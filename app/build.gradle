@@ -27,6 +27,10 @@ android {
         }
     }
     packaging {
+        resources {
+            // JVM OSGi descriptors are not Android resources; both JSch and jspecify ship this path.
+            excludes += ['META-INF/versions/9/OSGI-INF/MANIFEST.MF']
+        }
         jniLibs {
             // These two .so-named files are execve payloads, not dlopen libraries.
             useLegacyPackaging = true
