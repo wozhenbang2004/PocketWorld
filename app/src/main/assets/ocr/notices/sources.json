@@ -1,0 +1,42 @@
+[
+  {
+    "file": "Tesseract4Android-4.9.0-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/adaptech-cz/Tesseract4Android/4.9.0/LICENSE",
+    "bytes": 11357,
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  {
+    "file": "Tesseract-5.5.1-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tesseract/5.5.1/LICENSE",
+    "bytes": 11358,
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "file": "Leptonica-1.85.0-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/DanBloomberg/leptonica/1.85.0/leptonica-license.txt",
+    "bytes": 1521,
+    "sha256": "87829abb5bbb00b55a107365da89e9a33f86c4250169e5a1e5588505be7d5806"
+  },
+  {
+    "file": "libpng-1.6.48-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/pnggroup/libpng/v1.6.48/LICENSE",
+    "bytes": 5345,
+    "sha256": "16d9daaafbf63a31a5bdc91d4600972548fef5aaa1244202393288dbd079c49a"
+  },
+  {
+    "file": "libjpeg-9f-README.txt",
+    "url": "https://www.ijg.org/files/jpegsrc.v9f.tar.gz",
+    "archive_sha256": "04705c110cb2469caa79fb71fba3d7bf834914706e9641a4589485c1f832565b",
+    "bytes": 18719,
+    "sha256": "7c25493a9f64fed34d01445467341bda77bc1cdbeccbe33558659ef173fb9ff2",
+    "archive_member": "jpeg-9f/README"
+  },
+  {
+    "file": "NDK-r27-NOTICE.toolchain.txt",
+    "url": "https://android.googlesource.com/toolchain/prebuilts/ndk/r27/+/refs/heads/main/NOTICE.toolchain?format=TEXT",
+    "tree": "a35e8102a1d6a6f35cf113c12fba3e2a6218e612",
+    "bytes": 806124,
+    "sha256": "cbe3237be53c0a819f8df6aac5358fdee848eee3b6571b4e2ca20767ebd7465e",
+    "scope": "Full official NDK r27 toolchain notice; AAR contains static __ndk1 libc++ symbols. This notice includes compiler/toolchain components not themselves bundled."
+  }
+]

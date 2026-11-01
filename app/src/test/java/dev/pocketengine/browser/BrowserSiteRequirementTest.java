@@ -1,0 +1,13 @@
+package dev.pocketengine.browser;
+
+import java.util.UUID;
+import org.json.JSONObject;
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public final class BrowserSiteRequirementTest {
+    private static JSONObject identity()throws Exception{return new JSONObject().put("profileId","owner-default").put("profileRevision",1).put("browserSessionId",UUID.randomUUID().toString()).put("profileIsolation","default-webview-only").put("tabId",UUID.randomUUID().toString());}
+    @Test public void realNativeOriginAndFiniteResourceTypesAreVisibleWithoutPermissionGrant()throws Exception {JSONObject notice=BrowserSiteRequirement.create(identity(),3,UUID.randomUUID().toString(),"https://frame.example",new String[]{"android.webkit.resource.VIDEO_CAPTURE","android.webkit.resource.AUDIO_CAPTURE"},"site_permission_denied");assertEquals("https://frame.example",notice.getString("origin"));assertEquals("camera",notice.getJSONArray("requestTypes").getString(0));assertEquals("microphone",notice.getJSONArray("requestTypes").getString(1));assertFalse(notice.getBoolean("hardwareAuthorizationGranted"));assertFalse(notice.getBoolean("retryPerformed"));}
+    @Test public void invalidOriginAndUnknownResourceCannotBecomePageTextOrPrivilege()throws Exception {JSONObject identity=identity().put("prompt","private prompt canary");JSONObject notice=BrowserSiteRequirement.create(identity,3,UUID.randomUUID().toString(),"https://user:credential@frame.example",new String[]{"arbitrary page canary",null},"site_permission_denied");assertTrue(notice.isNull("origin"));assertFalse(notice.getBoolean("originVerified"));assertEquals("other_device_request",notice.getJSONArray("requestTypes").getString(0));assertFalse(notice.toString().contains("canary"));assertFalse(notice.toString().contains("credential"));}
+    @Test public void cancellationAndLocationDenialRemainExplicitNotAWaitingOrAcceptedRequest()throws Exception {JSONObject cancelled=BrowserSiteRequirement.create(identity(),3,UUID.randomUUID().toString(),"https://frame.example",new String[0],"site_request_cancelled");assertEquals("cancelled",cancelled.getString("status"));JSONObject location=BrowserSiteRequirement.create(identity(),3,UUID.randomUUID().toString(),"https://frame.example",new String[0],"geolocation_denied");assertEquals("blocked",location.getString("status"));assertEquals("location",location.getJSONArray("requestTypes").getString(0));assertThrows(IllegalArgumentException.class,()->BrowserSiteRequirement.create(identity(),3,UUID.randomUUID().toString(),"https://frame.example",new String[0],"auto_grant"));}
+}

@@ -1,0 +1,34 @@
+Apache Commons libraries used by the Android runtime archive installer
+
+commons-codec-1.19.0.jar
+========================
+Apache Commons Codec
+Copyright 2002-2025 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (https://www.apache.org/).
+
+commons-compress-1.28.0.jar
+===========================
+Apache Commons Compress
+Copyright 2002-2025 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (https://www.apache.org/).
+
+commons-io-2.20.0.jar
+=====================
+Apache Commons IO
+Copyright 2002-2025 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (https://www.apache.org/).
+
+commons-lang3-3.18.0.jar
+========================
+Apache Commons Lang
+Copyright 2001-2025 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (https://www.apache.org/).
+

@@ -1,0 +1,166 @@
+package dev.pocketengine.features.attachments;
+
+import java.io.File;
+import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.util.Arrays;
+import java.util.UUID;
+import dev.pocketengine.core.RunControl;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+/** Real imported bytes in private storage. Paths never come from a document name or external URI. */
+public final class AttachmentBook {
+    public static final long MAX_FILE_BYTES=20L*1024*1024,MAX_TOTAL_BYTES=100L*1024*1024;
+    private final File root;
+    private final long fileLimit,totalLimit;
+    /** Read-only publication of this Book's own successful native byte/metadata checks.
+     * Empty after cold construction: no file, JSON locator or another store can mint eligibility. */
+    private volatile java.util.Map<String,OutputSourceEligibility> outputEligibility=java.util.Collections.emptyMap();
+    public static final class OutputSourceEligibility {
+        public final String id,sha256,generation;
+        private OutputSourceEligibility(String id,String sha256,String generation){this.id=id;this.sha256=sha256;this.generation=generation;}
+    }
+    /** No Book/Tasks monitor, disk, callback or grant. A source token is not read permission. */
+    public OutputSourceEligibility outputSourceEligibility(String id,String sha256){
+        OutputSourceEligibility current=outputEligibility.get(id);return current!=null&&current.sha256.equals(sha256)?current:null;
+    }
+    public boolean outputSourceCurrent(String id,String sha256,String generation){
+        OutputSourceEligibility current=outputEligibility.get(id);return current!=null&&current.sha256.equals(sha256)&&current.generation.equals(generation);
+    }
+    private static String outputGeneration(JSONObject meta)throws Exception{
+        JSONObject source=meta.optJSONObject("source");if(source==null)source=new JSONObject();
+        String value="attachment-native-source-v1\0"+meta.getString("id")+"\0"+meta.getString("sha256")+"\0"+meta.getLong("size")+"\0"+meta.optString("principalId")+"\0"+meta.optString("spaceId")+"\0"+source.optString("kind")+"\0"+source.optString("groupSpaceId")+"\0"+source.optString("groupAudience")+"\0"+source.optString("groupActorId")+"\0"+meta.optBoolean("outputSourceRetired");
+        return "sha256:"+hex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+    }
+    private static boolean privateOutputSource(JSONObject meta){
+        JSONObject source=meta.optJSONObject("source");boolean group=source!=null&&(source.has("groupSpaceId")||source.optString("kind").startsWith("group_")||"group".equals(source.optString("kind")));
+        return !group&&!meta.optBoolean("outputSourceRetired")&&"owner".equals(meta.optString("principalId"))&&"private".equals(meta.optString("spaceId"));
+    }
+    /** Called only while this original Book monitor is held, after its own native commit/check. */
+    private void publishOutputEligibility(JSONObject meta)throws Exception{
+        String id=meta.getString("id");java.util.Map<String,OutputSourceEligibility> next=new java.util.HashMap<>(outputEligibility);next.remove(id);
+        if(privateOutputSource(meta))next.put(id,new OutputSourceEligibility(id,meta.getString("sha256"),outputGeneration(meta)));
+        outputEligibility=java.util.Collections.unmodifiableMap(next);
+    }
+    private void revokeOutputEligibility(String id){java.util.Map<String,OutputSourceEligibility> next=new java.util.HashMap<>(outputEligibility);next.remove(id);outputEligibility=java.util.Collections.unmodifiableMap(next);}
+
+    public AttachmentBook(File root){this(root,MAX_FILE_BYTES,MAX_TOTAL_BYTES);}
+    AttachmentBook(File root,long fileLimit,long totalLimit){this.root=root;this.fileLimit=fileLimit;this.totalLimit=totalLimit;}
+    public synchronized JSONObject importBytes(InputStream input,String name,String mime,JSONObject source)throws Exception{return importBytesInternal(input,name,mime,source,null);}
+    /** Native local save with revocable reads and a pause-revision fence at the actual file commit. */
+    public synchronized JSONObject importBytes(InputStream input,String name,String mime,JSONObject source,RunControl control)throws Exception{
+        return importBytesInternal(input,name,mime,source,java.util.Objects.requireNonNull(control));
+    }
+    private JSONObject importBytesInternal(InputStream input,String name,String mime,JSONObject source,RunControl control)throws Exception{
+        if(input==null)throw new IllegalArgumentException("附件来源无法读取");
+        if(control!=null)control.checkpoint();long pauseRevision=control==null?0:control.pauseRevision();
+        if(!root.isDirectory()&&!root.mkdirs())throw new IllegalStateException("无法创建附件目录");
+        JSONArray existing=list();if(existing.length()>=200)throw new IllegalStateException("附件数量已达200个，请先清理");long total=0;File[] stored=root.listFiles((d,n)->n.endsWith(".blob")||n.endsWith(".part"));if(stored!=null)for(File file:stored)total+=file.length();
+        String id=UUID.randomUUID().toString();File part=new File(root,id+".part"),blob=new File(root,id+".blob"),record=new File(root,id+".json");long size=0;MessageDigest digest=MessageDigest.getInstance("SHA-256");
+        try{
+            try(FileOutputStream output=new FileOutputStream(part)){byte[] buffer=new byte[32768];for(int n;(n=input.read(buffer))!=-1;){if(control!=null)control.checkpoint();if(Thread.currentThread().isInterrupted())throw new InterruptedException("附件导入已停止");if(n==0)continue;size+=n;if(size>fileLimit||total+size>totalLimit)throw new IllegalArgumentException("附件超出单文件或总容量限制");output.write(buffer,0,n);digest.update(buffer,0,n);}output.getFD().sync();}
+            JSONObject meta=new JSONObject().put("id",id).put("name",displayName(name)).put("mimeType",mimeType(mime)).put("size",size).put("sha256",hex(digest.digest())).put("createdAt",System.currentTimeMillis()).put("principalId","owner").put("spaceId","private").put("source",source==null?new JSONObject():new JSONObject(source.toString()));
+            if(control==null){move(part,blob);atomicJson(record,meta);}
+            else control.dispatchAtPauseRevision(pauseRevision,()->{move(part,blob);atomicJson(record,meta);});
+            publishOutputEligibility(meta);return visible(meta);
+        }catch(Exception failure){revokeOutputEligibility(id);part.delete();blob.delete();record.delete();new File(root,id+".json.pending").delete();throw failure;}
+    }
+    public synchronized JSONArray list()throws Exception{JSONArray result=new JSONArray();File[] records=root.listFiles((d,n)->n.matches("[a-f0-9-]{36}\\.json"));if(records==null)return result;Arrays.sort(records,(a,b)->Long.compare(b.lastModified(),a.lastModified()));for(File record:records){JSONObject meta=new JSONObject(new String(Files.readAllBytes(record.toPath()),StandardCharsets.UTF_8));File data=new File(root,meta.getString("id")+".blob");if(data.isFile()&&data.length()==meta.getLong("size"))result.put(visible(meta));}return result;}
+    public synchronized JSONObject get(String id)throws Exception{return visible(internal(id));}
+    synchronized JSONObject internal(String id)throws Exception{checkId(id);try{File record=new File(root,id+".json"),data=new File(root,id+".blob");if(!record.isFile()||!data.isFile())throw new IllegalArgumentException("附件不存在");JSONObject value=new JSONObject(new String(Files.readAllBytes(record.toPath()),StandardCharsets.UTF_8));if(!id.equals(value.optString("id"))||data.length()!=value.getLong("size"))throw new IllegalStateException("附件记录与文件不一致");return value;}catch(Exception missingOrChanged){revokeOutputEligibility(id);throw missingOrChanged;}}
+    public synchronized File file(String id)throws Exception{internal(id);return new File(root,id+".blob");}
+    public synchronized JSONObject readText(String id)throws Exception{JSONObject meta=internal(id);if(meta.getLong("size")>65536)throw new IllegalArgumentException("文本预览最多64KiB，请打开附件查看");byte[] data=Files.readAllBytes(file(id).toPath());String text=StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(data)).toString();if(text.indexOf('\0')>=0)throw new IllegalArgumentException("此附件不是可预览的UTF-8文本");return visible(meta).put("text",text).put("untrustedAttachmentContent",true);}
+    static final class InputChangedException extends Exception {
+        InputChangedException(){super("Attachment no longer matches the requested digest");}
+    }
+    /** A private immutable snapshot; callers supply an attachment identity, never a file or URI. */
+    synchronized byte[] verifiedBytes(String id,String expectedSha256,RunControl control)throws Exception {
+        return verifyBytes(id,expectedSha256,control,true);
+    }
+    /** Native artifact adapters may read exact imported bytes; this is not a model/file-path endpoint. */
+    public synchronized byte[] readVerifiedSnapshot(String id,String expectedSha256,RunControl control)throws Exception {
+        return verifyBytes(id,expectedSha256,control,true);
+    }
+    /** Immutable native metadata after the same complete byte/hash check as a snapshot; no file path or authority is returned. */
+    public static final class VerifiedMetadata {
+        public final String id,sha256,name,mimeType;
+        public final long size;
+        private VerifiedMetadata(JSONObject record)throws Exception {
+            id=record.getString("id");sha256=record.getString("sha256");name=record.getString("name");mimeType=record.getString("mimeType");size=record.getLong("size");
+        }
+    }
+    public synchronized VerifiedMetadata readVerifiedMetadata(String id,String expectedSha256,RunControl control)throws Exception {
+        verifyBytes(id,expectedSha256,control,false);
+        JSONObject record=internal(id);if(!expectedSha256.equals(record.getString("sha256")))throw new InputChangedException();
+        control.checkpoint();return new VerifiedMetadata(record);
+    }
+    /** Native cold-source admission only. The saved generation is not a grant; this original
+     * Book must recheck its private scope and the complete actual file digest before publication.
+     * Callers must not hold Tasks while entering this Book. No body or path is returned. */
+    public synchronized long revalidateOutputSource(String id,String expectedSha256,String expectedGeneration,long remainingBytes,RunControl control)throws Exception {
+        checkId(id);java.util.Objects.requireNonNull(control).check();
+        try{
+            JSONObject meta=internal(id);long size=meta.getLong("size");
+            if(!privateOutputSource(meta)||expectedGeneration==null||!expectedGeneration.equals(outputGeneration(meta))||size<0||size>remainingBytes)throw new InputChangedException();
+            verifyBytes(id,expectedSha256,control,false);
+            if(!outputSourceCurrent(id,expectedSha256,expectedGeneration))throw new InputChangedException();
+            control.check();return size;
+        }catch(Exception unavailable){revokeOutputEligibility(id);throw unavailable;}
+    }
+    synchronized void requireUnchanged(String id,String expectedSha256,RunControl control)throws Exception {
+        verifyBytes(id,expectedSha256,control,false);
+    }
+    private byte[] verifyBytes(String id,String expected,RunControl control,boolean retain)throws Exception {
+        checkId(id);
+        if(expected==null||!expected.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("Expected SHA-256 required");
+        if(control==null)throw new IllegalArgumentException("Live RunControl required");
+        control.checkpoint();JSONObject meta;
+        try {meta=internal(id);}catch(IllegalArgumentException|IllegalStateException absent){throw new InputChangedException();}
+        if(meta.optBoolean("outputSourceRetired")||!expected.equals(meta.optString("sha256"))||meta.getLong("size")>MAX_FILE_BYTES||meta.getLong("size")<0){revokeOutputEligibility(id);throw new InputChangedException();}
+        MessageDigest digest=MessageDigest.getInstance("SHA-256");long size=0;
+        ByteArrayOutputStream output=retain?new ByteArrayOutputStream((int)meta.getLong("size")):null;
+        try(InputStream input=new FileInputStream(new File(root,id+".blob"))) {
+            byte[] buffer=new byte[32768];
+            for(int n;(n=input.read(buffer))!=-1;) {
+                control.checkpoint();if(n==0)continue;size+=n;
+                if(size>MAX_FILE_BYTES||size>meta.getLong("size"))throw new InputChangedException();
+                digest.update(buffer,0,n);if(output!=null)output.write(buffer,0,n);
+            }
+        }
+        control.checkpoint();
+        if(size!=meta.getLong("size")||!expected.equals(hex(digest.digest()))){revokeOutputEligibility(id);throw new InputChangedException();}
+        JSONObject current=internal(id);if(!outputGeneration(meta).equals(outputGeneration(current))){revokeOutputEligibility(id);throw new InputChangedException();}
+        publishOutputEligibility(current);return output==null?null:output.toByteArray();
+    }
+    /** Native original group request only: retain why this technical media cache is excluded from private files. */
+    public synchronized void retainGroupOrigin(String id,dev.pocketengine.features.groups.GroupHostPort.Request request,String operation,String run,dev.pocketengine.features.groups.GroupHostPort.Authority read)throws Exception {
+        read.checkRead();JSONObject record=internal(id),source=record.getJSONObject("source");
+        if(!request.taskId.equals(source.optString("taskId"))||!operation.equals(source.optString("operationId"))||!run.equals(source.optString("runId")))throw new SecurityException("技术媒体副本不是原群操作");
+        if(source.has("groupSpaceId")&&(!request.spaceId.equals(source.getString("groupSpaceId"))||!request.audience.equals(source.optString("groupAudience"))))throw new SecurityException("技术媒体副本的原群范围变化");
+        if(source.has("groupSpaceId"))return;
+        revokeOutputEligibility(id);source.put("groupSpaceId",request.spaceId).put("groupAudience",request.audience).put("groupActorId",request.actorId);record.put("source",source);read.checkRead();atomicJson(new File(root,id+".json"),record);read.checkRead();publishOutputEligibility(record);
+    }
+    public synchronized void remove(String id)throws Exception{
+        JSONObject meta=internal(id);revokeOutputEligibility(id);
+        // Persist retirement before deleting either file: partial deletion cannot revive an old
+        // captured output on a cold reopen. Failure keeps this instance fail-closed as well.
+        File data=new File(root,id+".blob"),record=new File(root,id+".json");meta.put("outputSourceRetired",true);atomicJson(record,meta);
+        if(!data.delete())throw new IllegalStateException("附件文件未能删除，派生读取已停用");if(!record.delete())throw new IllegalStateException("附件索引未能删除，派生读取已停用");
+    }
+    public synchronized long exportTo(String id,java.io.OutputStream output)throws Exception{long copied=0;try(InputStream input=new FileInputStream(file(id))){byte[] data=new byte[32768];for(int n;(n=input.read(data))!=-1;){if(Thread.currentThread().isInterrupted())throw new InterruptedException("附件导出已停止，目标可能包含部分内容");output.write(data,0,n);copied+=n;}}output.flush();return copied;}
+    public static String displayName(String input){String name=input==null?"attachment":input.replaceAll("[\\p{Cntrl}/\\\\]","_").trim();if(name.isEmpty()||name.equals(".")||name.equals(".."))name="attachment";return name.substring(0,Math.min(160,name.length()));}
+    public static String mimeType(String raw){return raw!=null&&raw.matches("[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+")?raw.toLowerCase(java.util.Locale.ROOT):"application/octet-stream";}
+    private static JSONObject visible(JSONObject original)throws Exception{JSONObject result=new JSONObject(original.toString()),source=result.optJSONObject("source");if(source!=null){source.remove("uri");source.remove("url");}return result;}
+    private static void checkId(String id){if(id==null||!id.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("附件ID无效");}
+    private static String hex(byte[] bytes){StringBuilder text=new StringBuilder();for(byte b:bytes)text.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return text.toString();}
+    private static void atomicJson(File file,JSONObject value)throws Exception{File temp=new File(file.getParentFile(),file.getName()+".pending");try(FileOutputStream output=new FileOutputStream(temp)){output.write(value.toString().getBytes(StandardCharsets.UTF_8));output.getFD().sync();}move(temp,file);}
+    private static void move(File from,File to)throws Exception{try{Files.move(from.toPath(),to.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}catch(AtomicMoveNotSupportedException unavailable){Files.move(from.toPath(),to.toPath(),StandardCopyOption.REPLACE_EXISTING);}}
+}

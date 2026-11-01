@@ -1,0 +1,65 @@
+{
+  "artifacts": [
+    {
+      "file": "libadb-android-3.1.1.aar",
+      "url": "https://jitpack.io/com/github/MuntashirAkon/libadb-android/3.1.1/libadb-android-3.1.1.aar",
+      "sha256": "e6fcb495a20a507ca4a125afc9c554e838a84b3a15fbcc29f7deafd0f88bbb58",
+      "license": "Apache-2.0 OR GPL-3.0-or-later",
+      "selectedLicense": "Apache-2.0",
+      "sourceCommit": "c849886ebc6d48e7b46d967e78a6bb65c90c3b74",
+      "licenseSource": "https://github.com/MuntashirAkon/libadb-android/blob/c849886ebc6d48e7b46d967e78a6bb65c90c3b74/COPYING"
+    },
+    {
+      "file": "conscrypt-android-2.5.3.aar",
+      "url": "https://repo.maven.apache.org/maven2/org/conscrypt/conscrypt-android/2.5.3/conscrypt-android-2.5.3.aar",
+      "sha256": "551ae4e301c571760d1791e647db6ed1dcb10d34dcae7aa12b67f220f2ce98d1",
+      "license": "Apache-2.0 plus bundled third-party notices",
+      "licenseSource": "https://github.com/google/conscrypt/blob/2.5.3/LICENSE"
+    },
+    {
+      "file": "spake2-android-2.2.1.aar",
+      "url": "https://jitpack.io/com/github/MuntashirAkon/spake2-java/spake2-android/2.2.1/spake2-android-2.2.1.aar",
+      "sha256": "8798fb6c04b5d53a6307ed9481e9afe563227abd4e8b9e917c8514fa850071bb",
+      "license": "LGPL-3.0",
+      "releasePom": "https://jitpack.io/com/github/MuntashirAkon/spake2-java/spake2-android/2.2.1/spake2-android-2.2.1.pom",
+      "sourceCommit": "7615ddd680b990e14513ebb66eac4cb0dbf82464",
+      "nativeSubmoduleCommit": "0d15933e5ba3e662cb01245a7ac0dc9fca3eac31",
+      "nativeSubmoduleLicenses": "LGPL-3.0-or-later; constituent Apache-2.0, LGPL-2.1 and MIT per pinned upstream README"
+    },
+    {
+      "file": "bcprov-jdk15to18-1.86.jar",
+      "url": "https://repo.maven.apache.org/maven2/org/bouncycastle/bcprov-jdk15to18/1.86/bcprov-jdk15to18-1.86.jar",
+      "sha256": "fc50334d4d87b4272e72fa95ca748ead05bdef02ef760a5b13f64ffee317cd81",
+      "license": "Bouncy Castle License (MIT-style)",
+      "licenseSource": "https://www.bouncycastle.org/licence.html"
+    },
+    {
+      "file": "bcpkix-jdk15to18-1.86.jar",
+      "url": "https://repo.maven.apache.org/maven2/org/bouncycastle/bcpkix-jdk15to18/1.86/bcpkix-jdk15to18-1.86.jar",
+      "sha256": "cf70d32101e53c3f92d55ba5c5f1329af51a9a44057fd21e81e20cfd6cd64953",
+      "license": "Bouncy Castle License (MIT-style)",
+      "licenseSource": "https://www.bouncycastle.org/licence.html"
+    },
+    {
+      "file": "bcutil-jdk15to18-1.86.jar",
+      "url": "https://repo.maven.apache.org/maven2/org/bouncycastle/bcutil-jdk15to18/1.86/bcutil-jdk15to18-1.86.jar",
+      "sha256": "e72ef8a0fcad295207529b268ee02eb72acc7c83ec2e3a9df90cbed9380e3990",
+      "license": "Bouncy Castle License (MIT-style)",
+      "licenseSource": "https://www.bouncycastle.org/licence.html"
+    }
+  ],
+  "releaseMetadata": [
+    {
+      "file": "verification/libadb-android-3.1.1.pom",
+      "sha256": "0a12f1de3973888d5d54292ddb6299aa60c7906ade92c7cdea3a32d41973583d"
+    },
+    {
+      "file": "verification/spake2-android-2.2.1.pom",
+      "sha256": "7b01f048b5bf764542a81f6c8dcd93a9092bc40e0bf81cc1c8193f60c3a97f19"
+    },
+    {
+      "file": "verification/spake2-android-2.2.1.module",
+      "sha256": "92852fe3332f072c5440a20e0e2f85bf20d83b904bd86ccc4071707c840901d7"
+    }
+  ]
+}

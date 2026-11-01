@@ -1,0 +1,49 @@
+--- a/shmem.c
++++ b/shmem.c
+@@ -23,7 +23,22 @@
+ #include "shm.h"
+ 
+ #define DBG(...) __android_log_print(ANDROID_LOG_INFO, "shmem", __VA_ARGS__)
+-#define ASHV_KEY_SYMLINK_PATH _PATH_TMP "ashv_key_%d"
++/* PocketWorld modification, 2026-10-31: no Termux prefix or writable-system tmp.
++ * The launch owner supplies its canonical private PROOT_TMP_DIR. */
++static int ashv_key_path(char *path, size_t size, key_t key)
++{
++	const char *directory = getenv("PROOT_TMP_DIR");
++	if (directory == NULL || directory[0] != '/') {
++		errno = EINVAL;
++		return -1;
++	}
++	int length = snprintf(path, size, "%s/ashv_key_%d", directory, key);
++	if (length < 0 || (size_t)length >= size) {
++		errno = ENAMETOOLONG;
++		return -1;
++	}
++	return 0;
++}
+ #define ANDROID_SHMEM_SOCKNAME "/dev/shm/%08x"
+ #define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
+ 
+@@ -349,7 +364,10 @@
+ 		// (3) If connected and opened, done. If connection refused
+ 		//     take ownership of the key and create the symlink.
+ 		// (4) If no symlink, create it.
+-		sprintf(symlink_path, ASHV_KEY_SYMLINK_PATH, key);
++		if (ashv_key_path(symlink_path, sizeof(symlink_path), key) < 0) {
++			pthread_mutex_unlock(&mutex);
++			return -1;
++		}
+ 		char path_buffer[256];
+ 		char num_buffer[64];
+ 		while (true) {
+@@ -382,6 +400,10 @@
+ 				sprintf(num_buffer, "%d", shmid);
+ 			}
+ 			if (symlink(num_buffer, symlink_path) == 0) break;
++			if (errno != EEXIST) {
++				pthread_mutex_unlock(&mutex);
++				return -1;
++			}
+ 		}
+ 	}
+ 

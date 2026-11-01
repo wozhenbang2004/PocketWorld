@@ -1,0 +1,17 @@
+{
+  "id": "dev.example.echo",
+  "name": "Local echo example",
+  "version": "1.0",
+  "tools": [{
+    "name": "echo",
+    "kind": "echo",
+    "description": "Return the supplied text arguments locally",
+    "effect": "read",
+    "schema": {
+      "type": "object",
+      "properties": {"text": {"type": "string", "maxLength": 4000}},
+      "required": ["text"],
+      "additionalProperties": false
+    }
+  }]
+}

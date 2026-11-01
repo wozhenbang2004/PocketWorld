@@ -1,0 +1,47 @@
+package dev.pocketengine.features.semantic;
+
+import dev.pocketengine.core.RunControl;
+import dev.pocketengine.features.plugins.PluginRules;
+import java.util.List;
+import java.util.UUID;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+/** Typed protocol and admission fixtures only; no Android alarm is created. */
+public final class SemanticClockTest {
+    static JSONObject alarm()throws Exception{return new JSONObject().put("kind","alarm").put("hour",7).put("minutes",30).put("message","出门");}
+    static JSONObject timer()throws Exception{return new JSONObject().put("kind","timer").put("seconds",120).put("message","茶");}
+    static final class F implements AutoCloseable {
+        final RunControl control=new RunControl();final SemanticCapabilityPort port;final SemanticPlatform platform;int effects,approvals;String zone="Asia/Shanghai";boolean approved=true,lost;Runnable duringApproval;JSONObject prepared,capability;String operation;
+        F()throws Exception{this(true);}
+        F(boolean dispatch)throws Exception{control.bindHostRun(UUID.randomUUID().toString(),UUID.randomUUID().toString(),1);platform=new SemanticPlatform(){
+            public List<Target> discover(SemanticRequest r,RunControl c)throws Exception{return List.of(target());}
+            public JSONObject resourceIdentity()throws Exception{return new JSONObject().put("displayId",0).put("serviceSessionId","clock-fixture");}
+            public JSONObject dispatch(SemanticRequest r,Target t,RunControl c,Admission gate)throws Exception{gate.check();effects++;if(lost)throw new java.io.IOException("lost fixture receipt");return new JSONObject().put("accepted",true);}
+        };port=new SemanticCapabilityPort(null,control,new SemanticCapabilityPort.Authority(){
+            public void check(String n,RunControl c)throws Exception{if(c!=control)throw new SecurityException("different original control");c.check();}
+            public void requirePrepared(String op,String n,JSONObject a)throws Exception{if(!op.equals(operation)||!SemanticJson.hash(a).equals(SemanticJson.hash(prepared)))throw new SecurityException("missing original prepared operation");}
+            public JSONObject approve(String n,JSONObject a,JSONObject value)throws Exception{approvals++;capability=SemanticJson.copy(value);if(duringApproval!=null)duringApproval.run();return new JSONObject().put("approved",approved).put("approvalId","clock-fixture");}
+        },platform,dispatch);}
+        SemanticPlatform.Target target()throws Exception{return new SemanticPlatform.Target(new JSONObject().put("component","clock.fixture/clock.fixture.Main").put("packageName","clock.fixture").put("versionCode",1).put("certificates",new JSONArray().put("fixture-certificate")).put("deviceTimeZone",zone),"时钟fixture","official_intent");}
+        JSONObject discover(JSONObject r)throws Exception{return port.execute(SemanticCapabilityPort.DISCOVER,r,control);}
+        JSONObject args(JSONObject d)throws Exception{return new JSONObject().put("discoveryId",d.getString("discoveryId")).put("candidateId",d.getJSONArray("candidates").getJSONObject(0).getString("candidateId"));}
+        JSONObject dispatch(JSONObject d)throws Exception{prepared=args(d);operation=UUID.randomUUID().toString();return port.execute(SemanticCapabilityPort.DISPATCH,SemanticJson.copy(prepared).put("_hostOperationId",operation),control);}
+        public void close(){port.close();control.cancel();}
+    }
+    @Test public void fixedClockActionsAndDefaultsNeverInventTimeOrTimezone()throws Exception{SemanticRequest a=SemanticRequest.parse(alarm()),t=SemanticRequest.parse(timer());assertEquals("android.intent.action.SET_ALARM",a.action);assertEquals("android.intent.action.SET_TIMER",t.action);assertEquals("",a.data);assertEquals("",t.host);JSONObject p=alarm();p.remove("message");assertEquals("",SemanticRequest.parse(p).parameters().getString("message"));assertEquals("owner_verifies_clock_in_target_app",t.followup());}
+    @Test public void validIntegerBoundariesAreAcceptedExactly()throws Exception{for(int h:new int[]{0,23})for(int m:new int[]{0,59})assertEquals(h,SemanticRequest.parse(alarm().put("hour",h).put("minutes",m)).parameters().getInt("hour"));for(int s:new int[]{1,86400})assertEquals(s,SemanticRequest.parse(timer().put("seconds",s)).parameters().getInt("seconds"));}
+    @Test public void missingClockParametersDoNotDefaultToCurrentTime()throws Exception{for(String k:new String[]{"hour","minutes"}){JSONObject p=alarm();p.remove(k);assertThrows(IllegalArgumentException.class,()->SemanticRequest.parse(p));}JSONObject p=timer();p.remove("seconds");assertThrows(IllegalArgumentException.class,()->SemanticRequest.parse(p));}
+    @Test public void fractionalStringBooleanNullOverflowAndRangeAreRejected()throws Exception{for(Object v:new Object[]{-1,24,1.5,"7",true,JSONObject.NULL,Long.MAX_VALUE})assertThrows(IllegalArgumentException.class,()->SemanticRequest.parse(alarm().put("hour",v)));for(Object v:new Object[]{-1,60,0.1,"30"})assertThrows(IllegalArgumentException.class,()->SemanticRequest.parse(alarm().put("minutes",v)));for(Object v:new Object[]{0,86401,0.5,"120",false,Long.MAX_VALUE})assertThrows(IllegalArgumentException.class,()->SemanticRequest.parse(timer().put("seconds",v)));}
+    @Test public void arbitraryIntentExtrasDaysCredentialsTimezoneAndHostIdentityAreRejected()throws Exception{for(String k:new String[]{"component","extras","skipUi","days","ringtone","vibrate","timeZone","data","uri","grant","_hostOperationId","taskId"})for(JSONObject p:new JSONObject[]{alarm(),timer()})assertThrows(k,IllegalArgumentException.class,()->SemanticRequest.parse(p.put(k,"injected")));}
+    @Test public void messageIsSingleLineAndBounded()throws Exception{for(Object v:new Object[]{"x".repeat(121),"a\nb","a\tb","a\rb",false,JSONObject.NULL})assertThrows(IllegalArgumentException.class,()->SemanticRequest.parse(alarm().put("message",v)));assertEquals(120,SemanticRequest.parse(timer().put("message","茶".repeat(120))).parameters().getString("message").length());}
+    @Test public void exactParametersAreImmutableAndCanonicalForApproval()throws Exception{JSONObject p=alarm();SemanticRequest a=SemanticRequest.parse(p);p.put("hour",8);a.parameters().put("hour",9);assertEquals(7,a.parameters().getInt("hour"));assertNotEquals(a.digest(),SemanticRequest.parse(alarm().put("minutes",31)).digest());}
+    @Test public void actualPluginRulesValidateEveryNewToolSchemaAndClockArguments()throws Exception{try(F f=new F()){JSONArray tools=f.port.tools();for(int i=0;i<tools.length();i++){JSONObject tool=tools.getJSONObject(i).getJSONObject("function");if(tool.getString("name").equals(SemanticCapabilityPort.DISCOVER)){PluginRules.validateArguments(alarm(),tool.getJSONObject("parameters"));PluginRules.validateArguments(timer(),tool.getJSONObject("parameters"));}else PluginRules.validateArguments(new JSONObject().put("discoveryId",UUID.randomUUID().toString()).put("candidateId","a".repeat(64)),tool.getJSONObject("parameters"));}}}
+    @Test public void discoveryShowsActualNativeZoneWithoutDispatchOrBackgroundFallback()throws Exception{try(F f=new F(false)){JSONObject d=f.discover(alarm());assertEquals("Asia/Shanghai",d.getJSONArray("candidates").getJSONObject(0).getString("deviceTimeZone"));assertEquals(0,f.effects);assertFalse(d.getBoolean("dispatchAvailable"));assertFalse(f.port.supports(SemanticCapabilityPort.DISPATCH));assertFalse(d.getBoolean("automaticFallback"));assertTrue(d.getString("message").contains("不会启动"));}}
+    @Test public void exactApprovalWarnsImmediateEffectAndReceiptRequiresOwnerVerification()throws Exception{for(JSONObject request:new JSONObject[]{alarm(),timer()})try(F f=new F()){JSONObject out=f.dispatch(f.discover(request));assertEquals(1,f.effects);assertEquals(1,f.approvals);assertTrue(out.getBoolean("accepted"));assertTrue(out.getBoolean("requiresPause"));assertFalse(out.getBoolean("clockStateVerified"));assertFalse(out.getBoolean("verifiedBusinessSuccess"));assertTrue(f.capability.getBoolean("receiverMayApplyImmediately"));assertFalse(f.capability.getBoolean("separateConfirmationGuaranteed"));String review=SemanticApprovalText.describe(f.capability);assertTrue(review,review.contains("Asia/Shanghai")&&review.contains("不保证")&&review.contains("立即"));assertFalse(out.has("alarmId"));}}
+    @Test public void denialCannotDispatchAndClockZoneChangeInvalidatesOldApproval()throws Exception{try(F f=new F()){f.approved=false;assertFalse(f.dispatch(f.discover(alarm())).getBoolean("accepted"));assertEquals(0,f.effects);}try(F f=new F()){JSONObject d=f.discover(timer());f.duringApproval=()->f.zone="UTC";assertFalse(f.dispatch(d).getBoolean("accepted"));assertEquals(0,f.effects);}}
+    @Test public void unknownClockReceiptNeverReplaysOrFallsBack()throws Exception{try(F f=new F()){f.lost=true;JSONObject out=f.dispatch(f.discover(alarm()));assertTrue(out.isNull("accepted"));assertTrue(out.getBoolean("requiresReconciliation"));assertFalse(out.getBoolean("automaticFallback"));f.lost=false;assertEquals("unknown",f.dispatch(f.discover(timer())).getString("status"));assertEquals(1,f.effects);}}
+    @Test public void consumedClockDiscoveryCannotStartASecondTimer()throws Exception{try(F f=new F()){JSONObject d=f.discover(timer());assertTrue(f.dispatch(d).getBoolean("accepted"));assertFalse(f.dispatch(d).getBoolean("accepted"));assertEquals(1,f.effects);}}
+}

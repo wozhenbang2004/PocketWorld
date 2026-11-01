@@ -1,0 +1,46 @@
+Pocket World local OCR dependency notices
+
+The application's OCR integration code is independently authored. It uses the
+unmodified published Tesseract4Android 4.9.0 binary API, not copied application
+source. The following third-party software and model files retain their own
+licenses; this notice does not relicense them as Pocket World code.
+
+Tesseract4Android 4.9.0
+https://github.com/adaptech-cz/Tesseract4Android/tree/4.9.0
+Copyright 2019 Adaptech s.r.o., Robert Pösel.
+The wrapper also retains Copyright (C) 2011 Google Inc. and Robert Theis.
+Apache License 2.0: notices/Tesseract4Android-4.9.0-LICENSE.txt
+
+Tesseract OCR 5.5.1
+https://github.com/tesseract-ocr/tesseract/tree/5.5.1
+Apache License 2.0: notices/Tesseract-5.5.1-LICENSE.txt
+
+Leptonica 1.85.0
+https://github.com/DanBloomberg/leptonica/tree/1.85.0
+Copyright (C) 2001-2020 Leptonica. All rights reserved.
+BSD-style redistribution conditions: notices/Leptonica-1.85.0-LICENSE.txt
+
+libpng 1.6.48
+https://github.com/pnggroup/libpng/tree/v1.6.48
+PNG Reference Library License: notices/libpng-1.6.48-LICENSE.txt
+
+Independent JPEG Group libjpeg 9f
+https://www.ijg.org/files/jpegsrc.v9f.tar.gz
+Copyright (C) 1991-2024 Thomas G. Lane, Guido Vollbeding.
+This software is based in part on the work of the Independent JPEG Group.
+The original conditions and disclaimer are in notices/libjpeg-9f-README.txt.
+
+Android NDK C++ runtime components
+Tesseract4Android's published native libraries contain statically linked NDK
+libc++ symbols. See the original NDK r27 toolchain notice included alongside
+the dependency notices. It includes Apache 2.0 with LLVM exceptions and legacy
+BSD/MIT notices; not every compiler component listed is bundled in this app.
+
+tessdata_fast English, Simplified Chinese and Traditional Chinese models
+https://github.com/tesseract-ocr/tessdata_fast
+Commit 87416418657359cb625c412a48b6e1d6d41c29bd, unmodified model files.
+Apache License 2.0: tessdata_fast/LICENSE
+Exact asset sizes, SHA-256 and original URLs: tessdata_fast/manifest.json
+
+Exact sources and hashes of the license materials: notices/sources.json
+No Google ML Kit SDK or model is included by this OCR increment.

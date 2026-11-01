@@ -1,0 +1,92 @@
+{
+  "formatVersion" : "1.1",
+  "component" : {
+    "group" : "com.github.MuntashirAkon",
+    "module" : "spake2-java",
+    "version" : "2.2.1",
+    "attributes" : {
+      "org.gradle.status" : "release"
+    }
+  },
+  "createdBy" : {
+    "gradle" : {
+      "version" : "9.0.0"
+    }
+  },
+  "variants" : [ {
+    "name" : "releaseVariantReleaseApiPublication",
+    "attributes" : {
+      "org.gradle.category" : "library",
+      "org.gradle.dependency.bundling" : "external",
+      "org.gradle.libraryelements" : "aar",
+      "org.gradle.usage" : "java-api"
+    },
+    "files" : [ {
+      "name" : "spake2-android-2.2.1.aar",
+      "url" : "spake2-android-2.2.1.aar",
+      "size" : 87680,
+      "sha512" : "33974de2fd8abc7f3ebf8142c7af73e7cb1f10a013aa640b9bb23d10032cd3a36e2967f80e1049b60f4df366311f0822d9f89fd49093d4fa990f596f5bf69c56",
+      "sha256" : "8798fb6c04b5d53a6307ed9481e9afe563227abd4e8b9e917c8514fa850071bb",
+      "sha1" : "f716f6b9d24476b8dffbdd1640e47e92d10be7e4",
+      "md5" : "9f3338494339791f4a3204711d562eb4"
+    } ]
+  }, {
+    "name" : "releaseVariantReleaseRuntimePublication",
+    "attributes" : {
+      "org.gradle.category" : "library",
+      "org.gradle.dependency.bundling" : "external",
+      "org.gradle.libraryelements" : "aar",
+      "org.gradle.usage" : "java-runtime"
+    },
+    "dependencies" : [ {
+      "group" : "androidx.annotation",
+      "module" : "annotation",
+      "version" : {
+        "requires" : "1.9.1"
+      }
+    } ],
+    "files" : [ {
+      "name" : "spake2-android-2.2.1.aar",
+      "url" : "spake2-android-2.2.1.aar",
+      "size" : 87680,
+      "sha512" : "33974de2fd8abc7f3ebf8142c7af73e7cb1f10a013aa640b9bb23d10032cd3a36e2967f80e1049b60f4df366311f0822d9f89fd49093d4fa990f596f5bf69c56",
+      "sha256" : "8798fb6c04b5d53a6307ed9481e9afe563227abd4e8b9e917c8514fa850071bb",
+      "sha1" : "f716f6b9d24476b8dffbdd1640e47e92d10be7e4",
+      "md5" : "9f3338494339791f4a3204711d562eb4"
+    } ]
+  }, {
+    "name" : "releaseVariantReleaseSourcePublication",
+    "attributes" : {
+      "org.gradle.category" : "documentation",
+      "org.gradle.dependency.bundling" : "external",
+      "org.gradle.docstype" : "sources",
+      "org.gradle.usage" : "java-runtime"
+    },
+    "files" : [ {
+      "name" : "spake2-android-2.2.1.jar",
+      "url" : "spake2-android-2.2.1.jar",
+      "size" : 2378,
+      "sha512" : "7764c22623cab79f5f8f45d70e4ec70bc52873a1badfa2ab58255c154b62cf68779dac163cc85e386a48ee1b1401d438685ae329a97d6acf43c2029dcb0f32f6",
+      "sha256" : "ab81c84dacf4e1ead89797b2405148173e04879b8c0631047c76dc9f836ec8b9",
+      "sha1" : "e1006fcae3ca266abfe97c1e1fecd1d3ec45133b",
+      "md5" : "a1cd6198d1e82f7d2f47a960101ca8b5"
+    } ]
+  }, {
+    "name" : "releaseVariantReleaseJavaDocPublication",
+    "attributes" : {
+      "org.gradle.category" : "documentation",
+      "org.gradle.dependency.bundling" : "external",
+      "org.gradle.docstype" : "javadoc",
+      "org.gradle.usage" : "java-runtime"
+    },
+    "files" : [ {
+      "name" : "spake2-android-2.2.1.jar",
+      "url" : "spake2-android-2.2.1.jar",
+      "size" : 274978,
+      "sha512" : "9241a00732a72dad0eb04976b8c19acdc0348e06d873f696fbf836648b97c07284399f694c28b273fe4a6b824fe535c72876f14d2397323db6337a278c714412",
+      "sha256" : "32097c90f440d573bae09caadb8f1af2b778e7e1fb2e28c8dd8e8c228b2a16ed",
+      "sha1" : "addf18d51b65e8d527293aefb05b5b91e2cdf49e",
+      "md5" : "a3e7dc73c069fc2f3b6bcf7f8b06a876"
+    } ]
+  } ]
+}

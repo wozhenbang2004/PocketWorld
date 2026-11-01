@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Pocket World</string>
+    <string name="accessibility_name">口袋世界 手机操作</string>
+    <string name="accessibility_description">在你发起手机任务或屏幕观察时读取主屏界面；手机任务会占用主屏执行点击、输入和滑动，并保留停止入口。任务中的可见文字会发送到你配置的模型接口，启用模型视觉后还会发送截图。不读取密码输入框的文字。可随时关闭服务停止新的操作。</string>
+</resources>
