@@ -28,12 +28,15 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
     private final TaskStore tasks;
     private final CurrentControl controls;
     private final PlanArtifactVerifier artifactVerifier;
+    private volatile dev.pocketengine.features.channels.ChannelsModule businessModule;private volatile dev.pocketengine.features.automation.ChannelBusinessWaits businessEvents;
     private final java.util.concurrent.atomic.AtomicInteger planCursor=new java.util.concurrent.atomic.AtomicInteger();
     private final String snapshotProcess=java.util.UUID.randomUUID().toString();
     private final java.util.concurrent.atomic.AtomicLong snapshotSequence=new java.util.concurrent.atomic.AtomicLong();
     public AutomationPlanHost(TaskStore tasks,CurrentControl controls){this(tasks,controls,null);}
     public AutomationPlanHost(TaskStore tasks,CurrentControl controls,PlanArtifactVerifier.Source artifacts){this.tasks=java.util.Objects.requireNonNull(tasks);this.controls=controls;this.artifactVerifier=artifacts==null?null:new PlanArtifactVerifier(artifacts);}
     public AutomationPlanHost(TaskStore tasks){this(tasks,null);}
+    public synchronized void bindBusinessEvents(dev.pocketengine.features.channels.ChannelsModule module){if(module==null||businessModule!=null&&businessModule!=module)throw new SecurityException("必须绑定唯一原认证渠道");businessModule=module;businessEvents=new dev.pocketengine.features.automation.ChannelBusinessWaits(module,tasks);}
+    private JSONArray businessWaitCandidates(){try{return businessEvents==null?new JSONArray():businessEvents.candidates();}catch(Exception unavailable){return new JSONArray();}}
     public static boolean handles(String command){return COMMANDS.contains(command);}
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
 
@@ -43,13 +46,13 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         switch(command){
             case "snapshot":break;
             case "create":result.put("plan",handle(module,"createPlan",new JSONObject().put("plan",input.getJSONObject("plan")),true).getJSONObject("plan"));break;
-            case "approve":{JSONObject plan=module.handle("getPlan",new JSONObject().put("scope",scope()).put("id",id)).getJSONObject("plan");validateRemoteWaitPlan(plan);result.put("plan",module.approvePlanExecution(scope(),id,input.getLong("revision"),input.getJSONObject("settings")));break;}
+            case "approve":{JSONObject plan=module.handle("getPlan",new JSONObject().put("scope",scope()).put("id",id)).getJSONObject("plan");validateRemoteWaitPlan(plan);validateBusinessWaitPlan(plan);result.put("plan",module.approvePlanExecution(scope(),id,input.getLong("revision"),input.getJSONObject("settings")));break;}
             case "start":result.put("plan",module.startPlanExecution(scope(),id,input.getLong("revision")));break;
             case "pause":case "resume":{
                 JSONObject plan=module.setPlanPaused(scope(),id,input.getLong("revision"),command.equals("pause"));result.put("plan",plan).put("controls",applyControls(module,plan,command));break;
             }
             case "cancel":{JSONObject current=module.handle("getPlan",new JSONObject().put("scope",scope()).put("id",id)).getJSONObject("plan");JSONObject plan=current.optJSONObject("execution")==null?handle(module,"cancelPlan",input).getJSONObject("plan"):module.cancelPlanExecution(scope(),id,input.getLong("revision"));result.put("plan",plan).put("controls",applyControls(module,plan,"cancel"));break;}
-            case "editStep":{JSONObject patch=input.getJSONObject("patch");validateRemoteWait(patch);result.put("plan",module.editPlanStep(scope(),id,input.getLong("revision"),input.getString("stepId"),input.getLong("stepRevision"),patch));break;}
+            case "editStep":{JSONObject patch=input.getJSONObject("patch");validateRemoteWait(patch);validateBusinessWait(patch);result.put("plan",module.editPlanStep(scope(),id,input.getLong("revision"),input.getString("stepId"),input.getLong("stepRevision"),patch));break;}
             case "retry":result.put("plan",module.retryPlanStep(scope(),id,input.getLong("revision"),input.getString("stepId"),input.getLong("stepRevision")));break;
             case "inspect":case "refresh":inspectOriginalPlan(module,id);break;
             default:throw new IllegalArgumentException("未知原生计划操作");
@@ -69,7 +72,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         for(int i=0;i<plans.length();i++){JSONObject plan=executionView(module,plans.getJSONObject(i));plans.put(i,plan);plan.put("requirements",controls==null?new JSONObject().put("allowed",false).put("reason","native_host_unavailable"):controls.requirementsForPlan(plan));
             JSONObject next=plan.optJSONObject("nextStep");if(plan.optJSONObject("execution")!=null&&next!=null)plan.put("runtimeDecision",module.inspectPlanTask(scope(),plan.getString("id"),next.getString("id")));
         }
-        return new JSONObject().put("plans",plans).put("remoteWaitCandidates",tasks.automationRemoteWaitCandidates(20)).put("conditions",module.conditionsSnapshot()).put("taskAuthority","TaskStore").put("workerState","not_inferred_from_plan_state").put("snapshotProcess",snapshotProcess).put("snapshotSequence",snapshotSequence.incrementAndGet());
+        return new JSONObject().put("plans",plans).put("remoteWaitCandidates",tasks.automationRemoteWaitCandidates(20)).put("businessWaitCandidates",businessWaitCandidates()).put("businessWaitSourceAvailable",businessEvents!=null).put("conditions",module.conditionsSnapshot()).put("taskAuthority","TaskStore").put("workerState","not_inferred_from_plan_state").put("snapshotProcess",snapshotProcess).put("snapshotSequence",snapshotSequence.incrementAndGet());
     }
     private JSONObject executionView(AutomationModule module,JSONObject plan)throws Exception{
         if(plan.optJSONObject("execution")==null)return plan;JSONArray steps=plan.getJSONArray("steps");
@@ -133,7 +136,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         JSONObject input=new JSONObject(payload.toString()).put("scope",scope());
         if(command.equals("createPlan")){
             JSONObject plan=input.getJSONObject("plan");JSONArray steps=plan.getJSONArray("steps");
-            for(int i=0;i<steps.length();i++){JSONObject step=steps.getJSONObject(i);validateTask(step.optString("taskId"));if(step.has("remoteWait")&&!step.isNull("remoteWait")){if(!nativeOwner)throw new SecurityException("等待私人电脑任务须在原生机主目标页明确选择");validateRemoteWait(step);}}
+            for(int i=0;i<steps.length();i++){JSONObject step=steps.getJSONObject(i);validateTask(step.optString("taskId"));if(step.has("remoteWait")&&!step.isNull("remoteWait")){if(!nativeOwner)throw new SecurityException("等待私人电脑任务须在原生机主目标页明确选择");validateRemoteWait(step);}if(step.has("businessWait")&&!step.isNull("businessWait")){if(!nativeOwner)throw new SecurityException("认证入站来源须由主人在原生目标页明确选择并审阅");validateBusinessWait(step);}}
             plan.put("sourceRef",tasks.recordCommitmentDelegation(plan));
         }else if(command.equals("createCommitment")){
             JSONObject declaration=input.getJSONObject("commitment");validateTask(declaration.optString("taskId"));
@@ -158,6 +161,8 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         JSONObject reference=dev.pocketengine.features.automation.PlanRemoteWait.standard(step.getJSONObject("remoteWait"));
         if(!dev.pocketengine.features.automation.PlanRemoteWait.sameIdentity(reference,tasks.automationRemoteWaitReference(reference.getString("taskId"))))throw new SecurityException("原电脑执行身份已变化，请明确重选并审阅");
     }
+    private void validateBusinessWait(JSONObject step)throws Exception{if(step.optJSONObject("businessWait")==null)return;var nativeSource=businessEvents;if(nativeSource==null)throw new SecurityException("原认证渠道来源尚不可核对");nativeSource.requireCurrent(step.getJSONObject("businessWait"));}
+    private void validateBusinessWaitPlan(JSONObject plan)throws Exception{JSONArray steps=plan.getJSONArray("steps");for(int i=0;i<steps.length();i++){JSONObject step=steps.getJSONObject(i);if(!step.optString("status").matches("completed|failed|cancelled|skipped")&&step.optString("taskId").isEmpty()&&step.optJSONObject("taskAdmission")==null)validateBusinessWait(step);}}
     private void validateRemoteWaitPlan(JSONObject plan)throws Exception{
         JSONArray steps=plan.getJSONArray("steps");for(int i=0;i<steps.length();i++){JSONObject step=steps.getJSONObject(i);if(!step.optString("status").matches("completed|failed|cancelled|skipped")&&step.optString("taskId").isEmpty()&&step.optJSONObject("taskAdmission")==null)validateRemoteWait(step);}
     }
@@ -195,6 +200,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
 
     /** Domain evidence lookup rechecks the current original task at the actual completion fence. */
     public JSONObject resolveEvidence(JSONObject scope,JSONObject commitment,String kind,String id)throws Exception{
+        if("business_wait_condition".equals(kind)){if(Thread.holdsLock(tasks))throw new SecurityException("原认证入站事实必须在Tasks锁外核验");var nativeSource=businessEvents;JSONObject reference=commitment.optJSONObject("businessWait");if(nativeSource==null||!"owner".equals(scope.optString("ownerId"))||!"private".equals(scope.optString("spaceId"))||reference==null||!id.equals(dev.pocketengine.features.automation.PlanBusinessWait.anchorId(reference)))return null;JSONObject intent=commitment.optJSONObject("taskAdmission");return nativeSource.observe(reference,commitment.optString("businessWaitCursor"),intent==null?null:intent.optJSONObject("businessWaitEvidence"));}
         synchronized(tasks){
             if("remote_wait_condition".equals(kind)){
                 JSONObject reference=commitment.optJSONObject("remoteWait");if(!"owner".equals(scope.optString("ownerId"))||!"private".equals(scope.optString("spaceId"))||reference==null||!id.equals(reference.optString("taskId")))return null;

@@ -76,7 +76,7 @@ public final class BrowserSemanticRead {
     }
     private static String hex(byte[] bytes){StringBuilder b=new StringBuilder();for(byte v:bytes)b.append(String.format(java.util.Locale.ROOT,"%02x",v&255));return b.toString();}
 
-    private static final String SCRIPT="""
+    private static final String SCRIPT="const visibilityIncomplete=()=>{layoutLimited=true};\n"+BrowserVisibleSubtree.SCRIPT+"""
 const now=Date.now(),deadline=now+150,MAX_NODES=6000,MAX_CHARS=180000,MAX_QUEUE=6000;
 const work={nodesVisited:0,textCharsVisited:0,layoutChecks:0,queuedPeak:0,nodeLimit:MAX_NODES,textCharLimit:MAX_CHARS,queueLimit:MAX_QUEUE,budgetMs:150};
 const fail=(code)=>({semanticRead:true,status:'unavailable',code,url:location.href,title:document.title||'',readOnlyEvidence:true,automaticReplayAllowed:false});
@@ -95,24 +95,19 @@ let layoutLimited=false;const hasRect=e=>{if(work.layoutChecks>=MAX_NODES){layou
 const regionsRole=new Set(['document','main','article','region','navigation','banner','contentinfo','form','table','grid','list','heading']);
 function scan(root,makeRegions){
  const out={nodes:0,chars:0,text:[],elements:[],regions:[],frames:0,shadows:0,reasons:new Set(),hash:2166136261},stack=[{node:root,anc:[]}],vis=new WeakMap(),seen=new WeakSet();
- const renderedParent=e=>{if(e.parentElement)return e.parentElement;const root=typeof e.getRootNode==='function'?e.getRootNode():null;return root&&root.host||null};
- const styleVisible=c=>c.display!=='none'&&c.visibility!=='hidden'&&c.visibility!=='collapse';
- const shown=e=>{if(vis.has(e))return vis.get(e);let yes=!e.closest('[hidden],[aria-hidden="true"]');if(yes){const c=getComputedStyle(e);yes=styleVisible(c)&&hasRect(e);
-  // A layout-transparent slot can still render assigned/fallback content. Only this slot
-  // exception traverses without its own box, and its rendered ancestry must remain visible.
-  if(!yes&&e.tagName==='SLOT'&&c.display==='contents'&&styleVisible(c)){let p=renderedParent(e),hops=0;while(p&&hops++<128){if(p.closest('[hidden],[aria-hidden="true"]'))break;const pc=getComputedStyle(p);if(!styleVisible(pc))break;if(hasRect(p)){yes=true;break}if(pc.display!=='contents')break;p=renderedParent(p)}}
- }vis.set(e,yes);return yes};
+ const shown=e=>{if(vis.has(e))return vis.get(e);const yes=visibleSubtree(e)&&(getComputedStyle(e).display==='contents'||hasRect(e));vis.set(e,yes);return yes};
  let rootRegion=null;
  while(stack.length){
   if(work.nodesVisited>=MAX_NODES||Date.now()>deadline||work.textCharsVisited>=MAX_CHARS){out.reasons.add(work.nodesVisited>=MAX_NODES?'node_budget':work.textCharsVisited>=MAX_CHARS?'text_scan_budget':'capture_time_budget');break}
   const {node,anc,depth=0}=stack.pop();if(seen.has(node))continue;seen.add(node);out.nodes++;work.nodesVisited++;if(depth>128){out.reasons.add('depth_budget');continue}
   if(node.nodeType===3){const p=node.parentElement;if(!p||!shown(p))continue;const remaining=MAX_CHARS-work.textCharsVisited,raw=String(node.nodeValue||'');if(raw.length>remaining)out.reasons.add('text_scan_budget');let t=compact(clip(raw,remaining));if(!t)continue;out.chars+=t.length;work.textCharsVisited+=t.length;out.text.push(t);out.hash=hashAdd(out.hash,t);for(const r of anc){r.hash=hashAdd(r.hash,t);if(!r.preview)r.preview=clip(t,140);if(request.query){const at=t.toLocaleLowerCase().indexOf(request.query.toLocaleLowerCase());if(at>=0){r.matched=true;r.preview=clip(contextFrom(t,Math.max(0,at-60)),220)}}}if(work.textCharsVisited>=MAX_CHARS){out.reasons.add('text_scan_budget');break}continue}
-  if(node.nodeType!==1)continue;const e=node;if(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE'].includes(e.tagName)||e.type==='password'||!shown(e))continue;
+  if(node.nodeType!==1)continue;const e=node;if(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE'].includes(e.tagName)||e.type==='password'||!visibleSubtree(e))continue;
   out.elements.push(e);const r=role(e),n=name(e),href=e.tagName==='A'?clip(e.href,2048):'';const identity=e.tagName+'|'+r+'|'+n+'|'+href+'|'+JSON.stringify(stateOf(e));out.hash=hashAdd(out.hash,identity);for(const a of anc)a.hash=hashAdd(a.hash,identity);
   if(e.tagName==='IFRAME'||e.tagName==='FRAME'){out.frames++;out.reasons.add('child_frames_not_read');continue}
   if(e.tagName==='CANVAS')out.reasons.add('canvas_pixels_not_read');
   let nextAnc=anc;if(makeRegions&&(e===root||regionsRole.has(r))){if(out.regions.length<256){let ref=state.nodeRefs.get(e);if(!ref){if(state.nextRegion>=999999){out.reasons.add('region_identity_budget');continue}ref=state.namespace+':r'+(++state.nextRegion);state.nodeRefs.set(e,ref)}const item={el:e,ref,role:r||'region',name:n,preview:'',matched:!!request.query&&n.toLocaleLowerCase().includes(request.query.toLocaleLowerCase()),hash:hashAdd(2166136261,identity),order:out.regions.length};out.regions.push(item);nextAnc=anc.concat(item);if(e===root)rootRegion=item}else out.reasons.add('region_budget')}
-  let nodes=e.childNodes;if(e.shadowRoot){out.shadows++;nodes=e.shadowRoot.childNodes}else if(e.tagName==='SLOT'&&typeof e.assignedNodes==='function'){const assigned=e.assignedNodes({flatten:false});if(assigned.length)nodes=assigned}
+  const nodes=composedChildren(e);if(e.shadowRoot)out.shadows++;
+
   const cap=Math.min(nodes.length,Math.max(0,MAX_NODES-work.nodesVisited),Math.max(0,MAX_QUEUE-stack.length));if(cap<nodes.length)out.reasons.add('queue_budget');for(let i=cap-1;i>=0;i--)stack.push({node:nodes[i],anc:nextAnc,depth:depth+1});work.queuedPeak=Math.max(work.queuedPeak,stack.length);
  }
  out.version=hashHex(out.hash);for(const r of out.regions)r.version=hashHex(r.hash);out.rootRegion=rootRegion;return out;

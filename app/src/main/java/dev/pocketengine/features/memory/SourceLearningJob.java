@@ -17,9 +17,18 @@ public final class SourceLearningJob {
     public static final int MAX_INPUTS=20,CALLS_PER_ATTEMPT=3;
     private final TaskStore tasks;private final String task,run;private final int epoch;private final RunControl control;
     private final KnowledgeLearningWorkflow learning;private final Callable<InferenceReceipt> actualReceipt;
-    private final Callable<Void> synchronize;
+    private final Callable<Void> synchronize;private final int maxBatches;private final SourcePreparation prepareSource;
+    /** Native IO only, before the selected batch reads source bytes; never a source grant. */
+    public interface SourcePreparation {void prepare(SourceRef source,RunControl original)throws Exception;}
     public SourceLearningJob(TaskStore tasks,String task,String run,int epoch,RunControl control,KnowledgeLearningWorkflow learning,Callable<InferenceReceipt> actualReceipt,Callable<Void> synchronize){
-        this.tasks=java.util.Objects.requireNonNull(tasks);this.task=task;this.run=run;this.epoch=epoch;this.control=java.util.Objects.requireNonNull(control);this.learning=java.util.Objects.requireNonNull(learning);this.actualReceipt=java.util.Objects.requireNonNull(actualReceipt);this.synchronize=java.util.Objects.requireNonNull(synchronize);
+        this(tasks,task,run,epoch,control,learning,actualReceipt,synchronize,CALLS_PER_ATTEMPT);
+    }
+    public SourceLearningJob(TaskStore tasks,String task,String run,int epoch,RunControl control,KnowledgeLearningWorkflow learning,Callable<InferenceReceipt> actualReceipt,Callable<Void> synchronize,int maxBatches){
+        this(tasks,task,run,epoch,control,learning,actualReceipt,synchronize,maxBatches,(source,original)->{});
+    }
+    public SourceLearningJob(TaskStore tasks,String task,String run,int epoch,RunControl control,KnowledgeLearningWorkflow learning,Callable<InferenceReceipt> actualReceipt,Callable<Void> synchronize,int maxBatches,SourcePreparation prepareSource){
+        if(maxBatches<1||maxBatches>MAX_INPUTS)throw new IllegalArgumentException("本次原来源提炼须为1至20批");
+        this.tasks=java.util.Objects.requireNonNull(tasks);this.task=task;this.run=run;this.epoch=epoch;this.control=java.util.Objects.requireNonNull(control);this.learning=java.util.Objects.requireNonNull(learning);this.actualReceipt=java.util.Objects.requireNonNull(actualReceipt);this.synchronize=java.util.Objects.requireNonNull(synchronize);this.maxBatches=maxBatches;this.prepareSource=java.util.Objects.requireNonNull(prepareSource);
     }
     /** Native manifests contain identities, hashes and display labels only, never original bodies. */
     public static JSONArray checkedInputs(JSONArray input)throws Exception{
@@ -32,17 +41,19 @@ public final class SourceLearningJob {
     public interface OwnerCommands {
         JSONObject create(JSONArray sources)throws Exception;JSONObject add(String task,long revision,SourceRef source)throws Exception;
         JSONObject get(String task)throws Exception;JSONObject list(String cursor,int limit)throws Exception;
-        JSONObject run(String task,long revision,RunControl original)throws Exception;JSONObject skip(String task,long revision,boolean confirmed)throws Exception;JSONObject stop(String task)throws Exception;
+        JSONObject run(String task,long revision,RunControl original)throws Exception;
+        default JSONObject run(String task,long revision,RunControl original,int maxBatches)throws Exception{if(maxBatches!=CALLS_PER_ATTEMPT)throw new IllegalStateException("原宿主不支持这个连续批次窗口");return run(task,revision,original);}
+        JSONObject skip(String task,long revision,boolean confirmed)throws Exception;JSONObject stop(String task)throws Exception;
     }
     public static JSONObject dispatch(String command,JSONObject payload,RunControl original,OwnerCommands host)throws Exception{
-        java.util.Objects.requireNonNull(host);java.util.Objects.requireNonNull(original);java.util.Set<String> allowed=switch(command){case "createLearningJob"->java.util.Set.of("sourceRefs");case "addLearningJobSource"->java.util.Set.of("taskId","revision","sourceRef");case "getLearningJob","stopLearningJob"->java.util.Set.of("taskId");case "listLearningJobs"->java.util.Set.of("cursor","limit");case "runLearningJob"->java.util.Set.of("taskId","revision","confirmModelUse");case "skipLearningJobBatch"->java.util.Set.of("taskId","revision","confirmUnknownUse");default->throw new IllegalArgumentException("不是原逐批来源学习操作");};
-        if(payload==null||payload.length()!=allowed.size())throw new SecurityException("逐批来源任务参数不完整或含替代字段");for(var keys=payload.keys();keys.hasNext();)if(!allowed.contains(keys.next()))throw new SecurityException("逐批来源任务不能覆盖模型、身份、回执或授权");original.check();
+        java.util.Objects.requireNonNull(host);java.util.Objects.requireNonNull(original);java.util.Set<String> allowed=switch(command){case "createLearningJob"->java.util.Set.of("sourceRefs");case "addLearningJobSource"->java.util.Set.of("taskId","revision","sourceRef");case "getLearningJob","stopLearningJob"->java.util.Set.of("taskId");case "listLearningJobs"->java.util.Set.of("cursor","limit");case "runLearningJob"->java.util.Set.of("taskId","revision","confirmModelUse","maxBatches");case "skipLearningJobBatch"->java.util.Set.of("taskId","revision","confirmUnknownUse");default->throw new IllegalArgumentException("不是原逐批来源学习操作");};
+        if(payload==null||payload.length()<(command.equals("runLearningJob")?allowed.size()-1:allowed.size())||payload.length()>allowed.size())throw new SecurityException("逐批来源任务参数不完整或含替代字段");for(var keys=payload.keys();keys.hasNext();)if(!allowed.contains(keys.next()))throw new SecurityException("逐批来源任务不能覆盖模型、身份、回执或授权");original.check();
         return switch(command){
             case "createLearningJob"->host.create(payload.getJSONArray("sourceRefs"));
             case "addLearningJobSource"->host.add(payload.getString("taskId"),positiveInteger(payload,"revision"),SourceRef.fromJson(payload.getJSONObject("sourceRef")));
             case "getLearningJob"->host.get(payload.getString("taskId"));case "stopLearningJob"->host.stop(payload.getString("taskId"));
             case "listLearningJobs"->host.list(payload.getString("cursor"),Math.toIntExact(positiveInteger(payload,"limit")));
-            case "runLearningJob"->{if(!Boolean.TRUE.equals(payload.opt("confirmModelUse")))throw new SecurityException("须由主人明确确认本次把所选来源发给当前模型");yield host.run(payload.getString("taskId"),positiveInteger(payload,"revision"),original);}
+            case "runLearningJob"->{if(!Boolean.TRUE.equals(payload.opt("confirmModelUse")))throw new SecurityException("须由主人明确确认本次把所选来源发给当前模型");int max=payload.has("maxBatches")?Math.toIntExact(positiveInteger(payload,"maxBatches")):CALLS_PER_ATTEMPT;if(max>MAX_INPUTS)throw new IllegalArgumentException("本次最多20批，不能扩展原来源清单");yield host.run(payload.getString("taskId"),positiveInteger(payload,"revision"),original,max);}
             default->{if(!Boolean.TRUE.equals(payload.opt("confirmUnknownUse")))throw new SecurityException("须明确确认跳过，未知调用不退款");yield host.skip(payload.getString("taskId"),positiveInteger(payload,"revision"),true);}
         };
     }
@@ -53,15 +64,18 @@ public final class SourceLearningJob {
     public JSONObject run()throws Exception{
         int calls=0;
         while(true){
-            control.check();synchronize.call();JSONObject snapshot=tasks.sourceLearningJob(task),job=snapshot.getJSONObject("job");int index=job.getInt("nextIndex");JSONArray inputs=job.getJSONArray("inputs");
+            control.check();JSONObject snapshot=tasks.sourceLearningJob(task),job=snapshot.getJSONObject("job");int index=job.getInt("nextIndex");JSONArray inputs=job.getJSONArray("inputs");
             if(index>=inputs.length())return snapshot.put("invocationOutcome","all_batches_settled").put("gatewayInvocationsThisAttempt",calls);
             JSONObject active=snapshot.optJSONObject("active"),recorded;
+            if(active!=null&&!"draft_recorded".equals(active.optString("stage")))return snapshot.put("invocationOutcome","unknown_model_result_requires_owner_review").put("gatewayInvocationsThisAttempt",calls);
+            if(active==null&&calls>=maxBatches)return snapshot.put("invocationOutcome","batch_window_complete_continue_explicitly").put("gatewayInvocationsThisAttempt",calls);
+            JSONObject input=inputs.getJSONObject(index);SourceRef ref=SourceRef.fromJson(input.getJSONObject("sourceRef"));
+            // Prepare only the actual current source, outside Tasks/Book locks. A future deleted
+            // input must not block this bounded batch, and cached drafts still recheck cold bytes.
+            prepareSource.prepare(ref,control);control.check();synchronize.call();control.check();
             if(active!=null){
-                if(!"draft_recorded".equals(active.optString("stage")))return snapshot.put("invocationOutcome","unknown_model_result_requires_owner_review").put("gatewayInvocationsThisAttempt",calls);
                 recorded=tasks.sourceLearningDraft(task,active.getString("operationId"));
             }else{
-                if(calls>=CALLS_PER_ATTEMPT)return snapshot.put("invocationOutcome","batch_window_complete_continue_explicitly").put("gatewayInvocationsThisAttempt",calls);
-                JSONObject input=inputs.getJSONObject(index);SourceRef ref=SourceRef.fromJson(input.getJSONObject("sourceRef"));
                 // This pre-read avoids reserving a new model attempt for an already invalid source.
                 learning.requireCurrentLearningInput(scope(),ref,input.getString("sourceFingerprint"),control);
                 active=tasks.beginSourceLearningBatch(task,run,epoch,index,control);String operation=active.getString("operationId");

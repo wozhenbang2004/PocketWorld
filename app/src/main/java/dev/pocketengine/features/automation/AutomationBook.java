@@ -134,7 +134,7 @@ public final class AutomationBook {
             JSONObject condition=AutomationConditions.evaluate(policy,conditions,now);
             if(!condition.getBoolean("allowed"))throw new IllegalStateException("当前运行条件不满足，旧目标未获准执行："+condition.getJSONArray("blockers"));
             return new JSONObject().put("occurrenceId",receipt.getString("id")).put("ruleId",rule.getString("id")).put("ruleRevision",rule.getInt("revision"))
-                    .put("revision",rule.getInt("revision")).put("validUntil",deadline)
+                    .put("revision",rule.getInt("revision")).put("overlapPolicy",policy.getString("overlap")).put("validUntil",deadline)
                     .put("goal",receipt.getString("goal")).put("title",receipt.getString("title")).put("actorId","owner").put("spaceId","private")
                     .put("origin",new JSONObject().put("kind","automation").put("occurrenceId",receipt.getString("id"))).put("requiresHostAdmission",true).put("executionAuthorized",false);
         }
@@ -146,42 +146,88 @@ public final class AutomationBook {
             return earliest==Long.MAX_VALUE?-1:earliest;
         }
     }
+    /** Resolve original goal tasks outside the rule lock. Missing/changed evidence never
+     * authorizes parallel work; the native TaskStore admission also enforces non-overlap. */
+    private java.util.Map<String,JSONObject> overlapFacts(long now)throws Exception{
+        JSONArray pending=new JSONArray();synchronized(lock){JSONObject state=read();JSONArray rules=state.getJSONArray("rules"),rows=state.getJSONArray("receipts");
+            java.util.Map<String,Integer> due=new java.util.HashMap<>();
+            for(int i=0;i<rules.length();i++){JSONObject rule=rules.getJSONObject(i);
+                if(rule.optBoolean("enabled")&&!rule.isNull("nextAt")&&rule.getLong("nextAt")<=now&&!"allow".equals(policy(rule).getString("overlap")))due.put(rule.getString("id"),rule.getInt("revision"));
+            }
+            // The original file is already bounded to 8MB. Select only exact due-rule revisions,
+            // but never let another rule's recent rows hide a retained old completion proof.
+            for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);Integer revision=due.get(row.optString("ruleId"));
+                if(revision!=null&&revision==row.optInt("revision")&&"phone_goal".equals(row.optString("kind"))&&row.optString("status").matches("awaiting_user|blocked_notifications"))pending.put(copy(row));
+            }}
+        java.util.Map<String,JSONObject> result=new java.util.HashMap<>();
+        // Native resolver calls remain outside the rule monitor. Each page is bounded, and all
+        // selected pages are checked: an absent/changed proof still blocks inFlight below.
+        for(int start=0;start<pending.length();start+=100)for(int i=start;i<Math.min(start+100,pending.length());i++){
+            JSONObject row=pending.getJSONObject(i);result.put(row.getString("id"),new JSONObject().put("receipt",row).put("goal",goalState(row)));
+        }return result;
+    }
+    private static boolean inFlight(JSONArray receipts,JSONObject rule,java.util.Map<String,JSONObject> facts){
+        for(int i=0;i<receipts.length();i++){JSONObject row=receipts.optJSONObject(i);if(row==null||!rule.optString("id").equals(row.optString("ruleId"))||row.optInt("revision")!=rule.optInt("revision"))continue;
+            String status=row.optString("status");if(status.matches("dispatching|delivery_unknown|deferred"))return true;
+            if("phone_goal".equals(row.optString("kind"))&&status.matches("awaiting_user|blocked_notifications")){
+                JSONObject proof=facts.get(row.optString("id")),before=proof==null?null:proof.optJSONObject("receipt"),goal=proof==null?null:proof.optJSONObject("goal");
+                if(before==null||!before.toString().equals(row.toString())||goal==null||!goal.optString("state").matches("succeeded|cancelled"))return true;
+            }
+        }return false;
+    }
     public JSONArray claimDue(long now,int limit)throws Exception {
-        synchronized(lock){JSONObject state=read();JSONArray claimed=new JSONArray(),rules=state.getJSONArray("rules"),receipts=state.getJSONArray("receipts");boolean changed=false;
-            for(int i=0;i<receipts.length()&&claimed.length()<Math.min(20,Math.max(1,limit));i++){
+        java.util.Map<String,JSONObject> facts=overlapFacts(now);
+        synchronized(lock){JSONObject state=read();JSONArray claimed=new JSONArray(),rules=state.getJSONArray("rules"),receipts=state.getJSONArray("receipts");boolean changed=false;int maximum=Math.min(20,Math.max(1,limit)),historyBudget=64;
+            for(int i=0;i<receipts.length()&&claimed.length()<maximum;i++){
                 JSONObject receipt=receipts.getJSONObject(i);if(!"deferred".equals(receipt.optString("status"))||receipt.getLong("dispatchAfter")>now)continue;
                 String blocked=receiptBlocked(state,receipt,now);changed=true;
                 if(blocked==null){receipt.put("status","dispatching").put("updatedAt",now);claimed.put(copy(receipt));}
                 else if(!deferredBlock(blocked))receipt.put("status",blocked).put("message","旧提醒已停止："+blocked).put("updatedAt",now);
             }
-            for(int i=0;i<rules.length()&&claimed.length()<Math.min(20,Math.max(1,limit));i++){
+            for(int i=0;i<rules.length()&&claimed.length()<maximum&&historyBudget>0;i++){
                 JSONObject rule=rules.getJSONObject(i);if(!rule.optBoolean("enabled")||rule.isNull("nextAt")||rule.getLong("nextAt")>now)continue;
-                long occurrence=rule.optLong("scheduledAt",rule.getLong("nextAt"));JSONObject policy=policy(rule);long deadline=AutomationPolicy.deadline(policy,occurrence);
-                String blocked=now>=deadline?(now>=policy.optLong("expiresAt",AutomationPolicy.MAX_TIME)?"expired":"missed_window"):null;
-                if(blocked==null&&now<occurrence){rule.put("nextAt",Math.min(deadline,occurrence)).put("ruleState","scheduled");changed=true;continue;}
-                if(blocked==null&&AutomationPolicy.quietEnd(policy,now)>now){rule.put("nextAt",Math.min(deadline,AutomationPolicy.quietEnd(policy,now))).put("ruleState","quiet_hours");changed=true;continue;}
-                long count=claimedCount(state,rule);
-                if(blocked==null&&!policy.isNull("maxOccurrences")&&count>=policy.getLong("maxOccurrences")){rule.put("nextAt",JSONObject.NULL).put("ruleState","budget_exhausted");changed=true;continue;}
-                if(blocked==null){JSONObject condition=AutomationConditions.evaluate(policy,conditions,now);
-                    rule.put("conditionStatus",condition);
-                    if(!condition.getBoolean("allowed")){rule.put("nextAt",Math.min(deadline,condition.getLong("nextCheckAt"))).put("ruleState","conditions_blocked");changed=true;continue;}
+                JSONObject policy=policy(rule),schedule=rule.getJSONObject("schedule");long first=rule.optLong("scheduledAt",rule.getLong("nextAt"));
+                if(first>now){arm(rule,first);changed=true;continue;}
+                AutomationMisfire.Window window=AutomationMisfire.enumerate(schedule,first,now);java.util.List<Long> due=window.occurrences();
+                String strategy=policy.getString("misfire"),overlap=policy.getString("overlap");int catchUp=0;long next=window.next();boolean stopped=false,held=false;
+                for(int j=0;j<due.size();j++){
+                    long occurrence=due.get(j);if(historyBudget==0||claimed.length()>=maximum){next=occurrence;stopped=true;break;}
+                    boolean latest=window.coversNow()&&j==due.size()-1;
+                    boolean omitted=!"catch_up".equals(strategy)&&!latest;
+                    String terminal=!policy.isNull("expiresAt")&&now>=policy.getLong("expiresAt")?"expired":omitted?(strategy.equals("coalesce")?"coalesced":"missed_schedule"):null;
+                    long deadline=AutomationPolicy.deadline(policy,occurrence);long count=claimedCount(state,rule);
+                    if(terminal==null&&now>=deadline)terminal=now>=policy.optLong("expiresAt",AutomationPolicy.MAX_TIME)?"expired":"missed_window";
+                    if(terminal==null&&!policy.isNull("maxOccurrences")&&count>=policy.getLong("maxOccurrences")){rule.put("nextAt",JSONObject.NULL).put("ruleState","budget_exhausted");stopped=true;next=-1;changed=true;break;}
+                    if(terminal==null&&AutomationPolicy.quietEnd(policy,now)>now){rule.put("scheduledAt",occurrence).put("nextAt",Math.min(deadline,AutomationPolicy.quietEnd(policy,now))).put("ruleState","quiet_hours");held=true;stopped=true;changed=true;break;}
+                    if(terminal==null){JSONObject condition=AutomationConditions.evaluate(policy,conditions,now);rule.put("conditionStatus",condition);if(!condition.getBoolean("allowed")){rule.put("scheduledAt",occurrence).put("nextAt",Math.min(deadline,condition.getLong("nextCheckAt"))).put("ruleState","conditions_blocked");held=true;stopped=true;changed=true;break;}}
+                    if(terminal==null&&!overlap.equals("allow")&&inFlight(receipts,rule,facts)){
+                        if(overlap.equals("skip"))terminal="overlap_skipped";
+                        else{rule.put("scheduledAt",occurrence).put("nextAt",AutomationConditions.later(now)).put("ruleState","overlap_buffered");held=true;stopped=true;changed=true;break;}
+                    }
+                    String key=rule.getString("id")+":"+rule.getInt("revision")+":"+occurrence;boolean exists=false;
+                    for(int k=0;k<receipts.length();k++)if(key.equals(receipts.getJSONObject(k).optString("instanceKey"))){exists=true;break;}
+                    if(!exists){JSONObject receipt=new JSONObject().put("id",UUID.randomUUID().toString()).put("instanceKey",key).put("ruleId",rule.getString("id"))
+                            .put("revision",rule.getInt("revision")).put("occurrenceAt",occurrence).put("claimedAt",now).put("updatedAt",now)
+                            .put("status",terminal==null?"dispatching":terminal).put("kind",rule.getString("kind")).put("title",rule.getString("title")).put("goal",rule.getString("goal"))
+                            .put("validUntil",deadline).put("occurrenceNumber",terminal==null?count+1:JSONObject.NULL).put("misfirePolicy",strategy).put("overlapPolicy",overlap)
+                            .put("message",terminal==null?"提醒已领取，尚未确认通知投递":"此日历实例未投递或执行："+terminal);
+                        JSONObject pending=rule.optJSONObject("coalescedPending");
+                        if(strategy.equals("coalesce")){
+                            if(omitted){if(pending==null)pending=new JSONObject().put("firstAt",occurrence).put("count",0);pending.put("lastAt",occurrence).put("count",pending.getLong("count")+1);rule.put("coalescedPending",pending);}
+                            else if(pending!=null){receipt.put("coalescedOccurrences",copy(pending)).put("message",terminal==null?"已合并错过的日历实例，尚未确认本次投递":"合并实例未投递："+terminal);rule.remove("coalescedPending");}
+                        }
+                        receipts.put(receipt);if(terminal==null){rule.put("claimedCount",count+1);claimed.put(copy(receipt));catchUp++;}historyBudget--;changed=true;
+                    }
+                    if("expired".equals(terminal)){rule.put("enabled",false).put("ruleState","expired").put("scheduledAt",JSONObject.NULL).put("nextAt",JSONObject.NULL);next=-1;stopped=true;break;}
+                    if(strategy.equals("catch_up")&&catchUp>=policy.getInt("maxCatchUp")&&j+1<due.size()){next=due.get(j+1);stopped=true;break;}
                 }
-                String key=rule.getString("id")+":"+rule.getInt("revision")+":"+occurrence;
-                boolean exists=false;for(int j=0;j<receipts.length();j++)if(key.equals(receipts.getJSONObject(j).optString("instanceKey"))){exists=true;break;}
-                if(!exists){JSONObject receipt=new JSONObject().put("id",UUID.randomUUID().toString()).put("instanceKey",key).put("ruleId",rule.getString("id"))
-                        .put("revision",rule.getInt("revision")).put("occurrenceAt",occurrence).put("claimedAt",now).put("updatedAt",now)
-                        .put("status",blocked==null?"dispatching":blocked).put("kind",rule.getString("kind")).put("title",rule.getString("title")).put("goal",rule.getString("goal"))
-                        .put("validUntil",deadline).put("occurrenceNumber",blocked==null?count+1:JSONObject.NULL)
-                        .put("message",blocked==null?"提醒已领取，尚未确认通知投递":"提醒已错过有效窗口，未投递或执行");
-                    receipts.put(receipt);if(blocked==null){rule.put("claimedCount",count+1);claimed.put(copy(receipt));}changed=true;
-                }
-                JSONObject schedule=rule.getJSONObject("schedule");
-                if(schedule.getString("type").equals("once")||"expired".equals(blocked)){rule.put("enabled",false).put("nextAt",JSONObject.NULL).put("ruleState",blocked==null?"awaiting_user":blocked);}
-                else arm(rule,AutomationSchedule.nextAt(schedule,now));
+                rule.put("historyWindowCoveredToNow",window.coversNow()&&!stopped).put("historyWindowTruncated",!window.coversNow()||stopped&&next>=0);
+                // Quiet/condition/overlap holds already pinned the exact occurrence and wake.
+                if(!held&&next>=0)arm(rule,next);
+                if(next<0&&!stopped){rule.put("enabled",false).put("scheduledAt",JSONObject.NULL).put("nextAt",JSONObject.NULL).put("ruleState",schedule.getString("type").equals("once")?"awaiting_user":"schedule_exhausted");}
                 changed=true;
             }
-            // Never discard an unknown delivery or a live goal merely to meet a display limit.
-            while(receipts.length()>200){int removable=-1;for(int i=0;i<receipts.length();i++){JSONObject receipt=receipts.getJSONObject(i);if(receipt.optString("status").matches("notified|cancelled|expired|missed_window")){removable=i;break;}}if(removable<0)break;receipts.remove(removable);}
+            while(receipts.length()>200){int removable=-1;for(int i=0;i<receipts.length();i++)if(receipts.getJSONObject(i).optString("status").matches("notified|cancelled|expired|missed_window|missed_schedule|coalesced|overlap_skipped")){removable=i;break;}if(removable<0)break;JSONObject gone=receipts.getJSONObject(removable);receipts.remove(removable);JSONObject retention=state.optJSONObject("receiptRetention");if(retention==null)retention=new JSONObject().put("prunedTerminalCount",0);retention.put("prunedTerminalCount",retention.getLong("prunedTerminalCount")+1).put("lastPrunedOccurrenceAt",gone.optLong("occurrenceAt")).put("terminalWindowLimit",200);state.put("receiptRetention",retention);}
             if(changed)write(state);return claimed;
         }
     }

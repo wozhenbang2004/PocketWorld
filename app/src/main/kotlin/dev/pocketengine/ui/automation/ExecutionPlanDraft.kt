@@ -1,6 +1,7 @@
 package dev.pocketengine.ui
 
 import dev.pocketengine.features.automation.PlanArtifactVerifier
+import dev.pocketengine.features.automation.PlanBusinessWait
 import dev.pocketengine.features.automation.PlanRemoteWait
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,7 +12,7 @@ internal data class ExecutionStepDraft(
     val goal: String = "", val executor: String = "phone", val projectId: String = "",
     val path: String = "", val heading: String = "", val minimumBytes: String = "16",
     val dependencies: List<ExecutionDependencyDraft> = emptyList(),
-    val remoteWait: JSONObject? = null
+    val remoteWait: JSONObject? = null, val businessWait: JSONObject? = null
 )
 
 /** Exact earlier-step references only. An unsupported or missing edge is never silently dropped. */
@@ -29,7 +30,7 @@ internal fun executionStepDraft(plan: JSONObject, step: JSONObject): ExecutionSt
     val verification = step.optJSONObject("verification")
     val draft = ExecutionStepDraft(step.optString("goal"), step.optString("executor", "phone"), verification?.optString("projectId").orEmpty(),
         verification?.optString("path").orEmpty(), verification?.optString("requiredHeading").orEmpty(), (verification?.optLong("minBytes", 16) ?: 16).toString(), refs,
-        step.optJSONObject("remoteWait")?.let { PlanRemoteWait.standard(it) })
+        step.optJSONObject("remoteWait")?.let { PlanRemoteWait.standard(it) }, step.optJSONObject("businessWait")?.let { PlanBusinessWait.standard(it) })
     executionStepDefinition(draft, index, step.getLong("dueAt"))
     return draft
 }
@@ -52,6 +53,7 @@ private fun executionStepDefinition(draft: ExecutionStepDraft, index: Int, due: 
             .put("path", draft.path.trim()).put("requiredHeading", draft.heading.trim()).put("minBytes", minimum)))
     } else row.put("verification", JSONObject().put("kind", "owner_review"))
     draft.remoteWait?.let { row.put("remoteWait", PlanRemoteWait.standard(it)) }
+    draft.businessWait?.let { row.put("businessWait", PlanBusinessWait.standard(it)) }
     return row
 }
 
@@ -64,7 +66,7 @@ internal fun executionStepPatch(plan: JSONObject, original: JSONObject, draft: E
     val delay = minutes.toLongOrNull(); require(delay != null && delay in 0..525600) { "开始时间应为 0–525600 分钟之后" }
     val next = executionStepDefinition(draft, index, if (timingEdited) Math.addExact(now, delay * 60_000) else original.getLong("dueAt"))
     val patch = JSONObject()
-    for (key in listOf("title", "goal", "executor", "verification", "dependsOn", "dueAt", "remoteWait"))
+    for (key in listOf("title", "goal", "executor", "verification", "dependsOn", "dueAt", "remoteWait", "businessWait"))
         if (next.opt(key)?.toString() != previous.opt(key)?.toString()) patch.put(key, next.opt(key) ?: JSONObject.NULL)
     return patch
 }

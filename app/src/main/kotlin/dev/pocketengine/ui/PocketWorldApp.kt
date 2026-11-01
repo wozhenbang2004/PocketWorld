@@ -12,6 +12,9 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -186,9 +189,27 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
                     IconButton(onClick = { settings = true }, modifier = Modifier.semantics { contentDescription = "设置与连接" }) { LineIcon(3) }
                 }
             },
-            bottomBar = { Column { HorizontalDivider(color = Line); NavigationBar(containerColor = PageSurface, tonalElevation = 0.dp) {
-                listOf("对话", "任务", "项目").forEachIndexed { index, label -> NavigationBarItem(selected = tab == index, onClick = { tab = index }, icon = { LineIcon(index) }, label = { Text(label, fontSize = 13.sp) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = ActionInk, selectedTextColor = ActionInk, unselectedIconColor = SecondaryInk, unselectedTextColor = SecondaryInk, indicatorColor = ActionSurface)) }
-            } } }
+            bottomBar = {
+                Column(Modifier.background(Color.White).navigationBarsPadding()) {
+                    HorizontalDivider(color = Line.copy(alpha = .65f), thickness = .5.dp)
+                    Row(Modifier.fillMaxWidth().selectableGroup().padding(horizontal = 12.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("对话", "任务", "项目").forEachIndexed { index, label ->
+                            Row(Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
+                                .background(if(tab == index) Soft else Color.Transparent)
+                                .selectable(selected = tab == index, role = Role.Tab, onClick = { tab = index })
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center) {
+                                LineIcon(index)
+                                Spacer(Modifier.width(8.dp))
+                                Text(label, fontSize = 13.sp, fontWeight = if(tab == index) FontWeight.Medium else FontWeight.Normal,
+                                    color = if(tab == index) Ink else SecondaryInk)
+                            }
+                        }
+                    }
+                }
+            }
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
                 state.error?.let { text -> Notice(text, true, controller::dismissError) }
@@ -225,6 +246,7 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
             Text(goal, fontWeight = FontWeight.Medium)
             Text(if (executionMode == "background") "需要已连接的后台助手。无法建立独立屏幕时会停止等待。" else "会切换手机应用并占用当前屏幕。暂停后再自行操作，停止不会撤回已发生的动作。", color = SecondaryInk)
             Text("任务中的可见文字会发给你配置的模型；启用视觉后也会发送截图。", color = SecondaryInk, fontSize = 12.sp)
+            Text("原目标内累计 ${controller.newTaskToolBudget} 次工具、${controller.newTaskModelBudget} 次模型；" + if(controller.newTaskScopeMinutes==0) "持续至完成、主人停止或预算耗尽。" else "${controller.newTaskScopeMinutes}分钟后停止新派发。",color=SecondaryInk,fontSize=12.sp)
         } }, confirmButton = { Button(onClick = { controller.startPhone(goal, executionMode); consentGoal = null }) { Text("开始任务") } }, dismissButton = { TextButton(onClick = { consentGoal = null }) { Text("取消") } }) }
         BackHandler(enabled = !settings && !connections && !teamLaunch && state.teamRunId == null && state.inspectionTaskId == null && !state.backgroundSetupOpen && selectedTaskId == null && !conversationPicker && state.filePath == null && tab != 0) { tab = 0 }
         NativeInferenceHistory(controller)
@@ -261,18 +283,31 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
         }
     }
     LaunchedEffect(showLatest) { if (showLatest > 0 && state.messages.isNotEmpty()) { scroll.animateScrollToItem(state.messages.lastIndex); setNewReplies(false) } }
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().background(Color.White)) {
         if (state.messages.isEmpty()) Column(Modifier.weight(1f).fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.Center) {
             Text("想聊聊，\n还是交给我办？", fontSize = 24.sp, lineHeight = 32.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-.8).sp)
             Text("你的对话、任务和项目，都留在同一个口袋世界。", fontSize = 14.sp, lineHeight = 23.sp, color = SecondaryInk, modifier = Modifier.padding(top = 15.dp, bottom = 30.dp))
             Suggestion("聊个问题", "一起理清思路") { onPhone(false) }
             Suggestion("帮我操作手机", "在独立后台屏执行") { onPhone(true); onMode("background") }
-        } else LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("conversation_messages"), state = scroll, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        } else LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("conversation_messages"), state = scroll, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             items(state.messages, key = { it.id ?: (it.role + it.at + it.content.hashCode()) }) { message -> Column(Modifier.fillMaxWidth(), horizontalAlignment = if (message.role == "user") Alignment.End else Alignment.Start) {
                 var messageDetails by remember(message.id, message.at) { mutableStateOf(false) }
-                if (message.role != "user") Text("口袋世界", fontSize = 13.sp, color = ActionInk, modifier = Modifier.padding(bottom = 6.dp))
+                val hasMessageActions = message.id != null || message == lastAssistant || message.memoryReference != null
+                if (message.role != "user") Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
+                    Box(Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(Color.White)
+                        .border(.5.dp, Line, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                        AffectGlyph("spark", Modifier.size(14.dp))
+                    }
+                    Text("口袋世界", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = ActionInk)
+                    Spacer(Modifier.weight(1f))
+                    if (hasMessageActions) AffectToolButton("more", if(messageDetails) "收起消息操作与来源" else "消息操作与来源", { messageDetails = !messageDetails })
+                }
                 if (message.role == "assistant") RichConversationMessageBody(message.content, Modifier.fillMaxWidth())
-                else SelectionContainer { Text(message.content, color = Ink, fontSize = 16.sp, lineHeight = 25.sp, modifier = Modifier.widthIn(max = 310.dp).clip(Rounded).background(Soft).padding(horizontal = 15.dp, vertical = 12.dp)) }
+                else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Top) {
+                    if (message.role == "user" && hasMessageActions) AffectToolButton("more", if(messageDetails) "收起消息操作与来源" else "消息操作与来源", { messageDetails = !messageDetails })
+                    SelectionContainer(Modifier.weight(1f, fill = false)) { Text(message.content, color = Ink, fontSize = 16.sp, lineHeight = 25.sp, modifier = Modifier.widthIn(max = 310.dp).clip(Rounded).background(Soft).padding(horizontal = 15.dp, vertical = 12.dp)) }
+                }
                 if(message==lastAssistant && (messageDetails || state.speaking))Column {
                     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) { TextButton(onClick={controller.speak(message.content)},enabled=!state.voiceInput.optBoolean("active")&&!state.voiceInput.optBoolean("leaseHeld")) { Text("朗读这条原回复",fontSize=12.sp) };if(state.speaking)TextButton(onClick=controller::stopSpeaking){Text("停止朗读，任务继续",fontSize=12.sp)} }
                     if(state.speaking||state.systemSpeech.optString("ttsStatus") in setOf("unavailable","language_data_missing","language_unsupported"))Text(systemTtsDescription(state.systemSpeech),fontSize=12.sp,lineHeight=19.sp,color=SecondaryInk)
@@ -284,11 +319,6 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                     for(file in message.attachmentFiles)TextButton(onClick={controller.openAttachmentOutcome(file)},enabled=file.optString("availability")=="available",contentPadding=PaddingValues(0.dp)){Text(file.optString("name","原消息附件")+" · "+file.optString("mimeType"),fontSize=12.sp,maxLines=2)}
                 }
                 message.submission?.let{ChatInputReceipt(it,controller)}
-                if (message.id != null || message == lastAssistant || message.memoryReference != null) {
-                    AffectToolButton("more", if (messageDetails) "收起消息操作与来源" else "消息操作与来源",
-                        onClick = { messageDetails = !messageDetails },
-                        modifier = Modifier.align(Alignment.End))
-                }
                 if(messageDetails) {
                     message.id?.let { id -> SourceMemoryControl("message", id, message.content, state, controller, compact = true) }
                     message.memoryReference?.let { reference -> TextButton(onClick = { taskMemoryReference = JSONObject(reference.toString()) }) { Text("本次提供的记忆来源", fontSize = 11.sp) } }
@@ -311,6 +341,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 TextButton(onClick = { onMode(if (mode == "background") "main_screen" else "background") }, contentPadding = PaddingValues(horizontal = 2.dp)) { Text(if (mode == "background") "后台独立屏 ▾" else "主屏操作 ▾", fontSize = 12.sp) }
                 Spacer(Modifier.weight(1f)); TextButton(onClick = { if (mode == "background") controller.openBackgroundSetup() else settings() }) { Text(if (mode == "background" && !state.feature("display").optBoolean("helperConnected")) "启用手机控制" else "执行设置", fontSize = 12.sp) }
             }
+            if(phone||!state.chatBusy)ExecutionScopeStartControls(phone,controller.newTaskToolBudget,controller.newTaskModelBudget,controller.newTaskScopeMinutes,controller::selectNewTaskDeadline)
             if(!phone&&state.chatBusy)Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected=state.chatSendMode=="queue",onClick={controller.setChatSendMode("queue",ownerKey,ownerEpoch)},label={Text("本轮结束后处理",fontSize=11.sp)})
                 FilterChip(selected=state.chatSendMode=="steer",onClick={controller.setChatSendMode("steer",ownerKey,ownerEpoch)},label={Text("下个安全步骤加入",fontSize=11.sp)})
@@ -332,7 +363,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                         value = draft, onValueChange = onDraft,
                         enabled = phone || ownerDraft != null,
                         modifier = Modifier.fillMaxWidth().testTag("conversation_composer")
-                            .heightIn(min = 64.dp, max = 144.dp).padding(horizontal = 4.dp, vertical = 8.dp),
+                            .heightIn(min = 40.dp, max = 144.dp).padding(horizontal = 4.dp, vertical = 6.dp),
                         maxLines = 5,
                         textStyle = LocalTextStyle.current.copy(fontSize = 16.sp, lineHeight = 24.sp, color = Ink),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(Ink),
@@ -456,6 +487,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             TextButton(onClick = close, modifier = Modifier.testTag("task_return_source")) { Text(returnLabel, fontSize = 14.sp) }
             Text("${taskStatus(task.status)} · ${executionLocation(task.executionMode)}", color = SecondaryInk, fontSize = 14.sp)
             Text(task.goal, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, lineHeight = 28.sp, modifier = Modifier.padding(top = 10.dp, bottom = 12.dp))
+            if (!groupTask && !mediaTask && !memoryConsolidationTask) ExecutionScopeControls(task,controller)
             if (!groupTask && !mediaTask && !memoryConsolidationTask && (phoneTask || assistantTask) && teamRunReferences(task).isEmpty()) TaskExecutionProcess(task, controller) { target ->
                 val anchor = when (target) {
                     TaskExecutionPresentation.Target.APPROVAL -> approvalAnchor
@@ -808,6 +840,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
     var provider by remember(state.modelProvider) { mutableStateOf(if (state.modelRoute == "account") "openai_chat" else state.modelProvider) }
     var supportsImageInput by remember(provider, url, model, state.modelProvider, state.baseUrl, state.modelName, state.supportsImageInput, state.modelRoute) { mutableStateOf(state.modelRoute != "account" && provider == state.modelProvider && url.trim() == state.baseUrl && model.trim() == state.modelName && state.supportsImageInput) }
     var editApi by remember(state.modelRoute) { mutableStateOf(false) }
+    var settingsSection by rememberSaveable { mutableIntStateOf(0) }
     var providerOptions by remember { mutableStateOf(false) }
     var outputTokens by remember(state.maxOutputTokens) { mutableStateOf(state.maxOutputTokens.toString()) }
     val configuredOutput = if (provider == "openai_chat") state.maxOutputTokens else outputTokens.toIntOrNull() ?: 0
@@ -825,18 +858,19 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
             Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("设置与连接", fontSize = 22.sp, fontWeight = FontWeight.Medium)
-                    Text("模型、手机执行与连接能力", fontSize = 13.sp, color = SecondaryInk, modifier = Modifier.padding(top = 4.dp))
                 }
                 AffectToolButton("close", "关闭设置与连接", close)
             }
+            Box(Modifier.padding(horizontal = 18.dp).padding(bottom = 16.dp)) {
+                PocketSegmentedTabs(listOf("模型", "手机", "连接"), settingsSection) { settingsSection = it }
+            }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                SettingsSurface("模型与账号", if (state.modelRoute == "account") "当前使用账号主模型" else "当前使用 API 密钥模型") {
-                    Text(state.modelName.ifBlank { "尚未选择模型" }, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                    Text(if (state.modelRoute == "account") "原 API 密钥连接仍保留。" else "账号模型须在账号页中明确选择后才切换。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 5.dp, bottom = 12.dp))
-                    HorizontalDivider(color = Line)
+                if (settingsSection == 0) SettingsSurface(state.modelName.ifBlank { "选择模型" }, if (state.modelRoute == "account") "ChatGPT 套餐" else "API 连接") {
                     SettingEntry("ChatGPT 账号与模型目录", "连接账号，选择可用模型") { controller.openConnection("accounts") }
                     HorizontalDivider(color = Line)
                     SettingEntry("API 模型目录", "核对能力与请求参数") { controller.openConnection("models") }
+                    HorizontalDivider(color = Line)
+                    SettingEntry(if (editApi) "收起连接编辑" else "编辑 API 连接", "接口地址、密钥与输入能力") { editApi = !editApi }
             if (state.modelRoute == "account") {
                 Text("当前账号模型：" + state.modelName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
                 Text("支持文字与工具调用，暂不支持截图、音频和视频。账号刷新、停用或退出后可能需要重新选择目录模型；不会自动换号、降级或重试付费请求。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp))
@@ -845,7 +879,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                 state.error?.let { Text(it, color = Danger, fontSize = 12.sp) }
             }
                 }
-            if (state.modelRoute != "account" || editApi) SettingsSurface("API 模型配置", "连接参数、输入能力与回复预算") {
+            if (settingsSection == 0 && editApi) SettingsSurface("API 模型配置", "连接参数、输入能力与回复预算") {
             if (state.modelRoute == "account") Text("保存后会明确切换到这个 API 连接；测试连接不会改变当前账号模型。", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
 
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Soft)
@@ -872,20 +906,24 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("此模型支持图像输入", fontSize = 14.sp); Text(if (state.modelCatalogEnabled || state.modelRoute == "account") "请在 API 模型目录页核对精确能力与机主覆盖。" else "这是你的能力配置，不代表已实测效果。更换协议、地址或模型需重新确认。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp) }; Checkbox(supportsImageInput, { supportsImageInput = it }, enabled = !state.modelCatalogEnabled && state.modelRoute != "account") }
             HorizontalDivider(Modifier.padding(top = 18.dp), color = Line)
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许按需发送截图", fontSize = 14.sp); Text("优先读取节点，节点不足且已配置图像能力时才发送；可见文字也会发送。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp) }; Switch(screenshots, { screenshots = it }) }
-            if (!supportsImageInput) Text("当前使用节点文字模式；节点不足时会请求接管，不会猜测坐标。后台屏仍可能采集本地帧以核对显示身份。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 7.dp))
+            if (!supportsImageInput) Text("当前模型不接收像素；如果允许本地取图和 OCR，仍可发送有来源的识别文字。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 7.dp))
             OutlinedTextField(outputTokens, { outputTokens = it.filter(Char::isDigit).take(5) }, label = { Text("每次回复的输出上限") }, supportingText = { Text(if (state.modelCatalogEnabled) "在模型目录页选择输出参数字段与预算；发送前会核对已知容量" else if (provider == "openai_chat") "兼容 Chat 协议的输出限制由服务端配置" else "128–32768 tokens", fontSize = 12.sp) }, enabled = provider != "openai_chat", singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth().padding(top = 12.dp), shape = RoundedCornerShape(12.dp), colors = settingsFieldColors())
             FlowRow(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { OutlinedButton(onClick = { controller.testModel(url, model, key, screenshots, provider, configuredOutput, consentPayload) }, enabled = !state.modelTesting && configuredOutput in 128..32768 && transportConfirmed) { Text(if (state.modelTesting) "测试中" else "测试连接") }; Button(onClick = { controller.saveModel(url, model, key, screenshots, provider, configuredOutput, consentPayload, supportsImageInput) }, enabled = !state.modelSaving && configuredOutput in 128..32768 && transportConfirmed) { Text(if (state.modelSaving) "保存中" else if (state.modelRoute == "account") "保存并切换 API 模型" else "保存模型") } }
             state.modelTest?.let { Text(it, fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(top = 10.dp)) }
             state.modelTestTaskId?.let { id -> TextButton(onClick = { controller.focusTask(id) }) { Text("查看这次连接测试用量") } }
             state.error?.let { Text(it, fontSize = 12.sp, lineHeight = 20.sp, color = Danger, modifier = Modifier.padding(top = 10.dp)) }
             }
-                SettingsSurface("手机执行", "授权与后台任务入口") {
-                    BackgroundConnectionSummary(state, controller)
+                if (settingsSection == 1) SettingsSurface("手机执行", "授权与后台任务入口") {
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地按需取图", fontSize = 14.sp); Text("独立于云截图发送；关闭后不会为 OCR 采集像素。更改用于后续运行。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localCaptureAllowed, { controller.saveLocalObservation(it, state.localOcrAllowed) }) }
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地 OCR", fontSize = 14.sp); Text("优先本地识字。像素不外发，但识别文字会作为有来源的上下文发送给所选推理服务。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localOcrAllowed, { controller.saveLocalObservation(state.localCaptureAllowed, it) }) }
+                    BackgroundConnectionSummary(state, controller, compact = true)
+                    SettingEntry("视觉补充", if (state.screenshots) "已允许按需发送截图，优先读取结构树" else "未允许发送截图，可在模型连接中调整") { settingsSection = 0; editApi = true }
+                    HorizontalDivider(color = Line)
                     SettingEntry("任务通知", if (state.notificationsEnabled) "已开启，可以从通知暂停或停止" else "未开启，后台手机任务需要此入口", controller::openNotifications)
                     HorizontalDivider(color = Line)
                     SettingEntry("界面读取与主屏控制", if (state.accessibilityEnabled) "无障碍服务已连接，可读取系统允许访问的节点" else "后台节点和文字读取、主屏控制需要无障碍授权", controller::openAccessibility)
                 }
-                SettingsSurface("浏览器与语音", "网页研究、独立浏览与系统语音") {
+                if (settingsSection == 1) SettingsSurface("浏览器与语音", "网页研究、独立浏览与系统语音") {
                     SettingEntry("网页研究工作区", "选择登录资料，多页比较、保留依据与下载，随时接管", controller::openBrowserResearch)
                     HorizontalDivider(color = Line)
                     SettingEntry("内置浏览器", if (state.feature("browser").optBoolean("open")) "有打开的页面，点击后进入人工浏览" else "使用独立登录环境，不共享系统 Chrome 账号", controller::openBrowser)
@@ -894,7 +932,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                     val latestReply = state.messages.lastOrNull { it.role == "assistant" }?.content
                     OutlinedButton(onClick = { if (state.speaking) controller.stopSpeaking() else latestReply?.let(controller::speak) }, enabled = state.speaking || latestReply != null, modifier = Modifier.padding(top = 10.dp)) { Text(if (state.speaking) "停止朗读" else "朗读最近回复") }
                 }
-                SettingsSurface("更多能力", "沿用同一引擎与已有配置") {
+                if (settingsSection == 2) SettingsSurface("更多能力", "沿用同一引擎与已有配置") {
                     SettingEntry("连接与能力管理", "记忆与定时、消息渠道、电脑环境、插件和团队", connections)
                 }
                 Spacer(Modifier.height(12.dp))

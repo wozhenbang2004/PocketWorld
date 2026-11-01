@@ -66,8 +66,8 @@ public final class TaskMemoryUse {
     /** Opaque per-book preparation. snapshot/metadata copies cannot mutate or recreate its identity. */
     public static final class Selection {
         private final MemoryBook issuer;private final String snapshot,metadata;
-        private final TaskRef task;
-        private Selection(TaskMemoryUse issuer,TaskRef task,JSONObject snapshot,JSONObject metadata){this.issuer=issuer.book;this.task=task;this.snapshot=snapshot.toString();this.metadata=metadata.toString();}
+        private final TaskRef task;private final MemoryAudienceSelection audience;
+        private Selection(TaskMemoryUse issuer,TaskRef task,JSONObject snapshot,JSONObject metadata,MemoryAudienceSelection audience){this.issuer=issuer.book;this.task=task;this.snapshot=snapshot.toString();this.metadata=metadata.toString();this.audience=audience;}
         public JSONObject snapshot()throws Exception{return new JSONObject(snapshot);}
         /** Root may persist this body-free projection in its existing native send journal. */
         public JSONObject metadata()throws Exception{return new JSONObject(metadata);}
@@ -75,11 +75,22 @@ public final class TaskMemoryUse {
 
     /** Select using the real task's current scope/run. A preparation is never a provided receipt. */
     public Selection prepareTaskRecall(JSONObject authenticatedScope,TaskRef task,String query,int limit,int maxChars,MemoryHostFence fence)throws Exception{
+        return prepareTaskRecall(authenticatedScope,task,query,limit,maxChars,fence,null);
+    }
+    /** Exact native member allowlist; no audience retains the original personal owner behavior. */
+    public Selection prepareTaskRecall(JSONObject authenticatedScope,TaskRef task,String query,int limit,int maxChars,MemoryHostFence fence,ReadAudience readAudience)throws Exception{
+        return prepareRecallPlan(authenticatedScope,task,query,null,limit,maxChars,fence,readAudience);
+    }
+    /** A native metered query rewrite only changes candidate ranking, never caller authority. */
+    public Selection prepareSemanticTaskRecall(JSONObject authenticatedScope,TaskRef task,MemoryQueryPlan plan,int limit,int maxChars,MemoryHostFence fence)throws Exception{
+        return prepareRecallPlan(authenticatedScope,task,"",java.util.Objects.requireNonNull(plan),limit,maxChars,fence,null);
+    }
+    private Selection prepareRecallPlan(JSONObject authenticatedScope,TaskRef task,String query,MemoryQueryPlan plan,int limit,int maxChars,MemoryHostFence fence,ReadAudience readAudience)throws Exception{
         MemoryBook.Scope scope=scope(authenticatedScope);requireScope(scope,task);requireFence(fence);
-        final Selection[] selection={null};
-        fence.admit(()->{synchronized(book){
+        MemoryAudienceSelection audience=MemoryAudienceSelection.capture(readAudience,scope);final Selection[] selection={null};
+        fence.admit(()->{checkAudience(audience);synchronized(book){
             TaskState state=task(scope,task);if(!"current".equals(taskStatus(state,task))||!Set.of("preparing","running").contains(state.status))throw new IllegalStateException("任务不可用于新的记忆请求");
-            JSONObject snapshot=book.contextSnapshot(authenticatedScope,query,limit,maxChars);JSONArray rows=snapshot.getJSONArray("records"),refs=new JSONArray(),projected=new JSONArray();
+            JSONObject snapshot=plan==null?book.contextSnapshotScoped(authenticatedScope,query,limit,maxChars,audience):book.contextSnapshotQueriesScoped(authenticatedScope,plan,limit,maxChars,audience);JSONArray rows=snapshot.getJSONArray("records"),refs=new JSONArray(),projected=new JSONArray();
             for(int i=0;i<rows.length();i++){JSONObject ref=book.taskReference(scope,rows.getJSONObject(i));refs.put(ref);projected.put(book.taskReferenceState(scope,ref));}
             String id=UUID.randomUUID().toString(),digest=digest(snapshot.getString("context"));
             JSONObject metadata=task.toJson().put("selectionId",id).put("contextDigest",digest).put("records",refs)
@@ -87,46 +98,58 @@ public final class TaskMemoryUse {
             JSONObject binding=task.toJson();for(java.util.Iterator<String> it=binding.keys();it.hasNext();){String key=it.next();snapshot.put(key,binding.get(key));}
             snapshot.put("task",binding).put("records",projected).put("receiptId",id).put("selectionId",id).put("contextDigest",digest).put("phase","prepared")
                     .put("status","current").put("modelUseVerified",false).put("executionAuthorized",false);
+            if(audience!=null){book.requireAudienceSnapshotCurrent(scope,snapshot,audience);snapshot.put("audience",audience.metadata());metadata.put("audience",audience.metadata());}
             if(!"current".equals(taskStatus(task(scope,task),task)))throw new IllegalStateException("任务来源已变化");
-            selection[0]=new Selection(this,task,snapshot,metadata);return new JSONObject().put("prepared",true);
-        }});return selection[0];
+            selection[0]=new Selection(this,task,snapshot,metadata,audience);
+        }checkAudience(audience);return new JSONObject().put("prepared",true);});return selection[0];
     }
     /** Fresh final-read gate for root's existing request assembly; never substitutes newly searched facts. */
     public JSONObject validateTaskMemorySelection(JSONObject authenticatedScope,Selection selection,MemoryHostFence fence)throws Exception{
         MemoryBook.Scope scope=scope(authenticatedScope);requireFence(fence);
         if(selection==null||selection.issuer!=book)throw new SecurityException("不是此记忆书的选择");requireScope(scope,selection.task);
-        return fence.admit(()->{synchronized(book){
+        checkAudience(selection.audience);return fence.admit(()->{checkAudience(selection.audience);synchronized(book){
             TaskState state=task(scope,selection.task);if(!"current".equals(taskStatus(state,selection.task))||!Set.of("preparing","running").contains(state.status))throw new IllegalStateException("任务执行代次已失效");
             JSONArray refs=selection.metadata().getJSONArray("records");for(int i=0;i<refs.length();i++)
                 if(!"current".equals(book.taskReferenceState(scope,refs.getJSONObject(i)).getString("status")))throw new IllegalStateException("选中记忆已变化，不能提供旧片段");
             if(!"current".equals(taskStatus(task(scope,selection.task),selection.task)))throw new IllegalStateException("任务已变化");
-            return selection.snapshot();
+            JSONObject result=selection.snapshot();book.requireAudienceSnapshotCurrent(scope,result,selection.audience);checkAudience(selection.audience);return result;
         }});
     }
     /** Confirm only the native journal's exact original projection; do not infer use from a search. */
     public JSONObject confirmTaskMemoryUse(JSONObject authenticatedScope,Selection selection,ReceiptRef expected,MemoryHostFence fence)throws Exception{
         MemoryBook.Scope scope=scope(authenticatedScope);requireScope(scope,expected.task);requireFence(fence);
         if(selection==null||selection.issuer!=book||!selection.task.same(expected.task))throw new SecurityException("不是本记忆书为该任务生成的选择");
-        return fence.admit(()->{synchronized(book){
+        checkAudience(selection.audience);return fence.admit(()->{checkAudience(selection.audience);synchronized(book){
             Provided proof=provided(scope,expected);if(proof==null)return unavailable(expected,"native_proof_unavailable");
             JSONObject metadata=selection.metadata();
             if(!proof.selectionId.equals(metadata.getString("selectionId"))||!proof.contextDigest.equals(metadata.getString("contextDigest"))
                     ||!canonical(proof.references()).equals(canonical(metadata.getJSONArray("records")))
                     ||proof.selectionDiagnostics()!=null&&!canonical(proof.selectionDiagnostics()).equals(canonical(metadata.getJSONObject("selectionDiagnostics"))))return unavailable(expected,"native_proof_mismatch");
-            return project(scope,expected,proof);
+            requireAudienceReferences(selection.audience,proof.references());JSONObject result=project(scope,expected,proof);checkAudience(selection.audience);return result;
         }});
     }
     /** Recovery reads the original host journal. It never calls search or accepts a supplied receipt JSON. */
     public JSONObject readTaskMemoryReceipt(JSONObject authenticatedScope,ReceiptRef expected,MemoryHostFence fence)throws Exception{
-        MemoryBook.Scope scope=scope(authenticatedScope);requireScope(scope,expected.task);requireFence(fence);
-        return fence.admit(()->{synchronized(book){Provided proof=provided(scope,expected);return proof==null?unavailable(expected,"native_proof_unavailable"):project(scope,expected,proof);}});
+        return readTaskMemoryReceipt(authenticatedScope,expected,fence,null);
+    }
+    public JSONObject readTaskMemoryReceipt(JSONObject authenticatedScope,ReceiptRef expected,MemoryHostFence fence,ReadAudience readAudience)throws Exception{
+        MemoryBook.Scope scope=scope(authenticatedScope);requireScope(scope,expected.task);requireFence(fence);MemoryAudienceSelection audience=MemoryAudienceSelection.capture(readAudience,scope);
+        return fence.admit(()->{checkAudience(audience);synchronized(book){Provided proof=provided(scope,expected);if(proof==null)return unavailable(expected,"native_proof_unavailable");
+            requireAudienceReferences(audience,proof.references());JSONObject result=project(scope,expected,proof);checkAudience(audience);return result;
+        }});
     }
     /** Source expansion is tied to a current record in a proven request, not an arbitrary source ID. */
     public JSONObject readTaskMemorySource(JSONObject authenticatedScope,ReceiptRef receipt,String recordId,long revision,SourceRef expected,MemoryHostFence fence)throws Exception{
+        return readTaskMemorySource(authenticatedScope,receipt,recordId,revision,expected,0,24000,fence,null);
+    }
+    /** Native member source span. Selecting a formal record alone never permits whole-source expansion. */
+    public JSONObject readTaskMemorySource(JSONObject authenticatedScope,ReceiptRef receipt,String recordId,long revision,SourceRef expected,int offset,int maxChars,MemoryHostFence fence,ReadAudience readAudience)throws Exception{
         MemoryBook.Scope scope=scope(authenticatedScope);requireScope(scope,receipt.task);requireFence(fence);
-        if(expected==null||recordId==null||revision<1)throw new IllegalArgumentException("必须指定本次来源的精确记录版本");
-        return fence.admit(()->{synchronized(book){
-            Provided proof=provided(scope,receipt);if(proof==null)return unavailable(receipt,"native_proof_unavailable");
+        if(expected==null||recordId==null||revision<1||offset<0||maxChars<1||maxChars>24000)throw new IllegalArgumentException("必须指定本次来源的精确记录版本及范围");
+        MemoryAudienceSelection audience=MemoryAudienceSelection.capture(readAudience,scope);
+        if(audience!=null&&(!audience.permits(recordId,revision)||!audience.permits(expected,offset,maxChars)))throw new SecurityException("成员未获选择这条记忆或此精确原文范围");
+        return fence.admit(()->{checkAudience(audience);synchronized(book){
+            Provided proof=provided(scope,receipt);if(proof==null)return unavailable(receipt,"native_proof_unavailable");requireAudienceReferences(audience,proof.references());
             JSONObject current=project(scope,receipt,proof),record=null;JSONArray rows=current.getJSONArray("records");
             for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(recordId.equals(row.getString("id"))&&revision==row.getLong("revision"))record=row;}
             if(record==null||!"current".equals(record.getString("status")))return sourceUnavailable(expected,"reference_invalidated");
@@ -135,15 +158,41 @@ public final class TaskMemoryUse {
             if(!attached||!expected.belongsTo(scope))throw new SecurityException("来源不属于本次提供的精确记忆版本");
             if(sources==null)return sourceUnavailable(expected,"body_unavailable");
             Evidence body;try{body=sources.read(expected);}catch(Exception missing){return sourceUnavailable(expected,"body_unavailable");}
-            if(body==null||!expected.equals(body.ref))return sourceUnavailable(expected,"body_unavailable");
-            Provided checked=provided(scope,receipt);
-            if(!sameProof(proof,checked))return sourceUnavailable(expected,"reference_invalidated");
-            JSONObject after=project(scope,receipt,checked);boolean stillCurrent=false;JSONArray afterRows=after.getJSONArray("records");
+            if(body==null||!expected.equals(body.ref)||offset>body.text.length())return sourceUnavailable(expected,"body_unavailable");
+            int end=TaskMemoryTrace.safeEnd(body.text,offset,maxChars);checkAudience(audience);
+            Provided checked=provided(scope,receipt);if(!sameProof(proof,checked))return sourceUnavailable(expected,"reference_invalidated");
+            requireAudienceReferences(audience,checked.references());JSONObject after=project(scope,receipt,checked);boolean stillCurrent=false;JSONArray afterRows=after.getJSONArray("records");
             for(int i=0;i<afterRows.length();i++){JSONObject row=afterRows.getJSONObject(i);if(recordId.equals(row.getString("id"))&&revision==row.getLong("revision")&&"current".equals(row.getString("status")))stillCurrent=true;}
-            if(!stillCurrent)return sourceUnavailable(expected,"reference_invalidated");
-            return new JSONObject().put("status","current").put("sourceRef",expected.toJson()).put("title",body.title).put("text",body.text)
+            if(!stillCurrent)return sourceUnavailable(expected,"reference_invalidated");checkAudience(audience);
+            return new JSONObject().put("status","current").put("sourceRef",expected.toJson()).put("title",audience==null?body.title:"所选原文范围").put("text",body.text.substring(offset,end))
+                    .put("readRange",TaskMemoryTrace.rawRange(offset,end,body.text.length())).put("nextOffset",end<body.text.length()?end:-1)
                     .put("evidenceRole","host_exact_version_snapshot_not_execution_proof").put("executionAuthorized",false).put("modelUseVerified",false);
         }});
+    }
+    /** Native discussion/member source read without inventing a TaskMemoryUse provided receipt.
+     * Only an explicit source span is read. This records an observation, never method application,
+     * formal memory publication, execution authority, or proof that a model used the returned text. */
+    public JSONObject readAudienceSource(JSONObject authenticatedScope,SourceRef expected,int offset,int chars,ReadAudience readAudience)throws Exception{
+        MemoryBook.Scope scope=scope(authenticatedScope);
+        if(readAudience==null||expected==null||!expected.belongsTo(scope)||offset<0||chars<1||chars>ReadAudience.MAX_SOURCE_CHARS)
+            throw new SecurityException("成员原文读取必须绑定当前认证范围及精确字符区间");
+        MemoryAudienceSelection audience=MemoryAudienceSelection.capture(readAudience,scope);
+        if(!audience.permits(expected,offset,chars))throw new SecurityException("原文区间不在主人为此成员显选的范围内");
+        requireSourceNotForgotten(authenticatedScope,expected);
+        if(sources==null)return sourceUnavailable(expected,"body_unavailable");audience.check();Evidence first=sources.read(expected);
+        if(first==null||!expected.equals(first.ref)||offset>first.text.length())return sourceUnavailable(expected,"body_unavailable");
+        int end=TaskMemoryTrace.safeEnd(first.text,offset,chars);audience.check();requireSourceNotForgotten(authenticatedScope,expected);Evidence current=sources.read(expected);
+        if(current==null||!expected.equals(current.ref)||!first.text.equals(current.text))return sourceUnavailable(expected,"source_changed");
+        audience.check();requireSourceNotForgotten(authenticatedScope,expected);return new JSONObject().put("status","current").put("sourceRef",expected.toJson()).put("title","所选原文范围")
+                .put("text",first.text.substring(offset,end)).put("readRange",TaskMemoryTrace.rawRange(offset,end,first.text.length()))
+                .put("audience",audience.metadata()).put("readObserved",true).put("modelUseVerified",false).put("executionAuthorized",false).put("formalMemorySaved",false);
+    }
+    private void requireSourceNotForgotten(JSONObject scope,SourceRef expected)throws Exception{
+        if(book.isSourceForgotten(scope,expected))throw new SecurityException("原文此版本已被主人遗忘，显选成员范围不能复活旧来源");
+    }
+    private static void checkAudience(MemoryAudienceSelection audience)throws Exception{if(audience!=null)audience.check();}
+    private static void requireAudienceReferences(MemoryAudienceSelection audience,JSONArray refs)throws Exception{
+        if(audience==null)return;for(int i=0;i<refs.length();i++){JSONObject row=refs.getJSONObject(i);if(!audience.permits(row.getString("id"),SourceRef.integer(row,"revision",1)))throw new SecurityException("原提供回执含未选入当前成员范围的记忆版本");}
     }
     /** Explicit replacement picker, separate from provenance: it never rewrites the original receipt. */
     public JSONObject listTaskMemoryReplacements(JSONObject authenticatedScope,ReceiptRef receipt,String recordId,long revision,MemoryHostFence fence)throws Exception{

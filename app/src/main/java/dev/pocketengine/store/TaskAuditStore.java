@@ -115,7 +115,9 @@ public final class TaskAuditStore {
     public static String coreAndImport(SQLiteDatabase db,JSONObject task)throws Exception{
         String id=task.getString("id");boolean exists;
         try(Cursor row=db.rawQuery("SELECT audit_format FROM tasks WHERE task_id=?",new String[]{id})){exists=row.moveToFirst();if(exists&&row.getInt(0)!=1)throw new IllegalStateException("原任务事件尚未完成迁移");}
-        JSONArray events=task.optJSONArray("events");if(!exists&&events!=null)for(int i=0;i<events.length();i++){
+        JSONArray events=task.optJSONArray("events");
+        if(!exists&&events!=null&&events.length()>0&&lastSequence(db,id)>0)throw new IllegalStateException("旧task事件身份已有退休序号，不能恢复成新的活动来源");
+        if(!exists&&events!=null)for(int i=0;i<events.length();i++){
             Object value=events.get(i);String raw=value.toString();long order=i+1L;ContentValues row=new ContentValues();row.put("task_id",id);row.put("event_order",order);row.put("event_type","");row.put("event_json",raw);db.insertOrThrow("task_events",null,row);updateMetadata(db,id,order,value instanceof JSONObject?(JSONObject)value:null,utf8(raw),false);
         }
         JSONObject core=new JSONObject();for(java.util.Iterator<String> keys=task.keys();keys.hasNext();){String key=keys.next();if(!key.equals("events"))core.put(key,task.get(key));}core.put("events",new JSONArray());return core.toString();
@@ -155,9 +157,33 @@ public final class TaskAuditStore {
         if(bytes>MAX_NATIVE_EVENT_BYTES){StringWriter body=new StringWriter();try(Reader original=new SqlEventReader(db,task,position)){char[] buffer=new char[4096];int count;while((count=original.read(buffer))!=-1)body.write(buffer,0,count);}return new JSONObject(body.toString());}
         try(Cursor row=db.rawQuery("SELECT event_json FROM task_events WHERE task_id=? AND event_order=?",new String[]{task,Long.toString(position)})){if(!row.moveToFirst())throw new IllegalStateException("原事件已不可读");return new JSONObject(row.getString(0));}
     }
-    /** Original native monotonic sequence floor, not a source revision or dispatch permission. */
+    private static final String SEQUENCE_FLOOR="task_events.sequence_floor:";
+    /** Native negative fence survives removal of the last/all original rows. It contains no body
+     * and grants no source access. Existing event numbers are never rewritten by this migration. */
+    public static void seedSequenceFloors(SQLiteDatabase db)throws Exception{
+        db.beginTransaction();try{
+            try(Cursor tasks=db.rawQuery("SELECT task_id FROM task_events GROUP BY task_id",null)){
+                while(tasks.moveToNext())pinSequence(db,tasks.getString(0),0);
+            }
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    /** Read-only and lock-free with respect to TaskStore/Books; SQLite retains its original scope. */
     public static long lastSequence(SQLiteDatabase db,String task){
-        try(Cursor row=db.rawQuery("SELECT MAX(COALESCE(MAX(event_order),0),COALESCE(MAX(native_seq),0)) FROM task_events WHERE task_id=?",new String[]{task})){row.moveToFirst();return row.getLong(0);}
+        long existing;try(Cursor row=db.rawQuery("SELECT MAX(COALESCE(MAX(event_order),0),COALESCE(MAX(native_seq),0)) FROM task_events WHERE task_id=?",new String[]{task})){row.moveToFirst();existing=row.getLong(0);}
+        try(Cursor row=db.rawQuery("SELECT value FROM meta WHERE key=?",new String[]{SEQUENCE_FLOOR+task})){
+            if(!row.moveToFirst())return existing;String raw=row.getString(0);
+            if(raw==null||!raw.matches("0|[1-9][0-9]{0,18}"))throw new IllegalStateException("原事件序号屏障无效，未回绕重用");
+            final long floor;try{floor=Long.parseLong(raw);}catch(NumberFormatException bad){throw new IllegalStateException("原事件序号屏障超限，未回绕重用",bad);}
+            return Math.max(existing,floor);
+        }
+    }
+    /** Pin an already selected native sequence, in the same original SQL transaction as selection. */
+    public static void pinSequence(SQLiteDatabase db,String task,long selected)throws Exception{
+        if(!db.inTransaction())throw new IllegalStateException("原事件屏障必须随原事务保存");
+        if(task==null||task.isEmpty()||task.length()>240||selected<0)throw new IllegalArgumentException("原事件屏障身份无效");
+        long floor=Math.max(lastSequence(db,task),selected);
+        db.execSQL("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",new Object[]{SEQUENCE_FLOOR+task,Long.toString(floor)});
     }
     public static int retireSnapshots(SQLiteDatabase db,String task,long through,boolean forgotten)throws Exception{
         int removed=0;try(Cursor rows=db.rawQuery("SELECT event_order,body_bytes FROM task_events WHERE task_id=? AND event_type='user_verification' AND COALESCE(native_seq,0)<=? ORDER BY event_order",new String[]{task,Long.toString(through)})){
@@ -172,7 +198,8 @@ public final class TaskAuditStore {
     public static long append(SQLiteDatabase db,String task,JSONObject event)throws Exception{
         long last=lastSequence(db,task);
         if(last==Long.MAX_VALUE)throw new IllegalStateException("原事件序号已耗尽");long next=last+1;event.put("seq",next);
-        String raw=event.toString();ContentValues row=new ContentValues();row.put("task_id",task);row.put("event_order",next);row.put("event_type",event.optString("type"));row.put("event_json",raw);db.insertOrThrow("task_events",null,row);updateMetadata(db,task,next,event,utf8(raw),false);return next;
+        if(!db.inTransaction())throw new IllegalStateException("原事件必须与序号屏障同事务保存");
+        String raw=event.toString();ContentValues row=new ContentValues();row.put("task_id",task);row.put("event_order",next);row.put("event_type",event.optString("type"));row.put("event_json",raw);db.insertOrThrow("task_events",null,row);updateMetadata(db,task,next,event,utf8(raw),false);pinSequence(db,task,next);return next;
     }
     /** Replace only the original native event, preserving its stable storage cursor and native seq. */
     public static void replace(SQLiteDatabase db,String task,long seq,JSONObject event)throws Exception{

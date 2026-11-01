@@ -46,6 +46,14 @@ public final class SettingsStore {
     /** Application singleton only; current facts may change without rewriting private model settings. */
     public synchronized void installImageCapabilities(ImageCapabilitySource source) { imageCapabilities=java.util.Objects.requireNonNull(source); }
     public synchronized ModelConfig get() throws Exception {
+        ModelConfig selected=getSelected();
+        return selected.withLocalObservation(prefs.getBoolean("localCaptureAllowed",selected.sendScreenshots),prefs.getBoolean("localOcrAllowed",selected.sendScreenshots));
+    }
+    /** Local capture/OCR consent is independent of a model's pixel-upload setting. */
+    public synchronized void saveLocalObservation(boolean capture,boolean ocr)throws Exception {
+        requireConfirmed();commitConfirmed(prefs.edit().putBoolean("localCaptureAllowed",capture).putBoolean("localOcrAllowed",ocr));
+    }
+    private ModelConfig getSelected() throws Exception {
         requireConfirmed();
         if("account".equals(prefs.getString("modelRoute","api_key"))){
             ModelConfig.AccountModelRef ref=ModelConfig.AccountModelRef.fromJson(new JSONObject(prefs.getString("accountModelRef","")));

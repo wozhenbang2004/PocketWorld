@@ -20,6 +20,7 @@ public final class ModelConfig {
     public static final Set<String> PROVIDERS=Set.of(DEFAULT_PROVIDER,"openai_responses","anthropic","gemini");
     public final String baseUrl, apiKey, model, provider;
     public final boolean sendScreenshots;
+    public final boolean localCaptureAllowed, localOcrAllowed;
     /** Native owner's route/model capability declaration, not a live vision-quality result. */
     public final boolean supportsImageInput;
     public final String cleartextConsent;
@@ -33,7 +34,7 @@ public final class ModelConfig {
     private ModelConfig(String baseUrl,String apiKey,String model,boolean sendScreenshots,int maxSteps,int requestTimeoutSeconds,String provider,int maxOutputTokens,boolean hostCeiling,String cleartextConsent,boolean supportsImageInput){
         this.baseUrl=baseUrl==null?"":baseUrl.trim();this.apiKey=apiKey==null?"":apiKey.trim();this.model=model==null?"":model.trim();
         this.provider=provider==null||provider.isBlank()?DEFAULT_PROVIDER:provider.trim();if(!PROVIDERS.contains(this.provider))throw new IllegalArgumentException("不支持的模型协议，请明确选择连接类型");
-        this.sendScreenshots=sendScreenshots;this.maxSteps=Math.max(1,Math.min(hostCeiling?400:40,maxSteps));this.requestTimeoutSeconds=Math.max(10,Math.min(120,requestTimeoutSeconds));this.maxOutputTokens=Math.max(128,Math.min(32768,maxOutputTokens));
+        this.localCaptureAllowed=sendScreenshots;this.localOcrAllowed=sendScreenshots;this.sendScreenshots=sendScreenshots;this.maxSteps=Math.max(1,Math.min(hostCeiling?400:40,maxSteps));this.requestTimeoutSeconds=Math.max(10,Math.min(120,requestTimeoutSeconds));this.maxOutputTokens=Math.max(128,Math.min(32768,maxOutputTokens));
         this.supportsImageInput=supportsImageInput;
         this.cleartextConsent=cleartextConsent==null?"":cleartextConsent;
         this.accountModel=null;
@@ -41,7 +42,7 @@ public final class ModelConfig {
     }
     private ModelConfig(ModelConfig source,AccountModelRef reference,int ceiling){
         accountModel=java.util.Objects.requireNonNull(reference);provider=ACCOUNT_PROVIDER;model=reference.modelId;
-        baseUrl="";apiKey="";cleartextConsent="";sendScreenshots=source.sendScreenshots;
+        baseUrl="";apiKey="";cleartextConsent="";localCaptureAllowed=source.localCaptureAllowed;localOcrAllowed=source.localOcrAllowed;sendScreenshots=source.sendScreenshots;
         boolean same=source.usesAccount()&&source.accountModel.sameModel(reference);supportsImageInput=same&&source.supportsImageInput;
         maxSteps=Math.max(1,Math.min(400,ceiling));requestTimeoutSeconds=source.requestTimeoutSeconds;maxOutputTokens=source.maxOutputTokens;
         capabilityBinding=null;catalogEnforced=false;reasoning=same?source.reasoning:ReasoningOptions.DEFAULT;imageTokenReserve=same?source.imageTokenReserve:0;
@@ -50,7 +51,7 @@ public final class ModelConfig {
         if(!source.usesAccount()||options==null||(options.mode()!=ReasoningOptions.Mode.DEFAULT&&options.mode()!=ReasoningOptions.Mode.OPENAI_EFFORT)
                 ||imageReserve<0||imageReserve>2000000||outputReserve<128||outputReserve>32768)throw new IllegalArgumentException("账号本地预留或推理选项无效");
         baseUrl=source.baseUrl;apiKey=source.apiKey;model=source.model;provider=source.provider;accountModel=source.accountModel;
-        sendScreenshots=source.sendScreenshots;supportsImageInput=source.supportsImageInput;cleartextConsent=source.cleartextConsent;
+        localCaptureAllowed=source.localCaptureAllowed;localOcrAllowed=source.localOcrAllowed;sendScreenshots=source.sendScreenshots;supportsImageInput=source.supportsImageInput;cleartextConsent=source.cleartextConsent;
         maxSteps=source.maxSteps;requestTimeoutSeconds=source.requestTimeoutSeconds;maxOutputTokens=outputReserve;
         capabilityBinding=null;catalogEnforced=false;reasoning=options;imageTokenReserve=imageReserve;
     }
@@ -58,7 +59,7 @@ public final class ModelConfig {
     public ModelConfig withAccountOptions(ReasoningOptions options,int imageReserve,int outputReserve){return new ModelConfig(this,options,imageReserve,outputReserve);}
     private ModelConfig(ModelConfig source,boolean accountImages){
         baseUrl=source.baseUrl;apiKey=source.apiKey;model=source.model;provider=source.provider;accountModel=source.accountModel;
-        sendScreenshots=source.sendScreenshots;supportsImageInput=accountImages;cleartextConsent=source.cleartextConsent;
+        localCaptureAllowed=source.localCaptureAllowed;localOcrAllowed=source.localOcrAllowed;sendScreenshots=source.sendScreenshots;supportsImageInput=accountImages;cleartextConsent=source.cleartextConsent;
         maxSteps=source.maxSteps;requestTimeoutSeconds=source.requestTimeoutSeconds;maxOutputTokens=source.maxOutputTokens;
         capabilityBinding=source.capabilityBinding;catalogEnforced=source.catalogEnforced;reasoning=source.reasoning;imageTokenReserve=source.imageTokenReserve;
     }
@@ -66,7 +67,7 @@ public final class ModelConfig {
     public ModelConfig withAccountImageInput(boolean supported){if(!usesAccount())throw new IllegalArgumentException("账号图片能力只能投影到账号连接");return new ModelConfig(this,supported);}
     private ModelConfig(ModelConfig source,int outputLimit){
         baseUrl=source.baseUrl;apiKey=source.apiKey;model=source.model;provider=source.provider;accountModel=source.accountModel;
-        sendScreenshots=source.sendScreenshots;supportsImageInput=source.supportsImageInput;cleartextConsent=source.cleartextConsent;
+        localCaptureAllowed=source.localCaptureAllowed;localOcrAllowed=source.localOcrAllowed;sendScreenshots=source.sendScreenshots;supportsImageInput=source.supportsImageInput;cleartextConsent=source.cleartextConsent;
         maxSteps=source.maxSteps;requestTimeoutSeconds=source.requestTimeoutSeconds;maxOutputTokens=outputLimit;
         capabilityBinding=source.capabilityBinding;catalogEnforced=source.catalogEnforced;reasoning=source.reasoning;imageTokenReserve=source.imageTokenReserve;
     }
@@ -81,7 +82,7 @@ public final class ModelConfig {
         String protocol=switch(binding.protocol()){case OPENAI_CHAT->"openai_chat";case OPENAI_RESPONSES->"openai_responses";case ANTHROPIC->"anthropic";case GEMINI->"gemini";};
         if(!protocol.equals(source.provider))throw new IllegalArgumentException("目录与请求协议不一致");
         baseUrl=source.baseUrl;apiKey=source.apiKey;model=source.model;provider=source.provider;accountModel=null;
-        sendScreenshots=source.sendScreenshots;supportsImageInput=source.supportsImageInput;cleartextConsent=source.cleartextConsent;
+        localCaptureAllowed=source.localCaptureAllowed;localOcrAllowed=source.localOcrAllowed;sendScreenshots=source.sendScreenshots;supportsImageInput=source.supportsImageInput;cleartextConsent=source.cleartextConsent;
         maxSteps=source.maxSteps;requestTimeoutSeconds=source.requestTimeoutSeconds;maxOutputTokens=source.maxOutputTokens;
         capabilityBinding=java.util.Objects.requireNonNull(binding);this.catalogEnforced=catalogEnforced;this.reasoning=java.util.Objects.requireNonNull(reasoning);
         if(imageTokenReserve<0||imageTokenReserve>2000000)throw new IllegalArgumentException("图片预留需在0–2000000之间，0表示尚未配置");
@@ -91,14 +92,22 @@ public final class ModelConfig {
     public ModelConfig withNativeCatalog(ModelBinding binding,ReasoningOptions reasoning,int imageTokenReserve){return new ModelConfig(this,binding,reasoning,imageTokenReserve,true);}
     /** Native identity only; this does not assert any model capability or enable directory enforcement. */
     public ModelConfig withApiConnection(ModelBinding binding){return new ModelConfig(this,binding,ReasoningOptions.DEFAULT,0,false);}
-    private ModelConfig retainCatalog(ModelConfig next){return capabilityBinding==null?next:catalogEnforced?next.withNativeCatalog(capabilityBinding,reasoning,imageTokenReserve):next.withApiConnection(capabilityBinding);}
+    private ModelConfig retainCatalog(ModelConfig next){next=next.withLocalObservation(localCaptureAllowed,localOcrAllowed);return capabilityBinding==null?next:catalogEnforced?next.withNativeCatalog(capabilityBinding,reasoning,imageTokenReserve):next.withApiConnection(capabilityBinding);}
     public boolean usesAccount(){return accountModel!=null;}
     public ModelConfig withAccountModel(AccountModelRef reference){return new ModelConfig(this,reference,maxSteps);}
     public ModelConfig withStepCeiling(int ceiling){return usesAccount()?new ModelConfig(this,accountModel,ceiling):retainCatalog(new ModelConfig(baseUrl,apiKey,model,sendScreenshots,ceiling,requestTimeoutSeconds,provider,maxOutputTokens,true,cleartextConsent,supportsImageInput));}
-    public ModelConfig withModel(String selected){if(usesAccount()){if(!model.equals(selected))throw new IllegalArgumentException("账号模型必须在账号页从当前目录重新选择，不能自动切换模型");return this;}ModelConfig next=new ModelConfig(baseUrl,apiKey,selected,sendScreenshots,maxSteps,requestTimeoutSeconds,provider,maxOutputTokens,true,cleartextConsent,model.equals(selected==null?"":selected.trim())&&supportsImageInput);return model.equals(next.model)?retainCatalog(next):capabilityBinding==null?next:catalogEnforced?next.withNativeCatalog(capabilityBinding,ReasoningOptions.DEFAULT):next.withApiConnection(capabilityBinding);}
+    public ModelConfig withModel(String selected){if(usesAccount()){if(!model.equals(selected))throw new IllegalArgumentException("账号模型必须在账号页从当前目录重新选择，不能自动切换模型");return this;}ModelConfig next=new ModelConfig(baseUrl,apiKey,selected,sendScreenshots,maxSteps,requestTimeoutSeconds,provider,maxOutputTokens,true,cleartextConsent,model.equals(selected==null?"":selected.trim())&&supportsImageInput).withLocalObservation(localCaptureAllowed,localOcrAllowed);return model.equals(next.model)?retainCatalog(next):capabilityBinding==null?next:catalogEnforced?next.withNativeCatalog(capabilityBinding,ReasoningOptions.DEFAULT):next.withApiConnection(capabilityBinding);}
     public ModelConfig withCleartextConsent(String consent){if(usesAccount())return this;return retainCatalog(new ModelConfig(baseUrl,apiKey,model,sendScreenshots,maxSteps,requestTimeoutSeconds,provider,maxOutputTokens,true,consent,supportsImageInput));}
     public ModelConfig withOwnerImageInput(boolean supported){if(usesAccount())return this;return retainCatalog(new ModelConfig(baseUrl,apiKey,model,sendScreenshots,maxSteps,requestTimeoutSeconds,provider,maxOutputTokens,true,cleartextConsent,supported));}
-    public static ModelConfig fromJson(JSONObject j){if(j.has("nativeRef")||j.has("accountModel")||j.has("capabilityBinding")||j.has("catalogEnforced")||j.has("reasoning")||j.has("imageTokenReserve"))throw new IllegalArgumentException("精确模型选择与推理设置只能在本机模型页配置");if(j.has("supportsImageInput")&&!(j.opt("supportsImageInput") instanceof Boolean))throw new IllegalArgumentException("图像输入能力必须是明确的本机布尔配置");return new ModelConfig(j.optString("baseUrl"),j.optString("apiKey"),j.optString("model"),j.optBoolean("sendScreenshots",true),j.optInt("maxSteps",20),j.optInt("requestTimeoutSeconds",60),j.optString("provider",DEFAULT_PROVIDER),j.optInt("maxOutputTokens",4096)).withCleartextConsent(j.optString("cleartextConsent")).withOwnerImageInput(j.optBoolean("supportsImageInput",false));}
+    private ModelConfig(ModelConfig source,boolean capture,boolean ocr){
+        baseUrl=source.baseUrl;apiKey=source.apiKey;model=source.model;provider=source.provider;accountModel=source.accountModel;
+        sendScreenshots=source.sendScreenshots;localCaptureAllowed=capture;localOcrAllowed=ocr;
+        supportsImageInput=source.supportsImageInput;cleartextConsent=source.cleartextConsent;
+        maxSteps=source.maxSteps;requestTimeoutSeconds=source.requestTimeoutSeconds;maxOutputTokens=source.maxOutputTokens;
+        capabilityBinding=source.capabilityBinding;catalogEnforced=source.catalogEnforced;reasoning=source.reasoning;imageTokenReserve=source.imageTokenReserve;
+    }
+    public ModelConfig withLocalObservation(boolean capture,boolean ocr){return new ModelConfig(this,capture,ocr);}
+    public static ModelConfig fromJson(JSONObject j){if(j.has("nativeRef")||j.has("accountModel")||j.has("capabilityBinding")||j.has("catalogEnforced")||j.has("reasoning")||j.has("imageTokenReserve"))throw new IllegalArgumentException("精确模型选择与推理设置只能在本机模型页配置");if(j.has("supportsImageInput")&&!(j.opt("supportsImageInput") instanceof Boolean))throw new IllegalArgumentException("图像输入能力必须是明确的本机布尔配置");return new ModelConfig(j.optString("baseUrl"),j.optString("apiKey"),j.optString("model"),j.optBoolean("sendScreenshots",true),j.optInt("maxSteps",20),j.optInt("requestTimeoutSeconds",60),j.optString("provider",DEFAULT_PROVIDER),j.optInt("maxOutputTokens",4096)).withCleartextConsent(j.optString("cleartextConsent")).withOwnerImageInput(j.optBoolean("supportsImageInput",false)).withLocalObservation(j.optBoolean("localCaptureAllowed",j.optBoolean("sendScreenshots",true)),j.optBoolean("localOcrAllowed",j.optBoolean("sendScreenshots",true)));}
     /** Empty means HTTPS or explicitly recognized device-loopback; no DNS resolution grants an exemption. */
     public static String cleartextConsentFor(String provider,String baseUrl){
         try{java.net.URI uri=new java.net.URI(baseUrl);String scheme=uri.getScheme(),host=uri.getHost();if(!"http".equalsIgnoreCase(scheme)||host==null)return "";host=host.toLowerCase(java.util.Locale.ROOT);if(host.equals("localhost")||host.equals("127.0.0.1")||host.equals("[::1]")||host.equals("::1"))return "";return provider+"|http://"+host+":"+(uri.getPort()<0?80:uri.getPort());}catch(Exception invalid){return "";}
@@ -106,7 +115,7 @@ public final class ModelConfig {
     public void requireTransportConsent(java.net.URL endpoint){
         String expected=cleartextConsentFor(provider,endpoint.toString());if(!expected.isEmpty()&&!expected.equals(cleartextConsent))throw new IllegalArgumentException("远端或局域网HTTP会明文传输API凭据、可见文字和屏幕内容；请在本机模型设置确认该目标后再连接，建议使用HTTPS。");
     }
-    public JSONObject publicJson(){JSONObject j=new JSONObject();try{j.put("baseUrl",baseUrl).put("model",model).put("provider",provider).put("maxOutputTokens",maxOutputTokens).put("hasApiKey",!apiKey.isEmpty()).put("sendScreenshots",sendScreenshots).put("supportsImageInput",supportsImageInput).put("imageInputCapabilitySource",usesAccount()?(supportsImageInput?"selected_account_catalog":"account_capability_unknown"):catalogEnforced?"native_catalog":supportsImageInput?"owner_configured":"not_configured").put("maxSteps",maxSteps).put("requestTimeoutSeconds",requestTimeoutSeconds).put("cleartextConsent",cleartextConsent).put("modelRoute",usesAccount()?"account":"api_key");if(usesAccount())j.put("nativeRef",accountModel.toJson()).put("supportsOutputTokenLimit",false).put("maxOutputTokensRole","local_admission_reserve_not_sent").put("reasoning",reasoning.toJson()).put("imageTokenReserve",imageTokenReserve);if(capabilityBinding!=null)j.put("capabilityBinding",capabilityBinding.toJson()).put("catalogEnforced",catalogEnforced).put("reasoning",reasoning.toJson()).put("imageTokenReserve",imageTokenReserve);}catch(Exception ignored){}return j;}
+    public JSONObject publicJson(){JSONObject j=new JSONObject();try{j.put("baseUrl",baseUrl).put("model",model).put("provider",provider).put("maxOutputTokens",maxOutputTokens).put("hasApiKey",!apiKey.isEmpty()).put("sendScreenshots",sendScreenshots).put("localCaptureAllowed",localCaptureAllowed).put("localOcrAllowed",localOcrAllowed).put("supportsImageInput",supportsImageInput).put("imageInputCapabilitySource",usesAccount()?(supportsImageInput?"selected_account_catalog":"account_capability_unknown"):catalogEnforced?"native_catalog":supportsImageInput?"owner_configured":"not_configured").put("maxSteps",maxSteps).put("requestTimeoutSeconds",requestTimeoutSeconds).put("cleartextConsent",cleartextConsent).put("modelRoute",usesAccount()?"account":"api_key");if(usesAccount())j.put("nativeRef",accountModel.toJson()).put("supportsOutputTokenLimit",false).put("maxOutputTokensRole","local_admission_reserve_not_sent").put("reasoning",reasoning.toJson()).put("imageTokenReserve",imageTokenReserve);if(capabilityBinding!=null)j.put("capabilityBinding",capabilityBinding.toJson()).put("catalogEnforced",catalogEnforced).put("reasoning",reasoning.toJson()).put("imageTokenReserve",imageTokenReserve);}catch(Exception ignored){}return j;}
     /** Immutable reviewed catalog selection, never parsed from a model response or generic settings request. */
     public static final class AccountModelRef {
         public final String provider,accountId,modelId;

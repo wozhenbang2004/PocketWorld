@@ -574,7 +574,7 @@ internal fun MemoryLearningReviewPage(
                         val refs = memoryLearningObjects(current.optJSONArray("sourceRefs"))
                         refs.forEachIndexed { index, ref ->
                             TextButton(onClick = { onOpenSource(JSONObject(ref.toString())) }, enabled = canAct, modifier = Modifier.fillMaxWidth()) {
-                                Text("${index + 1}. " + (if (ref.optString("kind") == "task_evidence") "任务证据" else "对话消息") + " · 版本 ${ref.optLong("revision")}\n" + ref.optString("sourceId"), modifier = Modifier.fillMaxWidth(), fontSize = 13.sp, lineHeight = 22.sp)
+                                Text("${index + 1}. " + (when (ref.optString("kind")) { "task_evidence" -> "任务证据"; "workspace_file" -> "原工作区文件范围"; else -> "对话消息" }) + " · 版本 ${ref.optLong("revision")}\n" + ref.optString("sourceId"), modifier = Modifier.fillMaxWidth(), fontSize = 13.sp, lineHeight = 22.sp)
                             }
                         }
                         val parentRefs = if (MemoryLearningReviewGuard.validRecordRefs(current.optJSONArray("recordRefs"))) memoryLearningObjects(current.optJSONArray("recordRefs")) else emptyList()

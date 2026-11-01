@@ -46,7 +46,7 @@ internal fun SourceLearningPlanPicker(sourceRef: JSONObject, controller: PocketW
         if (expanded && page == null) request("listLearningJobs", JSONObject().put("cursor", "").put("limit", 20))
     }, enabled = pending == null) { Text(if (expanded) "收起逐批计划" else "把此来源加入可续接的逐批学习计划") }
     if (expanded) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("只保存所选版本的来源清单，不发送正文。可以先从其他原消息/任务继续添加来源；首次开始后清单锁定，最多 20 份。", style = MaterialTheme.typography.bodySmall)
+        Text("只保存所选版本的来源清单，不发送正文。可以先从其他原消息/任务/已选文件范围继续添加来源；首次开始后清单锁定，最多 20 份。", style = MaterialTheme.typography.bodySmall)
         saved?.let { result ->
             Text("来源已保存在原任务中；尚未提炼或采用为正式记忆。", style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { openTask(result.getString("taskId")) }) { Text("查看原逐批任务并核对后开始") }

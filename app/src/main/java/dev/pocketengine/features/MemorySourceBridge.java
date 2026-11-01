@@ -16,19 +16,103 @@ import org.json.JSONObject;
 public final class MemorySourceBridge {
     private final FeatureHost host;private final TaskStore tasks;
     private volatile AssistantModule assistant;
+    private volatile dev.pocketengine.features.workspace.WorkspaceModule workspace;
+    private volatile dev.pocketengine.features.attachments.AttachmentsModule attachments;
+    private volatile dev.pocketengine.features.attachments.AttachmentBook attachmentBook;
     public MemorySourceBridge(FeatureHost host,TaskStore tasks){this.host=host;this.tasks=tasks;}
     /** Bind the already-registered singleton before reading a Book; no module lookup while Book is held. */
     public void bindAssistant(AssistantModule value){
         if(value==null||host.module("assistant")!=value||assistant!=null&&assistant!=value)throw new SecurityException("来源读取必须绑定唯一原生对话模块");assistant=value;
     }
+    /** Bind a singleton only; disk bootstrap is a separate IO step, never a Book resolver. */
+    public void bindWorkspace(dev.pocketengine.features.workspace.WorkspaceModule value){
+        if(value==null||host.module("workspace")!=value||workspace!=null&&workspace!=value)throw new SecurityException("工作区来源必须绑定唯一原VWS");workspace=value;
+    }
+    public void bindAttachments(dev.pocketengine.features.attachments.AttachmentsModule value,dev.pocketengine.features.attachments.AttachmentBook book){
+        if(value==null||book==null||host.module("attachments")!=value||attachments!=null&&attachments!=value||attachmentBook!=null&&attachmentBook!=book)throw new SecurityException("已保存文档来源必须绑定唯一原附件模块与Book");attachments=value;attachmentBook=book;
+    }
+    private dev.pocketengine.features.workspace.WorkspaceModule workspace(){
+        var value=workspace;if(value==null)throw new IllegalStateException("原工作区来源宿主尚未绑定");return value;
+    }
+    public void prepareSourceHead(String kind,String sourceId,dev.pocketengine.core.RunControl control)throws Exception{
+        if("task_evidence".equals(kind)&&dev.pocketengine.features.memory.TaskSavedEvidence.matches(sourceId)){
+            if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("原已保存文档须在原生IO流程核对字节");
+            var address=dev.pocketengine.features.memory.TaskSavedEvidence.address(sourceId);SourceRef expected=new SourceRef(kind,sourceId,address.eventSeq,"owner","private");JSONObject event=tasks.savedMemorySourceEvent(expected);
+            if("attachment_document_read".equals(event.optString("type"))){var book=attachmentBook;if(book==null)throw new IllegalStateException("原附件Book尚未绑定");var readControl=control==null?new dev.pocketengine.core.RunControl():control;
+                book.readVerifiedMetadata(event.getString("attachmentId"),event.getString("sha256"),readControl);readControl.check();
+                if(!book.outputSourceCurrent(event.getString("attachmentId"),event.getString("sha256"),event.getString("attachmentGeneration")))throw new SecurityException("原件字节、代次或私人来源资格已变化");
+            }
+            tasks.selectSavedMemorySource(address.taskId,address.runId,address.eventSeq,address.offset,address.chars);return;
+        }
+        if(!"workspace_file".equals(kind))return;
+        if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("请在原生IO读取流程准备工作区来源，不在主线程扫描文件");
+        SourceRef.WorkspaceAddress address=SourceRef.workspaceAddress(sourceId);if(control!=null)control.check();
+        var head=workspace().refreshFileHeadForHost(address.projectId,address.path);if(control!=null)control.check();
+        if(!head.authorityKnown||head.version<1||head.deleted)throw new IllegalStateException("所选原工作区文件不存在、已删除或权威未知");
+    }
+    /** A published VWS observation is the only currentness input here. No lookup, monitor, IO,
+     * TaskStore callback or opportunistic warm read is allowed while MemoryBook is held. */
+    private SourceRef.State workspaceState(MemoryBook.Scope scope,String sourceId){
+        if(!"owner".equals(scope.ownerId)||!"private".equals(scope.spaceId))return null;
+        SourceRef.WorkspaceAddress address=SourceRef.workspaceAddress(sourceId);var module=workspace;if(module==null)return null;
+        var head=module.currentFileHeadForHost(address.projectId,address.path);
+        if(!head.authorityKnown||head.version<1)return null;
+        SourceRef current=SourceRef.workspaceFile(address.projectId,address.path,head.version,head.revisionId,head.sha256,address.offset,address.chars,scope.ownerId,scope.spaceId);
+        return new SourceRef.State(current,head.deleted);
+    }
+    private KnowledgeLearningWorkflow.SourceDocument readWorkspace(SourceRef expected)throws Exception{
+        if(expected.workspace==null||!"owner".equals(expected.ownerId)||!"private".equals(expected.spaceId))throw new SecurityException("工作区来源不属于原主人学习受众");
+        if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("原工作区正文须由已选择的原生IO流程读取");
+        MemoryBook.Scope scope=MemoryBook.Scope.from(new JSONObject().put("ownerId",expected.ownerId).put("spaceId",expected.spaceId));
+        SourceRef.State before=workspaceState(scope,expected.sourceId);if(before==null||before.deleted||!expected.equals(before.ref))throw new IllegalStateException("原文件版本、revisionId、hash或来源范围已变化");
+        var address=expected.workspace;var head=workspace().currentFileHeadForHost(address.projectId,address.path);
+        if(head.sizeBytes<0||head.sizeBytes>1_048_576)throw new IllegalStateException("原工作区文件超过本次有界来源读取范围");
+        var snapshot=workspace().fileSnapshotForHost(address.projectId,address.path,Math.toIntExact(expected.revision));
+        if(snapshot.tombstone||snapshot.version!=expected.revision||!address.revisionId.equals(snapshot.revisionId)||!address.sha256.equals(snapshot.sha256)||snapshot.sizeBytes!=head.sizeBytes)throw new IllegalStateException("原工作区实际字节版本与选择不一致");
+        byte[] bytes=snapshot.bytes();String text=java.nio.charset.StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        if(address.offset>text.length()||address.offset>0&&address.offset<text.length()&&Character.isLowSurrogate(text.charAt(address.offset))&&Character.isHighSurrogate(text.charAt(address.offset-1)))throw new IllegalArgumentException("所选UTF-16来源起点不在有效字符边界");
+        int end=(int)Math.min((long)text.length(),(long)address.offset+address.chars);if(end<text.length()&&end>address.offset&&Character.isHighSurrogate(text.charAt(end-1)))end--;
+        if(end<=address.offset)throw new IllegalStateException("所选原文件范围没有可提炼的文字");String excerpt=text.substring(address.offset,end);
+        SourceRef.State after=workspaceState(scope,expected.sourceId);if(after==null||after.deleted||!expected.equals(after.ref))throw new IllegalStateException("原文件在读取期间变化，未交付旧正文");
+        int pathEnd=Math.min(60,address.path.length());if(pathEnd<address.path.length()&&pathEnd>0&&Character.isHighSurrogate(address.path.charAt(pathEnd-1)))pathEnd--;String path=address.path.substring(0,pathEnd)+(pathEnd<address.path.length()?"…":"");
+        return new KnowledgeLearningWorkflow.SourceDocument(expected,"文件范围："+path+" · UTF-16 "+address.offset+"–"+end+"（非全文声明）",excerpt);
+    }
     public SourceRef.State resolve(MemoryBook.Scope scope,String kind,String sourceId)throws Exception{
+        if(kind.equals("workspace_file"))return workspaceState(scope,sourceId);
+        if(kind.equals("task_evidence")&&dev.pocketengine.features.memory.TaskSavedEvidence.matches(sourceId)){
+            SourceRef.State state=tasks.resolveMemorySource(scope,kind,sourceId);if(state==null||state.deleted)return state;JSONObject event=tasks.savedMemorySourceEvent(state.ref);
+            if("attachment_document_read".equals(event.optString("type"))){var book=attachmentBook;if(book==null||!book.outputSourceCurrent(event.getString("attachmentId"),event.getString("sha256"),event.getString("attachmentGeneration")))return null;}
+            return state;
+        }
         if(kind.equals("task_evidence"))return tasks.resolveMemorySource(scope,kind,sourceId);
         AssistantModule module=assistant;
         return kind.equals("message")&&module!=null?module.resolveSource(scope,sourceId):null;
     }
+    /** Pure original source currentness, not read authority. Used after a native exact source
+     * selection was already read and pinned; it must not warm bytes inside model dispatch. */
+    public void requireCurrentReference(SourceRef expected)throws Exception{
+        MemoryBook.Scope scope=MemoryBook.Scope.from(new JSONObject().put("ownerId",expected.ownerId).put("spaceId",expected.spaceId));
+        SourceRef.State current=resolve(scope,expected.kind,expected.sourceId);
+        if(current==null||current.deleted||!expected.equals(current.ref))throw new SecurityException("原来源身份、版本或范围已变化");
+    }
     public KnowledgeLearningWorkflow.SourceDocument read(SourceRef ref)throws Exception{
+        if("workspace_file".equals(ref.kind))return readWorkspace(ref);
+        if("task_evidence".equals(ref.kind)&&dev.pocketengine.features.memory.TaskSavedEvidence.matches(ref.sourceId))return readSavedEvidence(ref);
         if("task_evidence".equals(ref.kind))return tasks.readMemorySource(ref);
         AssistantModule module=assistant;return "message".equals(ref.kind)&&module!=null?module.readMemorySource(ref):null;
+    }
+    private KnowledgeLearningWorkflow.SourceDocument readSavedEvidence(SourceRef expected)throws Exception{
+        if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("原保存证据须在原生IO流程读取");requireCurrentReference(expected);JSONObject event=tasks.savedMemorySourceEvent(expected);String text,title;
+        if("attachment_document_read".equals(event.optString("type"))){
+            var module=attachments;if(module==null)throw new IllegalStateException("原文档解析宿主尚未绑定");var control=new dev.pocketengine.core.RunControl();
+            JSONObject result=module.readDocument(event.getString("attachmentId"),event.getString("sha256"),dev.pocketengine.features.memory.TaskSavedEvidence.documentRange(event),control);
+            if(!event.getString("documentFingerprint").equals(TaskStore.capabilityFingerprint(result))||!event.getString("parserVersion").equals(result.optString("parserVersion"))||!event.getString("engineVersion").equals(result.optString("engineVersion")))throw new SecurityException("原解析版本或准确读取结果已变化，未用当前文档替代旧回执");
+            JSONArray chunks=result.getJSONArray("chunks");if(chunks.length()>256)throw new SecurityException("原文档块超出准确读取范围");StringBuilder joined=new StringBuilder();for(int i=0;i<chunks.length();i++){Object value=chunks.getJSONObject(i).get("text");if(!(value instanceof String))throw new SecurityException("原文档块正文不是文本");if(i>0)joined.append('\n');joined.append((String)value);if(joined.length()>66000)throw new SecurityException("原文档读取超过已批准范围");}
+            text=joined.toString();title="原已读取文档范围 · "+result.optString("coverage")+"（不是全文或独立成功证明）";
+        }else if("browser_source_retained".equals(event.optString("type"))){text=dev.pocketengine.features.memory.TaskSavedEvidence.browserText(event);title="原已批准保存的网页安全证据范围（非当前网页或整页）";}
+        else throw new IllegalStateException("这份保存来源尚无准确安全正文路由");
+        String excerpt=dev.pocketengine.features.memory.TaskSavedEvidence.excerpt(expected,text);requireCurrentReference(expected);tasks.savedMemorySourceEvent(expected);
+        return new KnowledgeLearningWorkflow.SourceDocument(expected,title,excerpt);
     }
     public synchronized void synchronize(JSONObject scope)throws Exception{
         if(assistant==null){EngineModule registered=host.module("assistant");if(registered instanceof AssistantModule)bindAssistant((AssistantModule)registered);}
@@ -37,6 +121,29 @@ public final class MemorySourceBridge {
         JSONArray sources=memory.sourceRefsForSynchronization(scope);Map<String,SourceRef> refs=new LinkedHashMap<>();
         for(int i=0;i<sources.length();i++){
             SourceRef ref=SourceRef.fromJson(sources.getJSONObject(i));String key=new JSONArray().put(ref.ownerId).put(ref.spaceId).put(ref.kind).put(ref.sourceId).toString();SourceRef old=refs.get(key);if(old==null||ref.revision<old.revision)refs.put(key,ref);
+        }
+        // Only original indexed/selected paths are bootstrapped, outside the Book monitor. A
+        // partial bootstrap refuses to claim all sources ready; the next native IO turn can continue.
+        int refreshed=0;java.util.Set<String> paths=new java.util.HashSet<>();
+        for(SourceRef ref:refs.values())if("workspace_file".equals(ref.kind)){
+            var address=SourceRef.workspaceAddress(ref.sourceId);String path=address.projectId+"\n"+address.path;
+            var workspaceModule=workspace();if(!workspaceModule.currentFileHeadForHost(address.projectId,address.path).authorityKnown&&paths.add(path)){
+                if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("工作区原来源尚待IO核对，未在主线程全盘扫描");
+                if(refreshed++>=64)throw new IllegalStateException("原工作区来源超过本次64路径准备窗口，尚未全部就绪");workspaceModule.refreshFileHeadForHost(address.projectId,address.path);
+            }
+        }
+        int savedPrepared=0;for(SourceRef ref:refs.values())if("task_evidence".equals(ref.kind)&&dev.pocketengine.features.memory.TaskSavedEvidence.matches(ref.sourceId)){
+            // SourceRef is not a new read grant. Warm only sources already indexed by this Book;
+            // original native owner selections use prepareLearningSource on their separate IO path.
+            JSONObject event;try{event=tasks.savedMemorySourceEvent(ref);}catch(SecurityException deleted){continue;}
+            if("attachment_document_read".equals(event.optString("type"))){var book=attachmentBook;if(book==null)throw new IllegalStateException("原附件Book尚未绑定");
+                if(!book.outputSourceCurrent(event.getString("attachmentId"),event.getString("sha256"),event.getString("attachmentGeneration"))){
+                    // Count only actual byte warmups. Already checked documents, safe browser
+                    // projections and deleted history must not permanently exhaust every pass.
+                    if(savedPrepared++>=64)throw new IllegalStateException("已保存文档超过本次64原件准备窗口，尚未全部就绪；可从原IO流程继续核对");
+                    prepareSourceHead(ref.kind,ref.sourceId,null);
+                }
+            }
         }
         MemoryBook.Scope identity=MemoryBook.Scope.from(scope);
         for(SourceRef ref:refs.values()){

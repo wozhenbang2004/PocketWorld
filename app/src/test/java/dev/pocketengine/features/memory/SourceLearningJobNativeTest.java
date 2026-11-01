@@ -50,6 +50,8 @@ public final class SourceLearningJobNativeTest {
         JSONObject input(SourceRef source)throws Exception{var document=assistant.readMemorySource(source);return new JSONObject().put("sourceRef",source.toJson()).put("sourceFingerprint",KnowledgeLearningWorkflow.sourceFingerprint(document)).put("title",document.title);}
         JSONObject snapshot()throws Exception{return tasks.sourceLearningJob(task);}
         void start()throws Exception{control=new RunControl();JSONObject attempt=tasks.startSourceLearningJob(task,snapshot().getJSONObject("job").getLong("revision"),control);run=attempt.getString("runId");epoch=attempt.getInt("coordinatorEpoch");long pause=control.pauseRevision();RunControl captured=control;String capturedRun=run;int capturedEpoch=epoch;control.setAuthorityCheck(()->{if(captured.pauseRevision()!=pause||captured.isPaused())throw new SecurityException("native original pause fence");tasks.checkCapabilityCurrent(task,capturedRun,capturedEpoch,"native_memory_consolidation");});}
+        void start(int max)throws Exception{control=new RunControl();JSONObject attempt=tasks.startSourceLearningJob(task,snapshot().getJSONObject("job").getLong("revision"),control,max);run=attempt.getString("runId");epoch=attempt.getInt("coordinatorEpoch");long pause=control.pauseRevision();RunControl captured=control;String capturedRun=run;int capturedEpoch=epoch;control.setAuthorityCheck(()->{if(captured.pauseRevision()!=pause||captured.isPaused())throw new SecurityException("native original pause fence");tasks.checkCapabilityCurrent(task,capturedRun,capturedEpoch,"native_memory_consolidation");});}
+        JSONObject invoke(int max)throws Exception{return new SourceLearningJob(tasks,task,run,epoch,control,workflow(),terminal::get,()->null,max).run();}
         void end(String status)throws Exception{tasks.endAttempt(task,run,status,"fixture native invocation stopped",new JSONObject().put("formalMemorySaved",false));}
         KnowledgeLearningWorkflow workflow(){RunControl original=control;return new KnowledgeLearningWorkflow(memory,skills,assistant::readMemorySource,(messages,current)->{
             terminal.set(null);JSONObject active=snapshot().getJSONObject("active");int index=active.getInt("index");var target=tasks.sourceLearningInferenceTarget(task,run,epoch,active.getString("operationId"),original);
@@ -78,5 +80,53 @@ public final class SourceLearningJobNativeTest {
     @Test public void invalidSourceBeforeBatchConsumesNoNewAttemptAndChangedRevisionCannotBeSubstituted()throws Exception{try(Fixture f=new Fixture(1)){f.start();f.assistant.handle("deleteMessage",new JSONObject().put("conversationId","learning-private").put("messageId",ref(0).sourceId).put("revision",ref(0).revision));assertThrows(Exception.class,f::invoke);assertEquals(0,f.modelCalls);assertEquals(0,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));assertFalse(f.snapshot().has("active"));}}
 
     @Test public void unopenedPlanSurvivesRestartAndCanAcceptAnotherCurrentNativeSource()throws Exception{try(Fixture f=new Fixture(2)){f.task=f.tasks.createSourceLearningJob(new JSONArray().put(f.input(ref(0)))).getString("taskId");f.reopen();assertTrue(f.snapshot().getBoolean("canAddSources"));long revision=f.snapshot().getJSONObject("job").getLong("revision");f.tasks.addSourceLearningJobSource(f.task,revision,f.input(ref(1)));assertEquals(2,f.snapshot().getJSONObject("job").getJSONArray("inputs").length());assertEquals(0,f.modelCalls);assertEquals(0,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));}}
+
+    @Test public void explicitTwentyBatchNativeWindowUsesOriginalBudgetAndProducesTwentyPendingResultsOnly()throws Exception{
+        try(Fixture f=new Fixture(20)){f.start(20);String originalTask=f.task;JSONObject result=f.invoke(20);assertEquals("all_batches_settled",result.getString("invocationOutcome"));assertEquals(20,result.getInt("gatewayInvocationsThisAttempt"));assertEquals(20,f.modelCalls);assertEquals(20,f.candidates());assertEquals(20,f.snapshot().getJSONObject("job").getInt("nextIndex"));assertEquals(20,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));assertEquals(0,f.memory.handle("list",new JSONObject().put("scope",scope())).getJSONArray("records").length());assertEquals(originalTask,f.task);
+            try(Cursor rows=f.db.rawQuery("SELECT grant_json FROM runs WHERE run_id=?",new String[]{f.run})){assertTrue(rows.moveToFirst());assertEquals(0,new JSONObject(rows.getString(0)).getInt("remainingOperations"));}
+            try(Cursor rows=f.db.rawQuery("SELECT event_json FROM task_events WHERE task_id=? AND event_type='inference_receipt'",new String[]{f.task})){java.util.Set<String> calls=new java.util.HashSet<>();while(rows.moveToNext()){JSONObject receipt=new JSONObject(rows.getString(0));assertEquals("COMPLETED",receipt.getString("outcome"));assertEquals(f.run,receipt.getJSONObject("context").getString("runId"));assertTrue(calls.add(receipt.getString("callId")));}assertEquals(20,calls.size());}
+            f.end("completed");f.reopen();assertEquals(20,f.snapshot().getJSONObject("job").getJSONArray("results").length());assertThrows(Exception.class,()->f.start(20));assertEquals(20,f.modelCalls);
+        }
+    }
+    @Test public void explicitOneThenTwentyContinuationNeverReplaysTheAlreadySettledSource()throws Exception{
+        try(Fixture f=new Fixture(5)){f.start(1);String firstRun=f.run;assertEquals("batch_window_complete_continue_explicitly",f.invoke(1).getString("invocationOutcome"));assertEquals(1,f.modelCalls);f.end("awaiting_user");f.reopen();f.start(20);assertNotEquals(firstRun,f.run);assertEquals("all_batches_settled",f.invoke(20).getString("invocationOutcome"));assertEquals(5,f.modelCalls);assertEquals(5,f.snapshot().getJSONObject("job").getJSONArray("results").length());assertEquals(5,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));
+            try(Cursor rows=f.db.rawQuery("SELECT COUNT(*) FROM operations WHERE task_id=? AND tool=?",new String[]{f.task,SourceLearningJob.TOOL})){assertTrue(rows.moveToFirst());assertEquals(5,rows.getInt(0));}
+        }
+    }
+    @Test public void cancelInsideExplicitTwentyWindowStopsNextSourceAndRetainsTheUnknownReservation()throws Exception{
+        try(Fixture f=new Fixture(20)){f.start(20);f.afterModel=()->{if(f.modelCalls==7)f.control.cancel();};assertThrows(Exception.class,()->f.invoke(20));assertEquals(7,f.modelCalls);assertEquals(6,f.candidates());assertEquals(6,f.snapshot().getJSONObject("job").getInt("nextIndex"));assertEquals(7,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));assertEquals("unknown",f.snapshot().getJSONObject("active").getString("stage"));assertThrows(Exception.class,()->f.start(20));assertEquals(7,f.modelCalls);
+        }
+    }
+
+    @Test public void currentOneBatchDoesNotPrepareAFutureDeletedSourceAndColdContinuationStillRefusesIt()throws Exception{
+        try(Fixture f=new Fixture(2)){
+            f.assistant.handle("deleteMessage",new JSONObject().put("conversationId","learning-private").put("messageId",ref(1).sourceId).put("revision",ref(1).revision));
+            java.util.List<String> prepared=new java.util.ArrayList<>();f.start(1);
+            SourceLearningJob.SourcePreparation preparation=(source,original)->{
+                assertFalse("native IO preparation must be outside Tasks",Thread.holdsLock(f.tasks));original.check();prepared.add(source.sourceId);
+                SourceRef.State current=f.assistant.resolveSource(MemoryBook.Scope.from(scope()),source.sourceId);
+                if(current==null||current.deleted||!source.equals(current.ref))throw new IllegalStateException("selected original source no longer current");
+            };
+            JSONObject first=new SourceLearningJob(f.tasks,f.task,f.run,f.epoch,f.control,f.workflow(),f.terminal::get,()->null,1,preparation).run();
+            assertEquals("batch_window_complete_continue_explicitly",first.getString("invocationOutcome"));assertEquals(java.util.List.of(ref(0).sourceId),prepared);
+            assertEquals(1,f.modelCalls);assertEquals(1,f.candidates());assertEquals(1,f.snapshot().getJSONObject("job").getInt("nextIndex"));assertEquals(1,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));
+            f.end("awaiting_user");f.reopen();f.start(1);
+            assertThrows(IllegalStateException.class,()->new SourceLearningJob(f.tasks,f.task,f.run,f.epoch,f.control,f.workflow(),f.terminal::get,()->null,1,preparation).run());
+            assertEquals(java.util.List.of(ref(0).sourceId,ref(1).sourceId),prepared);assertEquals(1,f.modelCalls);assertEquals(1,f.candidates());
+            assertEquals(1,f.snapshot().getJSONObject("job").getInt("nextIndex"));assertEquals(1,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));assertFalse(f.snapshot().has("active"));
+        }
+    }
+
+    @Test public void coldRecordedDraftPreparesOnlyItsCurrentSourceBeforePublishWithoutAnotherModelCall()throws Exception{
+        try(Fixture f=new Fixture(1)){
+            f.start(1);f.cacheNext();assertEquals(1,f.modelCalls);f.reopen();f.start(1);int[] prepared={0};
+            JSONObject result=new SourceLearningJob(f.tasks,f.task,f.run,f.epoch,f.control,f.workflow(),f.terminal::get,()->null,1,(source,original)->{
+                assertFalse(Thread.holdsLock(f.tasks));assertEquals(ref(0),source);original.check();prepared[0]++;
+                assertEquals("draft_recorded",f.snapshot().getJSONObject("active").getString("stage"));assertEquals(0,f.candidates());
+            }).run();
+            assertEquals("all_batches_settled",result.getString("invocationOutcome"));assertEquals(1,prepared[0]);assertEquals(1,f.modelCalls);assertEquals(1,f.candidates());
+            assertEquals(1,f.snapshot().getJSONObject("job").getInt("nextIndex"));assertEquals(1,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));
+        }
+    }
 
 }

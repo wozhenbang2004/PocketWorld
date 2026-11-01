@@ -29,8 +29,18 @@ import androidx.lifecycle.LifecycleOwner
 import org.json.JSONObject
 
 @Composable
-internal fun BackgroundConnectionSummary(state: PocketUiState, controller: PocketWorldController) {
+internal fun BackgroundConnectionSummary(state: PocketUiState, controller: PocketWorldController, compact: Boolean = false) {
     val connection = backgroundConnectionState(state.feature("display"), state.activeTaskId, state.moduleBusy)
+    if (compact) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(backgroundConnectionHeadline(connection), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                if (connection.helperConnected && !connection.screenEstablished) SetupCaption("开始任务时核验实际独立屏")
+            }
+            TextButton(onClick = controller::openBackgroundSetup) { Text(if(connection.helperConnected) "查看状态" else "设置", fontSize = 13.sp) }
+        }
+        return
+    }
     Text(backgroundConnectionHeadline(connection), fontSize = 14.sp, fontWeight = FontWeight.Medium)
     SetupCaption(if (connection.helperConnected) "已连接，无需重复设置。开始任务时会核对实际独立屏；不会占用手机主屏。" else "跟随一次引导，完成系统要求的授权。不需要电脑，也不需要另装应用。")
     OutlinedButton(onClick = controller::openBackgroundSetup) { Text(if (connection.helperConnected) "查看控制状态" else "启用手机控制", fontSize = 12.sp) }
@@ -45,6 +55,9 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
     LaunchedEffect(connection.backend) { if (!modeChosen) mode = backgroundSetupMode(display) }
     var alternatives by remember { mutableStateOf(false) }
     var foregroundConsent by remember { mutableStateOf(false) }
+    var practice by remember { mutableStateOf(false) }
+    var practicePackage by remember { mutableStateOf("") }
+    var practiceField by remember { mutableStateOf("") }
     var forget by remember { mutableStateOf(false) }
     LaunchedEffect(mode, connection.wirelessAvailable) { if (mode == "wireless_adb" && connection.wirelessAvailable && !connection.taskOwned) controller.display("adb.discover") }
     Dialog(onDismissRequest = controller::closeBackgroundSetup, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -60,6 +73,28 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
                     Text(if (!connection.helperConnected && !connection.requiresConnectionCheck && !connection.busy && connection.supported) "让助手帮你操作手机" else backgroundConnectionHeadline(connection), fontSize = 23.sp, lineHeight = 32.sp, fontWeight = FontWeight.SemiBold)
                     SetupCaption(if (connection.screenEstablished) "这是宿主已核验的独立显示会话。返回原任务后继续操作。" else if (connection.helperConnected) "助手已完成真实连接。开始任务时才会建立独立显示会话。" else "首次使用只需完成下面的系统设置。授权由你确认，完成后返回原目标，不会自动开始任务。")
                     BackgroundSetupProgress(connection, state.accessibilityEnabled, state.notificationsEnabled)
+                    SetupHeading("本机能力检查")
+                    SetupCaption("逐项来自当前原生检查；已连接不代表输入、取帧或输入法隔离都可用。返回系统设置后请刷新。")
+                    state.phoneReadiness.groups.forEach { group ->
+                        Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) { Text(group.title, modifier = Modifier.weight(1f), fontSize = 13.sp); Text(group.state.label, fontSize = 12.sp) }
+                        group.checks.filter { it.state != PhoneCapabilityState.READY }.distinctBy { it.id }.forEach { check ->
+                            SetupCaption(check.message.ifBlank { "尚未取得实际状态" })
+                            when (check.action) {
+                                "accessibility" -> TextButton(onClick = controller::openAccessibility) { Text("检查界面权限") }
+                                "notifications" -> TextButton(onClick = controller::openNotifications) { Text("检查任务通知") }
+                                "background_setup", "retry" -> TextButton(onClick = controller::refreshBackgroundSetup) { Text("重新核对") }
+                                "main_screen_choice" -> TextButton(onClick = { foregroundConsent = true }) { Text("选择主屏兼容模式") }
+                            }
+                        }
+                    }
+                    TextButton(onClick = { practice = !practice }, enabled = !connection.taskOwned && !state.phoneSubmitting) { Text(if (practice) "收起实际演练" else "开始一条实际手机演练…") }
+                    if (practice) {
+                        SetupCaption("这会创建一条原手机任务并真实输入“中文输入演练”。仅选可安全修改的普通测试字段；不会提交。暂停、停止和回执仍在原任务中。")
+                        OutlinedTextField(practicePackage, { practicePackage = it }, label = { Text("目标应用包名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(practiceField, { practiceField = it }, label = { Text("可安全测试的输入框标签") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        if (connection.helperConnected) OutlinedButton(onClick = { controller.startPhonePractice(practicePackage, practiceField, "background") }, enabled = !state.phoneSubmitting) { Text("明确开始后台演练") }
+                        OutlinedButton(onClick = { controller.startPhonePractice(practicePackage, practiceField, "main_screen") }, enabled = !state.phoneSubmitting) { Text("明确使用主屏演练（占用屏幕）") }
+                    }
                     if (connection.taskOwned) {
                         SetupCaption("原手机任务正在持有执行资源。此处只能查看状态；更改连接前，请回原任务停止并等待资源释放。")
                         state.activeTaskId?.let { id -> TextButton(onClick = { controller.closeBackgroundSetup(); controller.focusTask(id) }) { Text("回到原任务") } }

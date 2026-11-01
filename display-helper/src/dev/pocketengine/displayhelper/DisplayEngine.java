@@ -40,6 +40,7 @@ final class DisplayEngine {
     private int width,height,density;
     private int requiredDisplayFlags;
     private String packageName="";
+    private String imeState="unknown",imeReason="display_not_created";
     private final AtomicLong frameGeneration=new AtomicLong();
     private final Object frameLock=new Object();
     private volatile byte[] latestPixels;
@@ -81,9 +82,11 @@ final class DisplayEngine {
             throw new Failure("invalid_lease","后台显示会话已结束，请重新建立。",false);
         JSONObject result;
         if("release".equals(cmd)){current.release();onMain(()->{if(lease==current)release();return null;});result=ok().put("released",true);}
+        else if("heartbeat".equals(cmd)){long lifetime=integer(request,"lifetimeMs",1,30_000,30_000);if(!current.renew(request.optString("sessionId"),request.optInt("displayId",-1),SystemClock.uptimeMillis(),lifetime))throw new Failure("invalid_lease","原后台显示不能续期。",false);result=ok().put("renewed",true).put("leaseExpiresAtUptimeMs",current.expiresAt());}
         else if("frame".equals(cmd))result=frame(current,request);
         else if("launch".equals(cmd))result=launch(current,request);
         else if("apps".equals(cmd))result=apps();
+        else if("ownership".equals(cmd)){valid(current);result=ok().put("ownership",DisplayOwnershipSnapshot.parse(taskDump(),current.display()));}
         else if("tap".equals(cmd)||"swipe".equals(cmd))result=gesture(current,request,"swipe".equals(cmd));
         else if("key".equals(cmd))result=key(current,request);
         else throw new Failure("unsupported_command","后台助手不支持该命令。",false);
@@ -93,12 +96,13 @@ final class DisplayEngine {
         return onMain(()->{
             LeasePolicy current=lease;
             if(current!=null&&(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current)))release();
+            if(lease!=null)probeIme(lease.display(),false);
             return ok().put("protocol",1).put("uid",android.os.Process.myUid()).put("sdk",Build.VERSION.SDK_INT)
                     .put("frameMetadataOnly",true).put("backgroundOnly",true).put("minimumSdk",34).put("sessionActive",lease!=null)
                     .put("displayId",lease==null?JSONObject.NULL:lease.display()).put("sessionId",lease==null?JSONObject.NULL:lease.session())
                     .put("width",width).put("height",height).put("density",density).put("requestedPackageName",packageName)
                     .put("focusIsolationRequested",lease!=null).put("displayFlagsConfirmed",lease!=null&&displayIsValid(lease))
-                    .put("deviceVerified",false);
+                    .put("imeIsolation",imeState).put("imeReason",imeReason).put("inputInjectionAvailable",inject!=null&&setDisplay!=null).put("captureAvailable",lease==null?JSONObject.NULL:latestPixels!=null).put("deviceVerified",false);
         });
     }
     private JSONObject create(JSONObject request)throws Exception {
@@ -122,9 +126,10 @@ final class DisplayEngine {
                 if(display==null||display.getDisplay()==null||display.getDisplay().getDisplayId()<=0)throw new Failure("display_creation_failed","系统未创建独立后台屏。",false);
                 requiredDisplayFlags=requiredIsolationFlags();
                 if(!display.getDisplay().isValid()||(display.getDisplay().getFlags()&requiredDisplayFlags)!=requiredDisplayFlags||!destroysContentOnRemoval(display.getDisplay()))throw new Failure("focus_isolation_unavailable","系统未提供所需的后台隔离，不启动后台任务。",false);
+                configureIme(display.getDisplay().getDisplayId());
                 lease=new LeasePolicy(UUID.randomUUID().toString(),display.getDisplay().getDisplayId(),SystemClock.uptimeMillis(),600_000);
                 return ok().put("sessionId",lease.session()).put("displayId",lease.display()).put("width",w).put("height",h)
-                        .put("density",d).put("frameMetadataOnly",true).put("backgroundOnly",true).put("focusIsolationRequested",true).put("displayFlagsConfirmed",true).put("deviceVerified",false);
+                        .put("density",d).put("frameMetadataOnly",true).put("backgroundOnly",true).put("focusIsolationRequested",true).put("displayFlagsConfirmed",true).put("imeIsolation",imeState).put("imeReason",imeReason).put("inputInjectionAvailable",inject!=null&&setDisplay!=null).put("captureAvailable",JSONObject.NULL).put("deviceVerified",false);
             }catch(Exception failure){release();throw failure;}
         });
     }
@@ -205,7 +210,26 @@ final class DisplayEngine {
         return receipt().put("packageName",pkg);
     }
     private boolean mainScreenUses(String pkg)throws Exception {
-        // Fail closed if task ownership cannot be established; no moving an existing foreground app.
+        String dump=taskDump();
+        try{return PrimaryAppGuard.uses(dump,pkg);}
+        catch(IllegalArgumentException unsupported){throw new Failure("task_probe_failed","当前系统任务格式不受支持，未启动应用。",false);}
+    }
+    /** Configure only the helper-owned display. Unsupported/unknown IME never inherits focus readiness. */
+    private void configureIme(int displayId){probeIme(displayId,true);}
+    private void probeIme(int displayId,boolean configure){
+        imeState="unknown";imeReason="policy_not_verified";
+        try{Object wm=Class.forName("android.view.WindowManagerGlobal").getMethod("getWindowManagerService").invoke(null);
+            Class<?> contract=Class.forName("android.view.IWindowManager");
+            Method get=contract.getMethod("getDisplayImePolicy",int.class);
+            // Invoke the public Binder interface, not its private implementation class.
+            // Android DISPLAY_IME_POLICY_LOCAL = 0; FALLBACK_DISPLAY is expressly not accepted.
+            if(configure)contract.getMethod("setDisplayImePolicy",int.class,int.class).invoke(wm,displayId,0);
+            Object actual=get.invoke(wm,displayId);
+            imeState=Integer.valueOf(0).equals(actual)?"available":"unavailable";imeReason=Integer.valueOf(0).equals(actual)?"local_display_policy_read_back":"local_policy_not_applied";
+        }catch(NoSuchMethodException unsupported){imeState="unavailable";imeReason="display_ime_policy_unsupported";}
+        catch(Exception unknown){imeState="unknown";imeReason="display_ime_policy_probe_failed";}
+    }
+    private String taskDump()throws Exception {
         Process p=new ProcessBuilder("/system/bin/dumpsys","activity","activities").redirectErrorStream(true).start();
         java.util.concurrent.ExecutorService reading=java.util.concurrent.Executors.newSingleThreadExecutor();
         java.util.concurrent.Future<String> output=reading.submit(()->{
@@ -217,10 +241,9 @@ final class DisplayEngine {
         });
         String dump;
         try{dump=output.get(3,TimeUnit.SECONDS);if(!p.waitFor(500,TimeUnit.MILLISECONDS)||p.exitValue()!=0)throw new IllegalStateException();}
-        catch(Exception unknown){throw new Failure("task_probe_failed","无法确认主屏应用占用，未启动应用。",false);}
+        catch(Exception unknown){throw new Failure("task_probe_failed","无法确认显示任务归属。",false);}
         finally{p.destroy();output.cancel(true);reading.shutdownNow();}
-        try{return PrimaryAppGuard.uses(dump,pkg);}
-        catch(IllegalArgumentException unsupported){throw new Failure("task_probe_failed","当前系统任务格式不受支持，未启动应用。",false);}
+        return dump;
     }
     private JSONObject apps()throws Exception {
         List<ResolveInfo> list=context.getPackageManager().queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),0);

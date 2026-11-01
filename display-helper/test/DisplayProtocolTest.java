@@ -15,6 +15,11 @@ public final class DisplayProtocolTest {
         check(lease.accepts("owner",7,2000));check(!lease.expired(121999));check(lease.expired(122001));
         LeasePolicy hard=new LeasePolicy("owner",9,0,5000);check(hard.accepts("owner",9,4999));check(!hard.accepts("owner",9,5000));
         LeasePolicy released=new LeasePolicy("owner",12,0,5000);released.release();check(!released.accepts("owner",12,1));
+        LeasePolicy heartbeat=new LeasePolicy("original",13,0,600000);
+        check(heartbeat.renew("original",13,1000,30000));check(heartbeat.expiresAt()==31000);
+        check(!heartbeat.renew("other",13,2000,30000));check(!heartbeat.renew("original",0,2000,30000));check(!heartbeat.renew("original",13,2000,30001));
+        check(heartbeat.renew("original",13,30000,30000));check(!heartbeat.expired(59999));check(!heartbeat.renew("original",13,60000,30000));
+        LeasePolicy dead=new LeasePolicy("original",14,0,600000);dead.release();check(!dead.renew("original",14,10,30000));
         String dump="Display #0 (activities from top to bottom):\n  mResumedActivity: ActivityRecord{ com.example.main/.Home }\nDisplay #2 (activities from top to bottom):\n  mResumedActivity: ActivityRecord{ com.example.second/.Home }";
         check(PrimaryAppGuard.uses(dump,"com.example.main"));check(!PrimaryAppGuard.uses(dump,"com.example.second"));
         check(!PrimaryAppGuard.uses(dump,"com.example"));rejects(()->PrimaryAppGuard.uses("Display 0 unknown format","com.example.main"));

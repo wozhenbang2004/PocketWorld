@@ -17,6 +17,12 @@ public final class WorkspaceModule implements EngineModule {
     public JSONObject removeProjectPackage(String id,String sha)throws Exception{return artifacts.removeProjectPackage(id,sha);}
     public long exportProjectPackage(String id,String sha,java.io.OutputStream destination)throws Exception{return artifacts.exportProjectPackage(id,sha,destination);}
     public JSONObject createImportedProject(String name,String client,String packageSha)throws Exception{return workspace.createImported(name,client,packageSha);}
+    /** Native source observations over the original version store. No new model route or grant. */
+    public VersionedWorkspace.FileSnapshot fileSnapshotForHost(String project,String path,int version)throws Exception{return workspace.snapshot(project,path,version);}
+    public VersionedWorkspace.HeadObservation refreshFileHeadForHost(String project,String path)throws Exception{return workspace.refreshFileHeadForHost(project,path);}
+    /** Body-free no-lock/no-IO currentness; UNKNOWN until explicit native refresh. */
+    public VersionedWorkspace.HeadObservation currentFileHeadForHost(String project,String path){return workspace.currentFileHeadForHost(project,path);}
+    @Override public void close(){workspace.closeNativeHeadsForHost();}
     @Override public JSONObject snapshot()throws Exception{return new JSONObject().put("projects",workspace.projects()).put("artifacts",artifacts.list(null)).put("runtime","files_only").put("localCompilerAvailable",false).put("commands",new org.json.JSONArray("[\"create\",\"list\",\"read\",\"write\",\"history\",\"diff\",\"removeFile\",\"export\",\"createArtifact\",\"listArtifacts\",\"readArtifact\",\"diffArtifact\",\"prepareExport\"]"));}
     @Override public JSONObject handle(String command,JSONObject input)throws Exception {
         if(command.equals("create"))return workspace.create(JsonFiles.text(input,"name",80));

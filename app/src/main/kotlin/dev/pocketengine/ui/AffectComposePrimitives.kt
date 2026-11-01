@@ -32,6 +32,7 @@ internal fun AffectGlyph(name: String, modifier: Modifier = Modifier, color: Col
         "arrow" -> "m12 19 0-14m-6 6 6-6 6 6"
         "mic" -> "M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"
         "chevron" -> "m8 10 4 4 4-4"
+        "chevron-right" -> "m10 6 6 6-6 6"
         "file" -> "M6 2h8l4 4v16H6ZM14 2v5h4M9 12h6m-6 4h6"
         "copy" -> "M8 8h12v12H8ZM4 15H3V3h12v1"
         "close" -> "m6 6 12 12M18 6 6 18"

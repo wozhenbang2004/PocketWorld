@@ -132,7 +132,7 @@ public final class ChatGptProvider implements AutoCloseable {
             Response response=exchange.response;checkStatus(response,operation);if(response.body()==null||!response.header("Content-Type","").split(";",2)[0].trim().equalsIgnoreCase("text/event-stream"))throw new GatewayFailure("INVALID_PROVIDER_STREAM");
             if(context==null)ResponsesTextStream.read(response.body().byteStream(),operation,sink,credentials.accessToken(),credentials.refreshToken(),credentials.idToken());
             else ResponsesStream.read(response.body().byteStream(),context,operation,sink,credentials.accessToken(),credentials.refreshToken(),credentials.idToken());
-        }catch(GatewayFailure error){throw error;}catch(Exception error){operation.check();throw new GatewayFailure("PROVIDER_STREAM_INTERRUPTED");}
+        }catch(GatewayFailure error){throw error;}catch(Exception error){operation.check();throw new GatewayFailure(error instanceof java.io.IOException&&!(error instanceof javax.net.ssl.SSLException)?"PROVIDER_STREAM_INTERRUPTED":"INVALID_PROVIDER_STREAM");}
     }
     private static void requirePlan(Credentials credentials)throws GatewayFailure {if(!credentials.permitsInference())throw new GatewayFailure("PLAN_USAGE_PERMISSION_REQUIRED");}
     private JSONObject postToken(FormBody body,GatewayCall operation,String context)throws GatewayFailure {

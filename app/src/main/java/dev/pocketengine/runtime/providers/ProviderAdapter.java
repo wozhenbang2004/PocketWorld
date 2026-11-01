@@ -10,6 +10,8 @@ import org.json.JSONObject;
 public interface ProviderAdapter {
     URL endpoint(ModelConfig config)throws Exception;
     JSONObject request(ModelConfig config,JSONArray canonicalMessages,JSONArray canonicalTools)throws Exception;
+    /** Wire codec only. Production decisions must enter through ApiTurnStream's shared
+     * terminal/role/tool validation, with the actual request's declared tools. */
     JSONObject response(JSONObject wireResponse)throws Exception;
     Map<String,String> headers(ModelConfig config);
 }

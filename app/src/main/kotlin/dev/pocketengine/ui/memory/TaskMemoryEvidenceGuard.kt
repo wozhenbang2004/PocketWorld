@@ -88,14 +88,13 @@ object TaskMemoryEvidenceGuard {
     fun sameSpace(receipt: JSONObject, record: JSONObject): Boolean =
         receipt.optString("ownerId").isNotBlank() && receipt.opt("ownerId") == record.opt("ownerId") && receipt.opt("spaceId") == record.opt("spaceId")
 
-    fun sameSource(expected: JSONObject?, actual: JSONObject): Boolean = expected != null &&
-        listOf("kind", "sourceId", "ownerId", "spaceId").all { expected.opt(it) == actual.opt(it) } &&
-        revision(expected) > 0 && revision(expected) == revision(actual)
+    fun sameSource(expected: JSONObject?, actual: JSONObject): Boolean = expected != null && runCatching {
+        dev.pocketengine.features.memory.SourceRef.fromJson(expected) == dev.pocketengine.features.memory.SourceRef.fromJson(actual)
+    }.getOrDefault(false)
 
     fun source(receipt: JSONObject, supplied: JSONObject): JSONObject {
         val result = JSONObject(supplied.toString())
-        require(sameSpace(receipt, result) && result.optString("kind") in setOf("message", "task_evidence") &&
-            result.optString("sourceId").isNotBlank() && revision(result) > 0) { "来源身份或空间不匹配" }
+        require(sameSpace(receipt, result) && runCatching { dev.pocketengine.features.memory.SourceRef.fromJson(result) }.isSuccess && revision(result) > 0) { "来源身份或空间不匹配" }
         require(!result.has("state") || result.optString("state") in sourceStates) { "来源状态暂不受支持" }
         return result
     }

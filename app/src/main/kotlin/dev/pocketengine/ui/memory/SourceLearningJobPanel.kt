@@ -16,6 +16,7 @@ internal fun SourceLearningJobPanel(task: JSONObject, controller: PocketWorldCon
     var current by remember(taskId) { mutableStateOf<JSONObject?>(null) }
     var error by remember(taskId) { mutableStateOf<String?>(null) }
     var runConsent by remember(taskId) { mutableStateOf(false) }
+    var continuous by remember(taskId) { mutableStateOf(false) }
     var skipConsent by remember(taskId) { mutableStateOf(false) }
     DisposableEffect(taskId) { controller.enterOwnerDomain("learning"); onDispose { controller.leaveOwnerDomain("learning") } }
     fun request(command: String, payload: JSONObject) {
@@ -46,7 +47,7 @@ internal fun SourceLearningJobPanel(task: JSONObject, controller: PocketWorldCon
     val busy = pending?.first == "runLearningJob"
     Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("逐批来源学习", style = MaterialTheme.typography.titleSmall)
-        Text("每次最多提炼 3 份来源；已完成批次不重发。只生成待审候选，不自动保存正式记忆或启用技能。离开此页会停止本次调用，水位留在这个原任务。", style = MaterialTheme.typography.bodySmall)
+        Text("默认每次最多提炼 3 份来源；可明确选择本次连续处理已选清单（最多20份），已完成批次不重发。只生成待审候选，不自动保存正式记忆或启用技能。离开此页会停止本次调用，水位留在这个原任务。", style = MaterialTheme.typography.bodySmall)
         if (job != null) {
             Text("已处理 ${job.getInt("nextIndex")} / ${input?.length() ?: 0} · 已预留模型尝试 ${job.getInt("reservedModelAttempts")}", style = MaterialTheme.typography.bodyMedium)
             Text("预留尝试不等于服务商已计费；真实用量/未知状态在本任务推理回执中核对。", style = MaterialTheme.typography.bodySmall)
@@ -68,18 +69,22 @@ internal fun SourceLearningJobPanel(task: JSONObject, controller: PocketWorldCon
             }
         } else if (pending != null) Text("正在读取原任务水位…", style = MaterialTheme.typography.bodySmall)
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Checkbox(checked = continuous, onCheckedChange = { continuous = it }, enabled = pending == null)
+            Text("本次连续处理全部已选来源（最多20次模型请求）", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { refresh() }, enabled = pending == null) { Text("刷新原水位") }
-            Button(onClick = { runConsent = true }, enabled = pending == null && snapshot?.optBoolean("canContinue") == true) { Text("继续有限批次") }
+            Button(onClick = { runConsent = true }, enabled = pending == null && snapshot?.optBoolean("canContinue") == true) { Text(if (continuous) "连续处理所选清单" else "继续有限批次") }
         }
         if (busy) TextButton(onClick = { pending?.second?.let(controller::cancelLearning); pending = null; error = "停止请求已记录；请刷新原水位，已有 draft/候选与未知用量不会被当作未发生。" }) { Text("停止本次提炼") }
         else if (snapshot?.optString("taskStatus") in setOf("preparing", "running", "stopping")) TextButton(onClick = { request("stopLearningJob", JSONObject().put("taskId", taskId)) }, enabled = pending == null) { Text("停止这个原任务的当前提炼") }
         if (snapshot?.optBoolean("canSkipBatch") == true && pending == null) TextButton(onClick = { skipConsent = true }) { Text("核对并跳过当前来源") }
         if (results != null && (0 until results.length()).any { results.getJSONObject(it).optJSONObject("candidateRef") != null }) TextButton(onClick = reviewCandidates) { Text("去审阅候选（不自动采用）") }
     }
-    if (runConsent) AlertDialog(onDismissRequest = { runConsent = false }, title = { Text("继续这个原学习任务？") }, text = { Text("将核验所选原来源版本，并向当前模型发送本轮最多 3 份尚未处理的来源。已收到的 draft 只提交同一候选，不再发送；已完成批次不重提。每次新执行有新的原生预算，未知旧调用不退款。") }, confirmButton = { Button(onClick = {
+    if (runConsent) AlertDialog(onDismissRequest = { runConsent = false }, title = { Text("继续这个原学习任务？") }, text = { Text("将核验所选原来源版本，并向当前模型发送本轮最多 ${if (continuous) 20 else 3} 份尚未处理的来源。连续处理也只限当前已选清单，不扫描或追加其他原文。已收到的 draft 只提交同一候选，不再发送；已完成批次不重提。原生预算与逐调用用量仍保留，未知旧调用不退款；离开/停止会中止本轮。") }, confirmButton = { Button(onClick = {
         runConsent = false
-        job?.let { request("runLearningJob", JSONObject().put("taskId", taskId).put("revision", it.getLong("revision")).put("confirmModelUse", true)) }
+        job?.let { request("runLearningJob", JSONObject().put("taskId", taskId).put("revision", it.getLong("revision")).put("confirmModelUse", true).put("maxBatches", if (continuous) 20 else 3)) }
     }) { Text("发送并继续") } }, dismissButton = { TextButton(onClick = { runConsent = false }) { Text("暂不发送") } })
     if (skipConsent) AlertDialog(onDismissRequest = { skipConsent = false }, title = { Text("跳过当前来源，不重试") }, text = { Text("这不会声称旧模型请求未执行、不会退款，也不会生成该批候选。已收到 draft 的原回执保留；未知调用继续显示未知。其他来源仍需你明确继续。") }, confirmButton = { Button(onClick = {
         skipConsent = false

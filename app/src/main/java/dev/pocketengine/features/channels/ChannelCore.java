@@ -314,6 +314,77 @@ public final class ChannelCore {
         space.put("capabilities",accepted);save();return copy(space);
     }
     public synchronized JSONObject event(String id)throws Exception {JSONObject row=find("inbox","id",id);if(row==null)throw new IllegalArgumentException("消息记录不存在");return copy(row);}
+    private JSONObject originalSeenEvent(String id)throws Exception {
+        JSONObject original=find("inbox","id",id);if(original!=null)return original;
+        for(int i=0;i<array("taskRequests").length();i++){JSONObject origin=array("taskRequests").getJSONObject(i).optJSONObject("originEvent");if(origin!=null&&id.equals(origin.optString("id")))return origin;}
+        for(int i=0;i<array("outbox").length();i++){JSONObject row=array("outbox").getJSONObject(i);for(String key:new String[]{"nativeGroupEvent","nativeRemoteEvent","nativeRemoteResultEvent","nativeCompletionEvent"}){JSONObject origin=row.optJSONObject(key);if(origin!=null&&id.equals(origin.optString("id")))return origin;}}
+        return null;
+    }
+
+    /** Body-free native observation. This is neither a waiting-task association nor audience grant.
+     * Only original retained inbox/task/outbox source records may back a cold read. */
+    synchronized JSONObject inboundFactMetadata(String id)throws Exception {
+        JSONObject event=originalSeenEvent(id);if(event==null)throw new SecurityException("原认证消息已不在有界来源记录中，未补造事件");checkControlOrigin(event);
+        JSONObject profile=profile(event.getString("profileId")),received=event.getJSONObject("route"),current=route(event);
+        for(String key:new String[]{"ownerId","spaceId","principalId","bindingEpoch"})if(!received.optString(key).equals(current.optString(key)))throw new SecurityException("原消息接收受众/主人绑定已变化");
+        if(received.optBoolean("privateOwner")!=current.optBoolean("privateOwner"))throw new SecurityException("旧外部材料不能因后续绑定升级主人事实");
+        JSONObject payload=new JSONObject().put("text",event.getString("text"));if(event.optJSONObject("messageParts")!=null)payload.put("messageParts",event.getJSONObject("messageParts"));
+        String provider=profile.getString("provider");JSONObject facts=new JSONObject().put("format","pocketworld.channel-inbound-fact.v1").put("eventId",id).put("payloadVersion","original_channel_inbound_v1").put("payloadSha256",dev.pocketengine.store.TaskStore.capabilityFingerprint(payload))
+                .put("provider",provider).put("profileId",profile.getString("id")).put("appId",profile.optString("appId")).put("transportEpoch",event.getString("transportEpoch"))
+                .put("conversationKind",provider.equals("qq")?QqConversation.scene(event):event.getString("kind")).put("conversationId",event.getString("kind").equals("group")?event.getString("roomId"):event.getString("senderId")).put("conversationParentId",provider.equals("qq")&&QqConversation.guild(event)?event.getString("qqGuildId"):"")
+                .put("providerActorId",event.getString("senderId")).put("ownerId",received.getString("ownerId")).put("principalId",received.getString("principalId")).put("spaceId",received.getString("spaceId")).put("bindingEpoch",received.optString("bindingEpoch")).put("privateOwner",received.optBoolean("privateOwner"))
+                .put("providerMessageId",event.getString("messageId")).put("receivedAt",event.getLong("receivedAt")).put("sentAt",event.getLong("sentAt"))
+                .put("sourceTaskId",JSONObject.NULL).put("sourceRunId",JSONObject.NULL).put("sourceEpoch",JSONObject.NULL).put("sourceTaskBasis","unassociated_original_inbound");
+        for(int i=0;i<array("taskRequests").length();i++){JSONObject task=array("taskRequests").getJSONObject(i);if(!id.equals(task.getJSONObject("originEvent").getString("id"))||!task.optString("admission").equals("admitted"))continue;
+            checkHostTaskAuthority(task.getString("requestId"));if(task.optString("hostRunId").isEmpty()||task.optInt("hostCoordinatorEpoch")<1)throw new SecurityException("原宿主执行关联尚未确认");
+            facts.put("sourceTaskId",task.getString("taskId")).put("sourceRunId",task.getString("hostRunId")).put("sourceEpoch",task.getInt("hostCoordinatorEpoch")).put("sourceTaskBasis","original_channel_task_request");break;
+        }
+        JSONArray refs=new JSONArray(),images=event.optJSONArray("ownerImageArtifacts");for(int i=0;images!=null&&i<images.length();i++){JSONObject image=images.getJSONObject(i);refs.put(new JSONObject().put("artifactId",image.getString("artifactId")).put("sha256",image.getString("sha256")).put("bytes",image.getLong("bytes")).put("mimeType",image.getString("mimeType")).put("itemIndex",image.getInt("itemIndex")));}JSONArray media=event.optJSONArray("ownerMediaArtifacts");for(int i=0;media!=null&&i<media.length();i++){JSONObject item=media.getJSONObject(i);refs.put(new JSONObject().put("artifactId",item.getString("artifactId")).put("sha256",item.getString("sha256")).put("bytes",item.getLong("bytes")).put("mimeType",item.getString("mimeType")).put("itemIndex",item.getInt("itemIndex")).put("mediaKind",item.getString("mediaKind")));}facts.put("artifactRefs",refs);
+        // A current native association/frozen-reference change creates a different fact fingerprint,
+        // not a claimed provider revision. Provider message identity/payload hash remain unchanged.
+        return facts.put("fingerprint",dev.pocketengine.store.TaskStore.capabilityFingerprint(facts));
+    }
+    /** Ephemeral body-free original transport/route pin for detecting window expiry separately
+     * from revocation. Only a privately constructed accepted carrier retains this snapshot. */
+    synchronized JSONObject inboundFactReadScope(String id)throws Exception {
+        JSONObject event=originalSeenEvent(id);if(event==null)throw new SecurityException("原认证入站已超出保留窗口");checkControlOrigin(event);
+        JSONObject scope=new JSONObject();for(String key:new String[]{"profileId","senderId","roomId","kind","authenticatedBy","transportEpoch","conversationKind","qqGuildId","qqChannelId"})if(event.has(key))scope.put(key,event.get(key));scope.put("route",copy(event.getJSONObject("route")));checkInboundFactReadScope(scope);return scope;
+    }
+    synchronized void checkInboundFactReadScope(JSONObject scope)throws Exception {
+        checkControlOrigin(scope);JSONObject received=scope.getJSONObject("route"),actual=route(scope);
+        for(String key:new String[]{"ownerId","spaceId","principalId","bindingEpoch"})if(!received.optString(key).equals(actual.optString(key)))throw new SecurityException("原入站受众/主人绑定已撤销或变化");
+        if(received.optBoolean("privateOwner")!=actual.optBoolean("privateOwner"))throw new SecurityException("旧来源不能升级主人身份");
+    }
+    /** Native-only bounded scan of the SAME original inbox. A cursor is a local position,
+     * never a provider sequence, accepted message, task association or audience grant. */
+    synchronized JSONObject nextInboundFacts(JSONObject anchor,JSONObject capturedReadScope,String afterEventId,int limit)throws Exception {
+        if(limit<1||limit>100)throw new IllegalArgumentException("原入站窗口每次只可扫描1至100行");
+        checkInboundFactReadScope(capturedReadScope);boolean anchorRetained=originalSeenEvent(anchor.getString("eventId"))!=null;
+        if(anchorRetained){JSONObject current=inboundFactMetadata(anchor.getString("eventId"));if(!anchor.getString("fingerprint").equals(current.getString("fingerprint")))throw new SecurityException("原等待来源已变化");}
+        String cursor=afterEventId==null||afterEventId.isEmpty()?anchor.getString("eventId"):afterEventId;
+        JSONArray inbox=array("inbox"),facts=new JSONArray();int start=-1;
+        if(anchorRetained)for(int i=0;i<inbox.length();i++)if(cursor.equals(inbox.getJSONObject(i).getString("id"))){start=i;break;}
+        JSONObject metadata=new JSONObject().put("status",start<0?"retention_gap":"available").put("nextEventId",cursor)
+                .put("localWindowOnly",true).put("gap",start<0).put("scannedRows",0).put("retainedRows",inbox.length()).put("hasMore",false);
+        if(start<0)return new JSONObject().put("metadata",metadata).put("facts",facts);
+        int end=Math.min(inbox.length(),start+1+limit);
+        for(int i=start+1;i<end;i++){
+            JSONObject event=inbox.getJSONObject(i);metadata.put("nextEventId",event.getString("id"));
+            if(sameInboundScope(anchor,event))facts.put(inboundFactMetadata(event.getString("id")));
+        }
+        metadata.put("scannedRows",end-start-1).put("hasMore",end<inbox.length());
+        return new JSONObject().put("metadata",metadata).put("facts",facts);
+    }
+    private boolean sameInboundScope(JSONObject anchor,JSONObject event)throws Exception {
+        if(!anchor.getString("profileId").equals(event.getString("profileId"))||!anchor.getString("transportEpoch").equals(event.getString("transportEpoch"))
+                ||!anchor.getString("providerActorId").equals(event.getString("senderId")))return false;
+        JSONObject route=event.getJSONObject("route");for(String key:new String[]{"ownerId","principalId","spaceId","bindingEpoch"})if(!anchor.optString(key).equals(route.optString(key)))return false;
+        if(anchor.optBoolean("privateOwner")!=route.optBoolean("privateOwner"))return false;
+        boolean qq=anchor.getString("provider").equals("qq");
+        return anchor.getString("conversationKind").equals(qq?QqConversation.scene(event):event.getString("kind"))
+                &&anchor.getString("conversationId").equals(event.getString("kind").equals("group")?event.getString("roomId"):event.getString("senderId"))
+                &&anchor.getString("conversationParentId").equals(qq&&QqConversation.guild(event)?event.getString("qqGuildId"):"");
+    }
     public synchronized void eventStatus(String id,String status,String message)throws Exception {
         JSONObject row=find("inbox","id",id);if(row==null)return;row.put("status",status).put("message",message);save();
     }

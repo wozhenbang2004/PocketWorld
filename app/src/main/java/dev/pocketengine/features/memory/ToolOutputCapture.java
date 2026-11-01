@@ -16,8 +16,33 @@ public final class ToolOutputCapture {
     private static final Set<String> REASONS=Set.of("native_output_capture_unavailable","native_output_claim_unavailable","native_output_not_configured","native_output_metadata_unavailable","native_output_source_unavailable","native_output_provenance_unavailable","native_output_run_budget","native_output_capture_limit","native_output_upstream_truncated","native_output_upstream_completeness_unknown");
     public enum Kind {NATIVE_RESULT_DATA_JSON,MCP_RESULT_JSON}
     public interface TextCleaner {String clean(String originalText)throws Exception;}
+    /** Only these original native read producers may omit a prepared side-effect operation.
+     * This enum is not parsed from a model command, and is not a read or execution grant. */
+    public enum ReadTool {
+        PROJECT_READ_FILE("project_read_file"),PROJECT_SEARCH("project_search");
+        public final String tool;ReadTool(String tool){this.tool=tool;}
+    }
+    /** Native call identity issued from the existing live project binding, never caller JSON.
+     * Exact path/hash/range stay in the producer's actual returned data, not guessed request data. */
+    public static final class ReadCall {
+        public final String callId,taskId,runId,projectId,checkoutId;public final int epoch;public final ReadTool tool;
+        private final RunControl original;
+        private ReadCall(ReadTool tool,dev.pocketengine.features.capabilities.ModelCapabilityAdapters.Binding binding,String checkout,RunControl original){
+            this.tool=java.util.Objects.requireNonNull(tool);java.util.Objects.requireNonNull(binding);this.original=java.util.Objects.requireNonNull(original);
+            if(binding.projectId.isEmpty()||checkout==null||!checkout.matches(UUID)||!original.hasHostRun()||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("原native读取缺少真实项目/副本/执行绑定");
+            taskId=binding.taskId;runId=binding.runId;epoch=binding.epoch;projectId=binding.projectId;checkoutId=checkout;callId=java.util.UUID.randomUUID().toString();
+        }
+        public static ReadCall project(ReadTool tool,dev.pocketengine.features.capabilities.ModelCapabilityAdapters.Binding binding,String checkout,RunControl original){return new ReadCall(tool,binding,checkout,original);}
+        /** The original Factory checks this before its original SQL admission, never after a
+         * completed read as a reason to erase already-observed audit evidence. */
+        public void requireOriginal(String task,String run,int expectedEpoch,RunControl live)throws Exception{
+            if(live!=original||!taskId.equals(task)||!runId.equals(run)||epoch!=expectedEpoch||!live.matchesHostRun(task,run,expectedEpoch))throw new SecurityException("不能更换原native只读调用身份");live.check();
+        }
+        public JSONObject metadata()throws Exception{return new JSONObject().put("kind","native_project_read_call").put("callId",callId).put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("tool",tool.tool).put("projectId",projectId).put("checkoutId",checkoutId).put("preparedSideEffectOperation",false).put("executionAuthorized",false);}
+    }
     public interface Factory {
         Claim begin(String tool,String preparedOperationId,Kind kind,RunControl original)throws Exception;
+        default Claim beginRead(ReadCall call,RunControl original)throws Exception{return null;}
         default void beforeModelRequest(RunControl original)throws Exception{checkSources(original);}
         default void checkSources(RunControl original)throws Exception{}
     }

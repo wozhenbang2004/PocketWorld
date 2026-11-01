@@ -79,6 +79,18 @@ private class OwnerController(val host: BrowserTaskHost, private val activity: B
     var draftConflict by mutableStateOf<JSONObject?>(null)
     var contextTaskId by mutableStateOf("")
     var consent by mutableStateOf(false)
+    var scopeMinutes by mutableStateOf(0)
+    fun executionChoice(): JSONObject { val tools = snapshot.child("model").optInt("maxSteps", 40).coerceIn(1, 400); return JSONObject().put("deadlineAt", if (scopeMinutes == 0) 0L else System.currentTimeMillis() + scopeMinutes * 60_000L).put("toolLimit", tools).put("modelCallLimit", dev.pocketengine.store.TaskExecutionScope.defaultModelBudget(tools)) }
+    var autoActions by mutableStateOf(false)
+    var actionOrigins by mutableStateOf("")
+    var actionBudget by mutableStateOf("60")
+    var ordinaryInput by mutableStateOf(false)
+    var interactionClicks by mutableStateOf(false)
+    var interactionSelections by mutableStateOf(false)
+    var interactionChecks by mutableStateOf(false)
+    var interactionTargets by mutableStateOf("")
+    var selectedInteractionCandidates by mutableStateOf<List<JSONObject>>(emptyList())
+    var advancedInteractionTargets by mutableStateOf(false)
     var autoRead by mutableStateOf(false)
     var saveReadSources by mutableStateOf(false)
     var publicSeeds by mutableStateOf("")
@@ -104,6 +116,11 @@ private class OwnerController(val host: BrowserTaskHost, private val activity: B
         draftReady = false; draftError = null; draftConflict = null; goal = ""; contextTaskId = task; resetReadConsent(); consent = false
         try { io.execute { val loaded = runCatching { host.researchDraftForOwner(profile, task) }; main.post { if (!closed && draftLoadRevision == load && draftContext == key) loaded.onSuccess { draft.set(it); goal = it.optString("text"); draftSavedAt = it.optLong("updatedAt"); draftReady = true; draftSaving = false }.onFailure { draftError = it.message ?: "原研究草稿暂不可读，未自动恢复或执行。" } } } }
         catch (_: RuntimeException) { draftError = "原草稿读取尚未开始，请重开研究视图。" }
+    }
+    fun adopt(page: JSONObject) {
+        val original = snapshot.optJSONObject("pages")?.optJSONObject("taskSpace") ?: return
+        val expected = JSONObject().put("space", JSONObject(original.toString())).put("page", JSONObject(page.toString()))
+        command({ host.adoptPage(expected) })
     }
     fun showPagePrompt() { flushGoal(); expanded = false; workspaceView = "page"; activity.showPendingPageDialogForOwner() }
     fun editGoal(value: String) {
@@ -203,12 +220,12 @@ private class OwnerController(val host: BrowserTaskHost, private val activity: B
         var prepared: BrowserReadScope.Consent? = null
         command({ prepared = BrowserReadScope.forOwner(autoRead, saveReadSources, publicSeeds) }, { done(checkNotNull(prepared)) })
     }
-    fun reviewReadScopeAndFrames(done: (BrowserReadScope.Consent, BrowserFrameOrigins.Consent) -> Unit) {
-        val auto = autoRead; val keep = saveReadSources; val seeds = publicSeeds; val frames = extraFrameOrigins
-        var read: BrowserReadScope.Consent? = null; var embedded: BrowserFrameOrigins.Consent? = null
-        command({ read = BrowserReadScope.forOwner(auto, keep, seeds); embedded = BrowserFrameOrigins.forOwner(frames) }, { done(checkNotNull(read), checkNotNull(embedded)) })
+    fun reviewReadScopeAndFrames(done: (BrowserReadScope.Consent, BrowserFrameOrigins.Consent, BrowserActionScope.Consent) -> Unit) {
+        val auto = autoRead; val keep = saveReadSources; val seeds = publicSeeds; val frames = extraFrameOrigins; val routine = autoActions; val origins = actionOrigins; val budget = actionBudget; val inputs = ordinaryInput; val clicks = interactionClicks; val selections = interactionSelections; val checks = interactionChecks; val targets = interactionTargets; val candidates = JSONArray().also { all -> selectedInteractionCandidates.forEach { all.put(JSONObject(it.toString())) } }
+        var read: BrowserReadScope.Consent? = null; var embedded: BrowserFrameOrigins.Consent? = null; var actions: BrowserActionScope.Consent? = null
+        command({ read = BrowserReadScope.forOwner(auto, keep, seeds); embedded = BrowserFrameOrigins.forOwner(frames); actions = BrowserActionScope.forOwner(routine, origins, budget.toIntOrNull() ?: 0, inputs, clicks, selections, checks, targets, candidates) }, { done(checkNotNull(read), checkNotNull(embedded), checkNotNull(actions)) })
     }
-    fun resetReadConsent() { autoRead = false; saveReadSources = false; publicSeeds = ""; extraFrameOrigins = "" }
+    fun resetReadConsent() { autoActions = false; actionOrigins = ""; ordinaryInput = false; interactionClicks = false; interactionSelections = false; interactionChecks = false; interactionTargets = ""; selectedInteractionCandidates = emptyList(); advancedInteractionTargets = false; autoRead = false; saveReadSources = false; publicSeeds = ""; extraFrameOrigins = "" }
     override fun close() {
         flushGoal(force = true); closed = true; cancelFileOpen(); io.shutdown()
         // Drain already prepared unissued tokens; the remaining bounded queue only saves text/cleans up or skips closed actions.
@@ -216,13 +233,14 @@ private class OwnerController(val host: BrowserTaskHost, private val activity: B
         // Keep queued main delivery callbacks: closed guard discards late prepared views and never launches.
     }
 }
-private data class ReadScopeReview(val consent: BrowserReadScope.Consent, val target: String, val pin: JSONObject, val taskId: String, val goal: String, val profileLabel: String, val frameOrigins: BrowserFrameOrigins.Consent = BrowserFrameOrigins.sameOriginOnly())
+private data class ReadScopeReview(val consent: BrowserReadScope.Consent, val target: String, val pin: JSONObject, val taskId: String, val goal: String, val profileLabel: String, val frameOrigins: BrowserFrameOrigins.Consent = BrowserFrameOrigins.sameOriginOnly(), val actionConsent: BrowserActionScope.Consent = BrowserActionScope.disabled(), val browserRevision: Long = 0, val executionRevision: Long = 0, val executionChoice: JSONObject? = null)
 
 private fun JSONArray.rows(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
 private fun JSONObject.child(name: String) = optJSONObject(name) ?: JSONObject()
 private fun JSONObject.array(name: String) = optJSONArray(name) ?: JSONArray()
 private fun toolLabel(tool: String) = when (tool.removePrefix("browser_task_")) {
     "observe_visual" -> "查看网页图像"; "open" -> "打开研究页"; "select" -> "切换研究页"; "observe" -> "读取网页"; "navigate" -> "打开页面链接"
+    "evaluate" -> "只读计算当前网页"; "inspect" -> "检查正文与页面状态"; "script" -> "运行这段页面脚本"; "network" -> "页面网络证据"
     "select_option" -> "选择下拉选项"
     "set_checked" -> "设置勾选状态"
     "click" -> "点击网页控件"; "type" -> "填写网页内容"; "scroll" -> "滚动网页"; "wait" -> "等待网页条件"
@@ -231,6 +249,7 @@ private fun toolLabel(tool: String) = when (tool.removePrefix("browser_task_")) 
     "close" -> "关闭任务页"; "finish" -> "结束浏览空间"; else -> "本次网页操作"
 }
 private fun sourceScopeNote(source: JSONObject): String {
+    if (source.optString("kind") == "browser_live_observation") return "本次真实可见正文片段，附原文档与局部稳定证据；不含子frame整体，不证明全页完整、网络空闲或服务器业务成功。"
     if (source.optString("kind") == "browser_semantic_observation") {
         val reading = source.optJSONObject("semantic") ?: JSONObject()
         val mode = when (reading.optString("mode")) { "table" -> "表格"; "list" -> "列表"; "outline" -> "页面目录"; else -> "正文" }
@@ -286,6 +305,7 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
     val space = pageState.child("taskSpace")
     val pageDialog = state.child("pageDialog"); val dialogPending = pageDialog.optString("status") == "pending"
     val activeTask = state.child("activeResearchTask")
+    val actionScope = state.optJSONObject("taskActionScope")
     val control = state.child("researchControl")
     val pendingTask = state.child("pendingBrowserTask")
     val viewedTask = state.child("researchTask")
@@ -294,12 +314,15 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
     val running = space.optString("status") in setOf("active", "owner_control")
     val handoffPages = space.array("handoffPages").rows().filter { !it.optBoolean("unavailable") }
     val selectedHandoff = handoffPages.firstOrNull { pin -> pages.any { it.optBoolean("selected") && it.optString("tabId") == pin.optString("tabId") } }
+    var actionOptions by remember { mutableStateOf(false) }
     var identities by remember { mutableStateOf(false) }
     var switchTo by remember { mutableStateOf<JSONObject?>(null) }
     var deleteProfile by remember { mutableStateOf<JSONObject?>(null) }
     var newLabel by remember { mutableStateOf("") }
     var approval by remember { mutableStateOf<JSONObject?>(null) }
     var history by remember { mutableStateOf<List<JSONObject>?>(null) }
+    var uploadReview by remember { mutableStateOf<JSONObject?>(null) }
+    var uploadEvidence by remember { mutableStateOf("") }
     var showRecoveryPages by remember { mutableStateOf(false) }
     var recoveryReview by remember { mutableStateOf<JSONObject?>(null) }
     var recoveryConsent by remember { mutableStateOf(false) }
@@ -349,13 +372,18 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                 }
                 if (dialogPending) TextButton(onClick = { c.showPagePrompt() }) { Text("查看网页提示") }
                 else if (pageDialog.optString("status") == "resolved" && space.optString("status") == "owner_control") Text("网页提示已处理；请先核对当前页面，再决定是否继续研究。", style = MaterialTheme.typography.bodySmall)
+                if (actionScope != null && actionScope.optString("state") != "not_granted" && activeTask.length() > 0) {
+                    Text("日常浏览范围：${actionScope.optString("state")} · 余 ${actionScope.optInt("remainingActions")} 次", style = MaterialTheme.typography.bodySmall)
+                    if (actionScope.optString("state") == "active") TextButton(onClick = { val id = activeTask.getString("id"); val revision = actionScope.getLong("revision"); c.command({ c.host.revokeTaskScopeForOwner(id, revision) }) }, enabled = !c.busy) { Text("撤销连续浏览范围") }
+                }
+                if (activeTask.length() > 0 && space.optString("status") == "active" && (!control.optBoolean("unresolved") || control.optBoolean("scopeConfigurationWhilePending"))) TextButton(onClick = { c.autoActions = true; actionOptions = true }, enabled = !c.busy) { Text("明确授予连续浏览范围…") }
                 val readScope = state.child("readScope")
                 val readState = readScope.optString("state")
                 if (readScope.optString("scopeId").isNotBlank()) {
                     Text("只读范围 · ${when (readState) { "active" -> "已授权"; "exhausted" -> "次数已用尽"; "expired" -> "已过期"; "revoked" -> "已撤销"; else -> "待核对" }} · 剩余 ${readScope.optInt("remainingReads")} 次调用 / ${readScope.optLong("remainingPublicBytes")} bytes", style = MaterialTheme.typography.bodySmall)
                     Text("有效至 ${android.text.format.DateFormat.format("HH:mm:ss", readScope.optLong("expiresAt"))}；超出范围仍须逐次确认。", style = MaterialTheme.typography.bodySmall)
                     if (readState in setOf("active", "exhausted")) TextButton(onClick = { c.command({ c.host.revokeReadScopeForOwner(activeTask.getString("id"), readScope.getString("scopeId")) }) }, enabled = !c.busy) { Text("撤销只读范围") }
-                } else Text("未授予自动只读范围；网页读取仍逐次确认。", style = MaterialTheme.typography.bodySmall)
+                } else Text(if (actionScope?.optString("state") == "active") "站点内日常读取沿当前连续浏览范围；越域仍须确认。" else "未授予自动只读范围；网页读取仍逐次确认。", style = MaterialTheme.typography.bodySmall)
                 if (space.optString("status") == "active" && state.child("readScopeIdentity").optString("taskId") == activeTask.optString("id")) TextButton(onClick = { c.resetReadConsent(); readScopeOptions = true }, enabled = !c.busy) { Text("明确授予 / 更新本轮只读范围…") }
                 if (space.optString("status") == "owner_control") {
                     Text(space.optString("handoffReason").ifBlank { "你可以在网页中完成登录或检查结果，再交还给原任务。" }, style = MaterialTheme.typography.bodyMedium)
@@ -383,12 +411,14 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                     Checkbox(checked = c.consent, onCheckedChange = { c.consent = it }, enabled = !c.busy)
                     Text("把本次网页观察交给当前模型；可以随时接管或停止。", Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodySmall)
                 }
-                TextButton(onClick = { showReadOptions = !showReadOptions }) { Text(if (c.autoRead) "已选择本轮只读范围 · 核对或修改" else "可选：设置本轮只读范围") }
+                val taskTools = state.child("model").optInt("maxSteps", 40).coerceIn(1, 400)
+                dev.pocketengine.ui.ExecutionScopeStartControls(false, taskTools, dev.pocketengine.store.TaskExecutionScope.defaultModelBudget(taskTools), c.scopeMinutes) { c.scopeMinutes = it }
+                TextButton(onClick = { showReadOptions = !showReadOptions }) { Text(if (c.autoRead || c.autoActions) "已选择本轮浏览范围 · 核对或修改" else "可选：设置本轮连续浏览范围") }
                 if (showReadOptions) ReadScopeChoices(c)
-                if (originalTask != null) Button(onClick = { val pinned = JSONObject(state.toString()); val frameText = c.extraFrameOrigins; val id = originalTask.getString("taskId"); if (c.autoRead) c.reviewReadScopeAndFrames { read, frames -> readScopeReview = ReadScopeReview(read, "existing", pinned, id, originalTask.optString("goal"), profile?.optString("label").orEmpty(), frames) } else c.commandWithDraft({ c.host.allowExistingForOwner(id, pinned, c.consent, BrowserReadScope.disabled(), BrowserFrameOrigins.forOwner(frameText)) }, { c.consent = false; c.resetReadConsent() }) }, enabled = !c.busy && c.consent && c.draftReady) { Text("为这个原任务启用网页") }
+                if (originalTask != null) Button(onClick = { val pinned = JSONObject(state.toString()); val frameText = c.extraFrameOrigins; val id = originalTask.getString("taskId"); if (c.autoRead || c.autoActions) c.reviewReadScopeAndFrames { read, frames, actions -> readScopeReview = ReadScopeReview(read, "existing", pinned, id, originalTask.optString("goal"), profile?.optString("label").orEmpty(), frames, actions) } else c.commandWithDraft({ c.host.allowExistingForOwner(id, pinned, c.consent, BrowserReadScope.disabled(), BrowserFrameOrigins.forOwner(frameText)) }, { c.consent = false; c.resetReadConsent() }) }, enabled = !c.busy && c.consent && c.draftReady) { Text("为这个原任务启用网页") }
                 if (c.contextTaskId.isNotEmpty() && originalTask == null) Text("此处保留原任务回查；没有自动恢复它的执行或浏览授权。另提研究目标会创建新的明确任务。", style = MaterialTheme.typography.bodySmall)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { val pinned = JSONObject(state.toString()); val frameText = c.extraFrameOrigins; val goal = c.goal; if (c.autoRead) c.reviewReadScopeAndFrames { read, frames -> readScopeReview = ReadScopeReview(read, "start", pinned, "", goal, profile?.optString("label").orEmpty(), frames) } else c.commandWithDraft({ c.host.startForOwner(goal, pinned, c.consent, BrowserReadScope.disabled(), BrowserFrameOrigins.forOwner(frameText)) }, { c.consumedGoal(); c.consent = false; c.resetReadConsent(); c.backToPage() }) }, enabled = !c.busy && c.consent && c.draftReady && c.goal.isNotBlank() && state.optBoolean("open")) { Text(if (c.contextTaskId.isEmpty()) "开始研究" else "另开一项研究") }
+                    Button(onClick = { val pinned = JSONObject(state.toString()); val frameText = c.extraFrameOrigins; val goal = c.goal; val execution = c.executionChoice(); if (c.autoRead || c.autoActions) c.reviewReadScopeAndFrames { read, frames, actions -> readScopeReview = ReadScopeReview(read, "start", pinned, "", goal, profile?.optString("label").orEmpty(), frames, actions, executionChoice = execution) } else c.commandWithDraft({ c.host.startForOwner(goal, pinned, c.consent, BrowserReadScope.disabled(), BrowserFrameOrigins.forOwner(frameText), BrowserActionScope.disabled(), execution) }, { c.consumedGoal(); c.consent = false; c.resetReadConsent(); c.backToPage() }) }, enabled = !c.busy && c.consent && c.draftReady && c.goal.isNotBlank() && state.optBoolean("open")) { Text(if (c.contextTaskId.isEmpty()) "开始研究" else "另开一项研究") }
                     TextButton(onClick = { identities = true }, enabled = !c.busy) { Text("选择登录资料") }
                 }
                 if (state.array("currentAssistantTasks").length() > 0) TextButton(onClick = { existingTasks = true }, enabled = c.consent && !c.busy) { Text("为正在进行的助手任务启用网页") }
@@ -408,11 +438,21 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                             Text(if (page.optString("openedBy") == "task") "本任务页面" else if (handoffPages.any { it.optString("tabId") == page.optString("tabId") }) "原任务接管页 · 可交还" else "我的页面", style = MaterialTheme.typography.labelMedium)
                         }
                         TextButton(onClick = { c.command({ if (page.optString("openedBy") == "task") c.host.takeOverPage(page.getString("tabId")) else c.host.selectOwnerPage(page.getString("tabId")) }) }, enabled = !c.busy) { Text(if (page.optString("openedBy") == "task") "接管保留" else "查看") }
+                        if (page.optString("openedBy") == "owner" && space.optString("status") == "active") TextButton(onClick = { c.adopt(page) }, enabled = !c.busy && !state.optJSONObject("researchControl").let { it?.optBoolean("unresolved") ?: true }) { Text("交给当前任务") }
                         if (page.optString("openedBy") == "owner") TextButton(onClick = { c.command({ c.host.closeOwnerPage(page.getString("tabId")) }) }, enabled = !c.busy) { Text("关闭") }
                     }
                 }
             }
                 }
+            if (mode == "research" && viewedTask.array("browserUploadAttempts").length() > 0) {
+                Text("上传尝试 · 不自动重传", fontWeight = FontWeight.SemiBold)
+                viewedTask.array("browserUploadAttempts").rows().takeLast(10).forEach { attempt ->
+                    val pin = attempt.child("pin")
+                    Text(pin.array("attachments").rows().joinToString { it.optString("name") + " · " + it.optString("sha256").take(12) }, style = MaterialTheme.typography.bodySmall)
+                    Text("本地：${attempt.optString("deliveryState")} · 站点：${attempt.optString("siteState")} · ${if (attempt.optBoolean("cancelRequested")) "已尝试取消，未确认撤回" else "等待核对"}", style = MaterialTheme.typography.bodySmall)
+                    Row { TextButton(onClick = { uploadReview = JSONObject(attempt.toString()); uploadEvidence = "" }, enabled = !c.busy) { Text("核对站点结果") }; TextButton(onClick = { c.command({ c.host.cancelUploadForOwner(pin.getString("taskId"), attempt.getString("attemptId"), attempt.getString("fingerprint")) }) }, enabled = !c.busy) { Text("尝试停止原上传") } }
+                }
+            }
             if (mode == "sources") {
             HorizontalDivider()
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -473,7 +513,7 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
         }
     }
     if (existingTasks) AlertDialog(onDismissRequest = { existingTasks = false }, title = { Text("接入原助手任务") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) { Text("仅接入本人正在执行的私人助手任务；下一轮沿用原模型与执行控制。")
-        state.array("currentAssistantTasks").rows().forEach { task -> TextButton(onClick = { val pinned = JSONObject(state.toString()); val frameText = c.extraFrameOrigins; if (c.autoRead) c.reviewReadScopeAndFrames { read, frames -> readScopeReview = ReadScopeReview(read, "existing", pinned, task.getString("taskId"), task.optString("goal"), profile?.optString("label").orEmpty(), frames) } else c.commandWithDraft({ c.host.allowExistingForOwner(task.getString("taskId"), pinned, c.consent, BrowserReadScope.disabled(), BrowserFrameOrigins.forOwner(frameText)) }, { existingTasks = false; c.consent = false; c.resetReadConsent() }) }, enabled = !c.busy) { Text(task.optString("goal"), maxLines = 3) } }
+        state.array("currentAssistantTasks").rows().forEach { task -> TextButton(onClick = { val pinned = JSONObject(state.toString()); val frameText = c.extraFrameOrigins; if (c.autoRead || c.autoActions) c.reviewReadScopeAndFrames { read, frames, actions -> readScopeReview = ReadScopeReview(read, "existing", pinned, task.getString("taskId"), task.optString("goal"), profile?.optString("label").orEmpty(), frames, actions) } else c.commandWithDraft({ c.host.allowExistingForOwner(task.getString("taskId"), pinned, c.consent, BrowserReadScope.disabled(), BrowserFrameOrigins.forOwner(frameText)) }, { existingTasks = false; c.consent = false; c.resetReadConsent() }) }, enabled = !c.busy) { Text(task.optString("goal"), maxLines = 3) } }
     } }, confirmButton = { TextButton(onClick = { existingTasks = false }) { Text("返回") } })
     if (identities) AlertDialog(onDismissRequest = { identities = false }, title = { Text("登录资料") }, text = {
         Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -500,6 +540,13 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                 val publicRead = request.optString("tool") == "browser_task_read_public"
                 Text(if (publicRead) "匿名公共读取，不使用登录资料或系统代理凭据" else "登录资料：${profile?.optString("label") ?: "当前资料"}")
                 val args = request.child("arguments")
+                if (request.optString("tool") == "browser_task_network") Text("网络witness：${args.optString("action")}。启用会在当前页面包装fetch/XHR，只在本机保留有界请求/响应元数据，读取时才交给原模型。无正文、Cookie、Authorization或URL查询；URL路径仍可能含个人标识。页面可修改或绕过，非底层网络记录；导航即停用，停止采集不撤回已发网络。", style = MaterialTheme.typography.bodyMedium)
+                if (request.optString("tool") == "browser_task_script") {
+                    Text("真实页面脚本：会使用当前登录网页的权限，可能读取隐私、修改DOM、发网络或提交。不是只读脚本，也不受隔离世界保护。仅批准下方这段源码一次；异步效果可能继续，未知结果不会自动重跑。", style = MaterialTheme.typography.bodyMedium)
+                    Text("模型声明的目的与效果（未经核实）：\n${args.optString("effectReview")}")
+                    androidx.compose.foundation.text.selection.SelectionContainer { Text(args.optString("source"), style = MaterialTheme.typography.bodySmall) }
+                }
+                if (request.optString("tool") == "browser_task_evaluate") Text("真实DOM只读表达式（受限语言，不是任意JavaScript）：\n${args.optString("expression")}", style = MaterialTheme.typography.bodySmall)
                 if (request.optString("tool") == "browser_task_retain_source") {
                     val saved = request.child("capability").child("sourceRetentionPreview")
                     Text(if (saved.optString("mode") in setOf("table", "list")) "保留本次模型已读的 ${saved.optInt("rows")} 行、${saved.optInt("fields")} 个字段${if (saved.optBoolean("partial")) "（片段）" else ""}；不另抓整页。" else "仅保留本次实际已读文字摘录。", style = MaterialTheme.typography.bodyMedium)
@@ -538,6 +585,7 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
     }
     recipeSource?.let { source -> AlertDialog(onDismissRequest = { recipeSource = null; recipePreview = null }, title = { Text("制作网站只读配方") }, text = { Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("下次读取这个网站时，按同一结构直接整理字段；表头、路径或页面变化就回普通读取。配方不包含账号授权，也不会导航、点击或提交。"); Text(source.optString("url"), style = MaterialTheme.typography.bodySmall); OutlinedTextField(value = recipeQuery, onValueChange = { recipeQuery = it.take(160); recipePreview = null }, label = { Text("区域识别词，如这张表的标题") }, modifier = Modifier.fillMaxWidth()); TextButton(onClick = { val query = recipeQuery; var actual: JSONObject? = null; c.command({ actual = c.host.prepareRecipeForOwner(source.getString("taskId"), source.getString("sourceId"), query) }, { if (recipeQuery == query) recipePreview = actual }) }, enabled = !c.busy && recipeQuery.isNotBlank()) { Text("核对读取字段") }; recipePreview?.let { preview -> Text("字段：${preview.array("expectedHeaders").rows().joinToString("、") { it.optString("text") }.ifBlank { "列表逐字正文与原行位置" }}"); Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(checked = recipeEnabled, onCheckedChange = { recipeEnabled = it }); Text("保存后启用这份只读配方（仍使用本次任务的网页读取授权）。", Modifier.weight(1f)) } } } }, confirmButton = { TextButton(onClick = { val preview = recipePreview ?: return@TextButton; val expected = dev.pocketengine.store.TaskStore.capabilityFingerprint(preview); val query = preview.getString("query"); val enable = recipeEnabled; c.command({ c.host.saveRecipeForOwner(source.getString("taskId"), source.getString("sourceId"), query, expected, enable) }, { recipeSource = null; recipePreview = null }) }, enabled = recipePreview != null && !c.busy) { Text(if (recipeEnabled) "保存并启用" else "保存为停用配方") } }, dismissButton = { TextButton(onClick = { recipeSource = null; recipePreview = null }) { Text("取消") } }) }
     recoveryReview?.let { selected -> AlertDialog(onDismissRequest = { recoveryReview = null; recoveryConsent = false }, title = { Text("重新继续原研究？") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("保留同一个任务和已保存依据，新建执行并重新读取需要的页面。重开仍使用当前这份登录资料并逐次确认；不恢复旧授权、不自动重发未知操作，也不保证未保存表单可恢复。"); Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(checked = recoveryConsent, onCheckedChange = { recoveryConsent = it }); Text("我同意把重新读取的网页观察发送给当前模型。", Modifier.weight(1f)) } } }, confirmButton = { TextButton(onClick = { val pinned = JSONObject(selected.toString()); c.command({ c.host.recoverResearchForOwner(pinned.getString("taskId"), pinned.getString("manifestFingerprint"), pinned.getJSONObject("profile"), true) }, { recoveryReview = null; recoveryConsent = false; c.workspaceView = "research" }) }, enabled = recoveryConsent && !c.busy) { Text("恢复原任务") } }, dismissButton = { TextButton(onClick = { recoveryReview = null; recoveryConsent = false }) { Text("暂不恢复") } }) }
+    uploadReview?.let { original -> AlertDialog(onDismissRequest = { uploadReview = null }, title = { Text("核对这次原上传") }, text = { Column { Text("请根据原网页显示填写证据。选择已接收/已拒绝仅记录你的确认，不会重新上传，也不证明未撤回的内容已删除。"); OutlinedTextField(uploadEvidence, { uploadEvidence = it.take(2000) }, label = { Text("站点提示 / 实际结果") }) } }, confirmButton = { Row { listOf("accepted" to "已接收", "rejected" to "已拒绝", "unknown" to "仍未知").forEach { (value, label) -> TextButton(onClick = { val pin = original.getJSONObject("pin"); c.command({ c.host.confirmUploadForOwner(pin.getString("taskId"), original.getString("attemptId"), original.getString("fingerprint"), value, uploadEvidence) }, { uploadReview = null }) }, enabled = uploadEvidence.isNotBlank() && !c.busy) { Text(label) } } } }, dismissButton = { TextButton(onClick = { uploadReview = null }) { Text("返回") } }) }
     history?.let { rows -> AlertDialog(onDismissRequest = { history = null }, title = { Text("研究记录") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) { if (rows.isEmpty()) Text("还没有研究记录") else rows.forEach { row -> TextButton(onClick = { c.command({ c.host.selectHistoryForOwner(row.getString("taskId")) }, { history = null }) }) { Column { Text(row.optString("goal"), maxLines = 3); Text(statusLabel(row.optString("status")), style = MaterialTheme.typography.bodySmall) } } } } }, confirmButton = { TextButton(onClick = { history = null }) { Text("返回") } }) }
     sourceDetails?.let { source -> AlertDialog(onDismissRequest = { sourceDetails = null }, title = { Text(source.optString("title").ifBlank { "保留的网页摘录" }) }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("已保存的当时内容 · 不会自动换成现网页", fontWeight = FontWeight.SemiBold); if (source.has("structuredProjection")) SavedStructuredSource(source) { ref -> var actual: JSONObject? = null; c.command({ actual = c.host.savedFieldForOwner(source.getString("taskId"), ref) }, { fieldDetails = actual }) } else SelectionContainer { Text(source.optString("excerpt")) }; Text(source.optString("url"), style = MaterialTheme.typography.bodySmall); Text(sourceScopeNote(source), style = MaterialTheme.typography.bodySmall); if (source.has("readRecipe")) Text("读取配方版本 ${source.child("readRecipe").optInt("revision")} · ${if (source.child("readRecipe").optString("status") == "matched") "结构已匹配" else "本次配方已失配，使用普通读取证据"}", style = MaterialTheme.typography.bodySmall); if (source.has("structuredProjection") && !source.child("structuredProjection").optBoolean("partial", true)) TextButton(onClick = { recipeSource = JSONObject(source.toString()); recipeQuery = ""; recipePreview = null; recipeEnabled = false; sourceDetails = null }) { Text("制作网站只读配方…") } } }, confirmButton = { TextButton(onClick = { sourceDetails = null }) { Text("返回结果") } }, dismissButton = { TextButton(onClick = { c.command({ c.host.openSourceForOwner(source.getString("taskId"), source.getString("sourceId")) }, { sourceDetails = null; resultDetails = null }) }, enabled = !c.busy) { Text("另看现网页") } }) }
     fieldDetails?.let { field -> AlertDialog(onDismissRequest = { fieldDetails = null }, title = { Text("当时保存的字段") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(field.optString("title"), style = MaterialTheme.typography.bodySmall); SelectionContainer { Text(field.optString("text"), style = MaterialTheme.typography.bodyLarge) }; val headers = field.array("headers").rows(); if (headers.isNotEmpty()) { Text("同时保存的表头", fontWeight = FontWeight.SemiBold); Text(headers.joinToString(" | ") { it.optString("text") }, style = MaterialTheme.typography.bodySmall) }; Text("保存位置：第 ${field.child("row").optInt("index") + 1} 项" + if (field.optString("mode") == "table") " · 第 ${field.child("field").optInt("column") + 1} 列" else "", style = MaterialTheme.typography.bodySmall); Text(if (field.optBoolean("partial")) "来自当时保存的内容片段，未自动补读网页。" else "来自当时交付模型并保存的内容，网页文字仍需核实。", style = MaterialTheme.typography.bodySmall) } }, confirmButton = { TextButton(onClick = { fieldDetails = null }) { Text("返回依据") } }) }
@@ -548,23 +596,38 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
             c.command({ actual = c.host.savedSourceForOwner(taskId, sourceId) }, { sourceDetails = actual })
         }
     }, confirmButton = { TextButton(onClick = { resultDetails = null }) { Text("返回工作区") } }) }
+    if (actionOptions) AlertDialog(onDismissRequest = { actionOptions = false }, title = { Text("当前任务的日常浏览") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) { ActionScopeChoices(c); Text("只调整当前原执行的浏览范围；累计任务预算不增加，旧未知效果不重发。若正在等一次精确审批，本次仍需你单独决定，新增范围只影响之后的新操作。") } }, confirmButton = { TextButton(onClick = { val pin = JSONObject(state.child("readScopeIdentity").toString()); val rev = actionScope?.optLong("revision") ?: 0L; val execution = activeTask.child("executionScope").optLong("revision"); c.reviewReadScopeAndFrames { _, _, actions -> readScopeReview = ReadScopeReview(BrowserReadScope.disabled(), "renewActions", pin, activeTask.getString("id"), activeTask.optString("goal"), profile?.optString("label").orEmpty(), actionConsent = actions, browserRevision = rev, executionRevision = execution) } }, enabled = c.autoActions && !c.busy) { Text("核对实际范围") } }, dismissButton = { TextButton(onClick = { actionOptions = false; c.resetReadConsent() }) { Text("不授权") } })
     if (readScopeOptions) AlertDialog(onDismissRequest = { readScopeOptions = false }, title = { Text("本轮只读范围") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) { Text("仅用于当前原任务，暂停、接管或更换资料后失效。旧范围不会自动恢复。", style = MaterialTheme.typography.bodySmall); ReadScopeChoices(c, false); c.error?.let { Text(it, color = MaterialTheme.colorScheme.error) } } }, confirmButton = { TextButton(onClick = { val pin = JSONObject(state.child("readScopeIdentity").toString()); c.reviewReadScope { readScopeReview = ReadScopeReview(it, "renew", pin, activeTask.getString("id"), activeTask.optString("goal"), profile?.optString("label").orEmpty()) } }, enabled = c.autoRead && !c.busy) { Text("核对具体范围") } }, dismissButton = { TextButton(onClick = { readScopeOptions = false; c.resetReadConsent() }) { Text("不授权") } })
     readScopeReview?.let { review ->
         val policy = review.consent.review()
-        AlertDialog(onDismissRequest = { readScopeReview = null }, title = { Text("明确授予这轮只读范围？") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(review.goal, maxLines = 4); Text("资料：${review.profileLabel} · 原任务 / 原执行", style = MaterialTheme.typography.bodySmall)
-            Text("最长5分钟，最多32次只读 / 来源调用；匿名正文累计最多1MiB。不会延长原任务授权。可随时撤销，暂停 / 接管 / 资料或会话变化后须重新明确授权。", style = MaterialTheme.typography.bodySmall)
-            Text(if (policy.optBoolean("allowSourceRetention")) "你明确同意把实际已读摘录保留在原任务；未核实的正文不会变成已验证结论。" else "不自动保存网页来源；来源保存仍逐次确认。", style = MaterialTheme.typography.bodySmall)
+        AlertDialog(onDismissRequest = { readScopeReview = null }, title = { Text("明确授予这轮浏览范围？") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(review.goal, maxLines = 4); if (review.target == "start") Text("原任务累计 ${review.executionChoice?.optInt("toolLimit")} 次工具 / ${review.executionChoice?.optInt("modelCallLimit")} 次模型；" + if (review.executionChoice?.optLong("deadlineAt") == 0L) "至完成、停止或预算用完。" else "到期：${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(review.executionChoice?.optLong("deadlineAt") ?: 0L))}。", style = MaterialTheme.typography.bodySmall); Text("资料：${review.profileLabel} · 原任务 / 原执行", style = MaterialTheme.typography.bodySmall)
+            if (review.consent.enabled()) Text("最长5分钟，最多32次只读 / 来源调用；匿名正文累计最多1MiB。不会延长原任务授权。可随时撤销，暂停 / 接管 / 资料或会话变化后须重新明确授权。", style = MaterialTheme.typography.bodySmall)
+            if (review.consent.enabled()) Text(if (policy.optBoolean("allowSourceRetention")) "你明确同意把实际已读摘录保留在原任务；未核实的正文不会变成已验证结论。" else "不自动保存网页来源；来源保存仍逐次确认。", style = MaterialTheme.typography.bodySmall)
             val seeds = policy.getJSONArray("publicSeeds")
             Text(if (seeds.length() == 0) "未授予匿名公共URL读取。" else "仅这些逐字固定的匿名公共URL；重定向仅限这些种子origin / 同主机HTTPS升级，私有网络始终拒绝。", style = MaterialTheme.typography.bodySmall)
             for (i in 0 until seeds.length()) Text(seeds.getString(i), style = MaterialTheme.typography.bodySmall)
-            Text("仅本轮已明确打开的任务页 observe / wait、原下载状态及明确同意的来源保留。点击、输入、打开 / 跳转、下载 / 上传、账号操作仍逐次确认或交由你处理；不自动探索页面href。", style = MaterialTheme.typography.bodySmall)
-            if (review.target != "renew") {
+            if (review.consent.enabled()) Text("仅本轮已明确打开的任务页 observe / wait（包括原已展示 frame 内的有限目标条件）、原下载状态及明确同意的来源保留。本段只读授权本身不放行点击、输入、打开 / 跳转；只有下方另行明确勾选的日常浏览范围才可连续执行。下载 / 上传和账号操作仍需精确确认或由你处理。", style = MaterialTheme.typography.bodySmall)
+            if (review.actionConsent.enabled()) {
+                val actions = review.actionConsent.review()
+                Text("日常浏览共 ${actions.getInt("maxActions")} 次，且不超过原任务期限与累计预算；同一任务里连续打开 / 按明确链接跳转翻页 / 滚动 / 读取并保留来源，不逐次打断。暂停、换资料或任务scope续期后不自动恢复。", style = MaterialTheme.typography.bodySmall)
+                val origins = actions.getJSONArray("allowedOrigins"); for (i in 0 until origins.length()) Text(origins.getString(i), style = MaterialTheme.typography.bodySmall)
+                Text(if (actions.getBoolean("ordinaryInput")) "明确允许普通字段准备输入；输入可能触发页面联动或自动保存。密码、验证码和文件选择不包括在内。" else "普通输入未授权，仍逐次核对。", style = MaterialTheme.typography.bodySmall)
+                val interactionActions = actions.getJSONArray("interactionActions")
+                if (interactionActions.length() > 0) {
+                    Text("你额外明确授权这些控件在本任务内重复交互，不逐次打断；并非根据网页标签推定安全。动作：" + (0 until interactionActions.length()).joinToString("、") { when (interactionActions.getString(it)) { "click" -> "点击"; "select_option" -> "选择下拉项"; else -> "勾选 / 取消勾选" } }, style = MaterialTheme.typography.bodySmall)
+                    val targets = actions.getJSONArray("interactionTargets"); for (i in 0 until targets.length()) Text(targets.getString(i), style = MaterialTheme.typography.bodySmall)
+                    val selected = actions.getJSONArray("observedTargets"); for (i in 0 until selected.length()) { val pin = selected.getJSONObject(i).getJSONObject("pin"); Text("已选当前文档：" + BrowserActionScope.targetName(pin.getJSONObject("targetPreview")) + " · " + pin.optString("pageUrl").substringBefore('?').substringBefore('#'), style = MaterialTheme.typography.bodySmall) }
+                    Text("只包含上述完整名称 / #id，且须原观察、同网站与当前文档。页面处理器仍可能联动或自动保存，无法保证网页诚实；若网站或控件含义不确定，请不要授予。已知表单提交及敏感 / 有后果控件不包括在内。", style = MaterialTheme.typography.bodySmall)
+                }
+                Text("发送、提交、删除、付款、非上述明确控件、页面脚本、下载和越界操作继续精确审批。回执只记录真实派发与观察，不保证服务器结果；未知不重发。", style = MaterialTheme.typography.bodySmall)
+            }
+            if (review.target !in setOf("renew", "renewActions")) {
                 Text("嵌入网页默认只读顶层同源；以下为你明确加入本任务的额外来源。不会自动重载已打开的登录页，也不开放密码或设备权限。", style = MaterialTheme.typography.bodySmall)
                 val frames = review.frameOrigins.summary(); for (i in 0 until frames.length()) Text(frames.getString(i), style = MaterialTheme.typography.bodySmall)
             }
             c.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        } }, confirmButton = { TextButton(onClick = { c.commandWithDraft({ when (review.target) { "start" -> c.host.startForOwner(review.goal, review.pin, true, review.consent, review.frameOrigins); "existing" -> c.host.allowExistingForOwner(review.taskId, review.pin, true, review.consent, review.frameOrigins); else -> c.host.grantReadScopeForOwner(review.taskId, review.pin, review.consent) } }, { readScopeReview = null; readScopeOptions = false; existingTasks = false; c.consent = false; if (review.target == "start") c.consumedGoal(); c.resetReadConsent(); if (review.target != "renew") c.backToPage() }) }, enabled = !c.busy) { Text("授予这轮范围") } }, dismissButton = { TextButton(onClick = { readScopeReview = null }) { Text("不授权") } })
+        } }, confirmButton = { TextButton(onClick = { c.commandWithDraft({ when (review.target) { "start" -> c.host.startForOwner(review.goal, review.pin, true, review.consent, review.frameOrigins, review.actionConsent, review.executionChoice); "existing" -> c.host.allowExistingForOwner(review.taskId, review.pin, true, review.consent, review.frameOrigins, review.actionConsent); "renewActions" -> c.host.grantTaskScopeForOwner(review.taskId, review.pin, review.browserRevision, review.executionRevision, review.actionConsent); else -> c.host.grantReadScopeForOwner(review.taskId, review.pin, review.consent) } }, { readScopeReview = null; readScopeOptions = false; actionOptions = false; existingTasks = false; c.consent = false; if (review.target == "start") c.consumedGoal(); c.resetReadConsent(); if (review.target !in setOf("renew", "renewActions")) c.backToPage() }) }, enabled = !c.busy) { Text("授予这轮范围") } }, dismissButton = { TextButton(onClick = { readScopeReview = null }) { Text("不授权") } })
     }
 }
 
@@ -575,6 +638,7 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
         OutlinedTextField(c.publicSeeds, { if (it.length <= 16400) c.publicSeeds = it }, label = { Text("明确公共种子URL · 最多8个，每行一个") }, modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 4, enabled = !c.busy)
         Text("仅本轮已明确打开的任务页只读和明确种子，5分钟 / 32次 / 正文累计1MiB。下一步会逐字展示实际URL供你确认；不自动点击、输入、打开或跳转网页。", style = MaterialTheme.typography.bodySmall)
     }
+    if (frameChoice) ActionScopeChoices(c)
     if (frameChoice) {
         OutlinedTextField(c.extraFrameOrigins, { if (it.length <= 4200) c.extraFrameOrigins = it }, label = { Text("可选 · 本任务额外嵌入来源") }, placeholder = { Text("https://embedded.example · 每行一个，最多8个") }, modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 4, enabled = !c.busy)
         Text("默认仅同源。填入即明确允许本任务读取这些origin内已成功桥接的嵌入正文，不含账号密码或硬件权限；不支持通配。已有页不自动刷新，未接入的frame会明确说明。", style = MaterialTheme.typography.bodySmall)
@@ -621,4 +685,29 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
     if (projection.optBoolean("partial")) Text("当时只保存了部分行或字段，未补成整页。", style = MaterialTheme.typography.bodySmall)
     if (projection.optString("mode") == "list") projection.array("data").rows().forEach { item -> Column { SelectionContainer { Text(item.optString("text")) }; TextButton(onClick = { onField(prefix + "i" + item.optInt("index")) }) { Text("查看这一项") } } }
     else Column(Modifier.horizontalScroll(rememberScrollState())) { projection.array("data").rows().forEach { row -> Row { row.array("cells").rows().forEach { cell -> Column(Modifier.width(144.dp).padding(6.dp)) { Text(cell.optString("text"), style = MaterialTheme.typography.bodySmall, fontWeight = if (cell.optString("role") == "columnheader") FontWeight.SemiBold else FontWeight.Normal); TextButton(onClick = { onField(prefix + "r" + row.optInt("index") + "c" + cell.optInt("column")) }, contentPadding = PaddingValues(0.dp)) { Text("查看字段", style = MaterialTheme.typography.bodySmall) } } } }; HorizontalDivider() } }
+}
+
+@Composable private fun ActionScopeChoices(c: OwnerController) {
+        Row(Modifier.fillMaxWidth()) { Checkbox(checked = c.autoActions, onCheckedChange = { c.autoActions = it }, enabled = !c.busy); Text("在明确网站内连续完成日常浏览", Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodySmall) }
+        if (c.autoActions) {
+            OutlinedTextField(c.actionOrigins, { if (it.length <= 4096) c.actionOrigins = it }, label = { Text("明确允许的网站来源 · 每行一个") }, placeholder = { Text("https://example.com") }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
+            OutlinedTextField(c.actionBudget, { if (it.length <= 3 && it.all(Char::isDigit)) c.actionBudget = it }, label = { Text("日常浏览次数上限 · 1–100") }, singleLine = true)
+            Text("可选：明确授权任务内的页面交互", style = MaterialTheme.typography.labelLarge)
+            Row(Modifier.fillMaxWidth()) { Checkbox(checked = c.interactionClicks, onCheckedChange = { c.interactionClicks = it }); Text("重复点击我指定的翻页 / 展开 / 切换控件", Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodySmall) }
+            Row(Modifier.fillMaxWidth()) { Checkbox(checked = c.interactionSelections, onCheckedChange = { c.interactionSelections = it }); Text("选择我指定的下拉控件", Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodySmall) }
+            Row(Modifier.fillMaxWidth()) { Checkbox(checked = c.interactionChecks, onCheckedChange = { c.interactionChecks = it }); Text("勾选或取消我指定的筛选控件", Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodySmall) }
+            if (c.interactionClicks || c.interactionSelections || c.interactionChecks) {
+                val candidates = c.snapshot.child("pages").child("taskSpace").array("interactionCandidates").rows()
+                if (candidates.isEmpty()) Text("当前尚无可选的已观察控件；先让本任务读取原页，之后可在这里选择。不会替你猜按钮。", style = MaterialTheme.typography.bodySmall)
+                candidates.forEach { candidate ->
+                    val pin = candidate.child("pin"); val target = pin.child("targetPreview"); val key = candidate.toString(); val selected = c.selectedInteractionCandidates.any { it.toString() == key }
+                    Row(Modifier.fillMaxWidth()) { Checkbox(checked = selected, onCheckedChange = { checked -> c.selectedInteractionCandidates = if (checked) c.selectedInteractionCandidates + JSONObject(key) else c.selectedInteractionCandidates.filterNot { it.toString() == key } }); Column(Modifier.padding(top = 8.dp)) { Text(target.optString("text").ifBlank { target.optString("id") }, style = MaterialTheme.typography.bodySmall); Text(pin.optString("pageUrl").substringBefore('?').substringBefore('#') + " · " + pin.child("actionFrame").optString("frameId", "main"), style = MaterialTheme.typography.labelSmall) } }
+                }
+                Text("勾选项只对原任务当前文档 / frame 生效；刷新或跳转后的控件不会借旧选择获权。下一次原动作仍需当前观察，不重用旧 ref。", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { c.advancedInteractionTargets = !c.advancedInteractionTargets }) { Text("高级：手填跨文档的明确控件边界") }
+                if (c.advancedInteractionTargets) OutlinedTextField(c.interactionTargets, { if (it.length <= 4096) c.interactionTargets = it }, label = { Text("明确允许的完整控件名称或 #id · 每行一个") }, placeholder = { Text("下一页\n#load-more") }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
+                Text("只授权你明确指定的控件，不是全站按钮通行证；页面处理器可能联动 / 自动保存。发送、提交、删除、付款及表单内控件不包括，未知效果不重发。", style = MaterialTheme.typography.bodySmall)
+            }
+            Row(Modifier.fillMaxWidth()) { Checkbox(checked = c.ordinaryInput, onCheckedChange = { c.ordinaryInput = it }); Text("允许普通字段输入（可能触发页面联动或自动保存）", Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodySmall) }
+        }
 }

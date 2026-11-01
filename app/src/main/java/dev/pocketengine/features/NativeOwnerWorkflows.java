@@ -130,7 +130,7 @@ public final class NativeOwnerWorkflows {
     }
     private KnowledgeLearningWorkflow.SourceDocument learningSource(SourceRef expected)throws Exception{
         if(!"owner".equals(expected.ownerId)||!"private".equals(expected.spaceId))throw new SecurityException("来源不属于当前私人空间");
-        if("task_evidence".equals(expected.kind))return tasks.readMemorySource(expected);
+        if("workspace_file".equals(expected.kind)||"task_evidence".equals(expected.kind))return sources.read(expected);
         EngineModule module=host.module("assistant");
         if("message".equals(expected.kind)&&module instanceof AssistantModule)return ((AssistantModule)module).readMemorySource(expected);
         throw new IllegalArgumentException("只可提炼真实消息或主人已确认的任务来源");
@@ -170,6 +170,7 @@ public final class NativeOwnerWorkflows {
             case "snapshot":case "listProcedures":return learningSnapshot();
             case "prepareLearningSource":{
                 String kind=payload.getString("kind"),id=payload.getString("sourceId");
+                sources.prepareSourceHead(kind,id,control);
                 SourceRef.State source=sources.resolve(MemoryBook.Scope.from(scope),kind,id);
                 if(source==null||source.deleted)throw new IllegalStateException("真实来源不存在或尚未确认");
                 if(memory().isSourceForgotten(scope,source.ref))return new JSONObject().put("sourceRef",source.ref.toJson()).put("status","source_forgotten").put("learningAllowed",false).put("modelCalled",false).put("reason","此来源已遗忘，提炼不会再次发送旧正文；可返回原明确保存流程处理新内容");
@@ -349,8 +350,11 @@ public final class NativeOwnerWorkflows {
 
     public JSONObject source(JSONObject reference)throws Exception{
         SourceRef ref=SourceRef.fromJson(reference);if(!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId))throw new SecurityException("此来源不属于当前私人空间");
+        boolean nativeSaved="workspace_file".equals(ref.kind)||"task_evidence".equals(ref.kind)&&dev.pocketengine.features.memory.TaskSavedEvidence.matches(ref.sourceId);
+        if(nativeSaved)sources.prepareSourceHead(ref.kind,ref.sourceId,null);
         SourceRef.State actual=sources.resolve(MemoryBook.Scope.from(ownerScope()),ref.kind,ref.sourceId);
         if(actual==null||actual.deleted||!ref.equals(actual.ref))throw new IllegalStateException("来源已变化或被删除，请刷新候选后查看");
+        if(nativeSaved){KnowledgeLearningWorkflow.SourceDocument document=sources.read(ref);return new JSONObject().put("kind",ref.kind).put("title",document.title).put("text",document.text).put("sourceRef",ref.toJson()).put("historicalBodySnapshot",true).put("executionAuthorized",false);}
         if(ref.kind.equals("task_evidence")){
             synchronized(tasks){
                 SourceRef.State current=sources.resolve(MemoryBook.Scope.from(ownerScope()),ref.kind,ref.sourceId);

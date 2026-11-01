@@ -33,7 +33,7 @@ public final class AdaptivePhonePort implements PhonePort {
 
     private final PhonePort source;
     private final Scope scope;
-    private final boolean sendScreenshots, visionAvailable;
+    private final boolean sendScreenshots, visionAvailable, localCaptureAllowed, localOcrAllowed;
     private final LongSupplier uptime;
     private final LocalImageOcr ocr;
     private final AdaptiveObservationPolicy policy = new AdaptiveObservationPolicy();
@@ -55,13 +55,17 @@ public final class AdaptivePhonePort implements PhonePort {
     /** The same Application-owned local engine as attachments; this run adapter never closes it. */
     public AdaptivePhonePort(PhonePort source, Scope scope, boolean sendScreenshots,
                              boolean visionAvailable, LongSupplier uptime, LocalImageOcr ocr) {
+        this(source,scope,sendScreenshots,sendScreenshots,sendScreenshots,visionAvailable,uptime,ocr);
+    }
+    public AdaptivePhonePort(PhonePort source,Scope scope,boolean capture,boolean localOcr,boolean upload,boolean visionAvailable,LongSupplier uptime,LocalImageOcr ocr){
+        this.localCaptureAllowed=capture;this.localOcrAllowed=localOcr;
         this.source = Objects.requireNonNull(source); this.scope = Objects.requireNonNull(scope);
-        this.sendScreenshots = sendScreenshots; this.visionAvailable = visionAvailable;
-        this.imageCeiling = sendScreenshots; this.uptime = Objects.requireNonNull(uptime);
+        this.sendScreenshots = upload; this.visionAvailable = visionAvailable;
+        this.imageCeiling = upload; this.uptime = Objects.requireNonNull(uptime);
         this.ocr = ocr;
     }
     @Override public boolean isConnected() { return source.isConnected(); }
-    public boolean textTargetingAvailable(){return sendScreenshots&&source instanceof NativeOcrTapPort&&ocrAvailable();}
+    public boolean textTargetingAvailable(){return localCaptureAllowed&&localOcrAllowed&&source instanceof NativeOcrTapPort&&ocrAvailable();}
     public boolean matchesHostScope(String task,String run,int epoch){return scope.taskId.equals(task)&&scope.runId.equals(run)&&scope.epoch==epoch;}
     @Override public synchronized void clearReferences() {
         latest = null; latestBinding = null; textTargets.clear();source.clearReferences();
@@ -288,7 +292,7 @@ public final class AdaptivePhonePort implements PhonePort {
                     JSONObject observed=after.evidence.optJSONObject("observed");if(observed!=null)result.put("actionFeedback",observed.optString("status").equals("change_observed")?"已观察到界面变化；不代表业务完成。":"当前可读树未显示确定变化；这不证明动作没发生，勿原样重发。");
                 }catch(Exception unavailable){if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();result.put("actionEffects",new JSONObject().put("stability","unavailable_after_dispatch").put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false));}
             }else result.put("actionEffects",new JSONObject().put("stability",result.has("accepted")&&result.isNull("accepted")?"unknown_dispatch_not_replayed":Boolean.TRUE.equals(result.opt("accepted"))?"before_tree_unavailable":"not_accepted").put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false));
-            JSONObject readback=result.optJSONObject("nativeTextReadback");if(readback!=null&&readback.optString("status").equals("exact_match"))result.put("actionFeedback","原生同一输入节点已回读，文字与所输内容精确一致；仍不代表业务完成。");
+            JSONObject readback=result.optJSONObject("delayedTextReadback");if(readback==null)readback=result.optJSONObject("nativeTextReadback");if(readback!=null&&readback.optString("status").equals("exact_match"))result.put("actionFeedback","原生同一输入节点已回读，文字与所输内容精确一致（验证阶段见回执）；仍不代表业务完成。");
             return result.put("verifiedBusinessSuccess",false);
         }finally{actionEffectInFlight.set(false);}
     }
@@ -321,7 +325,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 selected=textTargets.get(args.optString("textTargetId"));
                 if(!(source instanceof NativeOcrTapPort)||selected==null||!selected.matches(control,args.optString("observationId"),control.pauseRevision()))
                     result=failure("stale_text_target","文字目标不属于当前原生OCR观察，请重新观察。");
-                else if(!imageCeiling)result=failure("screenshots_disabled","本轮未允许截图读取，尚未派发文字点击。");
+                else if(!localCaptureAllowed||!localOcrAllowed)result=failure("local_capture_disabled","本轮未允许本地取图/OCR，尚未派发文字点击。");
                 else result=((NativeOcrTapPort)source).tapOcrText(selected,control,admission);
             }else result = source.execute(tool, args, control);
         }
@@ -373,7 +377,7 @@ public final class AdaptivePhonePort implements PhonePort {
         Evidence evidence = new Evidence(binding, sources.optBoolean("treeAvailable"), observation.optBoolean("truncated"),
                 sources.optInt("usefulNodes"), sources.optBoolean("imageIncluded"),
                 "display_has_no_frame".equals(observation.optString("screenState")), at,sources.optBoolean("treeAdequate"));
-        return policy.decide(expected, evidence, need, Health.READY, imageCeiling, visionAvailable, ocrAvailable(),
+        return policy.decide(expected, evidence, need, Health.READY, localCaptureAllowed, localOcrAllowed, imageCeiling, visionAvailable, ocrAvailable(),
                 control.isPaused(), control.isCancelled(), uptime.getAsLong(), MAX_AGE_MS);
     }
     private JSONObject deliver(JSONObject observation, Decision decision, RunControl control) throws Exception {
@@ -382,7 +386,7 @@ public final class AdaptivePhonePort implements PhonePort {
         if (decision.request != Request.NODES && decision.request != Request.VISION && decision.request != Request.OCR && decision.request != Request.EMPTY_DISPLAY) {
             String reason = decision.reason;
             clearReferences();
-            String code = reason.startsWith("screenshots_disabled:") ? "screenshots_disabled"
+            String code = reason.startsWith("local_capture_disabled:") ? "local_capture_disabled"
                     : reason.startsWith("visual_engines_unavailable:") ? "visual_engines_unavailable"
                     : decision.request == Request.REOBSERVE ? "stale_observation" : reason;
             JSONObject failed = failure(code, "当前观察无法安全继续，请重新观察或由主人处理。").put("observationReason", reason);
@@ -406,14 +410,14 @@ public final class AdaptivePhonePort implements PhonePort {
                 .put("request", decision.request.name().toLowerCase(java.util.Locale.ROOT)).put("reason", decision.reason)
                 .put("visionAvailable", visionAvailable).put("ocrAvailable", ocrAvailable())
                 .put("ocrReason", ocrAvailable() ? "mounted_local_engine" : "engine_not_installed")
-                .put("screenshotsAllowed", imageCeiling).put("automaticReplayAllowed", false));
+                .put("localCaptureAllowed",localCaptureAllowed).put("localOcrAllowed",localOcrAllowed).put("ocrTextMayBeSentToModel",true).put("uploadImageAllowed",imageCeiling).put("screenshotsAllowed", imageCeiling).put("automaticReplayAllowed", false));
         latest = new JSONObject(out.toString()); pendingNeed = Need.AUTOMATIC;
         return out;
     }
     private boolean ocrAvailable() { return ocr != null && ocr.available(); }
 
     private JSONObject recognize(JSONObject observation, RunControl control) throws Exception {
-        if (!imageCeiling || !ocrAvailable() || !ObservationReport.hasImage(observation))
+        if (!localCaptureAllowed || !localOcrAllowed || !ocrAvailable() || !ObservationReport.hasImage(observation))
             return failure("ocr_unavailable", "未取得可用于本地识别的授权图片。");
         String mime = observation.optString("imageMimeType");
         String format = "image/png".equals(mime) ? "png" : "image/jpeg".equals(mime) ? "jpeg" : "webp";

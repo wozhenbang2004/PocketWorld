@@ -208,7 +208,7 @@ public final class CommitmentBook {
             String planId=UUID.randomUUID().toString();JSONArray ids=new JSONArray();long previousDue=0;
             for(int i=0;i<steps.length();i++){
                 JSONObject step=steps.getJSONObject(i);
-                for(Iterator<String> keys=step.keys();keys.hasNext();){String key=keys.next();if(!key.matches("title|details|dueAt|expiresAt|taskId|goal|executor|verification|dependsOn|remoteWait"))throw new IllegalArgumentException("不支持的计划步骤字段："+key);}
+                for(Iterator<String> keys=step.keys();keys.hasNext();){String key=keys.next();if(!key.matches("title|details|dueAt|expiresAt|taskId|goal|executor|verification|dependsOn|remoteWait|businessWait"))throw new IllegalArgumentException("不支持的计划步骤字段："+key);}
                 long due=time(step,"dueAt");if(due<previousDue)throw new IllegalArgumentException("计划步骤的跟进时间必须按顺序排列");previousDue=due;
                 String id=UUID.randomUUID().toString();JSONArray dependencies=PlanExecutionPolicy.dependencies(step,ids);ids.put(id);
                 JSONObject record=copy(identity).put("id",id).put("revision",1L).put("kind","explicit_user")
@@ -220,6 +220,7 @@ public final class CommitmentBook {
                         .put("snoozedUntil",JSONObject.NULL).put("completionEvidence",JSONObject.NULL).put("completionEvent",JSONObject.NULL)
                         .put("planId",planId).put("planIndex",i).put("createdAt",now).put("updatedAt",now);
                 if(step.has("remoteWait")&&!step.isNull("remoteWait"))record.put("remoteWait",PlanRemoteWait.standard(step.getJSONObject("remoteWait")));
+                if(step.has("businessWait")&&!step.isNull("businessWait")){JSONObject wait=PlanBusinessWait.standard(step.getJSONObject("businessWait"));record.put("businessWait",wait).put("businessWaitCursor",PlanBusinessWait.anchorId(wait));}
                 records.put(record);
             }
             JSONObject plan=copy(identity).put("id",planId).put("revision",1L).put("title",title).put("sourceRef",source)
@@ -345,6 +346,7 @@ public final class CommitmentBook {
         JSONObject identity=scope(scope);privatePlanScope(identity);validNow(now);JSONObject approved=PlanExecutionPolicy.settings(settings);
         synchronized(lock){JSONObject state=read(),plan=findPlan(state,identity,id);expectPlanRevision(state,identity,plan,revision);
             JSONArray steps=planSteps(state,identity,plan);String signature=PlanExecutionPolicy.signature(plan,steps);JSONObject previous=plan.optJSONObject("execution");
+            for(int i=0;i<steps.length();i++)if(steps.getJSONObject(i).optJSONObject("businessWait")!=null&&!approved.optBoolean("businessEventConsent"))throw new SecurityException("须由主人明确确认原认证来源可触发此固定目标");
             if(previous!=null&&planInFlight(state,identity,plan)&&!"paused".equals(previous.optString("state")))throw new IllegalStateException("原任务仍有关联，请先暂停后修改执行范围");
             boolean open=false;for(int i=0;i<steps.length();i++)if(!terminal(steps.getJSONObject(i)))open=true;if(!open)throw new IllegalStateException("已结束的计划没有可批准的步骤");
             long used=previous==null?0:previous.optLong("admissions"),sequence=previous==null?1:Math.addExact(previous.getLong("approvalSequence"),1);
@@ -381,11 +383,16 @@ public final class CommitmentBook {
             if(!"paused".equals(execution.getString("state")))throw new IllegalStateException("修改计划前须先暂停");
             JSONObject step=planStep(state,identity,plan,stepId);expectRevision(step,stepRevision);requireOpen(step);
             if(!step.optString("taskId").isEmpty()||step.has("taskAdmission"))throw new IllegalStateException("原任务或未知准入仍有关联，请在原任务反馈；不能借编辑重派");
-            for(Iterator<String> keys=patch.keys();keys.hasNext();){String key=keys.next();if(!key.matches("title|details|goal|executor|verification|dueAt|expiresAt|dependsOn|remoteWait"))throw new IllegalArgumentException("不支持的计划步骤修改："+key);}
+            for(Iterator<String> keys=patch.keys();keys.hasNext();){String key=keys.next();if(!key.matches("title|details|goal|executor|verification|dueAt|expiresAt|dependsOn|remoteWait|businessWait"))throw new IllegalArgumentException("不支持的计划步骤修改："+key);}
             if(patch.length()==0)throw new IllegalArgumentException("请指定计划修改");
             if(patch.has("title"))step.put("title",requiredText(patch,"title",200));if(patch.has("details"))step.put("details",optionalText(patch,"details",4000,""));
             if(patch.has("goal"))step.put("goal",PlanExecutionPolicy.text(patch,"goal",4000));
             if(patch.has("executor"))step.put("executor",PlanExecutionPolicy.text(patch,"executor",20));if(patch.has("verification"))step.put("verification",PlanArtifactVerifier.standard(patch.getJSONObject("verification")));
+            if(patch.has("businessWait")){
+                JSONObject previous=step.optJSONObject("businessWait"),next=patch.isNull("businessWait")?null:PlanBusinessWait.standard(patch.getJSONObject("businessWait"));
+                if(previous!=null&&!PlanBusinessWait.same(previous,next)){JSONArray history=step.optJSONArray("priorBusinessWaitRefs");if(history==null)history=new JSONArray();if(history.length()>=100)throw new IllegalStateException("先前入站等待来源已满，不能丢弃旧关联");history.put(new JSONObject().put("reference",copy(previous)).put("cursor",step.optString("businessWaitCursor")).put("changedAt",now));step.put("priorBusinessWaitRefs",history);}
+                if(next==null){step.remove("businessWait");step.remove("businessWaitCursor");}else step.put("businessWait",next).put("businessWaitCursor",PlanBusinessWait.anchorId(next));step.remove("businessWaitObservation");
+            }
             if(patch.has("remoteWait")){
                 JSONObject previous=step.optJSONObject("remoteWait"),next=patch.isNull("remoteWait")?null:PlanRemoteWait.standard(patch.getJSONObject("remoteWait"));
                 if(previous!=null&&!PlanRemoteWait.sameIdentity(previous,next)){JSONArray history=step.optJSONArray("priorRemoteWaitRefs");if(history==null)history=new JSONArray();if(history.length()>=100)throw new IllegalStateException("先前电脑等待身份已满，不能丢弃旧关联");history.put(new JSONObject().put("reference",copy(previous)).put("changedAt",now).put("stepRevision",step.getLong("revision")));step.put("priorRemoteWaitRefs",history);}
@@ -406,6 +413,7 @@ public final class CommitmentBook {
             JSONObject original=resolvePlanTask(identity,step);if(original==null||!planTaskMatches(identity,step,step.optJSONObject("taskAdmission"),original)||!step.getString("status").equals(original.optString("status"))||!Boolean.TRUE.equals(original.opt("terminalVerified")))throw new IllegalStateException("原任务终态目前无法核实，不能更换准入身份");
             JSONArray allSteps=planSteps(state,identity,plan);for(int i=0;i<allSteps.length();i++){JSONObject other=allSteps.getJSONObject(i);if(!other.getString("id").equals(stepId)&&hasUnsettledOriginalTask(other))throw new IllegalStateException("其他原任务仍未核实结束，不能重写依赖历史");}
             JSONArray history=step.optJSONArray("priorTaskRefs");if(history==null)history=new JSONArray();if(history.length()>=100)throw new IllegalStateException("重试历史已满，不能丢弃旧任务关联");history.put(copy(observed));step.put("priorTaskRefs",history);
+            JSONObject oldAdmission=step.optJSONObject("taskAdmission");if(oldAdmission!=null&&oldAdmission.optJSONObject("businessWaitEvidence")!=null){JSONArray businessHistory=step.optJSONArray("priorBusinessConsumptions");if(businessHistory==null)businessHistory=new JSONArray();if(businessHistory.length()>=100)throw new IllegalStateException("原事件消费历史已满，不能丢旧事实");JSONObject consumed=oldAdmission.getJSONObject("businessWaitEvidence");businessHistory.put(copy(consumed));step.put("priorBusinessConsumptions",businessHistory).put("businessWaitCursor",consumed.getString("eventId"));}
             step.remove("taskAdmission");step.remove("taskObservation");step.put("taskId","").put("status","pending").put("completionEvidence",JSONObject.NULL).put("completionEvent",JSONObject.NULL);advance(step,now);
             for(int i=0;i<plan.getJSONArray("stepIds").length();i++){JSONObject other=find(state,identity,plan.getJSONArray("stepIds").getString(i));if("skipped".equals(other.optString("status"))&&!other.has("taskAdmission")&&other.optString("taskId").isEmpty()){other.put("status","pending");other.remove("skipReason");advance(other,now);}}
             execution.put("approvalKey",JSONObject.NULL);touchPlan(plan,now);write(state);return planView(state,identity,plan,now);
@@ -437,6 +445,7 @@ public final class CommitmentBook {
             JSONArray steps=planSteps(state,identity,plan);for(int j=0;j<steps.length();j++){JSONObject step=steps.getJSONObject(j),wait=step.optJSONObject("remoteWait");if(!terminal(step)&&wait!=null&&taskId.equals(wait.optString("taskId")))return true;}
         }return false;}
     }
+    public boolean waitsForBusinessEvents(JSONObject scope)throws Exception{JSONObject identity=scope(scope);privatePlanScope(identity);synchronized(lock){JSONObject state=read();JSONArray plans=array(state,"plans");for(int i=0;i<plans.length();i++){JSONObject plan=plans.getJSONObject(i);if(!matches(identity,plan)||plan.optJSONObject("execution")==null||!"active".equals(plan.getJSONObject("execution").optString("state")))continue;JSONArray steps=planSteps(state,identity,plan);for(int j=0;j<steps.length();j++)if(!terminal(steps.getJSONObject(j))&&steps.getJSONObject(j).optJSONObject("businessWait")!=null)return true;}return false;}}
     /** Durable one-shot admission intent, not a task or permission to start a Runner. */
     public JSONObject preparePlanTask(JSONObject scope,String planId,long planRevision,String stepId,long now)throws Exception {
         JSONObject identity=scope(scope);privatePlanScope(identity);validNow(now);
@@ -450,6 +459,7 @@ public final class CommitmentBook {
                     .put("validUntil",Math.min(expiryLimit(step),execution.getJSONObject("policy").isNull("expiresAt")?MAX_TIME:execution.getJSONObject("policy").getLong("expiresAt")))
                     .put("createdAt",now).put("admissionNumber",Math.addExact(execution.getLong("admissions"),1)).put("state","task_creation_unknown");step.put("taskAdmission",intent);
             if(decision.optJSONObject("remoteWaitStatus")!=null)intent.put("remoteWaitEvidence",copy(decision.getJSONObject("remoteWaitStatus").getJSONObject("evidence")));
+            if(decision.optJSONObject("businessWaitStatus")!=null){JSONObject observed=decision.getJSONObject("businessWaitStatus"),proof=observed.getJSONObject("evidence");intent.put("businessWaitEvidence",copy(proof));step.put("businessWaitConsumedEventId",proof.getString("eventId"));}
             execution.put("admissions",Math.addExact(execution.getLong("admissions"),1));touchPlan(plan,now);write(state);
             return taskRequestView(plan,step).put("lookupOnly",false).put("eligible",true);
         }
@@ -468,6 +478,7 @@ public final class CommitmentBook {
     public JSONObject refreshPlanTasks(JSONObject scope,String planId,long now)throws Exception {
         JSONObject identity=scope(scope);privatePlanScope(identity);validNow(now);JSONArray lookups;
         synchronized(lock){JSONObject state=read(),plan=findPlan(state,identity,planId);execution(plan);lookups=copyArray(planSteps(state,identity,plan));}
+        JSONArray business=new JSONArray();for(int i=0;i<lookups.length();i++){JSONObject step=lookups.getJSONObject(i);if(!terminal(step)&&step.optJSONObject("businessWait")!=null&&step.optJSONObject("taskAdmission")==null&&step.optString("taskId").isEmpty())business.put(new JSONObject().put("stepId",step.getString("id")).put("revision",step.getLong("revision")).put("reference",copy(step.getJSONObject("businessWait"))).put("cursor",step.optString("businessWaitCursor")).put("observation",businessWaitStatus(identity,step)));}
         JSONArray observations=new JSONArray();for(int i=0;i<lookups.length();i++){
             JSONObject step=lookups.getJSONObject(i),intent=step.optJSONObject("taskAdmission");if(intent==null&&step.optString("taskId").isEmpty())continue;
             JSONObject task=null;try{
@@ -477,6 +488,12 @@ public final class CommitmentBook {
             observations.put(new JSONObject().put("stepId",step.getString("id")).put("intent",intent==null?JSONObject.NULL:copy(intent)).put("task",task==null?JSONObject.NULL:task));
         }
         synchronized(lock){JSONObject state=read(),plan=findPlan(state,identity,planId);boolean changed=false;JSONArray needsCompletion=new JSONArray();
+            for(int i=0;i<business.length();i++){JSONObject row=business.getJSONObject(i),step=planStep(state,identity,plan,row.getString("stepId")),observed=row.getJSONObject("observation");if(terminal(step)||step.has("taskAdmission")||!step.optString("taskId").isEmpty()||step.getLong("revision")!=row.getLong("revision")||!row.getString("cursor").equals(step.optString("businessWaitCursor"))||!PlanBusinessWait.same(row.getJSONObject("reference"),step.optJSONObject("businessWait")))continue;
+                JSONObject previous=step.optJSONObject("businessWaitObservation");if(previous==null||!previous.toString().equals(observed.toString())){step.put("businessWaitObservation",copy(observed));changed=true;}
+                // Only a proven page containing NO matching event advances a local scan position.
+                // A matching event is consumed once together with the original task-admission intent.
+                if(!observed.optBoolean("allowed")&&"business_wait_pending".equals(observed.optString("reason"))&&!observed.optBoolean("gap")&&!observed.optString("nextEventId").isEmpty()&&!step.optString("businessWaitCursor").equals(observed.getString("nextEventId"))){step.put("businessWaitCursor",observed.getString("nextEventId"));changed=true;}
+            }
             for(int i=0;i<observations.length();i++){
                 JSONObject entry=observations.getJSONObject(i),step=planStep(state,identity,plan,entry.getString("stepId")),intent=step.optJSONObject("taskAdmission"),savedIntent=entry.optJSONObject("intent"),task=entry.optJSONObject("task");
                 if(intent!=null&&(savedIntent==null||!intent.getString("occurrenceId").equals(savedIntent.getString("occurrenceId"))))continue;
@@ -523,6 +540,7 @@ public final class CommitmentBook {
         if(!execution.getString("state").equals("active"))return result.put("reason","plan_"+execution.getString("state"));
         if(!execution.getBoolean("started"))return result.put("reason","manual_start_required");
         if(!execution.optBoolean("modelObservationConsent"))return result.put("reason","model_consent_required");
+        if(step.optJSONObject("businessWait")!=null&&!execution.optBoolean("businessEventConsent"))return result.put("reason","business_source_consent_required");
         if(terminal(step))return result.put("reason",step.getString("status"));if(expired(step,now))return result.put("reason","expired");
         String dependency=taskDependency(state,identity,step,now);if(dependency!=null)return result.put("reason",dependency);
         String liveDependency=liveFailureDependencies(state,identity,step);if(liveDependency!=null)return result.put("reason",liveDependency).put("nextAt",AutomationConditions.later(now));
@@ -533,6 +551,7 @@ public final class CommitmentBook {
         if(next>now)return result.put("reason",next>followUpAt(step)?"quiet_or_not_due":"not_due").put("nextAt",next);
         JSONObject condition=AutomationConditions.evaluate(policy,conditions,now);result.put("conditionStatus",condition);if(!condition.getBoolean("allowed"))return result.put("reason","conditions_blocked").put("nextAt",Math.min(deadline,condition.getLong("nextCheckAt")));
         JSONObject remote=remoteWaitStatus(identity,step);if(remote!=null){result.put("remoteWaitStatus",remote);if(!remote.optBoolean("allowed"))return result.put("reason",remote.getString("reason")).put("nextAt",Math.min(deadline,AutomationConditions.later(now)));}
+        JSONObject business=businessWaitStatus(identity,step);if(business!=null){result.put("businessWaitStatus",business);if(!business.optBoolean("allowed"))return result.put("reason",business.getString("reason")).put("nextAt",Math.min(deadline,AutomationConditions.later(now)));}
         if(goalTasks==null)return result.put("reason","task_bridge_unavailable");
         if(step.has("taskAdmission")){
             if(step.getJSONObject("taskAdmission").getLong("admissionNumber")>execution.getLong("maxTaskAdmissions"))return result.put("reason","task_admission_budget_exhausted");
@@ -541,6 +560,16 @@ public final class CommitmentBook {
         if(!step.optString("taskId").isEmpty())return result.put("reason","existing_task_requires_owner_continue");
         if(execution.getLong("admissions")>=execution.getLong("maxTaskAdmissions"))return result.put("reason","task_admission_budget_exhausted");
         return result.put("eligible",true).put("reason","ready").put("nextAt",now);
+    }
+    private JSONObject businessWaitStatus(JSONObject identity,JSONObject step)throws Exception{
+        JSONObject reference=step.optJSONObject("businessWait");if(reference==null)return null;
+        JSONObject intent=step.optJSONObject("taskAdmission"),task=step.optJSONObject("taskObservation");
+        if(intent!=null&&intent.optJSONObject("businessWaitEvidence")!=null&&task!=null&&!task.optString("runId").isEmpty())return new JSONObject().put("allowed",true).put("reason","business_wait_consumed_for_original_task").put("evidence",copy(intent.getJSONObject("businessWaitEvidence"))).put("authority","original_plan_consumption").put("triggerScope","one_native_checked_event_then_independent_owner_goal");
+        JSONObject blocked=new JSONObject().put("allowed",false).put("reason","business_wait_unavailable").put("gap",false).put("nextEventId",step.optString("businessWaitCursor",PlanBusinessWait.anchorId(reference))).put("localWindowOnly",true);if(evidenceResolver==null)return blocked;
+        JSONObject observed;try{observed=evidenceResolver.resolve(copy(identity),copy(step),"business_wait_condition",PlanBusinessWait.anchorId(reference));}catch(Exception unavailable){return blocked;}
+        if(observed==null||!"ChannelsModule".equals(observed.optString("authority"))||!observed.optString("reason").matches("business_wait_(pending|retention_gap|consumed_event_changed|satisfied)"))return blocked;
+        if(observed.optBoolean("allowed")){JSONObject proof=observed.optJSONObject("evidence");if(proof==null||!"authenticated_channel_inbound".equals(proof.optString("kind"))||!PlanBusinessWait.same(reference,proof.optJSONObject("reference"))||!"original_authenticated_event_presence_only".equals(proof.optString("verificationScope"))||!proof.optString("fingerprint").matches("[0-9a-f]{64}")||!proof.optString("payloadSha256").matches("[0-9a-f]{64}")||proof.optString("eventId").isEmpty())return blocked;}
+        return copy(observed);
     }
     private JSONObject remoteWaitStatus(JSONObject identity,JSONObject step)throws Exception{
         JSONObject reference=step.optJSONObject("remoteWait");if(reference==null)return null;
@@ -571,6 +600,7 @@ public final class CommitmentBook {
                 .put("actorId","owner").put("spaceId","private").put("requiresHostAdmission",true).put("executionAuthorized",false)
                 .put("origin",new JSONObject().put("kind","automation").put("occurrenceId",intent.getString("occurrenceId")).put("planId",plan.getString("id")).put("commitmentId",step.getString("id")));
         if(step.optJSONObject("remoteWait")!=null)request.put("remoteWait",copy(step.getJSONObject("remoteWait")));
+        if(step.optJSONObject("businessWait")!=null)request.put("businessWait",copy(step.getJSONObject("businessWait"))).put("businessWaitCursor",step.optString("businessWaitCursor")).put("businessWaitEvidence",copy(intent.getJSONObject("businessWaitEvidence"))).put("businessEventConsent",execution.optBoolean("businessEventConsent"));
         return request;
     }
     private static String taskDependency(JSONObject state,JSONObject identity,JSONObject step,long now)throws Exception {

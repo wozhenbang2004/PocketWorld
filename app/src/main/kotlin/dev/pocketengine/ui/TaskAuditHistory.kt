@@ -1,6 +1,11 @@
 package dev.pocketengine.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -43,7 +48,7 @@ internal fun TaskAuditList(state: PocketUiState, controller: PocketWorldControll
     LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)) {
         item(key = "heading") {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("已载入 ${rows.size} 项" + if(next.isNotEmpty()) " · 还有较早记录" else "",
+                Text("${rows.count { taskOverviewAttention(it) != null }} 项待处理 · ${rows.count { taskOverviewMatches(it, "active") }} 项进行中" + if(next.isNotEmpty()) " · 当前页" else "",
                     color = SecondaryInk, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 TextButton(onClick = searchHistory) { Text("搜索", fontSize = 14.sp) }
                 TextButton(onClick = { load("") }, enabled = !busy) { Text("刷新", fontSize = 14.sp) }
@@ -81,26 +86,53 @@ internal fun TaskAuditList(state: PocketUiState, controller: PocketWorldControll
                     modifier = Modifier.padding(top = 16.dp, bottom = 8.dp))
             }
             items(tasks, key = { "task:" + it.id }) { task ->
-                Row(Modifier.fillMaxWidth().clickable { open(task) }.padding(vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    AffectGlyph("tool", Modifier.size(18.dp), SecondaryInk)
-                    Column(Modifier.weight(1f)) {
-                        Text(task.goal, color = Ink, fontSize = 15.sp, lineHeight = 22.sp,
-                            maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(taskStatus(task.status) + " · " + (taskOriginLabel(task) ?: executionLocation(task.executionMode)),
-                            color = SecondaryInk, fontSize = 13.sp, lineHeight = 20.sp,
-                            modifier = Modifier.padding(top = 4.dp))
+                if (!taskOverviewMatches(task, "active")) {
+                    Row(Modifier.fillMaxWidth().clickable { open(task) }.padding(vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Color.White), contentAlignment = Alignment.Center) {
+                            AffectGlyph(if(task.status == "completed") "check" else "file", Modifier.size(16.dp), SecondaryInk)
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(task.goal, fontSize = 15.sp, lineHeight = 22.sp, color = Ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(taskStatus(task.status) + if(task.updatedAt > 0) " · " + auditDate(task.updatedAt) else "",
+                                fontSize = 12.sp, lineHeight = 18.sp, color = SecondaryInk, modifier = Modifier.padding(top = 4.dp))
+                        }
+                        AffectGlyph("chevron-right", Modifier.size(12.dp), SecondaryInk)
                     }
-                    AffectGlyph("chevron", Modifier.size(12.dp), SecondaryInk)
+                    HorizontalDivider(color = Line.copy(alpha = .65f), thickness = .5.dp)
+                } else Surface(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                    .pocketDepth(PocketDepth.CONTENT, 14.dp),
+                    color = Color.White, shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(.5.dp, Line.copy(alpha = .65f))) {
+                    Column(Modifier.clickable { open(task) }.padding(16.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            AffectGlyph(if(task.status == "completed") "check" else "tool", Modifier.size(16.dp), Ink)
+                            Spacer(Modifier.width(8.dp))
+                            Text(taskStatus(task.status), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.weight(1f))
+                            Text(taskOriginLabel(task) ?: executionLocation(task.executionMode), color = SecondaryInk,
+                                fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 160.dp))
+                        }
+                        Text(task.goal, color = Ink, fontSize = 16.sp, lineHeight = 24.sp,
+                            fontWeight = FontWeight.Medium, maxLines = 3, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 12.dp, bottom = 12.dp))
+                        HorizontalDivider(color = Line.copy(alpha = .6f), thickness = .5.dp)
+                        Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(if(task.updatedAt > 0) auditDate(task.updatedAt) else "任务记录",
+                                fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.weight(1f))
+                            Text(if(task.status == "completed") "查看结果" else "查看进展", fontSize = 12.sp, color = Ink)
+                            Spacer(Modifier.width(6.dp))
+                            AffectGlyph("chevron-right", Modifier.size(12.dp), SecondaryInk)
+                        }
+                    }
                 }
-                HorizontalDivider(color = Line, thickness = .5.dp)
             }
             }
         }
         item(key = "pagination") {
             if (next.isNotEmpty()) TextButton(onClick = { load(next) }, enabled = !busy) { Text("查看较早一页") }
-            else Text("本次读取没有更多较早记录。", color = SecondaryInk, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(vertical = 12.dp))
+            else if (visible.isNotEmpty()) Text("已显示本次读取的全部任务", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp))
         }
     }
 }

@@ -22,6 +22,13 @@ public final class MemoryModule implements EngineModule {
         catch(Exception invalidBook){retrieval.close();throw invalidBook;}
     }
     @Override public String id(){return "memory";}
+    /** Native owner archive UI only; intentionally absent from handle/model command routes. */
+    public JSONObject ownerArchive(JSONObject scope)throws Exception{return book.ownerArchive(scope);}
+    public JSONObject restoreOwnerArchive(JSONObject scope,JSONObject archive,String nativeImportId)throws Exception{return book.restoreOwnerArchive(scope,archive,nativeImportId);}
+    public JSONObject ownerArchiveRestoration(JSONObject scope,String nativeImportId)throws Exception{return book.ownerArchiveRestoration(scope,nativeImportId);}
+    public JSONObject queryOwnerArchiveRestore(JSONObject scope,String exactSectionDigest,String nativeImportId)throws Exception{return book.queryOwnerArchiveRestore(scope,exactSectionDigest,nativeImportId);}
+    /** Native original task admission only; deliberately absent from handle/model JSON routes. */
+    public MemoryBook.ProcedureSelection selectProcedureForNativeTask(JSONObject scope,String id,long revision)throws Exception{return book.selectProcedureForNativeTask(scope,id,revision);}
     @Override public JSONObject snapshot()throws Exception {
         JSONObject scope=new JSONObject().put("ownerId","owner").put("spaceId","private");
         JSONArray records=book.list(scope);JSONObject layers=new JSONObject().put("fact",0).put("preference",0).put("episodic",0).put("procedural",0);
@@ -116,6 +123,15 @@ public final class MemoryModule implements EngineModule {
     public JSONObject contextSnapshot(JSONObject scope,String query,int limit,int maxChars)throws Exception {
         return book.contextSnapshot(scope,query,limit,maxChars);
     }
+    /** Native member audience only; never exposed as a caller supplied EngineModule JSON scope. */
+    public JSONObject contextSnapshot(JSONObject scope,String query,int limit,int maxChars,ReadAudience audience)throws Exception {
+        return book.contextSnapshot(scope,query,limit,maxChars,audience);
+    }
+    public JSONObject searchAudience(JSONObject scope,String query,int limit,ReadAudience audience)throws Exception{
+        if(audience==null)throw new SecurityException("成员检索必须保留原生资料范围");
+        return new JSONObject().put("records",book.search(scope,query,limit,audience)).put("executionAuthorized",false).put("audienceRestricted",true);
+    }
+
     /** Same book; native task/send/source read ports only, never a model/handle command. */
     public TaskMemoryUse taskMemoryUse(TaskMemoryUse.HostReader host,TaskMemoryUse.SourceReader sources){return new TaskMemoryUse(book,host,sources);}
     /** Host-only exact-version consolidation input, intentionally absent from raw JSON/model dispatch. */

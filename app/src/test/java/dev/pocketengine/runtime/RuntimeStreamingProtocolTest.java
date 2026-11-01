@@ -348,7 +348,7 @@ public final class RuntimeStreamingProtocolTest {
     @Test public void legacyNonStreamingChatRequestIsNotSilentlyChanged() throws Exception {
         try (Fixture server = new Fixture()) {
             server.reply(Reply.json(new JSONObject().put("choices", new JSONArray().put(new JSONObject()
-                    .put("message", new JSONObject().put("role", "assistant").put("content", "legacy"))))));
+                    .put("finish_reason", "stop").put("message", new JSONObject().put("role", "assistant").put("content", "legacy"))))));
             assertEquals("legacy", ModelGateway.complete(config(server, "openai_chat"), messages(), null, new RunControl()).getString("content"));
             assertFalse(server.requests.get(0).body.getBoolean("stream")); assertFalse(server.requests.get(0).body.has("max_tokens"));
         }

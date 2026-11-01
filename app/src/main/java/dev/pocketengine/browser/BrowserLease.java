@@ -12,6 +12,8 @@ public final class BrowserLease {
     private String profileId=PROFILE,browserSessionId="legacy-single-view",profileIsolation="default-webview-only";
     private long profileRevision=1;
     private long epoch,expiresAt;
+    @FunctionalInterface public interface TaskDeadline {long current()throws Exception;}
+    private TaskDeadline taskDeadline;
     private java.util.function.Consumer<JSONObject> expirationListener;
     public BrowserLease(){this(System::currentTimeMillis);}
     BrowserLease(LongSupplier clock){this.clock=clock;}
@@ -27,6 +29,11 @@ public final class BrowserLease {
         if(leaseId!=null){if(task.equals(taskId)&&run.equals(runId))return snapshot();throw new IllegalStateException("浏览器正被另一执行占用，请先停止或接管");}
         taskId=task;runId=run;leaseId=UUID.randomUUID().toString();epoch++;expiresAt=clock.getAsLong()+600_000L;return snapshot();
     }
+    /** Original native task authority, not a duration accepted from model JSON. */
+    public synchronized JSONObject acquireTask(JSONObject args,TaskDeadline deadline)throws Exception {
+        long end=deadline.current();if(end<=clock.getAsLong())throw new SecurityException("原任务范围已到期");
+        JSONObject acquired=acquire(args);taskDeadline=java.util.Objects.requireNonNull(deadline);expiresAt=end;return state();
+    }
     public synchronized long require(JSONObject args)throws Exception{
         expire();
         if(leaseId==null||!leaseId.equals(args.optString("leaseId"))||!taskId.equals(args.optString("taskId"))||!runId.equals(args.optString("runId")))throw new SecurityException("浏览器执行租约已失效，请从原任务重新取得控制");
@@ -35,7 +42,7 @@ public final class BrowserLease {
     }
     public synchronized boolean current(long expected){expire();return leaseId!=null&&epoch==expected;}
     public synchronized JSONObject release(JSONObject args,String reason)throws Exception{require(args);JSONObject previous=snapshot();invalidate();return previous.put("status",reason).put("active",false);}
-    public synchronized void invalidate(){taskId=null;runId=null;leaseId=null;expiresAt=0;epoch++;}
+    public synchronized void invalidate(){taskId=null;runId=null;leaseId=null;expiresAt=0;taskDeadline=null;epoch++;}
     public synchronized void bindProfile(BrowserProfileRegistry.Session session){
         invalidate();profileId=session==null?null:session.profileId;profileRevision=session==null?0:session.profileRevision;
         browserSessionId=session==null?"":session.sessionId;profileIsolation=session==null?"unavailable":session.isolation;
@@ -47,6 +54,6 @@ public final class BrowserLease {
     private void requireProfile(JSONObject args){
         if(args.has("profileId")&&!java.util.Objects.equals(profileId,args.optString("profileId"))||args.has("profileRevision")&&profileRevision!=args.optLong("profileRevision",-1)||args.has("browserSessionId")&&!browserSessionId.equals(args.optString("browserSessionId")))throw new SecurityException("浏览器资料或会话版本已变化，请重新取得原任务授权");
     }
-    private void expire(){if(leaseId!=null&&clock.getAsLong()>=expiresAt){JSONObject previous=state();invalidate();if(expirationListener!=null)try{expirationListener.accept(previous.put("active",false).put("status","expired").put("message","浏览器执行租约已到期，请从原任务继续"));}catch(Exception ignored){}}}
+    private void expire(){if(leaseId!=null&&taskDeadline!=null)try{expiresAt=taskDeadline.current();}catch(Exception revoked){expiresAt=0;}if(leaseId!=null&&clock.getAsLong()>=expiresAt){JSONObject previous=state();invalidate();if(expirationListener!=null)try{expirationListener.accept(previous.put("active",false).put("status","expired").put("message","浏览器执行租约已到期，请从原任务继续"));}catch(Exception ignored){}}}
     private static String identifier(JSONObject args,String key){String value=args.optString(key);if(value.isEmpty()||value.length()>100||!value.matches("[A-Za-z0-9._:-]+"))throw new IllegalArgumentException("缺少有效的"+key);return value;}
 }

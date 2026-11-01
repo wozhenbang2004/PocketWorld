@@ -43,6 +43,11 @@ public final class ExecutionResources {
         return true;
     }
 
+    /** Native canonical-authority refresh only; cannot recreate a released or expired owner. */
+    public synchronized boolean renewBrowser(String token,long expiresAt){
+        validate(token);long now=clock.getAsLong();expireBrowser(now);
+        if(!token.equals(browserToken)||phoneToken!=null||expiresAt<=now)return false;browserExpiresAt=expiresAt;return true;
+    }
     public synchronized void releaseBrowser(String token) {
         validate(token);
         expireBrowser(clock.getAsLong());

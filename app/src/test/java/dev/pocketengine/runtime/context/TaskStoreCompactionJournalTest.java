@@ -38,7 +38,7 @@ public final class TaskStoreCompactionJournalTest {
         final RunControl control=new RunControl();final AtomicLong sourceRevision=new AtomicLong();
         final AtomicReference<ModelConfig> selected=new AtomicReference<>();final String id,run;final int epoch;
         final TaskStoreMemoryReader.RawBinding binding;final RunJournal base,journal;final ContextCompactor compactor;
-        final ContextBudgetPolicy.Source budgets;volatile Action during=()->{};volatile Throwable handlerFailure;JSONArray raw;
+        final ContextBudgetPolicy.Source budgets;volatile boolean initialContextLimit,repeatContextLimit;volatile String finishReason="stop";volatile Action during=()->{};volatile Throwable handlerFailure;JSONArray raw;
         Fixture()throws Exception {
             Application app=RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");tasks=new TaskStore(app);
             JSONObject task=tasks.createCapabilityTask("real fixture original owner task","fixture-conversation");id=task.getString("id");
@@ -46,8 +46,9 @@ public final class TaskStoreCompactionJournalTest {
             tasks.openOwnerInputMailbox(id,run,epoch,"fixture-conversation",control);
             db=SQLiteDatabase.openDatabase(app.getDatabasePath("pocket-world.db").getPath(),null,SQLiteDatabase.OPEN_READWRITE);
             provider=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);provider.createContext("/v1/chat/completions",exchange->{
-                try{posts.incrementAndGet();exchange.getRequestBody().readAllBytes();during.run();
-                    byte[] body=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("finish_reason","stop").put("message",new JSONObject().put("role","assistant").put("content","source-0.java: ERR_IMPORT_0。已结算历史摘要，原件保留。"))))
+                try{int post=posts.incrementAndGet();exchange.getRequestBody().readAllBytes();during.run();
+                    if(initialContextLimit&&(post==1||repeatContextLimit&&post==3)){byte[] error="{\"error\":{\"code\":\"context_length_exceeded\"}}".getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(400,error.length);exchange.getResponseBody().write(error);return;}
+                    byte[] body=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("finish_reason",finishReason).put("message",new JSONObject().put("role","assistant").put("content","source-0.java: ERR_IMPORT_0。已结算历史摘要，原件保留。"))))
                             .put("usage",new JSONObject().put("prompt_tokens",20).put("completion_tokens",8).put("total_tokens",28)).toString().getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);
                 }catch(Throwable failed){handlerFailure=failed;}finally{exchange.close();}
@@ -79,6 +80,37 @@ public final class TaskStoreCompactionJournalTest {
             JSONObject page=fixture.tasks.readMemoryRaw(fixture.binding,citation);assertEquals("current",page.getString("status"));assertEquals("sha256_content_fingerprint",page.getString("revisionKind"));
             fixture.raw.put(CompactionPlanTest.message("assistant","appended original settled tail"));fixture.journal.checkpoint(fixture.raw,1,new JSONObject());
             assertEquals(projection.getString("callId"),fixture.stored().getJSONObject("contextCompaction").getString("callId"));assertEquals(fixture.raw.toString(),fixture.journal.restore().getJSONArray("messages").toString());
+        }
+    }
+    @Test public void explicitContextLimitCompactsOnceFromRawWithoutDeletingOrRecursivelySummarizing()throws Exception {
+        try(Fixture f=new Fixture()){
+            String raw=f.raw.toString();RunContextBudget budget=new RunContextBudget(f.budgets);
+            RunContextBudget.Projection projected=f.compactor.afterContextLimit(f.raw,new JSONArray(f.raw.toString()),CompactionPlanTest.indexes(f.raw),f.tools(),f.selected.get(),f.control,budget);
+            assertTrue(projected.diagnostics().getBoolean("summaryProjectionUsed"));assertEquals(1,f.posts.get());assertEquals(raw,f.stored().getJSONArray("messages").toString());
+            assertThrows(CompactionPlan.Unavailable.class,()->f.compactor.afterContextLimit(f.raw,new JSONArray(f.raw.toString()),CompactionPlanTest.indexes(f.raw),f.tools(),f.selected.get(),f.control,budget));assertEquals(1,f.posts.get());
+        }
+    }
+    @Test public void actualRunnerContextLimitUsesOneSummaryAndOneNewMainWithoutRawDeletion()throws Exception {
+        for(boolean rejectedAgain:new boolean[]{false,true})try(Fixture f=new Fixture()){
+            f.initialContextLimit=true;f.repeatContextLimit=rejectedAgain;
+            ContextBudgetPolicy.Source generous=config->ContextBudgetPolicy.RouteBudget.forRoute(config,new ContextWindow.Budget(200000,1000,1000,500000,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,1);
+            dev.pocketengine.core.CapabilityPort port=new dev.pocketengine.core.CapabilityPort(){public JSONArray tools(){return new JSONArray();}public boolean supports(String name){return false;}public boolean sideEffecting(String name){return false;}public JSONObject execute(String name,JSONObject args,RunControl c){throw new AssertionError("no tool replay");}};
+            var result=new dev.pocketengine.runtime.AgentRunner(null,port,generous).run(f.id,"real fixture original owner task",f.selected.get(),f.control,event->{try{if(!"model_stream".equals(event.optString("type")))f.tasks.event(f.id,f.run,f.epoch,event);}catch(Exception failed){throw new IllegalStateException(failed);}},f.journal);
+            f.assertHandler();assertEquals(result.summary,3,f.posts.get());JSONObject usage=f.tasks.inferenceUsage(f.id);assertEquals(3,usage.getInt("attempts"));
+            int summaries=0;JSONArray receipts=usage.getJSONArray("receipts");for(int i=0;i<receipts.length();i++)if("SUMMARY".equals(receipts.getJSONObject(i).getJSONObject("context").getString("purpose")))summaries++;assertEquals(1,summaries);
+            String stored=f.stored().getJSONArray("messages").toString();assertTrue(stored.contains("Owner goal; do not send without approval."));assertTrue(stored.contains("x".repeat(9000)));assertTrue(stored.contains("Latest correction: do not touch billing."));assertEquals(rejectedAgain?2:1,usage.getInt("failed"));
+        }
+    }
+    @Test public void invalidBufferedSummaryRetainsRawAndFailedUsageWithoutPublishingOrRetrying()throws Exception {
+        for(String finish:new String[]{"content_filter","length",null})try(Fixture fixture=new Fixture()){
+            fixture.finishReason=finish;String before=fixture.stored().toString();
+            assertThrows(dev.pocketengine.runtime.ModelGateway.GatewayException.class,fixture::request);fixture.assertHandler();
+            assertEquals(before,fixture.stored().toString());assertFalse(fixture.stored().has("contextCompaction"));
+            assertEquals(fixture.raw.toString(),fixture.journal.restore().getJSONArray("messages").toString());assertEquals(1,fixture.posts.get());
+            JSONObject usage=fixture.tasks.inferenceUsage(fixture.id);assertEquals(1,usage.getInt("attempts"));assertEquals(0,usage.getInt("completed"));assertEquals(1,usage.getInt("failed"));
+            JSONObject receipt=usage.getJSONArray("receipts").getJSONObject(0);assertEquals("SUMMARY",receipt.getJSONObject("context").getString("purpose"));
+            assertFalse(receipt.getString("callId").isEmpty());assertEquals(20,receipt.getJSONObject("usage").getJSONObject("counters").getJSONObject("INPUT").getLong("value"));
+            if(finish==null)assertTrue(receipt.getJSONObject("usage").isNull("finishReason"));else assertEquals(finish,receipt.getJSONObject("usage").getString("finishReason"));
         }
     }
     @Test public void steerDuringActualNetworkRejectsSqlPublicationWithoutHoldingTheDbLock()throws Exception {

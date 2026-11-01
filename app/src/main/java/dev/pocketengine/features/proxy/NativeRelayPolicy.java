@@ -16,7 +16,7 @@ final class NativeRelayPolicy {
         final ModelConfig config;final JSONObject wire;final JSONArray messages,tools;final URL endpoint;final boolean streaming,functionHistory;
         Prepared(ModelConfig config,JSONObject wire,JSONArray messages,JSONArray tools,URL endpoint,boolean streaming,boolean functionHistory){this.config=config;this.wire=wire;this.messages=messages;this.tools=tools;this.endpoint=endpoint;this.streaming=streaming;this.functionHistory=functionHistory;}
         void revalidate()throws Exception{ModelRequestPolicy.applyNative(config,messages,tools,new JSONObject(wire.toString()),functionHistory);}
-        void validateResult(JSONObject result)throws Exception{ApiTurnStream.completeJson(config.provider,ProviderAdapters.selected(config.provider),result.toString(),tools,delta->{});}
+        void validateResult(JSONObject result,dev.pocketengine.runtime.usage.ProviderUsage.Observer usage)throws Exception{ApiTurnStream.completeJson(config.provider,ProviderAdapters.selected(config.provider),result.toString(),tools,delta->{},usage);}
     }
     static JSONArray paths(ModelConfig config)throws Exception{
         return switch(config.provider){

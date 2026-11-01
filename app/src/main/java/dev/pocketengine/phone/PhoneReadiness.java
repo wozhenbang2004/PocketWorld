@@ -46,6 +46,9 @@ public final class PhoneReadiness {
                 .put("mainDisplayId", 0).put("mainObservation", main).put("mainScreenshot", screenshot)
                 .put("mainExecution", execution).put("taskNotifications", notifications).put("taskNotificationsForStart", notificationStart)
                 .put("stopControl", stop).put("backgroundPreparation", background).put("backgroundExecution", backgroundExecution)
+                .put("backgroundInput",group(facts,new String[][]{{"backgroundInput","background_input_unavailable","background_setup","后台输入注入尚未证实可用"}}))
+                .put("backgroundCapture",group(facts,new String[][]{{"backgroundCapture","background_capture_unavailable","background_setup","后台真实取帧尚未证实可用"}}))
+                .put("backgroundIme",group(facts,new String[][]{{"backgroundIme","background_ime_unavailable","background_setup","独立输入法隔离尚未证实可用；不会使用主屏输入法回落"}}))
                 .put("backgroundSessionId", facts.opt("backgroundSessionId") == null ? JSONObject.NULL : facts.opt("backgroundSessionId"))
                 .put("backgroundDisplayId", facts.optInt("backgroundDisplayId", -1)).put("mainScreenFallback", false);
     }

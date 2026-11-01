@@ -113,13 +113,17 @@ public final class RunControl {
      * Entry must be one short native dispatch, never a model/network turn or a wait.
      */
     public void dispatchAtPauseRevision(long expectedPauseRevision,DispatchEntry entry) throws Exception {
+        dispatchAtPauseState(expectedPauseRevision,false,entry);
+    }
+    /** A paused entry additionally requires the native owner permit checked by its caller. */
+    public void dispatchAtPauseState(long expectedPauseRevision,boolean ownerEntry,DispatchEntry entry) throws Exception {
         java.util.Objects.requireNonNull(entry);
         // Authority may acquire TaskStore locks or invoke pause. Never call it while
         // holding this monitor: cancellation also signals the monitor after callbacks.
         check();
         synchronized(monitor) {
             if(cancelled.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Run stopped");
-            if(paused||pauseRevision.get()!=expectedPauseRevision)throw new SecurityException("执行已暂停或经历暂停，旧派发决定失效");
+            if(paused!=ownerEntry||pauseRevision.get()!=expectedPauseRevision)throw new SecurityException("执行暂停状态已变化，旧派发决定失效");
             entry.enter();
         }
     }
@@ -132,6 +136,9 @@ public final class RunControl {
     }
     public void sleep(long millis) throws InterruptedException {
         long until = System.nanoTime() + Math.max(0, millis) * 1_000_000L;
-        while (System.nanoTime() < until) { checkpoint(); Thread.sleep(Math.min(100, Math.max(1, (until-System.nanoTime())/1_000_000L))); }
+        while (System.nanoTime() < until) {
+            checkpoint();
+            synchronized(monitor){if(cancelled.get())throw new InterruptedException("Run stopped");monitor.wait(Math.min(100, Math.max(1, (until-System.nanoTime())/1_000_000L)));}
+        }
     }
 }

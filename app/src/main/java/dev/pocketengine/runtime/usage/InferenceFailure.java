@@ -15,11 +15,11 @@ import org.json.JSONObject;
 
 /** Native content-free failure observation; not a retry instruction, quota, health or charge proof. */
 public final class InferenceFailure {
-    public enum Kind { HTTP, NETWORK, TIMEOUT, PROTOCOL, LOCAL_REFUSAL, ACCOUNT_GATE, CANCELLED, UNKNOWN }
+    public enum Kind { HTTP, NETWORK, TIMEOUT, INCOMPLETE_STREAM, CONTEXT_LIMIT, PROTOCOL, LOCAL_REFUSAL, ACCOUNT_GATE, CANCELLED, UNKNOWN }
     public enum RetryStatus { MISSING, VALID, INVALID }
     public enum RetryBasis { NONE, DELTA_SECONDS_LOCAL_RECEIPT, RESPONSE_DATE_ESTIMATE, LOCAL_CLOCK_ESTIMATE, NATIVE_ACCOUNT_GATE, INVALID_OR_AMBIGUOUS }
     public static final long MAX_WAIT_MILLIS=31_536_000_000L;
-    private static final Set<String> NATIVE_CODES=Set.of("CANCELLED","DEADLINE_EXCEEDED","STALE_ACCOUNT_VERSION","STALE_MODEL_CATALOG","ACCOUNT_SELECTION_STORE_UNAVAILABLE","ACCOUNT_REFRESH_REQUIRED","ACCOUNT_DISABLED","ACCOUNT_NOT_FOUND","ACCOUNT_SELECTION_REQUIRED","REAUTHORIZATION_REQUIRED","PLAN_USAGE_PERMISSION_REQUIRED","PROVIDER_PERMISSION_DENIED","ACCOUNT_COOLDOWN","RATE_LIMITED","QUOTA_EXCEEDED","PROVIDER_RATE_LIMITED","GATEWAY_BUSY","REFRESH_QUEUE_FULL","GATEWAY_CLOSED","PROVIDER_UNAVAILABLE","INVALID_PROVIDER_STREAM","INFERENCE_RECEIPT_STORE_UNAVAILABLE","ACCOUNT_MODEL_OPTION_UNAVAILABLE","ACCOUNT_CONTEXT_BUDGET_EXCEEDED","ACCOUNT_IMAGE_BUDGET_REQUIRED","ACCOUNT_TEXT_CAPABILITY_UNSUPPORTED","ACCOUNT_TOOL_CAPABILITY_UNSUPPORTED");
+    private static final Set<String> NATIVE_CODES=Set.of("CANCELLED","DEADLINE_EXCEEDED","STALE_ACCOUNT_VERSION","STALE_MODEL_CATALOG","ACCOUNT_SELECTION_STORE_UNAVAILABLE","ACCOUNT_REFRESH_REQUIRED","ACCOUNT_DISABLED","ACCOUNT_NOT_FOUND","ACCOUNT_SELECTION_REQUIRED","REAUTHORIZATION_REQUIRED","PLAN_USAGE_PERMISSION_REQUIRED","PROVIDER_PERMISSION_DENIED","ACCOUNT_COOLDOWN","RATE_LIMITED","QUOTA_EXCEEDED","PROVIDER_RATE_LIMITED","GATEWAY_BUSY","REFRESH_QUEUE_FULL","GATEWAY_CLOSED","PROVIDER_UNAVAILABLE","PROVIDER_NETWORK_ERROR","PROVIDER_STREAM_INTERRUPTED","INVALID_PROVIDER_STREAM","INFERENCE_RECEIPT_STORE_UNAVAILABLE","ACCOUNT_MODEL_OPTION_UNAVAILABLE","ACCOUNT_CONTEXT_BUDGET_EXCEEDED","ACCOUNT_IMAGE_BUDGET_REQUIRED","ACCOUNT_TEXT_CAPABILITY_UNSUPPORTED","ACCOUNT_TOOL_CAPABILITY_UNSUPPORTED");
     private static final Set<String> KEYS=Set.of("format","kind","httpStatus","nativeCode","observedAt","partialTextReceived","retry","automaticRetry","healthVerified","providerProcessingKnown","chargeKnown");
     private static final Set<String> RETRY_KEYS=Set.of("status","basis","delaySeconds","reportedDateAt","responseDateAt","estimatedNotBefore","healthVerified","quotaResetKnown");
     public final Kind kind;
@@ -38,7 +38,7 @@ public final class InferenceFailure {
     }
     public static InferenceFailure local(Kind kind,long at)throws Exception { return local(kind,0,at); }
     public static InferenceFailure local(Kind kind,int observedHttpStatus,long at)throws Exception {
-        if(kind==Kind.HTTP||kind==Kind.ACCOUNT_GATE||observedHttpStatus!=0&&kind!=Kind.PROTOCOL&&kind!=Kind.NETWORK&&kind!=Kind.TIMEOUT)throw new IllegalArgumentException("native_failure_source_required");
+        if(kind==Kind.HTTP||kind==Kind.ACCOUNT_GATE||observedHttpStatus!=0&&kind!=Kind.PROTOCOL&&kind!=Kind.NETWORK&&kind!=Kind.TIMEOUT&&kind!=Kind.INCOMPLETE_STREAM&&kind!=Kind.CONTEXT_LIMIT)throw new IllegalArgumentException("native_failure_source_required");
         return new InferenceFailure(kind,observedHttpStatus,"",at,false,emptyRetry(RetryStatus.MISSING,RetryBasis.NONE));
     }
     /** Stable original AccountGateway evidence only; no provider body/code guessing or state mutation. */
@@ -64,7 +64,7 @@ public final class InferenceFailure {
         if(value==null||!keys(value).equals(KEYS)||!"pocketworld.inference-failure.v1".equals(value.getString("format")))throw new IllegalArgumentException("invalid_failure_receipt");
         for(String key:new String[]{"automaticRetry","healthVerified","providerProcessingKnown","chargeKnown"})if(!Boolean.FALSE.equals(value.get(key)))throw new IllegalArgumentException("failure_is_not_authority");
         Kind kind=Kind.valueOf(value.getString("kind"));long at=integer(value.get("observedAt"),1,Long.MAX_VALUE);int status=value.isNull("httpStatus")?0:(int)integer(value.get("httpStatus"),100,599);
-        if(kind==Kind.HTTP&&(status<100||status>=200&&status<300)||kind!=Kind.HTTP&&kind!=Kind.ACCOUNT_GATE&&kind!=Kind.PROTOCOL&&kind!=Kind.NETWORK&&kind!=Kind.TIMEOUT&&status!=0)throw new IllegalArgumentException("invalid_failure_http_status");
+        if(kind==Kind.HTTP&&(status<100||status>=200&&status<300)||kind!=Kind.HTTP&&kind!=Kind.ACCOUNT_GATE&&kind!=Kind.PROTOCOL&&kind!=Kind.NETWORK&&kind!=Kind.TIMEOUT&&kind!=Kind.INCOMPLETE_STREAM&&kind!=Kind.CONTEXT_LIMIT&&status!=0)throw new IllegalArgumentException("invalid_failure_http_status");
         Object partial=value.get("partialTextReceived");if(!(partial instanceof Boolean))throw new IllegalArgumentException("invalid_failure_partial_flag");
         String code=value.isNull("nativeCode")?"":value.getString("nativeCode");if(!code.isEmpty()&&(kind!=Kind.ACCOUNT_GATE||!NATIVE_CODES.contains(code)))throw new IllegalArgumentException("invalid_native_failure_code");
         JSONObject retry=checkedRetry(value.getJSONObject("retry"),at,kind);

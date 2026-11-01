@@ -63,7 +63,7 @@ public final class OcrNativeBridgeTest {
         @Implementation public void close(){closed=true;}
     }
     private static JSONObject status()throws Exception{return new JSONObject().put("ok",true).put("protocol",1).put("uid",2000).put("sdk",35).put("sessionActive",true).put("displayId",5).put("sessionId",activeSession)
-            .put("width",101).put("height",101).put("backgroundOnly",true).put("focusIsolationRequested",true).put("displayFlagsConfirmed",true);}
+            .put("width",101).put("height",101).put("frameGeneration",frame).put("frameMetadataOnly",true).put("imeIsolation","available").put("ownership",new JSONObject().put("status","observed").put("primary",new org.json.JSONArray().put(new JSONObject().put("displayId",0).put("packageName","owner.original").put("taskId",1))).put("owned",new org.json.JSONArray().put(new JSONObject().put("displayId",5).put("packageName","example.original").put("taskId",2)))).put("backgroundOnly",true).put("focusIsolationRequested",true).put("displayFlagsConfirmed",true);}
     private static RunControl control(){RunControl c=new RunControl();c.bindHostRun("task","run",1);return c;}
     private static JSONObject payload()throws Exception{return new JSONObject().put("displayId",5).put("sessionId","original-session").put("frameGeneration",4).put("x",195).put("y",195);}
     @After public void reset()throws Exception {uid=2000;tapRequests=0;effects=0;frame=4;activeSession="original-session";lastTap=null;cancelAfterWrite=null;Field f=PhoneAccessibilityService.class.getDeclaredField("instance");f.setAccessible(true);f.set(null,null);}
@@ -88,9 +88,9 @@ public final class OcrNativeBridgeTest {
         Context context=RuntimeEnvironment.getApplication();context.getSharedPreferences("display_backend",0).edit().putString("backend","adb").putString("socketName","fixture").commit();
         PhoneAccessibilityService service=Robolectric.buildService(PhoneAccessibilityService.class).create().get();Field f=PhoneAccessibilityService.class.getDeclaredField("instance");f.setAccessible(true);f.set(null,service);
         DisplayModule module=new DisplayModule(new FeatureContext(context,null,new SecretVault(context),event->{}));Field state=DisplayModule.class.getDeclaredField("state");state.setAccessible(true);state.set(module,status());module.acceptStatus(status());module.pinOwner("task");
-        BackgroundPhonePort port=new BackgroundPhonePort(module);Class<?> tree=Class.forName(BackgroundPhonePort.class.getName()+"$Tree");Constructor<?> tc=tree.getDeclaredConstructor();tc.setAccessible(true);
+        BackgroundPhonePort port=new BackgroundPhonePort(module);Class<?> tree=Class.forName(BackgroundPhonePort.class.getName()+"$Tree");Constructor<?> tc=tree.getDeclaredConstructor(dev.pocketengine.phone.observation.AccessibilityForest.class);tc.setAccessible(true);Constructor<?> fc=dev.pocketengine.phone.observation.AccessibilityForest.class.getDeclaredConstructor();fc.setAccessible(true);
         Class<?> observation=Class.forName(BackgroundPhonePort.class.getName()+"$Observation");Constructor<?> oc=observation.getDeclaredConstructor(tree,long.class,long.class,int.class,int.class,RunControl.class,boolean.class);oc.setAccessible(true);
-        Object retained=oc.newInstance(tc.newInstance(),4L,0L,101,101,c,true);Field current=BackgroundPhonePort.class.getDeclaredField("current");current.setAccessible(true);current.set(port,retained);return port;
+        Object retained=oc.newInstance(tc.newInstance(fc.newInstance()),4L,0L,101,101,c,true);Field current=BackgroundPhonePort.class.getDeclaredField("current");current.setAccessible(true);current.set(port,retained);return port;
     }
     private OcrTextTarget target(BackgroundPhonePort port,RunControl c)throws Exception {
         Field field=BackgroundPhonePort.class.getDeclaredField("current");field.setAccessible(true);Object observation=field.get(port);Field id=observation.getClass().getDeclaredField("id");id.setAccessible(true);

@@ -149,6 +149,11 @@ public final class AgentRunner {
         return outcome;
     }
 
+    private static int executionStepCeiling(ModelConfig config,RunJournal journal)throws Exception {
+        int ceiling=journal==null?config.maxSteps:journal.executionStepCeiling(config.maxSteps);
+        if(ceiling<0||ceiling>400)throw new SecurityException("原任务步数范围无效");return ceiling;
+    }
+
     private RunOutcome runBound(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,java.util.List<String> ownedServiceOperations) {
         JSONObject evidence = new JSONObject();
         JSONArray history = null;
@@ -205,7 +210,8 @@ public final class AgentRunner {
             String recallIntent=latestOwnerRecallQuery(history,lastFeedback.isEmpty()?goal:lastFeedback);
             String durableOwnerReturnNonce="";
 
-            for (int round = 0; round <= config.maxSteps; round++) {
+            SafeModelRecovery modelRecovery=new SafeModelRecovery();
+            modelTurns: for (int round = 0; round <= executionStepCeiling(config,journal); round++) {
                 JSONObject resumed = afterPause(taskId, config, control, sink, pauseSeen);
                 if (resumed != null) { latest = resumed; evidence = resumed; appendObservation(history, resumed, config, contextBudget); }
                 control.check();
@@ -282,17 +288,59 @@ public final class AgentRunner {
                 catch(dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable unavailable){throw unavailable;}
                 catch(dev.pocketengine.features.memory.OwnerSourceRunContext.ContinuationUnavailable unavailable){throw unavailable;}
                 catch(Exception unavailable){control.check();throw new dev.pocketengine.core.NativeReadContextRepair.Unavailable();}
-                final JSONArray actualModelMessages=finalRequestMessages;
                 emit(taskId,"context_budget","running",projection.plan().removed.isEmpty()
                         ? projection.diagnostics().optBoolean("summaryProjectionUsed")?"已使用原任务有界历史整理；主人原话、未决项和最新尾部保留，原件可按内容指纹回读。":"已检查当前请求的上下文安全上限。" : "已按预算移除本轮可证明内容相同的重复旧观察；目标、审批和工具回执保持不变。",
                         null,projection.diagnostics(),config,sink);
                 final String[] nativeRequest={""};JSONObject response;
-                try{response = ModelGateway.completeStreaming(config, actualModelMessages, tools, control,event->{
-                    if(event.kind==ModelGateway.StreamKind.STARTED){nativeRequest[0]=event.requestId;if(capabilities!=null)capabilities.beforeModelRequest(event.requestId,actualModelMessages,control);}
-                    emitStream(taskId,event,config,control,sink);
-                },journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed()
-                        :journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,""));
-                }catch(Exception failed){if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);throw failed;}
+                int turnRetries=0;boolean contextRecoveryUsed=false;
+                while(true){
+                    if(turnRetries>0||contextRecoveryUsed){
+                        JSONArray intervening=pollOwnerInputs(history,false,false,control);
+                        if(intervening.length()>0){appendOwnerInputs(history,intervening,config);recallIntent=latestOwnerRecallQuery(history,recallIntent);checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget);continue modelTurns;}
+                        if(requestProjection!=null){JSONArray currentProjection=dev.pocketengine.features.memory.TaskMemoryHistory.wireMessages(requestProjection.project(nativeProvenance,config,control));
+                            if(!CompactionPlan.fingerprint(requestHistory).equals(CompactionPlan.fingerprint(currentProjection)))continue modelTurns;}
+                        if(capabilities!=null&&!capabilities.responseCurrent(control))continue modelTurns;
+                    }
+                    final JSONArray actualModelMessages=finalRequestMessages;final StringBuilder visibleAttempt=new StringBuilder();
+                    // Each physical call gets a fresh target/receipt and rechecks the original native
+                    // task/epoch/scope. No tool has been admitted from this incomplete response.
+                    try{response=ModelGateway.completeStreaming(config,actualModelMessages,tools,control,event->{
+                        if(event.kind==ModelGateway.StreamKind.STARTED){nativeRequest[0]=event.requestId;if(capabilities!=null)capabilities.beforeModelRequest(event.requestId,actualModelMessages,control);}
+                        if(event.kind==ModelGateway.StreamKind.TEXT_DELTA&&visibleAttempt.length()<32768){int count=Math.min(event.text.length(),32768-visibleAttempt.length());if(count>0&&count<event.text.length()&&Character.isHighSurrogate(event.text.charAt(count-1)))count--;visibleAttempt.append(event.text,0,count);}
+                        emitStream(taskId,event,config,control,sink);
+                    },journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed()
+                            :journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,""));break;
+                    }catch(Exception failed){
+                        if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
+                        // The UI's bounded visible prefix survives an interrupted attempt in the
+                        // original audit, never in assistant history or as an accepted answer.
+                        for(int offset=0;offset<visibleAttempt.length();){int end=Math.min(visibleAttempt.length(),offset+8000);if(end<visibleAttempt.length()&&Character.isHighSurrogate(visibleAttempt.charAt(end-1)))end--;
+                            emit(taskId,"model_attempt_interrupted","running","已保留中断推理的已显示片段；不是正式答复或操作结果。",null,new JSONObject().put("callId",nativeRequest[0]).put("offset",offset).put("text",visibleAttempt.substring(offset,end)).put("provisional",true).put("attemptCompleted",false).put("displayPrefixLimit",32768),config,sink);offset=end;}
+                        control.check();
+                        // A context rejection gets one existing compactor pass and one request,
+                        // not another transient retry budget or recursively summarized history.
+                        if(!contextRecoveryUsed&&SafeModelRecovery.contextLimit(failed)&&compactor.available()
+                                &&nativeRepair==null&&projection.plan().removed.isEmpty()&&!projection.diagnostics().optBoolean("summaryProjectionUsed")){
+                            contextRecoveryUsed=true;
+                            JSONArray raw=journal.restore().getJSONArray("messages");
+                            projection=compactor.afterContextLimit(raw,requestHistory,CompactionPlan.sourceMap(raw,history,nativeProvenance),tools,config,control,contextBudget);
+                            finalRequestMessages=projection.plan().messages();
+                            emit(taskId,"model_recovery","running","接口报告上下文超限；已用原任务整理器保留原件整理一次，仅再请求一次。",null,projection.diagnostics(),config,sink);
+                            continue;
+                        }
+                        long delay=contextRecoveryUsed?-1:modelRecovery.delay(failed,turnRetries,System.currentTimeMillis());
+                        if(delay<0)throw failed;
+                        // restore fences uncertain original operations; current permission and
+                        // physical-call budget are checked again by inferenceTarget before POST.
+                        if(journal==null||!journal.reserveModelRecovery(nativeRequest[0],delay))throw failed;
+                        journal.restore();
+                        emit(taskId,"model_recovery","running","本次推理未完整结束，正在原范围内稍后重新推理；没有重放工具，已发生的模型用量仍计入。",null,
+                                new JSONObject().put("previousCallId",nativeRequest[0]).put("retryNumber",turnRetries+1).put("waitMillis",delay).put("totalWaitLimitMillis",SafeModelRecovery.MAX_TOTAL_WAIT_MILLIS).put("toolReplay",false).put("usageRefunded",false),config,sink);
+                        modelRecovery.waitBeforeRetry(delay,control);turnRetries++;
+                        if(control.pauseRevision()!=pauseSeen[0])continue modelTurns;
+                        if(capabilities!=null&&!capabilities.responseCurrent(control))continue modelTurns;
+                    }
+                }
                 resumed = afterPause(taskId, config, control, sink, pauseSeen);
                 if (resumed != null) {
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
@@ -332,7 +380,7 @@ public final class AgentRunner {
                     // The final empty poll atomically closes admission in the same native store.
                     JSONArray queued=pollOwnerInputs(history,true,true,control);
                     if(queued.length()>0){
-                        if(round>=config.maxSteps)return finish(taskId,"awaiting_user","当前模型调用预算已耗尽；排队消息保留在原任务，请核对后继续，不会新建任务。",evidence,steps,config,sink);
+                        if(round>=executionStepCeiling(config,journal))return finish(taskId,"awaiting_user","当前模型调用预算已耗尽；排队消息保留在原任务，请核对后继续，不会新建任务。",evidence,steps,config,sink);
                         appendOwnerInputs(history,queued,config);
                         recallIntent=latestOwnerRecallQuery(history,recallIntent);
                         checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget);
@@ -367,7 +415,7 @@ public final class AgentRunner {
                         for(int stale=index;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),failure("owner_steered","主人已补充要求；此旧决定尚未派发，不会重放。"),config));
                         appendOwnerInputs(history,midBatch,config);recallIntent=latestOwnerRecallQuery(history,recallIntent);break;
                     }
-                    if (steps >= config.maxSteps) {
+                    if (steps >= executionStepCeiling(config,journal)) {
                         checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
                         return finish(taskId, "needs_confirmation", "已达到本次操作步数上限，请检查当前结果后决定是否继续。", evidence, steps, config, sink);
                     }
@@ -495,7 +543,7 @@ public final class AgentRunner {
                     // A successful read can still time out with an unmet predicate. Only this
                     // native plan step uses matched as a prerequisite; standalone WAIT is unchanged.
                     if(!receipt.optBoolean("ok",false)||activeStep!=null&&activeStep.tool==dev.pocketengine.core.NativeToolPlan.Tool.CONDITION_WAIT&&!Boolean.TRUE.equals(receipt.opt("matched")))sequenceMayContinue=false;
-                    if(capabilities!=null&&receipt.optBoolean("ok",false)){
+                    if(capabilities!=null&&receipt.optBoolean("ok",false)&&!control.isPaused()&&!control.isCancelled()&&pauseSeen[0]==control.pauseRevision()){
                         String nativeOperation=recordedOperation==null?call.getString("id"):recordedOperation;
                         if(imageRequired){dev.pocketengine.core.NativeToolObservation observation=capabilities.takeToolObservation(name,nativeOperation,control);
                             if(observation!=null)try{nativeImages.add(observation.consume(name,nativeOperation,control));}catch(Exception stale){observation.close();control.check();emit(taskId,"tool_observation","failed","图片已失效，没有作为本轮模型视觉输入。",name,null,config,sink);}
@@ -521,7 +569,7 @@ public final class AgentRunner {
                 if(!sequenceMayContinue){activePlan.close();break;}
                 try{activeStep=activePlan.next(control);}catch(Exception stale){control.check();activePlan.close();emit(taskId,"native_sequence","failed","短序列的下一步目标已变化或无法唯一核对；余下步骤没有派发。",null,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,sink);break;}
                 if(activeStep==null){activePlan.close();break;}
-                if(steps>=config.maxSteps){activePlan.close();return finish(taskId,"needs_confirmation","已达到本次操作步数上限；短序列余下步骤未派发。",evidence,steps,config,sink);}
+                if(steps>=executionStepCeiling(config,journal)){activePlan.close();return finish(taskId,"needs_confirmation","已达到本次操作步数上限；短序列余下步骤未派发。",evidence,steps,config,sink);}
                 JSONObject fresh=activeStep.observation();if(fresh!=null){latest=fresh;evidence=fresh;appendObservation(history,fresh,config,contextBudget);}
                 JSONObject nativeCall=new JSONObject().put("id","native_"+java.util.UUID.randomUUID()).put("type","function").put("function",new JSONObject().put("name",activeStep.tool.name).put("arguments",activeStep.arguments().toString()));
                 calls=new JSONArray().put(nativeCall);history.put(new JSONObject().put("role","assistant").put("tool_calls",new JSONArray(calls.toString())));
@@ -1194,7 +1242,7 @@ public final class AgentRunner {
                 .put("pauseRevision", stream.pauseRevision).put("provisional", stream.provisional)
                 .put("taskCompleted", false);
         if (stream.kind == ModelGateway.StreamKind.TEXT_DELTA) data.put("text", stream.text);
-        if (discard) data.put("discardDraft", true).put("code", stream.code);
+        if (discard) data.put("discardDraft", stream.kind==ModelGateway.StreamKind.CANCELLED).put("code", stream.code);
         sink.emit(new JSONObject().put("taskId", taskId).put("type", "model_stream").put("status", "running")
                 .put("message", "").put("timestamp", System.currentTimeMillis()).put("stream", data));
     }

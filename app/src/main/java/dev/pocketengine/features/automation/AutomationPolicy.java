@@ -15,13 +15,16 @@ final class AutomationPolicy {
     static JSONObject rule(JSONObject input,String defaultZone)throws Exception {
         if(input==null)input=new JSONObject();
         for(Iterator<String> keys=input.keys();keys.hasNext();){String key=keys.next();
-            if(!key.matches("zoneId|quietHours|expiresAt|maxLatenessMillis|maxOccurrences|requiresNetwork|requiresCharging|minBatteryPercent"))throw new IllegalArgumentException("不支持的规则策略："+key);
+            if(!key.matches("zoneId|quietHours|expiresAt|maxLatenessMillis|maxOccurrences|requiresNetwork|requiresCharging|minBatteryPercent|misfire|overlap|maxCatchUp"))throw new IllegalArgumentException("不支持的规则策略："+key);
         }
         Object zoneValue=input.has("zoneId")?input.opt("zoneId"):defaultZone;
         if(!(zoneValue instanceof String))throw new IllegalArgumentException("规则时区无效");
         String zone=(String)zoneValue;ZoneId.of(zone);
         JSONObject value=new JSONObject().put("zoneId",zone).put("quietHours",quiet(input.optJSONObject("quietHours")));
         AutomationConditions.appendRequirements(value,input);
+        String misfire=choice(input,"misfire","skip",java.util.Set.of("skip","coalesce","catch_up"));
+        String overlap=choice(input,"overlap","buffer_one",java.util.Set.of("allow","skip","buffer_one"));
+        value.put("misfire",misfire).put("overlap",overlap).put("maxCatchUp",input.has("maxCatchUp")?integer(input,"maxCatchUp",1,20):3);
         if(input.has("quietHours")&&!input.isNull("quietHours")&&input.optJSONObject("quietHours")==null)throw new IllegalArgumentException("安静时段格式无效");
         for(String key:new String[]{"expiresAt","maxLatenessMillis","maxOccurrences"}){
             if(!input.has(key)||input.isNull(key)){value.put(key,JSONObject.NULL);continue;}
@@ -71,6 +74,9 @@ final class AutomationPolicy {
         Number number=(Number)raw;long result=number.longValue();
         if(result<min||result>max||number.doubleValue()!=result)throw new IllegalArgumentException(key+"超出有效范围");
         return result;
+    }
+    private static String choice(JSONObject value,String key,String fallback,java.util.Set<String> allowed){
+        Object raw=value.has(key)?value.opt(key):fallback;if(!(raw instanceof String)||!allowed.contains(raw))throw new IllegalArgumentException(key+"策略无效");return (String)raw;
     }
     private static String clock(JSONObject value,String key)throws Exception {
         Object raw=value.opt(key);

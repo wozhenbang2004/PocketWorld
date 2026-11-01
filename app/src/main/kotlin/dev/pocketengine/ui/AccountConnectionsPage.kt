@@ -2,6 +2,9 @@ package dev.pocketengine.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -273,14 +276,14 @@ internal fun AccountConnectionsPage(
     }
     BackHandler { if (logout != null) logout = null else if (adding) adding = false else onBack() }
 
-    Column(Modifier.fillMaxSize().background(Color.White).imePadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxSize().background(PageSurface).imePadding()) {
+        Row(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("返回") }
             Text("ChatGPT 账号", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink, modifier = Modifier.weight(1f))
             TextButton(onClick = { submit("snapshot", JSONObject()) }, enabled = !loading && "snapshot" !in pendingCommands) { Text("刷新状态") }
         }
         HorizontalDivider(color = Line)
-        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 18.dp)) {
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 18.dp)) {
             AccountConnectionsCaption("用 ChatGPT 登录并选择套餐可用模型。API key 连接继续保留；登录不会授予手机操作权限。")
             if (loading || busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp), color = Ink, trackColor = Soft)
             AccountConnectionsCaption(snapshot.optString("mainInferenceMessage").ifBlank { "主模型连接能力尚未读取，请刷新状态后再选择。" })
@@ -331,8 +334,13 @@ internal fun AccountConnectionsPage(
                 val id = row.optString("id")
                 val expanded = expandedId == id
                 val validRow = id.isNotBlank() && accountConnectionsVersion(row) >= 0
-                Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                Column(Modifier.fillMaxWidth().padding(top = 14.dp)
+                    .pocketDepth(PocketDepth.CONTENT, 16.dp).clip(RoundedCornerShape(16.dp))
+                    .background(Color.White).border(.5.dp, Line, RoundedCornerShape(16.dp)).padding(horizontal = 16.dp, vertical = 4.dp)) {
                     Row(Modifier.fillMaxWidth().clickable(enabled = validRow) { expandedId = if (expanded) null else id }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.padding(end = 12.dp).size(38.dp).clip(RoundedCornerShape(11.dp)).background(Soft), contentAlignment = Alignment.Center) {
+                            AffectGlyph("spark", Modifier.size(20.dp))
+                        }
                         Column(Modifier.weight(1f)) {
                             Text(row.optString("label").ifBlank { "未命名账号" }, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                             if (row.optString("email").isNotBlank()) AccountConnectionsCaption(row.optString("email"))
@@ -401,7 +409,6 @@ internal fun AccountConnectionsPage(
                         } else if (modelRequest != null && accountConnectionsEnvelope(modelRequest, modelEnvelope)?.optBoolean("ok") == true) AccountConnectionsCaption("模型目录已过期或与账号版本不符，请重新读取，旧目录不能选择。")
                         TextButton(onClick = { logout = AccountConnectionsLogout(id, accountConnectionsVersion(row), row.optString("label")) }, enabled = !busy && !closed && validRow, modifier = Modifier.padding(top = 12.dp)) { Text("退出登录", color = Danger) }
                     }
-                    HorizontalDivider(color = Line)
                 }
             }
             if (!activeLogin && hasSnapshot) {

@@ -182,13 +182,14 @@ import org.json.JSONObject
         }
     }
     val remoteCandidates = snapshot?.optJSONArray("remoteWaitCandidates").objects()
-    if (creating) ExecutionPlanEditor(state, remoteCandidates, busy, { creating = false }) { definition -> createRequest = send("create", JSONObject().put("plan", definition)) }
+    val businessCandidates = snapshot?.optJSONArray("businessWaitCandidates").objects()
+    if (creating) ExecutionPlanEditor(state, remoteCandidates, businessCandidates, busy, { creating = false }) { definition -> createRequest = send("create", JSONObject().put("plan", definition)) }
     reviewing?.let { frozen -> ExecutionPlanReview(frozen, state, busy, { reviewing = null }) { settings -> dialogRequest = send("approve", planRef(frozen).put("settings", settings)) } }
-    editing?.let { (frozen, step) -> ExecutionStepEditor(frozen, step, state, remoteCandidates, busy, { editing = null }) { patch -> dialogRequest = send("editStep", planRef(frozen).put("stepId", step.getString("id")).put("stepRevision", step.getLong("revision")).put("patch", patch)) } }
+    editing?.let { (frozen, step) -> ExecutionStepEditor(frozen, step, state, remoteCandidates, businessCandidates, busy, { editing = null }) { patch -> dialogRequest = send("editStep", planRef(frozen).put("stepId", step.getString("id")).put("stepRevision", step.getLong("revision")).put("patch", patch)) } }
     cancelling?.let { frozen -> AlertDialog(onDismissRequest = { cancelling = null }, title = { Text("取消这个目标？") }, text = { Text("保留已核验成果，停止后继准入，并请求停止本目标创建的原任务。在途操作和未知结果仍需核对。" + if (frozen.optJSONArray("steps").objects().any { it.optJSONObject("remoteWait") != null }) " 独立电脑前置不会被此操作停止，需要停止时请打开电脑原任务。" else "") }, confirmButton = { TextButton(onClick = { send("cancel", planRef(frozen)); cancelling = null }) { Text("取消目标", color = Danger) } }, dismissButton = { TextButton(onClick = { cancelling = null }) { Text("保留") } }) }
 }
 
-@Composable private fun ExecutionPlanEditor(state: PocketUiState, remoteCandidates: List<JSONObject>, busy: Boolean, close: () -> Unit, save: (JSONObject) -> Unit) {
+@Composable private fun ExecutionPlanEditor(state: PocketUiState, remoteCandidates: List<JSONObject>, businessCandidates: List<JSONObject>, busy: Boolean, close: () -> Unit, save: (JSONObject) -> Unit) {
     var goal by remember { mutableStateOf("") }; var minutes by remember { mutableStateOf("0") }
     var steps by remember { mutableStateOf(listOf(ExecutionStepDraft())) }
     val projects = state.feature("workspace").optJSONArray("projects").objects()
@@ -198,7 +199,7 @@ import org.json.JSONObject
         OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit).take(6) }, label = { Text("最早几分钟后开始，0 为现在") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
         steps.forEachIndexed { index, draft ->
             Text("步骤 ${index + 1}", fontWeight = FontWeight.SemiBold)
-            ExecutionStepFields(draft, index, steps.take(index).map { it.goal }, projects, remoteCandidates) { value -> steps = steps.toMutableList().also { it[index] = value } }
+            ExecutionStepFields(draft, index, steps.take(index).map { it.goal }, projects, remoteCandidates, businessCandidates) { value -> steps = steps.toMutableList().also { it[index] = value } }
             // Removing only the last row preserves every earlier reference without silent rewrites.
             if (index == steps.lastIndex && steps.size > 1) TextButton(onClick = { steps = steps.dropLast(1) }) { Text("移除末步", color = Danger) }
             HorizontalDivider(color = Line)
@@ -213,7 +214,7 @@ import org.json.JSONObject
     }
 }
 
-@Composable private fun ExecutionStepFields(draft: ExecutionStepDraft, index: Int, earlier: List<String>, projects: List<JSONObject>, remoteCandidates: List<JSONObject>, earlierStates: List<String> = emptyList(), change: (ExecutionStepDraft) -> Unit) {
+@Composable private fun ExecutionStepFields(draft: ExecutionStepDraft, index: Int, earlier: List<String>, projects: List<JSONObject>, remoteCandidates: List<JSONObject>, businessCandidates: List<JSONObject>, earlierStates: List<String> = emptyList(), change: (ExecutionStepDraft) -> Unit) {
     OutlinedTextField(draft.goal, { change(draft.copy(goal = it)) }, label = { Text("这一步的可交付目标") }, minLines = 2, maxLines = 5, modifier = Modifier.fillMaxWidth())
     PlanChoice("使用的能力", if (draft.executor == "workspace") "所选项目的文件" else "手机应用", listOf("phone" to "手机应用", "workspace" to "所选项目的文件")) { change(draft.copy(executor = it)) }
     if (index > 0) ExecutionDependencyFields(draft.dependencies, earlier, earlierStates) { change(draft.copy(dependencies = it)) }
@@ -225,6 +226,27 @@ import org.json.JSONObject
         OutlinedTextField(draft.minimumBytes, { change(draft.copy(minimumBytes = it.filter(Char::isDigit).take(7))) }, label = { Text("最小 UTF-8 字节数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
     }
     ExecutionRemoteWaitField(draft.remoteWait, remoteCandidates) { change(draft.copy(remoteWait = it)) }
+    ExecutionBusinessWaitField(draft.businessWait, businessCandidates) { change(draft.copy(businessWait = it)) }
+}
+
+@Composable private fun ExecutionBusinessWaitField(reference: JSONObject?, candidates: List<JSONObject>, change: (JSONObject?) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    TextButton(onClick = { open = true }) { Text(if (reference == null) "等待认证来源下一条消息（可选）" else "认证来源前置 · 已选择") }
+    reference?.optJSONObject("anchor")?.let { source -> PlanCaption("${source.optString("provider")} · ${source.optString("conversationKind")} · ${source.optString("conversationId")}\n只观察这一个已认证来源的新事件；消息正文不作为目标指令，也不获得回复/群发送权限。") }
+    if (open) PlanSheet("选择原认证入站来源", { open = false }, { OutlinedButton(onClick = { open = false }) { Text("保留当前条件") } }) {
+        PlanCaption("仅列当前原渠道inbox最近窗口内仍有效的来源metadata。没有账号或来源不可核对时保持不可选，不新增webhook或消息存储。")
+        TextButton(onClick = { change(null); open = false }) { Text("不等待入站事件") }
+        if (candidates.isEmpty()) PlanCaption("当前没有可核对的原认证入站来源。请先在原渠道页完成连接与认证，再回来选择。")
+        candidates.forEach { row ->
+            val ref = row.getJSONObject("reference")
+            Column(Modifier.fillMaxWidth().clickable { change(JSONObject(ref.toString())); open = false }.padding(vertical = 16.dp)) {
+                Text(row.optString("label"), fontSize = 14.sp)
+                val anchor = ref.getJSONObject("anchor")
+                PlanCaption("原消息 ${anchor.optString("eventId")} · 绑定 ${anchor.optString("bindingEpoch")}\n只等待该位置之后同来源的新事件，不把缺失窗口猜成已读。")
+            }
+            HorizontalDivider(color = Line)
+        }
+    }
 }
 
 @Composable private fun ExecutionRemoteWaitField(reference: JSONObject?, candidates: List<JSONObject>, change: (JSONObject?) -> Unit) {
@@ -272,7 +294,7 @@ import org.json.JSONObject
     }
 }
 
-@Composable private fun ExecutionStepEditor(plan: JSONObject, step: JSONObject, state: PocketUiState, remoteCandidates: List<JSONObject>, busy: Boolean, close: () -> Unit, save: (JSONObject) -> Unit) {
+@Composable private fun ExecutionStepEditor(plan: JSONObject, step: JSONObject, state: PocketUiState, remoteCandidates: List<JSONObject>, businessCandidates: List<JSONObject>, busy: Boolean, close: () -> Unit, save: (JSONObject) -> Unit) {
     val rows = plan.optJSONArray("steps").objects(); val index = rows.indexOfFirst { it.optString("id") == step.optString("id") }
     val initial = remember { runCatching { executionStepDraft(plan, step) } }
     if (initial.isFailure) {
@@ -285,7 +307,7 @@ import org.json.JSONObject
     val projects = state.feature("workspace").optJSONArray("projects").objects()
     val candidate = runCatching { executionStepPatch(plan, step, draft, delay, timingEdited, System.currentTimeMillis()) }
     PlanSheet("修改未执行步骤", close, { Button(onClick = { save(candidate.getOrThrow()) }, enabled = !busy && candidate.isSuccess && candidate.getOrNull()?.length() != 0) { Text("保存修改，重新审阅") } }) {
-        ExecutionStepFields(draft, index, rows.take(index).map { it.optString("title") }, projects, remoteCandidates, rows.take(index).map { stepStateLabel(it) + " · 原任务：" + originalTaskLabel(it.optString("taskState", it.optJSONObject("taskObservation")?.optString("status").orEmpty())) }) { draft = it }
+        ExecutionStepFields(draft, index, rows.take(index).map { it.optString("title") }, projects, remoteCandidates, businessCandidates, rows.take(index).map { stepStateLabel(it) + " · 原任务：" + originalTaskLabel(it.optString("taskState", it.optJSONObject("taskObservation")?.optString("status").orEmpty())) }) { draft = it }
         OutlinedTextField(delay, { delay = it.filter(Char::isDigit).take(6); timingEdited = true }, label = { Text("改为几分钟后可执行") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
         PlanCaption("当前最早时间 · ${planTime(step.optLong("dueAt"))}。不修改时间字段会保留原时间。")
         PlanCaption("保留已发生的原任务、成果与未知操作。修改这一步后，整个目标需要再次审阅；不会借新版本重派当前任务。")
@@ -318,7 +340,9 @@ import org.json.JSONObject
             .put("allowPrivateArtifactFreeze", freezeScope).put("expiresAt", expires).put("zoneId", ZoneId.systemDefault().id).put("requiresNetwork", network).put("requiresCharging", charging).put("minBatteryPercent", battery)
         if (quiet) { require(runCatching { LocalTime.parse(start); LocalTime.parse(end) }.isSuccess && start != end) { "安静时段需使用不同的 HH:mm 开始和结束时间" }; result.put("quietHours", JSONObject().put("start", start).put("end", end)) }; result
     }
-    PlanSheet("审阅这个目标的执行范围", close, { Button(onClick = { approve(settings.getOrThrow()) }, enabled = !busy && consent && settings.isSuccess && projectsAvailable) { Text(if (automatic) "批准并按计划开始" else "保存授权，等我开始") } }) {
+    val hasBusinessSource = steps.any { it.optJSONObject("businessWait") != null }
+    var businessConsent by remember(plan.optString("id"), plan.optLong("revision")) { mutableStateOf(false) }
+    PlanSheet("审阅这个目标的执行范围", close, { Button(onClick = { approve(settings.getOrThrow().put("businessEventConsent", businessConsent)) }, enabled = !busy && consent && (!hasBusinessSource || businessConsent) && settings.isSuccess && projectsAvailable) { Text(if (automatic) "批准并按计划开始" else "保存授权，等我开始") } }) {
         Text(plan.optString("goal"), fontSize = 18.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold)
         steps.forEachIndexed { at, step ->
             Text("${at + 1}. ${step.optString("goal")}", fontSize = 14.sp, lineHeight = 23.sp)
@@ -342,6 +366,12 @@ import org.json.JSONObject
                 PlanCaption("这里只等待这份已存在的原进程回执，不提交、重试或停止电脑任务，也不推定它的业务目标已成功。")
             }
         }
+        steps.filter { it.optJSONObject("businessWait") != null }.forEach { step ->
+            val source = step.getJSONObject("businessWait").getJSONObject("anchor")
+            Text("入站前置 · ${source.optString("provider")} / ${source.optString("conversationKind")} / ${source.optString("conversationId")}", fontSize = 14.sp)
+            PlanCaption("原来源消息 ${source.optString("eventId")}\n主体 ${source.optString("principalId")} · 绑定 ${source.optString("bindingEpoch")}\n只以同来源的一次新事件触发上面已写明的固定目标。消息正文不送入目标、不作为新指令，不自动回复或外发成果。来源已撤销、窗口缺失或版本变化会阻止新的消费/派发。")
+        }
+        if (hasBusinessSource) PlanToggle("明确允许上述认证来源的新事件触发这个固定目标", businessConsent) { businessConsent = it }
         if (!projectsAvailable) Text("项目列表尚不可核实，请返回刷新项目后再审阅；没有改换项目或批准执行。", color = Danger, fontSize = 14.sp)
         if (steps.any { it.optString("executor", "phone") == "phone" }) PlanChoice("手机执行位置", if (phoneMode == "background") "独立后台屏" else "主屏兼容模式", listOf("background" to "独立后台屏", "main_screen" to "主屏兼容模式")) { phoneMode = it }
         Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}.toggleable(consent, role = Role.Checkbox) { consent = it }, verticalAlignment = Alignment.Top) { Checkbox(consent, null); Text("同意将本目标需要的项目文件，或手机界面与可见文字，发送给我配置的云端模型。", fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 10.dp)) }

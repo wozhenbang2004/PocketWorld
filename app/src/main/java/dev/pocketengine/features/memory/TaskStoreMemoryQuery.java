@@ -380,18 +380,33 @@ public final class TaskStoreMemoryQuery {
     private static String historyEncode(JSONObject value){return Base64.getUrlEncoder().withoutPadding().encodeToString(value.toString().getBytes(StandardCharsets.UTF_8));}
     private static JSONObject historyPosition(String cursor)throws Exception{return cursor.isEmpty()?new JSONObject():new JSONObject(new String(Base64.getUrlDecoder().decode(cursor),StandardCharsets.UTF_8));}
     private static String historyMembership(JSONObject task)throws Exception{return TaskMemoryTrace.rawFingerprint(new JSONObject().put("taskId",task.getString("id")).put("actorId",task.optString("actorId")).put("spaceId",task.optString("spaceId")).put("conversationId",task.optString("conversationId")).put("originKind",task.optJSONObject("origin")==null?"":task.getJSONObject("origin").optString("kind")));}
-    private static boolean historyVisible(ConversationHistory.HistoryBinding binding,JSONObject task){JSONObject origin=task.optJSONObject("origin");return "owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))&&"assistant".equals(task.optString("kind"))&&binding.conversationId.equals(task.optString("conversationId"))&&(origin==null||!Set.of("group","channel").contains(origin.optString("kind")));}
-    private static void historyCaller(SQLiteDatabase db,ConversationHistory.HistoryBinding binding,RawWindow window)throws Exception{JSONObject task=rawTask(db,binding.caller,window);if(task==null||!historyVisible(binding,task))throw new SecurityException("历史范围不是原调用任务的私人会话");}
+    private static boolean historyVisible(ConversationHistory.HistoryBinding binding,JSONObject task){JSONObject origin=task.optJSONObject("origin");return "owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))&&"assistant".equals(task.optString("kind"))&&binding.sourceConversationId.equals(task.optString("conversationId"))&&(origin==null||!Set.of("group","channel").contains(origin.optString("kind")));}
+    private static void historyCaller(SQLiteDatabase db,ConversationHistory.HistoryBinding binding,RawWindow window)throws Exception{binding.requireScopeCurrent();JSONObject task=rawTask(db,binding.caller,window);requireHistoryScope(task,binding.conversationId);if(!binding.permitsConversation(binding.sourceConversationId))throw new SecurityException("历史来源会话不在主人本轮范围");}
     private static JSONObject historySourceTask(SQLiteDatabase db,ConversationHistory.HistoryBinding binding,ConversationHistory.SourceLocator selected,RawWindow window)throws Exception{
         try(Cursor row=window.query(db,TRACE_AUTHORITY_SIZE,new String[]{selected.taskId})){if(!row.moveToFirst())return null;if(row.isNull(0)||row.getLong(0)>RAW_MAX_BYTES)throw new RawLimit("source_task_authority_exceeds_inline_limit");}
-        try(Cursor row=window.query(db,TRACE_AUTHORITY_ROW,new String[]{selected.taskId})){if(!row.moveToFirst())return null;String text=row.getString(0);window.sourceAuthorityBytes=text.getBytes(StandardCharsets.UTF_8).length;if(window.sourceAuthorityBytes>RAW_MAX_BYTES)throw new RawLimit("source_task_authority_exceeds_inline_limit");JSONObject task=new JSONObject(text);if(!historyVisible(binding,task)||!selected.taskId.equals(task.optString("id"))||!selected.membership.equals(historyMembership(task)))throw new SecurityException("历史来源的原会话或私人归属已变化");return task;}
+        try(Cursor row=window.query(db,TRACE_AUTHORITY_ROW,new String[]{selected.taskId})){if(!row.moveToFirst())return null;String text=row.getString(0);window.sourceAuthorityBytes=text.getBytes(StandardCharsets.UTF_8).length;if(window.sourceAuthorityBytes>RAW_MAX_BYTES)throw new RawLimit("source_task_authority_exceeds_inline_limit");JSONObject task=new JSONObject(text);if(!historyVisible(binding,task)||!selected.conversationId.isEmpty()&&!binding.sourceConversationId.equals(selected.conversationId)||!selected.taskId.equals(task.optString("id"))||!selected.membership.equals(historyMembership(task)))throw new SecurityException("历史来源的原会话或私人归属已变化");return task;}
+    }
+    /** Body-free plan for ONE already-selected historical run. Only the native caller may warm it
+     * outside TaskStore; repeating this read after warm rechecks all original identities/dependencies. */
+    public static JSONArray historicalOutputWarmDependencies(SQLiteDatabase db,ConversationHistory.HistoryBinding binding,ConversationHistory.SourceLocator selected,
+            dev.pocketengine.features.assistant.ConversationRepository originals)throws Exception{
+        if(selected==null||selected.kind!=ConversationHistory.Kind.RUN&&selected.kind!=ConversationHistory.Kind.OUTPUT)throw new SecurityException("请先发现原会话中的真实run或输出");
+        final JSONArray[] result={null};binding.caller.admit(()->{try(RawWindow window=new RawWindow(binding.caller,originals)){
+            historyCaller(db,binding,window);JSONObject task=historySourceTask(db,binding,selected,window);
+            if(task==null||!historyRunExists(db,selected,window))throw new SecurityException("历史输出来源的task/run已不可用");
+            requireOperationContext(db,originals,selected.taskId,selected.runId,binding.sourceConversationId,window.contextBytes(),window.signal);
+            result[0]=OwnerSourceRunContext.outputRunDependencies(db,selected.taskId,selected.runId,window.contextBytes(),window.signal);
+            if(selected.kind==ConversationHistory.Kind.OUTPUT){ToolOutputStore.Header header=ToolOutputStore.header(db,selected.taskId,selected.runId,selected.sourceId,window.outputBudget(),window.signal);
+                if(header==null||!selected.revision.equals(header.reference().getString("revision"))||selected.epoch!=header.reference().getInt("epoch"))throw new SecurityException("历史输出原件版本已变化");}
+            window.check();return new JSONObject();
+        }});return new JSONArray(result[0].toString());
     }
     /** Conversation-scoped metadata discovery. Never uses the legacy unbounded queryMemoryTasks. */
     public static JSONObject queryConversationHistory(SQLiteDatabase db,ConversationHistory.HistoryBinding binding,ConversationHistory.SourceLocator selected,String kind,JSONObject options)throws Exception{return queryConversationHistory(db,binding,selected,kind,options,null);}
     public static JSONObject queryConversationHistory(SQLiteDatabase db,ConversationHistory.HistoryBinding binding,ConversationHistory.SourceLocator selected,String kind,JSONObject options,dev.pocketengine.features.assistant.ConversationRepository originals)throws Exception{
         return binding.caller.admit(()->{
             JSONObject result=new JSONObject().put("entries",new JSONArray()).put("gaps",new JSONArray()).put("nextCursor","").put("charsReturned",0);JSONArray entries=result.getJSONArray("entries"),gaps=result.getJSONArray("gaps");JSONObject position=historyPosition(options.optString("cursor"));String reason="",first="",last="";boolean more=false;int limit=options.getInt("limit"),chars=0;String query=options.getString("query");long after=options.optLong("createdAfter",-1),before=options.optLong("createdBefore",-1);
-            try(RawWindow window=new RawWindow(binding.caller,originals)){db.beginTransaction();try{
+            try(RawWindow window=new RawWindow(binding.caller,originals)){boolean committed=false;db.beginTransaction();try{
                 historyCaller(db,binding,window);
                 if(selected==null){
                     if(!kind.equals("runs"))throw new IllegalArgumentException("请先选择原任务/轮次");
@@ -422,9 +437,14 @@ public final class TaskStoreMemoryQuery {
                         }}
                         if(more&&position.has("epoch"))result.put("nextCursor",historyEncode(position));if(window.rows==0&&entries.length()==0)reason="run_not_collected_or_unavailable";
                     }else if(selected.kind==ConversationHistory.Kind.RUN){
-                        if(!kind.equals("operations"))throw new IllegalArgumentException("此选择是执行轮次，请查该轮原操作");if(!historyRunExists(db,selected,window))reason="source_run_unavailable";
+                        if(!Set.of("operations","outputs").contains(kind))throw new IllegalArgumentException("此选择是执行轮次，请查该轮原操作或留存输出");if(!historyRunExists(db,selected,window))reason="source_run_unavailable";
                         else{
                             window.operationContext(db,selected.taskId,selected.runId,task.optString("conversationId"));
+                            if(kind.equals("outputs")){
+                                OutputScan scan=new OutputScan();historyOutputMetadata(db,binding,selected,window,options,position,entries,scan);
+                                reason=scan.reason;more=scan.more;first=scan.first;last=scan.last;
+                                if(more&&position.has("lastAt"))result.put("nextCursor",historyEncode(position));
+                            }else{
                             String filter="task_id=? AND run_id=? AND tool NOT IN ("+RAW_REFERENCE_TOOLS+")";List<String> args=new ArrayList<>(List.of(selected.taskId,selected.runId));if(after>=0){filter+=" AND created_at>=?";args.add(Long.toString(after));}if(before>=0){filter+=" AND created_at<=?";args.add(Long.toString(before));}
                             if(!position.has("upperId"))try(Cursor upper=window.query(db,"SELECT created_at,operation_id FROM operations WHERE "+filter+" ORDER BY created_at DESC,operation_id DESC LIMIT 1",args.toArray(new String[0]))){if(upper.moveToFirst()){position.put("upperAt",upper.getLong(0)).put("upperId",upper.getString(1));window.metadata(upper.getString(1));}}
                             if(position.has("upperId")){
@@ -440,17 +460,52 @@ public final class TaskStoreMemoryQuery {
                                 }}
                             }
                             if(more&&position.has("lastAt"))result.put("nextCursor",historyEncode(position));
+                            }
                         }
-                    }else throw new IllegalArgumentException("请使用任务或轮次选择来发现操作");
+                    }else throw new IllegalArgumentException("请使用任务或轮次选择来发现操作或输出");
                 }
-                window.check();if(selected!=null&&selected.kind==ConversationHistory.Kind.RUN&&entries.length()>0)OwnerSourceRunContext.inheritPrepared(db,binding.caller.taskId,binding.caller.runId,selected.taskId,selected.runId,window.contextBytes(),window.signal);window.recheckOperationContexts(db);db.setTransactionSuccessful();
+                window.check();if(selected!=null&&selected.kind==ConversationHistory.Kind.RUN&&kind.equals("operations")&&entries.length()>0)OwnerSourceRunContext.inheritPrepared(db,binding.caller.taskId,binding.caller.runId,selected.taskId,selected.runId,window.contextBytes(),window.signal);window.recheckOperationContexts(db);db.setTransactionSuccessful();committed=true;
             }catch(TaskStoreMemoryReader.RawMessageUnavailable unavailable){reason=OwnerSourceRunContext.UNAVAILABLE;entries=new JSONArray();result.put("entries",entries).put("nextCursor","");chars=0;more=false;}
             catch(RawLimit limited){reason=limited.reason;more=true;if(position.has("lastAt")||position.has("epoch"))result.put("nextCursor",historyEncode(position));}
             catch(OperationCanceledException deadline){binding.caller.check();reason="read_deadline";more=true;if(position.has("lastAt")||position.has("epoch"))result.put("nextCursor",historyEncode(position));}
             finally{db.endTransaction();}
-            binding.check();return ConversationHistory.proof(result.put("status",reason.matches("source_task_unavailable|source_run_unavailable|run_not_collected_or_unavailable|context_provenance_unavailable")?"unavailable":reason.isEmpty()?"current":"partial").put("reason",reason).put("charsReturned",chars).put("hasMore",more).put("pageCoverage",window.coverage(kind.equals("operations")?"operations":"task_run_metadata",first,last,reason,false,-1).put("sourceKinds",new JSONArray().put(selected==null?"task_record":selected.kind==ConversationHistory.Kind.TASK?"task_run":"operation_receipt")).put("logicalScope","bound_private_conversation_only").put("candidateTaskRowsMayBeOutsideScope",selected==null).put("foreignCandidateIdentitiesReturned",false).put("originalHistoryTotalKnown",false).put("watermarkKind",selected==null?"updated_at_upper_bound_not_snapshot":selected.kind==ConversationHistory.Kind.TASK?"descending_epoch_keyset":"operation_created_at_upper_bound").put("paginationCanMissConcurrentTaskUpdates",selected==null).put("upperCreatedOrUpdatedAt",position.has("upperAt")?position.get("upperAt"):JSONObject.NULL)));
+            if(!committed&&selected!=null&&selected.kind==ConversationHistory.Kind.RUN&&kind.equals("operations")){
+                // Operations contain body text. A deadline/budget rollback also rolls back the
+                // caller's inherited source facts: no collected body or advanced cursor may escape.
+                entries=new JSONArray();gaps=new JSONArray();chars=0;more=false;first="";last="";
+                result.put("entries",entries).put("gaps",gaps).put("nextCursor","")
+                    .put("bodyDelivery","not_delivered").put("undeliveredReason","source_dependency_transaction_not_committed");
+            }
+            binding.check();return ConversationHistory.proof(result.put("status",reason.matches("source_task_unavailable|source_run_unavailable|run_not_collected_or_unavailable|context_provenance_unavailable")?"unavailable":reason.isEmpty()?"current":"partial").put("reason",reason).put("charsReturned",chars).put("hasMore",more).put("pageCoverage",window.coverage(kind.equals("outputs")?"outputs":kind.equals("operations")?"operations":"task_run_metadata",first,last,reason,false,-1).put("sourceKinds",new JSONArray().put(selected==null?"task_record":selected.kind==ConversationHistory.Kind.TASK?"task_run":kind.equals("outputs")?"retained_safe_native_result_metadata":"operation_receipt")).put("bodyIncluded",!kind.equals("outputs")&&!"not_delivered".equals(result.optString("bodyDelivery"))).put("outputQueryMatches",kind.equals("outputs")?"tool_operation_or_output_identity_not_body":"not_applicable").put("logicalScope","bound_private_conversation_only").put("candidateTaskRowsMayBeOutsideScope",selected==null).put("foreignCandidateIdentitiesReturned",false).put("originalHistoryTotalKnown",false).put("watermarkKind",selected==null?"updated_at_upper_bound_not_snapshot":selected.kind==ConversationHistory.Kind.TASK?"descending_epoch_keyset":kind.equals("outputs")?"capture_created_at_upper_bound":"operation_created_at_upper_bound").put("paginationCanMissConcurrentTaskUpdates",selected==null).put("upperCreatedOrUpdatedAt",position.has("upperAt")?position.get("upperAt"):JSONObject.NULL)));
             }
         });
+    }
+    /** Metadata only on the explicitly selected native run. No chunks/body scan or implicit grant. */
+    private static void historyOutputMetadata(SQLiteDatabase db,ConversationHistory.HistoryBinding binding,ConversationHistory.SourceLocator selected,RawWindow window,
+            JSONObject options,JSONObject position,JSONArray entries,OutputScan progress)throws Exception{
+        String filter="task_id=? AND run_id=? AND epoch=?";List<String> args=new ArrayList<>(List.of(selected.taskId,selected.runId,Integer.toString(selected.epoch)));
+        long after=options.optLong("createdAfter",-1),before=options.optLong("createdBefore",-1);if(after>=0){filter+=" AND created_at>=?";args.add(Long.toString(after));}if(before>=0){filter+=" AND created_at<=?";args.add(Long.toString(before));}
+        if(!position.has("upperId"))try(Cursor upper=window.query(db,"SELECT created_at,output_id FROM task_output_sources WHERE "+filter+" ORDER BY created_at DESC,output_id DESC LIMIT 1",args.toArray(new String[0]))){if(upper.moveToFirst()){position.put("upperAt",upper.getLong(0)).put("upperId",upper.getString(1));window.metadata(upper.getString(1));}}
+        if(!position.has("upperId"))return;
+        filter+=" AND (created_at<? OR (created_at=? AND output_id<=?)) AND (created_at>? OR (created_at=? AND output_id>?))";
+        for(String key:new String[]{"upperAt","upperAt","upperId"})args.add(position.get(key).toString());long last=position.optLong("lastAt",-1);args.add(Long.toString(last));args.add(Long.toString(last));args.add(position.optString("lastId"));int returnedMetadataChars=0;
+        try(Cursor rows=window.query(db,"SELECT output_id,created_at FROM task_output_sources WHERE "+filter+" ORDER BY created_at,output_id LIMIT 101",args.toArray(new String[0]))){while(rows.moveToNext()){
+            if(window.rows>=RAW_MAX_ROWS||entries.length()>=options.getInt("limit")){progress.more=true;progress.reason=window.rows>=RAW_MAX_ROWS?"source_row_budget":"result_limit";break;}
+            window.check();String output=rows.getString(0);long at=rows.getLong(1);if(!validTaskId(output)||at<0)throw new SecurityException("历史原输出索引不可核对");window.metadata(output);
+            String source=ToolOutputStore.sourceId(selected.taskId,selected.runId,output);ToolOutputStore.Header header=ToolOutputStore.header(db,selected.taskId,selected.runId,source,window.outputBudget(),window.signal);
+            if(header==null){progress.reason="source_changed_during_read";progress.more=true;break;}JSONObject ref=header.reference();if(ref.getInt("epoch")!=selected.epoch)throw new SecurityException("输出不属于选中的原轮次");
+            JSONArray dependencies=header.dependencies();ToolOutputStore.requireDependencies(dependencies,binding.caller.outputSources());window.outputDependencies.add(dependencies);
+            if(rawMatches(ref.getString("tool")+" "+ref.getString("operationId")+" "+source,options.getString("query"))){
+                JSONObject entry=new JSONObject().put("sourceKind","task_output").put("sourceTaskId",selected.taskId).put("sourceRunId",selected.runId).put("sourceEpoch",selected.epoch)
+                        .put("sourceId",source).put("revision",ref.getString("revision")).put("revisionKind","sha256_content_fingerprint").put("membershipFingerprint",selected.membership)
+                        .put("tool",ref.getString("tool")).put("operationId",ref.getString("operationId")).put("captureKind",ref.getString("captureKind")).put("createdAt",at).put("timeStatus","stored_capture_time")
+                        .put("retainedRange",ref.getJSONObject("retainedRange")).put("retainedNativeDataComplete",ref.getBoolean("retainedNativeDataComplete")).put("upstreamTruncated",ref.get("upstreamTruncated"))
+                        .put("bodyIncluded",false).put("coverage","retained_safe_native_result_metadata_not_wire");
+                int size=entry.toString().length();if(size>options.getInt("maxChars")-returnedMetadataChars){progress.reason="metadata_character_limit";progress.more=true;break;}
+                window.check();window.outputSourcesCurrent();entries.put(entry);returnedMetadataChars+=size;
+            }
+            window.rows++;if(progress.first.isEmpty())progress.first=source;progress.last=source;position.put("lastAt",at).put("lastId",output);
+        }}
     }
     private static boolean historyStatusMatches(String state,String id,String query){String labels=state+" "+id+" "+switch(state){case "failed"->"失败";case "completed"->"完成";case "cancelled"->"取消";case "paused"->"暂停";default->"";};return rawMatches(labels,query);}
     private static boolean historyRunExists(SQLiteDatabase db,ConversationHistory.SourceLocator selected,RawWindow window)throws Exception{try(Cursor row=window.query(db,"SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? LIMIT 1",new String[]{selected.taskId,selected.runId,Integer.toString(selected.epoch)})){return row.moveToFirst();}}
@@ -459,7 +514,8 @@ public final class TaskStoreMemoryQuery {
     }
     public static JSONObject readConversationHistoryOperation(SQLiteDatabase db,ConversationHistory.HistoryBinding binding,ConversationHistory.SourceLocator selected,int offset,int maxChars)throws Exception{return readConversationHistoryOperation(db,binding,selected,offset,maxChars,null);}
     public static JSONObject readConversationHistoryOperation(SQLiteDatabase db,ConversationHistory.HistoryBinding binding,ConversationHistory.SourceLocator selected,int offset,int maxChars,dev.pocketengine.features.assistant.ConversationRepository originals)throws Exception{
-        if(selected.kind!=ConversationHistory.Kind.OPERATION)throw new IllegalArgumentException("请选择原历史操作");JSONObject input=new JSONObject().put("sourceId",selected.sourceId).put("revision",selected.revision).put("offset",offset).put("maxChars",maxChars),wanted=TaskMemoryTrace.rawCitation(selected.taskId,selected.runId,input);
+        if(selected.kind==ConversationHistory.Kind.OUTPUT)return readConversationHistoryOutput(db,binding,selected,offset,maxChars,originals);
+        if(selected.kind!=ConversationHistory.Kind.OPERATION)throw new IllegalArgumentException("请选择原历史操作或留存输出");JSONObject input=new JSONObject().put("sourceId",selected.sourceId).put("revision",selected.revision).put("offset",offset).put("maxChars",maxChars),wanted=TaskMemoryTrace.rawCitation(selected.taskId,selected.runId,input);
         return binding.caller.admit(()->{JSONObject result;try(RawWindow window=new RawWindow(binding.caller,originals)){db.beginTransaction();try{
             historyCaller(db,binding,window);JSONObject task=historySourceTask(db,binding,selected,window);if(task==null||!historyRunExists(db,selected,window))result=TaskMemoryTrace.operationStatus(new JSONObject().put("ownerId","owner").put("spaceId","private"),wanted,"unavailable","source_task_or_run_unavailable");
             else{window.operationContext(db,selected.taskId,selected.runId,task.optString("conversationId"));String id=TaskMemoryTrace.operationId(wanted);long size=-1;try(Cursor row=window.query(db,"SELECT "+RAW_OPERATION_BYTES+" FROM operations WHERE operation_id=? AND task_id=? AND run_id=? LIMIT 1",new String[]{id,selected.taskId,selected.runId})){if(row.moveToFirst()&&!row.isNull(0))size=row.getLong(0);}
@@ -470,6 +526,33 @@ public final class TaskStoreMemoryQuery {
         catch(RawLimit limited){result=TaskMemoryTrace.operationStatus(new JSONObject().put("ownerId","owner").put("spaceId","private"),wanted,"read_limited",limited.reason);}
         catch(OperationCanceledException deadline){binding.caller.check();result=TaskMemoryTrace.operationStatus(new JSONObject().put("ownerId","owner").put("spaceId","private"),wanted,"read_limited","read_deadline");}finally{db.endTransaction();}
         binding.check();return result.put("sourceKind","task_operation").put("sourceTaskId",selected.taskId).put("sourceRunId",selected.runId).put("sourceEpoch",selected.epoch).put("readBudget",window.coverage("operations",selected.sourceId,selected.sourceId,result.optString("reason"),false,-1));}});
+    }
+
+    private static JSONObject readConversationHistoryOutput(SQLiteDatabase db,ConversationHistory.HistoryBinding binding,ConversationHistory.SourceLocator selected,int offset,int maxChars,
+            dev.pocketengine.features.assistant.ConversationRepository originals)throws Exception{
+        JSONObject input=new JSONObject().put("sourceId",selected.sourceId).put("revision",selected.revision).put("offset",offset).put("maxChars",maxChars),wanted=ToolOutputStore.citation(selected.taskId,selected.runId,input);
+        return binding.caller.admit(()->{JSONObject result;try(RawWindow window=new RawWindow(binding.caller,originals)){db.beginTransaction();try{
+            historyCaller(db,binding,window);JSONObject task=historySourceTask(db,binding,selected,window);
+            if(task==null||!historyRunExists(db,selected,window))result=ToolOutputStore.status(selected.taskId,selected.runId,wanted,"unavailable","source_task_or_run_unavailable");
+            else{
+                window.operationContext(db,selected.taskId,selected.runId,task.optString("conversationId"));ToolOutputStore.Header header=ToolOutputStore.header(db,selected.taskId,selected.runId,selected.sourceId,window.outputBudget(),window.signal);
+                if(header==null)result=ToolOutputStore.status(selected.taskId,selected.runId,wanted,"unavailable","native_output_not_retained");
+                else if(!selected.revision.equals(header.reference().getString("revision")))result=ToolOutputStore.status(selected.taskId,selected.runId,wanted,"source_changed","native_output_fingerprint_changed");
+                else{
+                    if(header.reference().getInt("epoch")!=selected.epoch)throw new SecurityException("历史输出与原run不符");JSONArray dependencies=header.dependencies();ToolOutputStore.requireDependencies(dependencies,binding.caller.outputSources());window.outputDependencies.add(dependencies);
+                    // Depend on the real prepared source context before any body can be returned.
+                    OwnerSourceRunContext.inheritPrepared(db,binding.caller.taskId,binding.caller.runId,selected.taskId,selected.runId,window.contextBytes(),window.signal);
+                    String body=ToolOutputStore.range(db,header,offset,maxChars,window.outputBudget(),window.signal);window.rows++;
+                    result=ToolOutputStore.page(selected.taskId,selected.runId,wanted,header,body,offset);
+                }
+            }
+            window.check();window.recheckOperationContexts(db);window.outputSourcesCurrent();db.setTransactionSuccessful();
+        }catch(TaskStoreMemoryReader.RawMessageUnavailable unavailable){result=ToolOutputStore.status(selected.taskId,selected.runId,wanted,unavailable.getMessage().equals("native_output_read_limited")?"read_limited":"unavailable",unavailable.getMessage());}
+        catch(RawLimit limited){result=ToolOutputStore.status(selected.taskId,selected.runId,wanted,"read_limited",limited.reason);}
+        catch(OperationCanceledException deadline){binding.caller.check();result=ToolOutputStore.status(selected.taskId,selected.runId,wanted,"read_limited","read_deadline");}
+        finally{db.endTransaction();}
+        binding.check();window.outputSourcesCurrent();return result.put("sourceKind","task_output").put("sourceTaskId",selected.taskId).put("sourceRunId",selected.runId).put("sourceEpoch",selected.epoch)
+                .put("readBudget",window.coverage("outputs",selected.sourceId,selected.sourceId,result.optString("reason"),false,-1));}});
     }
 
     /** Metadata/source-currentness only. No RunControl callbacks here: this is itself a retained
@@ -495,6 +578,12 @@ public final class TaskStoreMemoryQuery {
         ConversationHistory.SourceBytes contextBytes(){return new ConversationHistory.SourceBytes(){public long remaining(){check();return sourceLimit-sourceBytes;}public void charge(long bytes)throws Exception{if(bytes<0||bytes>sourceLimit-sourceBytes)throw new TaskStoreMemoryReader.RawMessageUnavailable(OwnerSourceRunContext.UNAVAILABLE);sourceBytes+=bytes;operationContextBytes+=bytes;check();}};}
         void operationContext(SQLiteDatabase db,String task,String run,String conversation)throws Exception{if(!derivedRead)return;String key=task+"\n"+run;if(operationContexts.containsKey(key))return;requireOperationContext(db,originals,task,run,conversation,contextBytes(),signal);if(checkOutputSources)nativeOutputDependencies.add(OwnerSourceRunContext.verifiedOutputDependencies(db,outputSources,task,run,contextBytes(),signal));operationContexts.put(key,new String[]{task,run,conversation});}
         void recheckOperationContexts(SQLiteDatabase db)throws Exception{for(String[] context:operationContexts.values()){requireOperationContext(db,originals,context[0],context[1],context[2],contextBytes(),signal);if(checkOutputSources)for(JSONArray rows:nativeOutputDependencies)ToolOutputStore.requireDependencies(rows,outputSources);}}
+        ToolOutputStore.ReadBudget outputBudget(){return new ToolOutputStore.ReadBudget(){
+            public void check(){HistoryInspection.this.check();}
+            public long remaining(){check();return sourceLimit-sourceBytes;}
+            public void charge(long bytes,String category)throws Exception{check();if(bytes<0||bytes>sourceLimit-sourceBytes){unavailableReason="related_output_metadata_byte_budget";throw new TaskStoreMemoryReader.RawMessageUnavailable(unavailableReason);}sourceBytes+=bytes;check();}
+            public void chunks(int count){if(count!=0)throw new SecurityException("历史来源检查不应读取正文块");}
+        };}
         @Override public void close(){deadline.cancel(false);}
     }
     private static void requireHistoryScope(JSONObject task,String conversation)throws Exception{
@@ -505,9 +594,15 @@ public final class TaskStoreMemoryQuery {
         if(provided==null||provided.size()>100)throw new SecurityException("历史来源检查条数超过100");
         for(ConversationHistory.SourceLocator ref:provided){
             String referenceKey=TaskMemoryTrace.rawFingerprint(ref.taskReference());if(window.verifiedReferences.contains(referenceKey))continue;if(window.verifiedReferences.size()>=100)throw new SecurityException("历史来源批次超过100个原引用");
-            if(ref.kind==ConversationHistory.Kind.MESSAGE)throw new SecurityException("消息必须回到原Assistant来源");JSONObject task=window.task(db,ref.taskId,false);requireHistoryScope(task,conversation);if(!ref.membership.equals(historyMembership(task)))throw new SecurityException("历史来源成员身份已变化");if(ref.kind==ConversationHistory.Kind.TASK){window.verifiedReferences.add(referenceKey);continue;}
+            if(ref.kind==ConversationHistory.Kind.MESSAGE||ref.kind==ConversationHistory.Kind.CONVERSATION)throw new SecurityException("消息/会话必须回到原Assistant来源");String sourceConversation=ref.conversationId.isEmpty()?conversation:ref.conversationId;JSONObject task=window.task(db,ref.taskId,false);requireHistoryScope(task,sourceConversation);if(!ref.membership.equals(historyMembership(task)))throw new SecurityException("历史来源成员身份已变化");if(ref.kind==ConversationHistory.Kind.TASK){window.verifiedReferences.add(referenceKey);continue;}
             try(Cursor row=window.query(db,"SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? LIMIT 1",new String[]{ref.taskId,ref.runId,Integer.toString(ref.epoch)})){if(!row.moveToFirst())throw new SecurityException("历史执行轮次已不存在");}if(ref.kind==ConversationHistory.Kind.RUN){window.verifiedReferences.add(referenceKey);continue;}
-            window.operationContext(db,ref.taskId,ref.runId,conversation);
+            window.operationContext(db,ref.taskId,ref.runId,sourceConversation);
+            if(ref.kind==ConversationHistory.Kind.OUTPUT){
+                ToolOutputStore.Header header=ToolOutputStore.header(db,ref.taskId,ref.runId,ref.sourceId,window.outputBudget(),window.signal);
+                if(header==null||!ref.revision.equals(header.reference().getString("revision"))||ref.epoch!=header.reference().getInt("epoch"))throw new SecurityException("历史留存原输出版本已变化，旧正文停用");
+                if(window.derivedRead){JSONArray dependencies=header.dependencies();ToolOutputStore.requireDependencies(dependencies,window.outputSources);window.nativeOutputDependencies.add(dependencies);}
+                window.verifiedReferences.add(referenceKey);continue;
+            }
             String id=TaskMemoryTrace.operationId(TaskMemoryTrace.rawCitation(ref.taskId,ref.runId,new JSONObject().put("sourceId",ref.sourceId).put("revision",ref.revision)));long size=-1;
             try(Cursor row=window.query(db,"SELECT "+RAW_OPERATION_BYTES+" FROM operations WHERE operation_id=? AND task_id=? AND run_id=? LIMIT 1",new String[]{id,ref.taskId,ref.runId})){if(row.moveToFirst()&&!row.isNull(0))size=row.getLong(0);}
             if(size<0||size>window.sourceLimit-window.sourceBytes){window.unavailableReason=size<0?"related_source_unavailable":"related_source_byte_budget";throw new SecurityException("原历史操作缺失或超过本次metadata核对预算");}
@@ -519,7 +614,8 @@ public final class TaskStoreMemoryQuery {
         try(HistoryInspection window=new HistoryInspection(RAW_MAX_BYTES,originals,true,binding.caller.outputSources())){
             JSONObject caller=window.task(db,binding.caller.taskId,true);requireHistoryScope(caller,binding.conversationId);
             if(!binding.caller.runId.equals(caller.optString("runId"))||binding.caller.epoch!=SourceRef.integer(caller,"coordinatorEpoch",1)||!Boolean.FALSE.equals(caller.opt("cancelRequested")))throw new SecurityException("原历史调用轮次已停止");
-            requireHistorySources(db,binding.conversationId,provided,window);window.recheckOperationContexts(db);
+            for(ConversationHistory.SourceLocator ref:provided)if(!binding.permitsConversation(ref.conversationId.isEmpty()?binding.conversationId:ref.conversationId))throw new SecurityException("已提供的历史来源越过主人当前范围");
+            requireHistorySources(db,binding.conversationId,provided,window);window.recheckOperationContexts(db);binding.requireScopeCurrent();
         }
     }
     /** Native owner viewer admission from the exact retained original tool event, not model JSON. */
@@ -527,17 +623,38 @@ public final class TaskStoreMemoryQuery {
         JSONObject wanted=ConversationHistory.checkedCitation(input);String callerId=wanted.getString("callerTaskId"),run=wanted.getString("callerRunId"),conversation=wanted.getString("conversationId");
         try(HistoryInspection window=new HistoryInspection()){
             JSONObject caller=window.task(db,callerId,true);requireHistoryScope(caller,conversation);if(!run.equals(caller.optString("runId")))throw new SecurityException("这次原生历史读取回执已不在原轮次");
-            JSONArray citations=TaskMemoryTrace.historyCitationJumps(caller);boolean found=false;for(int i=0;i<citations.length();i++)if(TaskMemoryTrace.rawFingerprint(wanted).equals(TaskMemoryTrace.rawFingerprint(citations.getJSONObject(i)))){found=true;break;}
-            if(!found)throw new SecurityException("此精确来源范围不在原任务保留的native历史读取回执内");
+            // TaskAuditStore owns events; tasks.document intentionally no longer embeds them.
+            // Inspect only the original last 200 event positions and bounded native tool rows.
+            JSONArray events=new JSONArray();long oldest=-1;boolean incomplete=false;
+            try(Cursor rows=window.query(db,"SELECT event_order,event_type,body_bytes FROM task_events WHERE task_id=? ORDER BY event_order DESC LIMIT 200",new String[]{callerId})){
+                while(rows.moveToNext()){
+                    window.check();long order=rows.getLong(0);oldest=order;if(!"tool".equals(rows.getString(1)))continue;
+                    long bytes=rows.getLong(2);if(rows.isNull(2)||bytes<0||bytes>RAW_MAX_BYTES-window.authorityBytes-window.sourceBytes){incomplete=true;continue;}
+                    try(Cursor body=window.query(db,"SELECT event_json FROM task_events WHERE task_id=? AND event_order=? LIMIT 1",new String[]{callerId,Long.toString(order)})){
+                        if(!body.moveToFirst()){incomplete=true;continue;}String text=body.getString(0);long actual=text.getBytes(StandardCharsets.UTF_8).length;
+                        if(actual!=bytes||actual>RAW_MAX_BYTES-window.authorityBytes-window.sourceBytes)throw new SecurityException("原历史事件字节数已变化，未作为回看授权");
+                        window.sourceBytes+=actual;events.put(new JSONObject(text));
+                    }
+                }
+            }
+            caller.put("events",events);JSONArray citations=TaskMemoryTrace.historyCitationJumps(caller);boolean found=false;
+            for(int i=0;i<citations.length();i++)if(TaskMemoryTrace.rawFingerprint(wanted).equals(TaskMemoryTrace.rawFingerprint(citations.getJSONObject(i)))){found=true;break;}
+            if(!found){
+                if(incomplete)throw new SecurityException("historical_citation_event_read_limited: 本次原事件字节窗口未完整覆盖，不能判断原引用不存在");
+                if(oldest>=0)try(Cursor older=window.query(db,"SELECT 1 FROM task_events WHERE task_id=? AND event_order<? LIMIT 1",new String[]{callerId,Long.toString(oldest)})){
+                    if(older.moveToFirst())throw new SecurityException("historical_citation_window_not_covered: 原引用不在本次末200事件窗口，不能判断原引用不存在");
+                }
+                throw new SecurityException("此精确来源范围不在原任务保留的native历史读取回执内");
+            }
             if(wanted.has("taskSource"))requireHistorySources(db,conversation,List.of(ConversationHistory.SourceLocator.from(wanted.getJSONObject("taskSource"))),window);
             window.check();return wanted;
         }
     }
-    private static JSONArray projectHistoryReferences(SQLiteDatabase db,JSONArray supplied,String conversation,HistoryInspection window)throws Exception{
+    private static JSONArray projectHistoryReferences(SQLiteDatabase db,JSONArray supplied,String conversation,HistoryInspection window,ConversationHistory.ReadScope scope)throws Exception{
         JSONArray projected=new JSONArray(supplied.toString());Map<String,String> calls=new java.util.HashMap<>();boolean stale=false;
         for(int i=0;i<projected.length();i++){window.check();JSONObject row=projected.getJSONObject(i);JSONArray declared=row.optJSONArray("tool_calls");for(int j=0;declared!=null&&j<declared.length();j++){JSONObject call=declared.getJSONObject(j);calls.put(call.getString("id"),call.getJSONObject("function").optString("name"));}
             String name=calls.get(row.optString("tool_call_id"));if(!"tool".equals(row.optString("role"))||!Set.of(ConversationHistory.SEARCH,ConversationHistory.READ).contains(name==null?"":name))continue;
-            try{JSONObject receipt=new JSONObject(row.getString("content"));if(conversation.isEmpty()||!conversation.equals(receipt.optString("conversationId")))throw new SecurityException("原历史工具会话身份不符");JSONArray refs=receipt.getJSONArray("taskSourceRefs");if(refs.length()>100)throw new SecurityException("原历史来源数过多");List<ConversationHistory.SourceLocator> selected=new ArrayList<>();for(int j=0;j<refs.length();j++)selected.add(ConversationHistory.SourceLocator.from(refs.getJSONObject(j)));requireHistorySources(db,conversation,selected,window);}catch(Exception unavailable){stale=true;break;}
+            try{JSONObject receipt=new JSONObject(row.getString("content"));if(conversation.isEmpty()||!conversation.equals(receipt.optString("conversationId")))throw new SecurityException("原历史工具会话身份不符");JSONArray refs=receipt.getJSONArray("taskSourceRefs");if(refs.length()>100)throw new SecurityException("原历史来源数过多");List<ConversationHistory.SourceLocator> selected=new ArrayList<>();for(int j=0;j<refs.length();j++){ConversationHistory.SourceLocator ref=ConversationHistory.SourceLocator.from(refs.getJSONObject(j));ConversationHistory.requireReceiptScope(scope,conversation,receipt,ref.conversationId.isEmpty()?conversation:ref.conversationId);selected.add(ref);}requireHistorySources(db,conversation,selected,window);}catch(Exception unavailable){stale=true;break;}
         }
         if(stale)return OwnerSourceRunContext.retireDerived(projected);return projected;
     }
@@ -545,22 +662,22 @@ public final class TaskStoreMemoryQuery {
     public static JSONArray projectConversationHistoryReferences(SQLiteDatabase db,JSONArray supplied,String conversation)throws Exception{return projectConversationHistoryReferences(db,supplied,conversation,null);}
     public static JSONArray projectConversationHistoryReferences(SQLiteDatabase db,JSONArray supplied,String conversation,dev.pocketengine.features.assistant.ConversationRepository originals)throws Exception{return projectConversationHistoryReferences(db,supplied,conversation,originals,null);}
     public static JSONArray projectConversationHistoryReferences(SQLiteDatabase db,JSONArray supplied,String conversation,dev.pocketengine.features.assistant.ConversationRepository originals,ToolOutputStore.Sources sources)throws Exception{
-        try(HistoryInspection window=new HistoryInspection(RAW_MAX_BYTES,originals,true,sources)){JSONArray result=projectHistoryReferences(db,supplied,conversation,window);window.recheckOperationContexts(db);return result;}
+        try(HistoryInspection window=new HistoryInspection(RAW_MAX_BYTES,originals,true,sources)){ConversationHistory.ReadScope scope=originals==null||conversation.isEmpty()?null:originals.captureHistoryReadScope(conversation);JSONArray result=projectHistoryReferences(db,supplied,conversation,window,scope);window.recheckOperationContexts(db);if(scope!=null)scope.checkCurrent();return result;}
         catch(Exception unavailable){return OwnerSourceRunContext.retireDerived(supplied);}
     }
     /** A short original-TaskStore-monitor read batch, not a persistent cache or an authority grant.
      * Verified operation bytes are reused only while that same monitor remains continuously held. */
     public static final class HistoryProjectionSession implements ConversationHistory.ProjectionBatch {
-        private final SQLiteDatabase db;private final Object monitor;private final Thread thread;private final String conversation;private final HistoryInspection window;private final JSONObject caller;private final String callerId,callerRun;private boolean closed;private long extraProjectionSourceBytes;
+        private final SQLiteDatabase db;private final Object monitor;private final Thread thread;private final String conversation;private final HistoryInspection window;private final JSONObject caller;private final String callerId,callerRun;private final ConversationHistory.ReadScope scope;private boolean closed;private long extraProjectionSourceBytes;
         private HistoryProjectionSession(SQLiteDatabase db,Object monitor,ConversationHistory.HistoryBinding binding,long sourceLimit,dev.pocketengine.features.assistant.ConversationRepository originals)throws Exception{
-            this.db=db;this.monitor=monitor;thread=Thread.currentThread();conversation=binding.conversationId;callerId=binding.caller.taskId;callerRun=binding.caller.runId;window=new HistoryInspection(sourceLimit,originals,true,binding.caller.outputSources());
+            this.db=db;this.monitor=monitor;thread=Thread.currentThread();conversation=binding.conversationId;scope=binding.readScope;callerId=binding.caller.taskId;callerRun=binding.caller.runId;window=new HistoryInspection(sourceLimit,originals,true,binding.caller.outputSources());
             try{current();caller=window.task(db,binding.caller.taskId,true);requireHistoryScope(caller,conversation);if(!binding.caller.runId.equals(caller.optString("runId"))||binding.caller.epoch!=SourceRef.integer(caller,"coordinatorEpoch",1)||!Boolean.FALSE.equals(caller.opt("cancelRequested")))throw new SecurityException("原消息当前性门的调用轮次已停止");}
             catch(Exception failed){window.close();throw failed;}
         }
-        private void current(){if(closed||Thread.currentThread()!=thread||!Thread.holdsLock(monitor))throw new SecurityException("消息投影必须仍在唯一原TaskStore短事务内");window.check();}
+        private void current()throws Exception{if(closed||Thread.currentThread()!=thread||!Thread.holdsLock(monitor))throw new SecurityException("消息投影必须仍在唯一原TaskStore短事务内");if(scope!=null)scope.checkCurrent();window.check();}
         public JSONObject callerTask()throws Exception{current();return new JSONObject(caller.toString());}
-        public JSONArray project(JSONArray messages)throws Exception{current();JSONArray projected=projectHistoryReferences(db,messages,conversation,window);return projectOwnerSourceContext(db,window,callerId,callerRun,conversation,projected);}
-        public long sourceBytesRemaining(){current();return window.sourceLimit-window.sourceBytes;}
+        public JSONArray project(JSONArray messages)throws Exception{current();JSONArray projected=projectHistoryReferences(db,messages,conversation,window,scope);return projectOwnerSourceContext(db,window,callerId,callerRun,conversation,projected);}
+        public long sourceBytesRemaining()throws Exception{current();return window.sourceLimit-window.sourceBytes;}
         public void chargeSourceUtf8Bytes(long bytes)throws Exception{current();if(bytes<0||bytes>window.sourceLimit-window.sourceBytes){window.unavailableReason="extra_projection_source_byte_budget";throw new TaskStoreMemoryReader.RawMessageUnavailable("extra_projection_source_byte_budget");}window.sourceBytes+=bytes;extraProjectionSourceBytes+=bytes;}
         public JSONObject readBudget()throws Exception{return new JSONObject().put("guardSourceUtf8Bytes",window.sourceBytes).put("guardExtraProjectionSourceUtf8Bytes",extraProjectionSourceBytes).put("guardOperationContextUtf8Bytes",window.operationContextBytes).put("guardAuthorityUtf8Bytes",window.authorityBytes).put("guardUniqueSourceRefs",window.verifiedReferences.size()).put("guardSourceLimit",window.sourceLimit).put("guardUnavailableReason",window.unavailableReason).put("continuousOriginalAuthorityMonitor",true).put("guardByteAccounting","materialized_SQLite_text_not_physical_io");}
         @Override public void close()throws Exception{if(closed)return;try{current();window.recheckOperationContexts(db);}finally{closed=true;window.close();}}

@@ -76,6 +76,62 @@ public final class ConversationRepository {
     public boolean newInstallation(){synchronized(monitor){try(Cursor row=db.rawQuery("SELECT 1 FROM meta WHERE key='assistant_history_new_install' AND value='1' LIMIT 1",null)){return row.moveToFirst();}}}
     public void initializeEmpty()throws Exception{synchronized(monitor){if(active())return;if(!newInstallation())throw new IllegalStateException("已有安装缺原文件，不能静默当作空新安装");String next=UUID.randomUUID().toString();db.beginTransaction();boolean committing=false;try{publishAuthority(next,"",0,0);db.setTransactionSuccessful();committing=true;}finally{try{db.endTransaction();}catch(Exception uncertain){healthy=false;throw uncertain;}}if(committing)generation=next;}}
     private void publishAuthority(String next,String sourceSha,int messages,int sources)throws Exception{ContentValues value=new ContentValues();value.put("key","assistant_history_authority");value.put("value",new JSONObject().put("generation",next).put("legacySourceSha256",sourceSha).put("importedMessages",messages).put("importedSources",sources).put("legacyLossNotRecovered",!sourceSha.isEmpty()).put("legacyCleanupPending",!sourceSha.isEmpty()).toString());db.insertWithOnConflict("meta",null,value,SQLiteDatabase.CONFLICT_REPLACE);ContentValues typed=new ContentValues();typed.put("key","assistant_history_generation");typed.put("value",next);db.insertWithOnConflict("meta",null,typed,SQLiteDatabase.CONFLICT_REPLACE);}
+    private static String historyScopeKey(String generation,String conversation){return "assistant.history_read_scope."+generation+":"+conversation;}
+    private final class NativeHistoryReadScope implements ConversationHistory.ReadScope {
+        final ConversationRepository issuer=ConversationRepository.this;final String generation,conversation;final ConversationHistory.ScopeMode mode;final long revision;
+        NativeHistoryReadScope(String gen,String cid,ConversationHistory.ScopeMode mode,long revision){generation=gen;conversation=cid;this.mode=mode;this.revision=revision;}
+        public String conversationId(){return conversation;}public ConversationHistory.ScopeMode mode(){return mode;}public long revision(){return revision;}
+        public void checkCurrent()throws Exception{
+            if(!healthy||!generation.equals(activeGeneration()))throw new SecurityException("原历史读取权威已变化");
+            NativeHistoryReadScope current=historyReadScope(conversation);
+            if(current.revision!=revision||current.mode!=mode||!current.generation.equals(generation))throw new SecurityException("主人已修改或关闭本轮跨会话读取范围");
+        }
+    }
+    /** Metadata SQL only. A missing setting means CURRENT revision zero, never owner-wide consent. */
+    private NativeHistoryReadScope historyReadScope(String conversation)throws Exception{
+        if(conversation==null||!dev.pocketengine.features.memory.TaskStoreMemoryQuery.validTaskId(conversation))throw new SecurityException("历史范围缺当前原会话");
+        String gen=activeGeneration();JSONObject stored=null;
+        try(Cursor row=db.rawQuery("SELECT m.value FROM assistant_conversations c LEFT JOIN meta m ON m.key=? WHERE c.generation=? AND c.conversation_id=? AND c.deleted=0 LIMIT 1",new String[]{historyScopeKey(gen,conversation),gen,conversation})){
+            if(!row.moveToFirst())throw new SecurityException("原会话已不存在");if(!row.isNull(0)){String raw=row.getString(0);if(raw.length()>1024)throw new SecurityException("原历史范围配置不可读");stored=new JSONObject(raw);}
+        }
+        if(stored==null)return new NativeHistoryReadScope(gen,conversation,ConversationHistory.ScopeMode.CURRENT,0);
+        if(stored.length()!=5||!"owner".equals(stored.optString("ownerId"))||!"private".equals(stored.optString("spaceId"))||!conversation.equals(stored.optString("conversationId")))throw new SecurityException("原历史范围主体不符");
+        long revision=integer(stored,"revision",1);ConversationHistory.ScopeMode mode;
+        try{mode=ConversationHistory.ScopeMode.valueOf(stored.getString("mode"));}catch(Exception unknown){throw new SecurityException("原历史范围模式未知");}
+        return new NativeHistoryReadScope(gen,conversation,mode,revision);
+    }
+    public ConversationHistory.ReadScope captureHistoryReadScope(String conversation)throws Exception{return historyReadScope(conversation);}
+    public JSONObject historyReadScopeSnapshot(String conversation)throws Exception{
+        NativeHistoryReadScope value=historyReadScope(conversation);return new JSONObject().put("conversationId",conversation).put("ownerId","owner").put("spaceId","private")
+                .put("mode",value.mode.name()).put("revision",value.revision).put("canEnableOwnerPrivate",true).put("bodyIncluded",false).put("executionAuthorized",false);
+    }
+    public JSONObject setHistoryReadScope(String conversation,long expected,ConversationHistory.ScopeMode mode)throws Exception{
+        if(mode==null||expected<0)throw new SecurityException("历史范围配置参数无效");
+        return transaction(()->{NativeHistoryReadScope old=historyReadScope(conversation);if(old.revision!=expected)throw new SecurityException("历史范围已变化，请刷新后确认");long revision=Math.addExact(old.revision,1);
+            JSONObject value=new JSONObject().put("conversationId",conversation).put("ownerId","owner").put("spaceId","private").put("mode",mode.name()).put("revision",revision);
+            ContentValues row=new ContentValues();row.put("key",historyScopeKey(old.generation,conversation));row.put("value",value.toString());db.insertWithOnConflict("meta",null,row,SQLiteDatabase.CONFLICT_REPLACE);
+            return historyReadScopeSnapshot(conversation);
+        });
+    }
+    public JSONObject queryHistoryConversations(ConversationHistory.ReadScope supplied,JSONObject options,RunControl control)throws Exception{
+        if(!(supplied instanceof ConversationRepository.NativeHistoryReadScope))throw new SecurityException("不是原主人历史范围");NativeHistoryReadScope scope=(NativeHistoryReadScope)supplied;
+        if(scope.issuer!=this)throw new SecurityException("历史范围来自其他原文权威");scope.checkCurrent();control.check();
+        int limit=options.getInt("limit");if(limit<1||limit>20||!options.optString("query").isEmpty())throw new IllegalArgumentException("会话目录只接受有界分页，不把标题或正文作为目录");
+        String cursor=options.optString("cursor");if(cursor.length()>4000)throw new IllegalArgumentException("原会话目录游标过大");JSONObject at=decode(cursor);
+        String signature=TaskMemoryTrace.rawFingerprint(new JSONObject().put("callerConversationId",scope.conversation).put("scopeRevision",scope.revision).put("mode",scope.mode.name()).put("generation",scope.generation));
+        if(!cursor.isEmpty()&&!signature.equals(at.optString("signature")))throw new SecurityException("原会话目录游标范围已变化");
+        String where="generation=? AND deleted=0";List<String> args=new ArrayList<>();args.add(scope.generation);
+        if(scope.mode==ConversationHistory.ScopeMode.CURRENT){where+=" AND conversation_id=?";args.add(scope.conversation);}
+        if(at.has("at")){where+=" AND (updated_at<? OR (updated_at=? AND conversation_id<?))";args.add(at.get("at").toString());args.add(at.get("at").toString());args.add(at.getString("id"));}
+        JSONArray entries=new JSONArray();String last="";long lastAt=0;boolean more=false;
+        try(Cursor rows=db.rawQuery("SELECT conversation_id,updated_at FROM assistant_conversations WHERE "+where+" ORDER BY updated_at DESC,conversation_id DESC LIMIT ?",append(args,Integer.toString(limit+1)))){
+            while(rows.moveToNext()){control.check();if(entries.length()>=limit){more=true;break;}String id=rows.getString(0);long time=rows.getLong(1);if(!dev.pocketengine.features.memory.TaskStoreMemoryQuery.validTaskId(id)||time<0)throw new SecurityException("原会话目录身份不可读");
+                entries.put(new JSONObject().put("sourceKind","assistant_conversation").put("sourceConversationId",id).put("updatedAt",time).put("metadataOnly",true).put("originalBodyIncluded",false));last=id;lastAt=time;}
+        }
+        scope.checkCurrent();control.check();String next=more?encode(new JSONObject().put("signature",signature).put("at",lastAt).put("id",last)):"";
+        return ConversationHistory.proof(new JSONObject().put("status","current").put("entries",entries).put("gaps",new JSONArray()).put("hasMore",more).put("nextCursor",next)
+                .put("bodyIncluded",false).put("historyScopeMode",scope.mode.name()).put("historyScopeRevision",scope.revision).put("scopeFilteredBeforeLimit",true));
+    }
     public JSONObject authority()throws Exception{synchronized(monitor){try(Cursor row=db.rawQuery("SELECT value FROM meta WHERE key='assistant_history_authority' LIMIT 1",null)){return row.moveToFirst()?new JSONObject(row.getString(0)):new JSONObject().put("status","legacy_pending_explicit_migration");}}}
     /** Typed per-ID native metadata; no source_json or message body is loaded. */
     public JSONObject metadata(String id)throws Exception{

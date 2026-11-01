@@ -38,6 +38,11 @@ public final class TaskMemoryNativeHost {
             case "deleteOriginalConversation":allowed=Set.of("conversationId","confirmDelete");break;
             case "deleteOriginalMessage":allowed=Set.of("conversationId","messageId","revision","confirmDelete");break;
             case "deleteOriginalImportedRecord":allowed=Set.of("conversationId","recordId","recordVersion","confirmDelete");break;
+            case "readLearnedMethodApplications":allowed=Set.of("recordId","revision","cursor","limit");break;
+            case "listSavedMemorySources":allowed=Set.of("taskId","beforeEventOrder","limit");break;
+            case "selectSavedMemorySource":allowed=Set.of("taskId","runId","eventSeq","offset","chars");break;
+            case "getConversationHistoryReadScope":allowed=Set.of("conversationId");break;
+            case "setConversationHistoryReadScope":allowed=Set.of("conversationId","revision","mode","ownerConfirmed");break;
             case "searchTaskMemoryTasks":allowed.addAll(Set.of("query","cursor","limit"));break;
             case "readTaskMemoryTrace":allowed=Set.of("taskId","runId","section","query","sourceId","cursor","limit","maxChars","expectedSnapshot");break;
             case "readTaskMemoryTraceOperation":allowed=Set.of("taskId","runId","sourceId","revision","offset","maxChars");break;
@@ -74,7 +79,12 @@ public final class TaskMemoryNativeHost {
             return assistant().deleteOriginalImportedRecord(payload.getString("conversationId"),payload.getString("recordId"),SourceRef.integer(payload,"recordVersion",1));
         }
         JSONObject authenticated=scope();
-        if("readConversationHistoryCitation".equals(command))return readHistoryCitation(payload);
+        if("readConversationHistoryCitation".equals(command))return readHistoryCitation(payload,ownerReadControl);
+        if("getConversationHistoryReadScope".equals(command)){if(ownerReadControl!=null)ownerReadControl.check();return assistant().historyReadScopeSnapshot(payload.getString("conversationId"));}
+        if("setConversationHistoryReadScope".equals(command)){if(ownerReadControl!=null)ownerReadControl.check();return assistant().setHistoryReadScope(payload.getString("conversationId"),SourceRef.integer(payload,"revision",0),payload.getString("mode"),Boolean.TRUE.equals(payload.opt("ownerConfirmed")));}
+        if("readLearnedMethodApplications".equals(command)){if(ownerReadControl!=null)ownerReadControl.check();return tasks.learnedMethodApplications(payload.getString("recordId"),SourceRef.integer(payload,"revision",1),payload.optString("cursor"),Math.toIntExact(SourceRef.integer(payload,"limit",1)));}
+        if("listSavedMemorySources".equals(command)){if(ownerReadControl!=null)ownerReadControl.check();return tasks.savedMemorySources(payload.getString("taskId"),payload.has("beforeEventOrder")?SourceRef.integer(payload,"beforeEventOrder",0):0,Math.toIntExact(SourceRef.integer(payload,"limit",1)));}
+        if("selectSavedMemorySource".equals(command)){if(ownerReadControl!=null)ownerReadControl.check();var selected=tasks.selectSavedMemorySource(payload.getString("taskId"),payload.getString("runId"),SourceRef.integer(payload,"eventSeq",1),Math.toIntExact(SourceRef.integer(payload,"offset",0)),Math.toIntExact(SourceRef.integer(payload,"chars",1)));return new JSONObject().put("sourceRef",selected.toJson()).put("modelCalled",false).put("executionAuthorized",false);}
         if("searchTaskMemoryTasks".equals(command))return reader.searchTasks(authenticated,payload.getString("query"),payload.optString("cursor"),Math.toIntExact(SourceRef.integer(payload,"limit",1)));
         if("readTaskMemoryTrace".equals(command)){
             JSONObject options=new JSONObject(payload.toString());options.remove("taskId");options.remove("runId");
@@ -113,15 +123,16 @@ public final class TaskMemoryNativeHost {
     }
     /** A native owner read, admitted twice against the original retained tool receipt. This never
      * lends the active caller's control to a historical task or enters Assistant's admission lock. */
-    private JSONObject readHistoryCitation(JSONObject payload)throws Exception{
+    private JSONObject readHistoryCitation(JSONObject payload,dev.pocketengine.core.RunControl ownerReadControl)throws Exception{
         JSONObject citation=tasks.conversationHistoryCitation(payload),jump=citation.getJSONObject("sourceJump"),result;
         dev.pocketengine.features.memory.ConversationHistory.Gate gate=null;
         if("task_raw_source".equals(jump.getString("kind"))){
             JSONObject input=new JSONObject().put("taskId",jump.getString("taskId")).put("runId",jump.getString("runId")).put("sourceId",jump.getString("sourceId")).put("revision",jump.getString("revision")).put("offset",jump.getInt("offset")).put("maxChars",Math.max(64,jump.getInt("chars")));
-            result=reader.readTraceOperation(scope(),input);
+            var selected=ConversationHistory.SourceLocator.from(citation.getJSONObject("taskSource"));
+            result=selected.kind==ConversationHistory.Kind.OUTPUT?tasks.readNativeOutputAudit(MemoryBook.Scope.from(scope()),input,ownerReadControl):reader.readTraceOperation(scope(),input);
         }else{
             EngineModule selected=host.module("assistant");if(!(selected instanceof dev.pocketengine.features.assistant.AssistantModule))throw new IllegalStateException("原私人对话来源暂不可用");
-            var assistant=(dev.pocketengine.features.assistant.AssistantModule)selected;gate=assistant.openHistoryConversation(citation.getString("conversationId"));
+            var assistant=(dev.pocketengine.features.assistant.AssistantModule)selected;gate=assistant.openHistoryConversation(jump.getString("conversationId"));
             result=assistant.readHistoryMessage(gate,SourceRef.fromJson(jump.getJSONObject("sourceRef")),jump.getInt("offset"),Math.max(64,jump.getInt("chars")),null);
             if("current".equals(result.optString("status"))&&!jump.getString("bodyFingerprint").equals(result.optString("bodyFingerprint")))result=ConversationHistory.proof(new JSONObject().put("status","source_changed").put("reason","cited_message_body_changed").put("sourceRef",jump.getJSONObject("sourceRef")));
         }

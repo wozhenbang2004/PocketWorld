@@ -40,7 +40,7 @@ public final class TeamInferenceJournalTest {
         final java.util.List<String> wireModels=new java.util.concurrent.CopyOnWriteArrayList<>();
         final java.util.concurrent.ExecutorService httpWorkers;
         final String operation=UUID.randomUUID().toString(),definition;
-        volatile CountDownLatch arrived,release;
+        volatile CountDownLatch arrived,release;volatile boolean invalidPeerCall;
         Rig(boolean bind)throws Exception{
             http=HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
             httpWorkers=java.util.concurrent.Executors.newCachedThreadPool(r->{Thread t=new Thread(r,"team-usage-http");t.setDaemon(true);return t;});http.setExecutor(httpWorkers);
@@ -48,8 +48,10 @@ public final class TeamInferenceJournalTest {
                 JSONObject input=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));
                 wireModels.add(input.getString("model"));
                 CountDownLatch wait=release;if(arrived!=null)arrived.countDown();if(wait!=null)wait.await(2,TimeUnit.SECONDS);
+                JSONObject answer=new JSONObject().put("role","assistant").put("content","actual member output");
+                if(invalidPeerCall)answer.put("tool_calls",new JSONArray().put(new JSONObject().put("id","filtered-peer").put("type","function").put("function",new JSONObject().put("name","team_send_message").put("arguments",new JSONObject().put("targetMemberId",input.getString("model").equals("member-model-a")?"member-b":"member-a").put("text","must never be delivered").toString()))));
                 byte[] body=new JSONObject().put("model",input.getString("model")).put("choices",new JSONArray().put(new JSONObject()
-                        .put("finish_reason","stop").put("message",new JSONObject().put("role","assistant").put("content","actual member output"))))
+                        .put("finish_reason",invalidPeerCall?"content_filter":"stop").put("message",answer)))
                         .put("usage",new JSONObject().put("prompt_tokens",11).put("completion_tokens",3).put("total_tokens",14)).toString().getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);
             }catch(Exception ignored){}finally{exchange.close();}});http.start();
@@ -59,7 +61,7 @@ public final class TeamInferenceJournalTest {
             }));
             JSONArray members=new JSONArray().put(new JSONObject().put("id","member-a").put("name","A").put("role","first role").put("model","member-model-a"))
                     .put(new JSONObject().put("id","member-b").put("name","B").put("role","second role").put("model","member-model-b"));
-            definition=module.handle("save",new JSONObject().put("name","native team").put("members",members)).getString("id");
+            definition=module.handle("save",new JSONObject().put("name","native team").put("members",members).put("discussionFormat","classic")).getString("id");
             tasks.beginExternal("teams","start",operation,new JSONObject().put("goal","original team goal").put("teamId",definition));
             if(bind)module.setInferenceFactory((call,control)->tasks.teamInferenceTarget(call.nativeRunId,call.purpose,call.memberId,call.site,control,call::checkCurrent));
         }
@@ -96,6 +98,17 @@ public final class TeamInferenceJournalTest {
             assertEquals(Set.of("member-a","member-b"),memberIds);assertEquals(1,summaries);assertEquals(Set.of("member-model-a","member-model-b"),models);
             assertEquals(new HashSet<>(rig.wireModels),models);
             assertFalse(rig.run().getJSONArray("transcript").toString().contains("inference_receipt"));
+        }
+    }
+    @Test public void filteredBufferedMemberToolsNeverReachPeersOrSynthesis()throws Exception{
+        try(Rig rig=new Rig(true)){
+            rig.invalidPeerCall=true;rig.start();JSONObject run=rig.done();assertEquals("failed",run.getString("status"));
+            assertEquals(2,rig.requests.get());assertEquals(0,run.getJSONArray("mailbox").length());assertFalse(run.getJSONArray("transcript").toString().contains("must never be delivered"));
+            JSONObject usage=rig.tasks.inferenceUsage(rig.operation);assertEquals(2,usage.getInt("attempts"));assertEquals(2,usage.getInt("failed"));assertEquals(0,usage.getInt("completed"));
+            for(int i=0;i<usage.getJSONArray("receipts").length();i++){
+                JSONObject receipt=usage.getJSONArray("receipts").getJSONObject(i);assertEquals("MEMBER",receipt.getJSONObject("context").getString("purpose"));assertEquals("content_filter",receipt.getJSONObject("usage").getString("finishReason"));
+                assertEquals(11,receipt.getJSONObject("usage").getJSONObject("counters").getJSONObject("INPUT").getLong("value"));assertEquals("FAILED",receipt.getString("outcome"));
+            }
         }
     }
     @Test public void noFactoryIsExplicitlyUnknownAndCannotFabricateTaskUsage()throws Exception{

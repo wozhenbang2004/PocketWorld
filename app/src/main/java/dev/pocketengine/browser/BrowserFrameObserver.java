@@ -115,29 +115,51 @@ public final class BrowserFrameObserver implements AutoCloseable {
             @Override public void onError(JavaScriptExecutionException failure){if(result.isDone())return;try{done.onReceiveValue(JSONObject.quote(new JSONObject().put("semanticRead",true).put("status","unavailable").put("code","isolated_frame_read_failed").put("url",url).put("title",view.getTitle()==null?"":view.getTitle()).put("readOnlyEvidence",true).put("automaticReplayAllowed",false).toString()));}catch(Exception invalid){result.completeExceptionally(invalid);}}
         });
     }
+    /** Actual live DOM evaluation in the original registered isolated frame. No page-world fallback. */
+    public void evaluateLive(JSONObject request,boolean inspect,Check current,CompletableFuture<JSONObject> result)throws Exception {
+        current.check();if(closed)throw new BrowserTaskSpace.StalePage("原读取通道已关闭");
+        final Frame<JavaScriptReplyProxy> selected=request.has("frameRef")?frames.requirePresentedChild(request.getString("frameRef"),android.os.SystemClock.elapsedRealtime()):frames.main();
+        if(selected==null){result.complete(new JSONObject().put("status","unavailable").put("accepted",false).put("code","isolated_world_not_registered").put("automaticReload",false));return;}
+        final long expected=revision;String code=inspect?BrowserPagePrograms.inspect():BrowserPagePrograms.expression(request.getString("expression"));
+        selected.proxy.executeJavaScript(guarded(code,selected,"liveEvaluation"),new WebViewOutcomeReceiver<String,JavaScriptExecutionException>(){
+            public void onResult(String value){if(result.isDone())return;try{current.check();if(closed||revision!=expected||!frames.current(selected))throw new BrowserTaskSpace.StalePage("原live读取文档已变化");if(value==null||value.length()>65536)throw new IllegalStateException("live读取结果超限");Object decoded=new org.json.JSONTokener(value).nextValue();JSONObject out=decoded instanceof String?new JSONObject((String)decoded):decoded instanceof JSONObject?(JSONObject)decoded:null;if(out==null)throw new IllegalStateException("live读取不是JSON");String returnedUrl=out.optString("url");String kind=returnedUrl.startsWith("about:")?"inline_document_host_page":"selected_document_url";if(kind.equals("inline_document_host_page"))out.put("url",view.getUrl());else if(out.optString("status").equals("observed")&&!urlOrigin(returnedUrl).equals(selected.origin))throw new BrowserTaskSpace.StalePage("live读取来源已变化");out.put("frameCoverage",coverage(selected,selected.document,view.getUrl(),out.optString("status").equals("observed"),kind.equals("inline_document_host_page")?(returnedUrl.equals("about:srcdoc")?"inline_srcdoc":"inline_about_blank"):"http_document"));out.put("frameId",selected.id).put("documentId",selected.document).put("sourceOrigin",selected.origin).put("executionWorld","isolated_world").put("readOnlyEvidence",true).put("untrustedPageContent",true).put("observedAt",System.currentTimeMillis()).put("automaticReplayAllowed",false);result.complete(out);}catch(Exception stale){result.completeExceptionally(stale);}}
+            public void onError(JavaScriptExecutionException error){result.completeExceptionally(error);}
+        });
+    }
     /** Read-only condition probe in one already presented region; it never registers/presents new refs. */
     public void condition(JSONObject target,String nativeEpoch,Check current,CompletableFuture<JSONObject> result)throws Exception {
         if(closed)throw new IllegalStateException("网页读取通道已关闭");BrowserTargetCondition.validate(target);current.check();
         final long expected=revision,now=android.os.SystemClock.elapsedRealtime();final String url=view.getUrl()==null?"":view.getUrl();
-        final Frame<JavaScriptReplyProxy> selected=frames.main();final String doc=selected==null?document:selected.document,scope=nativeEpoch+"|"+doc;
+        final Frame<JavaScriptReplyProxy> selected=target.has("frameRef")?frames.requirePresentedChild(target.getString("frameRef"),now):frames.main();final String doc=selected==null?document:selected.document,scope=nativeEpoch+"|"+doc;
         String ref=target.getString("regionRef");IssuedRead old=issued.get(ref);
         if(old==null||!old.scope.equals(scope)||now<old.created||now-old.created>120000){
             result.complete(BrowserTargetCondition.project(new JSONObject().put("targetProbe",true).put("status","unavailable").put("code","read_reference_not_current").put("matched",JSONObject.NULL).put("actual",new JSONObject())
                     .put("coverage",new JSONObject().put("nodesVisited",0).put("textCharsVisited",0).put("queuedPeak",0).put("layoutChecks",0).put("partial",true).put("reasons",new JSONArray().put("read_reference_not_current"))),target,doc).put("nativeProbeStarted",false));return;
         }
-        String code=BrowserTargetCondition.script(target,key,scope,doc);
+        String code=BrowserTargetCondition.script(target,key,scope,doc);if(selected!=null)code=guarded(code,selected,"targetProbe");
         android.webkit.ValueCallback<String> done=value->{if(result.isDone())return;try{
             current.check();if(closed||revision!=expected||!url.equals(view.getUrl()==null?"":view.getUrl())||selected!=null&&!frames.current(selected))throw new BrowserTaskSpace.StalePage("目标条件回调的原文档已变化");
             Object decoded=new org.json.JSONTokener(value==null?"null":value).nextValue();JSONObject raw=decoded instanceof String?new JSONObject((String)decoded):decoded instanceof JSONObject?(JSONObject)decoded:null;
             if(raw==null)throw new IllegalStateException("网页目标条件返回无效JSON");
-            JSONObject projected=BrowserTargetCondition.project(raw,target,doc).put("observedAt",System.currentTimeMillis()).put("nativeProbeStarted",true).put("frameId","main")
-                    .put("frameCoverage",new JSONObject().put("featureSupported",supported).put("execution",selected==null?"page_world_fallback":"isolated_world").put("fallbackReason",selected==null?(supported?"no_current_document_start_handshake":"provider_feature_unsupported"):JSONObject.NULL).put("childFrameContentsRead",false).put("frameTreeComplete",false));
+            JSONObject projected=BrowserTargetCondition.project(raw,target,doc).put("observedAt",System.currentTimeMillis()).put("nativeProbeStarted",true).put("frameId",selected==null?"main":selected.id)
+                    .put("frameCoverage",new JSONObject().put("featureSupported",supported).put("execution",selected==null?"page_world_fallback":"isolated_world").put("fallbackReason",selected==null?(supported?"no_current_document_start_handshake":"provider_feature_unsupported"):JSONObject.NULL).put("childFrameContentsRead",selected!=null&&!selected.main).put("nestedFrameContentsRead",false).put("frameTreeComplete",false));
             result.complete(projected);
         }catch(Exception stale){result.completeExceptionally(stale);}};
         if(selected==null)view.evaluateJavascript(code,done);
         else selected.proxy.executeJavaScript(code,new WebViewOutcomeReceiver<String,JavaScriptExecutionException>(){
             @Override public void onResult(String value){done.onReceiveValue(value);}
             @Override public void onError(JavaScriptExecutionException failure){if(!result.isDone())result.completeExceptionally(failure);}
+        });
+    }
+    /** Explicit ordinary action observation/dispatch on the original registered frame. Read refs themselves grant no action. */
+    public void evaluateAction(JSONObject pin,String code,Check current,android.webkit.ValueCallback<String> done,java.util.function.Consumer<Exception> failed)throws Exception {
+        current.check();if(closed)throw new BrowserTaskSpace.StalePage("frame宿主已关闭");
+        final Frame<JavaScriptReplyProxy> selected=frames.requirePresentedChild(pin.getString("frameId"),android.os.SystemClock.elapsedRealtime());
+        JSONObject actual=framePinForNative(selected.id);for(String key:new String[]{"frameId","documentId","sourceOrigin","topDocumentId"})if(!String.valueOf(pin.get(key)).equals(String.valueOf(actual.get(key))))throw new BrowserTaskSpace.StalePage("原动作frame/document已更换");
+        final long expected=revision;String guarded=guarded(code,selected,"frameAction");
+        selected.proxy.executeJavaScript(guarded,new WebViewOutcomeReceiver<String,JavaScriptExecutionException>(){
+            @Override public void onResult(String value){try{current.check();if(closed||revision!=expected||!frames.current(selected))throw new BrowserTaskSpace.StalePage("原动作frame回调已失效");done.onReceiveValue(value);}catch(Exception failure){failed.accept(failure);}}
+            @Override public void onError(JavaScriptExecutionException failure){failed.accept(failure);}
         });
     }
     /** Bounded privacy/mutation metadata only. It is not an image, input value read, or permission source. */
@@ -179,8 +201,8 @@ public final class BrowserFrameObserver implements AutoCloseable {
     private static JSONObject unavailableFrame(String topUrl,String code)throws Exception {return new JSONObject().put("semanticRead",true).put("status","unavailable").put("code",code).put("url",topUrl).put("title","").put("readOnlyEvidence",true).put("accepted",true).put("verified",false).put("automaticReplayAllowed",false).put("message","嵌入网页已变化或引用未展示，请重新读取frame目录；没有把它改指向新文档。");}
     private String guarded(String code,Frame<JavaScriptReplyProxy> selected,String type)throws Exception {return guardScript(code,documentKey,selected.documentToken,type);}
     static String guardScript(String code,String nativeDocumentKey,String nativeDocumentToken,String type)throws Exception {
-        if(!Set.of("semanticRead","targetProbe","visualProbe").contains(type)||!nativeDocumentToken.matches("[a-f0-9]{32}"))throw new IllegalArgumentException("原frame探针类型或文档标记无效");
-        String refusal="JSON.stringify({"+type+":true,status:'unavailable',code:'frame_document_changed',url:location.href,title:document.title||'',readOnlyEvidence:true,automaticReplayAllowed:false})";
+        if(!Set.of("semanticRead","targetProbe","visualProbe","frameAction","liveEvaluation").contains(type)||!nativeDocumentToken.matches("[a-f0-9]{32}"))throw new IllegalArgumentException("原frame探针类型或文档标记无效");
+        String refusal="JSON.stringify({"+type+":true,status:'unavailable',accepted:false,code:'frame_document_changed',url:location.href,title:document.title||'',readOnlyEvidence:true,automaticReplayAllowed:false})";
         return "(()=>{if(globalThis["+JSONObject.quote(nativeDocumentKey)+"]!=="+JSONObject.quote(nativeDocumentToken)+"||globalThis.closed||!document.documentElement||!document.documentElement.isConnected)return "+refusal+";return "+code+";})()";
     }
     private JSONObject coverage(Frame<JavaScriptReplyProxy> selected,String doc,String topUrl,boolean read,String documentKind)throws Exception {

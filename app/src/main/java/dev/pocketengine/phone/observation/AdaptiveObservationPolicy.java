@@ -62,6 +62,11 @@ public final class AdaptiveObservationPolicy {
     public Decision decide(Binding expected, Evidence observed, Need need, Health health,
                            boolean sendScreenshots, boolean visionAvailable, boolean ocrAvailable,
                            boolean paused, boolean cancelled, long nowUptimeMs, long maxAgeMs) {
+        return decide(expected,observed,need,health,sendScreenshots,true,sendScreenshots,visionAvailable,ocrAvailable,paused,cancelled,nowUptimeMs,maxAgeMs);
+    }
+    public Decision decide(Binding expected,Evidence observed,Need need,Health health,
+                           boolean localCaptureAllowed,boolean localOcrAllowed,boolean uploadImageAllowed,boolean visionAvailable,boolean ocrAvailable,
+                           boolean paused,boolean cancelled,long nowUptimeMs,long maxAgeMs) {
         Objects.requireNonNull(expected); Objects.requireNonNull(observed);
         Objects.requireNonNull(need); Objects.requireNonNull(health);
         if (maxAgeMs <= 0 || nowUptimeMs < 0) throw new IllegalArgumentException("Invalid observation clock");
@@ -80,11 +85,12 @@ public final class AdaptiveObservationPolicy {
         String cause = need != Need.AUTOMATIC ? need.name().toLowerCase(java.util.Locale.ROOT)
                 : !observed.treeAvailable ? "tree_unavailable" : observed.treeTruncated ? "tree_truncated" : observed.usefulNodes==0?"no_useful_nodes":"tree_partial";
         // Even a retained image cannot override the owner's disabled screenshots setting.
-        if (!sendScreenshots) return decision(Request.PAUSE, "screenshots_disabled:" + cause, expected);
+        if (!localCaptureAllowed) return decision(Request.PAUSE, "local_capture_disabled:" + cause, expected);
+        ocrAvailable=localOcrAllowed&&ocrAvailable;visionAvailable=uploadImageAllowed&&visionAvailable;
         if (!visionAvailable && !ocrAvailable) return decision(Request.PAUSE, "visual_engines_unavailable:" + cause, expected);
         if (!observed.actualImage) return decision(Request.CAPTURE_IMAGE, cause, expected);
         // OCR is an explicit, actually-ready capability supplied by the native host. No engine is bundled here.
-        return decision(visionAvailable ? Request.VISION : Request.OCR, cause, expected);
+        return decision(ocrAvailable ? Request.OCR : Request.VISION, cause, expected);
     }
 
     private static Decision decision(Request request, String reason, Binding binding) { return new Decision(request, reason, binding); }

@@ -45,6 +45,9 @@ public final class MemoryBook {
     private final Map<String,JSONObject> candidateHistory=new LinkedHashMap<>();
     // Local-memory evidence fences share the same atomic book. No text, separate database or timer.
     private final Map<String,JSONObject> recordForgetBarriers=new LinkedHashMap<>();
+    // Same atomic Book, body-free import ACKs/old negative evidence. Never iterated by recall.
+    private final Map<String,JSONObject> archiveImports=new LinkedHashMap<>();
+    private boolean archiveFormat;
     private final SourceRef.Resolver sourceResolver;
     private boolean learningFormat;
     private boolean retentionFormat;
@@ -61,7 +64,8 @@ public final class MemoryBook {
             if(file.length()>8_000_000)throw new IllegalStateException("记忆文件过大，请先导出检查");
             JSONObject stored=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8));
             long version=stored.has("version")?SourceRef.integer(stored,"version",1):1;
-            if(version<1||version>6)throw new IllegalStateException("不支持的记忆版本，未覆盖原文件");
+            if(version<1||version>7)throw new IllegalStateException("不支持的记忆版本，未覆盖原文件");
+            archiveFormat=version>=7;
             learningFormat=version>=3;hierarchicalFormat=version>=4;recordBarrierFormat=version>=5;supersessionFormat=version>=6;
             JSONArray savedSources=stored.optJSONArray("sources");
             if(version>=2&&savedSources==null)throw new IllegalStateException("来源屏障缺失，未覆盖原文件");
@@ -88,12 +92,78 @@ public final class MemoryBook {
                     for(int j=0;j<refs.length();j++)if(!sources.containsKey(SourceRef.fromJson(refs.getJSONObject(j)).key()))
                         throw new IllegalStateException("记忆来源状态缺失，未覆盖原文件");
                     restored.put("sourceRefs",refs);
+                    if(restored.has("archiveOnly")||restored.has("importedFrom"))MemoryArchive.checkRestoredRecord(restored);
                     checkSupersessionMetadata(restored,version);
                     records.put(restored.getString("id"),restored);
                 }
             }
             restoreRecordForgetBarriers(stored,version);restoreLearningCandidates(stored,version);
+            restoreArchiveImports(stored,version);
         }
+    }
+
+    /** Native owner-only data export. No resolver, source read, task, token, schedule or grant is
+     * exported. Old source/barrier objects are historical evidence, never restored authorities. */
+    public synchronized JSONObject ownerArchive(JSONObject authenticatedScope)throws Exception{
+        Scope scope=MemoryArchive.ownerScope(authenticatedScope);
+        JSONObject data=new JSONObject().put("format",MemoryArchive.FORMAT).put("version",1).put("ownerId",scope.ownerId).put("spaceId",scope.spaceId)
+                .put("records",archiveRows(records,scope)).put("sources",archiveRows(sources,scope)).put("recordForgetBarriers",archiveRows(recordForgetBarriers,scope))
+                .put("learningCandidates",archiveRows(learningCandidates,scope)).put("candidateHistory",archiveRows(candidateHistory,scope)).put("priorImports",archiveRows(archiveImports,scope))
+                .put("executionAuthorized",false).put("activeAuthorityIncluded",false);
+        data.put("counts",MemoryArchive.counts(data));data.put("sectionDigest",MemoryArchive.sectionDigest(data));return MemoryArchive.checked(data,authenticatedScope);
+    }
+    private static JSONArray archiveRows(Map<String,JSONObject> source,Scope scope)throws Exception{JSONArray out=new JSONArray();for(JSONObject row:source.values())if(scope.matches(row))out.put(copy(row));return out;}
+    /** The caller is the native owner archive review, not EngineModule/model JSON. Import IDs are
+     * stable per reviewed archive/section. Allocation and ACK share the original atomic write. */
+    public synchronized JSONObject restoreOwnerArchive(JSONObject authenticatedScope,JSONObject input,String nativeImportId)throws Exception{
+        Scope scope=MemoryArchive.ownerScope(authenticatedScope);if(nativeImportId==null||!nativeImportId.matches("[A-Za-z0-9:_-]{1,160}"))throw new IllegalArgumentException("缺少原生档案导入身份");
+        JSONObject archive=MemoryArchive.checked(input,authenticatedScope);String digest=archive.getString("sectionDigest");JSONObject prior=archiveImports.get(nativeImportId);
+        if(prior!=null){if(!scope.matches(prior)||!digest.equals(prior.getString("sectionDigest")))throw new SecurityException("同一原生导入身份不能更换档案内容或范围");return archiveResult(prior,true);}
+        int needed=archive.getJSONObject("counts").getInt("restoreRecordSlots");if(needed>MAX_RECORDS-records.size())throw new IllegalStateException("档案需要 "+needed+" 个可读记录位置，本机仅余 "+(MAX_RECORDS-records.size())+"；未部分覆盖或自动驱逐");
+        if(archiveImports.size()>=MemoryArchive.MAX_IMPORTS)throw new IllegalStateException("已达32次原生档案恢复记录上限，未丢弃旧幂等回执");
+        Map<String,JSONObject> before=new LinkedHashMap<>(records);boolean oldFormat=archiveFormat;JSONArray mappings=new JSONArray(),metadataOnly=new JSONArray();long now=System.currentTimeMillis();
+        JSONObject receipt=new JSONObject().put("format",MemoryArchive.IMPORT_FORMAT).put("archiveImportId",nativeImportId).put("sectionDigest",digest).put("ownerId",scope.ownerId).put("spaceId",scope.spaceId).put("importedAt",now)
+                .put("mappings",mappings).put("sourceEvidence",archive.getJSONArray("sources")).put("recordForgetEvidence",archive.getJSONArray("recordForgetBarriers"))
+                .put("candidateMetadata",metadataOnly).put("candidateHistoryEvidence",archive.getJSONArray("candidateHistory")).put("priorImports",archive.getJSONArray("priorImports")).put("counts",archive.getJSONObject("counts"));
+        try{
+            for(String type:java.util.List.of("record","candidate")){JSONArray rows=archive.getJSONArray(type.equals("record")?"records":"learningCandidates");for(int i=0;i<rows.length();i++){
+                JSONObject original=rows.getJSONObject(i);if(!original.has("text")){metadataOnly.put(copy(original));continue;}
+                String id=UUID.randomUUID().toString();JSONObject evidence=copy(original);evidence.remove("text");
+                JSONObject restored=new JSONObject().put("id",id).put("ownerId",scope.ownerId).put("spaceId",scope.spaceId).put("revision",1L).put("layer",original.getString("layer")).put("text",original.getString("text"))
+                        .put("source",type.equals("record")?"主人从档案恢复的可读记录（旧来源未核对）":"主人从档案恢复的候选原文（不进入活动待审队列）").put("confidence",original.getDouble("confidence"))
+                        .put("core",false).put("sourceIds",new JSONArray()).put("sourceRefs",new JSONArray()).put("expiresAt",JSONObject.NULL).put("createdAt",now).put("updatedAt",now).put("formation","archive_restore").put("archiveOnly",true)
+                        .put("importedFrom",new JSONObject().put("archiveImportId",nativeImportId).put("originalId",original.getString("id")).put("sectionDigest",digest).put("originalType",type))
+                        .put("archiveEvidence",new JSONObject().put("originalType",type).put("original",evidence));
+                MemoryArchive.checkRestoredRecord(restored);records.put(id,restored);mappings.put(new JSONObject().put("originalId",original.getString("id")).put("originalType",type).put("newId",id));
+            }}
+            MemoryArchive.checkImportMetadata(receipt,0);archiveImports.put(nativeImportId,receipt);archiveFormat=true;persist();return archiveResult(receipt,false);
+        }catch(Exception failed){records.clear();records.putAll(before);archiveImports.remove(nativeImportId);archiveFormat=oldFormat;throw failed;}
+    }
+    /** Native recovery lookup only; a metadata view cannot reconstruct execution authority. */
+    public synchronized JSONObject ownerArchiveRestoration(JSONObject authenticatedScope,String nativeImportId)throws Exception{
+        if(nativeImportId==null||!nativeImportId.matches("[A-Za-z0-9:_-]{1,160}"))throw new IllegalArgumentException("原生档案导入身份无效");
+        Scope scope=MemoryArchive.ownerScope(authenticatedScope);JSONObject row=archiveImports.get(nativeImportId);if(row==null||!scope.matches(row))throw new IllegalArgumentException("没有此主人档案恢复回执");return archiveResult(row,true);
+    }
+    /** Cold recovery is a query, never another restore or a new native approval. Unknown is not
+     * proof of non-dispatch. Both the original reviewed section digest and import ID must match. */
+    public synchronized JSONObject queryOwnerArchiveRestore(JSONObject authenticatedScope,String exactSectionDigest,String nativeImportId)throws Exception{
+        Scope scope=MemoryArchive.ownerScope(authenticatedScope);
+        if(nativeImportId==null||!nativeImportId.matches("[A-Za-z0-9:_-]{1,160}")||exactSectionDigest==null||!exactSectionDigest.matches("[0-9a-f]{64}"))throw new IllegalArgumentException("档案恢复查询缺少原导入身份或精确分段hash");
+        JSONObject row=archiveImports.get(nativeImportId);
+        if(row==null)return new JSONObject().put("format","pocketworld.owner-memory-restore-query.v1").put("status","unknown").put("found",false).put("archiveImportId",nativeImportId).put("sectionDigest",exactSectionDigest).put("executionAuthorized",false);
+        if(!scope.matches(row)||!exactSectionDigest.equals(row.getString("sectionDigest")))throw new SecurityException("原导入身份不对应此已审范围或分段内容");
+        return archiveResult(row,true).put("status","found").put("found",true);
+    }
+    private JSONObject archiveResult(JSONObject receipt,boolean replay)throws Exception{
+        JSONArray mapping=copy(receipt).getJSONArray("mappings");int available=0;for(int i=0;i<mapping.length();i++){JSONObject row=mapping.getJSONObject(i);boolean present=records.containsKey(row.getString("newId"));row.put("state",present?"archive_only_source_unavailable":"locally_forgotten_or_removed");if(present)available++;}
+        return new JSONObject().put("format","pocketworld.owner-memory-restore.v1").put("archiveImportId",receipt.getString("archiveImportId")).put("sectionDigest",receipt.getString("sectionDigest")).put("records",mapping).put("restoredRecordCount",mapping.length()).put("currentlyReadableRecords",available)
+                .put("originalCounts",copy(receipt.getJSONObject("counts"))).put("alreadyRestored",replay).put("formalMemoryActivated",0).put("pendingCandidatesActivated",0).put("currentSourcesRestored",0).put("executionAuthorized",false).put("remainingRecordSlots",MAX_RECORDS-records.size());
+    }
+    private void restoreArchiveImports(JSONObject stored,long version)throws Exception{
+        if(version<7){if(stored.has("archiveImports"))throw new IllegalStateException("档案恢复状态缺少安全版本");return;}JSONArray saved=stored.getJSONArray("archiveImports");if(saved.length()>MemoryArchive.MAX_IMPORTS)throw new IllegalStateException("档案恢复回执过多");
+        for(int i=0;i<saved.length();i++){JSONObject row=copy(saved.getJSONObject(i));MemoryArchive.checkImportMetadata(row,0);String id=row.getString("archiveImportId");if(archiveImports.put(id,row)!=null)throw new IllegalStateException("档案恢复身份重复");}
+        for(JSONObject receipt:archiveImports.values()){JSONArray mappings=receipt.getJSONArray("mappings");for(int i=0;i<mappings.length();i++){JSONObject m=mappings.getJSONObject(i),row=records.get(m.getString("newId"));if(row==null)continue;JSONObject from=row.optJSONObject("importedFrom");if(!row.optBoolean("archiveOnly")||from==null||!receipt.getString("archiveImportId").equals(from.optString("archiveImportId"))||!receipt.getString("sectionDigest").equals(from.optString("sectionDigest"))||!m.getString("originalId").equals(from.optString("originalId"))||!m.getString("originalType").equals(from.optString("originalType")))throw new IllegalStateException("档案恢复映射仍在，不能删掉只读标记而复活旧内容");}}
+        for(JSONObject row:records.values())if(row.optBoolean("archiveOnly")){JSONObject from=row.getJSONObject("importedFrom"),receipt=archiveImports.get(from.getString("archiveImportId"));boolean matched=false;if(receipt!=null&&from.getString("sectionDigest").equals(receipt.getString("sectionDigest"))){JSONArray mappings=receipt.getJSONArray("mappings");for(int i=0;i<mappings.length();i++){JSONObject m=mappings.getJSONObject(i);if(row.getString("id").equals(m.getString("newId"))&&from.getString("originalId").equals(m.getString("originalId"))&&from.getString("originalType").equals(m.getString("originalType")))matched=true;}}if(!matched)throw new IllegalStateException("档案记录缺少同原子写入的导入映射，未提升为活动记忆");}
     }
 
     public synchronized JSONObject save(JSONObject scope,JSONObject input,long now)throws Exception {
@@ -702,6 +772,10 @@ public final class MemoryBook {
                     .put("applicability",input.has("applicability")?candidateText(input,"applicability",0,MAX_APPLICABILITY_CHARS):old.getString("applicability"));
         }
         value.put("formation",explicitResave?"explicit_resave":imported?"source_import":"explicit_save");
+        if(old!=null&&old.optBoolean("archiveOnly")){
+            if(core)throw new IllegalStateException("档案来源未核，不能通过选核心或普通编辑恢复旧活动状态");
+            value.put("archiveOnly",true).put("formation","archive_restore").put("importedFrom",copy(old.getJSONObject("importedFrom"))).put("archiveEvidence",copy(old.getJSONObject("archiveEvidence")));
+        }
         if(old!=null&&old.has("parentRevisions"))value.put("parentRevisions",old.getJSONArray("parentRevisions"));
         if(old!=null&&old.has("supersedes"))value.put("supersedes",old.getJSONArray("supersedes")).put("supersededAt",old.getLong("supersededAt"));
         Map<String,JSONObject> beforeBarriers=new LinkedHashMap<>(recordForgetBarriers);
@@ -754,6 +828,26 @@ public final class MemoryBook {
         if(origin==null||origin.current.revision!=expectedRevision||!origin.acceptedProcedure||origin.status!=ExperienceOrigin.Status.ACTIVE)
             throw new IllegalStateException("程序记忆或真实来源已变化，请刷新并重新审阅");
         return copy(record);
+    }
+    /** Native exact-record carrier for an original task's method decision audit, not an execution
+     * grant. Callers use the existing Tasks -> Book admission order; metadata cannot recreate it. */
+    public static final class ProcedureSelection {
+        private final MemoryBook issuer;private final String snapshot;
+        public final String recordId,ownerId,spaceId,recordFingerprint;public final long revision;
+        private ProcedureSelection(MemoryBook issuer,JSONObject record)throws Exception{
+            this.issuer=issuer;snapshot=record.toString();recordId=record.getString("id");revision=record.getLong("revision");
+            ownerId=record.getString("ownerId");spaceId=record.getString("spaceId");recordFingerprint=TaskMemoryUse.digest(snapshot);
+        }
+        public JSONObject metadata()throws Exception{return new JSONObject().put("recordId",recordId).put("revision",revision).put("ownerId",ownerId).put("spaceId",spaceId).put("recordFingerprint",recordFingerprint);}
+        /** Never acquire Tasks from a caller already holding Book. */
+        public void requireNoBookMonitorHeld(){if(Thread.holdsLock(issuer))throw new SecurityException("方法决定不能持Book锁反向进入Tasks");}
+        public void checkCurrent()throws Exception{
+            synchronized(issuer){JSONObject scope=new JSONObject().put("ownerId",ownerId).put("spaceId",spaceId);
+                if(!snapshot.equals(issuer.reviewedProcedure(scope,recordId,revision).toString()))throw new SecurityException("所选方法正文、版本或来源已变化");}
+        }
+    }
+    public synchronized ProcedureSelection selectProcedureForNativeTask(JSONObject authenticatedScope,String id,long revision)throws Exception{
+        return new ProcedureSelection(this,reviewedProcedure(authenticatedScope,id,revision));
     }
     /** Includes pending/rejected/accepted candidates: their sources must be synchronized too. */
     public synchronized JSONArray sourceRefsForSynchronization(JSONObject authenticatedScope)throws Exception {
@@ -838,6 +932,12 @@ public final class MemoryBook {
     public synchronized JSONArray search(JSONObject scope,String query,int limit)throws Exception {
         Scope s=Scope.from(scope);return search(s,query,limit,retrievalActiveIds(s,System.currentTimeMillis()));
     }
+    /** Native audience search never indexes or returns unselected private records, including core. */
+    public JSONArray search(JSONObject scope,String query,int limit,ReadAudience audience)throws Exception{
+        if(audience==null)return search(scope,query,limit);Scope identity=Scope.from(scope);MemoryAudienceSelection selected=MemoryAudienceSelection.capture(audience,identity);JSONArray result;
+        synchronized(this){result=search(identity,query,limit,retrievalActiveIds(identity,System.currentTimeMillis(),selected));}
+        selected.check();synchronized(this){requireAudienceSnapshotCurrent(identity,new JSONObject().put("records",result),selected);}selected.check();return new JSONArray(result.toString());
+    }
     private JSONArray search(Scope s,String query,int limit,Set<String> active)throws Exception {
         String normalized=normalize(query==null?"":query);
         if(normalized.length()>500)throw new IllegalArgumentException("检索词最多500字");
@@ -861,12 +961,31 @@ public final class MemoryBook {
         }
         return result;
     }
+    /** Native multi-query reciprocal-rank fusion. Scope/source eligibility is applied to
+     * every candidate list before top-k; an indexed body or model-supplied ID is never trusted. */
+    private JSONArray searchQueries(Scope scope,MemoryQueryPlan plan,Set<String> active)throws Exception{
+        Map<String,Double> scores=new LinkedHashMap<>();Map<String,JSONObject> candidates=new LinkedHashMap<>();
+        for(String query:plan.queries()){
+            if(query.isEmpty())continue;JSONArray matches=search(scope,query,MAX_RECORDS,active);
+            for(int rank=0;rank<matches.length();rank++){
+                JSONObject row=matches.getJSONObject(rank);String id=row.getString("id");
+                scores.merge(id,1.0/(60+rank+1),Double::sum);candidates.put(id,row);
+            }
+        }
+        List<String> ordered=new ArrayList<>(scores.keySet());ordered.sort(Comparator.<String>comparingDouble(scores::get).reversed().thenComparing(id->id));
+        JSONArray result=new JSONArray();Set<String> live=activeIds(System.currentTimeMillis());Map<SourceRef,Boolean> verified=new LinkedHashMap<>();
+        for(String id:ordered){JSONObject prior=candidates.get(id),current=records.get(id);
+            if(current!=null&&scope.matches(current)&&active.contains(id)&&live.contains(id)&&prior.getLong("revision")==current.getLong("revision")&&retrievalSourcesLive(current,verified))result.put(viewRecord(current));
+        }return result;
+    }
     private static MemoryRetrievalBackend.Document retrievalDocument(JSONObject row)throws Exception {
         return new MemoryRetrievalBackend.Document(row.getString("ownerId"),row.getString("spaceId"),row.getString("id"),row.getLong("revision"),row.getString("text"),row.getLong("updatedAt"),row.optDouble("confidence",0));
     }
-    private Set<String> retrievalActiveIds(Scope scope,long now)throws Exception {
+    private Set<String> retrievalActiveIds(Scope scope,long now)throws Exception {return retrievalActiveIds(scope,now,null);}
+    private Set<String> retrievalActiveIds(Scope scope,long now,MemoryAudienceSelection audience)throws Exception {
         Set<String> active=activeIds(now),result=new HashSet<>();Map<SourceRef,Boolean> verified=new LinkedHashMap<>();
-        for(JSONObject row:records.values())if(scope.matches(row)&&active.contains(row.getString("id"))&&retrievalSourcesLive(row,verified))result.add(row.getString("id"));
+        for(JSONObject row:records.values())if(scope.matches(row)&&active.contains(row.getString("id"))
+                &&(audience==null||audience.permits(row.getString("id"),row.getLong("revision")))&&retrievalSourcesLive(row,verified))result.add(row.getString("id"));
         return result;
     }
     private boolean retrievalSourcesLive(JSONObject row,Map<SourceRef,Boolean> verified)throws Exception {
@@ -961,6 +1080,7 @@ public final class MemoryBook {
     /** Selection is explicit metadata, not a new fact or a grant. It does not invalidate derived text. */
     public synchronized JSONObject setCore(JSONObject scope,String id,int revision,boolean core,long now)throws Exception {
         Scope s=Scope.from(scope);JSONObject old=require(s,id);
+        if(core&&old.optBoolean("archiveOnly"))throw new IllegalStateException("档案来源未核，请从当前来源重新审阅后建立新记忆");
         if(revision<1||(long)revision!=old.getLong("revision"))throw new IllegalStateException("记忆已被修改，请刷新后再保存");
         if(old.optBoolean("core",false)==core)return copy(old);
         if(core)checkCoreCapacity(s);
@@ -983,10 +1103,31 @@ public final class MemoryBook {
      * Omissions are reported so callers must not interpret a budgeted snapshot as all saved memory.
      */
     public synchronized JSONObject contextSnapshot(JSONObject scope,String query,int limit,int maxChars)throws Exception {
+        return contextSnapshotScoped(scope,query,limit,maxChars,null);
+    }
+    /** Member/native audience only. No audience is the unchanged personal owner entry point. */
+    public JSONObject contextSnapshot(JSONObject scope,String query,int limit,int maxChars,ReadAudience audience)throws Exception {
+        if(audience==null)return contextSnapshot(scope,query,limit,maxChars);
+        MemoryAudienceSelection selected=MemoryAudienceSelection.capture(audience,Scope.from(scope));JSONObject result;
+        synchronized(this){result=contextSnapshotScoped(scope,query,limit,maxChars,selected);}
+        selected.check();
+        synchronized(this){requireAudienceSnapshotCurrent(Scope.from(scope),result,selected);}
+        selected.check();return result.put("audience",selected.metadata());
+    }
+    /** Caller holds the original memory fence before Book. Only the already captured allowlist
+     * is consulted here, so this does not acquire the coordinator or call a scope issuer. */
+    synchronized JSONObject contextSnapshotScoped(JSONObject scope,String query,int limit,int maxChars,MemoryAudienceSelection audience)throws Exception {
+        String original=normalize(query==null?"":query);return contextSnapshotQueriesScoped(scope,MemoryQueryPlan.lexical(MemoryRecallBudget.boundedQuery(original),"not_requested"),limit,maxChars,audience,original.length()>500);
+    }
+    synchronized JSONObject contextSnapshotQueriesScoped(JSONObject scope,MemoryQueryPlan plan,int limit,int maxChars,MemoryAudienceSelection audience)throws Exception {
+        return contextSnapshotQueriesScoped(scope,java.util.Objects.requireNonNull(plan),limit,maxChars,audience,false);
+    }
+    private JSONObject contextSnapshotQueriesScoped(JSONObject scope,MemoryQueryPlan plan,int limit,int maxChars,MemoryAudienceSelection audience,boolean queryTruncated)throws Exception {
         Scope s=Scope.from(scope);
         if(limit<0||maxChars<0)throw new IllegalArgumentException("上下文预算不能为负数");
         int boundedLimit=Math.min(MAX_CONTEXT_RECORDS,limit),boundedChars=Math.min(MAX_CONTEXT_CHARS,maxChars);
-        long now=System.currentTimeMillis();Set<String> active=retrievalActiveIds(s,now),coreIds=new HashSet<>();
+        long now=System.currentTimeMillis();Set<String> active=retrievalActiveIds(s,now,audience),coreIds=new HashSet<>();
+        if(audience!=null)active.removeIf(id->{JSONObject row=records.get(id);return row==null||!audience.permits(id,row.optLong("revision",-1));});
         List<JSONObject> core=new ArrayList<>();
         for(JSONObject value:records.values())if(s.matches(value)&&active.contains(value.getString("id"))&&value.optBoolean("core",false)){
             core.add(value);coreIds.add(value.getString("id"));
@@ -994,9 +1135,8 @@ public final class MemoryBook {
         core.sort(Comparator.comparingLong((JSONObject value)->value.optLong("updatedAt")).reversed()
                 .thenComparing(value->value.optString("id")));
         // A long current task must not suppress core preferences. Only lexical input is bounded.
-        String lexicalQuery=normalize(query==null?"":query);boolean queryTruncated=lexicalQuery.length()>500;
-        lexicalQuery=MemoryRecallBudget.boundedQuery(lexicalQuery);
-        JSONArray hits=lexicalQuery.isEmpty()?new JSONArray():search(s,lexicalQuery,MAX_RECORDS,active);
+        String lexicalQuery=plan.queries().get(0);
+        JSONArray hits=plan.queries().size()==1?(lexicalQuery.isEmpty()?new JSONArray():search(s,lexicalQuery,MAX_RECORDS,active)):searchQueries(s,plan,active);
         List<JSONObject> retrieved=new ArrayList<>();
         for(int i=0;i<hits.length();i++){
             JSONObject hit=hits.getJSONObject(i);
@@ -1018,7 +1158,15 @@ public final class MemoryBook {
                 .put("executionAuthorized",false).put("limit",boundedLimit).put("maxChars",boundedChars).put("charsUsed",context.length())
                 .put("coreAvailable",core.size()).put("retrievedAvailable",retrievedAvailable)
                 .put("omittedCore",core.size()-keptCore).put("omittedRetrieved",retrievedAvailable-keptRetrieved)
-                .put("truncated",kept.length()<core.size()+retrievedAvailable);
+                .put("truncated",kept.length()<core.size()+retrievedAvailable).put("queryPlan",plan.metadata());
+    }
+
+    synchronized void requireAudienceSnapshotCurrent(Scope scope,JSONObject snapshot,MemoryAudienceSelection audience)throws Exception{
+        if(audience==null)return;JSONArray selected=snapshot.getJSONArray("records");Set<String> active=retrievalActiveIds(scope,System.currentTimeMillis(),audience);
+        for(int i=0;i<selected.length();i++){JSONObject prior=selected.getJSONObject(i),current=records.get(prior.getString("id"));
+            if(current==null||!scope.matches(current)||!active.contains(current.getString("id"))||!audience.permits(current.getString("id"),current.getLong("revision"))
+                    ||prior.getLong("revision")!=current.getLong("revision"))throw new SecurityException("成员选定记忆已换版、撤回或失效，未返回旧正文");
+        }
     }
 
     private void checkCoreCapacity(Scope scope){
@@ -1271,7 +1419,7 @@ public final class MemoryBook {
     }
     private Set<String> activeIds(long now)throws Exception {
         Set<String> active=new HashSet<>();
-        for(JSONObject record:records.values())if(record.optLong("expiresAt",Long.MAX_VALUE)>now&&externalActive(record))active.add(record.getString("id"));
+        for(JSONObject record:records.values())if(!record.optBoolean("archiveOnly")&&record.optLong("expiresAt",Long.MAX_VALUE)>now&&externalActive(record))active.add(record.getString("id"));
         boolean changed;
         do{changed=false;for(JSONObject record:records.values()){
             String id=record.getString("id");if(!active.contains(id))continue;JSONArray sources=record.optJSONArray("sourceIds");if(sources==null)continue;
@@ -1288,7 +1436,7 @@ public final class MemoryBook {
         File temporary=new File(file.getPath()+".new");
         // v3 makes older binaries fail closed instead of silently discarding review/rejection state.
         // A legacy-only book retains its v2 write contract until learning is actually used.
-        boolean withRetention=retentionFormat||enableRetention||hierarchicalFormat||recordBarrierFormat||!candidateHistory.isEmpty();
+        boolean withRetention=archiveFormat||retentionFormat||enableRetention||hierarchicalFormat||recordBarrierFormat||!candidateHistory.isEmpty();
         boolean withLearning=learningFormat||!learningCandidates.isEmpty()||withRetention;
         // Drop keys only when a durable source registry entry now prevents that old proposal.
         // Stage this compaction until the same atomic replacement succeeds, including on forget.
@@ -1307,8 +1455,9 @@ public final class MemoryBook {
             JSONObject barrier=entry.getValue(),row=records.get(barrier.getString("recordId"));
             if(row!=null&&Scope.from(barrier).matches(row)&&row.getLong("revision")<=barrier.getLong("forgottenThrough"))retainedBarriers.put(entry.getKey(),barrier);
         }
-        JSONObject state=new JSONObject().put("version",supersessionFormat?6:recordBarrierFormat?5:hierarchicalFormat?4:withLearning?3:2).put("records",new JSONArray(records.values())).put("sources",new JSONArray(sources.values()));
-        if(recordBarrierFormat)state.put("recordForgetBarriers",new JSONArray(retainedBarriers.values()));
+        JSONObject state=new JSONObject().put("version",archiveFormat?7:supersessionFormat?6:recordBarrierFormat?5:hierarchicalFormat?4:withLearning?3:2).put("records",new JSONArray(records.values())).put("sources",new JSONArray(sources.values()));
+        if(recordBarrierFormat||archiveFormat)state.put("recordForgetBarriers",new JSONArray(retainedBarriers.values()));
+        if(archiveFormat)state.put("archiveImports",new JSONArray(archiveImports.values()));
         if(withLearning)state.put("learningVersion",withRetention?2:1).put("learningCandidates",new JSONArray(learningCandidates.values()));
         if(withRetention)state.put("candidateHistory",new JSONArray(retainedHistory.values()));
         byte[] bytes=state.toString().getBytes(StandardCharsets.UTF_8);

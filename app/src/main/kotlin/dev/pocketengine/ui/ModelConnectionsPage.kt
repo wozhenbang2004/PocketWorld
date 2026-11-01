@@ -39,7 +39,7 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
     var refreshControl by remember(service) { mutableStateOf<RunControl?>(null) }
     val alive = remember(service) { AtomicBoolean(true) }
     val main = remember { Handler(Looper.getMainLooper()) }
-    val secondary = Color(0xff72777f)
+    val secondary = SecondaryInk
 
     fun execute(onSuccess: (() -> Unit)? = null, action: () -> JSONObject) {
         if (busy || !alive.get()) return
@@ -86,7 +86,7 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
             Text(if (openedModel == null) "模型目录与能力" else openedModel.orEmpty(), fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             if (busy && refreshControl != null) TextButton(onClick = { refreshControl?.cancel() }) { Text("取消刷新") }
         }
-        HorizontalDivider(color = Color(0xffe9ebee))
+        HorizontalDivider(color = Line)
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (openedModel == null) {
                 ApiConnectionProfilesPanel(snapshot.optJSONObject("connections") ?: JSONObject(), busy, error,
@@ -120,7 +120,7 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
                             if (listed?.optBoolean("known") == true && !listed.optBoolean("value")) Text("机主填写 · 目录未列出此模型", fontSize = 11.sp, color = secondary)
                             Text(if (row.optBoolean("catalogFresh")) "目录读取于 ${modelTime(row.optLong("catalogFetchedAtMillis"))}" else "目录未获取或已过期，机主覆盖仍独立有效", fontSize = 11.sp, color = secondary)
                         }
-                        HorizontalDivider(color = Color(0xffe9ebee))
+                        HorizontalDivider(color = Line)
                     }
                 } else {
                     Text("当前保留原 API 配置。启用目录后，每次请求将核对这项连接的真实能力，未知工具或图片不会被当作支持。", fontSize = 12.sp, lineHeight = 20.sp)
@@ -141,7 +141,7 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
                         }
                         TextButton(onClick = { edit = field }, enabled = !busy) { Text("调整") }
                     }
-                    HorizontalDivider(color = Color(0xffe9ebee))
+                    HorizontalDivider(color = Line)
                 }
                 var output by remember(binding, openedModel, api.optInt("maxOutputTokens")) { mutableStateOf(api.optInt("maxOutputTokens", 4096).toString()) }
                 var imageReserve by remember(binding, openedModel, snapshot.optInt("imageTokenReserve")) { mutableStateOf(if (openedModel == api.optString("model")) snapshot.optInt("imageTokenReserve").toString() else "0") }

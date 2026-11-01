@@ -105,18 +105,15 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                     HorizontalDivider(color = Line)
                     Column(Modifier.weight(1f).fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 18.dp)) {
                         if (section == null) {
-                            CenterCaption("按需连接和管理，所有能力共享同一套任务与权限。")
-                            TextButton(onClick = controller::openNativeInferenceHistory) { Text("独立模型调用记录") }
-                            titles.forEach { (id, title) ->
-                                val summary = when (id) {
-                                    "accounts" -> "官方账号授权、模型目录与主模型选择 · 文字和工具"
+                            ConnectionCatalog(titles, description = { id ->
+                                when (id) {
+                                    "accounts" -> "账号授权与主模型选择"
                                     "memoryReview" -> "核对学习候选、查看来源与管理遗忘"
-                                    "learning" -> "从已审程序记忆整理草稿，完整阅读后另行启用"
-                                    "mcp" -> "发现工具、逐项预览、停用导入后单独启用"
+                                    "learning" -> "从已审记忆整理经验，审阅后另行启用"
+                                    "mcp" -> "发现工具、预览权限与按需启用"
                                     else -> featureSummary(id, state.feature(if (id == "commitments") "automation" else id))
                                 }
-                                ConnectionRow(title, summary) { section = id }
-                            }
+                            }, open = { section = it }, history = controller::openNativeInferenceHistory)
                         } else {
                             state.moduleErrors.filterKeys { it.startsWith(section + ".") }.values.distinct().forEach { Text(it, color = Danger, fontSize = 12.sp, modifier = Modifier.padding(bottom = 10.dp)) }
                             when (section) {
@@ -222,10 +219,20 @@ private fun RemoteProfileDialog(profile: JSONObject, state: PocketUiState, contr
 
 @Composable
 private fun NativeMemory(state: PocketUiState, controller: PocketWorldController) {
+    // One actual owner page owns this domain. Nested read-only pickers must not globally
+    // dispose the still-visible history-scope control and cancel its in-flight receipt.
+    DisposableEffect(controller) {
+        controller.enterOwnerDomain("taskMemory")
+        onDispose { controller.leaveOwnerDomain("taskMemory") }
+    }
     var query by rememberSaveable { mutableStateOf("") }
     var appliedQuery by rememberSaveable { mutableStateOf("") }
+    var applications by remember { mutableStateOf<JSONObject?>(null) }
     var editing by remember { mutableStateOf<JSONObject?>(null) }
     var retrievalDetails by remember { mutableStateOf(false) }
+    var workspaceSources by remember { mutableStateOf(false) }
+    var sourcePath by remember(state.projectId) { mutableStateOf<String?>(null) }
+    var sourcePathFilter by remember(state.projectId) { mutableStateOf("") }
     val records = state.moduleResults[if (appliedQuery.isBlank()) "memory.list" else "memory.search"]?.optJSONArray("records").objects()
     LaunchedEffect(state.moduleResults["memory.setCore"]) { if (state.moduleResults["memory.setCore"] != null) controller.requestFeature("memory", if (appliedQuery.isBlank()) "list" else "search", JSONObject().put("query", appliedQuery).put("limit", 50)) }
     CenterCaption("机主的私人记忆，可编辑、查看来源。遗忘需到审核页重新读取当前版本并明确确认，会同步清理旧派生技能与被遗忘的来源快照。过期记忆保留记录，不参与召回。")
@@ -242,16 +249,36 @@ private fun NativeMemory(state: PocketUiState, controller: PocketWorldController
     }
     Row(verticalAlignment = Alignment.CenterVertically) { OutlinedTextField(query, { query = it }, label = { Text("搜索记忆") }, singleLine = true, modifier = Modifier.weight(1f)); TextButton(onClick = { appliedQuery = query.trim(); controller.requestFeature("memory", if (appliedQuery.isBlank()) "list" else "search", JSONObject().put("query", appliedQuery).put("limit", 50)) }, enabled = "memory.search" !in state.moduleBusy && "memory.list" !in state.moduleBusy) { Text("搜索") } }
     OutlinedButton(onClick = { editing = JSONObject() }, modifier = Modifier.padding(top = 12.dp)) { Text("保存一条记忆") }
+    state.conversationId?.let { ConversationHistoryScopeControl(it, state, controller) }
+    SavedEvidenceLearningControl(state, controller)
+    TextButton(onClick = { workspaceSources = !workspaceSources }) { Text(if (workspaceSources) "收起项目原文选择" else "从已保存项目文件提炼候选") }
+    if (workspaceSources) {
+        val project = state.projectId
+        if (project == null) CenterCaption("先在项目页选择原版本库项目；这里不把活工作副本SHA当虚构文件版本。")
+        else {
+            CenterCaption("原版本库：" + (state.projects.firstOrNull { it.id == project }?.name ?: project) + "。只读取你选择的当前文件范围，预览后仍需明确确认模型使用。")
+            OutlinedTextField(sourcePathFilter, { sourcePathFilter = it }, label = { Text("筛选已载入文件路径") }, singleLine = true)
+            val choices = state.files.filter { it.path.contains(sourcePathFilter, ignoreCase = true) }
+            CenterCaption("当前已载入 ${state.files.size} 条文件metadata；筛选 ${choices.size} 条，本页最多显示50条。")
+            choices.take(50).forEach { file -> TextButton(onClick = { sourcePath = file.path }) { Text(file.path + " · v" + file.version) } }
+            sourcePath?.takeIf { selected -> state.files.any { it.path == selected } }?.let { selected ->
+                WorkspaceMemorySourceControl(project, selected, state, controller)
+            }
+        }
+    }
+
     records.take(50).forEach { record ->
         Column(Modifier.fillMaxWidth().padding(vertical = 15.dp)) {
             SelectionContainer { Text(record.optString("text"), fontSize = 14.sp, lineHeight = 23.sp) }
-            CenterCaption(memoryLayer(record.optString("layer")) + if (!record.optBoolean("active", true)) " · 已失效" else "")
+            CenterCaption(memoryLayer(record.optString("layer")) + if (record.optBoolean("archiveOnly")) " · 档案原文（来源未核，不参与召回）" else if (!record.optBoolean("active", true)) " · 已失效" else "")
             CenterCaption("来源：" + record.optString("source"))
-            Row { TextButton(onClick = { editing = record }) { Text("编辑", fontSize = 12.sp) }; TextButton(onClick = { controller.requestFeature("memory", "setCore", JSONObject().put("id", record.optString("id")).put("revision", record.optInt("revision")).put("core", !record.optBoolean("core"))) }, enabled = "memory.setCore" !in state.moduleBusy) { Text(if (record.optBoolean("core")) "取消核心" else "设为核心", fontSize = 12.sp) }; TextButton(onClick = { controller.openConnection("memoryReview") }) { Text("审核并遗忘…", fontSize = 12.sp, color = Danger) } }
+            if (record.optString("layer") == "procedural") TextButton(onClick = { applications = JSONObject(record.toString()) }) { Text("查看真实方法应用回执", fontSize = 13.sp) }
+            Row { TextButton(onClick = { editing = record }) { Text("编辑", fontSize = 12.sp) }; TextButton(onClick = { controller.requestFeature("memory", "setCore", JSONObject().put("id", record.optString("id")).put("revision", record.optInt("revision")).put("core", !record.optBoolean("core"))) }, enabled = !record.optBoolean("archiveOnly") && "memory.setCore" !in state.moduleBusy) { Text(if (record.optBoolean("core")) "取消核心" else "设为核心", fontSize = 12.sp) }; TextButton(onClick = { controller.openConnection("memoryReview") }) { Text("审核并遗忘…", fontSize = 12.sp, color = Danger) } }
         }
         HorizontalDivider(color = Line)
     }
     if (records.isEmpty()) CenterCaption(if ("memory.list" in state.moduleBusy || "memory.search" in state.moduleBusy) "正在读取记忆…" else "这里还没有符合条件的记忆。")
+    applications?.let { record -> LearnedMethodApplicationsSheet(record, state, controller) { applications = null } }
     editing?.let { record -> MemoryEditor(record, state, controller) { editing = null; controller.requestFeature("memory", if (appliedQuery.isBlank()) "list" else "search", JSONObject().put("query", appliedQuery).put("limit", 50)) } }
 }
 
@@ -299,6 +326,9 @@ private fun ReminderEditor(state: PocketUiState, controller: PocketWorldControll
     var minutes by rememberSaveable { mutableStateOf("30") }
     var phone by rememberSaveable { mutableStateOf(false) }
     var goal by rememberSaveable { mutableStateOf("") }
+    var misfire by rememberSaveable { mutableStateOf("skip") }
+    var overlap by rememberSaveable { mutableStateOf("buffer_one") }
+    var maxCatchUp by rememberSaveable { mutableStateOf("3") }
     var submitted by remember { mutableStateOf(false) }
     val busy = "automation.save" in state.moduleBusy
     LaunchedEffect(busy) { if (submitted && !busy && state.moduleErrors["automation.save"] == null) close() }
@@ -308,8 +338,28 @@ private fun ReminderEditor(state: PocketUiState, controller: PocketWorldControll
         if (daily) { OutlinedTextField(time, { time = it }, label = { Text("每天时间 HH:mm") }, singleLine = true); CenterCaption("时区：" + ZoneId.systemDefault().id) } else OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit).take(6) }, label = { Text("多少分钟后") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
         Row(verticalAlignment = Alignment.CenterVertically) { Text("提醒我开始手机任务", Modifier.weight(1f), fontSize = 13.sp); Switch(phone, { phone = it }) }
         if (phone) OutlinedTextField(goal, { goal = it }, label = { Text("手机任务目标") }, minLines = 2, maxLines = 5)
+        if (daily) {
+            Text("错过日历时间时", fontSize = 14.sp)
+            listOf("skip" to "跳过旧实例，只处理最新一次", "coalesce" to "合并错过的实例为一次", "catch_up" to "按原日历逐次补处理").forEach { (value, label) ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = misfire == value, onClick = { misfire = value }, enabled = !busy)
+                    Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                }
+            }
+            if (misfire == "catch_up") OutlinedTextField(maxCatchUp, { maxCatchUp = it.filter(Char::isDigit).take(2) },
+                label = { Text("本轮最多补处理次数（1–20）") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            Text("原任务仍未结束时", fontSize = 14.sp)
+            listOf("buffer_one" to "保留一个待处理实例", "skip" to "跳过新实例", "allow" to "允许并行（仍各自需要原任务授权）").forEach { (value, label) ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = overlap == value, onClick = { overlap = value }, enabled = !busy)
+                    Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                }
+            }
+            CenterCaption("补处理不等于补执行：通知投递未知或旧任务结果未核对时，不会盲目重发或假定成功。")
+        }
         state.moduleErrors["automation.save"]?.let { Text(it, color = Danger, fontSize = 12.sp) }
-    } }, confirmButton = { Button(onClick = { submitted = true; val schedule = if (daily) JSONObject().put("type", "daily").put("time", time).put("zone", ZoneId.systemDefault().id) else JSONObject().put("type", "once").put("at", System.currentTimeMillis() + (minutes.toLongOrNull() ?: 0) * 60_000); controller.requestFeature("automation", "save", JSONObject().put("rule", JSONObject().put("title", title.trim()).put("kind", if (phone) "phone_goal" else "reminder").put("goal", goal.trim()).put("enabled", true).put("schedule", schedule))) }, enabled = !busy && title.isNotBlank() && (!phone || goal.isNotBlank()) && (daily || (minutes.toLongOrNull() ?: 0) in 1..525600)) { Text(if (busy) "保存中" else "创建提醒") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
+    } }, confirmButton = { Button(onClick = { submitted = true; val schedule = if (daily) JSONObject().put("type", "daily").put("time", time).put("zone", ZoneId.systemDefault().id) else JSONObject().put("type", "once").put("at", System.currentTimeMillis() + (minutes.toLongOrNull() ?: 0) * 60_000); controller.requestFeature("automation", "save", JSONObject().put("rule", JSONObject().put("title", title.trim()).put("kind", if (phone) "phone_goal" else "reminder").put("goal", goal.trim()).put("enabled", true).put("schedule", schedule).put("policy", JSONObject().put("misfire", if (daily) misfire else "skip").put("overlap", if (daily) overlap else "buffer_one").put("maxCatchUp", maxCatchUp.toIntOrNull() ?: 3)))) }, enabled = !busy && (misfire != "catch_up" || (maxCatchUp.toIntOrNull() ?: 0) in 1..20) && title.isNotBlank() && (!phone || goal.isNotBlank()) && (daily || (minutes.toLongOrNull() ?: 0) in 1..525600)) { Text(if (busy) "保存中" else "创建提醒") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
 }
 
 internal fun qqGatewayConnection(channels: JSONObject, profileId: String): JSONObject? = channels.optJSONObject("qq")?.optJSONArray("connections").objects().find { it.optString("profileId") == profileId }

@@ -52,14 +52,19 @@ public final class AdaptivePhoneOcrTest {
         assertTrue(out.getJSONObject("observationSources").getBoolean("ocrTextIncluded"));assertFalse(out.getJSONObject("observationSources").getBoolean("imageIncluded"));
         error(port.execute("phone_tap",new JSONObject().put("observationId","pixels").put("x",0).put("y",0),c),"coordinate_unverifiable");assertEquals(0,source.executions);
     }
-    @Test public void completeTreeOrModelVisionDoesNotRunOcrUnnecessarily()throws Exception {
+    @Test public void completeTreeAvoidsPixelsAndAllowedLocalOcrPrecedesCloudVision()throws Exception {
         Ocr ocr=new Ocr();Source nodes=new Source(observation("nodes",false,1));assertEquals("nodes",port(nodes,true,false,ocr).observe(true,control()).getJSONObject("observationDecision").getString("request"));
-        Source visual=new Source(observation("first",false,0),observation("image",true,0));assertEquals("vision",port(visual,true,true,ocr).observe(true,control()).getJSONObject("observationDecision").getString("request"));assertEquals(0,ocr.calls);
+        Source visual=new Source(observation("first",false,0),observation("image",true,0));assertEquals("ocr",port(visual,true,true,ocr).observe(true,control()).getJSONObject("observationDecision").getString("request"));assertEquals(1,ocr.calls);
     }
-    @Test public void screenshotConsentCannotBeBypassedByLocalProcessing()throws Exception {
-        for(boolean configured:new boolean[]{false,true}){
-            Ocr ocr=new Ocr();Source source=new Source(observation("first",false,0));error(port(source,configured,false,ocr).observe(false,control()),"screenshots_disabled");assertEquals(0,ocr.calls);assertEquals(Collections.singletonList(false),source.includes);
-        }
+    @Test public void independentLocalCaptureAllowsOcrWithCloudPixelsDisabled()throws Exception {
+        Ocr ocr=new Ocr();Source source=new Source(observation("first",false,0),observation("pixels",true,0));
+        AdaptivePhonePort p=new AdaptivePhonePort(source,new AdaptivePhonePort.Scope("task","run",2,"session",5),true,true,false,true,()->now,ocr);
+        JSONObject out=p.observe(false,control());assertEquals(1,ocr.calls);assertEquals(Arrays.asList(false,true),source.includes);assertTrue(out.has("ocr"));assertFalse(out.has("imageBase64"));assertFalse(ObservationReport.hasImage(out));assertFalse(out.getJSONObject("observationDecision").getBoolean("uploadImageAllowed"));
+    }
+    @Test public void disabledLocalCaptureNeverTakesPixelsEvenWhenCloudAndOcrAreEnabled()throws Exception {
+        Ocr ocr=new Ocr();Source source=new Source(observation("first",false,0));
+        AdaptivePhonePort p=new AdaptivePhonePort(source,new AdaptivePhonePort.Scope("task","run",2,"session",5),false,true,true,true,()->now,ocr);
+        error(p.observe(true,control()),"local_capture_disabled");assertEquals(0,ocr.calls);assertEquals(Collections.singletonList(false),source.includes);
     }
     @Test public void cancellationDuringRecognitionSuppressesAllRetainedText()throws Exception {
         Ocr ocr=new Ocr(){public OcrPage recognizeImage(byte[] b,String f,RunControl c)throws Exception{OcrPage page=super.recognizeImage(b,f,c);c.cancel();return page;}};

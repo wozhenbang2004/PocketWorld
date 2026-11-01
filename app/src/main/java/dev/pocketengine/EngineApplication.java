@@ -131,6 +131,8 @@ public final class EngineApplication extends Application implements dev.pocketen
         EngineModule plugins=addModule("plugins",()->new dev.pocketengine.features.plugins.PluginsModule(context));
         pluginHost=new dev.pocketengine.features.NativePluginHost(this,plugins,tasks,this::checkLiveExtensionControl,this::pushTask);
         EngineModule workspace=addModule("workspace",()->new dev.pocketengine.features.workspace.WorkspaceModule(context));
+        if(workspace instanceof dev.pocketengine.features.workspace.WorkspaceModule)memorySources.bindWorkspace((dev.pocketengine.features.workspace.WorkspaceModule)workspace);
+        capabilityWorkers.execute(()->{try{memorySources.synchronize(json("ownerId","owner","spaceId","private"));}catch(Exception unavailable){main.post(()->error("部分原文来源尚待核对，请在原来源页刷新；未发送未知来源"));}});
         EngineModule development=addModule("local",()->new dev.pocketengine.features.local.LocalModule(context,workspace));
         if(development instanceof dev.pocketengine.features.local.LocalModule&&assistant instanceof dev.pocketengine.features.assistant.AssistantModule){
             var local=(dev.pocketengine.features.local.LocalModule)development;
@@ -146,12 +148,14 @@ public final class EngineApplication extends Application implements dev.pocketen
             features.setSkillExecutionHost(skillExecutionHost);
         }
         EngineModule attachments=addModule("attachments",()->{var pdf=new dev.pocketengine.features.attachments.documents.AndroidPdfDocumentPort(this);return new dev.pocketengine.features.attachments.AttachmentsModule(context,new dev.pocketengine.features.attachments.documents.DocumentReader(pdf,localOcr,pdf.ocrPages()));});
+        if(attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule)memorySources.bindAttachments((dev.pocketengine.features.attachments.AttachmentsModule)attachments,dev.pocketengine.features.attachments.AttachmentRepository.get(this).book);
         if(attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule)((dev.pocketengine.features.attachments.AttachmentsModule)attachments).setNativeRecordRead(record->{JSONObject source=record.optJSONObject("source");if(source!=null&&!source.optString("taskId").isEmpty()&&groupOrigin(tasks.get(source.getString("taskId"),false)))throw new SecurityException("群媒体技术副本请从原群任务读取");});
         if(assistant instanceof dev.pocketengine.features.assistant.AssistantModule&&attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule){
             assistantAttachments=new dev.pocketengine.features.assistant.AttachmentRequestProjection(dev.pocketengine.features.attachments.AttachmentRepository.get(this).book,(dev.pocketengine.features.attachments.AttachmentsModule)attachments,this::requireDocumentReferenceRoute);
             var module=(dev.pocketengine.features.assistant.AssistantModule)assistant;module.setAttachmentProjection(assistantAttachments);
             module.setNativeInputHost(new dev.pocketengine.features.assistant.AssistantModule.NativeInputHost(){
                 public JSONObject start(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control)throws Exception{return startAssistantInput(conversation,goal,message,config,control);}
+                public JSONObject startScoped(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startAssistantInput(conversation,goal,message,config,control,ownerScope);}
                 public JSONObject append(String conversation,JSONObject message,String mode,JSONObject expected,RunControl control)throws Exception{return appendAssistantInput(conversation,message,mode,expected,control);}
             });
         }
@@ -200,6 +204,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             browserTaskHost=new dev.pocketengine.browser.BrowserTaskHost((dev.pocketengine.browser.BrowserModule)managedBrowser,tasks,resources,new dev.pocketengine.browser.BrowserTaskHost.OriginalTasks(){
                 public void checkModelConfigured()throws Exception{ModelConfig selected=settings.get();SettingsStore.validate(selected);dev.pocketengine.runtime.ModelGateway.validate(selected);}
                 public JSONObject modelForOwner()throws Exception{return settings.get().publicJson();}
+                public void prepareOwnerExecutionScope(String taskId,JSONObject choice)throws Exception {initializeOwnerExecutionScope(taskId,settings.get(),choice);}
                 public RunControl currentControl(String taskId){return capabilityControls.get(taskId);}
                 public JSONArray currentTasksForOwner()throws Exception {JSONArray result=new JSONArray();for(var entry:capabilityControls.entrySet()){JSONObject task=tasks.get(entry.getKey(),false);JSONObject origin=task==null?null:task.optJSONObject("origin");if(task!=null&&"assistant".equals(task.optString("kind"))&&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))&&(origin==null||!origin.optString("kind").matches("channel|group"))&&!entry.getValue().isCancelled())result.put(json("taskId",task.getString("id"),"goal",task.optString("goal"),"status",task.optString("status")));}return result;}
                 public void launch(String taskId)throws Exception{
@@ -229,6 +234,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             dev.pocketengine.features.channels.ChannelsModule module=(dev.pocketengine.features.channels.ChannelsModule)channels;
             channelTaskHost=new dev.pocketengine.features.ChannelTaskCoordinator(tasks,features,module,capabilityWorkers,capabilityControls,settings::get,this::runCapabilityAttempt,this::pushTask,this::error);
             module.setHostTaskPort(channelTaskHost);
+            automationPlans.bindBusinessEvents(module);
+            module.setInboundObserver(fact->{fact.checkCurrent();capabilityWorkers.execute(()->{try{fact.checkCurrent();automationModule().authenticatedBusinessEventChanged(json("ownerId","owner","spaceId","private"));}catch(Exception unavailable){/* Existing alarm/reopen may recheck the original inbox; never re-admit an inbound task. */}});});
             initializeGroupHost(module);
         }
     }
@@ -328,7 +335,8 @@ public final class EngineApplication extends Application implements dev.pocketen
     public synchronized String start(String goal,boolean consent)throws Exception {
         return start(goal,consent,"main_screen");
     }
-    public synchronized String start(String goal,boolean consent,String executionMode)throws Exception {
+    public synchronized String start(String goal,boolean consent,String executionMode)throws Exception {return start(goal,consent,executionMode,null);}
+    private synchronized String start(String goal,boolean consent,String executionMode,JSONObject ownerScope)throws Exception {
         if(activeTaskId!=null)throw new IllegalStateException("已有任务占用手机，请先停止或完成它");
         goal=goal==null?"":goal.trim();if(goal.isEmpty()||goal.length()>4000)throw new IllegalArgumentException("请填写 1–4000 字的手机任务目标");
         if(!consent)throw new IllegalStateException("开始前请确认屏幕与可见文字会发送到所配置的模型");
@@ -339,7 +347,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             EngineModule display=features.module("display");if(!(display instanceof dev.pocketengine.phone.display.DisplayModule)||!((dev.pocketengine.phone.display.DisplayModule)display).isConnected())throw new IllegalStateException("请先在连接中心连接后台助手；不会改为主屏执行");
         }
         ModelConfig c=settings.get();SettingsStore.validate(c);
-        JSONObject t=tasks.create(goal,executionMode);return admit(t.getString("id"),executionMode,c);
+        JSONObject t=tasks.create(goal,executionMode);initializeOwnerExecutionScope(t.getString("id"),c,ownerScope);return admit(t.getString("id"),executionMode,c);
     }
     private String admit(String taskId,String executionMode,ModelConfig c)throws Exception {
         return admit(taskId,executionMode,c,false);
@@ -731,6 +739,9 @@ public final class EngineApplication extends Application implements dev.pocketen
             var assistant=(dev.pocketengine.features.assistant.AssistantModule)module;
             var history=new dev.pocketengine.features.memory.ConversationHistory.HistoryBinding(binding,conversation,new dev.pocketengine.features.memory.ConversationHistory.Source(){
                 public dev.pocketengine.features.memory.ConversationHistory.Gate open(String id)throws Exception{return assistant.openHistoryConversation(id);}
+                public dev.pocketengine.features.memory.ConversationHistory.ReadScope captureReadScope(String id)throws Exception{return assistant.captureHistoryReadScope(id);}
+                public String conversationFor(dev.pocketengine.features.memory.SourceRef ref)throws Exception{return assistant.historyConversationFor(ref);}
+                public JSONObject conversations(dev.pocketengine.features.memory.ConversationHistory.ReadScope scope,JSONObject options,RunControl live)throws Exception{return assistant.queryHistoryConversations(scope,options,live);}
                 public JSONObject query(dev.pocketengine.features.memory.ConversationHistory.Gate gate,JSONObject options,RunControl live)throws Exception{return assistant.queryRetainedHistory(gate,options,live);}
                 public JSONObject neighbors(dev.pocketengine.features.memory.ConversationHistory.Gate gate,dev.pocketengine.features.memory.SourceRef anchor,String fingerprint,String direction,JSONObject budgets,RunControl live)throws Exception{return assistant.historyNeighbors(gate,anchor,fingerprint,direction,budgets,live);}
                 public JSONArray inspect(dev.pocketengine.features.memory.ConversationHistory.Gate gate,java.util.List<dev.pocketengine.features.memory.SourceRef> expected)throws Exception{return assistant.inspectHistorySources(gate,expected);}
@@ -830,12 +841,24 @@ public final class EngineApplication extends Application implements dev.pocketen
         AssistantInputBinding(JSONObject task,String conversation,ModelConfig config,RunControl control)throws Exception{this.task=task.getString("id");run=task.getString("runId");epoch=task.getInt("coordinatorEpoch");this.conversation=conversation;this.config=config;this.control=control;}
         JSONObject json(){return EngineApplication.json("taskId",task,"runId",run,"epoch",epoch);}
     }
-    private JSONObject startAssistantInput(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control)throws Exception{
+    private static JSONObject optionalOwnerExecutionScope(JSONObject input)throws Exception {
+        if(!input.has("executionScope"))return null;
+        if(!(input.get("executionScope") instanceof JSONObject))throw new SecurityException("任务范围必须为明确原生对象");return input.getJSONObject("executionScope");
+    }
+    private void initializeOwnerExecutionScope(String id,ModelConfig config,JSONObject choice)throws Exception {
+        if(choice==null){tasks.initializeExecutionScope(id,config.maxSteps);return;}
+        java.util.Set<String> keys=new java.util.HashSet<>();choice.keys().forEachRemaining(keys::add);
+        if(!keys.equals(java.util.Set.of("deadlineAt","toolLimit","modelCallLimit")))throw new SecurityException("新任务范围参数无效");
+        for(String key:keys)if(!(choice.get(key) instanceof Integer||choice.get(key) instanceof Long))throw new SecurityException("任务预算必须是确切整数");
+        tasks.configureExecutionScope(id,0,choice.getLong("deadlineAt"),dev.pocketengine.store.TaskExecutionScope.exactInt(choice,"toolLimit",1,400),dev.pocketengine.store.TaskExecutionScope.exactInt(choice,"modelCallLimit",1,512));
+    }
+    private JSONObject startAssistantInput(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control)throws Exception{return startAssistantInput(conversation,goal,message,config,control,null);}
+    private JSONObject startAssistantInput(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{
         synchronized(assistantAdmissions){
             control.check();if(control.hasHostRun())throw new SecurityException("不能用旧控制器新建聊天任务");SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
             for(var entry:capabilityControls.entrySet()){JSONObject current=tasks.get(entry.getKey(),false);if(current!=null&&conversation.equals(current.optString("conversationId")))throw new IllegalStateException("原对话仍由原任务执行；请在原任务核对输入，不能启动第二执行器");}
             if(tasks.ownerConversationUnresolved(conversation)!=null)throw new IllegalStateException("原对话有动作结果待核对，请先处理原任务；没有重发旧目标");
-            JSONObject task=tasks.createCapabilityTask(goal,conversation);task=tasks.startAttempt(task.getString("id"),"capabilities",config.maxSteps);control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));
+            JSONObject task=tasks.createCapabilityTask(goal,conversation);initializeOwnerExecutionScope(task.getString("id"),config,ownerScope);task=tasks.startAttempt(task.getString("id"),"capabilities",config.maxSteps);control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));
             AssistantInputBinding binding=new AssistantInputBinding(task,conversation,config,control);if(capabilityControls.putIfAbsent(binding.task,control)!=null)throw new SecurityException("原任务已有执行控制器");assistantInputs.put(control,binding);
             binding.admissionCancel=()->{if(!binding.phase.compareAndSet(0,2))return;assistantInputs.remove(control,binding);capabilityControls.remove(binding.task,control);try{tasks.endAttempt(binding.task,binding.run,"cancelled","输入已登记但执行尚未接手，已停止；请核对原消息回执",new JSONObject());pushTask(binding.task);}catch(Exception failure){error("未启动聊天任务的停止状态保存未确认，请核对原任务");}};
             control.onCancel(binding.admissionCancel);
@@ -875,7 +898,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             AssistantInputBinding binding=assistantInputs.get(control);if(binding==null||!conversation.equals(binding.conversation)||!binding.phase.compareAndSet(0,1)||capabilityControls.get(binding.task)!=control)throw new SecurityException("聊天执行器不能更换或重复领取原输入任务");
             return runCapabilityAttempt(binding.task,history,config,control);
         }
-        JSONObject task=tasks.createCapabilityTask(goal,conversation);return runCapabilityAttempt(task.getString("id"),history,config,control);
+        JSONObject task=tasks.createCapabilityTask(goal,conversation);initializeOwnerExecutionScope(task.getString("id"),config,null);return runCapabilityAttempt(task.getString("id"),history,config,control);
     }
     /** Native local UI only. Test inference is one real original receipt, never directory health. */
     public JSONObject testModelConnection(ModelConfig captured)throws Exception{
@@ -1142,7 +1165,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private JSONObject learningJobInput(dev.pocketengine.features.memory.SourceRef expected,dev.pocketengine.features.memory.MemoryModule memory)throws Exception{
         if(expected==null||!"owner".equals(expected.ownerId)||!"private".equals(expected.spaceId))throw new SecurityException("逐批提炼只接受主人私人原始来源");JSONObject scope=json("ownerId","owner","spaceId","private");
-        if(memory.isSourceForgotten(scope,expected))throw new IllegalStateException("原来源已遗忘，未排入提炼任务");var source=memorySources.read(expected);if(source==null||!expected.equals(source.ref))throw new IllegalStateException("原来源版本已变化或不可用");
+        if(memory.isSourceForgotten(scope,expected))throw new IllegalStateException("原来源已遗忘，未排入提炼任务");memorySources.prepareSourceHead(expected.kind,expected.sourceId,null);var source=memorySources.read(expected);if(source==null||!expected.equals(source.ref))throw new IllegalStateException("原来源版本已变化或不可用");
         return json("sourceRef",expected.toJson(),"sourceFingerprint",dev.pocketengine.features.KnowledgeLearningWorkflow.sourceFingerprint(source),"title",source.title);
     }
     /** Saving a native source plan does not send data to a model or authorize a future run. */
@@ -1162,6 +1185,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             public JSONObject get(String task)throws Exception{return sourceLearningJob(task);}
             public JSONObject list(String cursor,int limit)throws Exception{return listSourceLearningJobs(cursor,limit);}
             public JSONObject run(String task,long revision,RunControl control)throws Exception{return runSourceLearningJob(task,revision,control);}
+            public JSONObject run(String task,long revision,RunControl control,int maxBatches)throws Exception{return runSourceLearningJob(task,revision,control,maxBatches);}
             public JSONObject skip(String task,long revision,boolean confirmed)throws Exception{return skipSourceLearningJobBatch(task,revision,confirmed);}
             public JSONObject stop(String task)throws Exception{return stopSourceLearningJob(task);}
         });
@@ -1174,9 +1198,15 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     /** Explicit owner continuation of the same Task; no automatic wake, blind retry or new Runner. */
     public JSONObject runSourceLearningJob(String id,long expectedRevision,RunControl original)throws Exception{
+        return runSourceLearningJob(id,expectedRevision,original,dev.pocketengine.features.memory.SourceLearningJob.CALLS_PER_ATTEMPT);
+    }
+    public JSONObject runSourceLearningJob(String id,long expectedRevision,RunControl original,int maxBatches)throws Exception{
+        if(maxBatches<1||maxBatches>dev.pocketengine.features.memory.SourceLearningJob.MAX_INPUTS)throw new IllegalArgumentException("本次原来源窗口为1至20批");
         java.util.Objects.requireNonNull(original);var memory=learningJobMemory();EngineModule carrier=features.module("skills");if(!(carrier instanceof dev.pocketengine.features.skills.SkillsModule))throw new IllegalStateException("原候选与经验模块尚未就绪");var skills=(dev.pocketengine.features.skills.SkillsModule)carrier;
+        JSONObject selectedManifest=tasks.sourceLearningJob(id).getJSONObject("job");
+        if(selectedManifest.getLong("revision")!=expectedRevision)throw new SecurityException("原学习清单已变化");
         final MemoryConsolidationRequest request;final long entryPause=original.pauseRevision();
-        synchronized(this){original.check();if(original.hasHostRun()||capabilityControls.containsKey(id))throw new SecurityException("原逐批任务已有执行，不能重建调用");ModelConfig model=settings.get();SettingsStore.validate(model);dev.pocketengine.runtime.ModelGateway.validate(model);JSONObject attempt=tasks.startSourceLearningJob(id,expectedRevision,original);
+        synchronized(this){original.check();if(original.hasHostRun()||capabilityControls.containsKey(id))throw new SecurityException("原逐批任务已有执行，不能重建调用");ModelConfig model=settings.get();SettingsStore.validate(model);dev.pocketengine.runtime.ModelGateway.validate(model);JSONObject attempt=tasks.startSourceLearningJob(id,expectedRevision,original,maxBatches);
             request=new MemoryConsolidationRequest(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),model,original);capabilityControls.put(id,original);memoryConsolidations.put(original,request);original.setAuthorityCheck(()->{synchronized(EngineApplication.this){checkMemoryConsolidation(request);if(original.pauseRevision()!=entryPause)throw new SecurityException("暂停前提炼已失效，请从原任务显式继续");}});
         }
         pushTask(id);JSONObject scope=json("ownerId","owner","spaceId","private");
@@ -1188,11 +1218,14 @@ public final class EngineApplication extends Application implements dev.pocketen
                 var nativeTarget=tasks.sourceLearningInferenceTarget(id,request.runId,request.epoch,active.getString("operationId"),original);
                 var observed=dev.pocketengine.runtime.usage.InferenceCapture.observe(nativeTarget,new dev.pocketengine.runtime.usage.InferenceCapture.Sink(){public void started(dev.pocketengine.runtime.usage.InferenceReceipt receipt){}public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt){terminal.set(receipt);}});
                 var target=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(observed,()->{
-                    dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(request.model,settings.currentForCaptured(request.model),original);JSONObject checked=learningJobInput(source,memory);if(!input.getString("sourceFingerprint").equals(checked.getString("sourceFingerprint")))throw new SecurityException("原来源在模型派发前已变化，未发送替代版本");
+                    dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(request.model,settings.currentForCaptured(request.model),original);
+                    if("workspace_file".equals(source.kind)||"task_evidence".equals(source.kind)&&dev.pocketengine.features.memory.TaskSavedEvidence.matches(source.sourceId)){
+                        if(memory.isSourceForgotten(scope,source))throw new SecurityException("原文件来源已遗忘");memorySources.requireCurrentReference(source);
+                    }else{JSONObject checked=learningJobInput(source,memory);if(!input.getString("sourceFingerprint").equals(checked.getString("sourceFingerprint")))throw new SecurityException("原来源在模型派发前已变化，未发送替代版本");}
                 });
                 return dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,original,target);
             },fence);
-            JSONObject result=new dev.pocketengine.features.memory.SourceLearningJob(tasks,id,request.runId,request.epoch,original,workflow,terminal::get,()->{memorySources.synchronize(scope);return null;}).run();
+            JSONObject result=new dev.pocketengine.features.memory.SourceLearningJob(tasks,id,request.runId,request.epoch,original,workflow,terminal::get,()->{memorySources.synchronize(scope);return null;},maxBatches,(source,control)->memorySources.prepareSourceHead(source.kind,source.sourceId,control)).run();
             synchronized(this){request.settled=true;String outcome=result.getString("invocationOutcome");boolean settled=outcome.equals("all_batches_settled");tasks.endAttempt(id,request.runId,settled?"completed":outcome.equals("unknown_model_result_requires_owner_review")?"reconciling":"awaiting_user",settled?"原来源批次已处理结束；候选仍须审阅，跳过/未知项保留原记录":"本次有限批次已保存；回原任务核对后显式继续，不会重发已完成来源",json("formalMemorySaved",false,"outcome",outcome,"sourceLearningJob",true));}
             return tasks.sourceLearningJob(id).put("invocationOutcome",result.getString("invocationOutcome")).put("gatewayInvocationsThisAttempt",result.getInt("gatewayInvocationsThisAttempt"));
         }catch(Exception failed){synchronized(this){request.settled=true;tasks.endAttempt(id,request.runId,original.isCancelled()?"cancelled":"awaiting_user","原批次已停止并保留水位/真实模型计量；未自动重试，候选仍须在原审核页核对",json("formalMemorySaved",false,"sourceLearningJob",true,"automaticRetry",false));}throw failed;
@@ -1244,7 +1277,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             case "rescheduleAutomation":dev.pocketengine.features.automation.AutomationModule.reschedule(this);return json("scheduled",true);
             case "prepareReminderTask":{EngineModule module=features.module("automation");if(!(module instanceof dev.pocketengine.features.automation.AutomationModule))throw new IllegalStateException("提醒模块暂不可用");JSONObject request=((dev.pocketengine.features.automation.AutomationModule)module).taskRequest(input.getString("occurrenceId"));JSONObject task=tasks.createReminderTask(request,input.optString("executionMode","background"));pushTask(task.getString("id"));return json("task",task);}
             case "featureRequest":features.request(input);return null;
-            case "startRun":return json("taskId",start(input.optString("goal"),input.optBoolean("screenConsent"),input.optString("executionMode","background")));
+            case "startRun":return json("taskId",start(input.optString("goal"),input.optBoolean("screenConsent"),input.optString("executionMode","background"),optionalOwnerExecutionScope(input)));
+            case "configureTaskExecutionScope":{String id=input.getString("taskId");JSONObject result=tasks.configureExecutionScope(id,dev.pocketengine.store.TaskExecutionScope.exactLong(input,"expectedRevision",0,Long.MAX_VALUE),dev.pocketengine.store.TaskExecutionScope.exactLong(input,"deadlineAt",0,Long.MAX_VALUE),dev.pocketengine.store.TaskExecutionScope.exactInt(input,"toolLimit",1,400),dev.pocketengine.store.TaskExecutionScope.exactInt(input,"modelCallLimit",1,512));pushTask(id);return result;}
             case "pauseRun":pause();return null;
             case "resumeRun":resume();return null;
             case "stopRun":stop(input.optString("taskId",null));return null;

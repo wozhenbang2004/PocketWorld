@@ -20,8 +20,14 @@ public interface RunJournal {
             public boolean hasNativeProjectRunningAck(String operationId,JSONObject deliveredReceipt)throws Exception{return original.hasNativeProjectRunningAck(operationId,deliveredReceipt);}
             public JSONObject projectServiceExitEvidence(JSONArray provenLaunchOperationIds)throws Exception{return original.projectServiceExitEvidence(provenLaunchOperationIds);}
             public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String memberId)throws Exception{return original.inferenceTarget(purpose,memberId);}
+            public boolean reserveModelRecovery(String failedCall,long waitMillis)throws Exception{return original.reserveModelRecovery(failedCall,waitMillis);}
+            public int executionStepCeiling(int captured)throws Exception{return original.executionStepCeiling(captured);}
         };
     }
+    /** Original task-wide retry wait debit; absent native authority must not invent recovery. */
+    default boolean reserveModelRecovery(String failedCall,long waitMillis)throws Exception{return false;}
+    /** Only the original owner scope can raise the captured ceiling after native CAS review. */
+    default int executionStepCeiling(int captured)throws Exception{return captured;}
     JSONObject restore() throws Exception;
     void checkpoint(JSONArray messages, int steps, JSONObject observation) throws Exception;
     String beginOperation(String tool, JSONObject arguments) throws Exception;

@@ -230,7 +230,9 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                     String nodeId = "phone_click_node".equals(name)
                             ? string(args, "nodeId", 100, false) : optionalString(args, "nodeId", 100);
                     String text = "phone_type".equals(name) ? string(args, "text", 12_000, true) : null;
-                    return onMain(control, expected.revision, () -> nodeAction(service, expected, control, name, nodeId, text));
+                    dev.pocketengine.phone.observation.DelayedInputReadback delayed=new dev.pocketengine.phone.observation.DelayedInputReadback();
+                    JSONObject receipt=onMain(control, expected.revision, () -> nodeAction(service, expected, control, name, nodeId, text,null,null,delayed));
+                    return delayed.attach(receipt);
                 }
                 case "phone_tap":
                 case "phone_swipe": {
@@ -299,9 +301,12 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
 
     private JSONObject nodeAction(PhoneAccessibilityService service, Snapshot expected, RunControl control,
                                   String tool, String id, String text) throws Exception {
-        return nodeAction(service,expected,control,tool,id,text,null,null);
+        return nodeAction(service,expected,control,tool,id,text,null,null,null);
     }
     private JSONObject nodeAction(PhoneAccessibilityService service,Snapshot expected,RunControl control,String tool,String id,String text,NativePhoneEntry.Admission admission,String direction)throws Exception {
+        return nodeAction(service,expected,control,tool,id,text,admission,direction,null);
+    }
+    private JSONObject nodeAction(PhoneAccessibilityService service,Snapshot expected,RunControl control,String tool,String id,String text,NativePhoneEntry.Admission admission,String direction,dev.pocketengine.phone.observation.DelayedInputReadback delayed)throws Exception {
         validate(service, expected, control);
         AccessibilityForest.Ref selected = null;
         if (id != null) selected = expected.tree.forest.refs.get(id);
@@ -349,15 +354,17 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
                 readbackIdentity=AccessibilityNodeInfo.obtain(node);
                 guard(service, control, expected.revision);
-                clearReferences();
-                accepted = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
+                accepted = NativePhoneEntry.call(control,expected.revision,()->guard(service,control,expected.revision),()->{clearReferences();return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);});
             } else {
                 guard(service, control, expected.revision);
-                clearReferences();
-                accepted = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                accepted = NativePhoneEntry.call(control,expected.revision,()->guard(service,control,expected.revision),()->{clearReferences();return node.performAction(AccessibilityNodeInfo.ACTION_CLICK);});
             }
             JSONObject returned=receipt(accepted, "node_action_requested");
             if(accepted&&"phone_type".equals(tool))returned.put("nativeTextReadback",readTextAfterInput(service,node,readbackIdentity,selected,text,control,expected.revision));
+            if(accepted&&"phone_type".equals(tool)&&delayed!=null){
+                final AccessibilityNodeInfo retained=AccessibilityNodeInfo.obtain(node),identity=AccessibilityNodeInfo.obtain(readbackIdentity);final AccessibilityForest.Ref original=selected;
+                delayed.schedule(main,()->readTextAfterInput(service,retained,identity,original,text,control,expected.revision),()->{retained.recycle();identity.recycle();});
+            }
             return returned;
         } finally { if(readbackIdentity!=null)readbackIdentity.recycle();node.recycle(); }
     }

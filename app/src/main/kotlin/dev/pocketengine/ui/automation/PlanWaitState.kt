@@ -24,6 +24,16 @@ internal fun planWaitState(plan: JSONObject): PlanWaitState? {
     if (state in setOf("unknown", "reconciling")) return PlanWaitState("原操作结果待核对", listOf("保留同一次触发和原任务。这里只查询原记录，不会补发已有操作；请打开原任务核对未决结果。"), inspect = true)
     if (step?.optBoolean("taskNeedsApproval") == true) return PlanWaitState("原任务需要具体操作审批", listOf("目标范围授权仍保留。请在原任务查看并批准或拒绝这次具体参数；这里不会代你授权。"), inspect = true)
     val next = decision.optLong("nextAt").takeIf { it > 0 }
+    if (reason.startsWith("business_wait_") || reason == "business_source_consent_required") {
+        val line = when (reason) {
+            "business_wait_pending" -> "原认证来源尚无可消费的新事件。这里只检查本机原inbox窗口，不请求模型或补造消息。"
+            "business_wait_retention_gap" -> "原anchor或扫描位置已不在保留窗口，未自动跳过缺口或前移已读位置。请暂停后重新选择仍可核对的来源并审阅。"
+            "business_wait_consumed_event_changed" -> "本次已经消费的原事件版本已变化。保留同一次触发身份，不换另一条事件重新触发目标。"
+            "business_source_consent_required" -> "请在原生范围页明确确认所选来源与这个固定目标。"
+            else -> "原渠道绑定、来源或本机记录暂不可核对；已撤销来源不能产生新的消费或派发。"
+        }
+        return PlanWaitState("等待认证来源事件", listOf(line, "只核验事件存在，不把消息正文当新指令；已合法启动的目标仍受独立原plan授权、预算和取消控制。"), inspect = hasOriginal, recheck = active, nextAt = next)
+    }
     if (reason.startsWith("remote_wait_")) {
         val remote = decision.optJSONObject("remoteWaitStatus")
         val detail = when (reason) {

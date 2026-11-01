@@ -26,6 +26,9 @@ final class ProxyRequestPolicy {
         void revalidate()throws Exception{
             ModelRequestPolicy.apply(requestConfig,messages,tools,new JSONObject(wire.toString()));
         }
+        void validateResult(JSONObject result,dev.pocketengine.runtime.usage.ProviderUsage.Observer usage)throws Exception{
+            ApiTurnStream.completeJson(requestConfig.provider,ProviderAdapters.selected(requestConfig.provider),result.toString(),tools,delta->{},usage);
+        }
         void beforeStreamData(String data)throws Exception{
             if("[DONE]".equals(data)){revalidate();return;}
             JSONObject frame=new JSONObject(data);JSONArray choices=frame.optJSONArray("choices");

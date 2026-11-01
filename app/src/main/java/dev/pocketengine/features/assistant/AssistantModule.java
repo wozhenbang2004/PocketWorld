@@ -28,9 +28,15 @@ public final class AssistantModule implements EngineModule {
     /** Trusted native admission only. An ACK is a TaskStore receipt, never model authorization. */
     public interface NativeInputHost {
         JSONObject start(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control)throws Exception;
+        /** Native owner settings, never copied into provider messages or stored owner prose. */
+        default JSONObject startScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{if(ownerScope!=null)throw new SecurityException("原宿主尚未支持明确任务范围，未丢弃主人选择或新建执行");return start(conversationId,goal,message,config,control);}
         JSONObject append(String conversationId,JSONObject message,String mode,JSONObject expected,RunControl control)throws Exception;
     }
     public interface CheckedAction {void run()throws Exception;}
+    private static JSONObject nativeExecutionScope(JSONObject input)throws Exception {
+        if(!input.has("executionScope"))return null;
+        if(!(input.get("executionScope") instanceof JSONObject))throw new SecurityException("任务范围必须为明确原生对象");return input.getJSONObject("executionScope");
+    }
     private interface Mutation<T> {T run()throws Exception;}
     private final FeatureContext context;
     private final EngineModule memory;
@@ -260,7 +266,7 @@ public final class AssistantModule implements EngineModule {
             }catch(Exception failure){if(starting)active.compareAndSet(live,null);throw failure;}
             String cid=saved.getString("conversationId");JSONObject message=saved.getJSONObject("message"),binding;
             try{
-                binding=starting?nativeInputHost.start(cid,safe,copy(message),config,live):nativeInputHost.append(cid,copy(message),mode,expected,live);
+                binding=starting?nativeInputHost.startScoped(cid,safe,copy(message),config,live,nativeExecutionScope(input)):nativeInputHost.append(cid,copy(message),mode,expected,live);
                 if(!live.matchesHostRun(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch")))throw new SecurityException("宿主未返回原任务控制绑定");
             }catch(Exception failure){
                 if(starting){live.cancel();active.compareAndSet(live,null);} // Never retry an uncertain task creation.
@@ -408,6 +414,7 @@ public final class AssistantModule implements EngineModule {
     /** Native history-reference projection. A normal new tail does not retire unchanged source refs. */
     public JSONArray projectMemoryHistory(JSONArray supplied,java.util.Set<String> delegatedMessageIds,String nativeConversationId)throws Exception{return projectMemoryHistory(supplied,delegatedMessageIds,nativeConversationId,null);}
     public JSONArray projectMemoryHistory(JSONArray supplied,java.util.Set<String> delegatedMessageIds,String nativeConversationId,dev.pocketengine.features.memory.ConversationHistory.SourceBytes sourceBytes)throws Exception{
+        final dev.pocketengine.features.memory.ConversationHistory.ReadScope readScope=nativeConversationId.isEmpty()?null:captureHistoryReadScope(nativeConversationId);
         JSONArray projected=new JSONArray(supplied.toString());boolean[] staleHistory={false};java.util.Map<String,String> calls=new java.util.HashMap<>();
         sourceRead(()->{for(int i=0;i<projected.length();i++){
             JSONObject row=projected.getJSONObject(i);String id=row.optString("ownerMessageId");JSONObject current=durable()?historyRepository.metadata(id):source(id);
@@ -416,7 +423,7 @@ public final class AssistantModule implements EngineModule {
             JSONArray declared=row.optJSONArray("tool_calls");for(int j=0;declared!=null&&j<declared.length();j++){JSONObject call=declared.getJSONObject(j);calls.put(call.getString("id"),call.getJSONObject("function").optString("name"));}
             String name=calls.get(row.optString("tool_call_id"));if(!"tool".equals(row.optString("role"))||!java.util.Set.of("memory_history_search","memory_history_read").contains(name==null?"":name))continue;
             try{JSONObject receipt=new JSONObject(row.getString("content"));if(!nativeConversationId.equals(receipt.optString("conversationId"))||nativeConversationId.isEmpty())throw new SecurityException("历史工具来源会话不符");
-                JSONArray refs=receipt.getJSONArray("messageSourceRefs");if(refs.length()>100)throw new SecurityException("历史来源过多");for(int j=0;j<refs.length();j++){SourceRef ref=SourceRef.fromJson(refs.getJSONObject(j));if(!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||!"message".equals(ref.kind)||!"current".equals(historyState(nativeConversationId,ref).optString("status")))staleHistory[0]=true;}
+                JSONArray refs=receipt.getJSONArray("messageSourceRefs");if(refs.length()>100)throw new SecurityException("历史来源过多");for(int j=0;j<refs.length();j++){SourceRef ref=SourceRef.fromJson(refs.getJSONObject(j));String sourceConversation=historyConversationFor(ref);if(sourceConversation==null)sourceConversation=nativeConversationId;dev.pocketengine.features.memory.ConversationHistory.requireReceiptScope(readScope,nativeConversationId,receipt,sourceConversation);if(!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||!"message".equals(ref.kind)||!"current".equals(historyState(sourceConversation,ref).optString("status")))staleHistory[0]=true;}
             }catch(Exception invalid){staleHistory[0]=true;}
         }return null;});
         // The journal/audit is not overwritten here. Retired reference output and derived prose
@@ -510,6 +517,29 @@ public final class AssistantModule implements EngineModule {
         public boolean current(){if(durable())try{return historyRepository.read(()->historyRepository.exists(conversation));}catch(Exception unavailable){return false;}synchronized(storage){if(!storageHealthy)return false;for(int i=0;i<conversations.length();i++){JSONObject row=conversations.optJSONObject(i);if(row!=null&&conversation.equals(row.optString("conversationId")))return true;}return false;}}
     }
     /** Native-only bounded retained-history access; never registered in handle()/EngineModule tools. */
+    public dev.pocketengine.features.memory.ConversationHistory.ReadScope captureHistoryReadScope(String conversation)throws Exception{
+        if(!durable())return null;return historyRepository.read(()->historyRepository.captureHistoryReadScope(conversation));
+    }
+    public JSONObject historyReadScopeSnapshot(String conversation)throws Exception{
+        if(!durable()){openHistoryConversation(conversation);return new JSONObject().put("conversationId",conversation).put("ownerId","owner").put("spaceId","private").put("mode","CURRENT").put("revision",0).put("canEnableOwnerPrivate",false).put("bodyIncluded",false).put("executionAuthorized",false);}
+        return historyRepository.read(()->historyRepository.historyReadScopeSnapshot(conversation));
+    }
+    /** Native owner-only; not included in handle()/tool/JS catalogs. May revoke a busy run. */
+    public JSONObject setHistoryReadScope(String conversation,long expected,String mode,boolean ownerConfirmed)throws Exception{
+        final dev.pocketengine.features.memory.ConversationHistory.ScopeMode selected;
+        try{selected=dev.pocketengine.features.memory.ConversationHistory.ScopeMode.valueOf(mode);}catch(Exception unknown){throw new IllegalArgumentException("请选择当前会话或主人私人会话范围");}
+        if(selected==dev.pocketengine.features.memory.ConversationHistory.ScopeMode.OWNER_PRIVATE&&!ownerConfirmed)throw new SecurityException("必须由主人明确开启这个会话的跨会话只读范围");
+        synchronized(admission){if(!durable())throw new SecurityException("请先完成原文权威迁移，不能给旧未知文件扩大范围");return historyRepository.setHistoryReadScope(conversation,expected,selected);}
+    }
+    public String historyConversationFor(SourceRef expected)throws Exception{
+        if(expected==null||!"message".equals(expected.kind)||!"owner".equals(expected.ownerId)||!"private".equals(expected.spaceId))throw new SecurityException("历史消息来源范围无效");
+        if(!durable())return null;JSONObject actual=historyRepository.read(()->historyRepository.metadata(expected.sourceId));
+        if(actual==null||actual.optBoolean("deleted")||actual.optBoolean("memoryContextRetired")||actual.getLong("revision")!=expected.revision||actual.optLong("memorySourceRetiredThrough")>=expected.revision)throw new SecurityException("原历史消息已变化或撤回");
+        return actual.getString("conversationId");
+    }
+    public JSONObject queryHistoryConversations(dev.pocketengine.features.memory.ConversationHistory.ReadScope selected,JSONObject options,RunControl control)throws Exception{
+        if(!durable())throw new SecurityException("旧文件权威不支持跨会话目录");return historyRepository.read(()->historyRepository.queryHistoryConversations(selected,options,control));
+    }
     public dev.pocketengine.features.memory.ConversationHistory.Gate openHistoryConversation(String nativeConversationId)throws Exception{
         return sourceRead(()->{if(durable()){if(!historyRepository.exists(nativeConversationId))throw new IllegalArgumentException("原私人会话不存在");}else find(nativeConversationId);return new ConversationHistoryGate(nativeConversationId);});
     }

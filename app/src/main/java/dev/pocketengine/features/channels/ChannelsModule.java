@@ -37,6 +37,7 @@ public final class ChannelsModule implements EngineModule {
     private volatile EngineModule memory;
     private volatile FeatureHost.MemorySynchronizer memorySynchronizer;
     private volatile HostTaskPort hostTasks;
+    private volatile InboundObserver inboundObserver;
     private GroupChannelBridge groupBridge;
     private final GroupInboundFiles groupInbound;
 
@@ -56,6 +57,35 @@ public final class ChannelsModule implements EngineModule {
     public void setMemorySynchronizer(FeatureHost.MemorySynchronizer synchronizer){memorySynchronizer=java.util.Objects.requireNonNull(synchronizer);}
     /** Admission adapter only; root retains the sole TaskStore, worker, approvals and execution policy. */
     public void setHostTaskPort(HostTaskPort port){hostTasks=java.util.Objects.requireNonNull(port);}
+    /** Application-only observation after original durable acceptance. No JSON factory/feature tool. */
+    public interface InboundObserver {void accepted(InboundFact fact)throws Exception;}
+    public synchronized void setInboundObserver(InboundObserver observer){if(closed)throw new SecurityException("原渠道已关闭");java.util.Objects.requireNonNull(observer);if(inboundObserver!=null&&inboundObserver!=observer)throw new SecurityException("原入站观察者已挂载，不能替换当前消费者");inboundObserver=observer;}
+    public static final class InboundFact {
+        private final ChannelsModule issuer;private final String value,readScope;
+        private InboundFact(ChannelsModule issuer,JSONObject value)throws Exception{this.issuer=issuer;this.value=value.toString();readScope=issuer.core.inboundFactReadScope(value.getString("eventId")).toString();}
+        public JSONObject metadata()throws Exception{return new JSONObject(value);}
+        /** Takes the Core monitor only. Never call this while holding TaskStore/Book monitors. */
+        public void checkCurrent()throws Exception{if(issuer.closed)throw new SecurityException("原渠道已关闭");JSONObject expected=new JSONObject(value),actual=issuer.core.inboundFactMetadata(expected.getString("eventId"));if(!expected.getString("fingerprint").equals(actual.getString("fingerprint")))throw new SecurityException("原入站内容、来源、执行关联或冻结版本已变化");}
+    }
+    public InboundFact originalInboundFact(String originalEventId)throws Exception {if(closed)throw new SecurityException("原渠道已关闭");return new InboundFact(this,core.inboundFactMetadata(originalEventId));}
+    /** Private carriers only; no feature command/JSON factory and no network backfill. */
+    public static final class InboundPage {
+        private final ChannelsModule issuer;private final InboundFact anchor;private final String value;
+        private final java.util.List<InboundFact> facts;
+        private InboundPage(ChannelsModule issuer,InboundFact anchor,JSONObject page)throws Exception {
+            this.issuer=issuer;this.anchor=anchor;value=page.getJSONObject("metadata").toString();
+            facts=new java.util.ArrayList<>();JSONArray rows=page.getJSONArray("facts");for(int i=0;i<rows.length();i++)facts.add(new InboundFact(issuer,rows.getJSONObject(i)));
+        }
+        public JSONObject metadata()throws Exception{return new JSONObject(value);}
+        public java.util.List<InboundFact> facts(){return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(facts));}
+        /** Core monitor only. Consumer must check outside TaskStore/Book locks before/after SQL. */
+        public void checkCurrent()throws Exception{if(issuer.closed)throw new SecurityException("原渠道已关闭");if(new JSONObject(value).getBoolean("gap")){issuer.core.checkInboundFactReadScope(new JSONObject(anchor.readScope));if(!facts.isEmpty())throw new SecurityException("缺口不能携带可消费事实");}else anchor.checkCurrent();for(InboundFact fact:facts)fact.checkCurrent();}
+    }
+    public InboundPage nextInboundFact(InboundFact anchor,String afterEventId,int limit)throws Exception {
+        if(closed||anchor==null||anchor.issuer!=this)throw new SecurityException("原等待必须使用此渠道签发的来源事实");
+        InboundPage page=new InboundPage(this,anchor,core.nextInboundFacts(anchor.metadata(),new JSONObject(anchor.readScope),afterEventId,limit));page.checkCurrent();return page;
+    }
+    private void publishInbound(String eventId){InboundObserver observer=inboundObserver;if(observer==null||closed)return;try{InboundFact fact=originalInboundFact(eventId);fact.checkCurrent();observer.accepted(fact);}catch(Exception unavailable){try{changed("native_inbound_observation_unconfirmed",eventId);}catch(Exception ignored){/* Recover from the retained original fact; never re-admit/retry business or input. */}}}
     /** Application-only bridge; receives the same authenticated core, HTTP client and native vault. */
     public synchronized GroupChannelBridge groupBridge()throws Exception {
         if(closed)throw new IllegalStateException("渠道模块已关闭");
@@ -232,6 +262,7 @@ public final class ChannelsModule implements EngineModule {
     private void handleAccepted(JSONObject profile,JSONObject accepted)throws Exception {
         if(!accepted.getBoolean("duplicate")) {
             JSONObject event=accepted.getJSONObject("event"),route=accepted.getJSONObject("route");String id=event.getString("id");
+            publishInbound(id); // Original accept already returned after durable inbox/seen persistence; no Core monitor held.
             changed("message_received",id);
             String text=event.getString("text");
             if(text.trim().isEmpty()&&ChannelMessageParts.weixinImagePositions(event.optJSONObject("messageParts")).length()>0&&!weixin.ownerImagesEligible(event)){core.eventStatus(id,"awaiting_local","已保留原图片消息；尚无当前原主人绑定/图片处理同意，不下载或调用模型。混合消息仍可按文字处理。");changed("owner_image_input_unavailable",id);return;}
@@ -287,6 +318,7 @@ public final class ChannelsModule implements EngineModule {
             authority.check();receipt=port.admit(request,authority);core.hostTaskAdmitted(requestId,receipt);
         }catch(Exception uncertain){core.hostTaskAdmissionUnknown(requestId);changed("owner_task_admission_unknown",requestId);throw new IllegalStateException("宿主是否已接收此任务尚未确认；来源编号已保留，不会重复准入，请核对原任务",uncertain);}
         changed("owner_task_admitted",requestId);
+        publishInbound(eventId); // Publish only after original native host admission created the real association.
         if(core.hostTask(requestId).optLong("hostReceiptRevision",0)<=receipt.revision)recordHostTaskUpdate(requestId,receipt,sendAfter);
         return core.hostTask(requestId).put("known",false);
     }

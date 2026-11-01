@@ -10,11 +10,15 @@ public final class NativePhoneEntry {
     @FunctionalInterface public interface Admission {void check()throws Exception;}
     @FunctionalInterface public interface Effect<T> {T run()throws Exception;}
     public static <T>T call(RunControl control,long revision,Admission admission,Effect<T> effect)throws Exception {
+        return call(control,revision,false,admission,effect);
+    }
+    /** Only the existing native paused-owner permit may choose this overload. */
+    public static <T>T call(RunControl control,long revision,boolean owner,Admission admission,Effect<T> effect)throws Exception {
         AtomicInteger state=new AtomicInteger();AtomicReference<T> result=new AtomicReference<>();
         Runnable cancel=()->state.compareAndSet(0,2);control.onCancel(cancel);
         try {
             admission.check();
-            control.dispatchAtPauseRevision(revision,()->{
+            control.dispatchAtPauseState(revision,owner,()->{
                 if(!state.compareAndSet(0,1))throw new InterruptedException("原手机派发已停止");
                 result.set(effect.run());
             });

@@ -22,16 +22,17 @@ public final class PlanExecutionPolicy {
     }
     static JSONObject settings(JSONObject input)throws Exception {
         for(Iterator<String> keys=input.keys();keys.hasNext();){String key=keys.next();
-            if(!key.matches("mode|maxTaskAdmissions|phoneMode|modelObservationConsent|allowPrivateArtifactFreeze|zoneId|quietHours|expiresAt|requiresNetwork|requiresCharging|minBatteryPercent"))throw new IllegalArgumentException("不支持的计划执行设置："+key);
+            if(!key.matches("mode|maxTaskAdmissions|phoneMode|modelObservationConsent|allowPrivateArtifactFreeze|businessEventConsent|zoneId|quietHours|expiresAt|requiresNetwork|requiresCharging|minBatteryPercent"))throw new IllegalArgumentException("不支持的计划执行设置："+key);
         }
         String mode=text(input,"mode",20);if(!mode.matches("manual|automatic"))throw new IllegalArgumentException("计划触发应为manual或automatic");
         long maximum=AutomationPolicy.integer(input,"maxTaskAdmissions",1,1000);
         String phoneMode=input.optString("phoneMode","background");if(!phoneMode.matches("background|main_screen"))throw new IllegalArgumentException("请选择明确手机执行位置");
         if(input.has("modelObservationConsent")&&!(input.opt("modelObservationConsent") instanceof Boolean))throw new IllegalArgumentException("模型观察同意必须为明确布尔值");
         if(input.has("allowPrivateArtifactFreeze")&&!(input.opt("allowPrivateArtifactFreeze") instanceof Boolean))throw new IllegalArgumentException("私人文件成果范围必须为明确布尔值");
+        if(input.has("businessEventConsent")&&!(input.opt("businessEventConsent") instanceof Boolean))throw new IllegalArgumentException("认证来源触发须由主人明确确认");
         JSONObject policy=new JSONObject(input.toString());policy.remove("mode");policy.remove("maxTaskAdmissions");
-        policy.remove("phoneMode");policy.remove("modelObservationConsent");policy.remove("allowPrivateArtifactFreeze");
-        return new JSONObject().put("mode",mode).put("maxTaskAdmissions",maximum).put("phoneMode",phoneMode).put("modelObservationConsent",Boolean.TRUE.equals(input.opt("modelObservationConsent"))).put("allowPrivateArtifactFreeze",Boolean.TRUE.equals(input.opt("allowPrivateArtifactFreeze"))).put("policy",AutomationPolicy.rule(policy,"UTC"));
+        policy.remove("phoneMode");policy.remove("modelObservationConsent");policy.remove("allowPrivateArtifactFreeze");policy.remove("businessEventConsent");
+        return new JSONObject().put("mode",mode).put("maxTaskAdmissions",maximum).put("phoneMode",phoneMode).put("modelObservationConsent",Boolean.TRUE.equals(input.opt("modelObservationConsent"))).put("allowPrivateArtifactFreeze",Boolean.TRUE.equals(input.opt("allowPrivateArtifactFreeze"))).put("businessEventConsent",Boolean.TRUE.equals(input.opt("businessEventConsent"))).put("policy",AutomationPolicy.rule(policy,"UTC"));
     }
     static JSONArray dependencies(JSONObject step,JSONArray previousIds)throws Exception {
         JSONArray input=step.optJSONArray("dependsOn");
@@ -63,6 +64,7 @@ public final class PlanExecutionPolicy {
             definitions.put(new JSONObject().put("id",id).put("goal",goal).put("title",step.getString("title")).put("details",step.getString("details"))
                     .put("executor",executor).put("verification",verification).put("dueAt",step.getLong("dueAt")).put("expiresAt",step.opt("expiresAt")).put("dependencies",normalized));prior.add(id);
             if(step.has("remoteWait")&&!step.isNull("remoteWait"))definitions.getJSONObject(i).put("remoteWait",PlanRemoteWait.standard(step.getJSONObject("remoteWait")));
+            if(step.has("businessWait")&&!step.isNull("businessWait"))definitions.getJSONObject(i).put("businessWait",PlanBusinessWait.standard(step.getJSONObject("businessWait")));
         }
         JSONObject definition=new JSONObject().put("id",plan.getString("id")).put("goal",text(plan,"goal",4000)).put("steps",definitions);
         byte[] digest=MessageDigest.getInstance("SHA-256").digest(definition.toString().getBytes(StandardCharsets.UTF_8));StringBuilder result=new StringBuilder();for(byte b:digest)result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();

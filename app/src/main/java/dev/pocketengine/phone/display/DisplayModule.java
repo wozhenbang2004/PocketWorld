@@ -261,6 +261,14 @@ public final class DisplayModule implements EngineModule {
             throw new SecurityException("后台显示或会话回执身份不匹配");
         return result;
     }
+    /** Native task supervisor only. It supplies a freshly checked canonical deadline, never a model duration. */
+    public synchronized JSONObject renewTaskLease(String taskId,String runId,int epoch,RunControl control,String expectedSession,int expectedDisplay,long taskDeadline)throws Exception {
+        if(!ownedBy(taskId)||control==null||control.isCancelled()||!control.matchesHostRun(taskId,runId,epoch)||!hasSession())throw new SecurityException("原后台任务已停止");
+        JSONObject current=session();if(expectedDisplay!=current.optInt("displayId",-1)||!expectedSession.equals(current.optString("sessionId")))throw new SecurityException("不能续期其他后台会话");
+        long now=System.currentTimeMillis();if(taskDeadline<=now)throw new SecurityException("原任务范围已到期");long duration=taskDeadline==Long.MAX_VALUE?30_000:Math.min(30_000,taskDeadline-now);
+        JSONObject result=client().call("heartbeat",new JSONObject().put("sessionId",expectedSession).put("displayId",expectedDisplay).put("lifetimeMs",duration),null);
+        requireOk(result);if(!result.optBoolean("renewed")||expectedDisplay!=result.optInt("displayId",-1)||!expectedSession.equals(result.optString("sessionId")))throw new SecurityException("原后台续期回执不匹配");return result;
+    }
     public synchronized JSONObject releaseSession(String sessionId,int displayId)throws Exception {
         JSONObject owned=session();
         if(sessionId.equals(owned.optString("sessionId"))&&displayId==owned.optInt("displayId",-1))return release();
@@ -317,7 +325,7 @@ public final class DisplayModule implements EngineModule {
     }
     static void requireOk(JSONObject result){if(!result.optBoolean("ok"))throw new IllegalStateException(result.optString("message","后台请求未成功"));}
     private static JSONObject publicState(JSONObject input)throws Exception {
-        JSONObject out=new JSONObject();for(String key:new String[]{"sessionActive","displayId","sessionId","width","height","density","sdk","requestedPackageName","backgroundOnly","focusIsolationRequested","displayFlagsConfirmed","recoveryRequired","frameMetadataOnly"})if(input.has(key))out.put(key,input.get(key));return out;
+        JSONObject out=new JSONObject();for(String key:new String[]{"sessionActive","displayId","sessionId","width","height","density","sdk","requestedPackageName","backgroundOnly","focusIsolationRequested","displayFlagsConfirmed","recoveryRequired","frameMetadataOnly","imeIsolation","imeReason","inputInjectionAvailable","captureAvailable"})if(input.has(key))out.put(key,input.get(key));return out;
     }
     private static String randomHex(int count){byte[] data=new byte[count];new SecureRandom().nextBytes(data);StringBuilder result=new StringBuilder();for(byte b:data)result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();}
 }

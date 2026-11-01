@@ -77,7 +77,7 @@ private fun SourceMemoryEditor(kind: String, id: String, initialText: String, st
 
 /** Opening previews the exact host version only; a second explicit action sends it to the model. */
 @Composable
-private fun SourceLearningDialog(kind: String, id: String, state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
+internal fun SourceLearningDialog(kind: String, id: String, state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
     var preparedId by remember(kind, id) { mutableStateOf<String?>(null) }
     var proposedId by remember(kind, id) { mutableStateOf<String?>(null) }
     var submittedSource by remember(kind, id) { mutableStateOf<JSONObject?>(null) }
@@ -88,7 +88,7 @@ private fun SourceLearningDialog(kind: String, id: String, state: PocketUiState,
     fun readSource() {
         proposedId = null; submittedSource = null; localMessage = null; stoppedAcknowledged = false; showOriginalSource = false
         preparedId = controller.requestOwnerDomain("learning", "prepareLearningSource", JSONObject()
-            .put("kind", if (kind == "task") "task_evidence" else "message")
+            .put("kind", if (kind == "task" || kind == "task_evidence") "task_evidence" else if (kind == "workspace_file") "workspace_file" else "message")
             .put("sourceId", if (kind == "task") "task:$id:verified_result" else id))
     }
     LaunchedEffect(kind, id) { readSource() }
@@ -114,7 +114,7 @@ private fun SourceLearningDialog(kind: String, id: String, state: PocketUiState,
     } }
     val result = outcome.getOrNull()
     val busy = "proposeLearning" in state.ownerPending("learning") || "prepareLearningSource" in state.ownerPending("learning")
-    val expectedKind = if (kind == "task") "task_evidence" else "message"
+    val expectedKind = if (kind == "task" || kind == "task_evidence") "task_evidence" else if (kind == "workspace_file") "workspace_file" else "message"
     val expectedSourceId = if (kind == "task") "task:$id:verified_result" else id
     val sourceAllowed = source != null && source.optString("status") == "current" && source.opt("learningAllowed") == true && source.opt("modelCalled") == false && source.opt("text") is String &&
         source.optJSONObject("sourceRef")?.let { ref -> ref.optString("ownerId") == "owner" && ref.optString("spaceId") == "private" && ref.optString("kind") == expectedKind &&

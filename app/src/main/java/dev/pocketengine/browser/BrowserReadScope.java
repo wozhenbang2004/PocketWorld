@@ -54,8 +54,8 @@ public final class BrowserReadScope {
     public static boolean eligible(JSONObject policy,String tool,JSONObject args,JSONObject nativePin)throws Exception {
         if(!readTool(tool))return false;Set<String> fields;
         switch(tool){
-            case "browser_task_observe":fields=Set.of("tabId","read","recipe");break;
-            case "browser_task_wait":fields=Set.of("tabId","condition","value","timeoutMs");break;
+            case "browser_task_observe":fields=Set.of("tabId","read","recipe","frameRef");break;
+            case "browser_task_wait":fields=Set.of("tabId","condition","value","target","timeoutMs");break;
             case "browser_task_download_status":fields=Set.of("downloadId");break;
             case "browser_task_retain_source":fields=Set.of("tabId","observationId","excerpt");break;
             default:fields=Set.of("url","allowedRedirectOrigins","maxBytes","maxChars");
@@ -69,9 +69,12 @@ public final class BrowserReadScope {
         if(tool.equals("browser_task_download_status"))return args.getString("downloadId").equals(nativePin.optString("downloadId"));
         if(!args.getString("tabId").equals(nativePin.optString("tabId")))return false;
         if(tool.equals("browser_task_retain_source"))return policy.getBoolean("allowSourceRetention")&&args.getString("observationId").equals(nativePin.optString("observationId"))&&(!args.has("excerpt")||args.get("excerpt") instanceof String&&args.getString("excerpt").length()<=6000);
+        if(args.has("frameRef")&&(nativePin.optJSONObject("readFrame")==null||!args.getString("frameRef").equals(nativePin.getJSONObject("readFrame").optString("frameId"))))return false;
         if(tool.equals("browser_task_observe")&&args.has("read"))BrowserSemanticRead.validate(args.getJSONObject("read"));if(args.has("recipe")){if(!tool.equals("browser_task_observe")||!args.has("read"))return false;BrowserReadRecipe.reference(args.getJSONObject("recipe"));}
         if(tool.equals("browser_task_wait")){
-            String condition=args.getString("condition");if(!Set.of("load","url","text").contains(condition)||condition.equals("load")&&args.has("value")||!condition.equals("load")&&args.optString("value").isEmpty())return false;
+            String condition=args.getString("condition");
+            if(condition.equals("target")){if(args.has("value")||!args.has("target"))return false;BrowserTargetCondition.validate(args.getJSONObject("target"));if(args.getJSONObject("target").has("frameRef")&&(nativePin.optJSONObject("readFrame")==null||!args.getJSONObject("target").getString("frameRef").equals(nativePin.getJSONObject("readFrame").optString("frameId"))))return false;}
+            else if(args.has("target")||!Set.of("load","url","text").contains(condition)||condition.equals("load")&&args.has("value")||!condition.equals("load")&&args.optString("value").isEmpty())return false;
             if(args.has("timeoutMs")){Object ms=args.get("timeoutMs");if(!(ms instanceof Number)||((Number)ms).doubleValue()!=args.optInt("timeoutMs")||args.getInt("timeoutMs")<100||args.getInt("timeoutMs")>6000)return false;}
         }
         return true;

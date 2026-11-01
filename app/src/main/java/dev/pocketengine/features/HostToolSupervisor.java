@@ -44,8 +44,10 @@ public final class HostToolSupervisor implements CapabilityPort {
     public static Set<String> configuredSkillCapabilities(FeatureHost host,TaskStore tasks)throws Exception{return new HostToolSupervisor(host,tasks,null,null,0,true,true).skillCapabilityNames();}
     private HostToolSupervisor(FeatureHost host,TaskStore tasks,String taskId,String runId,int epoch,boolean allowWrites,boolean catalogueOnly)throws Exception{
         this.host=java.util.Objects.requireNonNull(host);this.tasks=java.util.Objects.requireNonNull(tasks);this.taskId=catalogueOnly?null:identifier(taskId);this.runId=catalogueOnly?null:identifier(runId);this.epoch=epoch;this.allowWrites=allowWrites;
-        add("memory","search","memory_search","检索主人私人记忆，只返回真实已保存记录。",false,props("query",text(8000),"limit",integer(1,100)),"query");
-        add("memory","recall","memory_recall","按当前问题召回主人私人记忆及来源。",false,props("query",text(8000),"limit",integer(1,20)),"query");
+        add("memory","search","memory_search","检索主人私人记忆，只返回真实已保存记录。可用queries补充至多3条同义/语义短查询；原query始终保留，不增加模型请求或来源权限。",false,props("query",text(8000),"queries",querySuggestions(),"limit",integer(1,100)),"query");
+        add("memory","recall","memory_recall","按当前问题召回主人私人记忆及来源。可用queries补充至多3条同义/语义短查询；原query始终保留，不增加模型请求或来源权限。",false,props("query",text(8000),"queries",querySuggestions(),"limit",integer(1,20)),"query");
+        add("memory","$method_decision","memory_method_decision","记录本任务对准确经验版本的明确采用/不适用/未选决定与理由。apply须关联本task/run已经返回确定回执的1至8个stepOperationIds，可从memory_raw_query(section=operations)取得原operationId。只记录决定和原步骤关系，不证明方法语义有效或导致业务成功，不执行或重试任何步骤。",true,
+                props("recordId",text(240),"revision",new JSONObject().put("type","integer").put("minimum",1).put("maximum",Long.MAX_VALUE),"decision",new JSONObject().put("type","string").put("enum",new JSONArray().put("apply").put("not_applicable").put("not_selected")),"reason",text(1000),"stepOperationIds",new JSONObject().put("type","array").put("maxItems",8).put("items",text(80))),"recordId","revision","decision","reason","stepOperationIds");
         add("workspace","$projects","workspace_projects","列出实际本地工作区项目。",false,new JSONObject());
         add("workspace","list","workspace_list","列出项目已提交文件及版本。",false,props("projectId",text(80)),"projectId");
         add("workspace","read","workspace_read","读取真实项目文本文件；version省略为最新提交。",false,props("projectId",text(80),"path",text(240),"version",integer(0,Integer.MAX_VALUE)),"projectId","path");
@@ -249,7 +251,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         JSONObject approvalCapability=new JSONObject().put("feature",tool.feature).put("command",tool.command);
         if(tool.feature.equals("teams")&&tool.command.equals("start"))approvalCapability.put("teamDefinition",host.teamDefinition(args.getString("teamId")));
-        if(tool.write&&!tool.command.equals("$skill_execute")){
+        if(tool.write&&!tool.command.equals("$skill_execute")&&!tool.command.equals("$method_decision")){
             if(!allowWrites)throw new SecurityException("该执行仅允许读取证据");
             JSONObject capability=approvalCapability;
             if(tool.preset!=null)capability.put("pluginId",tool.preset.getString("id")).put("tool",tool.preset.getString("tool")).put("installationId",tool.preset.getString("expectedInstallationId")).put("version",tool.preset.getString("expectedVersion")).put("expectedExecutionIdentity",tool.preset.getString("expectedExecutionIdentity"));
@@ -263,7 +265,28 @@ public final class HostToolSupervisor implements CapabilityPort {
         control.check();tasks.checkCapability(taskId,runId,epoch,name,control);
         EngineModule module=host.module(tool.feature);if(module==null)throw new IllegalStateException("所选能力已不可用");
         JSONObject result;
-        if(tool.command.equals("$projects"))result=new JSONObject().put("projects",module.snapshot().getJSONArray("projects"));
+        if(tool.command.equals("$method_decision")){
+            if(!allowWrites||operationId.isEmpty()||!(module instanceof dev.pocketengine.features.memory.MemoryModule)||memoryFence==null||control!=memoryControl||control!=workingControl)throw new SecurityException("方法决定必须来自原任务已登记的审计操作");
+            host.synchronizeMemory(privateScope());final String decisionOperation=operationId;
+            // This tool owns one prepared audit row. The generic read fence would reject that
+            // very row as unresolved. Keep the same Tasks admission and use the exact native
+            // current/own-operation checks below; no other unresolved operation is allowed.
+            synchronized(tasks){
+                var selected=((dev.pocketengine.features.memory.MemoryModule)module).selectProcedureForNativeTask(privateScope(),args.getString("recordId"),args.getLong("revision"));
+                result=tasks.recordLearnedMethodDecision(taskId,runId,epoch,decisionOperation,selected,control);
+            }
+        }
+        else if(tool.feature.equals("memory")&&java.util.Set.of("search","recall").contains(tool.command)&&args.has("queries")){
+            if(memoryControl!=control||taskMemory==null||memoryTask==null||memoryFence==null)throw new SecurityException("原任务记忆选择尚未绑定，未放宽来源读取");
+            host.synchronizeMemory(privateScope());
+            var plan=dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.getJSONArray("queries"));
+            var selected=taskMemory.prepareSemanticTaskRecall(privateScope(),memoryTask,plan,Math.min(16,args.optInt("limit",6)),12000,memoryFence);
+            result=memoryFence.admit(()->{
+                JSONObject snapshot=taskMemory.validateTaskMemorySelection(privateScope(),selected,memoryFence);
+                tasks.prepareMemoryToolReference(name,selected,control);return snapshot;
+            });
+        }
+        else if(tool.command.equals("$projects"))result=new JSONObject().put("projects",module.snapshot().getJSONArray("projects"));
         else if(tool.command.equals("$teams"))result=new JSONObject().put("teams",module.snapshot().getJSONArray("teams"));
         else if(tool.feature.equals("teams")&&tool.command.equals("start"))result=host.startTeamForTask(taskId,runId,operationId.isEmpty()?UUID.randomUUID().toString():operationId,args,approvalCapability.getJSONObject("teamDefinition"),control);
         else if(tool.feature.equals("teams")&&tool.command.equals("get"))result=host.readTeamForTask(taskId,runId,epoch,args,control);
@@ -311,6 +334,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     private static JSONObject definition(String name,String description,JSONObject schema)throws Exception{return new JSONObject().put("type","function").put("function",new JSONObject().put("name",name).put("description",description).put("parameters",schema));}
     private static JSONObject props(Object... values)throws Exception{JSONObject properties=new JSONObject();for(int i=0;i+1<values.length;i+=2)properties.put(String.valueOf(values[i]),values[i+1]);return properties;}
     private static JSONObject text(int max)throws Exception{return new JSONObject().put("type","string").put("maxLength",max);}
+    private static JSONObject querySuggestions()throws Exception{return new JSONObject().put("type","array").put("maxItems",3).put("items",text(500));}
     private static JSONObject integer(int min,int max)throws Exception{return new JSONObject().put("type","integer").put("minimum",min).put("maximum",max);}
     private static JSONObject privateScope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
     private static String identifier(String value){if(value==null||!value.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("宿主taskId或runId无效");return value;}

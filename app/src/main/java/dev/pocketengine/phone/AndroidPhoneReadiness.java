@@ -73,7 +73,10 @@ public final class AndroidPhoneReadiness {
                     .put("backgroundSessionReady", state.getBoolean("readyForTask"))
                     .put("backgroundClean", !state.optBoolean("releasePending") && !state.optBoolean("recoveryRequired"))
                     .put("backgroundSessionId", state.opt("sessionId") == null ? JSONObject.NULL : state.opt("sessionId"))
-                    .put("backgroundDisplayId", state.optInt("displayId", -1));
+                    .put("backgroundDisplayId", state.optInt("displayId", -1))
+                    .put("backgroundInput",state.opt("inputInjectionAvailable")==null?JSONObject.NULL:state.opt("inputInjectionAvailable"))
+                    .put("backgroundCapture",state.opt("captureAvailable")==null?JSONObject.NULL:state.opt("captureAvailable"))
+                    .put("backgroundIme",state.optString("imeIsolation").equals("available")?Boolean.TRUE:state.optString("imeIsolation").equals("unavailable")?Boolean.FALSE:JSONObject.NULL);
         } catch (Exception unavailable) {
             facts.put("backgroundConnected", JSONObject.NULL).put("backgroundSessionReady", JSONObject.NULL).put("backgroundClean", JSONObject.NULL);
         }

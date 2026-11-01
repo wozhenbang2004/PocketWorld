@@ -628,7 +628,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (domain == "accounts" && (command in setOf("beginLogin", "cancelLogin", "logout") || command == "setEnabled" && !payload.optBoolean("enabled"))) authorizationOpening = null
         ownerRequests[key]?.let { previous ->
             if (previous.payload.toString() == payload.toString()) return previous.id
-            if (command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "models", "openSource", "prepareLearningSource", "discoverMcp", "discoverMcpAuthorized", "searchTaskMemoryTasks", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "getLearningJob", "listLearningJobs", "searchOwnerOriginals", "readOwnerOriginalSearchHit", "selectOwnerOriginalReference")) throw IllegalStateException("这项操作仍在处理中，请等待真实回执")
+            if (command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "models", "openSource", "prepareLearningSource", "discoverMcp", "discoverMcpAuthorized", "searchTaskMemoryTasks", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "getLearningJob", "listLearningJobs", "searchOwnerOriginals", "readOwnerOriginalSearchHit", "selectOwnerOriginalReference")) throw IllegalStateException("这项操作仍在处理中，请等待真实回执")
             previous.control.cancel(); previous.call.cancel(); originalSourceStages.remove(previous.id)
             if (domain == "mcp" && command in setOf("discoverMcp", "discoverMcpAuthorized")) cleanOwnerResult(domain, "cancel", JSONObject().put("operationId", previous.payload.optString("_operationId")))
         }
@@ -663,7 +663,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
             } catch (error: Exception) { failure = error }
             if (failure == null && domain == "accounts" && command == "selectModel") app.sendState()
-            if (failure == null && domain != "accounts" && command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "openSource", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "discoverMcp", "discoverMcpAuthorized", "discardMcpPreview", "cancel")) {
+            if (failure == null && domain != "accounts" && command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "openSource", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "discoverMcp", "discoverMcpAuthorized", "discardMcpPreview", "cancel")) {
                 try { app.features.sendState() } catch (_: Exception) { /* The direct receipt remains authoritative. */ }
             }
             try {
@@ -1180,6 +1180,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if(unresolved!=null){if(canRetryLocallyUnsent(unresolved.clientId))state=state.copy(notice="本进程确认这条原输入尚未派发；修复保存问题后，请明确点击原输入下的重新保存并发送")else{queryChatSubmission(unresolved.clientId);state=state.copy(notice="正在查询同一输入的原回执，没有用新消息身份重发")};return}
         val client=try{voiceInput.claimMessageId(voiceTarget(false),voiceOwnerAuthority())?:UUID.randomUUID().toString()}catch(error:Exception){state=state.copy(error=message(error));return}
         val input=JSONObject().put("message",text.trim()).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray().also{a->selected.forEach{a.put(it.selection())}});if(selectedSources.length()>0)input.put("ownerSourceRefs",selectedSources)
+        if(!state.chatBusy)input.put("executionScope",newTaskExecutionScope())
         state.conversationId?.let{input.put("conversationId",it)}
         if(state.chatBusy)for(key in listOf("taskId","runId","epoch"))input.put(key,binding!!.get(key))
         try{model.prepare(client,draft.key,draft.revision,fingerprint,if(state.chatBusy)binding else null);publishComposer()}
@@ -1219,6 +1220,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } }
     }
     fun cancelChat() { state = state.copy(modelDrafts = state.modelDrafts.filterKeys { id -> state.tasks.find { it.id == id }?.raw?.optString("conversationId") != state.conversationId }); feature("assistant", "cancel") }
+    var newTaskScopeMinutes by mutableStateOf(0)
+        private set
+    val newTaskToolBudget: Int get() = app.settings.get().maxSteps
+    val newTaskModelBudget: Int get() = dev.pocketengine.store.TaskExecutionScope.defaultModelBudget(newTaskToolBudget)
+    fun selectNewTaskDeadline(minutes: Int) { require(minutes in setOf(0,30,120)); newTaskScopeMinutes = minutes }
+    private fun newTaskExecutionScope(): JSONObject = JSONObject().put("deadlineAt", if (newTaskScopeMinutes == 0) 0L else System.currentTimeMillis() + newTaskScopeMinutes * 60_000L).put("toolLimit", newTaskToolBudget).put("modelCallLimit", newTaskModelBudget)
+    fun configureExecutionScope(task: UiTask, minutes: Int, tools: Int, models: Int) {
+        if (minutes !in setOf(-1,0,30,120) || tools !in 1..400 || models !in 1..512) return
+        native("configureTaskExecutionScope", JSONObject().put("taskId",task.id).put("expectedRevision",task.raw.optJSONObject("executionScope")?.optLong("revision") ?: 0L).put("deadlineAt",if(minutes == -1) task.raw.getJSONObject("executionScope").getLong("deadlineAt") else if(minutes==0)0L else System.currentTimeMillis()+minutes*60_000L).put("toolLimit",tools).put("modelCallLimit",models))
+    }
     fun startPhone(goal: String, mode: String) {
         if (state.phoneSubmitting) return
         if (mode == "background") {
@@ -1231,7 +1242,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         try{voiceInput.claimMessageId(voiceTarget(true),voiceOwnerAuthority())}catch(error:Exception){state=state.copy(error=message(error));return}
         state = state.copy(phoneSubmitting = true)
-        native("startRun", JSONObject().put("goal", goal.trim()).put("executionMode", mode).put("screenConsent", true))
+        native("startRun", JSONObject().put("goal", goal.trim()).put("executionMode", mode).put("screenConsent", true).put("executionScope",newTaskExecutionScope()))
     }
     fun pausePhone() { native("pauseRun") }
     fun continuePhone() { state.tasks.find { it.id == state.activeTaskId }?.let { resumeTask(it, "") } }
@@ -1331,12 +1342,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun display(command: String) { feature("display", command) }
     fun openBackgroundSetup() { state = state.copy(backgroundSetupOpen = true); refreshBackgroundSetup() }
+    fun startPhonePractice(packageName: String, field: String, mode: String) {
+        if (!packageName.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")) || field.isBlank()) { state = state.copy(error = "请填写实际应用包名和一个可安全测试的普通输入框名称"); return }
+        startPhone("这是主人明确批准的手机能力演练。仅打开包名 $packageName，读取当前窗口与控件，找到标签为“${field.take(120)}”的唯一普通非敏感输入框，输入“中文输入演练”，不点发送、保存、支付或任何提交。核对同一原生字段即时与延迟实际值，记录应用版本（可读时）、树覆盖、display/package归属、主屏干扰与结果；不唯一或不支持时交还主人。完成后保持现场供主人核对。", mode)
+        if (state.phoneSubmitting) closeBackgroundSetup()
+    }
     fun closeBackgroundSetup() { state = state.copy(backgroundSetupOpen = false) }
     fun selectMainScreenCompatibility() {
         state = state.copy(backgroundSetupOpen = false, requestedPhoneMode = "main_screen", requestedPhoneModeRevision = state.requestedPhoneModeRevision + 1,
             notice = "已明确选择主屏兼容模式。请确认系统权限，再手动开始原目标；不会自动执行。")
     }
     fun refreshBackgroundSetup() {
+        io.execute { app.sendState() }
         native("getFeatures")
         if (state.activeTaskId == null && !state.feature("display").optBoolean("taskOwned") && state.feature("display").optJSONObject("adb") != null) display("adb.status")
     }
@@ -1480,6 +1497,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             } catch (error: Exception) { main.post { if (!closed) state = state.copy(modelSaving = false, error = message(error)) } }
         }
     }
+    fun saveLocalObservation(capture: Boolean, ocr: Boolean) {
+        io.execute { try { app.settings.saveLocalObservation(capture, ocr); app.sendState() }
+            catch (error: Exception) { main.post { if (!closed) state = state.copy(error = message(error)) } } }
+    }
     fun saveModel(url: String, model: String, apiKey: String, screenshots: Boolean, provider: String = state.modelProvider, maxOutputTokens: Int = state.maxOutputTokens, cleartextConsent: String = state.cleartextConsent, supportsImageInput: Boolean = false) {
         state = state.copy(modelSaving = true, error = null)
         io.execute {
@@ -1550,7 +1571,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private fun native(action: String, input: JSONObject = JSONObject(), ownerRequestId: String? = null) {
         val viewerEpoch = inspectionEpoch
         val targetTask = input.optString("taskId")
-        val taskAction = targetTask.takeIf { it.isNotBlank() && action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask") }
+        val taskAction = targetTask.takeIf { it.isNotBlank() && action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask", "configureTaskExecutionScope") }
         if (taskAction != null) state = state.copy(taskActionErrors = state.taskActionErrors - taskAction)
         val needsGroupOwner = action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask") && state.tasks.any { it.id == targetTask && it.raw.optJSONObject("origin")?.optString("kind") == "group" }
         val groupWindow = if (needsGroupOwner && groupTaskId == targetTask) groupTaskWindow else null
@@ -1573,6 +1594,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     }
                     if (action in setOf("observeTask", "takeoverTask", "manualTaskAction", "ownerSecretInput") && viewerEpoch == inspectionEpoch && input.optString("taskId") == state.inspectionTaskId) receiveInspection(action, result)
                     if (action == "startRun") { phoneDraftAcceptedText=input.optString("goal");phoneDraftAcceptedRevision++;state = state.copy(phoneSubmitting = false, acceptedInputRevision = state.acceptedInputRevision + 1, acceptedInput = input.optString("goal")) }
+                    if (action == "configureTaskExecutionScope" && result != null) { mergeTask(result); state = state.copy(notice = "原范围已更新，累计用量保留；没有自动继续或重放动作") }
                     if (action == "getTask" && result != null) {
                         val task = result.optJSONObject("task") ?: if (result.has("id")) result else null
                         task?.let { mergeTask(it) }
@@ -1623,7 +1645,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 val merged = incoming.map { row -> mergeTaskSummary(row, state.tasks.find { it.id == row.id }) }
                 val retained = state.tasks.filter { old -> old.id !in incoming.map { it.id } && old.id in setOf(state.activeTaskId, state.requestedTaskId) }
 
-                state = state.copy(modelName = config.optString("model"), baseUrl = config.optString("baseUrl"), hasApiKey = config.optBoolean("hasApiKey"), screenshots = config.optBoolean("sendScreenshots", true), supportsImageInput = config.optBoolean("supportsImageInput", false), modelProvider = config.optString("provider", "openai_chat"), modelRoute = config.optString("modelRoute", "api_key"), modelCatalogEnabled = config.optJSONObject("capabilityBinding") != null, maxOutputTokens = config.optInt("maxOutputTokens", 4096), cleartextConsent = config.optString("cleartextConsent"), accessibilityEnabled = payload.optBoolean("accessibilityEnabled"), notificationsEnabled = payload.optBoolean("notificationsEnabled"), activeTaskId = payload.optString("activeTaskId").takeUnless { it.isBlank() || it == "null" }, tasks = merged + retained, modelDrafts = ModelStreamDrafts.retain(state.modelDrafts, merged + retained))
+                state = state.copy(modelName = config.optString("model"), baseUrl = config.optString("baseUrl"), hasApiKey = config.optBoolean("hasApiKey"), screenshots = config.optBoolean("sendScreenshots", true), localCaptureAllowed = config.optBoolean("localCaptureAllowed", false), localOcrAllowed = config.optBoolean("localOcrAllowed", false), supportsImageInput = config.optBoolean("supportsImageInput", false), modelProvider = config.optString("provider", "openai_chat"), modelRoute = config.optString("modelRoute", "api_key"), modelCatalogEnabled = config.optJSONObject("capabilityBinding") != null, maxOutputTokens = config.optInt("maxOutputTokens", 4096), cleartextConsent = config.optString("cleartextConsent"), accessibilityEnabled = payload.optBoolean("accessibilityEnabled"), notificationsEnabled = payload.optBoolean("notificationsEnabled"), phoneReadiness = PhoneReadinessState.parse(payload.optJSONObject("phoneReadiness")), activeTaskId = payload.optString("activeTaskId").takeUnless { it.isBlank() || it == "null" }, tasks = merged + retained, modelDrafts = ModelStreamDrafts.retain(state.modelDrafts, merged + retained))
             }
             "task" -> event.optJSONObject("task")?.let(::mergeTask)
             "features_state" -> {
@@ -1815,7 +1837,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
     private fun invalidateTaskMemoryReadings() {
-        val reads = setOf("readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit")
+        val reads = setOf("readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications")
         val abandoned = ownerRequests.filter { it.value.domain == "taskMemory" && it.value.command in reads }
         abandoned.forEach { (key, request) -> request.control.cancel(); request.call.cancel(); ownerRequests.remove(key) }
         state = state.copy(memoryRefreshRevision = state.memoryRefreshRevision + 1, ownerPending = state.ownerPending - abandoned.keys)

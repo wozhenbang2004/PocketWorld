@@ -89,7 +89,7 @@ public final class ApiTurnStream {
         for (int count = 0; count < MAX_EVENTS; count++) {
             control.check();
             Frame frame = parser.next();
-            if (frame == null) throw interrupted();
+            if (frame == null) throw GatewayException.incompleteStream();
             if (state.accept(frame)) {
                 control.check();
                 JSONObject result=normalize(protocol, adapter, state.result(), tools);
@@ -119,6 +119,7 @@ public final class ApiTurnStream {
 
     private static JSONObject normalize(String protocol, ProviderAdapter adapter, JSONObject wire,
                                         JSONArray tools) throws Exception {
+        if(wire.has("error")&&!wire.isNull("error"))throw invalid();
         switch (protocol) {
             case "openai_chat": {
                 JSONArray choices = wire.getJSONArray("choices");
@@ -139,7 +140,10 @@ public final class ApiTurnStream {
                             && !item.isNull("namespace") && !text(item, "namespace", 256).isEmpty()) throw invalid();
                 }
                 break;
-            case "anthropic": terminalAnthropic(text(wire, "stop_reason", 64)); break;
+            case "anthropic":
+                terminalAnthropic(text(wire, "stop_reason", 64));
+                if(wire.has("role")&&!"assistant".equals(wire.optString("role")))throw invalid();
+                break;
             case "gemini": {
                 JSONArray candidates = wire.getJSONArray("candidates");
                 if (candidates.length() != 1 || !"STOP".equals(candidates.getJSONObject(0).optString("finishReason")))
@@ -161,6 +165,7 @@ public final class ApiTurnStream {
             if ("function".equals(tool.optString("type"))) offered.add(tool.getJSONObject("function").getString("name"));
         }
         JSONArray calls = assistant.optJSONArray("tool_calls");
+        if(assistant.has("tool_calls")&&!assistant.isNull("tool_calls")&&calls==null)throw invalid();
         Set<String> ids = new HashSet<>();
         if (calls != null) {
             if (calls.length() > MAX_TOOLS) throw tooLarge();

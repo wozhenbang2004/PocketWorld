@@ -9,6 +9,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 
 public final class NativePhoneEntryTest {
+    @Test public void pausedOwnerEntryRequiresExactStateAndNeverGrantsAgentEntry()throws Exception {
+        RunControl c=new RunControl();c.pause();long revision=c.pauseRevision();AtomicInteger effects=new AtomicInteger();
+        assertThrows(NativePhoneEntry.Refused.class,()->NativePhoneEntry.call(c,revision,()->{},effects::incrementAndGet));
+        assertEquals(Integer.valueOf(1),NativePhoneEntry.call(c,revision,true,()->{},effects::incrementAndGet));
+        assertThrows(NativePhoneEntry.Refused.class,()->NativePhoneEntry.call(c,revision,true,()->{c.resume();c.pause();},effects::incrementAndGet));assertEquals(1,effects.get());
+    }
     @Test public void lastPreparedCallbackPauseResumeOrCancelCannotEnter()throws Exception {
         for(boolean cancel:new boolean[]{false,true}){
             RunControl c=new RunControl();AtomicInteger effects=new AtomicInteger();

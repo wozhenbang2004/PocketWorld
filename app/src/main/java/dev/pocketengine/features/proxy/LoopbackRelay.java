@@ -325,10 +325,12 @@ public final class LoopbackRelay implements AutoCloseable {
                             bytes.write(buffer,0,count);
                         }
                     }
-                    JSONObject result=ChatCompletionStream.parseObject(new String(bytes.toByteArray(),StandardCharsets.UTF_8));
-                    if(nativeRequest==null&&result.optJSONArray("choices")==null)throw new RequestFailure(502,"上游没有返回Chat Completions格式");
-                    actualCapture.usage.observe(result,dev.pocketengine.runtime.usage.ProviderUsage.Stage.FINAL);
-                    if(nativeRequest!=null)nativeRequest.validateResult(result);else dev.pocketengine.runtime.providers.ApiTurnStream.terminalUsage(config.provider,result,actualCapture.usage);
+                    JSONObject result=ChatCompletionStream.parseObject(StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes.toByteArray())).toString());
+                    // Validate before any buffered client delivery, while retaining usage/terminal
+                    // facts even when the provider's HTTP 200 body is not a completed decision.
+                    if(nativeRequest!=null)nativeRequest.validateResult(result,actualCapture.usage);
+                    else prepared.validateResult(result,actualCapture.usage);
                     requireInferenceCurrent(config,endpoint);
                     if(nativeRequest==null)prepared.revalidate();else nativeRequest.revalidate();
                     response.json(200,ChatCompletionStream.scrub(result,config.apiKey).toString().getBytes(StandardCharsets.UTF_8));

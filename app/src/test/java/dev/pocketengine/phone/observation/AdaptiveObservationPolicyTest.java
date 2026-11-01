@@ -31,7 +31,7 @@ public class AdaptiveObservationPolicyTest {
     }
     @Test public void imageFlagNeverOverridesOwnerConfiguration() {
         Decision d=decide(binding("obs",0),evidence(false,false,0,true),Need.AUTOMATIC,Health.READY,false,true,true,false,false);
-        assertEquals(Request.PAUSE,d.request);assertTrue(d.reason.startsWith("screenshots_disabled:"));
+        assertEquals(Request.PAUSE,d.request);assertTrue(d.reason.startsWith("local_capture_disabled:"));
     }
     @Test public void truncatedTreeNeedsVisualEvidence() {
         assertEquals(Request.CAPTURE_IMAGE,decide(binding("obs",0),evidence(true,true,6,false),Need.AUTOMATIC,Health.READY,true,true,false,false,false).request);

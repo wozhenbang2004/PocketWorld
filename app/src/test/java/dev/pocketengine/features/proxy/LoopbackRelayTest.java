@@ -28,7 +28,7 @@ public class LoopbackRelayTest {
     }
     @Test public void forwardsOnlyConfiguredModelAndCredentialAndReturnsActualResult()throws Exception {
         AtomicReference<String> observed=new AtomicReference<>();
-        try(Upstream upstream=new Upstream(200,"{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"real upstream-key result\"}}]}",observed);
+        try(Upstream upstream=new Upstream(200,"{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"real upstream-key result\"}}]}",observed);
             LoopbackRelay proxy=new LoopbackRelay(0,TOKEN,()->config("http://127.0.0.1:"+upstream.port()+"/v1"))){
             Reply result=request(proxy.port(),TOKEN,null,BODY);assertEquals(200,result.status);assertTrue(result.body.contains("real"));assertFalse(result.body.contains("upstream-key"));assertTrue(observed.get().contains("Authorization: Bearer upstream-key"));assertFalse(observed.get().contains(TOKEN));assertTrue(observed.get().contains("\"model\":\"configured-model\""));assertEquals(1,proxy.requests());
         }

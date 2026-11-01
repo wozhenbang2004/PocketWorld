@@ -21,6 +21,14 @@ public final class ContextCompactor {
     public boolean available(){return journal!=null&&host!=null;}
 
     public RunContextBudget.Projection request(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget)throws Exception {
+        return request(raw,visible,sourceMap,tools,selected,original,budget,false);
+    }
+    /** One native provider context-limit recovery. Raw rows remain authoritative; never summarize a summary. */
+    public RunContextBudget.Projection afterContextLimit(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget)throws Exception {
+        if(!available()||active!=null)throw new CompactionPlan.Unavailable("context_limit_no_new_raw_prefix");
+        return request(raw,visible,sourceMap,tools,selected,original,budget,true);
+    }
+    private RunContextBudget.Projection request(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget,boolean forced)throws Exception {
         if(active!=null&&original.pauseRevision()!=active.pauseRevision){
             original.check();
             if(original.isPaused()||!host.scopeCurrent(original))throw new CompactionPlan.Unavailable("native_resume_scope_unavailable");
@@ -39,7 +47,7 @@ public final class ContextCompactor {
             try{return withEvidence(budget.request(active.plan.project(visible,sourceMap,summary.text),tools,selected),false);}
             catch(RunContextBudget.Blocked full){if(!"budget_exceeded".equals(full.status))throw full;}
         }
-        try{return budget.request(visible,tools,selected);}
+        if(!forced)try{return budget.request(visible,tools,selected);}
         catch(RunContextBudget.Blocked blocked){if(!available()||!"budget_exceeded".equals(blocked.status))throw blocked;}
         ContextBudgetPolicy.Resolved resolved=ContextBudgetPolicy.resolve(budgets,selected,ContextBudgetPolicy.REQUEST_BYTES);
         CompactionPlan plan=CompactionPlan.choose(raw,visible,sourceMap,tools,selected,resolved.limits);

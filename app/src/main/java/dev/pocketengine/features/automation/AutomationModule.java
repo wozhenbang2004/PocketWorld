@@ -162,6 +162,7 @@ public final class AutomationModule implements EngineModule {
     public JSONObject readyPlanTasks(JSONObject scope,String planId,int limit)throws Exception {return commitments.readyPlanTasks(scope,planId,System.currentTimeMillis(),limit);}
     public JSONObject inspectPlanTask(JSONObject scope,String planId,String stepId)throws Exception{return commitments.inspectPlanTask(scope,planId,stepId,System.currentTimeMillis());}
     public void remoteTaskChanged(JSONObject scope,String taskId)throws Exception {if(commitments.waitsForRemoteTask(scope,taskId))commitmentsChanged();}
+    public void authenticatedBusinessEventChanged(JSONObject scope)throws Exception{if(commitments.waitsForBusinessEvents(scope))commitmentsChanged();}
     public long nextPlanTaskAt(JSONObject scope,long now)throws Exception {return commitments.nextPlanTaskAt(scope,now);}
     public JSONObject preparePlanTask(JSONObject scope,String planId,long planRevision,String stepId)throws Exception {JSONObject result=commitments.preparePlanTask(scope,planId,planRevision,stepId,System.currentTimeMillis());commitmentsChanged();return result;}
     public JSONObject planTaskRequest(JSONObject scope,String planId,String stepId,String occurrenceId)throws Exception {return commitments.planTaskRequest(scope,planId,stepId,occurrenceId,System.currentTimeMillis());}

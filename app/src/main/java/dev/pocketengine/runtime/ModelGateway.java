@@ -144,7 +144,7 @@ public final class ModelGateway {
         try{
             JSONObject result=config.usesAccount()?completeAccount(config,messages,tools,control,null,capture)
                     :completeApi(config,messages,tools,control,null,capture);
-            capture.finish(InferenceReceipt.Outcome.COMPLETED);return result;
+            control.check();capture.finish(InferenceReceipt.Outcome.COMPLETED);return result;
         }catch(InterruptedException|java.util.concurrent.CancellationException stopped){
             observeFailure(capture,stopped,false,true);capture.failed(InferenceReceipt.Outcome.CANCELLED,stopped);throw stopped;
         }catch(Exception failure){observeFailure(capture,failure,false,false);capture.failed(InferenceReceipt.Outcome.FAILED,failure);throw failure;}
@@ -249,7 +249,7 @@ public final class ModelGateway {
             try (OutputStream output = connection.getOutputStream()) { output.write(payload); }
             control.check();
             int status = connection.getResponseCode();
-            if (status < 200 || status >= 300) throw httpFailure(config,status,headers(connection.getHeaderFields(),"Retry-After"),headers(connection.getHeaderFields(),"Date"));
+            if (status < 200 || status >= 300) throw httpFailure(config,status,headers(connection.getHeaderFields(),"Retry-After"),headers(connection.getHeaderFields(),"Date"),connection.getErrorStream());
             String body;
             try (InputStream input = connection.getInputStream()) {
                 ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -260,24 +260,22 @@ public final class ModelGateway {
                     if (buffer.size() + count > MAX_RESPONSE_BYTES) throw new GatewayException("模型回复过大，请缩短任务或更换模型。");
                     buffer.write(chunk, 0, count);
                 }
-                body = buffer.toString(StandardCharsets.UTF_8.name());
+                try{body = StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                        .decode(java.nio.ByteBuffer.wrap(buffer.toByteArray())).toString();}
+                catch(java.nio.charset.CharacterCodingException invalidUtf8){throw localFailure("模型回复包含无效UTF-8，未派发工具。",InferenceFailure.Kind.PROTOCOL,status);}
             }
             control.check();
             if (expired.get()) throw localFailure("模型请求超时，请检查网络或提高请求超时。",InferenceFailure.Kind.TIMEOUT);
             try {
-                JSONObject assistant;
-                if("openai_responses".equals(config.provider)){
-                    // Buffered Responses must pass the same terminal/tool boundary as SSE and
-                    // same-request JSON negotiation before the original runner can see a decision.
-                    assistant=ApiTurnStream.completeJson(config.provider,provider,body,tools,delta->{},capture.usage);
-                }else{
-                    JSONObject wire=new JSONObject(body);capture.usage.observe(wire,ProviderUsage.Stage.FINAL);ApiTurnStream.terminalUsage(config.provider,wire,capture.usage);
-                    assistant=provider.response(wire);
-                }
+                // HTTP success is not a provider terminal. Every buffered consumer (including
+                // SUMMARY and team inference) shares SSE's terminal/tool boundary on this body.
+                JSONObject assistant=ApiTurnStream.completeJson(config.provider,provider,body,tools,delta->{},capture.usage);
                 checkCapabilities(config,messages,tools,request);
                 return assistant;
             } catch (GatewayException known) {
-                throw known;
+                if(known.failure!=null)throw known;
+                throw new GatewayException(known.getMessage(),InferenceFailure.local(InferenceFailure.Kind.PROTOCOL,status,System.currentTimeMillis()));
             } catch (InterruptedException stopped) {
                 throw stopped;
             } catch (Exception malformed) {
@@ -288,7 +286,13 @@ public final class ModelGateway {
             if (expired.get() || error instanceof SocketTimeoutException) {
                 throw localFailure("模型请求超时，请检查网络或提高请求超时。",InferenceFailure.Kind.TIMEOUT);
             }
-            throw localFailure("无法连接模型接口，请检查地址、网络和 HTTPS 证书。",InferenceFailure.Kind.NETWORK);
+            throw localFailure("无法连接模型接口，请检查地址、网络和 HTTPS 证书。",error instanceof javax.net.ssl.SSLException?InferenceFailure.Kind.PROTOCOL:InferenceFailure.Kind.NETWORK);
+        } catch (RuntimeException transportFailure) {
+            // Some HttpURLConnection implementations throw a runtime failure when the native
+            // cancellation watchdog disconnects a concurrent header/body read. Keep cancellation
+            // authoritative without retrying or hiding unrelated bugs.
+            control.check();
+            throw transportFailure;
         } finally {
             finished.set(true);
             control.removeCancelAction(disconnect);
@@ -320,7 +324,7 @@ public final class ModelGateway {
             control.check();
             capture.dispatch();control.check();ModelRequestPolicy.resolve(config);
             try(Response response=call.execute()){
-                control.check();if(!response.isSuccessful())throw httpFailure(config,response.code(),response.headers().values("Retry-After"),response.headers().values("Date"));
+                control.check();if(!response.isSuccessful())throw httpFailure(config,response.code(),response.headers().values("Retry-After"),response.headers().values("Date"),response.body()==null?null:response.body().byteStream());
                 if(response.body()==null)throw new GatewayException("模型没有返回正文，未派发工具。");
                 JSONObject assistant;
                 try(InputStream input=response.body().byteStream()){
@@ -343,14 +347,14 @@ public final class ModelGateway {
                 catch(IOException network){throw network;}
                 catch(Exception malformed){throw localFailure("模型流的事件、终态、工具参数或显示回调无法核对；未派发工具，没有自动重试。",InferenceFailure.Kind.PROTOCOL,response.code());}
                 control.check();
-                if(System.nanoTime()>=deadline)throw localFailure("模型请求超时；未派发工具，没有自动重试。",InferenceFailure.Kind.TIMEOUT);
+                if(System.nanoTime()>=deadline)throw localFailure("模型请求超时；本次未派发工具。是否有界恢复由原任务范围决定。",InferenceFailure.Kind.TIMEOUT);
                 return assistant;
             }
         }catch(IOException network){
             control.check();
             if(network instanceof java.io.InterruptedIOException||System.nanoTime()>=deadline)
-                throw localFailure("模型请求超时；未派发工具，没有自动重试。",InferenceFailure.Kind.TIMEOUT);
-            throw localFailure("模型流连接中断；未派发工具，没有自动重试。",InferenceFailure.Kind.NETWORK);
+                throw localFailure("模型请求超时；本次未派发工具。是否有界恢复由原任务范围决定。",InferenceFailure.Kind.TIMEOUT);
+            throw localFailure("模型流连接中断；本次未派发工具。",network instanceof javax.net.ssl.SSLException?InferenceFailure.Kind.PROTOCOL:InferenceFailure.Kind.NETWORK);
         }finally{control.removeCancelAction(cancel);}
     }
 
@@ -510,7 +514,7 @@ public final class ModelGateway {
             case "UNSUPPORTED_OR_OVERSIZED_INPUT":return "账号模型上下文或工具数量超过当前支持范围；请缩短任务或使用其他明确选择的模型。";
             case "INVALID_FUNCTION_RESULT_LINK":return "历史工具结果与模型调用不匹配，已停止请求；请先核对原任务，不能自动重放。";
             case "UNSUPPORTED_PROVIDER_REQUEST":case "UNSUPPORTED_INPUT_TYPE":case "UNSUPPORTED_TOOL_TYPE":case "UNSUPPORTED_PROTOCOL_FIELD":case "UNSUPPORTED_FUNCTION_MODE":case "UNSUPPORTED_PROVIDER_OUTPUT":case "UNSUPPORTED_REASONING_CONTENT":return "账号模型使用了尚未接入的输入、字段或工具，本次未派发动作。";
-            case "PROVIDER_UNAVAILABLE":return "账号模型服务暂时不可用；没有自动重试，请稍后手动继续。";
+            case "PROVIDER_UNAVAILABLE":return "账号模型服务暂时不可用；原任务的有限恢复与每次真实调用以任务记录为准。";
             default:return "账号模型没有返回可验证的完整回复，已停止本次执行；请检查账号与网络，不会自动重放或换号。";
         }
     }
@@ -544,8 +548,23 @@ public final class ModelGateway {
         try { object.put("ok", false).put("message", message).put("code", code); } catch (Exception ignored) { }
     }
 
-    private static GatewayException httpFailure(ModelConfig captured,int status,java.util.List<String> retryAfter,java.util.List<String> date)throws Exception {
+    private static GatewayException httpFailure(ModelConfig captured,int status,java.util.List<String> retryAfter,java.util.List<String> date,InputStream errorBody)throws Exception {
+        if((status==400||status==413)&&contextLimitCode(errorBody))return localFailure("模型明确报告上下文超限；尚未派发工具。",InferenceFailure.Kind.CONTEXT_LIMIT,status);
         return new GatewayException(httpMessage(status),InferenceFailure.http(status,withoutCapturedSecret(retryAfter,captured.apiKey),withoutCapturedSecret(date,captured.apiKey),System.currentTimeMillis()));
+    }
+    /** Only exact protocol error codes authorize one compaction; never match arbitrary provider prose. */
+    private static boolean contextLimitCode(InputStream input){
+        if(input==null)return false;
+        try(InputStream body=input){
+            // readNBytes is Android API 33; retain minSdk 30 using the same hard byte bound.
+            byte[] bytes=new byte[16_385];int length=0;
+            while(length<bytes.length){int read=body.read(bytes,length,bytes.length-length);if(read<0)break;if(read==0)return false;length+=read;}
+            if(length>16_384)return false;
+            String text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes,0,length)).toString();
+            JSONObject error=new JSONObject(text).optJSONObject("error");
+            return error!=null&&java.util.Set.of("context_length_exceeded","context_window_exceeded","prompt_too_long").contains(error.optString("code"));
+        }catch(Exception unavailable){return false;}
     }
     private static java.util.List<String> withoutCapturedSecret(java.util.List<String> values,String secret) {
         if(values!=null&&secret!=null&&!secret.isEmpty())for(String value:values)if(value!=null&&value.contains(secret))return java.util.List.of("invalid_header");
@@ -569,6 +588,9 @@ public final class ModelGateway {
         } catch(Exception malformed){original.addSuppressed(malformed);}
     }
     public static final class GatewayException extends Exception {
+        /** Content-free native failure classification, never provider text or retry authority. */
+        public InferenceFailure observation(){return failure;}
+        public static GatewayException incompleteStream()throws Exception{return new GatewayException("模型流在终态前中断；本次没有派发工具。",InferenceFailure.local(InferenceFailure.Kind.INCOMPLETE_STREAM,System.currentTimeMillis()));}
         private final InferenceFailure failure;
         public GatewayException(String message) { this(message,null); }
         private GatewayException(String message,InferenceFailure failure){super(message);this.failure=failure;}
