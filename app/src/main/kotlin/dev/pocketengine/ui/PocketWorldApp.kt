@@ -707,41 +707,97 @@ private fun ProjectsScreen(state: PocketUiState, controller: PocketWorldControll
     } }, confirmButton = { Button(onClick = { controller.createDevelopmentProject(projectName.trim(), template); creating = false; projectName = ""; choosing = false }, enabled = projectName.isNotBlank() && "owner.createDevelopmentProject" !in state.moduleBusy) { Text("创建并打开") } }, dismissButton = { TextButton(onClick = { creating = false }) { Text("取消") } })
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun FileEditor(state: PocketUiState, controller: PocketWorldController) {
     var discard by remember { mutableStateOf(false) }
     var replaceDraft by remember { mutableStateOf(false) }
     var history by rememberSaveable(state.filePath) { mutableStateOf(false) }
     fun requestClose() { if (!state.fileSaving) { if (state.fileContent != state.fileBaseline) discard = true else controller.closeFile() } }
-    ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = ::requestClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Color.White) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).padding(horizontal = 20.dp).navigationBarsPadding().imePadding()) {
-            TextButton(onClick = ::requestClose, enabled = !state.fileSaving, modifier = Modifier.testTag("project_file_return")) { Text(if (state.workspaceArtifactEditorOrigin != null) "返回原成果" else "返回项目") }
-            Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(state.filePath ?: "", fontFamily = FontFamily.Monospace, fontSize = 14.sp, maxLines = 2); Text(if (!state.fileReady) "正在读取项目文件" else if (state.fileVersion == 0) "新文件 · 保存后创建" else "当前版本 v${state.fileVersion}", color = SecondaryInk, fontSize = 11.sp) }; Button(onClick = controller::saveFile, enabled = state.fileReady && !state.fileLoading && !state.fileSaving) { Text(if (state.fileSaving) "保存中" else "保存") } }
-            state.workspaceArtifactEditorOrigin?.let { source -> Text("你正在修改已保存的项目版本；原成果 v${source.source.version} 仍保留。保存会核对版本，不会自动同步运行副本或执行。", fontSize = 11.sp, lineHeight = 18.sp, color = SecondaryInk, modifier = Modifier.padding(top = 8.dp)) }
-            if (state.fileLoading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 12.dp))
-            state.fileError?.let { error -> Text(error, fontSize = 12.sp, lineHeight = 20.sp, color = Danger, modifier = Modifier.padding(top = 10.dp)); if (!state.fileReady) TextButton(onClick = controller::retryFile) { Text("重新读取文件") } }
-            OutlinedTextField(value = state.fileContent, onValueChange = controller::editFile, modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 16.dp, bottom = 12.dp).testTag("project_file_editor"), enabled = state.fileReady && !state.fileLoading && !state.fileSaving, textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 21.sp), shape = RoundedCornerShape(12.dp))
-            if (state.fileReady && state.fileVersion > 0) TextButton(onClick = { history = !history; if (history) controller.fileHistory() }) { Text(if (history) "收起版本记录" else "查看版本记录", fontSize = 12.sp) }
-            if (state.fileReady && state.fileVersion > 0) Row { TextButton(onClick = controller::exportFile, enabled = !state.exportPending && "workspace.prepareExport" !in state.moduleBusy) { Text("导出已保存版本", fontSize = 11.sp) }; TextButton(onClick = controller::createArtifact, enabled = state.fileContent == state.fileBaseline && "workspace.createArtifact" !in state.moduleBusy) { Text("保存为成果", fontSize = 11.sp) } }
-            if (history) Column(Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
-                state.fileHistory.forEach { revision ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("v${revision.version} · ${date(revision.at)}", color = SecondaryInk, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { controller.previewRevision(revision.version) }, enabled = !revision.deleted && !state.revisionLoading) { Text("查看", fontSize = 11.sp) }
-                    }
-                }
-                if (state.revisionLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
-                state.revisionContent?.let { content -> Text("v${state.revisionNumber} 的内容", fontSize = 12.sp, fontWeight = FontWeight.Medium); SelectionContainer { Text(content, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).background(Soft).padding(10.dp)) }; OutlinedButton(onClick = { if (state.fileContent != state.fileBaseline) replaceDraft = true else controller.useRevision() }, enabled = !state.fileSaving) { Text("放入编辑区", fontSize = 12.sp) } }
+    val currentEditorState by rememberUpdatedState(state)
+    val editorSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { target ->
+        // Ask before the native sheet hides, so cancelling keeps the draft visibly mounted.
+        when {
+            target != SheetValue.Hidden -> true
+            currentEditorState.fileSaving -> false
+            currentEditorState.fileContent != currentEditorState.fileBaseline -> { discard = true; false }
+            else -> true
+        }
+    })
+    ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = ::requestClose,
+        sheetState = editorSheetState, containerColor = PageSurface) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(.94f).navigationBarsPadding().imePadding()) {
+            Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = ::requestClose, enabled = !state.fileSaving, modifier = Modifier.testTag("project_file_return")) { Text(if (state.workspaceArtifactEditorOrigin != null) "返回原成果" else "返回项目") }
+                Spacer(Modifier.weight(1f))
+                Button(onClick = controller::saveFile, enabled = state.fileReady && !state.fileLoading && !state.fileSaving,
+                    shape = RoundedCornerShape(12.dp)) { Text(if (state.fileSaving) "保存中" else "保存") }
             }
-            state.lastSavedVersion?.let { Text("已保存为 v$it", fontSize = 11.sp, color = SecondaryInk, modifier = Modifier.padding(bottom = 12.dp)) }
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp)) {
+                Text(state.filePath ?: "", fontFamily = FontFamily.Monospace, fontSize = 14.sp, lineHeight = 21.sp)
+                Text(if (!state.fileReady) "正在读取项目文件" else if (state.fileVersion == 0) "新文件 · 保存后创建" else "当前版本 v${state.fileVersion}", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 5.dp))
+            }
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val editorHeight = (maxHeight - 86.dp).coerceAtLeast(260.dp)
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
+                    state.workspaceArtifactEditorOrigin?.let { source -> Text("你正在修改已保存的项目版本；原成果 v${source.source.version} 仍保留。保存会核对版本，不会自动同步运行副本或执行。", fontSize = 12.sp, lineHeight = 19.sp, color = SecondaryInk, modifier = Modifier.padding(bottom = 12.dp)) }
+                    if (state.fileLoading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(bottom = 12.dp))
+                    state.fileError?.let { error ->
+                        Column(Modifier.fillMaxWidth().padding(bottom = 12.dp).clip(RoundedCornerShape(12.dp)).background(Soft).padding(12.dp)) {
+                            Text(error, fontSize = 12.sp, lineHeight = 20.sp, color = Danger)
+                            if (!state.fileReady) TextButton(onClick = controller::retryFile) { Text("重新读取文件") }
+                        }
+                    }
+                    Column(Modifier.fillMaxWidth().height(editorHeight).pocketDepth(PocketDepth.INPUT, 16.dp)
+                        .clip(RoundedCornerShape(16.dp)).background(Color.White).border(.5.dp, Line, RoundedCornerShape(16.dp))) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            AffectGlyph("file", color = SecondaryInk)
+                            Text("编辑内容", fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                            Text(if (!state.fileReady) "等待读取" else if (state.fileContent != state.fileBaseline) "未保存修改" else if (state.fileVersion == 0) "尚未创建" else "与已保存版本一致", fontSize = 12.sp, color = SecondaryInk)
+                        }
+                        HorizontalDivider(color = Line)
+                        OutlinedTextField(value = state.fileContent, onValueChange = controller::editFile,
+                            modifier = Modifier.fillMaxWidth().weight(1f).testTag("project_file_editor"),
+                            enabled = state.fileReady && !state.fileLoading && !state.fileSaving,
+                            textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 22.sp),
+                            shape = RoundedCornerShape(0.dp), colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Ink, unfocusedBorderColor = Color.Transparent, disabledBorderColor = Color.Transparent,
+                                focusedContainerColor = Color.White, unfocusedContainerColor = Color.White, disabledContainerColor = Soft))
+                        Row(Modifier.fillMaxWidth().background(Soft).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(state.lastSavedVersion?.let { "已保存为 v$it" } ?: "保存时核对文件版本", fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.weight(1f).padding(vertical = 12.dp))
+                            if (state.fileReady && state.fileVersion > 0) TextButton(onClick = { history = !history; if (history) controller.fileHistory() }) { Text(if (history) "收起版本记录" else "查看版本记录", fontSize = 12.sp) }
+                        }
+                    }
+                    if (state.fileReady && state.fileVersion > 0) FlowRow(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = controller::exportFile, enabled = !state.exportPending && "workspace.prepareExport" !in state.moduleBusy) { Text("导出已保存版本", fontSize = 12.sp) }
+                        TextButton(onClick = controller::createArtifact, enabled = state.fileContent == state.fileBaseline && "workspace.createArtifact" !in state.moduleBusy) { Text("保存为成果", fontSize = 12.sp) }
+                    }
+                    if (history) Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp)) {
+                        Text("版本记录", fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(bottom = 8.dp))
+                        state.fileHistory.forEach { revision ->
+                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("v${revision.version} · ${date(revision.at)}", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                                TextButton(onClick = { controller.previewRevision(revision.version) }, enabled = !revision.deleted && !state.revisionLoading) { Text("查看", fontSize = 12.sp) }
+                            }
+                            HorizontalDivider(color = Line)
+                        }
+                        if (state.revisionLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                        state.revisionContent?.let { content ->
+                            Text("v${state.revisionNumber} 的内容", fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 12.dp))
+                            SelectionContainer { Text(content, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp)).background(Color.White).padding(14.dp)) }
+                            OutlinedButton(onClick = { if (state.fileContent != state.fileBaseline) replaceDraft = true else controller.useRevision() }, enabled = !state.fileSaving, modifier = Modifier.padding(top = 8.dp)) { Text("放入编辑区", fontSize = 12.sp) }
+                        }
+                    }
+                    Spacer(Modifier.height(24.dp))
+                }
+            }
         }
     }
-    if (replaceDraft) AlertDialog(onDismissRequest = { replaceDraft = false }, containerColor = Color.White, title = { Text("用历史内容替换编辑区？") }, text = { Text("当前未保存的修改将被替换。文件已保存的版本会保留，下一次保存会创建新版本。") }, confirmButton = { Button(onClick = { controller.useRevision(); replaceDraft = false }) { Text("替换编辑内容") } }, dismissButton = { TextButton(onClick = { replaceDraft = false }) { Text("保留当前修改") } })
-    if (discard) AlertDialog(onDismissRequest = { discard = false }, containerColor = Color.White, title = { Text("关闭文件编辑？") }, text = { Text("尚未保存的修改会离开当前编辑区。") }, confirmButton = { TextButton(onClick = { discard = false; controller.closeFile() }) { Text("放弃修改并关闭") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("继续编辑") } })
+    if (replaceDraft) AlertDialog(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), tonalElevation = 0.dp, onDismissRequest = { replaceDraft = false }, containerColor = Color.White, title = { Text("用历史内容替换编辑区？") }, text = { Text("当前未保存的修改将被替换。文件已保存的版本会保留，下一次保存会创建新版本。") }, confirmButton = { Button(onClick = { controller.useRevision(); replaceDraft = false }) { Text("替换编辑内容") } }, dismissButton = { TextButton(onClick = { replaceDraft = false }) { Text("保留当前修改") } })
+    if (discard) AlertDialog(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), tonalElevation = 0.dp, onDismissRequest = { discard = false }, containerColor = Color.White, title = { Text("关闭文件编辑？") }, text = { Text("尚未保存的修改会离开当前编辑区。") }, confirmButton = { TextButton(onClick = { discard = false; controller.closeFile() }) { Text("放弃修改并关闭") } }, dismissButton = { Button(onClick = { discard = false }) { Text("继续编辑") } })
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsSheet(state: PocketUiState, controller: PocketWorldController, close: () -> Unit, connections: () -> Unit) {
     var url by remember(state.baseUrl) { mutableStateOf(state.baseUrl) }
@@ -763,69 +819,119 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
     val transportConfirmed = requiredCleartextConsent.isNullOrEmpty() || acceptedCleartextConsent == requiredCleartextConsent
     val consentPayload = acceptedCleartextConsent.takeIf { !requiredCleartextConsent.isNullOrEmpty() && it == requiredCleartextConsent }.orEmpty()
     val providers = mapOf("openai_chat" to "OpenAI Chat Completions", "openai_responses" to "OpenAI Responses", "anthropic" to "Anthropic Messages", "gemini" to "Gemini")
-    ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Color.White) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp).navigationBarsPadding().imePadding()) {
-            Text("设置与连接", fontSize = 23.sp, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = { controller.openConnection("accounts") }) { Text("连接 ChatGPT 账号与查看模型目录") }
-            TextButton(onClick = { controller.openConnection("models") }) { Text("API 模型目录、能力与请求参数") }
-            Text(if (state.modelRoute == "account") "当前使用账号主模型，原 API 密钥连接仍保留。" else "当前使用 API 密钥模型；账号模型须在账号页中明确选择后才切换。", color = SecondaryInk, fontSize = 11.sp)
+    ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = close,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = PageSurface) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(.94f).navigationBarsPadding().imePadding()) {
+            Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("设置与连接", fontSize = 22.sp, fontWeight = FontWeight.Medium)
+                    Text("模型、手机执行与连接能力", fontSize = 13.sp, color = SecondaryInk, modifier = Modifier.padding(top = 4.dp))
+                }
+                AffectToolButton("close", "关闭设置与连接", close)
+            }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                SettingsSurface("模型与账号", if (state.modelRoute == "account") "当前使用账号主模型" else "当前使用 API 密钥模型") {
+                    Text(state.modelName.ifBlank { "尚未选择模型" }, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                    Text(if (state.modelRoute == "account") "原 API 密钥连接仍保留。" else "账号模型须在账号页中明确选择后才切换。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 5.dp, bottom = 12.dp))
+                    HorizontalDivider(color = Line)
+                    SettingEntry("ChatGPT 账号与模型目录", "连接账号，选择可用模型") { controller.openConnection("accounts") }
+                    HorizontalDivider(color = Line)
+                    SettingEntry("API 模型目录", "核对能力与请求参数") { controller.openConnection("models") }
             if (state.modelRoute == "account") {
-                Text("当前账号模型：" + state.modelName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
+                Text("当前账号模型：" + state.modelName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
                 Text("支持文字与工具调用，暂不支持截图、音频和视频。账号刷新、停用或退出后可能需要重新选择目录模型；不会自动换号、降级或重试付费请求。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp))
                 OutlinedButton(onClick = controller::useApiKeyModel, enabled = !state.modelSaving, modifier = Modifier.padding(top = 12.dp)) { Text(if (state.modelSaving) "切换中…" else "切回已保存的 API 密钥模型") }
                 TextButton(onClick = { editApi = !editApi }) { Text(if (editApi) "收起 API 连接编辑" else "配置新的 API 密钥模型") }
                 state.error?.let { Text(it, color = Danger, fontSize = 12.sp) }
             }
-            if (state.modelRoute != "account" || editApi) {
+                }
+            if (state.modelRoute != "account" || editApi) SettingsSurface("API 模型配置", "连接参数、输入能力与回复预算") {
             if (state.modelRoute == "account") Text("保存后会明确切换到这个 API 连接；测试连接不会改变当前账号模型。", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
-            Text("模型", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 24.dp, bottom = 12.dp))
-            TextButton(onClick = { providerOptions = !providerOptions }) { Text("协议：" + providers[provider].orEmpty() + " ▾", fontSize = 12.sp) }
-            if (providerOptions) providers.forEach { (id, title) -> Row(Modifier.fillMaxWidth().clickable { if (provider != id) acceptedCleartextConsent = ""; provider = id; providerOptions = false }, verticalAlignment = Alignment.CenterVertically) { RadioButton(provider == id, { if (provider != id) acceptedCleartextConsent = ""; provider = id; providerOptions = false }); Text(title, fontSize = 13.sp) } }
-            OutlinedTextField(url, { nextUrl -> val nextConsent = try { ModelConfig.cleartextConsentFor(provider, nextUrl) } catch (_: Exception) { null }; if (nextConsent != requiredCleartextConsent) acceptedCleartextConsent = ""; url = nextUrl }, label = { Text("接口地址") }, modifier = Modifier.fillMaxWidth(), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), shape = RoundedCornerShape(13.dp))
+
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Soft)
+                .clickable { providerOptions = !providerOptions }.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("协议", fontSize = 12.sp, color = SecondaryInk)
+                    Text(providers[provider].orEmpty(), fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+                Text(if (providerOptions) "⌃" else "⌄", fontSize = 20.sp, color = SecondaryInk)
+            }
+            if (providerOptions) Column(Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp)).background(Soft)) {
+                providers.forEach { (id, title) -> Row(Modifier.fillMaxWidth().clickable { if (provider != id) acceptedCleartextConsent = ""; provider = id; providerOptions = false }.padding(end = 12.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(provider == id, { if (provider != id) acceptedCleartextConsent = ""; provider = id; providerOptions = false }); Text(title, fontSize = 14.sp) } }
+            }
+            OutlinedTextField(url, { nextUrl -> val nextConsent = try { ModelConfig.cleartextConsentFor(provider, nextUrl) } catch (_: Exception) { null }; if (nextConsent != requiredCleartextConsent) acceptedCleartextConsent = ""; url = nextUrl }, label = { Text("接口地址") }, modifier = Modifier.fillMaxWidth().padding(top = 14.dp), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), shape = RoundedCornerShape(12.dp), colors = settingsFieldColors())
             if (!requiredCleartextConsent.isNullOrEmpty()) {
                 Text("远端 HTTP 会明文发送 API 凭据、屏幕截图和文本，网络中的第三方可能读取或篡改。", color = Danger, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 10.dp))
-                if (transportConfirmed) Text("已明确允许当前协议与地址", fontSize = 11.sp, color = SecondaryInk, modifier = Modifier.padding(top = 6.dp))
+                if (transportConfirmed) Text("已明确允许当前协议与地址", fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(top = 6.dp))
                 else OutlinedButton(onClick = { cleartextDialog = true }, modifier = Modifier.padding(top = 8.dp)) { Text("查看并确认这个明文连接", fontSize = 12.sp) }
             }
-            OutlinedTextField(model, { model = it }, label = { Text("模型名称") }, modifier = Modifier.fillMaxWidth().padding(top = 13.dp), singleLine = true, shape = RoundedCornerShape(13.dp))
-            OutlinedTextField(key, { key = it }, label = { Text("API 密钥") }, modifier = Modifier.fillMaxWidth().padding(top = 13.dp), singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), shape = RoundedCornerShape(13.dp))
-            Text(if (state.hasApiKey && provider == state.modelProvider && sameOrigin(url, state.baseUrl)) "此协议与服务已保存密钥，留空可继续使用。" else "填写此协议与服务的密钥；更换协议不沿用旧密钥。", fontSize = 11.sp, color = SecondaryInk, modifier = Modifier.padding(top = 7.dp))
-            Row(Modifier.fillMaxWidth().padding(top = 13.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("此模型支持图像输入", fontSize = 13.sp); Text(if (state.modelCatalogEnabled || state.modelRoute == "account") "请在 API 模型目录页核对精确能力与机主覆盖。" else "这是你的能力配置，不代表已实测效果。更换协议、地址或模型需重新确认。", color = SecondaryInk, fontSize = 11.sp, lineHeight = 18.sp) }; Checkbox(supportsImageInput, { supportsImageInput = it }, enabled = !state.modelCatalogEnabled && state.modelRoute != "account") }
-            Row(Modifier.fillMaxWidth().padding(top = 13.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许按需发送截图", fontSize = 13.sp); Text("优先读取节点，节点不足且已配置图像能力时才发送；可见文字也会发送。", color = SecondaryInk, fontSize = 11.sp, lineHeight = 18.sp) }; Switch(screenshots, { screenshots = it }) }
-            if (!supportsImageInput) Text("当前使用节点文字模式；节点不足时会请求接管，不会猜测坐标。后台屏仍可能采集本地帧以核对显示身份。", color = SecondaryInk, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 7.dp))
-            OutlinedTextField(outputTokens, { outputTokens = it.filter(Char::isDigit).take(5) }, label = { Text("每次回复的输出上限") }, supportingText = { Text(if (state.modelCatalogEnabled) "在模型目录页选择输出参数字段与预算；发送前会核对已知容量" else if (provider == "openai_chat") "兼容 Chat 协议的输出限制由服务端配置" else "128–32768 tokens", fontSize = 11.sp) }, enabled = provider != "openai_chat", singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth().padding(top = 12.dp), shape = RoundedCornerShape(13.dp))
-            Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedButton(onClick = { controller.testModel(url, model, key, screenshots, provider, configuredOutput, consentPayload) }, enabled = !state.modelTesting && configuredOutput in 128..32768 && transportConfirmed) { Text(if (state.modelTesting) "测试中" else "测试连接") }; Button(onClick = { controller.saveModel(url, model, key, screenshots, provider, configuredOutput, consentPayload, supportsImageInput) }, enabled = !state.modelSaving && configuredOutput in 128..32768 && transportConfirmed) { Text(if (state.modelSaving) "保存中" else if (state.modelRoute == "account") "保存并切换 API 模型" else "保存模型") } }
+            OutlinedTextField(model, { model = it }, label = { Text("模型名称") }, modifier = Modifier.fillMaxWidth().padding(top = 13.dp), singleLine = true, shape = RoundedCornerShape(12.dp), colors = settingsFieldColors())
+            OutlinedTextField(key, { key = it }, label = { Text("API 密钥") }, modifier = Modifier.fillMaxWidth().padding(top = 13.dp), singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), shape = RoundedCornerShape(12.dp), colors = settingsFieldColors())
+            Text(if (state.hasApiKey && provider == state.modelProvider && sameOrigin(url, state.baseUrl)) "此协议与服务已保存密钥，留空可继续使用。" else "填写此协议与服务的密钥；更换协议不沿用旧密钥。", fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(top = 7.dp))
+            HorizontalDivider(Modifier.padding(top = 18.dp), color = Line)
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("此模型支持图像输入", fontSize = 14.sp); Text(if (state.modelCatalogEnabled || state.modelRoute == "account") "请在 API 模型目录页核对精确能力与机主覆盖。" else "这是你的能力配置，不代表已实测效果。更换协议、地址或模型需重新确认。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp) }; Checkbox(supportsImageInput, { supportsImageInput = it }, enabled = !state.modelCatalogEnabled && state.modelRoute != "account") }
+            HorizontalDivider(Modifier.padding(top = 18.dp), color = Line)
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许按需发送截图", fontSize = 14.sp); Text("优先读取节点，节点不足且已配置图像能力时才发送；可见文字也会发送。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp) }; Switch(screenshots, { screenshots = it }) }
+            if (!supportsImageInput) Text("当前使用节点文字模式；节点不足时会请求接管，不会猜测坐标。后台屏仍可能采集本地帧以核对显示身份。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 7.dp))
+            OutlinedTextField(outputTokens, { outputTokens = it.filter(Char::isDigit).take(5) }, label = { Text("每次回复的输出上限") }, supportingText = { Text(if (state.modelCatalogEnabled) "在模型目录页选择输出参数字段与预算；发送前会核对已知容量" else if (provider == "openai_chat") "兼容 Chat 协议的输出限制由服务端配置" else "128–32768 tokens", fontSize = 12.sp) }, enabled = provider != "openai_chat", singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth().padding(top = 12.dp), shape = RoundedCornerShape(12.dp), colors = settingsFieldColors())
+            FlowRow(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { OutlinedButton(onClick = { controller.testModel(url, model, key, screenshots, provider, configuredOutput, consentPayload) }, enabled = !state.modelTesting && configuredOutput in 128..32768 && transportConfirmed) { Text(if (state.modelTesting) "测试中" else "测试连接") }; Button(onClick = { controller.saveModel(url, model, key, screenshots, provider, configuredOutput, consentPayload, supportsImageInput) }, enabled = !state.modelSaving && configuredOutput in 128..32768 && transportConfirmed) { Text(if (state.modelSaving) "保存中" else if (state.modelRoute == "account") "保存并切换 API 模型" else "保存模型") } }
             state.modelTest?.let { Text(it, fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(top = 10.dp)) }
             state.modelTestTaskId?.let { id -> TextButton(onClick = { controller.focusTask(id) }) { Text("查看这次连接测试用量") } }
             state.error?.let { Text(it, fontSize = 12.sp, lineHeight = 20.sp, color = Danger, modifier = Modifier.padding(top = 10.dp)) }
             }
-            HorizontalDivider(Modifier.padding(vertical = 24.dp), color = Line)
-            Text("手机执行", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            BackgroundConnectionSummary(state, controller)
-            SettingEntry("任务通知", if (state.notificationsEnabled) "已开启，可以从通知暂停或停止" else "未开启，后台手机任务需要此入口", controller::openNotifications)
-            SettingEntry("界面读取与主屏控制", if (state.accessibilityEnabled) "无障碍服务已连接，可读取系统允许访问的节点" else "后台节点和文字读取、主屏控制需要无障碍授权", controller::openAccessibility)
-            HorizontalDivider(Modifier.padding(vertical = 16.dp), color = Line)
-            Text("浏览器与语音", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            SettingEntry("网页研究工作区", "选择登录资料，多页比较、保留依据与下载，随时接管", controller::openBrowserResearch)
-            SettingEntry("内置浏览器", if (state.feature("browser").optBoolean("open")) "有打开的页面，点击后进入人工浏览" else "使用独立登录环境，不共享系统 Chrome 账号", controller::openBrowser)
-            Text(if (state.speechAvailable) "系统听写可用，识别结果只填入草稿，由你发送。" else "系统听写服务不可用，可以继续使用文字。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 8.dp))
-            val latestReply = state.messages.lastOrNull { it.role == "assistant" }?.content
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = { if (state.speaking) controller.stopSpeaking() else latestReply?.let(controller::speak) }, enabled = state.speaking || latestReply != null) { Text(if (state.speaking) "停止朗读" else "朗读最近回复") } }
-            HorizontalDivider(Modifier.padding(vertical = 16.dp), color = Line)
-            Text("更多能力", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text("记忆与定时、消息渠道、电脑环境、插件和团队，沿用同一引擎与已有配置。", fontSize = 12.sp, color = SecondaryInk, lineHeight = 21.sp, modifier = Modifier.padding(top = 9.dp))
-            OutlinedButton(onClick = connections, modifier = Modifier.padding(top = 12.dp)) { Text("连接与能力管理") }
-            Spacer(Modifier.height(24.dp))
+                SettingsSurface("手机执行", "授权与后台任务入口") {
+                    BackgroundConnectionSummary(state, controller)
+                    SettingEntry("任务通知", if (state.notificationsEnabled) "已开启，可以从通知暂停或停止" else "未开启，后台手机任务需要此入口", controller::openNotifications)
+                    HorizontalDivider(color = Line)
+                    SettingEntry("界面读取与主屏控制", if (state.accessibilityEnabled) "无障碍服务已连接，可读取系统允许访问的节点" else "后台节点和文字读取、主屏控制需要无障碍授权", controller::openAccessibility)
+                }
+                SettingsSurface("浏览器与语音", "网页研究、独立浏览与系统语音") {
+                    SettingEntry("网页研究工作区", "选择登录资料，多页比较、保留依据与下载，随时接管", controller::openBrowserResearch)
+                    HorizontalDivider(color = Line)
+                    SettingEntry("内置浏览器", if (state.feature("browser").optBoolean("open")) "有打开的页面，点击后进入人工浏览" else "使用独立登录环境，不共享系统 Chrome 账号", controller::openBrowser)
+                    HorizontalDivider(color = Line)
+                    Text(if (state.speechAvailable) "系统听写可用，识别结果只填入草稿，由你发送。" else "系统听写服务不可用，可以继续使用文字。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 14.dp))
+                    val latestReply = state.messages.lastOrNull { it.role == "assistant" }?.content
+                    OutlinedButton(onClick = { if (state.speaking) controller.stopSpeaking() else latestReply?.let(controller::speak) }, enabled = state.speaking || latestReply != null, modifier = Modifier.padding(top = 10.dp)) { Text(if (state.speaking) "停止朗读" else "朗读最近回复") }
+                }
+                SettingsSurface("更多能力", "沿用同一引擎与已有配置") {
+                    SettingEntry("连接与能力管理", "记忆与定时、消息渠道、电脑环境、插件和团队", connections)
+                }
+                Spacer(Modifier.height(12.dp))
+            }
         }
     }
-    if (cleartextDialog && !requiredCleartextConsent.isNullOrEmpty()) AlertDialog(onDismissRequest = { cleartextDialog = false }, containerColor = Color.White, title = { Text("允许这个明文模型连接？") }, text = { Text("协议：" + providers[provider].orEmpty() + "\n地址：" + requiredCleartextConsent.substringAfter('|') + "\n\nAPI 凭据、屏幕截图和文本将通过 HTTP 明文传输。更换协议或地址后需要重新确认。") }, confirmButton = { Button(onClick = { acceptedCleartextConsent = requiredCleartextConsent; cleartextDialog = false }) { Text("允许此协议与地址") } }, dismissButton = { TextButton(onClick = { cleartextDialog = false }) { Text("取消") } })
+    if (cleartextDialog && !requiredCleartextConsent.isNullOrEmpty()) AlertDialog(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), tonalElevation = 0.dp, onDismissRequest = { cleartextDialog = false }, containerColor = Color.White, title = { Text("允许这个明文模型连接？") }, text = { Text("协议：" + providers[provider].orEmpty() + "\n地址：" + requiredCleartextConsent.substringAfter('|') + "\n\nAPI 凭据、屏幕截图和文本将通过 HTTP 明文传输。更换协议或地址后需要重新确认。") }, confirmButton = { Button(onClick = { acceptedCleartextConsent = requiredCleartextConsent; cleartextDialog = false }) { Text("允许此协议与地址") } }, dismissButton = { TextButton(onClick = { cleartextDialog = false }) { Text("取消") } })
+}
+
+// Layout adaptation of the retained Affect Integration Settings sections and action footer
+// (reference 0e69029b, public-preview independent implementation; not paid upstream TSX).
+// One content surface per task group; rows and field explanations stay on that same plane.
+@Composable
+private fun SettingsSurface(title: String, detail: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp).pocketDepth(PocketDepth.CONTENT, 18.dp)
+        .clip(RoundedCornerShape(18.dp)).background(Color.White).border(.5.dp, Line, RoundedCornerShape(18.dp)).padding(16.dp)) {
+        Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+        Text(detail, fontSize = 12.sp, lineHeight = 19.sp, color = SecondaryInk, modifier = Modifier.padding(top = 3.dp, bottom = 16.dp))
+        content()
+    }
 }
 
 @Composable
+private fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = Ink, unfocusedBorderColor = Line,
+    focusedContainerColor = Color.White, unfocusedContainerColor = Color.White,
+    disabledContainerColor = Soft, disabledBorderColor = Line)
+
+@Composable
 private fun SettingEntry(title: String, detail: String, open: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = open).padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) { Text(title, fontSize = 13.sp); Text(detail, fontSize = 11.sp, lineHeight = 18.sp, color = SecondaryInk, modifier = Modifier.padding(top = 5.dp)) }
-        Text("›", fontSize = 22.sp, color = SecondaryInk, modifier = Modifier.padding(start = 10.dp))
+    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).clip(RoundedCornerShape(10.dp))
+        .clickable(onClick = open).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(detail, fontSize = 12.sp, lineHeight = 19.sp, color = SecondaryInk, modifier = Modifier.padding(top = 4.dp))
+        }
+        Text("›", fontSize = 24.sp, color = SecondaryInk, modifier = Modifier.padding(start = 14.dp, end = 4.dp))
     }
 }
 @Composable
