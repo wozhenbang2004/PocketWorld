@@ -933,6 +933,8 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                     OutlinedButton(onClick = { if (state.speaking) controller.stopSpeaking() else latestReply?.let(controller::speak) }, enabled = state.speaking || latestReply != null, modifier = Modifier.padding(top = 10.dp)) { Text(if (state.speaking) "停止朗读" else "朗读最近回复") }
                 }
                 if (settingsSection == 2) SettingsSurface("更多能力", "沿用同一引擎与已有配置") {
+                    NativeOwnerDataArchives(controller.ownerArchives)
+                    NativeOwnerProjectStorage(controller.projectStorage)
                     SettingEntry("连接与能力管理", "记忆与定时、消息渠道、电脑环境、插件和团队", connections)
                 }
                 Spacer(Modifier.height(12.dp))

@@ -1,0 +1,49 @@
+package dev.pocketengine.features.remote;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+/** Reducer/protocol tests only; actual SQL/HTTP/driver coverage lives in the native journey. */
+public final class RemoteJobEventsTest {
+    static final String GEN="00000000-0000-0000-0000-000000000001",GEN2="00000000-0000-0000-0000-000000000002";
+    static JSONObject scope()throws Exception{return RemoteJobEvents.scope(new JSONObject().put("taskId","task").put("runId","run").put("coordinatorEpoch",0).put("profileId","profile").put("serviceBase","https://original.invalid").put("jobId","job").put("jobOperationId","operation").put("environmentId","workspace").put("worker","codex_app_server"),"a".repeat(64));}
+    static JSONObject page(JSONObject request,String generation,int first,int head,int next)throws Exception {
+        JSONArray rows=new JSONArray();long start=request.getLong("after");JSONObject gap=null;
+        if(start<first-1){gap=new JSONObject().put("reason","retention_gap").put("fromSequence",start+1).put("throughSequence",Math.min(first-1,head));start=gap.getLong("throughSequence");}
+        for(long n=start+1;n<=next;n++)rows.put(new JSONObject().put("sequence",n).put("observedAt",1000+n).put("kind","tool").put("nativeType","item/started").put("text","actual-row-"+n));
+        return new JSONObject().put("protocol",RemoteJobEvents.PROTOCOL).put("filter",RemoteJobEvents.FILTER).put("id","job").put("operationId","operation").put("environmentId","workspace").put("worker","codex_app_server")
+                .put("requestedGeneration",request.getString("generation")).put("requestedAfter",request.getLong("after")).put("requestedHead",request.getLong("head"))
+                .put("generation",generation).put("status","page").put("events",rows).put("gap",gap==null?JSONObject.NULL:gap).put("retainedFromSequence",first).put("headSequence",head).put("lastSequence",head)
+                .put("nextSequence",next).put("hasMore",next<head).put("liveStreaming",false).put("completeHistory",false).put("executionAuthorized",false);
+    }
+    @Test public void durableCommitDuplicatesAndLatePagesNeverRegressAndSameSequenceConflictIsRejected()throws Exception {
+        JSONObject scope=scope(),request=RemoteJobEvents.request(null,scope),first=page(request,GEN,1,4,2);
+        var received=RemoteJobEvents.received(scope,request,first);JSONObject a=RemoteJobEvents.merge(null,received);
+        assertEquals(2,a.getLong("nextSequence"));assertEquals(2,RemoteJobEvents.merge(a,received).getJSONArray("events").length());
+        JSONObject next=RemoteJobEvents.request(a,scope);assertEquals(4,next.getLong("head"));JSONObject b=RemoteJobEvents.merge(a,RemoteJobEvents.received(scope,next,page(next,GEN,1,4,4)));
+        assertTrue(RemoteJobEvents.same(b,RemoteJobEvents.merge(b,received)));assertEquals(4,b.getJSONArray("events").length());
+        JSONObject conflict=new JSONObject(first.toString());conflict.getJSONArray("events").getJSONObject(0).put("text","different original event");
+        assertThrows(SecurityException.class,()->RemoteJobEvents.merge(b,RemoteJobEvents.received(scope,request,conflict)));
+    }
+    @Test public void explicitGapIsSavedAndGenerationResetNeverReusesOldCursorOrRows()throws Exception {
+        JSONObject scope=scope(),request=RemoteJobEvents.request(null,scope);JSONObject a=RemoteJobEvents.merge(null,RemoteJobEvents.received(scope,request,page(request,GEN,4,6,6)));
+        assertEquals(1,a.getJSONArray("gaps").length());assertEquals(3,a.getJSONArray("events").length());assertEquals(6,a.getLong("nextSequence"));
+        JSONObject next=RemoteJobEvents.request(a,scope),changed=page(new JSONObject(next.toString()).put("after",0),GEN2,1,0,0);
+        changed.put("requestedAfter",6).put("requestedHead",0).put("status","generation_changed").put("gap",new JSONObject().put("reason","generation_changed").put("previousGeneration",GEN));
+        var actual=RemoteJobEvents.received(scope,next,changed);JSONObject b=RemoteJobEvents.merge(a,actual);
+        assertEquals(0,b.getLong("nextSequence"));assertEquals(0,b.getJSONArray("events").length());assertEquals(0,b.getLong("lastSequence"));
+        assertTrue(RemoteJobEvents.same(b,RemoteJobEvents.merge(b,actual)));assertFalse(b.getBoolean("executionAuthorized"));
+        JSONObject other=new JSONObject(scope.toString()).put("jobId","other");assertEquals("",RemoteJobEvents.request(b,other).getString("generation"));assertEquals(0,RemoteJobEvents.request(b,other).getLong("after"));
+    }
+    @Test public void skippedSequencesMissingGapsWrongIdentityAndAheadCommitAreRejected()throws Exception {
+        JSONObject scope=scope(),request=RemoteJobEvents.request(null,scope),valid=page(request,GEN,1,4,2);
+        JSONObject wrong=new JSONObject(valid.toString()).put("id","other-job");assertThrows(SecurityException.class,()->RemoteJobEvents.received(scope,request,wrong));
+        JSONObject skip=new JSONObject(valid.toString());skip.getJSONArray("events").getJSONObject(0).put("sequence",2);assertThrows(SecurityException.class,()->RemoteJobEvents.received(scope,request,skip));
+        JSONObject missing=page(request,GEN,4,6,6).put("gap",JSONObject.NULL);assertThrows(SecurityException.class,()->RemoteJobEvents.received(scope,request,missing));
+        JSONObject ahead=new JSONObject(request.toString()).put("generation",GEN).put("after",2),future=page(ahead,GEN,1,4,4);var actual=RemoteJobEvents.received(scope,ahead,future);
+        assertThrows(SecurityException.class,()->RemoteJobEvents.merge(null,actual));
+        assertFalse(RemoteJobEvents.supported(new JSONObject().put("capabilities",new JSONObject().put("progressSnapshot",true))));
+    }
+}

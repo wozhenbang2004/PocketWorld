@@ -38,7 +38,7 @@ final class QqGatewayClient implements AutoCloseable {
         QqGatewaySession session=new QqGatewaySession(resume,access.token,payload->{
             control.check();guard.check();WebSocket socket=active.get();
             if(socket==null||!socket.send(payload.toString()))throw new IllegalStateException("QQ网关发送队列不可用");
-        },events,()->{control.check();guard.check();},System.nanoTime()/1_000_000);
+        },events,()->{control.check();guard.check();},System.nanoTime()/1_000_000,access.intents,access.botUserId);
         WebSocket socket=http.newWebSocket(new Request.Builder().url(address).build(),new WebSocketListener(){
             @Override public void onOpen(WebSocket webSocket,Response response){active.compareAndSet(null,webSocket);}
             @Override public void onMessage(WebSocket webSocket,String text){

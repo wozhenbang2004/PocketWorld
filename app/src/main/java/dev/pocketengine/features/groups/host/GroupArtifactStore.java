@@ -19,6 +19,23 @@ import org.json.JSONObject;
 public final class GroupArtifactStore {
     private final File root;
     public GroupArtifactStore(File privateGroupDirectory)throws Exception {root=new File(privateGroupDirectory,"artifacts");Files.createDirectories(root.toPath());}
+    /** Original SQL's one-use native freeze claim. It cannot be reconstructed from metadata JSON. */
+    public synchronized SavedRemoteResult retainRemoteResult(dev.pocketengine.store.TaskStore.GroupReturnClaim claim)throws Exception {
+        if(claim==null)throw new SecurityException("没有原SQL群成果冻结领取");claim.beforeWrite();var approval=claim.approval();JSONObject scope=approval.scope();var source=approval.originalSource();SavedRemoteResult existing=findRemoteResult(scope,source,approval.readControl());if(existing!=null)return existing;
+        byte[] bytes=approval.exactBytes();try{
+            if(bytes.length!=scope.getLong("bytes")||!scope.getString("sha256").equals(hex(MessageDigest.getInstance("SHA-256").digest(bytes))))throw new SecurityException("原已阅成果实际字节不一致");GroupHostPort.Request request=source.originalRequest();JSONObject stored=importOutput(request,scope.getString("operationId"),scope.getString("mimeType"),new ByteArrayInputStream(bytes),new GroupHostPort.Authority(){public void check()throws Exception{claim.checkCurrent();}public void checkRead()throws Exception{claim.checkCurrent();}});
+            JSONObject actual=required(request.spaceId,stored.getString("artifactId"),claim::checkCurrent);JSONObject origin=new JSONObject().put("scopeHash",dev.pocketengine.store.TaskStore.capabilityFingerprint(scope)).put("childTaskId",scope.getString("taskId")).put("jobId",scope.getString("jobId")).put("jobOperationId",scope.getString("jobOperationId")).put("sha256",scope.getString("sha256"));actual.put("nativeRemoteSource",origin);claim.checkCurrent();atomic(new File(root,request.spaceId.substring(6)+"/"+stored.getString("artifactId")+".json"),actual);return new SavedRemoteResult(actual,origin.getString("scopeHash"));
+        }finally{java.util.Arrays.fill(bytes,(byte)0);}
+    }
+    /** Original producer query only. Missing metadata is unknown, never permission to freeze again. */
+    public synchronized SavedRemoteResult findRemoteResult(JSONObject scope,dev.pocketengine.features.groups.GroupsModule.RemoteInputSource source,RunControl read)throws Exception {
+        source.checkCurrent();read.check();GroupHostPort.Request request=source.originalRequest();JSONObject original=scope.getJSONObject("groupInputSource");if(!request.taskId.equals(original.getString("taskId"))||!request.spaceId.equals(original.getString("spaceId"))||!request.actorId.equals(original.getString("actorId")))throw new SecurityException("原群冻结查询范围不符");String hash=dev.pocketengine.store.TaskStore.capabilityFingerprint(scope);File directory=new File(root,request.spaceId.substring(6));File[] files=directory.listFiles((d,n)->n.endsWith(".json"));SavedRemoteResult found=null;for(File file:files==null?new File[0]:files){read.check();source.checkCurrent();if(file.length()>16384)throw new SecurityException("群原件元数据超限");JSONObject value=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8));if(!scope.getString("operationId").equals(value.optString("operationId")))continue;JSONObject origin=value.optJSONObject("nativeRemoteSource");if(origin!=null&&!hash.equals(origin.optString("scopeHash")))throw new SecurityException("原群成果来源marker冲突");if(!request.taskId.equals(value.optString("taskId"))||!request.actorId.equals(value.optString("actorId"))||!request.audience.equals(value.optString("audience"))||!scope.getString("sha256").equals(value.optString("sha256"))||scope.getLong("bytes")!=value.optLong("bytes")||!scope.getString("mimeType").equals(value.optString("mimeType")))throw new SecurityException("原冻结操作存在不同群/内容来源");JSONObject actual=required(request.spaceId,value.getString("artifactId"),()->{read.check();source.checkCurrent();});if(found!=null)throw new SecurityException("原冻结操作有重复物理原件，不能猜最新");found=new SavedRemoteResult(actual,hash);}read.check();source.checkCurrent();return found;
+    }
+    public static final class SavedRemoteResult {
+        private final String record,scopeHash;private SavedRemoteResult(JSONObject actual,String scopeHash){record=actual.toString();this.scopeHash=scopeHash;}
+        public JSONObject metadata()throws Exception{return new JSONObject(record);}
+        public String scopeHash(){return scopeHash;}
+    }
     public synchronized JSONObject importOutput(GroupHostPort.Request request,String operationId,String mimeType,InputStream input,GroupHostPort.Authority authority)throws Exception {
         authority.check();if(!operationId.matches("[a-f0-9-]{36}"))throw new SecurityException("产物缺少原操作身份");
         return write(request.spaceId,request.actorId,request.audience,request.taskId,operationId,mimeType,input,request.maxMediaBytes,authority::check,null);
@@ -113,6 +130,13 @@ public final class GroupArtifactStore {
         if(!record.getString("taskId").isEmpty()||!request.event.eventId.equals(record.getString("operationId"))||!request.actorId.equals(record.getString("actorId"))
                 ||record.getLong("bytes")!=pinned.getLong("bytes")||!record.getString("mimeType").equals(pinned.getString("mimeType")))throw new SecurityException("原群输入附件的认证来源已变化");
         return readSnapshot(record,authority,control);
+    }
+    /** Exact original group input metadata/hash. No private Book import or execution/send grant. */
+    public synchronized JSONObject inputMetadata(GroupHostPort.Request request,String artifactId,GroupHostPort.Authority authority)throws Exception {
+        authority.checkRead();JSONObject pinned=null;JSONArray inputs=request.inputArtifacts();for(int i=0;i<inputs.length();i++)if(artifactId.equals(inputs.getJSONObject(i).optString("artifactId")))pinned=inputs.getJSONObject(i);
+        if(pinned==null)throw new SecurityException("不是本次认证群消息的原件");JSONObject record=required(request.spaceId,artifactId,authority::checkRead);
+        if(!record.optString("taskId").isEmpty()||!request.event.eventId.equals(record.getString("operationId"))||!request.actorId.equals(record.getString("actorId"))||record.getLong("bytes")!=pinned.getLong("bytes")||!record.getString("mimeType").equals(pinned.getString("mimeType")))throw new SecurityException("群原件不是该原认证事件/成员的实际版本");
+        authority.checkRead();return new JSONObject(record.toString());
     }
     private ReadSnapshot readSnapshot(JSONObject record,GroupHostPort.Authority authority,RunControl control)throws Exception {
         byte[] bytes=new byte[record.getInt("bytes")];boolean returned=false;

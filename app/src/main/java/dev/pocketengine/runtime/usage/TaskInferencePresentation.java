@@ -133,7 +133,7 @@ public final class TaskInferencePresentation {
         String kind="account".equals(route.optString("kind"))?"ChatGPT registration "+label(route.optString("accountId"),"未知")+" · v"+label(route.optString("accountVersion"),"未知")
                 :"api_key".equals(route.optString("kind"))?"API-key · 连接 "+label(route.optString("connectionId"),"身份未保留")+" · 凭据版本 "+label(route.optString("credentialRevision"),"未知"):"调用路由未知";
         String requested=label(route.optString("requestedModel"),"请求模型未知"),response=label(route.optString("responseModel"),"服务未返回模型标识");
-        return kind+"\n请求："+requested+" · 返回："+response;
+        return kind+"\n请求："+requested+" · 返回："+response+(route.optString("logicalRequestId").isEmpty()?"":"\n逻辑请求 "+route.optString("logicalRequestId")+" · 尝试 "+route.optInt("attemptNo")+" · 候选 "+route.optString("candidateId")+"\n别名 "+route.optString("requestedAlias")+" · 原因 "+route.optString("retryReason"));
     }
     private static String purpose(String purpose,String member){String label=switch(purpose){case "MAIN"->"主请求 MAIN";case "SUMMARY"->"上下文整理 SUMMARY";case "MEMBER"->"成员请求 MEMBER";case "TOOL"->"工具模型 TOOL";case "CONNECTION_TEST"->"连接测试";case "VOICE_TURN"->"语音文字对话";case "REALTIME"->"自然语音回复";case "REALTIME_TRANSCRIPTION"->"语音输入转录（独立ASR）";case "RELAY"->"本机模型服务";case "SKILL_DRAFT"->"经验技能草稿整理";default->"用途未核对";};return member.isEmpty()?label:label+" · 成员 "+label(member,"未知");}
     private static String outcome(String value){return switch(value){case "COMPLETED"->"调用完成（不是任务验收）";case "FAILED"->"调用失败（不代表未计费）";case "CANCELLED"->"已取消本地等待（不代表退款或服务未处理）";default->"未见终态，派发结果待核对";};}

@@ -70,7 +70,7 @@ import org.json.JSONObject
     if (!expanded) return
     if (busy) { LinearProgressIndicator(Modifier.fillMaxWidth()); TextButton(onClick = { page.cancel(); notice = "已请求停止后续组件；正在核对原回执，不撤回已发生的效果" }) { Text("停止后续组件", color = Danger) } }
     notice?.let { Text(it, color = SecondaryInk, fontSize = 13.sp, lineHeight = 21.sp) }
-    Text("选择的文件必须是 pocketworld.functional-pack.v1；不执行 npm、shell 或宿主桥。不支持的协议和依赖会在整包写入前说明。", color = SecondaryInk, fontSize = 13.sp, lineHeight = 21.sp)
+    Text("选择的文件必须是 pocketworld.functional-pack.v1；不执行 npm、shell 或宿主桥。不支持的协议/依赖逐组件说明；可明确选择无受阻依赖的独立组件，其他组件保持受阻，不冒整包成功。", color = SecondaryInk, fontSize = 13.sp, lineHeight = 21.sp)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = { picker.launch(arrayOf("application/json", "application/octet-stream", "text/plain")) }, enabled = !busy) { Text("选择准确功能包") }
         TextButton(onClick = { work({ page.snapshot() }) { snapshot = it } }, enabled = !busy) { Text("读取原登记") }
@@ -86,6 +86,18 @@ import org.json.JSONObject
         }
         data.optJSONArray("issues")?.let { issues -> (0 until issues.length()).forEach { Text(issues.optString(it), color = Danger, fontSize = 13.sp, lineHeight = 21.sp) } }
         Text("按组件分别记入原任务，不承诺跨模块原子安装。中途停止或失败会明确保留已确认部分；未知只查询原操作，不回滚已发生的效果，也不自动重提。", color = SecondaryInk, fontSize = 13.sp, lineHeight = 21.sp)
+        var chosen by remember(retained.digest) { mutableStateOf(functionalRows(data.optJSONArray("components")).filter { it.optBoolean("selected", true) && it.optBoolean("selectable", true) }.map { it.getString("key") }.toSet()) }
+        if (!removing) {
+            Text("独立组件选择", fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            functionalRows(data.optJSONArray("components")).forEach { component ->
+                val key = component.getString("key")
+                Row { Checkbox(key in chosen, { chosen = if (key in chosen) chosen - key else chosen + key; acknowledged = false }, enabled = !busy && component.optBoolean("selectable", true)); Text("$key · ${if (component.optBoolean("selectable", true)) "可选择" else "受阻，未派发"}", fontSize = 13.sp) }
+                component.optJSONObject("inspection")?.optString("reason")?.takeIf { it.isNotBlank() }?.let { Text(it, color = SecondaryInk, fontSize = 12.sp) }
+            }
+            TextButton(onClick = { work({ page.selectComponents(retained, JSONArray(chosen.toList())) }) { review = it; acknowledged = false } }, enabled = !busy && chosen.isNotEmpty()) { Text("重新审阅仅所选独立组件及依赖") }
+            data.optJSONArray("selectionProblems")?.let { problems -> (0 until problems.length()).forEach { Text(problems.optString(it), color = Danger, fontSize = 13.sp) } }
+            if (data.optBoolean("selectionExplicit") && !data.optBoolean("wholePackageSelected")) Text("本次为部分组件安装：未选/受阻部分不派发，保留原组件/手工修改，不声明整包或配方可用。", color = SecondaryInk, fontSize = 13.sp)
+        }
         functionalRows(data.optJSONArray("components")).forEach { component ->
             Text("${component.optString("key")} · ${functionalAction(component.optString("action"))}", fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Text(component.optString("kind") + " · " + component.optJSONObject("inspection")?.optString("message").orEmpty(), color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp)
@@ -98,7 +110,7 @@ import org.json.JSONObject
             SelectionContainer { Text(component.toString(2), fontSize = 11.sp, lineHeight = 18.sp) }
         }
         Row { Checkbox(acknowledged, { acknowledged = it }, enabled = !busy && retained.ready); Text(if (removing) "我已核对归属与保留项；仅移除本次准确原组件" else "我已核对准确组件与所需能力；只导入内容，不批准或开始运行", modifier = Modifier.weight(1f), fontSize = 13.sp, lineHeight = 21.sp) }
-        Button(onClick = { work({ val actual = page.submit(retained, retained.digest); actual to page.snapshot() }) { (actual, current) -> result = actual; snapshot = current; review = null; notice = actual.optString("message") } }, enabled = !busy && acknowledged && retained.ready) { Text(if (removing) "仅卸载原包确认组件" else "安装为停用组件，不运行") }
+        Button(onClick = { work({ val actual = page.submit(retained, retained.digest); actual to page.snapshot() }) { (actual, current) -> result = actual; snapshot = current; review = null; notice = actual.optString("message") } }, enabled = !busy && acknowledged && retained.ready) { Text(if (removing) "仅卸载原包确认组件" else if (data.optBoolean("selectionExplicit") && !data.optBoolean("wholePackageSelected")) "仅安装已审所选组件，整包仍部分完成" else "安装为停用组件，不运行") }
         TextButton(onClick = { review = null }, enabled = !busy) { Text("放弃这次审阅") }
     }
     result.optString("taskId").takeIf { it.isNotBlank() }?.let { task -> TextButton(onClick = { onOpenTask(task) }) { Text("打开这次原任务与回执") } }
@@ -108,6 +120,7 @@ import org.json.JSONObject
         Text("${pack.optString("name")} · ${pack.optString("version")}", fontSize = 15.sp, fontWeight = FontWeight.Medium)
         Text("原登记：${functionalState(pack.optString("state"))} · 组件权限与业务效果须分别核对", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp)
         functionalRows(pack.optJSONArray("components")).forEach { component -> SelectionContainer { Text("${component.optString("key")} · ${component.optString("id")} · ${component.optString("installationId", "修订 " + component.optInt("revision"))}", fontSize = 11.sp, lineHeight = 18.sp) } }
+        functionalRows(pack.optJSONArray("excludedComponents")).forEach { component -> Text("${component.optString("key")} · ${if (component.optString("action") == "blocked") "受阻" else "未选择"}，未派发；${component.optJSONObject("inspection")?.optString("reason").orEmpty()}", color = SecondaryInk, fontSize = 12.sp) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { work({ page.reconcile(pack.getString("id")) to page.snapshot() }) { (actual, current) -> snapshot = current; notice = if (actual.optBoolean("reconciled")) "已只读核对原回执与登记，未重提" else "仍有原未决动作，只可从原任务核对" } }, enabled = !busy) { Text("核对原操作") }
             TextButton(onClick = { work({ page.journal(pack.getString("id")) }) { journal = it } }, enabled = !busy) { Text("原组件回执") }

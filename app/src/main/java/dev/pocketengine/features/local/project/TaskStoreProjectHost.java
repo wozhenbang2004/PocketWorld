@@ -13,6 +13,8 @@ public final class TaskStoreProjectHost implements ProjectDevelopment.HostPort {
     public interface CurrentControl {RunControl get(String taskId);}
     private final TaskStore tasks;private final LocalModule local;private final CurrentControl controls;private final EventSink approvals;
     public TaskStoreProjectHost(TaskStore tasks,LocalModule local,CurrentControl controls,EventSink approvals){this.tasks=java.util.Objects.requireNonNull(tasks);this.local=java.util.Objects.requireNonNull(local);this.controls=java.util.Objects.requireNonNull(controls);this.approvals=java.util.Objects.requireNonNull(approvals);}
+    /** Native owner editor uses this same registered host and original controls. */
+    public ProjectOwnerLiveFileSave ownerFileSaves(){return new ProjectOwnerLiveFileSave(tasks,local,this,controls);}
     private RunControl current(JSONObject binding)throws Exception {
         RunControl original=controls.get(binding.getString("taskId"));if(original==null||!original.hasHostRun()||!original.matchesHostRun(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch")))throw new SecurityException("项目没有原活动执行控制");
         original.check();if(original.isPaused())throw new SecurityException("项目原执行已暂停");return original;
@@ -60,6 +62,7 @@ public final class TaskStoreProjectHost implements ProjectDevelopment.HostPort {
         JSONObject row=tasks.projectOperationForHost(binding);JSONObject args=row.getJSONObject("arguments"),plan=ProjectBuildPlan.verified(args.getJSONObject("plan"));JSONObject exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,args.getString("stepId")));
         row=tasks.projectOperationReceipt(binding,exact);JSONObject receipt=row.optJSONObject("receipt"),route=receipt==null?null:receipt.optJSONObject("projectExecution");if(route==null)return null;
         if("freezeProjectPackage".equals(exact.getString("command"))){JSONObject actual=receipt.optJSONObject("executionReceipt");if(actual!=null&&ProjectPackageDelivery.terminalReceipt(exact,actual))return new JSONObject(route.toString()).put("nativeReceipt",actual);}
+        if(ProjectManagedOutput.COMMAND.equals(exact.getString("command"))){JSONObject actual=receipt.optJSONObject("executionReceipt");if(actual!=null&&ProjectManagedOutput.terminalReceipt(exact,actual))return new JSONObject(route.toString()).put("nativeReceipt",actual);}
         if(java.util.Set.of("writeFile","patchFiles").contains(exact.getString("command"))){JSONObject actual=receipt.optJSONObject("executionReceipt");return actual==null?new JSONObject(route.toString()):new JSONObject(route.toString()).put("nativeReceipt",actual);}
         try{JSONObject backend=local.projectReceiptForHost(exact,route,route.optBoolean("cancelRequested"));tasks.recordProjectOperation(binding,exact,backend);return new JSONObject(route.toString()).put("nativeReceipt",backend);}catch(IllegalArgumentException missing){/* Persisted sending without a backend receipt stays unknown/query-only. */}
         JSONObject actual=receipt.optJSONObject("executionReceipt");return actual==null?new JSONObject(route.toString()):new JSONObject(route.toString()).put("nativeReceipt",actual);
@@ -68,6 +71,7 @@ public final class TaskStoreProjectHost implements ProjectDevelopment.HostPort {
         return tasks.originalProjectRequestForHost(binding);
     }
     @Override public void recordProcessInputReceipt(dev.pocketengine.features.local.runtime.ManagedProcessJobs.ProcessInputReceipt receipt)throws Exception {tasks.recordProjectProcessInput(receipt);}
+    public ProjectOwnerTerminal ownerTerminals(){return new ProjectOwnerTerminal(tasks,local,controls);}
     @Override public JSONObject processInput(JSONObject binding,String executionId)throws Exception {
         RunControl original=current(binding);JSONObject claim=tasks.claimProjectProcessInput(binding,executionId,original);if(!claim.optBoolean("fresh"))return claim.getJSONObject("receipt");
         JSONObject row=claim.getJSONObject("service"),args=row.getJSONObject("arguments"),plan=ProjectBuildPlan.verified(args.getJSONObject("plan")),exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,args.getString("stepId"))),route=row.getJSONObject("receipt").getJSONObject("projectExecution");
@@ -99,8 +103,9 @@ public final class TaskStoreProjectHost implements ProjectDevelopment.HostPort {
     /** Called only for the real non-exported Termux callback's native job event. */
     public void recordBackendReceipt(JSONObject backend)throws Exception {
         JSONObject link=backend.optJSONObject("projectExecution");if(link==null||!"native_host_operation".equals(link.optString("authority")))throw new SecurityException("不是原生项目回执");
+        if(dev.pocketengine.features.skills.ManagedSkillBackend.INTENT.equals(link.optString("intent"))){tasks.recordManagedSkillBackendReceiptForHost(new JSONObject(backend.toString()));return;}
         JSONObject binding=new JSONObject();for(String key:new String[]{"taskId","runId","operationId","coordinatorEpoch"})binding.put(key,link.get(key));
         JSONObject row=tasks.projectOperationForHost(binding),args=row.getJSONObject("arguments"),plan=ProjectBuildPlan.verified(args.getJSONObject("plan"));
-        JSONObject exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,args.getString("stepId")));if("freezeProjectPackage".equals(exact.getString("command")))throw new SecurityException("文件成果回执只由原Local/catalog生产，不采纳外部终端回调");tasks.recordProjectOperation(binding,exact,new JSONObject(backend.toString()));
+        JSONObject exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,args.getString("stepId")));if(java.util.Set.of("freezeProjectPackage","collectProjectOutput").contains(exact.getString("command")))throw new SecurityException("文件成果回执只由原Local/catalog生产，不采纳外部终端回调");tasks.recordProjectOperation(binding,exact,new JSONObject(backend.toString()));tasks.finishOwnerGitFromReceipt(binding);
     }
 }

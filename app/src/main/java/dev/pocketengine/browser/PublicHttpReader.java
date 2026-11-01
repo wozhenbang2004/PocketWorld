@@ -277,7 +277,7 @@ public final class PublicHttpReader {
         return InetAddress.getByAddress(address);
     }
     static String origin(HttpUrl url){return url.scheme()+"://"+(url.host().contains(":")?"["+url.host()+"]":url.host())+(url.port()==(url.isHttps()?443:80)?"":":"+url.port());}
-    static boolean publicAddress(InetAddress address){
+    public static boolean publicAddress(InetAddress address){
         if(address==null||address.isAnyLocalAddress()||address.isLoopbackAddress()||address.isLinkLocalAddress()||address.isSiteLocalAddress()||address.isMulticastAddress())return false;
         byte[] raw=address.getAddress();int a=raw[0]&255,b=raw[1]&255;
         if(raw.length==4)return a!=0&&a!=10&&a!=127&&a<224&&!(a==100&&b>=64&&b<=127)&&!(a==169&&b==254)&&!(a==172&&b>=16&&b<=31)

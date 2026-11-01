@@ -10,14 +10,19 @@ import org.json.JSONObject;
 public final class ProjectOwnerWorkflows {
     private final LocalModule local;private final TaskStore tasks;private final AssistantModule assistant;
     private final ThreadLocal<JSONObject> selection=new ThreadLocal<>();
+    private final ThreadLocal<dev.pocketengine.features.teams.TeamProjectRoundHost.Admission> teamRound=new ThreadLocal<>();
     public ProjectOwnerWorkflows(LocalModule local,TaskStore tasks,AssistantModule assistant){this.local=java.util.Objects.requireNonNull(local);this.tasks=java.util.Objects.requireNonNull(tasks);this.assistant=java.util.Objects.requireNonNull(assistant);}
+    @FunctionalInterface public interface RoundContinuationExecutor {JSONObject resume(dev.pocketengine.features.teams.TeamProjectRoundHost.Continuation original)throws Exception;}
+    private volatile RoundContinuationExecutor roundContinuationExecutor;
+    public synchronized void setRoundContinuationExecutor(RoundContinuationExecutor original){if(roundContinuationExecutor!=null)throw new IllegalStateException("原round继续宿主已挂载");roundContinuationExecutor=java.util.Objects.requireNonNull(original);}
+    public JSONObject continueTeamRound(dev.pocketengine.features.teams.TeamProjectRoundHost.Continuation original)throws Exception{RoundContinuationExecutor nativeHost=roundContinuationExecutor;if(nativeHost==null)throw new IllegalStateException("原native继续入口尚未挂载；没有新建run或更换预算");return nativeHost.resume(java.util.Objects.requireNonNull(original));}
     public JSONObject createProject(JSONObject input)throws Exception{return local.createProjectForOwner(input.getString("name"),input.getString("template"));}
     public JSONObject openProject(JSONObject input)throws Exception{return local.openProjectForOwner(input.getString("projectId"));}
     public JSONObject start(JSONObject ownerInput)throws Exception {
         String checkout=ProjectBuildPlan.identity(ownerInput.getString("checkoutId")),project=ProjectBuildPlan.identity(ownerInput.getString("projectId"));
         String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=ownerInput.getString("goal").trim();
         String runtime=ownerInput.getString("runtime");local.projectRuntimeForHost(runtime);
-        if(!digest.matches("[a-f0-9]{64}")||!client.matches("[a-fA-F0-9-]{36}")||goal.isBlank()||goal.length()>12000)throw new IllegalArgumentException("请选择真实项目、运行位置和1至12000字目标");
+        if(!digest.matches("[a-f0-9]{64}")||!client.matches("[a-fA-F0-9-]{36}")||goal.codePoints().allMatch(Character::isWhitespace)||goal.length()>12000)throw new IllegalArgumentException("请选择真实项目、运行位置和1至12000字目标");
         JSONObject context=new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",checkout).put("runtime",runtime)
                 .put("initialSourceDigest",digest).put("clientMessageId",client).put("filesAreUntrusted",true).put("authorityAdded",false);
         JSONObject prior=null;try{prior=assistant.handle("getSubmission",new JSONObject().put("clientMessageId",client));}catch(IllegalArgumentException absent){}
@@ -32,8 +37,17 @@ public final class ProjectOwnerWorkflows {
             return ack;
         }finally{selection.remove();}
     }
+    /** Native opaque result review only. JSON owner/model actions cannot mint this selection. */
+    public JSONObject startTeamRound(dev.pocketengine.features.teams.TeamProjectRoundHost.Admission admitted)throws Exception {
+        java.util.Objects.requireNonNull(admitted);JSONObject input=admitted.ownerRequest(),prior=null;try{prior=assistant.handle("getSubmission",new JSONObject().put("clientMessageId",input.getString("clientMessageId")));}catch(IllegalArgumentException absent){}
+        if(prior!=null){admitted.verifyAcknowledgement(prior);return prior;}admitted.checkCurrent();if(selection.get()!=null||teamRound.get()!=null)throw new IllegalStateException("不能嵌套新建项目执行");teamRound.set(admitted);
+        try{JSONObject ack=assistant.handle("send",new JSONObject().put("clientMessageId",input.getString("clientMessageId")).put("message",input.getString("goal")).put("mode","queue"));if(ack.optString("status").matches("accepted|queued"))admitted.verifyAcknowledgement(ack);return ack;}finally{teamRound.remove();}
+    }
+    public JSONObject teamRoundSubmission(dev.pocketengine.features.teams.TeamProjectRoundHost.Admission admitted)throws Exception{JSONObject input=admitted.ownerRequest(),ack=assistant.handle("getSubmission",new JSONObject().put("clientMessageId",input.getString("clientMessageId")));admitted.verifyAcknowledgement(ack);return ack;}
     /** Called only inside the existing native assistant admission, before any model turn is scheduled. */
-    public void bindNewAttempt(JSONObject task,RunControl original)throws Exception {
+    public void bindNewAttempt(JSONObject task,RunControl original)throws Exception {bindNewAttempt(task,original,null);}
+    public void bindNewAttempt(JSONObject task,RunControl original,dev.pocketengine.core.ModelConfig actualModel)throws Exception {
+        var round=teamRound.get();if(round!=null){if(selection.get()!=null)throw new SecurityException("新一轮与其他项目选择不能混合");round.bindNewAttempt(task,original,actualModel);return;}
         JSONObject context=selection.get();if(context!=null)tasks.bindDevelopmentContext(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),original,new JSONObject(context.toString()));
     }
     public JSONObject requireTask(String id)throws Exception {

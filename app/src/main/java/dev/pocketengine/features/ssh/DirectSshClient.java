@@ -240,6 +240,11 @@ public final class DirectSshClient {
             try(InputStream input=channel.get(path)){ByteArrayOutputStream output=new ByteArrayOutputStream();byte[] chunk=new byte[4096];int n;while((n=input.read(chunk))!=-1){control.check();if(output.size()+n>MAX_FILE)throw new IllegalArgumentException("文件超过256KiB");output.write(chunk,0,n);}return output.toByteArray();}
         }
         private String version(ChannelSftp channel,String path)throws Exception {try{return "sha256:"+SshProfile.hash(bytes(channel,path));}catch(SftpException missing){if(missing.id==ChannelSftp.SSH_FX_NO_SUCH_FILE)return "absent";throw missing;}}
+        /** Exact local loopback listener owned by this SSH session; no remote daemon is started. */
+        Forward openPreviewForward(int remotePort,int seconds)throws Exception {
+            if(remotePort<1024||remotePort>65535||seconds<10||seconds>600)throw new IllegalArgumentException("预览只允许明确的开发端口1024–65535、10–600秒");
+            check();int local=session.setPortForwardingL("127.0.0.1",0,"127.0.0.1",remotePort);try{check();return new Forward(this,local,remotePort,System.currentTimeMillis()+seconds*1000L);}catch(Exception revoked){close();throw revoked;}
+        }
         public Pty openPty(int columns,int rows,int seconds)throws Exception {
             if(columns<20||columns>300||rows<5||rows>120||seconds<10||seconds>600)throw new IllegalArgumentException("终端尺寸或会话时限无效");
             check();
@@ -300,6 +305,13 @@ public final class DirectSshClient {
         public String status(){return status;}
         public long expiresAt(){return expiresAt;}
         public boolean localClosed(){return connection.localClosed();}
+    }
+    static final class Forward implements AutoCloseable {
+        final Connection connection;final int localPort,remotePort;final long expiresAt;private volatile boolean closed;
+        Forward(Connection connection,int localPort,int remotePort,long expiresAt){this.connection=connection;this.localPort=localPort;this.remotePort=remotePort;this.expiresAt=expiresAt;}
+        void requireCurrent()throws Exception{connection.check();if(closed||System.currentTimeMillis()>=expiresAt){close();throw new SecurityException("原SSH预览隧道已关闭或到期");}}
+        JSONObject metadata()throws Exception{boolean active=!closed&&!connection.localClosed()&&connection.session.isConnected();return receipt(active?"running":"completed").put("localBaseUrl","http://127.0.0.1:"+localPort+"/").put("remoteHost","127.0.0.1").put("remotePort",remotePort).put("localPort",localPort).put("expiresAt",expiresAt).put("forwardingEstablished",active).put("localResourcesClosed",connection.localClosed()).put("remoteServerStopped",false).put("verified",false);}
+        @Override public void close(){closed=true;connection.close();} // closes listener AND every established channel, including upgraded WS
     }
     static void drain(InputStream input,ByteArrayOutputStream output,int limit)throws Exception {byte[] chunk=new byte[4096];while(input.available()>0){int n=input.read(chunk,0,Math.min(chunk.length,input.available()));if(n<0)return;if(output.size()+n>limit)throw new IllegalStateException("SSH输出超过限制，请缩小命令结果");output.write(chunk,0,n);}}
     /** Keep the bounded bytes already received, including the last in-range prefix. PTY's

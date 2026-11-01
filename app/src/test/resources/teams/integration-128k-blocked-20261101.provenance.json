@@ -1,0 +1,12 @@
+{
+  "source": "controlled integration fixture; original capture retained outside the source repository",
+  "sourceSha256": "f70924effef9b9420164f45a3f81e488268e48db7a48e685410bac24dde56c40",
+  "originalTaskId": "af454553-3d50-3425-b49a-664af02a4196",
+  "originalRunId": "6f7b69a1-3c58-48b6-962c-e95001c8607f",
+  "originalEpoch": 9,
+  "checkpointBytes": 108884,
+  "checkpointSha256": "88666ea7640a94a9e7dcac5cb890f5af101f738959601f54816b0099f4571cc6",
+  "messages": 87,
+  "status": "historical_controlled_fixture_data_not_authority",
+  "newTestUsesOriginalNativeApprovalForNewChild": true
+}

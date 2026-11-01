@@ -36,6 +36,18 @@ fun GroupCollaborationPage(
     onReviewTask: ((GroupTaskReviewSelection) -> Unit)? = null,
     onOpenArtifact: ((GroupArtifactSelection) -> Unit)? = null
 ) {
+    var remoteInputRequest by remember { mutableStateOf<String?>(null) }
+    remoteInputRequest?.let { original -> GroupRemoteInputsPanel(original,responses,onRequest,{remoteInputRequest=null});return }
+    var completedDelivery by remember { mutableStateOf(false) }
+    if (completedDelivery) {
+        DisposableEffect(Unit) { onDispose { try { onRequest("completion.leave", JSONObject()) } catch (_: Exception) { /* Parent lifecycle already revokes it. */ } } }
+        CompletionDeliveryPanel(responses, onRequest, { completedDelivery = false }); return
+    }
+    var manualMaterials by remember { mutableStateOf(false) }
+    if (manualMaterials) {
+        DisposableEffect(Unit) { onDispose { try { onRequest("material.leave", JSONObject()) } catch (_: Exception) { /* Parent window disposal already revokes authority. */ } } }
+        ReviewedMaterialPanel(responses, onRequest, { manualMaterials = false }); return
+    }
     var data by remember { mutableStateOf(JSONObject()) }
     var pending by remember { mutableStateOf<GroupPending?>(null) }
     var selected by remember { mutableStateOf<String?>(null) }
@@ -151,6 +163,8 @@ fun GroupCollaborationPage(
                     val storedDeliveries = GroupUiState.rows(data.optJSONArray("deliveries"))
                     val currentDeliveries = storedDeliveries.map { row -> deliveryUpdates[row.optString("deliveryId")] ?: row } +
                         deliveryUpdates.values.filter { update -> storedDeliveries.none { it.opt("deliveryId") == update.opt("deliveryId") } }
+                    Column(Modifier.fillMaxSize()) {
+                    OutlinedButton(onClick={remoteInputRequest=selectedTask},enabled=!busy&&reference!=null,modifier=Modifier.padding(horizontal=16.dp)){Text("显选原群文件到电脑分析并回原群")}
                     GroupTaskJourney(group.optString("name"), reference, taskResult, taskPresentations[selectedTask], currentDeliveries, busy, taskReadError,
                         onInspect = { request("task.inspect", JSONObject().put("requestId", selectedTask), selectedTask!!) },
                         onCancel = {
@@ -162,6 +176,7 @@ fun GroupCollaborationPage(
                         onSend = { request("delivery.send", JSONObject().put("requestId", selectedTask).put("outputId", it), selectedTask!!) },
                         onInspectDelivery = { request("delivery.inspect", JSONObject().put("deliveryId", it), selectedTask!!) },
                         onOpenArtifact = onOpenArtifact)
+                    }
                 }
                 memberEditor != null && group != null -> GroupMemberEditor(editorGroup ?: group, memberEditor!!, busy) { draft ->
                     review = GroupReview("member.set", JSONObject((editorGroup ?: group).toString()), draft,
@@ -176,6 +191,8 @@ fun GroupCollaborationPage(
                         Text("选择要开放的共享空间", style = MaterialTheme.typography.titleMedium)
                         Text("每个群单独管理成员、能力与额度。群成员不能取得私人手机、浏览器、记忆或 SSH 权限。", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 8.dp))
                         Button(onClick = { creating = true }, enabled = !busy) { Text("新建群空间") }
+                        OutlinedButton(onClick = { manualMaterials = true }, enabled = !busy) { Text("主人审阅外部材料并人工交还") }
+                        OutlinedButton(onClick = { completedDelivery = true }, enabled = !busy) { Text("把已核对任务结果发到主人私聊") }
                     }
                     if (GroupUiState.revision(data) < 0) item { Text("尚未读取群空间，请刷新。") }
                     else if (groups.isEmpty()) item { Text("还没有群空间。创建后默认关闭，添加成员并明确授权后再启用。", modifier = Modifier.padding(vertical = 20.dp)) }
@@ -234,6 +251,7 @@ fun GroupCollaborationPage(
                         }
                         else -> Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text("${group.optString("provider")} · 机器人 ${group.optString("accountId")}\n群稳定身份 ${group.optString("roomId")}", style = MaterialTheme.typography.bodyMedium)
+                            if (group.optString("conversationKind") == "qq_guild_channel") Text("QQ频道场景 · guild_id ${group.optString("conversationParentId")} · 不继承普通QQ群权限", style = MaterialTheme.typography.bodyMedium)
                             Text("${if (group.optBoolean("enabled")) "已启用" else "已关闭"} · 私人设备权限不向群开放", style = MaterialTheme.typography.titleMedium)
                             for (grant in GroupUiState.rows(group.optJSONArray("grants"))) Text("${capabilityLabel(grant.optString("capability"))} · ${if (grant.optBoolean("allowGroupAudience")) "可回群" else "未开放群受众"}\n${grant.optString("resource")} · 到期 ${java.util.Date(grant.optLong("expiresAt"))}", style = MaterialTheme.typography.bodyMedium)
                             val quota = group.getJSONObject("quota"); val usage = group.optJSONObject("usage")
@@ -264,7 +282,7 @@ fun GroupCollaborationPage(
 @Composable
 private fun GroupCreateForm(connections: List<JSONObject>, busy: Boolean, onCreate: (JSONObject) -> Unit) {
     var name by remember { mutableStateOf("") }; var provider by remember { mutableStateOf("qq") }
-    var account by remember { mutableStateOf("") }; var room by remember { mutableStateOf("") }
+    var account by remember { mutableStateOf("") }; var room by remember { mutableStateOf("") }; var guild by remember { mutableStateOf(false) }; var guildId by remember { mutableStateOf("") }
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("新建群空间", style = MaterialTheme.typography.titleLarge)
         Text("使用官方通道核实的机器人与群稳定编号。昵称、转发消息和群管理员声明不能用于认证。", style = MaterialTheme.typography.bodyMedium)
@@ -272,8 +290,16 @@ private fun GroupCreateForm(connections: List<JSONObject>, busy: Boolean, onCrea
         Text("选择本机已有连接", style = MaterialTheme.typography.titleMedium)
         if (connections.isEmpty()) Text("先在消息渠道配置 QQ 官方机器人或明确可信桥接。微信 iLink 目前仅支持私聊，不作为群连接。", style = MaterialTheme.typography.bodyMedium)
         connections.forEach { connection -> GroupRadio(account == connection.optString("id"), connection.optString("name").ifBlank { connection.optString("id") } + " · " + if (connection.optString("provider") == "qq") "QQ 官方机器人" else "明确可信桥接") { account = connection.getString("id"); provider = connection.getString("provider") } }
-        GroupField("官方群/桥接协议的稳定群编号", room, { room = it })
-        Button(onClick = { onCreate(JSONObject().put("name", name).put("provider", provider).put("accountId", account).put("roomId", room)) }, enabled = !busy && listOf(name, provider, account, room).all { it.isNotBlank() }) { Text("创建为关闭状态") }
+        if (provider == "qq") {
+            GroupRadio(!guild, "QQ群（group_openid）") { guild = false }
+            GroupRadio(guild, "QQ频道（guild_id / channel_id，独立授权）") { guild = true }
+            if (guild) {
+                GroupField("QQ原生 guild_id", guildId, { guildId = it })
+                Text("须先在该连接启用频道事件并核对官方资格。频道不继承同编号QQ群的成员或公开结果授权。", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        GroupField(if (provider == "qq" && guild) "QQ原生 channel_id" else "官方群/桥接协议的稳定群编号", room, { room = it })
+        Button(onClick = { val scope = JSONObject().put("name", name).put("provider", provider).put("accountId", account).put("roomId", room); if (provider == "qq" && guild) scope.put("conversationKind", "qq_guild_channel").put("conversationParentId", guildId); onCreate(scope) }, enabled = !busy && listOf(name, provider, account, room).all { it.isNotBlank() } && (!(provider == "qq" && guild) || guildId.isNotBlank() && connections.any { it.optString("id") == account && it.optBoolean("qqGuildEnabled") })) { Text("创建为关闭状态") }
     }
 }
 

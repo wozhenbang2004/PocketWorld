@@ -56,14 +56,21 @@ final class QqGatewayAdapter implements AutoCloseable {
         return new JSONObject().put("profileId",id).put("status","starting").put("transport","outbound_wss").put("persistentAfterProcessDeath",false);
     }
     private void run(String id,JSONObject profile,String secret,RunControl control,ChannelHttp.DispatchGuard guard){
-        QqGatewaySession.Resume resume=new QqGatewaySession.Resume();int failures=0,authenticationFailures=0;boolean blocked=false;
-        try{while(!closed&&!control.isCancelled()){
+        int failures=0,authenticationFailures=0;boolean blocked=false;
+        try{
+        String credentialFingerprint=ChannelCore.digest(secret);
+        QqGatewaySession.Resume resume=new QqGatewaySession.Resume(core.originalQqResume(profile,credentialFingerprint),(session,sequence)->{
+            guard.check();core.recordQqResume(profile,credentialFingerprint,session,sequence);guard.check();
+        });
+        while(!closed&&!control.isCancelled()){
             long wait=3000;
             try{
-                guard.check();ChannelHttp.GatewayAccess access=delivery.qqGateway(profile,secret,control,guard);guard.check();
+                guard.check();ChannelHttp.GatewayAccess found=delivery.qqGateway(profile,secret,control,guard);ChannelHttp.GatewayAccess access=new ChannelHttp.GatewayAccess(found.url,found.token,found.intents,core.originalQqBotUser(profile));guard.check();
                 QqGatewayClient.Exit exit=client.run(access,resume,control,guard,new QqGatewaySession.Events(){
-                    public void ready(boolean resumed)throws Exception{guard.check();state(id,"listening",resumed?"QQ官方会话已恢复":"QQ官方会话已认证，正在接收文字消息",System.currentTimeMillis());}
-                    public void message(JSONObject payload)throws Exception{receive(id,profile,payload,control,guard);}
+                    public void ready(boolean resumed)throws Exception{ready(resumed,"");}
+                    public void ready(boolean resumed,String bot)throws Exception{guard.check();if(!bot.isEmpty())core.recordQqBotUser(profile,bot);state(id,"listening",resumed?"QQ官方会话已恢复":"QQ官方会话已认证，正在接收文字消息",System.currentTimeMillis());}
+                    public void message(JSONObject payload)throws Exception{receive(id,profile,payload,control,guard,"");}
+                    public void message(JSONObject payload,String bot)throws Exception{receive(id,profile,payload,control,guard,bot);}
                 });
                 guard.check();if(exit.clearSession)resume.clear();
                 if(exit.refreshToken){delivery.forgetQqToken(id);if(++authenticationFailures>=2){blocked=true;state(id,"authorization_required","QQ重复拒绝更新后的凭据，请核对机器人授权与平台权限",0);break;}}
@@ -78,11 +85,13 @@ final class QqGatewayAdapter implements AutoCloseable {
             state(id,"retry_wait","QQ接收连接中断，将恢复原会话；未重试任务或消息发送",0);control.sleep(wait);
         }}catch(InterruptedException stopped){Thread.currentThread().interrupt();}
         catch(Exception stopped){blocked=true;state(id,"configuration_changed","QQ接收授权已失效，请由本机重新启动",0);}
-        finally{resume.clear();monitors.remove(id,control);if(!blocked)state(id,"stopped","QQ接收已停止",0);}
+        // A user stop or process close stops this socket, not the durable resume evidence.
+        // Only an authenticated invalid-session response clears the original cursor.
+        finally{monitors.remove(id,control);if(!blocked)state(id,"stopped","QQ接收已停止；原同步位置已保留",0);}
     }
-    private void receive(String id,JSONObject profile,JSONObject payload,RunControl control,ChannelHttp.DispatchGuard guard)throws Exception {
+    private void receive(String id,JSONObject profile,JSONObject payload,RunControl control,ChannelHttp.DispatchGuard guard,String nativeBotUserId)throws Exception {
         guard.check();JSONObject canonical;
-        try{canonical=ChannelProtocol.canonicalQq(payload);}catch(IllegalArgumentException unsupported){return;}
+        try{canonical=ChannelProtocol.canonicalQq(payload,nativeBotUserId);}catch(IllegalArgumentException unsupported){return;}
         long age=System.currentTimeMillis()-canonical.getLong("sentAt");if(age< -300_000)return;
         control.check();guard.check();JSONObject incoming=core.accept(id,canonical,"qq_gateway");
         if(incoming.getBoolean("duplicate"))return;
@@ -95,7 +104,7 @@ final class QqGatewayAdapter implements AutoCloseable {
         // Only native setup fields fence a receiver. beginAnswer updates quotaWindowStart/
         // quotaUsed on the same profile; normal runtime accounting must not revoke its socket.
         JSONArray configuration=new JSONArray();
-        for(String key:new String[]{"id","name","provider","appId","enabled","apiBase","autoReply","replyUrl","maxRepliesPerHour","updatedAt","transportEpoch"})configuration.put(profile.get(key));
+        for(String key:new String[]{"id","name","provider","appId","enabled","apiBase","autoReply","replyUrl","maxRepliesPerHour","updatedAt","transportEpoch","qqGuildEnabled"})configuration.put(profile.opt(key));
         return ChannelCore.digest(configuration.toString());
     }
     boolean isRunning(String id){return monitors.containsKey(id);}

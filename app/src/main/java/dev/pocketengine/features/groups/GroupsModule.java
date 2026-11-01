@@ -16,6 +16,7 @@ public final class GroupsModule implements EngineModule {
     private final GroupOwnerAuthority owner;
     private final LongSupplier clock;
     private volatile boolean closed;
+    private volatile dev.pocketengine.features.groups.host.GroupArtifactStore remoteInputArtifacts;
 
     public GroupsModule(File privateDirectory,GroupIngressPort ingress,GroupHostPort tasks,GroupDeliveryPort delivery,GroupOwnerAuthority owner) throws Exception {
         this(privateDirectory,ingress,tasks,delivery,owner,System::currentTimeMillis);
@@ -200,7 +201,7 @@ public final class GroupsModule implements EngineModule {
         if(receipt==null||!receipt.status.equals("completed"))throw new IllegalStateException("任务尚无已核验完成的结果");
         GroupHostPort.Output output=null;for(GroupHostPort.Output candidate:receipt.outputs)if(candidate.outputId.equals(outputId))output=candidate;
         if(output==null)throw new IllegalArgumentException("TaskStore回执中没有此产物");
-        if(!delivery.supports(target.provider,target.accountId,request.audience,output.mimeType))throw new IllegalStateException("该官方渠道不支持此受众或媒体类型，未发送");
+        if(!delivery.supports(target,request.audience,output.mimeType))throw new IllegalStateException("该官方渠道不支持此受众或媒体类型，未发送");
         GroupDeliveryPort.Delivery value=registry.prepareDelivery(request.requestId,output,target,clock.getAsLong());
         JSONObject result=deliver(request,value,target);read.checkRead();return result;
     }
@@ -239,6 +240,41 @@ public final class GroupsModule implements EngineModule {
     }
     @FunctionalInterface public interface OwnerTaskReader<T> {
         T read(GroupHostPort.Request request,GroupHostPort.Authority readAuthority) throws Exception;
+    }
+    /** Original Application construction only. This does not expose a feature/model command. */
+    public synchronized void bindRemoteInputArtifacts(dev.pocketengine.features.groups.host.GroupArtifactStore artifacts){if(closed||remoteInputArtifacts!=null)throw new IllegalStateException("原群文件宿主已经绑定或关闭");remoteInputArtifacts=Objects.requireNonNull(artifacts);}
+    /** Native source proof, not a remote account/budget/model or transmission grant. */
+    public static final class RemoteInputSource {
+        private final GroupsModule issuer;private final GroupHostPort.Request request;private final String files,run;private final int epoch;
+        private RemoteInputSource(GroupsModule issuer,GroupHostPort.Request request,JSONArray files,GroupHostPort.TaskReceipt original){this.issuer=issuer;this.request=request;this.files=files.toString();run=original.runId;epoch=original.coordinatorEpoch;}
+        private void originCurrent()throws Exception{issuer.checkRequest(request,false);if(!GroupJson.canonical(request.origin()).equals(GroupJson.canonical(issuer.registry.request(request.requestId).origin())))throw new SecurityException("原群来源身份已变化");}
+        private GroupHostPort.Authority readAuthority(){return new GroupHostPort.Authority(){public void check(){throw new SecurityException("群原件读取不授予执行或外发");}public void checkRead()throws Exception{originCurrent();}};}
+        public void checkCurrent()throws Exception{originCurrent();GroupHostPort.TaskReceipt current=issuer.host.inspect(request,readAuthority());if(current==null||!run.equals(current.runId)||epoch!=current.coordinatorEpoch||!current.status.equals("completed"))throw new SecurityException("所选原群任务已变更、停止或尚未完成核验，不能继续外传");originCurrent();}
+        public JSONObject view()throws Exception{return new JSONObject().put("inferenceAudience","EXTERNAL_GROUP").put("privateBookImported",false).put("requestId",request.requestId).put("taskId",request.taskId).put("runId",run).put("coordinatorEpoch",epoch).put("spaceId",request.spaceId).put("actorId",request.actorId).put("audience",request.audience).put("origin",request.origin()).put("files",new JSONArray(files));}
+        public JSONObject selectedView(JSONArray selected)throws Exception{JSONObject value=view();JSONArray actual=new JSONArray();for(int i=0;i<selected.length();i++)actual.put(file(selected.getJSONObject(i).getString("attachmentId"),selected.getJSONObject(i).getString("sha256")));return value.put("files",actual);}
+        public JSONArray files()throws Exception{return new JSONArray(files);}
+        private JSONObject file(String id,String sha)throws Exception{JSONArray values=new JSONArray(files);for(int i=0;i<values.length();i++){JSONObject value=values.getJSONObject(i);if(id.equals(value.getString("attachmentId"))&&sha.equals(value.getString("sha256")))return value;}throw new SecurityException("所选群文件不是此原任务可核对的字节版本");}
+        public JSONObject checkFile(String id,String sha)throws Exception{checkCurrent();JSONObject expected=file(id,sha),actual=issuer.remoteInputArtifacts.inputMetadata(request,id,readAuthority());if(actual.getLong("bytes")!=expected.getLong("bytes")||!actual.getString("sha256").equals(sha)||!actual.getString("mimeType").equals(expected.getString("mimeType")))throw new SecurityException("群原件内容/类型变化");checkCurrent();return expected;}
+        public byte[] readExact(String id,String sha,dev.pocketengine.core.RunControl control)throws Exception{JSONObject expected=checkFile(id,sha);var snapshot=issuer.remoteInputArtifacts.readInputSnapshot(request,id,readAuthority(),control);JSONObject actual=snapshot.metadata();if(actual.getLong("bytes")!=expected.getLong("bytes")||!actual.getString("sha256").equals(sha))throw new SecurityException("群原件实际hash变化");control.check();checkCurrent();return snapshot.copyBytes();}
+        public boolean issuedBy(GroupsModule module){return issuer==module;}
+        public GroupHostPort.Request originalRequest(){return request;}
+    }
+    /** Only the actual foreground native owner route can mint the original group source. */
+    public RemoteInputSource remoteInputSourceForOwner(String requestId)throws Exception{
+        ownerCheck();requireHost();if(remoteInputArtifacts==null)throw new IllegalStateException("群原件宿主尚未接入");GroupHostPort.Request request=registry.request(GroupJson.id(requestId,"requestId"));checkRequest(request,false);GroupHostPort.Progress original=host.inspectProgress(request,ownerReadAuthority());if(original==null||original.task==null||!original.task.status.equals("completed")||original.unresolved)throw new SecurityException("请先在原群任务核验完成并结清未决动作，再另审远端数据使用");
+        JSONArray files=new JSONArray(),all=request.inputArtifacts();for(int i=0;i<all.length();i++){JSONObject pinned=all.getJSONObject(i);if(pinned.optLong("bytes")>262144)continue;JSONObject meta=remoteInputArtifacts.inputMetadata(request,pinned.getString("artifactId"),ownerReadAuthority());files.put(new JSONObject().put("attachmentId",meta.getString("artifactId")).put("name","group-"+meta.getString("artifactId")+".bin").put("mimeType",meta.getString("mimeType")).put("bytes",meta.getLong("bytes")).put("sha256",meta.getString("sha256")).put("generatedDisplayName",true));}
+        ownerCheck();RemoteInputSource source=new RemoteInputSource(this,request,files,original.task);source.checkCurrent();return source;
+    }
+    /** Real original ingress supplies a possible passive reply context, never arbitrary endpoint JSON. */
+    public JSONObject remoteReplyContextForOwner(RemoteInputSource source,String eventId)throws Exception{
+        ownerCheck();if(source==null||!source.issuedBy(this))throw new SecurityException("不是此原群来源");source.checkCurrent();GroupIngressPort.Event target=authenticate(eventId);registry.visible(source.request.requestId,target);if(clock.getAsLong()>target.replyUntil)throw new SecurityException("原消息回复窗口已过期");return replyContext(target);
+    }
+    private static JSONObject replyContext(GroupIngressPort.Event target)throws Exception {JSONObject value=new JSONObject().put("eventId",target.eventId).put("provider",target.provider).put("accountId",target.accountId).put("roomId",target.roomId).put("senderId",target.senderId).put("messageId",target.messageId).put("transportEpoch",target.transportEpoch).put("conversationKind",target.conversationKind).put("conversationParentId",target.conversationParentId).put("replyUntil",target.replyUntil).put("receivedAt",target.receivedAt);return value;}
+    /** Only the second exact native content/target approval may use the original delivery/outbox. */
+    public JSONObject sendRemoteResult(dev.pocketengine.features.remote.RemoteGroupInputs.ReturnApproval approval)throws Exception{
+        ownerCheck();if(approval==null||!approval.originalSource().issuedBy(this))throw new SecurityException("没有原群成果回发批准");approval.checkCurrent();approval.checkOriginalReceipt();RemoteInputSource source=approval.originalSource();source.checkCurrent();JSONObject scope=approval.scope(),saved=approval.saved();GroupHostPort.Request request=source.request;JSONObject record=remoteInputArtifacts.readOutputMetadata(request,saved.getString("artifactId"),source.readAuthority(),approval.readControl());
+        if(!record.getString("sha256").equals(scope.getString("sha256"))||record.getLong("bytes")!=scope.getLong("bytes")||!record.getString("operationId").equals(scope.getString("operationId")))throw new SecurityException("原群冻结成果不是本次核对内容");GroupHostPort.Output output=remoteInputArtifacts.output(request,record.getString("artifactId"),source.readAuthority());JSONObject selectedTarget=approval.deliveryContext();GroupIngressPort.Event target=authenticate(selectedTarget.getString("eventId"));if(!GroupJson.canonical(replyContext(target)).equals(GroupJson.canonical(selectedTarget)))throw new SecurityException("原群回复上下文已变化");registry.visible(request.requestId,target);if(delivery==null||!delivery.supports(target,request.audience,output.mimeType))throw new IllegalStateException("原正式渠道不支持此群文件类型；成果已保留，未改成私人或其它受众发送");
+        approval.checkCurrent();source.checkCurrent();GroupDeliveryPort.Delivery value=registry.prepareDelivery(request.requestId,output,target,clock.getAsLong());JSONObject result=deliver(request,value,target);ownerCheck();return result;
     }
     /**
      * Native artifact/result readers use the original registry identity inside the current

@@ -22,6 +22,7 @@ internal class ProjectWorkbenchSession(context: Context) : ViewModel() {
     private val agents = mutableMapOf<String, ProjectAgentDraftSession>()
     private val fileTrees = mutableMapOf<String, ProjectTreeUiState>()
     private val pages = mutableMapOf<Pair<String, Int>, LazyListState>()
+    private val codeReturns = mutableMapOf<String, java.util.ArrayDeque<Triple<String,Int,Int>>>()
     private var navigationRevision = 0L
     fun navigationRevision(): Long = navigationRevision
 
@@ -61,6 +62,12 @@ internal class ProjectWorkbenchSession(context: Context) : ViewModel() {
         val path = preferences.getString("checkout.$checkoutId.path", null) ?: return null
         return path to preferences.getBoolean("checkout.$checkoutId.new", false)
     }
+    fun navigateCode(checkout:String,from:String,fromStart:Int,fromEnd:Int,target:String,start:Int,end:Int) {
+        val stack=codeReturns.getOrPut(checkout){java.util.ArrayDeque()};if(stack.size>=20)stack.removeFirst();stack.addLast(Triple(from,fromStart,fromEnd))
+        rememberEditorPosition(checkout,from,fromStart,fromEnd);rememberEditorPosition(checkout,target,start,end);open(checkout,target,false)
+    }
+    fun hasCodeReturn(checkout:String):Boolean { change.intValue;return codeReturns[checkout]?.isNotEmpty()==true }
+    fun returnFromCode(checkout:String) { val original=codeReturns[checkout]?.pollLast()?:return;rememberEditorPosition(checkout,original.first,original.second,original.third);open(checkout,original.first,false) }
     fun lastFile(checkoutId: String): String? { change.intValue; return preferences.getString("checkout.$checkoutId.lastPath", null) }
     fun open(checkoutId: String, path: String, fresh: Boolean) {
         preferences.edit().putString("checkout.$checkoutId.lastPath", path).putString("checkout.$checkoutId.path", path).putBoolean("checkout.$checkoutId.new", fresh).apply(); change.intValue++
@@ -70,6 +77,23 @@ internal class ProjectWorkbenchSession(context: Context) : ViewModel() {
     }
     fun selectedTask(checkoutId: String): String? { change.intValue; return preferences.getString("checkout.$checkoutId.task", null) }
     fun selectTask(checkoutId: String, taskId: String?) { if (selectedTask(checkoutId) == taskId) return; navigationRevision++; preferences.edit().putString("checkout.$checkoutId.task", taskId).apply(); change.intValue++ }
+    /** Only the exact original query locator, never file text, plan, grant or automatic retry. */
+    fun pendingLiveFileSave(checkoutId: String, path: String): JSONObject? {
+        val body = preferences.getString("live-save.$checkoutId.$path", null) ?: return null
+        return JSONObject(body).also { require(it.getString("checkoutId") == checkoutId && it.getString("path") == path && it.toString().length <= 2048) }
+    }
+    /** IO caller commits before entering any source effect. */
+    fun persistLiveFileSave(checkoutId: String, path: String, locator: JSONObject?) {
+        val edit = preferences.edit()
+        if (locator == null) edit.remove("live-save.$checkoutId.$path") else {
+            require(locator.getString("checkoutId") == checkoutId && locator.getString("path") == path)
+            val safe = JSONObject()
+            listOf("taskId", "runId", "operationId", "coordinatorEpoch", "checkoutId", "path").forEach { safe.put(it, locator.get(it)) }
+            require(safe.toString().length <= 2048)
+            edit.putString("live-save.$checkoutId.$path", safe.toString())
+        }
+        check(edit.commit()) { "原保存定位尚未可靠保存，未派发新保存" }
+    }
     fun agent(checkoutId: String): ProjectAgentDraftSession = agents.getOrPut(checkoutId) {
         ProjectAgentDraftSession().also { session ->
             try { preferences.getString("checkout.$checkoutId.liveInput", null)?.let { session.liveInput.value = dev.pocketengine.features.local.project.ProjectLiveInput.verified(JSONObject(it)) } }

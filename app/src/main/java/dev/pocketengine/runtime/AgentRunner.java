@@ -302,6 +302,7 @@ public final class AgentRunner {
                         if(capabilities!=null&&!capabilities.responseCurrent(control))continue modelTurns;
                     }
                     final JSONArray actualModelMessages=finalRequestMessages;final StringBuilder visibleAttempt=new StringBuilder();
+                    final JSONArray originalHistory=history,retryProjection=requestHistory;final JSONArray[] retryOwnerInputs={null};final boolean retryAfterContextRepair=!contextRecoveryUsed;
                     // Each physical call gets a fresh target/receipt and rechecks the original native
                     // task/epoch/scope. No tool has been admitted from this incomplete response.
                     try{response=ModelGateway.completeStreaming(config,actualModelMessages,tools,control,event->{
@@ -309,7 +310,21 @@ public final class AgentRunner {
                         if(event.kind==ModelGateway.StreamKind.TEXT_DELTA&&visibleAttempt.length()<32768){int count=Math.min(event.text.length(),32768-visibleAttempt.length());if(count>0&&count<event.text.length()&&Character.isHighSurrogate(event.text.charAt(count-1)))count--;visibleAttempt.append(event.text,0,count);}
                         emitStream(taskId,event,config,control,sink);
                     },journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed()
-                            :journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,""));break;
+                             :journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,""),new ModelGateway.RetryObserver(){
+                        public void beforeWait(String logical,String failedCall,int retryNumber,long delay)throws Exception {
+                            if(!retryAfterContextRepair)throw new ModelGateway.GatewayException("原上下文整理后的唯一请求已结束；本轮没有再次重试。");
+                            if(capabilities!=null)capabilities.modelRequestAbandoned(failedCall);
+                            if(journal!=null)journal.restore();
+                            emit(taskId,"model_recovery","running","本次推理未完整结束，正在原范围内稍后重新推理；没有重放工具，已发生的模型用量仍计入。",null,
+                                    new JSONObject().put("logicalRequestId",logical).put("previousCallId",failedCall).put("retryNumber",retryNumber).put("waitMillis",delay).put("totalWaitLimitMillis",SafeModelRecovery.MAX_TOTAL_WAIT_MILLIS).put("toolReplay",false).put("usageRefunded",false),config,sink);
+                        }
+                        public void afterWait()throws Exception {
+                            if(control.pauseRevision()!=pauseSeen[0])throw new ModelGateway.RequestRefreshRequired();
+                            JSONArray incoming=pollOwnerInputs(originalHistory,false,false,control);if(incoming.length()>0){retryOwnerInputs[0]=incoming;throw new ModelGateway.RequestRefreshRequired();}
+                            if(requestProjection!=null){JSONArray current=dev.pocketengine.features.memory.TaskMemoryHistory.wireMessages(requestProjection.project(nativeProvenance,config,control));if(!CompactionPlan.fingerprint(retryProjection).equals(CompactionPlan.fingerprint(current)))throw new ModelGateway.RequestRefreshRequired();}
+                            if(capabilities!=null&&!capabilities.responseCurrent(control))throw new ModelGateway.RequestRefreshRequired();
+                        }
+                    });break;
                     }catch(Exception failed){
                         if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
                         // The UI's bounded visible prefix survives an interrupted attempt in the
@@ -317,6 +332,10 @@ public final class AgentRunner {
                         for(int offset=0;offset<visibleAttempt.length();){int end=Math.min(visibleAttempt.length(),offset+8000);if(end<visibleAttempt.length()&&Character.isHighSurrogate(visibleAttempt.charAt(end-1)))end--;
                             emit(taskId,"model_attempt_interrupted","running","已保留中断推理的已显示片段；不是正式答复或操作结果。",null,new JSONObject().put("callId",nativeRequest[0]).put("offset",offset).put("text",visibleAttempt.substring(offset,end)).put("provisional",true).put("attemptCompleted",false).put("displayPrefixLimit",32768),config,sink);offset=end;}
                         control.check();
+                        if(failed instanceof ModelGateway.RequestRefreshRequired){
+                            if(retryOwnerInputs[0]!=null){appendOwnerInputs(history,retryOwnerInputs[0],config);recallIntent=latestOwnerRecallQuery(history,recallIntent);checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget);}
+                            continue modelTurns;
+                        }
                         // A context rejection gets one existing compactor pass and one request,
                         // not another transient retry budget or recursively summarized history.
                         if(!contextRecoveryUsed&&SafeModelRecovery.contextLimit(failed)&&compactor.available()

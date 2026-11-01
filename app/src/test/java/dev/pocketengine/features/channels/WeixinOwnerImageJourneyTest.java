@@ -60,7 +60,7 @@ public final class WeixinOwnerImageJourneyTest {
         return new JSONObject().put("message_id",id).put("from_user_id",sender).put("message_type",1).put("message_state",2).put("create_time_ms",System.currentTimeMillis()).put("context_token","ctx-image-"+id).put("item_list",items);
     }
     private static Context isolatedContext(){Context original=RuntimeEnvironment.getApplication();java.io.File files=new java.io.File(original.getFilesDir(),"owner-image-fixture-"+UUID.randomUUID());assertTrue(files.mkdirs());return new ContextWrapper(original){@Override public java.io.File getFilesDir(){return files;}@Override public Context getApplicationContext(){return this;}};}
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final Context android=isolatedContext();final FeatureContext context=new FeatureContext(android,new SettingsStore(android),new SecretVault(android),ignored->{});
         final HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);final AtomicReference<JSONObject> incoming=new AtomicReference<>();final AtomicInteger cdn=new AtomicInteger(),models=new AtomicInteger();final CopyOnWriteArrayList<JSONObject> requests=new CopyOnWriteArrayList<>(),delivered=new CopyOnWriteArrayList<>();final AtomicReference<Throwable> serverFailure=new AtomicReference<>();final CountDownLatch cdnEntered=new CountDownLatch(1),cdnRelease=new CountDownLatch(1);volatile boolean holdCdn,redirectCdn;volatile byte[] download=encrypted(PNG);final String base;ChannelsModule module;String profile,bindingEvent;int cursor;
         Fixture()throws Exception {

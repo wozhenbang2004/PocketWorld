@@ -10,7 +10,7 @@ public interface GroupIngressPort {
     void check(Event event) throws Exception;
 
     final class Event {
-        public final String eventId,provider,accountId,roomId,senderId,messageId,transportEpoch,text;
+        public final String eventId,provider,accountId,roomId,senderId,messageId,transportEpoch,text,conversationKind,conversationParentId;
         public final long receivedAt,replyUntil;
         private final JSONArray artifacts;
         private final JSONObject messageParts;
@@ -20,6 +20,12 @@ public interface GroupIngressPort {
         }
         public Event(String eventId,String provider,String accountId,String roomId,String senderId,
                      String messageId,String transportEpoch,String text,long receivedAt,long replyUntil,JSONArray artifacts,JSONObject messageParts) throws Exception {
+            this(eventId,provider,accountId,roomId,senderId,messageId,transportEpoch,text,receivedAt,replyUntil,artifacts,messageParts,"group","");
+        }
+        public Event(String eventId,String provider,String accountId,String roomId,String senderId,String messageId,String transportEpoch,String text,long receivedAt,long replyUntil,JSONArray artifacts,JSONObject messageParts,String conversationKind,String conversationParentId)throws Exception {
+            this.conversationKind=conversationKind==null?"group":conversationKind;this.conversationParentId=conversationParentId==null?"":conversationParentId;
+            if(!this.conversationKind.equals("group")&&!(provider.equals("qq")&&this.conversationKind.equals("qq_guild_channel")&&!this.conversationParentId.isEmpty()))throw new SecurityException("非已认证群/QQ频道场景");
+            if(!this.conversationParentId.isEmpty())GroupJson.id(this.conversationParentId,"conversationParentId");if(this.conversationKind.equals("group")&&!this.conversationParentId.isEmpty())throw new SecurityException("原普通群不继承频道父身份");
             this.messageParts=messageParts==null?new JSONObject():new JSONObject(messageParts.toString());
             if(this.messageParts.length()>0&&(!provider.equals(this.messageParts.optString("provider"))||!messageId.equals(this.messageParts.optString("messageId"))||this.messageParts.optJSONArray("parts")==null||this.messageParts.getJSONArray("parts").length()>64||this.messageParts.toString().length()>65536))throw new SecurityException("原群消息parts没有认证平台来源");
             this.eventId=GroupJson.id(eventId,"eventId");this.provider=GroupJson.id(provider,"provider");
@@ -40,11 +46,12 @@ public interface GroupIngressPort {
         }
         public JSONArray artifacts() throws Exception {return GroupJson.copy(artifacts);}
         public JSONObject messageParts() throws Exception {return new JSONObject(messageParts.toString());}
-        JSONObject json() throws Exception {return new JSONObject().put("eventId",eventId).put("provider",provider).put("accountId",accountId)
+        String routeIdentity(){String legacy=provider+"\n"+accountId+"\n"+roomId;return conversationKind.equals("group")?legacy:legacy+"\n"+conversationKind+"\n"+conversationParentId;}
+        JSONObject json() throws Exception {JSONObject value=new JSONObject().put("eventId",eventId).put("provider",provider).put("accountId",accountId)
                 .put("roomId",roomId).put("senderId",senderId).put("messageId",messageId).put("transportEpoch",transportEpoch)
-                .put("text",text).put("receivedAt",receivedAt).put("replyUntil",replyUntil).put("artifacts",artifacts()).put("messageParts",messageParts());}
+                .put("text",text).put("receivedAt",receivedAt).put("replyUntil",replyUntil).put("artifacts",artifacts()).put("messageParts",messageParts());if(!conversationKind.equals("group"))value.put("conversationKind",conversationKind).put("conversationParentId",conversationParentId);return value;}
         static Event from(JSONObject v) throws Exception {return new Event(v.getString("eventId"),v.getString("provider"),v.getString("accountId"),
                 v.getString("roomId"),v.getString("senderId"),v.getString("messageId"),v.getString("transportEpoch"),v.getString("text"),
-                v.getLong("receivedAt"),v.getLong("replyUntil"),v.getJSONArray("artifacts"),v.optJSONObject("messageParts"));}
+                v.getLong("receivedAt"),v.getLong("replyUntil"),v.getJSONArray("artifacts"),v.optJSONObject("messageParts"),v.optString("conversationKind","group"),v.optString("conversationParentId"));}
     }
 }

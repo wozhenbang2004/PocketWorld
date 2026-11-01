@@ -29,7 +29,9 @@ final class TeamProjectPort implements CapabilityPort {
     private CapabilityPort selected(String name)throws Exception {if(!supports(name))throw new SecurityException("没有此成员已挂载项目能力；先准备真实副本，不降级成另写文字文件");return projectTool(name)?project:files;}
     @Override public boolean sideEffecting(String name){return projectTool(name)?project==null||project.sideEffecting(name):files.sideEffecting(name);}
     @Override public void validate(String name,JSONObject args)throws Exception{selected(name).validate(name,args);}
-    @Override public JSONObject execute(String name,JSONObject args,RunControl control)throws Exception {check(control);return selected(name).execute(name,args,control);}
+    @Override public JSONObject execute(String name,JSONObject args,RunControl control)throws Exception {check(control);JSONObject result=selected(name).execute(name,args,control);
+        if(name.equals("project_plan")&&result.has("planRef")&&result.has("planDigest")){result=new JSONObject(result.toString());result.remove("plan");result.put("inlineCompatibilityCopyOmitted",true).put("fullPlanStoredInOriginalTaskStore",true).put("readFullManifestWith","project_plan_manifest");}
+        return result;}
     @Override public JSONObject contextSnapshot(String query)throws Exception {JSONObject result=files.contextSnapshot(query);JSONObject context=tasks.teamProjectContextIfReady(binding,original);return result.put("teamProject",context==null?new JSONObject().put("ready",false).put("message","先准备原工作项的完整副本"):TeamProjectWorkspaces.summary(context.getJSONObject("selection")).put("ready",true).put("checkoutId",context.getString("checkoutId")).put("projectId",context.getString("projectId"))).put("scopeNotice","命令在同应用UID执行，独立目录不是OS权限沙箱；只接受原native模板与当前源码的明确逐方案批准");}
     @Override public void beginRun(String goal,RunControl control)throws Exception{files.beginRun(goal,control);}
     @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl control)throws Exception{if(project==null)files.admitCapabilities(snapshot,control);else project.admitCapabilities(snapshot,control);}
@@ -41,5 +43,10 @@ final class TeamProjectPort implements CapabilityPort {
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{return project==null?files.beforeTool(name,args,control):project.beforeTool(name,args,control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{if(project==null)files.afterTool(name,args,receipt,control);else project.afterTool(name,args,receipt,control);}
     @Override public void endRun(RunControl control)throws Exception{if(project==null)files.endRun(control);else project.endRun(control);}
+    // Preserve typed native consumers on the SAME original port/control; this adds no tool or authority.
+    @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String tool,JSONObject args,RunControl live)throws Exception{return (project==null?files:project).observationRequirement(tool,args,live);}
+    @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String tool,String operation,RunControl live)throws Exception{return (project==null?files:project).takeToolObservation(tool,operation,live);}
+    @Override public dev.pocketengine.core.NativeToolPlan takeToolPlan(String tool,String operation,RunControl live)throws Exception{return (project==null?files:project).takeToolPlan(tool,operation,live);}
+    @Override public dev.pocketengine.core.NativeReadContextRepair nativeReadContextRepair(JSONArray messages,RunControl live)throws Exception{return (project==null?files:project).nativeReadContextRepair(messages,live);}
     @Override public void close(){try{if(project!=null)project.close();else files.close();}finally{closed=true;}}
 }

@@ -39,6 +39,24 @@ internal fun TaskInferencePanel(task: JSONObject, reestimate: ((String, String, 
             if (snapshot.context().attention()) Text(snapshot.context().title(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             if (expanded) Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 10.dp)) {
                 Text(snapshot.coverage(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val logical = task.optJSONArray("logicalRequests")
+                if (logical != null && logical.length() > 0) {
+                    Text("逻辑请求与路由", style = MaterialTheme.typography.titleSmall)
+                    Text("显示最多8条最近请求，仅为展示窗口；原记录未删除，费用仍以物理回执为准。", style = MaterialTheme.typography.bodySmall)
+                    for (index in 0 until minOf(logical.length(), 8)) {
+                        val request = logical.getJSONObject(index)
+                        val route = request.optJSONObject("routeSnapshot") ?: JSONObject()
+                        val control = request.optJSONObject("control") ?: JSONObject()
+                        Text("${route.optString("requestedAlias")} · ${request.optString("state")} · ${control.optJSONArray("attempts")?.length() ?: 0}/${control.optInt("maxAttempts", 1)} 次", style = MaterialTheme.typography.bodyMedium)
+                        SelectionContainer { Text(request.optString("logicalRequestId"), style = MaterialTheme.typography.labelSmall) }
+                        Text("完成：${control.optString("completionOutcome", "unknown")} · 输出：${control.optString("streamCompleteness", "none")} · 费用按各次回执核对", style = MaterialTheme.typography.bodySmall)
+                        val candidates = route.optJSONArray("orderedCandidates")
+                        for (c in 0 until (candidates?.length() ?: 0)) {
+                            val candidate = candidates!!.getJSONObject(c)
+                            if (candidate.optString("exclusion").isNotBlank()) Text("未选 ${candidate.optString("candidateId")}：${candidate.optString("exclusion")}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
                 Text("费用估算与额度", style = MaterialTheme.typography.titleSmall)
                 snapshot.money().forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                 Text("套餐额度未观察；服务冷却/Retry-After不是套餐重置时间。", style = MaterialTheme.typography.bodySmall)

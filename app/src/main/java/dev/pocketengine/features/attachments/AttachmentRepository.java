@@ -23,6 +23,13 @@ public final class AttachmentRepository {
     public final AttachmentBook book;
     private AttachmentRepository(Context context){this.context=context.getApplicationContext();book=new AttachmentBook(new java.io.File(this.context.getFilesDir(),"attachments"));}
     public static synchronized AttachmentRepository get(Context context){String key=context.getApplicationContext().getFilesDir().getAbsolutePath();AttachmentRepository found=INSTANCES.get(key);if(found==null){found=new AttachmentRepository(context);INSTANCES.put(key,found);}return found;}
+    /** Native private-original reader only. This verifies Book scope/bytes, not task execution
+     * permission: model callers must separately retain their original selected-source authority. */
+    public OwnerFilePreviewSource privateOriginalForHost(String id,String sha,RunControl control)throws Exception{
+        JSONObject meta=book.get(id),source=meta.optJSONObject("source");
+        if(!"owner".equals(meta.optString("principalId"))||!"private".equals(meta.optString("spaceId"))||meta.optBoolean("outputSourceRetired")||source!=null&&(source.has("groupSpaceId")||source.optString("kind").startsWith("group_")))throw new SecurityException("此输入不是原私人附件，群只读权限不会转为私人服务上传授权");
+        book.requireUnchanged(id,sha,control);return new OwnerFilePreviewSource("attachments",meta,c->book.verifiedBytes(id,sha,c),c->{JSONObject current=book.get(id);if(!"owner".equals(current.optString("principalId"))||!"private".equals(current.optString("spaceId"))||current.optBoolean("outputSourceRetired"))throw new SecurityException("原私人附件已撤回");book.requireUnchanged(id,sha,c);});
+    }
     public synchronized JSONObject importUri(Uri uri,int receivedFlags,String taskId,String projectId)throws Exception{
         requireContent(uri);if(context.getPackageName().concat(".attachments").equals(uri.getAuthority()))throw new SecurityException("外部文件选择结果不能引用应用私有附件");boolean prior=persisted(uri),kept=prior;
         if((receivedFlags&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)!=0&&(receivedFlags&Intent.FLAG_GRANT_READ_URI_PERMISSION)!=0)try{context.getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);kept=persisted(uri);}catch(SecurityException unsupported){kept=prior;}

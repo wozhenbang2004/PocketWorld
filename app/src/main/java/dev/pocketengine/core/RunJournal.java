@@ -7,6 +7,18 @@ import dev.pocketengine.runtime.usage.InferenceReceipt;
 
 /** Host-owned durable boundary. Implementations fence by task/run/epoch before all writes. */
 public interface RunJournal {
+    /** Native pre-request admission stopped for an exhausted existing allowance. This is
+     * diagnostic data, never a grant or evidence that earlier effects did not happen. */
+    final class NativeBudgetPaused extends Exception {
+        public final String taskId,runId,parentTaskId,parentRunId,purpose;
+        public final int epoch,used,limit;
+        public NativeBudgetPaused(String taskId,String runId,int epoch,String parentTaskId,String parentRunId,String purpose,int used,int limit){
+            super("Native model allowance exhausted before request dispatch");
+            this.taskId=java.util.Objects.requireNonNull(taskId);this.runId=java.util.Objects.requireNonNull(runId);this.epoch=epoch;
+            this.parentTaskId=java.util.Objects.requireNonNull(parentTaskId);this.parentRunId=java.util.Objects.requireNonNull(parentRunId);this.purpose=java.util.Objects.requireNonNull(purpose);this.used=used;this.limit=limit;
+        }
+        public JSONObject diagnostics()throws Exception{return new JSONObject().put("code","native_model_budget_exhausted").put("taskId",taskId).put("runId",runId).put("coordinatorEpoch",epoch).put("parentTaskId",parentTaskId).put("parentRunId",parentRunId).put("purpose",purpose).put("modelRequestsReservedOrUsed",used).put("modelRequestLimit",limit).put("thisRequestDispatched",false).put("priorUsageRetained",true).put("autoRefill",false).put("executionAuthorized",false);}
+    }
     /** Optional native original-store compaction authority. Missing means preserve the existing safe budget block. */
     default dev.pocketengine.runtime.context.CompactionJournal compaction(){return null;}
     /** Native decoration only; every operation and inference receipt still belongs to this journal. */

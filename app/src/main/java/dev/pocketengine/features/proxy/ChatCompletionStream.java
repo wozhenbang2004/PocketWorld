@@ -243,23 +243,10 @@ final class ChatCompletionStream {
         }
     }
     static JSONObject parseObject(String text) throws IOException {
-        // Bound nesting before org.json recursion, also on Android's platform implementation.
-        boolean quoted = false, escaped = false; int depth = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char ch = text.charAt(i);
-            if (quoted) { if (escaped) escaped = false; else if (ch == '\\') escaped = true; else if (ch == '"') quoted = false; }
-            else if (ch == '"') quoted = true;
-            else if (ch == '{' || ch == '[') { if (++depth > 64) throw new IOException("JSON嵌套超过限制"); }
-            else if (ch == '\'') throw new IOException("JSON字符串需使用双引号");
-            else if ((ch == '}' || ch == ']') && --depth < 0) throw new IOException("JSON结构无效");
-        }
-        try {
-            org.json.JSONTokener parser = new org.json.JSONTokener(text);
-            JSONObject object = new JSONObject(parser);
-            if (parser.nextClean() != 0) throw new IOException("JSON后存在多余内容");
-            return object;
-        } catch (Exception invalid) { throw new IOException("不是有效JSON对象", invalid); }
+        try{return dev.pocketengine.runtime.providers.ProtocolJson.parse(text);}
+        catch(Exception invalid){throw new IOException("不是有效JSON对象",invalid);}
     }
+
     static Object scrub(Object value, String key) throws Exception {
         if (value instanceof JSONObject) {
             JSONObject result = new JSONObject(), source = (JSONObject) value;

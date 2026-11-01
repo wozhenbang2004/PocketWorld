@@ -46,7 +46,7 @@ import org.json.JSONObject
     }
     LaunchedEffect(page) { work({page.snapshot()}){current=it} }
     Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(6.dp)) {
-        TeamCaption("真实Codex作者只处理所选文字文件副本；不是Git全项目开发、命令/build/test或OS读隔离。原文件不由远端直接写入。")
+        TeamCaption(if(current.optJSONObject("selection")?.optBoolean("fullProject")==true) "真实Codex作者读取主人显选的完整源包，在独立Git新基线制作；仅原写路径可导回增改删/二进制。远端命令与手机唯一整合者另审，目录不是OS隔离。" else "真实Codex作者处理所选文字文件副本；此旧模式不含命令/build/test/Git或OS隔离。原项目不由远端直写。")
         TextButton(onClick={work({page.snapshot()}){current=it;review=null}},enabled=!busy){Text("核对原范围与剩余预算")}
         current.optJSONObject("approvedScope")?.takeIf{!current.optBoolean("needsOwnerScope",true)}?.let { scope->
             TeamCaption("当前分工已批准 ${scope.optInt("approvedJobs")} 次独立远端job；未知接收/取消不退款，后续修改或新job需重新明确批准。")
@@ -57,7 +57,7 @@ import org.json.JSONObject
         }
         review?.let { exact->
             val selected=shown.optJSONObject("remoteSelection")?:JSONObject()
-            TeamCaption("执行位置：${selected.optString("profileId")} / ${selected.optString("environmentId")}；基线快照 ${selected.optString("snapshotId").take(12)} · ${selected.optString("snapshotVersion").take(12)}。")
+            TeamCaption("执行位置：${selected.optString("profileId")} / ${selected.optString("environmentId")}；" + if(selected.optBoolean("fullProject")) "完整固定包 ${selected.optJSONObject("packageReference")?.optString("id")} · ${selected.optString("packageIdentity").take(12)}（新Git基线，不含原历史）" else "基线快照 ${selected.optString("snapshotId").take(12)} · ${selected.optString("snapshotVersion").take(12)}。")
             shown.optJSONArray("files").objects().forEach { file->Text("${file.optString("path")} · 原项目 v${file.optInt("baseVersion")} · ${file.optString("baseHash").take(12)}",fontSize=12.sp) }
             val limits=selected.optJSONObject("limits")?:JSONObject()
             TeamCaption("明确硬限：${limits.optInt("maxWallTimeSeconds")}秒；输出${limits.optLong("maxOutputBytes")}字节；冻结贡献${limits.optLong("maxContributionBytes")}字节。")
@@ -65,7 +65,7 @@ import org.json.JSONObject
             TeamCaption("一次独立job≠一次模型请求。远端内部模型次数/token/费用未知且不能硬限，不会填0；不满足token或费用硬上限的任务不得提交。")
             TeamCaption("本地调度模型请求上限 ${shown.optJSONObject("parentBudget")?.optInt("modelRequestLimit")} → ${shown.optInt("proposedParentModelLimit")}；原父工具上限 → ${shown.optInt("proposedParentToolLimit")}，实际父操作剩余 ${shown.optInt("parentRemainingOperations")}；本次至少${shown.optInt("minimumAdditionalToolOperations")}步，独立job剩余额度${shown.optInt("remainingParentExternalJobs")}。")
             shown.optJSONObject("localModelBudgetPlan")?.let { plan->TeamCaption("本片调度计划估计 ${plan.optInt("plannedFlowRequests")} 次本地请求，另含 ${plan.optInt("explicitRetryMargin")} 次明确重试余量；不是通用最小值或复杂任务完成保证。耗尽会停下，不自动续预算。") }
-            TeamCaption("只可单次批准原worker针对精确所选路径的fileChange。命令/执行策略/网络/目录扩权不在本scope；请在原child页处理真实待审请求。")
+            TeamCaption(if(selected.optBoolean("fullProject")) "完整源包已明确外传供读，命令同用户风险与未知内部计费已显选；原worker每条命令/fileChange仍单次核确切请求，不允许session/execpolicy/网络扩权。手机调度模型不因此拥有手机命令；手机组合测试/包须另有实际证据。" else "只可单次批准原worker针对精确所选路径的fileChange。命令/执行策略/网络/目录扩权不在旧scope；请在原child页处理真实待审请求。")
             Row(verticalAlignment=Alignment.CenterVertically){Checkbox(accepted,{accepted=it},enabled=!busy);Text("我明确批准以上范围、可见本地预算及1次独立远端job，并接受内部推理计费不可硬限。",fontSize=13.sp)}
             Button(onClick={work({page.approve(exact,shown.getString("digest"))}){current=it;review=null;notice="本次独立job范围已保存，原成员已回原分工继续；没有重建旧control。"}},enabled=!busy&&accepted&&shown.optInt("maximumAssignmentJobs")>=1&&shown.optInt("parentRemainingOperations")>=shown.optInt("minimumAdditionalToolOperations")){Text("批准这次原分工job并继续")}
         }

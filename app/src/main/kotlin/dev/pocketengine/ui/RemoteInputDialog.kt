@@ -22,10 +22,16 @@ import org.json.JSONObject
 
 /** Explicit native private transfer, separate from chat selection and the ordinary text submit. */
 @Composable
-internal fun RemoteInputDialog(request: JSONObject?, originalTask: String, controller: PocketWorldController, close: () -> Unit) {
-    var window by remember(originalTask, request?.toString()) { mutableStateOf<String?>(null) }
-    DisposableEffect(originalTask, request?.toString()) {
-        val opened = controller.enterRemoteInputs(request, originalTask); window = opened
+internal fun RemoteInputDialog(request: JSONObject?, originalTask: String, controller: PocketWorldController, close: () -> Unit) = RemoteInputFlowDialog(request,originalTask,controller,false,close)
+
+@Composable
+internal fun RemoteContinuationInputDialog(originalTask: String,controller: PocketWorldController,close: () -> Unit) = RemoteInputFlowDialog(null,originalTask,controller,true,close)
+
+@Composable
+private fun RemoteInputFlowDialog(request: JSONObject?, originalTask: String, controller: PocketWorldController, continuation: Boolean, close: () -> Unit) {
+    var window by remember(originalTask, request?.toString(),continuation) { mutableStateOf<String?>(null) }
+    DisposableEffect(originalTask, request?.toString(),continuation) {
+        val opened = if(continuation)controller.enterRemoteContinuationInputs(originalTask) else controller.enterRemoteInputs(request, originalTask); window = opened
         onDispose { controller.leaveRemoteTask(opened) }
     }
     val state = controller.state
@@ -43,6 +49,8 @@ internal fun RemoteInputDialog(request: JSONObject?, originalTask: String, contr
     var confirm by remember(window) { mutableStateOf(false) }
     var billing by remember(window) { mutableStateOf(false) }
     var details by remember(window) { mutableStateOf(false) }
+    var continuationPrompt by remember(window) { mutableStateOf("") }
+    var continuationTimeout by remember(window) { mutableStateOf("300") }
     val review = snapshot.optJSONObject("review")
     LaunchedEffect(review?.optString("digest"), review?.optLong("expiresAt")) { confirm = review != null; billing = false }
     fun send(command: String, payload: JSONObject = JSONObject()) {
@@ -72,6 +80,12 @@ internal fun RemoteInputDialog(request: JSONObject?, originalTask: String, contr
                 val target = snapshot.optJSONObject("request") ?: request ?: JSONObject()
                 Text("目标：${target.optString("profileId")} · ${target.optString("environmentId")} · ${remoteWorkerLabel(target.optString("worker"))}", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 Text("工作区：" + (scope?.optString("workspace") ?: snapshot.optJSONObject("environment")?.optString("workspace").orEmpty()), fontSize = 14.sp, lineHeight = 22.sp)
+                if (!registered&&continuation) {
+                    Text("继续原任务的准确会话，另建本次执行；旧job与原输入保留，不会改成新会话或自动继承旧工具批准。",fontSize=14.sp,lineHeight=22.sp)
+                    OutlinedTextField(continuationPrompt,{continuationPrompt=it},label={Text("这次如何使用新文件")},minLines=3,modifier=Modifier.fillMaxWidth())
+                    OutlinedTextField(continuationTimeout,{continuationTimeout=it},label={Text("本次新执行时限（秒）")},modifier=Modifier.fillMaxWidth())
+                    Button(onClick={send("setContinuationInput",JSONObject().put("prompt",continuationPrompt).put("timeoutSeconds",continuationTimeout.toIntOrNull()))},enabled=!busy&&continuationPrompt.isNotBlank()&&continuationPrompt.length<=8000&&(continuationTimeout.toIntOrNull()?:0)in 10..3600){Text("保存本次新要求与时限")}
+                }
                 if (!registered) {
                     Text("选择私人原件（最多8个，每个256KiB，总计512KiB）", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     if (available.isEmpty()) Text("暂无可选私人原件；先在原附件入口导入，再重新打开。群技术副本不能作为私人附件。", fontSize = 14.sp, lineHeight = 22.sp, color = SecondaryInk)
@@ -87,6 +101,7 @@ internal fun RemoteInputDialog(request: JSONObject?, originalTask: String, contr
                             Column(Modifier.weight(1f).padding(vertical = 9.dp)) {
                                 Text(file.optString("name"), fontSize = 14.sp)
                                 Text("${file.optLong("size")} 字节 · ${file.optString("mimeType")}", fontSize = 13.sp, lineHeight = 20.sp, color = SecondaryInk)
+                                file.optJSONObject("channelSource")?.let { origin -> Text("${origin.optString("profileName")} · ${origin.optString("senderId")} · 原消息 ${origin.optString("messageId")}", fontSize = 13.sp, lineHeight = 20.sp, color = SecondaryInk) }
                             }
                         }
                     }
@@ -95,6 +110,7 @@ internal fun RemoteInputDialog(request: JSONObject?, originalTask: String, contr
                     Text((if (registered) "已登记原件范围：" else "已核原件：") + "${selected.size} 个 · ${selected.sumOf { it.optLong("bytes") }} 字节", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     selected.forEach { file -> Text("${file.optString("name")} · ${file.optLong("bytes")} 字节 · ${file.optString("mimeType")}", fontSize = 14.sp, lineHeight = 22.sp) }
                     Text("类型是原件声明；上传成功不代表 CLI 能理解任意格式。", fontSize = 13.sp, color = SecondaryInk)
+                    snapshot.optJSONArray("channelInputSources").objects().forEach { origin -> Text("已核原主人私聊来源：${origin.optString("profileName")} · ${origin.optString("senderId")} · 消息 ${origin.optString("messageId")}。这里只确认交给所选电脑，不自动回发成果。", fontSize = 14.sp, lineHeight = 22.sp) }
                     Button(onClick = { send("reviewInputs") }, enabled = !busy) { Text(if (registered) "重新核对原范围" else "核对目标与外传范围") }
                 }
                 Text(snapshot.optString("message", "正在读取原生范围"), fontSize = 14.sp, lineHeight = 22.sp)
@@ -117,7 +133,9 @@ internal fun RemoteInputDialog(request: JSONObject?, originalTask: String, contr
         AlertDialog(onDismissRequest = { confirm = false }, title = { Text("仅向这个准确目标发送这些原件") }, text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SelectionContainer { Text("${scope.optString("profileId")}\n${scope.optString("serviceBase")}\n${scope.optString("workspace")}/${scope.optString("inputDirectory")}", fontSize = 14.sp, lineHeight = 22.sp) }
+                scope.optJSONObject("continuationSource")?.let { original -> Text("原会话：${original.optString("threadId")}\n来源job：${original.optString("jobId")}\n原执行：${original.optString("runId")}；本次是新的run与输入目录，旧操作不会重发。",fontSize=14.sp,lineHeight=22.sp) }
                 scope.optJSONArray("files").objects().forEach { file -> SelectionContainer { Text("${file.optString("name")} · ${file.optLong("bytes")} 字节\n${file.optString("mimeType")}\nSHA-256 ${file.optString("sha256")}", fontSize = 13.sp, lineHeight = 20.sp) } }
+                snapshot.optJSONArray("channelInputSources").objects().forEach { origin -> Text("原私聊：${origin.optString("profileName")} · ${origin.optString("senderId")}\n本次是向电脑外传的单独批准；不会把原收件人变成电脑权限，也不自动发送任何成果。", fontSize = 14.sp, lineHeight = 22.sp) }
                 Text("这是所选输入目录，不是 OS 读写/网络沙箱。不会自动批准工具命令，也不保证删除已上传副本。", fontSize = 14.sp, lineHeight = 22.sp)
                 Text("原任务时限：${scope.optJSONObject("request")?.optInt("timeoutSeconds", 300)} 秒。内部模型调用次数、token 与费用不能在此硬限制。", fontSize = 14.sp, lineHeight = 22.sp)
                 Row { Checkbox(billing, { billing = it }); Text("我已了解上述外传范围与远端 CLI 计费边界，确认仅执行这次明确任务。", fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 10.dp).weight(1f)) }

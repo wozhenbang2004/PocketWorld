@@ -24,9 +24,16 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketengine.features.local.project.ProjectEditorDocument
@@ -38,7 +45,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Platform text input plus bounded document navigation. Not Sora, syntax analysis, LSP or a save authority. */
+/** Platform IME/draft input, bounded navigation and an optional real TypeScript service.
+ * It is neither Sora/LSP nor a source-save/execution authority. */
 @Composable
 internal fun ProjectSourceEditor(
     checkoutId: String,
@@ -47,6 +55,8 @@ internal fun ProjectSourceEditor(
     enabled: Boolean,
     controller: PocketWorldController,
     modifier: Modifier = Modifier,
+    draft: dev.pocketengine.features.local.project.ProjectFileDraft? = null,
+    changedDraft: ((dev.pocketengine.features.local.project.ProjectFileDraft) -> Boolean)? = null,
     change: (String) -> Boolean
 ) {
     val currentParentText by rememberUpdatedState(text)
@@ -78,6 +88,8 @@ internal fun ProjectSourceEditor(
     var jump by remember(checkoutId, path) { mutableStateOf(false) }
     var lineInput by remember(checkoutId, path) { mutableStateOf("") }
     var jumpError by remember(checkoutId, path) { mutableStateOf<String?>(null) }
+    var syntaxText by remember(checkoutId, path) { mutableStateOf<String?>(null) }
+    var syntax by remember(checkoutId, path) { mutableStateOf<org.json.JSONArray?>(null) }
     val font = session.editorFontSp()
     val horizontal = rememberScrollState()
     val vertical = rememberScrollState()
@@ -215,6 +227,16 @@ internal fun ProjectSourceEditor(
             TextButton(onClick = { session.editorFontSp(font - 1) }, enabled = font > 12, modifier = Modifier.semantics { contentDescription = "减小代码字号" }) { Text("A−") }
             TextButton(onClick = { session.editorFontSp(font + 1) }, enabled = font < 22, modifier = Modifier.semantics { contentDescription = "增大代码字号" }) { Text("A＋") }
         }
+        if (draft != null && changedDraft != null) ProjectLanguageTools(controller, draft, value.selection, compositionActive, enabled && !changingDraft,
+            select = { start, end -> selectRange(start, end) },
+            complete = { next, caret ->
+                if (value.composition != null || value.text != currentParentText || !currentEnabled) false
+                else if (currentChange(next)) { value = TextFieldValue(next, TextRange(editorOffset(next, caret))); true } else false
+            },
+            staged = { updated ->
+                if (value.composition != null || value.text != currentParentText || !currentEnabled) false
+                else if (changedDraft(updated)) { value = TextFieldValue(updated.text, TextRange(editorOffset(updated.text, value.selection.start), editorOffset(updated.text, value.selection.end))); true } else false
+            }, syntax = { original, tokens -> syntaxText = original; syntax = tokens })
         if (find) Column(Modifier.fillMaxWidth().heightIn(max = findHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             OutlinedTextField(query, { if (it.length <= ProjectEditorDocument.MAX_QUERY_CHARACTERS) query = it else notice = "查找文字上限512字符。" },
                 label = { Text("字面查找") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("project_editor_query"))
@@ -272,11 +294,29 @@ internal fun ProjectSourceEditor(
                         drawContext.canvas.nativeCanvas.drawText(logical.toString(), size.width - 8.dp.toPx(), baseline, paint); line++
                     }
                 }
+                val commentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                val tokenColor = MaterialTheme.colorScheme.onSurface
+                val highlighting = remember(syntaxText, syntax, value.text, commentColor, tokenColor) {
+                    if (syntaxText != value.text || syntax == null) VisualTransformation.None else VisualTransformation { original ->
+                        val styled = AnnotatedString.Builder(original)
+                        val tokens = syntax!!
+                        for (i in 0 until tokens.length()) {
+                            val token = tokens.getJSONObject(i); val start = token.optInt("start", -1); val end = start + token.optInt("length", -1)
+                            if (start >= 0 && end > start && end <= original.length) styled.addStyle(when (token.optString("kind")) {
+                                "keyword" -> SpanStyle(color = tokenColor, fontWeight = FontWeight.SemiBold)
+                                "comment" -> SpanStyle(color = commentColor, fontStyle = FontStyle.Italic)
+                                "string" -> SpanStyle(color = commentColor)
+                                else -> SpanStyle(color = tokenColor)
+                            }, start, end)
+                        }
+                        TransformedText(styled.toAnnotatedString(), OffsetMapping.Identity)
+                    }
+                }
                 BasicTextField(value, onValueChange = { next ->
                     // Composition/selection-only updates stay in the platform engine; never rebuild
                     // TextFieldValue on every parent acknowledgement and commit an unfinished IME word.
                     if (next.text == text || change(next.text)) { restoredSelection = true; restoredScroll = true; value = next; notice = null }
-                }, enabled = enabled && !changingDraft,
+                }, enabled = enabled && !changingDraft, visualTransformation = highlighting,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace, fontSize = font.sp, lineHeight = (font * 1.55f).sp, color = MaterialTheme.colorScheme.onSurface),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary), onTextLayout = { layout = it },
                     modifier = Modifier.weight(1f).fillMaxHeight().onSizeChanged { viewportWidth = it.width }.horizontalScroll(horizontal).verticalScroll(vertical).padding(14.dp)

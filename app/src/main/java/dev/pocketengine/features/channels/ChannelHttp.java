@@ -52,37 +52,53 @@ final class ChannelHttp {
         return new JSONObject().put("authenticated",!token.isEmpty()).put("message","QQ访问凭证获取成功；消息接收和发送尚待平台联调");
     }
     JSONObject sendQq(JSONObject profile,String secret,JSONObject event,JSONObject outbox,RunControl control,DispatchGuard guard)throws Exception {
-        String target=event.getString("kind").equals("group")?event.getString("roomId"):event.getString("senderId");
-        String path=event.getString("kind").equals("group")?"/v2/groups/":"/v2/users/";
-        JSONObject payload=new JSONObject().put("content",outbox.getString("text")).put("msg_type",0)
-                .put("msg_id",event.getString("messageId")).put("msg_seq",outbox.getInt("sequence"));
+        String path=QqConversation.endpoint(event);
+        JSONObject payload=new JSONObject().put("content",outbox.getString("text")).put("msg_id",event.getString("messageId"));
+        // Official guild channel/DM methods have their own schema, not the v2 group/C2C body.
+        if(!QqConversation.guild(event))payload.put("msg_type",0).put("msg_seq",outbox.getInt("sequence"));
         String token=qqToken(profile,secret,control,guard);
         guard.check();control.check();
-        return post(qqBase+path+target+"/messages","QQBot "+token,payload,control,guard);
+        return post(qqBase+path,"QQBot "+token,payload,control,guard);
     }
     /** Native group media only: upload does not post a message, and an unknown upload is never retried. */
     JSONObject uploadGroupMedia(JSONObject profile,String secret,JSONObject event,String mime,byte[] bytes,RunControl control,DispatchGuard guard)throws Exception {
-        if(!event.optString("kind").equals("group")||bytes==null||bytes.length>20*1024*1024L)throw new SecurityException("群媒体来源或大小无效");
+        if(!QqConversation.scene(event).equals(QqConversation.GROUP)||bytes==null||bytes.length>20*1024*1024L)throw new SecurityException("群媒体来源或大小无效");
         String room=ChannelCore.identifier(event,"roomId");int type=mime.startsWith("image/")?1:mime.startsWith("video/")?2:mime.startsWith("audio/")?3:4;
         JSONObject payload=new JSONObject().put("file_type",type).put("srv_send_msg",false).put("file_name","group-artifact")
                 .put("file_data",java.util.Base64.getEncoder().encodeToString(bytes));
         String token=qqToken(profile,secret,control,guard);guard.check();control.check();return request(qqBase+"/v2/groups/"+room+"/files","QQBot "+token,payload,control,guard,30*1024*1024);
     }
     JSONObject sendGroupMedia(JSONObject profile,String secret,JSONObject event,JSONObject outbox,String fileInfo,RunControl control,DispatchGuard guard)throws Exception {
-        if(!event.optString("kind").equals("group")||fileInfo==null||fileInfo.isEmpty()||fileInfo.length()>8192)throw new SecurityException("原QQ群媒体上传回执无效");
+        if(!QqConversation.scene(event).equals(QqConversation.GROUP)||fileInfo==null||fileInfo.isEmpty()||fileInfo.length()>8192)throw new SecurityException("原QQ群媒体上传回执无效");
         String token=qqToken(profile,secret,control,guard);JSONObject payload=new JSONObject().put("content"," ").put("msg_type",7).put("msg_id",event.getString("messageId")).put("msg_seq",outbox.getInt("sequence")).put("media",new JSONObject().put("file_info",fileInfo));
         guard.check();control.check();return request(qqBase+"/v2/groups/"+ChannelCore.identifier(event,"roomId")+"/messages","QQBot "+token,payload,control,guard);
+    }
+    JSONObject sendQqStream(JSONObject profile,String secret,JSONObject event,JSONObject frame,RunControl control,DispatchGuard guard)throws Exception {
+        if(!QqConversation.scene(event).equals(QqConversation.C2C)||!frame.getString("msg_id").equals(event.getString("messageId"))||!frame.getString("input_mode").equals("replace")||!frame.getString("content_type").equals("markdown"))throw new SecurityException("QQ流帧不是原C2C消息");String token=qqToken(profile,secret,control,guard);guard.check();control.check();return request(qqBase+"/v2/users/"+ChannelCore.identifier(event,"senderId")+"/stream_messages","QQBot "+token,frame,control,guard);
+    }
+    /** Native reviewed original C2C bytes; upload and message remain two separately recorded phases. */
+    JSONObject uploadOwnerMedia(JSONObject profile,String secret,JSONObject event,JSONObject media,byte[] bytes,RunControl control,DispatchGuard guard)throws Exception {
+        if(!QqConversation.scene(event).equals(QqConversation.C2C)||bytes==null||bytes.length>ChannelOutboundMediaFormats.MAX_BYTES||media.getLong("bytes")!=bytes.length)throw new SecurityException("QQ附件必须是准确原C2C目标/固定字节");
+        int type=media.getInt("qqFileType");if(type<1||type>4)throw new SecurityException("QQ媒体类型不支持");String token=qqToken(profile,secret,control,guard);
+        JSONObject body=new JSONObject().put("file_type",type).put("srv_send_msg",false).put("file_name",media.getString("name")).put("file_data",java.util.Base64.getEncoder().encodeToString(bytes));
+        guard.check();control.check();return request(qqBase+"/v2/users/"+ChannelCore.identifier(event,"senderId")+"/files","QQBot "+token,body,control,guard,12*1024*1024);
+    }
+    JSONObject sendOwnerMedia(JSONObject profile,String secret,JSONObject event,JSONObject row,String fileInfo,RunControl control,DispatchGuard guard)throws Exception {
+        if(!QqConversation.scene(event).equals(QqConversation.C2C)||fileInfo==null||fileInfo.isEmpty()||fileInfo.length()>8192)throw new SecurityException("QQ原C2C媒体回执不完整");String token=qqToken(profile,secret,control,guard);
+        JSONObject body=new JSONObject().put("content",row.getString("text")).put("msg_type",7).put("msg_id",event.getString("messageId")).put("msg_seq",row.getInt("sequence")).put("media",new JSONObject().put("file_info",fileInfo));guard.check();control.check();return request(qqBase+QqConversation.endpoint(event),"QQBot "+token,body,control,guard);
     }
     /** Token and gateway stay native-only; no secret-bearing object enters a feature response. */
     GatewayAccess qqGateway(JSONObject profile,String secret,RunControl control,DispatchGuard guard)throws Exception {
         String token=qqToken(profile,secret,control,guard);
         JSONObject response=request(qqBase+"/gateway","QQBot "+token,null,control,guard);
-        guard.check();control.check();return new GatewayAccess(response.getString("url"),token);
+        guard.check();control.check();return new GatewayAccess(response.getString("url"),token,(1<<25)|(profile.optBoolean("qqGuildEnabled")?((1<<30)|(1<<12)):0));
     }
     synchronized void forgetQqToken(String profileId){tokens.remove(profileId);}
     static final class GatewayAccess {
-        final String url,token;
-        GatewayAccess(String url,String token){this.url=url;this.token=token;}
+        final String url,token;final int intents;final String botUserId;
+        GatewayAccess(String url,String token){this(url,token,1<<25);}
+        GatewayAccess(String url,String token,int intents){this(url,token,intents,"");}
+        GatewayAccess(String url,String token,int intents,String botUserId){this.url=url;this.token=token;this.intents=intents;this.botUserId=botUserId;}
     }
     private synchronized String qqToken(JSONObject profile,String secret,RunControl control,DispatchGuard guard)throws Exception {
         String id=profile.getString("id"),fingerprint=ChannelCore.digest(profile.getString("appId")+"\u0000"+secret);Token previous=tokens.get(id);

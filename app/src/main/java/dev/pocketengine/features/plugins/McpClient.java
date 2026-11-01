@@ -102,10 +102,16 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
     JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control)throws CallFailure {
         return call(declaration,arguments,control,false);
     }
+    JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control,McpResultCapture capture)throws CallFailure {
+        return call(declaration,arguments,control,false,capture);
+    }
     @Override public JSONObject start(JSONObject declaration,JSONObject arguments,RunControl control)throws CallFailure {
         return call(declaration,arguments,control,true);
     }
     private JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control,boolean tasks)throws CallFailure {
+        return call(declaration,arguments,control,tasks,null);
+    }
+    private JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control,boolean tasks,McpResultCapture capture)throws CallFailure {
         boolean dispatched=false;
         try {
             validateDeclaration(declaration,control);
@@ -123,7 +129,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
                     .put("unsupportedInputRequired",true).put("untrusted",true).put("instructionsAreData",true).put("content",new JSONArray())
                     .put("message","此工具要求未授权或不支持的客户端输入；未执行sampling、elicitation、roots或重发调用");
             if(tasks&&"task".equals(result.optString("resultType")))return taskResult(result,null,true);
-            requireComplete(result);return McpData.result(result,token);
+            requireComplete(result);return capture==null?McpData.result(result,token):capture.result(result,token);
         }catch(Exception failure){
             if(dispatched)valid=false;
             throw new CallFailure(dispatched,!usable(),failure instanceof McpException?failure.getMessage():

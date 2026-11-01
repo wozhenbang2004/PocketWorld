@@ -7,11 +7,16 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.ParcelFileDescriptor;
+import android.system.Os;
+import android.system.OsConstants;
 import android.webkit.WebView;
 import androidx.javascriptengine.IsolateStartupParameters;
 import androidx.javascriptengine.JavaScriptIsolate;
 import androidx.javascriptengine.JavaScriptSandbox;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
+import dev.pocketengine.core.RunControl;
 import java.io.File;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -40,6 +45,12 @@ public final class AndroidJavascriptSandboxRuntime implements AutoCloseable {
     public static final String POLICY_ID="pure-js-no-host-bridge-v1";
     public static final long MAX_HEAP_BYTES=32L*1024*1024;
     public static final int MAX_PACKAGE_BYTES=1024*1024;
+    /** Native, fixed-program analysis only. These limits do not change third-party plugin policy. */
+    public enum BuiltinProgram { PROJECT_TYPESCRIPT_5_9_3 }
+    public static final long BUILTIN_MAX_HEAP_BYTES=96L*1024*1024;
+    public static final int BUILTIN_MAX_RESULT_BYTES=128*1024,BUILTIN_MAX_SOURCE_BYTES=16*1024*1024;
+    private static final long BUILTIN_QUEUE_NANOS=TimeUnit.SECONDS.toNanos(30);
+    private static final String FROM_FD="JS_FEATURE_EVALUATE_FROM_FD";
     private static final String TERMINATION="JS_FEATURE_ISOLATE_TERMINATION";
     private static final String HEAP="JS_FEATURE_ISOLATE_MAX_HEAP_SIZE";
     private static final String RESULT_LIMIT="JS_FEATURE_EVALUATE_WITHOUT_TRANSACTION_LIMIT";
@@ -81,12 +92,14 @@ public final class AndroidJavascriptSandboxRuntime implements AutoCloseable {
     }
     interface Isolate extends AutoCloseable {
         ListenableFuture<String> evaluate(String source)throws Exception;
+        default ListenableFuture<String> evaluate(ParcelFileDescriptor source)throws Exception{throw new Unavailable("当前原生JS后端没有文件描述符读取能力");}
         @Override void close();
     }
+    private interface Lease extends AutoCloseable {@Override void close();}
     private final Provider provider;
     private Engine engine;
     private Identity identity;
-    private Session active;
+    private Lease active;
     private boolean connecting,closed;
 
     public AndroidJavascriptSandboxRuntime(Context context){this(new AndroidProvider(context.getApplicationContext()));}
@@ -125,10 +138,10 @@ public final class AndroidJavascriptSandboxRuntime implements AutoCloseable {
     public synchronized Session createSession(int maxOutputBytes)throws Exception {
         describe();if(maxOutputBytes<1||maxOutputBytes>65536)throw new IllegalArgumentException("JavaScript返回上限无效");
         if(active!=null)throw new Unavailable("原JavaScript操作尚未释放，请先核对原回执");
-        active=new Session(engine.isolate(MAX_HEAP_BYTES,maxOutputBytes));return active;
+        Session created=new Session(engine.isolate(MAX_HEAP_BYTES,maxOutputBytes));active=created;return created;
     }
 
-    public final class Session implements AutoCloseable {
+    public final class Session implements Lease {
         private final Isolate isolate;
         private final AtomicBoolean initialized=new AtomicBoolean(),evaluated=new AtomicBoolean(),stopped=new AtomicBoolean();
         private volatile ListenableFuture<String> initialization;
@@ -152,13 +165,76 @@ public final class AndroidJavascriptSandboxRuntime implements AutoCloseable {
         @Override public synchronized void close(){
             if(closeComplete)return;stopped.set(true);
             isolate.close();closeComplete=true;
-            synchronized(AndroidJavascriptSandboxRuntime.this){if(active==this)active=null;}
+            synchronized(AndroidJavascriptSandboxRuntime.this){if(active==this){active=null;AndroidJavascriptSandboxRuntime.this.notifyAll();}}
+        }
+    }
+
+    /**
+     * Native built-in compiler lane on this exact app-owned binding. The caller supplies only the
+     * pinned compiler/driver and JSON-encoded VFS data, never project scripts or a host bridge.
+     * Waits behind an existing plugin isolate; it cannot replace, terminate or share that isolate.
+     */
+    public BuiltinReadSession openBuiltinReadSession(BuiltinProgram program,RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(program);java.util.Objects.requireNonNull(original);
+        original.check();if(original.isPaused())throw new InterruptedException("原分析任务已暂停");
+        connect();long deadline=System.nanoTime()+BUILTIN_QUEUE_NANOS;
+        Runnable wake=()->{synchronized(AndroidJavascriptSandboxRuntime.this){AndroidJavascriptSandboxRuntime.this.notifyAll();}};
+        original.onCancel(wake);BuiltinReadSession lease=null;
+        try {
+            while(lease==null){
+                // Never call TaskStore/control callbacks while holding the sandbox monitor.
+                original.check();if(original.isPaused())throw new InterruptedException("原分析任务已暂停");
+                synchronized(this){
+                    describe();
+                    if(!engine.supports(FROM_FD)||!engine.supports(HEAP)||!engine.supports(RESULT_LIMIT)||!engine.supports(TERMINATION))throw new Unavailable("当前WebView不支持有界内置分析、文件输入或实际取消");
+                    if(active==null){lease=new BuiltinReadSession(program,original,original.pauseRevision(),engine.isolate(BUILTIN_MAX_HEAP_BYTES,BUILTIN_MAX_RESULT_BYTES));active=lease;}
+                    else{long left=deadline-System.nanoTime();if(left<=0)throw new Unavailable("原JavaScript操作尚未释放；分析没有派发，请稍后重试");TimeUnit.NANOSECONDS.timedWait(this,Math.min(left,TimeUnit.MILLISECONDS.toNanos(100)));}
+                }
+            }
+        }finally{original.removeCancelAction(wake);}
+        lease.attachCancellation();
+        try{lease.check();return lease;}catch(Exception failure){lease.close();throw failure;}
+    }
+
+    public final class BuiltinReadSession implements Lease {
+        private final BuiltinProgram program;private final RunControl original;private final long pauseRevision;private final Isolate isolate;
+        private final Runnable cancel=this::close;private boolean evaluated,stopped,closeComplete;private ParcelFileDescriptor source;
+        private BuiltinReadSession(BuiltinProgram program,RunControl original,long pauseRevision,Isolate isolate){this.program=program;this.original=original;this.pauseRevision=pauseRevision;this.isolate=isolate;}
+        private void attachCancellation(){original.onCancel(cancel);}
+        private void check()throws Exception{original.check();if(original.isPaused()||original.pauseRevision()!=pauseRevision)throw new InterruptedException("原分析代次已暂停或改变");describe();synchronized(this){if(stopped)throw new InterruptedException("原分析隔离实例已停止");}}
+        public BuiltinProgram program(){return program;}
+        /** Dedicated, read-only, known-length UTF-8 temporary file; no source/secret FD reuse. */
+        public ListenableFuture<String> evaluate(ParcelFileDescriptor nativeSource)throws Exception {
+            java.util.Objects.requireNonNull(nativeSource);check();
+            long size=nativeSource.getStatSize();if(size<1||size>BUILTIN_MAX_SOURCE_BYTES)throw new IllegalArgumentException("内置分析文件输入超限或长度未知");
+            int flags=Os.fcntlInt(nativeSource.getFileDescriptor(),OsConstants.F_GETFL,0);
+            if((flags&OsConstants.O_ACCMODE)!=OsConstants.O_RDONLY)throw new SecurityException("内置分析只接受专用只读文件描述符");
+            ParcelFileDescriptor duplicate=ParcelFileDescriptor.dup(nativeSource.getFileDescriptor());
+            final ListenableFuture<String>[] sent=new ListenableFuture[1];
+            synchronized(this){
+                if(stopped||evaluated){duplicate.close();throw new SecurityException("同一内置分析隔离实例只能派发一次");}
+                evaluated=true;source=duplicate;
+            }
+            try{original.dispatchAtPauseRevision(pauseRevision,()->{synchronized(BuiltinReadSession.this){if(stopped)throw new InterruptedException("原分析已停止");sent[0]=isolate.evaluate(duplicate);}});}
+            catch(Exception failure){close();throw failure;}
+            SettableFuture<String> result=SettableFuture.create();
+            sent[0].addListener(()->{
+                try{String value=sent[0].get();check();if(value==null||StandardCharsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT).encode(java.nio.CharBuffer.wrap(value)).remaining()>BUILTIN_MAX_RESULT_BYTES)throw new IllegalStateException("内置分析结果超限或编码无效；未返回部分可应用结果");result.set(value);}
+                catch(Exception failure){result.setException(failure);}
+                finally{closeSource();}
+            },DIRECT);
+            result.addListener(()->{if(result.isCancelled())close();},DIRECT);return result;
+        }
+        private synchronized void closeSource(){if(source!=null)try{source.close();source=null;}catch(java.io.IOException ignored){/* Isolate close remains the actual resource fence. */}}
+        @Override public synchronized void close(){
+            if(closeComplete)return;stopped=true;isolate.close();closeComplete=true;closeSource();original.removeCancelAction(cancel);
+            synchronized(AndroidJavascriptSandboxRuntime.this){if(active==this){active=null;AndroidJavascriptSandboxRuntime.this.notifyAll();}}
         }
     }
 
     @Override public void close(){
-        Engine current;Session session;
-        synchronized(this){if(closed)return;closed=true;session=active;current=engine;engine=null;identity=null;}
+        Engine current;Lease session;
+        synchronized(this){if(closed)return;closed=true;session=active;current=engine;engine=null;identity=null;notifyAll();}
         try{if(session!=null)session.close();}finally{if(current!=null)current.close();}
     }
 
@@ -232,7 +308,7 @@ public final class AndroidJavascriptSandboxRuntime implements AutoCloseable {
                 @Override public Isolate isolate(long heap,int maxReturnBytes){
                     IsolateStartupParameters settings=new IsolateStartupParameters();settings.setMaxHeapSizeBytes(heap);settings.setMaxEvaluationReturnSizeBytes(maxReturnBytes);
                     JavaScriptIsolate value=sandbox.createIsolate(settings);
-                    return new Isolate(){@Override public ListenableFuture<String> evaluate(String source){return value.evaluateJavaScriptAsync(source);}@Override public void close(){value.close();}};
+                    return new Isolate(){@Override public ListenableFuture<String> evaluate(String source){return value.evaluateJavaScriptAsync(source);}@Override public ListenableFuture<String> evaluate(ParcelFileDescriptor source){return value.evaluateJavaScriptAsync(source);}@Override public void close(){value.close();}};
                 }
                 @Override public void close(){sandbox.close();}
             };

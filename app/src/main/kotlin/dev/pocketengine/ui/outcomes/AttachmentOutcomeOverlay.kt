@@ -30,7 +30,15 @@ internal fun AttachmentOutcomeOverlay(flow:AttachmentOutcomeCoordinator) {
     Dialog(onDismissRequest=flow::close,properties=DialogProperties(usePlatformDefaultWidth=false,dismissOnBackPress=false)) {
         Surface(Modifier.fillMaxSize(),color=Color.White) {
             val file=state.file
-            if(state.team!=null){
+            if(state.comparison!=null){
+                NativeImageVersionComparison(state.comparison,flow::closeComparison)
+            }else if(state.processingSource!=null&&state.processingInfo!=null){
+                NativeFileProcessComposer(state,flow)
+            }else if(state.documentDraft!=null){
+                NativeDocumentComposer(state.documentDraft,state.busy,state.error,state.pendingDocumentTask,flow::createDocument,flow::queryDocument,flow::closeDocumentDraft)
+            }else if(state.originalFile!=null){
+                NativeOriginalFilePage(state.originalFile,flow::backFromOriginalFile)
+            }else if(state.team!=null){
                 TeamWorkspaceArtifactPage(flow)
             }else if(state.documentOpen&&file!=null){
                 Column(Modifier.fillMaxSize()){
@@ -59,14 +67,17 @@ internal fun AttachmentOutcomeOverlay(flow:AttachmentOutcomeCoordinator) {
                     Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(22.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
                         state.error?.let{Text(it,color=Danger,fontSize=13.sp,lineHeight=21.sp)}
                         state.notice?.let{Text(it,color=SecondaryInk,fontSize=13.sp,lineHeight=21.sp)}
+                        state.pendingProcessingTask?.let{Text("原加工动作 ${it.take(12)} 待核，不会自动重复。",style=MaterialTheme.typography.bodySmall);OutlinedButton(onClick=flow::queryProcessing,enabled=!state.busy){Text("核对原加工结果")}}
+                        state.pendingDocumentTask?.let{Text("原文档动作待核：${it.take(12)}，不会自动重新生成。",style=MaterialTheme.typography.bodySmall);OutlinedButton(onClick=flow::queryDocument,enabled=!state.busy){Text("核对原文档结果")}}
                         if(state.busy)TextButton(onClick=flow::cancel){Text("停止本次读取")}
-                        if(file!=null)OutcomeFileDetail(file,state,flow)
+                        if(file!=null){OutcomeFileDetail(file,state,flow);if(state.group==null&&file.optString("mimeType").let{it.startsWith("image/")||it=="video/mp4"||it=="audio/mp4"}){OutlinedButton(onClick=flow::openProcessing,enabled=!state.busy&&state.pendingProcessingTask==null,modifier=Modifier.fillMaxWidth()){Text(if(file.optString("mimeType").startsWith("image/"))"裁剪、缩放或转换原图"else "剪辑原媒体片段")};if(file.optString("mimeType").startsWith("image/")&&(file.optJSONObject("parentArtifact")!=null||file.optJSONObject("source")?.optJSONObject("parentArtifact")!=null))TextButton(onClick=flow::compareImageParent,enabled=!state.busy){Text("对照这个版本与父原图")}};if(state.group==null&&(file.optJSONObject("editableSource")!=null||file.optJSONObject("source")?.optJSONObject("editableSource")!=null))OutlinedButton(onClick=flow::continueDocument,enabled=!state.busy,modifier=Modifier.fillMaxWidth()){Text("从这个原版本继续生成文档")}}
                         else {
                             Text(if(state.choosingSource)"选择当前目标需要的来源"else "来源和成果留在同一个任务里",fontWeight=FontWeight.SemiBold,fontSize=22.sp,lineHeight=30.sp)
                             Text(if(state.group!=null)"仅查看原群、原受众的真实文件。生成、保存和群消息回执分别显示。" else "按当前目标选择来源、读取需要的部分，再继续处理。任务结束后，真实文件和原操作仍可回来查看。",color=SecondaryInk,fontSize=13.sp,lineHeight=22.sp)
                             if(state.group==null){
                                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
                                     OutlinedButton(onClick=flow::importSource,enabled=!state.busy){Text("选择手机文件")}
+                                    TextButton(onClick=flow::newDocument,enabled=!state.busy){Text("创建文档")}
                                     if(state.taskId!=null&&!state.choosingSource)TextButton(onClick=flow::chooseSource,enabled=!state.busy){Text("从附件库关联")}
                                 }
                             }
@@ -112,8 +123,12 @@ private fun OutcomeFileDetail(file:JSONObject,state:AttachmentOutcomeState,flow:
     Text("${file.optString("mimeType")} · ${outcomeSize(file.optLong("size"))}",color=SecondaryInk,fontSize=13.sp)
     Text(if(state.group!=null)"文件属于原群任务与原受众，保持在群文件空间。打开或导出不会发送群消息。"else if(file.optString("sourceKind")=="document_extract")"这是当前已读范围的文字摘录，带有原文件版本、来源定位和读取说明。原文件与尚未读取的后续内容分别保留。"else "这是实际保存的文件。预览和文档提取用于查看来源；内容是否达到目标仍由原任务的证据核对。",color=SecondaryInk,fontSize=13.sp,lineHeight=22.sp)
     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
-        Button(onClick=flow::openExternal,enabled=!state.busy){Text("打开原文件")}
+        Button(onClick=flow::openOriginalFile,enabled=!state.busy){Text("查看原件")}
         OutlinedButton(onClick=flow::prepareExport,enabled=!state.busy){Text("导出到手机")}
+    }
+    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+        TextButton(onClick=flow::openExternal,enabled=!state.busy){Text("用其他应用打开")}
+        if(state.group==null)TextButton(onClick=flow::shareOriginalFile,enabled=!state.busy){Text("系统分享…")}
     }
     val mime=file.optString("mimeType")
     if(mime.startsWith("text/")||mime.contains("pdf")||mime.contains("officedocument")||mime.matches(Regex("application/(json|xml|octet-stream)"))||mime.startsWith("image/")){

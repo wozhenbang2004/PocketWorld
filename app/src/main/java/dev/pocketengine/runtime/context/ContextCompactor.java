@@ -62,9 +62,10 @@ public final class ContextCompactor {
             public void started(InferenceReceipt receipt){}
             public void finished(InferenceReceipt receipt){terminal[0]=receipt;}
         });
-        JSONArray input=plan.summaryMessages();budget.request(input,null,selected);original.check();
-        JSONObject answer=ModelGateway.complete(selected,input,null,original,target);
-        frozen.check(original);SummaryDraft actual=SummaryDraft.completed(frozen,answer,terminal[0],selected);
+        JSONArray input=plan.summaryMessages();ModelConfig summarySelection=selected.forPurpose("SUMMARY");original.check();
+        JSONObject answer=ModelGateway.completeWithAdmission(summarySelection,input,null,original,target,candidate->budget.request(input,null,candidate));
+        ModelConfig actualSummary=ModelGateway.actualConfigForReceipt(summarySelection,terminal[0]);
+        frozen.check(original);SummaryDraft actual=SummaryDraft.completed(frozen,answer,terminal[0],actualSummary);
         // A text that did not strictly reduce the complete final request cannot be published.
         JSONArray projected=plan.project(visible,sourceMap,actual.text);
         if(projected.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>=visible.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length)throw new CompactionPlan.Unavailable("summary_made_no_progress");

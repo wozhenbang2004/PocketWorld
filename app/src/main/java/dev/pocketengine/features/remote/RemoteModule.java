@@ -73,8 +73,13 @@ public final class RemoteModule implements EngineModule {
                 JSONObject result=requestJob(input,"/v1/jobs/"+identifier(input,"jobId"),null,15);
                 result.put("profileId",required(input,"profileId",80));acceptReceipt(result);return result;
             }
+            case "readSessionRecovery":{
+                JSONObject result=requestJob(input,"/v1/jobs/"+identifier(input,"jobId")+"/session-recovery",null,15);
+                result.put("profileId",required(input,"profileId",80));acceptReceipt(result);return result;
+            }
             case "submitJob":{
                 if(input.has("inputFiles")||input.has("inputProtocol"))throw new SecurityException("私人附件只能经原生精确外传确认，不接受通用JSON提交或静默丢附件");
+                if(input.has("projectHistory")||input.has("forkSource"))throw new SecurityException("项目基线/会话分支须经原生单次审阅；通用JSON不会静默丢范围再创建工作");
                 JSONObject body=new JSONObject().put("environmentId",required(input,"environmentId",80)).put("worker",input.optString("worker","command")).put("timeoutSeconds",input.optInt("timeoutSeconds",300));
                 String operation=input.optString("operationId");if(operation.isEmpty())operation=UUID.randomUUID().toString();
                 identifier(new JSONObject().put("operationId",operation),"operationId");
@@ -86,6 +91,10 @@ public final class RemoteModule implements EngineModule {
                 if(input.has("resumeJobId"))body.put("resumeJobId",identifier(input,"resumeJobId"));
                 if(input.has("model"))body.put("model",required(input,"model",200));
                 if(input.has("readOnly")){if(!(input.opt("readOnly") instanceof Boolean))throw new IllegalArgumentException("readOnly需为boolean");body.put("readOnly",input.getBoolean("readOnly"));}
+                if(input.has("recoveryProofId")||input.has("recoveryOwnerAcknowledged")){
+                    String proof=required(input,"recoveryProofId",36);if(!proof.matches("[a-f0-9-]{36}")||input.opt("recoveryOwnerAcknowledged")!=Boolean.TRUE)throw new SecurityException("冷恢复必须是原proof的明确新一次主人授权");
+                    body.put("recoveryProofId",proof).put("recoveryOwnerAcknowledged",true);
+                }
                 if(input.has("resultSnapshotId")||input.has("resultSnapshotVersion")){
                     if(!body.has("resumeJobId"))throw new SecurityException("成果版本只可绑定原job明确续接");
                     body.put("resultSnapshotId",identifier(input,"resultSnapshotId")).put("resultSnapshotVersion",required(input,"resultSnapshotVersion",64));
@@ -139,16 +148,54 @@ public final class RemoteModule implements EngineModule {
             default:throw new IllegalArgumentException("未知电脑连接操作");
         }
     }
+    /** Native owner opaque approval only. EngineModule.handle does not expose project execution/restore. */
+    public JSONObject dispatchProjectAction(dev.pocketengine.features.RemoteOwnerWorkflows.ProjectApproval approval,AssignmentDispatch before)throws Exception {
+        if(closed||approval==null||before==null)throw new SecurityException("原连接已关闭或没有本次原生项目操作批准");approval.checkCurrent();JSONObject scope=approval.view();String action=scope.getString("action"),profile=scope.getString("profileId"),operation=scope.getString("operationId");requireProfileBinding(profile,scope.getString("profileGeneration"));
+        JSONObject request=scope.getJSONObject("request"),body=new JSONObject().put("operationId",operation);String path;JSONObject details=new JSONObject().put("profileBinding",scope.getString("profileGeneration")).put("sourceServiceBase",scope.getString("serviceBase"));
+        if(action.equals("RESTORE")){
+            for(String key:new String[]{"jobOperationId","snapshotId","snapshotVersion","path","expectedVersion","expectedFileVersion","environmentBinding"})body.put(key,request.get(key));body.put("approvalExpiresAt",scope.getLong("approvalExpiresAt"));path="/v1/jobs/"+identifier(scope.optJSONObject("versionSource")==null?scope.getJSONObject("source"):scope.getJSONObject("versionSource"),"jobId")+"/restore-project-file";details.put("jobId",(scope.optJSONObject("versionSource")==null?scope.getJSONObject("source"):scope.getJSONObject("versionSource")).getString("jobId")).put("path",body.getString("path"));
+        }else if(action.equals("START")||action.equals("FORK")){
+            for(String key:new String[]{"environmentId","environmentBinding","worker","prompt","timeoutSeconds","model","readOnly","projectHistory","forkSource"})if(request.has(key))body.put(key,request.get(key));path="/v1/jobs";
+            if(action.equals("START")&&!body.has("projectHistory")||action.equals("FORK")&&!body.has("forkSource"))throw new SecurityException("原项目/会话动作类型缺失");
+        }else throw new SecurityException("未知原项目副作用类型");
+        Reservation reservation=reserve(profile,operation,action.equals("RESTORE")?"file_restore":"job_submit",body,details);
+        if(reservation.known)return action.equals("RESTORE")?queryProjectFileRestore(scope,scope.getString("profileGeneration")):reconcile(new JSONObject().put("profileId",profile).put("operationId",operation));
+        approval.checkCurrent();requireProfileBinding(profile,scope.getString("profileGeneration"));
+        JSONObject nativeTarget=new JSONObject().put("profileId",profile).put("_profileBinding",scope.getString("profileGeneration")).put("serviceBase",scope.getString("serviceBase"));JSONObject result;
+        try{result=assignmentSend(nativeTarget,reservation.target,path,body,()->{approval.checkCurrent();before.beforeDispatch();approval.checkCurrent();});}catch(RemoteTransport.HttpFailure refusal){if(!action.equals("RESTORE")&&refusal.status>=400&&refusal.status<500){reservation.intent.put("status","rejected").put("message",refusal.getMessage());recordOperation(reservation.intent);return new JSONObject().put("operationId",operation).put("profileId",profile).put("serviceBase",scope.getString("serviceBase")).put("status","rejected").put("environmentId",request.getString("environmentId")).put("worker",request.getString("worker")).put("message",refusal.getMessage());}return unknownOperation(reservation.intent);}catch(java.io.IOException unknown){return unknownOperation(reservation.intent);}
+        result.put("profileId",profile).put("serviceBase",scope.getString("serviceBase"));if(!operation.equals(result.optString("operationId")))return unknownOperation(reservation.intent);
+        if(action.equals("RESTORE")){
+            reservation.intent.put("status",result.optString("status").matches("completed|failed")?"settled":"unknown");recordOperation(reservation.intent);return result;
+        }
+        if(!result.optString("id").matches("[A-Za-z0-9_-]{1,80}")||!body.getString("environmentId").equals(result.optString("environmentId"))||!body.getString("worker").equals(result.optString("worker")))return unknownOperation(reservation.intent);
+        if(action.equals("START")&&(!RemoteProjectHistory.PROTOCOL.equals(result.optJSONObject("projectHistoryScope")==null?"":result.getJSONObject("projectHistoryScope").optString("protocol"))||!dev.pocketengine.store.TaskStore.capabilityFingerprint(body.getJSONObject("projectHistory")).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(result.getJSONObject("projectHistoryScope")))))return unknownOperation(reservation.intent);
+        if(action.equals("FORK")&&(result.optJSONObject("sessionBranchSource")==null||!dev.pocketengine.store.TaskStore.capabilityFingerprint(body.getJSONObject("forkSource")).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(result.getJSONObject("sessionBranchSource")))))return unknownOperation(reservation.intent);
+        reservation.intent.put("status","accepted").put("jobId",result.getString("id"));recordOperation(reservation.intent);acceptReceipt(result);return result;
+    }
+    /** Local original-ledger cancellation only, after original SQL proves its native claim unused. */
+    public void settleProjectCancellation(dev.pocketengine.features.RemoteOwnerWorkflows.ProjectApproval approval)throws Exception {
+        JSONObject receipt=approval.originalLocalCancellation();if(receipt==null)return;JSONObject scope=approval.view();synchronized(this){JSONObject intent=operation(scope.getString("operationId"));if(intent==null)return;if(!scope.getString("profileId").equals(intent.getString("profileId"))||!scope.getString("serviceBase").equals(intent.getString("serviceBase"))||!intent.optString("kind").matches("job_submit|file_restore"))throw new SecurityException("本机未派发证明不是此原模块操作");intent.put("status","rejected").put("nativeCancelledBeforeDispatch",true).put("localCancellationReceipt",receipt);recordOperation(intent);}
+    }
+    public JSONObject readProjectHistory(JSONObject original,String generation,JSONObject query,AssignmentDispatch current)throws Exception {
+        if(closed)throw new SecurityException("原连接已关闭");java.util.Set<String> allowed=java.util.Set.of("offset","limit","snapshotId","snapshotVersion","path","currentPath","diffPath","pageVersion");StringBuilder path=new StringBuilder("/v1/jobs/"+identifier(original,"jobId")+"/project-history");for(java.util.Iterator<String> keys=query.keys();keys.hasNext();){String key=keys.next();if(!allowed.contains(key))throw new SecurityException("未知原项目只读参数");path.append(path.indexOf("?")<0?'?':'&').append(key).append('=').append(URLEncoder.encode(String.valueOf(query.get(key)),"UTF-8"));}
+        current.beforeDispatch();requireProfileBinding(original.getString("profileId"),generation);JSONObject result=snapshotRead(new JSONObject(original.toString()).put("_profileBinding",generation),path.toString());if(closed)throw new SecurityException("原连接已关闭");requireProfileBinding(original.getString("profileId"),generation);current.beforeDispatch();RemoteProjectHistory.original(result,original);return result;
+    }
+    public JSONObject queryProjectFileRestore(JSONObject scope,String currentGeneration)throws Exception {
+        if(closed)throw new SecurityException("原连接已关闭");String profile=scope.getString("profileId"),operation=scope.getString("operationId");requireProfileBinding(profile,currentGeneration);JSONObject original; synchronized(this){original=operation(operation);if(original==null||!"file_restore".equals(original.optString("kind"))||!scope.getString("serviceBase").equals(original.optString("serviceBase")))throw new SecurityException("没有此原生文件恢复登记；不会创建新操作");}
+        if(original.optBoolean("nativeCancelledBeforeDispatch"))return new JSONObject(original.getJSONObject("localCancellationReceipt").toString());BoundRequest target=bind(profile,scope.getString("serviceBase"));JSONObject result=send(target,"/v1/file-operations/"+operation,null,20);return result.put("profileId",profile).put("serviceBase",scope.getString("serviceBase"));
+    }
     private JSONObject steerJob(JSONObject input)throws Exception {
+        if(input.has("_profileBinding"))requireProfileBinding(input.getString("profileId"),input.getString("_profileBinding"));
         String profileId=identifier(input,"profileId"),jobId=identifier(input,"jobId"),messageId=identifier(input,"messageId");
         String expected=required(input,"expectedTurnId",200),content=required(input,"text",12000);
         JSONObject body=new JSONObject().put("messageId",messageId).put("expectedTurnId",expected).put("text",content);
         JSONObject details=new JSONObject().put("messageId",messageId).put("jobId",jobId).put("expectedTurnId",expected);
+        if(input.has("_profileBinding"))details.put("profileBinding",required(input,"_profileBinding",64)).put("sourceServiceBase",required(input,"serviceBase",2048));
         for(String key:new String[]{"threadId","jobOperationId"})if(input.has(key)){String value=required(input,key,200);body.put(key,value);details.put(key,value);}
         Reservation reserved=reserve(profileId,messageId,"steer_message",body,details);
         if(reserved.known)return reconcileSteer(input);
         JSONObject intent=reserved.intent;
-        try{return acceptSteer(intent,send(reserved.target,"/v1/jobs/"+jobId+"/steer",body,15));}
+        try{String path="/v1/jobs/"+jobId+"/steer";dispatchGate.beforeDispatch(path);if(input.has("_profileBinding"))requireProfileBinding(profileId,input.getString("_profileBinding"));return acceptSteer(intent,reserved.target.request(path,body,15));}
         catch(RemoteTransport.HttpFailure rejected){if(rejected.status>=400&&rejected.status<500)return acceptSteer(intent,new JSONObject(intent.toString()).put("status","rejected").put("dispatched",false).put("errorCode",rejected.status).put("message","电脑拒绝本次补充；未创建新turn，也未自动重发"));return unknownSteer(intent);}
         catch(java.io.IOException unknown){return unknownSteer(intent);}
     }
@@ -258,7 +305,7 @@ public final class RemoteModule implements EngineModule {
     private JSONObject reconcile(JSONObject input)throws Exception {
         String profileId=identifier(input,"profileId"),operationId=identifier(input,"operationId");
         JSONObject op;BoundRequest target;
-        JSONObject messageOperation=operation(operationId);if(messageOperation!=null&&"assignment_prepare".equals(messageOperation.optString("kind")))return reconcileAssignmentPreparation(new JSONObject(input.toString()).put("sourceJobId",messageOperation.getString("sourceJobId")).put("_profileBinding",messageOperation.getString("profileBinding")));
+        JSONObject messageOperation=operation(operationId);if(messageOperation!=null&&messageOperation.optBoolean("nativeCancelledBeforeDispatch")){if(!profileId.equals(messageOperation.getString("profileId")))throw new SecurityException("本机取消记录不是此原电脑操作");return new JSONObject(messageOperation.getJSONObject("localCancellationReceipt").toString());}if(messageOperation!=null&&"assignment_prepare".equals(messageOperation.optString("kind")))return reconcileAssignmentPreparation(new JSONObject(input.toString()).put("sourceJobId",messageOperation.getString("sourceJobId")).put("_profileBinding",messageOperation.getString("profileBinding")));
         if(messageOperation!=null&&"file_write".equals(messageOperation.optString("kind")))return reconcileFile(new JSONObject(input.toString()));
         if(messageOperation!=null&&"steer_message".equals(messageOperation.optString("kind")))return reconcileSteer(new JSONObject().put("profileId",profileId).put("jobId",messageOperation.getString("jobId")).put("messageId",operationId));
         synchronized(this){
@@ -298,6 +345,59 @@ public final class RemoteModule implements EngineModule {
         if(!found){if(operations.length()>=100){int removable=-1;for(int i=0;i<operations.length();i++){String state=operations.getJSONObject(i).optString("status");if(state.equals("settled")||state.equals("rejected")){removable=i;break;}}if(removable<0)throw new IllegalStateException("待核对的电脑操作记录已达上限，请先核对原操作");operations.remove(removable);}operations.put(new JSONObject(intent.toString()));}
         write(operationFile,operations);
     }
+    /** Native private Settings workflow only; never exposed by EngineModule.handle. */
+    public static final class ConnectionBackupReview {
+        private final RemoteModule issuer;private final String section,action;private final dev.pocketengine.core.RunControl original;private final long expires;private ConnectionBackupAdmission admission;
+        private ConnectionBackupReview(RemoteModule issuer,JSONObject section,String action,dev.pocketengine.core.RunControl original){this.issuer=issuer;this.section=section.toString();this.action=action;this.original=original;expires=System.currentTimeMillis()+600_000L;}
+        public JSONObject metadata()throws Exception {current();return dev.pocketengine.features.ConnectionBackupSections.reviewMetadata("remote",action,new JSONObject(section));}
+        private void current()throws Exception {original.check();if(issuer.closed||System.currentTimeMillis()>expires)throw new SecurityException("原私人设置恢复审阅已关闭或到期");}
+        public synchronized ConnectionBackupAdmission confirm()throws Exception {current();if(admission==null)admission=new ConnectionBackupAdmission(this);return admission;}
+    }
+    public static final class ConnectionBackupAdmission {
+        private final ConnectionBackupReview review;private boolean attempted;
+        private ConnectionBackupAdmission(ConnectionBackupReview review){this.review=review;}
+        public JSONObject metadata()throws Exception{return review.metadata();}
+    }
+    public JSONObject exportConnectionBackupForOwner(dev.pocketengine.core.RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(original).check();JSONArray rows; synchronized(this){if(closed)throw new SecurityException("原连接模块已关闭");rows=connectionBackupRows();}original.check();return dev.pocketengine.features.ConnectionBackupSections.section("remote",rows);
+    }
+    public ConnectionBackupReview reviewConnectionBackupForOwner(JSONObject exactSection,String ownerActionId,dev.pocketengine.core.RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(original).check();if(closed)throw new SecurityException("原连接模块已关闭");JSONObject section=dev.pocketengine.features.ConnectionBackupSections.checked("remote",exactSection);ConnectionBackupReview review=new ConnectionBackupReview(this,section,dev.pocketengine.features.ConnectionBackupSections.action(ownerActionId),original);review.current();return review;
+    }
+    /** Cold unknown recovery: original action/digest/id lookup only, never mint an admission or write. */
+    public JSONObject queryConnectionBackupForOwner(JSONObject exactSection,String originalOwnerActionId,dev.pocketengine.core.RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(original).check();JSONObject section=dev.pocketengine.features.ConnectionBackupSections.checked("remote",exactSection);String action=dev.pocketengine.features.ConnectionBackupSections.action(originalOwnerActionId),digest=dev.pocketengine.features.ConnectionBackupSections.digest(section);JSONArray rows=section.getJSONArray("profiles"),results=new JSONArray();
+        for(int n=0;n<rows.length();n++){original.check();JSONObject row=rows.getJSONObject(n);String id=dev.pocketengine.features.ConnectionBackupSections.restoredId("remote",action,digest,row.getString("sourceProfileId"));String actual="unconfirmed";try{synchronized(this){if(closed)throw new SecurityException("原连接模块已关闭");original.check();actual=restoreConnectionBackupRow(row,id,action,digest,true);}}catch(Exception unconfirmed){original.check();}results.put(new JSONObject().put("originalProfileId",row.getString("sourceProfileId")).put("newProfileId",id).put("state",actual.equals("already_restored")?"found":"unknown").put("observation",actual));}
+        original.check();return new JSONObject().put("module","remote").put("ownerActionId",action).put("sectionDigest",digest).put("profiles",results).put("queryOnly",true).put("configurationWritten",false).put("automaticConnection",false);
+    }
+    public JSONObject restoreConnectionBackupForOwner(ConnectionBackupAdmission admission,dev.pocketengine.core.RunControl original)throws Exception {
+        if(admission==null||admission.review.issuer!=this||admission.review.original!=original)throw new SecurityException("没有此模块/原私人设置操作的native恢复批准");ConnectionBackupReview review=admission.review;review.current();boolean queryOnly;synchronized(admission){queryOnly=admission.attempted;admission.attempted=true;}
+        JSONObject section=new JSONObject(review.section);String digest=dev.pocketengine.features.ConnectionBackupSections.digest(section);JSONArray rows=section.getJSONArray("profiles"),results=new JSONArray();boolean stopped=false;
+        for(int n=0;n<rows.length();n++){JSONObject row=rows.getJSONObject(n);String old=row.getString("sourceProfileId"),id=dev.pocketengine.features.ConnectionBackupSections.restoredId("remote",review.action,digest,old);JSONObject receipt=new JSONObject().put("originalProfileId",old).put("newProfileId",id);
+            if(stopped){results.put(receipt.put("state","not_attempted"));continue;}
+            review.current();try{synchronized(this){review.current();receipt.put("state",restoreConnectionBackupRow(row,id,review.action,digest,queryOnly));}}catch(Exception uncertain){receipt.put("state","unknown").put("reason","原配置提交未确认；仅核对这次固定编号，不重建或自动连接");stopped=true;}results.put(receipt);
+        }
+        return new JSONObject().put("format","pocketworld.native-connection-restore-receipt.v1").put("module","remote").put("ownerActionId",review.action).put("sectionDigest",digest).put("queryOnly",queryOnly).put("profiles",results).put("credentialsRestored",false).put("hostKeyTrustRestored",false).put("executionGrantsRestored",false).put("automaticConnection",false);
+    }
+
+    private JSONArray connectionBackupRows()throws Exception {
+        JSONArray rows=new JSONArray();for(int n=0;n<profiles.length();n++){JSONObject profile=profiles.getJSONObject(n);rows.put(new JSONObject().put("sourceProfileId",profile.getString("id")).put("name",profile.getString("name")).put("baseUrl",profile.getString("baseUrl")));}return rows;
+    }
+    private JSONObject backupConfiguration(JSONObject row,String id)throws Exception {return new JSONObject().put("id",id).put("name",row.getString("name")).put("baseUrl",row.getString("baseUrl"));}
+    private String restoreConnectionBackupRow(JSONObject row,String id,String action,String sectionDigest,boolean queryOnly)throws Exception {
+        JSONObject desired=backupConfiguration(row,id),origin=dev.pocketengine.features.ConnectionBackupSections.origin(action,sectionDigest,row.getString("sourceProfileId"),dev.pocketengine.features.ConnectionBackupSections.digest(desired));
+        // Refresh only from the original AtomicFile; an unreadable disk is not an empty catalog.
+        JSONArray actual;try{actual=new JSONArray(new String(file.readFully(),StandardCharsets.UTF_8));}catch(java.io.FileNotFoundException missing){if(file.getBaseFile().exists()||profiles.length()!=0)throw missing;actual=new JSONArray();}
+        JSONObject known=null;for(int n=0;n<actual.length();n++)if(id.equals(actual.getJSONObject(n).optString("id")))known=actual.getJSONObject(n);
+        if(known!=null){JSONObject original=known.optJSONObject("nativeBackupOrigin");if(original==null||!dev.pocketengine.features.ConnectionBackupSections.digest(origin).equals(dev.pocketengine.features.ConnectionBackupSections.digest(original))||!dev.pocketengine.features.ConnectionBackupSections.digest(desired).equals(dev.pocketengine.features.ConnectionBackupSections.digest(backupConfiguration(known,id))))return "configuration_changed_not_overwritten";if(!queryOnly)publishConnectionBackupProfiles(actual);return "already_restored";}
+        if(queryOnly)return "not_confirmed_query_only";if(actual.length()>=20)throw new IllegalStateException("原电脑连接已满");if(context.secrets.contains(slot(id,row.getString("baseUrl"))))throw new SecurityException("固定新编号已有残留凭据，未重用");
+        JSONObject restored=new JSONObject(desired.toString()).put("bindingRevision",UUID.randomUUID().toString()).put("nativeBackupOrigin",origin);JSONArray proposed=new JSONArray(actual.toString());proposed.put(restored);byte[] expected=proposed.toString().getBytes(StandardCharsets.UTF_8);
+        try{write(file,proposed);}catch(Exception failed){if(!connectionBackupStoredEquals(expected))throw failed;}if(!connectionBackupStoredEquals(expected))throw new java.io.IOException("原电脑配置没有准确读回回执");
+        publishConnectionBackupProfiles(proposed);return "restored_needs_credentials";
+    }
+    private void publishConnectionBackupProfiles(JSONArray durable)throws Exception {while(profiles.length()>0)profiles.remove(profiles.length()-1);for(int n=0;n<durable.length();n++)profiles.put(durable.getJSONObject(n));}
+    private boolean connectionBackupStoredEquals(byte[] expected){try{return java.util.Arrays.equals(expected,file.readFully());}catch(Exception unreadable){return false;}}
+
     private synchronized JSONObject saveProfile(JSONObject input)throws Exception {
         String name=required(input,"name",80),base=required(input,"baseUrl",2048);RemoteTransport.validateBase(base);
         String id=input.optString("id");if(id.isEmpty())id=UUID.randomUUID().toString();if(!id.matches("[A-Za-z0-9_-]{1,80}"))throw new IllegalArgumentException("电脑连接编号无效");
@@ -384,12 +484,16 @@ public final class RemoteModule implements EngineModule {
         return new JSONObject().put("profileId",scope.getString("profileId")).put("serviceBase",scope.getString("serviceBase")).put("_profileBinding",scope.getString("profileGeneration"));
     }
     /** These three effects require the original TaskStore's non-restorable opaque claim. */
+    /** Native group input review reads the actual CLI mode, not accountConfigured. No model turn. */
+    public JSONObject probeGroupInputApiMode(JSONObject selected)throws Exception {
+        requireProfileBinding(selected.getString("profileId"),selected.getString("_profileBinding"));JSONObject body=new JSONObject().put("environmentId",selected.getString("environmentId")).put("environmentBinding",selected.getString("environmentBinding")).put("worker",selected.getString("worker")).put("inferenceAudience","EXTERNAL_GROUP");if(selected.has("model"))body.put("model",selected.getString("model"));JSONObject actual=request(selected,"/v1/workers/probe",body,15);requireProfileBinding(selected.getString("profileId"),selected.getString("_profileBinding"));if(!actual.optBoolean("available")||!actual.optBoolean("protocolVerified")||actual.optJSONObject("externalGroupApiMode")==null)throw new SecurityException("此原app-server未确认API-key模式/凭据代次，未派发群资料；普通确认不能替代此证明");RemoteTaskRequest.requireGroupApiMode(actual.getJSONObject("externalGroupApiMode"),selected);return actual;
+    }
     public JSONObject submitInputJob(dev.pocketengine.store.TaskStore.RemoteInputClaim claim)throws Exception {
         JSONObject scope=inputScope(claim);
         if(!claim.view().getString("action").equals("CREATE"))throw new SecurityException("不是原附件创建领取");
         if(!claim.canDispatch())return queryInputJob(scope,scope.optString("jobId"));
         JSONObject selected=scope.getJSONObject("request"),body=new JSONObject();
-        for(String key:new String[]{"environmentId","environmentBinding","worker","prompt","model","readOnly","timeoutSeconds"})if(selected.has(key))body.put(key,selected.get(key));
+        for(String key:new String[]{"environmentId","environmentBinding","worker","prompt","model","readOnly","timeoutSeconds","inputContinuationProtocol","threadId","resumeJobId","sourceJobOperationId","recoveryProofId","recoveryOwnerAcknowledged","inferenceAudience","groupInputSource","externalGroupApiMode"})if(selected.has(key))body.put(key,selected.get(key));
         body.put("operationId",scope.getString("jobOperationId")).put("inputProtocol",RemoteTaskRequest.INPUT_PROTOCOL).put("inputFiles",RemoteTaskRequest.inputManifest(scope.getJSONArray("files")));
         return inputSend(claim,scope,"/v1/jobs",body,"job_submit",scope.getString("jobOperationId"));
     }
@@ -405,6 +509,7 @@ public final class RemoteModule implements EngineModule {
         JSONObject targetInput=inputTarget(scope);assignmentTarget(targetInput);claim.beforeDispatch();
         JSONObject details=new JSONObject().put("profileBinding",scope.getString("profileGeneration")).put("sourceServiceBase",scope.getString("serviceBase"));
         if(scope.has("jobId"))details.put("jobId",scope.getString("jobId"));
+        if(scope.has("continuationSource"))details.put("jobOperationId",scope.getJSONObject("continuationSource").getString("jobOperationId"));
         Reservation reserved=reserve(scope.getString("profileId"),operation,kind,body,details);
         if(reserved.known)return queryInputJob(scope,scope.optString("jobId"));
         try{
@@ -442,7 +547,39 @@ public final class RemoteModule implements EngineModule {
         return result;
     }
     /** Native assignment host only. Model handle() deliberately has no selected-copy submit route. */
+    /** Native owner only. These methods are intentionally absent from EngineModule.handle/model tools. */
+    public JSONObject harnessConfigProbe(JSONObject input)throws Exception {return harnessReadWrite(input,"/v1/harnesses/probe",input.getJSONObject("request"));}
+    public JSONObject harnessConfigPlan(JSONObject input)throws Exception {
+        JSONObject request=new JSONObject(input.getJSONObject("request").toString());String path="/v1/harness-config/plans";
+        if(input.has("restoreOf")){path="/v1/harness-config/operations/"+identifier(input,"restoreOf")+"/restore-plan";JSONObject reduced=new JSONObject();for(String key:new String[]{"operationId","environmentId","environmentBinding","bindingId","identityDigest"})reduced.put(key,request.get(key));request=reduced;}
+        return harnessReadWrite(input,path,request);
+    }
+    public JSONObject harnessConfigOperation(JSONObject input)throws Exception {return harnessReadWrite(input,"/v1/harness-config/operations/"+identifier(input,"operationId"),null);}
+    private JSONObject harnessReadWrite(JSONObject input,String path,JSONObject body)throws Exception {
+        BoundRequest target;synchronized(this){String profile=identifier(input,"profileId");requireProfileRevision(profile,required(input,"_profileBinding",64));target=bind(profile,required(input,"serviceBase",2048));}
+        JSONObject actual=send(target,path,body,20);synchronized(this){requireProfileRevision(input.getString("profileId"),input.getString("_profileBinding"));}return actual;
+    }
+    public JSONObject harnessConfigApply(JSONObject input,AssignmentDispatch originalOwnerFence)throws Exception {
+        JSONObject body=new JSONObject(input.getJSONObject("request").toString());String operation=identifier(body,"operationId"),profile=identifier(input,"profileId"),plan=identifier(input,"planId");
+        JSONObject details=new JSONObject().put("profileBinding",required(input,"_profileBinding",64)).put("sourceServiceBase",required(input,"serviceBase",2048)).put("planId",plan);
+        Reservation reserved=reserve(profile,operation,"harness_config",body,details);if(reserved.known)return harnessConfigOperation(new JSONObject(input.toString()).put("operationId",operation));
+        JSONObject actual;try{actual=assignmentSend(input,reserved.target,"/v1/harness-config/plans/"+plan+"/apply",body,originalOwnerFence);}
+        catch(RemoteTransport.HttpFailure rejected){if(rejected.status>=400&&rejected.status<500){actual=harnessNotice(body,"CONFLICT").put("rejected",true).put("httpStatus",rejected.status);reserved.intent.put("status","rejected");recordOperation(reserved.intent);return actual;}return harnessNotice(body,"unknown");}
+        catch(java.io.IOException unavailable){return harnessNotice(body,"unknown");}
+        if(!operation.equals(actual.optString("operationId"))||!body.getString("planDigest").equals(actual.optString("planDigest")))return harnessNotice(body,"unknown");
+        reserved.intent.put("status",actual.optString("state").matches("COMMITTED|CONFLICT")?"settled":"unknown");recordOperation(reserved.intent);return actual;
+    }
+    private static JSONObject harnessNotice(JSONObject request,String state)throws Exception {JSONObject value=new JSONObject().put("state",state).put("configApplied",false).put("runtimeVerified",false).put("resubmitted",false);for(String key:new String[]{"operationId","planDigest","environmentId","environmentBinding","bindingId"})value.put(key,request.get(key));return value;}
     public interface AssignmentDispatch { void beforeDispatch()throws Exception; }
+    /** Native original-owner observation only. Never registered as a mutating model command. */
+    public RemoteJobEvents.Page readOriginalJobEvents(JSONObject source,String binding,JSONObject previous,AssignmentDispatch pageFence)throws Exception {
+        JSONObject input=new JSONObject(source.toString()).put("_profileBinding",binding),scope=RemoteJobEvents.scope(source,binding),cursor=RemoteJobEvents.request(previous,scope);
+        BoundRequest target=assignmentTarget(input);String job=identifier(input,"jobId");
+        String path="/v1/jobs/"+job+"/events?filter="+RemoteJobEvents.FILTER+"&jobOperationId="+java.net.URLEncoder.encode(input.getString("jobOperationId"),"UTF-8")
+                +"&generation="+cursor.getString("generation")+"&after="+cursor.getLong("after")+"&head="+cursor.getLong("head")+"&limit=32";
+        pageFence.beforeDispatch();assignmentTarget(input);JSONObject actual=send(target,path,null,15);pageFence.beforeDispatch();assignmentTarget(input);
+        return RemoteJobEvents.received(scope,cursor,actual);
+    }
     /** Native original-owner input only. It is deliberately absent from EngineModule.handle/model commands. */
     public JSONObject answerQuestionJob(JSONObject input,AssignmentDispatch originalOwnerFence)throws Exception {
         BoundRequest target=assignmentTarget(input);String job=identifier(input,"jobId");
@@ -453,6 +590,69 @@ public final class RemoteModule implements EngineModule {
     /** Foreground recovery schedules only original GETs on the existing bounded poll executor. */
     public void requestReadRefresh(){
         if(closed||!readRefreshQueued.compareAndSet(false,true))return;try{poller.execute(()->{try{synchronized(RemoteModule.this){for(int i=0;i<operations.length();i++)try{JSONObject op=operations.getJSONObject(i),selected=find(op.optString("profileId"));if(selected!=null&&!op.optString("jobId").isEmpty()&&op.optString("status").equals("accepted")&&endpoint(selected.optString("baseUrl")).equals(op.optString("serviceBase")))watch(op.getString("profileId"),op.getString("jobId"),op.getString("serviceBase"));}catch(Exception originalUnavailable){/* Never rebind or create. */}}poll();}finally{readRefreshQueued.set(false);}});}catch(java.util.concurrent.RejectedExecutionException closedExecutor){readRefreshQueued.set(false);}
+    }
+    /** One original prepared package operation. Existing ledger retains every slot before raw IO. */
+    public JSONObject prepareProjectAssignment(JSONObject input,dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen original,
+                                               dev.pocketengine.core.RunControl control,AssignmentDispatch authority)throws Exception {
+        RemoteProjectAssignments.validateSelection(input);if(!original.identity.equals(input.getString("packageIdentity")))throw new SecurityException("原Frozen不是已批准项目包");
+        JSONObject body=new JSONObject();for(String key:new String[]{"operationId","nativeAssignment","environmentId","environmentBinding","packageIdentity","packageIdentityEncoding","packageManifest","packageReference","files","limits","commandScope","approvalRevision","approvalExpiresAt"})body.put(key,input.get(key));
+        String profile=identifier(input,"profileId"),operation=identifier(input,"operationId");JSONObject details=assignmentDetails(input).put("nativeAssignment",input.getJSONObject("nativeAssignment")).put("packageIdentity",input.getString("packageIdentity"));
+        Reservation reserved=reserve(profile,operation,"assignment_project_prepare",body,details);if(reserved.known)return reconcileProjectAssignment(input);
+        JSONObject actual;
+        try{actual=projectSend(input,reserved.target,"/v1/assignment-projects",body,()->{control.check();authority.beforeDispatch();control.check();});}
+        catch(java.io.IOException uncertain){actual=reconcileProjectAssignment(input);if(!actual.has("inputFiles"))return actual;}
+        actual=acceptProjectPreparation(input,reserved.intent,actual);
+        JSONArray files=input.getJSONObject("packageManifest").getJSONArray("files");
+        for(int i=0;i<files.length();i++){
+            control.check();JSONObject slot=actual.getJSONArray("inputFiles").getJSONObject(i);String state=slot.getString("state");if(state.equals("verified"))continue;
+            if(!state.equals("pending"))return projectUnknown(reserved.intent,"原slot已派发或未知；只查原ACK，不发送第二个body");
+            final int index=i;byte[] raw=original.file(files.getJSONObject(i).getString("path"));
+            try{
+                if(raw.length!=files.getJSONObject(i).getLong("bytes")||!dev.pocketengine.features.local.project.ProjectSources.sha256(raw).equals(files.getJSONObject(i).getString("sha256")))throw new SecurityException("原Frozen字节与批准manifest不符");
+                reserveProjectSlot(reserved.intent,index);control.check();BoundRequest target=assignmentTarget(input);
+                try{actual=RemoteTransport.uploadProjectFile(target.base,target.token,"/v1/assignment-projects/"+operation+"/files/"+index,operation,new java.io.ByteArrayInputStream(raw),raw.length,control,()->{control.check();dispatchGate.beforeDispatch("/v1/assignment-projects/"+operation+"/files/"+index);assignmentTarget(input);control.check();},null);}
+                catch(java.io.IOException uncertain){actual=reconcileProjectAssignment(input);if(!actual.has("inputFiles")||!actual.getJSONArray("inputFiles").getJSONObject(i).optString("state").equals("verified"))return projectUnknown(reserved.intent,"原上传结果未确认；不自动重传");}
+                control.check();actual=acceptProjectPreparation(input,reserved.intent,actual);
+            }finally{java.util.Arrays.fill(raw,(byte)0);}
+        }
+        control.check();String finalize=UUID.nameUUIDFromBytes(("pocketworld/project-finalize/v1/"+operation).getBytes(StandardCharsets.UTF_8)).toString();
+        boolean alreadyFinalizing;synchronized(this){JSONObject current=currentProjectIntent(reserved.intent);alreadyFinalizing=current.optBoolean("finalizeDispatched");if(!alreadyFinalizing){current.put("finalizeDispatched",true).put("finalizeOperationId",finalize);recordOperation(current);}}if(alreadyFinalizing)return reconcileProjectAssignment(input);
+        try{actual=projectSend(input,assignmentTarget(input),"/v1/assignment-projects/"+operation+"/finalize",new JSONObject().put("finalizeOperationId",finalize).put("packageIdentity",input.getString("packageIdentity")),control::check);}
+        catch(java.io.IOException uncertain){return reconcileProjectAssignment(input);}
+        control.check();return acceptProjectPreparation(input,reserved.intent,actual);
+    }
+    public JSONObject reconcileProjectAssignment(JSONObject input)throws Exception {
+        String operation=identifier(input,"operationId");JSONObject intent=operation(operation);if(intent!=null&&(!intent.optString("kind").equals("assignment_project_prepare")||!intent.getString("profileId").equals(input.getString("profileId"))||!intent.getString("packageIdentity").equals(input.getString("packageIdentity"))))throw new SecurityException("原prepare属于其他项目/连接");
+        BoundRequest target=assignmentTarget(input);JSONObject actual;try{actual=RemoteTransport.requestProject(target.base,target.token,"/v1/assignment-projects/"+operation,null,20);}catch(java.io.IOException unavailable){return intent==null?assignmentNotice(input,"unknown","只查原项目准备；没有重体/重建"):projectUnknown(intent,"原项目准备不可读；不重体/重建");}
+        assignmentTarget(input);return acceptProjectPreparation(input,intent,actual);
+    }
+    private synchronized JSONObject acceptProjectPreparation(JSONObject input,JSONObject intent,JSONObject actual)throws Exception {
+        JSONObject checked=RemoteProjectAssignments.preparation(actual,input,false);if(checked.has("profileId")&&!input.getString("profileId").equals(checked.getString("profileId")))throw new SecurityException("准备回执属于别的连接");checked.remove("profileId");if(intent==null)return checked.put("profileId",input.getString("profileId"));intent=currentProjectIntent(intent);JSONObject previous=intent.optJSONObject("projectState");
+        if(previous!=null){long before=previous.getLong("revision"),after=checked.getLong("revision");if(after<before)return new JSONObject(previous.toString()).put("profileId",input.getString("profileId"));if(after==before&&!canonical(previous).equals(canonical(checked)))throw new SecurityException("原项目同revision出现不同准备状态，不能按到达先后覆盖");}
+        intent.put("projectState",new JSONObject(checked.toString())).put("status",checked.optString("status").equals("ready")?"settled":"unknown");recordOperation(intent);return checked.put("profileId",input.getString("profileId"));
+    }
+    private synchronized void reserveProjectSlot(JSONObject intent,int index)throws Exception {intent=currentProjectIntent(intent);JSONObject slots=intent.optJSONObject("projectSlotDispatch");if(slots==null){slots=new JSONObject();intent.put("projectSlotDispatch",slots);}String key=String.valueOf(index);if(slots.has(key))throw new SecurityException("原slot已经在本机登记，不能发送第二个body");slots.put(key,new JSONObject().put("status","sending").put("preparedAt",System.currentTimeMillis()));recordOperation(intent);}
+    private synchronized JSONObject projectUnknown(JSONObject intent,String message)throws Exception {intent=currentProjectIntent(intent);intent.put("status","unknown").put("message",message);recordOperation(intent);return new JSONObject(intent.toString()).put("resubmitted",false);}
+    private JSONObject currentProjectIntent(JSONObject selected)throws Exception {JSONObject actual=operation(selected.getString("operationId"));if(actual==null||!actual.optString("kind").equals("assignment_project_prepare")||!actual.optString("fingerprint").equals(selected.optString("fingerprint")))throw new SecurityException("原项目准备本机记录已替换");return actual;}
+    private static String projectEncode(String value)throws Exception{return URLEncoder.encode(value,"UTF-8");}
+    private JSONObject projectSend(JSONObject input,BoundRequest target,String path,JSONObject body,AssignmentDispatch authority)throws Exception {dispatchGate.beforeDispatch(path);assignmentTarget(input);authority.beforeDispatch();assignmentTarget(input);JSONObject actual=RemoteTransport.requestProject(target.base,target.token,path,body,30);assignmentTarget(input);return actual;}
+    public JSONObject cancelProjectPreparation(JSONObject input,AssignmentDispatch authority)throws Exception {
+        JSONObject actual=projectSend(input,assignmentTarget(input),"/v1/assignment-projects/"+identifier(input,"operationId")+"/cancel",new JSONObject(),authority);
+        return acceptProjectPreparation(input,operation(identifier(input,"operationId")),actual);
+    }
+    public JSONObject captureProjectContribution(JSONObject input,AssignmentDispatch authority)throws Exception {
+        JSONObject reference=input.getJSONObject("assignmentWorkspace");String operation=identifier(input,"operationId"),job=identifier(input,"jobId");JSONObject body=new JSONObject().put("operationId",operation).put("jobOperationId",identifier(input,"jobOperationId")).put("prepareOperationId",reference.getString("prepareOperationId")).put("checkoutVersion",reference.getString("checkoutVersion"));
+        Reservation reserved=reserve(identifier(input,"profileId"),operation,"project_contribution",body,assignmentDetails(input).put("jobId",job).put("jobOperationId",body.getString("jobOperationId")));if(reserved.known)return reconcileProjectContribution(input);
+        try{JSONObject actual=projectSend(input,reserved.target,"/v1/jobs/"+job+"/project-contributions",body,authority);reserved.intent.put("status",actual.optString("status").equals("completed")?"settled":"unknown");recordOperation(reserved.intent);return actual;}
+        catch(java.io.IOException unconfirmed){return reconcileProjectContribution(input);}
+    }
+    public JSONObject reconcileProjectContribution(JSONObject input)throws Exception {
+        String operation=identifier(input,"operationId"),job=identifier(input,"jobId");JSONObject intent=operation(operation);if(intent!=null&&(!intent.optString("kind").equals("project_contribution")||!job.equals(intent.optString("jobId"))))throw new SecurityException("原贡献操作属于另一job");BoundRequest target=assignmentTarget(input);JSONObject actual;
+        try{actual=RemoteTransport.requestProject(target.base,target.token,"/v1/jobs/"+job+"/snapshot-operations/"+operation,null,20);}catch(java.io.IOException unavailable){return assignmentNotice(input,"unknown","只查原贡献操作，不重新冻结/执行");}assignmentTarget(input);if(intent!=null){intent.put("status",actual.optString("status").equals("completed")?"settled":"unknown");recordOperation(intent);}return actual;
+    }
+    public byte[] readProjectContributionFile(JSONObject input,JSONObject file,AssignmentDispatch originalRead)throws Exception {
+        String path="/v1/jobs/"+identifier(input,"jobId")+"/project-contributions/"+identifier(input,"snapshotId")+"/file?version="+projectEncode(required(input,"snapshotVersion",64))+"&path="+projectEncode(file.getString("path"))+"&sha256="+projectEncode(file.getString("sha256"))+"&bytes="+file.getLong("bytes")+"&jobOperationId="+projectEncode(identifier(input,"jobOperationId"));BoundRequest target=assignmentTarget(input);
+        return RemoteTransport.readProjectFile(target.base,target.token,path,file.getLong("bytes"),file.getString("sha256"),()->{originalRead.beforeDispatch();assignmentTarget(input);});
     }
     public JSONObject prepareAssignmentWorkspace(JSONObject input,AssignmentDispatch authority)throws Exception {
         String profile=identifier(input,"profileId"),source=identifier(input,"sourceJobId"),operation=identifier(input,"operationId");
@@ -597,7 +797,9 @@ public final class RemoteModule implements EngineModule {
                 ||!body.getString("environmentId").equals(source.optString("environmentId"))||!body.getString("threadId").equals(source.optString("threadId")))throw new SecurityException("续接执行环境、协议或原会话身份已变化");
         if(worker.equals("claude")&&(!source.optBoolean("protocolVerified")||!body.getString("threadId").equals(source.optString("sessionId"))))throw new SecurityException("Claude尚未确认原会话身份，不能按线程别名续接");
         JSONObject controls=source.optJSONObject("controls");
-        if(!source.optString("status").matches("completed|failed|cancelled")||controls==null||!controls.optBoolean("threadResume")||source.optBoolean("steeringUnknown"))throw new IllegalStateException("原任务尚未结算或不允许续接；未知结果只能查询，不会重新提交");
+        boolean recovered=RemoteColdRecovery.receipt(source);
+        if(!source.optString("status").matches("completed|failed|cancelled")&&!recovered||controls==null||!controls.optBoolean("threadResume")||source.optBoolean("steeringUnknown"))throw new IllegalStateException("原任务尚未核对终止或不允许续接；未知效果只能查询，不会重新提交");
+        if(recovered&&(!source.getJSONObject("recoveryProof").getString("proofId").equals(body.optString("recoveryProofId"))||body.opt("recoveryOwnerAcknowledged")!=Boolean.TRUE||body.optInt("timeoutSeconds")<10||body.optInt("timeoutSeconds")>900))throw new SecurityException("冷中断续接缺少原proof及本次新时限/费用风险确认");
         if(body.has("readOnly")&&(worker.equals("claude")&&body.getBoolean("readOnly")||worker.equals("codex_app_server")&&body.getBoolean("readOnly")!=source.optBoolean("readOnly")))throw new SecurityException("不能改变原工具访问边界；Claude不提供强制只读沙箱");
         for(int i=0;i<operations.length();i++){
             JSONObject op=operations.getJSONObject(i);
@@ -638,7 +840,7 @@ public final class RemoteModule implements EngineModule {
         if(recent.size()>=30&&!recent.containsKey(job.optString("profileId")+":"+job.optString("id"))){String oldest=null;long time=Long.MAX_VALUE;for(Map.Entry<String,JSONObject> item:recent.entrySet()){long at=item.getValue().optLong("updatedAt");if(at<time){time=at;oldest=item.getKey();}}if(oldest!=null)recent.remove(oldest);}
         recent.put(job.optString("profileId")+":"+job.getString("id"),metadata(job).put("serviceBase",job.optString("serviceBase")));
     }
-    private static JSONObject metadata(JSONObject job)throws Exception {JSONObject value=new JSONObject();for(String key:new String[]{"id","profileId","serviceBase","operationId","environmentId","worker","status","message","createdAt","updatedAt","exitCode","outputTruncated","timedOut","archived","lastKnownStatus","path","version","previousVersion","desiredVersion","verified","protocol","protocolVerified","controlProtocolVerified","sessionIdentityConfirmed","sessionId","promptRequestId","threadId","turnId","pendingApprovals","approvalReceipts","pendingQuestions","questionReceipts","progress","promptResultIdentity","diffTruncated","model","reportedModel","readOnly","readOnlyConfirmed","externalToolsDisabled","capabilities","controls","inputSteeringVerified","steeringUnknown","lastSteerMessage","interruptAcknowledged","turnStartAcknowledged","resumeJobId","sourceServiceBase","remoteEffectsVerified","eventCount","resultSubtype","permissionDenialCount","messageId","jobId","jobOperationId","expectedTurnId","dispatched","errorCode","resultSnapshotId","resultSnapshotVersion","snapshotPrelaunchVerified","snapshotBaseVerifiedAt","workspaceIdentity","assignmentWorkspace","externalJobLimits","inferenceUsage","modelCallHardCapSupported","tokenHardCapSupported","costHardCapSupported","wallTimeHardCapSupported","wallTimeEnforcement","detachedDescendantIsolationVerified","assignmentWriteSandboxVerified","osReadIsolationVerified","commandAllowlistEnforced","processStarted","dispatchFenceFinal","notStartedConfirmed","processCleanupProof","outputLimitExceeded","inputState"})if(job.has(key))value.put(key,job.get(key));return new JSONObject(value.toString());}
+    private static JSONObject metadata(JSONObject job)throws Exception {JSONObject value=new JSONObject();for(String key:new String[]{"id","profileId","serviceBase","operationId","environmentId","worker","status","message","createdAt","updatedAt","exitCode","outputTruncated","timedOut","archived","lastKnownStatus","path","version","previousVersion","desiredVersion","verified","protocol","protocolVerified","controlProtocolVerified","sessionIdentityConfirmed","sessionId","promptRequestId","threadId","turnId","pendingApprovals","approvalReceipts","pendingQuestions","questionReceipts","progress","promptResultIdentity","diffTruncated","model","reportedModel","readOnly","readOnlyConfirmed","externalToolsDisabled","capabilities","controls","inputSteeringVerified","steeringUnknown","lastSteerMessage","interruptAcknowledged","turnStartAcknowledged","resumeJobId","sourceServiceBase","remoteEffectsVerified","eventCount","resultSubtype","permissionDenialCount","messageId","jobId","jobOperationId","expectedTurnId","dispatched","errorCode","resultSnapshotId","resultSnapshotVersion","snapshotPrelaunchVerified","snapshotBaseVerifiedAt","workspaceIdentity","assignmentWorkspace","externalJobLimits","inferenceUsage","modelCallHardCapSupported","tokenHardCapSupported","costHardCapSupported","wallTimeHardCapSupported","wallTimeEnforcement","detachedDescendantIsolationVerified","assignmentWriteSandboxVerified","osReadIsolationVerified","commandAllowlistEnforced","processStarted","dispatchFenceFinal","notStartedConfirmed","processCleanupProof","outputLimitExceeded","inputState","recoveryProof","coldRecovery","projectHistory","sessionBranchSource","sessionBranch","inferenceAudience","groupInputSource","externalGroupApiMode","externalGroupApiRead"})if(job.has(key))value.put(key,job.get(key));return new JSONObject(value.toString());}
     /** Opaque native config/credential generation; contains no token or token-derived digest. */
     public synchronized JSONObject requireProfileBinding(String id,String expected)throws Exception {
         JSONObject current=requireProfileRevision(id,expected);if(!current.optBoolean("hasToken"))throw new SecurityException("电脑访问密钥尚未配置");return current;

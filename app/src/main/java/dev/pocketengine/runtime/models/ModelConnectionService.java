@@ -44,6 +44,7 @@ public final class ModelConnectionService {
             public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt)throws Exception{inferenceObservations.committed(receipt);}
         });
         ModelRequestPolicy.installHostSource(this::resolve);
+        dev.pocketengine.runtime.ModelGateway.installModelGroupAdmission(settings::requireModelGroupAdmission);
         InferencePricing.installHostSource(this::resolvePrice);
         settings.installImageCapabilities(config -> {
             ModelCatalog.View view=resolve(config);if(view==null)return false;
@@ -104,10 +105,11 @@ public final class ModelConnectionService {
     public JSONObject snapshot() throws Exception {
         synchronized(settings){
             ModelConfig current=settings.apiConfigForCatalog();ModelBinding binding=current.catalogEnforced?current.capabilityBinding:null;
-            JSONObject out=new JSONObject().put("api",current.publicJson()).put("activeRoute",settings.get().usesAccount()?"account":"api_key")
-                    .put("catalogEnabled",binding!=null).put("connections",settings.apiConnectionsSnapshot()).put("maxCatalogAgeMillis",MAX_CATALOG_AGE_MILLIS)
+            JSONObject out=new JSONObject().put("api",current.publicJson()).put("activeRoute",settings.selectedAccountModel()!=null?"account":"api_key")
+                    .put("modelGroups",settings.modelGroupsSnapshot()).put("catalogEnabled",binding!=null).put("connections",settings.apiConnectionsSnapshot()).put("maxCatalogAgeMillis",MAX_CATALOG_AGE_MILLIS)
                     .put("modelsEndpoint",binding==null?defaultEndpoint(current):binding.modelsEndpoint().toASCIIString())
                     .put("catalogFormat",binding==null?ModelCatalogRoutes.defaultFormat(current.provider).name():binding.format().name());
+            try{ModelConfig active=settings.get();out.put("activeRoute",active.usesAccount()?"account":"api_key").put("nativeSelection",active.publicJson());}catch(Exception unavailable){out.put("selectionUnavailable",true).put("selectionMessage","所选模型组或原连接已变化；请重新核对用途选择。没有回退。");}
             JSONArray models=new JSONArray();
             if(binding!=null){
                 catalog.bind(binding);out.put("binding",binding.toJson());
@@ -197,8 +199,16 @@ public final class ModelConnectionService {
     /** Existing owner model page, no feature/model tool and no automatic network request. */
     public JSONObject connections()throws Exception{synchronized(settings){settings.apiConnections();return snapshot();}}
     public JSONObject saveConnection(String id,long revision,String name,JSONObject input)throws Exception{synchronized(settings){settings.saveApiConnection(id,revision,name,input);return snapshot();}}
-    public JSONObject selectConnection(String id,long revision)throws Exception{synchronized(settings){settings.selectApiConnection(id,revision);return snapshot();}}
+    public JSONObject selectConnection(String id,long revision)throws Exception{synchronized(settings){settings.selectApiConnection(id,revision);settings.selectModelPurpose("MAIN",null);return snapshot();}}
     public JSONObject enableConnection(String id,long revision,boolean enabled)throws Exception{synchronized(settings){settings.setApiConnectionEnabled(id,revision,enabled);return snapshot();}}
+    public JSONObject saveGroup(String id,long revision,String name,JSONObject definition)throws Exception{synchronized(settings){settings.saveModelGroup(id,revision,name,definition);return snapshot();}}
+    public JSONObject selectPurpose(String purpose,ModelTargetRef target)throws Exception{synchronized(settings){settings.selectModelPurpose(purpose,target);return snapshot();}}
+    public ModelConfig captureTarget(ModelTargetRef target,String purpose,String audience,ModelConfig capturedGlobal)throws Exception{return settings.captureModelTarget(target,purpose,audience,capturedGlobal);}
+    /** Inputs are already captured native policy references. Never reads a later global default. */
+    public ModelConfig capturePurpose(ModelTargetRef member,java.util.Map<String,ModelTargetRef> task,java.util.Map<String,ModelTargetRef> profile,String purpose,String audience,ModelConfig capturedGlobal)throws Exception{
+        ModelTargetRef chosen=member!=null?member:task!=null&&task.containsKey(purpose)?task.get(purpose):profile==null?null:profile.get(purpose);
+        return chosen==null?capturedGlobal.withRoutePlan(null):captureTarget(chosen,purpose,audience,capturedGlobal);
+    }
     private void setAttempt(ModelBinding binding,ModelCatalog.Ticket ticket,String status,String code) {
         if(!stillBound(binding))return;
         synchronized(this){if(attempt!=null&&attempt.ticket==ticket)attempt=new Attempt(binding,ticket,attempt.started,status,code);}

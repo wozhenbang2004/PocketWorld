@@ -28,7 +28,7 @@ final class AndroidRuntimePreparation {
     private final File root,cache,staging,generations,home,tmp,proot,loader,dns;
     private JSONObject active;
     private volatile JSONObject progress=new JSONObject();
-    private boolean preparing;
+    private boolean preparing,ownerStorageMaintenance;
     AndroidRuntimePreparation(File privateDirectory,File nativeLibraryDirectory,AndroidRuntimeCatalog catalog,
             RuntimeEnvironment environments,File home,File tmp) throws Exception {
         this(privateDirectory,nativeLibraryDirectory,catalog,environments,home,tmp,url->(HttpURLConnection)url.openConnection());
@@ -70,8 +70,35 @@ final class AndroidRuntimePreparation {
                 .put("projectFilesRetained",true).put("activeGenerationMutatedByUpgrade",false);
     }
     synchronized AutoCloseable beginPreparation() throws Exception {
-        if(preparing)throw new IllegalStateException("runtime_preparation_already_running");preparing=true;
+        if(preparing||ownerStorageMaintenance)throw new IllegalStateException("runtime_preparation_or_owner_cleanup_already_running");preparing=true;
         return ()->{synchronized(AndroidRuntimePreparation.this){preparing=false;}};
+    }
+    synchronized AutoCloseable beginOwnerStorageMaintenance()throws Exception {
+        if(preparing||ownerStorageMaintenance)throw new IllegalStateException("runtime_preparation_or_owner_cleanup_already_running");AutoCloseable lease=environments.beginOwnerMaintenance();ownerStorageMaintenance=true;return ()->{synchronized(AndroidRuntimePreparation.this){try{lease.close();}finally{ownerStorageMaintenance=false;}}};
+    }
+    synchronized java.util.List<RuntimeStorage.Target> ownerStorageTargets()throws Exception {
+        java.util.List<RuntimeStorage.Target> result=new java.util.ArrayList<>();result.add(new RuntimeStorage.Target("runtime:downloads","运行环境下载缓存","可重新按原固定目录下载；清理不卸载已准备工具",cache,true));result.add(new RuntimeStorage.Target("runtime:temporary","运行临时文件","可能含运行生成的临时数据，先确认不再需要；原项目与回执保留",tmp,true));result.add(new RuntimeStorage.Target("runtime:home","开发环境 HOME","包含用户配置、安装缓存及程序写入的数据；不把整个HOME当缓存删除",home,false));
+        result.add(new RuntimeStorage.Target("runtime:npm-cache","HOME 中的 npm 内容缓存","只清理 _cacache，不删除.npmrc或其它HOME配置",new File(home,".npm/_cacache"),true));result.add(new RuntimeStorage.Target("runtime:pip-cache","HOME 中的 pip 下载缓存","不删除已创建的项目venv或HOME其它文件",new File(home,".cache/pip"),true));result.add(new RuntimeStorage.Target("runtime:pnpm-cache","HOME 中的 pnpm 内容缓存","之后依赖安装可能需要按原范围联网重新下载",new File(home,".local/share/pnpm/store"),true));
+        // Protected aggregates keep unknown/corrupt generation and backing bytes
+        // visible. Their totals overlap the per-version rows; never add them.
+        result.add(new RuntimeStorage.Target("runtime:generation-store-all","全部运行环境（含未知版本）","完整目录逻辑占用，包含下方各版及未识别/损坏项；与分项重叠，不可整目录清理",generations,false));
+        result.add(new RuntimeStorage.Target("runtime:link-store-all","全部PRoot文件后备（含未知项）","包含已列同版后备与未识别文件；没有准确归属的后备保留，不按名字猜测可删",new File(root,"link-storage"),false));
+        File[] all=generations.listFiles();if(all==null)throw new java.io.IOException("runtime_generation_storage_unreadable");java.util.Arrays.sort(all,java.util.Comparator.comparingLong(File::lastModified).reversed());
+        boolean unresolved=all.length>256;java.util.Set<String> linksInUse=new java.util.HashSet<>();File[] stages=staging.listFiles();if(stages==null)throw new java.io.IOException("runtime_staging_storage_unreadable");
+        for(File stage:stages){File owner=new File(stage,"owner.json");try{if(!owner.isFile()||Files.isSymbolicLink(owner.toPath())){unresolved=true;continue;}JSONObject row=RuntimeFiles.read(owner).optJSONObject("linkStorage");if(row==null||!row.optString("id").matches("[a-f0-9]{32}")||!linksInUse.add(row.getString("id")))unresolved=true;}catch(Exception unknown){unresolved=true;}}
+        java.util.List<RuntimeStorage.Target> classified=new java.util.ArrayList<>();
+        for(int i=0;i<all.length&&i<256;i++){File entry=all[i];String id=entry.getName();if(!id.matches("[a-f0-9]{64}")){unresolved=true;continue;}
+            try{JSONObject generation=loadGeneration(id);boolean isActive=active!=null&&id.equals(active.getString("generationIdentity"));JSONObject binding=generation.getJSONObject("linkStorage");File backing=links.require(binding,generation.getString("catalogIdentity"));if(!linksInUse.add(binding.getString("id")))unresolved=true;
+                classified.add(new RuntimeStorage.Target("runtime:generation:"+id,(isActive?"当前运行环境 / rootfs":"已保留的旧运行环境 / rootfs"),isActive?"当前工具环境保留；修复/升级通过原准备流程生成新版本":"只有实际退出且无原未决进程时可清理，之后不能回退到此旧版本",entry,!isActive));classified.add(new RuntimeStorage.Target("runtime:links:"+id,(isActive?"当前运行环境文件后备":"旧运行环境文件后备"),"PRoot链接后备必须与其同版rootfs一起审阅；不会跟随链接删除其他位置",backing,!isActive));
+            }catch(Exception unknown){unresolved=true;}}
+        // An unclassified record may still refer to an otherwise valid backing.
+        // Preserve all version pairs until that original ownership is understood.
+        for(RuntimeStorage.Target target:classified)result.add(unresolved?new RuntimeStorage.Target(target.id,target.label,target.note+"；另有未识别的版本/安装归属，本轮只计量保留，不清理旧版本或后备",target.file,false):target);
+        result.add(new RuntimeStorage.Target("runtime:installation-staging","运行环境安装暂存","中断安装保留为原恢复依据，不在普通缓存清理中删除",staging,false));return result;
+    }
+    synchronized File ownerStorageObservationTarget(JSONObject original)throws Exception {
+        String id=original.getString("id");if(id.equals("runtime:downloads"))return cache;if(id.equals("runtime:npm-cache"))return new File(home,".npm/_cacache");if(id.equals("runtime:pip-cache"))return new File(home,".cache/pip");if(id.equals("runtime:pnpm-cache"))return new File(home,".local/share/pnpm/store");if(id.startsWith("runtime:generation:")&&id.substring(19).matches("[a-f0-9]{64}"))return new File(generations,id.substring(19));
+        if(id.startsWith("runtime:links:")&&id.substring(14).matches("[a-f0-9]{64}")&&original.optString("nativeBackingId").matches("[a-f0-9]{32}"))return new File(new File(root,"link-storage"),original.getString("nativeBackingId"));throw new SecurityException("不是原运行环境声明的只读存储定位");
     }
     private boolean engineVerified() throws Exception {
         JSONObject engine=catalog.descriptor().getJSONObject("engine");

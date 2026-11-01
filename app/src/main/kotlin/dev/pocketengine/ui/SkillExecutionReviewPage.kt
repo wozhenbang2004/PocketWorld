@@ -58,28 +58,39 @@ internal fun SkillExecutionReviewPage(
                 message?.let { Text(it, fontSize = 14.sp, lineHeight = 22.sp) }
                 if (plan == null || review == null) {
                     Text("当前脚本执行不可用", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                    Text("需要可验证文件、网络、超时和取消限制的执行端，以及本任务的具体授权。技能文件仍可作为参考读取。", fontSize = 14.sp, lineHeight = 22.sp)
+                    Text("请选择手机托管执行或已准备的电脑隔离执行端，并审阅这项任务的具体计划。技能文件仍可作为参考读取。", fontSize = 14.sp, lineHeight = 22.sp)
                 } else {
                     val source = review.getJSONObject("package")
                     val request = review.getJSONObject("request")
                     val backend = review.getJSONObject("backend")
                     Text(request.getString("scriptPath"), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                     ExecutionReviewValue("运行时", "${backend.getString("runtimeId")} · ${backend.getString("runtimeVersion")}")
-                    ExecutionReviewValue("执行位置", "${backend.getString("backendId")} / ${backend.getString("workspaceId")}")
+                    val phone = review.optString("executionLocation") == "this_phone"
+                    ExecutionReviewValue("执行位置", if (phone) "这台手机 · 原托管运行环境" else "电脑 Companion · ${backend.getString("workspaceId")}")
                     if (backend.optString("workspaceMode") == "isolated_copy") {
-                        Text("脚本写入本次独立执行副本；文件成果需另行审阅导入，项目原文件不会自动改变。", fontSize = 14.sp, lineHeight = 22.sp)
+                        Text(if (phone) "原生入口只复制已核对的输入到本次副本，不自动回写项目；但同 UID 进程并非 OS 沙箱，恶意脚本仍可能访问应用可达数据或网络。只批准你信任的技能。" else "脚本写入本次独立执行副本；文件成果需另行审阅导入，项目原文件不会自动改变。", fontSize = 14.sp, lineHeight = 22.sp)
+                    }
+                    if (phone) {
+                        Text("手机执行不提供强制网络禁止或文件路径 OS 隔离。原进程组与观察到的后代会按原任务停止，不能保证所有自行脱离的后代已终止。", color = MaterialTheme.colorScheme.error, fontSize = 13.sp, lineHeight = 21.sp)
+                        val dependencies = review.optJSONObject("dependencies")
+                        val packages = dependencies?.optJSONArray("packages")
+                        if (packages != null && packages.length() > 0) {
+                            ExecutionReviewValue("准备固定依赖", "只从 PyPI 读取原锁中精确版本和 SHA-256 的 wheel；不构建源码包，不运行安装脚本，也不自动解析未锁依赖。准备时间计入本次总超时。")
+                            for (i in 0 until packages.length()) { val pin = packages.getJSONObject(i); ExecutionReviewValue(pin.getString("name") + " == " + pin.getString("version"), pin.getJSONArray("sha256").toString()) }
+                        }
                     }
                     if (backend.optString("processPolicy") == "single_process") {
                         Text("此执行端仅运行单个 Python 进程，脚本不能创建子进程或线程。", fontSize = 13.sp, lineHeight = 21.sp)
                     }
                     ExecutionReviewValue("工作目录", review.getString("cwd"))
                     ExecutionReviewValue("参数 · 每行是一项原始 argv", executionReviewLines(review.getJSONArray("argv")))
-                    ExecutionReviewValue("可读取的工作区路径", executionReviewLines(request.getJSONArray("readPaths")))
-                    ExecutionReviewValue("可写入的工作区路径", executionReviewLines(request.getJSONArray("writePaths")))
+                    ExecutionReviewValue(if (phone) "复制进副本的输入路径" else "可读取的工作区路径", executionReviewLines(request.getJSONArray("readPaths")))
+                    ExecutionReviewValue(if (phone) "声明的输出写入范围（非 OS 限制）" else "可写入的工作区路径", executionReviewLines(request.getJSONArray("writePaths")))
                     ExecutionReviewValue("输出目标", executionReviewLines(request.getJSONArray("outputPaths")))
                     Text("不以 / 结尾的范围仅包含该文件；以 / 结尾的范围包含该目录及子目录。", fontSize = 13.sp, lineHeight = 21.sp)
-                    ExecutionReviewValue("网络与输入", "网络禁止；标准输入关闭。技能包只读挂载。")
-                    ExecutionReviewValue("执行与输出上限", "${request.getInt("timeoutSeconds")} 秒；输出 ${request.getInt("maxOutputBytes")} 字节；回执 ${request.getInt("maxResultChars")} 字符。")
+                    ExecutionReviewValue("网络与输入", if (phone) "网络可能可达；标准输入关闭；使用独立最小环境。技能副本仅尝试设置只读权限，同 UID 进程可以自行改变该权限。" else "网络禁止；标准输入关闭。技能包只读挂载。")
+                    ExecutionReviewValue("执行与输出上限", "${request.getInt("timeoutSeconds")} 秒；保留输出/成果 ${request.getInt("maxOutputBytes")} 字节；回执 ${request.getInt("maxResultChars")} 字符。")
+                    if (phone) Text("原日志另按字节游标读取；日志有原缓存上限。单文件运行时上限 64MiB；临时目录按 256MiB/20000 条目观察停止，不是硬磁盘配额，也没有单独 RAM 沙箱。", fontSize = 13.sp, lineHeight = 21.sp)
                     ExecutionReviewValue("脚本 SHA-256", review.getString("scriptSha256"))
                     ExecutionReviewValue("运行时 SHA-256", backend.getString("runtimeSha256"))
                     if (backend.optString("runtimeImageSha256").isNotEmpty()) {
@@ -95,6 +106,7 @@ internal fun SkillExecutionReviewPage(
                         ExecutionReviewValue("计划 SHA-256", plan.digest)
                         ExecutionReviewValue("任务 / 运行 / 代次", "${plan.run().taskId}\n${plan.run().runId}\n${plan.run().epoch}")
                         ExecutionReviewValue("执行端安装 / 工作区版本", "${backend.getString("installationId")}\n${backend.getString("workspaceRevision")}")
+                        if (phone) ExecutionReviewValue("原项目准确输入快照", backend.getJSONObject("managedInputSnapshot").toString())
                         val resources = review.getJSONArray("resources")
                         for (i in 0 until resources.length()) {
                             val resource = resources.getJSONObject(i)
@@ -105,7 +117,7 @@ internal fun SkillExecutionReviewPage(
                     Text("批准仅覆盖本次显示的计划。输出是未验证的外部内容；进程退出或接收回执仍需核对任务结果。", fontSize = 13.sp, lineHeight = 21.sp)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = acknowledged, onCheckedChange = { acknowledged = it }, enabled = !busy && !submitted)
-                        Text("我已审阅脚本、参数和本次读写范围", fontSize = 14.sp, modifier = Modifier.weight(1f))
+                        Text(if (phone) "我已审阅具体版本、依赖和输入输出，并接受本机同 UID / 网络可达风险" else "我已审阅脚本、参数和本次读写范围", fontSize = 14.sp, modifier = Modifier.weight(1f))
                     }
                     Button(onClick = {
                         if (SkillExecutionReviewGuard.canApprove(digest, currentPlanDigest, plan.expiresAt, nowMillis, busy || submitted, acknowledged)) {

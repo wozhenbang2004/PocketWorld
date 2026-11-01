@@ -11,16 +11,21 @@ import org.json.JSONObject;
 
 /** Native owner media admission and original-operation recovery. No model, scheduler or task database. */
 public final class MediaWorkflowHost implements AutoCloseable {
-    private static final Set<String> SUBMIT=Set.of("submitWorkflow","generateImage","synthesizeSpeech");
+    private static final Set<String> SUBMIT=Set.of("submitWorkflow","generateImage","generateVideo","editImage","synthesizeSpeech");
     private static final Set<String> ORIGINAL=Set.of("getOperation","getJob","reconcileOperation","fetchResults","cancelJob");
     private final TaskStore tasks;
     // Only revocable in-flight waits live here. All identities, approvals and outcomes live in TaskStore.
     private final ConcurrentHashMap<String,Active> active=new ConcurrentHashMap<>();
     private volatile boolean closed;
-    public MediaWorkflowHost(TaskStore tasks){this.tasks=java.util.Objects.requireNonNull(tasks);}
+    private final java.util.concurrent.Executor reads;
+    private final ConcurrentHashMap<String,ReadContinuation> continuedReads=new ConcurrentHashMap<>();
+    public MediaWorkflowHost(TaskStore tasks){this(tasks,null);}
+    public MediaWorkflowHost(TaskStore tasks,java.util.concurrent.Executor originalHostWorkers){this.tasks=java.util.Objects.requireNonNull(tasks);reads=originalHostWorkers;}
+    public JSONObject continuationSnapshot()throws Exception{JSONArray operations=new JSONArray();for(ReadContinuation waiting:continuedReads.values())operations.put(new JSONObject().put("taskId",waiting.task).put("runId",waiting.run).put("operationId",waiting.operation).put("providerJobId",waiting.job).put("expiresAt",waiting.until));return new JSONObject().put("applicationAlivePolling",reads!=null).put("activeOriginalReadContinuations",continuedReads.size()).put("operations",operations).put("osBackgroundGuaranteed",false).put("coldAutomaticResume",false).put("readLimit",60).put("maxDurationMillis",300000).put("scope","confirmed_original_comfyui_job_only;original_approval_expiry;no_new_POST");}
+
     public static boolean isSubmission(String command){return SUBMIT.contains(command);}
     public static boolean isOriginalCommand(String command){return ORIGINAL.contains(command);}
-    public RunControl currentControl(String taskId){for(Active entry:active.values())if(entry.task.equals(taskId))return entry.control;return null;}
+    public RunControl currentControl(String taskId){for(Active entry:active.values())if(entry.task.equals(taskId))return entry.control;for(ReadContinuation waiting:continuedReads.values())if(waiting.task.equals(taskId))return waiting.control;return null;}
 
     /** Routing guard: these tasks must never enter the generic assistant/model resume loop. */
     public boolean ownsTask(String taskId)throws Exception{
@@ -39,6 +44,7 @@ public final class MediaWorkflowHost implements AutoCloseable {
         // Establish ownership before saving draft bytes: a quota/disk failure must not expose a
         // half-prepared media task to generic assistant resume. No HTTP has happened here.
         tasks.event(task.getString("id"),preview);tasks.status(task.getString("id"),"awaiting_user","媒体输入正在保存，尚未请求服务");
+        if(command.equals("editImage")){JSONArray sources=module.imageEditInputReferencesForOwner(args,new RunControl());for(int i=0;i<sources.length();i++)tasks.linkOwnerAttachment(task.getString("id"),sources.getJSONObject(i));}
         JSONObject input=module.retainOwnerSubmissionInput(task.getString("id"),command,args,hash);
         tasks.event(task.getString("id"),new JSONObject(preview.toString()).put("inputAttachment",input));
         tasks.status(task.getString("id"),"awaiting_user","媒体输入已准备；等待主人确认提交，尚未请求服务");
@@ -62,6 +68,7 @@ public final class MediaWorkflowHost implements AutoCloseable {
     /** Second explicit native owner action. An existing operation can only be read, never regenerated. */
     public JSONObject submitFromOwner(MediaModule module,String command,JSONObject payload)throws Exception{
         requireOpen();String taskId=payload.getString("taskId");JSONObject args=arguments(command,payload,true);
+        final JSONArray selectedInputs=command.equals("editImage")?module.imageEditInputReferencesForOwner(args,new RunControl()):null;
         final Active entry;final RunJournal journal;final JSONObject input;
         synchronized(this){
             requireOpen();
@@ -76,9 +83,11 @@ public final class MediaWorkflowHost implements AutoCloseable {
                 JSONObject admitted=tasks.startAttempt(taskId,"capabilities",1);String run=admitted.getString("runId");int epoch=admitted.getInt("coordinatorEpoch");
                 RunControl control=new RunControl();control.bindHostRun(taskId,run,epoch);String tool=tool(command);
                 tasks.authorizeTools(taskId,run,new JSONArray().put(tool));
-                JSONObject approvalArgs=new JSONObject().put("command",command).put("configurationRevision",args.getString("configurationRevision"))
+                JSONObject approvalArgs=new JSONObject().put("command",command).put("appReadContinuation",args.optBoolean("observeUntilComplete")).put("configurationRevision",args.getString("configurationRevision"))
                         .put("requestHash",TaskStore.capabilityFingerprint(args));
                 JSONObject capability=new JSONObject().put("kind","media").put("tool",tool).put("configurationRevision",args.getString("configurationRevision"));
+                if(args.optBoolean("observeUntilComplete"))capability.put("originalJobReadContinuation",new JSONObject().put("onlyConfirmedJob",true).put("maxReads",60).put("maxDurationMillis",300000).put("osBackgroundGuaranteed",false));
+                if(selectedInputs!=null){approvalArgs.put("inputArtifacts",selectedInputs);capability.put("inputArtifacts",selectedInputs).put("uploadsOriginalBytes",true).put("overwritesOriginal",false);}
                 JSONObject approval=tasks.requireCapabilityApproval(taskId,run,tool,approvalArgs,capability);
                 // This method is reachable only from the owner's explicit submit action, not a model tool.
                 if(!approval.optBoolean("approved")){
@@ -105,7 +114,7 @@ public final class MediaWorkflowHost implements AutoCloseable {
                     .put("receiptSource","native_host_failure").put("verified",false).put("message","媒体原操作未取得完整回执；请核对原操作，不会重新提交");
             if(failure instanceof SecurityException||failure instanceof IllegalArgumentException)notice.put("dispatched",false);
             persist(entry,notice,true);throw failure;
-        }finally{active.remove(entry.operation,entry);}
+        }finally{active.remove(entry.operation,entry);startConfirmedReadContinuation(module,entry.task,entry.operation);}
     }
 
     /** Explicit owner recovery: GET/query, import original artifacts or targeted cancellation; never submit. */
@@ -150,7 +159,8 @@ public final class MediaWorkflowHost implements AutoCloseable {
     }
     /** Urgent local control only. In particular this never waits on /history, /queue or /interrupt. */
     public JSONObject cancelLocalWait(String operation)throws Exception{
-        Active entry=active.get(operation);if(entry==null)return null;
+        ReadContinuation waiting=continuedReads.get(operation);if(waiting!=null){waiting.control.cancel();tasks.requestCancel(waiting.task,waiting.run);}
+        Active entry=active.get(operation);if(entry==null)return waiting==null?null:new JSONObject().put("hostTaskId",waiting.task).put("taskId",waiting.task).put("runId",waiting.run).put("operationId",operation).put("status","local_wait_stop_requested").put("localWaitCancelled",true).put("providerStateConfirmed",false).put("message","已停止原job的自动核对，远端仍可能继续；没有重发或声明已撤销");
         synchronized(tasks){
             current(entry);entry.control.cancel();if(!entry.recovery)tasks.requestCancel(entry.task,entry.run);
             JSONObject receipt=new JSONObject().put("operationId",operation).put("taskId",entry.task).put("runId",entry.run).put("epoch",entry.epoch)
@@ -160,7 +170,12 @@ public final class MediaWorkflowHost implements AutoCloseable {
             return withHost(receipt,entry);
         }
     }
-    public JSONObject cancelTask(String taskId)throws Exception{for(Active entry:active.values())if(entry.task.equals(taskId))return cancelLocalWait(entry.operation);return null;}
+    public JSONObject cancelTask(String taskId)throws Exception{
+        ReadContinuation waiting=null;for(ReadContinuation next:continuedReads.values())if(next.task.equals(taskId)){waiting=next;break;}
+        if(waiting!=null){waiting.control.cancel();tasks.requestCancel(waiting.task,waiting.run);tasks.event(waiting.task,new JSONObject().put("type","media_read_continuation_stopped").put("operationId",waiting.operation).put("remoteTerminationConfirmed",false));}
+        for(Active entry:active.values())if(entry.task.equals(taskId))return cancelLocalWait(entry.operation);
+        return waiting==null?null:new JSONObject().put("taskId",waiting.task).put("operationId",waiting.operation).put("status","local_wait_stop_requested").put("remoteTerminationConfirmed",false).put("message","已停止原job的自动状态核对；未声称远端已停止或撤回费用");
+    }
 
     /** Original leaf events retain full provider/artifact evidence without a competing executor state. */
     public void recordEvent(JSONObject event)throws Exception{
@@ -176,11 +191,51 @@ public final class MediaWorkflowHost implements AutoCloseable {
         }
     }
 
+    /** Runs on the existing application's native host workers, NOT an OS/background-service
+     * guarantee. A page observer may disappear without cancelling this already-reviewed read.
+     * The original durable event prevents a cold launch or duplicate receipt from resetting it. */
+    public void startConfirmedReadContinuation(MediaModule module,String taskId,String operation){
+        if(reads==null||closed||!active.isEmpty()||continuedReads.containsKey(operation))return;
+        final ReadContinuation waiting;
+        try{
+            JSONObject actual=module.originalReceiptForHost(operation);if(!"comfyui".equals(actual.optString("provider"))||!actual.optBoolean("providerJobIdConfirmed")||!actual.optString("status").matches("queued|running|unknown")||actual.optString("providerJobId").isEmpty())return;
+            JSONObject source=tasks.ownerMediaOperationSource(taskId,operation),args=source.getJSONObject("arguments");if(!args.optBoolean("appReadContinuation",args.optBoolean("observeUntilComplete")))return;
+            long expires=continuationAuthority(taskId,source);waiting=new ReadContinuation(taskId,source.getString("runId"),source.getInt("epoch"),operation,actual.getString("providerJobId"),actual.getString("configurationRevision"),expires,source.getString("argumentsHash"));
+            synchronized(this){if(closed||!continuedReads.isEmpty())return;continuedReads.put(operation,waiting);}
+            // MediaJobs may emit into Tasks: never enter it while holding the Tasks monitor.
+            if(!module.markOriginalReadStartedForHost(operation,taskId,waiting.run,waiting.revision,waiting.until)){continuedReads.remove(operation,waiting);return;}
+            continuationAuthority(taskId,source);
+            tasks.event(taskId,new JSONObject().put("type","media_read_continuation_started").put("operationId",operation).put("providerJobId",waiting.job).put("configurationRevision",waiting.revision).put("maxReads",60).put("expiresAt",waiting.until).put("osBackgroundGuaranteed",false));
+            try{reads.execute(()->continueReads(module,waiting));}catch(java.util.concurrent.RejectedExecutionException unavailable){continuedReads.remove(operation,waiting);waiting.control.cancel();tasks.event(taskId,new JSONObject().put("type","media_read_continuation_waiting_foreground").put("operationId",operation).put("message","原宿主无可用读取执行位，请在原任务明确继续查询；未重发生成"));}
+        }catch(Exception noReadAuthority){ReadContinuation failed=continuedReads.remove(operation);if(failed!=null)failed.control.cancel();/* No original confirmed scope: leave the durable job for explicit owner query. */}
+    }
+    private long continuationAuthority(String taskId,JSONObject source)throws Exception{
+        if(!taskId.equals(source.optString("taskId")))throw new SecurityException("原媒体续查来源不同");return Math.min(tasks.ownerMediaReadContinuationExpiry(source),System.currentTimeMillis()+300000);
+    }
+    private void continueReads(MediaModule module,ReadContinuation waiting){
+        String ended="limit_or_authority";int reads=0;
+        try{
+            waiting.control.setAuthorityCheck(()->{requireOpen();if(continuedReads.get(waiting.operation)!=waiting||System.currentTimeMillis()>=waiting.until)throw new SecurityException("原job续查已到期");JSONObject source=tasks.ownerMediaOperationSource(waiting.task,waiting.operation);if(!waiting.run.equals(source.getString("runId"))||waiting.epoch!=source.getInt("epoch")||!waiting.argumentHash.equals(source.getString("argumentsHash")))throw new SecurityException("原job来源已换代");continuationAuthority(waiting.task,source);if(!waiting.revision.equals(module.snapshot().getString("configurationRevision")))throw new SecurityException("原服务配置已撤回或变化");});
+            for(;reads<60;reads++){
+                while(!active.isEmpty()||module.snapshot().optBoolean("busy")){waiting.control.check();Thread.sleep(100);}
+                waiting.control.check();JSONObject actual=module.originalReceiptForHost(waiting.operation);if(!actual.optBoolean("providerJobIdConfirmed")||!waiting.job.equals(actual.optString("providerJobId"))||!waiting.revision.equals(actual.optString("configurationRevision")))throw new SecurityException("原已确认job身份改变");
+                JSONObject result=handleOriginal(module,"getJob",new JSONObject().put("operationId",waiting.operation).put("taskId",waiting.task).put("runId",waiting.run).put("epoch",waiting.epoch),waiting.control);
+                if(result.optString("status").matches("response_received|failed|cancelled")){ended="original_provider_terminal";break;}
+                long wake=System.nanoTime()+2_000_000_000L;while(System.nanoTime()<wake){waiting.control.check();Thread.sleep(100);}
+            }
+        }catch(Exception stopped){ended=waiting.control.isCancelled()?"owner_stopped":"original_read_unavailable_or_authority_ended";}
+        finally{continuedReads.remove(waiting.operation,waiting);waiting.control.cancel();try{module.finishOriginalReadContinuationForHost(waiting.operation,ended,reads);}catch(Exception unavailable){}try{tasks.event(waiting.task,new JSONObject().put("type","media_read_continuation_ended").put("operationId",waiting.operation).put("reason",ended).put("reads",reads).put("remoteTerminationConfirmed",false).put("newSubmission",false));}catch(Exception unavailable){}}
+    }
+    private static final class ReadContinuation{
+        final String task,run,operation,job,revision,argumentHash;final int epoch;final long until;final RunControl control=new RunControl();
+        ReadContinuation(String task,String run,int epoch,String operation,String job,String revision,long until,String hash){this.task=task;this.run=run;this.epoch=epoch;this.operation=operation;this.job=job;this.revision=revision;this.until=until;argumentHash=hash;control.bindHostRun(task,run,epoch);}
+    }
     private void check(Active entry)throws Exception{
         if(closed||active.get(entry.operation)!=entry||entry.control.isCancelled()||entry.control.isPaused())throw new SecurityException("原媒体等待控制已停止或被替换");
         synchronized(tasks){
             JSONObject task=current(entry);JSONObject op=operation(task,entry.operation);
             if(!entry.tool.equals(op.optString("tool"))||!TaskStore.capabilityFingerprint(entry.intent).equals(TaskStore.capabilityFingerprint(op.getJSONObject("arguments"))))throw new SecurityException("媒体原操作的确认身份已变化");
+            if(!entry.recovery&&entry.intent.has("inputArtifacts")){JSONArray wanted=entry.intent.getJSONArray("inputArtifacts"),selected=tasks.ownerAttachmentReferences(entry.task);for(int i=0;i<wanted.length();i++){JSONObject reference=wanted.getJSONObject(i);boolean found=false;for(int j=0;j<selected.length();j++)if(reference.getString("id").equals(selected.getJSONObject(j).optString("id"))&&reference.getString("sha256").equals(selected.getJSONObject(j).optString("sha256")))found=true;if(!found)throw new SecurityException("原编辑图像或mask已撤回");}}
             if(entry.recovery){if(!entry.cancelAtAdmission&&task.optBoolean("cancelRequested"))throw new SecurityException("媒体查询或导入已被主人停止");return;}
             tasks.checkCapabilityCurrent(entry.task,entry.run,entry.epoch,entry.tool);
             JSONArray operations=task.getJSONArray("operations");
@@ -226,11 +281,12 @@ public final class MediaWorkflowHost implements AutoCloseable {
     private static JSONObject arguments(String command,JSONObject payload,boolean submitting)throws Exception{
         if(!SUBMIT.contains(command))throw new IllegalArgumentException("不支持的媒体提交命令");
         String field=command.equals("submitWorkflow")?"workflow":command.equals("synthesizeSpeech")?"text":"prompt";
-        java.util.Iterator<String> keys=payload.keys();while(keys.hasNext()){String key=keys.next();if(!key.equals(field)&&!key.equals("configurationRevision")&&!(submitting&&key.equals("taskId")))throw new SecurityException("媒体输入含未授权字段："+key);}
-        String revision=payload.getString("configurationRevision");if(revision.isBlank()||revision.length()>128)throw new IllegalArgumentException("请重新读取并确认媒体配置版本");
-        JSONObject result=new JSONObject().put("configurationRevision",revision);
+        java.util.Iterator<String> keys=payload.keys();while(keys.hasNext()){String key=keys.next();if(!key.equals(field)&&!key.equals("configurationRevision")&&!key.equals("observeUntilComplete")&&!(command.equals("editImage")&&Set.of("imageId","imageSha256","maskId","maskSha256").contains(key))&&!(submitting&&key.equals("taskId")))throw new SecurityException("媒体输入含未授权字段："+key);}
+        String revision=payload.getString("configurationRevision");if(revision.codePoints().allMatch(Character::isWhitespace)||revision.length()>128)throw new IllegalArgumentException("请重新读取并确认媒体配置版本");
+        JSONObject result=new JSONObject().put("configurationRevision",revision);if(payload.has("observeUntilComplete")){if(!(payload.opt("observeUntilComplete") instanceof Boolean))throw new IllegalArgumentException("原job续查选择必须明确");result.put("observeUntilComplete",payload.getBoolean("observeUntilComplete"));}
         if(command.equals("submitWorkflow"))result.put(field,ComfyUiTransport.workflow(payload.getJSONObject(field)));
-        else{String text=payload.getString(field);int maximum=command.equals("synthesizeSpeech")?MediaTransport.MAX_SPEECH_INPUT_CHARS:MediaTransport.MAX_IMAGE_INPUT_CHARS;if(text.isBlank()||text.length()>maximum)throw new IllegalArgumentException("媒体输入应为1–"+maximum+"字");result.put(field,text);}
+        else{String text=payload.getString(field);int maximum=command.equals("synthesizeSpeech")?MediaTransport.MAX_SPEECH_INPUT_CHARS:MediaTransport.MAX_IMAGE_INPUT_CHARS;if(text.codePoints().allMatch(Character::isWhitespace)||text.length()>maximum)throw new IllegalArgumentException("媒体输入应为1–"+maximum+"字");result.put(field,text);}
+        if(command.equals("editImage")){for(String key:new String[]{"imageId","imageSha256"})result.put(key,payload.getString(key));if(payload.has("maskId")!=payload.has("maskSha256"))throw new IllegalArgumentException("mask需要准确ID与SHA");for(String key:new String[]{"maskId","maskSha256"})if(payload.has(key))result.put(key,payload.getString(key));for(String key:new String[]{"imageId","maskId"})if(result.has(key)&&!result.getString(key).matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("原图或mask身份无效");for(String key:new String[]{"imageSha256","maskSha256"})if(result.has(key)&&!result.getString(key).matches("[a-f0-9]{64}"))throw new IllegalArgumentException("原图或mask缺少完整SHA");}
         return result;
     }
     private static String configuration(MediaModule module,JSONObject args)throws Exception{
@@ -242,14 +298,14 @@ public final class MediaWorkflowHost implements AutoCloseable {
     private static void verifyPreview(JSONObject preview,String command,JSONObject args)throws Exception{if(!command.equals(preview.optString("command"))||!args.getString("configurationRevision").equals(preview.optString("configurationRevision"))||!TaskStore.capabilityFingerprint(args).equals(preview.optString("requestHash")))throw new SecurityException("媒体输入或服务配置与主人准备的版本不一致");}
     private static JSONObject mediaOperation(JSONObject task)throws Exception{JSONArray operations=task.getJSONArray("operations");JSONObject result=null;for(int i=0;i<operations.length();i++){JSONObject op=operations.getJSONObject(i);if(isMediaTool(op.optString("tool"))){if(result!=null)throw new SecurityException("同一媒体任务含多个提交操作，禁止猜测或重提");result=op;}}return result;}
     private static JSONObject operation(JSONObject task,String id)throws Exception{JSONArray operations=task.getJSONArray("operations");for(int i=0;i<operations.length();i++){JSONObject op=operations.getJSONObject(i);if(id.equals(op.optString("operationId"))&&isMediaTool(op.optString("tool")))return op;}throw new SecurityException("媒体操作不属于原任务");}
-    private static boolean isMediaTool(String tool){return tool.matches("media_workflow|media_generate_image|media_synthesize_speech");}
-    private static String tool(String command){return command.equals("submitWorkflow")?"media_workflow":command.equals("generateImage")?"media_generate_image":"media_synthesize_speech";}
-    private static String goal(String command,JSONObject args){return command.equals("submitWorkflow")?"运行主人确认的媒体工作流":(command.equals("generateImage")?"生成图片：":"合成语音：")+args.optString(command.equals("generateImage")?"prompt":"text").substring(0,Math.min(3000,args.optString(command.equals("generateImage")?"prompt":"text").length()));}
+    private static boolean isMediaTool(String tool){return tool.matches("media_workflow|media_generate_image|media_generate_video|media_edit_image|media_synthesize_speech");}
+    private static String tool(String command){return command.equals("submitWorkflow")?"media_workflow":command.equals("generateImage")?"media_generate_image":command.equals("generateVideo")?"media_generate_video":command.equals("editImage")?"media_edit_image":"media_synthesize_speech";}
+    private static String goal(String command,JSONObject args){return command.equals("submitWorkflow")?"运行主人确认的媒体工作流":(command.equals("synthesizeSpeech")?"合成语音：":command.equals("editImage")?"编辑原图：":command.equals("generateVideo")?"生成视频：":"生成图片：")+args.optString(command.equals("synthesizeSpeech")?"text":"prompt").substring(0,Math.min(3000,args.optString(command.equals("synthesizeSpeech")?"text":"prompt").length()));}
     private static void bind(JSONObject input,Active entry)throws Exception{input.put("operationId",entry.operation).put("_operationId",entry.operation).put("_taskId",entry.task).put("_runId",entry.run).put("_epoch",entry.epoch).put("_configurationRevision",entry.revision);}
     private static void checkSupplied(JSONObject payload,JSONObject task,JSONObject op,int sourceEpoch)throws Exception{for(String key:new String[]{"taskId","runId","epoch","configurationRevision"})if(payload.has(key)){Object expected=key.equals("taskId")?task.getString("id"):key.equals("runId")?op.getString("runId"):key.equals("epoch")?sourceEpoch:op.getJSONObject("arguments").getString("configurationRevision");if(!String.valueOf(expected).equals(String.valueOf(payload.get(key))))throw new SecurityException("媒体查询不是原任务或配置版本");}java.util.Iterator<String> keys=payload.keys();while(keys.hasNext()){String key=keys.next();if(!Set.of("operationId","taskId","runId","epoch","configurationRevision","providerJobId").contains(key))throw new SecurityException("媒体查询含未授权字段："+key);}}
     private static JSONObject withHost(JSONObject receipt,Active entry)throws Exception{return new JSONObject(receipt.toString()).put("hostTaskId",entry.task).put("hostEpoch",entry.epoch);}
     private void requireOpen(){if(closed)throw new IllegalStateException("媒体宿主已关闭");}
-    @Override public void close(){closed=true;for(Active entry:active.values())entry.control.cancel();}
+    @Override public void close(){closed=true;for(Active entry:active.values())entry.control.cancel();for(ReadContinuation waiting:continuedReads.values())waiting.control.cancel();}
     private static final class Active{
         final String task,run,operation,tool,revision;final int epoch;final JSONObject intent;final RunControl control;final boolean recovery,cancelAtAdmission;
         Active(String task,String run,int epoch,String operation,String tool,String revision,JSONObject intent,RunControl control,boolean recovery,boolean cancelAtAdmission)throws Exception{this.task=task;this.run=run;this.epoch=epoch;this.operation=operation;this.tool=tool;this.revision=revision;this.intent=new JSONObject(intent.toString());this.control=control;this.recovery=recovery;this.cancelAtAdmission=cancelAtAdmission;}

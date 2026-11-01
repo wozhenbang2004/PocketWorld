@@ -19,7 +19,6 @@ import java.util.Set;
 import java.util.TreeMap;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import org.json.JSONTokener;
 
 /**
  * Independently authored, bounded SSE accumulation around the existing native wire codecs.
@@ -40,6 +39,15 @@ public final class ApiTurnStream {
     /** Same validated native SSE frame, for the authenticated protocol-preserving loopback relay.
      * No id/retry/control fields are exposed; the final frame is emitted only after normalization. */
     public interface NativeFrameSink { void frame(String event,JSONObject data) throws Exception; }
+    public interface WireFrameSink {
+        void frame(String event,String data) throws Exception;
+        default void beforeTerminal(JSONObject nativeResult) throws Exception {}
+    }
+    /** Same state machine and terminal validation, retaining native final order and usage. */
+    public static JSONObject readWire(InputStream input,String protocol,ProviderAdapter adapter,JSONArray tools,
+            RunControl control,ProviderUsage.Observer usage,WireFrameSink frames)throws Exception {
+        return readFrames(input,protocol,adapter,tools,control,delta->{},usage,frames,true);
+    }
 
     /** Reuse the native serializer; only enable streaming and the Chat output ceiling. */
     public static JSONObject request(String protocol, JSONObject ordinary, int outputTokens) throws Exception {
@@ -77,9 +85,13 @@ public final class ApiTurnStream {
     }
     private static JSONObject readFrames(InputStream input,String protocol,ProviderAdapter adapter,JSONArray tools,
             RunControl control,TextSink sink,ProviderUsage.Observer usage,NativeFrameSink frames)throws Exception{
+        return readFrames(input,protocol,adapter,tools,control,sink,usage,frames==null?null:(event,data)->{if(!"[DONE]".equals(data))frames.frame(event,eventObject(data));},false);
+    }
+    private static JSONObject readFrames(InputStream input,String protocol,ProviderAdapter adapter,JSONArray tools,
+            RunControl control,TextSink sink,ProviderUsage.Observer usage,WireFrameSink frames,boolean nativeResult)throws Exception{
         State state;
         switch (protocol) {
-            case "openai_chat": state = new Chat(sink,usage); break;
+            case "openai_chat": state = new Chat(sink,usage,tools); break;
             case "openai_responses": state = new Responses(sink,usage); break;
             case "anthropic": state = new Anthropic(sink,usage); break;
             case "gemini": state = new Gemini(sink,usage); break;
@@ -93,10 +105,10 @@ public final class ApiTurnStream {
             if (state.accept(frame)) {
                 control.check();
                 JSONObject result=normalize(protocol, adapter, state.result(), tools);
-                if(frames!=null)frames.frame(frame.event,object(frame.data));
-                usage.completed();return result;
+                if(frames!=null){frames.beforeTerminal(state.result());frames.frame(frame.event,frame.data);}
+                usage.completed();return nativeResult?state.result():result;
             }
-            if(frames!=null)frames.frame(frame.event,object(frame.data));
+            if(frames!=null)frames.frame(frame.event,frame.data);
         }
         throw tooLarge();
     }
@@ -216,14 +228,17 @@ public final class ApiTurnStream {
         private final TreeMap<Integer, ChatCall> calls = new TreeMap<>();
         private String responseId, finish;
         private boolean seen;
-        Chat(TextSink sink,ProviderUsage.Observer usage) { this.sink = sink;this.usage=usage; }
+        private final Set<String> names=new HashSet<>();
+        Chat(TextSink sink,ProviderUsage.Observer usage,JSONArray tools)throws Exception { this.sink = sink;this.usage=usage;
+            for(int i=0;tools!=null&&i<tools.length();i++){JSONObject tool=tools.getJSONObject(i);if("function".equals(tool.optString("type")))names.add(tool.getJSONObject("function").getString("name"));}
+        }
         public boolean accept(Frame frame) throws Exception {
             if (!frame.event.isEmpty() && !"message".equals(frame.event)) throw invalid();
             if ("[DONE]".equals(frame.data)) {
                 if (!seen || finish == null) throw interrupted();
                 return true;
             }
-            JSONObject chunk = object(frame.data);
+            JSONObject chunk = eventObject(frame.data);
             if (chunk.has("error") || !"chat.completion.chunk".equals(chunk.optString("object"))) throw invalid();
             if (chunk.has("id")) {
                 String id = identity(chunk, "id");
@@ -264,13 +279,16 @@ public final class ApiTurnStream {
                     if (fragment.has("id")) {
                         String id = identity(fragment, "id");
                         if (call.id != null && !call.id.equals(id)) throw invalid();
+                        for(ChatCall other:calls.values())if(other!=call&&id.equals(other.id))throw invalid();
                         call.id = id;
                     }
                     JSONObject function = fragment.optJSONObject("function");
                     if (function != null) {
                         if (function.has("name")) {
                             String name = text(function, "name", 256);
-                            call.name = (call.name == null ? "" : call.name) + name;
+                            String assembled=call.name==null?name:call.name.equals(name)?call.name:call.name+name;
+                            boolean prefix=false;for(String offered:names)if(offered.startsWith(assembled)){prefix=true;break;}
+                            if(!prefix)throw invalid();call.name=assembled;
                             if (call.name.length() > 256) throw invalid();
                         }
                         if (function.has("arguments")) append(call.arguments,
@@ -321,7 +339,7 @@ public final class ApiTurnStream {
         private JSONObject completed;
         Responses(TextSink sink,ProviderUsage.Observer usage) { this.sink = sink;this.usage=usage; }
         public boolean accept(Frame frame) throws Exception {
-            JSONObject event = object(frame.data);
+            JSONObject event = eventObject(frame.data);
             String type = identity(event, "type"); named(frame, type);
             if (numbered == null) numbered = event.has("sequence_number");
             if (numbered != event.has("sequence_number")) throw invalid();
@@ -354,6 +372,7 @@ public final class ApiTurnStream {
                     JSONObject raw = event.getJSONObject("item"); String kind = identity(raw, "type");
                     if (!Set.of("message", "reasoning", "function_call").contains(kind) || items.containsKey(index)) throw invalid();
                     if (!itemIds.add(identity(raw, "id"))) throw invalid();
+                    if("function_call".equals(kind)){String callId=identity(raw,"call_id");identity(raw,"name");for(ResponseItem other:items.values())if("function_call".equals(other.raw.optString("type"))&&callId.equals(other.raw.optString("call_id")))throw invalid();}
                     ResponseItem item = new ResponseItem(copy(raw)); items.put(index, item); break;
                 }
                 case "response.function_call_arguments.delta": {
@@ -478,7 +497,7 @@ public final class ApiTurnStream {
         private String finish;
         Anthropic(TextSink sink,ProviderUsage.Observer usage) { this.sink = sink;this.usage=usage; }
         public boolean accept(Frame frame) throws Exception {
-            JSONObject event = object(frame.data); String type = identity(event, "type"); named(frame, type);
+            JSONObject event = eventObject(frame.data); String type = identity(event, "type"); named(frame, type);
             if ("error".equals(type)) throw interrupted();
             if ("ping".equals(type)) return false;
             if ("message_start".equals(type)) {
@@ -494,7 +513,7 @@ public final class ApiTurnStream {
                     JSONObject raw = copy(event.getJSONObject("content_block"));
                     if (blocks.containsKey(index) || !Set.of("text", "tool_use", "thinking", "redacted_thinking").contains(raw.optString("type")))
                         throw invalid();
-                    if ("tool_use".equals(raw.optString("type"))) { identity(raw, "id"); identity(raw, "name"); raw.getJSONObject("input"); }
+                    if ("tool_use".equals(raw.optString("type"))) { String callId=identity(raw, "id"); identity(raw, "name"); raw.getJSONObject("input");for(AnthropicBlock other:blocks.values())if("tool_use".equals(other.raw.optString("type"))&&callId.equals(other.raw.optString("id")))throw invalid(); }
                     if ("text".equals(raw.optString("type")) && raw.has("text")) sink.text(text(raw, "text", MAX_TEXT_CHARS));
                     blocks.put(index, new AnthropicBlock(raw)); break;
                 }
@@ -505,6 +524,7 @@ public final class ApiTurnStream {
                     if ("text_delta".equals(change) && "text".equals(kind)) {
                         String value = text(delta, "text", MAX_TEXT_CHARS); extend(block.raw, "text", value, MAX_TEXT_CHARS); sink.text(value);
                     } else if ("input_json_delta".equals(change) && "tool_use".equals(kind)) {
+                        if(block.raw.getJSONObject("input").length()!=0)throw invalid();
                         append(block.arguments, text(delta, "partial_json", MAX_ARGUMENT_CHARS), MAX_ARGUMENT_CHARS); block.argumentDeltas = true;
                     } else if ("thinking_delta".equals(change) && "thinking".equals(kind)) {
                         extend(block.raw, "thinking", text(delta, "thinking", MAX_TEXT_CHARS), MAX_TEXT_CHARS);
@@ -521,6 +541,7 @@ public final class ApiTurnStream {
                 case "message_delta": {
                     JSONObject delta = event.getJSONObject("delta");
                     usage.observe(event,ProviderUsage.Stage.PARTIAL);
+                    JSONObject counters=event.optJSONObject("usage");if(counters!=null){JSONObject merged=message.optJSONObject("usage");if(merged==null)merged=new JSONObject();for(Iterator<String> it=counters.keys();it.hasNext();){String key=it.next();merged.put(key,counters.get(key));}message.put("usage",merged);}
                     if (delta.has("stop_reason") && !delta.isNull("stop_reason")) {
                         for (AnthropicBlock block : blocks.values()) if (!block.done) throw invalid();
                         if (finish != null) throw invalid(); finish = text(delta, "stop_reason", 64);usage.terminal(finish); terminalAnthropic(finish);
@@ -562,7 +583,7 @@ public final class ApiTurnStream {
         Gemini(TextSink sink,ProviderUsage.Observer usage) { this.sink = sink;this.usage=usage; }
         public boolean accept(Frame frame) throws Exception {
             if (!frame.event.isEmpty() && !"message".equals(frame.event)) throw invalid();
-            JSONObject event = object(frame.data);
+            JSONObject event = eventObject(frame.data);
             if (event.has("error")) throw interrupted();
             if (event.has("responseId")) {
                 String id = identity(event, "responseId");
@@ -701,19 +722,10 @@ public final class ApiTurnStream {
         long value = nonnegative(object, key); if (value >= upperExclusive) throw invalid(); return (int) value;
     }
     private static JSONObject object(String value) throws Exception {
-        // Bound org.json recursion before parsing. Syntax follows the project's existing org.json contract.
-        int depth = 0; char quote = 0; boolean escape = false;
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (quote != 0) { if (escape) escape = false; else if (c == '\\') escape = true; else if (c == quote) quote = 0; }
-            else if (c == '"' || c == '\'') quote = c;
-            else if (c == '{' || c == '[') { if (++depth > 32) throw invalid(); }
-            else if (c == '}' || c == ']') { if (--depth < 0) throw invalid(); }
-        }
-        JSONTokener tokens = new JSONTokener(value); Object parsed = tokens.nextValue();
-        if (!(parsed instanceof JSONObject) || tokens.nextClean() != 0) throw invalid(); return (JSONObject) parsed;
+        try{return ProtocolJson.parse(value);}catch(Exception bad){throw invalid();}
     }
-    private static JSONObject copy(JSONObject value) throws Exception { return object(value.toString()); }
+    private static JSONObject eventObject(String value)throws Exception{try{return ProtocolJson.parseEvent(value);}catch(Exception bad){throw invalid();}}
+    private static JSONObject copy(JSONObject value) throws Exception { return eventObject(value.toString()); }
     private static boolean same(Object a, Object b) throws Exception {
         if (a instanceof JSONObject && b instanceof JSONObject) {
             JSONObject left = (JSONObject) a, right = (JSONObject) b;

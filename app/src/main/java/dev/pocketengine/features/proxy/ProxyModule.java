@@ -15,10 +15,10 @@ public final class ProxyModule implements EngineModule {
     public ProxyModule(FeatureContext context,LoopbackRelay.AccountRoute accounts,LoopbackRelay.InferenceFactory inferenceFactory){this.context=context;this.accounts=accounts;this.inferenceFactory=inferenceFactory;}
     @Override public String id(){return "proxy";}
     @Override public synchronized JSONObject snapshot()throws Exception {
-        ModelConfig selection=bound==null?context.model():bound;boolean account=selection.usesAccount();
+        ModelConfig selection=bound==null?context.settings.captureRelaySelection():bound;boolean account=selection.usesAccount();
         return new JSONObject().put("sessionId",sessionId).put("running",relay!=null&&relay.running()).put("endpoint",relay!=null&&relay.running()?"http://127.0.0.1:"+relay.port()+"/v1":"")
             .put("hasToken",context.secrets.contains("proxy.bearer")).put("requiresToken",true).put("streaming",true).put("protocol",NativeRelayPolicy.protocol(selection))
-            .put("modelRoute",account?"account":"api_key").put("model",selection.model).put("accountRouteAvailable",false)
+            .put("modelRoute",account?"account":"api_key").put("model",selection.routePlan==null?selection.model:selection.routePlan.requestedAlias).put("actualPrimaryModel",selection.model).put("modelGroup",selection.routePlan!=null&&selection.routePlan.groupRevision>0).put("accountRouteAvailable",false)
             .put("externalRelayAllowed",!account).put("blockedReason",account?"CHATGPT_PLAN_APP_ONLY":"")
             .put("endpoints",endpoints(selection))
             .put("phoneExecution",false).put("scope","loopback_only").put("requests",relay==null?0:relay.requests())
@@ -29,7 +29,7 @@ public final class ProxyModule implements EngineModule {
         switch(command){
             case "start":{
                 if(relay!=null&&relay.running())throw new IllegalStateException("反代已运行，请先停止再修改配置");
-                ModelConfig selection=context.model();
+                ModelConfig selection=context.settings.captureRelaySelection();
                 InferenceAudiencePolicy.require(selection,NativeInferenceScope.externalRelay(),null);
                 if(selection.model.isEmpty()||selection.baseUrl.isEmpty())throw new IllegalStateException("请先在模型页配置并明确选择自己的 API-key 上游模型");
                 if(selection.usesAccount()){if(accounts==null)throw new IllegalStateException("账号反代尚未接入本机账号宿主");}
@@ -37,11 +37,11 @@ public final class ProxyModule implements EngineModule {
                 String token=input.optString("token");if(token.isEmpty())throw new IllegalArgumentException("请先生成或填写本地访问令牌");
                 LoopbackRelay next=new LoopbackRelay(input.optInt("port",0),token,new LoopbackRelay.ConfigSource(){
                     @Override public ModelConfig get()throws Exception{
-                        ModelConfig current=context.model();
+                        ModelConfig current=context.settings.captureRelaySelection();
                         if(current.usesAccount()!=selection.usesAccount()||(selection.usesAccount()&&!selection.accountModel.sameModel(current.accountModel)))throw new GatewayFailure("RELAY_ROUTE_CHANGED");
                         return current;
                     }
-                    @Override public long selectionRevision()throws Exception{return context.settings.apiSelectionRevision();}
+                    @Override public long selectionRevision()throws Exception{return context.settings.relaySelectionRevision();}
                 },accounts,selection,inferenceFactory==null?null:this::beginInference);
                 try{context.secrets.put("proxy.bearer",token);}catch(Exception error){next.close();throw error;}
                 relay=next;bound=selection;sessionId=next.sessionId();return snapshot();

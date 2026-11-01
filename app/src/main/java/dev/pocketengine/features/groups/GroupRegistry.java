@@ -54,10 +54,10 @@ final class GroupRegistry implements AutoCloseable {
     /** Read-only original registry lookup for authenticated attachment import; grants no execution. */
     synchronized JSONObject authenticatedScope(GroupIngressPort.Event event,long now) throws Exception {
         open();JSONArray groups=state.getJSONArray("groups");for(int i=0;i<groups.length();i++){
-            JSONObject group=groups.getJSONObject(i);if(!group.getString("provider").equals(event.provider)||!group.getString("accountId").equals(event.accountId)||!group.getString("roomId").equals(event.roomId))continue;
+            JSONObject group=groups.getJSONObject(i);if(!routeMatches(group,event))continue;
             if(!group.getBoolean("enabled"))throw new SecurityException("原群空间已关闭");JSONObject member=activeMember(group,event.senderId);if(member.getString("role").equals("viewer"))throw new SecurityException("只读成员不能导入群任务附件");
             grant(group,"group.files",now);
-            return new JSONObject().put("spaceId",group.getString("spaceId")).put("actorId",GroupJson.uuid(event.provider+"\n"+event.accountId+"\n"+event.roomId+"\n"+event.senderId))
+            return new JSONObject().put("spaceId",group.getString("spaceId")).put("actorId",GroupJson.uuid(event.routeIdentity()+"\n"+event.senderId))
                     .put("policyEpoch",group.getString("policyEpoch")).put("memberEpoch",member.getString("memberEpoch")).put("maxArtifactBytes",group.getJSONObject("quota").getLong("maxMediaBytes"));
         }throw new SecurityException("此认证事件没有原生群空间");
     }
@@ -73,18 +73,18 @@ final class GroupRegistry implements AutoCloseable {
                     .put("groupId",group.getString("id")).put("spaceId",group.getString("spaceId")).put("policyEpoch",group.getString("policyEpoch"))
                     .put("memberEpoch",member.getString("memberEpoch")).put("capability",capability).put("grantExpiresAt",grant.getLong("expiresAt"))
                     .put("accountId",event.accountId).put("roomId",event.roomId).put("senderId",event.senderId).put("transportEpoch",event.transportEpoch).put("audience","group");
-            return scope.put("scopeHash",GroupJson.hash(GroupJson.canonical(scope)));
+            if(!event.conversationKind.equals("group"))scope.put("conversationKind",event.conversationKind).put("conversationParentId",event.conversationParentId);return scope.put("scopeHash",GroupJson.hash(GroupJson.canonical(scope)));
         }
         throw new SecurityException("此认证事件没有主人已授权的原群反馈范围");
     }
     synchronized JSONObject create(JSONObject input,long now) throws Exception {
         open();JSONObject next=GroupJson.copy(state);JSONArray groups=next.getJSONArray("groups");if(groups.length()>=32)throw new IllegalStateException("最多配置32个群空间");
-        String provider=GroupJson.id(input,"provider"),account=GroupJson.id(input,"accountId"),room=GroupJson.id(input,"roomId");
-        for(int i=0;i<groups.length();i++) {JSONObject g=groups.getJSONObject(i);if(provider.equals(g.getString("provider"))&&account.equals(g.getString("accountId"))&&room.equals(g.getString("roomId")))throw new IllegalArgumentException("该机器人与群已绑定空间");}
+        String provider=GroupJson.id(input,"provider"),account=GroupJson.id(input,"accountId"),room=GroupJson.id(input,"roomId");String scene=input.optString("conversationKind","group"),parent=input.optString("conversationParentId");if(!scene.equals("group")&&!(provider.equals("qq")&&scene.equals("qq_guild_channel")&&!parent.isEmpty()))throw new SecurityException("请明确选择QQ频道原生场景；不继承普通群授权");if(scene.equals("group")&&!parent.isEmpty())throw new SecurityException("原群无频道父身份");if(!parent.isEmpty())GroupJson.id(parent,"conversationParentId");
+        for(int i=0;i<groups.length();i++) {JSONObject g=groups.getJSONObject(i);if(provider.equals(g.getString("provider"))&&account.equals(g.getString("accountId"))&&room.equals(g.getString("roomId"))&&scene.equals(g.optString("conversationKind","group"))&&parent.equals(g.optString("conversationParentId")))throw new IllegalArgumentException("该机器人与群已绑定空间");}
         String id=UUID.randomUUID().toString();JSONObject group=new JSONObject().put("id",id).put("spaceId","group:"+id).put("name",GroupJson.text(input,"name",100))
                 .put("provider",provider).put("accountId",account).put("roomId",room).put("revision",1L).put("policyEpoch",UUID.randomUUID().toString())
                 .put("enabled",false).put("visibility","requester").put("grants",new JSONArray()).put("members",new JSONArray()).put("quota",defaultQuota()).put("createdAt",now);
-        groups.put(group);audit(next,id,"group.created",now);commit(next);return GroupJson.copy(group);
+        if(!scene.equals("group"))group.put("conversationKind",scene).put("conversationParentId",parent);groups.put(group);audit(next,id,"group.created",now);commit(next);return GroupJson.copy(group);
     }
     synchronized JSONObject policy(JSONObject input,long now) throws Exception {
         open();JSONObject next=GroupJson.copy(state),group=group(next,GroupJson.id(input,"id"));cas(group,input);
@@ -136,7 +136,7 @@ final class GroupRegistry implements AutoCloseable {
         }
         if(selected==null)throw new SecurityException("该渠道群尚未绑定原生群空间");
         String groupId=selected.getString("id"),space=selected.getString("spaceId");
-        String requestId=GroupJson.uuid(event.provider+"\n"+event.accountId+"\n"+event.roomId+"\n"+event.messageId);
+        String requestId=GroupJson.uuid(event.routeIdentity()+"\n"+event.messageId);
         String fingerprint=GroupJson.hash(event.senderId+"\n"+event.text+"\n"+cap+"\n"+audience+"\n"+visibility+"\n"+tokens+"\n"+GroupJson.canonical(event.artifacts())+(event.messageParts().length()==0?"":"\n"+GroupJson.canonical(event.messageParts())));
         JSONObject existing=GroupJson.find(state.getJSONArray("requests"),"requestId",requestId);
         if(existing!=null) {if(!fingerprint.equals(existing.getString("fingerprint")))throw new SecurityException("同一平台消息的身份或请求内容冲突");return new GroupHostPort.Request(existing);}
@@ -157,7 +157,7 @@ final class GroupRegistry implements AutoCloseable {
             throw new IllegalStateException("群或成员的任务、模型、媒体额度已用完，或并发已满");
         JSONObject next=GroupJson.copy(state);JSONArray requests=next.getJSONArray("requests");if(requests.length()>=2000)throw new IllegalStateException("群请求引用已达上限，请由宿主管理保留记录");
         JSONObject row=new JSONObject().put("requestId",requestId).put("taskId",GroupJson.uuid("group-task:"+requestId)).put("groupId",groupId).put("spaceId",space)
-                .put("actorId",GroupJson.uuid(event.provider+"\n"+event.accountId+"\n"+event.roomId+"\n"+event.senderId)).put("senderId",event.senderId)
+                .put("actorId",GroupJson.uuid(event.routeIdentity()+"\n"+event.senderId)).put("senderId",event.senderId)
                 .put("goal",event.text).put("capability",cap).put("resource",grant.getString("resource")).put("audience",audience).put("visibility",visibility)
                 .put("policyEpoch",selected.getString("policyEpoch")).put("memberEpoch",member.getString("memberEpoch")).put("grantExpiresAt",grant.getLong("expiresAt"))
                 .put("maxTokens",tokens).put("maxMediaBytes",quota.getLong("maxMediaBytes")).put("mediaItems",media).put("createdAt",now).put("fingerprint",fingerprint)
@@ -316,7 +316,7 @@ final class GroupRegistry implements AutoCloseable {
     private static JSONObject delivery(JSONObject state,String id) throws Exception {JSONObject result=GroupJson.find(state.getJSONArray("deliveries"),"deliveryId",id);if(result==null)throw new IllegalArgumentException("群投递不存在");return result;}
     private static JSONObject activeMember(JSONObject group,String sender) throws Exception {JSONObject result=GroupJson.find(group.getJSONArray("members"),"senderId",sender);if(result==null||!result.getBoolean("enabled"))throw new SecurityException("该稳定身份尚未获准加入群服务");return result;}
     private static JSONObject grant(JSONObject group,String capability,long now) throws Exception {JSONObject result=GroupJson.find(group.getJSONArray("grants"),"capability",capability);if(result==null||now>=result.getLong("expiresAt"))throw new SecurityException("该群能力未授权或已过期");return result;}
-    private static boolean routeMatches(JSONObject group,GroupIngressPort.Event event) throws Exception {return group.getString("provider").equals(event.provider)&&group.getString("accountId").equals(event.accountId)&&group.getString("roomId").equals(event.roomId);}
+    private static boolean routeMatches(JSONObject group,GroupIngressPort.Event event) throws Exception {return group.getString("provider").equals(event.provider)&&group.getString("accountId").equals(event.accountId)&&group.getString("roomId").equals(event.roomId)&&group.optString("conversationKind","group").equals(event.conversationKind)&&group.optString("conversationParentId").equals(event.conversationParentId);}
     private static void sameRoute(JSONObject group,GroupIngressPort.Event event) throws Exception {if(!routeMatches(group,event))throw new SecurityException("认证消息不属于此机器人群空间");}
     private static void cas(JSONObject group,JSONObject input) throws Exception {if(GroupJson.number(input,"revision",1,Long.MAX_VALUE-1)!=group.getLong("revision"))throw new IllegalStateException("群设置已变化，请刷新后重核");}
     private static void audit(JSONObject next,String groupId,String type,long now) throws Exception {JSONArray rows=next.getJSONArray("audit");while(rows.length()>=500)rows.remove(0);rows.put(new JSONObject().put("groupId",groupId).put("type",type).put("at",now));}

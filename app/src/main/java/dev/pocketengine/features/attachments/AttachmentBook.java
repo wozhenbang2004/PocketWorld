@@ -59,19 +59,47 @@ public final class AttachmentBook {
     public synchronized JSONObject importBytes(InputStream input,String name,String mime,JSONObject source,RunControl control)throws Exception{
         return importBytesInternal(input,name,mime,source,java.util.Objects.requireNonNull(control));
     }
-    private JSONObject importBytesInternal(InputStream input,String name,String mime,JSONObject source,RunControl control)throws Exception{
+    /** Native producer retry identity in this SAME Book; not a second journal or authority.
+     * A surviving orphan/retired record is unknown, never silently overwritten or given a new ID. */
+    public synchronized JSONObject findNativeResult(String operation,String role,String task,String run,String planDigest,RunControl control)throws Exception{
+        String id=nativeResultId(operation,role,task,run,planDigest);java.util.Objects.requireNonNull(control).checkpoint();
+        File record=new File(root,id+".json"),blob=new File(root,id+".blob"),part=new File(root,id+".part"),pending=new File(root,id+".json.pending");
+        if(!record.exists()&&!blob.exists()&&!part.exists()&&!pending.exists())return new JSONObject().put("found",false).put("id",id).put("publicationEntered",false);
+        if(!record.isFile()||!blob.isFile()||Files.isSymbolicLink(record.toPath())||Files.isSymbolicLink(blob.toPath())||part.exists()||pending.exists())throw new IllegalStateException("原固定产物发布尚未完整确认；按原ID核对，未覆盖或重新保存："+id);
+        JSONObject actual=internal(id),nativeSource=actual.getJSONObject("source").getJSONObject("nativePublication");
+        for(String key:new String[]{"operationId","role","taskId","runId","planDigest"}){String wanted=switch(key){case "operationId"->operation;case "role"->role;case "taskId"->task==null?"":task;case "runId"->run==null?"":run;default->planDigest;};if(!wanted.equals(nativeSource.optString(key)))throw new SecurityException("原产物发布身份与这次固定计划不同");}
+        verifyBytes(id,actual.getString("sha256"),control,false);return visible(actual).put("found",true).put("publicationEntered",true).put("originalPublication",true);
+    }
+    public synchronized JSONObject importNativeResult(InputStream input,String name,String mime,JSONObject source,String operation,String role,String task,String run,String planDigest,RunControl control)throws Exception{
+        JSONObject prior=findNativeResult(operation,role,task,run,planDigest,control);if(prior.getBoolean("found"))return prior;
+        JSONObject nativeSource=source==null?new JSONObject():new JSONObject(source.toString());requireNativeParents(nativeSource,control);nativeSource.put("nativePublication",new JSONObject().put("operationId",operation).put("role",role).put("taskId",task==null?"":task).put("runId",run==null?"":run).put("planDigest",planDigest));
+        return importBytesInternal(input,name,mime,nativeSource,control,nativeResultId(operation,role,task,run,planDigest)).put("found",true).put("originalPublication",true);
+    }
+    private void requireNativeParents(JSONObject source,RunControl control)throws Exception{
+        if(source==null)return;org.json.JSONArray inputs=source.optJSONArray("inputArtifacts");if(inputs!=null){if(inputs.length()>4)throw new SecurityException("原件输入引用超限");for(int i=0;i<inputs.length();i++){JSONObject selected=inputs.getJSONObject(i),parent=internal(selected.getString("id"));if(!privateOutputSource(parent))throw new SecurityException("原私人加工或编辑输入已撤下");verifyBytes(selected.getString("id"),selected.getString("sha256"),control,false);}}
+        for(String key:new String[]{"parentArtifact","editableSource"}){JSONObject selected=source.optJSONObject(key);if(selected==null)continue;String id=selected.getString("id"),sha=selected.getString("sha256");JSONObject parent=internal(id);if(!privateOutputSource(parent))throw new SecurityException("原私人父来源已经撤下或范围变化");verifyBytes(id,sha,control,false);}
+    }
+    private static String nativeResultId(String operation,String role,String task,String run,String digest)throws Exception{
+        checkId(operation);if(role==null||!role.matches("[a-z][a-z0-9_]{0,39}")||digest==null||!digest.matches("[a-f0-9]{64}"))throw new SecurityException("缺少原生固定产物计划身份");
+        boolean scoped=task!=null&&!task.isEmpty()||run!=null&&!run.isEmpty();if(scoped){checkId(task);checkId(run);}
+        // Do not include digest in the route: changed semantics under one operation/role must be rejected.
+        return UUID.nameUUIDFromBytes(("pocketworld-native-result-v1\0"+operation+"\0"+role+"\0"+(task==null?"":task)+"\0"+(run==null?"":run)).getBytes(StandardCharsets.UTF_8)).toString();
+    }
+    private JSONObject importBytesInternal(InputStream input,String name,String mime,JSONObject source,RunControl control)throws Exception{return importBytesInternal(input,name,mime,source,control,null);}
+    private JSONObject importBytesInternal(InputStream input,String name,String mime,JSONObject source,RunControl control,String nativeId)throws Exception{
         if(input==null)throw new IllegalArgumentException("附件来源无法读取");
         if(control!=null)control.checkpoint();long pauseRevision=control==null?0:control.pauseRevision();
         if(!root.isDirectory()&&!root.mkdirs())throw new IllegalStateException("无法创建附件目录");
         JSONArray existing=list();if(existing.length()>=200)throw new IllegalStateException("附件数量已达200个，请先清理");long total=0;File[] stored=root.listFiles((d,n)->n.endsWith(".blob")||n.endsWith(".part"));if(stored!=null)for(File file:stored)total+=file.length();
-        String id=UUID.randomUUID().toString();File part=new File(root,id+".part"),blob=new File(root,id+".blob"),record=new File(root,id+".json");long size=0;MessageDigest digest=MessageDigest.getInstance("SHA-256");
+        String id=nativeId==null?UUID.randomUUID().toString():nativeId;File part=new File(root,id+".part"),blob=new File(root,id+".blob"),record=new File(root,id+".json");long size=0;MessageDigest digest=MessageDigest.getInstance("SHA-256");
+        if(nativeId!=null&&(part.exists()||blob.exists()||record.exists()||new File(root,id+".json.pending").exists()))throw new SecurityException("原固定产物发布状态变化，未覆盖");
         try{
             try(FileOutputStream output=new FileOutputStream(part)){byte[] buffer=new byte[32768];for(int n;(n=input.read(buffer))!=-1;){if(control!=null)control.checkpoint();if(Thread.currentThread().isInterrupted())throw new InterruptedException("附件导入已停止");if(n==0)continue;size+=n;if(size>fileLimit||total+size>totalLimit)throw new IllegalArgumentException("附件超出单文件或总容量限制");output.write(buffer,0,n);digest.update(buffer,0,n);}output.getFD().sync();}
             JSONObject meta=new JSONObject().put("id",id).put("name",displayName(name)).put("mimeType",mimeType(mime)).put("size",size).put("sha256",hex(digest.digest())).put("createdAt",System.currentTimeMillis()).put("principalId","owner").put("spaceId","private").put("source",source==null?new JSONObject():new JSONObject(source.toString()));
             if(control==null){move(part,blob);atomicJson(record,meta);}
-            else control.dispatchAtPauseRevision(pauseRevision,()->{move(part,blob);atomicJson(record,meta);});
+            else control.dispatchAtPauseRevision(pauseRevision,()->{if(nativeId!=null)requireNativeParents(source,control);move(part,blob);atomicJson(record,meta);});
             publishOutputEligibility(meta);return visible(meta);
-        }catch(Exception failure){revokeOutputEligibility(id);part.delete();blob.delete();record.delete();new File(root,id+".json.pending").delete();throw failure;}
+        }catch(Exception failure){revokeOutputEligibility(id);part.delete();if(nativeId==null){blob.delete();record.delete();new File(root,id+".json.pending").delete();}throw failure;}
     }
     public synchronized JSONArray list()throws Exception{JSONArray result=new JSONArray();File[] records=root.listFiles((d,n)->n.matches("[a-f0-9-]{36}\\.json"));if(records==null)return result;Arrays.sort(records,(a,b)->Long.compare(b.lastModified(),a.lastModified()));for(File record:records){JSONObject meta=new JSONObject(new String(Files.readAllBytes(record.toPath()),StandardCharsets.UTF_8));File data=new File(root,meta.getString("id")+".blob");if(data.isFile()&&data.length()==meta.getLong("size"))result.put(visible(meta));}return result;}
     public synchronized JSONObject get(String id)throws Exception{return visible(internal(id));}
@@ -101,6 +129,13 @@ public final class AttachmentBook {
         verifyBytes(id,expectedSha256,control,false);
         JSONObject record=internal(id);if(!expectedSha256.equals(record.getString("sha256")))throw new InputChangedException();
         control.checkpoint();return new VerifiedMetadata(record);
+    }
+    /** Native owner archive stream. Same private Book and full digest before/after;
+     * no file path, URI, group source or old execution permission is exported. */
+    public synchronized long exportOwnerArchiveBytes(String id,String sha,java.io.OutputStream destination,RunControl original)throws Exception {
+        JSONObject meta=internal(id);if(!privateOutputSource(meta))throw new SecurityException("只能备份当前可读的私人原件，不能借此导出群来源或撤下文件");verifyBytes(id,sha,original,false);long count=0;MessageDigest digest=MessageDigest.getInstance("SHA-256");
+        try(InputStream input=Files.newInputStream(new File(root,id+".blob").toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)){byte[] buffer=new byte[32768];for(int n;(n=input.read(buffer))>=0;){original.checkpoint();if(n==0)continue;if((count+=n)>meta.getLong("size"))throw new SecurityException("原件备份期间长度变化");digest.update(buffer,0,n);destination.write(buffer,0,n);}}
+        if(count!=meta.getLong("size")||!sha.equals(hex(digest.digest())))throw new SecurityException("原件备份期间字节变化，未确认完整备份");verifyBytes(id,sha,original,false);return count;
     }
     /** Native cold-source admission only. The saved generation is not a grant; this original
      * Book must recheck its private scope and the complete actual file digest before publication.

@@ -123,4 +123,29 @@ public final class AndroidJavascriptSandboxRuntimeTest {
         assertThrows(IllegalArgumentException.class,()->AndroidJavascriptSandboxRuntime.bootstrap(List.of(),Map.of("../secret",new byte[0])));assertThrows(IllegalArgumentException.class,()->AndroidJavascriptSandboxRuntime.bootstrap(List.of(),Map.of("scripts/huge.js",new byte[1024*1024+1])));
         assertThrows(IllegalArgumentException.class,()->fixture.runtime.createSession(65537));assertThrows(IllegalArgumentException.class,()->fixture.runtime.createSession(0));
     }
+    @Test public void builtinQueuesBehindTheOriginalPluginAndNeverCreatesASecondBinding()throws Exception {
+        Fixture fixture=new Fixture();java.util.HashSet<String> features=new java.util.HashSet<>(fixture.provider.engine.features);features.add("JS_FEATURE_EVALUATE_FROM_FD");fixture.provider.engine.features=features;
+        AndroidJavascriptSandboxRuntime.Session plugin=fixture.ready(512);Isolate old=fixture.current();
+        dev.pocketengine.core.RunControl control=new dev.pocketengine.core.RunControl();
+        java.util.concurrent.atomic.AtomicReference<AndroidJavascriptSandboxRuntime.BuiltinReadSession> opened=new java.util.concurrent.atomic.AtomicReference<>();java.util.concurrent.atomic.AtomicReference<Throwable> failure=new java.util.concurrent.atomic.AtomicReference<>();
+        Thread waiting=new Thread(()->{try{opened.set(fixture.runtime.openBuiltinReadSession(AndroidJavascriptSandboxRuntime.BuiltinProgram.PROJECT_TYPESCRIPT_5_9_3,control));}catch(Throwable error){failure.set(error);}},"fixture-builtin-queue");waiting.start();
+        awaitWaiting(waiting);assertNull(opened.get());assertEquals(0,old.closed);assertEquals(2,fixture.provider.engine.isolates.size());
+        plugin.close();waiting.join(2000);assertFalse(waiting.isAlive());assertNull(failure.get());assertNotNull(opened.get());assertEquals(3,fixture.provider.engine.isolates.size());assertEquals(96L*1024*1024,fixture.provider.engine.lastHeap);assertEquals(128*1024,fixture.provider.engine.lastLimit);
+        assertThrows(AndroidJavascriptSandboxRuntime.Unavailable.class,()->fixture.runtime.createSession(512));opened.get().close();
+        fixture.runtime.createSession(512).close();assertEquals(32L*1024*1024,fixture.provider.engine.lastHeap);fixture.runtime.close();assertEquals(1,fixture.provider.engine.closed);
+    }
+    @Test public void cancellingQueuedBuiltinDoesNotCancelOrReplaceAnotherPluginIsolate()throws Exception {
+        Fixture fixture=new Fixture();java.util.HashSet<String> features=new java.util.HashSet<>(fixture.provider.engine.features);features.add("JS_FEATURE_EVALUATE_FROM_FD");fixture.provider.engine.features=features;
+        AndroidJavascriptSandboxRuntime.Session plugin=fixture.ready(512);Isolate old=fixture.current();dev.pocketengine.core.RunControl control=new dev.pocketengine.core.RunControl();java.util.concurrent.atomic.AtomicReference<Throwable> failure=new java.util.concurrent.atomic.AtomicReference<>();
+        Thread waiting=new Thread(()->{try{fixture.runtime.openBuiltinReadSession(AndroidJavascriptSandboxRuntime.BuiltinProgram.PROJECT_TYPESCRIPT_5_9_3,control);}catch(Throwable error){failure.set(error);}},"fixture-cancelled-builtin");waiting.start();awaitWaiting(waiting);control.cancel();waiting.join(2000);
+        assertFalse(waiting.isAlive());assertTrue(failure.get() instanceof InterruptedException);assertEquals(0,old.closed);assertEquals(2,fixture.provider.engine.isolates.size());assertEquals("actual fixture output",plugin.evaluateExact("'still original'".getBytes(StandardCharsets.UTF_8)).get());plugin.close();fixture.runtime.close();
+    }
+    @Test public void builtinFeatureAndActualTerminationFencesAreNotInferredFromAProgramName()throws Exception {
+        Fixture fixture=new Fixture();dev.pocketengine.core.RunControl control=new dev.pocketengine.core.RunControl();
+        assertThrows(AndroidJavascriptSandboxRuntime.Unavailable.class,()->fixture.runtime.openBuiltinReadSession(AndroidJavascriptSandboxRuntime.BuiltinProgram.PROJECT_TYPESCRIPT_5_9_3,control));assertEquals(1,fixture.provider.engine.isolates.size());
+        java.util.HashSet<String> features=new java.util.HashSet<>(fixture.provider.engine.features);features.add("JS_FEATURE_EVALUATE_FROM_FD");fixture.provider.engine.features=features;
+        AndroidJavascriptSandboxRuntime.BuiltinReadSession builtin=fixture.runtime.openBuiltinReadSession(AndroidJavascriptSandboxRuntime.BuiltinProgram.PROJECT_TYPESCRIPT_5_9_3,control);Isolate old=fixture.current();old.failClose=true;
+        assertThrows(IllegalStateException.class,builtin::close);assertThrows(AndroidJavascriptSandboxRuntime.Unavailable.class,()->fixture.runtime.createSession(512));old.failClose=false;builtin.close();fixture.runtime.createSession(512).close();fixture.runtime.close();
+    }
+    private static void awaitWaiting(Thread thread)throws Exception{long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);while(System.nanoTime()<deadline){Thread.State state=thread.getState();if(state==Thread.State.WAITING||state==Thread.State.TIMED_WAITING)return;if(!thread.isAlive())throw new AssertionError("queued worker terminated before waiting");Thread.sleep(2);}throw new AssertionError("worker did not reach original sandbox queue");}
 }

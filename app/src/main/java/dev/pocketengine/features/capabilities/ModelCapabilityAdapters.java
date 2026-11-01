@@ -24,7 +24,7 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
         void requirePrepared(String operationId,String tool,JSONObject originalArgs)throws Exception;
     }
     public interface ResourceCheck {void check()throws Exception;}
-    public interface DocumentRead {JSONObject readDocument(JSONObject input,RunControl liveControl)throws Exception;}
+    public interface DocumentRead {JSONObject readDocument(JSONObject input,RunControl liveControl)throws Exception;default void requireReference(String id,String sha,RunControl original)throws Exception{throw new SecurityException("原任务附件来源读取未挂载");}}
     public interface LiveBrowserCall {JSONObject invokeForHost(String command,JSONObject input,RunControl liveControl,ResourceCheck admission)throws Exception;}
     /**
      * Native SSH entry must retain this same control before registering/connecting and through
@@ -107,7 +107,7 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
         this.browser=browser;this.ssh=ssh;this.attachments=attachments==null?null:requireModule(attachments,"attachments");this.documents=documents;
         if(browser!=null)for(String command:new String[]{"observe","navigate","click","type","scroll","back","forward","reload"})add(CapabilityDescriptor.browser(command));
         if(ssh!=null)for(String command:new String[]{"listFiles","readFile","exec","writeFile"})add(CapabilityDescriptor.ssh(command));
-        if(attachments!=null)add(CapabilityDescriptor.createText());if(documents!=null)add(CapabilityDescriptor.document(attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule?((dev.pocketengine.features.attachments.AttachmentsModule)attachments).documentCapabilities():new JSONObject()));
+        if(attachments!=null){add(CapabilityDescriptor.createText());if(attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule){add(CapabilityDescriptor.createDocument());add(CapabilityDescriptor.transformImage());add(CapabilityDescriptor.trimMedia());}}if(documents!=null)add(CapabilityDescriptor.document(attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule?((dev.pocketengine.features.attachments.AttachmentsModule)attachments).documentCapabilities():new JSONObject()));
         if(existing!=null)for(CapabilityDescriptor route:routes.values())if(existing.supports(route.name))throw new IllegalArgumentException("既存能力工具与leaf名称冲突："+route.name);
         Set<String> names=new java.util.HashSet<>();JSONArray tools=tools();for(int i=0;i<tools.length();i++)if(!names.add(tools.getJSONObject(i).getJSONObject("function").getString("name")))throw new IllegalArgumentException("工具名称重复");
     }
@@ -142,7 +142,7 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
         JSONObject capability=new JSONObject().put("feature",route.feature).put("command",route.command);
         if(route.feature.equals("browser"))capability.put("binding",browser.capability());
         if(route.feature.equals("ssh"))capability.put("binding",ssh.capability());
-        if(route.name.equals("attachments_create_text"))capability.put("hostTaskId",binding.taskId).put("projectId",binding.projectId);
+        if(route.name.matches("attachments_create_text|attachments_create_document|attachments_transform_image|attachments_trim_media"))capability.put("hostTaskId",binding.taskId).put("projectId",binding.projectId);
         if(route.approvalRequired){
             if(!binding.allowWrites)throw new SecurityException("本任务仅允许读取");JSONObject approval=authority.approve(route,new JSONObject(args.toString()),capability);
             if(!approval.optBoolean("approved"))return new JSONObject().put("ok",false).put("accepted",false).put("code","approval_required")
@@ -155,6 +155,7 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
         else if(route.feature.equals("ssh")){module=ssh.module;moduleInput.put("profileId",ssh.profileId).put("_profileBinding",ssh.bindingHash).put("hostTaskId",binding.taskId)
                 .put("principalId","owner").put("spaceId","private").put("_operationId",operationId).put("_hostRunId",binding.runId).put("_hostEpoch",binding.epoch);}
         else if(route.name.equals("attachments_create_text")){module=attachments;moduleInput.put("taskId",binding.taskId);if(!binding.projectId.isEmpty())moduleInput.put("projectId",binding.projectId);}
+        else if(route.name.matches("attachments_create_document|attachments_transform_image|attachments_trim_media")){module=attachments;moduleInput.put("_taskId",binding.taskId).put("_runId",binding.runId).put("_operationId",operationId).put("_epoch",binding.epoch);}
         ToolOutputCapture.Claim outputClaim=null;
         if(outputCapture!=null&&!route.feature.equals("browser"))try{outputClaim=outputCapture.begin(name,operationId,ToolOutputCapture.Kind.NATIVE_RESULT_DATA_JSON,control);if(outputClaim==null&&route.name.equals("attachments_read_document"))throw new ToolOutputCapture.OutputSourceUnavailable(null);}
         catch(ToolOutputCapture.OutputSourceUnavailable unavailable){control.check();throw unavailable;}
@@ -173,13 +174,15 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
                 if(result!=null)for(String key:new String[]{"profileId","profileRevision","browserSessionId","profileIsolation"}){Object pinned=browser.preset.get(key);if(result.has(key)&&!String.valueOf(pinned).equals(String.valueOf(result.get(key))))throw new SecurityException("浏览回执不属于原生选定的Profile会话");result.put(key,pinned);}
             }
             else if(route.feature.equals("ssh"))result=ssh.liveCall.invokeForHost(route.command,moduleInput,control);
+            else if(route.name.matches("attachments_transform_image|attachments_trim_media")){if(documents==null)throw new SecurityException("原任务附件来源不可核对");documents.requireReference(args.getString("attachmentId"),args.getString("expectedSha256"),control);result=((dev.pocketengine.features.attachments.AttachmentsModule)module).processFileForHost(route.command,moduleInput,control);}
+            else if(route.name.equals("attachments_create_document")){if(args.has("parentArtifactId")){if(documents==null)throw new SecurityException("原任务附件来源不可核对");documents.requireReference(args.getString("parentArtifactId"),args.getString("parentSha256"),control);documents.requireReference(args.getString("editableSourceId"),args.getString("editableSourceSha256"),control);}result=((dev.pocketengine.features.attachments.AttachmentsModule)module).createDocumentForHost(moduleInput,control);}
             else result=module.handle(route.command,moduleInput);
             captureMetadata=recordOutput(route,outputClaim,result);
             try{binding.check(control);authority.check(name,control);checkResource(route);}
             catch(Exception invalidated){
                 // createText returns committed UUID/digest metadata. Preserve that known local
                 // receipt for the original journal even if cancellation arrived before delivery.
-                if(route.name.equals("attachments_create_text")&&result!=null){
+                if(route.name.matches("attachments_create_text|attachments_create_document|attachments_transform_image|attachments_trim_media")&&result!=null){
                     JSONObject actual=CapabilityResults.withCapture(CapabilityResults.creationAfterStop(route,result,operationId,control.isCancelled()||Thread.currentThread().isInterrupted()),captureMetadata);
                     ownerReviewRequired=true;return actual;
                 }

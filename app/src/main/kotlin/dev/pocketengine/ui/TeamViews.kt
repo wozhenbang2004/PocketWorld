@@ -36,7 +36,7 @@ internal fun mergeTeamSnapshot(previous: JSONObject?, incoming: JSONObject): JSO
     }
     return JSONObject(incoming.toString())
 }
-internal fun isTeamRunResult(command: String, value: JSONObject): Boolean = command in setOf("start", "get", "pause", "resume", "feedback", "cancel", "continueMessages", "reviseAssignment", "continueOutcome", "sendMessage") && value.optString("id").isNotBlank() && value.has("goal") && value.optJSONArray("members") != null
+internal fun isTeamRunResult(command: String, value: JSONObject): Boolean = command in setOf("start", "get", "pause", "resume", "feedback", "cancel", "continueMessages", "reviseAssignment", "continueOutcome", "sendMessage", "configureMember") && value.optString("id").isNotBlank() && value.has("goal") && value.optJSONArray("members") != null
 /** Receipts are native UI acknowledgements, not task state or model/executor result bodies. */
 internal fun teamOwnerReceipts(state: PocketUiState, runId: String? = null, teamId: String? = null): Map<String, JSONObject> = state.teamOwnerReceipts.filterValues {
     (runId != null && it.optString("runId") == runId) || (teamId != null && it.optString("command") == "savePlan" && it.optString("teamId") == teamId)
@@ -140,9 +140,12 @@ internal fun TeamRunDetail(state: PocketUiState, controller: PocketWorldControll
                 if (!collaborationOpen) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) { TextButton(onClick = { if (collaborationOpen) collaborationOpen = false else if (memberId == null) controller.closeTeam() else memberId = null }) { Text("返回") }; Text(detailTitle, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); TextButton(onClick = { controller.requestFeature("teams", "get", JSONObject().put("runId", runId)) }) { Text("刷新", fontSize = 12.sp) } }
                 if (!collaborationOpen) HorizontalDivider(color = Line)
                 if (collaborationOpen) TeamCollaborationPage(run, definition, commands, teamBusyCommands(state), lastReceipt, null, { command, payload -> controller.requestFeature("teams", command, payload) }, { controller.closeTeam() }, receipts, onDetails = { collaborationOpen = false }, workItems = {
-                    if (run != null && (run.optJSONObject("workPlan") != null || run.optString("status") == "completed" && run.optString("discussionFormat") == dev.pocketengine.features.teams.TeamEvidenceDiscussion.FORMAT)) TeamWorkPlanControls(run, controller::openTeamWorkPlanPage, controller::runEcosystemControlWork, { id -> childTaskId = id; controller.getTask(id) }, controller::openTeamArtifact)
+                    if (run != null && (run.optJSONObject("workPlan") != null || run.optString("status") == "completed" && run.optString("discussionFormat") == dev.pocketengine.features.teams.TeamEvidenceDiscussion.FORMAT)) TeamWorkPlanControls(run, controller::openTeamWorkPlanPage, controller::runEcosystemControlWork, { id -> childTaskId = id; controller.getTask(id) }, controller::openTeamArtifact, controller::openTeamProjectRoundPage, controller::openTeamFailedProjectRoundPage)
                 }, outcomes = { chosen ->
+                    if (run != null) TeamRunMemberControls(run, "configureMember" in teamBusyCommands(state)) { command, input -> controller.requestFeature("teams", command, input) }
+                    if (run != null) TeamMemberMaterialControls(run, controller::openTeamMemberMaterialsPage, controller::runEcosystemControlWork)
                     if (run != null && run.optString("mode") == "produce") {
+                        if (run.optJSONObject("productionScope")?.optJSONArray("assignments").objects().any { it.optJSONObject("remoteSelection")?.optBoolean("fullProject") == true }) TeamPhoneIntegratorControls(runId, controller::openTeamPhoneIntegratorPage, controller::runEcosystemControlWork)
                         TeamWritePanel(run, chosen, state, controller) { id -> childTaskId = id; controller.getTask(id) }
                         TeamWorkspaceArtifactLinks(run, chosen?.optString("id"), controller::openTeamArtifact)
                     }

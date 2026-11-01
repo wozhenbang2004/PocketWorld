@@ -169,6 +169,11 @@ public final class PluginsModule implements EngineModule {
     private JSONObject invoke(JSONObject input)throws Exception{return invokeForHost(input,new RunControl());}
     /** The supervisor's control reaches the actual HTTP dispatch, including cancellation before registration. */
     public JSONObject invokeForHost(JSONObject input,RunControl hostControl)throws Exception {
+        return invokeForHost(input,hostControl,null,"");
+    }
+    /** Native-only output authority. Neither a descriptor nor model JSON supplies this Factory. */
+    public JSONObject invokeForHost(JSONObject input,RunControl hostControl,
+            dev.pocketengine.features.memory.ToolOutputCapture.Factory outputFactory,String nativeHostTool)throws Exception {
         final String id=input.getString("id"),name=input.getString("tool"),operationId=input.optString("_operationId",UUID.randomUUID().toString());
         final Object suppliedArguments=arguments(input);
         final JSONObject args;
@@ -207,20 +212,40 @@ public final class PluginsModule implements EngineModule {
             }else mcp=null;
             invocation=new Invocation(id,hostControl);active.put(operationId,invocation);
         }
+        McpResultCapture output=null;
         try{
             JSONObject result;
             if(mcp!=null){
+                if(outputFactory!=null){
+                    JSONObject provenance=new JSONObject().put("pluginId",id).put("installationId",input.getString("expectedInstallationId"))
+                        .put("version",input.getString("expectedVersion")).put("hostTool",nativeHostTool).put("remoteTool",name)
+                        .put("executionIdentity",input.getString("expectedExecutionIdentity"))
+                        .put("endpointDigest",McpData.digest(tool.getString("endpoint"))).put("protocolVersion",tool.getString("protocolVersion"))
+                        .put("serverDigest",tool.getString("serverDigest")).put("descriptorDigest",tool.getString("descriptorDigest"));
+                    output=McpResultCapture.open(outputFactory,nativeHostTool,operationId,invocation.control,provenance);
+                }
                 if(mcp.needsDiscovery())try{mcp.discover(invocation.control);}catch(Exception unavailable){throw new McpClient.CallFailure(false,true,"MCP重新发现失败，工具未发送，请检查配置后重新导入");}
-                result=mcp.call(tool,args,invocation.control);
+                result=output==null?mcp.call(tool,args,invocation.control):mcp.call(tool,args,invocation.control,output);
             }else result=HttpToolClient.invoke(tool.getString("endpoint"),token,name,args,operationId,invocation.control);
-            synchronized(this){invocation.control.check();return new JSONObject().put("operationId",operationId).put("status","response_received").put("verified",false).put("toolResult",result);}
+            synchronized(this){invocation.control.check();return withOutputCapture(new JSONObject().put("operationId",operationId).put("status","response_received").put("verified",false).put("toolResult",result),output);}
+        }catch(McpResultCapture.AdmissionRefused refused){
+            // Only Factory admission can issue this type; no transport/save catch is relabelled.
+            return new JSONObject().put("operationId",operationId).put("status","failed").put("dispatchStatus","not_dispatched")
+                .put("dispatched",false).put("nativeDispatched",false).put("accepted",false).put("requiresPause",true)
+                .put("code","mcp_output_admission_denied").put("verified",false).put("message",refused.getMessage());
+        }catch(dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable refused){
+            throw refused;
         }catch(McpClient.CallFailure failure){
-            return new JSONObject().put("operationId",operationId).put("status",failure.dispatched?"unknown":"failed").put("dispatchStatus",failure.dispatched?"may_have_dispatched":"not_dispatched").put("dispatched",failure.dispatched)
+            if(output!=null&&!failure.dispatched)output.notDispatched();
+            return withOutputCapture(new JSONObject().put("operationId",operationId).put("status",failure.dispatched?"unknown":"failed").put("dispatchStatus",failure.dispatched?"may_have_dispatched":"not_dispatched").put("dispatched",failure.dispatched)
                     .put("cancelRequested",invocation.control.isCancelled()).put("refreshRequired",failure.refreshRequired)
-                    .put("verified",false).put("message",failure.getMessage());
+                    .put("verified",false).put("message",failure.getMessage()),output);
         }catch(Exception uncertain){
-            return new JSONObject().put("operationId",operationId).put("status","unknown").put("cancelRequested",invocation.control.isCancelled()).put("verified",false).put("message",invocation.control.isCancelled()?"工具请求已停止或授权已变化，可能已被处理；请核对服务端结果，勿重复提交":"HTTP工具请求未取得有效回执，可能已被处理；请检查服务端结果，勿直接重复提交");
+            return withOutputCapture(new JSONObject().put("operationId",operationId).put("status","unknown").put("cancelRequested",invocation.control.isCancelled()).put("verified",false).put("message",invocation.control.isCancelled()?"工具请求已停止或授权已变化，可能已被处理；请核对服务端结果，勿重复提交":"HTTP工具请求未取得有效回执，可能已被处理；请检查服务端结果，勿直接重复提交"),output);
         }finally{synchronized(this){active.remove(operationId);}}
+    }
+    private static JSONObject withOutputCapture(JSONObject receipt,McpResultCapture output)throws Exception{
+        if(output!=null)receipt.put("outputCapture",output.metadata());return receipt;
     }
     private JSONObject discoverMcp(JSONObject input)throws Exception {return discoverMcp(input,null);}
     private JSONObject discoverMcp(JSONObject input,dev.pocketengine.features.plugins.mcp.NativeMcpOAuthHost.Credential authorization)throws Exception {

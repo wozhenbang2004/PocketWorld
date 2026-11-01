@@ -60,10 +60,12 @@ public final class GeneratedArtifacts {
         selection=verified(selection);JSONObject binding=selection.getJSONObject("buildReceipt").getJSONObject("binding");
         return "native_host_operation".equals(binding.optString("authority"))?nativeBuild(selection.getJSONObject("buildPlan"),actual,binding):ownerBuild(selection.getJSONObject("buildPlan"),actual);
     }
-    private static JSONObject nativeBuild(JSONObject plan,JSONObject raw,JSONObject supplied)throws Exception {
+    private static JSONObject nativeBuild(JSONObject plan,JSONObject raw,JSONObject supplied)throws Exception {return nativeBuild(plan,raw,supplied,false);}
+    static JSONObject managedBuild(JSONObject plan,JSONObject raw,JSONObject supplied)throws Exception {return nativeBuild(plan,raw,supplied,true);}
+    private static JSONObject nativeBuild(JSONObject plan,JSONObject raw,JSONObject supplied,boolean managed)throws Exception {
         plan=ProjectBuildPlan.verified(plan);JSONObject step=ProjectBuildPlan.step(plan,"build"),exact=ProjectDevelopment.exact(plan,step),link=raw.getJSONObject("projectExecution");
         successful(raw);String operation=ProjectBuildPlan.identity(raw.getString("id"));
-        if(!"termux.run".equals(exact.getString("command"))||!"command".equals(raw.optString("kind"))||!operation.equals(raw.optString("operationId"))||!operation.equals(supplied.getString("operationId"))
+        if(!(managed?"project.runtime.run":"termux.run").equals(exact.getString("command"))||!"command".equals(raw.optString("kind"))||!operation.equals(raw.optString("operationId"))||!operation.equals(supplied.getString("operationId"))
                 ||!plan.getString("checkoutId").equals(raw.optString("checkoutId"))||!plan.getString("sourceDigest").equals(raw.optString("sourceDigest"))||!"pre_exec_manifest_verified".equals(raw.optString("sourceCheckStatus"))
                 ||!"native_host_operation".equals(link.optString("authority"))||!step.getJSONObject("payload").getString("executable").equals(raw.optString("requestedExecutable"))
                 ||!ProjectSources.canonical(step.getJSONObject("payload").getJSONArray("argv")).equals(ProjectSources.canonical(raw.optJSONArray("requestedArgv"))))throw new SecurityException("需要此原任务实际成功build回执");

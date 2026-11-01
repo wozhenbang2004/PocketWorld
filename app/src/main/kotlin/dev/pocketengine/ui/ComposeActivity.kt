@@ -30,6 +30,10 @@ class ComposeActivity : ComponentActivity() {
         controller.attachmentOutcomes.exportResult(if(result.resultCode==Activity.RESULT_OK)result.data?.data else null)
     }
     internal fun createOutcomeDocument(mime:String,name:String){outcomeExportPicker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime).putExtra(Intent.EXTRA_TITLE,name))}
+    private val ownerArchiveImportPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> controller.ownerArchives.importResult(uri) }
+    private val ownerArchiveExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> controller.ownerArchives.exportResult(uri) }
+    internal fun pickOwnerDataArchive() { try { ownerArchiveImportPicker.launch(arrayOf("application/zip", "application/octet-stream")) } catch (_: RuntimeException) { controller.ownerArchives.importResult(null) } }
+    internal fun createOwnerDataArchive(name: String) { try { ownerArchiveExportPicker.launch(name) } catch (_: RuntimeException) { controller.ownerArchives.exportResult(null) } }
     private val projectPackageImportPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> controller.projectPackages.importResult(uri) }
     private val projectPackageExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> controller.projectPackages.exportResult(uri) }
     internal fun pickProjectPackageDocument() {
@@ -57,6 +61,8 @@ class ComposeActivity : ComponentActivity() {
         controller = PocketWorldController(this, engine)
         controller.attachmentOutcomes.restore(savedInstanceState)
         controller.projectPackages.restore(savedInstanceState)
+        controller.ownerArchives.restore(savedInstanceState)
+        controller.projectStorage.restore(savedInstanceState)
         importTaskId = savedInstanceState?.getString("ownerImportTask")
         importProjectId = savedInstanceState?.getString("ownerImportProject")
         exportPath = savedInstanceState?.getString("ownerExportPath")
@@ -65,13 +71,17 @@ class ComposeActivity : ComponentActivity() {
         controller.attach()
         engine.publish(media.state())
         deliverPhoneTask(intent)
+        deliverRemoteAttention(intent)
         deliverGoal(intent)
         deliverSharedFiles(intent)
         deliverAccountEntry(intent)
     }
-    override fun onResume() { super.onResume(); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.foreground(true); controller.projectPackages.foreground(true) } }
-    override fun onPause() { (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectPackages.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); deliverPhoneTask(intent); deliverGoal(intent); deliverSharedFiles(intent); deliverAccountEntry(intent) }
+    override fun onResume() { super.onResume(); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.foreground(true); controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true) } }
+    override fun onPause() { (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent); deliverAccountEntry(intent) }
+    private fun deliverRemoteAttention(intent: Intent?) {
+        dev.pocketengine.features.remote.RemoteAttentionNotifications.openRequestedTask((application as EngineApplication).tasks, intent) { controller.showRemoteAttention(it) }
+    }
     private fun deliverAccountEntry(intent: Intent?) {
         if (intent?.getBooleanExtra("openChatGptAccounts", false) != true) return
         intent.removeExtra("openChatGptAccounts")
@@ -141,6 +151,8 @@ class ComposeActivity : ComponentActivity() {
         outState.putString("ownerImportTask", importTaskId); outState.putString("ownerImportProject", importProjectId); outState.putString("ownerExportPath", exportPath)
         controller.attachmentOutcomes.save(outState)
         controller.projectPackages.save(outState)
+        controller.ownerArchives.save(outState)
+        controller.projectStorage.save(outState)
         super.onSaveInstanceState(outState)
     }
     override fun onDestroy() { if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }

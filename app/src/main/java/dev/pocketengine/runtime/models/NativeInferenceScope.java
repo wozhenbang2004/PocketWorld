@@ -43,11 +43,16 @@ public final class NativeInferenceScope {
         return new NativeInferenceScope(Entry.EXTERNAL_GROUP,authenticatedOrigin.optString("actorId"),authenticatedOrigin.optString("spaceId"),
                 task,run,epoch,original,"",null,authenticatedOrigin.toString());
     }
+    /** Only the original SQL-issued, native-owner reviewed weak-source claim can enter this route. */
+    public static NativeInferenceScope reviewedExternalGroup(dev.pocketengine.store.TaskStore.ReviewedExternalGroupClaim claim,RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(claim).checkCurrent();if(!claim.matchesOriginal(original))throw new SecurityException("不是原材料任务控制器");
+        return new NativeInferenceScope(Entry.EXTERNAL_GROUP,claim.actorId,claim.spaceId,claim.taskId,claim.runId,claim.epoch,original,claim.scopeDigest,claim::checkCurrent,claim.view().toString());
+    }
     void check(RunControl actual)throws Exception {
         if(original!=null&&actual!=original)throw new SecurityException("模型调用控制器已改变");
         if(actual!=null)actual.check();
         if(!taskId.isEmpty()&&!actual.matchesHostRun(taskId,runId,epoch))throw new SecurityException("模型调用执行代次已改变");
-        if(entry==Entry.OWNER_BACKGROUND)consent.check();
+        if(entry==Entry.OWNER_BACKGROUND||entry==Entry.EXTERNAL_GROUP&&consent!=null)consent.check();
         if(actual!=null)actual.check();
     }
     public JSONObject publicJson()throws Exception {

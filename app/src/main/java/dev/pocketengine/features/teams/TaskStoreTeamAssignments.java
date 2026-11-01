@@ -26,6 +26,7 @@ public final class TaskStoreTeamAssignments implements TeamAssignmentHost.Tasks 
         @Override public void check(String tool,RunControl control)throws Exception {if(control!=original)throw new SecurityException("不是原assignment控制器");tasks.checkTeamAssignment(binding,tool,control);}
         @Override public JSONObject claim(String operation,String tool,JSONObject args,JSONObject capability,RunControl control)throws Exception {check(tool,control);JSONObject receipt=tasks.claimTeamFileOperation(binding,operation,tool,args,capability,control);changed.accept(binding.getString("taskId"));return receipt;}
         @Override public JSONArray receipts(String tool)throws Exception {return tasks.teamAssignmentReceipts(binding,tool);}
+        @Override public JSONObject integrationHistory(JSONObject args,RunControl control)throws Exception{check("team_read_integration",control);return tasks.teamIntegrationHistory(binding,args,control);}
         @Override public JSONObject question(String operation,String question,RunControl control)throws Exception {check("team_request_input",control);JSONObject receipt=tasks.askTeamAssignment(binding,operation,question,control);changed.accept(binding.getString("taskId"));return receipt;}
     };}
     @Override public RunJournal journal(JSONObject binding,RunControl original)throws Exception {return tasks.journal(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),original);}

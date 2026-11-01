@@ -35,6 +35,7 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
     var review by remember { mutableStateOf<JSONObject?>(null) }
     var localError by remember { mutableStateOf<String?>(null) }
     var inputRequest by remember(profileId, binding) { mutableStateOf<JSONObject?>(null) }
+    var projectRequest by remember(profileId, binding) { mutableStateOf<JSONObject?>(null) }
     val environments = state.moduleResults["remote.environments"]
         .takeIf { environmentRequest != null && state.moduleResultInputs["remote.environments"]?.optString("_requestId") == environmentRequest }
         ?.optJSONArray("environments").objects()
@@ -109,6 +110,15 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
                 review = RemoteTaskRequest.first(request); localError = null
             } catch (failure: Exception) { localError = failure.message ?: "请核对任务参数" }
         }, enabled = canCreate, modifier = Modifier.padding(top = 10.dp)) { Text("核对并创建这次工作") }
+        if (worker != "command" && selected.optJSONObject("projectHistoryCapabilities")?.optBoolean("supported") == true) {
+            OutlinedButton(onClick = {
+                try {
+                    val request=JSONObject().put("profileId",profileId).put("bindingHash",binding).put("environmentId",environmentId).put("environmentBinding",selected.optString("bindingHash")).put("worker",worker).put("timeoutSeconds",timeout.toIntOrNull()?:0).put("prompt",goal).put("readOnly",worker=="codex_app_server"&&readOnly)
+                    if(model.isNotBlank())request.put("model",model.trim())
+                    RemoteTaskRequest.first(request);projectRequest=request;localError=null
+                }catch(failure:Exception){localError=failure.message}
+            },enabled=canCreate&&goal.isNotBlank()){Text("先保留项目基线，再创建这次工作")}
+        }
         if (worker != "command") {
             OutlinedButton(onClick = {
                 try {
@@ -135,6 +145,7 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
     }
     (localError ?: state.moduleErrors["remote.submitJob"] ?: state.moduleErrors["remote.probeWorker"])?.let { Text(it, color = Danger, fontSize = 12.sp) }
     inputRequest?.let { RemoteInputDialog(it, "", controller) { inputRequest = null } }
+    projectRequest?.let { RemoteProjectStartDialog(it,controller){projectRequest=null} }
     review?.let { captured ->
         val current = profile.optString("bindingHash") == captured.optString("_profileBinding") && environment?.optString("bindingHash") == captured.optString("environmentBinding")
         AlertDialog(onDismissRequest = { review = null }, title = { Text("确认在所选电脑创建工作") }, text = {

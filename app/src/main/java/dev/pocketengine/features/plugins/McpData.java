@@ -73,14 +73,18 @@ final class McpData {
         return null;
     }
 
-    static JSONObject result(JSONObject source,String token)throws Exception {
+    static JSONObject result(JSONObject source,String token)throws Exception {return result(source,token,true);}
+    /** Full supported returned data, not a model view. The transport has already bounded the
+     * matched RPC body. Unsupported content remains explicitly omitted, never fetched/decoded. */
+    static JSONObject resultForCapture(JSONObject source,String token)throws Exception {return result(source,token,false);}
+    private static JSONObject result(JSONObject source,String token,boolean viewLimits)throws Exception {
         if(source.has("isError")&&!(source.get("isError") instanceof Boolean))throw new IllegalArgumentException("MCP isError格式无效");
-        JSONArray content=source.getJSONArray("content");if(content.length()>64)throw new IllegalArgumentException("MCP结果块过多");
+        JSONArray content=source.getJSONArray("content");if(viewLimits&&content.length()>64)throw new IllegalArgumentException("MCP结果块过多");
         JSONArray text=new JSONArray(),omitted=new JSONArray();int characters=0;
         for(int i=0;i<content.length();i++){
             JSONObject block=content.getJSONObject(i);String type=block.getString("type");
             if(type.equals("text")){
-                String value=block.getString("text");characters+=value.length();if(characters>32768)throw new IllegalArgumentException("MCP文字结果超过32Ki字符");
+                String value=block.getString("text");characters+=value.length();if(viewLimits&&characters>32768)throw new IllegalArgumentException("MCP文字结果超过32Ki字符");
                 text.put(new JSONObject().put("type","text").put("text",redact(value,token)));
             }else omitted.put(new JSONObject().put("index",i).put("type",redact(type,token)).put("reason","当前仅接收文本；未读取或执行二进制、资源或链接内容"));
         }
@@ -88,7 +92,7 @@ final class McpData {
                 .put("omittedContent",omitted).put("untrusted",true).put("instructionsAreData",true);
         if(source.has("structuredContent")){
             JSONObject structured=source.getJSONObject("structuredContent");
-            if(structured.toString().length()>32768)throw new IllegalArgumentException("MCP结构化结果超过32Ki字符");
+            if(viewLimits&&structured.toString().length()>32768)throw new IllegalArgumentException("MCP结构化结果超过32Ki字符");
             result.put("structuredContent",scrub(structured,token,0)).put("outputSchemaValidated",false);
         }
         return result;

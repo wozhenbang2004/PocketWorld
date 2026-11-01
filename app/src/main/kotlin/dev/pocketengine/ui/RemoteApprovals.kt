@@ -39,9 +39,15 @@ internal fun RemoteTaskApprovals(task: UiTask, controller: PocketWorldController
     if (task.raw.optString("feature") != "remote" || task.raw.optString("actorId") != "owner" || task.raw.optString("spaceId") != "private") return
     var open by remember(task.id) { mutableStateOf(false) }
     var inputsOpen by remember(task.id) { mutableStateOf(false) }
-    OutlinedButton(onClick = { inputsOpen = false; open = true }, modifier = Modifier.padding(top = 16.dp)) { Text("核对原电脑任务与会话") }
-    if (open) RemoteOwnerDialog(task.id, controller) { open = false }
-    if (task.raw.has("remoteInputScope")) TextButton(onClick = { open = false; inputsOpen = true }) { Text("原私人附件暂存与传输回执") }
+    var continuationInputsOpen by remember(task.id) { mutableStateOf(false) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var foreground by remember(lifecycle) { mutableStateOf(lifecycle.currentState == Lifecycle.State.RESUMED) }
+    DisposableEffect(lifecycle) { val observer=LifecycleEventObserver { _,_->foreground=lifecycle.currentState==Lifecycle.State.RESUMED }; lifecycle.addObserver(observer); onDispose { lifecycle.removeObserver(observer) } }
+    LaunchedEffect(controller.remoteAttentionNotice, foreground) { if(foreground&&controller.remoteAttentionNotice?.optString("taskId")==task.id){inputsOpen=false;continuationInputsOpen=false;open=true;controller.consumeRemoteAttention(task.id)} }
+    OutlinedButton(onClick = { inputsOpen = false; continuationInputsOpen=false;open = true }, modifier = Modifier.padding(top = 16.dp)) { Text("核对原电脑任务与会话") }
+    if (open) RemoteOwnerDialog(task.id, controller, { open=false;inputsOpen=false;continuationInputsOpen=true }) { open = false }
+    if(continuationInputsOpen)RemoteContinuationInputDialog(task.id,controller){continuationInputsOpen=false;open=true}
+    if (task.raw.has("remoteInputScope")) TextButton(onClick = { open = false; continuationInputsOpen=false;inputsOpen = true }) { Text("原私人附件暂存与传输回执") }
     if (inputsOpen) RemoteInputDialog(null, task.id, controller) { inputsOpen = false }
 }
 
@@ -64,13 +70,15 @@ internal fun remoteApprovalClaim(task: JSONObject?, requestId: String): JSONObje
 /** Read policy for this page only; never a task admission, write retry, or remote liveness claim. */
 internal fun remoteReadShouldPoll(snapshot: JSONObject): Boolean {
     if (snapshot.optString("queryStatus") in setOf("unconfirmed", "changed", "paused")) return false
+    if (snapshot.optString("eventReadStatus") == "not_available") return false // Keep the original cursor/cache; manual reconnect may query again.
+    if (snapshot.optString("eventReadStatus") == "confirmed" && snapshot.optJSONObject("eventRead")?.optBoolean("hasMore") == true) return true // Original fixed-head read only, including terminal jobs.
     val task = snapshot.optJSONObject("task")
     if (task?.optBoolean("cancelRequested") == true || task?.optString("status") in setOf("cancelled", "completed", "stopping")) return false
     return snapshot.optJSONObject("source")?.optString("executorStatus") in setOf("queued", "running", "stopping", "awaiting_approval", "awaiting_input", "unknown")
 }
 
 @Composable
-private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController, close: () -> Unit) {
+private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController, openContinuationInputs: () -> Unit, close: () -> Unit) {
     DisposableEffect(taskId) { val window = controller.enterRemoteTask(taskId); onDispose { controller.leaveRemoteTask(window) } }
     val state = controller.state
     val snapshot = state.ownerSnapshot("remoteTask")
@@ -88,6 +96,9 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
     // Only an explicit button press changes this local nonce. Snapshots/timestamps do not.
     var reconnectNonce by remember(taskId) { mutableIntStateOf(0) }
     var prompt by remember(taskId) { mutableStateOf("") }
+    val coldRecovery = dev.pocketengine.features.remote.RemoteColdRecovery.source(source)
+    var recoveryAccepted by remember(taskId,source.optString("jobOperationId"),source.optJSONObject("recoveryProof")?.optString("proofId")) { mutableStateOf(false) }
+    var recoveryTimeout by remember(taskId) { mutableStateOf("300") }
     var localError by remember(taskId) { mutableStateOf<String?>(null) }
     var submitted by remember(taskId) { mutableStateOf<Pair<String, String>?>(null) }
     var selectedSnapshot by remember(taskId, source.optString("jobOperationId")) { mutableStateOf<JSONObject?>(null) }
@@ -111,7 +122,7 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
         delay(250)
         if(!latestBusy)send("refresh") // Only original GET; never create/answer/resume.
         while(true) {
-            delay(4000)
+            delay(if(latestSnapshot.optString("eventReadStatus")=="confirmed"&&latestSnapshot.optJSONObject("eventRead")?.optBoolean("hasMore")==true) 500 else 4000)
             if(latestBusy)continue
             if(!remoteReadShouldPoll(latestSnapshot))break // A manual reconnect may restart; never an effect self-trigger.
             send("refresh")
@@ -134,26 +145,44 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
 操作：${source.optString("jobOperationId")}""", fontSize = 12.sp, lineHeight = 21.sp) }
                     Text("执行端报告和协议回执不等于工具或业务成功；Claude工具限制不是操作系统只读沙箱。运行中Codex补充仍使用原任务的独立输入入口。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp)
                 }
+                HarnessConfigurationPanel(taskId, snapshot, controller, busy, foreground)
                 RemoteReadStatusPanel(snapshot, readBusy, foreground && !busy) { reconnectNonce++ }
+                if(source.optString("executorStatus")=="interrupted") {
+                    Text(if(coldRecovery) "已核对原进程组停止、原会话最后一轮终止；原job仍是中断。未补造旧输出、成果或费用，业务是否成功仍须核对。" else "原执行因服务故障中断，不能由失联状态推断已停止。先只读核对原进程与准确会话终态，不会重发旧任务、答案或批准。",fontSize=14.sp,lineHeight=21.sp)
+                    if(source.optJSONObject("coldRecovery")?.optJSONObject("lastInspection")?.optString("status")=="unconfirmed") Text("最近一次只读核对未能确认当前恢复条件，旧核对仅保留作历史；不会按旧记录开启下一轮。",fontSize=14.sp,color=MaterialTheme.colorScheme.error)
+                    if(fresh&&source.optJSONObject("controls")?.optBoolean("readSessionRecovery")==true) OutlinedButton(onClick={send("inspectRecovery")},enabled=!busy) { Text("只读核对原会话的恢复条件") }
+                    else if(!coldRecovery) Text("此旧任务或执行器缺少可核对证据时，仍只读保留；需在原电脑确认并停止原执行，不会自动另建任务。",fontSize=13.sp,color=SecondaryInk)
+                }
+                RemoteAttentionPanel(snapshot, fresh && !busy, controller, ::send)
                 RemoteProgressPanel(snapshot)
                 RemoteQuestionPanel(snapshot,busy) { id,hash,answers -> send("answerQuestion",JSONObject().put("requestId",id).put("requestHash",hash).put("answers",answers)) }
                 RemoteResultPanel(snapshot, fresh && !busy) { path -> send("readArtifact", JSONObject().put("path", path)) }
                 RemoteTaskFilesPanel(snapshot, fresh && !busy, ::send)
+                RemoteProjectHistoryPanel(snapshot, fresh && !busy, controller, ::send)
                 RemoteSnapshotPanel(snapshot, fresh && !busy, selectedSnapshot?.optString("snapshotId"),
                     capture = { paths -> send("captureSnapshot", JSONObject().put("paths", paths)) },
                     read = { id, path -> send("readSnapshot", JSONObject().put("snapshotId", id).put("path", path)) },
                     select = { selectedSnapshot = it },
                     save = { id, path -> send("saveSnapshot", JSONObject().put("snapshotId", id).put("path", path)) },
                     openAttachment = controller::openAttachmentOutcome)
+                RemoteConversationResultPanel(snapshot, fresh && !busy, controller, ::send)
+                RemoteDraftPanel(snapshot, fresh && !busy, ::send)
+                RemotePreviewPanel(snapshot, controller)
 
                 if (fresh && snapshot.optBoolean("canContinue")) {
                     Text("继续这个会话", fontWeight = FontWeight.SemiBold)
+                    OutlinedButton(onClick=openContinuationInputs,enabled=!busy){Text("选择新文件，在这个会话继续")}
                     OutlinedTextField(prompt, { prompt = it }, label = { Text("本次明确的新要求") }, minLines = 3, maxLines = 7, modifier = Modifier.fillMaxWidth())
+                    if(coldRecovery) {
+                        OutlinedTextField(recoveryTimeout,{recoveryTimeout=it},label={Text("本次新执行时限（10–900秒）")},supportingText={Text("沿用原电脑、工作区和读写边界；超时会按原监督流程请求停止并核对。每流输出仍有界，内部模型次数、tokens和费用不可硬限；旧未知费用不清零。")},modifier=Modifier.fillMaxWidth())
+                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) { Checkbox(checked=recoveryAccepted,onCheckedChange={recoveryAccepted=it},enabled=!busy);Text("我明确授权这次新执行及所示时限，理解内部计费未知；不恢复任何旧批准。",fontSize=14.sp,lineHeight=21.sp,modifier=Modifier.weight(1f)) }
+                    }
                     Button(onClick = {
                         val input = JSONObject().put("prompt", prompt)
+                        if(coldRecovery)input.put("timeoutSeconds",recoveryTimeout.toIntOrNull()).put("recoveryOwnerAcknowledged",recoveryAccepted)
                         selectedSnapshot?.let { input.put("snapshotId", it.getString("snapshotId")).put("snapshotVersion", it.getString("snapshotVersion")) }
                         send("continue", input)
-                    }, enabled = !busy && submitted == null && prompt.isNotBlank() && prompt.length <= 12000) { Text(if (selectedSnapshot == null) "确认续接原会话" else "按所选快照同版本续接") }
+                    }, enabled = !busy && submitted == null && prompt.isNotBlank() && prompt.length <= 12000 && (!coldRecovery || recoveryAccepted && (recoveryTimeout.toIntOrNull() ?: 0) in 10..900)) { Text(if (selectedSnapshot == null) "确认续接原会话" else "按所选快照同版本续接") }
                     if (selectedSnapshot != null) Text("派发前和原电脑启动前均核对所选文件版本；漂移时拒绝旧续接，不把快照自动改绑新文件。此操作仍可能修改原工作区。", fontSize = 11.sp, lineHeight = 19.sp, color = SecondaryInk)
                 } else snapshot.optString("reason").takeIf { it.isNotBlank() }?.let { Text(it, color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp) }
                 source.optJSONArray("pendingApprovals").objects().forEach { approval ->
@@ -286,7 +315,10 @@ private fun RemoteApprovalSummary(approval: JSONObject) {
         Text("本次所选文件：" + file.optString("path"), fontSize = 12.sp)
         SelectionContainer { Text(file.optString("diff"), fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())) }
     }
-    if (approval.optString("scopeReason").isNotBlank()) Text("仅明确所选路径的单次文件修改可批准；命令/会话/网络扩权及未知文件不会获准。", fontSize = 11.sp, lineHeight = 19.sp, color = SecondaryInk)
+    if (approval.optBoolean("projectCommandRisk")) {
+        Text("仅批准上面这一条命令。它以电脑当前用户权限运行，工作目录不是操作系统隔离；可能读取该用户可访问的数据或改变本机/网络状态。", fontSize = 14.sp, lineHeight = 22.sp, color = Danger)
+        Text("这不允许会话级放行、修改执行策略、网络扩权或扩大根目录。若命令范围不明确，请拒绝并说明目标。", fontSize = 14.sp, lineHeight = 22.sp, color = SecondaryInk)
+    } else if (approval.optString("scopeReason").isNotBlank()) Text("仅明确所选路径的单次文件修改可批准；命令/会话/网络扩权及未知文件不会获准。", fontSize = 13.sp, lineHeight = 20.sp, color = SecondaryInk)
     if (command.isBlank() && path.isBlank() && fileChanges.isEmpty()) Text("执行端没有提供完整命令/文件摘要，请展开原文核对访问范围。", fontSize = 12.sp, color = SecondaryInk)
     TextButton(onClick = { raw = !raw }) { Text(if (raw) "收起协议原文" else "展开工具输入与协议原文", fontSize = 12.sp) }
     if (raw) SelectionContainer { Text(approval.toString(2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 19.sp) }

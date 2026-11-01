@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from remote_interactions import QuestionMailbox, Progress, question
+import group_input_audience
 
 
 class DriverError(Exception):
@@ -15,11 +16,12 @@ class DriverError(Exception):
 
 
 class CodexAppServerDriver:
-    def __init__(self, process, cwd, write_allowed, on_state, stopped, timeout, restricted_read_only=False, dispatch_guard=None, assignment_write=False, output_limit=196608, assignment_paths=None):
+    def __init__(self, process, cwd, write_allowed, on_state, stopped, timeout, restricted_read_only=False, dispatch_guard=None, assignment_write=False, output_limit=196608, assignment_paths=None, assignment_project=False):
         self.process, self.cwd, self.write_allowed = process, cwd, write_allowed
         self.on_state, self.stopped = on_state, stopped
         self.restricted_read_only = restricted_read_only
         self.assignment_write = assignment_write
+        self.assignment_project = bool(assignment_project)
         self.assignment_paths = set(assignment_paths or [])
         self.assignment_file_items = {}
         self.assignment_write_verified = False
@@ -39,7 +41,7 @@ class CodexAppServerDriver:
         self.seen_approvals = set()
         self.approval_receipts = []
         self.questions = QuestionMailbox()
-        self.progress = Progress("codex_app_server", enabled=not assignment_write)
+        self.progress = Progress("codex_app_server", enabled=not assignment_write or assignment_project)
         self.output_truncated = self.diff_truncated = False
         self.closed = False
         self.lock = threading.RLock()
@@ -49,11 +51,19 @@ class CodexAppServerDriver:
         self.turn_dispatched = False
         self.turn_start_acknowledged = False
         self.protocol_verified = False
+        self.initialized = False
         self.restricted_profile_confirmed = False
         self.interrupt_sent = False
         self.interrupt_deadline = None
         self.output = ""
         self.diff = ""
+        self.reported_file_changes = set()
+        self.fork_dispatched = self.fork_refused = False
+        self.fork_proof = None
+        self.group_generation = self.group_expected_generation = self.group_runtime_generation = None
+        self.group_last_source_check = 0
+        self.group_api_revoked = False
+        self.group_api_facts = None
         self.reader = threading.Thread(target=self._read, daemon=True, name="pocket-codex-rpc")
         self.reader.start()
 
@@ -101,7 +111,13 @@ class CodexAppServerDriver:
 
     def _pump(self):
         now = time.monotonic()
-        if self.stopped() or now >= self.deadline:
+        if self.group_runtime_generation is not None and now-self.group_last_source_check>=1:
+            self.group_last_source_check=now
+            try:
+                self.group_api_revoked |= self.group_runtime_generation()!=self.group_expected_generation
+            except group_input_audience.Unavailable:
+                self.group_api_revoked=True
+        if self.stopped() or now >= self.deadline or self.group_api_revoked:
             if not self.turn_dispatched:
                 raise DriverError("Codex stopped before turn dispatch")
             if self.interrupt_deadline is None:
@@ -218,10 +234,13 @@ class CodexAppServerDriver:
         return response["result"]
 
     def _start_turn(self, params):
+        self._check_group_api_mode()
         request_id = self._id()
         with self.dispatch_guard():
             if self.stopped() or time.monotonic() >= self.deadline:
                 raise DriverError("Codex stopped before turn dispatch")
+            if self.group_generation is not None and (self.group_api_revoked or self.group_generation() != self.group_expected_generation):
+                raise DriverError("API-key source changed at the original turn dispatch boundary; no group prompt sent")
             self.turn_dispatched = True
             self._send({"id": request_id, "method": "turn/start", "params": params})
         while True:
@@ -278,6 +297,10 @@ class CodexAppServerDriver:
         method, params = message["method"], message.get("params", {})
         if not isinstance(params, dict):
             raise DriverError("Codex event params must be an object")
+        if method == "account/updated" and self.group_generation is not None:
+            if params.get("authMode") != "apikey":
+                self.group_api_revoked = True
+            return
         if "id" in message:
             if method == "item/tool/requestUserInput":
                 wire = message["id"]
@@ -311,16 +334,23 @@ class CodexAppServerDriver:
                 if self.assignment_write:
                     # A command approval may authorize an unsandboxed retry. cwd is not confinement.
                     # Only a known exact selected-file change can be approved once; never grantRoot.
-                    safe = method == "item/fileChange/requestApproval" and self.assignment_write_verified and item is not None and not params.get("grantRoot") and safe
+                    exact_file = method == "item/fileChange/requestApproval" and item is not None
+                    explicit_command = self.assignment_project and method == "item/commandExecution/requestApproval" and isinstance(params.get("command"), str) and 0 < len(params["command"]) <= 8000 and params.get("cwd") == self.cwd
+                    # Full project owner scope explicitly acknowledges same-user command risk. Still one exact
+                    # pending request, never session grants, execpolicy amendments, network/grantRoot expansion.
+                    safe = (exact_file or explicit_command) and self.assignment_write_verified and not params.get("grantRoot") and not params.get("proposedExecpolicyAmendment") and not params.get("proposedNetworkPolicyAmendments") and safe
                 request = {"requestId": str(message["id"]), "wireId": message["id"], "method": method, "reason": str(params.get("reason", ""))[:2000], "command": params.get("command"), "cwd": params.get("cwd"), "canAccept": safe, "threadId": params.get("threadId"), "turnId": params.get("turnId"), "itemId": params.get("itemId"), "grantRoot": params.get("grantRoot")}
                 if self.assignment_write:
                     request["files"] = item or []
-                    request["scopeReason"] = "Exact selected-file change only; command/sandbox escalation, session grants and unknown paths are not supported"
+                    request["scopeReason"] = "Explicit full-project same-user command scope; approve this exact request once, no session/network/grantRoot expansion" if self.assignment_project else "Exact selected-file change only; command/sandbox escalation, session grants and unknown paths are not supported"
+                    request["projectCommandRisk"] = self.assignment_project and method == "item/commandExecution/requestApproval"
                 with self.lock:
                     if len(self.pending) >= 12:
                         self._send({"id": message["id"], "result": {"decision": "decline"}})
                     else:
                         self.pending[str(message["id"])] = request
+                        self.progress.add("approval", method, str(params.get("itemId", "")), requestId=approval_id,
+                                          summary="Original single tool/file permission request; history is not approval authority")
                 self._state()
             elif method == "item/permissions/requestApproval":
                 self._send({"id": message["id"], "result": {"permissions": {}}})
@@ -341,6 +371,15 @@ class CodexAppServerDriver:
                                   command=item.get("command") if isinstance(item.get("command"), str) else None,
                                   exitCode=item.get("exitCode") if isinstance(item.get("exitCode"), int) else None)
                 self._state()
+        if method == "item/completed" and isinstance(params.get("item"), dict) and params["item"].get("type") == "fileChange":
+            for change in params["item"].get("changes", [])[:2000]:
+                if isinstance(change, dict) and isinstance(change.get("path"), str) and len(self.reported_file_changes) < 2000:
+                    try:
+                        candidate = Path(change["path"])
+                        relative = (candidate if candidate.is_absolute() else Path(self.cwd) / candidate).resolve().relative_to(Path(self.cwd).resolve())
+                        self.reported_file_changes.add(str(relative))
+                    except (OSError, ValueError):
+                        pass  # Out-of-project protocol paths are not attribution proof.
         elif method == "item/commandExecution/outputDelta":
             self.progress.add("tool_output", method, params.get("itemId", ""), text=params.get("delta") if isinstance(params.get("delta"), str) else "")
             self._state()
@@ -362,7 +401,7 @@ class CodexAppServerDriver:
             if isinstance(item, dict) and item.get("type") == "fileChange" and isinstance(item.get("id"), str):
                 changes = item.get("changes")
                 checked = []
-                if isinstance(changes, list) and 0 < len(changes) <= 8 and len(self.assignment_file_items) < 128:
+                if isinstance(changes, list) and 0 < len(changes) <= (2000 if self.assignment_project else 8) and len(self.assignment_file_items) < 128:
                     for change in changes:
                         if not isinstance(change, dict) or not isinstance(change.get("path"), str):
                             break
@@ -377,7 +416,7 @@ class CodexAppServerDriver:
                         except (OSError, ValueError):
                             break
                         kind = change.get("kind")
-                        if not isinstance(kind, dict) or kind.get("type") != "update" or kind.get("move_path") is not None:
+                        if not isinstance(kind, dict) or kind.get("type") not in ({"add", "update", "delete"} if self.assignment_project else {"update"}) or kind.get("move_path") is not None:
                             break
                         if relative not in self.assignment_paths or not isinstance(change.get("diff"), str) or len(change["diff"].encode()) > self.output_limit:
                             break
@@ -385,13 +424,15 @@ class CodexAppServerDriver:
                     else:
                         if sum(len(change["diff"].encode()) for change in checked) <= self.output_limit:
                             self.assignment_file_items[item["id"]] = checked
+        byte_bounded_output = self.assignment_write or self.group_generation is not None
         if method == "item/agentMessage/delta":
             text = self.output + str(params.get("delta", ""))
             self.output_truncated |= len(text) > 196608
             combined = text.encode("utf-8")
             available = max(0, self.output_limit - len(self.diff.encode("utf-8")))
-            self.output = combined[:available].decode("utf-8", errors="ignore") if self.assignment_write else text[:196608]
-            if self.assignment_write and len(combined) + len(self.diff.encode("utf-8")) > self.output_limit:
+            self.output = combined[:available].decode("utf-8", errors="ignore") if byte_bounded_output else text[:196608]
+            self.output_truncated |= byte_bounded_output and len(combined) > available
+            if byte_bounded_output and len(combined) + len(self.diff.encode("utf-8")) > self.output_limit:
                 self.output_limit_exceeded = True
                 self._state()
                 raise DriverError("Approved external_job output byte limit exceeded; no later turn is dispatched")
@@ -399,9 +440,9 @@ class CodexAppServerDriver:
         elif method == "turn/diff/updated":
             raw = str(params.get("diff", "")).encode("utf-8")
             available = max(0, self.output_limit - len(self.output.encode("utf-8")))
-            self.diff = raw[:available].decode("utf-8", errors="ignore") if self.assignment_write else str(params.get("diff", ""))[:196608]
-            self.diff_truncated |= not self.assignment_write and len(str(params.get("diff", ""))) > 196608
-            if self.assignment_write and len(raw) + len(self.output.encode("utf-8")) > self.output_limit:
+            self.diff = raw[:available].decode("utf-8", errors="ignore") if byte_bounded_output else str(params.get("diff", ""))[:196608]
+            self.diff_truncated |= len(raw) > available if byte_bounded_output else len(str(params.get("diff", ""))) > 196608
+            if byte_bounded_output and len(raw) + len(self.output.encode("utf-8")) > self.output_limit:
                 self.output_limit_exceeded = True
                 self._state()
                 raise DriverError("Approved external_job output/diff byte limit exceeded")
@@ -433,7 +474,7 @@ class CodexAppServerDriver:
         with self.lock:
             approvals = [{key: value for key, value in entry.items() if key != "wireId"} for entry in self.pending.values()]
         questions, answers = self.questions.snapshot()
-        self.on_state({"protocol": "codex_app_server", "protocolVerified": self.protocol_verified, "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "pendingApprovals": approvals, "approvalReceipts": [dict(value) for value in self.approval_receipts], "pendingQuestions": questions, "questionReceipts": answers, "progress": self.progress.snapshot(), "output": self.output, "diff": self.diff, "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "inputSteeringVerified": self.input_steering_verified, "steeringUnknown": self.steering_unknown, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "status": "awaiting_approval" if approvals else "awaiting_input" if any(value.get("isBlocking") for value in questions) else "running"})
+        self.on_state({"protocol": "codex_app_server", "protocolVerified": self.protocol_verified, "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "pendingApprovals": approvals, "approvalReceipts": [dict(value) for value in self.approval_receipts], "pendingQuestions": questions, "questionReceipts": answers, "progress": self.progress.snapshot(), "output": self.output, "diff": self.diff, "reportedFileChanges": sorted(self.reported_file_changes), "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "inputSteeringVerified": self.input_steering_verified, "steeringUnknown": self.steering_unknown, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "status": "awaiting_approval" if approvals else "awaiting_input" if any(value.get("isBlocking") for value in questions) else "running"})
 
     def _question_live(self):
         return self.protocol_verified and self.turn_dispatched and self.thread_id is not None and self.turn_id is not None and self.completed is None and not self.closed and not self.interrupt_sent and not self.stopped() and not self.assignment_write
@@ -459,10 +500,32 @@ class CodexAppServerDriver:
             self.decisions.put_nowait((str(request_id), decision))
             request["decisionQueued"] = True
 
-    def probe(self, model=None):
-        """Read protocol/account/catalog only. Never creates a thread or starts a turn."""
+    def _initialize(self):
+        if self.initialized:
+            return
         self._request("initialize", {"clientInfo": {"name": "pocket_world", "title": "Pocket World", "version": "0.3.0"}})
         self._send({"method": "initialized", "params": {}})
+        self.initialized = True
+
+    def read_original_turn(self, thread_id, turn_id):
+        """Only official stored metadata/history reads. Unsupported current RPC shapes fail closed.
+        A new app-server notLoaded status is NOT process quiescence; the original supervisor
+        separately requires its persisted native process identity and stopped group.
+        """
+        self._initialize()
+        result = self._request("thread/read", {"threadId": thread_id, "includeTurns": False})
+        thread = result.get("thread")
+        if not isinstance(thread, dict) or thread.get("id") != thread_id or thread.get("cwd") != self.cwd or not isinstance(thread.get("status"), dict) or thread["status"].get("type") not in {"notLoaded", "idle"}:
+            raise DriverError("Stored original thread identity/cwd/runtime status is unavailable or active; no turn was started")
+        history = self._request("thread/turns/list", {"threadId": thread_id, "limit": 1, "sortDirection": "desc", "itemsView": "notLoaded"})
+        data = history.get("data")
+        if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict) or data[0].get("id") != turn_id or data[0].get("status") not in {"completed", "failed", "interrupted"}:
+            raise DriverError("Latest stored turn differs or is not terminal; no old turn/answer/approval was replayed")
+        return {"threadId": thread_id, "turnId": turn_id, "status": data[0]["status"], "threadStatus": thread["status"]["type"], "readOnlyInspection": True}
+
+    def probe(self, model=None):
+        """Read protocol/account/catalog only. Never creates a thread or starts a turn."""
+        self._initialize()
         self._probe_steering()
         self._read_only_overrides()
         account = self._request("account/read", {"refreshToken": False})
@@ -478,10 +541,67 @@ class CodexAppServerDriver:
             if isinstance(item, dict) and isinstance(item.get("model"), str) and 0 < len(item["model"]) <= 200:
                 models.append({"id": item["model"], "name": str(item.get("displayName", item["model"]))[:200], "isDefault": item.get("isDefault") is True})
         model_available = bool(models) if model is None else any(item["id"] == model for item in models)
-        return {"available": configured and model_available, "protocolVerified": True, "accountConfigured": configured,
+        return {"available": configured and model_available, "protocolVerified": True, "accountConfigured": configured, "authMode": identity.get("type", "unknown") if isinstance(identity, dict) and identity.get("type") in {"apiKey", "chatgpt", "amazonBedrock", "gcp"} else "unknown", "authModeObservedFrom": "original_app_server_account_read", "billingBackendVerified": False,
                 "modelInferenceVerified": False, "configReadVerified": True, "inputSteeringVerified": self.input_steering_verified, "models": models, "modelCatalogTruncated": bool(catalog.get("nextCursor")),
                 "selectedModelAvailable": model_available,
                 "message": "Protocol and configured account/catalog checked; no model turn was executed" if configured and model_available else "Configure the Codex account and select a model advertised by its catalog"}
+
+    def require_group_api_mode(self, expected_generation, current_generation, runtime_generation=None):
+        self.group_expected_generation, self.group_generation = expected_generation, current_generation
+        self.group_runtime_generation=runtime_generation or current_generation
+        return self._check_group_api_mode()
+
+    def _check_group_api_mode(self, runtime=False):
+        if self.group_generation is None:
+            return None
+        self._initialize()
+        try:
+            current_generation = self.group_runtime_generation if runtime else self.group_generation
+            before = current_generation()
+            facts = group_input_audience.actual_api_mode(self._request("account/read", {"refreshToken": False}), self._request("config/read", {}))
+            after = current_generation()
+        except group_input_audience.Unavailable as failure:
+            raise DriverError(str(failure)) from failure
+        if self.group_api_revoked or before != after or after != self.group_expected_generation:
+            raise DriverError("Actual API-key mode/source generation changed; no group prompt or fallback was dispatched")
+        self.group_api_facts = {**facts, "credentialGeneration": after}
+        return dict(self.group_api_facts)
+
+    def fork_original_thread(self, thread_id, turn_id):
+        """One real thread/fork, not a fallback thread/start or a filesystem rollback.
+
+        Only the latest known terminal turn is supported here. This also makes an old
+        peer ignoring lastTurnId fail safe: no unreviewed later turn may be copied.
+        Missing provenance or lost acknowledgement is not permission to try again.
+        """
+        self.read_original_turn(thread_id, turn_id)
+        with self.dispatch_guard():
+            if self.stopped() or time.monotonic() >= self.deadline:
+                raise DriverError("Stopped before original conversation fork")
+            self.on_state({"sessionBranch": {"phase": "sending", "sourceThreadId": thread_id, "sourceTurnId": turn_id, "filesRestored": False}})
+            self.fork_dispatched = True
+            request_id = self._id()
+            self._send({"id": request_id, "method": "thread/fork", "params": {"threadId": thread_id, "lastTurnId": turn_id, "excludeTurns": True}})
+        # Do not hold the Companion cancellation monitor while waiting for peer IO.
+        while True:
+            response = self._pump()
+            if response and response.get("id") == request_id:
+                break
+        if isinstance(response.get("error"), dict):
+            self.fork_refused = response["error"].get("code") in {-32600, -32601, -32602}
+            raise DriverError("Installed Codex refused exact thread/fork; no new thread/start fallback or prompt was sent")
+        admitted = response.get("result", {}).get("thread")
+        if not isinstance(admitted, dict) or not isinstance(admitted.get("id"), str) or not admitted["id"] or admitted["id"] == thread_id or admitted.get("forkedFromId") != thread_id:
+            raise DriverError("Conversation fork lacks a distinct original-provenance receipt; creation is unconfirmed")
+        branch = admitted["id"]
+        # Verify actual stored history of the new ID before the first model turn.
+        self.read_original_turn(branch, turn_id)
+        self.fork_proof = {"phase": "created", "sourceThreadId": thread_id, "sourceTurnId": turn_id, "threadId": branch,
+                           "forkedFromId": admitted["forkedFromId"], "sessionId": admitted.get("sessionId"),
+                           "historyVerifiedThroughOriginalTerminalTurn": True, "filesRestored": False, "oldApprovalOrBudgetInherited": False}
+        self.thread_id = branch
+        self.on_state({"threadId": branch, "sessionBranch": dict(self.fork_proof)})
+        return branch
 
     def _read_only_overrides(self):
         # Effective configuration stays inside the CLI transport; it can contain credentials.
@@ -501,9 +621,9 @@ class CodexAppServerDriver:
                 "computer_use": False, "multi_agent": False}, "web_search": "disabled"}
 
     def run(self, prompt, thread_id=None, model=None):
-        self._request("initialize", {"clientInfo": {"name": "pocket_world", "title": "Pocket World", "version": "0.3.0"}})
-        self._send({"method": "initialized", "params": {}})
+        self._initialize()
         self.protocol_verified = True
+        self._check_group_api_mode()
         self._probe_steering()
         params = {"cwd": self.cwd, "approvalPolicy": "unlessTrusted", "sandbox": "workspaceWrite" if self.write_allowed else "readOnly"}
         if self.restricted_read_only or self.assignment_write:
@@ -553,4 +673,15 @@ class CodexAppServerDriver:
         status = self.completed.get("status")
         if status not in {"completed", "failed", "interrupted"}:
             raise DriverError("Codex turn ended with an unsupported status")
-        return {"status": "completed" if status == "completed" else "cancelled" if status == "interrupted" else "failed", "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "output": self.output, "diff": self.diff, "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "message": "Codex returned a final turn receipt; inspect its actual changes", "protocol": "codex_app_server", "protocolVerified": True, "approvalReceipts": self.approval_receipts, "pendingApprovals": [], "pendingQuestions": [], "questionReceipts": self.questions.snapshot()[1], "progress": self.progress.snapshot()}
+        if self.group_generation is not None:
+            # Same actual app-server after the final turn, not another CLI/model request.
+            # Admission TTL is not renewed and cannot cancel a legitimately long accepted run.
+            try:
+                self._check_group_api_mode(runtime=True)
+                self.group_api_facts.update(postTurnAccountReadVerified=True, generationCheckedAfterTurn=True)
+            except DriverError:
+                self.group_api_revoked = True
+                self.group_api_facts = {"authMode": "unknown", "postTurnAccountReadVerified": False,
+                                        "billingBackendVerified": False, "internalTokensKnown": False,
+                                        "internalCostKnown": False}
+        return {"status": "unknown" if self.group_api_revoked else "completed" if status == "completed" else "cancelled" if status == "interrupted" else "failed", "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "output": self.output, "diff": self.diff, "reportedFileChanges": sorted(self.reported_file_changes), "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "message": "Codex returned a final turn receipt; inspect its actual changes", "protocol": "codex_app_server", "protocolVerified": True, "approvalReceipts": self.approval_receipts, "pendingApprovals": [], "pendingQuestions": [], "questionReceipts": self.questions.snapshot()[1], "progress": self.progress.snapshot()}

@@ -20,6 +20,11 @@ final class ProjectLivePreviewProfiles {
     private static final Set<String> loaded=new HashSet<>();
     private ProjectLivePreviewProfiles(){}
     static void bindFirst(Context context,WebView fresh,ProjectDevSession.Observed observed)throws Exception {
+        bindFirst(context,fresh,observed.reference.operationId().replace("-",""));
+    }
+    /** Same dev-profile registry; native owned mounts never use the user's Browser profiles. */
+    static void bindFirst(Context context,WebView fresh,String nativeProfileKey)throws Exception {
+        if(nativeProfileKey==null||!nativeProfileKey.matches("[a-f0-9]{32}"))throw new SecurityException("活预览原native资料身份无效");
         if(Looper.myLooper()!=Looper.getMainLooper())throw new IllegalStateException("活预览必须由原生主线程打开");
         if(!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE))throw new IllegalStateException("此WebView提供者不支持独立资料，未借用默认或账号浏览器。可继续看日志、修改和固定成果；活页面待支持的提供者");
         File file=new File(context.getNoBackupFilesDir(),"project-live-preview-profiles-v1.json");
@@ -36,7 +41,7 @@ final class ProjectLivePreviewProfiles {
             }catch(RuntimeException unavailable){/* Retain the exact pending name. */}
             if(!absent)pending.put(name);
         }
-        String name="pw_dev_"+observed.reference.operationId().replace("-","");boolean found=false;for(int i=0;i<pending.length();i++)found|=name.equals(pending.getString(i));
+        String name="pw_dev_"+nativeProfileKey;boolean found=false;for(int i=0;i<pending.length();i++)found|=name.equals(pending.getString(i));
         if(!found){if(pending.length()>=8)throw new IllegalStateException("本进程的活预览资料待提供者清理；请结束原服务并真正重开App后再试。固定成果和文件仍保留");pending.put(name);}
         book.put("pending",pending);JsonFiles.write(file,book);
         // Conservatively mark before calling the provider: a throwing call may have loaded it.

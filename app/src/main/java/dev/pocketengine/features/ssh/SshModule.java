@@ -50,10 +50,11 @@ public final class SshModule implements EngineModule {
     public void setOwnerAttachments(dev.pocketengine.features.attachments.AttachmentsModule ownerFiles){fileArtifacts=new SshFileArtifacts(dev.pocketengine.features.attachments.AttachmentRepository.get(context.android).book,java.util.Objects.requireNonNull(ownerFiles));}
     @Override public String id(){return "ssh";}
     @Override public synchronized JSONObject snapshot()throws Exception {
-        JSONArray saved=new JSONArray(),terminals=new JSONArray(),operations=new JSONArray();for(SshProfile profile:profiles.values())saved.put(publicProfile(profile));
+        JSONArray saved=new JSONArray(),terminals=new JSONArray(),operations=new JSONArray(),previews=new JSONArray();for(SshProfile profile:profiles.values())saved.put(publicProfile(profile));
         for(Operation operation:active.values())if(operation.terminal!=null)terminals.put(metadata(operation));
         for(Operation operation:active.values())if(!operation.finished.get())operations.put(metadata(operation));
-        return new JSONObject().put("profiles",saved).put("terminals",terminals).put("operations",operations).put("directSsh",true).put("sftp",true).put("environmentDoctor",true)
+        for(Operation operation:active.values())if(operation.forward!=null&&!operation.finished.get())previews.put(metadata(operation));
+        return new JSONObject().put("profiles",saved).put("previews",previews).put("terminals",terminals).put("operations",operations).put("directSsh",true).put("sftp",true).put("environmentDoctor",true)
                 .put("ptyImplemented",true).put("deviceVerified",false).put("remotePersistentJobs",false).put("posixShellOnly",true)
                 .put("strongAtomicCas",false).put("binaryFileTransfers",fileArtifacts!=null).put("maxBinaryTransferBytes",DirectSshClient.MAX_TRANSFER).put("binaryBodiesInJson",false).put("automaticTransferResume",false).put("ownerOnly",true).put("library","com.github.mwiede:jsch:2.28.8");
     }
@@ -71,6 +72,21 @@ public final class SshModule implements EngineModule {
             case "readPty":case "writePty":case "resizePty":case "closePty":return terminal(command,input);
             default:throw new IllegalArgumentException("未知SSH操作");
         }
+    }
+    /** Not in handle()/model capabilities. Only the private native page can construct Grant. */
+    JSONObject openOwnerPreview(SshPreviewWorkflows.Grant grant)throws Exception {
+        grant.checkCurrent();if(!grant.control.matchesHostRun(grant.task,grant.run,grant.epoch))throw new SecurityException("原预览控制身份不符");
+        return execute("openPreviewForward",grant.input,grant.control,grant.run,grant.epoch);
+    }
+    public final class PreviewLease implements dev.pocketengine.features.local.preview.OwnedLoopbackPreview {
+        private final Operation operation;private final String identity;
+        private PreviewLease(Operation operation)throws Exception{this.operation=operation;identity=SshProfile.hash(("pocketworld/ssh-preview/v1\n"+operation.taskId+"\n"+operation.runId+"\n"+operation.profileId+"\n"+operation.forward.localPort+"\n"+operation.forward.remotePort).getBytes(StandardCharsets.UTF_8));}
+        public String identity(){return identity;}
+        public String baseUrl(){return "http://127.0.0.1:"+operation.forward.localPort+"/";}
+        public void requireCurrent()throws Exception{if(closed||active.get(operation.id)!=operation||operation.finished.get()||operation.forward==null)throw new SecurityException("原隧道身份已失效");operation.forward.requireCurrent();}
+    }
+    public PreviewLease originalPreview(String taskId,String runId)throws Exception {
+        Operation operation=active.get(runId);if(operation==null||!taskId.equals(operation.taskId)||!runId.equals(operation.runId)||operation.forward==null)throw new SecurityException("没有此原任务的实际隧道");PreviewLease lease=new PreviewLease(operation);lease.requireCurrent();return lease;
     }
     /** Native owner entry points only. Models/channels must not receive these configuration capabilities. */
     public static boolean configurationCommand(String command){return command.matches("saveProfile|removeProfile|probeHostKey|approveHostKey|forgetHostKey");}
@@ -90,6 +106,54 @@ public final class SshModule implements EngineModule {
         int epoch=((Number)rawEpoch).intValue();
         if(!sameLiveControl.hasHostRun()||!sameLiveControl.matchesHostRun(task,run,epoch))throw new SecurityException("SSH控制不属于原宿主任务与执行");
         return execute(command,new JSONObject(input.toString()),sameLiveControl,run,epoch);
+    }
+
+    /** Native private Settings workflow only; never exposed by EngineModule.handle. */
+    public static final class ConnectionBackupReview {
+        private final SshModule issuer;private final String section,action;private final dev.pocketengine.core.RunControl original;private final long expires;private ConnectionBackupAdmission admission;
+        private ConnectionBackupReview(SshModule issuer,JSONObject section,String action,dev.pocketengine.core.RunControl original){this.issuer=issuer;this.section=section.toString();this.action=action;this.original=original;expires=System.currentTimeMillis()+600_000L;}
+        public JSONObject metadata()throws Exception {current();return dev.pocketengine.features.ConnectionBackupSections.reviewMetadata("ssh",action,new JSONObject(section));}
+        private void current()throws Exception {original.check();if(issuer.closed||System.currentTimeMillis()>expires)throw new SecurityException("原私人设置恢复审阅已关闭或到期");}
+        public synchronized ConnectionBackupAdmission confirm()throws Exception {current();if(admission==null)admission=new ConnectionBackupAdmission(this);return admission;}
+    }
+    public static final class ConnectionBackupAdmission {
+        private final ConnectionBackupReview review;private boolean attempted;
+        private ConnectionBackupAdmission(ConnectionBackupReview review){this.review=review;}
+        public JSONObject metadata()throws Exception{return review.metadata();}
+    }
+    public JSONObject exportConnectionBackupForOwner(dev.pocketengine.core.RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(original).check();JSONArray rows; synchronized(this){if(closed)throw new SecurityException("原连接模块已关闭");rows=connectionBackupRows();}original.check();return dev.pocketengine.features.ConnectionBackupSections.section("ssh",rows);
+    }
+    public ConnectionBackupReview reviewConnectionBackupForOwner(JSONObject exactSection,String ownerActionId,dev.pocketengine.core.RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(original).check();if(closed)throw new SecurityException("原连接模块已关闭");JSONObject section=dev.pocketengine.features.ConnectionBackupSections.checked("ssh",exactSection);ConnectionBackupReview review=new ConnectionBackupReview(this,section,dev.pocketengine.features.ConnectionBackupSections.action(ownerActionId),original);review.current();return review;
+    }
+    /** Cold unknown recovery: original action/digest/id lookup only, never mint an admission or write. */
+    public JSONObject queryConnectionBackupForOwner(JSONObject exactSection,String originalOwnerActionId,dev.pocketengine.core.RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(original).check();JSONObject section=dev.pocketengine.features.ConnectionBackupSections.checked("ssh",exactSection);String action=dev.pocketengine.features.ConnectionBackupSections.action(originalOwnerActionId),digest=dev.pocketengine.features.ConnectionBackupSections.digest(section);JSONArray rows=section.getJSONArray("profiles"),results=new JSONArray();
+        for(int n=0;n<rows.length();n++){original.check();JSONObject row=rows.getJSONObject(n);String id=dev.pocketengine.features.ConnectionBackupSections.restoredId("ssh",action,digest,row.getString("sourceProfileId"));String actual="unconfirmed";try{synchronized(this){if(closed)throw new SecurityException("原连接模块已关闭");original.check();actual=restoreConnectionBackupRow(row,id,action,digest,true);}}catch(Exception unconfirmed){original.check();}results.put(new JSONObject().put("originalProfileId",row.getString("sourceProfileId")).put("newProfileId",id).put("state",actual.equals("already_restored")?"found":"unknown").put("observation",actual));}
+        original.check();return new JSONObject().put("module","ssh").put("ownerActionId",action).put("sectionDigest",digest).put("profiles",results).put("queryOnly",true).put("configurationWritten",false).put("automaticConnection",false);
+    }
+    public JSONObject restoreConnectionBackupForOwner(ConnectionBackupAdmission admission,dev.pocketengine.core.RunControl original)throws Exception {
+        if(admission==null||admission.review.issuer!=this||admission.review.original!=original)throw new SecurityException("没有此模块/原私人设置操作的native恢复批准");ConnectionBackupReview review=admission.review;review.current();boolean queryOnly;synchronized(admission){queryOnly=admission.attempted;admission.attempted=true;}
+        JSONObject section=new JSONObject(review.section);String digest=dev.pocketengine.features.ConnectionBackupSections.digest(section);JSONArray rows=section.getJSONArray("profiles"),results=new JSONArray();boolean stopped=false;
+        for(int n=0;n<rows.length();n++){JSONObject row=rows.getJSONObject(n);String old=row.getString("sourceProfileId"),id=dev.pocketengine.features.ConnectionBackupSections.restoredId("ssh",review.action,digest,old);JSONObject receipt=new JSONObject().put("originalProfileId",old).put("newProfileId",id);
+            if(stopped){results.put(receipt.put("state","not_attempted"));continue;}
+            review.current();try{synchronized(this){review.current();receipt.put("state",restoreConnectionBackupRow(row,id,review.action,digest,queryOnly));}}catch(Exception uncertain){receipt.put("state","unknown").put("reason","原配置提交未确认；仅核对这次固定编号，不重建或自动连接");stopped=true;}results.put(receipt);
+        }
+        return new JSONObject().put("format","pocketworld.native-connection-restore-receipt.v1").put("module","ssh").put("ownerActionId",review.action).put("sectionDigest",digest).put("queryOnly",queryOnly).put("profiles",results).put("credentialsRestored",false).put("hostKeyTrustRestored",false).put("executionGrantsRestored",false).put("automaticConnection",false);
+    }
+
+    private JSONArray connectionBackupRows()throws Exception {
+        JSONArray rows=new JSONArray();for(SshProfile profile:profiles.values())rows.put(backupConfiguration(profile).put("sourceProfileId",profile.id).put("previousHostFingerprint",profile.pinnedKey.isEmpty()?"":SshProfile.fingerprint(Base64.getDecoder().decode(profile.pinnedKey))));return rows;
+    }
+    private JSONObject backupConfiguration(SshProfile profile)throws Exception {JSONObject value=profile.document();for(String key:new String[]{"pinnedKey","configRevision","credentialRevision","nativeBackupOrigin","id"})value.remove(key);return value;}
+    private String restoreConnectionBackupRow(JSONObject row,String id,String action,String sectionDigest,boolean queryOnly)throws Exception {
+        JSONObject config=new JSONObject(row.toString()).put("id",id);config.remove("sourceProfileId");config.remove("previousHostFingerprint");SshProfile desired=new SshProfile(config);JSONObject origin=dev.pocketengine.features.ConnectionBackupSections.origin(action,sectionDigest,row.getString("sourceProfileId"),dev.pocketengine.features.ConnectionBackupSections.digest(backupConfiguration(desired)));
+        // Read the same original file before any new row. An uncertain/invalid file never becomes empty.
+        JSONArray actual;try{actual=new JSONArray(new String(storage.readFully(),StandardCharsets.UTF_8));}catch(java.io.FileNotFoundException missing){if(storage.getBaseFile().exists()||!profiles.isEmpty())throw missing;actual=new JSONArray();}
+        Map<String,SshProfile> durable=new java.util.LinkedHashMap<>();for(int n=0;n<actual.length();n++){SshProfile found=new SshProfile(actual.getJSONObject(n));durable.put(found.id,found);}SshProfile known=durable.get(id);
+        if(known!=null){JSONObject previous=known.document().optJSONObject("nativeBackupOrigin");if(previous==null||!dev.pocketengine.features.ConnectionBackupSections.digest(origin).equals(dev.pocketengine.features.ConnectionBackupSections.digest(previous))||!dev.pocketengine.features.ConnectionBackupSections.digest(backupConfiguration(desired)).equals(dev.pocketengine.features.ConnectionBackupSections.digest(backupConfiguration(known))))return "configuration_changed_not_overwritten";if(!queryOnly){profiles.clear();profiles.putAll(durable);}return "already_restored";}
+        if(queryOnly)return "not_confirmed_query_only";if(durable.size()>=20)throw new IllegalStateException("原SSH连接已满");config.put("pinnedKey","").put("configRevision",UUID.randomUUID().toString()).put("credentialRevision",UUID.randomUUID().toString()).put("nativeBackupOrigin",origin);SshProfile restored=new SshProfile(config);durable.put(id,restored);commitProfiles(durable);return "restored_needs_credentials_and_host_verification";
     }
 
     private synchronized JSONObject saveProfile(JSONObject input)throws Exception {
@@ -167,6 +231,7 @@ public final class SshModule implements EngineModule {
                 JSONObject result;
                 switch(command){
                     case "doctor":result=connection.doctor();break;
+                    case "openPreviewForward":operation.forward=connection.openPreviewForward(input.getInt("remotePort"),input.getInt("timeoutSeconds"));result=operation.forward.metadata();break;
                     case "exec":actionStarted=true;result=connection.exec(text(input,"command",12000),input.optInt("timeoutSeconds",60));break;
                     case "listFiles":result=connection.listFiles(input.optString("path"));break;
                     case "readFile":result=connection.readFile(text(input,"path",1024));break;
@@ -182,8 +247,8 @@ public final class SshModule implements EngineModule {
                         result=DirectSshClient.receipt("running").put("terminalId",id).put("ptyConfirmed",true).put("expiresAt",operation.terminal.expiresAt()).put("workspaceIsSandbox",false);break;
                     default:throw new IllegalArgumentException();
                 }
-                emit(operation,result);retained=operation.terminal!=null;return decorate(operation,result);
-            }finally{if(!retained){if(operation.terminal!=null)operation.terminal.close();connection.close();}}
+                emit(operation,result);retained=operation.terminal!=null||operation.forward!=null;return decorate(operation,result);
+            }finally{if(!retained){if(operation.terminal!=null)operation.terminal.close();if(operation.forward!=null)operation.forward.close();connection.close();}}
         }catch(Exception failure){
             JSONObject result=actionStarted?DirectSshClient.unknown("本次SSH动作未取得确定回执，请核对远端；没有重试",true):DirectSshClient.receipt(operation.control.isCancelled()?"cancelled":"failed").put("accepted",false).put("verified",false)
                     .put("message",failure instanceof SecurityException?failure.getMessage():"SSH操作未取得执行回执，请检查配置、认证与连接状态");
@@ -206,13 +271,15 @@ public final class SshModule implements EngineModule {
     private JSONObject cancel(JSONObject input)throws Exception {
         Operation operation=active.get(text(input,"operationId",80));if(operation==null)return DirectSshClient.unknown("未找到本机执行控制，不能确认远端停止状态",true);
         if(operation.finished.get())return metadata(operation);
-        operation.control.cancel();if(operation.terminal!=null)operation.terminal.close();
+        operation.control.cancel();if(operation.terminal!=null)operation.terminal.close();if(operation.forward!=null)operation.forward.close();
         JSONObject result=DirectSshClient.unknown("已中断本机连接，不能保证远端进程已终止；不会自动重试",true);emit(operation,result);
         // An exec/connect worker owns the lease until its finally block has closed resources.
-        if(operation.terminal!=null&&operation.terminal.localClosed())finish(operation);return decorate(operation,operation.receipt);
+        if(operation.terminal!=null&&operation.terminal.localClosed()||operation.forward!=null&&operation.forward.connection.localClosed())finish(operation);return decorate(operation,operation.receipt);
     }
     private static boolean binary(String command){return command!=null&&command.matches("inspectFile|downloadFile|uploadFile");}
     private void reap(){if(closed)return;
+        for(Operation operation:active.values())if(operation.forward!=null&&!operation.finished.get())try{operation.forward.requireCurrent();}catch(Exception ended){operation.control.cancel();operation.forward.close();try{emit(operation,operation.forward.metadata().put("message","本机预览监听与连接已关闭；远端服务和job未被停止或重启"));}catch(Exception ignored){}finish(operation);}
+
         for(Operation operation:active.values())if(!operation.finished.get()&&operation.transferDeadlineNanos>0&&System.nanoTime()>=operation.transferDeadlineNanos)operation.control.cancel();
         for(Operation operation:active.values())if(operation.terminal!=null&&!operation.finished.get())try{
         if(System.currentTimeMillis()>=operation.terminal.expiresAt())operation.terminal.close();
@@ -237,7 +304,7 @@ public final class SshModule implements EngineModule {
         // complete its run or store private diagnostic bodies in the task event stream.
     }
     private JSONObject decorate(Operation operation,JSONObject receipt)throws Exception{return new JSONObject(receipt.toString()).put("id",operation.id).put("operationId",operation.id).put("hostTaskId",operation.taskId).put("taskId",operation.taskId).put("runId",operation.runId).put("epoch",operation.epoch).put("profileId",operation.profileId).put("command",operation.command).put("hostManaged",operation.hostManaged).put("transferExpiresAt",operation.transferExpiresAt).put("localTransferDeadline",operation.transferExpiresAt>0);}
-    private JSONObject metadata(Operation operation)throws Exception {JSONObject out=decorate(operation,operation.receipt==null?DirectSshClient.receipt("running"):operation.receipt);out.remove("stdout");out.remove("stderr");out.remove("content");out.remove("doctor");out.put("startedAt",operation.startedAt).put("finishedAt",operation.finishedAt).put("localResourcesClosed",operation.connection==null?operation.finished.get():operation.connection.localClosed());if(operation.terminal!=null)out.put("terminalId",operation.id).put("status",operation.terminal.status()).put("expiresAt",operation.terminal.expiresAt());return out;}
+    private JSONObject metadata(Operation operation)throws Exception {JSONObject out=decorate(operation,operation.receipt==null?DirectSshClient.receipt("running"):operation.receipt);out.remove("stdout");out.remove("stderr");out.remove("content");out.remove("doctor");out.put("startedAt",operation.startedAt).put("finishedAt",operation.finishedAt).put("localResourcesClosed",operation.connection==null?operation.finished.get():operation.connection.localClosed());if(operation.forward!=null)out.put("preview",operation.forward.metadata());if(operation.terminal!=null)out.put("terminalId",operation.id).put("status",operation.terminal.status()).put("expiresAt",operation.terminal.expiresAt());return out;}
     private synchronized SshProfile profile(String id){SshProfile found=profiles.get(id);if(found==null)throw new IllegalArgumentException("SSH连接不存在");return found;}
     private void notBusy(SshProfile profile){for(Operation operation:active.values())if(operation.profileId.equals(profile.id)&&!operation.finished.get())throw new IllegalStateException("该SSH连接正在执行，不能修改身份或信任配置");}
     private synchronized JSONObject publicProfile(SshProfile profile)throws Exception {JSONObject out=profile.document();out.remove("pinnedKey");return out.put("bindingHash",profile.bindingHash()).put("credentialsConfigured",context.secrets.contains(profile.credentialSlot())).put("hostKeyTrusted",!profile.pinnedKey.isEmpty()).put("hostFingerprint",profile.pinnedKey.isEmpty()?"":SshProfile.fingerprint(Base64.getDecoder().decode(profile.pinnedKey)));}
@@ -255,7 +322,7 @@ public final class SshModule implements EngineModule {
     private boolean removeCredential(String slot){try{context.secrets.remove(slot);return true;}catch(Exception cleanup){return false;}}
     private void trim(){if(active.size()<=100)return;for(Operation operation:active.values())if(active.size()>80&&operation.finished.get())active.remove(operation.id,operation);}
     private static String text(JSONObject input,String key,int max){return SshProfile.text(input,key,max);}
-    @Override public void close(){closed=true;lifecycle.shutdownNow();for(Operation operation:active.values()){operation.control.cancel();if(operation.terminal!=null)operation.terminal.close();}accounts.clear();}
+    @Override public void close(){closed=true;lifecycle.shutdownNow();for(Operation operation:active.values()){operation.control.cancel();if(operation.terminal!=null)operation.terminal.close();if(operation.forward!=null){operation.forward.close();finish(operation);}}accounts.clear();}
     private static final class Probe{final String profileId,binding,key,fingerprint;final long expiresAt;Probe(String profileId,String binding,String key,String fingerprint,long expiresAt){this.profileId=profileId;this.binding=binding;this.key=key;this.fingerprint=fingerprint;this.expiresAt=expiresAt;}}
-    private static final class Operation{final String taskId,id,profileId,account,runId,command;final int epoch;final boolean hostManaged;final long startedAt=System.currentTimeMillis();final RunControl control;final AtomicBoolean finished=new AtomicBoolean();volatile long finishedAt,transferExpiresAt,transferDeadlineNanos;volatile DirectSshClient.Connection connection;volatile DirectSshClient.Pty terminal;volatile JSONObject receipt;Operation(String taskId,String id,String profileId,String account,RunControl control,String runId,int epoch,String command){this.taskId=taskId;this.id=id;this.profileId=profileId;this.account=account;this.control=control;this.hostManaged=!runId.isEmpty();this.runId=hostManaged?runId:id;this.epoch=epoch;this.command=command;}}
+    private static final class Operation{final String taskId,id,profileId,account,runId,command;final int epoch;final boolean hostManaged;final long startedAt=System.currentTimeMillis();final RunControl control;final AtomicBoolean finished=new AtomicBoolean();volatile long finishedAt,transferExpiresAt,transferDeadlineNanos;volatile DirectSshClient.Connection connection;volatile DirectSshClient.Pty terminal;volatile DirectSshClient.Forward forward;volatile JSONObject receipt;Operation(String taskId,String id,String profileId,String account,RunControl control,String runId,int epoch,String command){this.taskId=taskId;this.id=id;this.profileId=profileId;this.account=account;this.control=control;this.hostManaged=!runId.isEmpty();this.runId=hostManaged?runId:id;this.epoch=epoch;this.command=command;}}
 }

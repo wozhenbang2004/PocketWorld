@@ -20,8 +20,9 @@ public final class CompanionSkillHostPort implements SkillExecution.HostPort {
         void cancelRequested(CompanionSkillBackend.ReceiptRef ref)throws Exception;
     }
     private final Store store;
-    private final CompanionSkillBackend backend;
-    public CompanionSkillHostPort(Store store,CompanionSkillBackend backend){this.store=Objects.requireNonNull(store);this.backend=Objects.requireNonNull(backend);backend.bindDispatchCheck(store::checkCurrent);}
+    private final NativeSkillBackend backend;
+    public CompanionSkillHostPort(Store store,CompanionSkillBackend backend){this(store,(NativeSkillBackend)backend);}
+    public CompanionSkillHostPort(Store store,NativeSkillBackend backend){this.store=Objects.requireNonNull(store);this.backend=Objects.requireNonNull(backend);backend.bindDispatchCheck(store::checkCurrent);}
     @Override public void checkCurrent(SkillExecution.Plan plan,SkillExecution.Grant grant,RunControl control)throws Exception {
         CompanionSkillBackend.ReceiptRef.from(plan,grant);control.check();
         if(!control.hasHostRun()||!control.matchesHostRun(grant.taskId,grant.runId,grant.epoch)||control.isPaused())throw new SecurityException("原运行控制无效或暂停");

@@ -80,6 +80,8 @@ public final class ProjectFileDraft {
         return next("", "", "absent", false, null);
     }
 
+    /** Package-native original journal receipt reconciliation; never exposed as a model tool. */
+    static SaveIntent originalHostSave(String project,String checkout,String path,String text,String expectedHash)throws org.json.JSONException{return new SaveIntent(identity(project),identity(checkout),path(path),bounded(text),hash(expectedHash),0);}
     public JSONObject toJson() throws org.json.JSONException {
         // No approval, expected project version, process, preview or runtime authority is persisted.
         return new JSONObject().put("format", "pocketworld.project-file-draft.v1")

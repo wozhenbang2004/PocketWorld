@@ -17,6 +17,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import dev.pocketengine.features.ssh.SshTerminalScreen
+import dev.pocketengine.features.ssh.SshTerminalWebView
 import java.nio.ByteBuffer
 import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
@@ -57,8 +63,12 @@ internal class PtyTextBuffer(private val limit: Int = 120000) {
 
 @Composable
 internal fun SshTerminalView(binding: SshTerminalBinding, state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
-    val buffer = remember(binding.terminalId) { PtyTextBuffer() }
-    var output by remember(binding.terminalId) { mutableStateOf("") }
+    val screen = remember(binding.terminalId) { SshTerminalScreen() }
+    var frame by remember(binding.terminalId) { mutableStateOf(screen.view(80, 24)) }
+    var renderer by remember(binding.terminalId) { mutableStateOf<SshTerminalWebView?>(null) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var foreground by remember { mutableStateOf(lifecycle.currentState == Lifecycle.State.RESUMED) }
+    DisposableEffect(binding.terminalId, lifecycle) { val observer = LifecycleEventObserver { _, _ -> foreground = lifecycle.currentState == Lifecycle.State.RESUMED }; lifecycle.addObserver(observer); onDispose { lifecycle.removeObserver(observer); renderer?.release(); renderer = null } }
     var cursor by remember(binding.terminalId) { mutableLongStateOf(0) }
     var input by remember(binding.terminalId) { mutableStateOf("") }
     var appendNewline by remember(binding.terminalId) { mutableStateOf(true) }
@@ -78,17 +88,19 @@ internal fun SshTerminalView(binding: SshTerminalBinding, state: PocketUiState, 
     val unresolved = task?.let(::unresolvedOperations).orEmpty()
     val blocked = unresolved.isNotEmpty() || task?.status == "reconciling" || write?.optString("status") == "unknown" && !ownerReviewedPtyInput(write, task)
     val writing = "ssh.writePty" in state.moduleBusy
-    val canWrite = status == "running" && !blocked && !writing
+    val canWrite = foreground && status == "running" && !blocked && !writing
     LaunchedEffect(binding.terminalId) { controller.getTask(binding.hostTaskId) }
     LaunchedEffect(read) {
         val requested = state.moduleResultInputs["ssh.readPty"]
         if (read != null && requested?.optLong("cursor", -1) == cursor && read.has("dataBase64")) {
-            try { output = buffer.append(read.optString("dataBase64"), read.optBoolean("truncated"), read.optString("status") != "running"); cursor = read.optLong("cursor", cursor) }
-            catch (_: Exception) { localError = "终端输出不能按 UTF-8 文本读取，未将其作为命令执行。" }
+            try { screen.append(read.optString("dataBase64"), cursor, read.optLong("cursor", cursor), read.optBoolean("truncated")); cursor = screen.cursor(); frame = screen.view(frame.optInt("cols", 80), frame.optInt("rows", 24)) }
+            catch (_: Exception) { localError = "终端字节范围无法核对，未推进本机读取位置或重放任何输入。" }
         }
     }
-    LaunchedEffect(binding.terminalId, automatic) {
-        while (automatic) {
+    val resized = state.moduleResults["ssh.resizePty"].takeIf { state.moduleResultInputs["ssh.resizePty"]?.optString("terminalId") == binding.terminalId }
+    LaunchedEffect(resized) { if (resized?.optBoolean("accepted") == true) { val original = state.moduleResultInputs["ssh.resizePty"]; if (original != null) frame = screen.view(original.optInt("cols", 80), original.optInt("rows", 24)) } }
+    LaunchedEffect(binding.terminalId, automatic, foreground) {
+        while (automatic && foreground) {
             if ("ssh.readPty" !in latestState.moduleBusy) controller.requestFeature("ssh", "readPty", binding.payload().put("cursor", latestCursor))
             delay(1000)
         }
@@ -104,10 +116,10 @@ internal fun SshTerminalView(binding: SshTerminalBinding, state: PocketUiState, 
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = close) { Text("收起") }
-                    Text("SSH 文本终端", Modifier.weight(1f), fontSize = 18.sp)
+                    Text("SSH 交互终端", Modifier.weight(1f), fontSize = 18.sp)
                     TextButton(onClick = { closing = true }) { Text("关闭连接", color = Danger, fontSize = 12.sp) }
                 }
-                Text(taskStatus(status) + " · 实际 UTF-8 文本记录", fontSize = 11.sp, color = SecondaryInk)
+                Text(taskStatus(status) + " · xterm.js VT/TUI屏幕", fontSize = 13.sp, color = SecondaryInk)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("自动读取", fontSize = 11.sp)
                     Switch(automatic, { automatic = it })
@@ -117,7 +129,9 @@ internal fun SshTerminalView(binding: SshTerminalBinding, state: PocketUiState, 
                 }
                 localError?.let { Text(it, fontSize = 12.sp, color = Danger) }
                 listOf("ssh.readPty", "ssh.writePty", "ssh.resizePty", "ssh.closePty").mapNotNull { state.moduleErrors[it] }.distinct().forEach { Text(it, fontSize = 12.sp, color = Danger) }
-                SelectionContainer(Modifier.weight(1f).fillMaxWidth()) { Text(output.ifBlank { "等待实际终端输出…" }, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) }
+                AndroidView(factory = { context -> SshTerminalWebView(context) { localError = it }.also { renderer = it; it.display(frame) } }, update = { it.display(frame) }, modifier = Modifier.weight(1f).fillMaxWidth())
+                if (frame.optBoolean("gap")) Text("早期字节超出保留窗口，屏幕已按剩余字节重建，不代表完整TUI状态。可明确发送 Ctrl+L 请求程序重绘。", fontSize = 13.sp, color = SecondaryInk)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) { for ((label, value) in listOf("↑" to "\u001b[A", "↓" to "\u001b[B", "←" to "\u001b[D", "→" to "\u001b[C", "Tab" to "\t", "Esc" to "\u001b", "↵" to "\r")) TextButton(onClick = { send(value.toByteArray(Charsets.UTF_8)) }, enabled = canWrite) { Text(label) } }
                 if (blocked) {
                     Text("输入结果或会话状态需要核对，已暂停后续输入；读取输出不会重放命令。", fontSize = 11.sp, lineHeight = 19.sp, color = SecondaryInk)
                     TextButton(onClick = { controller.focusTask(binding.hostTaskId) }) { Text("到原任务核对结果", fontSize = 11.sp) }
@@ -130,7 +144,8 @@ internal fun SshTerminalView(binding: SshTerminalBinding, state: PocketUiState, 
                 OutlinedTextField(input, { input = it }, label = { Text("要发送的文本") }, minLines = 1, maxLines = 4, modifier = Modifier.fillMaxWidth(), enabled = canWrite)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(appendNewline, { appendNewline = it }); Text("附带换行", fontSize = 11.sp)
-                    TextButton(onClick = { send(byteArrayOf(3)) }, enabled = canWrite) { Text("Ctrl+C", fontSize = 11.sp) }
+                    TextButton(onClick = { send(byteArrayOf(3)) }, enabled = canWrite) { Text("Ctrl+C", fontSize = 13.sp) }
+                    TextButton(onClick = { send(byteArrayOf(12)) }, enabled = canWrite) { Text("Ctrl+L", fontSize = 13.sp) }
                     Spacer(Modifier.weight(1f))
                     Button(onClick = { val bytes = (input + if (appendNewline) "\n" else "").toByteArray(Charsets.UTF_8); send(bytes) }, enabled = canWrite && input.isNotEmpty()) { Text(if (writing) "发送中" else "发送") }
                 }

@@ -82,7 +82,7 @@ public final class InferenceUsageTest {
         }
     }
     @Test public void ordinaryJsonAlsoCapturesUsageWithoutChangingAssistant()throws Exception{
-        try(Server server=new Server(new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",new JSONObject().put("role","assistant").put("content","ok"))))
+        try(Server server=new Server(new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("finish_reason","stop").put("message",new JSONObject().put("role","assistant").put("content","ok"))))
                 .put("usage",usage(40,5)).toString())){
             Captured captured=new Captured();JSONObject answer=ModelGateway.complete(server.config("openai_chat"),messages(),null,new RunControl(),captured.target());
             assertFalse(answer.has("usage"));assertEquals(40,count(captured.finished.get(0),"INPUT").getLong("value"));

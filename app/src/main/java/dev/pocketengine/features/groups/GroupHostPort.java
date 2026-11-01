@@ -61,11 +61,11 @@ public interface GroupHostPort {
             event=GroupIngressPort.Event.from(row.getJSONObject("event"));artifacts=event.artifacts();
         }
         public JSONArray inputArtifacts() throws Exception {return GroupJson.copy(artifacts);}
-        public JSONObject origin() throws Exception {return new JSONObject().put("kind","group").put("requestId",requestId).put("groupId",groupId)
+        public JSONObject origin() throws Exception {JSONObject value=new JSONObject().put("kind","group").put("requestId",requestId).put("groupId",groupId)
                 .put("spaceId",spaceId).put("actorId",actorId).put("eventId",event.eventId).put("provider",event.provider)
                 .put("accountId",event.accountId).put("roomId",event.roomId).put("senderId",event.senderId).put("messageId",event.messageId)
                 .put("transportEpoch",event.transportEpoch).put("policyEpoch",policyEpoch).put("capability",capability).put("resource",resource)
-                .put("audience",audience).put("visibility",visibility).put("maxTokens",maxTokens).put("maxMediaItems",maxMediaItems).put("maxMediaBytes",maxMediaBytes);}
+                .put("audience",audience).put("visibility",visibility).put("maxTokens",maxTokens).put("maxMediaItems",maxMediaItems).put("maxMediaBytes",maxMediaBytes);if(!event.conversationKind.equals("group"))value.put("conversationKind",event.conversationKind).put("conversationParentId",event.conversationParentId);return value;}
     }
 
     final class Output {

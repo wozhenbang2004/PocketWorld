@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -92,8 +93,16 @@ public final class ProjectBuildPlan {
         if(npm&&pnpm||!declared.isEmpty()&&!Set.of("npm","pnpm").contains(declared)||declared.equals("npm")&&pnpm||declared.equals("pnpm")&&npm){warnings.put("包管理器声明/锁文件冲突或暂不支持，请先明确修正");return "unsupported_or_conflicting";}
         return !declared.isEmpty()?declared:pnpm?"pnpm":"npm";
     }
-    public static JSONObject create(EngineModule local,JSONObject input)throws Exception {
+    public static JSONObject create(EngineModule local,JSONObject input)throws Exception {return create(local,input,16000);}
+    /** Native private editor only: same reviewed dev-watch contract and immutable plan store,
+     * without pretending the model's smaller argument budget can carry a 256KiB source file. */
+    public static JSONObject ownerLiveEdit(EngineModule local,ProjectFileDraft.SaveIntent original,String service)throws Exception{
+        if(original==null||"absent".equals(original.expectedHash))throw new SecurityException("活服务只能保存已存在的原批准源码文件");JSONObject source=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",original.checkoutId)));if(!original.projectId.equals(source.getString("projectId")))throw new SecurityException("原草稿不属于这个项目副本");
+        return create(local,new JSONObject().put("checkoutId",original.checkoutId).put("runtimeId","managed_process_v1").put("intent","edit").put("expectedSourceDigest",source.getString("sourceDigest")).put("path",original.path).put("content",original.text).put("expectedHash",original.expectedHash).put("liveEditServiceExecutionId",identity(service)),262144);
+    }
+    private static JSONObject create(EngineModule local,JSONObject input,int editByteLimit)throws Exception {
         String checkout=input.getString("checkoutId"),intent=input.getString("intent");
+        if(intent.equals(ProjectGit.INTENT))return ProjectGit.create(local,input);
         if(intent.equals("freeze_package"))return freezePackage(local,input);
         if(intent.equals("command"))return command(local,input);
         if(intent.equals("collect"))return collection(local,input);
@@ -121,8 +130,8 @@ public final class ProjectBuildPlan {
         JSONArray steps=new JSONArray(),warnings=new JSONArray(inspection.getJSONArray("warnings").toString());
         JSONObject base=new JSONObject().put("checkoutId",checkout).put("expectedSourceDigest",digest);
         if(intent.equals("edit")){
-            String path=VersionedWorkspace.path(input.getString("path")),content=input.getString("content");byte[] bytes=content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            if(bytes.length>16000||content.indexOf('\0')>=0)throw new IllegalArgumentException("Agent修改限16000字节UTF-8文本");
+            String path=VersionedWorkspace.path(input.getString("path")),content=input.getString("content");byte[] bytes=ProjectExactPatch.encode(content);
+            if(bytes.length>editByteLimit||content.indexOf('\0')>=0)throw new IllegalArgumentException("本次副本修改限"+editByteLimit+"字节UTF-8文本；没有截断正文");
             String expected=files.containsKey(path)?ProjectSources.sha256(files.get(path).getBytes(java.nio.charset.StandardCharsets.UTF_8)):"absent";
             if(!expected.equals(input.getString("expectedHash")))throw new SecurityException("文件版本已变化，请先读取当前文件");
             if(!files.containsKey(path)&&inspection.getJSONObject("source").getInt("fileCount")>=ProjectSources.MAX_FILES||inspection.getJSONObject("source").getLong("bytes")-(files.containsKey(path)?files.get(path).getBytes(java.nio.charset.StandardCharsets.UTF_8).length:0)+bytes.length>ProjectSources.MAX_TOTAL_BYTES)throw new IllegalArgumentException("修改后项目超过源码清单上限");
@@ -250,6 +259,13 @@ public final class ProjectBuildPlan {
         return seal(new JSONObject().put("format","pocketworld.project-plan.v1").put("checkoutId",checkout).put("projectId",source.getString("projectId")).put("sourceDigest",source.getString("sourceDigest")).put("sourceManifest",source.getJSONArray("files")).put("runtimeId",runtime).put("runtimeIdentity",local.handle("project.runtime.describe",new JSONObject().put("runtimeId",runtime)).optString("identity")).put("intent",intent).put("ecosystem","exact_source_patch").put("steps",new JSONArray().put(action)).put("available",true).put("warnings",new JSONArray().put("全部文件先核对再按文件原子替换；这不是跨文件事务。每个文件有实际applied/failed/unknown/skipped回执，未知不重放。撤销也是新一次原操作与明确批准，只在afterSHA未被后续修改时恢复。")).put("automaticChaining",false));
     }
     private static JSONObject collection(EngineModule local,JSONObject input)throws Exception {
+        if(ProjectManagedOutput.selection(input.optJSONObject("artifactSelection"))){
+            JSONObject selection=ProjectManagedOutput.verified(input.getJSONObject("artifactSelection")),source=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",input.getString("checkoutId"))));
+            if(!input.getString("checkoutId").equals(selection.getString("checkoutId"))||!source.getString("sourceDigest").equals(input.getString("expectedSourceDigest"))||!source.getString("sourceDigest").equals(selection.getString("sourceDigest")))throw new SecurityException("原managed生成文件选择已不属于当前源码");
+            JSONObject runtime=local.handle("project.runtime.describe",new JSONObject().put("runtimeId","managed_process_v1"));if(!runtime.optBoolean("managedOutputCollectionAvailable")||!runtime.optString("identity").equals(selection.getString("runtimeIdentity")))throw new SecurityException("原managed构建环境已变化");
+            JSONObject payload=new JSONObject().put("checkoutId",input.getString("checkoutId")).put("expectedSourceDigest",source.getString("sourceDigest")).put("artifactSelection",selection),action=step("collect",ProjectManagedOutput.COMMAND,payload,"保存原成功构建的选定生成文件",false);action.getJSONObject("effects").put("runtime","app_private_checkout").put("writesCheckout",false).put("publishesImmutableArtifact",true).put("automaticallyExported",false);
+            return seal(new JSONObject().put("format","pocketworld.project-plan.v1").put("checkoutId",selection.getString("checkoutId")).put("projectId",selection.getString("projectId")).put("sourceDigest",source.getString("sourceDigest")).put("sourceManifest",source.getJSONArray("files")).put("runtimeId","managed_process_v1").put("runtimeIdentity",selection.getString("runtimeIdentity")).put("intent","collect").put("ecosystem","managed_selected_output").put("steps",new JSONArray().put(action)).put("available",true).put("warnings",selection.getJSONArray("warnings")).put("automaticChaining",false));
+        }
         JSONObject selection=GeneratedArtifacts.verified(input.getJSONObject("artifactSelection")),source=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",input.getString("checkoutId"))));
         if(!input.getString("checkoutId").equals(selection.getString("checkoutId"))||!source.getString("sourceDigest").equals(input.getString("expectedSourceDigest"))||!source.getString("sourceDigest").equals(selection.getString("sourceDigest")))throw new SecurityException("回收选择与当前项目源码不同");
         JSONObject payload=new JSONObject().put("checkoutId",input.getString("checkoutId")).put("expectedSourceDigest",source.getString("sourceDigest")).put("artifactSelection",selection);
@@ -258,7 +274,7 @@ public final class ProjectBuildPlan {
                 .put("sourceDigest",source.getString("sourceDigest")).put("sourceManifest",source.getJSONArray("files")).put("intent","collect").put("ecosystem","selected_text_artifact").put("steps",steps)
                 .put("available",true).put("warnings",selection.getJSONArray("warnings")).put("automaticChaining",false));
     }
-    private static JSONObject seal(JSONObject core)throws Exception {
+    static JSONObject seal(JSONObject core)throws Exception {
         String seal=ProjectSources.digest(core);core.put("planId",seal).put("planDigest",seal);JSONObject clean=ProjectSources.copy(core);JSONArray steps=core.getJSONArray("steps");
         for(int i=0;i<steps.length();i++){JSONObject item=steps.getJSONObject(i);JSONObject payload=ProjectSources.copy(item.getJSONObject("payload")).put("projectPlan",ProjectSources.copy(clean)).put("projectStepId",item.getString("id"));item.put("hostAction",new JSONObject().put("feature","local").put("command",item.getString("localCommand")).put("payload",payload));}
         return core;
@@ -279,7 +295,13 @@ public final class ProjectBuildPlan {
         if(!"pocketworld.project-plan.v1".equals(core.getString("format"))||!ProjectSources.digest(core).equals(plan.getString("planDigest"))||!plan.getString("planId").equals(plan.getString("planDigest"))||!core.getString("sourceDigest").equals(ProjectSources.manifestDigest(core.getJSONArray("sourceManifest"))))throw new SecurityException("计划内容或源码清单已变化，请重新审阅");
         if("freeze_package".equals(core.optString("intent")))verifyFreeze(core,steps);
         if("command".equals(core.optString("intent")))verifyCommand(core,steps);
+        if("managed_selected_output".equals(core.optString("ecosystem")))verifyManagedOutput(core,steps);
+        if(ProjectGit.INTENT.equals(core.optString("intent")))ProjectGit.verify(core,steps);
         return core.put("planId",plan.getString("planId")).put("planDigest",plan.getString("planDigest"));
+    }
+    private static void verifyManagedOutput(JSONObject core,JSONArray steps)throws Exception {
+        if(!"collect".equals(core.getString("intent"))||!"managed_process_v1".equals(core.getString("runtimeId"))||steps.length()!=1||!Boolean.FALSE.equals(core.opt("automaticChaining")))throw new SecurityException("原managed生成成果必须单一精确文件保存");JSONObject action=steps.getJSONObject(0),payload=action.getJSONObject("payload"),effects=action.getJSONObject("effects");
+        if(!jsonKeys(payload).equals(new TreeSet<>(Set.of("checkoutId","expectedSourceDigest","artifactSelection")))||!ProjectManagedOutput.COMMAND.equals(action.getString("localCommand"))||!"collect".equals(action.getString("id"))||!"collect".equals(action.getString("stepId"))||!Boolean.TRUE.equals(action.opt("approvalRequired"))||!Boolean.FALSE.equals(action.opt("cancelReliable"))||!Boolean.FALSE.equals(effects.opt("networkMayBeUsed"))||!Boolean.FALSE.equals(effects.opt("writesCheckout"))||!Boolean.TRUE.equals(effects.opt("publishesImmutableArtifact"))||!Boolean.FALSE.equals(effects.opt("automaticallyExported"))||!"app_private_checkout".equals(effects.optString("runtime")))throw new SecurityException("生成文件动作不能混入执行、网络或副本写入");JSONObject selected=ProjectManagedOutput.verified(payload.getJSONObject("artifactSelection"));for(String field:new String[]{"projectId","checkoutId","sourceDigest","runtimeId","runtimeIdentity"})if(!core.getString(field).equals(selected.getString(field)))throw new SecurityException("生成文件与原项目或工具环境不同");if(!core.getString("checkoutId").equals(payload.getString("checkoutId"))||!core.getString("sourceDigest").equals(payload.getString("expectedSourceDigest")))throw new SecurityException("生成文件原源码绑定不同");
     }
     private static void verifyCommand(JSONObject core,JSONArray steps)throws Exception {
         if(!"managed_process_v1".equals(core.getString("runtimeId"))||!"native_command".equals(core.getString("ecosystem"))||steps.length()!=1||!Boolean.FALSE.equals(core.opt("automaticChaining")))throw new SecurityException("精确命令必须是本App原运行环境中的单步骤方案");

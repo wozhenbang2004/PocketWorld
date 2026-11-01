@@ -30,8 +30,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 from workspace_files import WorkspaceFiles, FileError
 import assignment_workspaces
+import assignment_projects
+import cold_session
 import result_files
+import project_history
+import group_input_audience
 import input_files
+import harness_config
+import job_events
 from codex_driver import CodexAppServerDriver, DriverError
 from claude_driver import ClaudeStreamDriver, command as claude_command, inspect_cli as inspect_claude_cli, session_uuid
 
@@ -49,9 +55,11 @@ def worker_capabilities(worker):
     return {"protocol": "codex_app_server" if native else "claude_stream_json" if claude else "process_exit", "modelSelection": native or claude,
             "threadResume": native or claude, "interactiveApprovals": native or claude, "turnInterrupt": native or claude,
             "inputSteering": False, "sessionReattach": False, "readOnlySandbox": native,
+            "conversationForkProtocol": "thread/fork" if native else "unavailable_without_verified_new_session_before_prompt", "forkCapabilityRequiresActualReceipt": True, "forkRestoresFiles": False,
             "operationReconciliation": True, "protocolVerified": False, "modelInferenceVerified": False,
             "structuredUserInput": native or claude, "questionCapability": "validated_when_original_runtime_emits_request",
-            "questionAnswerScope": "ordinary_private_session_only", "progressSnapshot": native or claude, "liveStreaming": False}
+            "questionAnswerScope": "ordinary_private_session_only", "progressSnapshot": native or claude, "liveStreaming": False,
+            "originalJobEvents": job_events.capability(worker)}
 
 
 class RequestError(Exception):
@@ -91,6 +99,7 @@ class JobManager:
         self.token = token
         self.config = config
         self.instance_id = str(uuid.uuid4())
+        self.auth_generation_salt = secrets.token_bytes(32)  # process-local opaque revisions, never persisted credentials
         self.state = Path(config.get("stateDir", "~/.pocketengine/companion")).expanduser().resolve()
         self.state.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
@@ -106,6 +115,17 @@ class JobManager:
             os.chmod(self.state / "operations.sqlite3", 0o600)
         self.ledger.execute("PRAGMA synchronous=FULL")
         self.ledger.execute("CREATE TABLE IF NOT EXISTS operations (operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, job_id TEXT NOT NULL, last_status TEXT NOT NULL, updated_at INTEGER NOT NULL)")
+        if "details" not in {row[1] for row in self.ledger.execute("PRAGMA table_info(operations)")}:
+            self.ledger.execute("ALTER TABLE operations ADD COLUMN details TEXT")
+        # In-flight prepare bodies/Git cannot be replayed after a supervisor restart.
+        for op, raw in self.ledger.execute("SELECT operation_id,details FROM operations WHERE details IS NOT NULL").fetchall():
+            original = json.loads(raw)
+            if original.get("protocol") == assignment_projects.PROTOCOL and original.get("status") in {"preparing", "uploading", "finalizing"}:
+                original.update(status="unknown", revision=original.get("revision", 0) + 1, copiesMayRemain=True, cleanupConfirmed=False)
+                for slot in original.get("inputFiles", []):
+                    if slot.get("state") == "uploading":
+                        slot["state"] = "unknown"
+                self.ledger.execute("UPDATE operations SET details=?,last_status='unknown' WHERE operation_id=?", (json.dumps(original), op))
         self.ledger.execute("CREATE TABLE IF NOT EXISTS steer_messages (message_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL, updated_at INTEGER NOT NULL)")
         # A restarted supervisor cannot know whether an in-flight pipe write was accepted.
         for message_id, raw in self.ledger.execute("SELECT message_id, receipt FROM steer_messages").fetchall():
@@ -118,6 +138,7 @@ class JobManager:
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="pocket-job")
         self.closed = False
         self.environments = self._environments(config.get("environments", []))
+        self.harness_configs = harness_config.HarnessConfigs(self)
         for path in sorted(self.state.glob("job-*.json"))[-500:]:
             try:
                 job = json.loads(path.read_text(encoding="utf-8"))
@@ -137,6 +158,8 @@ class JobManager:
                     job["inputState"]["phase"] = "unknown"
                     self._save(job)  # Persist the whole conservative state, never auto-dispatch after restart.
                 if job.get("status") not in TERMINAL:
+                    if job.get("_coldProcess"):
+                        job.setdefault("_coldOrigin", {"previousStatus": job["status"], "supervisorRestartedAt": self.now()})
                     job.update(status="interrupted", pendingApprovals=[], pendingQuestions=[], message="Companion restarted; prior effects are unverified", updatedAt=self.now())
                     if job.get("inputState"):
                         job["inputState"]["phase"] = "interrupted"
@@ -147,7 +170,7 @@ class JobManager:
                     atomic_json(path, job)
                 self.jobs[job["id"]] = job
                 if job.get("operationId") and job.get("fingerprint"):
-                    self.ledger.execute("INSERT OR IGNORE INTO operations VALUES (?, ?, ?, ?, ?)",
+                    self.ledger.execute("INSERT OR IGNORE INTO operations(operation_id,fingerprint,job_id,last_status,updated_at) VALUES (?, ?, ?, ?, ?)",
                                         (job["operationId"], job["fingerprint"], job["id"], job["status"], job.get("updatedAt", self.now())))
                     self.ledger.commit()
             except (ValueError, KeyError, OSError, RequestError):
@@ -222,7 +245,12 @@ class JobManager:
             entries.append({"id": eid, "label": item.get("label", eid), "kind": item.get("kind", "local"), "workers": workers,
                             "writeAllowed": bool(item.get("writeAllowed", False)), "sandboxed": False,
                             "bindingHash": self.environment_binding(eid), "workspace": item["root"],
+                            "harnesses": [{key: value.get(key) for key in ("bindingId", "family", "scope")} for value in item.get("harnesses", [])],
+                            "harnessConfiguration": {"protocol": "harness_config_v1", "writeConsistency": "OPTIMISTIC", "runtimeVerified": False},
                             "privateInputCapabilities": input_files.capabilities(item),
+                            "projectAssignmentCapabilities": assignment_projects.capability(item, str(self.state / "assignment-projects")),
+                            "projectHistoryCapabilities": project_history.capability(item),
+                            "externalGroupInputCapabilities": group_input_audience.capability(item),
                             "assignmentWorkspaceCapabilities": {"protocol": "selected_files_v1", "copySupported": item.get("kind", "local") == "local" and os.name != "nt" and hasattr(os, "O_NOFOLLOW") and bool(item.get("writeAllowed")) and "codex_app_server" in item.get("workers", []), "maxFiles": 8, "fullProject": False, "osReadIsolationVerified": False, "commandApprovalEscalationSupported": False, "wallTimeEnforcement": "original_companion_process_group", "detachedDescendantIsolationVerified": False}})
         return {"environments": entries}
 
@@ -230,7 +258,8 @@ class JobManager:
         item = self._environment(eid)
         # No credential contents or token-derived identity are exposed. A restart invalidates
         # an unsubmitted review; accepted operations still reconcile by their original ID.
-        scope = {key: item.get(key) for key in ("kind", "root", "host", "user", "port", "writeAllowed", "workers", "commands", "knownHosts", "identityFile", "sshConfig")}
+        scope = {key: item.get(key) for key in ("kind", "root", "host", "user", "port", "writeAllowed", "workers", "commands", "knownHosts", "identityFile", "sshConfig", "harnesses")}
+        scope.update({key: item[key] for key in ("codexHome", "codexProviderVariables") if key in item})
         scope.update(instance=self.instance_id, environmentId=eid)
         return hashlib.sha256(json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -239,6 +268,11 @@ class JobManager:
         if "environmentBinding" in request and request["environmentBinding"] != self.environment_binding(request["environmentId"]):
             raise RequestError("Environment configuration or Companion instance changed; probe not started", 409)
         worker = request.get("worker")
+        group_probe = request.get("inferenceAudience") == "EXTERNAL_GROUP"
+        if "inferenceAudience" in request and not group_probe:
+            raise RequestError("Unknown native inference audience", 409)
+        if group_probe and worker != "codex_app_server":
+            raise RequestError("Actual API-key mode is not verified for this worker; private/DM mode is unchanged", 409)
         if worker == "claude":
             return {**self._inspect_claude(env), "environmentId": request["environmentId"], "worker": worker,
                     "capabilities": worker_capabilities(worker), "selectedModelAvailable": None}
@@ -253,14 +287,21 @@ class JobManager:
         try:
             child_env = dict(os.environ)
             child_env.pop("POCKETENGINE_COMPANION_TOKEN", None)
+            group_generation = None
+            if group_probe:
+                group_generation = group_input_audience.generation(self, env)
+                child_env = group_input_audience.child_environment(env, child_env)
             options = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
             process = subprocess.Popen(launch, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=child_env, bufsize=0, **options)
             driver = CodexAppServerDriver(process, env["root"], False, lambda _state: None, lambda: self.closed, 10)
             result = driver.probe(model)
+            if group_probe:
+                facts = driver.require_group_api_mode(group_generation, lambda: group_input_audience.generation(self, env))
+                result["externalGroupApiMode"] = group_input_audience.issue(self, request["environmentId"], group_generation, facts)
             result.update(environmentId=request["environmentId"], worker=worker, readOnly=True,
                           capabilities={**worker_capabilities(worker), "protocolVerified": True, "inputSteering": result["inputSteeringVerified"]})
             return result
-        except (OSError, ValueError, DriverError):
+        except (OSError, ValueError, DriverError, group_input_audience.Unavailable):
             return {"environmentId": request["environmentId"], "worker": worker, "available": False,
                     "protocolVerified": False, "accountConfigured": False, "modelInferenceVerified": False,
                     "capabilities": worker_capabilities(worker), "message": "Codex protocol/account probe failed; inspect its installed version and account on the computer"}
@@ -375,6 +416,11 @@ class JobManager:
         executable = argv[0]
         if not (Path(executable).is_file() if os.path.isabs(executable) else shutil.which(executable)):
             raise RequestError("Requested executable is not installed", 409)
+        if env.get("_fullProjectNative"):
+            # Resolve the actual installed CLI before chdir. A package file named codex must not
+            # replace the probed worker through a relative or dot-PATH entry in the new checkout.
+            resolved = executable if os.path.isabs(executable) else shutil.which(executable)
+            argv = [str(Path(resolved).resolve()), *argv[1:]]
         return argv, env["root"]
 
     @staticmethod
@@ -395,9 +441,13 @@ class JobManager:
     def operation(self, operation):
         operation = identifier(operation, "operationId")
         with self.lock:
-            found = self.ledger.execute("SELECT job_id, last_status FROM operations WHERE operation_id=?", (operation,)).fetchone()
+            found = self.ledger.execute("SELECT job_id, last_status, details FROM operations WHERE operation_id=?", (operation,)).fetchone()
             if found is None:
                 return {"operationId": operation, "status": "not_found", "message": "No accepted receipt found; this query did not submit anything"}
+            if found[2]:
+                detail = json.loads(found[2])
+                if detail.get("protocol") == assignment_projects.PROTOCOL:
+                    return assignment_projects.public(detail)
             if found[0] in self.jobs:
                 return self._public(self.jobs[found[0]])
             return {"id": found[0], "operationId": operation, "status": "unknown", "archived": True, "lastKnownStatus": found[1],
@@ -415,6 +465,13 @@ class JobManager:
                 return self.operation(operation)
         eid = identifier(request.get("environmentId"), "environmentId")
         env = dict(self._environment(eid))
+        try:
+            group_input_audience.check(self, request, env)
+        except group_input_audience.Unavailable as failure:
+            raise RequestError(str(failure), 409) from failure
+        history_scope = project_history.spec(request, env, RequestError)
+        if history_scope is not None and request.get("environmentBinding") != self.environment_binding(eid):
+            raise RequestError("Project baseline requires the exact owner-reviewed environment binding", 409)
         input_state = input_files.manifest(request, env, RequestError)
         if input_state is not None and request.get("environmentBinding") != self.environment_binding(eid):
             raise RequestError("Private input transfer requires the exact reviewed environment generation", 409)
@@ -438,6 +495,18 @@ class JobManager:
                 if request.get("worker") not in {"codex_app_server", "claude"}:
                     raise RequestError(field + " is unsupported by this worker", 409)
         prior = None
+        fork_source = None
+        if "forkSource" in request:
+            selected = request["forkSource"]
+            if request.get("worker") != "codex_app_server" or not isinstance(selected, dict) or set(selected) != {"jobId", "jobOperationId", "threadId", "turnId"} or any(key in request for key in ("threadId", "resumeJobId", "resultSnapshotId", "inputFiles", "assignmentWorkspace", "recoveryProofId")):
+                raise RequestError("Conversation fork is a distinct owner-reviewed Codex job, not resume/file restore/team authority", 409)
+            with self.lock:
+                fork_source = self.jobs.get(identifier(selected.get("jobId"), "original fork job"))
+                if fork_source is None or fork_source.get("worker") != "codex_app_server" or fork_source.get("status") not in {"completed", "failed", "cancelled"} or not self._can_resume(fork_source) or any(fork_source.get(key) != selected[field] for key, field in (("operationId", "jobOperationId"), ("threadId", "threadId"), ("turnId", "turnId"))) or fork_source["resourceId"] != self.resource_id(env) or fork_source.get("workspaceIdentity") != self.workspace_identity(env):
+                    raise RequestError("Conversation fork requires this exact latest settled original job/thread/terminal turn", 409)
+                if bool(request.get("readOnly")) != bool(fork_source.get("readOnly")):
+                    raise RequestError("Branch cannot silently import a different original tool boundary", 409)
+                self._snapshot_environment(fork_source)
         if request.get("worker") == "codex_app_server" and request.get("threadId"):
             with self.lock:
                 sources = [j for j in self.jobs.values() if j.get("worker") == "codex_app_server" and
@@ -446,6 +515,11 @@ class JobManager:
                 if prior is None or prior not in sources or prior.get("resourceId") != self.resource_id(env):
                     raise RequestError("Codex resume requires the settled original invocation and execution resource; unknown work must be reconciled", 409)
                 request["resumeJobId"] = prior["id"]
+                if prior.get("status") == "interrupted":
+                    if request.get("recoveryProofId") != prior.get("recoveryProof", {}).get("proofId") or request.get("recoveryOwnerAcknowledged") is not True or not isinstance(request.get("timeoutSeconds"), int) or isinstance(request["timeoutSeconds"], bool) or not 10 <= request["timeoutSeconds"] <= 900:
+                        raise RequestError("Cold continuation requires the exact original proof and NEW explicit owner walltime/unknown-billing acknowledgement", 409)
+                elif "recoveryProofId" in request or "recoveryOwnerAcknowledged" in request:
+                    raise RequestError("Recovery proof cannot be imported into an ordinary settled continuation", 409)
                 if prior.get("readOnly"):
                     env = {**env, "writeAllowed": False}
                     request["readOnly"] = True
@@ -481,6 +555,8 @@ class JobManager:
             if prior is not None and prior.get("workspaceIdentity") and prior["workspaceIdentity"] != self.workspace_identity(env):
                 raise RequestError("Original continuation physical workspace changed", 409)
             self._check_snapshot_continuation(request, prior, env)
+            if input_state is not None and request.get("inputContinuationProtocol"):
+                input_files.check_continuation(self, prior, request, RequestError)
         argv = self._worker_argv({**request, "_sessionId": session_id}, env) if session_id else self._worker_argv(request, env)
         timeout = request.get("timeoutSeconds", 300)
         if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 3600:
@@ -496,6 +572,10 @@ class JobManager:
                 raise RequestError("Companion queue is full or stopping", 503)
             if assignment_record is not None:
                 env, assignment_record = assignment_workspaces.bound_environment(self, request, env, RequestError)
+            if fork_source is not None:
+                self._snapshot_environment(fork_source)
+                if not self._can_resume(fork_source):
+                    raise RequestError("Original branch source is no longer settled/current", 409)
             if request.get("worker") in {"claude", "codex_app_server"} and request.get("threadId"):
                 # Recheck atomically with reservation: another submitted invocation
                 # (including an unknown one) must not be bypassed via an older job.
@@ -521,11 +601,23 @@ class JobManager:
                            resumeJobId=request.get("resumeJobId"), protocolVerified=False, pendingApprovals=[])
             if request.get("resultSnapshotId"):
                 job.update(resultSnapshotId=request["resultSnapshotId"], resultSnapshotVersion=request["resultSnapshotVersion"], snapshotPrelaunchVerified=False)
+            if fork_source is not None:
+                job["sessionBranchSource"] = dict(request["forkSource"])
+            if history_scope is not None:
+                job.update(projectHistoryScope=history_scope, projectEnvironmentBinding=request["environmentBinding"], projectEnvironmentConfigHash=cold_session._scope(job, self._environment(eid))["environmentConfigHash"])
             if input_state is not None:
-                input_files.bind_job(self, job, request, input_state)
+                input_files.bind_job(self, job, request, input_state, RequestError)
+            try:
+                self.harness_configs.job_environment(job, request, env)
+            except harness_config.ConfigError as error:
+                raise RequestError(str(error), error.status)
+            if request.get("harnessConfigOperationId"):
+                job["_harnessConfigRequest"] = {key: request[key] for key in ("harnessConfigOperationId", "harnessOwnerBinding")}
             # Reserve idempotency before dispatch. If the job document cannot be saved,
             # subsequent queries remain conservative instead of repeating a side effect.
-            self.ledger.execute("INSERT INTO operations VALUES (?, ?, ?, ?, ?)", (operation, fingerprint, job["id"], "queued", job["updatedAt"]))
+            self.ledger.execute("INSERT INTO operations(operation_id,fingerprint,job_id,last_status,updated_at) VALUES (?, ?, ?, ?, ?)", (operation, fingerprint, job["id"], "queued", job["updatedAt"]))
+            if assignment_record is not None and request["assignmentWorkspace"].get("mode") == assignment_projects.MODE:
+                assignment_projects.bind_job(self, assignment_record, job)
             self.ledger.commit()
             self.jobs[job["id"]] = job
             self._save(job)
@@ -584,14 +676,15 @@ class JobManager:
                 raise
 
     def _public(self, job):
-        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding"}}
+        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_harnessConfigRequest"}}
         result.pop("_inputPersistenceUnconfirmed", None)
         if job.get("_inputPersistenceUnconfirmed"):
             result.pop("inputState", None)
             result.update(status="unknown", message="Original input state persistence unconfirmed; no successful revision or ready state is published")
         elif job.get("inputState"):
             result["inputState"] = json.loads(json.dumps(job["inputState"]))
-        result["resultSnapshots"] = [self._snapshot_public(value) for value in job.get("resultSnapshots", [])]
+        result["resultSnapshots"] = [self._snapshot_public(value) for value in job.get("resultSnapshots", []) if value.get("protocol") != project_history.PROTOCOL]
+        result["projectHistory"] = project_history.summary(job)
         for snapshot in result["resultSnapshots"]:
             for file in snapshot.get("assignmentContribution", {}).get("files", []):
                 if "diff" in file:
@@ -603,18 +696,24 @@ class JobManager:
         result["capabilities"]["protocolVerified"] = bool(job.get("protocolVerified"))
         result["capabilities"]["inputSteering"] = native and bool(job.get("inputSteeringVerified"))
         driver = self.drivers.get(job.get("id"))
-        result["controls"] = {"cancel": job.get("status") not in TERMINAL,
+        result.pop("coldRecoveryRead", None)
+        result["coldRecovery"] = {"protocol": cold_session.PROTOCOL, "supportedForOriginalJob": cold_session.eligible(job), "requiresNativeOwnerReview": True, "readOnlyInspection": True, "lastInspection": json.loads(json.dumps(job.get("coldRecoveryRead", {"status": "not_checked"}))), "reason": "Original process identity and exact latest stored terminal Codex turn are both required; old jobs/Claude/SSH/private input staging have no cold continuation proof"}
+        result["controls"] = {"readSessionRecovery": cold_session.eligible(job), "cancel": job.get("status") not in TERMINAL,
                               "approve": live and bool(job.get("pendingApprovals")),
                               "answerQuestion": live and not job.get("assignmentWorkspace") and any(value.get("canAnswer") for value in job.get("pendingQuestions", [])),
-                              "threadResume": self._can_resume(job),
+                              "threadResume": self._can_resume(job), "threadFork": native and self._can_resume(job) and job.get("status") in {"completed", "failed", "cancelled"},
                               "inputSteering": not job.get("assignmentWorkspace") and live and driver is not None and driver.can_steer(job.get("turnId")), "sessionReattach": False}
         return result
 
     def _can_resume(self, job):
+        return self._can_resume_without_child(job, None)
+
+    def _can_resume_without_child(self, job, exact_child):
         if job.get("assignmentWorkspace"):
             return False  # Team follow-up needs native assignment/reservation, not private continuation.
         worker = job.get("worker")
-        if worker not in {"claude", "codex_app_server"} or job.get("status") not in {"completed", "failed", "cancelled"} or not job.get("threadId"):
+        recovered = cold_session.proof_matches(job, self.environments.get(job.get("environmentId"), {})) if job.get("status") == "interrupted" else False
+        if worker not in {"claude", "codex_app_server"} or job.get("status") not in {"completed", "failed", "cancelled"} and not recovered or not job.get("threadId"):
             return False
         if any(value.get("status") in {"queued", "sending", "unknown"} for value in job.get("questionReceipts", [])):
             return False
@@ -635,7 +734,7 @@ class JobManager:
                     return False
             except (OSError, RequestError):
                 return False
-        return not any(j.get("worker") == worker and j.get("threadId") == job.get("threadId") and
+        return not any(j.get("id") not in {job.get("id"), exact_child} and j.get("worker") == worker and j.get("threadId") == job.get("threadId") and
                        (j.get("status") not in {"completed", "failed", "cancelled"} or j.get("resumeJobId") == job["id"])
                        for j in self.jobs.values())
 
@@ -731,6 +830,7 @@ class JobManager:
             if job is None:
                 raise RequestError("Job not found", 404)
             if input_files.cancel_before_worker(self, job):
+                self.harness_configs.settle_job(job, job.get("notStartedConfirmed") is True)
                 return self._public(job)
             if job["status"] in TERMINAL:
                 return self._public(job)
@@ -757,6 +857,7 @@ class JobManager:
         wall_timer = None
         wall_expired = threading.Event()
         assignment = False
+        group_input = bool(codex and codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP")
         cleanup = None
         try:
             with self.resource_changed:
@@ -784,8 +885,30 @@ class JobManager:
                     input_files.verify(self, job, RequestError)
                 self.resources.add(resource)
                 acquired_resource = resource
+            # Keep the original resource lease, but never hold its monitor during project IO.
+            if job.get("projectHistoryScope"):
+                project_history.before(self, job, RequestError)
+            with self.resource_changed:
+                if self.closed or jobid in self.stopping:
+                    raise RequestError("Cancelled before original worker dispatch", 409)
+                actual_env = assignment_workspaces.job_environment(self, job, RequestError)
+                if job.get("workspaceIdentity") and job["workspaceIdentity"] != self.workspace_identity(actual_env):
+                    raise RequestError("Original workspace changed before worker launch", 409)
+                if job.get("projectHistoryScope"):
+                    current_root, _identity = project_history._root(self, job, RequestError)
+                    os.close(current_root)
                 child_env = dict(os.environ)
                 child_env.pop("POCKETENGINE_COMPANION_TOKEN", None)
+                try:
+                    child_env.update(self.harness_configs.job_environment(job, job.get("_harnessConfigRequest", {}), actual_env))
+                except harness_config.ConfigError as error:
+                    raise RequestError(str(error), error.status)
+                if codex and codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP":
+                    try:
+                        group_input_audience.check(self, codex["request"], self._environment(job["environmentId"]))
+                        child_env = group_input_audience.child_environment(self._environment(job["environmentId"]), child_env)
+                    except group_input_audience.Unavailable as failure:
+                        raise RequestError(str(failure), 409) from failure
                 if job.get("worker") == "claude":
                     child_env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
                 options = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -793,11 +916,14 @@ class JobManager:
                 process._pocket_cleanup_lock = threading.Lock()
                 self.processes[jobid] = process
                 job.update(status="running", processStarted=True, dispatchFenceFinal=False, message="Remote SSH process started" if remote else "Process started", updatedAt=self.now())
+                identity = cold_session.capture(job, actual_env, process)
+                if identity is not None:
+                    job["_coldProcess"] = identity
                 if job.get("inputState"):
                     job["inputState"].update(phase="running", workerStarted=True)
                     job["notStartedConfirmed"] = False
                 self._save(job)
-                if assignment:
+                if assignment or group_input:
                     def expire():
                         if getattr(process, "_pocket_cleanup_proof", {}).get("processGroupStoppedVerified"):
                             return
@@ -816,16 +942,17 @@ class JobManager:
                     with self.lock:
                         if assignment and (job["assignmentWorkspace"]["approvalExpiresAt"] <= self.now() or job.get("assignmentEnvironmentBinding") != self.environment_binding(job["environmentId"])):
                             return True
-                        return jobid in self.stopping or self.closed
+                        return jobid in self.stopping or self.closed or not self.harness_configs.job_live(job)
                 last_saved = {"at": 0, "identity": None}
                 def state(value):
                     with self.lock:
                         # Raw protocol diagnostics and account credentials never enter receipts.
-                        safe = json.loads(json.dumps(value).replace(self.token, "[token hidden]"))
+                        safe = json.loads(self.harness_configs.redact(json.dumps(value)).replace(self.token, "[token hidden]"))
                         if jobid in self.stopping and safe.get("status") in {"running", "awaiting_approval", "awaiting_input"}:
                             safe["status"] = "stopping"
                         self.jobs[jobid].update(safe, updatedAt=self.now())
-                        identity = json.dumps([safe.get("threadId"), safe.get("turnId"), safe.get("pendingApprovals"), safe.get("approvalReceipts"), safe.get("pendingQuestions"), safe.get("questionReceipts"), safe.get("status")], sort_keys=True)
+                        identity = json.dumps([safe.get("threadId"), safe.get("turnId"), safe.get("pendingApprovals"), safe.get("approvalReceipts"), safe.get("pendingQuestions"), safe.get("questionReceipts"), safe.get("status"),
+                                               safe.get("progress", {}).get("generation"), safe.get("progress", {}).get("lastSequence")], sort_keys=True)
                         if identity != last_saved["identity"] or self.now() - last_saved["at"] >= 500:
                             self._save(self.jobs[jobid])
                             last_saved.update(at=self.now(), identity=identity)
@@ -835,12 +962,45 @@ class JobManager:
                 else:
                     driver = CodexAppServerDriver(process, codex["environment"]["root"], bool(codex["environment"].get("writeAllowed")), state, stopped, timeout, codex["request"].get("readOnly") is True, lambda: self.lock,
                                                   assignment_write=assignment, output_limit=job.get("externalJobLimits", {}).get("maxOutputBytes", MAX_OUTPUT),
-                                                  assignment_paths=[value["path"] for value in assignment_workspaces.lookup(self, job["assignmentWorkspace"]["sourceJobId"], job["assignmentWorkspace"]["checkoutId"])["files"]] if assignment else None)
+                                                  assignment_paths=[value["path"] for value in assignment_workspaces.record_for_reference(self, job["assignmentWorkspace"], RequestError)["files"]] if assignment else None,
+                                                  assignment_project=assignment and job["assignmentWorkspace"].get("mode") == assignment_projects.MODE)
                 with self.lock:
                     self.drivers[jobid] = driver
-                result = driver.run(text(codex["request"].get("prompt"), "prompt"), codex["request"].get("threadId"), codex["request"].get("model"))
+                if codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP":
+                    def current_group_api_generation():
+                        try:
+                            return group_input_audience.check(self, codex["request"], self._environment(job["environmentId"]))["credentialGeneration"]
+                        except group_input_audience.Unavailable as failure:
+                            raise DriverError(str(failure)) from failure
+                    facts = driver.require_group_api_mode(codex["request"]["externalGroupApiMode"]["credentialGeneration"], current_group_api_generation, lambda: group_input_audience.generation(self,self._environment(job["environmentId"])))
+                    with self.lock:
+                        job["externalGroupApiRead"] = facts
+                        self._save(job)
+                if codex["request"].get("recoveryProofId"):
+                    with self.lock:
+                        prior = self.jobs.get(codex["request"].get("resumeJobId"))
+                        if prior is None or codex["request"]["recoveryProofId"] != prior.get("recoveryProof", {}).get("proofId") or not cold_session.proof_matches(prior, actual_env):
+                            raise DriverError("Original cold recovery proof or process/configuration changed; no new turn was dispatched")
+                        original_turn = prior["turnId"]
+                    driver.read_original_turn(codex["request"]["threadId"], original_turn)
+                if codex["request"].get("inputContinuationTurnId"):
+                    with self.lock:
+                        prior = self.jobs.get(codex["request"].get("resumeJobId"))
+                        if prior is None or input_files.continuation_source(prior) != job.get("inputState", {}).get("continuationSource") or not self._can_resume_without_child(prior, jobid):
+                            raise DriverError("Original input continuation scope/session changed before launch; no turn was started")
+                    driver.read_original_turn(codex["request"]["threadId"], codex["request"]["inputContinuationTurnId"])
+                thread = codex["request"].get("threadId")
+                if codex["request"].get("forkSource"):
+                    with self.lock:
+                        original = self.jobs.get(codex["request"]["forkSource"]["jobId"])
+                        if original is None or not self._can_resume(original) or original.get("turnId") != codex["request"]["forkSource"]["turnId"]:
+                            raise DriverError("Original fork source changed before protocol dispatch")
+                    thread = driver.fork_original_thread(original["threadId"], original["turnId"])
+                result = driver.run(text(codex["request"].get("prompt"), "prompt"), thread, codex["request"].get("model"))
+                if codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP":
+                    result["externalGroupApiRead"] = dict(driver.group_api_facts)
                 with self.lock:
-                    self.jobs[jobid].update(json.loads(json.dumps(result).replace(self.token, "[token hidden]")), updatedAt=self.now())
+                    self.jobs[jobid].update(json.loads(self.harness_configs.redact(json.dumps(result)).replace(self.token, "[token hidden]")), updatedAt=self.now())
                     self._save(self.jobs[jobid])
                 cleanup = self._terminate(process, hard=assignment)
                 return
@@ -878,7 +1038,7 @@ class JobManager:
             if process is not None:
                 cleanup = self._terminate(process, hard=assignment)
             with self.lock:
-                before_dispatch = isinstance(error, RequestError) and process is None or isinstance(error, DriverError) and codex and driver is not None and not driver.turn_dispatched
+                before_dispatch = isinstance(error, RequestError) and process is None or isinstance(error, DriverError) and codex and driver is not None and not driver.turn_dispatched and (not getattr(driver, "fork_dispatched", False) or getattr(driver, "fork_refused", False))
                 cancelled = before_dispatch and (jobid in self.stopping or self.closed)
                 blocked = before_dispatch and not cancelled
                 self.jobs[jobid].update(status="cancelled" if cancelled else "blocked" if blocked else "unknown" if process is not None else "failed", pendingApprovals=[], message="Cancelled before prompt/turn dispatch" if cancelled else str(error) + "; no process/turn was dispatched" if blocked and isinstance(error, RequestError) else "Required protocol capabilities were not confirmed; no turn was dispatched" if blocked else "Worker supervision failed; prior effects are unverified" if process is not None else "Unable to start configured worker: " + type(error).__name__, updatedAt=self.now())
@@ -892,8 +1052,21 @@ class JobManager:
                 except (OSError, ValueError, sqlite3.Error):
                     with self.lock:
                         self.jobs[jobid].update(status="unknown", message="Steering receipt could not be persisted; inspect the original operation before continuing")
+            if process is not None and process.poll() is not None and self.jobs[jobid].get("projectHistoryScope"):
+                try:
+                    project_history.after(self, self.jobs[jobid], RequestError)
+                except (OSError, ValueError, sqlite3.Error, RequestError):
+                    # Capture persistence failure cannot skip original process/lease cleanup,
+                    # publish a complete diff, or replay this worker/final capture after restart.
+                    with self.lock:
+                        self.jobs[jobid]["projectHistory"]["comparisonStatus"] = "unknown_persistence"
+                        self.jobs[jobid]["projectHistory"]["reason"] = "Original project comparison persistence unconfirmed; no automatic recapture"
+                        try:
+                            self._save(self.jobs[jobid])
+                        except (OSError, ValueError, sqlite3.Error):
+                            pass
             with self.lock:
-                if assignment:
+                if assignment or group_input:
                     job = self.jobs[jobid]
                     if process is not None and cleanup is None:
                         cleanup = self._terminate(process, hard=True)
@@ -913,10 +1086,18 @@ class JobManager:
                     job["inputState"]["phase"] = job["status"]
                     job.update(dispatchFenceFinal=True, notStartedConfirmed=process is None, processStarted=process is not None)
                     self._save(job)
+                if job.get("harnessConfigOperationId"):
+                    if process is not None and cleanup is None:
+                        cleanup = self._terminate(process)
+                    stopped = process is None or bool(cleanup and cleanup.get("processGroupStoppedVerified"))
+                    job["processCleanupProof"] = cleanup if cleanup is not None else {"notStartedConfirmed": True, "processGroupStoppedVerified": stopped}
+                    job["dispatchFenceFinal"] = stopped
+                    self.harness_configs.settle_job(job, stopped)
+                    self._save(job)
                 self.processes.pop(jobid, None)
                 self.drivers.pop(jobid, None)
                 self.stopping.discard(jobid)
-                if acquired_resource is not None and not (assignment and process is not None and not cleanup.get("processGroupStoppedVerified")):
+                if acquired_resource is not None and not ((assignment or group_input) and process is not None and not cleanup.get("processGroupStoppedVerified")):
                     self.resources.discard(acquired_resource)
                 self.resource_changed.notify_all()
             if process is not None and process.stdout is not None:
@@ -1168,8 +1349,10 @@ class JobManager:
             self.get(jobid)
             job = self.jobs[jobid]
             # A lost ACK is query-only; even changed current files never recapture this operation.
+            if operation == job["operationId"]:
+                raise RequestError("A selected snapshot needs its own original operation, not the job submission ID", 409)
             for snapshot in job.get("resultSnapshots", []):
-                if snapshot["operationId"] == operation:
+                if snapshot.get("protocol") != project_history.PROTOCOL and snapshot["operationId"] == operation:
                     if snapshot["fingerprint"] != fingerprint:
                         raise RequestError("Snapshot operationId is already bound to different exact files/source", 409)
                     return self._snapshot_public(snapshot)
@@ -1178,7 +1361,8 @@ class JobManager:
                     raise RequestError("Snapshot request does not match the original job environment/worker", 409)
             if request.get("jobOperationId") != job["operationId"] or any(key in request and request[key] != job.get(key) for key in ("threadId", "turnId")):
                 raise RequestError("Snapshot request does not match the original job operation/session/turn", 409)
-            snapshots = job.get("resultSnapshots", [])
+            retained = job.get("resultSnapshots", [])
+            snapshots = [snapshot for snapshot in retained if snapshot.get("protocol") != project_history.PROTOCOL]
             if len(snapshots) >= 4:
                 raise RequestError("Original job already has four retained snapshots; none were silently replaced", 409)
             env = self._snapshot_environment(job)
@@ -1208,7 +1392,7 @@ class JobManager:
             manifest = self._snapshot_public(snapshot)
             snapshot["snapshotVersion"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
             updated = dict(job)
-            updated["resultSnapshots"] = snapshots + [snapshot]
+            updated["resultSnapshots"] = retained + [snapshot]
             # Original atomic job document is the only durable artifact store for these bytes.
             self._save(updated)
             self.jobs[jobid] = updated
@@ -1220,6 +1404,11 @@ class JobManager:
             for snapshot in self.jobs[jobid].get("resultSnapshots", []):
                 if snapshot["operationId"] == identifier(operation, "snapshot operationId"):
                     return self._snapshot_public(snapshot)
+            row = self.ledger.execute("SELECT job_id,details FROM operations WHERE operation_id=?", (operation,)).fetchone()
+            if row and row[1] and json.loads(row[1]).get("protocol") == "project_contribution_v1":
+                if row[0] != jobid:
+                    raise RequestError("Original contribution operation belongs to another job", 409)
+                return {"operationId": operation, "jobId": jobid, "jobOperationId": self.jobs[jobid]["operationId"], "status": "unknown", "resubmitted": False, "message": "Original capture intent exists, immutable receipt unconfirmed; never recapture on GET"}
             return {"operationId": operation, "jobId": jobid, "jobOperationId": self.jobs[jobid]["operationId"], "status": "not_found", "resubmitted": False}
 
     def result_snapshot(self, jobid, snapshotid, version, path=None):
@@ -1243,6 +1432,8 @@ class JobManager:
         if not request.get("resultSnapshotId") or not request.get("resultSnapshotVersion") or prior is None:
             raise RequestError("Snapshot continuation requires the exact original settled job and snapshot/version", 409)
         snapshot = self.result_snapshot(prior["id"], request["resultSnapshotId"], request["resultSnapshotVersion"])
+        if snapshot.get("protocol") == project_history.PROTOCOL:
+            raise RequestError("A project historical file must be explicitly restored, then current selected files recaptured; conversation is not rolled back by a version ID", 409)
         if prior.get("resourceId") != self.resource_id(env):
             raise RequestError("Snapshot continuation workspace changed", 409)
         if not prior.get("workspaceIdentity") or prior["workspaceIdentity"] != snapshot.get("workspaceIdentity") or prior["workspaceIdentity"] != self.workspace_identity(env):
@@ -1317,7 +1508,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
             request = {}
             if post:
                 length = self.headers.get("Content-Length", "")
-                body_limit = 2_097_152 if len(parts) == 4 and parts[:2] == ["v1", "workspaces"] and parts[3] == "file" else MAX_BODY
+                body_limit = 2_097_152 if (len(parts) == 4 and parts[:2] == ["v1", "workspaces"] and parts[3] == "file") or parts == ["v1", "assignment-projects"] else MAX_BODY
                 if not length.isdigit() or not 0 < int(length) <= body_limit:
                     raise RequestError("Request body is missing or too large", 413)
                 try:
@@ -1333,6 +1524,8 @@ class CompanionHandler(BaseHTTPRequestHandler):
                           "operationReconciliation": True, "perWorkspaceExecutionLease": True}
             elif not post and parts == ["v1", "environments"]:
                 result = manager.list_environments()
+            elif len(parts) >= 2 and parts[:2] in (["v1", "harnesses"], ["v1", "harness-config"]):
+                result = harness_config.route(manager, parts, post, request, {key: values[0] for key, values in parse_qs(url.query).items()}, RequestError)
             elif post and parts == ["v1", "workers", "probe"]:
                 result = manager.probe_worker(request)
             elif len(parts) == 3 and parts[:2] == ["v1", "operations"] and not post:
@@ -1346,10 +1539,29 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 if action is None:
                     raise RequestError("Endpoint not found", 404)
                 result = manager.workspace_files(parts[2], action, request if post else query)
+            elif parts == ["v1", "assignment-projects"] and post:
+                result = assignment_projects.prepare(manager, request, RequestError)
+            elif len(parts) == 3 and parts[:2] == ["v1", "assignment-projects"] and not post:
+                result = assignment_projects.operation(manager, parts[2], RequestError)
+            elif len(parts) == 4 and parts[:2] == ["v1", "assignment-projects"] and parts[3] == "finalize" and post:
+                result = assignment_projects.finalize(manager, parts[2], request, RequestError)
+            elif len(parts) == 4 and parts[:2] == ["v1", "assignment-projects"] and parts[3] == "cancel" and post:
+                if request:
+                    raise RequestError("Project preparation cancellation has no replacement scope")
+                result = assignment_projects.cancel(manager, parts[2], RequestError)
             elif parts == ["v1", "jobs"]:
                 result = manager.submit(request) if post else manager.list_jobs()
             elif len(parts) == 3 and parts[:2] == ["v1", "jobs"] and not post:
                 result = manager.get(parts[2])
+            elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "session-recovery" and not post:
+                if url.query:
+                    raise RequestError("Original recovery read accepts no replacement scope")
+                result = cold_session.inspect(manager, identifier(parts[2], "jobId"), RequestError)
+            elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "events" and not post:
+                parsed = parse_qs(url.query, keep_blank_values=True)
+                if any(len(values) != 1 for values in parsed.values()):
+                    raise RequestError("Repeated event cursor fields are not accepted")
+                result = job_events.read(manager, parts[2], {key: values[0] for key, values in parsed.items()}, RequestError)
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "approval" and post:
                 result = manager.approve(parts[2], request)
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "question-answer" and post:
@@ -1360,12 +1572,38 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 result = manager.steer_message(parts[2], parts[4])
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "cancel" and post:
                 result = manager.cancel(parts[2])
+            elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "restore-project-file" and post:
+                result = project_history.restore(manager, parts[2], request, RequestError)
+            elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "project-history" and not post:
+                parsed = parse_qs(url.query, keep_blank_values=True)
+                if any(len(values) != 1 for values in parsed.values()):
+                    raise RequestError("Repeated original project history fields")
+                result = project_history.read(manager, parts[2], {key: values[0] for key, values in parsed.items()}, RequestError)
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "result-files" and not post:
                 result = result_files.list_files(manager, parts[2], {key: values[0] for key, values in parse_qs(url.query).items()}, RequestError)
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "artifact" and not post:
                 result = manager.artifact(parts[2], parse_qs(url.query).get("path", [""])[0])
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "start-with-inputs" and post:
                 result = input_files.start(manager, parts[2], request, RequestError)
+            elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "project-contributions" and post:
+                result = assignment_projects.freeze(manager, parts[2], request, RequestError)
+            elif len(parts) == 6 and parts[:2] == ["v1", "jobs"] and parts[3] == "project-contributions" and parts[5] == "file" and not post:
+                parsed = parse_qs(url.query, keep_blank_values=True)
+                if any(len(values) != 1 for values in parsed.values()):
+                    raise RequestError("Repeated exact contribution fields not accepted")
+                raw, sha = assignment_projects.exact_file(manager, parts[2], parts[4], {key: values[0] for key, values in parsed.items()}, RequestError)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("X-Pocket-Content-SHA256", sha)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                try:
+                    for at in range(0, len(raw), 32768):
+                        self.wfile.write(raw[at:at + 32768])
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "snapshots" and post:
                 result = manager.capture_result_snapshot(parts[2], request)
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "assignment-workspaces" and post:
@@ -1400,15 +1638,23 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 raise RequestError("Unauthorized", 401)
             url = urlsplit(self.path)
             parts = [unquote(value) for value in url.path.strip("/").split("/")]
-            if len(parts) != 5 or parts[:2] != ["v1", "jobs"] or parts[3] != "inputs" or not re.fullmatch("[0-7]", parts[4]) or url.query or any("/" in part for part in parts):
-                raise RequestError("Exact original input endpoint required", 404)
+            project = len(parts) == 5 and parts[:2] == ["v1", "assignment-projects"] and parts[3] == "files" and parts[4].isdigit() and 0 <= int(parts[4]) < assignment_projects.MAX_FILES
+            private = len(parts) == 5 and parts[:2] == ["v1", "jobs"] and parts[3] == "inputs" and re.fullmatch("[0-7]", parts[4])
+            if not (project or private) or url.query or any("/" in part for part in parts):
+                raise RequestError("Exact original native binary endpoint required", 404)
             length = self.headers.get("Content-Length", "")
-            if self.headers.get("Transfer-Encoding") or not length.isdigit() or not 0 <= int(length) <= input_files.MAX_FILE:
-                raise RequestError("Raw private input requires an exact bounded Content-Length", 413)
+            if self.headers.get("Transfer-Encoding") or not length.isdigit() or not 0 <= int(length) <= (assignment_projects.MAX_FILE if project else input_files.MAX_FILE):
+                raise RequestError("Raw native input requires an exact bounded Content-Length", 413)
             if self.headers.get_content_type() != "application/octet-stream":
-                raise RequestError("Private input must be binary octet-stream")
-            operation = self.headers.get("X-Pocket-Job-Operation", "")
-            result = input_files.upload(self.server.manager, parts[2], int(parts[4]), operation, int(length), self.rfile, RequestError)
+                raise RequestError("Native input must be binary octet-stream")
+            if project:
+                operation = self.headers.get("X-Pocket-Prepare-Operation", "")
+                if operation != parts[2]:
+                    raise RequestError("Project input is not bound to its original native prepare", 409)
+                result = assignment_projects.upload(self.server.manager, parts[2], int(parts[4]), int(length), self.rfile, RequestError)
+            else:
+                operation = self.headers.get("X-Pocket-Job-Operation", "")
+                result = input_files.upload(self.server.manager, parts[2], int(parts[4]), operation, int(length), self.rfile, RequestError)
             self._send(200, {"ok": True, "result": result})
         except RequestError as failure:
             self.close_connection = True  # An unaccepted body is never consumed or reused as a request.

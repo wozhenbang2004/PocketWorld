@@ -27,7 +27,7 @@ public final class ModelImageCapabilityTest {
     }
     @Test public void accountTransportNeverInheritsImageDeclarationAndRetainedApiChoiceRemainsSeparate()throws Exception{
         SettingsStore store=settings();store.save(config());JSONObject ref=new JSONObject().put("provider",ModelConfig.ACCOUNT_PROVIDER).put("accountId","fixture-account").put("accountVersion",1L).put("modelId","fixture-account-model");ModelConfig account=store.selectAccountModel(ref);
-        assertFalse(account.supportsImageInput);assertFalse(account.withOwnerImageInput(true).supportsImageInput);assertEquals("account_text_only",account.publicJson().getString("imageInputCapabilitySource"));assertTrue(store.useApiKeyModel().supportsImageInput);
+        assertFalse(account.supportsImageInput);assertFalse(account.withOwnerImageInput(true).supportsImageInput);assertEquals("account_capability_unknown",account.publicJson().getString("imageInputCapabilitySource"));assertTrue(store.useApiKeyModel().supportsImageInput);
     }
     @Test public void immutableRunCopiesPreserveOnlyTheSameDeclaredRouteModel()throws Exception{
         ModelConfig config=ModelConfig.fromJson(config());assertTrue(config.withStepCeiling(80).supportsImageInput);assertTrue(config.withCleartextConsent("").supportsImageInput);assertTrue(config.withModel("fixture-model").supportsImageInput);assertFalse(config.withModel("other-model").supportsImageInput);assertFalse(new ModelConfig("https://model.invalid","","image-sounding-name",true,2,10).supportsImageInput);

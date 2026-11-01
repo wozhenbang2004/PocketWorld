@@ -43,6 +43,13 @@ public final class ChannelCore {
             JSONObject row=array("inbox").getJSONObject(i);
             if("answering".equals(row.optString("status"))||"queued".equals(row.optString("status"))){row.put("status","interrupted");changed=true;}
         }
+        // Migrate retained legacy keys using their actual original event, never the new
+        // caller's room. An unresolvable old key stays an explicit replay barrier.
+        for(int i=0;i<array("seen").length();i++){
+            JSONObject seen=array("seen").getJSONObject(i);if(seen.optInt("keyVersion")==2)continue;
+            JSONObject original=originalSeenEvent(seen.optString("eventId"));
+            if(original!=null&&find("profiles","id",original.optString("profileId"))!=null){seen.put("key",eventKey(original)).put("keyVersion",2);changed=true;}
+        }
         if(changed)save();
     }
 
@@ -56,22 +63,27 @@ public final class ChannelCore {
         if(previous!=null&&(!provider.equals(previous.optString("provider"))||!appId.equals(previous.optString("appId"))))
             throw new IllegalArgumentException("平台或 AppID 改变时请新建连接，避免沿用旧身份绑定");
         if(previous==null&&array("profiles").length()>=20)throw new IllegalStateException("最多保存20个渠道连接");
+        if(input.has("qqGuildEnabled")&&!(input.opt("qqGuildEnabled") instanceof Boolean))throw new IllegalArgumentException("请明确选择是否接收QQ频道场景");
         if(input.has("ownerImagesEnabled")&&!(input.opt("ownerImagesEnabled") instanceof Boolean))throw new IllegalArgumentException("请明确选择是否处理主人私聊图片");
+        if(input.has("qqStreamRepliesEnabled")&&!(input.opt("qqStreamRepliesEnabled") instanceof Boolean))throw new IllegalArgumentException("请明确选择QQ C2C流式回复");
+        if(input.has("ownerMediaEnabled")&&!(input.opt("ownerMediaEnabled") instanceof Boolean))throw new IllegalArgumentException("请明确选择是否允许本机逐项保存主人私聊文件/音视频");
         JSONObject profile=new JSONObject().put("id",id).put("name",text(input,"name",80,false))
                 .put("provider",provider).put("appId",appId).put("enabled",input.optBoolean("enabled",false))
                 .put("apiBase",apiBase).put("transportEpoch",UUID.randomUUID().toString())
-                .put("autoReply",input.optBoolean("autoReply",false)).put("ownerImagesEnabled",provider.equals("weixin")&&input.optBoolean("ownerImagesEnabled",false)).put("replyUrl",input.optString("replyUrl","").trim())
+                .put("qqGuildEnabled",provider.equals("qq")&&input.optBoolean("qqGuildEnabled",previous!=null&&previous.optBoolean("qqGuildEnabled"))).put("qqStreamRepliesEnabled",provider.equals("qq")&&input.optBoolean("qqStreamRepliesEnabled",false)).put("ownerMediaEnabled",provider.matches("weixin|qq")&&input.optBoolean("ownerMediaEnabled",false)).put("autoReply",input.optBoolean("autoReply",false)).put("ownerImagesEnabled",provider.matches("weixin|qq")&&input.optBoolean("ownerImagesEnabled",false)).put("replyUrl",input.optString("replyUrl","").trim())
                 .put("maxRepliesPerHour",Math.max(1,Math.min(200,input.optInt("maxRepliesPerHour",30))))
                 .put("updatedAt",System.currentTimeMillis());
         replace("profiles","id",id,profile);save();return copy(profile);
     }
     public synchronized JSONObject profile(String id)throws Exception {
-        JSONObject profile=find("profiles","id",id);if(profile==null)throw new IllegalArgumentException("渠道连接不存在");return copy(profile);
+        JSONObject profile=find("profiles","id",id);if(profile==null)throw new IllegalArgumentException("渠道连接不存在");JSONObject view=copy(profile);view.remove("nativeQqResume");return view;
     }
+    synchronized String originalQqBotUser(JSONObject captured)throws Exception {JSONObject actual=profile(captured.getString("id")),proof=actual.optJSONObject("nativeQqBotUser");if(!actual.getString("transportEpoch").equals(captured.getString("transportEpoch"))||proof==null||!actual.getString("transportEpoch").equals(proof.optString("transportEpoch")))return "";return identifier(proof,"botUserId");}
+    synchronized void recordQqBotUser(JSONObject captured,String nativeId)throws Exception {JSONObject actual=find("profiles","id",captured.getString("id"));if(actual==null||!actual.optString("provider").equals("qq")||!actual.optString("transportEpoch").equals(captured.getString("transportEpoch")))throw new SecurityException("QQ机器人认证代次已变化");String checked=identifier(new JSONObject().put("id",nativeId),"id");JSONObject prior=actual.optJSONObject("nativeQqBotUser");if(prior!=null&&!prior.optString("botUserId").equals(checked))throw new SecurityException("同一原QQ连接认证出不同机器人身份，停止并重新配置");actual.put("nativeQqBotUser",new JSONObject().put("botUserId",checked).put("transportEpoch",actual.getString("transportEpoch")).put("source","authenticated_gateway_ready"));save();}
     public synchronized void prepareCredentialChange(String id)throws Exception {
         JSONObject profile=find("profiles","id",id);if(profile==null)throw new IllegalArgumentException("渠道连接不存在");
         JSONObject binding=find("bindings","profileId",id);if(binding!=null){binding.put("bindingEpoch",UUID.randomUUID().toString());resetTaskGrant(binding);}
-        profile.put("enabled",false).put("configurationPending",true).put("transportEpoch",UUID.randomUUID().toString());save();
+        profile.remove("nativeQqResume");profile.put("enabled",false).put("configurationPending",true).put("transportEpoch",UUID.randomUUID().toString());save();
     }
     public synchronized void removeProfile(String id)throws Exception {
         remove("profiles","id",id);remove("bindings","profileId",id);
@@ -93,27 +105,83 @@ public final class ChannelCore {
         if(!kind.equals("dm")&&!kind.equals("group"))throw new IllegalArgumentException("未知会话类型");
         if(profile.optString("provider").equals("weixin")&&!kind.equals("dm"))throw new SecurityException("当前微信适配器只支持私人文字会话");
         String roomId=kind.equals("group")?identifier(canonical,"roomId"):"";
-        String key=digest(profileId+"\u0000"+messageId);
+        if(profile.getString("provider").equals("qq")&&QqConversation.guild(canonical)&&!profile.optBoolean("qqGuildEnabled"))throw new SecurityException("此连接未由本机启用QQ频道/频道私聊接收");
+        JSONObject source=new JSONObject().put("profileId",profileId).put("kind",kind).put("roomId",roomId).put("senderId",senderId).put("messageId",messageId);
+        if(profile.getString("provider").equals("qq"))QqConversation.copyNative(canonical,source);String key=eventKey(source);
         JSONObject seen=find("seen","key",key);
         if(seen!=null)return new JSONObject().put("duplicate",true).put("eventId",seen.getString("eventId"));
+        JSONObject legacy=find("seen","key",digest(profileId+"\u0000"+messageId));
+        if(legacy!=null&&legacy.optInt("keyVersion")!=2)return new JSONObject().put("duplicate",true).put("eventId",legacy.getString("eventId")).put("deduplicationStatus","legacy_scope_unavailable");
         long now=System.currentTimeMillis();
         JSONObject row=new JSONObject().put("id",UUID.randomUUID().toString()).put("profileId",profileId)
                 .put("messageId",messageId).put("senderId",senderId).put("roomId",roomId).put("kind",kind)
-                .put("text",text(canonical,"text",4000,profile.getString("provider").equals("weixin")&&ChannelMessageParts.weixinImagePositions(canonical.optJSONObject("messageParts")).length()>0)).put("authenticatedBy",authentication).put("transportEpoch",profile.getString("transportEpoch"))
+                .put("text",text(canonical,"text",4000,(profile.getString("provider").equals("weixin")&&(ChannelMessageParts.weixinImagePositions(canonical.optJSONObject("messageParts")).length()>0||ChannelMessageParts.ownerMediaPositions(canonical.optJSONObject("messageParts")).length()>0)||profile.getString("provider").equals("qq")&&canonical.optBoolean("nativeMediaOnly")&&ChannelMessageParts.qqHasMedia(canonical.optJSONObject("messageParts"))))).put("authenticatedBy",authentication).put("transportEpoch",profile.getString("transportEpoch"))
                 .put("receivedAt",now).put("sentAt",canonical.optLong("sentAt",now)).put("status","received");
+        if(profile.getString("provider").equals("qq"))QqConversation.copyNative(canonical,row);
         if(kind.equals("group")&&profile.getString("provider").equals("qq")&&canonical.optJSONArray("groupAttachments")!=null)row.put("groupAttachments",copy(canonical.getJSONArray("groupAttachments")));
         if(canonical.optJSONObject("messageParts")!=null)row.put("messageParts",ChannelMessageParts.authenticatedCopy(canonical.getJSONObject("messageParts"),profile.getString("provider"),messageId));
+        if(canonical.optBoolean("nativeMediaOnly"))row.put("nativeMediaOnly",true);
         if(canonical.optBoolean("partialInput"))row.put("partialInput",true).put("inputNotice","已保留文字与引用；其他消息项未下载/解密，不能声称已读取媒体");
         JSONObject route=route(row);row.put("route",route);
         if(profile.getString("provider").equals("weixin")&&authentication.equals("weixin_session"))resolveOriginalWeixinQuotes(row,now);
+        if(profile.getString("provider").equals("qq"))resolveOriginalQqQuotes(row,now);
         if(find("spaces","spaceId",route.getString("spaceId"))==null) {
             if(array("spaces").length()>=200)throw new IllegalStateException("会话空间已达200个，请删除不用的连接");
             array("spaces").put(new JSONObject().put("profileId",profileId).put("spaceId",route.getString("spaceId"))
                     .put("kind",kind).put("capabilities",new JSONArray().put("chat")));
         }
         appendBounded("inbox",row,200);
-        appendBounded("seen",new JSONObject().put("key",key).put("eventId",row.getString("id")).put("at",now),2000);
+        appendBounded("seen",new JSONObject().put("key",key).put("keyVersion",2).put("eventId",row.getString("id")).put("at",now),2000);
         save();return new JSONObject().put("duplicate",false).put("event",copy(row)).put("route",route);
+    }
+
+    private String eventKey(JSONObject event)throws Exception {
+        JSONObject profile=profile(event.getString("profileId"));
+        JSONArray scope=new JSONArray().put("channel_event_v2").put(profile.getString("provider")).put(profile.getString("id")).put(profile.optString("appId"))
+                .put(event.getString("kind")).put(event.getString("kind").equals("group")?event.getString("roomId"):event.getString("senderId")).put(event.getString("messageId"));
+        if(profile.getString("provider").equals("qq")&&QqConversation.guild(event))scope.put(QqConversation.scene(event)).put(event.getString("qqGuildId")).put(event.optString("qqChannelId"));return digest(scope.toString());
+    }
+    /** Preserve existing private C2C keys; newly enabled guild namespaces cannot collide with them. */
+    private String hostEventKey(JSONObject event)throws Exception {
+        String legacy=event.getString("profileId")+"\u0000"+event.getString("messageId");
+        return digest(profile(event.getString("profileId")).getString("provider").equals("qq")&&QqConversation.guild(event)?legacy+"\u0000"+QqConversation.scene(event)+"\u0000"+event.getString("qqGuildId"):legacy);
+    }
+    private JSONObject originalSeenEvent(String id)throws Exception {
+        JSONObject original=find("inbox","id",id);if(original!=null)return original;
+        for(int i=0;i<array("taskRequests").length();i++){JSONObject origin=array("taskRequests").getJSONObject(i).optJSONObject("originEvent");if(origin!=null&&id.equals(origin.optString("id")))return origin;}
+        for(int i=0;i<array("outbox").length();i++){JSONObject row=array("outbox").getJSONObject(i);for(String key:new String[]{"nativeGroupEvent","nativeRemoteEvent","nativeRemoteResultEvent","nativeCompletionEvent"}){JSONObject origin=row.optJSONObject(key);if(origin!=null&&id.equals(origin.optString("id")))return origin;}}
+        return null;
+    }
+
+    /** Native official receiver only. Session identifiers never enter public snapshots. */
+    synchronized JSONObject originalQqResume(JSONObject captured,String credentialFingerprint)throws Exception {
+        JSONObject profile=currentQqReceiver(captured);JSONObject resume=profile.optJSONObject("nativeQqResume");
+        if(resume==null||!credentialFingerprint.equals(resume.optString("credentialFingerprint")))return new JSONObject();
+        return copy(resume);
+    }
+    synchronized void recordQqResume(JSONObject captured,String credentialFingerprint,String session,long sequence)throws Exception {
+        JSONObject profile=currentQqReceiver(captured);if(!credentialFingerprint.matches("[a-f0-9]{64}")||!(session.isEmpty()&&sequence==-1||session.matches("[A-Za-z0-9_.:@-]{1,180}")&&sequence>=0))throw new SecurityException("QQ原同步位置无效");
+        JSONObject previous=profile.optJSONObject("nativeQqResume");
+        if(previous!=null&&credentialFingerprint.equals(previous.optString("credentialFingerprint"))&&session.equals(previous.optString("sessionId"))&&sequence<previous.optLong("sequence",-1))throw new SecurityException("QQ原同步位置不能回退");
+        JSONArray gaps=previous==null?new JSONArray():previous.optJSONArray("gaps");if(gaps==null)gaps=new JSONArray();
+        if(session.isEmpty()&&previous!=null&&!previous.optString("sessionId").isEmpty()){
+            JSONArray bounded=new JSONArray();for(int i=Math.max(0,gaps.length()-7);i<gaps.length();i++)bounded.put(gaps.get(i));
+            bounded.put(new JSONObject().put("reason","platform_session_not_resumable").put("afterSequence",previous.optLong("sequence",-1)).put("observedAt",System.currentTimeMillis()).put("missingMessages","unknown_not_reconstructed"));gaps=bounded;
+        }
+        profile.put("nativeQqResume",new JSONObject().put("sessionId",session).put("sequence",sequence).put("credentialFingerprint",credentialFingerprint).put("savedAt",System.currentTimeMillis()).put("gaps",gaps));save();
+    }
+    private JSONObject currentQqReceiver(JSONObject captured)throws Exception {
+        JSONObject current=find("profiles","id",captured.getString("id"));if(current==null||!current.optString("provider").equals("qq")||!current.optBoolean("enabled")||!current.optString("transportEpoch").equals(captured.optString("transportEpoch"))||!current.optString("appId").equals(captured.optString("appId")))throw new SecurityException("QQ原账号/接收代次已失效");return current;
+    }
+
+    /** Native QQ provider-message or ref_idx references, bounded by the existing original inbox/outbox. */
+    private void resolveOriginalQqQuotes(JSONObject incoming,long now)throws Exception {
+        JSONObject structured=incoming.optJSONObject("messageParts");if(structured==null)return;JSONArray parts=structured.getJSONArray("parts");JSONObject authority=incoming.getJSONObject("route");
+        for(int n=0;n<parts.length();n++){JSONObject quote=parts.getJSONObject(n);if(!quote.optString("kind").equals("quote")||!quote.optBoolean("resolveFromOriginalInbox")||quote.optString("availability").equals("native_payload"))continue;String ref=quote.optString("quoteRef"),text=null;JSONObject source=null;boolean ambiguous=false;
+            for(int i=0;i<array("inbox").length();i++){JSONObject original=array("inbox").getJSONObject(i);if(!original.optString("authenticatedBy").matches("qq_signature|qq_gateway")||now-original.getLong("receivedAt")>30L*86_400_000L||!sameHistoryConversation(incoming,original,authority))continue;JSONObject nativeParts=original.optJSONObject("messageParts");String id=quote.optString("referenceIdKind").equals("provider_message_id")?original.getString("messageId"):nativeParts==null?"":nativeParts.optString("messageIndex");if(id.isEmpty()||!id.equals(ref))continue;if(source!=null){ambiguous=true;break;}source=original;text=original.getString("text");}
+            if(!ambiguous)for(int i=0;i<array("outbox").length();i++){JSONObject reply=array("outbox").getJSONObject(i);String nativeId=quote.optString("referenceIdKind").equals("provider_message_id")?reply.optString("receiptId"):reply.optString("nativeQqReplyIndex");if(!reply.optString("status").equals("sent")||nativeId.isEmpty()||!ref.equals(nativeId))continue;JSONObject original=deliveryEvent(reply);if(now-reply.optLong("createdAt")>30L*86_400_000L||!sameHistoryConversation(incoming,original,authority))continue;if(source!=null){ambiguous=true;break;}source=original;text=reply.getString("text");}
+            quote.put("resolveFromOriginalInbox",false).put("cacheBounds","original_inbox_max200_outbox_max200_30days");if(source==null||ambiguous){quote.put("reason",ambiguous?"ambiguous_original_message_id":"original_not_in_current_account_conversation");continue;}ChannelMessageParts.quotedText(quote,text,"original_inbox");if(quote.optString("availability").equals("original_inbox"))quote.put("originalSource",new JSONObject().put("eventId",source.getString("id")).put("profileId",source.getString("profileId")).put("messageId",source.getString("messageId")).put("transportEpoch",source.getString("transportEpoch")).put("sourceKind","retained_native_message_or_accepted_reply"));
+        }
     }
 
     /** Original bounded inbox only: no network history lookup, second cache or cross-space fallback. */
@@ -150,10 +218,10 @@ public final class ChannelCore {
     public synchronized JSONObject route(JSONObject event)throws Exception {
         JSONObject profile=profile(event.getString("profileId"));
         JSONObject binding=find("bindings","profileId",profile.getString("id"));
-        boolean owner=event.optString("kind").equals("dm")&&binding!=null&&binding.optString("senderId").equals(event.optString("senderId"));
+        boolean qq=profile.getString("provider").equals("qq"),sameScene=!qq||binding!=null&&QqConversation.same(binding,event);boolean owner=event.optString("kind").equals("dm")&&binding!=null&&sameScene&&binding.optString("senderId").equals(event.optString("senderId"));
         String space=owner?"private":profile.getString("provider")+":"+profile.getString("id")+":"+event.getString("kind")+":"
-                +digest(event.optString("kind").equals("group")?event.getString("roomId"):event.getString("senderId")).substring(0,32);
-        String principal=owner?"owner":"external:"+digest(profile.getString("id")+"|"+event.getString("kind")+"|"+event.optString("roomId")+"|"+event.getString("senderId")).substring(0,32);
+                +digest((event.optString("kind").equals("group")?event.getString("roomId"):event.getString("senderId"))+(qq&&QqConversation.guild(event)?"\n"+QqConversation.scene(event)+"\n"+event.getString("qqGuildId"):"")).substring(0,32);
+        String principal=owner?"owner":"external:"+digest(profile.getString("id")+"|"+event.getString("kind")+"|"+event.optString("roomId")+"|"+event.getString("senderId")+(qq&&QqConversation.guild(event)?"|"+QqConversation.scene(event)+"|"+event.getString("qqGuildId"):"")).substring(0,32);
         JSONArray grants=owner?new JSONArray().put("chat").put("memory.private").put("phone.request").put("remote.request").put("files.private"):new JSONArray().put("chat");
         JSONObject configured=find("spaces","spaceId",space);
         if(!owner&&configured!=null)grants=new JSONArray(configured.getJSONArray("capabilities").toString());
@@ -171,7 +239,7 @@ public final class ChannelCore {
         if(System.currentTimeMillis()-event.getLong("receivedAt")>24*60*60*1000L)throw new SecurityException("绑定依据已过期，请重新发一条私聊消息");
         JSONObject binding=new JSONObject().put("profileId",profileId).put("senderId",event.getString("senderId"))
                 .put("verifiedEventId",eventId).put("boundAt",System.currentTimeMillis()).put("principalId","owner").put("bindingEpoch",UUID.randomUUID().toString());
-        resetTaskGrant(binding);
+        if(profile(profileId).getString("provider").equals("qq"))QqConversation.copyNative(event,binding);resetTaskGrant(binding);
         replace("bindings","profileId",profileId,binding);save();return copy(binding);
     }
     public synchronized void unbindOwner(String profileId)throws Exception {remove("bindings","profileId",profileId);save();}
@@ -196,7 +264,7 @@ public final class ChannelCore {
     /** Persist once before crossing the host boundary. Never evict origin deduplication records. */
     public synchronized JSONObject prepareHostTask(String eventId)throws Exception {
         JSONObject event=event(eventId),authority=route(event);requireTaskRoute(event,authority);
-        String key=digest(event.getString("profileId")+"\u0000"+event.getString("messageId"));
+        String key=hostEventKey(event);
         JSONObject existing=find("taskRequests","eventKey",key);
         if(existing!=null){checkHostTaskAuthority(existing.getString("requestId"));return new JSONObject().put("known",true).put("request",taskMetadata(existing));}
         String text=event.getString("text");if(!text.startsWith("/task ")||text.substring(6).trim().isEmpty())throw new IllegalArgumentException("任务命令格式为 /task 目标");
@@ -215,6 +283,7 @@ public final class ChannelCore {
         if(!request.getString("bindingEpoch").equals(authority.getString("bindingEpoch"))||!request.getString("taskGrantEpoch").equals(authority.getString("taskGrantEpoch")))throw new SecurityException("此渠道任务的主人绑定或授权代次已失效");
     }
     private void requireTaskRoute(JSONObject event,JSONObject authority)throws Exception {
+        checkControlOrigin(event);
         JSONObject original=event.getJSONObject("route");
         if(!profile(event.getString("profileId")).optBoolean("enabled")||!event.getString("kind").equals("dm")
                 ||!authority.optBoolean("privateOwner")||!"owner".equals(authority.optString("principalId"))||!"private".equals(authority.optString("spaceId"))
@@ -248,7 +317,7 @@ public final class ChannelCore {
     /** The command event must itself be a current authenticated owner DM from this exact origin. */
     public synchronized void authorizeHostTaskCommand(String requestId,String eventId)throws Exception {
         JSONObject command=event(eventId),origin=requiredTask(requestId).getJSONObject("originEvent");requireTaskRoute(command,route(command));checkHostTaskAuthority(requestId);
-        if(!command.getString("profileId").equals(origin.getString("profileId"))||!command.getString("senderId").equals(origin.getString("senderId")))throw new SecurityException("不能从其他渠道会话操作此任务");
+        if(!command.getString("profileId").equals(origin.getString("profileId"))||!command.getString("senderId").equals(origin.getString("senderId"))||profile(command.getString("profileId")).getString("provider").equals("qq")&&!QqConversation.same(command,origin))throw new SecurityException("不能从其他渠道会话操作此任务");
     }
     public synchronized HostTaskPort.Request prepareHostTaskCancellation(String requestId)throws Exception {
         checkHostTaskAuthority(requestId);JSONObject request=requiredTask(requestId);String run=request.optString("hostRunId","");int epoch=request.optInt("hostCoordinatorEpoch",0);
@@ -314,13 +383,6 @@ public final class ChannelCore {
         space.put("capabilities",accepted);save();return copy(space);
     }
     public synchronized JSONObject event(String id)throws Exception {JSONObject row=find("inbox","id",id);if(row==null)throw new IllegalArgumentException("消息记录不存在");return copy(row);}
-    private JSONObject originalSeenEvent(String id)throws Exception {
-        JSONObject original=find("inbox","id",id);if(original!=null)return original;
-        for(int i=0;i<array("taskRequests").length();i++){JSONObject origin=array("taskRequests").getJSONObject(i).optJSONObject("originEvent");if(origin!=null&&id.equals(origin.optString("id")))return origin;}
-        for(int i=0;i<array("outbox").length();i++){JSONObject row=array("outbox").getJSONObject(i);for(String key:new String[]{"nativeGroupEvent","nativeRemoteEvent","nativeRemoteResultEvent","nativeCompletionEvent"}){JSONObject origin=row.optJSONObject(key);if(origin!=null&&id.equals(origin.optString("id")))return origin;}}
-        return null;
-    }
-
     /** Body-free native observation. This is neither a waiting-task association nor audience grant.
      * Only original retained inbox/task/outbox source records may back a cold read. */
     synchronized JSONObject inboundFactMetadata(String id)throws Exception {
@@ -405,6 +467,7 @@ public final class ChannelCore {
         JSONObject current=event(captured.getString("id"));
         for(String key:new String[]{"profileId","messageId","senderId","roomId","kind","authenticatedBy","transportEpoch"})
             if(!captured.optString(key).equals(current.optString(key)))throw new SecurityException("原渠道问答来源已变化");
+        if(profile(current.getString("profileId")).getString("provider").equals("qq")&&!QqConversation.same(current,captured))throw new SecurityException("原QQ问答场景/频道父身份已变化");
         checkControlOrigin(current);JSONObject authority=route(current);requireChat(authority);
         for(String key:new String[]{"spaceId","principalId","ownerId","bindingEpoch"})
             if(!capturedRoute.optString(key).equals(authority.optString(key)))throw new SecurityException("原渠道账号、主人绑定或问答受众已变化");
@@ -412,45 +475,78 @@ public final class ChannelCore {
     }
     /** Only a source received under this exact owner binding may import private attachment bytes. */
     synchronized void checkOwnerImageOrigin(JSONObject captured,JSONObject capturedRoute)throws Exception {
+        checkOwnerMaterialOrigin(captured,capturedRoute,"ownerImagesEnabled");
+    }
+    synchronized void checkOwnerMediaOrigin(JSONObject captured,JSONObject capturedRoute)throws Exception {
+        checkOwnerMaterialOrigin(captured,capturedRoute,"ownerMediaEnabled");
+    }
+    private void checkOwnerMaterialOrigin(JSONObject captured,JSONObject capturedRoute,String consent)throws Exception {
         checkAnswerOrigin(captured,capturedRoute);JSONObject original=event(captured.getString("id")),received=original.getJSONObject("route"),profile=profile(original.getString("profileId"));
-        if(!profile.getString("provider").equals("weixin")||!profile.optBoolean("ownerImagesEnabled")||!original.getString("authenticatedBy").equals("weixin_session")||!original.getString("kind").equals("dm")
+        boolean supported=profile.getString("provider").equals("weixin")?original.getString("authenticatedBy").equals("weixin_session"):profile.getString("provider").equals("qq")&&QqConversation.privateScene(original)&&original.getString("authenticatedBy").matches("qq_gateway|qq_signature");
+        if(!supported||!profile.optBoolean(consent)||!original.getString("kind").equals("dm")
                 ||!capturedRoute.optBoolean("privateOwner")||!capturedRoute.optString("spaceId").equals("private")||!capturedRoute.optString("principalId").equals("owner")
-                ||!received.optBoolean("privateOwner")||received.optString("bindingEpoch").isEmpty()||!received.optString("bindingEpoch").equals(capturedRoute.optString("bindingEpoch")))throw new SecurityException("仅当前已明确允许的原主人私聊图片可下载并作为私人模型输入；旧消息不会因后续绑定而升级");
+                ||!received.optBoolean("privateOwner")||received.optString("bindingEpoch").isEmpty()||!received.optString("bindingEpoch").equals(capturedRoute.optString("bindingEpoch")))throw new SecurityException("仅当前已明确允许的原主人私聊素材可下载；图片与文件/音视频同意分开，旧消息不因后续绑定升级");
     }
     synchronized JSONArray ownerImageReferences(JSONObject captured,JSONObject route)throws Exception {
         checkOwnerImageOrigin(captured,route);JSONArray refs=event(captured.getString("id")).optJSONArray("ownerImageArtifacts");return refs==null?new JSONArray():copy(refs);
     }
     synchronized void ownerImageFrozen(JSONObject captured,JSONObject route,JSONObject reference)throws Exception {
-        checkOwnerImageOrigin(captured,route);JSONObject row=find("inbox","id",captured.getString("id"));JSONArray positions=ChannelMessageParts.weixinImagePositions(row.optJSONObject("messageParts"));int position=reference.getInt("itemIndex");boolean found=false;
+        checkOwnerImageOrigin(captured,route);JSONObject row=find("inbox","id",captured.getString("id"));JSONArray positions=ChannelMessageParts.ownerImagePositions(row.optJSONObject("messageParts"));int position=reference.getInt("itemIndex");boolean found=false;
         for(int i=0;i<positions.length();i++)if(positions.getInt(i)==position)found=true;
         if(!found||positions.length()>4||!reference.optString("artifactId").matches("[a-f0-9-]{36}")||!reference.optString("sha256").matches("[a-f0-9]{64}")||reference.getLong("bytes")<1||reference.getLong("bytes")>4*1024*1024L||!reference.optString("mimeType").matches("image/(png|jpeg|webp)"))throw new SecurityException("图片冻结回执与原消息项不符");
         JSONArray refs=row.optJSONArray("ownerImageArtifacts");if(refs==null)refs=new JSONArray();
         for(int i=0;i<refs.length();i++)if(refs.getJSONObject(i).getInt("itemIndex")==position){if(!refs.getJSONObject(i).getString("artifactId").equals(reference.getString("artifactId"))||!refs.getJSONObject(i).getString("sha256").equals(reference.getString("sha256")))throw new SecurityException("原图片项已有不同固定版本");return;}
         refs.put(copy(reference));row.put("ownerImageArtifacts",refs).put("imageInputState","frozen_bytes_not_model_understanding");save();
     }
+    synchronized JSONArray ownerMediaReferences(JSONObject captured,JSONObject route)throws Exception {
+        checkOwnerMediaOrigin(captured,route);JSONArray refs=event(captured.getString("id")).optJSONArray("ownerMediaArtifacts");return refs==null?new JSONArray():copy(refs);
+    }
+    synchronized void ownerMediaFrozen(JSONObject captured,JSONObject route,JSONObject reference)throws Exception {
+        checkOwnerMediaOrigin(captured,route);JSONObject row=find("inbox","id",captured.getString("id"));JSONArray positions=ChannelMessageParts.ownerMediaPositions(row.optJSONObject("messageParts"));int index=reference.getInt("itemIndex");boolean found=false;for(int i=0;i<positions.length();i++)if(positions.getInt(i)==index)found=true;
+        if(!found||!reference.optString("artifactId").matches("[a-f0-9-]{36}")||!reference.optString("sha256").matches("[a-f0-9]{64}")||reference.getLong("bytes")<0||reference.getLong("bytes")>8*1024*1024L||!reference.optString("mimeType").matches("[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+"))throw new SecurityException("媒体冻结回执与原消息项不符");
+        JSONArray refs=row.optJSONArray("ownerMediaArtifacts");if(refs==null)refs=new JSONArray();for(int i=0;i<refs.length();i++)if(refs.getJSONObject(i).getInt("itemIndex")==index){if(!dev.pocketengine.store.TaskStore.capabilityFingerprint(refs.getJSONObject(i)).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(reference)))throw new SecurityException("原媒体项已有不同固定版本");return;}
+        refs.put(copy(reference));row.put("ownerMediaArtifacts",refs).put("mediaInputState","frozen_bytes_not_content_understanding");save();
+    }
     synchronized void ownerImageModelState(JSONObject captured,JSONObject route,String status)throws Exception {
         checkOwnerImageOrigin(captured,route);if(!status.matches("model_request_prepared|model_response_received|model_result_unconfirmed"))throw new IllegalArgumentException("未知图片输入状态");JSONObject row=find("inbox","id",captured.getString("id"));if(row.optJSONArray("ownerImageArtifacts")==null)throw new SecurityException("原图片尚未冻结");row.put("imageInputState",status).put("imageInputNotice","实际字节已冻结；模型输入/响应状态不代表已理解全部图片内容");save();
     }
     public synchronized JSONArray history(JSONObject current,int limit)throws Exception {
-        JSONObject authority=route(current);JSONArray history=new JSONArray();int end=-1;
-        for(int i=0;i<array("inbox").length();i++)if(array("inbox").getJSONObject(i).getString("id").equals(current.getString("id"))){end=i;break;}
-        if(end<0)throw new IllegalStateException("消息已不在当前记录中，请刷新后处理");
-        for(int i=Math.max(0,end-100);i<end;i++) {
-            JSONObject row=array("inbox").getJSONObject(i);
-            if(!route(row).getString("spaceId").equals(authority.getString("spaceId")))continue;
-            // Before owner binding, channel messages belonged to an isolated DM; do not silently promote that history.
-            if(!row.getJSONObject("route").getString("spaceId").equals(authority.getString("spaceId")))continue;
-            history.put(new JSONObject().put("role","user").put("content",row.getString("text").isEmpty()?"[原历史消息仅含图片；本轮未重新提供其图片，不代表已看图]":row.getString("text")));
-            // Only acknowledged or owner-reconciled deliveries belong to the conversation.
-            // Drafts/unknown sends were not established as visible to the remote participant.
+        return historyProjection(current,limit).getJSONArray("messages");
+    }
+    /** Read coverage is a fact about this bounded local inbox, never a platform transcript. */
+    public synchronized JSONObject historyProjection(JSONObject current,int limit)throws Exception {
+        JSONObject original=event(current.getString("id")),authority=route(original);checkAnswerOrigin(current,authority);
+        JSONArray history=new JSONArray();int end=-1,unconfirmed=0,unreadMedia=0;long first=0,last=0;
+        for(int i=0;i<array("inbox").length();i++)if(array("inbox").getJSONObject(i).getString("id").equals(original.getString("id"))){end=i;break;}
+        if(end<0)throw new IllegalStateException("原消息不在当前记录中");
+        for(int i=0;i<end;i++) {
+            JSONObject row=array("inbox").getJSONObject(i);if(!sameHistoryConversation(original,row,authority))continue;
+            long at=row.getLong("receivedAt");if(first==0)first=at;last=at;
+            JSONObject structured=row.optJSONObject("messageParts");if(structured!=null&&ChannelMessageParts.hasUnsupported(structured))unreadMedia++;
+            history.put(new JSONObject().put("role","user").put("content",row.getString("text").isEmpty()?"[原历史消息含媒体；本轮未重新提供其字节，不代表已读取]":row.getString("text")));
             for(int j=0;j<array("outbox").length();j++){
-                JSONObject reply=array("outbox").getJSONObject(j);
-                if(row.getString("id").equals(reply.optString("eventId"))&&reply.optString("status").equals("sent")
-                        &&authority.getString("spaceId").equals(reply.getJSONObject("route").optString("spaceId")))
-                    history.put(new JSONObject().put("role","assistant").put("content",reply.getString("text")));
+                JSONObject reply=array("outbox").getJSONObject(j);if(!row.getString("id").equals(reply.optString("eventId")))continue;
+                if(reply.optString("status").equals("sent")&&authority.getString("spaceId").equals(reply.getJSONObject("route").optString("spaceId"))
+                        &&authority.optString("bindingEpoch").equals(reply.getJSONObject("route").optString("bindingEpoch")))history.put(new JSONObject().put("role","assistant").put("content",reply.getString("text")));
+                else unconfirmed++;
             }
         }
-        JSONArray bounded=new JSONArray();for(int i=Math.max(0,history.length()-Math.min(8,limit));i<history.length();i++)bounded.put(history.get(i));return bounded;
+        int count=Math.max(0,Math.min(8,limit));JSONArray bounded=new JSONArray();for(int i=Math.max(0,history.length()-count);i<history.length();i++)bounded.put(history.get(i));
+        JSONObject coverage=new JSONObject().put("status","partial").put("source","original_local_inbox").put("completePlatformHistory",false).put("platformBackfillAvailable",false)
+                .put("messageLimit",count).put("localInboxLimit",200).put("availableMessageCount",history.length()).put("includedMessageCount",bounded.length()).put("omittedByLimit",history.length()-bounded.length())
+                .put("unconfirmedRepliesOmitted",unconfirmed).put("mediaNotResupplied",unreadMedia).put("earliestLocalObservationAt",first).put("latestLocalObservationAt",last)
+                .put("earlierOrOfflineGap","unknown_not_reconstructed").put("ordering","local_durable_receive_order_not_cross_field_wire_order")
+                .put("notice","只读取本机同账号、同会话和当前绑定下已收记录，最多8条；不含全部平台历史，离线缺口及未重新提供的媒体不可推定已读。");
+        return new JSONObject().put("eventId",original.getString("id")).put("profileId",original.getString("profileId")).put("conversationKind",original.getString("kind"))
+                .put("spaceId",authority.getString("spaceId")).put("messages",bounded).put("coverage",coverage);
+    }
+    private boolean sameHistoryConversation(JSONObject current,JSONObject candidate,JSONObject authority)throws Exception {
+        if(!current.getString("profileId").equals(candidate.optString("profileId"))||!current.getString("kind").equals(candidate.optString("kind"))
+                ||!current.optString("transportEpoch").equals(candidate.optString("transportEpoch")))return false;
+        if(profile(current.getString("profileId")).getString("provider").equals("qq")&&!QqConversation.same(current,candidate))return false;
+        String peer=current.getString("kind").equals("group")?"roomId":"senderId";if(!current.optString(peer).equals(candidate.optString(peer)))return false;
+        JSONObject captured=candidate.optJSONObject("route");return captured!=null&&authority.getString("spaceId").equals(captured.optString("spaceId"))
+                &&authority.optString("bindingEpoch").equals(captured.optString("bindingEpoch"))&&route(candidate).getString("spaceId").equals(authority.getString("spaceId"));
     }
     public synchronized JSONObject queueReply(String eventId,String text)throws Exception {
         return queueReplyExpected(eventId,text,null);
@@ -464,13 +560,37 @@ public final class ChannelCore {
         if(expectedBindingEpoch!=null&&!expectedBindingEpoch.equals(authority.optString("bindingEpoch")))throw new SecurityException("主人绑定代次已变化，回答未加入投递队列");
         JSONObject row=queueReplyRecord(event,text);save();return copy(row);
     }
+    /** Original outbox receipt, not a second task/transfer store. Only the native module calls this. */
+    synchronized JSONObject queueRemoteResult(JSONObject original,JSONObject scope,String text,String deliveryId)throws Exception {
+        JSONObject event=event(original.getString("eventId")),route=route(event);checkRemoteInputOrigin(original,event,route);
+        for(String key:new String[]{"profileId","messageId","senderId","transportEpoch"})if(!event.getString(key).equals(original.getString(key)))throw new SecurityException("原回发私聊来源已变化");
+        if(!route.getString("bindingEpoch").equals(original.getString("bindingEpoch"))||!deliveryId.matches("[a-f0-9-]{36}"))throw new SecurityException("原回发主人绑定或投递编号不符");
+        requireRemoteResultReference(original,event,route);JSONObject selectedMedia=null;
+        if(scope.optString("resultKind").equals("exact_binary_attachment_not_text_substitution")){String provider=profile(event.getString("profileId")).getString("provider");if(!provider.equals("weixin")&&!provider.equals("qq")||provider.equals("qq")&&!QqConversation.scene(event).equals(QqConversation.C2C))throw new SecurityException("此原生附件只支持iLink私聊/QQ C2C，未借频道或桥接代发");selectedMedia=new JSONObject().put("artifactId",scope.getString("attachmentId")).put("sha256",scope.getString("sha256")).put("bytes",scope.getLong("bytes")).put("format",copy(scope.getJSONObject("media")));}
+        JSONObject known=find("outbox","id",deliveryId);
+        if(known!=null){if(!known.has("nativeRemoteResult")||!known.getString("text").equals(text)||!known.getJSONObject("nativeRemoteResult").getString("deliveryScopeHash").equals(scope.getString("deliveryScopeHash")))throw new SecurityException("原回发编号已登记不同内容，不能覆盖或重发");return copy(known).put("known",true);}
+        JSONObject row=queueReplyRecord(event,text);row.put("id",deliveryId).put("text",text).put("nativeRemoteResult",copy(scope)).put("nativeRemoteResultEvent",copy(event));if(selectedMedia!=null)row.put("ownerReplyMedia",selectedMedia).put("mediaPhase","prepared");save();return copy(row).put("known",false);
+    }
+    synchronized JSONArray originalRemoteResults(String taskId)throws Exception {JSONArray result=new JSONArray();for(int i=0;i<array("outbox").length();i++){JSONObject row=array("outbox").getJSONObject(i),scope=row.optJSONObject("nativeRemoteResult");if(scope!=null&&taskId.equals(scope.optString("taskId")))result.put(copy(row));}return result;}
+    private void checkRemoteInputOrigin(JSONObject source,JSONObject event,JSONObject route)throws Exception {if(source.has("mediaKind")){if(!source.optString("mediaKind").matches("file|voice|video"))throw new SecurityException("原媒体类型不符");checkOwnerMediaOrigin(event,route);}else checkOwnerImageOrigin(event,route);}
+    private void requireRemoteResultReference(JSONObject source,JSONObject event,JSONObject route)throws Exception {
+        JSONArray refs=source.has("mediaKind")?ownerMediaReferences(event,route):ownerImageReferences(event,route);boolean found=false;
+        for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);if(ref.getInt("itemIndex")==source.getInt("itemIndex")&&ref.getString("artifactId").equals(source.getString("attachmentId"))&&ref.getString("sha256").equals(source.getString("sha256")))found=true;}
+        if(!found)throw new SecurityException("原回发不对应此认证消息的已冻结输入");
+    }
+    private void checkRemoteResultReply(JSONObject row,JSONObject event)throws Exception {
+        if(!row.has("nativeRemoteResult"))return;
+        JSONObject original=row.getJSONObject("nativeRemoteResult").getJSONObject("inputSource"),route=route(event);checkRemoteInputOrigin(original,event,route);checkControlOrigin(event);
+        for(String key:new String[]{"profileId","messageId","senderId","transportEpoch"})if(!event.getString(key).equals(original.getString(key)))throw new SecurityException("原成果回发来源已变化");
+        if(!route.getString("bindingEpoch").equals(original.getString("bindingEpoch")))throw new SecurityException("原成果回发主人绑定已失效");requireRemoteResultReference(original,event,route);
+    }
     /** Native fixed protocol notices only. This is not a model reply or task/execution grant. */
     synchronized JSONObject queueControlFeedback(String eventId,String code)throws Exception {
         if(code.startsWith("group_"))throw new SecurityException("群反馈必须核对原生主人策略，普通chat不授予群外发权");
         JSONObject event=event(eventId);if(!event.getString("kind").equals("dm"))throw new SecurityException("私人控制反馈不能借群消息绕开原群主人策略");
         String body=controlText(code),requestId="";
         if(code.equals("owner_task_unconfirmed")){
-            JSONObject original=find("taskRequests","eventKey",digest(event.getString("profileId")+"\u0000"+event.getString("messageId")));
+            JSONObject original=find("taskRequests","eventKey",hostEventKey(event));
             if(original!=null){String candidate=original.getString("requestId");authorizeHostTaskCommand(candidate,eventId);requestId=candidate;body+="\n仅查询此原任务：/task-status "+candidate;}
         }
         return queueNativeControl(event,code,body,requestId,null);
@@ -520,7 +640,7 @@ public final class ChannelCore {
     synchronized JSONObject groupControlScope(String id)throws Exception {JSONObject row=find("outbox","id",id);if(row==null||!row.optString("nativeControlCode").startsWith("group_"))return null;if(row.optJSONObject("nativeControlGroupScope")==null)throw new SecurityException("旧群反馈没有原生主人范围，不能派发");return new JSONObject().put("eventId",row.getString("eventId")).put("scope",copy(row.getJSONObject("nativeControlGroupScope")));}
     private void checkControlOrigin(JSONObject event)throws Exception {
         JSONObject profile=profile(event.getString("profileId"));String auth=event.optString("authenticatedBy"),provider=profile.getString("provider");
-        if(!profile.optBoolean("enabled")||!profile.getString("transportEpoch").equals(event.optString("transportEpoch"))
+        if(!profile.optBoolean("enabled")||provider.equals("qq")&&QqConversation.guild(event)&&!profile.optBoolean("qqGuildEnabled")||!profile.getString("transportEpoch").equals(event.optString("transportEpoch"))
                 ||!(provider.equals("qq")&&auth.matches("qq_signature|qq_gateway")||provider.equals("webhook")&&auth.equals("trusted_relay")||provider.equals("weixin")&&auth.equals("weixin_session")&&event.getString("kind").equals("dm")))throw new SecurityException("原生反馈的认证来源或连接代次已失效");
     }
     private void checkControlReply(JSONObject row,JSONObject event)throws Exception {
@@ -539,22 +659,71 @@ public final class ChannelCore {
         JSONObject row=new JSONObject().put("id",UUID.randomUUID().toString()).put("eventId",eventId)
                 .put("profileId",event.getString("profileId")).put("text",text.trim()).put("route",authority)
                 .put("sequence",count+1).put("status","queued").put("createdAt",System.currentTimeMillis());
-        if(array("outbox").length()>=200){for(int i=0;i<array("outbox").length();i++){JSONObject old=array("outbox").getJSONObject(i);if(old.has("groupDeliveryId")||old.has("nativeControlCode"))throw new IllegalStateException("原确定性投递回执仍须保留，投递账簿已满");}}
+        if(array("outbox").length()>=200){for(int i=0;i<array("outbox").length();i++){JSONObject old=array("outbox").getJSONObject(i);if(old.has("groupDeliveryId")||old.has("nativeControlCode")||old.has("nativeRemoteResult")||old.has("reviewedExternalReturn")||old.has("nativeCompletionResult"))throw new IllegalStateException("原确定性投递回执仍须保留，投递账簿已满");}}
         appendBounded("outbox",row,200);return row;
+    }
+    synchronized void queueQqStream(String id,JSONObject incoming,String epoch,String modelRequestId)throws Exception {
+        JSONObject actual=event(incoming.getString("id")),authority=route(actual),profile=profile(actual.getString("profileId"));checkAnswerOrigin(incoming,incoming.getJSONObject("route"));if(!profile.getString("provider").equals("qq")||!profile.optBoolean("qqStreamRepliesEnabled")||!QqConversation.scene(actual).equals(QqConversation.C2C)||!epoch.equals(profile.getString("transportEpoch"))||System.currentTimeMillis()-actual.getLong("sentAt")>300_000L)throw new SecurityException("QQ C2C流式需要当前原消息和独立明确同意，五分钟窗口不改主动发送");if(find("outbox","id",id)!=null)throw new SecurityException("原流编号已登记，不能新建或重放");
+        JSONObject row=queueReplyRecord(actual,"生成中草稿，尚未完整结束"),source=new JSONObject();for(String key:new String[]{"id","profileId","messageId","senderId","roomId","kind","authenticatedBy","transportEpoch","receivedAt","sentAt","text","route","conversationKind"})if(actual.has(key))source.put(key,actual.get(key));row.put("id",id).put("status","sending").put("nativeQqStreamEvent",source).put("nativeQqStream",new JSONObject().put("protocol","qq_c2c_replace_v1").put("phase","prepared").put("modelRequestId",modelRequestId).put("lastAckIndex",-1).put("complete",false).put("partialMayBeVisible",false));save();
+    }
+    synchronized JSONObject reserveQqStreamFrame(String id,String text,int state,boolean observedDeltas)throws Exception {
+        checkSendAuthority(id);JSONObject row=find("outbox","id",id),stream=row.getJSONObject("nativeQqStream");if(!stream.optString("phase").matches("prepared|generating")||stream.optBoolean("complete")||text==null||text.trim().isEmpty()||text.length()>4000||!(state==1||state==10))throw new SecurityException("原QQ帧范围/顺序已终止或不支持");JSONObject event=deliveryEvent(row);if(System.currentTimeMillis()-event.getLong("sentAt")>300_000L||!profile(row.getString("profileId")).optBoolean("qqStreamRepliesEnabled"))throw new SecurityException("原QQ流式同意/被动窗口已失效");int index=stream.getInt("lastAckIndex")+1;if(index>=64)throw new IllegalStateException("原QQ流最多64帧，未自动开新消息");JSONObject frame=new JSONObject().put("input_mode","replace").put("input_state",state).put("content_type","markdown").put("content_raw",text).put("event_id",event.getString("messageId")).put("msg_id",event.getString("messageId")).put("msg_seq",row.getInt("sequence")).put("index",index);if(!stream.optString("streamMessageId").isEmpty())frame.put("stream_msg_id",stream.getString("streamMessageId"));stream.put("phase","frame_sending").put("pendingFrameHash",dev.pocketengine.store.TaskStore.capabilityFingerprint(frame)).put("pendingIndex",index).put("pendingState",state).put("providerDeltasObserved",observedDeltas).put("partialMayBeVisible",true);row.put("text",text);save();return frame;
+    }
+    synchronized void checkQqStreamFrame(String id,JSONObject frame)throws Exception {checkSendAuthority(id);JSONObject row=find("outbox","id",id),stream=row.getJSONObject("nativeQqStream");if(!stream.optString("phase").equals("frame_sending")||!stream.getString("pendingFrameHash").equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(frame))||!profile(row.getString("profileId")).optBoolean("qqStreamRepliesEnabled")||System.currentTimeMillis()-deliveryEvent(row).getLong("sentAt")>300_000L)throw new SecurityException("原QQ分片已失效；不再发送");}
+    synchronized void ackQqStreamFrame(String id,JSONObject frame,JSONObject receipt)throws Exception {checkQqStreamFrame(id,frame);JSONObject row=find("outbox","id",id),stream=row.getJSONObject("nativeQqStream");Object raw=receipt.opt("id");if(!(raw instanceof String)||((String)raw).isEmpty()||((String)raw).length()>180||!stream.optString("streamMessageId").isEmpty()&&!stream.getString("streamMessageId").equals(raw))throw new SecurityException("QQ未返回同一原流消息的准确回执");stream.put("streamMessageId",raw).put("lastAckIndex",frame.getInt("index")).put("phase",frame.getInt("input_state")==10?"completed":"generating").put("complete",frame.getInt("input_state")==10);stream.remove("pendingFrameHash");stream.remove("pendingIndex");stream.remove("pendingState");if(frame.getInt("input_state")==10)row.put("status","sent").put("receiptId",raw).put("message","平台接受原流最终帧；不代表已读或业务完成");save();}
+    synchronized void stopQqStream(String id,String reason)throws Exception {JSONObject row=find("outbox","id",id);if(row==null||row.optJSONObject("nativeQqStream")==null||row.optString("status").equals("sent"))return;row.put("status","unknown").put("message",reason);row.getJSONObject("nativeQqStream").put("phase","stopped_unconfirmed").put("complete",false);save();}
+
+    /** Native picker facts from current authenticated owner DM only. Not a group/audience grant. */
+    synchronized JSONObject completionTarget(String eventId)throws Exception {
+        JSONObject event=originalSeenEvent(eventId);if(event==null)throw new SecurityException("原接收消息已不在有界记录中");JSONObject authority=route(event);checkAnswerOrigin(event,authority);requireChat(authority);JSONObject profile=profile(event.getString("profileId"));
+        if(!profile.optBoolean("enabled")||!"dm".equals(event.optString("kind"))||!authority.optBoolean("privateOwner")||!"owner".equals(authority.optString("principalId"))||!"private".equals(authority.optString("spaceId"))||!event.getJSONObject("route").optBoolean("privateOwner"))throw new SecurityException("请选择当前已认证并原生绑定的主人私聊；群需要原群规则，不能借完成事实获得群发送权");
+        JSONObject target=new JSONObject().put("eventId",event.getString("id")).put("profileId",profile.getString("id")).put("profileName",profile.optString("name")).put("provider",profile.getString("provider")).put("appId",profile.optString("appId")).put("transportEpoch",event.getString("transportEpoch")).put("bindingEpoch",authority.getString("bindingEpoch")).put("senderId",event.getString("senderId")).put("messageId",event.getString("messageId")).put("kind","dm").put("roomId","").put("conversationKind",profile.getString("provider").equals("qq")?QqConversation.scene(event):"dm").put("conversationParentId",event.optString("qqGuildId")).put("sentAt",event.getLong("sentAt")).put("receivedAt",event.getLong("receivedAt"));
+        return target.put("targetSha256",dev.pocketengine.store.TaskStore.capabilityFingerprint(target));
+    }
+    synchronized JSONArray completionTargets()throws Exception {JSONArray out=new JSONArray();java.util.Set<String> peers=new java.util.HashSet<>();for(int i=array("inbox").length()-1;i>=0&&out.length()<40;i--){JSONObject event=array("inbox").getJSONObject(i);if(!"dm".equals(event.optString("kind")))continue;try{JSONObject target=completionTarget(event.getString("id"));String key=target.getString("profileId")+":"+target.getString("conversationKind")+":"+target.getString("conversationParentId")+":"+target.getString("senderId");if(peers.add(key))out.put(target);}catch(SecurityException|IllegalArgumentException unavailable){/* Not an eligible current owner recipient; do not upgrade old unbound material. */}}return out;}
+    private void checkCompletionTarget(JSONObject target)throws Exception {if(!dev.pocketengine.store.TaskStore.capabilityFingerprint(target).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(completionTarget(target.getString("eventId")))))throw new SecurityException("原完成结果的准确私聊目标/连接/绑定代次已变化");}
+    synchronized void completionTargetCheck(JSONObject target)throws Exception {checkCompletionTarget(target);}
+    synchronized JSONObject queueCompletionResult(ChannelsModule.CompletionDeliveryReview review)throws Exception {
+        review.checkOwnerPageCurrent();JSONObject scope=review.metadata();checkCompletionTarget(scope.getJSONObject("target"));String id=scope.getString("outboxId");JSONObject old=find("outbox","id",id);
+        if(old!=null){if(old.optJSONObject("nativeCompletionResult")==null||!dev.pocketengine.store.TaskStore.capabilityFingerprint(scope).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(old.getJSONObject("nativeCompletionResult"))))throw new SecurityException("原完成投递编号已有不同受众或内容");requireOutboxDurable(old);return copy(old);}
+        for(int i=0;i<array("outbox").length();i++){JSONObject prior=array("outbox").getJSONObject(i).optJSONObject("nativeCompletionResult");if(prior!=null&&scope.getString("factId").equals(prior.optString("factId")))throw new SecurityException("这个完成事实已建立原outbox，只查询它，不换目标或重建第二条发送");}
+        JSONObject event=originalSeenEvent(scope.getJSONObject("target").getString("eventId"));JSONObject row=queueReplyRecord(event,scope.getString("text"));row.put("id",id).put("nativeCompletionResult",scope).put("nativeCompletionEvent",copy(event));save();requireOutboxDurable(row);return copy(row);
+    }
+    synchronized JSONArray completionDeliveries()throws Exception {JSONArray result=new JSONArray();for(int i=array("outbox").length()-1;i>=0&&result.length()<40;i--){JSONObject row=array("outbox").getJSONObject(i);if(row.optJSONObject("nativeCompletionResult")!=null)result.put(copy(row));}return result;}
+    synchronized JSONObject originalCompletionDeliveryForFact(String factId)throws Exception {JSONObject found=null;for(int i=0;i<array("outbox").length();i++){JSONObject row=array("outbox").getJSONObject(i),scope=row.optJSONObject("nativeCompletionResult");if(scope==null||!factId.equals(scope.optString("factId")))continue;if(found!=null)throw new SecurityException("原完成事实出现多个投递编号，不能猜最新或重建");requireOutboxDurable(row);found=copy(row);}return found;}
+    synchronized JSONObject completionDeliveryScope(String id)throws Exception {JSONObject row=find("outbox","id",id);return row==null||row.optJSONObject("nativeCompletionResult")==null?null:copy(row.getJSONObject("nativeCompletionResult"));}
+    synchronized JSONObject originalCompletionDelivery(String factId,String id)throws Exception {JSONObject row=find("outbox","id",id);if(row==null)return null;JSONObject scope=row.optJSONObject("nativeCompletionResult");if(scope==null||!factId.equals(scope.optString("factId")))throw new SecurityException("不是所选完成事实的原投递编号");return copy(row);}
+    private void checkCompletionReply(JSONObject row)throws Exception {JSONObject scope=row.optJSONObject("nativeCompletionResult");if(scope==null)return;if(!"once_exact_text_to_selected_current_owner_dm".equals(scope.optString("dispatchApproval")))throw new SecurityException("未取得这份准确完成文字的单次发送确认");checkCompletionTarget(scope.getJSONObject("target"));if(!scope.getString("outboxId").equals(row.getString("id"))||!scope.getString("payloadSha256").equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(new JSONObject().put("text",row.getString("text")))))throw new SecurityException("原完成投递准确文字被更改");}
+
+    /** Native-only manually reviewed weak-source return. No profile/event/provider identity is invented. */
+    synchronized JSONObject queueReviewedManualReturn(dev.pocketengine.store.TaskStore.ReviewedExternalReturn original)throws Exception {
+        JSONObject facts=original.metadata();String hash=dev.pocketengine.store.TaskStore.capabilityFingerprint(facts),id=UUID.nameUUIDFromBytes(("reviewed-manual-return:v1:"+hash).getBytes(StandardCharsets.UTF_8)).toString();
+        JSONObject old=find("outbox","id",id);if(old!=null){if(!hash.equals(old.optString("reviewedMaterialHash"))||!"manual".equals(old.optString("deliveryMode")))throw new SecurityException("原人工交还编号已有不同内容");requireOutboxDurable(old);return copy(old);}
+        if(array("outbox").length()>=200)throw new IllegalStateException("原outbox已满，未覆盖未知投递或已确认人工草稿");
+        JSONObject row=new JSONObject().put("id",id).put("status","manual_draft").put("deliveryMode","manual").put("reviewedMaterialHash",hash).put("reviewedExternalReturn",facts).put("text",facts.getString("text")).put("recipientLabel",facts.getString("recipientLabel")).put("createdAt",System.currentTimeMillis()).put("platformIdentityVerified",false).put("automaticSendAllowed",false).put("message","仅为主人已核对的人工交还草稿；复制不证明外部送达");array("outbox").put(row);save();requireOutboxDurable(row);return copy(row);
+    }
+    private void requireOutboxDurable(JSONObject expected)throws Exception {
+        if(!file.isFile()||file.length()>4_000_000)throw new IllegalStateException("原出站记录持久结果未知，只查原编号");JSONArray rows=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8)).getJSONArray("outbox");for(int i=0;i<rows.length();i++){JSONObject actual=rows.getJSONObject(i);if(expected.getString("id").equals(actual.optString("id"))){if(!dev.pocketengine.store.TaskStore.capabilityFingerprint(actual).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(expected)))throw new SecurityException("原出站记录磁盘内容已变化");return;}}throw new IllegalStateException("原出站记录尚未取得耐久ACK，不重建编号或冒已保存");
+    }
+    synchronized JSONObject reviewedManualReturnForCopy(dev.pocketengine.store.TaskStore.ReviewedExternalReturn original,String id)throws Exception {
+        JSONObject row=find("outbox","id",id);if(row==null||!"manual".equals(row.optString("deliveryMode"))||!"manual_draft".equals(row.optString("status"))||!dev.pocketengine.store.TaskStore.capabilityFingerprint(original.metadata()).equals(row.optString("reviewedMaterialHash")))throw new SecurityException("原人工交还草稿与刚核对的结果不一致");requireOutboxDurable(row);return copy(row).put("clipboardRequested",true).put("deliveryConfirmed",false);
     }
     public synchronized JSONObject prepareSend(String id)throws Exception {
         JSONObject row=find("outbox","id",id);if(row==null)throw new IllegalArgumentException("待发送回复不存在");
+        if("manual".equals(row.optString("deliveryMode")))throw new SecurityException("人工材料草稿没有平台目标或发送授权，只能主人显式复制交还");
         if(row.has("groupDeliveryId"))throw new SecurityException("群任务投递只能使用保留原生群授权的入口");
         if(!row.optString("status").equals("queued"))throw new IllegalStateException("此回复已发送或状态待核对，不能重复投递");
         JSONObject event=deliveryEvent(row),authority=route(event),profile=profile(row.getString("profileId"));
         if(!authority.getString("spaceId").equals(row.getJSONObject("route").getString("spaceId")))throw new SecurityException("账号权限已经变化，请重新生成回复");
         checkReplyEpoch(row,authority);
         checkControlReply(row,event);
+        checkRemoteResultReply(row,event);checkCompletionReply(row);
         requireChat(authority);if(!profile.optBoolean("enabled"))throw new IllegalStateException("此连接已暂停");
         if(profile.getString("provider").equals("qq")) {
             long window=event.getString("kind").equals("group")?5*60*1000L:60*60*1000L;
             if(System.currentTimeMillis()-event.getLong("sentAt")>window)throw new IllegalStateException("平台被动回复窗口已过期，回复保留在本机");
         }
+        if(row.has("ownerReplyMedia")&&!row.optString("mediaPhase").equals("prepared"))throw new SecurityException("原附件已开始上传/消息发送，不能重放body；只核对原编号");
         row.put("status","sending");save();return copy(row);
     }
     public synchronized void checkSendAuthority(String id)throws Exception {
@@ -565,13 +734,19 @@ public final class ChannelCore {
         requireChat(authority);
         checkReplyEpoch(row,authority);
         checkControlReply(row,event);
+        checkRemoteResultReply(row,event);checkCompletionReply(row);
     }
-    public synchronized JSONObject deliveryEvent(JSONObject row)throws Exception{if(row.has("nativeGroupEvent"))return copy(row.getJSONObject("nativeGroupEvent"));if(row.has("nativeControlEvent"))return copy(row.getJSONObject("nativeControlEvent"));return row.has("taskRequestId")?copy(requiredTask(row.getString("taskRequestId")).getJSONObject("originEvent")):event(row.getString("eventId"));}
+    public synchronized JSONObject deliveryEvent(JSONObject row)throws Exception{if(row.has("nativeCompletionEvent"))return copy(row.getJSONObject("nativeCompletionEvent"));if(row.has("nativeQqStreamEvent"))return copy(row.getJSONObject("nativeQqStreamEvent"));if(row.has("nativeGroupEvent"))return copy(row.getJSONObject("nativeGroupEvent"));if(row.has("nativeControlEvent"))return copy(row.getJSONObject("nativeControlEvent"));if(row.has("nativeRemoteResultEvent"))return copy(row.getJSONObject("nativeRemoteResultEvent"));return row.has("taskRequestId")?copy(requiredTask(row.getString("taskRequestId")).getJSONObject("originEvent")):event(row.getString("eventId"));}
     private void checkReplyEpoch(JSONObject row,JSONObject authority)throws Exception {
         JSONObject original=row.getJSONObject("route");
         if(original.optBoolean("privateOwner")&&(original.optString("bindingEpoch").isEmpty()||!original.getString("bindingEpoch").equals(authority.optString("bindingEpoch"))))throw new SecurityException("回复的主人绑定代次已失效");
         if(row.has("taskRequestId"))checkHostTaskAuthority(row.getString("taskRequestId"));
     }
+    synchronized void ownerMediaDeliveryPhase(String id,String next,long bytes)throws Exception {
+        checkSendAuthority(id);JSONObject row=find("outbox","id",id);if(row==null||row.optJSONObject("ownerReplyMedia")==null)throw new SecurityException("没有原生已确认附件投递");String old=row.getString("mediaPhase");if(!(old.equals("prepared")&&next.equals("upload_requesting")||old.equals("upload_requesting")&&next.equals("uploading")||old.equals("uploading")&&next.equals("uploaded")||old.equals("uploaded")&&next.equals("message_sending")))throw new SecurityException("原附件投递阶段不可重放或倒退");if(bytes<0||bytes>row.getJSONObject("ownerReplyMedia").getLong("bytes"))throw new SecurityException("原附件实际传输量超出固定范围");row.put("mediaPhase",next).put("mediaVerifiedUploadedBytes",bytes).put("mediaUploadMayRemain",!next.equals("upload_requesting")).put("mediaDeletionConfirmed",false);save();
+    }
+    /** Only the actual authenticated HTTP response can add an optional QQ quote index. */
+    synchronized void qqReplyReference(String id,JSONObject actualReceipt)throws Exception {JSONObject row=find("outbox","id",id);if(row==null||!row.optString("status").equals("sending")||!profile(row.getString("profileId")).getString("provider").equals("qq"))throw new SecurityException("不是当前QQ原生发送回执");JSONObject ext=actualReceipt.optJSONObject("ext_info");Object index=ext==null?null:ext.opt("ref_idx");if(index==null||index==JSONObject.NULL)return;if(!(index instanceof String)||!((String)index).matches("[A-Za-z0-9_.:@/+=-]{1,180}"))throw new IllegalStateException("QQ引用回执格式无法保留，发送结果待核");row.put("nativeQqReplyIndex",index);save();}
     public synchronized void delivery(String id,String status,String message,String receiptId)throws Exception {
         JSONObject row=find("outbox","id",id);if(row==null)return;
         if(!status.equals("sent")&&!status.equals("failed")&&!status.equals("unknown"))throw new IllegalArgumentException("无效投递回执状态");
@@ -585,6 +760,9 @@ public final class ChannelCore {
         if(note==null||note.trim().isEmpty()||note.length()>500)throw new IllegalArgumentException("请填写1至500字的核对说明");
         JSONObject row=find("outbox","id",id);if(row==null)throw new IllegalArgumentException("待核对回复不存在");
         if(!row.optString("status").equals("unknown"))throw new IllegalStateException("只有投递结果未知的回复需要核对");
+        if(row.has("nativeCompletionResult")&&outcome.equals("not_delivered"))throw new SecurityException("原完成文字可能已被平台接收，未见消息不能重放；只核对原编号，业务不重跑");
+        if(row.has("nativeQqStream")&&outcome.equals("not_delivered"))throw new SecurityException("原QQ分片可能已显示，不能把未见最终回答当未派发后重开流");
+        if(row.has("ownerReplyMedia")&&outcome.equals("not_delivered")&&!row.optString("mediaPhase").equals("prepared"))throw new SecurityException("附件上传/消息是否发生仍不明确，不能据未见消息就重传body；保留原编号核对");
         row.put("status",outcome.equals("delivered")?"sent":"queued")
                 .put("message",outcome.equals("delivered")?"机主在原平台确认已投递":"机主在原平台确认未投递，保留为待发送；未自动重发")
                 .put("reconciliation",new JSONObject().put("source","local_owner").put("outcome",outcome).put("note",note.trim()).put("at",System.currentTimeMillis()))
@@ -657,13 +835,14 @@ public final class ChannelCore {
     }
     public synchronized JSONObject groupOutbox(String id)throws Exception {JSONObject row=find("outbox","id",id);if(row==null)return null;if(!id.equals(row.optString("groupDeliveryId")))throw new SecurityException("不是原群投递");return copy(row);}
     public synchronized void checkGroupEventCurrent(JSONObject event)throws Exception {
-        JSONObject profile=profile(event.getString("profileId"));if(!profile.optBoolean("enabled")||!event.optString("kind").equals("group")||event.optString("transportEpoch").isEmpty()||!event.getString("transportEpoch").equals(profile.optString("transportEpoch")))throw new SecurityException("原群连接或认证代次已撤销");
+        JSONObject profile=profile(event.getString("profileId"));if(!profile.optBoolean("enabled")||profile.getString("provider").equals("qq")&&QqConversation.guild(event)&&!profile.optBoolean("qqGuildEnabled")||!event.optString("kind").equals("group")||event.optString("transportEpoch").isEmpty()||!event.getString("transportEpoch").equals(profile.optString("transportEpoch")))throw new SecurityException("原群连接或认证代次已撤销");
         requireChat(route(event));
     }
     public synchronized JSONObject snapshot()throws Exception {
         JSONArray tasks=new JSONArray();JSONArray requests=array("taskRequests");for(int i=Math.max(0,requests.length()-40);i<requests.length();i++)tasks.put(taskMetadata(requests.getJSONObject(i)));
-        return new JSONObject().put("profiles",copy(array("profiles"))).put("bindings",copy(array("bindings")))
-                .put("spaces",copy(array("spaces"))).put("inbox",tail(array("inbox"),40)).put("outbox",tail(array("outbox"),40)).put("taskRequests",tasks);
+        JSONArray profiles=new JSONArray();for(int i=0;i<array("profiles").length();i++){JSONObject view=copy(array("profiles").getJSONObject(i));JSONObject resume=view.optJSONObject("nativeQqResume");view.remove("nativeQqResume");if(resume!=null)view.put("receivingCheckpoint",new JSONObject().put("persisted",!resume.optString("sessionId").isEmpty()).put("savedAt",resume.optLong("savedAt")).put("coverage","official_resume_if_platform_retains_session_not_complete_history").put("gaps",resume.optJSONArray("gaps")==null?new JSONArray():copy(resume.getJSONArray("gaps"))));profiles.put(view);}
+        return new JSONObject().put("profiles",profiles).put("bindings",copy(array("bindings")))
+                .put("receivingGuarantees",new JSONObject().put("deduplication","provider_profile_account_conversation_message").put("dedupKeysRetained",2000).put("inboxRetained",200).put("offlineHistoryComplete",false)).put("spaces",copy(array("spaces"))).put("inbox",tail(array("inbox"),40)).put("outbox",tail(array("outbox"),40)).put("taskRequests",tasks);
     }
     static void requireChat(JSONObject route)throws Exception {
         JSONArray grants=route.getJSONArray("capabilities");for(int i=0;i<grants.length();i++)if("chat".equals(grants.getString(i)))return;

@@ -41,6 +41,8 @@ public final class InferenceProjection {
             switch(receipt.getString("outcome")){case "COMPLETED":completed++;break;case "FAILED":failed++;break;case "CANCELLED":cancelled++;break;default:started++;}
             JSONObject context=receipt.getJSONObject("context"),route=receipt.getJSONObject("route"),usage=receipt.getJSONObject("usage");
             JSONObject groupedRoute=new JSONObject(route.toString());groupedRoute.remove("providerResponseId");groupedRoute.remove("providerItemId");
+            // Logical control does not fragment or duplicate the original physical route totals.
+            for(String field:new String[]{"logicalRequestId","attemptNo","candidateId","requestedAlias","ingressProtocol","egressProtocol","retryReason","deadlineAt","historyDigest"})groupedRoute.remove(field);
             JSONObject identity=new JSONObject().put("route",groupedRoute).put("purpose",context.optString("purpose"))
                     .put("memberId",context.optString("memberId")).put("protocol",usage.optString("protocol"));
             String key=canonical(identity);Group group=byGroup.get(key);
@@ -57,7 +59,7 @@ public final class InferenceProjection {
     }
     private static boolean same(JSONObject first,JSONObject second)throws Exception{return canonical(first).equals(canonical(second));}
     private static boolean sameSelectedRoute(JSONObject first,JSONObject second)throws Exception{
-        JSONObject left=new JSONObject(first.toString()),right=new JSONObject(second.toString());left.remove("responseModel");right.remove("responseModel");return same(left,right);
+        JSONObject left=new JSONObject(first.toString()),right=new JSONObject(second.toString());left.remove("responseModel");right.remove("responseModel");left.remove("historyDigest");right.remove("historyDigest");return same(left,right);
     }
     private static String canonical(Object value)throws Exception{
         if(value instanceof JSONObject){JSONObject object=(JSONObject)value;java.util.List<String> keys=new java.util.ArrayList<>();object.keys().forEachRemaining(keys::add);java.util.Collections.sort(keys);

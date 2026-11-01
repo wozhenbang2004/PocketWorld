@@ -8,7 +8,10 @@ import org.json.JSONObject;
 
 /** Executes one host-requested protocol step. There are no threads, timers, or automatic resubmissions. */
 public final class MediaJobs {
-    public interface ArtifactSink { JSONObject save(MediaTransport.Payload payload, JSONObject source, RunControl control) throws Exception; }
+    public interface ArtifactSink {
+        JSONObject save(MediaTransport.Payload payload,JSONObject source,RunControl control)throws Exception;
+        default JSONObject find(JSONObject source,RunControl control)throws Exception{return null;}
+    }
     public interface ReceiptSink { void emit(JSONObject receipt); }
     private final MediaJobJournal journal;
     private final ArtifactSink artifacts;
@@ -26,6 +29,16 @@ public final class MediaJobs {
         JSONObject record = journal.get(operation);
         if (record == null) throw new IllegalArgumentException("媒体操作回执不存在");
         return MediaJobJournal.visible(record);
+    }
+    /** Native host observation marker in this ORIGINAL provider receipt; never a new grant,
+     * scheduling authority or caller JSON command. Once written, cold/duplicate receipts cannot
+     * reset the application's bounded automatic read window. Explicit original GET stays usable. */
+    public synchronized boolean markOriginalReadStarted(String operation,String task,String run,String revision,long until)throws Exception{
+        JSONObject record=journal.get(operation);if(record==null||!task.equals(record.optString("taskId"))||!run.equals(record.optString("runId"))||!revision.equals(record.optString("configurationRevision"))||!record.optString("provider").equals("comfyui")||!record.optBoolean("providerJobIdConfirmed")||!record.optString("status").matches("queued|running|unknown"))throw new SecurityException("续查不是原确认的媒体job");
+        if(record.has("_readContinuationStartedAt"))return false;long now=System.currentTimeMillis();if(until<=now||until>now+300000)throw new SecurityException("原只读续查时限无效");record.put("_readContinuationStartedAt",now).put("_readContinuationUntil",until).put("originalReadContinuation","application_alive");journal.put(record);return true;
+    }
+    public synchronized void finishOriginalReadContinuation(String operation,String reason,int reads)throws Exception{
+        JSONObject record=journal.get(operation);if(record==null||!record.has("_readContinuationStartedAt"))return;record.put("originalReadContinuation","ended").put("readContinuationEnd",reason).put("readContinuationReads",Math.max(0,Math.min(60,reads)));save(record);
     }
     public static String configurationRevision(JSONObject config) throws Exception {
         return config.optString("revision").isEmpty() ? MediaJobJournal.hash(config) : config.getString("revision");
@@ -62,15 +75,19 @@ public final class MediaJobs {
         finally { observer.close(); synchronized (this) { observing.remove(operation); } }
     }
 
-    public synchronized JSONObject execute(String command, JSONObject input, JSONObject config, String key, RunControl control) throws Exception {
+    public synchronized JSONObject execute(String command,JSONObject input,JSONObject config,String key,RunControl control)throws Exception{return execute(command,input,config,key,control,null);}
+    public synchronized JSONObject execute(String command,JSONObject input,JSONObject config,String key,RunControl control,MediaTransport.EditInput edit)throws Exception {
         control.check();
         if (command.equals("listJobs")) return new JSONObject().put("jobs", list());
         if (command.equals("getOperation")) return MediaJobJournal.visible(require(input));
-        if (command.matches("generateImage|synthesizeSpeech|submitWorkflow")) return submit(command, input, config, key, control);
+        if (command.matches("generateImage|generateVideo|editImage|synthesizeSpeech|submitWorkflow")) return submit(command,input,config,key,control,edit);
         JSONObject record = require(input);
         if (!command.matches("getJob|reconcileOperation|fetchResults|cancelJob|cancel")) throw new IllegalArgumentException("不支持的媒体操作");
         if (!record.getString("provider").equals("comfyui")) {
-            return MediaJobJournal.visible(record).put("querySupported", false).put("remoteCancellationSupported", false)
+            requireConfiguration(config,record);
+            if(command.equals("fetchResults")&&record.has("_resultUrl"))return fetchConfirmedUrl(record,config,key,control);
+            if(command.equals("fetchResults")&&record.has("_responseDigest")){JSONObject found=artifacts.find(source(record,config,"response"),control);if(found!=null)return save(record.put("attachments",new JSONArray().put(found)).put("attachment",found).put("resultStatus","saved").put("message","已找到原响应对应的真实固定附件；没有重发生成"));}
+            return MediaJobJournal.visible(record).put("resultDownloadRetryAvailable",record.has("_resultUrl")&&!record.optString("resultStatus").equals("saved")).put("querySupported", false).put("remoteCancellationSupported", false)
                     .put("message", record.optJSONArray("attachments") != null && record.getJSONArray("attachments").length() > 0
                             ? "媒体回执已保留为附件" : "此同步媒体API不提供原请求查询或远程取消；未知效果未重试");
         }
@@ -81,7 +98,7 @@ public final class MediaJobs {
         return MediaJobJournal.visible(record);
     }
 
-    private JSONObject submit(String command, JSONObject input, JSONObject config, String key, RunControl control) throws Exception {
+    private JSONObject submit(String command,JSONObject input,JSONObject config,String key,RunControl control,MediaTransport.EditInput edit)throws Exception {
         String operation = input.optString("_operationId");
         MediaJobJournal.identity(operation);
         String task = input.optString("_taskId"), run = input.optString("_runId", operation);
@@ -93,16 +110,18 @@ public final class MediaJobs {
         if (input.has("_configurationRevision") && !revision.equals(input.getString("_configurationRevision"))) throw new SecurityException("媒体配置已变化，请重新确认");
         String provider = config.optString("provider", "openai_compatible");
         if (!provider.matches("openai_compatible|comfyui")) throw new IllegalArgumentException("媒体服务类型无效");
-        String kind = command.equals("synthesizeSpeech") ? "speech" : command.equals("submitWorkflow") ? "workflow" : "image";
+        String kind=command.equals("synthesizeSpeech")?"speech":command.equals("submitWorkflow")?"workflow":command.equals("generateVideo")?"video":"image";
         JSONObject request;
+        if(command.equals("editImage")&&(edit==null||!provider.equals("openai_compatible")))throw new SecurityException("编辑需原私人附件字节与兼容图像编辑服务，不能拿Comfy图或JSON伪造原图");
         if (provider.equals("comfyui")) {
             if (kind.equals("speech")) throw new IllegalArgumentException("ComfyUI语音需使用显式工作流，或配置兼容TTS服务");
-            request = kind.equals("workflow") ? ComfyUiTransport.workflow(input.getJSONObject("workflow")) : imageWorkflow(config, input);
+            request=kind.equals("workflow")?ComfyUiTransport.workflow(input.getJSONObject("workflow")):kind.equals("video")?videoWorkflow(config,input):imageWorkflow(config,input);
         } else {
-            if (kind.equals("workflow")) throw new IllegalArgumentException("此媒体服务不是ComfyUI工作流服务");
+            if (kind.equals("workflow")||kind.equals("video")) throw new IllegalArgumentException("此媒体服务不是ComfyUI工作流服务");
             request = MediaTransport.compatibleBody(kind, config.optString(kind.equals("image") ? "imageModel" : "ttsModel"),
                     config.optString("voice"), input.getString(kind.equals("image") ? "prompt" : "text"), config.optBoolean("legacyImageBase64"));
         }
+        if(command.equals("editImage"))request.put("nativeImageInputs",edit.references());
         String configurationHash = MediaJobJournal.hash(config);
         String hash = MediaJobJournal.hash(new JSONObject().put("command", command).put("configurationHash", configurationHash).put("request", request));
         JSONObject existing = journal.get(operation);
@@ -120,6 +139,7 @@ public final class MediaJobs {
                 .put("createdAt", System.currentTimeMillis()).put("expirySupported", false).put("expiresAt", JSONObject.NULL)
                 .put("outputs", new JSONArray()).put("attachments", new JSONArray())
                 .put("remoteCancellation", provider.equals("comfyui") ? config.optBoolean("comfyJobsApi") ? "jobs_api" : "queue_only" : "unavailable");
+        if(edit!=null)record.put("_inputArtifacts",edit.references().getJSONArray("inputArtifacts"));
         journal.put(record); // Must succeed before any network side effect.
         control.check();
         record.put("status", "submitting").put("dispatched", true);
@@ -130,18 +150,23 @@ public final class MediaJobs {
                 record.put("providerJobId", id).put("providerJobIdConfirmed", true).put("status", "queued").put("providerState", "accepted")
                         .put("message", "ComfyUI已受理原任务；请查询进度，不要重新生成");
             } else {
-                MediaTransport.Payload payload = MediaTransport.request(config.getString("baseUrl"), key, kind,
-                        config.getString(kind.equals("image") ? "imageModel" : "ttsModel"), config.optString("voice"),
-                        input.getString(kind.equals("image") ? "prompt" : "text"), config.optBoolean("legacyImageBase64"), control);
-                record.put("providerState", "response_received");
-                control.check();
-                JSONObject attachment = artifacts.save(payload, source(record, config, "response"), control);
-                record.put("attachments", new JSONArray().put(attachment)).put("attachment", attachment).put("resultStatus", "saved")
-                        .put("status", "response_received").put("message", "媒体服务返回已保存为附件，请检查生成内容");
+                MediaTransport.ProviderResponse response=command.equals("editImage")
+                    ?MediaTransport.editResponse(config.getString("baseUrl"),key,config.getString("imageModel"),input.getString("prompt"),config.optBoolean("legacyImageBase64"),edit,control)
+                    :MediaTransport.requestResponse(config.getString("baseUrl"),key,kind,config.getString(kind.equals("image")?"imageModel":"ttsModel"),config.optString("voice"),input.getString(kind.equals("image")?"prompt":"text"),config.optBoolean("legacyImageBase64"),control);
+                record.put("providerState","response_received").put("_responseDigest",response.responseDigest).put("status","response_received");
+                if(!response.resultUrl.isEmpty())record.put("_resultUrl",response.resultUrl).put("resultDescriptorConfirmed",true).put("resultDownloadRetryAvailable",true);
+                // Persist the exact returned URL BEFORE any result GET/import. Recovery never
+                // repeats the paid image/edit POST and never exposes signed URLs in tool views.
+                journal.put(record);control.check();
+                if(response.payload==null)return fetchConfirmedUrl(record,config,key,control);
+                if(edit!=null)edit.requireCurrent(control);
+                JSONObject attachment=artifacts.save(response.payload,source(record,config,"response"),control);
+                record.put("attachments",new JSONArray().put(attachment)).put("attachment",attachment).put("resultStatus","saved").put("message","原媒体响应已保存为独立附件，请检查内容；输入原件保留");
             }
         } catch (Exception failure) {
             boolean rejected = failure instanceof MediaTransport.Rejected && ((MediaTransport.Rejected) failure).definitive;
-            record.put("status", rejected ? "failed" : "unknown").put("message", rejected ? failure.getMessage()
+            if(record.optString("providerState").equals("response_received"))record.put("status","response_received").put("resultStatus","unavailable").put("message","服务原响应已取得，但附件尚未完整保存；只核对原响应，不重新生成或编辑");
+            else record.put("status", rejected ? "failed" : "unknown").put("message", rejected ? failure.getMessage()
                     : "媒体提交或产物保存回执不完整；服务可能已受理或计费，未自动重试");
             if (failure instanceof MediaTransport.Rejected) record.put("httpStatus", ((MediaTransport.Rejected) failure).status);
             if (control.isCancelled()) record.put("localWaitCancelled", true);
@@ -149,9 +174,20 @@ public final class MediaJobs {
         return save(record);
     }
 
+    private JSONObject fetchConfirmedUrl(JSONObject record,JSONObject config,String key,RunControl control)throws Exception {
+        if(!record.optBoolean("resultDescriptorConfirmed")||!record.optString("providerState").equals("response_received")||!record.optString("_responseDigest").matches("[a-f0-9]{64}"))throw new SecurityException("缺少原服务实际返回并保存的结果描述");
+        requireConfiguration(config,record);JSONObject origin=source(record,config,"response");
+        try{
+            control.check();JSONObject saved=artifacts.find(origin,control);
+            if(saved==null){if(!config.optBoolean("allowResultUrls"))return save(record.put("resultStatus","owner_download_policy_required").put("message","服务已返回原结果地址，但此配置未允许独立HTTPS公有下载。原响应保留，没有重发付费请求；请明确配置并重新审阅后续新任务。"));
+                byte[] bytes=dev.pocketengine.media.MediaResultDownload.getConfirmedResult(record.getString("_resultUrl"),config.getString("baseUrl"),key,control);try{saved=artifacts.save(MediaTransport.imagePayload(bytes),origin,control);}finally{java.util.Arrays.fill(bytes,(byte)0);}}
+            record.put("attachments",new JSONArray().put(saved)).put("attachment",saved).put("resultStatus","saved").put("resultDownloadRetryAvailable",false).put("message","已获取原服务返回的固定图像并保存；未重新提交生成");
+        }catch(Exception failure){record.put("resultStatus","unavailable").put("resultDownloadRetryAvailable",true).put("message","原结果GET或附件保存未确认；原响应描述保留，不重发生成。HTTPS/公有地址、取消或容量条件未满足时不会下载。");if(failure instanceof MediaTransport.Rejected)record.put("resultHttpStatus",((MediaTransport.Rejected)failure).status);}
+        return save(record);
+    }
     private static JSONObject imageWorkflow(JSONObject config, JSONObject input) throws Exception {
         String prompt = input.getString("prompt");
-        if (prompt.isBlank() || prompt.length() > 8000) throw new IllegalArgumentException("媒体输入为空或超过长度限制");
+        if (prompt.codePoints().allMatch(Character::isWhitespace) || prompt.length() > 8000) throw new IllegalArgumentException("媒体输入为空或超过长度限制");
         JSONObject graph = ComfyUiTransport.workflow(config.optJSONObject("workflow"));
         String node = config.getString("promptNodeId"), field = config.optString("promptInput", "text");
         JSONObject inputs = graph.getJSONObject(node).getJSONObject("inputs");
@@ -160,6 +196,9 @@ public final class MediaJobs {
         return ComfyUiTransport.workflow(graph);
     }
 
+    private static JSONObject videoWorkflow(JSONObject config,JSONObject input)throws Exception{
+        String prompt=input.getString("prompt");if(prompt.codePoints().allMatch(Character::isWhitespace)||prompt.length()>MediaTransport.MAX_IMAGE_INPUT_CHARS)throw new IllegalArgumentException("视频输入需1至8000字");JSONObject graph=ComfyUiTransport.workflow(config.optJSONObject("videoWorkflow"));String node=config.getString("videoPromptNodeId"),field=config.optString("videoPromptInput","text");JSONObject inputs=graph.getJSONObject(node).getJSONObject("inputs");if(!(inputs.opt(field) instanceof String))throw new SecurityException("原视频模板的文字字段改变");inputs.put(field,prompt);return ComfyUiTransport.workflow(graph);
+    }
     private JSONObject require(JSONObject input) throws Exception {
         String operation = input.optString("operationId", input.optString("_operationId"));
         if (input.has("operationId") && input.has("_operationId") && !input.getString("operationId").equals(input.getString("_operationId"))) throw new SecurityException("媒体操作标识不一致");
@@ -209,6 +248,8 @@ public final class MediaJobs {
             for (int i = saved.length(); i < outputs.length(); i++) {
                 control.check();
                 JSONObject output = outputs.getJSONObject(i);
+                JSONObject found=artifacts.find(source(record,config,MediaJobJournal.hash(output)),control);
+                if(found!=null){saved.put(found);record.put("attachments",saved).put("resultStatus",saved.length()==outputs.length()?"saved":"partial");if(saved.length()==1)record.put("attachment",found);save(record);continue;}
                 byte[] bytes = MediaTransport.exchange(ComfyUiTransport.outputUri(config.getString("baseUrl"), output), key, "GET", null,
                         MediaTransport.MAX_MEDIA_BYTES, control);
                 total += bytes.length;
@@ -221,7 +262,8 @@ public final class MediaJobs {
                 if (saved.length() == 1) record.put("attachment", attachment);
                 save(record); // Preserve each import before proceeding; recovery finds the same artifact identity.
             }
-            record.put("resultStatus", "saved").put("message", "原媒体任务产物已保存为附件，请检查内容");
+            boolean video=false;for(int i=0;i<saved.length();i++)video|="video/mp4".equals(saved.getJSONObject(i).optString("mimeType"));
+            if(record.optString("kind").equals("video")&&!video)record.put("resultStatus","no_video_output").put("message","原job返回的文件已保留，但没有支持的真实MP4视频；未将预览图标成视频生成成功");else record.put("resultStatus", "saved").put("message", "原媒体任务产物已保存为附件，请检查内容");
         } catch (Exception failure) {
             record.put("resultStatus", saved.length() == 0 ? "unavailable" : "partial")
                     .put("message", "生成回执已保留，产物下载或导入未全部完成；可核对原产物，不会重新生成");
@@ -261,6 +303,9 @@ public final class MediaJobs {
                 .put("serviceOrigin", MediaTransport.base(config.getString("baseUrl")).getHost());
         String model = config.optString(record.getString("kind").equals("speech") ? "ttsModel" : "imageModel");
         if (!model.isEmpty()) result.put("model", model);
+        result.put("configurationRevision",record.getString("configurationRevision")).put("requestIdentity",record.getString("_requestHash"));
+        if(record.has("_responseDigest"))result.put("providerResponseSha256",record.getString("_responseDigest"));
+        if(record.has("_inputArtifacts")){JSONArray inputs=record.getJSONArray("_inputArtifacts");result.put("inputArtifacts",inputs);if(inputs.length()>0)result.put("parentArtifact",inputs.getJSONObject(0));}
         return result;
     }
     private JSONObject save(JSONObject record) throws Exception {

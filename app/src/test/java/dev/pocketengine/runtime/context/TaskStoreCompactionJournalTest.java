@@ -38,7 +38,7 @@ public final class TaskStoreCompactionJournalTest {
         final RunControl control=new RunControl();final AtomicLong sourceRevision=new AtomicLong();
         final AtomicReference<ModelConfig> selected=new AtomicReference<>();final String id,run;final int epoch;
         final TaskStoreMemoryReader.RawBinding binding;final RunJournal base,journal;final ContextCompactor compactor;
-        final ContextBudgetPolicy.Source budgets;volatile boolean initialContextLimit,repeatContextLimit;volatile String finishReason="stop";volatile Action during=()->{};volatile Throwable handlerFailure;JSONArray raw;
+        final ContextBudgetPolicy.Source budgets;volatile boolean initialContextLimit,repeatContextLimit;volatile String finishReason="stop",summaryText="source-0.java: ERR_IMPORT_0。已结算历史摘要，原件保留。";volatile Action during=()->{};volatile Throwable handlerFailure;JSONArray raw;
         Fixture()throws Exception {
             Application app=RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");tasks=new TaskStore(app);
             JSONObject task=tasks.createCapabilityTask("real fixture original owner task","fixture-conversation");id=task.getString("id");
@@ -48,7 +48,7 @@ public final class TaskStoreCompactionJournalTest {
             provider=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);provider.createContext("/v1/chat/completions",exchange->{
                 try{int post=posts.incrementAndGet();exchange.getRequestBody().readAllBytes();during.run();
                     if(initialContextLimit&&(post==1||repeatContextLimit&&post==3)){byte[] error="{\"error\":{\"code\":\"context_length_exceeded\"}}".getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(400,error.length);exchange.getResponseBody().write(error);return;}
-                    byte[] body=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("finish_reason",finishReason).put("message",new JSONObject().put("role","assistant").put("content","source-0.java: ERR_IMPORT_0。已结算历史摘要，原件保留。"))))
+                    byte[] body=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("finish_reason",finishReason).put("message",new JSONObject().put("role","assistant").put("content",summaryText))))
                             .put("usage",new JSONObject().put("prompt_tokens",20).put("completion_tokens",8).put("total_tokens",28)).toString().getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);
                 }catch(Throwable failed){handlerFailure=failed;}finally{exchange.close();}
@@ -206,6 +206,22 @@ public final class TaskStoreCompactionJournalTest {
                 return new TaskStoreMemoryReader.RawMessageCheck(){public void requireCurrentOriginalMessage(int index,JSONObject original){}public void close(){}};
             });
             fixture.request();assertEquals(expected,observed.get());assertTrue(fixture.stored().has("contextCompaction"));assertEquals(1,fixture.posts.get());
+        }
+    }
+
+    @Test public void summaryGroupFallbackUsesActualCandidateBudgetAndSecretWhileMainStaysCaptured()throws Exception {
+        try(Fixture f=new Fixture()){
+            HttpServer failed=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);AtomicInteger failedCalls=new AtomicInteger();failed.createContext("/",exchange->{try{failedCalls.incrementAndGet();exchange.getRequestBody().readAllBytes();byte[] bytes="{}".getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(503,bytes.length);exchange.getResponseBody().write(bytes);}finally{exchange.close();}});failed.start();
+            try{
+                ModelConfig main=f.selected.get(),first=new ModelConfig("http://127.0.0.1:"+failed.getAddress().getPort()+"/v1","first-summary-key","summary-first",false,40,10,"openai_chat",1000),actual=new ModelConfig(main.baseUrl,"actual-summary-key","summary-actual",false,40,10,"openai_chat",1000);
+                var preferences=RuntimeEnvironment.getApplication().getSharedPreferences("summary_group_fixture",0);preferences.edit().clear().commit();java.util.Map<String,String> secrets=new java.util.HashMap<>();dev.pocketengine.store.SettingsStore.ApiSecrets vault=new dev.pocketengine.store.SettingsStore.ApiSecrets(){public String get(String slot){return secrets.getOrDefault(slot,"");}public void put(String slot,String value){secrets.put(slot,value);}};
+                var constructor=dev.pocketengine.store.SettingsStore.class.getDeclaredConstructor(android.content.SharedPreferences.class,dev.pocketengine.store.SettingsStore.ApiSecrets.class);constructor.setAccessible(true);var settings=constructor.newInstance(preferences,vault);var service=new dev.pocketengine.runtime.models.ModelConnectionService(settings,java.nio.file.Files.createTempDirectory("summary-group-real-store").resolve("catalog"),java.time.Clock.systemUTC());service.install();service.connections();JSONArray candidates=new JSONArray(),accounts=new JSONArray();
+                for(ModelConfig candidate:java.util.List.of(first,actual)){JSONObject saved=settings.saveApiConnection("",0,candidate.model,new JSONObject().put("baseUrl",candidate.baseUrl).put("apiKey",candidate.apiKey).put("model",candidate.model).put("provider",candidate.provider).put("maxOutputTokens",1000).put("sendScreenshots",false));accounts.put(saved.getString("id"));candidates.put(new JSONObject().put("candidateId",candidate.model).put("target",dev.pocketengine.runtime.models.ModelTargetRef.exact(saved.getString("id"),candidate.model).toJson()).put("enabled",true).put("allowedPurposes",new JSONArray().put("SUMMARY")).put("allowedAudiences",new JSONArray().put("APP_OWNER")));}
+                JSONObject group=settings.saveModelGroup("",0,"Summary native group",new JSONObject().put("allowedAccounts",new JSONObject().put("mode","EXPLICIT").put("refs",accounts)).put("candidates",candidates).put("attemptPolicy",new JSONObject().put("maxAttempts",3).put("maxRouteSwitches",1)));var summary=settings.captureModelTarget(dev.pocketengine.runtime.models.ModelTargetRef.group(group.getString("groupId"),1),"SUMMARY","APP_OWNER",main);
+                f.selected.set(main.withPurposePlans(java.util.Map.of("SUMMARY",summary.routePlan)));f.summaryText="actual-summary-key was quoted by fixture; retained useful summary.";java.util.Set<String> budgetModels=new java.util.HashSet<>();ContextBudgetPolicy.Source budgets=config->{budgetModels.add(config.model);return f.budgets.resolve(config);};
+                ContextCompactor compactor=new ContextCompactor(f.journal,f.journal.compaction(),budgets);String original=f.raw.toString();compactor.request(f.raw,new JSONArray(original),CompactionPlanTest.indexes(f.raw),f.tools(),f.selected.get(),f.control,new RunContextBudget(budgets));
+                assertEquals(1,failedCalls.get());assertEquals(1,f.posts.get());assertTrue(budgetModels.contains("summary-first"));assertTrue(budgetModels.contains("summary-actual"));assertTrue(budgetModels.contains(main.model));assertEquals(main.model,f.selected.get().model);assertEquals(main.apiKey,f.selected.get().apiKey);assertEquals(original,f.stored().getJSONArray("messages").toString());JSONObject published=f.stored().getJSONObject("contextCompaction");assertFalse(published.getString("text").contains("actual-summary-key"));assertTrue(published.getBoolean("hostSecretRedacted"));assertEquals("summary-actual",published.getJSONObject("inferenceReceipt").getJSONObject("route").getString("requestedModel"));assertEquals(2,f.tasks.inferenceUsage(f.id).getInt("attempts"));
+            }finally{failed.stop(0);}
         }
     }
 

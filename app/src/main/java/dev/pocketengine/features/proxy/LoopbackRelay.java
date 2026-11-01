@@ -28,13 +28,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import okhttp3.Call;
-import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.ResponseBody;
-import okio.BufferedSink;
 
 /** Authenticated phone-local model API. A client token is not a phone/tool grant. */
 public final class LoopbackRelay implements AutoCloseable {
@@ -60,10 +53,8 @@ public final class LoopbackRelay implements AutoCloseable {
     private final ServerSocket listener;
     private final ThreadPoolExecutor workers;
     private final Set<Socket> clients=ConcurrentHashMap.newKeySet();
-    private final Set<Call> upstream=ConcurrentHashMap.newKeySet();
+    private final Set<dev.pocketengine.core.RunControl> apiControls=ConcurrentHashMap.newKeySet();
     private final Set<GatewayCall> accountCalls=ConcurrentHashMap.newKeySet();
-    private final OkHttpClient http=new OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
-            .retryOnConnectionFailure(false).connectTimeout(10,TimeUnit.SECONDS).cache(null).build();
     private final AtomicInteger requests=new AtomicInteger();
     private final Thread acceptor;
     private volatile boolean closed;
@@ -104,7 +95,7 @@ public final class LoopbackRelay implements AutoCloseable {
         if(!routeBinding.matches(captured)||!routeBinding.matches(configurations.get())||selectionRevision!=configurations.selectionRevision())invalidateRoute();
         if(routeInvalidated)throw new RequestFailure(503,"模型连接或请求设置已改变；请停止本机模型服务后按新选择重新启用，没有自动切换连接或模型");
     }
-    private void invalidateRoute(){routeInvalidated=true;for(Call call:upstream)call.cancel();for(GatewayCall call:accountCalls)call.cancel();}
+    private void invalidateRoute(){routeInvalidated=true;for(dev.pocketengine.core.RunControl control:apiControls)control.cancel();for(GatewayCall call:accountCalls)call.cancel();}
     private void requireInferenceCurrent(ModelConfig captured,URL target)throws Exception{
         requireCurrent(captured);
         try{configurations.get().requireTransportConsent(target);}
@@ -132,7 +123,7 @@ public final class LoopbackRelay implements AutoCloseable {
                 if(headers.containsKey("transfer-encoding")||!headers.getOrDefault("content-length","0").equals("0"))throw new RequestFailure(400,"模型目录请求不能包含请求体");
                 parsed.set(true);deadline.interrupt();ModelConfig config=currentConfiguration();
                 if(config.usesAccount()){accountModels(socket,response,config);return;}
-                JSONObject model=new JSONObject().put("id",config.model).put("object","model").put("owned_by","configured-upstream");response.json(200,ChatCompletionStream.scrub(new JSONObject().put("object","list").put("data",new JSONArray().put(model)),config.apiKey).toString().getBytes(StandardCharsets.UTF_8));return;
+                JSONObject model=new JSONObject().put("id",config.routePlan==null?config.model:config.routePlan.requestedAlias).put("object","model").put("owned_by","configured-upstream");response.json(200,ChatCompletionStream.scrub(new JSONObject().put("object","list").put("data",new JSONArray().put(model)),config.apiKey).toString().getBytes(StandardCharsets.UTF_8));return;
             }
             if(!request[0].equals("POST")||!NativeRelayPolicy.acceptsPath(request[1]))throw new RequestFailure(404,"请使用本机已选模型协议的明确路径，可在本机服务页查看");
             if(headers.containsKey("transfer-encoding"))throw new RequestFailure(400,"当前不支持分块请求");
@@ -150,29 +141,11 @@ public final class LoopbackRelay implements AutoCloseable {
                 if(length>ResponsesRequest.MAX_REQUEST_BYTES)throw new RequestFailure(413,"账号请求超过256KiB");
                 accountResponse(socket,response,config,json);return;
             }
-            if(!ModelConfig.DEFAULT_PROVIDER.equals(config.provider)){
-                NativeRelayPolicy.Prepared nativeRequest;
-                try{nativeRequest=NativeRelayPolicy.prepare(config,request[1],json);}
-                catch(NativeRelayPolicy.Rejected|dev.pocketengine.runtime.models.ModelRequestPolicy.Rejected invalid){throw new RequestFailure(400,invalid.getMessage());}
-                catch(org.json.JSONException|IllegalArgumentException malformed){throw new RequestFailure(400,"客户端原生协议字段或参数无法核对，未向上游发送");}
-                preventSelf(nativeRequest.endpoint);relay(socket,response,nativeRequest.endpoint,config,null,nativeRequest.streaming,nativeRequest);return;
-            }
-            if(!request[1].equals("/v1/chat/completions"))throw new RequestFailure(400,"当前服务已固定 Chat Completions 协议；请停止后在模型页显式选择另一协议连接");
-            if(streaming&&json.optBoolean("logprobs",false))throw new RequestFailure(400,"当前流式反代不支持logprobs");
-            if(streaming&&(json.has("audio")||(json.optJSONArray("modalities")!=null&&json.getJSONArray("modalities").toString().contains("audio"))))throw new RequestFailure(400,"当前流式反代仅支持文本与函数工具分片");
-            JSONArray messages=json.optJSONArray("messages");if(messages==null||messages.length()<1||messages.length()>100)throw new RequestFailure(400,"messages需为1至100项");
-            URL endpoint=endpoint(config.baseUrl);if(config.model.isEmpty())throw new RequestFailure(503,"请先配置模型");
-            if(!ModelConfig.DEFAULT_PROVIDER.equals(config.provider))throw new RequestFailure(503,"本地反代当前仅支持Chat Completions模型协议");
-            if(json.has("model")&&(!(json.opt("model") instanceof String)||!config.model.equals(json.getString("model"))))
-                throw new RequestFailure(400,"请求模型不是本机服务已选择的模型；请读取/v1/models后明确选择，没有代换模型");
-            if((endpoint.getHost().equals("127.0.0.1")||endpoint.getHost().equalsIgnoreCase("localhost")||endpoint.getHost().equals("[::1]"))&&endpoint.getPort()==port())throw new RequestFailure(508,"不能将反代指向自身");
-            json.put("model",config.model).put("stream",streaming);
-            ProxyRequestPolicy.Prepared prepared;
-            try{prepared=ProxyRequestPolicy.prepare(config,json,streaming);}
-            catch(ProxyRequestPolicy.Rejected|dev.pocketengine.runtime.models.ModelRequestPolicy.Rejected refused){throw new RequestFailure(400,refused.getMessage());}
-            catch(IllegalArgumentException malformed){throw new RequestFailure(400,"客户端推理或输出参数无法核对");}
-            catch(org.json.JSONException malformed){throw new RequestFailure(400,"客户端消息或工具字段格式无法核对");}
-            relay(socket,response,endpoint,config,prepared,streaming,null);
+            NativeRelayPolicy.Prepared prepared;
+            try{prepared=NativeRelayPolicy.prepare(config,request[1],json);}
+            catch(NativeRelayPolicy.Rejected|ProxyRequestPolicy.Rejected|dev.pocketengine.runtime.providers.ProtocolCodec.Rejected|dev.pocketengine.runtime.models.ModelRequestPolicy.Rejected invalid){throw new RequestFailure(400,invalid.getMessage());}
+            catch(org.json.JSONException|IllegalArgumentException malformed){throw new RequestFailure(400,"客户端协议字段或参数无法核对，未向上游发送");}
+            preventSelf(prepared.endpoint);gatewayRelay(socket,response,config,prepared.gateway);
         }catch(InferenceAudiencePolicy.Rejected denied){try{response.failure(403,denied.getMessage());}catch(Exception ignored){}}
         catch(GatewayFailure failure){try{response.accountFailure(failure);}catch(Exception ignored){}}
         catch(dev.pocketengine.runtime.models.ModelRequestPolicy.Rejected changed){try{response.failure(409,"当前模型能力已变化；旧回复未作为完整结果返回，没有自动重试");}catch(Exception ignored){}}
@@ -240,108 +213,35 @@ public final class LoopbackRelay implements AutoCloseable {
         }
         @Override public void close(){complete=true;watcher.interrupt();accountCalls.remove(call);call.cancel();}
     }
-    private void relay(Socket client,Response response,URL endpoint,ModelConfig config,ProxyRequestPolicy.Prepared prepared,boolean streaming,NativeRelayPolicy.Prepared nativeRequest)throws Exception {
-        // This is the same host-owned consent decision used by direct model transport. Check
-        // the resolved fixed target before opening a connection or sending any credentials.
-        try {config.requireTransportConsent(endpoint);}
-        catch(IllegalArgumentException denied){throw new RequestFailure(503,"此HTTP上游尚未获得本机传输确认；请在模型设置确认该目标或使用HTTPS");}
-        byte[] payload=(nativeRequest==null?prepared.wire:nativeRequest.wire).toString().getBytes(StandardCharsets.UTF_8);
-        // A model POST may be billable. Explicit one-shot body forbids response-driven replay
-        // (for example a 503 Retry-After: 0) as well as connection-recovery retries.
-        RequestBody body=new RequestBody(){
-            @Override public MediaType contentType(){return MediaType.get("application/json; charset=utf-8");}
-            @Override public long contentLength(){return payload.length;}
-            @Override public boolean isOneShot(){return true;}
-            @Override public void writeTo(BufferedSink sink)throws java.io.IOException{sink.write(payload);}
-        };
-        Request.Builder request=new Request.Builder().url(endpoint).post(body)
-                .header("Accept",streaming?"text/event-stream":"application/json").header("Accept-Encoding","identity");
-        if(nativeRequest==null){if(!config.apiKey.isEmpty())request.header("Authorization","Bearer "+config.apiKey);}
-        else for(var header:dev.pocketengine.runtime.providers.ProviderAdapters.selected(config.provider).headers(config).entrySet())request.header(header.getKey(),header.getValue());
-        Call call=http.newBuilder().readTimeout(config.requestTimeoutSeconds,TimeUnit.SECONDS)
-                .writeTimeout(config.requestTimeoutSeconds,TimeUnit.SECONDS).build().newCall(request.build());
-        call.timeout().timeout(config.requestTimeoutSeconds,TimeUnit.SECONDS);
-        upstream.add(call);
-        long expires=System.nanoTime()+config.requestTimeoutSeconds*1_000_000_000L;
-        java.util.concurrent.atomic.AtomicBoolean complete=new java.util.concurrent.atomic.AtomicBoolean();
-        final dev.pocketengine.core.RunControl requestControl=new dev.pocketengine.core.RunControl();
-        dev.pocketengine.runtime.usage.NativeInferenceWork usage=null;dev.pocketengine.runtime.usage.InferenceCapture capture=null;boolean failureRecorded=false;int observedStatus=0;final boolean[] textSeen={false};
-        client.setSoTimeout(250);
-        Thread watchdog=new Thread(()->{
-            try {
-                // A request uses one connection, with no pipelining. Closing the client request
-                // side is cancellation, including while upstream headers/next token are stalled.
-                InputStream input=client.getInputStream();
-                while(!complete.get()&&!closed&&System.nanoTime()<expires){
-                    try{input.read();break;}catch(java.net.SocketTimeoutException waiting){}
-                }
-                if(!complete.get()){requestControl.cancel();closeClient(client);call.cancel();}
-            }catch(Exception cancelled){if(!complete.get()){requestControl.cancel();closeClient(client);call.cancel();}}
-        },"pocket-proxy-lifetime");watchdog.setDaemon(true);watchdog.start();
-        try {
-            if(closed)throw new RequestFailure(503,"反代已停止");
-            requireInferenceCurrent(config,endpoint);
-            if(nativeRequest!=null)nativeRequest.revalidate();
-            if(inferenceFactory!=null)usage=inferenceFactory.open(config,requestControl,sessionId+":"+java.util.UUID.randomUUID());
-            var target=usage==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():usage.target();
-            capture=new dev.pocketengine.runtime.usage.InferenceCapture(config,requestControl,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(target,()->requireInferenceCurrent(config,endpoint)));
-            capture.dispatch();final dev.pocketengine.runtime.usage.InferenceCapture actualCapture=capture;
-            requests.incrementAndGet();
-            try(okhttp3.Response reply=call.execute()){
-                int status=reply.code();observedStatus=status;
-                if(status<200||status>=300){capture.failure(dev.pocketengine.runtime.usage.InferenceFailure.http(status,reply.headers("Retry-After"),reply.headers("Date"),System.currentTimeMillis()));failureRecorded=true;throw new RequestFailure(status>=400&&status<=599?status:502,status>=300&&status<400?"上游返回重定向，请配置最终接口地址":"上游请求返回HTTP "+status+"，请检查模型设置");}
-                ResponseBody responseBody=reply.body();
-                if(responseBody==null)throw new RequestFailure(502,"上游回复体为空");
-                if(streaming){
-                    String type=reply.header("Content-Type");
-                    if(type==null||!type.split(";",2)[0].trim().equalsIgnoreCase("text/event-stream"))throw new RequestFailure(502,"上游没有返回text/event-stream");
-                    String encoding=reply.header("Content-Encoding");
-                    if(encoding!=null&&!encoding.equalsIgnoreCase("identity"))throw new RequestFailure(502,"上游流使用了不支持的内容编码");
-                    response.nativeProtocol=nativeRequest==null?"":config.provider;response.startStream();
-                    try(InputStream input=responseBody.byteStream()){
-                        if(nativeRequest!=null){
-                            NativeRelayStream.relay(input,nativeRequest,requestControl,config.apiKey,actualCapture.usage,(event,data)->{
-                                if(closed||client.isClosed()||System.nanoTime()>=expires)throw new java.io.IOException("relay stopped");
-                                requireInferenceCurrent(config,endpoint);if(NativeRelayStream.hasVisibleText(config.provider,data))textSeen[0]=true;response.nativeEvent(event,data);
-                            });response.nativeCompleted=true;
-                        }else ChatCompletionStream.relay(input,config.apiKey,data->{
-                            if(closed||client.isClosed()||System.nanoTime()>=expires)throw new java.io.IOException("relay stopped");
-                            requireInferenceCurrent(config,endpoint);
-                            prepared.beforeStreamData(data);
-                            if(!"[DONE]".equals(data)){
-                                JSONObject chunk=new JSONObject(data);actualCapture.usage.observe(chunk,dev.pocketengine.runtime.usage.ProviderUsage.Stage.PARTIAL);JSONArray choices=chunk.optJSONArray("choices");
-                                for(int i=0;choices!=null&&i<choices.length();i++){JSONObject choice=choices.getJSONObject(i),delta=choice.optJSONObject("delta");if(delta!=null&&!delta.optString("content").isEmpty())textSeen[0]=true;if(!choice.isNull("finish_reason")&&choice.has("finish_reason"))actualCapture.usage.terminal(choice.getString("finish_reason"));}
-                            }else actualCapture.usage.completed();
-                            response.data(data);
-                        });
-                    }
-                }else{
-                    ByteArrayOutputStream bytes=new ByteArrayOutputStream();
-                    try(InputStream input=responseBody.byteStream()){
-                        byte[] buffer=new byte[8192];int count;
-                        while((count=input.read(buffer))!=-1){
-                            if(closed||client.isClosed()||System.nanoTime()>=expires)throw new RequestFailure(504,"反代请求已停止或超时");
-                            if(bytes.size()+count>MAX_BODY)throw new RequestFailure(502,"上游回复超过2MiB");
-                            bytes.write(buffer,0,count);
-                        }
-                    }
-                    JSONObject result=ChatCompletionStream.parseObject(StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes.toByteArray())).toString());
-                    // Validate before any buffered client delivery, while retaining usage/terminal
-                    // facts even when the provider's HTTP 200 body is not a completed decision.
-                    if(nativeRequest!=null)nativeRequest.validateResult(result,actualCapture.usage);
-                    else prepared.validateResult(result,actualCapture.usage);
-                    requireInferenceCurrent(config,endpoint);
-                    if(nativeRequest==null)prepared.revalidate();else nativeRequest.revalidate();
-                    response.json(200,ChatCompletionStream.scrub(result,config.apiKey).toString().getBytes(StandardCharsets.UTF_8));
-                }
-            }
-            capture.finish(dev.pocketengine.runtime.usage.InferenceReceipt.Outcome.COMPLETED);if(usage!=null)usage.completed();
-        }catch(Exception failure){
-            boolean cancelled=requestControl.isCancelled()||failure instanceof InterruptedException;
-            if(capture!=null){if(!failureRecorded)try{capture.failure(dev.pocketengine.runtime.usage.InferenceFailure.local(cancelled?dev.pocketengine.runtime.usage.InferenceFailure.Kind.CANCELLED:observedStatus>=200&&observedStatus<300?dev.pocketengine.runtime.usage.InferenceFailure.Kind.PROTOCOL:dev.pocketengine.runtime.usage.InferenceFailure.Kind.NETWORK,observedStatus>=200&&observedStatus<300&&!cancelled?observedStatus:0,System.currentTimeMillis()).withPartialText(textSeen[0]));}catch(Exception ignored){}capture.failed(cancelled?dev.pocketengine.runtime.usage.InferenceReceipt.Outcome.CANCELLED:dev.pocketengine.runtime.usage.InferenceReceipt.Outcome.FAILED,failure);}
-            if(usage!=null)try{usage.failed(failure);}catch(Exception storage){failure.addSuppressed(storage);}throw failure;
-        }finally{complete.set(true);watchdog.interrupt();upstream.remove(call);call.cancel();if(usage!=null)usage.close();}
+    private void gatewayRelay(Socket client,Response response,ModelConfig selected,dev.pocketengine.runtime.providers.GatewayRequest request)throws Exception {
+        final dev.pocketengine.core.RunControl control=new dev.pocketengine.core.RunControl();
+        final java.util.concurrent.atomic.AtomicBoolean complete=new java.util.concurrent.atomic.AtomicBoolean();
+        long expires=System.nanoTime()+selected.requestTimeoutSeconds*1_000_000_000L;client.setSoTimeout(250);apiControls.add(control);
+        Thread watchdog=new Thread(()->{try{InputStream input=client.getInputStream();while(!complete.get()&&!closed&&System.nanoTime()<expires){try{input.read();break;}catch(java.net.SocketTimeoutException waiting){}}
+            if(!complete.get()){control.cancel();closeClient(client);}}catch(Exception stopped){if(!complete.get()){control.cancel();closeClient(client);}}},"pocket-gateway-client-lifetime");watchdog.setDaemon(true);watchdog.start();
+        dev.pocketengine.runtime.usage.NativeInferenceWork work=null;
+        try{
+            requireInferenceCurrent(selected,request.endpoint);request.revalidate();
+            if(inferenceFactory!=null)work=inferenceFactory.open(selected,control,sessionId+":"+java.util.UUID.randomUUID());
+            var target=work==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():work.target();
+            // Admission and every physical receipt are still owned by the original native target.
+            var observed=dev.pocketengine.runtime.usage.InferenceCapture.observe(target,new dev.pocketengine.runtime.usage.InferenceCapture.Sink(){
+                public void started(dev.pocketengine.runtime.usage.InferenceReceipt receipt){requests.incrementAndGet();}
+                public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt){}
+            });
+            var admitted=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(observed,()->requireInferenceCurrent(selected,request.endpoint));
+            JSONObject result=dev.pocketengine.runtime.ModelGateway.completeNative(selected,request,control,admitted,
+                (callId,seq)->{if(closed||client.isClosed()||System.nanoTime()>=expires)throw new java.io.IOException("relay stopped");requireInferenceCurrent(selected,request.endpoint);},
+                (event,data)->{if(closed||client.isClosed()||System.nanoTime()>=expires)throw new java.io.IOException("relay stopped");requireInferenceCurrent(selected,request.endpoint);
+                    if(!response.started){response.nativeProtocol=request.ingressProtocol;response.startStream();}
+                    response.nativeFrame(event,data);
+                });
+            if(request.stream)response.nativeCompleted=true;else{requireInferenceCurrent(selected,request.endpoint);response.json(200,result.toString().getBytes(StandardCharsets.UTF_8));}
+            if(work!=null)work.completed();
+        }catch(dev.pocketengine.runtime.providers.ProtocolGateway.Failure failure){if(work!=null)work.failed(failure);throw new RequestFailure(failure.observation().httpStatus>=400&&failure.observation().httpStatus<=599?failure.observation().httpStatus:502,"上游请求失败；没有自动换号或重放");}
+        catch(dev.pocketengine.runtime.ModelGateway.GatewayException failure){if(work!=null)work.failed(failure);var observed=failure.observation();if(observed!=null&&observed.httpStatus>=400&&observed.httpStatus<=599)throw new RequestFailure(observed.httpStatus,"上游请求失败；没有自动换号或重放");throw failure;}
+        catch(Exception failure){if(work!=null)try{work.failed(failure);}catch(Exception storage){failure.addSuppressed(storage);}throw failure;}
+        finally{complete.set(true);watchdog.interrupt();apiControls.remove(control);control.cancel();if(work!=null)work.close();}
     }
     private static final class Response {
         private final Socket socket;
@@ -356,7 +256,8 @@ public final class LoopbackRelay implements AutoCloseable {
             OutputStream out=socket.getOutputStream();out.write(headers.getBytes(StandardCharsets.US_ASCII));out.flush();
         }
         void data(String json)throws Exception{OutputStream out=socket.getOutputStream();out.write(("data: "+json+"\n\n").getBytes(StandardCharsets.UTF_8));out.flush();}
-        void nativeEvent(String event,JSONObject data)throws Exception{OutputStream out=socket.getOutputStream();out.write(((event.isEmpty()?"":"event: "+event+"\n")+"data: "+data+"\n\n").getBytes(StandardCharsets.UTF_8));out.flush();}
+        void nativeFrame(String event,String data)throws Exception{OutputStream out=socket.getOutputStream();out.write(((event.isEmpty()?"":"event: "+event+"\n")+"data: "+data+"\n\n").getBytes(StandardCharsets.UTF_8));out.flush();}
+        void nativeEvent(String event,JSONObject data)throws Exception{nativeFrame(event,data.toString());}
         void namedEvent(JSONObject event)throws Exception{OutputStream out=socket.getOutputStream();out.write(("event: "+event.getString("type")+"\ndata: "+event+"\n\n").getBytes(StandardCharsets.UTF_8));out.flush();}
         void accountFailure(GatewayFailure failure)throws Exception {
             if(!started)json(LoopbackResponses.status(failure),LoopbackResponses.error(failure).toString().getBytes(StandardCharsets.UTF_8));
@@ -379,6 +280,6 @@ public final class LoopbackRelay implements AutoCloseable {
     private static byte[] error(String text)throws Exception{return new JSONObject().put("error",new JSONObject().put("message",text).put("type","pocketengine_proxy_error")).toString().getBytes(StandardCharsets.UTF_8);}
     private static void respond(Socket socket,int status,byte[] body)throws Exception {OutputStream out=socket.getOutputStream();String header="HTTP/1.1 "+status+" "+(status==200?"OK":"Error")+"\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: "+body.length+"\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n";out.write(header.getBytes(StandardCharsets.US_ASCII));out.write(body);out.flush();}
     private void closeClient(Socket client){clients.remove(client);try{client.close();}catch(Exception ignored){}}
-    @Override public void close(){closed=true;try{listener.close();}catch(Exception ignored){}for(Socket client:clients)closeClient(client);for(Call call:upstream)call.cancel();for(GatewayCall call:accountCalls)call.cancel();workers.shutdownNow();http.connectionPool().evictAll();http.dispatcher().executorService().shutdown();}
+    @Override public void close(){closed=true;try{listener.close();}catch(Exception ignored){}for(Socket client:clients)closeClient(client);for(dev.pocketengine.core.RunControl control:apiControls)control.cancel();for(GatewayCall call:accountCalls)call.cancel();workers.shutdownNow();}
     private static final class RequestFailure extends Exception {final int status;RequestFailure(int status,String text){super(text);this.status=status;}}
 }

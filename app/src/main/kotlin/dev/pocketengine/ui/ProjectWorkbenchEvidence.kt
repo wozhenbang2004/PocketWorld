@@ -95,6 +95,7 @@ internal fun NativeProjectExecutionLog(task: UiTask, onRefresh: () -> Unit, onFu
         TextButton(onClick = onRefresh) { Text("刷新状态") }
     }
     if (!expanded) return
+    NativeProjectTerminal(task)
     (if (all) operations else operations.takeLast(4)).asReversed().forEach { operation ->
         key(operation.optString("operationId")) {
             val receipt = ProjectWorkbenchGuard.executionReceipt(task, operation)

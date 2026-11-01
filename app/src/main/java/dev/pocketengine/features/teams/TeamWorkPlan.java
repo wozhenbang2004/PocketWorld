@@ -39,6 +39,6 @@ public final class TeamWorkPlan {
         if(round>1&&failed(state(member,round-1).optString("status")))return true;
         JSONArray dependencies=member.getJSONArray("dependsOn");for(int i=0;i<dependencies.length();i++)if(failed(state(find(members,dependencies.getString(i)),round).optString("status")))return true;return false;
     }
-    static boolean failed(String status){return status.matches("failed|unsupported|blocked_dependency");}
+    static boolean failed(String status){return status.matches("failed|unsupported|blocked_dependency|exited");}
     public static JSONObject find(JSONArray members,String id)throws Exception {for(int i=0;i<members.length();i++)if(id.equals(members.getJSONObject(i).getString("id")))return members.getJSONObject(i);throw new IllegalArgumentException("团队成员不存在");}
 }

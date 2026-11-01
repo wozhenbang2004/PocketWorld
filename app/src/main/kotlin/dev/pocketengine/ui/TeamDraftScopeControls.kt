@@ -55,7 +55,7 @@ import org.json.JSONObject
             TeamCaption("当前范围剩余 ${current.optInt("remainingOperations")} 次草稿操作；到期、撤销、改派或修订后须重审。回答问题不延长授权或预算。")
             TextButton(onClick = { work({ page.revoke(current.getString("grantId")) }) { current = it; review = null; notice = "已撤销后续草稿派发；已发生的操作保留，未知操作仍须核对。" } }, enabled = !busy) { Text("撤销隔离草稿授权") }
         }
-        OutlinedButton(onClick = { work({ page.review() }) { review = it; shown = it.view(); accepted = false } }, enabled = !busy) { Text("审阅本次隔离草稿范围与计划预算") }
+        OutlinedButton(onClick = { work({ page.review() }) { review = it; shown = it.view(); accepted = false } }, enabled = !busy) { Text("审阅本次隔离草稿范围（所选路径可新增、修改、删除；重命名须选新旧两路径）与计划预算") }
         review?.let { exact ->
             shown.optJSONArray("targets").objects().forEach { target ->
                 Text("${target.optString("memberName", target.optString("memberId"))} · 原分工修订 ${target.optInt("assignmentRevision")}", fontSize = 14.sp)

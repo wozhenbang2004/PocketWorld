@@ -7,10 +7,11 @@ import org.json.JSONObject;
 /** Bounded value operations for the ORIGINAL TaskStore document, never a store or dispatch authority.
  * TaskStore must load, change and persist these values in its existing SQLite transaction. */
 public final class TeamParentBudget {
-    public static final int MAX_TEXT_TOOL_OPERATIONS=32,MAX_PROJECT_TOOL_OPERATIONS=128,MAX_MODEL_REQUESTS=64;
+    public static final int MAX_TEXT_TOOL_OPERATIONS=32,MAX_PROJECT_TOOL_OPERATIONS=128,MAX_MODEL_REQUESTS=64,MAX_PROJECT_MODEL_REQUESTS=128;
     private TeamParentBudget(){}
     public static JSONObject create(String parentTask,String parentRun,int modelLimit,int operationLimit,JSONObject nativeSource)throws Exception {
-        if(modelLimit<0||modelLimit>64||operationLimit<0||operationLimit>32)throw new SecurityException("原父预算上限无效");
+        boolean project=nativeSource.optBoolean("nativeProjectWorkPlan");
+        if(modelLimit<0||modelLimit>(project?MAX_PROJECT_MODEL_REQUESTS:MAX_MODEL_REQUESTS)||operationLimit<0||operationLimit>(project?MAX_PROJECT_TOOL_OPERATIONS:MAX_TEXT_TOOL_OPERATIONS))throw new SecurityException("原父预算上限无效");
         return new JSONObject().put("parentTaskId",parentTask).put("parentRunId",parentRun)
                 .put("modelRequestLimit",modelLimit).put("toolOperationLimit",operationLimit).put("budgetSource",new JSONObject(nativeSource.toString())).put("reservations",new JSONArray())
                 .put("tokenLimitKnown",false).put("costLimitKnown",false);
@@ -18,16 +19,21 @@ public final class TeamParentBudget {
     public static JSONObject reserve(JSONObject pool,JSONObject binding,String phase,String dedup,int model,int tool)throws Exception {
         if(!phase.matches("member|review|integration|summary|parent_coordination")||dedup==null||dedup.isEmpty()||dedup.length()>240
                 ||model<0||tool<0||model+tool!=1)throw new SecurityException("父预算预留身份或单位无效");
+        String coordination=binding.optString("parentCoordinationScopeId");
+        if(!coordination.isEmpty()||binding.optString("teamRunId").isEmpty()){
+            JSONObject source=pool.getJSONObject("budgetSource");
+            if(!phase.equals("parent_coordination")||coordination.isEmpty()||!coordination.equals(pool.getString("parentRunId"))||!coordination.equals(source.optString("parentCoordinationScopeId"))||!source.optString("nativeProjectRoundReview").matches("[a-f0-9]{64}")||!source.optBoolean("includeParentInference")||!binding.optString("teamRunId").isEmpty()||!pool.getString("parentTaskId").equals(binding.optString("childTaskId"))||!nativeRoundRunBinding(pool,binding)||!"@parent".equals(binding.optString("memberId"))||!pool.getString("parentTaskId").equals(binding.optString("assignmentId")))throw new SecurityException("空teamRun仅限原native新round父协调范围，不是模型可声明的团队授权");
+        }
         JSONArray rows=pool.getJSONArray("reservations");
         for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!dedup.equals(row.getString("dedupKey"))&&!dedup.equals(row.optString("productionDedupKey")))continue;
-            for(String key:new String[]{"teamRunId","childTaskId","childRunId","memberId","assignmentId"})
+            for(String key:new String[]{"teamRunId","parentCoordinationScopeId","childTaskId","childRunId","childEpoch","memberId","assignmentId"})
                 if(!row.optString(key).equals(binding.optString(key)))throw new SecurityException("父预留去重键属于另一原执行");
             if(!phase.equals(row.getString("phase"))||model!=row.getInt("modelRequests")||tool!=row.getInt("toolOperations")
                     ||row.optString("state").equals("released_unstarted"))throw new SecurityException("原父预留不可重用");
             return row;
         }
         if(remaining(pool,"modelRequests")<model||remaining(pool,"toolOperations")<tool)throw new IllegalStateException("原父任务团队总预算已用尽，回答保留但未派发");
-        if(rows.length()>=(pool.getJSONObject("budgetSource").optBoolean("nativeProjectWorkPlan")?224:128))throw new IllegalStateException("原父预留记录已满，未丢弃未知或迟到用量");
+        if(rows.length()>=reservationCeiling(pool))throw new IllegalStateException("原父预留记录已满，未丢弃未知或迟到用量");
         JSONObject row=new JSONObject(binding.toString()).put("reservationId",UUID.randomUUID().toString())
                 .put("parentTaskId",pool.getString("parentTaskId")).put("parentRunId",pool.getString("parentRunId"))
                 .put("phase",phase).put("dedupKey",dedup).put("modelRequests",model).put("toolOperations",tool)
@@ -35,6 +41,13 @@ public final class TeamParentBudget {
                 .put("actualReceiptRefs",new JSONArray()).put("reservedAt",System.currentTimeMillis());
         rows.put(row);return row;
     }
+    private static boolean nativeRoundRunBinding(JSONObject pool,JSONObject binding)throws Exception {
+        if(pool.getString("parentRunId").equals(binding.optString("childRunId")))return true;String digest=binding.optString("nativeRoundContinuationDigest");if(!digest.matches("[a-f0-9]{64}"))return false;JSONArray approved=pool.getJSONObject("budgetSource").optJSONArray("ownerContinuations");for(int i=0;approved!=null&&i<approved.length();i++){JSONObject row=approved.getJSONObject(i);if(digest.equals(row.optString("reviewDigest"))&&pool.getString("parentTaskId").equals(row.optString("taskId"))&&pool.getString("parentRunId").equals(row.optString("scopeId"))&&binding.optString("childRunId").equals(row.optString("toRunId"))&&binding.optInt("childEpoch")==row.optInt("toEpoch"))return true;}return false;
+    }
+    /** Engineering ceilings only. Neither this marker nor a Reply grants additional units. */
+    public static int modelCeiling(JSONObject pool)throws Exception{return pool.getJSONObject("budgetSource").optBoolean("nativeProjectWorkPlan")?MAX_PROJECT_MODEL_REQUESTS:MAX_MODEL_REQUESTS;}
+    public static int toolCeiling(JSONObject pool)throws Exception{return pool.getJSONObject("budgetSource").optBoolean("nativeProjectWorkPlan")?MAX_PROJECT_TOOL_OPERATIONS:MAX_TEXT_TOOL_OPERATIONS;}
+    public static int reservationCeiling(JSONObject pool)throws Exception{return pool.getJSONObject("budgetSource").optBoolean("nativeProjectWorkPlan")?MAX_PROJECT_MODEL_REQUESTS+MAX_PROJECT_TOOL_OPERATIONS+32:128;}
     private static int used(JSONObject pool,String unit)throws Exception {
         int used=unit.equals("externalJobs")?pool.optInt("externalJobsBeforePool",0):0;JSONArray rows=pool.getJSONArray("reservations");for(int i=0;i<rows.length();i++){
             JSONObject row=rows.getJSONObject(i);if(!row.getString("state").equals("released_unstarted"))used+=row.optInt(unit,0);
@@ -47,7 +60,7 @@ public final class TeamParentBudget {
     }
     public static JSONObject snapshot(JSONObject pool)throws Exception {
         int models=remaining(pool,"modelRequests"),tools=remaining(pool,"toolOperations");JSONObject states=new JSONObject();JSONArray rows=pool.getJSONArray("reservations");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);String state=row.getString("state");JSONObject counts=states.optJSONObject(state);if(counts==null){counts=new JSONObject().put("modelRequests",0).put("toolOperations",0).put("externalJobs",0);states.put(state,counts);}for(String unit:new String[]{"modelRequests","toolOperations","externalJobs"})counts.put(unit,counts.getInt(unit)+row.optInt(unit));}
-        return new JSONObject().put("parentTaskId",pool.getString("parentTaskId")).put("parentRunId",pool.getString("parentRunId"))
+        JSONObject value=new JSONObject().put("parentTaskId",pool.getString("parentTaskId")).put("parentRunId",pool.getString("parentRunId"))
                 .put("modelRequestLimit",pool.getInt("modelRequestLimit")).put("toolOperationLimit",pool.getInt("toolOperationLimit"))
                 .put("modelRequestsReservedOrUsed",used(pool,"modelRequests")).put("toolOperationsReservedOrUsed",used(pool,"toolOperations"))
                 .put("remainingModelRequests",models).put("remainingToolOperations",tools).put("reservationStates",states).put("priorExternalJobsUnattributed",pool.optInt("externalJobsBeforePool",0)).put("budgetSource",new JSONObject(pool.getJSONObject("budgetSource").toString()))
@@ -56,6 +69,7 @@ public final class TeamParentBudget {
                 .put("externalJobUnit","one_native_owner_approved_remote_job_not_model_request").put("remoteInternalModelRequestsKnown",false)
                 .put("remoteInputTokens",JSONObject.NULL).put("remoteOutputTokens",JSONObject.NULL).put("remoteCost",JSONObject.NULL)
                 .put("tokenLimitKnown",false).put("costLimitKnown",false);
+        JSONObject prior=pool.getJSONObject("budgetSource").optJSONObject("priorProjectUsage");if(prior!=null){JSONObject cumulative=new JSONObject();for(String unit:new String[]{"modelRequests","toolOperations","externalJobs"})cumulative.put(unit+"ReservedOrUsed",Math.addExact(prior.getInt(unit+"ReservedOrUsed"),used(pool,unit)));value.put("priorProjectUsage",new JSONObject(prior.toString())).put("projectCumulativeUsage",cumulative).put("newExecutionBudgetNotProjectLifetimeZero",true);}return value;
     }
     /** Separate external job allowance, sourced only from the original native team plan. No local model/tool transfer. */
     public static void initializeExternalJobs(JSONObject pool,JSONObject nativePlan)throws Exception {
@@ -75,7 +89,7 @@ public final class TeamParentBudget {
             if(!reservationId.equals(row.getString("reservationId"))||!jobOperation.equals(row.getString("jobOperationId"))||!TeamWorkFiles.canonical(approvedScope).equals(TeamWorkFiles.canonical(row.getJSONObject("approvedScope"))))throw new SecurityException("原远端job scope不可替换");
             if(row.getString("state").equals("released_unstarted"))throw new SecurityException("已确定未启动释放的原job不能重放");return row;
         }
-        if(remaining(pool,"externalJobs")<1)throw new IllegalStateException("原父external job额度已用尽；未挪用本地模型或工具预算");if(rows.length()>=128)throw new IllegalStateException("原父预留记录已满，未丢弃未知用量");
+        if(remaining(pool,"externalJobs")<1)throw new IllegalStateException("原父external job额度已用尽；未挪用本地模型或工具预算");if(rows.length()>=reservationCeiling(pool))throw new IllegalStateException("原父预留记录已满，未丢弃未知用量");
         JSONObject row=new JSONObject(binding.toString()).put("reservationId",reservationId).put("parentTaskId",pool.getString("parentTaskId")).put("parentRunId",pool.getString("parentRunId"))
                 .put("phase","external_job").put("dedupKey",dedup).put("modelRequests",0).put("toolOperations",0).put("externalJobs",1).put("jobOperationId",jobOperation)
                 .put("approvedScope",new JSONObject(approvedScope.toString())).put("state","reserved").put("inferenceCallIds",new JSONArray()).put("operationIds",new JSONArray().put(preparedOperation)).put("actualReceiptRefs",new JSONArray()).put("reservedAt",System.currentTimeMillis())

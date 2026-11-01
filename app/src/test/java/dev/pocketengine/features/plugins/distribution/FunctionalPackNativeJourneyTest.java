@@ -92,4 +92,24 @@ public final class FunctionalPackNativeJourneyTest {
             try(var fresh=f.page()){byte[] unsupported=new JSONObject(new String(packageBytes("mcp",true),StandardCharsets.UTF_8)).put("id","mcp-kit").toString().getBytes(StandardCharsets.UTF_8);var blocked=fresh.inspect(new ByteArrayInputStream(unsupported));assertFalse(blocked.ready);assertThrows(SecurityException.class,()->fresh.submit(blocked,blocked.digest));}
         }
     }
+    @Test public void blockedMcpDoesNotBlockExplicitIndependentJsAndMissingDependencyCannotBeClaimed()throws Exception {
+        try(Fixture f=new Fixture();var page=f.page()){
+            var initial=page.inspect(new ByteArrayInputStream(packageBytes("independent",true)));assertFalse(initial.ready);assertEquals(0,f.plugins.snapshot().getJSONArray("plugins").length());
+            var invalid=page.selectComponents(initial,new JSONArray().put("method").put("transform"));assertFalse(invalid.ready);assertTrue(invalid.view().getJSONArray("selectionProblems").length()>0);assertThrows(SecurityException.class,()->page.submit(invalid,invalid.digest));
+            var selected=page.selectComponents(invalid,new JSONArray().put("transform"));assertTrue(selected.view().toString(2),selected.ready);assertFalse(selected.view().getBoolean("wholePackageSelected"));JSONObject result=page.submit(selected,selected.digest);
+            assertEquals("partial",result.getString("status"));assertTrue(result.getBoolean("selectedActionsCompleted"));assertFalse(result.getBoolean("wholePackageInstalled"));assertFalse(result.getBoolean("recipeContentsComplete"));assertEquals(2,result.getJSONArray("excludedComponents").length());assertEquals(1,f.tasks.get(result.getString("taskId"),false).getJSONArray("operations").length());assertEquals(0,f.plugins.snapshot().getJSONArray("plugins").length());assertEquals(0,f.skills.snapshot().getJSONArray("skills").length());assertEquals(1,f.js.snapshot().getJSONArray("plugins").length());assertFalse(f.js.snapshot().getJSONArray("plugins").getJSONObject(0).getBoolean("approved"));
+            JSONObject reconciled=page.reconcile("release-kit");assertTrue(reconciled.getBoolean("reconciled"));assertEquals("partial",reconciled.getString("state"));assertEquals(1,f.tasks.get(result.getString("taskId"),false).getJSONArray("operations").length());assertEquals(1,f.pack("release-kit").getJSONArray("components").length());
+        }
+    }
+    @Test public void explicitSubsetUpdatePreservesUnselectedSkillAndManualJsAndKeepsOriginalPermissions()throws Exception {
+        try(Fixture f=new Fixture()){
+            f.install(packageBytes("one",false));JSONObject oldSkill=f.skills.snapshot().getJSONArray("skills").getJSONObject(0);
+            JsPluginPackage manual=JsPluginPackage.author(new ByteArrayInputStream("// 手工变更不属于新包".getBytes(StandardCharsets.UTF_8)),"release-transform","手工变体","manual",new RunControl());var inspected=f.js.inspect(manual,new RunControl());String manualId=f.js.installReviewed(inspected,inspected.reviewDigest,new RunControl()).getJSONObject("plugin").getString("installationId");
+            try(var page=f.page()){
+                var full=page.inspect(new ByteArrayInputStream(packageBytes("two",false)));assertFalse(full.ready);var onlyData=page.selectComponents(full,new JSONArray().put("data"));assertTrue(onlyData.ready);JSONObject updated=page.submit(onlyData,onlyData.digest);assertEquals("partial",updated.getString("status"));assertEquals(1,f.tasks.get(updated.getString("taskId"),false).getJSONArray("operations").length());assertEquals(manualId,f.js.snapshot().getJSONArray("plugins").getJSONObject(0).getString("installationId"));assertEquals(oldSkill.getInt("revision"),f.skills.snapshot().getJSONArray("skills").getJSONObject(0).getInt("revision"));assertFalse(f.plugins.snapshot().getJSONArray("plugins").getJSONObject(0).getBoolean("enabled"));assertEquals(0,f.plugins.snapshot().getJSONArray("plugins").getJSONObject(0).getJSONArray("grants").length());
+                var remove=page.reviewRemove("release-kit");page.submit(remove,remove.digest);assertEquals(manualId,f.js.snapshot().getJSONArray("plugins").getJSONObject(0).getString("installationId"));assertEquals(0,f.skills.snapshot().getJSONArray("skills").length());assertEquals(0,f.plugins.snapshot().getJSONArray("plugins").length());
+            }
+        }
+    }
+
 }

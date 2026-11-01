@@ -1,0 +1,21 @@
+{
+  "approvalId": "62fc2557-7f32-46b2-ae3d-7b46253ecc0c",
+  "originalSqlArguments": {
+    "planRef": "638696a2-7262-4188-aef5-aecf2ccb4170",
+    "planDigest": "963ed4322fa847ef03559f4d75da9712a8230a9dd1da902cbf4a47747b0934bf",
+    "stepId": "command"
+  },
+  "dataOnlyNoAuthority": true,
+  "sourceCapture": "controlled integration fixture; original capture retained outside the source repository",
+  "sourceCaptureSha256": "96df21d99e7c18875bb34f0f904e3c2a7febc5cae2cd79687f3c300e9fc013ef",
+  "originalNativeCheckpointUtf8Bytes": 109667,
+  "serializedFixtureBytes": 109608,
+  "serializedFixtureSha256": "44876dee412ecc483e25867376c47263b406bd997209e9e222c7aa3bc58db25b",
+  "serialization": "Parsed captured native JSON reserialized as compact UTF8 test DATA; original capture preserved separately; not an exact original JSONStringer byte restoration",
+  "nativeTailIndexes": [
+    87,
+    88
+  ],
+  "runId": "aa67c6b0-33e5-4125-a6db-a0bb4156b975",
+  "epoch": 10
+}

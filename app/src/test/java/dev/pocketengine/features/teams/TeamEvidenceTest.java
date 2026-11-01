@@ -31,14 +31,14 @@ public class TeamEvidenceTest {
             if(messages.getJSONObject(messages.length()-1).optString("role").equals("tool"))return new JSONObject().put("content","依据 https://example.invalid/actual-fixture 的真实fixture分析");
             assertEquals(2,tools.length());assertEquals("evidence_read",tools.getJSONObject(0).getJSONObject("function").getString("name"));assertEquals("team_send_message",tools.getJSONObject(1).getJSONObject("function").getString("name"));return call("evidence_read");
         },event->{})){
-            String id=coordinator.start(team(),"比较证据",1,config(),operation,(task,run,member)->{assertEquals(operation,task);assertEquals(operation,run);identities.add(member);return port(reads);}).getString("id");JSONObject run=waitDone(coordinator,id);
+            String id=coordinator.start(team(),"比较证据",1,config(),operation,(nativeCall)->{JSONObject who=nativeCall.view();assertEquals(operation,who.getString("teamRunId"));identities.add(who.getString("memberId"));return port(reads);}).getString("id");JSONObject run=waitDone(coordinator,id);
             assertEquals("completed",run.getString("status"));assertEquals(2,reads.get());assertEquals(2,run.getInt("toolCallsUsed"));assertEquals(5,run.getInt("callsUsed"));assertEquals(2,identities.size());assertTrue(models.contains("research-model"));assertTrue(models.contains("review-model"));assertTrue(models.contains("default-model"));assertEquals(1,run.getJSONArray("members").getJSONObject(0).getJSONArray("evidence").length());assertFalse(run.toString().contains("fixture-secret"));assertFalse(run.toString().contains("must not persist"));
         }
     }
     @Test public void modelCannotInvokeToolsThatTheHostMarksAsSideEffecting()throws Exception {
         File state=new File(Files.createTempDirectory("pocket-team-write-denied").toFile(),"runs.json");AtomicInteger reads=new AtomicInteger();
         try(TeamCoordinator coordinator=new TeamCoordinator(state,(model,messages,tools,control)->call("unsafe_write"),event->{})){
-            String id=coordinator.start(team(),"研究",1,config(),UUID.randomUUID().toString(),(task,run,member)->port(reads)).getString("id");JSONObject run=waitDone(coordinator,id);assertEquals("failed",run.getString("status"));assertEquals(0,reads.get());assertEquals(0,run.getInt("toolCallsUsed"));
+            String id=coordinator.start(team(),"研究",1,config(),UUID.randomUUID().toString(),nativeCall->port(reads)).getString("id");JSONObject run=waitDone(coordinator,id);assertEquals("failed",run.getString("status"));assertEquals(0,reads.get());assertEquals(0,run.getInt("toolCallsUsed"));
         }
     }
 }

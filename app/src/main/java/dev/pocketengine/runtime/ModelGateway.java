@@ -11,6 +11,8 @@ import dev.pocketengine.features.proxy.providers.ChatGptProvider;
 import dev.pocketengine.runtime.providers.ProviderAdapters;
 import dev.pocketengine.runtime.providers.ApiTurnStream;
 import dev.pocketengine.runtime.models.ModelRequestPolicy;
+import dev.pocketengine.runtime.models.ModelRoutePlan;
+import dev.pocketengine.runtime.usage.LogicalInferenceAuthority;
 import dev.pocketengine.runtime.usage.InferenceCapture;
 import dev.pocketengine.runtime.usage.InferenceReceipt;
 import dev.pocketengine.runtime.usage.InferenceFailure;
@@ -46,6 +48,12 @@ public final class ModelGateway {
             .retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).cache(null).build();
 
     private ModelGateway() { }
+    @FunctionalInterface public interface ModelGroupAdmission {void check(ModelRoutePlan plan,String candidateId,ModelConfig candidate)throws Exception;}
+    private static volatile ModelGroupAdmission modelGroupAdmission;
+    /** Original native SettingsStore owner only; snapshots never freeze revocation. */
+    public static void installModelGroupAdmission(ModelGroupAdmission source){modelGroupAdmission=java.util.Objects.requireNonNull(source);}
+    private static void checkGroup(ModelRoutePlan plan,ModelRoutePlan.Candidate candidate)throws Exception {if(plan.groupRevision==0)return;ModelGroupAdmission source=modelGroupAdmission;if(source==null)throw new SecurityException("model_group_owner_unavailable");source.check(plan,candidate.candidateId(),candidate.config());if(source!=modelGroupAdmission)throw new SecurityException("model_group_owner_changed");}
+
 
     /** Trusted application-only seam. Never a feature command, model tool, or credential getter. */
     public interface AccountInferencePort {
@@ -139,15 +147,25 @@ public final class ModelGateway {
     }
     public static JSONObject complete(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,
                                       InferenceCapture.Target target)throws Exception{
-        validate(config);
-        InferenceCapture capture=new InferenceCapture(config,control,target);
-        try{
-            JSONObject result=config.usesAccount()?completeAccount(config,messages,tools,control,null,capture)
-                    :completeApi(config,messages,tools,control,null,capture);
-            control.check();capture.finish(InferenceReceipt.Outcome.COMPLETED);return result;
-        }catch(InterruptedException|java.util.concurrent.CancellationException stopped){
-            observeFailure(capture,stopped,false,true);capture.failed(InferenceReceipt.Outcome.CANCELLED,stopped);throw stopped;
-        }catch(Exception failure){observeFailure(capture,failure,false,false);capture.failed(InferenceReceipt.Outcome.FAILED,failure);throw failure;}
+        return completeWithAdmission(config,messages,tools,control,target,candidate->{});
+    }
+    /** Additional original-consumer budget, checked for every candidate and again before dispatch. */
+    public static JSONObject completeWithAdmission(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,CandidateAdmission originalBudget)throws Exception {
+        return executeLogical(config,messages,tools,control,target,"INTERNAL",null,(candidate,capture,commit)->{
+            JSONObject result=candidate.usesAccount()?completeAccount(candidate,messages,tools,control,null,capture):completeApi(candidate,messages,tools,control,null,capture);
+            commit.beforeFlush(capture.callId,1);return result;
+        },candidate->{validate(candidate);if(!candidate.usesAccount())ModelRequestPolicy.apply(candidate,messages,tools,ProviderAdapters.selected(candidate.provider).request(candidate,messages,tools));originalBudget.check(candidate);});
+    }
+    /** Resolve only the actual physical receipt against this native frozen plan, not a later default. */
+    public static ModelConfig actualConfigForReceipt(ModelConfig captured,InferenceReceipt receipt)throws Exception {
+        if(receipt==null||receipt.outcome!=InferenceReceipt.Outcome.COMPLETED)throw new SecurityException("original_complete_model_receipt_required");
+        JSONObject route=receipt.toJson().getJSONObject("route");java.util.List<ModelRoutePlan.Candidate> candidates=captured.routePlan==null?java.util.List.of(new ModelRoutePlan.Candidate("exact",captured,"")):captured.routePlan.candidates;
+        for(ModelRoutePlan.Candidate candidate:candidates){ModelConfig config=candidate.config();if(config==null||!candidate.exclusion().isEmpty()||!config.model.equals(route.optString("requestedModel"))||!(config.usesAccount()?"openai_responses":config.provider).equals(route.optString("protocol")))continue;
+            if(route.has("candidateId")&&!candidate.candidateId().equals(route.getString("candidateId")))continue;
+            if(config.usesAccount()){if(config.accountModel.accountId.equals(route.optString("accountId"))&&route.optLong("accountVersion")>=config.accountModel.accountVersion)return config.withAccountModel(config.accountModel.withVersion(route.getLong("accountVersion")));continue;}
+            var binding=config.capabilityBinding;if(binding==null){if(!route.has("connectionId"))return config;}else if(binding.connectionId().equals(route.optString("connectionId"))&&binding.credentialId().equals(route.optString("credentialId"))&&binding.credentialRevision()==route.optLong("credentialRevision")&&binding.installationId().equals(route.optString("installationId"))&&binding.installationRevision()==route.optLong("installationRevision"))return config;
+        }
+        throw new SecurityException("receipt_not_in_original_model_plan");
     }
 
     public enum StreamKind { STARTED, TEXT_DELTA, COMPLETED, FAILED, CANCELLED }
@@ -168,8 +186,8 @@ public final class ModelGateway {
 
     /**
      * Opt-in streaming of visible text; the return value alone contains completed validated tools.
-     * Old complete() keeps its JSON request contract. A stream request may receive one valid JSON
-     * response, but it is never retried, downgraded, switched to another account or another model.
+     * Old complete() keeps its JSON request contract. Each physical attempt is single-dispatch;
+     * native logical recovery is bounded and ends as soon as semantic output is committed.
      * Native account deltas share this presentation channel; only the verified terminal yields tools.
      */
     public static JSONObject completeStreaming(ModelConfig config,JSONArray messages,JSONArray tools,
@@ -178,26 +196,128 @@ public final class ModelGateway {
     }
     public static JSONObject completeStreaming(ModelConfig config,JSONArray messages,JSONArray tools,
                                                RunControl control,StreamSink sink,InferenceCapture.Target target)throws Exception {
-        validate(config);control.check();
-        InferenceCapture capture=new InferenceCapture(config,control,target);
-        StreamSession stream=new StreamSession(config,control,sink,capture.callId);
-        try{
-            stream.emit(StreamKind.STARTED,"","request_started",true);
-            JSONObject assistant=config.usesAccount()?completeAccount(config,messages,tools,control,stream,capture)
-                    :completeApi(config,messages,tools,control,stream,capture);
-            control.check();capture.finish(InferenceReceipt.Outcome.COMPLETED);stream.finish();return assistant;
-        }catch(InterruptedException stopped){
-            observeFailure(capture,stopped,stream.textReceived,true);capture.failed(InferenceReceipt.Outcome.CANCELLED,stopped);
-            stream.failed(StreamKind.CANCELLED,"request_cancelled");throw stopped;
-        }catch(java.util.concurrent.CancellationException stopped){
-            observeFailure(capture,stopped,stream.textReceived,true);capture.failed(InferenceReceipt.Outcome.CANCELLED,stopped);
-            stream.failed(StreamKind.CANCELLED,"request_cancelled");throw stopped;
-        }catch(Exception failure){
-            observeFailure(capture,failure,stream.textReceived,false);capture.failed(InferenceReceipt.Outcome.FAILED,failure);
-            stream.failed(StreamKind.FAILED,"stream_failed");
-            if(failure instanceof GatewayException||failure instanceof dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable)throw failure;
-            throw new GatewayException("模型流或显示回调未能完整结束；没有派发工具或自动重试。");
+        return completeStreaming(config,messages,tools,control,sink,target,null);
+    }
+    /** Original Runner presentation/currentness only. Gateway remains the sole retry owner. */
+    public interface RetryObserver {
+        void beforeWait(String logicalRequestId,String failedCallId,int retryNumber,long waitMillis)throws Exception;
+        void afterWait()throws Exception;
+    }
+    public static final class RequestRefreshRequired extends Exception {public RequestRefreshRequired(){super("original_request_context_changed");}}
+    public static JSONObject completeStreaming(ModelConfig config,JSONArray messages,JSONArray tools,
+            RunControl control,StreamSink sink,InferenceCapture.Target target,RetryObserver retryObserver)throws Exception {
+        InferenceCapture.requireOriginalContext(control,target);
+        try{return executeLogical(config,messages,tools,control,target,"INTERNAL",null,new PhysicalAttempt(){
+            private StreamSession stream;
+            public JSONObject run(ModelConfig candidate,InferenceCapture capture,SemanticCommit commit)throws Exception {
+                stream=new StreamSession(candidate,control,sink,capture.callId,commit);
+                stream.emit(StreamKind.STARTED,"","request_started",true);
+                return candidate.usesAccount()?completeAccount(candidate,messages,tools,control,stream,capture):completeApi(candidate,messages,tools,control,stream,capture);
+            }
+            public void afterPersist(InferenceCapture capture)throws Exception {stream.finish();}
+            public void rejected(String logical,ModelConfig candidate)throws Exception {stream=new StreamSession(candidate,control,sink,logical,(call,sequence)->{throw new SecurityException("rejected_request_cannot_flush");});stream.failed(StreamKind.FAILED,"candidate_admission_failed");}
+            public void failed(Exception failure){if(stream!=null)stream.failed(failure instanceof InterruptedException||failure instanceof java.util.concurrent.CancellationException?StreamKind.CANCELLED:StreamKind.FAILED,"stream_failed");}
+            public boolean receivedText(){return stream!=null&&stream.textReceived;}
+            public void beforeWait(String logical,String call,int retry,long delay)throws Exception {if(retryObserver!=null)retryObserver.beforeWait(logical,call,retry,delay);}
+            public void afterWait()throws Exception {if(retryObserver!=null)retryObserver.afterWait();}
+        });}catch(InterruptedException|java.util.concurrent.CancellationException stopped){throw stopped;}
+        catch(Exception failure){
+            if(failure instanceof GatewayException||failure instanceof RequestRefreshRequired||failure instanceof dev.pocketengine.core.RunJournal.NativeBudgetPaused||failure instanceof dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable)throw failure;
+            throw controlled(new GatewayException("模型流或显示回调未能完整结束；没有派发工具或自动重试。"),target.logical!=null);
         }
+    }
+
+    /** All protocol ingress joins the same native logical/physical pipeline. Never executes tools. */
+    public static JSONObject completeNative(ModelConfig config,dev.pocketengine.runtime.providers.GatewayRequest request,RunControl control,
+            InferenceCapture.Target target,dev.pocketengine.runtime.providers.ProtocolGateway.SemanticCommit externalCommit,
+            dev.pocketengine.runtime.providers.ProtocolGateway.WireSink sink)throws Exception {
+        if(config.usesAccount())throw new SecurityException("CHATGPT_PLAN_APP_ONLY");
+        if(config.routePlan!=null&&config.routePlan.groupRevision>0&&!"EXTERNAL_RELAY".equals(config.routePlan.audience))throw new SecurityException("model_group_external_audience_not_granted");
+        return executeLogical(config,request.messages,request.tools,control,target,request.ingressProtocol,request.requestDigest,(candidate,capture,commit)->{
+            var prepared=request.forCandidate(candidate.withRoutePlan(config.routePlan));
+            try{return dev.pocketengine.runtime.providers.ProtocolGateway.attempt(candidate,prepared,control,capture,(call,seq)->{commit.beforeFlush(call,seq);if(externalCommit!=null)externalCommit.beforeFlush(call,seq);},sink);}
+            catch(dev.pocketengine.runtime.providers.ProtocolGateway.Failure failure){throw new GatewayException(failure.getMessage(),failure.observation());}
+        },candidate->request.forCandidate(candidate.withRoutePlan(config.routePlan)).revalidate());
+    }
+
+    @FunctionalInterface public interface SemanticCommit {void beforeFlush(String callId,long sequence)throws Exception;}
+    @FunctionalInterface private interface PhysicalAttempt {
+        JSONObject run(ModelConfig candidate,InferenceCapture capture,SemanticCommit commit)throws Exception;
+        default void afterPersist(InferenceCapture capture)throws Exception { }
+        default void rejected(String logical,ModelConfig candidate)throws Exception { }
+        default void failed(Exception failure){ }
+        default boolean receivedText(){return false;}
+        default void beforeWait(String logical,String call,int retry,long delay)throws Exception { }
+        default void afterWait()throws Exception { }
+    }
+    @FunctionalInterface public interface CandidateAdmission {void check(ModelConfig candidate)throws Exception;}
+    /** The one retry owner. A physical HTTP implementation remains strictly single-dispatch. */
+    private static JSONObject executeLogical(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,String ingress,String nativeDigest,PhysicalAttempt physical)throws Exception {
+        return executeLogical(config,messages,tools,control,target,ingress,nativeDigest,physical,candidate->{
+            validate(candidate);
+            if(!candidate.usesAccount())ModelRequestPolicy.apply(candidate,messages,tools,ProviderAdapters.selected(candidate.provider).request(candidate,messages,tools));
+        });
+    }
+    private static JSONObject executeLogical(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,String ingress,String nativeDigest,PhysicalAttempt physical,CandidateAdmission preflight)throws Exception {
+        config=config.forPurpose(target.context.purpose.name());
+        control.check();LogicalInferenceAuthority authority=target.logical;
+        if(config.routePlan!=null&&authority==null)throw new SecurityException("模型组需要原TaskStore逻辑请求准入；没有调用未归因通路");
+        ModelRoutePlan plan=config.routePlan==null?new ModelRoutePlan(config.model,0,target.context.purpose.name(),target.context.purpose==InferenceReceipt.Purpose.RELAY?"EXTERNAL_RELAY":"APP_OWNER",java.util.List.of(new ModelRoutePlan.Candidate("exact",config,"")),authority==null?1:3,0):config.routePlan;
+        long deadline=System.currentTimeMillis()+config.requestTimeoutSeconds*1000L;JSONObject snapshot=plan.toJson();JSONArray rows=snapshot.getJSONArray("orderedCandidates");java.util.List<ModelRoutePlan.Candidate> eligible=new java.util.ArrayList<>();Exception rejection=null;
+        boolean opaque=false;for(int i=0;messages!=null&&i<messages.length();i++)if(messages.getJSONObject(i).optJSONObject("provider_data")!=null)opaque=true;
+        for(int i=0;i<plan.candidates.size();i++){
+            ModelRoutePlan.Candidate candidate=plan.candidates.get(i);if(candidate.config()==null||!candidate.exclusion().isEmpty())continue;
+            try{
+                if(candidate.config().usesAccount()&&(!"APP_OWNER".equals(plan.audience)||target.context.purpose==InferenceReceipt.Purpose.RELAY))throw new SecurityException("CHATGPT_PLAN_APP_ONLY");
+                if(opaque&&authority!=null)for(int n=0;n<messages.length();n++){JSONObject data=messages.getJSONObject(n).optJSONObject("provider_data");if(data!=null&&!(candidate.config().usesAccount()&&ModelConfig.ACCOUNT_PROVIDER.equals(data.optString("provider")))&&!authority.matchesHistoryOrigin(data.optString("originCallId"),candidate.config(),data))throw new SecurityException("opaque_history_origin_mismatch");}
+                checkGroup(plan,candidate);preflight.check(candidate.config());eligible.add(candidate);
+            }catch(Exception refused){if(refused instanceof InterruptedException)throw refused;rejection=refused;rows.getJSONObject(i).put("exclusion",refused instanceof ModelRequestPolicy.Rejected?((ModelRequestPolicy.Rejected)refused).code:refused instanceof SecurityException?"origin_or_audience_denied":"candidate_capability_unavailable");}
+        }
+        String logical=java.util.UUID.randomUUID().toString();int maximum=plan.maxAttempts;
+        if(authority!=null){String digest=nativeDigest==null?requestDigest(messages,tools):nativeDigest;JSONObject admitted=authority.begin(logical,digest,snapshot,deadline);deadline=admitted.getLong("deadlineAt");maximum=admitted.getJSONObject("control").getInt("maxAttempts");}
+        if(eligible.isEmpty()){
+            physical.rejected(logical,config);
+            if(authority!=null)authority.finish(logical,"FAILED","failed","none");if(rejection!=null)throw controlled(rejection,authority!=null);throw new GatewayException("模型组没有可用候选；请在模型页核对原连接和用途。没有回退到其他账号。");
+        }
+        int candidateIndex=0,switches=0;String retryReason="initial_ordered_candidate";long waited=0;boolean semantic=false;
+        try { for(int attempt=1;attempt<=maximum;attempt++){
+            control.check();if(System.currentTimeMillis()>=deadline){if(authority!=null)authority.finish(logical,"FAILED","unknown","none");throw controlled(localFailure("模型请求总期限已到，等待与重试没有重置期限。",InferenceFailure.Kind.TIMEOUT),authority!=null);}
+            ModelRoutePlan.Candidate chosen=eligible.get(candidateIndex);ModelConfig selected=chosen.config();checkGroup(plan,chosen);preflight.check(selected);
+            InferenceCapture capture=new InferenceCapture(selected,control,InferenceCapture.withAdmission(target,()->checkGroup(plan,chosen)));
+            if(authority!=null){capture.logical(logical,attempt,chosen.candidateId(),plan.requestedAlias,ingress,retryReason,deadline);authority.reserve(logical,capture.callId,attempt,chosen.candidateId(),retryReason);}
+            final boolean[] committed={false};SemanticCommit commit=(call,sequence)->{control.check();checkGroup(plan,chosen);if(!capture.callId.equals(call))throw new SecurityException("semantic_call_identity_changed");if(!committed[0]){if(authority!=null)authority.commit(logical,call,sequence);committed[0]=true;}};
+            try{
+                JSONObject result=physical.run(selected,capture,commit);control.check();commit.beforeFlush(capture.callId,1);
+                capture.returnedHistory(result);capture.finish(InferenceReceipt.Outcome.COMPLETED);physical.afterPersist(capture);
+                if(authority!=null){authority.attemptEnded(logical,capture.callId,capture.wasDispatched(),"complete");authority.finish(logical,"SUCCEEDED","complete","complete");JSONObject metadata=result.optJSONObject("provider_data");if(metadata!=null&&!selected.usesAccount())metadata.put("originCallId",capture.callId);}
+                return result;
+            }catch(Exception failure){
+                semantic|=committed[0];boolean cancelled=failure instanceof InterruptedException||failure instanceof java.util.concurrent.CancellationException||control.isCancelled();
+                observeFailure(capture,failure,physical.receivedText(),cancelled);capture.failed(cancelled?InferenceReceipt.Outcome.CANCELLED:InferenceReceipt.Outcome.FAILED,failure);physical.failed(failure);
+                if(authority!=null)try{authority.attemptEnded(logical,capture.callId,capture.wasDispatched(),cancelled?"cancelled":semantic?"partial":"failed");}catch(Exception storage){failure.addSuppressed(storage);throw controlled(failure,true);}
+                InferenceFailure facts=failure instanceof GatewayException e?e.observation():null;
+                boolean retry=capture.terminalPersisted()&&!cancelled&&!semantic&&!opaque&&!selected.usesAccount()&&capture.wasDispatched()&&attempt<maximum&&retryableLogical(facts);
+                long delay=500L*attempt;
+                if(retry&&facts!=null){JSONObject after=facts.retry();if("INVALID".equals(after.optString("status")))retry=false;else if("VALID".equals(after.optString("status")))delay=Math.max(delay,after.getLong("estimatedNotBefore")-System.currentTimeMillis());}
+                if(delay>30_000-waited||delay>=deadline-System.currentTimeMillis())retry=false;
+                if(retry&&authority!=null&&!authority.reserveRetry(logical,capture.callId,delay))retry=false;
+                if(!retry){if(authority!=null)authority.finish(logical,cancelled?"CANCELLED":semantic?"PARTIAL":capture.wasDispatched()&&facts!=null&&(facts.kind==InferenceFailure.Kind.NETWORK||facts.kind==InferenceFailure.Kind.TIMEOUT)?"UNKNOWN":"FAILED",semantic||capture.wasDispatched()&&facts!=null&&(facts.kind==InferenceFailure.Kind.NETWORK||facts.kind==InferenceFailure.Kind.TIMEOUT)?"unknown":"failed",semantic?"partial":"none");if(semantic&&facts!=null&&facts.kind==InferenceFailure.Kind.INCOMPLETE_STREAM)failure=new GatewayException("本次输出已提交，但模型流在终态前中断；没有自动重发或切换模型。请在原任务核对片段并明确继续，本次未派发工具。",facts);throw controlled(failure,authority!=null);}
+                // Explicit transient 429 never changes RouteKey. Unknown 429 is not retryable.
+                if(facts.httpStatus!=429&&switches<plan.maxRouteSwitches&&candidateIndex+1<eligible.size()){candidateIndex++;switches++;retryReason="transient_failure_next_candidate";}else retryReason="transient_failure_same_route";
+                physical.beforeWait(logical,capture.callId,attempt,delay);waited+=delay;control.sleep(delay);control.check();physical.afterWait();
+            }
+        }
+        throw new IllegalStateException("logical_attempt_loop_exhausted");
+        }catch(Exception stopped){
+            if(authority!=null)try{authority.finish(logical,stopped instanceof InterruptedException||control.isCancelled()?"CANCELLED":semantic?"PARTIAL":"UNKNOWN","unknown",semantic?"partial":"none");}catch(Exception storage){stopped.addSuppressed(storage);}
+            throw controlled(stopped,authority!=null);
+        }
+    }
+    private static boolean retryableLogical(InferenceFailure f){return f!=null&&f.httpStatus!=401&&f.httpStatus!=403&&f.httpStatus!=402&&(f.kind==InferenceFailure.Kind.RATE_LIMIT||f.kind==InferenceFailure.Kind.NETWORK||f.kind==InferenceFailure.Kind.TIMEOUT||f.kind==InferenceFailure.Kind.INCOMPLETE_STREAM||f.kind==InferenceFailure.Kind.HTTP&&java.util.Set.of(500,502,503,504).contains(f.httpStatus));}
+    private static String requestDigest(JSONArray messages,JSONArray tools)throws Exception {byte[] bytes=java.security.MessageDigest.getInstance("SHA-256").digest(new JSONObject().put("messages",messages==null?new JSONArray():messages).put("tools",tools==null?new JSONArray():tools).toString().getBytes(StandardCharsets.UTF_8));StringBuilder out=new StringBuilder();for(byte b:bytes)out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
+    private static Exception controlled(Exception failure,boolean controlled)throws Exception {
+        if(failure instanceof ModelRequestPolicy.Rejected)failure=new GatewayException(failure.getMessage(),InferenceFailure.local(InferenceFailure.Kind.LOCAL_REFUSAL,System.currentTimeMillis()));
+        if(controlled&&failure instanceof GatewayException gateway)gateway.logicalControlled=true;return failure;
     }
 
     private static JSONObject completeApi(ModelConfig config,JSONArray messages,JSONArray tools,
@@ -215,8 +335,8 @@ public final class ModelGateway {
         connection.setRequestMethod("POST");
         connection.setDoOutput(true);
         connection.setInstanceFollowRedirects(false); // Never forward credentials to a redirect target.
-        connection.setConnectTimeout(Math.min(15_000, config.requestTimeoutSeconds * 1000));
-        connection.setReadTimeout(config.requestTimeoutSeconds * 1000);
+        connection.setConnectTimeout((int)Math.min(15_000,capture.remainingMillis(config)));
+        connection.setReadTimeout((int)capture.remainingMillis(config));
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         connection.setRequestProperty("Accept", "application/json");
         for(java.util.Map.Entry<String,String> header:provider.headers(config).entrySet())connection.setRequestProperty(header.getKey(),header.getValue());
@@ -227,7 +347,7 @@ public final class ModelGateway {
         CountDownLatch cancellationWake=new CountDownLatch(1);
         Runnable disconnect = cancellationWake::countDown;
         control.onCancel(disconnect);
-        long deadline = System.nanoTime() + config.requestTimeoutSeconds * 1_000_000_000L;
+        long deadline = System.nanoTime() + capture.remainingMillis(config) * 1_000_000L;
         Thread caller = Thread.currentThread();
         Thread cancellation = new Thread(() -> {
             try {
@@ -308,7 +428,7 @@ public final class ModelGateway {
     private static JSONObject completeStreamingHttp(ModelConfig config,ProviderAdapter provider,URL endpoint,
                                                      byte[] payload,JSONArray tools,RunControl control,StreamSession stream,InferenceCapture capture)throws Exception {
         AtomicBoolean sent=new AtomicBoolean();
-        OkHttpClient client=STREAM_HTTP.newBuilder().callTimeout(config.requestTimeoutSeconds,TimeUnit.SECONDS)
+        OkHttpClient client=STREAM_HTTP.newBuilder().callTimeout(capture.remainingMillis(config),TimeUnit.MILLISECONDS)
                 .connectTimeout(Math.min(15,config.requestTimeoutSeconds),TimeUnit.SECONDS)
                 .readTimeout(config.requestTimeoutSeconds,TimeUnit.SECONDS).writeTimeout(config.requestTimeoutSeconds,TimeUnit.SECONDS)
                 // OkHttp can follow some retryable HTTP statuses even with connection retry off.
@@ -319,7 +439,7 @@ public final class ModelGateway {
                 .header("Accept","text/event-stream, application/json");
         for(java.util.Map.Entry<String,String> header:provider.headers(config).entrySet())request.header(header.getKey(),header.getValue());
         Call call=client.newCall(request.build());Runnable cancel=call::cancel;control.onCancel(cancel);
-        long deadline=System.nanoTime()+config.requestTimeoutSeconds*1_000_000_000L;
+        long deadline=System.nanoTime()+capture.remainingMillis(config)*1_000_000L;
         try{
             control.check();
             capture.dispatch();control.check();ModelRequestPolicy.resolve(config);
@@ -340,7 +460,10 @@ public final class ModelGateway {
                         assistant=ApiTurnStream.completeJson(config.provider,provider,body,tools,stream::text,capture.usage);
                     }
                 }catch(GatewayException known){
-                    if(known.failure!=null)throw known;
+                    if(known.failure!=null){
+                        if(known.failure.kind==InferenceFailure.Kind.INCOMPLETE_STREAM&&known.failure.httpStatus==0)throw new GatewayException(known.getMessage(),InferenceFailure.local(InferenceFailure.Kind.INCOMPLETE_STREAM,response.code(),known.failure.observedAt).withPartialText(known.failure.partialTextReceived));
+                        throw known;
+                    }
                     throw new GatewayException(known.getMessage(),InferenceFailure.local(InferenceFailure.Kind.PROTOCOL,response.code(),System.currentTimeMillis()));
                 }
                 catch(InterruptedException stopped){throw stopped;}
@@ -366,11 +489,13 @@ public final class ModelGateway {
         final String requestId;
         final long pauseRevision;
         final String key,mask;
+        final SemanticCommit commit;
         final StringBuilder pending=new StringBuilder();
         long sequence;
         int visibleChars;
         boolean presentationClosed,textReceived;
-        StreamSession(ModelConfig config,RunControl control,StreamSink sink,String requestId)throws GatewayException {
+        StreamSession(ModelConfig config,RunControl control,StreamSink sink,String requestId,SemanticCommit commit)throws GatewayException {
+            this.commit=commit;
             this.config=config;this.control=control;this.sink=sink;this.requestId=requestId;pauseRevision=control.pauseRevision();key=config.apiKey;
             if(key.length()>16384)throw new GatewayException("API凭据过长，未发送流式请求，请检查模型设置。");
             String chosen="[密钥已隐藏]";if(!key.isEmpty()&&chosen.contains(key))chosen="●";if(chosen.equals(key))chosen="○";mask=chosen;
@@ -411,6 +536,7 @@ public final class ModelGateway {
                 return;
             }
             if(kind==StreamKind.COMPLETED||kind==StreamKind.FAILED||kind==StreamKind.CANCELLED)presentationClosed=true;
+            if(kind==StreamKind.TEXT_DELTA||kind==StreamKind.COMPLETED)commit.beforeFlush(requestId,sequence+1);
             sink.event(new StreamEvent(kind,requestId,++sequence,config.provider,pauseRevision,text,code));
         }
         private static void checkVisibleUnicode(String value)throws GatewayException {
@@ -425,7 +551,7 @@ public final class ModelGateway {
     private static JSONObject completeAccount(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,StreamSession stream,InferenceCapture capture)throws Exception {
         control.check();AccountInferencePort port=accountInference;
         if(port==null)throw new GatewayException("账号推理宿主已关闭，请重新打开应用。");
-        try(GatewayCall operation=new GatewayCall(config.requestTimeoutSeconds*1000L)){
+        try(GatewayCall operation=new GatewayCall(capture.remainingMillis(config))){
             Runnable cancel=operation::cancel;control.onCancel(cancel);
             // The account version callback keeps its stable checked GatewayFailure protocol.
             // Only this invocation's exact native source refusal may cross back to the Runner.
@@ -549,22 +675,24 @@ public final class ModelGateway {
     }
 
     private static GatewayException httpFailure(ModelConfig captured,int status,java.util.List<String> retryAfter,java.util.List<String> date,InputStream errorBody)throws Exception {
-        if((status==400||status==413)&&contextLimitCode(errorBody))return localFailure("模型明确报告上下文超限；尚未派发工具。",InferenceFailure.Kind.CONTEXT_LIMIT,status);
-        return new GatewayException(httpMessage(status),InferenceFailure.http(status,withoutCapturedSecret(retryAfter,captured.apiKey),withoutCapturedSecret(date,captured.apiKey),System.currentTimeMillis()));
+        String bounded=boundedError(errorBody);
+        if((status==400||status==413)&&contextLimitCode(bounded))return localFailure("模型明确报告上下文超限；尚未派发工具。",InferenceFailure.Kind.CONTEXT_LIMIT,status);
+        return new GatewayException(httpMessage(status),InferenceFailure.classifiedHttp(status,withoutCapturedSecret(retryAfter,captured.apiKey),withoutCapturedSecret(date,captured.apiKey),System.currentTimeMillis(),bounded));
     }
     /** Only exact protocol error codes authorize one compaction; never match arbitrary provider prose. */
-    private static boolean contextLimitCode(InputStream input){
-        if(input==null)return false;
+    private static boolean contextLimitCode(InputStream input){return contextLimitCode(boundedError(input));}
+    private static boolean contextLimitCode(String text){try{JSONObject error=new JSONObject(text).optJSONObject("error");return error!=null&&java.util.Set.of("context_length_exceeded","context_window_exceeded","prompt_too_long").contains(error.optString("code"));}catch(Exception unavailable){return false;}}
+    private static String boundedError(InputStream input){
+        if(input==null)return "";
         try(InputStream body=input){
             // readNBytes is Android API 33; retain minSdk 30 using the same hard byte bound.
             byte[] bytes=new byte[16_385];int length=0;
-            while(length<bytes.length){int read=body.read(bytes,length,bytes.length-length);if(read<0)break;if(read==0)return false;length+=read;}
-            if(length>16_384)return false;
+            while(length<bytes.length){int read=body.read(bytes,length,bytes.length-length);if(read<0)break;if(read==0)return "";length+=read;}
+            if(length>16_384)return "";
             String text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                     .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes,0,length)).toString();
-            JSONObject error=new JSONObject(text).optJSONObject("error");
-            return error!=null&&java.util.Set.of("context_length_exceeded","context_window_exceeded","prompt_too_long").contains(error.optString("code"));
-        }catch(Exception unavailable){return false;}
+            return text;
+        }catch(Exception unavailable){return "";}
     }
     private static java.util.List<String> withoutCapturedSecret(java.util.List<String> values,String secret) {
         if(values!=null&&secret!=null&&!secret.isEmpty())for(String value:values)if(value!=null&&value.contains(secret))return java.util.List.of("invalid_header");
@@ -582,7 +710,7 @@ public final class ModelGateway {
     }
     private static void observeFailure(InferenceCapture capture,Exception original,boolean partialText,boolean cancelled) {
         try {
-            InferenceFailure failure=original instanceof GatewayException nativeError?nativeError.failure:null;
+            InferenceFailure failure=original instanceof GatewayException nativeError?nativeError.failure:capture.failureObservation();
             if(failure==null)failure=InferenceFailure.local(cancelled?InferenceFailure.Kind.CANCELLED:InferenceFailure.Kind.UNKNOWN,System.currentTimeMillis());
             capture.failure(failure.withPartialText(partialText));
         } catch(Exception malformed){original.addSuppressed(malformed);}
@@ -592,6 +720,8 @@ public final class ModelGateway {
         public InferenceFailure observation(){return failure;}
         public static GatewayException incompleteStream()throws Exception{return new GatewayException("模型流在终态前中断；本次没有派发工具。",InferenceFailure.local(InferenceFailure.Kind.INCOMPLETE_STREAM,System.currentTimeMillis()));}
         private final InferenceFailure failure;
+        private boolean logicalControlled;
+        public boolean logicalControlled(){return logicalControlled;}
         public GatewayException(String message) { this(message,null); }
         private GatewayException(String message,InferenceFailure failure){super(message);this.failure=failure;}
     }

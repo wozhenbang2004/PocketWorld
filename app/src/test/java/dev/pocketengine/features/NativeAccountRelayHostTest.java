@@ -19,7 +19,7 @@ public final class NativeAccountRelayHostTest {
         try(FeatureHost host=new FeatureHost(event->{})){
             TaskStore tasks=new TaskStore(app);NativeOwnerWorkflows flows=new NativeOwnerWorkflows(host,context,tasks,new MemorySourceBridge(host,tasks));context.settings.selectAccountModel(ref());
             try(ProxyModule proxy=new ProxyModule(context,flows.accountRelayRoute())){
-                JSONObject snapshot=proxy.snapshot();assertFalse(snapshot.getBoolean("accountRouteAvailable"));assertFalse(snapshot.getBoolean("externalRelayAllowed"));assertFalse(snapshot.getBoolean("running"));assertFalse(snapshot.getBoolean("phoneExecution"));assertEquals("openai_responses",snapshot.getString("protocol"));assertEquals(0,snapshot.getJSONArray("endpoints").length());
+                JSONObject snapshot=proxy.snapshot();assertFalse(snapshot.getBoolean("accountRouteAvailable"));assertFalse(snapshot.getBoolean("externalRelayAllowed"));assertFalse(snapshot.getBoolean("running"));assertFalse(snapshot.getBoolean("phoneExecution"));assertEquals("unavailable",snapshot.getString("protocol"));assertEquals(0,snapshot.getJSONArray("endpoints").length());
                 assertEquals("CHATGPT_PLAN_APP_ONLY",assertThrows(dev.pocketengine.runtime.models.InferenceAudiencePolicy.Rejected.class,()->proxy.handle("start",new JSONObject())).code);assertFalse(proxy.snapshot().getBoolean("running"));assertFalse(context.secrets.contains("proxy.bearer"));
             }
         }

@@ -15,7 +15,7 @@ import org.json.JSONObject;
 
 /** Native content-free failure observation; not a retry instruction, quota, health or charge proof. */
 public final class InferenceFailure {
-    public enum Kind { HTTP, NETWORK, TIMEOUT, INCOMPLETE_STREAM, CONTEXT_LIMIT, PROTOCOL, LOCAL_REFUSAL, ACCOUNT_GATE, CANCELLED, UNKNOWN }
+    public enum Kind { HTTP, RATE_LIMIT, QUOTA_EXHAUSTED, POLICY_REFUSAL, NETWORK, TIMEOUT, INCOMPLETE_STREAM, CONTEXT_LIMIT, PROTOCOL, LOCAL_REFUSAL, ACCOUNT_GATE, CANCELLED, UNKNOWN }
     public enum RetryStatus { MISSING, VALID, INVALID }
     public enum RetryBasis { NONE, DELTA_SECONDS_LOCAL_RECEIPT, RESPONSE_DATE_ESTIMATE, LOCAL_CLOCK_ESTIMATE, NATIVE_ACCOUNT_GATE, INVALID_OR_AMBIGUOUS }
     public static final long MAX_WAIT_MILLIS=31_536_000_000L;
@@ -36,9 +36,21 @@ public final class InferenceFailure {
         if(status<100||status>599||status>=200&&status<300)throw new IllegalArgumentException("not_http_failure");
         return new InferenceFailure(Kind.HTTP,status,"",receivedAt,false,retryAfter(retryAfter,date,receivedAt));
     }
+    /** Exact machine-code classification only. Provider prose/body is never retained in a receipt. */
+    public static InferenceFailure classifiedHttp(int status,List<String> retryAfter,List<String> date,long receivedAt,String body)throws Exception {
+        InferenceFailure base=http(status,retryAfter,date,receivedAt);Kind kind=Kind.HTTP;
+        if(body!=null&&body.length()<=16384)try{JSONObject error=new JSONObject(body).optJSONObject("error");if(error!=null){String code=error.optString("code"),type=error.optString("type");
+            Set<String> quota=Set.of("insufficient_quota","quota_exceeded","billing_hard_limit_reached"),policy=Set.of("content_policy_violation","policy_violation","safety_policy_violation");
+            if(quota.contains(code)||quota.contains(type))kind=Kind.QUOTA_EXHAUSTED;
+            else if(policy.contains(code)||policy.contains(type))kind=Kind.POLICY_REFUSAL;
+            else if(status==429&&(Set.of("rate_limit_exceeded","rate_limit_error").contains(code)||Set.of("rate_limit_exceeded","rate_limit_error").contains(type)))kind=Kind.RATE_LIMIT;
+        }}catch(Exception malformed){/* Unclassified is not transient-rate-limit evidence. */}
+        return new InferenceFailure(kind,status,"",receivedAt,false,base.retry());
+    }
+    private static boolean httpKind(Kind kind){return kind==Kind.HTTP||kind==Kind.RATE_LIMIT||kind==Kind.QUOTA_EXHAUSTED||kind==Kind.POLICY_REFUSAL;}
     public static InferenceFailure local(Kind kind,long at)throws Exception { return local(kind,0,at); }
     public static InferenceFailure local(Kind kind,int observedHttpStatus,long at)throws Exception {
-        if(kind==Kind.HTTP||kind==Kind.ACCOUNT_GATE||observedHttpStatus!=0&&kind!=Kind.PROTOCOL&&kind!=Kind.NETWORK&&kind!=Kind.TIMEOUT&&kind!=Kind.INCOMPLETE_STREAM&&kind!=Kind.CONTEXT_LIMIT)throw new IllegalArgumentException("native_failure_source_required");
+        if(httpKind(kind)||kind==Kind.ACCOUNT_GATE||observedHttpStatus!=0&&kind!=Kind.PROTOCOL&&kind!=Kind.NETWORK&&kind!=Kind.TIMEOUT&&kind!=Kind.INCOMPLETE_STREAM&&kind!=Kind.CONTEXT_LIMIT)throw new IllegalArgumentException("native_failure_source_required");
         return new InferenceFailure(kind,observedHttpStatus,"",at,false,emptyRetry(RetryStatus.MISSING,RetryBasis.NONE));
     }
     /** Stable original AccountGateway evidence only; no provider body/code guessing or state mutation. */
@@ -64,9 +76,10 @@ public final class InferenceFailure {
         if(value==null||!keys(value).equals(KEYS)||!"pocketworld.inference-failure.v1".equals(value.getString("format")))throw new IllegalArgumentException("invalid_failure_receipt");
         for(String key:new String[]{"automaticRetry","healthVerified","providerProcessingKnown","chargeKnown"})if(!Boolean.FALSE.equals(value.get(key)))throw new IllegalArgumentException("failure_is_not_authority");
         Kind kind=Kind.valueOf(value.getString("kind"));long at=integer(value.get("observedAt"),1,Long.MAX_VALUE);int status=value.isNull("httpStatus")?0:(int)integer(value.get("httpStatus"),100,599);
-        if(kind==Kind.HTTP&&(status<100||status>=200&&status<300)||kind!=Kind.HTTP&&kind!=Kind.ACCOUNT_GATE&&kind!=Kind.PROTOCOL&&kind!=Kind.NETWORK&&kind!=Kind.TIMEOUT&&kind!=Kind.INCOMPLETE_STREAM&&kind!=Kind.CONTEXT_LIMIT&&status!=0)throw new IllegalArgumentException("invalid_failure_http_status");
+        if(httpKind(kind)&&(status<100||status>=200&&status<300)||!httpKind(kind)&&kind!=Kind.ACCOUNT_GATE&&kind!=Kind.PROTOCOL&&kind!=Kind.NETWORK&&kind!=Kind.TIMEOUT&&kind!=Kind.INCOMPLETE_STREAM&&kind!=Kind.CONTEXT_LIMIT&&status!=0)throw new IllegalArgumentException("invalid_failure_http_status");
         Object partial=value.get("partialTextReceived");if(!(partial instanceof Boolean))throw new IllegalArgumentException("invalid_failure_partial_flag");
         String code=value.isNull("nativeCode")?"":value.getString("nativeCode");if(!code.isEmpty()&&(kind!=Kind.ACCOUNT_GATE||!NATIVE_CODES.contains(code)))throw new IllegalArgumentException("invalid_native_failure_code");
+        if(kind==Kind.RATE_LIMIT&&status!=429)throw new IllegalArgumentException("rate_limit_requires_observed_429");
         JSONObject retry=checkedRetry(value.getJSONObject("retry"),at,kind);
         return new InferenceFailure(kind,status,code,at,(Boolean)partial,retry);
     }
@@ -76,7 +89,7 @@ public final class InferenceFailure {
         Long until=optional(value,"estimatedNotBefore"),delay=value.isNull("delaySeconds")?null:integer(value.get("delaySeconds"),0,MAX_WAIT_MILLIS/1000),reported=optional(value,"reportedDateAt"),response=optional(value,"responseDateAt");
         if(status==RetryStatus.VALID) {
             if(until==null||until<at||until-at>MAX_WAIT_MILLIS||basis==RetryBasis.NONE||basis==RetryBasis.INVALID_OR_AMBIGUOUS)throw new IllegalArgumentException("invalid_retry_range");
-            if(basis==RetryBasis.NATIVE_ACCOUNT_GATE&&kind!=Kind.ACCOUNT_GATE||basis!=RetryBasis.NATIVE_ACCOUNT_GATE&&kind!=Kind.HTTP)throw new IllegalArgumentException("invalid_retry_source");
+            if(basis==RetryBasis.NATIVE_ACCOUNT_GATE&&kind!=Kind.ACCOUNT_GATE||basis!=RetryBasis.NATIVE_ACCOUNT_GATE&&!httpKind(kind))throw new IllegalArgumentException("invalid_retry_source");
             boolean consistent=switch(basis) {
                 case DELTA_SECONDS_LOCAL_RECEIPT -> delay!=null&&reported==null&&response==null&&until-at==delay*1000;
                 case RESPONSE_DATE_ESTIMATE -> reported!=null&&response!=null&&delay==null&&reported>=response&&until-at==reported-response;

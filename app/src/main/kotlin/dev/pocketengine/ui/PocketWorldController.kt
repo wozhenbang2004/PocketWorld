@@ -26,6 +26,10 @@ import org.json.JSONObject
 internal class PocketWorldController(private val activity: ComposeActivity, private val app: EngineApplication) {
     var state by mutableStateOf(PocketUiState())
         private set
+    internal var remoteAttentionNotice by mutableStateOf<JSONObject?>(null)
+        private set
+    internal fun showRemoteAttention(locator: JSONObject) { remoteAttentionNotice=JSONObject(locator.toString()); if(locator.optJSONObject("original")?.optString("fingerprint")!=locator.optJSONObject("current")?.optString("fingerprint"))state=state.copy(notice="原通知对应旧状态；已打开原任务，问题和审批将重新查询，不响应旧请求。"); focusTask(locator.getString("taskId")) }
+    internal fun consumeRemoteAttention(taskId: String) { if(remoteAttentionNotice?.optString("taskId")==taskId)remoteAttentionNotice=null }
     private val io = Executors.newSingleThreadExecutor()
     internal val projectWorkbench: ProjectWorkbenchSession by lazy {
         androidx.lifecycle.ViewModelProvider(activity, object : androidx.lifecycle.ViewModelProvider.Factory {
@@ -47,6 +51,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         selectProject(checkout.getString("projectId"))
         developmentCheckoutId = checkout.getString("id"); developmentNavigationRevision++
     }
+    internal val ownerArchives = OwnerBackupCoordinator(activity, app, io, main, ::privateWorkspaceView, { checkout ->
+        closeProjectPreview(); closeProjectLivePreview()
+        projectWorkbench.selectCheckout(checkout.getString("projectId"), checkout.getString("id"), replace = true)
+        projectWorkbench.selectView(checkout.getString("projectId"), 1)
+        selectProject(checkout.getString("projectId")); developmentCheckoutId = checkout.getString("id"); developmentNavigationRevision++
+    }, { file -> attachmentOutcomes.openFile(file) })
+    internal val projectStorage = ProjectStorageCoordinator(app, io, main, ::privateWorkspaceView) { id -> ownerArchives.openCache(id) }
+    internal val projectGit = ProjectGitCoordinator(app, io, main, ::privateWorkspaceView)
     internal val attachmentOutcomes = AttachmentOutcomeCoordinator(activity,app,io,main,::outcomeOwnerWindow,::focusTask,::releaseOutcomeWindow).also { flow -> app.teamWorkspaceOutcomes?.let { flow.bindTeamOutcomes(it,::openTeamAssignment) } }
     fun openTeamArtifact(selected:dev.pocketengine.features.attachments.TeamWorkspaceOutcomeHost.Selection) = attachmentOutcomes.openTeamArtifact(selected)
     fun openTeamProjectPackage(runId: String) {
@@ -234,6 +246,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         io.execute { try { projectWorkbench.persistLiveInput(checkoutId, null) } catch (_: Exception) { main.post { if (!closed) state = state.copy(notice = "补充已取得原回执；本机待核标记清理未确认，重开后只查询原输入，不自动重发") } } }
         getTask(target); return true
     }
+    fun newRemotePreviewPage(taskId:String):dev.pocketengine.features.ssh.SshPreviewWorkflows.Page = app.newRemotePreviewPage(taskId)
     fun newPrivateSshDoctorPage(): dev.pocketengine.features.ssh.SshOwnerWorkflows.DoctorPage = app.newSshDoctorPage()
     fun recordProjectPreviewConsole(preview: dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified, taskId: String, level: String, text: String, source: String, line: Int) {
         if (closed || projectPreview !== preview || projectPreviewTaskId != taskId) return
@@ -477,6 +490,22 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         check(!closed)
         return app.tasks.teamParentPlanForOwner(taskId, approvalId)
     }
+    fun openTeamMemberMaterialsPage(runId: String, memberId: String): dev.pocketengine.features.teams.TeamMemberEvidenceHost.Page {
+        check(!closed)
+        return app.openTeamMemberMaterialsPage(runId, memberId)
+    }
+    fun openTeamProjectRoundContinuationPage(taskId: String): dev.pocketengine.features.teams.TeamProjectRoundHost.ContinuationPage {
+        check(!closed)
+        return app.openTeamProjectRoundContinuationPage(taskId)
+    }
+    fun openTeamProjectRoundPage(runId: String): dev.pocketengine.features.teams.TeamProjectRoundHost.Page {
+        check(!closed)
+        return app.openTeamProjectRoundPage(runId)
+    }
+    fun openTeamFailedProjectRoundPage(runId: String, itemId: String): dev.pocketengine.features.teams.TeamProjectRoundHost.Page {
+        check(!closed)
+        return app.openTeamFailedProjectRoundPage(runId, itemId)
+    }
     fun openTeamWorkPlanPage(runId: String): dev.pocketengine.features.teams.TaskStoreTeamWriteHost.WorkPlanPage {
         check(!closed)
         return (app.features.module("teams") as? dev.pocketengine.features.teams.TeamsModule
@@ -491,6 +520,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         check(!closed)
         return (app.features.module("teams") as? dev.pocketengine.features.teams.TeamsModule
             ?: throw IllegalStateException("原团队远端成果宿主不可用")).newRemoteRevisionPage(runId, assignmentId)
+    }
+    fun openTeamPhoneIntegratorPage(runId: String): dev.pocketengine.features.teams.TaskStoreTeamWriteHost.PhoneIntegratorPage {
+        check(!closed)
+        return (app.features.module("teams") as? dev.pocketengine.features.teams.TeamsModule
+            ?: throw IllegalStateException("原团队手机整合者不可用")).newPhoneIntegratorPage(runId)
     }
     fun openTeamRemoteScopePage(runId: String, assignmentId: String): dev.pocketengine.features.teams.TaskStoreTeamWriteHost.RemoteScopePage {
         check(!closed)
@@ -541,6 +575,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     var groupTaskReady by mutableStateOf(false)
         private set
     fun enterGroupTask(taskId: String): String {
+        projectGit.deactivate()
         projectPackages.leavePrivate()
         closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null)
         groupTaskWindow?.let { app.groupOwnerWorkflows?.close(it) }
@@ -573,6 +608,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     private var remoteOwnerWindow: String? = null
     private var remoteOwnerTask: String? = null
+    private var channelMediaWindow: dev.pocketengine.features.channels.ChannelsModule.OwnerMediaWindow? = null
+    @Volatile private var channelMediaReview: dev.pocketengine.features.channels.ChannelsModule.OwnerMediaReview? = null
+    private fun nativeChannelModule() = app.features.module("channels") as? dev.pocketengine.features.channels.ChannelsModule ?: throw IllegalStateException("原渠道模块不可用")
     private var remoteOwnerReceiptSequence = 0L
     private var configPick: OwnerRequest? = null
     private var authorizationOpening: String? = null
@@ -590,14 +628,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun runModelConnectionWork(work: Runnable) { check(!closed); io.execute(work) }
     fun modelConnectionChanged() { if (!closed) io.execute { app.sendState() } }
     fun enterOwnerDomain(domain: String) {
-        if (domain !in setOf("memoryReview", "taskMemory", "mcp", "accounts", "learning", "groups")) return
-        if (domain == "groups") { projectPackages.leavePrivate(); closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null) }
+        if (domain !in setOf("memoryReview", "taskMemory", "mcp", "accounts", "learning", "groups", "channelMedia")) return
+        if (domain == "groups") { projectGit.deactivate();projectPackages.leavePrivate(); closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null) }
         ownerDomain = domain
+        if (domain == "channelMedia") { channelMediaWindow?.close(); channelMediaReview = null; channelMediaWindow = nativeChannelModule().openOwnerMediaWindow(activity) }
         if (domain == "groups") try { groupOwnerWindow = app.groupOwnerWorkflows.open(activity) } catch (error: Exception) { state = state.copy(ownerErrors = state.ownerErrors + (domain to message(error))) }
         if (domain != "taskMemory") requestOwnerDomain(domain, "snapshot")
         if (domain == "accounts") { main.removeCallbacks(accountPoll); main.postDelayed(accountPoll, 1500) }
     }
     fun leaveOwnerDomain(domain: String) {
+        if (domain == "channelMedia") { channelMediaWindow?.close(); channelMediaWindow = null; channelMediaReview = null }
         if (domain == "groups") { groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null }
         if (domain == "remoteTask") { remoteOwnerWindow?.let { app.remoteOwnerWorkflows?.close(it) }; remoteOwnerWindow = null; remoteOwnerTask = null }
         ownerEpochs[domain] = (ownerEpochs[domain] ?: 0) + 1
@@ -619,6 +659,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } catch (_: Exception) { /* An expired/already consumed preview or login needs no retry. */ } } } catch (_: java.util.concurrent.RejectedExecutionException) { }
     }
     fun requestOwnerDomain(domain: String, command: String, payload: JSONObject = JSONObject()): String {
+        if (domain == "groups" && command == "remoteInputs.leave") {
+            groupOwnerWindow?.let { app.groupOwnerWorkflows.leaveRemoteInputs(it, payload.optString("pageId")) }
+            return "native-remote-input-page-closed"
+        }
+        if (domain == "groups" && command == "completion.leave") {
+            groupOwnerWindow?.let { app.groupOwnerWorkflows.leaveCompletions(it) }
+            return "native-completion-page-revoked"
+        }
+        if (domain == "groups" && command == "material.leave") {
+            groupOwnerWindow?.let { app.groupOwnerWorkflows.leaveMaterials(it) }
+            return "native-material-page-revoked"
+        }
         val key = "$domain.$command"
         if (domain == "groups" && groupOwnerWindow == null) try { groupOwnerWindow = app.groupOwnerWorkflows.open(activity) } catch (_: Exception) { /* Worker returns a real denied-window receipt. */ }
         if (domain == "learning" && command == "cancelLearning") return cancelLearning(payload.optString("requestId"))
@@ -633,6 +685,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             if (domain == "mcp" && command in setOf("discoverMcp", "discoverMcpAuthorized")) cleanOwnerResult(domain, "cancel", JSONObject().put("operationId", previous.payload.optString("_operationId")))
         }
         val capturedGroupWindow = if (domain == "groups") groupOwnerWindow else null
+        val capturedChannelWindow = if (domain == "channelMedia") channelMediaWindow else null
+        val capturedChannelReview = if (domain == "channelMedia" && command == "freezeMedia") channelMediaReview else null
         val request = OwnerRequest(UUID.randomUUID().toString(), domain, command, JSONObject(payload.toString()), ownerEpochs[domain] ?: 0, dev.pocketengine.features.proxy.accounts.GatewayCall(60000))
         ownerRequests[key] = request
         state = state.copy(ownerPending = state.ownerPending + key, ownerErrors = state.ownerErrors - domain)
@@ -658,6 +712,20 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     }
                     "groups" -> app.groupOwnerWorkflows.call(capturedGroupWindow ?: throw SecurityException("请重新打开当前原生群审核页面")) { app.groupOwnerRequest(command, request.payload) }
                     "remoteTask" -> (app.remoteOwnerWorkflows ?: throw IllegalStateException("原生电脑任务宿主未就绪")).handle(activity, command, request.payload)
+                    "channelMedia" -> when (command) {
+                        "snapshot" -> JSONObject().put("modelCalled", false).put("remoteUploaded", false).put("messageSent", false)
+                        "reviewMedia" -> {
+                            require(request.payload.keys().asSequence().toSet() == setOf("eventId", "itemIndex"))
+                            val review = nativeChannelModule().reviewOwnerMedia(capturedChannelWindow ?: throw SecurityException("请重开当前媒体页"), request.payload.getString("eventId"), request.payload.getInt("itemIndex"))
+                            channelMediaReview = review
+                            review.metadata()
+                        }
+                        "freezeMedia" -> {
+                            require(request.payload.keys().asSequence().toSet() == setOf("digest"))
+                            nativeChannelModule().freezeOwnerMedia(capturedChannelReview ?: throw SecurityException("请先核对这份原媒体"), request.payload.getString("digest"), request.control)
+                        }
+                        else -> throw IllegalArgumentException("未知原生媒体操作")
+                    }
                     "accounts" -> if (command == "selectModel") app.nativeOwnerWorkflows.selectModel(request.payload, request.call) else app.nativeOwnerWorkflows.account(command, request.payload, request.call)
                     else -> throw IllegalArgumentException("未知原生管理页面")
                 }
@@ -701,6 +769,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     receipt.put("draftStaged",true);state=state.copy(notice="原文精确范围已加入原私聊草稿，尚未发送；发送时会再次核对来源")
                 }catch(staging:Exception){envelope.put("ok",false).put("error",message(staging));state=state.copy(error=message(staging))}
                 val responses = state.ownerResponses(domain) + (command to envelope)
+                if (domain == "groups" && command == "material.return.copy" && error == null && completed != null) {
+                    try {
+                        app.groupOwnerWorkflows.checkWindow(capturedGroupWindow ?: throw SecurityException("原材料页面已经关闭"))
+                        check(completed.optString("deliveryMode") == "manual" && completed.optString("status") == "manual_draft" && !completed.optBoolean("deliveryConfirmed")) { "不是已确认的人工交还草稿" }
+                        val clipboard = activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("人工交还草稿（未确认投递）", completed.getString("text")))
+                        completed.put("copiedLocally", true).put("deliveryConfirmed", false)
+                    } catch (copyError: Exception) { envelope.put("ok", false).put("message", message(copyError)); envelope.remove("result") }
+                }
                 state = state.copy(ownerResponses = state.ownerResponses + (domain to responses), ownerPending = state.ownerPending - key, groupOwnerReceipts = if (domain == "groups") retainedGroupReceipts(request.id, envelope) else state.groupOwnerReceipts,
                     ownerSnapshots = if (currentSnapshot != null && (domain != "accounts" || currentSnapshot.optLong("nativeSnapshotRevision") >= state.ownerSnapshot(domain).optLong("nativeSnapshotRevision"))) state.ownerSnapshots + (domain to currentSnapshot) else state.ownerSnapshots,
                     ownerErrors = if (error != null && command in setOf("snapshot", "openSource", "selectModel")) state.ownerErrors + (domain to ownerFailure(error)) else state.ownerErrors - domain)
@@ -715,6 +792,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         return request.id
     }
+    fun openCurrentChannelMedia() {
+        try { val file = nativeChannelModule().ownerMediaForViewing(channelMediaReview ?: throw SecurityException("请重新核对这份原件")); openAttachmentOutcome(file) }
+        catch (error: Exception) { state = state.copy(error = message(error)) }
+    }
     fun enterRemoteTask(taskId: String): String {
         ownerDomain?.let(::leaveOwnerDomain)
         ownerDomain = "remoteTask"; remoteOwnerWindow = UUID.randomUUID().toString(); remoteOwnerTask = taskId
@@ -722,12 +803,21 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         requestRemoteTask("open")
         return remoteOwnerWindow!!
     }
-    fun enterRemoteInputs(request: JSONObject? = null, taskId: String = ""): String {
+    fun enterRemoteProject(request: JSONObject): String {
+        ownerDomain?.let(::leaveOwnerDomain)
+        ownerDomain = "remoteTask"; remoteOwnerWindow = UUID.randomUUID().toString(); remoteOwnerTask = UUID.randomUUID().toString()
+        state = state.copy(ownerSnapshots = state.ownerSnapshots - "remoteTask", ownerResponses = state.ownerResponses - "remoteTask", ownerErrors = state.ownerErrors - "remoteTask")
+        requestRemoteTask("project.open", JSONObject().put("request", JSONObject(request.toString())))
+        return remoteOwnerWindow!!
+    }
+    fun enterRemoteInputs(request: JSONObject? = null, taskId: String = ""): String = enterRemoteInputWindow(request,taskId,false)
+    fun enterRemoteContinuationInputs(taskId: String): String = enterRemoteInputWindow(null,taskId,true)
+    private fun enterRemoteInputWindow(request: JSONObject?,taskId: String,continuation: Boolean): String {
         ownerDomain?.let(::leaveOwnerDomain)
         ownerDomain = "remoteTask"; remoteOwnerWindow = UUID.randomUUID().toString(); remoteOwnerTask = taskId.ifBlank { UUID.randomUUID().toString() }
         state = state.copy(ownerSnapshots = state.ownerSnapshots - "remoteTask", ownerResponses = state.ownerResponses - "remoteTask", ownerErrors = state.ownerErrors - "remoteTask")
         val payload = JSONObject(); if (request != null) payload.put("request", JSONObject(request.toString()))
-        requestRemoteTask("openInputs", payload)
+        requestRemoteTask(if(continuation)"openContinuationInputs" else "openInputs", payload)
         return remoteOwnerWindow!!
     }
     fun leaveRemoteTask(windowId: String) {
@@ -841,7 +931,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
 
     fun attach() { app.addObserver(observer);loadOwnerComposer(); refresh() }
-    fun detach() { closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
+    fun detach() { projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
     fun refresh() { authorizationOpening = null; ownerDomain?.let { requestOwnerDomain(it, "snapshot") }; native("getState"); native("getFeatures"); native("rescheduleAutomation"); feature("assistant", "list") }
     fun suggestInput(text: String, phoneTask: Boolean? = null) {
         if (text.isNotBlank()) state = state.copy(suggestedInputRevision = state.suggestedInputRevision + 1, suggestedInput = text, suggestedPhoneTask = phoneTask)
@@ -917,6 +1007,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun stopSpeaking() { activity.media.stopSpeaking() }
     fun realtimeForeground(visible: Boolean) {
         voiceForeground=visible;if(!visible)voiceInputModeChanged()
+        (app.features.module("channels") as? dev.pocketengine.features.channels.ChannelsModule)?.setNativeOwnerForeground(activity, visible)
+        if (!visible && channelMediaWindow != null) leaveOwnerDomain("channelMedia")
         groupForeground(visible)
         val module = app.features.module("realtime") as? RealtimeSessionModule ?: return
         if (visible) module.setForeground(activity, activity.media) else module.clearForeground(activity)
@@ -1002,6 +1094,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun exportArtifact(id: String) { if (!state.exportPending && "workspace.prepareExport" !in state.moduleBusy) feature("workspace", "prepareExport", JSONObject().put("artifactId", id)) }
     fun createArtifact() { val project = state.projectId ?: return; val path = state.filePath ?: return; if (state.fileVersion > 0 && state.fileContent == state.fileBaseline) feature("workspace", "createArtifact", JSONObject().put("projectId", project).put("path", path).put("version", state.fileVersion)) }
     private fun privateWorkspaceView() = !closed && groupTaskPage == null && ownerDomain !in setOf("groups", "teams")
+    internal fun originalProjectEditorCurrent(project:String,checkout:String):Boolean = privateWorkspaceView() && state.projectId == project && projectWorkbench.checkout(project) == checkout
     private fun currentWorkspaceArtifact(source: UiWorkspaceArtifact, fromTaskId: String?): Boolean =
         privateWorkspaceView() && workspaceArtifacts(state).contains(source) && (fromTaskId == null || source.taskId == fromTaskId && state.tasks.any { it.id == fromTaskId && it.raw.optJSONObject("origin")?.optString("kind") != "group" })
     fun refreshWorkspaceArtifacts() {
@@ -1026,17 +1119,39 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         state = state.copy(workspaceArtifactView = view.copy(diffLoading = true, diffError = null))
         workspaceArtifactDiffRequest = feature("workspace", "diffArtifact", JSONObject().put("artifactId", view.source.id))
     }
+    private var exactArtifactContinuation: dev.pocketengine.features.workspace.WorkspaceArtifactContinuation? = null
+    private var artifactContinuationGeneration = 0L
     fun editWorkspaceArtifactSource() {
         val view = state.workspaceArtifactView ?: return
         if (view.content == null || !currentWorkspaceArtifact(view.source, view.fromTaskId)) return
-        val sameFile = state.projectId == view.source.projectId && state.filePath == view.source.path
-        if (state.fileSaving || state.fileLoading || !sameFile && state.filePath != null && state.fileContent != state.fileBaseline) {
-            state = state.copy(workspaceArtifactView = view.copy(error = "现有编辑区还有未保存内容或正在读写，请先保存或关闭原草稿；不会用成果覆盖它")); return
+        if (state.fileSaving || state.fileLoading || state.filePath != null && state.fileContent != state.fileBaseline) {
+            state = state.copy(workspaceArtifactView = view.copy(error = "现有编辑区还有未保存内容或正在读写，请先保留原草稿；不会用历史成果覆盖它")); return
         }
-        val origin = UiArtifactEditorOrigin(view.source, view.fromTaskId)
-        closeWorkspaceArtifact()
-        if (!sameFile || !state.fileReady) { selectProject(view.source.projectId); openFile(view.source.path) }
-        state = state.copy(workspaceArtifactEditorOrigin = origin)
+        val request = ++artifactContinuationGeneration
+        state = state.copy(workspaceArtifactView = view.copy(loading = true, error = null))
+        io.execute {
+            try {
+                val workspace = app.features.module("workspace") as dev.pocketengine.features.workspace.WorkspaceModule
+                val selected = workspace.continueArtifactForHost(view.source.id, view.source.sha256)
+                val historical = selected.originalText()
+                val current = selected.currentText()
+                check(historical == view.content) { "原历史成果完整字节与已选版本不同；没有换用当前文件" }
+                main.post {
+                    if (!closed && request == artifactContinuationGeneration && currentWorkspaceArtifact(view.source, view.fromTaskId) && state.workspaceArtifactView?.source == view.source) {
+                        if (state.fileSaving || state.fileLoading || state.filePath != null && state.fileContent != state.fileBaseline) {
+                            state = state.copy(workspaceArtifactView = view.copy(loading = false, error = "编辑区已出现新稿，原稿和这份成果均保留；请先处理当前稿"))
+                        } else {
+                            closeWorkspaceArtifact(); selectProject(view.source.projectId); invalidateFileRequests()
+                            exactArtifactContinuation = selected
+                            state = state.copy(filePath = view.source.path, fileContent = historical, fileBaseline = current, fileVersion = selected.expected.version,
+                                fileLoading = false, fileSaving = false, fileReady = true, fileError = null, fileHistory = emptyList(), revisionContent = null, revisionNumber = null,
+                                revisionLoading = false, lastSavedVersion = null, workspaceArtifactEditorOrigin = UiArtifactEditorOrigin(view.source, view.fromTaskId),
+                                notice = "已把所选历史成果的原字节放入编辑区。当前文件仅用作保存冲突基线；明确保存才创建新版本，原成果保留。")
+                        }
+                    }
+                }
+            } catch (failure: Exception) { main.post { if (!closed && request == artifactContinuationGeneration && state.workspaceArtifactView?.source == view.source) state = state.copy(workspaceArtifactView = view.copy(loading = false, error = message(failure))) } }
+        }
     }
     fun focusWorkspaceArtifactProject() {
         val view = state.workspaceArtifactView ?: return
@@ -1437,6 +1552,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun selectProject(id: String) {
         closeProjectPreview(); closeProjectLivePreview()
+        projectGit.deactivate()
         projectPackages.cancel()
         invalidateFileRequests()
         state = state.copy(projectId = id, files = emptyList(), filePath = null, lastSavedVersion = null, fileReady = false, workspaceArtifactEditorOrigin = null, projectTaskReturn = state.projectTaskReturn?.takeIf { it.projectId == id })
@@ -1479,11 +1595,31 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val content = state.revisionContent ?: return
         state = state.copy(fileContent = content, lastSavedVersion = null, notice = "历史内容已放入编辑区，保存后才会创建新版本")
     }
-    private fun invalidateFileRequests() { fileRequestId = null; historyRequestId = null; revisionRequestId = null }
+    private fun invalidateFileRequests() { fileRequestId = null; historyRequestId = null; revisionRequestId = null; exactArtifactContinuation = null; artifactContinuationGeneration++ }
     fun saveFile() {
         val project = state.projectId ?: return
         val path = state.filePath ?: return
         if (state.fileSaving || state.fileLoading || !state.fileReady) return
+        val historical = exactArtifactContinuation
+        if (historical != null) {
+            val origin = state.workspaceArtifactEditorOrigin ?: return
+            if (!currentWorkspaceArtifact(origin.source, origin.fromTaskId) || historical.expected.projectId != project || historical.expected.path != path) { state = state.copy(fileError = "原历史成果或目标已变化，草稿保留；请返回原成果重新核对"); return }
+            val edited = state.fileContent
+            state = state.copy(fileSaving = true, fileError = null)
+            io.execute {
+                try {
+                    val receipt = historical.saveText(edited)
+                    main.post { if (!closed && exactArtifactContinuation === historical && state.projectId == project && state.filePath == path) {
+                        exactArtifactContinuation = null
+                        state = state.copy(fileBaseline = edited, fileVersion = receipt.version, fileSaving = false, fileReady = true, fileError = null, lastSavedVersion = receipt.version,
+                            notice = "已从所选历史原件保存为新版本 v${receipt.version}；原固定成果保留。")
+                        feature("workspace", "list", JSONObject().put("projectId", project))
+                    } }
+                    app.features.sendState()
+                } catch (failure: Exception) { main.post { if (!closed && exactArtifactContinuation === historical && state.projectId == project && state.filePath == path) state = state.copy(fileSaving = false, fileError = "未取得完整保存回执，草稿保留。请读取当前版本核对，不自动重发。\n" + message(failure)) } }
+            }
+            return
+        }
         state = state.copy(fileSaving = true, fileError = null)
         fileRequestId = feature("workspace", "write", JSONObject().put("projectId", project).put("path", path).put("content", state.fileContent).put("expectedVersion", state.fileVersion))
     }

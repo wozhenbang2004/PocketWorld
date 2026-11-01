@@ -41,9 +41,10 @@ public final class RemoteInputOwnerJourneyTest {
         Process server;BufferedReader output;String base,task,window;Path workspace;
         TaskStore tasks;FeatureHost host;RemoteModule remote;RemoteOwnerWorkflows owner;
         AttachmentRepository attachments;AttachmentsModule documents;AttachmentOutcomeHost viewer;
-        Fixture()throws Exception {try{
+        Fixture()throws Exception {this("input_files_fixture_server.py");}
+        Fixture(String nativeFixtureScript)throws Exception {try{
             Path repo=Path.of(System.getProperty("user.dir"));
-            server=new ProcessBuilder("/usr/bin/python3","-B","-u",repo.resolve("companion/input_files_fixture_server.py").toString(),root.toString())
+            server=new ProcessBuilder("/usr/bin/python3","-B","-u",repo.resolve("companion/"+nativeFixtureScript).toString(),root.toString())
                     .directory(repo.resolve("companion").toFile()).redirectError(root.resolve("server-stderr.log").toFile()).start();
             output=new BufferedReader(new InputStreamReader(server.getInputStream(),StandardCharsets.UTF_8));
             long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(6);
@@ -60,7 +61,7 @@ public final class RemoteInputOwnerJourneyTest {
             remote=new RemoteModule(context,(id,address)->"native-input-files-fixture-token-longer-than-32-characters",path->{
                 if(path.equals("/v1/jobs")&&task!=null){
                     assertNotNull("Original SQL task must precede the first real HTTP create",tasks.get(task,false));
-                    assertEquals("native_remote_private_inputs",tasks.get(task,false).getJSONObject("origin").getString("kind"));
+                    JSONObject current=tasks.get(task,false),scope=current.getJSONObject("remoteInputScope");if(!scope.has("continuationSource"))assertEquals("native_remote_private_inputs",current.getJSONObject("origin").getString("kind"));else{assertEquals(task,scope.getString("taskId"));assertEquals(current.getString("runId"),scope.getString("jobOperationId"));assertEquals(current.getInt("coordinatorEpoch"),scope.getInt("coordinatorEpoch"));}
                     if(holdCreate){createEntered.countDown();if(!releaseCreate.await(6,TimeUnit.SECONDS))throw new AssertionError("Fixture create gate not released");}
                 }
             });

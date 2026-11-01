@@ -57,6 +57,7 @@ public final class SkillExecution {
         public final String scriptPath,runtimeId,workspaceId,workingDirectory;
         public final int timeoutSeconds,maxOutputBytes,maxResultChars;
         private final List<String> arguments,readPaths,writePaths,outputPaths;
+        private ManagedSkillPolicy.Authority managedAuthority;
         public Request(String scriptPath,String runtimeId,String workspaceId,String workingDirectory,List<String> arguments,
                        List<String> readPaths,List<String> writePaths,List<String> outputPaths,int timeoutSeconds,int maxOutputBytes,int maxResultChars){
             this.scriptPath=relative(scriptPath,false);if(!this.scriptPath.startsWith("scripts/"))throw new IllegalArgumentException("请选择scripts目录中的具体资源");
@@ -66,15 +67,19 @@ public final class SkillExecution {
             if(timeoutSeconds<1||timeoutSeconds>120||maxOutputBytes<1||maxOutputBytes>65536||maxResultChars<2048||maxResultChars>32000)throw new IllegalArgumentException("执行、输出或返回预算超限");
             this.timeoutSeconds=timeoutSeconds;this.maxOutputBytes=maxOutputBytes;this.maxResultChars=maxResultChars;
         }
-        JSONObject json()throws Exception{return new JSONObject().put("scriptPath",scriptPath).put("runtimeId",runtimeId).put("workspaceId",workspaceId).put("workingDirectory",workingDirectory)
+        static Request managed(ManagedSkillPolicy.Authority nativeAuthority,String script,String runtime,String workspace,String cwd,List<String> arguments,List<String> reads,List<String> writes,List<String> outputs,int seconds,int bytes,int chars){Request request=new Request(script,runtime,workspace,cwd,arguments,reads,writes,outputs,seconds,bytes,chars);request.managedAuthority=java.util.Objects.requireNonNull(nativeAuthority);return request;}
+        JSONObject json()throws Exception{JSONObject value=new JSONObject().put("scriptPath",scriptPath).put("runtimeId",runtimeId).put("workspaceId",workspaceId).put("workingDirectory",workingDirectory)
                 .put("arguments",new JSONArray(arguments)).put("readPaths",new JSONArray(readPaths)).put("writePaths",new JSONArray(writePaths)).put("outputPaths",new JSONArray(outputPaths))
-                .put("network","deny").put("stdin","closed").put("environment","empty").put("timeoutSeconds",timeoutSeconds).put("maxOutputBytes",maxOutputBytes).put("maxResultChars",maxResultChars);}
+                .put("network",managedAuthority==null?"deny":"possible_same_uid").put("stdin","closed").put("environment",managedAuthority==null?"empty":"native_controlled_minimal").put("timeoutSeconds",timeoutSeconds).put("maxOutputBytes",maxOutputBytes).put("maxResultChars",maxResultChars);
+            if(managedAuthority!=null)value.put("nativeExecutionContract",managedAuthority.risks()).put("requestedPathRulesOsEnforced",false);return value;}
+
     }
     /** Exact probed native/Companion identity, binary and immutable mount layout for one request. */
     public static final class Environment {
         public final String backendId,installationId,runtimeId,runtimeVersion,runtimeSha256,workspaceId,workspaceRevision,workspaceRoot,packageRoot,enforcementId,workspaceMode,runtimeImageSha256,processPolicy;
         private final List<String> runtimePrefix;
         private final Set<Fence> fences;
+        private ManagedSkillPolicy.Authority managedAuthority;private String managedRuntimeIdentity="";private JSONObject managedInputs;
         public Environment(String backendId,String installationId,String runtimeId,String runtimeVersion,String runtimeSha256,List<String> runtimePrefix,
                            String workspaceId,String workspaceRevision,String workspaceRoot,String packageRoot,String enforcementId,Set<Fence> fences){
             this(backendId,installationId,runtimeId,runtimeVersion,runtimeSha256,runtimePrefix,workspaceId,workspaceRevision,workspaceRoot,packageRoot,enforcementId,fences,"direct_mount","");
@@ -95,13 +100,17 @@ public final class SkillExecution {
             this.workspaceMode=workspaceMode;this.runtimeImageSha256=runtimeImageSha256.isEmpty()?"":hash(runtimeImageSha256);
             if(!Set.of("executor_defined","single_process").contains(processPolicy))throw new IllegalArgumentException("进程运行限制无效");this.processPolicy=processPolicy;
         }
-        JSONObject json()throws Exception{return new JSONObject().put("backendId",backendId).put("installationId",installationId).put("runtimeId",runtimeId).put("runtimeVersion",runtimeVersion)
+        static Environment managed(ManagedSkillPolicy.Authority authority,String installation,String runtime,String version,String sha,List<String> prefix,String workspace,String revision,String workspaceRoot,String packageRoot,String runtimeIdentity,JSONObject exactInputs)throws Exception {
+            Environment environment=new Environment(ManagedSkillBackend.BACKEND,installation,runtime,version,sha,prefix,workspace,revision,workspaceRoot,packageRoot,"native-managed:"+ManagedSkillProgram.identity(),Set.of(Fence.EXACT_BYTES,Fence.EXACT_ARGV,Fence.TIMEOUT),"isolated_copy","","executor_defined");environment.managedAuthority=java.util.Objects.requireNonNull(authority);environment.managedRuntimeIdentity=hash(runtimeIdentity);environment.managedInputs=new JSONObject(exactInputs.toString());return environment;
+        }
+        JSONObject json()throws Exception{JSONObject result=new JSONObject().put("backendId",backendId).put("installationId",installationId).put("runtimeId",runtimeId).put("runtimeVersion",runtimeVersion)
                 .put("runtimeSha256",runtimeSha256).put("runtimePrefix",new JSONArray(runtimePrefix)).put("workspaceId",workspaceId).put("workspaceRevision",workspaceRevision)
                 .put("workspaceRoot",workspaceRoot).put("packageRoot",packageRoot).put("enforcementId",enforcementId).put("fences",new JSONArray(fences.stream().map(Enum::name).sorted().toArray(String[]::new)))
-                .put("workspaceMode",workspaceMode).put("fileResultsRequireImport",workspaceMode.equals("isolated_copy")).put("runtimeImageSha256",runtimeImageSha256).put("processPolicy",processPolicy);}
+                .put("workspaceMode",workspaceMode).put("fileResultsRequireImport",workspaceMode.equals("isolated_copy")).put("runtimeImageSha256",runtimeImageSha256).put("processPolicy",processPolicy);if(managedAuthority!=null)result.put("nativeExecutionContract",managedAuthority.risks()).put("managedRuntimeIdentity",managedRuntimeIdentity).put("managedInputSnapshot",new JSONObject(managedInputs.toString())).put("processPolicy","owned_process_group_observed_descendants").put("packageCopyReadOnlyAttempted",true);return result;}
         void require(Request request){
             if(!runtimeId.equals(request.runtimeId)||!workspaceId.equals(request.workspaceId))throw new Unavailable("执行端无法提供选定的运行时或工作区");
-            if(!fences.containsAll(Set.of(Fence.values())))throw new Unavailable("执行端不能验证本次文件、网络、输出、超时及取消限制");
+            if(managedAuthority!=null){if(request.managedAuthority!=managedAuthority||!ManagedSkillBackend.BACKEND.equals(backendId)||!fences.containsAll(Set.of(Fence.EXACT_BYTES,Fence.EXACT_ARGV,Fence.TIMEOUT)))throw new Unavailable("缺少本机主人原生选择的真实能力合同，不能由模型参数降级执行限制");return;}
+            if(request.managedAuthority!=null||!fences.containsAll(Set.of(Fence.values())))throw new Unavailable("执行端不能验证本次文件、网络、输出、超时及取消限制");
         }
     }
     /** In-memory immutable plan. No public JSON decoder; editing review JSON cannot edit execution. */
@@ -123,6 +132,7 @@ public final class SkillExecution {
                     .put("scriptSha256",sha256(script)).put("resources",files).put("request",request.json()).put("backend",environment.json())
                     .put("argv",new JSONArray(argv())).put("cwd",cwd()).put("expiresAt",expiresAt).put("packageReadOnly",true)
                     .put("untrustedReference",true).put("requiresOwnerApproval",true).put("businessVerified",false).put("grantsAdded",new JSONArray());
+            if(request.managedAuthority!=null){review.put("packageReadOnly",false).put("packageCopyReadOnlyAttempted",true).put("packageReadOnlyOsEnforced",false).put("executionLocation","this_phone").put("dependencies",ManagedSkillDependencies.inspect(snapshot.files,request.runtimeId,request.managedAuthority.prepareDependencies));}
             this.digest=digestJson(review);this.reviewJson=review.put("planDigest",digest).toString();
         }
         public JSONObject review()throws Exception{return new JSONObject(reviewJson);}
@@ -131,6 +141,8 @@ public final class SkillExecution {
         public List<String> argv(){List<String> argv=new ArrayList<>(environment.runtimePrefix);argv.add(environment.packageRoot+"/"+request.scriptPath);argv.addAll(request.arguments);return Collections.unmodifiableList(argv);}
         public String cwd(){return environment.workspaceRoot+(request.workingDirectory.equals(".")?"":"/"+request.workingDirectory);}
         public Run run(){return run;}
+        boolean managedPhone(){return request.managedAuthority!=null&&environment.managedAuthority==request.managedAuthority;}
+        ManagedSkillPolicy.Authority nativeManagedAuthority(){if(!managedPhone())throw new SecurityException("不是原生手机Skill方案");return request.managedAuthority;}
     }
     /** A native TaskStore/backend approval reference, never accepted from feature or model JSON. */
     public static final class Grant {
@@ -181,6 +193,7 @@ public final class SkillExecution {
     }
     /** Exposes the exact environment fingerprint for the host's backend grant, not a grant itself. */
     public static String environmentBinding(Plan plan){return plan.environmentBinding;}
+    public static boolean isManagedPhonePlan(Plan plan){return plan!=null&&plan.managedPhone();}
     /** Refresh the native review page's validity; this does not approve or reserve an operation. */
     public String validateForReview(Plan plan,RunControl control)throws Exception {
         if(backend==null||host==null)throw new Unavailable("脚本执行端不可用");checkRun(plan.run,control);

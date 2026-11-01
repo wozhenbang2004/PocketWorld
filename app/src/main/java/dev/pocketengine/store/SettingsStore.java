@@ -8,6 +8,9 @@ import android.util.Base64;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.runtime.models.ModelBinding;
 import dev.pocketengine.runtime.models.ApiConnectionProfile;
+import dev.pocketengine.runtime.models.ModelTargetRef;
+import dev.pocketengine.runtime.models.ModelGroup;
+import dev.pocketengine.runtime.models.ModelRoutePlan;
 import org.json.JSONArray;
 import dev.pocketengine.runtime.models.ModelCatalogRoutes;
 import dev.pocketengine.runtime.models.ReasoningOptions;
@@ -46,7 +49,12 @@ public final class SettingsStore {
     /** Application singleton only; current facts may change without rewriting private model settings. */
     public synchronized void installImageCapabilities(ImageCapabilitySource source) { imageCapabilities=java.util.Objects.requireNonNull(source); }
     public synchronized ModelConfig get() throws Exception {
-        ModelConfig selected=getSelected();
+        ModelConfig selected=getSelected(),global=selected;
+        ModelTargetRef target=modelPurposeTarget("MAIN");
+        if(target!=null)selected=captureModelTarget(target,"MAIN","APP_OWNER",selected);
+        ModelTargetRef summary=modelPurposeTarget("SUMMARY");
+        ModelConfig capturedSummary=summary==null?global.withRoutePlan(ModelRoutePlan.exact(global,"SUMMARY","APP_OWNER")):captureModelTarget(summary,"SUMMARY","APP_OWNER",global);
+        selected=selected.withPurposePlans(java.util.Map.of("SUMMARY",capturedSummary.routePlan,"DEFAULT",ModelRoutePlan.exact(global,"DEFAULT","APP_OWNER")));
         return selected.withLocalObservation(prefs.getBoolean("localCaptureAllowed",selected.sendScreenshots),prefs.getBoolean("localOcrAllowed",selected.sendScreenshots));
     }
     /** Local capture/OCR consent is independent of a model's pixel-upload setting. */
@@ -237,7 +245,7 @@ public final class SettingsStore {
         if(state!=null&&!captured.usesAccount()&&captured.capabilityBinding!=null){
             ApiConnectionProfile row=state.rows.get(captured.capabilityBinding.connectionId());
             if(row==null||!row.enabled||!row.configuration.capabilityBinding.equals(captured.capabilityBinding))throw new SecurityException("原API连接已停用或凭据/地址代次已变化，未切换连接");
-            return materialize(row,true);
+            return materialize(row,true).withModel(captured.model).withRoutePlan(captured.routePlan);
         }return get();
     }
     /** Owner estimate lookup only; returns no key bytes, never selects or materializes a credential. */
@@ -291,6 +299,76 @@ public final class SettingsStore {
         ModelConfig config=row.configuration.catalogEnforced?row.configuration.withNativeCatalog(next,ReasoningOptions.DEFAULT,0):row.configuration.withApiConnection(next);
         ApiConnectionProfile saved=new ApiConnectionProfile(row.name,Math.addExact(row.revision,1),enabled,row.secretSlot,config);state.rows.put(id,saved);
         commitProfiles(state,Math.addExact(state.selectionRevision,1),false);return saved.publicJson();
+    }
+    /** Native owner definitions in the existing confirmed preferences transaction. Never stores keys. */
+    public synchronized JSONObject modelGroupsSnapshot()throws Exception {
+        requireConfirmed();JSONObject root=modelGroupsDocument();return new JSONObject(root.toString());
+    }
+    private JSONObject modelGroupsDocument()throws Exception {
+        String raw=prefs.getString("modelGroups","");
+        if(raw.isEmpty())return new JSONObject().put("format","pocketworld.model-groups.v1").put("groups",new JSONArray()).put("purposeBindings",new JSONObject());
+        if(raw.getBytes(StandardCharsets.UTF_8).length>131072)throw new IllegalStateException("模型组资料超过有界范围，保留原文");
+        JSONObject root=new JSONObject(raw);if(!"pocketworld.model-groups.v1".equals(root.getString("format")))throw new IllegalStateException("模型组版本不可识别");
+        JSONArray groups=root.getJSONArray("groups");if(groups.length()>ModelGroup.MAX_GROUPS)throw new IllegalStateException("模型组数量超限");
+        java.util.Set<String> ids=new java.util.HashSet<>();for(int i=0;i<groups.length();i++)if(!ids.add(ModelGroup.fromJson(groups.getJSONObject(i)).groupId))throw new IllegalStateException("模型组身份重复");
+        JSONObject bindings=root.getJSONObject("purposeBindings");java.util.Iterator<String> names=bindings.keys();while(names.hasNext())ModelTargetRef.fromJson(bindings.getJSONObject(names.next()));return root;
+    }
+    public synchronized JSONObject saveModelGroup(String id,long expectedRevision,String name,JSONObject definition)throws Exception {
+        requireConfirmed();JSONObject root=modelGroupsDocument();JSONArray rows=root.getJSONArray("groups");int found=-1;
+        for(int i=0;i<rows.length();i++)if(rows.getJSONObject(i).getString("groupId").equals(id))found=i;
+        if(found<0&&(id!=null&&!id.isEmpty()||expectedRevision!=0)||found>=0&&rows.getJSONObject(found).getLong("revision")!=expectedRevision)throw new IllegalStateException("模型组已变化，请重新打开原记录");
+        if(found<0&&rows.length()>=ModelGroup.MAX_GROUPS)throw new IllegalStateException("模型组数量已达32项");
+        String actual=found<0?"group-"+java.util.UUID.randomUUID():id;
+        JSONObject value=new JSONObject(definition.toString()).put("groupId",actual).put("revision",Math.addExact(expectedRevision,1)).put("name",name);
+        ModelGroup checked=ModelGroup.fromJson(value);
+        // Refusing missing references at edit time does not delete later unavailable candidates.
+        for(ModelGroup.Candidate c:checked.candidates){ModelConfig config=resolveExactModel(c.target(),getSelected());if(!config.apiKey.isEmpty()&&checked.toJson().toString().contains(config.apiKey))throw new SecurityException("模型组说明不得包含原凭据");}
+        if(found<0)rows.put(checked.toJson());else rows.put(found,checked.toJson());
+        saveModelGroups(root);return checked.toJson();
+    }
+    public synchronized void selectModelPurpose(String purpose,ModelTargetRef ref)throws Exception {
+        requireConfirmed();if(!purpose.matches("MAIN|SUMMARY|RELAY|MEMBER(?:\\.[A-Za-z0-9_-]{1,60})?"))throw new IllegalArgumentException("无效模型用途");
+        if(ref!=null)captureModelTarget(ref,purpose,"RELAY".equals(purpose)?"EXTERNAL_RELAY":"APP_OWNER",getSelected());
+        JSONObject root=modelGroupsDocument(),bindings=root.getJSONObject("purposeBindings");if(ref==null)bindings.remove(purpose);else bindings.put(purpose,ref.toJson());saveModelGroups(root);
+    }
+    private void saveModelGroups(JSONObject root)throws Exception {String raw=root.toString();if(raw.getBytes(StandardCharsets.UTF_8).length>131072)throw new IllegalArgumentException("模型组资料超限");commitConfirmed(prefs.edit().putString("modelGroups",raw).putLong("modelGroupSelectionRevision",Math.addExact(prefs.getLong("modelGroupSelectionRevision",0),1)));}
+    public synchronized ModelTargetRef modelPurposeTarget(String purpose)throws Exception {requireConfirmed();JSONObject bindings=modelGroupsDocument().getJSONObject("purposeBindings");JSONObject value=bindings.optJSONObject(purpose);return value==null?null:ModelTargetRef.fromJson(value);}
+    /** Explicit native local-service selection. MAIN/SUMMARY group permission never grants external use. */
+    public synchronized ModelConfig captureRelaySelection()throws Exception {
+        ModelConfig original=getSelected();ModelTargetRef relay=modelPurposeTarget("RELAY");
+        // With no explicit binding retain the original exact choice, including an account's denial.
+        return relay==null?original:captureModelTarget(relay,"RELAY","EXTERNAL_RELAY",original);
+    }
+    /** Both counters are monotonic; change-away-and-back still requires the original service restart. */
+    public synchronized long relaySelectionRevision()throws Exception {return Math.addExact(apiSelectionRevision(),prefs.getLong("modelGroupSelectionRevision",0));}
+    /** Capture once at native run admission. Edits cannot add candidates to this returned plan. */
+    public synchronized ModelConfig captureModelTarget(ModelTargetRef ref,String purpose,String audience,ModelConfig capturedFallback)throws Exception {
+        requireConfirmed();if(ref==null)return capturedFallback;
+        if(ref.kind()==ModelTargetRef.Kind.EXACT){ModelConfig exact=resolveExactModel(ref,capturedFallback);if(exact.usesAccount()&&!"APP_OWNER".equals(audience))throw new SecurityException("CHATGPT_PLAN_APP_ONLY");return exact.withRoutePlan(ModelRoutePlan.exact(exact,purpose,audience));}
+        ModelGroup group=null;JSONArray rows=modelGroupsDocument().getJSONArray("groups");for(int i=0;i<rows.length();i++){ModelGroup candidate=ModelGroup.fromJson(rows.getJSONObject(i));if(candidate.groupId.equals(ref.groupId()))group=candidate;}
+        if(group==null||group.revision!=ref.groupRevision())throw new IllegalStateException("所选模型组修订已失效，请重新选择；未使用最新版本替代");
+        java.util.List<ModelRoutePlan.Candidate> frozen=new java.util.ArrayList<>();
+        for(ModelGroup.Candidate c:group.candidates){String reason=!c.enabled()?"candidate_disabled":!group.allowedAccounts.contains(c.target().connectionId())?"account_not_allowed":!c.allowedAudiences().contains(audience)?"audience_not_allowed":!c.allowedPurposes().contains(purpose)&&!(purpose.startsWith("MEMBER.")&&c.allowedPurposes().contains("MEMBER"))?"purpose_not_allowed":"";ModelConfig config=null;
+            if(reason.isEmpty())try{config=resolveExactModel(c.target(),capturedFallback);if(config.usesAccount()&&!"APP_OWNER".equals(audience))reason="CHATGPT_PLAN_APP_ONLY";}catch(Exception unavailable){reason="original_connection_unavailable";}
+            frozen.add(new ModelRoutePlan.Candidate(c.candidateId(),config,reason));
+        }
+        ModelRoutePlan plan=new ModelRoutePlan(group.groupId,group.revision,purpose,audience,frozen,group.maxAttempts,group.maxRouteSwitches);return plan.primary().withRoutePlan(plan);
+    }
+    /** Current policy is intersected with the frozen candidate; edits can revoke but never add to a run. */
+    public synchronized void requireModelGroupAdmission(ModelRoutePlan plan,String candidateId,ModelConfig selected)throws Exception {
+        requireConfirmed();if(plan.groupRevision<1)return;ModelGroup live=null;JSONArray rows=modelGroupsDocument().getJSONArray("groups");for(int i=0;i<rows.length();i++){ModelGroup group=ModelGroup.fromJson(rows.getJSONObject(i));if(group.groupId.equals(plan.requestedAlias))live=group;}
+        if(live==null)throw new SecurityException("original_model_group_removed");String connection=selected.usesAccount()?"account:"+selected.accountModel.accountId:selected.capabilityBinding==null?"":selected.capabilityBinding.connectionId();
+        if(!live.allowedAccounts.contains(connection))throw new SecurityException("model_group_account_revoked");
+        for(ModelGroup.Candidate candidate:live.candidates)if(candidate.candidateId().equals(candidateId)&&candidate.enabled()&&candidate.target().connectionId().equals(connection)&&candidate.target().modelId().equals(selected.model)&&candidate.allowedAudiences().contains(plan.audience)&&(candidate.allowedPurposes().contains(plan.purpose)||plan.purpose.startsWith("MEMBER.")&&candidate.allowedPurposes().contains("MEMBER")))return;
+        throw new SecurityException("model_group_candidate_permission_revoked");
+    }
+    private ModelConfig resolveExactModel(ModelTargetRef ref,ModelConfig capturedFallback)throws Exception {
+        if(ref.kind()!=ModelTargetRef.Kind.EXACT)throw new IllegalArgumentException("exact_model_required");
+        if(ref.connectionId().startsWith("account:")){
+            if(capturedFallback==null||!capturedFallback.usesAccount()||!ref.connectionId().equals("account:"+capturedFallback.accountModel.accountId)||!ref.modelId().equals(capturedFallback.model))throw new SecurityException("账号模型必须使用原账号页已选绑定");return capturedFallback.withRoutePlan(null);
+        }
+        Profiles profiles=requireProfiles();ApiConnectionProfile row=profiles.rows.get(ref.connectionId());if(row==null||!row.enabled)throw new SecurityException("原API连接不存在或已停用");
+        ModelConfig selected=materialize(row,true).withModel(ref.modelId());return selected.withLocalObservation(capturedFallback.localCaptureAllowed,capturedFallback.localOcrAllowed);
     }
     private Profiles requireProfiles()throws Exception{Profiles p=profiles();if(p==null)throw new IllegalStateException("请先在本机模型页核对原API连接迁移");return p;}
     private static ApiConnectionProfile requireProfile(Profiles state,String id,long expected){ApiConnectionProfile row=state.rows.get(id);if(row==null||row.revision!=expected)throw new IllegalStateException("API连接已变化，请刷新原记录");return row;}

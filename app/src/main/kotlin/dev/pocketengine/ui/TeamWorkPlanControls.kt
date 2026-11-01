@@ -21,7 +21,9 @@ import org.json.JSONObject
 /** In-place continuation of the original discussion: owner plan, current item, exact handoff and actual results. */
 @Composable internal fun TeamWorkPlanControls(
     run: JSONObject, openPage: (String) -> TaskStoreTeamWriteHost.WorkPlanPage,
-    runWork: (Runnable) -> Unit, onTask: (String) -> Unit, onArtifact: (TeamWorkspaceOutcomeHost.Selection) -> Unit
+    runWork: (Runnable) -> Unit, onTask: (String) -> Unit, onArtifact: (TeamWorkspaceOutcomeHost.Selection) -> Unit,
+    openRoundPage: ((String) -> dev.pocketengine.features.teams.TeamProjectRoundHost.Page)? = null,
+    openFailedRoundPage: ((String, String) -> dev.pocketengine.features.teams.TeamProjectRoundHost.Page)? = null
 ) {
     val runId = run.getString("id")
     var opening by remember(runId) { mutableIntStateOf(0) }
@@ -66,7 +68,9 @@ import org.json.JSONObject
     }
     LaunchedEffect(page, run.optLong("revision")) { work({ page.snapshot() }) { result = it } }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("授权仅所选副本路径的新增/修改/删除；重命名需新旧两路径。原项目仍须独审、主人批准及唯一CAS。", style = MaterialTheme.typography.bodySmall)
         val plan = result.optJSONObject("workPlan") ?: run.optJSONObject("workPlan")
+        NickTeamExecutionTree(result.optJSONObject("executionTree"), runId)
         if (plan == null) {
             Text("把当前条件结论落实为明确工作项", style = MaterialTheme.typography.titleSmall)
             TeamCaption("讨论只是提案。你确认每项负责人、前置工作、原项目准确文件/基线与本次父预算后，才允许成员在各自草稿中自主制作。最终原项目仍需独审与唯一整合。")
@@ -99,7 +103,7 @@ import org.json.JSONObject
             OutlinedButton(onClick = { work({ if (fullProject) page.reviewProject(reviewedDrafts(), JSONObject().put("allowCommands", true).put("sameUidExecutionAcknowledged", commandRiskAccepted).put("commands", JSONArray(commandText))) else page.review(reviewedDrafts()) }) { pendingRevision = null; pending = it; shown = it.view(); accepted = false } }, enabled = !busy && drafts.length() > 0 && (!fullProject || commandRiskAccepted && commandText.length <= 24000)) { Text(if (fullProject) "审阅完整基线、命令与真实预算缺口" else "审阅原文件范围、依赖与实际预算") }
         } else {
             Text("当前工作计划 · ${plan.optJSONArray("items")?.length() ?: 0} 项", style = MaterialTheme.typography.titleSmall)
-            TeamCaption("相同成员可以依次承接多个原assignment；每个工作项只有一个当前负责人。未启动才可精确改派，未知写入不能重派或退款。")
+            TeamCaption("相同成员可以依次承接多个原assignment；每个工作项只有一个当前负责人。未启动或已核对确定终态的失败项可以精确交接；原草稿和效果保留，未知写入不能重派或退款。")
             plan.optJSONArray("items").objects().forEach { item -> key(item.getString("workItemId")) {
                 Text(item.optString("title"), style = MaterialTheme.typography.titleSmall)
                 TeamCaption("${memberName(item.optString("memberId"))} · ${item.optString("status")} · 工作项 r${item.optInt("itemRevision")} / 负责人 g${item.optInt("ownerGeneration")}")
@@ -107,12 +111,15 @@ import org.json.JSONObject
                 item.optJSONObject("assignmentTask")?.optString("taskId")?.takeIf(String::isNotBlank)?.let { task -> TextButton(onClick = { onTask(task) }) { Text("打开这个原assignment与真实回执") } }
                 item.optJSONArray("artifacts").objects().forEach { ref -> TextButton(onClick = { runCatching { onArtifact(TeamWorkspaceOutcomeHost.Selection.fromManifest(ref)) }.onFailure { notice = it.message } }) { Text("查看原冻结文件 · ${ref.optString("path")}") } }
                 item.optJSONArray("assignmentHistory").objects().forEach { old -> TeamCaption("已交接：${memberName(old.optString("memberId"))} → ${memberName(item.optString("memberId"))}；旧assignment ${old.optString("assignmentId").take(8)} 保留历史，不重放。") }
-                if (item.optString("status") in setOf("queued", "waiting_dependency", "blocked_dependency")) {
-                    members.filter { it.optString("id") != item.optString("memberId") }.forEach { next -> TextButton(onClick = { work({ page.reviewTransfer(item.getString("workItemId"), next.getString("id"), item.getInt("itemRevision"), item.getInt("ownerGeneration")) }) { pendingRevision = null; pending = it; shown = it.view(); accepted = false } }, enabled = !busy) { Text("审阅交接给 ${next.optString("name")}") } }
+                if (item.optString("status") in setOf("queued", "waiting_dependency", "blocked_dependency", "failed", "awaiting_user", "needs_confirmation", "paused", "interrupted", "cancelled")) {
+                    members.filter { !it.optBoolean("exited") && it.optString("id") != item.optString("memberId") }.forEach { next -> TextButton(onClick = { work({ page.reviewTransfer(item.getString("workItemId"), next.getString("id"), item.getInt("itemRevision"), item.getInt("ownerGeneration")) }) { pendingRevision = null; pending = it; shown = it.view(); accepted = false } }, enabled = !busy) { Text("审阅交接给 ${next.optString("name")}") } }
                 }
                 if (item.optString("status") in setOf("paused", "awaiting_user", "interrupted", "failed", "cancelled")) TextButton(onClick = { work({ page.reviewContinuation(item.getString("workItemId"), item.getInt("itemRevision"), item.getInt("ownerGeneration")) }) { pendingRevision = null; pending = it; shown = it.view(); accepted = false } }, enabled = !busy) { Text("核对并只继续这个原工作项") }
-                if (item.optString("status") == "completed" && run.optJSONObject("productionScope")?.has("projectSelection") == true) TeamCaption("完整项目V2仍需重新选择完整基线/源码执行及预算；当前不会沿用旧文件授权自动启动新版本。")
-                if (item.optString("status") == "completed" && run.optJSONObject("productionScope")?.has("projectSelection") != true) {
+                if (openFailedRoundPage != null && run.optJSONObject("productionScope")?.has("projectSelection") == true && item.optString("status") in setOf("failed", "cancelled", "interrupted", "paused", "awaiting_user", "needs_confirmation")) TeamProjectRoundControls(runId, { id -> openFailedRoundPage(id, item.getString("workItemId")) }, runWork, onTask, item.getString("workItemId"))
+                if (item.optString("status") == "completed") {
+                    val projectRevision = run.optJSONObject("productionScope")?.has("projectSelection") == true
+                    var revisionCommands by rememberSaveable(runId, item.getString("workItemId")) { mutableStateOf("[]") }
+                    var revisionCommandRisk by rememberSaveable(runId, item.getString("workItemId")) { mutableStateOf(false) }
                     var revisionText by rememberSaveable(runId, item.getString("workItemId")) { mutableStateOf("") }
                     run.optJSONArray("parentRequests").objects().filter { it.optString("workItemId") == item.getString("workItemId") && it.optString("kind") == "revision_proposal" }.forEach { request ->
                         val current = request.optInt("itemRevision") == item.getInt("itemRevision") && request.optInt("ownerGeneration") == item.getInt("ownerGeneration")
@@ -121,11 +128,18 @@ import org.json.JSONObject
                         if (current) TextButton(onClick = { revisionText = request.getString("text"); pendingRevision = null }, enabled = !busy) { Text("带入我的修订草稿，仍需下面的精确审阅") }
                     }
                     OutlinedTextField(revisionText, { revisionText = it; pendingRevision = null }, label = { Text("沿此原成果继续：明确要改什么") }, minLines = 2, maxLines = 4, enabled = !busy, modifier = Modifier.fillMaxWidth())
-                    TextButton(onClick = { work({ page.reviewRevision(item.getString("workItemId"), item.getInt("itemRevision"), item.getInt("ownerGeneration"), revisionText) }) { pending = null; pendingRevision = it; shown = it.view(); accepted = false } }, enabled = !busy && revisionText.isNotBlank()) { Text("审阅这项修订、受影响依赖与原剩余预算") }
+                    if (projectRevision) {
+                        TeamCaption("完整项目新一轮将以原已交付组合包的准确完整源码为基线，不使用未接收的父活跃checkout；本版测试/构建命令与源码执行需要重新明确授权。")
+                        TextButton(onClick = { work({ page.projectRevisionCommandSuggestions() }) { revisionCommands = it.toString(2); pendingRevision = null; revisionCommandRisk = false } }, enabled = !busy) { Text("读取原完整成果的实际测试/构建建议") }
+                        OutlinedTextField(revisionCommands, { revisionCommands = it; pendingRevision = null; revisionCommandRisk = false }, label = { Text("新一轮准确命令模板 JSON") }, minLines = 3, maxLines = 9, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                        Row { Checkbox(revisionCommandRisk, { revisionCommandRisk = it; pendingRevision = null }, enabled = !busy); Text("我允许本轮命令及新副本源码执行；同应用UID可访问应用可访问文件/网络，不是OS隔离") }
+                    }
+                    TextButton(onClick = { work({ if (projectRevision) page.reviewProjectRevision(item.getString("workItemId"), item.getInt("itemRevision"), item.getInt("ownerGeneration"), revisionText, JSONObject().put("allowCommands", true).put("sameUidExecutionAcknowledged", revisionCommandRisk).put("commands", JSONArray(revisionCommands))) else page.reviewRevision(item.getString("workItemId"), item.getInt("itemRevision"), item.getInt("ownerGeneration"), revisionText) }) { pending = null; pendingRevision = it; shown = it.view(); accepted = false } }, enabled = !busy && revisionText.isNotBlank() && (!projectRevision || revisionCommandRisk)) { Text("审阅这项修订、受影响依赖与原剩余预算") }
                 }
                 HorizontalDivider()
             } }
             TextButton(onClick = { work({ page.snapshot() }) { result = it } }, enabled = !busy) { Text("刷新真实分工与阻塞") }
+            if (openRoundPage != null && run.optJSONObject("productionScope")?.has("projectSelection") == true && plan.optJSONArray("items").objects().all { it.optString("status") == "completed" }) TeamProjectRoundControls(runId, openRoundPage, runWork, onTask)
         }
         pending?.let { exact ->
             if (shown.optString("kind") == "work_plan") {
@@ -147,11 +161,17 @@ import org.json.JSONObject
                     if (shown.optBoolean("parentBudgetIncreaseRequired")) TeamCaption("原父预算明确缺口 ${shown.optInt("parentOperationShortfall")}：仅预算建议剩余 → ${shown.optInt("proposedParentRemainingOperations")} / 累计上限 → ${shown.optInt("proposedParentStepCeiling")}。必须先明确批准；不延长期限、不扩大工具/文件/资源权限、不重启任务。")
                 } else TeamCaption("所选文件计划工具步骤 ${planning.optInt("selectedFileToolSteps")}（含前置冻结原件读取 ${planning.optInt("dependencyArtifactReads")}），明确工具重试余量 ${planning.optInt("toolRetryMargin")}；模型新增估计 ${planning.optInt("estimatedAdditionalModelRequests")}（含1次重试，非复杂任务足额保证）。原父实际工具剩余 ${shown.getJSONObject("parent").optInt("remainingOperations")}，token/费用未知；本次不增加父授权。")
                 TeamCaption("原讨论条件结论仍须核对：${shown.getJSONObject("plan").getJSONObject("decision").optString("conclusion")}")
+            } else if (shown.optString("kind") in setOf("failed_transfer", "unstarted_transfer")) {
+                TeamCaption("只交接这条已知终态工作给 ${memberName(shown.optString("newMemberId"))}；原 ${shown.optString("oldStatus")}，已确认效果 ${shown.optInt("confirmedEffectCount")} 条。旧操作不重发，旧负责人generation撤销；旧贡献/未提交草稿保留。")
+                shown.getJSONArray("preservedDraftFiles").objects().forEach { file -> TeamCaption("保留 ${file.optString("path")} · v${file.optInt("version")} / ${file.optString("sha256").take(12)}") }
+                shown.optJSONObject("projectSelection")?.let { TeamProjectScopeSummary(it); TeamCaption("完整失败副本将按此准确源身份继续；每次新源码/命令plan仍须原明确审批，不沿用旧命令执行回执。") }
+                TeamCaption("本次明确为接手者分配 ${shown.optInt("proposedDraftOperations")} 次草稿操作；拟累计模型上限 ${shown.optInt("proposedModelRequestLimit")} / 工具 ${shown.optInt("proposedToolOperationLimit")}，含后续独审/唯一整合估计，不保证复杂任务足额。原已用/预留/unknown不重置、不退款，期限不延长。")
+                if(shown.optBoolean("parentBudgetIncreaseRequired")) TeamCaption("原父实际操作不足 ${shown.optInt("parentOperationShortfall")}；只预算建议累计上限 → ${shown.optInt("proposedParentStepCeiling")}，须下方主人明确确认后重新审阅范围，不扩工具/资源/期限。")
             } else TeamCaption(if (shown.optString("kind") == "transfer") "只把这条未开始的工作项交接给 ${memberName(shown.optString("newMemberId"))}；原范围与预算不增加，旧assignment保留。" else "只继续这条原assignment的新真实attempt；保留原scope期限及剩余预算，未知操作不重放。")
             TeamCaption("期限：${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(shown.optLong("expiresAt")))}；回答消息不续期或补预算。")
             Row { Checkbox(accepted, { accepted = it }, enabled = !busy); Text(if (shown.optBoolean("parentBudgetIncreaseRequired")) "我明确批准以上同run仅预算增加；其他授权与未知账保留" else "我确认此次准确范围、负责人、完整基线/命令及可见预算") }
             if (shown.optBoolean("parentBudgetIncreaseRequired")) Button(onClick = { work({ page.approveParentBudget(exact, shown.getString("digest")) }) { pending = it; shown = it.view(); accepted = false; notice = "仅预算CAS已保存；尚未批准成员执行。请再核对本次新范围与实际剩余。" } }, enabled = accepted && !busy) { Text("仅批准本次原父预算缺口") }
-            Button(onClick = { work({ when (shown.optString("kind")) { "work_plan" -> page.approve(exact, shown.getString("digest")); "transfer" -> page.approveTransfer(exact, shown.getString("digest")); else -> page.approveContinuation(exact, shown.getString("digest")) } }) { pending = null; result = if (it.has("workPlan")) JSONObject().put("workPlan", it.getJSONObject("workPlan")).put("parentBudget", it.optJSONObject("parentBudget")) else it; notice = "已保存原生决定；执行与成果以原Runner回执为准。" } }, enabled = accepted && !busy && !shown.optBoolean("parentBudgetIncreaseRequired")) { Text(if (busy) "正在保存…" else "确认并沿原工作计划继续") }
+            Button(onClick = { work({ when (shown.optString("kind")) { "work_plan" -> page.approve(exact, shown.getString("digest")); "transfer", "failed_transfer", "unstarted_transfer" -> page.approveTransfer(exact, shown.getString("digest")); else -> page.approveContinuation(exact, shown.getString("digest")) } }) { pending = null; result = if (it.has("workPlan")) JSONObject().put("workPlan", it.getJSONObject("workPlan")).put("parentBudget", it.optJSONObject("parentBudget")) else it; notice = "已保存原生决定；执行与成果以原Runner回执为准。" } }, enabled = accepted && !busy && !shown.optBoolean("parentBudgetIncreaseRequired")) { Text(if (busy) "正在保存…" else "确认并沿原工作计划继续") }
             TextButton(onClick = { pending = null }, enabled = !busy) { Text("暂不授权，保留原工作") }
         }
         pendingRevision?.let { exact ->
@@ -165,9 +185,16 @@ import org.json.JSONObject
             }
             val budget = shown.getJSONObject("parentBudget"); val planning = shown.getJSONObject("budgetPlan")
             TeamCaption("同一父池累计：模型已预留/使用 ${budget.getInt("modelRequestsReservedOrUsed")}，总上限 ${budget.getInt("modelRequestLimit")} → ${shown.getInt("proposedModelRequestLimit")}；工具已预留/使用 ${budget.getInt("toolOperationsReservedOrUsed")}，总上限 ${budget.getInt("toolOperationLimit")} → ${shown.getInt("proposedToolOperationLimit")}。旧账不清零、未知不退款。")
-            TeamCaption("本次所选流程工具步骤 ${planning.optInt("selectedFileToolSteps")} + 明确重试余量 ${planning.optInt("toolRetryMargin")}；模型新增估计 ${planning.optInt("estimatedAdditionalModelRequests")}（含1次重试，非复杂任务保证）。保留原scope期限，不补父授权，token/费用未知。")
+            shown.optJSONObject("projectSelection")?.let { selected ->
+                TeamProjectScopeSummary(selected)
+                TeamCaption("从原准确完整成果包 ${selected.getJSONObject("previousDelivery").optString("packageArtifactId").take(12)} 继续；本次完整基线 ${selected.optString("snapshotIdentity").take(16)}。父活跃checkout不覆盖。")
+                selected.getJSONArray("templates").objects().forEach { template -> Text("${template.optString("id")} · ${template.getJSONObject("request")}", style = MaterialTheme.typography.bodySmall) }
+            }
+            TeamCaption("本轮计划工具步骤 ${planning.optInt("plannedToolOperations")} + 明确重试余量 ${planning.optInt("toolRetryMargin")}；模型新增估计 ${planning.optInt("estimatedAdditionalModelRequests")}。工程上限模型 ${planning.optInt("modelEngineeringMaximum")} / 工具 ${planning.optInt("toolEngineeringMaximum")} 不是默认授权或复杂任务保证；已用/预留/unknown不清，token/费用未知。")
+            if (shown.optBoolean("parentBudgetIncreaseRequired")) TeamCaption("真实父grant不足：本次明确增加 ${shown.optInt("parentOperationShortfall")}，剩余 → ${shown.optInt("proposedParentRemainingOperations")}，累计上限 → ${shown.optInt("proposedParentStepCeiling")}；不延长期限、不扩大工具/资源权限、不恢复旧控制。")
             Row { Checkbox(accepted, { accepted = it }, enabled = !busy); Text("我确认本次受影响工作项、原成果基线与可见累计预算") }
-            Button(onClick = { work({ page.approveRevision(exact, shown.getString("digest")) }) { pendingRevision = null; result = JSONObject().put("workPlan", it.getJSONObject("workPlan")).put("parentBudget", it.optJSONObject("parentBudget")); notice = "原工作项新修订已排入；保留未变贡献，等待本版真实制作及新独审。" } }, enabled = accepted && !busy) { Text(if (busy) "正在保存…" else "批准并沿这些原工作项继续") }
+            if (shown.optBoolean("parentBudgetIncreaseRequired")) Button(onClick = { work({ page.approveRevisionParentBudget(exact, shown.getString("digest")) }) { pendingRevision = it; shown = it.view(); accepted = false; notice = "同run预算CAS已保存，请重新核对本轮完整基线/命令；尚未授权执行。" } }, enabled = accepted && !busy) { Text("仅批准本轮父预算缺口并重读范围") }
+            Button(onClick = { work({ page.approveRevision(exact, shown.getString("digest")) }) { pendingRevision = null; result = JSONObject().put("workPlan", it.getJSONObject("workPlan")).put("parentBudget", it.optJSONObject("parentBudget")); notice = "原工作项新修订已排入；保留未变贡献，等待本版真实制作及新独审。" } }, enabled = accepted && !busy && !shown.optBoolean("parentBudgetIncreaseRequired")) { Text(if (busy) "正在保存…" else "批准并沿这些原工作项继续") }
             TextButton(onClick = { pendingRevision = null }, enabled = !busy) { Text("暂不修订，保留当前成果") }
         }
         notice?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }

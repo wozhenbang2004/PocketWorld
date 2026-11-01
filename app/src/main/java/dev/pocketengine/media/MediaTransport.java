@@ -9,7 +9,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
 
-/** Bounded HTTP exchanges. No redirects, implicit retries, provider fallback, or external URL fetches. */
+/** Bounded HTTP exchanges. No redirects, implicit retries or provider fallback. Confirmed result GETs are a separate bounded native path. */
 public final class MediaTransport {
     public static final int MAX_IMAGE_INPUT_CHARS=8000,MAX_SPEECH_INPUT_CHARS=4000;
     public static final int MAX_MEDIA_BYTES = 20 * 1024 * 1024;
@@ -38,6 +38,42 @@ public final class MediaTransport {
         }
     }
 
+    /** Native image bytes are issued by MediaModule after checking actual private Book inputs.
+     * IDs, URLs and base64 supplied by a model cannot construct this value. */
+    public static final class EditInput implements AutoCloseable {
+        private final Payload image,mask;private final JSONObject references;private final InputCheck current;
+        private EditInput(Payload image,Payload mask,JSONObject references,InputCheck current)throws Exception{this.image=image;this.mask=mask;this.references=new JSONObject(references.toString());this.current=current;}
+        public JSONObject references()throws Exception{return new JSONObject(references.toString());}
+        public void requireCurrent(RunControl control)throws Exception{control.check();current.check(control);control.check();}
+        @Override public void close(){java.util.Arrays.fill(image.bytes,(byte)0);if(mask!=null)java.util.Arrays.fill(mask.bytes,(byte)0);}
+    }
+    interface InputCheck {void check(RunControl control)throws Exception;}
+    static EditInput editInput(Payload image,Payload mask,JSONObject references,InputCheck check)throws Exception{return new EditInput(image,mask,references,check);}
+    public static final class ProviderResponse {
+        public final Payload payload;public final String resultUrl,responseDigest;
+        private ProviderResponse(Payload payload,String resultUrl,String digest){this.payload=payload;this.resultUrl=resultUrl;responseDigest=digest;}
+    }
+    public static ProviderResponse response(byte[] bytes,String kind)throws Exception {
+        String digest=dev.pocketengine.features.local.project.ProjectSources.sha256(bytes);
+        if(kind.equals("speech"))return new ProviderResponse(speechPayload(bytes),"",digest);
+        JSONObject reply=new JSONObject(new String(bytes,StandardCharsets.UTF_8));if(reply.getJSONArray("data").length()!=1)throw new IllegalStateException("服务没有返回单个原图像");JSONObject first=reply.getJSONArray("data").getJSONObject(0);String encoded=first.optString("b64_json"),url=first.optString("url");
+        if(!encoded.isEmpty()){if(encoded.length()>((MAX_MEDIA_BYTES+2L)/3)*4)throw new IllegalStateException("图像超过20MiB");return new ProviderResponse(imagePayload(java.util.Base64.getDecoder().decode(encoded)),"",digest);}
+        if(url.isEmpty())throw new IllegalStateException("服务没有返回图像字节或结果地址");if(url.length()>16384||url.chars().anyMatch(c->c<=32||c==127))throw new SecurityException("原产物URL无效");new URI(url);return new ProviderResponse(null,url,digest);
+    }
+    public static ProviderResponse requestResponse(String base,String key,String kind,String model,String voice,String text,boolean legacy,RunControl control)throws Exception {
+        JSONObject body=compatibleBody(kind,model,voice,text,legacy);return response(exchange(endpoint(base,kind),key,"POST",body,kind.equals("image")?30*1024*1024:MAX_MEDIA_BYTES,control),kind);
+    }
+    /** Official /images/edits multipart image[] + optional mask; never reads a caller file URI. */
+    public static ProviderResponse editResponse(String base,String key,String model,String prompt,boolean legacy,EditInput original,RunControl control)throws Exception {
+        if(original==null)throw new SecurityException("缺少原生核对的图像字节");JSONObject fields=compatibleBody("image",model,"",prompt,legacy);String boundary="pw-image-"+java.util.UUID.randomUUID();ByteArrayOutputStream body=new ByteArrayOutputStream();
+        for(var keys=fields.keys();keys.hasNext();){String field=keys.next();part(body,boundary,field,null,null,String.valueOf(fields.get(field)).getBytes(StandardCharsets.UTF_8));}
+        part(body,boundary,"image[]","source."+original.image.extension,original.image.mimeType,original.image.bytes);if(original.mask!=null)part(body,boundary,"mask","mask.png","image/png",original.mask.bytes);body.write(("--"+boundary+"--\r\n").getBytes(StandardCharsets.US_ASCII));
+        byte[] bytes=body.toByteArray();if(bytes.length>10*1024*1024)throw new IllegalArgumentException("原图与mask请求超过10MiB");URI generated=endpoint(base,"image"),edit=new URI(generated.getScheme(),null,generated.getHost(),generated.getPort(),generated.getPath().replaceFirst("/generations$","/edits"),null,null);
+        original.requireCurrent(control);try{return response(exchangeBytes(edit,key,"multipart/form-data; boundary="+boundary,bytes,30*1024*1024,control),"image");}finally{java.util.Arrays.fill(bytes,(byte)0);original.requireCurrent(control);}
+    }
+    private static void part(ByteArrayOutputStream output,String boundary,String field,String filename,String mime,byte[] bytes)throws Exception{
+        String header="--"+boundary+"\r\nContent-Disposition: form-data; name=\""+field+"\""+(filename==null?"":"; filename=\""+filename+"\"")+"\r\n"+(mime==null?"":"Content-Type: "+mime+"\r\n")+"\r\n";output.write(header.getBytes(StandardCharsets.US_ASCII));output.write(bytes);output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+    }
     public static URI base(String raw) throws Exception {
         URI result = new URI(raw == null ? "" : raw.trim());
         String path = result.getPath();
@@ -118,6 +154,12 @@ public final class MediaTransport {
         if (key != null && (key.length() > 8192 || key.chars().anyMatch(c -> c < 32 || c == 127))) throw new IllegalArgumentException("媒体凭据格式无效");
         byte[] outgoing = body == null ? null : body.toString().getBytes(StandardCharsets.UTF_8);
         if (outgoing != null && outgoing.length > MAX_JSON_BYTES) throw new IllegalArgumentException("媒体请求超过512KiB上限");
+        return exchangeRaw(endpoint,key,method,outgoing,"application/json; charset=utf-8",limit,control);
+    }
+    private static byte[] exchangeBytes(URI endpoint,String key,String type,byte[] outgoing,int limit,RunControl control)throws Exception{
+        if(key!=null&&(key.length()>8192||key.chars().anyMatch(c->c<32||c==127)))throw new IllegalArgumentException("媒体凭据格式无效");return exchangeRaw(endpoint,key,"POST",outgoing,type,limit,control);
+    }
+    private static byte[] exchangeRaw(URI endpoint,String key,String method,byte[] outgoing,String contentType,int limit,RunControl control)throws Exception {
         control.check();
         HttpURLConnection connection = (HttpURLConnection) endpoint.toURL().openConnection();
         connection.setRequestMethod(method);
@@ -133,9 +175,9 @@ public final class MediaTransport {
             control.check();
             if (outgoing != null) {
                 connection.setDoOutput(true);
-                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                connection.setRequestProperty("Content-Type", contentType);
                 connection.setFixedLengthStreamingMode(outgoing.length);
-                try (OutputStream output = connection.getOutputStream()) { control.check(); output.write(outgoing); }
+                try (OutputStream output = connection.getOutputStream()) { for(int offset=0;offset<outgoing.length;offset+=32768){control.check();output.write(outgoing,offset,Math.min(32768,outgoing.length-offset));} }
             }
             control.check();
             int status = connection.getResponseCode();
@@ -176,6 +218,7 @@ public final class MediaTransport {
         return new Payload(bytes, "audio/wav", "wav");
     }
     public static Payload outputPayload(byte[] bytes) throws Exception {
+        if(bytes.length>=12&&ascii(bytes,4,"ftyp")){if(bytes.length>MAX_MEDIA_BYTES)throw new IllegalStateException("视频超过20MiB");return new Payload(bytes,"video/mp4","mp4");}
         return bytes.length >= 12 && ascii(bytes, 0, "RIFF") && ascii(bytes, 8, "WAVE") ? speechPayload(bytes) : imagePayload(bytes);
     }
     private static boolean ascii(byte[] bytes, int offset, String value) {

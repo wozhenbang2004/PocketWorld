@@ -18,6 +18,7 @@ final class WeixinAdapter implements AutoCloseable {
     private final java.util.function.Consumer<String> profileChanging;
     private final WeixinClient client;
     private final WeixinOwnerImages ownerImages;
+    private final OwnerDmMedia ownerMedia;
     private final Map<String,Login> logins=new ConcurrentHashMap<>();
     private final Map<String,RunControl> monitors=new ConcurrentHashMap<>();
     private final Map<String,JSONObject> states=new ConcurrentHashMap<>();
@@ -26,7 +27,8 @@ final class WeixinAdapter implements AutoCloseable {
     private volatile boolean closed;
     WeixinAdapter(FeatureContext context,ChannelCore core,Accepted accepted,java.util.function.Consumer<String> profileChanging){this(context,core,accepted,profileChanging,new WeixinClient());}
     WeixinAdapter(FeatureContext context,ChannelCore core,Accepted accepted,java.util.function.Consumer<String> profileChanging,WeixinClient client){this(context,core,accepted,profileChanging,client,new GroupInboundFiles());}
-    WeixinAdapter(FeatureContext context,ChannelCore core,Accepted accepted,java.util.function.Consumer<String> profileChanging,WeixinClient client,GroupInboundFiles download){this.context=context;this.core=core;this.accepted=accepted;this.profileChanging=profileChanging;this.client=client;ownerImages=new WeixinOwnerImages(context,core,download);}
+    WeixinAdapter(FeatureContext context,ChannelCore core,Accepted accepted,java.util.function.Consumer<String> profileChanging,WeixinClient client,GroupInboundFiles download){this(context,core,accepted,profileChanging,client,download,new OwnerDmMedia(context,core,download));}
+    WeixinAdapter(FeatureContext context,ChannelCore core,Accepted accepted,java.util.function.Consumer<String> profileChanging,WeixinClient client,GroupInboundFiles download,OwnerDmMedia ownerMedia){this.context=context;this.core=core;this.accepted=accepted;this.profileChanging=profileChanging;this.client=client;this.ownerMedia=ownerMedia;ownerImages=new WeixinOwnerImages(context,core,download);}
 
     JSONObject handle(String command,JSONObject input)throws Exception {
         if(closed)throw new IllegalStateException("微信接入已关闭");
@@ -43,7 +45,7 @@ final class WeixinAdapter implements AutoCloseable {
     }
     JSONObject snapshot()throws Exception {
         JSONArray rows=new JSONArray();for(Map.Entry<String,JSONObject> row:states.entrySet())rows.put(new JSONObject(row.getValue().toString()).put("profileId",row.getKey()).put("monitorRunning",monitors.containsKey(row.getKey())));
-        return new JSONObject().put("available",true).put("accountType","weixin_ilink_bot").put("personalChatHistory",false).put("wecom",false).put("officialAccount",false).put("requiresPublicCallback",false).put("privateText",true).put("groupMessages",false).put("media",false).put("ownerDmImages",true).put("ownerDmImageConsentDefault",false).put("ownerDmImageFormats",new JSONArray().put("png").put("jpeg").put("webp")).put("ownerDmImageLimits","4images_4MiB_each_8MiB_total_12MP_each").put("mixedItemText",true).put("nativeQuotes",true).put("idOnlyQuoteRestore",true).put("quoteSource","original_inbox_same_account_peer_scope_and_transport").put("quoteBounds","max200_original_messages_30days").put("unsupportedItemsExplained",true)
+        return new JSONObject().put("available",true).put("accountType","weixin_ilink_bot").put("personalChatHistory",false).put("wecom",false).put("officialAccount",false).put("requiresPublicCallback",false).put("privateText",true).put("groupMessages",false).put("media",false).put("ownerDmSelectedMedia",true).put("ownerDmSelectedMediaConsentDefault",false).put("ownerDmSelectedMediaMaxBytes",OwnerDmMedia.MAX_BYTES).put("automaticMediaUnderstanding",false).put("ownerDmImages",true).put("ownerDmImageConsentDefault",false).put("ownerDmImageFormats",new JSONArray().put("png").put("jpeg").put("webp")).put("ownerDmImageLimits","4images_4MiB_each_8MiB_total_12MP_each").put("mixedItemText",true).put("nativeQuotes",true).put("idOnlyQuoteRestore",true).put("quoteSource","original_inbox_same_account_peer_scope_and_transport").put("quoteBounds","max200_original_messages_30days").put("unsupportedItemsExplained",true)
                 .put("backgroundPersistence","app_process_only").put("connections",rows);
     }
     private JSONObject startLogin(JSONObject input)throws Exception {
@@ -130,7 +132,10 @@ final class WeixinAdapter implements AutoCloseable {
         activePulls.put(id,control);
         try{
             JSONObject profile=requireProfile(id);String credential=context.secrets.get(secretSlot(id));if(credential.isEmpty())throw new SecurityException("请先扫码登录微信");
-            String cursor=context.secrets.get(cursorSlot(id));ChannelHttp.DispatchGuard guard=()->{control.check();JSONObject current=requireProfile(id);if(!profile.getString("apiBase").equals(current.getString("apiBase")))throw new SecurityException("微信接入配置已变化");};
+            String scope=cursorScope(profile,credential),stored=context.secrets.get(cursorSlot(id)),cursor="";
+            // Older unscoped cursors are not silently promoted to a newly authenticated account.
+            if(stored.startsWith("{")){JSONObject saved=new JSONObject(stored);if(scope.equals(saved.optString("scope")))cursor=saved.optString("cursor");}
+            ChannelHttp.DispatchGuard guard=()->{control.check();if(!scope.equals(cursorScope(requireProfile(id),context.secrets.get(secretSlot(id)))))throw new SecurityException("微信原账号/凭据/接收代次已变化");};
             JSONObject response=client.poll(profile.getString("apiBase"),credential,cursor,control,guard);guard.check();JSONArray messages=response.getJSONArray("msgs");int received=0,skipped=0;
             for(int i=0;i<messages.length();i++){
                 control.check();JSONObject raw=messages.optJSONObject(i);if(raw==null){skipped++;continue;}
@@ -141,24 +146,29 @@ final class WeixinAdapter implements AutoCloseable {
                 String token=raw.optString("context_token");if(!token.isEmpty()&&token.length()<=4096)saveContext(id,eventId,token);
                 if(!incoming.optBoolean("duplicate")){
                     try{ownerImages.capture(incoming.getJSONObject("event"),raw,control);}catch(Exception unavailable){control.check();core.eventStatus(eventId,"awaiting_local","原图片下载引用未能保留；文字仍在原消息中，未下载或假称看图");}
+                    try{ownerMedia.captureWeixin(incoming.getJSONObject("event"),raw,control);}catch(Exception unavailable){control.check();core.eventStatus(eventId,"awaiting_local","原文件/音视频下载引用未能保留；没有下载或假称已读媒体");}
                     received++;
                     if(System.currentTimeMillis()-canonical.getLong("sentAt")>3_600_000)core.eventStatus(eventId,"awaiting_local","已保留旧消息，未自动回答或执行；请由本机选择处理");
                     else{guard.check();accepted.handle(profile,incoming);}
                 }
             }
-            guard.check();String next=response.optString("get_updates_buf");if(!next.isEmpty())context.secrets.put(cursorSlot(id),next);
+            guard.check();String next=response.optString("get_updates_buf");if(!next.isEmpty())context.secrets.put(cursorSlot(id),new JSONObject().put("version",2).put("scope",scope).put("cursor",next).put("savedAt",System.currentTimeMillis()).toString());guard.check();
             state(id,monitors.containsKey(id)?"listening":"synchronized","已完成一次官方消息同步",System.currentTimeMillis());
             return new JSONObject().put("profileId",id).put("received",received).put("skippedUnsupported",skipped).put("authenticated",true).put("cursorSaved",!next.isEmpty()).put("status","synchronized");
         }finally{activePulls.remove(id,control);lock.set(false);}
     }
     boolean ownerImagesEligible(JSONObject event)throws Exception {return ownerImages.eligible(event);}
+    JSONObject frozenRemoteInputSource(String id,String hash)throws Exception{return ownerImages.frozenRemoteInputSource(id,hash);}
     WeixinOwnerImages.Projection ownerImages(JSONObject event,dev.pocketengine.core.ModelConfig model,RunControl control)throws Exception{return ownerImages.project(event,model,control);}
     void checkOwnerImages(JSONObject event,WeixinOwnerImages.Projection projection,RunControl control)throws Exception{ownerImages.checkProjection(event,projection,control);}
     JSONObject send(JSONObject profile,JSONObject event,JSONObject draft,RunControl control,ChannelHttp.DispatchGuard guard)throws Exception {
         return client.send(profile.getString("apiBase"),context.secrets.get(secretSlot(profile.getString("id"))),event,draft,getContext(profile.getString("id"),event.getString("id")),control,guard);
     }
+    JSONObject sendMedia(JSONObject profile,JSONObject event,JSONObject row,JSONObject format,byte[] bytes,RunControl control,ChannelHttp.DispatchGuard guard,WeixinClient.MediaSteps steps)throws Exception {
+        return client.sendMedia(profile.getString("apiBase"),context.secrets.get(secretSlot(profile.getString("id"))),event,row,getContext(profile.getString("id"),event.getString("id")),format,bytes,control,guard,steps);
+    }
     private JSONObject requireProfile(String id)throws Exception {JSONObject profile=core.profile(id);if(!profile.optString("provider").equals("weixin")||!profile.optBoolean("enabled"))throw new SecurityException("微信连接不存在或已暂停");WeixinClient.validateApiBase(profile.getString("apiBase"));return profile;}
-    synchronized void resetContexts(String id)throws Exception {context.secrets.remove(cursorSlot(id));context.secrets.remove(contextSlot(id));ownerImages.reset(id);states.remove(id);}
+    synchronized void resetContexts(String id)throws Exception {context.secrets.remove(cursorSlot(id));context.secrets.remove(contextSlot(id));ownerImages.reset(id);ownerMedia.reset(id);states.remove(id);}
     private synchronized void saveContext(String id,String eventId,String token)throws Exception {
         String stored=context.secrets.get(contextSlot(id));JSONObject all=stored.isEmpty()?new JSONObject():new JSONObject(stored);all.remove(eventId);all.put(eventId,token);
         while(all.length()>100||all.toString().length()>48000){String first=all.keys().next();if(first.equals(eventId)&&all.length()>1){java.util.Iterator<String> keys=all.keys();keys.next();first=keys.next();}all.remove(first);}
@@ -170,6 +180,7 @@ final class WeixinAdapter implements AutoCloseable {
     private void state(String id,String status,String message,long success) {try{JSONObject previous=states.get(id);long last=success>0?success:previous==null?0:previous.optLong("lastSyncAt");states.put(id,new JSONObject().put("status",status).put("message",message).put("lastSyncAt",last));emit("weixin_state",id);}catch(Exception ignored){/* Status telemetry never changes an authenticated event or its durable cursor. */}}
     private void emit(String type,String id)throws Exception{context.emit("channels",new JSONObject().put("type",type).put("profileId",id));}
     private static String secretSlot(String id){return "channels."+id+".secret";}
+    private static String cursorScope(JSONObject profile,String credential)throws Exception{return ChannelCore.digest(new JSONArray().put("weixin_cursor_v2").put(profile.getString("id")).put(profile.getString("appId")).put(profile.getString("apiBase")).put(profile.getString("transportEpoch")).put(ChannelCore.digest(credential)).toString());}
     private static String cursorSlot(String id){return "channels."+id+".weixin-cursor";}
     private static String contextSlot(String id){return "channels."+id+".weixin-context";}
     @Override public void close(){closed=true;for(RunControl control:monitors.values())control.cancel();for(RunControl control:activePulls.values())control.cancel();for(Login login:logins.values())synchronized(login){login.control.cancel();}logins.clear();}

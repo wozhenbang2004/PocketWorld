@@ -236,6 +236,7 @@ private fun LocalJobDetail(checkoutId: String, ref: LocalJobRef, metadata: JSONO
 internal fun LocalFiles(checkoutId: String, state: PocketUiState, controller: PocketWorldController) {
     val projectId = state.feature("local").optJSONArray("checkouts").objects().firstOrNull { it.optString("id") == checkoutId }?.optString("projectId")
     if (projectId.isNullOrBlank()) { LocalCaption("原工作副本尚未核对，草稿未移到其他项目。请刷新原项目后重开。"); return }
+    ProjectGitSection(projectId, checkoutId, state, controller)
     val session = controller.projectWorkbench
     val opened = session.opened(checkoutId)
     var requestId by remember(checkoutId) { mutableStateOf<String?>(null) }
@@ -307,6 +308,7 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
     var cacheError by remember { mutableStateOf<String?>(null) }
     var durable by remember { mutableStateOf(false) }
     var cacheRetry by remember { mutableIntStateOf(0) }
+    var liveWriteBlocked by remember(projectId, checkoutId, path) { mutableStateOf(true) }
     val retainedEditor by rememberUpdatedState(editor)
     DisposableEffect(projectId, checkoutId, path) { onDispose { retainedEditor?.let(store::release) } }
     fun update(next: ProjectFileDraft): Boolean = try {
@@ -387,7 +389,7 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
                 when {
                     mode == 0 && current != null -> {
                         val editableSize = current.text.toByteArray(Charsets.UTF_8).size <= 262144
-                        if (editableSize) ProjectSourceEditor(checkoutId, path, current.text, enabled = !busy && current.hasBaseline(), controller = controller, modifier = Modifier.weight(1f)) { value ->
+                        if (editableSize) ProjectSourceEditor(checkoutId, path, current.text, enabled = !busy && current.hasBaseline(), controller = controller, modifier = Modifier.weight(1f), draft = current, changedDraft = ::update) { value ->
                             if (value.toByteArray(Charsets.UTF_8).size > 262144) { localError = "编辑区与副本保存均限256KiB；没有替换现有草稿，也不会部分保存覆盖文件尾部。"; false }
                             else try { update(current.edit(value)) } catch (failure: Exception) { localError = failure.message; false }
                         }
@@ -395,11 +397,14 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
                             Text("文件超过256KiB，暂只支持完整只读查看；不会截断保存。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             ProjectReadOnlyTextPages("我的完整原草稿", current.text, "draft:$checkoutId:$path:${current.revision}", Modifier.weight(1f))
                         }
+                        ProjectLiveFileSaveControls(projectId, checkoutId, path, current, controller,
+                            canSave = editableSize && !busy && !needsFreshRead && !conflict && dirty && !current.creating,
+                            changed = ::update, saved = { needsFreshRead = true; reload(); mode = 1 }, blocksOtherWrites = { liveWriteBlocked = it })
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = {
                                 try { focus.clearFocus(); val frozen = current.saveIntent(); saveIntent = frozen; submitted = "writeFile" to controller.requestFeature("local", "writeFile", frozen.input()); acknowledged = false }
                                 catch (failure: Exception) { localError = failure.message }
-                            }, enabled = editableSize && !busy && !needsFreshRead && !conflict && (current.creating || dirty), modifier = Modifier.weight(1f)) { Text("保存并看差异") }
+                            }, enabled = editableSize && !busy && !liveWriteBlocked && !needsFreshRead && !conflict && (current.creating || dirty), modifier = Modifier.weight(1f)) { Text("保存并看差异") }
                             TextButton(onClick = { notices = !notices }) { Text(if (notices) "收起" else "更多") }
                         }
                     }
@@ -420,7 +425,7 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
                         Button(onClick = {
                             try { val frozen = LocalWorkbenchGuard.importPayload(JSONObject(reviewed.toString())); submitted = "importToProject" to controller.requestFeature("local", "importToProject", frozen); acknowledged = false; localError = null }
                             catch (failure: Exception) { localError = failure.message }
-                        }, enabled = acknowledged && !busy && !dirty && !conflict && !needsFreshRead && reviewed.optBoolean("importable") && !reviewed.optBoolean("truncated") && importedVersion == null, modifier = Modifier.fillMaxWidth()) { Text(if (reviewed.optBoolean("deleted")) "确认删除正式项目文件" else "明确导回正式版本库") }
+                        }, enabled = acknowledged && !busy && !liveWriteBlocked && !dirty && !conflict && !needsFreshRead && reviewed.optBoolean("importable") && !reviewed.optBoolean("truncated") && importedVersion == null, modifier = Modifier.fillMaxWidth()) { Text(if (reviewed.optBoolean("deleted")) "确认删除正式项目文件" else "明确导回正式版本库") }
                         TextButton(onClick = { notices = !notices }) { Text(if (notices) "收起其他文件操作" else "其他文件操作") }
                     }
                     else -> Spacer(Modifier.weight(1f))
@@ -431,7 +436,7 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
                     cacheError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                     if (reviewed != null) SelectionContainer { Text("checkout $checkoutId\n当前文件 SHA-256 ${reviewed.optString("expectedHash")}\n项目目标版本 ${reviewed.optInt("expectedVersion")}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
                     TextButton(onClick = { reload() }, enabled = !busy && current != null) { Text("读最新副本，保留我的草稿") }
-                    if (reviewed != null && !reviewed.optBoolean("deleted")) TextButton(onClick = { deleting = true }, enabled = !busy && !dirty && !needsFreshRead && !conflict) { Text("从工作副本删除…", color = MaterialTheme.colorScheme.error) }
+                    if (reviewed != null && !reviewed.optBoolean("deleted")) TextButton(onClick = { deleting = true }, enabled = !busy && !liveWriteBlocked && !dirty && !needsFreshRead && !conflict) { Text("从工作副本删除…", color = MaterialTheme.colorScheme.error) }
                     if (dirty) TextButton(onClick = { discard = true }, enabled = !busy) { Text("明确放弃未保存草稿…", color = MaterialTheme.colorScheme.error) }
                 }
             }

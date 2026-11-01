@@ -13,6 +13,7 @@ public final class SafeModelRecovery {
     private long waited;
     /** -1 means keep the original failure. Every retry remains a new physical, attributed call. */
     public long delay(Exception original,int turnRetries,long now)throws Exception {
+        if(original instanceof ModelGateway.GatewayException gateway&&gateway.logicalControlled())return -1;
         if(turnRetries>=MAX_RETRIES_PER_TURN||retries>=MAX_RETRIES_PER_TASK)return -1;
         InferenceFailure failure=original instanceof ModelGateway.GatewayException
                 ?((ModelGateway.GatewayException)original).observation():null;
@@ -37,9 +38,10 @@ public final class SafeModelRecovery {
                 ||failure.kind==InferenceFailure.Kind.ACCOUNT_GATE&&"ACCOUNT_CONTEXT_BUDGET_EXCEEDED".equals(failure.nativeCode));
     }
     private static boolean transientFailure(InferenceFailure failure){
-        if(failure.httpStatus==401||failure.httpStatus==403)return false;
+        if(failure.httpStatus==401||failure.httpStatus==403||failure.httpStatus==402)return false;
         if(failure.kind==InferenceFailure.Kind.NETWORK||failure.kind==InferenceFailure.Kind.TIMEOUT||failure.kind==InferenceFailure.Kind.INCOMPLETE_STREAM)return true;
-        if(failure.kind==InferenceFailure.Kind.HTTP)return failure.httpStatus==429||failure.httpStatus==500||failure.httpStatus==502||failure.httpStatus==503||failure.httpStatus==504;
+        if(failure.kind==InferenceFailure.Kind.RATE_LIMIT)return failure.httpStatus==429;
+        if(failure.kind==InferenceFailure.Kind.HTTP)return failure.httpStatus==500||failure.httpStatus==502||failure.httpStatus==503||failure.httpStatus==504;
         return failure.kind==InferenceFailure.Kind.ACCOUNT_GATE
                 &&java.util.Set.of("PROVIDER_UNAVAILABLE","PROVIDER_RATE_LIMITED","RATE_LIMITED","GATEWAY_BUSY","PROVIDER_NETWORK_ERROR","PROVIDER_STREAM_INTERRUPTED").contains(failure.nativeCode)
                 &&(failure.httpStatus==0||failure.httpStatus==429||failure.httpStatus==500||failure.httpStatus==502||failure.httpStatus==503||failure.httpStatus==504);

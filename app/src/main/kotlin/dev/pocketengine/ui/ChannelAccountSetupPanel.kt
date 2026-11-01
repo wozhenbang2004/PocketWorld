@@ -42,6 +42,7 @@ internal fun ChannelAccountSetupPanel(state: PocketUiState, controller: PocketWo
     if (qq) ChannelProfileDialog(null, state, controller) { qq = false }
     if (weixin) WeixinNativeLoginDialog(state, controller) { weixin = false }
     ChannelOwnerImageStatus(state, controller)
+    ChannelOwnerMediaPanel(state, controller)
 }
 
 @Composable
@@ -50,10 +51,12 @@ internal fun ChannelProfileActions(profile: JSONObject, binding: JSONObject?, st
     var edit by remember { mutableStateOf(false) }
     var bind by remember { mutableStateOf(false) }
     var unbind by remember { mutableStateOf(false) }
+    var history by remember { mutableStateOf(false) }
     val id = profile.optString("id")
     ChannelSetupCaption(if (!profile.optBoolean("enabled")) "下一步：启用此连接后，再核对真实接收状态。" else if (binding == null) "下一步：先接收一条本人私聊，再在本机核对主人。连接保存不等于身份已绑定。" else "已绑定主人；自动问答、允许任务和持续接收仍是独立设置。")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         TextButton(onClick = { edit = true }) { Text("连接设置", fontSize = 12.sp) }
+        TextButton(onClick = { history = true }) { Text("已读历史范围", fontSize = 13.sp) }
         TextButton(onClick = { bind = true }) { Text(if (binding == null) "核对主人私聊" else "重新核对主人", fontSize = 12.sp) }
         if (binding != null) TextButton(onClick = { unbind = true }) { Text("解除绑定", fontSize = 12.sp) }
         if (profile.optString("provider") == "weixin") TextButton(onClick = { controller.requestFeature("channels", "weixin.poll", JSONObject().put("id", id)) }, enabled = profile.optBoolean("enabled") && "channels.weixin.poll" !in state.moduleBusy) { Text("同步一次", fontSize = 12.sp) }
@@ -64,6 +67,7 @@ internal fun ChannelProfileActions(profile: JSONObject, binding: JSONObject?, st
         if (input?.let { it.optString("id", it.optString("profileId")) } == id) state.moduleErrors[key]?.let { Text(it, color = Danger, fontSize = 12.sp) }
     }
     if (edit) ChannelProfileDialog(profile, state, controller) { edit = false }
+    if (history) ChannelHistoryDialog(profile, state, controller) { history = false }
     if (bind) ChannelOwnerBindingDialog(profile, state, controller) { bind = false }
     if (unbind) AlertDialog(onDismissRequest = { unbind = false }, title = { Text("解除这个账号的主人绑定？") }, text = { Text("新的消息将回到独立外部会话；旧私聊任务授权及私人回答不能继续使用。已发生的外部动作不会撤回。", fontSize = 13.sp) }, confirmButton = { Button(onClick = { controller.requestFeature("channels", "owner.unbind", JSONObject().put("profileId", id)); unbind = false }) { Text("解除绑定") } }, dismissButton = { TextButton(onClick = { unbind = false }) { Text("返回") } })
 }
@@ -75,7 +79,10 @@ private fun ChannelProfileDialog(original: JSONObject?, state: PocketUiState, co
     var secret by remember { mutableStateOf("") } // Never saved to the activity bundle.
     var enabled by remember { mutableStateOf(original?.optBoolean("enabled") ?: true) }
     var auto by remember { mutableStateOf(original?.optBoolean("autoReply") ?: false) }
+    var qqGuild by remember { mutableStateOf(original?.optBoolean("qqGuildEnabled") ?: false) }
+    var qqStream by remember { mutableStateOf(original?.optBoolean("qqStreamRepliesEnabled") ?: false) }
     var ownerImages by remember { mutableStateOf(original?.optBoolean("ownerImagesEnabled") ?: false) }
+    var ownerMedia by remember { mutableStateOf(original?.optBoolean("ownerMediaEnabled") ?: false) }
     var submitted by remember { mutableStateOf<String?>(null) }
     val provider = original?.optString("provider") ?: "qq"
     val busy = "channels.profile.save" in state.moduleBusy
@@ -89,12 +96,20 @@ private fun ChannelProfileDialog(original: JSONObject?, state: PocketUiState, co
                 OutlinedTextField(appId, { appId = it }, label = { Text("QQ平台AppID") }, readOnly = original != null, singleLine = true)
                 OutlinedTextField(secret, { secret = it }, label = { Text(if (original == null) "QQ平台AppSecret" else "新AppSecret（留空保留）") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
                 ChannelSetupCaption("AppID/AppSecret来自你有权管理的QQ机器人。更换AppID需另建连接，不沿用旧身份授权。保存不代表账号资格或网关已经验证。")
+                Row { Checkbox(qqGuild, { qqGuild = it }); Text("同时接收QQ频道@消息与频道私信", fontSize = 14.sp, modifier = Modifier.weight(1f).padding(top = 12.dp)) }
+                Row { Checkbox(qqStream, { qqStream = it }); Text("向QQ C2C显示生成中的回答", fontSize = 14.sp, modifier = Modifier.weight(1f).padding(top = 12.dp)) }
+                Text("仅自动问答已启用且原消息在五分钟内时使用。会把实际模型草稿逐段传到同一条QQ消息，最终完整后再标结束；中断/未知只保留原帧，不改发第二条。群/频道不支持此流式接口。", fontSize = 14.sp, lineHeight = 21.sp, color = SecondaryInk)
+                ChannelSetupCaption("默认仅C2C与QQ群。频道需机器人具备官方权限；频道私信的用户ID与C2C openid是不同场景，必须在本机另行核对绑定，绝不沿用旧主人或群权限。")
             } else if (provider == "weixin") ChannelSetupCaption("微信凭据来自原官方扫码流程；本页不索取微信密码。重新登录请从“连接微信私聊”开始，主人绑定另行核对。")
             Row { Checkbox(enabled, { enabled = it }); Text("启用此连接", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp)) }
             Row { Checkbox(auto, { auto = it }); Text("对新消息自动文字问答", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp)) }
-            if (provider == "weixin") {
+            if (provider == "weixin" || provider == "qq") {
                 Row { Checkbox(ownerImages, { ownerImages = it }); Text("下载并向所选图像模型提供主人私聊图片", fontSize = 13.sp, modifier = Modifier.weight(1f).padding(top = 12.dp)) }
                 ChannelSetupCaption("默认关闭，仅处理原消息接收时已经绑定的本人私聊；自动图片回答还需同时开启上方自动问答与实际接收。仅此勾选不会启动收发。每条最多4张、单张4MiB/12MP、合计8MiB。会从官方CDN下载/解密，实际文件保存在私人附件并发送给当前明确支持图片的模型；不含语音、视频、群图或其他人的私聊。关闭不删除已经保存的文件。保存更新代次后请发送一条新消息。")
+            }
+            if (provider == "weixin" || provider == "qq") {
+                Row { Checkbox(ownerMedia, { ownerMedia = it }); Text("允许在本机逐项保存主人私聊文件、语音和视频", fontSize = 14.sp, modifier = Modifier.weight(1f).padding(top = 12.dp)) }
+                Text("默认关闭。仅接收时已绑定的本人私聊；每项另行确认才从官方CDN下载，最多8MiB，保存到原私人附件。不会自动转写、分析、上传电脑或回发。旧图片同意不包含此权限，关闭不删除已保存原件。保存后请发送新消息。", fontSize = 14.sp, lineHeight = 21.sp, color = SecondaryInk)
             }
             ChannelSetupCaption("群和非主人私聊只能用明确配置的API-key模型；已认证并由本机绑定的主人私聊才可用本人套餐。文字问答不授予手机工具或群任务能力。")
             if (original != null) ChannelSetupCaption("保存会更新连接代次并停止当前接收/生成；已有动作不回滚。原群任务与待发回复可能需要重新核对来源。")
@@ -102,7 +117,7 @@ private fun ChannelProfileDialog(original: JSONObject?, state: PocketUiState, co
         }
     }, confirmButton = { Button(onClick = {
         val payload = original?.let { JSONObject(it.toString()) } ?: JSONObject()
-        payload.put("name", name.trim()).put("provider", provider).put("appId", appId.trim()).put("enabled", enabled).put("autoReply", auto).put("ownerImagesEnabled", provider == "weixin" && ownerImages)
+        payload.put("name", name.trim()).put("provider", provider).put("appId", appId.trim()).put("enabled", enabled).put("autoReply", auto).put("ownerImagesEnabled", (provider == "weixin" || provider == "qq") && ownerImages).put("qqGuildEnabled", provider == "qq" && qqGuild).put("qqStreamRepliesEnabled", provider == "qq" && qqStream).put("ownerMediaEnabled", (provider == "weixin" || provider == "qq") && ownerMedia)
         if (secret.isNotEmpty()) payload.put("secret", secret)
         submitted = controller.requestFeature("channels", "profile.save", payload); secret = ""
     }, enabled = !busy && name.trim().isNotEmpty() && (provider != "qq" || appId.trim().isNotEmpty() && (original != null || secret.isNotEmpty()))) { Text(if (busy) "保存中" else "保存配置") } }, dismissButton = { TextButton(onClick = { secret = ""; close() }, enabled = !busy) { Text("取消") } })
@@ -202,7 +217,7 @@ private fun ChannelOwnerBindingDialog(profile: JSONObject, state: PocketUiState,
             Text(profile.optString("name"), fontSize = 14.sp)
             ChannelSetupCaption("只选择你自己的平台账号发来的当前认证私聊。群消息、昵称、“我是主人”等文字及转发来源都不能建立主人身份。")
             if (candidates.isEmpty()) ChannelSetupCaption("当前连接代次下还没有可核对的私聊。请先从本人账号发一条消息并同步；旧凭据代次的消息不能用于新绑定。")
-            for (event in candidates.take(10)) Row { RadioButton(selected == event.optString("id"), { selected = event.optString("id"); accepted = false }); Column(Modifier.weight(1f).padding(top = 9.dp)) { Text(event.optString("senderId"), fontSize = 13.sp); ChannelSetupCaption(event.optString("text").take(160)); ChannelSetupCaption("认证来源：" + event.optString("authenticatedBy")) } }
+            for (event in candidates.take(10)) Row { RadioButton(selected == event.optString("id"), { selected = event.optString("id"); accepted = false }); Column(Modifier.weight(1f).padding(top = 9.dp)) { Text(event.optString("senderId"), fontSize = 13.sp); ChannelSetupCaption(event.optString("text").take(160)); ChannelSetupCaption("认证来源：" + event.optString("authenticatedBy")); if (event.optString("conversationKind").startsWith("qq_")) ChannelSetupCaption("原生场景：" + event.optString("conversationKind") + if (event.has("qqGuildId")) " · 频道会话 " + event.optString("qqGuildId") else "") } }
             Row { Checkbox(accepted, { accepted = it }, enabled = actual != null); Text("我已核对这是我自己的账号", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp)) }
             ChannelSetupCaption("绑定后本人私聊可使用私人问答与记忆；创建任务仍需另开权限，任何写入、外发和手机工具不因此自动批准。")
             if (submitted != null && state.moduleResultInputs["channels.owner.bind"]?.optString("_requestId") == submitted) state.moduleErrors["channels.owner.bind"]?.let { Text(it, color = Danger, fontSize = 12.sp) }
@@ -212,7 +227,7 @@ private fun ChannelOwnerBindingDialog(profile: JSONObject, state: PocketUiState,
 
 @Composable
 private fun ChannelOwnerImageStatus(state: PocketUiState, controller: PocketWorldController) {
-    val recent = state.feature("channels").optJSONArray("inbox").objects().filter { event -> event.optJSONObject("messageParts")?.let { it.optString("provider") == "weixin" && it.optJSONArray("parts").objects().any { part -> part.optString("kind") == "image" } } == true }.takeLast(4).asReversed()
+    val recent = state.feature("channels").optJSONArray("inbox").objects().filter { event -> event.optJSONObject("messageParts")?.let { it.optString("provider") in setOf("weixin", "qq") && it.optJSONArray("parts").objects().any { part -> part.optString("kind") == "image" } } == true }.takeLast(4).asReversed()
     if (recent.isEmpty()) return
     Text("最近4条图片接收范围内的处理回执", fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
     for (event in recent) {
@@ -232,8 +247,45 @@ private fun ChannelOwnerImageStatus(state: PocketUiState, controller: PocketWorl
             TextButton(onClick = { controller.openAttachmentOutcome(JSONObject().put("id", ref.optString("artifactId")).put("sha256", ref.optString("sha256"))) }) { Text("查看这个固定版本原图", fontSize = 12.sp) }
         }
         if (refs.isNotEmpty()) ChannelSetupCaption("完整原文件及版本保存在私人附件，可从文件与成果查看；关闭图片处理不会删除这些原件。")
+        if (refs.isNotEmpty()) TextButton(onClick = { controller.openConnection("remote") }) { Text("选择电脑后交给远端任务") }
+        if (refs.isNotEmpty()) ChannelSetupCaption("需在所选电脑另行选择这条消息的准确原件并确认外传；不自动启动、不自动回发。原绑定失效后不能沿旧消息外传。")
     }
 }
 
 @Composable
 private fun ChannelSetupCaption(text: String) { Text(text, fontSize = 12.sp, lineHeight = 19.sp, color = SecondaryInk) }
+
+/** The platform does not expose a complete transcript through these receiving APIs. */
+@Composable
+private fun ChannelHistoryDialog(profile: JSONObject, state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
+    val id = profile.optString("id")
+    val candidates = state.feature("channels").optJSONArray("inbox").objects().filter { it.optString("profileId") == id && it.optString("transportEpoch") == profile.optString("transportEpoch") }.asReversed()
+    var selected by remember(id) { mutableStateOf<String?>(null) }
+    var submitted by remember(id) { mutableStateOf<String?>(null) }
+    val key = "channels.history.inspect"
+    val matches = submitted != null && state.moduleResultInputs[key]?.optString("_requestId") == submitted
+    val result = if (matches) state.moduleResults[key] else null
+    val coverage = result?.optJSONObject("coverage")
+    val foreground = LocalLifecycleOwner.current.lifecycle.currentState == Lifecycle.State.RESUMED
+    AlertDialog(onDismissRequest = close, title = { Text("这次问答可读的历史") }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("只显示本机已收到的同账号、同会话记录，不读取其他群或绑定前的私人历史。平台完整历史与离线遗漏不作已读保证。", fontSize = 14.sp)
+            profile.optJSONObject("receivingCheckpoint")?.let { checkpoint -> Text(if (checkpoint.optBoolean("persisted")) "QQ原同步位置已保存；平台若仍保留会话，将从原位置请求重放。" else "当前没有可用的QQ原会话位置；不能补造离线历史。", fontSize = 13.sp) }
+            for (event in candidates.take(12)) Row {
+                RadioButton(selected == event.optString("id"), { selected = event.optString("id"); submitted = null })
+                Column(Modifier.weight(1f).padding(top = 9.dp)) {
+                    Text((if (event.optString("kind") == "group") "群 " + event.optString("roomId") else "私聊 " + event.optString("senderId")), fontSize = 13.sp)
+                    Text(event.optString("text").take(100).ifEmpty { "媒体消息（这里不代表已读取媒体）" }, fontSize = 14.sp)
+                }
+            }
+            if (candidates.isEmpty()) Text("当前连接代次没有保留的入站消息。", fontSize = 14.sp)
+            coverage?.let {
+                Text("部分历史 · 本轮包含 ${it.optInt("includedMessageCount")} 条 / 本机可用 ${it.optInt("availableMessageCount")} 条", fontSize = 14.sp)
+                Text("窗口省略 ${it.optInt("omittedByLimit")} 条，未确认投递 ${it.optInt("unconfirmedRepliesOmitted")} 条未作已送达回答。", fontSize = 13.sp)
+                Text("离线缺口未知；未提供平台历史补查。顺序是本机持久接收顺序，不推断QQ不同字段的线序。", fontSize = 13.sp)
+                for (message in result?.optJSONArray("messages").objects()) Text((if (message.optString("role") == "assistant") "已确认发出的回复：" else "已收到：") + message.optString("content"), fontSize = 14.sp)
+            }
+            if (matches) state.moduleErrors[key]?.let { Text(it, color = Danger, fontSize = 13.sp) }
+        }
+    }, confirmButton = { Button(onClick = { selected?.let { submitted = controller.requestFeature("channels", "history.inspect", JSONObject().put("eventId", it).put("limit", 8)) } }, enabled = foreground && selected != null && key !in state.moduleBusy) { Text("核对原消息之前的记录") } }, dismissButton = { TextButton(onClick = close) { Text("返回") } })
+}

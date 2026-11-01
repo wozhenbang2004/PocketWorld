@@ -56,7 +56,7 @@ private fun teamRows(array: JSONArray?): List<JSONObject> = (0 until (array?.len
 private fun collaborationStatus(status: String): String = when (status) {
     "queued" -> "等待开始"; "running" -> "本轮工作中"; "completed" -> "本轮已产出"; "partial" -> "部分分工未完成"; "failed" -> "本轮未完成"
     "awaiting_review" -> "冻结成果待独审"; "awaiting_input" -> "等待回答原问题"; "awaiting_user" -> "等待主人处理"; "waiting_dependency" -> "等待前置分工"; "blocked_dependency" -> "前置未完成，已阻断"; "blocked_unknown" -> "原操作结果待核对"
-    "unsupported" -> "执行器未接入"; "blocked" -> "环境未就绪"; "awaiting_approval" -> "等待本机授权"; "paused" -> "已暂停"; "interrupted" -> "已中断，等待主人继续"; "cancelled" -> "已停止"; else -> status
+    "unsupported" -> "执行器未接入"; "blocked" -> "环境未就绪"; "awaiting_approval" -> "等待本机授权"; "paused" -> "已暂停"; "interrupted" -> "已中断，等待主人继续"; "cancelled" -> "已停止"; "exited" -> "已退出"; else -> status
 }
 
 /** A question keeps its original assignment even when another question/member becomes latest. */
@@ -172,7 +172,7 @@ internal fun TeamCollaborationPage(
                 }
                 Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected == null, { selected = null }, label = { Text("共同现场") })
-                    members.forEach { slot -> FilterChip(selected == slot.optString("id"), { selected = slot.optString("id") }, label = { Text(slot.optString("name") + " · " + collaborationStatus(slot.optString("status"))) }) }
+                    members.filterNot { it.optBoolean("hidden") || it.optBoolean("exited") }.forEach { slot -> FilterChip(selected == slot.optString("id"), { selected = slot.optString("id") }, label = { Text(slot.optString("name") + " · " + collaborationStatus(slot.optString("status"))) }) }
                 }
                 TabRow(tab, containerColor = Color.White) { listOf("对话", "分工", "成果").forEachIndexed { i, label -> Tab(tab == i, { tab = i }, text = { Text(label) }) } }
                 Box(Modifier.weight(1f).fillMaxWidth()) { listStates.SaveableStateProvider("$runId|$tab|$selected") { val listState = rememberLazyListState()
@@ -182,7 +182,7 @@ internal fun TeamCollaborationPage(
                         if (visible.isEmpty()) item { Text("尚无此成员的实际消息。", style = MaterialTheme.typography.bodyMedium) }
                         items(visible, key = { it.getString("messageId") }) { row ->
                             Column(Modifier.fillMaxWidth()) {
-                                val actor = when (row.optString("role")) { "user" -> "你"; "parent_model" -> "主代理 · " + row.optString("senderParentTaskId").take(8); else -> name(row.optString("memberId")) }
+                                val actor = when (row.optString("role")) { "user" -> "你"; "parent_model" -> "主代理 · " + row.optString("senderParentTaskId").take(8); else -> row.optJSONObject("memberSnapshot")?.optString("name")?.takeIf { it.isNotBlank() } ?: name(row.optString("memberId")) }
                                 val target = row.optString("recipientMemberId", row.optString("targetMemberId"))
                                 Text(actor + if (target.isNotBlank()) " → ${name(target)}" else "", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 row.optString("quoteMessageId").takeIf { it.isNotBlank() }?.let { quote -> Text("回复：" + (rows.find { it.optString("messageId") == quote }?.optString("content")?.take(100) ?: "原消息 $quote"), style = MaterialTheme.typography.bodySmall) }
@@ -212,7 +212,7 @@ internal fun TeamCollaborationPage(
                 HorizontalDivider()
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        members.forEach { slot -> FilterChip(recipient == slot.optString("id"), { if (reply?.optString("kind") != "assignment_question") recipient = slot.optString("id") }, label = { Text("@${slot.optString("name")} · ${slot.optString("id")}") }) }
+                        members.filterNot { it.optBoolean("exited") }.forEach { slot -> FilterChip(recipient == slot.optString("id"), { if (reply?.optString("kind") != "assignment_question") recipient = slot.optString("id") }, label = { Text("@${slot.optString("name")} · ${slot.optString("id")}") }) }
                     }
                     if (reply != null) Row(verticalAlignment = Alignment.CenterVertically) { Text("回复 ${name(reply.optString("memberId"))}：${reply.optString("content").take(100)}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f)); TextButton(onClick = { replyId = "" }) { Text("取消引用") } }
                     else Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("discussion" to "讨论", "queue" to "下一工作点", "steer" to "暂停改方向").forEach { (id, label) -> FilterChip(mode == id, { mode = id }, label = { Text(label) }) } }

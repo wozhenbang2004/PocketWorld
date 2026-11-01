@@ -11,6 +11,7 @@ import org.json.JSONObject;
 public final class SshProfile {
     public final String id,name,host,user,root,authType,pinnedKey,configRevision,credentialRevision;
     public final int port;
+    private final String nativeBackupOrigin;
     public SshProfile(JSONObject value)throws Exception {
         id=text(value,"id",80);if(!id.matches("[A-Za-z0-9_-]{1,80}"))throw new IllegalArgumentException("SSH连接编号无效");
         name=text(value,"name",80);String address=text(value,"host",253);
@@ -25,6 +26,7 @@ public final class SshProfile {
         authType=value.optString("authType","key");if(!authType.equals("key")&&!authType.equals("password"))throw new IllegalArgumentException("SSH认证方式无效");
         pinnedKey=value.optString("pinnedKey");if(!pinnedKey.isEmpty()&&(pinnedKey.length()>65536||Base64.getDecoder().decode(pinnedKey).length<16))throw new IllegalArgumentException("主机密钥记录无效");
         configRevision=revision(value,"configRevision");credentialRevision=revision(value,"credentialRevision");
+        JSONObject backup=value.optJSONObject("nativeBackupOrigin");nativeBackupOrigin=backup==null?null:backup.toString();
     }
     public String binding(){return host+"\n"+port+"\n"+user+"\n"+root;}
     public String bindingHash(){String identity=id+"\n"+binding()+"\n"+authType+"\n"+pinnedKey;if(!configRevision.isEmpty()||!credentialRevision.isEmpty())identity+="\nconfigRevision="+configRevision+"\ncredentialRevision="+credentialRevision;return hash(identity.getBytes(StandardCharsets.UTF_8));}
@@ -32,7 +34,7 @@ public final class SshProfile {
     public String accountKey(){if(pinnedKey.isEmpty())throw new SecurityException("SSH账号资源需要已确认的主机指纹");return hash((fingerprint(Base64.getDecoder().decode(pinnedKey))+"\n"+user).getBytes(StandardCharsets.UTF_8));}
     public String credentialSlot(){String identity=id+"\n"+binding();if(!credentialRevision.isEmpty())identity+="\ncredentialRevision="+credentialRevision;return "ssh.credentials."+hash(identity.getBytes(StandardCharsets.UTF_8));}
     public String hostAlias(){return "pocketworld-"+bindingHash();}
-    public JSONObject document()throws Exception{return new JSONObject().put("id",id).put("name",name).put("host",host).put("port",port).put("username",user).put("workspace",root).put("authType",authType).put("pinnedKey",pinnedKey).put("configRevision",configRevision).put("credentialRevision",credentialRevision);}
+    public JSONObject document()throws Exception{return new JSONObject().put("id",id).put("name",name).put("host",host).put("port",port).put("username",user).put("workspace",root).put("authType",authType).put("pinnedKey",pinnedKey).put("configRevision",configRevision).put("credentialRevision",credentialRevision).putOpt("nativeBackupOrigin",nativeBackupOrigin==null?null:new JSONObject(nativeBackupOrigin));}
     private static String revision(JSONObject value,String key){Object raw=value.opt(key);if(raw==null)return "";if(!(raw instanceof String))throw new IllegalArgumentException("SSH配置代次无效");String revision=(String)raw;if(!revision.isEmpty()&&!revision.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"))throw new IllegalArgumentException("SSH配置代次无效");return revision;}
     public static String relative(String value,boolean directory){
         if(value==null||value.length()>1024||value.startsWith("/")||value.contains("\\")||controls(value)||value.matches(".*[*?\\[\\]].*"))throw new IllegalArgumentException("文件路径无效");

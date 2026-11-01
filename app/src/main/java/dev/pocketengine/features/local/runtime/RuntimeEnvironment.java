@@ -52,6 +52,7 @@ public final class RuntimeEnvironment {
     private final File root;
     private final Usage usage;
     private int leases;
+    private boolean ownerMaintenance;
     public RuntimeEnvironment(File privateRuntimeDirectory,Usage usage) throws Exception {
         root=RuntimeFiles.directory(privateRuntimeDirectory,"environments");this.usage=java.util.Objects.requireNonNull(usage);
     }
@@ -66,6 +67,7 @@ public final class RuntimeEnvironment {
         try(InputStream owned=java.util.Objects.requireNonNull(admittedSource)) {return installAdmitted(spec,owned,originalGate,progress);}
     }
     private JSONObject installAdmitted(Package spec,InputStream admittedSource,ProjectRuntime.LiveGate originalGate,Progress progress) throws Exception {
+        requireNotMaintaining();
         java.util.Objects.requireNonNull(admittedSource);java.util.Objects.requireNonNull(originalGate);java.util.Objects.requireNonNull(progress);
         originalGate.check();File target=location(spec);
         if(verifiedReceipt(spec,target))return describe(spec);
@@ -128,6 +130,7 @@ public final class RuntimeEnvironment {
         } finally {removeOwnedTree(staging);}
     }
     public synchronized AutoCloseable acquire(Package spec) throws Exception {
+        requireNotMaintaining();
         if(!verifiedReceipt(spec,location(spec)))throw new IllegalStateException("runtime_environment_not_installed");
         verifyContent(spec,location(spec));
         leases++;return new AutoCloseable(){private boolean released;@Override public void close(){synchronized(RuntimeEnvironment.this){if(!released){released=true;leases--;}}}};
@@ -137,6 +140,7 @@ public final class RuntimeEnvironment {
         verifyContent(spec,location(spec));return location(spec);
     }
     public synchronized JSONObject uninstall(Package spec,ProjectRuntime.LiveGate originalGate) throws Exception {
+        requireNotMaintaining();
         originalGate.check();usage.requireIdle(spec.identity);
         if(leases!=0)throw new IllegalStateException("runtime_environment_in_use");
         File directory=location(spec);
@@ -146,10 +150,18 @@ public final class RuntimeEnvironment {
         if(directory.exists())throw new java.io.IOException("runtime_environment_delete_not_observed");
         return new JSONObject().put("status","uninstalled").put("identity",spec.identity).put("projectFilesRetained",true);
     }
+    /** Same original lease owner, not an independent scheduler. No new execution
+     * may acquire a generation/package while a reviewed owner cleanup holds it. */
+    synchronized AutoCloseable beginOwnerMaintenance()throws Exception {
+        requireNotMaintaining();if(leases!=0||!generationLeases.isEmpty())throw new IllegalStateException("runtime_environment_in_use");usage.requireIdle(null);ownerMaintenance=true;
+        return new AutoCloseable(){private boolean closed;@Override public void close(){synchronized(RuntimeEnvironment.this){if(!closed){closed=true;ownerMaintenance=false;}}}};
+    }
+    private void requireNotMaintaining(){if(ownerMaintenance)throw new IllegalStateException("runtime_owner_reviewed_storage_cleanup_in_progress");}
     private final Map<String,Integer> generationLeases=new HashMap<>();
     /** Generation storage is separate from the legacy immutable ZIP package content. */
     File generationStorage() throws Exception {return RuntimeFiles.directory(root,"generations");}
     synchronized AutoCloseable acquireGeneration(String identity) {
+        requireNotMaintaining();
         if(!identity.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("runtime_generation_identity_invalid");
         generationLeases.put(identity,generationLeases.getOrDefault(identity,0)+1);
         return new AutoCloseable(){private boolean released;@Override public void close(){synchronized(RuntimeEnvironment.this){if(!released){released=true;int count=generationLeases.get(identity)-1;if(count==0)generationLeases.remove(identity);else generationLeases.put(identity,count);}}}};

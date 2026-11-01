@@ -40,7 +40,7 @@ public final class AttachmentOutcomeHost {
                 if(original!=null&&original.optJSONObject("origin")!=null&&original.getJSONObject("origin").optString("kind").equals("group"))continue; // Group results use their original scoped viewer, not this technical media cache.
             }
             String kind=origin==null?"":origin.optString("kind");
-            boolean output=kind.equals("generated_media")||kind.equals("created_text")||kind.equals("document_extract")||kind.equals("remote_result_snapshot");
+            boolean output=kind.equals("generated_media")||kind.equals("created_text")||kind.equals("document_extract")||kind.equals("remote_result_snapshot")||kind.equals("created_document")||kind.equals("derived_media")||kind.equals("managed_build_output");
             if(task!=null&&output&&kind.equals("generated_media")) {
                 JSONObject actual=tasks.ownerMediaOperationSource(taskId,origin.getString("operationId"));
                 if(!actual.getString("runId").equals(origin.optString("runId")))throw new SecurityException("媒体文件不属于原任务的原执行");
@@ -51,7 +51,7 @@ public final class AttachmentOutcomeHost {
         if(task!=null){
             JSONArray operations=task.getJSONArray("operations");
             for(int i=0;i<operations.length();i++){
-                JSONObject op=operations.getJSONObject(i);if(!op.optString("tool").matches("media_workflow|media_generate_image|media_synthesize_speech"))continue;
+                JSONObject op=operations.getJSONObject(i);if(!op.optString("tool").matches("media_workflow|media_generate_image|media_generate_video|media_edit_image|media_synthesize_speech"))continue;
                 JSONObject source=tasks.ownerMediaOperationSource(taskId,op.getString("operationId")),receipt=mediaReceipt(op.optJSONObject("receipt"));
                 JSONObject value=new JSONObject().put("operationId",source.getString("operationId")).put("sourceTaskRunId",source.getString("runId"))
                         .put("sourceCoordinatorEpoch",source.getInt("epoch")).put("tool",source.getString("tool")).put("operationState",source.getString("state"))
@@ -62,7 +62,7 @@ public final class AttachmentOutcomeHost {
         }
         ownerTask(taskId);control.check();JSONObject result=new JSONObject().put("taskId",taskId==null?"":taskId).put("sources",sources).put("artifacts",results)
                 .put("media",jobs).put("documentCapabilities",documents.documentCapabilities()).put("verifiedBusinessSuccess",false);
-        if(task!=null)result.put("taskRunId",task.optString("runId")).put("coordinatorEpoch",task.optInt("coordinatorEpoch")).put("taskStatus",task.optString("status"));
+        if(task!=null){result.put("taskRunId",task.optString("runId")).put("coordinatorEpoch",task.optInt("coordinatorEpoch")).put("taskStatus",task.optString("status"));if("attachments".equals(task.optString("feature"))&&"createDocument".equals(task.optString("command")))result.put("originalDocumentActionId",task.getString("operationId"));}
         return result;
     }
 
@@ -86,6 +86,7 @@ public final class AttachmentOutcomeHost {
         requireReference(taskId,artifactId,expectedSha256);control.checkpoint();JSONObject result=documents.previewOwnerDocument(taskId,artifactId,expectedSha256,range,control);
         requireReference(taskId,artifactId,expectedSha256);control.checkpoint();return result.put("taskId",taskId==null?"":taskId).put("readContext","native_owner_preview");
     }
+    public JSONObject editableDocument(String task,String id,String sha,RunControl control)throws Exception{requireReference(task,id,sha);JSONObject result=documents.editableDocumentForOwner(id,sha,control);requireReference(task,id,sha);return result;}
     /** Explicit local extract from a real owner preview, never arbitrary client text, a new task or a group delivery. */
     public JSONObject saveOwnerDocumentExtract(String taskId,String artifactId,String expectedSha256,String readReceiptId,RunControl control)throws Exception {
         requireReference(taskId,artifactId,expectedSha256);documents.requireOwnerAttachment(artifactId);control.checkpoint();
@@ -99,11 +100,15 @@ public final class AttachmentOutcomeHost {
         tasks.checkCapability(taskId,runId,epoch,"attachments_read_document",control);requireReference(taskId,artifactId,expectedSha256);
         JSONObject result=documents.readDocument(artifactId,expectedSha256,range,control);
         tasks.checkCapability(taskId,runId,epoch,"attachments_read_document",control);requireReference(taskId,artifactId,expectedSha256);
+        AttachmentBook.OutputSourceEligibility sourceGeneration=repository.book.outputSourceEligibility(artifactId,expectedSha256);
+        JSONArray nativeChunks=result.optJSONArray("chunks");boolean hasNativeBody=false;for(int i=0;nativeChunks!=null&&i<nativeChunks.length();i++){JSONObject chunk=nativeChunks.optJSONObject(i);hasNativeBody|=chunk!=null&&!chunk.optString("text").isEmpty();}
+        if(sourceGeneration==null&&hasNativeBody)throw new SecurityException("原附件正文来源已撤回或未完成原字节核验");
         JSONObject fact=new JSONObject().put("type","attachment_document_read").put("attachmentId",artifactId).put("sha256",expectedSha256).put("runId",runId).put("epoch",epoch)
-                .put("startUnit",range.startUnit).put("startChunk",range.startChunk).put("maxUnits",range.maxUnits).put("extraction",range.extraction)
+                .put("startUnit",range.startUnit).put("startChunk",range.startChunk).put("maxUnits",range.maxUnits).put("maxChars",range.maxChars).put("maxChunks",range.maxChunks).put("extraction",range.extraction).put("documentFingerprint",TaskStore.capabilityFingerprint(result))
                 .put("coverage",result.optString("coverage")).put("status",result.optString("status")).put("parserVersion",result.optString("parserVersion"))
                 .put("engineVersion",result.optString("engineVersion")).put("chunkCount",result.optJSONArray("chunks")==null?0:result.getJSONArray("chunks").length())
                 .put("nextUnit",result.optInt("nextUnit")).put("nextChunk",result.optInt("nextChunk")).put("readContext","task_tool").put("verifiedBusinessSuccess",false);
+        if(sourceGeneration!=null)fact.put("attachmentGeneration",sourceGeneration.generation);
         tasks.noteOwnerDocumentRead(taskId,runId,epoch,fact,control);return result.put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("readContext","task_tool");
     }
 
@@ -111,6 +116,17 @@ public final class AttachmentOutcomeHost {
         requireReference(taskId,artifactId,expectedSha256);Intent prepared=repository.verifiedViewIntent(artifactId,expectedSha256,control);
         try{requireReference(taskId,artifactId,expectedSha256);control.checkpoint();return prepared;}
         catch(Exception failure){try{repository.discardVerifiedView(prepared);}catch(Exception cleanup){failure.addSuppressed(cleanup);}throw failure;}
+    }
+    /** Actual original-format viewer; task/audience and canonical byte checks remain this host's. */
+    public OwnerFilePreviewSource originalFile(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
+        requireReference(taskId,artifactId,expectedSha256);JSONObject metadata=privateMetadata(artifactId,expectedSha256);repository.book.requireUnchanged(artifactId,expectedSha256,control);
+        return new OwnerFilePreviewSource("attachments",metadata,c->repository.book.verifiedBytes(artifactId,expectedSha256,c),c->{requireReference(taskId,artifactId,expectedSha256);repository.book.requireUnchanged(artifactId,expectedSha256,c);});
+    }
+    /** Explicit system chooser with a pinned original copy; a requested share is not delivery. */
+    public Intent share(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
+        Intent view=open(taskId,artifactId,expectedSha256,control);Uri pinned=view.getData();if(pinned==null){repository.discardVerifiedView(view);throw new IllegalStateException("原文件分享副本没有真实URI");}
+        Intent share=new Intent(Intent.ACTION_SEND).setDataAndType(pinned,view.getType()).putExtra(Intent.EXTRA_STREAM,pinned).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        share.setClipData(android.content.ClipData.newRawUri("Pocket World original file",pinned));return share;
     }
     /** Native UI marks this only immediately before handing the prepared view to an external reader. */
     public static final String NATIVE_VIEW_ISSUED="dev.pocketengine.native_view_issued";
@@ -154,6 +170,6 @@ public final class AttachmentOutcomeHost {
     private static boolean privateFile(JSONObject meta){return "owner".equals(meta.optString("principalId"))&&"private".equals(meta.optString("spaceId"));}
     private static boolean sameReference(JSONObject a,JSONObject b){return a.optString("sha256").equals(b.optString("sha256"))&&a.optString("mimeType").equals(b.optString("mimeType"))&&a.optLong("size",-1)==b.optLong("size",-2);}
     private static JSONObject find(JSONArray files,String id)throws Exception {for(int i=0;i<files.length();i++)if(id.equals(files.getJSONObject(i).optString("id")))return files.getJSONObject(i);return null;}
-    private static JSONObject row(JSONObject meta,String role)throws Exception {JSONObject result=new JSONObject();for(String field:new String[]{"id","name","mimeType","size","sha256","createdAt"})if(meta.has(field))result.put(field,meta.get(field));JSONObject source=meta.optJSONObject("source");if(source!=null){result.put("sourceKind",source.optString("kind"));for(String[] field:new String[][]{{"taskId","sourceTaskId"},{"runId","sourceTaskRunId"},{"operationId","sourceOperationId"},{"providerJobId","sourceJobId"},{"sourceAttachmentId","sourceAttachmentId"},{"sourceSha256","sourceSha256"}})if(!source.optString(field[0]).isEmpty())result.put(field[1],source.getString(field[0]));}return result.put("role",role).put("availability","available");}
+    private static JSONObject row(JSONObject meta,String role)throws Exception {JSONObject result=new JSONObject();for(String field:new String[]{"id","name","mimeType","size","sha256","createdAt"})if(meta.has(field))result.put(field,meta.get(field));JSONObject source=meta.optJSONObject("source");if(source!=null){result.put("sourceKind",source.optString("kind"));for(String key:new String[]{"editableSource","parentArtifact","formatCheck","processing"})if(source.optJSONObject(key)!=null)result.put(key,new JSONObject(source.getJSONObject(key).toString()));for(String[] field:new String[][]{{"taskId","sourceTaskId"},{"runId","sourceTaskRunId"},{"operationId","sourceOperationId"},{"providerJobId","sourceJobId"},{"sourceAttachmentId","sourceAttachmentId"},{"sourceSha256","sourceSha256"}})if(!source.optString(field[0]).isEmpty())result.put(field[1],source.getString(field[0]));}return result.put("role",role).put("availability","available");}
     private static JSONObject mediaReceipt(JSONObject receipt)throws Exception {for(int i=0;receipt!=null&&i<4;i++){if(receipt.has("operationId")&&receipt.has("configurationRevision"))return receipt;JSONObject next=receipt.optJSONObject("data");if(next==null)next=receipt.optJSONObject("receipt");receipt=next;}return null;}
 }

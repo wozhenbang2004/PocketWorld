@@ -39,7 +39,7 @@ public final class MediaModule implements EngineModule {
 
     private synchronized MediaJobs jobs() throws Exception {
         if (jobs == null) jobs = new MediaJobs(new MediaJobJournal(new File(context.android.getFilesDir(), "media-receipts-v1.json")),
-                this::importArtifact, receipt -> context.emit("media", receipt));
+                new MediaJobs.ArtifactSink(){public JSONObject save(MediaTransport.Payload payload,JSONObject source,RunControl control)throws Exception{return importArtifact(payload,source,control);}public JSONObject find(JSONObject source,RunControl control)throws Exception{return findImportedArtifact(source,control);}}, receipt -> context.emit("media", receipt));
         return jobs;
     }
 
@@ -48,7 +48,7 @@ public final class MediaModule implements EngineModule {
         String slot = publicConfig.optString("secretSlot");
         publicConfig.remove("secretSlot");
         JSONObject workflow = publicConfig.optJSONObject("workflow");
-        publicConfig.remove("workflow");
+        publicConfig.remove("workflow");JSONObject videoWorkflow=publicConfig.optJSONObject("videoWorkflow");publicConfig.remove("videoWorkflow");publicConfig.put("hasVideoWorkflow",videoWorkflow!=null);if(videoWorkflow!=null)publicConfig.put("videoWorkflowHash",MediaJobJournal.hash(videoWorkflow));
         publicConfig.put("hasApiKey", !slot.isEmpty() && context.secrets.contains(slot)).put("hasWorkflow", workflow != null);
         if (workflow != null) publicConfig.put("workflowHash", MediaJobJournal.hash(workflow));
         boolean comfy = config.optString("provider").equals("comfyui");
@@ -57,10 +57,10 @@ public final class MediaModule implements EngineModule {
                 .put("activeOperationId", activeOperation == null ? "" : activeOperation).put("jobs", jobs().list())
                 .put("serviceVerification", "not_verified_for_current_configuration").put("asyncProviderJobs", comfy)
                 .put("remoteCancellation", comfy ? config.optBoolean("comfyJobsApi") ? "jobs_api" : "queue_only" : "unavailable")
-                .put("commands", new JSONArray("[\"configure\",\"generateImage\",\"synthesizeSpeech\",\"submitWorkflow\",\"getJob\",\"getOperation\",\"listJobs\",\"fetchResults\",\"reconcileOperation\",\"cancelJob\",\"cancel\"]"))
+                .put("commands", new JSONArray("[\"configure\",\"generateImage\",\"generateVideo\",\"editImage\",\"synthesizeSpeech\",\"submitWorkflow\",\"getJob\",\"getOperation\",\"listJobs\",\"fetchResults\",\"reconcileOperation\",\"cancelJob\",\"cancel\"]"))
                 .put("inputLimits",new JSONObject().put("imagePromptChars",MediaTransport.MAX_IMAGE_INPUT_CHARS).put("speechTextChars",MediaTransport.MAX_SPEECH_INPUT_CHARS))
-                .put("outputMimeTypes",new JSONArray(new String[]{"image/png","image/jpeg","image/webp","audio/wav"})).put("maxOutputBytes",MediaTransport.MAX_MEDIA_BYTES)
-                .put("videoSupported", false).put("imageEditingSupported",false).put("backgroundPolling", false)
+                .put("outputMimeTypes",new JSONArray(new String[]{"image/png","image/jpeg","image/webp","audio/wav","video/mp4"})).put("maxOutputBytes",MediaTransport.MAX_MEDIA_BYTES)
+                .put("videoSupported",comfy).put("videoScope","actual_comfyui_mp4_avc_hevc_aac_only_20MiB").put("imageEditingSupported",!comfy&&!config.optString("imageModel").isEmpty()).put("imageEditingInputMaxBytes",4*1024*1024).put("imageEditingInputMaxPixels",4_000_000).put("backgroundPolling",false).put("resultUrlPolicy",new JSONObject().put("enabled",config.optBoolean("allowResultUrls")).put("httpsOnly",true).put("publicAddressAtActualConnection",true).put("crossOriginCredentials",false).put("redirects",false))
                 .put("nativeProgressObservationSupported", comfy).put("activeProgressObservers", progressControls.size());
     }
 
@@ -114,7 +114,7 @@ public final class MediaModule implements EngineModule {
             synchronized (this) { if (closed) throw new IllegalStateException("媒体模块已关闭"); }
             return jobs().execute(command, input, new JSONObject(), "", control);
         }
-        String operation = command.matches("generateImage|synthesizeSpeech|submitWorkflow")
+        String operation = command.matches("generateImage|generateVideo|editImage|synthesizeSpeech|submitWorkflow")
                 ? input.optString("_operationId") : input.optString("operationId", input.optString("_operationId"));
         synchronized (this) {
             if (closed) throw new IllegalStateException("媒体模块已关闭");
@@ -131,6 +131,7 @@ public final class MediaModule implements EngineModule {
             }
         }
         MediaJobJournal.identity(operation);
+        if(command.equals("editImage")&&(!nativeControl||!control.hasHostRun()))throw new SecurityException("图像编辑必须使用原生主人/模型原任务控制，不能自报_taskId上传原件");
         if (command.equals("submitWorkflow") && (input.optString("_taskId").isEmpty() || input.optString("_runId").isEmpty())) {
             throw new SecurityException("ComfyUI工作流必须先由宿主登记原任务及操作");
         }
@@ -147,7 +148,8 @@ public final class MediaModule implements EngineModule {
             control.check();
             String slot = config.optString("secretSlot");
             String key = slot.isEmpty() ? "" : context.secrets.get(slot);
-            JSONObject result = jobs().execute(command, input, config, key, control);
+            JSONObject result;
+            if(command.equals("editImage"))try(var selected=readImageEditInputs(input,control)){result=jobs().execute(command,input,config,key,control,selected);}else result=jobs().execute(command,input,config,key,control);
             return result.put("liveHostControl", nativeControl).put("hostRunBound", nativeControl && control.hasHostRun());
         } finally {
             synchronized (this) { if (active == control) { active = null; activeOperation = null; } }
@@ -163,7 +165,7 @@ public final class MediaModule implements EngineModule {
         if (!provider.matches("openai_compatible|comfyui")) throw new IllegalArgumentException("媒体服务类型无效");
         String image = bounded(input.optString("imageModel"), 120), tts = bounded(input.optString("ttsModel"), 120), voice = bounded(input.optString("voice"), 120);
         JSONObject next = new JSONObject().put("provider", provider).put("baseUrl", base).put("imageModel", image).put("ttsModel", tts)
-                .put("voice", voice).put("legacyImageBase64", input.optBoolean("legacyImageBase64"))
+                .put("voice", voice).put("legacyImageBase64", input.optBoolean("legacyImageBase64")).put("allowResultUrls",input.optBoolean("allowResultUrls"))
                 .put("comfyJobsApi", provider.equals("comfyui") && input.optBoolean("comfyJobsApi")).put("revision", UUID.randomUUID().toString());
         if (provider.equals("openai_compatible")) {
             if (image.isEmpty() && tts.isEmpty()) throw new IllegalArgumentException("至少配置一个真实媒体模型标识");
@@ -174,6 +176,7 @@ public final class MediaModule implements EngineModule {
             if (!(graph.getJSONObject(node).getJSONObject("inputs").opt(field) instanceof String)) throw new IllegalArgumentException("ComfyUI提示词目标必须是工作流中已有的文字输入");
             next.put("workflow", graph).put("promptNodeId", node).put("promptInput", field);
         }
+        if(provider.equals("comfyui")&&input.has("videoWorkflow")){JSONObject graph=ComfyUiTransport.workflow(input.getJSONObject("videoWorkflow"));String node=bounded(input.getString("videoPromptNodeId"),80),field=bounded(input.optString("videoPromptInput","text"),80);if(!(graph.getJSONObject(node).getJSONObject("inputs").opt(field) instanceof String))throw new IllegalArgumentException("视频提示词需要视频API图中已有的文字字段");next.put("videoWorkflow",graph).put("videoPromptNodeId",node).put("videoPromptInput",field);}
         JSONObject old = read();
         String previous = old.optString("secretSlot"), slot = "", newSlot = null, key = input.optString("apiKey");
         if (key.length() > 8192 || key.chars().anyMatch(c -> c < 32 || c == 127)) throw new IllegalArgumentException("媒体服务密钥格式无效");
@@ -187,6 +190,11 @@ public final class MediaModule implements EngineModule {
         if (!previous.isEmpty() && !previous.equals(slot)) context.secrets.remove(previous);
         return snapshot();
     }
+
+    /** Original provider receipt only; no new request and no caller-provided job descriptor. */
+    public JSONObject originalReceiptForHost(String operation)throws Exception{return jobs().get(operation);}
+    public boolean markOriginalReadStartedForHost(String operation,String task,String run,String revision,long until)throws Exception{return jobs().markOriginalReadStarted(operation,task,run,revision,until);}
+    public void finishOriginalReadContinuationForHost(String operation,String reason,int reads)throws Exception{jobs().finishOriginalReadContinuation(operation,reason,reads);}
 
     /** Native owner draft bytes use the existing attachment store, never provider receipts or task logs. */
     public JSONObject retainOwnerSubmissionInput(String taskId,String command,JSONObject arguments,String requestHash)throws Exception{
@@ -203,6 +211,33 @@ public final class MediaModule implements EngineModule {
         return new JSONObject(new String(bytes,StandardCharsets.UTF_8));
     }
 
+    public JSONArray imageEditInputReferencesForOwner(JSONObject args,RunControl control)throws Exception{
+        try(var selected=readImageEditInputs(args,control)){return selected.references().getJSONArray("inputArtifacts");}
+    }
+    private MediaTransport.EditInput readImageEditInputs(JSONObject args,RunControl control)throws Exception{
+        var repo=AttachmentRepository.get(context.android);var original=repo.privateOriginalForHost(args.getString("imageId"),args.getString("imageSha256"),control);byte[] imageBytes=null,maskBytes=null;
+        try{
+            if(original.sizeBytes>4*1024*1024)throw new IllegalArgumentException("编辑原图最多4MiB");imageBytes=original.bytes(control);var image=MediaTransport.imagePayload(imageBytes);int[] dims=imageDimensions(imageBytes,false);JSONArray refs=new JSONArray().put(inputReference(original.metadata()));
+            dev.pocketengine.features.attachments.OwnerFilePreviewSource maskSource=null;MediaTransport.Payload mask=null;
+            if(args.has("maskId")||args.has("maskSha256")){if(!args.has("maskId")||!args.has("maskSha256"))throw new IllegalArgumentException("mask需原附件ID与完整SHA");maskSource=repo.privateOriginalForHost(args.getString("maskId"),args.getString("maskSha256"),control);if(maskSource.sizeBytes>4*1024*1024)throw new IllegalArgumentException("mask最多4MiB");maskBytes=maskSource.bytes(control);mask=MediaTransport.imagePayload(maskBytes);if(!mask.mimeType.equals("image/png"))throw new IllegalArgumentException("编辑mask必须是含透明区域的PNG");int[] maskDims=imageDimensions(maskBytes,true);if(dims[0]!=maskDims[0]||dims[1]!=maskDims[1])throw new IllegalArgumentException("原图和mask实际像素尺寸不同，未缩放或猜测");refs.put(inputReference(maskSource.metadata()));}
+            var checkedMask=maskSource;JSONObject pins=new JSONObject().put("inputArtifacts",refs).put("width",dims[0]).put("height",dims[1]).put("imageBytes",imageBytes.length).put("maskUsed",mask!=null).put("originalBytesUploaded",true);
+            return MediaTransport.editInput(image,mask,pins,c->{original.requireCurrent(c);if(checkedMask!=null)checkedMask.requireCurrent(c);});
+        }catch(Exception failed){if(imageBytes!=null)java.util.Arrays.fill(imageBytes,(byte)0);if(maskBytes!=null)java.util.Arrays.fill(maskBytes,(byte)0);throw failed;}
+    }
+    private static JSONObject inputReference(JSONObject meta)throws Exception{return new JSONObject().put("id",meta.getString("id")).put("sha256",meta.getString("sha256")).put("mimeType",meta.getString("mimeType")).put("size",meta.getLong("size")).put("name",meta.getString("name"));}
+    private static int[] imageDimensions(byte[] bytes,boolean mask)throws Exception{
+        android.graphics.BitmapFactory.Options bounds=new android.graphics.BitmapFactory.Options();bounds.inJustDecodeBounds=true;android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length,bounds);if(bounds.outWidth<1||bounds.outHeight<1||(long)bounds.outWidth*bounds.outHeight>4_000_000)throw new IllegalArgumentException("编辑原图/mask最多400万像素且必须能真实解码");
+        android.graphics.Bitmap bitmap=android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length);if(bitmap==null)throw new IllegalArgumentException("原图或mask实际字节不能解码");try{if(mask){if(!bitmap.hasAlpha())throw new IllegalArgumentException("mask没有透明通道");int[] row=new int[bitmap.getWidth()];boolean transparent=false;for(int y=0;y<bitmap.getHeight()&&!transparent;y++){bitmap.getPixels(row,0,row.length,0,y,row.length,1);for(int pixel:row)if((pixel>>>24)==0){transparent=true;break;}}if(!transparent)throw new IllegalArgumentException("mask没有完全透明的可编辑区域");}return new int[]{bitmap.getWidth(),bitmap.getHeight()};}finally{bitmap.recycle();}
+    }
+    private JSONObject findImportedArtifact(JSONObject source,RunControl control)throws Exception{
+        AttachmentBook book=AttachmentRepository.get(context.android).book;
+        if(nativePublication(source)){JSONObject found=book.findNativeResult(source.getString("operationId"),outputRole(source),source.getString("taskId"),source.getString("runId"),publicationDigest(source),control);if(found.optBoolean("found"))return found;}
+        JSONArray all=book.list();for(int i=0;i<all.length();i++){JSONObject actual=all.getJSONObject(i),origin=actual.optJSONObject("source");if(origin==null||!source.getString("operationId").equals(origin.optString("operationId"))||!source.getString("artifactKey").equals(origin.optString("artifactKey")))continue;
+            for(String key:new String[]{"taskId","runId","configurationRevision","requestIdentity","providerResponseSha256"})if(origin.has(key)&&!source.optString(key).equals(origin.getString(key)))throw new SecurityException("原媒体产物来源身份改变");book.readVerifiedMetadata(actual.getString("id"),actual.getString("sha256"),control);return actual;}return null;
+    }
+    private static String publicationDigest(JSONObject source)throws Exception{JSONObject semantic=new JSONObject(source.toString());semantic.remove("formatCheck");return MediaJobJournal.hash(semantic);}
+    private static String outputRole(JSONObject source)throws Exception{return "provider_output_"+MediaJobJournal.hash(source.getString("artifactKey")).substring(0,16);}
+    private static boolean nativePublication(JSONObject source){return source.optString("operationId").matches("[a-f0-9-]{36}")&&source.optString("taskId").matches("[a-f0-9-]{36}")&&source.optString("runId").matches("[a-f0-9-]{36}");}
     private JSONObject importArtifact(MediaTransport.Payload payload, JSONObject source, RunControl control) throws Exception {
         control.check();
         if (payload.mimeType.startsWith("image/")) {
@@ -211,6 +246,7 @@ public final class MediaModule implements EngineModule {
             android.graphics.BitmapFactory.decodeByteArray(payload.bytes, 0, payload.bytes.length, bounds);
             if (bounds.outWidth < 1 || bounds.outHeight < 1 || (long) bounds.outWidth * bounds.outHeight > 33_554_432L) throw new IllegalStateException("媒体图像不能解码或尺寸超过上限");
         }
+        if(payload.mimeType.equals("video/mp4"))source=new JSONObject(source.toString()).put("formatCheck",NativeMediaValidation.mp4(payload.bytes,context.android.getCacheDir(),control));
         AttachmentBook book = AttachmentRepository.get(context.android).book;
         String digest = hex(MessageDigest.getInstance("SHA-256").digest(payload.bytes));
         JSONArray existing = book.list();
@@ -226,7 +262,7 @@ public final class MediaModule implements EngineModule {
             @Override public int read() throws IOException { check(); return super.read(); }
             @Override public int read(byte[] bytes, int offset, int length) throws IOException { check(); return super.read(bytes, offset, length); }
         }) {
-            JSONObject attachment = book.importBytes(input, "generated-" + source.getString("operationId") + "." + payload.extension, payload.mimeType, source);
+            JSONObject attachment=nativePublication(source)?book.importNativeResult(input,"generated-"+source.getString("operationId")+"."+payload.extension,payload.mimeType,source,source.getString("operationId"),outputRole(source),source.getString("taskId"),source.getString("runId"),publicationDigest(source),control):book.importBytes(input,"generated-"+source.getString("operationId")+"."+payload.extension,payload.mimeType,source,control);
             context.emit("attachments", new JSONObject().put("status", "imported").put("attachments", new JSONArray().put(attachment)));
             return attachment;
         }

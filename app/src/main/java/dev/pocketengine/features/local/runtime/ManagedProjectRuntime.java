@@ -53,6 +53,20 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         ManagedProjectRuntime runtime=unconfigured(privateRuntimeDirectory);runtime.configurationProblem=reason;return runtime;
     }
     public RuntimeEnvironment environmentManager() {return environments;}
+    /** Body-free owner storage view with the same original package/generation leases. */
+    public RuntimeStorage ownerStorageForHost(){return new RuntimeStorage(this,androidRuntime,environments,jobs,home,tmp);}
+
+    /** Native Skill description from this same installed generation/tools. No
+     * argv/executable/env is accepted from model or downloaded Skill metadata. */
+    public synchronized JSONObject skillToolsForHost(String interpreter)throws Exception {
+        if(!java.util.Set.of("python3","sh").contains(interpreter))throw new SecurityException("本机Skill只选择已核对的Python或Shell解释器");JSONObject observed=describe();if(!observed.optBoolean("canExecute"))throw new IllegalStateException("本机托管工具尚未实际准备，请从原项目工具准备入口检查和修复");JSONArray actual=observed.getJSONArray("tools");JSONObject chosen=null,python=null;
+        for(int i=0;i<actual.length();i++){JSONObject row=actual.getJSONObject(i);if(row.optBoolean("hashVerified")||row.optBoolean("probeVerified")){if(interpreter.equals(row.optString("name")))chosen=row;if("python3".equals(row.optString("name")))python=row;}}
+        if(chosen==null||python==null)throw new IllegalStateException("原托管环境缺少已核对的解释器或Python原生派发辅助，未换到电脑或任意shell");JSONArray argv=new JSONArray(),bootstrap=new JSONArray();String path;
+        if(androidRuntime!=null){argv.put(androidRuntime.guestTool(interpreter));bootstrap.put(androidRuntime.guestTool("python3"));path="/opt/node/bin:/usr/local/bin:/usr/bin:/bin";}
+        else{for(String value:tools.get(interpreter).command(java.util.List.of()))argv.put(value);for(String value:tools.get("python3").command(java.util.List.of()))bootstrap.put(value);StringBuilder prefixes=new StringBuilder();for(RuntimeTool tool:tools.values()){if(prefixes.length()>0)prefixes.append(':');prefixes.append(tool.executableDirectory().getPath());}path=prefixes.toString();}
+        String versionProbe=chosen.optString("observedVersion",chosen.optString("version","verified_native_tool"));String firstLine=versionProbe.split("\\R",2)[0];if(firstLine.isEmpty()||firstLine.length()>120||firstLine.chars().anyMatch(Character::isISOControl))throw new SecurityException("原解释器版本首行无法完整展示，请核对原工具探测");
+        return new JSONObject().put("runtimeIdentity",identity()).put("interpreter",interpreter).put("interpreterArgv",argv).put("runtimeSha256",chosen.getString("sha256")).put("runtimeVersion",firstLine).put("runtimeVersionScope","first_line_of_native_probe").put("runtimeVersionProbeSha256",ProjectSources.sha256(versionProbe.getBytes(java.nio.charset.StandardCharsets.UTF_8))).put("bootstrapArgv",bootstrap).put("bootstrapSha256",python.getString("sha256")).put("path",path).put("guestProjectRoot",androidRuntime==null?"":"/workspace").put("executionLocation","this_phone").put("osSandbox",false);
+    }
     public String identity() {return androidRuntime==null?identity:androidRuntime.identity();}
     /** Native host hook for its original TaskStore receipt row; no new task or execution authority. */
     public void setReceiptSink(java.util.function.Consumer<JSONObject> nativeSink) {jobs.setReceiptSink(nativeSink);}
@@ -67,13 +81,15 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     public void requireLivePreview(RuntimeExecutionRef reference,dev.pocketengine.core.RunControl original)throws Exception {requireProvider(reference);jobs.requireLivePreview(reference,original);}
     public void requirePtyServiceLive(RuntimeExecutionRef reference,dev.pocketengine.core.RunControl original)throws Exception {requireProvider(reference);jobs.requirePtyServiceLive(reference,original);}
     public void requireCheckoutWritable(String checkout)throws Exception {jobs.requireCheckoutWritable(checkout);}
+    /** Body-free original native job order; not a source version or execution grant. */
+    public long currentCheckoutSequence(String checkout)throws Exception{return jobs.currentCheckoutSequence(checkout);}
     @Override public JSONObject describe() throws Exception {
         if(androidRuntime!=null)return androidRuntime.describe(jobs.available()).put("runtimeId",RUNTIME_ID).put("provider",RUNTIME_ID)
                 .put("ptyAvailable",jobs.ptyAvailable()).put("terminalStreams","pty_merged_stdout_stderr_or_pipe_separate").put("nativeSupervisorAvailable",jobs.available()).put("canonicalProjectOwner","native_active_checkout")
                 .put("requiresHostApproval",true).put("createsTasks",false).put("liveStdout",true).put("logDelivery","raw_byte_cursor_pages").put("ownedServiceLifetime","same_original_host_run").put("ownedServiceNativeStartAck",true).put("serviceReadinessVerified",false).put("persistentServices",false)
                 .put("scopeEnforced",false).put("securityBoundary","same_uid_process_group_not_a_sandbox")
                 .put("cancellationScope","owned_process_group; escaped sessions are outside this boundary")
-                .put("phases",new JSONArray().put("PROBE").put("STAGE").put("COMMAND"));
+                .put("managedOutputCollectionAvailable",true).put("phases",new JSONArray().put("PROBE").put("STAGE").put("COMMAND"));
         JSONArray facts=new JSONArray();boolean toolFilesVerified=!tools.isEmpty();
         for(RuntimeTool tool:tools.values()) {JSONObject fact=tool.describe();facts.put(fact);toolFilesVerified&=fact.getBoolean("hashVerified");}
         JSONObject environment=selected==null?new JSONObject().put("installed",false).put("status","not_configured"):environments.describe(selected);
@@ -88,10 +104,11 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
                 .put("liveStdout",true).put("logDelivery","raw_byte_cursor_pages").put("ownedServiceLifetime","same_original_host_run").put("ownedServiceNativeStartAck",true).put("serviceReadinessVerified",false).put("persistentServices",false)
                 .put("scopeEnforced",false).put("securityBoundary","same_uid_process_group_not_a_sandbox")
                 .put("cancellationScope","owned_process_group; escaped sessions are outside this boundary")
-                .put("phases",new JSONArray().put("PROBE").put("STAGE").put("COMMAND"));
+                .put("managedOutputCollectionAvailable",true).put("phases",new JSONArray().put("PROBE").put("STAGE").put("COMMAND"));
     }
     @Override public RuntimeReceipt dispatch(RuntimeInvocation invocation) throws Exception {
         requireProvider(invocation.executionRef());invocation.checkCurrent();
+        if(dev.pocketengine.features.skills.ManagedSkillBackend.exact(invocation.exact()))dev.pocketengine.features.skills.ManagedSkillBackend.requireProgram(invocation.exact());
         if(androidRuntime!=null)return dispatchAndroid(invocation);
         if(!identity.equals(invocation.exact().getString("runtimeIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");
         if(!describe().getBoolean("canExecute"))throw new IllegalStateException("runtime_environment_not_prepared");
@@ -113,7 +130,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             case COMMAND:
                 RuntimeTool tool=tools.get(payload.getString("executable"));
                 if(tool==null)throw new IllegalArgumentException("runtime_tool_not_installed");
-                JSONArray requested=payload.getJSONArray("argv");List<String> argv=new ArrayList<>();
+                JSONArray requested=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(payload):payload.getJSONArray("argv");List<String> argv=new ArrayList<>();
                 for(int i=0;i<requested.length();i++)argv.add(requested.getString(i));command=tool.command(argv);break;
             default:throw new IllegalArgumentException("runtime_phase_requires_native_artifact_reader");
         }
@@ -154,7 +171,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
                     for(List<String> probe:profile.probeCommands()){for(String arg:probe)script.append(ProjectSources.quote(arg)).append(' ');script.append('\n');}
                     guest.add(profile.guestTool("sh"));guest.addAll(List.of("-c",script.toString()));break;
                 case COMMAND:
-                    guest.add(profile.guestTool(payload.getString("executable")));JSONArray args=payload.getJSONArray("argv");for(int i=0;i<args.length();i++)guest.add(args.getString(i));break;
+                    guest.add(profile.guestTool(payload.getString("executable")));JSONArray args=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(payload):payload.getJSONArray("argv");for(int i=0;i<args.length();i++)guest.add(args.getString(i));break;
                 default:throw new IllegalArgumentException("runtime_phase_requires_native_artifact_reader");
             }
             String relative=payload.optString("workingDirectory",".");cwd=workspace.resolve(relative,false);

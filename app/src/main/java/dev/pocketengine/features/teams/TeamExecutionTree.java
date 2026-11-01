@@ -1,0 +1,29 @@
+package dev.pocketengine.features.teams;
+
+import java.util.HashMap;
+import java.util.Map;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+/** Body-free VIEW of original owner-read SQL facts. Never a scheduler, grant or inferred hierarchy. */
+public final class TeamExecutionTree {
+    public static final String FORMAT="pocketworld.team-execution-tree.v1";
+    private TeamExecutionTree(){}
+    public static JSONObject project(JSONObject plan,JSONArray actualAssignments,int window)throws Exception {
+        Map<String,JSONObject> children=new HashMap<>();for(int i=0;i<actualAssignments.length();i++){JSONObject row=actualAssignments.getJSONObject(i);if(children.put(row.getString("assignmentId"),row)!=null)throw new SecurityException("原执行树assignment重复");}
+        JSONArray roots=new JSONArray(),items=plan.getJSONArray("items");boolean partial=false;int operationCount=0;
+        for(int i=0;i<items.length();i++){
+            JSONObject item=items.getJSONObject(i),row=children.get(item.getString("assignmentId"));String original=row==null?item.optString("status"):row.getString("taskStatus");JSONArray operations=row==null?new JSONArray():row.getJSONArray("operations");boolean pendingEffect=false;for(int o=0;o<operations.length();o++)pendingEffect|=operations.getJSONObject(o).optString("state").matches("awaiting_reconciliation|running|stopping|awaiting_admission");String state=itemState(pendingEffect?"blocked_unknown":original,row!=null&&row.optBoolean("recordedFinalDelivery")&&!pendingEffect);boolean omitted=row!=null&&row.getInt("totalOperations")>operations.length();partial|=omitted;operationCount+=operations.length();
+            JSONObject node=new JSONObject().put("id",item.getString("workItemId")).put("parentId",JSONObject.NULL).put("kind","work_item").put("title",item.getString("title")).put("state",state).put("stateLabel",itemLabel(state)).put("nativeStatus",original).put("workItemId",item.getString("workItemId")).put("itemRevision",item.getInt("itemRevision")).put("ownerGeneration",item.getInt("ownerGeneration")).put("memberId",item.getString("memberId")).put("assignmentId",item.getString("assignmentId")).put("taskId",row==null?JSONObject.NULL:row.getString("taskId")).put("runId",row==null?JSONObject.NULL:row.opt("runId")).put("startedAt",JSONObject.NULL).put("finishedAt",JSONObject.NULL).put("durationMillis",JSONObject.NULL).put("timestampCoverage","work_item_stage_times_not_recorded").put("children",operations).put("partial",omitted).put("totalOperationCount",row==null?0:row.getInt("totalOperations"));roots.put(node);
+        }
+        return new JSONObject().put("format",FORMAT).put("teamRunId",plan.getString("teamRunId")).put("planId",plan.getString("planId")).put("planRevision",plan.getInt("revision")).put("roots",roots).put("partial",partial).put("operationWindowPerItem",window).put("operationCount",operationCount).put("hierarchySource","original_work_item_assignment_and_operation_rows").put("timeSource","original_native_prepared_at_only;no_inferred_duration").put("bodyIncluded",false).put("executionAuthorized",false).put("businessVerified",false);
+    }
+    private static String itemState(String actual,boolean delivered){if(delivered)return "recorded_delivered";switch(actual){case "completed":return "contributed";case "running":case "preparing":return "working";case "queued":case "waiting_dependency":case "blocked_dependency":return actual;case "blocked_unknown":case "unknown":case "stopping":return "awaiting_reconciliation";case "awaiting_approval":return "awaiting_owner_approval";case "awaiting_input":return "awaiting_input";case "failed":return "failed";case "cancelled":case "interrupted":case "paused":return actual;case "awaiting_user":case "needs_confirmation":return "awaiting_owner";default:return "not_started";}}
+    private static String itemLabel(String state){switch(state){case "recorded_delivered":return "原交付记录已闭合";case "contributed":return "已贡献，仍待本版独审/接收/整合";case "working":return "原作者工作中";case "queued":return "已排队";case "waiting_dependency":return "等待前置分工";case "blocked_dependency":return "前置未完成，已阻断";case "awaiting_reconciliation":return "原效果待核对";case "awaiting_owner_approval":return "等待主人精确批准";case "awaiting_input":return "等待原问题回答";case "failed":return "本项未完成";case "cancelled":return "已停止，不代表原效果撤销";case "interrupted":return "执行中断";case "paused":return "已暂停";case "awaiting_owner":return "等待主人决定";default:return "尚未开始";}}
+    /** Original native operation STATE is receipt/unknown/etc; receipt is settlement, not business completion. */
+    // Store passes the actual child.id fetched by the original assignment primary key, never a label.
+    public static JSONObject operation(String item,String assignment,String operation,String run,String tool,String nativeState,long preparedAt)throws Exception {
+        String state,label;switch(nativeState){case "prepared":state="awaiting_admission";label="原意图已登记，待准入";break;case "unknown":state="awaiting_reconciliation";label="原操作效果待核对";break;case "project_running":state="running";label="原执行仍在运行";break;case "project_stopping":state="stopping";label="正在停止原执行";break;case "receipt":state="settled";label="已收到原操作回执，不等于业务完成";break;case "resolved":state="owner_reconciled";label="主人已核对原效果";break;default:state="unclassified_native_state";label="原状态待核对";}
+        return new JSONObject().put("id",operation).put("parentId",item).put("kind","operation").put("assignmentId",assignment).put("taskId",assignment).put("runId",run).put("tool",tool).put("title",tool).put("state",state).put("stateLabel",label).put("nativeState",nativeState).put("preparedAt",preparedAt).put("startedAt",JSONObject.NULL).put("finishedAt",JSONObject.NULL).put("durationMillis",JSONObject.NULL).put("timestampCoverage","native_intent_recorded_time_not_dispatch_start_or_end").put("children",new JSONArray()).put("businessVerified",false);
+    }
+}

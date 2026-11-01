@@ -108,7 +108,7 @@ public final class GroupChannelBridge implements GroupIngressPort,GroupDeliveryP
     }
     @Override public Event authenticate(String eventId)throws Exception {
         JSONObject proof=proof(eventId),row=proof.getJSONObject("event");JSONObject profile=core.profile(row.getString("profileId"));
-        Event event=new Event(eventId,profile.getString("provider"),profile.getString("id"),row.getString("roomId"),row.getString("senderId"),row.getString("messageId"),row.getString("transportEpoch"),proof.getString("goal"),row.getLong("receivedAt"),proof.getLong("replyUntil"),proof.optJSONArray("artifacts")==null?new JSONArray():proof.getJSONArray("artifacts"),proof.optJSONObject("messageParts")==null?row.optJSONObject("messageParts"):proof.getJSONObject("messageParts"));
+        Event event=new Event(eventId,profile.getString("provider"),profile.getString("id"),row.getString("roomId"),row.getString("senderId"),row.getString("messageId"),row.getString("transportEpoch"),proof.getString("goal"),row.getLong("receivedAt"),proof.getLong("replyUntil"),proof.optJSONArray("artifacts")==null?new JSONArray():proof.getJSONArray("artifacts"),proof.optJSONObject("messageParts")==null?row.optJSONObject("messageParts"):proof.getJSONObject("messageParts"),profile.getString("provider").equals("qq")?QqConversation.groupScene(row):"group",profile.getString("provider").equals("qq")&&QqConversation.scene(row).equals(QqConversation.GUILD)?row.getString("qqGuildId"):"");
         check(event);return event;
     }
     @Override public void check(Event event)throws Exception {
@@ -117,6 +117,7 @@ public final class GroupChannelBridge implements GroupIngressPort,GroupDeliveryP
         if(current==null||current.isEmpty()||!proof.getString("credentialFingerprint").equals(ChannelCore.digest(current))
                 ||!event.accountId.equals(profile.getString("id"))||!event.provider.equals(profile.getString("provider"))||!event.roomId.equals(row.getString("roomId"))
                 ||!event.senderId.equals(row.getString("senderId"))||!event.messageId.equals(row.getString("messageId"))||!event.transportEpoch.equals(row.getString("transportEpoch"))
+                ||!event.conversationKind.equals(profile.getString("provider").equals("qq")?QqConversation.groupScene(row):"group")||!event.conversationParentId.equals(profile.getString("provider").equals("qq")&&QqConversation.scene(row).equals(QqConversation.GUILD)?row.getString("qqGuildId"):"")
                 ||!event.text.equals(proof.getString("goal"))||event.receivedAt!=row.getLong("receivedAt")||event.replyUntil!=proof.getLong("replyUntil")||!event.artifacts().toString().equals(proof.optJSONArray("artifacts")==null?"[]":proof.getJSONArray("artifacts").toString()))
             throw new SecurityException("原群事件、机器人或凭据代次已失效");
         JSONObject expectedParts=proof.optJSONObject("messageParts")==null?row.optJSONObject("messageParts"):proof.getJSONObject("messageParts");
@@ -144,9 +145,10 @@ public final class GroupChannelBridge implements GroupIngressPort,GroupDeliveryP
         open();JSONObject profile=core.profile(accountId);return profile.optBoolean("enabled")&&provider.equals(profile.getString("provider"))
                 &&provider.matches("qq|webhook")&&audience.equals("group")&&(mimeType.equals("text/plain")||provider.equals("qq")&&artifacts!=null&&mimeType.matches("image/(png|jpeg|webp)|audio/(mpeg|ogg|wav|silk)|video/mp4|application/(pdf|octet-stream)"));
     }
+    @Override public boolean supports(Event event,String audience,String mimeType)throws Exception {return supports(event.provider,event.accountId,audience,mimeType)&&(event.conversationKind.equals("group")||mimeType.equals("text/plain"));}
     @Override public Receipt send(Delivery delivery,GroupHostPort.Authority authority)throws Exception {
         open();authority.check();check(delivery.event);verify(delivery);
-        if(!supports(delivery.event.provider,delivery.event.accountId,delivery.audience,delivery.output.mimeType))throw new IllegalStateException("此原生渠道不支持该受众或媒体类型");
+        if(!supports(delivery.event,delivery.audience,delivery.output.mimeType))throw new IllegalStateException("此原生渠道不支持该受众或媒体类型");
         JSONObject original=proof(delivery.event.eventId).getJSONObject("event");
         boolean media=!delivery.output.mimeType.equals("text/plain");
         JSONObject queued=media?core.queueGroupMedia(delivery.deliveryId,original,delivery.output,authority):delivery.kind.equals("feedback")?core.queueGroupFeedback(delivery.deliveryId,original,delivery.output.text,authority):core.queueGroupOutput(delivery.deliveryId,original,delivery.output.text,authority);

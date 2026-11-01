@@ -12,7 +12,20 @@ public final class TeamWorkspaceOutcomeHost {
         JSONObject resolveTeamArtifact(String teamRunId,String assignmentId,String memberId,String taskId,String frozenRunId,String artifactId,RunControl control)throws Exception;
         void checkTeamArtifact(JSONObject exactRef,RunControl control)throws Exception;
     }
-    public interface FrozenArtifactRead {JSONObject read(String artifactId)throws Exception;}
+    public interface FrozenArtifactRead {
+        JSONObject read(String artifactId)throws Exception;
+        /** Old text readers retain their exact contract; binary bytes must come from the original catalog. */
+        default byte[] bytes(String artifactId,String sha256)throws Exception {
+            JSONObject actual=read(artifactId);if(!"text_file".equals(actual.optString("kind"))||!sha256.equals(actual.optString("sha256")))throw new SecurityException("此成果需要原生完整字节读取口");
+            return actual.getString("content").getBytes(StandardCharsets.UTF_8);
+        }
+    }
+    public static FrozenArtifactRead forWorkspace(dev.pocketengine.features.workspace.WorkspaceModule workspace) {
+        java.util.Objects.requireNonNull(workspace);return new FrozenArtifactRead(){
+            public JSONObject read(String artifact)throws Exception{return workspace.handle("readArtifact",new JSONObject().put("artifactId",artifact));}
+            public byte[] bytes(String artifact,String sha)throws Exception{return workspace.fileArtifactBytesForHost(workspace.fileArtifactForHost(artifact,sha));}
+        };
+    }
     /** Existing native whole-team review; its assignments come from the original TaskStore provider. */
     public interface ReviewRead {JSONObject read(String teamRunId,RunControl control)throws Exception;}
     private static final String[] TEXT_FIELDS={"teamRunId","assignmentId","memberId","taskId","runId","artifactId","draftProjectId","targetProjectId","path","baseHash","draftRevisionId","sha256"};
@@ -33,7 +46,14 @@ public final class TeamWorkspaceOutcomeHost {
     }
     public JSONObject preview(Selection selected,int offset,int length,RunControl control)throws Exception {
         if(offset<0||offset>65536||length<1||length>12000)throw new IllegalArgumentException("成果读取范围无效，每次最多12000字符");
-        JSONObject ref=resolve(selected,control),artifact=read(ref,control);String content=artifact.getString("content");
+        JSONObject ref=resolve(selected,control),artifact=read(ref,control);
+        if(!"text_file".equals(artifact.optString("kind"))){
+            if(offset!=0)throw new IllegalArgumentException("二进制成果或删除修订没有文字分页位置");
+            return new JSONObject().put("provider","teams").put("source","team_assignment").put("selection",Selection.fromManifest(ref).toJson()).put("reference",reference(ref)).put("artifact",artifact)
+                .put("contentAvailable",false).put("tombstone","file_tombstone".equals(artifact.optString("kind"))).put("message",artifact.optString("message","完整原件可在原生查看器打开或导出；没有用文字或空文件代替"))
+                .put("readOnly",true).put("businessVerified",false);
+        }
+        String content=artifact.getString("content");
         if(offset>content.length()||offset>0&&offset<content.length()&&Character.isLowSurrogate(content.charAt(offset))&&Character.isHighSurrogate(content.charAt(offset-1)))throw new IllegalArgumentException("成果分页位置越界或位于同一字符中间");
         int end=Math.min(content.length(),offset+length);if(end<content.length()&&end>offset&&Character.isHighSurrogate(content.charAt(end-1)))end--;
         if(end==offset&&end<content.length())throw new IllegalArgumentException("本次读取长度会截断同一字符，请扩大读取范围");
@@ -44,8 +64,12 @@ public final class TeamWorkspaceOutcomeHost {
     }
     /** Native export adapters receive exact bytes, then recheck this source before/after the existing SAF copy. This is no write grant. */
     public byte[] verifiedBytes(Selection selected,RunControl control)throws Exception {
-        JSONObject ref=resolve(selected,control),artifact=read(ref,control);byte[] bytes=artifact.getString("content").getBytes(StandardCharsets.UTF_8);
-        try{check(ref,control);return bytes;}catch(Exception revoked){java.util.Arrays.fill(bytes,(byte)0);throw revoked;}
+        JSONObject ref=resolve(selected,control),artifact=read(ref,control);if("file_tombstone".equals(artifact.optString("kind")))throw new IllegalStateException("这是原删除修订，没有可导出的文件正文");byte[] bytes=artifacts.bytes(ref.getString("artifactId"),ref.getString("sha256"));
+        try{if(bytes.length>VersionedWorkspace.MAX_FILE_BYTES||!ref.getString("sha256").equals(dev.pocketengine.features.local.project.ProjectSources.sha256(bytes))||artifact.has("sizeBytes")&&bytes.length!=artifact.getLong("sizeBytes"))throw new SecurityException("原成员成果字节与固定版本不同");check(ref,control);return bytes;}catch(Exception revoked){java.util.Arrays.fill(bytes,(byte)0);throw revoked;}
+    }
+    public OwnerFilePreviewSource originalFile(Selection selected,RunControl control)throws Exception {
+        JSONObject ref=resolve(selected,control),artifact=read(ref,control);JSONObject metadata=new JSONObject(artifact.toString());if(!metadata.has("sizeBytes"))metadata.put("sizeBytes",artifact.getString("content").getBytes(StandardCharsets.UTF_8).length);
+        return new OwnerFilePreviewSource("team_workspace",metadata,c->verifiedBytes(selected,c),c->checkRead(selected,c));
     }
     public boolean supportsDifference(){return review!=null;}
     /** Find a later frozen revision for this exact original assignment/path using native review refs, never a client-provided replacement. */
@@ -90,15 +114,19 @@ public final class TeamWorkspaceOutcomeHost {
         JSONObject actual=source.resolveTeamArtifact(selected.value("teamRunId"),selected.value("assignmentId"),selected.value("memberId"),selected.value("taskId"),selected.value("runId"),selected.value("artifactId"),control),normalized=reference(actual);
         for(String key:TEXT_FIELDS)if(!selected.fields.getString(key).equals(normalized.getString(key)))throw new SecurityException("成果来源或固定版本已变化，请回原assignment核对");
         for(String key:new String[]{"baseVersion","draftVersion"})if(selected.fields.getInt(key)!=normalized.getInt(key))throw new SecurityException("成果的原基线或草稿版本不一致");
+        for(String key:new String[]{"artifactKind","bytes","mimeType"})if(selected.fields.has(key)!=normalized.has(key)||selected.fields.has(key)&&!selected.fields.get(key).equals(normalized.get(key)))throw new SecurityException("成果的原字节类型或容量已变化");
         if(selected.fields.has("assignmentRevision")!=normalized.has("assignmentRevision")||normalized.has("assignmentRevision")&&selected.fields.getInt("assignmentRevision")!=normalized.getInt("assignmentRevision"))throw new SecurityException("原分工修订版本已变化，请回原分工核对");
         check(actual,control);return new JSONObject(actual.toString());
     }
     private void check(JSONObject ref,RunControl control)throws Exception {control.checkpoint();source.checkTeamArtifact(new JSONObject(ref.toString()),control);control.checkpoint();}
     private JSONObject read(JSONObject ref,RunControl control)throws Exception {
-        check(ref,control);JSONObject artifact=artifacts.read(ref.getString("artifactId"));String content=artifact.getString("content");
-        if(content.length()>65536||!"text_file".equals(artifact.optString("kind"))||!"task_workspace".equals(artifact.optString("source")))throw new SecurityException("原成果不是已冻结的任务文本文件");
+        check(ref,control);JSONObject artifact=artifacts.read(ref.getString("artifactId"));String kind=artifact.optString("kind");
+        if(!java.util.Set.of("text_file","binary_file","file_tombstone").contains(kind)||!"task_workspace".equals(artifact.optString("source"))||!kind.equals(ref.optString("artifactKind","text_file")))throw new SecurityException("原成果不是这份原回执已冻结的任务文件或删除修订");
         for(String[] field:new String[][]{{"artifactId","id"},{"draftProjectId","projectId"},{"path","path"},{"draftRevisionId","sourceRevisionId"},{"sha256","sha256"},{"taskId","taskId"},{"runId","runId"}})if(!ref.getString(field[0]).equals(artifact.optString(field[1])))throw new SecurityException("实际WorkspaceArtifact与原冻结回执不一致");
-        if(ref.getInt("draftVersion")!=artifact.getInt("sourceVersion")||content.length()!=artifact.getInt("characters")||!ref.getString("sha256").equals(hash(content))||!mime(ref.getString("path")).equals(artifact.optString("mimeType")))throw new SecurityException("原成果版本、实际内容、类型或SHA-256校验失败");
+        if(ref.getInt("draftVersion")!=artifact.getInt("sourceVersion")||ref.has("bytes")&&ref.getLong("bytes")!=artifact.optLong("sizeBytes",-1)||ref.has("mimeType")&&!ref.getString("mimeType").equals(artifact.optString("mimeType")))throw new SecurityException("原成果版本、容量或类型校验失败");
+        if("text_file".equals(kind)){String content=artifact.getString("content");if(content.length()>65536||content.length()!=artifact.getInt("characters")||!ref.getString("sha256").equals(hash(content))||!ref.has("mimeType")&&!mime(ref.getString("path")).equals(artifact.optString("mimeType")))throw new SecurityException("原文字成果内容或SHA-256校验失败");}
+        else if("file_tombstone".equals(kind)){if(!"absent".equals(artifact.optString("sha256"))||artifact.optLong("sizeBytes",-1)!=0||!artifact.optBoolean("tombstone")||artifact.has("content")||artifact.has("contentBase64"))throw new SecurityException("原删除修订不能含有伪文件正文");}
+        else {byte[] bytes=artifacts.bytes(ref.getString("artifactId"),ref.getString("sha256"));try{if(bytes.length>VersionedWorkspace.MAX_FILE_BYTES||bytes.length!=artifact.getLong("sizeBytes")||!ref.getString("sha256").equals(dev.pocketengine.features.local.project.ProjectSources.sha256(bytes)))throw new SecurityException("原二进制成果完整字节校验失败");}finally{java.util.Arrays.fill(bytes,(byte)0);}}
         check(ref,control);return artifact;
     }
     private static JSONObject reference(JSONObject input)throws Exception {
@@ -106,7 +134,11 @@ public final class TeamWorkspaceOutcomeHost {
         if(input.has("assignmentRevision")){Object revision=input.get("assignmentRevision");if(!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<1||((Number)revision).longValue()>Integer.MAX_VALUE)throw new SecurityException("原分工修订版本无效");value.put("assignmentRevision",((Number)revision).intValue());}
         for(String key:new String[]{"teamRunId","assignmentId","taskId","runId","artifactId","draftProjectId","targetProjectId","draftRevisionId"})if(!value.getString(key).matches("[a-f0-9-]{36}"))throw new SecurityException("原成果身份无效");
         if(!value.getString("assignmentId").equals(value.getString("taskId")))throw new SecurityException("原assignment与稳定成员任务身份不一致");
-        if(!value.getString("memberId").matches("[A-Za-z][A-Za-z0-9_-]{0,63}")||!value.getString("sha256").matches("[a-f0-9]{64}")||!value.getString("baseHash").matches("absent|[a-f0-9]{64}")||value.getInt("draftVersion")<1)throw new SecurityException("原成员、版本或文件摘要无效");
+        if(input.has("artifactKind")){String kind=input.getString("artifactKind");if(!java.util.Set.of("text_file","binary_file","file_tombstone").contains(kind))throw new SecurityException("原成果类型不支持");value.put("artifactKind",kind);}
+        if(input.has("bytes")){Object bytes=input.get("bytes");if(!(bytes instanceof Integer||bytes instanceof Long)||((Number)bytes).longValue()<0||((Number)bytes).longValue()>VersionedWorkspace.MAX_FILE_BYTES)throw new SecurityException("原成果字节范围无效");value.put("bytes",((Number)bytes).longValue());}
+        if(input.has("mimeType")){String mime=input.getString("mimeType");if(mime.length()>160||!mime.matches("[A-Za-z0-9!#$&^_.+\\-]+/[A-Za-z0-9!#$&^_.+\\-]+"))throw new SecurityException("原成果类型标记无效");value.put("mimeType",mime);}
+        boolean deleted="file_tombstone".equals(value.optString("artifactKind"));if(deleted&&(!"absent".equals(value.getString("sha256"))||!value.has("bytes")||value.getLong("bytes")!=0)||!deleted&&!value.getString("sha256").matches("[a-f0-9]{64}"))throw new SecurityException("原成果文件摘要与删除修订不一致");
+        if(!value.getString("memberId").matches("[A-Za-z][A-Za-z0-9_-]{0,63}")||!value.getString("baseHash").matches("absent|[a-f0-9]{64}")||value.getInt("draftVersion")<1)throw new SecurityException("原成员、版本或文件摘要无效");
         value.put("path",VersionedWorkspace.path(value.getString("path")));return value;
     }
     private static String hash(String content)throws Exception {StringBuilder value=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(content.getBytes(StandardCharsets.UTF_8)))value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return value.toString();}

@@ -54,6 +54,20 @@ public final class ProjectFileDraftStore {
         releaseWhenWritten.remove(key);
         queue(key);
     }
+    /** All semantic-edit buffers are checked before publishing any in-memory draft. Disk recovery
+     * remains per file and reports each original persistence error; this is NOT a source transaction. */
+    public synchronized void retainAllExact(List<ProjectFileDraft> before,List<ProjectFileDraft> after) {
+        if(before==null||after==null||before.size()!=after.size()||before.size()>MAX_DIRTY_FILES)throw new IllegalArgumentException("本次草稿修改范围无效或超过32份");
+        Map<String,ProjectFileDraft> next=new LinkedHashMap<>(retained);java.util.Set<String> seen=new java.util.HashSet<>();
+        for(int i=0;i<before.size();i++){
+            ProjectFileDraft old=before.get(i),replacement=after.get(i);String originalKey=key(old.projectId,old.checkoutId,old.path);
+            if(!seen.add(originalKey)||!originalKey.equals(key(replacement.projectId,replacement.checkoutId,replacement.path))||retained.get(originalKey)!=old||replacement.revision<=old.revision)throw new IllegalStateException("语言预览后原稿已变化，未覆盖更新的草稿");
+            next.put(originalKey,replacement);
+        }
+        long bytes=0;int count=0;for(ProjectFileDraft value:next.values())if(value.dirty()){count++;bytes+=memoryBytes(value);}
+        if(count>MAX_DIRTY_FILES||bytes>MAX_CACHE_BYTES)throw new IllegalStateException("完整修改将超过32份/32MiB草稿范围，未应用部分修改");
+        retained.clear();retained.putAll(next);for(String originalKey:seen){releaseWhenWritten.remove(originalKey);queue(originalKey);}
+    }
     public synchronized void release(ProjectFileDraft draft) {
         String key = key(draft.projectId, draft.checkoutId, draft.path);
         if (retained.get(key) != draft || draft.dirty()) return;

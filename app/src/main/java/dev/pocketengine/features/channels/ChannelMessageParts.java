@@ -19,12 +19,13 @@ public final class ChannelMessageParts {
         JSONArray elements=body.optJSONArray("msg_elements");if(elements!=null&&elements.length()>30)throw new IllegalArgumentException("QQ消息元素超过30项");
         if(ref.isEmpty()&&number(body.opt("message_type"),103)&&elements!=null)for(int i=0;i<elements.length();i++){JSONObject element=elements.optJSONObject(i);if(element!=null&&!index(element,"msg_idx").isEmpty()){ref=index(element,"msg_idx");break;}}
         if(!ref.isEmpty()){
-            JSONObject quote=part(parts,"quote","qq",message,"message_scene.ext",-1).put("quoteRef",ref).put("availability","unavailable");
+            JSONObject quote=part(parts,"quote","qq",message,"message_scene.ext",-1).put("quoteRef",ref).put("referenceIdKind","message_index").put("resolveFromOriginalInbox",true).put("availability","unavailable");
             for(int i=0;elements!=null&&i<elements.length();i++){JSONObject element=elements.optJSONObject(i);if(element==null||!ref.equals(index(element,"msg_idx")))continue;
                 quote.put("availability","native_payload").put("text",bounded(element.optString("content"),4000)).put("source",source("qq",message,"msg_elements",i));
                 JSONArray quoted=element.optJSONArray("attachments");if(quoted!=null){JSONArray attachments=attachments(quoted,"msg_elements/"+i+"/attachments");quote.put("attachments",attachments);}break;
             }
         }
+        JSONObject nativeReference=body.optJSONObject("message_reference");if(ref.isEmpty()&&nativeReference!=null){String original=index(nativeReference,"message_id");if(!original.isEmpty())part(parts,"quote","qq",message,"message_reference",-1).put("quoteRef",original).put("referenceIdKind","provider_message_id").put("resolveFromOriginalInbox",true).put("availability","unavailable").put("reason","original_text_unavailable");}
         String content=body.optString("content");if(content.length()>4000)throw new IllegalArgumentException("QQ正文超过4000字符");Matcher matches=MENTION.matcher(content);int offset=0;Set<String> inline=new HashSet<>();
         while(matches.find()){
             if(matches.start()>offset)part(parts,"text","qq",message,"content",offset).put("text",content.substring(offset,matches.start()));
@@ -38,7 +39,26 @@ public final class ChannelMessageParts {
             else for(int j=0;j<parts.length();j++){JSONObject existing=parts.getJSONObject(j);if("mention".equals(existing.optString("kind"))&&id.equals(existing.optString("mentionId")))existing.put("scope",mention.optString("scope","single")).put("isBotTarget",mention.optBoolean("is_you"));}
         }
         JSONArray attachments=body.optJSONArray("attachments");if(attachments!=null){JSONArray safe=attachments(attachments,"attachments");for(int i=0;i<safe.length();i++){JSONObject attachment=safe.getJSONObject(i);part(parts,attachment.getString("mimeType").startsWith("image/")?"image":"unsupported_media","qq",message,"attachments",i).put("media",attachment).put("contentRead",false);}}
+        // A current mixed-message element is not the referenced message. Keep its real
+        // within-field position; do not guess a global order against body.content/attachments.
+        for(int i=0;elements!=null&&i<elements.length();i++){
+            JSONObject element=elements.optJSONObject(i);if(element==null)continue;
+            if(!ref.isEmpty()&&ref.equals(index(element,"msg_idx")))continue;
+            if(element.opt("content") instanceof String&&!element.getString("content").isEmpty()){
+                String fragment=element.getString("content");if(fragment.length()>4000)throw new IllegalArgumentException("QQ消息元素正文超过4000字符");
+                JSONObject current=part(parts,content.isEmpty()?"text":"text_fragment","qq",message,"msg_elements",i).put("text",fragment).put("messageElementIndex",index(element,"msg_idx")).put("withinFieldOrderKnown",true);
+                if(!content.isEmpty())current.put("topLevelTextAlsoPresent",true).put("duplicatesTopLevelText",content.equals(fragment));
+            }
+            JSONArray raw=element.optJSONArray("attachments");if(raw!=null){JSONArray safe=attachments(raw,"msg_elements/"+i+"/attachments");for(int j=0;j<safe.length();j++){JSONObject attachment=safe.getJSONObject(j);part(parts,attachment.getString("mimeType").startsWith("image/")?"image":"unsupported_media","qq",message,"msg_elements/"+i+"/attachments",j).put("media",attachment).put("contentRead",false).put("withinFieldOrderKnown",true);}}
+        }
         return new JSONObject().put("version",1).put("provider","qq").put("messageId",message).put("messageIndex",own).put("parts",parts).put("ordering","source_field_positions;cross_field_order_unspecified");
+    }
+    static boolean qqHasMedia(JSONObject value)throws Exception {if(value==null||!value.optString("provider").equals("qq"))return false;JSONArray parts=value.getJSONArray("parts");for(int i=0;i<parts.length();i++){JSONObject part=parts.getJSONObject(i);if(part.optJSONObject("media")!=null||part.optJSONArray("attachments")!=null&&part.getJSONArray("attachments").length()>0)return true;}return false;}
+    /** Native current image parts only. Referenced-message attachments never become current private inputs. */
+    static JSONArray ownerImagePositions(JSONObject value)throws Exception {
+        if(value==null)return new JSONArray();if(value.optString("provider").equals("weixin"))return weixinImagePositions(value);
+        JSONArray positions=new JSONArray();if(!value.optString("provider").equals("qq"))return positions;JSONArray parts=value.getJSONArray("parts");
+        for(int i=0;i<parts.length();i++){JSONObject part=parts.getJSONObject(i),source=part.optJSONObject("source"),media=part.optJSONObject("media");if(part.optString("kind").equals("image")&&source!=null&&source.optString("provider").equals("qq")&&media!=null&&media.optString("mimeType").matches("image/(png|jpeg|webp)"))positions.put(i);}return positions;
     }
     /** Only a platform-marked self mention may be removed from command prefix; other people stay intact. */
     static String qqCommandText(JSONObject body)throws Exception {
@@ -51,7 +71,7 @@ public final class ChannelMessageParts {
         if(raw.length()>8)throw new IllegalArgumentException("QQ群附件最多8项");JSONArray safe=new JSONArray();
         for(int i=0;i<raw.length();i++){JSONObject item=raw.getJSONObject(i);String url=ChannelCore.text(item,"url",4096,false),mime=ChannelCore.text(item,"content_type",120,false);Object size=item.opt("size");boolean sizeKnown=size!=null&&size!=JSONObject.NULL;long bytes=sizeKnown?item.optLong("size",-1):0;
             if(sizeKnown&&(!(size instanceof Number)||((Number)size).doubleValue()!=bytes||bytes<0||bytes>20*1024*1024L))throw new IllegalArgumentException("QQ群附件大小无效");
-            JSONObject selected=new JSONObject().put("url",url).put("mimeType",mime.toLowerCase(java.util.Locale.ROOT)).put("bytes",bytes).put("declaredSizeKnown",sizeKnown).put("sourceField",field).put("sourceIndex",i);
+            JSONObject selected=new JSONObject().put("url",url).put("mimeType",mime.toLowerCase(java.util.Locale.ROOT)).put("bytes",bytes).put("declaredSizeKnown",sizeKnown).put("sourceField",field).put("sourceIndex",i);if(item.opt("filename") instanceof String)selected.put("name",bounded(item.getString("filename"),160));
             if(item.opt("asr_refer_text") instanceof String)selected.put("platformAsrText",bounded(item.getString("asr_refer_text"),4000)).put("asrSource","qq_platform_not_local_transcription");
             if(item.opt("voice_wav_url") instanceof String)selected.put("voiceWavUrl",bounded(item.getString("voice_wav_url"),4096));safe.put(selected);
         }return safe;
@@ -83,7 +103,10 @@ public final class ChannelMessageParts {
             }
             else if(number(item.opt("type"),2))part(parts,"image","weixin",canonicalId,"item_list",i).put("contentRead",false).put("materializationState","not_downloaded").put("mediaKind","image");
             else {String media=number(item.opt("type"),3)?"voice":number(item.opt("type"),4)?"file":number(item.opt("type"),5)?"video":"unknown";
-                JSONObject unknown=part(parts,"unsupported","weixin",canonicalId,"item_list",i).put("wireType",item.opt("type")).put("mediaKind",media).put("reason","此端未下载/解密该项，不能声称已读取媒体").put("contentRead",false).put("unsupportedRaw",redacted(item,0));
+                JSONObject unknown=part(parts,media.equals("unknown")?"unsupported":"media","weixin",canonicalId,"item_list",i).put("wireType",item.opt("type")).put("mediaKind",media).put("reason","实际媒体内容尚未读取；保留原项位置，不当作文字目标").put("contentRead",false).put("unsupportedRaw",redacted(item,0));
+                JSONObject nativeMedia=item.optJSONObject(media+"_item");
+                if(nativeMedia!=null&&media.equals("file")){Object name=nativeMedia.opt("file_name"),length=nativeMedia.opt("len");if(name instanceof String)unknown.put("declaredName",bounded((String)name,160));if(length instanceof String&&((String)length).matches("[0-9]{1,12}"))unknown.put("declaredBytes",Long.parseLong((String)length)).put("sizeSource","platform_declaration_not_downloaded_bytes");}
+                if(nativeMedia!=null&&media.equals("voice")&&nativeMedia.opt("encode_type") instanceof Number)unknown.put("platformCodecId",nativeMedia.get("encode_type"));
                 if(media.equals("voice")&&item.optJSONObject("voice_item")!=null&&item.getJSONObject("voice_item").opt("text") instanceof String)unknown.put("platformAsrText",bounded(item.getJSONObject("voice_item").getString("text"),4000)).put("asrSource","weixin_platform_not_local_transcription");
             }
         }
@@ -103,15 +126,22 @@ public final class ChannelMessageParts {
         else {quote.remove("text");quote.put("availability","unavailable").put("reason",selected.getString("reason"));}
     }
     public static boolean hasUnsupported(JSONObject structured)throws Exception {
-        JSONArray parts=structured.optJSONArray("parts");for(int i=0;parts!=null&&i<parts.length();i++)if(parts.getJSONObject(i).optString("kind").matches("unsupported|unsupported_media")||structured.optString("provider").equals("weixin")&&parts.getJSONObject(i).optString("kind").equals("image"))return true;return false;
+        JSONArray parts=structured.optJSONArray("parts");for(int i=0;parts!=null&&i<parts.length();i++)if(parts.getJSONObject(i).optString("kind").matches("unsupported|unsupported_media|media")||structured.optString("provider").equals("weixin")&&parts.getJSONObject(i).optString("kind").equals("image"))return true;return false;
     }
     /** Current actual image item positions only; quoted/forwarded payloads are not promoted. */
     static JSONArray weixinImagePositions(JSONObject structured)throws Exception {
         JSONArray result=new JSONArray();if(structured==null||!structured.optString("provider").equals("weixin"))return result;JSONArray parts=structured.optJSONArray("parts");
         for(int i=0;parts!=null&&i<parts.length();i++){JSONObject part=parts.getJSONObject(i),source=part.optJSONObject("source");if(part.optString("kind").equals("image")&&source!=null&&source.optString("provider").equals("weixin")&&source.optString("field").equals("item_list"))result.put(source.getInt("position"));}return result;
     }
+    /** Actual current non-image items. A quoted media item is never promoted to a new input. */
+    static JSONArray ownerMediaPositions(JSONObject structured)throws Exception {
+        JSONArray result=new JSONArray();if(structured==null)return result;JSONArray parts=structured.optJSONArray("parts");String provider=structured.optString("provider");
+        for(int i=0;parts!=null&&i<parts.length();i++){JSONObject part=parts.getJSONObject(i),source=part.optJSONObject("source");if(source==null||!source.optString("provider").equals(provider))continue;
+            if(provider.equals("weixin")&&source.optString("field").equals("item_list")&&part.optString("kind").equals("media")&&part.optString("mediaKind").matches("file|voice|video")||provider.equals("qq")&&part.optString("kind").equals("unsupported_media")&&part.optJSONObject("media")!=null)result.put(i);
+        }return result;
+    }
     static boolean hasUnprocessed(JSONObject structured,int suppliedImages)throws Exception {
-        if(structured==null)return false;JSONArray parts=structured.optJSONArray("parts");for(int i=0;parts!=null&&i<parts.length();i++)if(parts.getJSONObject(i).optString("kind").matches("unsupported|unsupported_media"))return true;return weixinImagePositions(structured).length()>suppliedImages;
+        if(structured==null)return false;JSONArray parts=structured.optJSONArray("parts");for(int i=0;parts!=null&&i<parts.length();i++)if(parts.getJSONObject(i).optString("kind").matches("unsupported|unsupported_media|media"))return true;return ownerImagePositions(structured).length()>suppliedImages;
     }
     public static String currentText(JSONObject structured)throws Exception {
         StringBuilder text=new StringBuilder();JSONArray parts=structured.getJSONArray("parts");
@@ -126,7 +156,8 @@ public final class ChannelMessageParts {
                 text.append("\n[原平台引用 ").append(part.optString("quoteRef")).append(" · ").append(label);if(part.optString("selection").equals("selected_substring"))text.append(" · 仅选中片段/非整条");text.append("]\n").append(part.optString("text"));
                 if(availability.equals("unavailable")&&!part.optString("preview").isEmpty())text.append("\n[平台摘要而非原文] ").append(part.getString("preview"));
             }
-            else if(kind.equals("unsupported")||kind.equals("unsupported_media"))text.append("\n[消息第").append(i+1).append("段未处理：").append(part.optString("mediaKind",kind)).append("；未读取媒体内容，不得假称已看图/听音]");
+            else if(kind.equals("text_fragment")&&!part.optBoolean("duplicatesTopLevelText"))text.append("\n[原平台当前消息元素 ").append(part.optJSONObject("source")==null?i:part.getJSONObject("source").optInt("position",i)).append("；与顶层正文的相对顺序未提供]\n").append(part.optString("text"));
+            else if(kind.equals("unsupported")||kind.equals("unsupported_media")||kind.equals("media"))text.append("\n[消息第").append(i+1).append("段未处理：").append(part.optString("mediaKind",kind)).append("；未读取媒体内容，不得假称已看图/听音]");
         }
         if(text.length()>6000)throw new IllegalArgumentException("消息引用/不支持部分超过上下文上限");return text.toString();
     }
@@ -139,7 +170,7 @@ public final class ChannelMessageParts {
     }
     private static JSONObject source(String provider,String message,String field,int position)throws Exception{return new JSONObject().put("provider",provider).put("messageId",message).put("field",field).put("position",position);}
     private static String index(JSONObject object,String key){String value=object.optString(key);return validIndex(value)?value:"";}
-    private static boolean validIndex(String value){return value!=null&&value.matches("[A-Za-z0-9_.:@-]{1,180}");}
+    private static boolean validIndex(String value){return value!=null&&value.matches("[A-Za-z0-9_.:@/+=-]{1,180}");}
     private static boolean number(Object value,int expected){return value instanceof Number&&((Number)value).doubleValue()==expected;}
     private static String bounded(String value,int limit){int end=Math.min(value.length(),limit);if(end<value.length()&&end>0&&Character.isHighSurrogate(value.charAt(end-1)))end--;return value.substring(0,end);}
     private static JSONObject redacted(JSONObject object,int depth)throws Exception {

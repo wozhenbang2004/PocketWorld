@@ -24,6 +24,7 @@ public class LoopbackRelayStreamingTest {
     private static final String BODY="{\"model\":\"configured-model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}";
     private static String chunk(String text)throws Exception{return "{\"object\":\"chat.completion.chunk\",\"id\":\"fixture\",\"choices\":[{\"index\":0,\"delta\":{\"content\":"+JSONObject.quote(text)+"},\"finish_reason\":null}]}";}
     private static String event(String text)throws Exception{return "data: "+chunk(text)+"\n\n";}
+    private static String finish(){return "data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";}
     private static ModelConfig config(String base){return new ModelConfig(base,KEY,"configured-model",false,20,10);}
 
     @Test public void firstEventArrivesBeforeUpstreamTailWithChunkedUtf8Transport()throws Exception {
@@ -35,12 +36,12 @@ public class LoopbackRelayStreamingTest {
             byte[] first=event("你好🙂 first").getBytes(StandardCharsets.UTF_8);
             for(byte value:first)httpChunk(peer,new byte[]{value});
             assertTrue("client should receive first event before tail is released",tail.await(3,TimeUnit.SECONDS));
-            httpChunk(peer,(event(" second")+"data: {\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"total_tokens\":3}}\n\ndata: [DONE]\n\n").getBytes(StandardCharsets.UTF_8));
+            httpChunk(peer,(event(" second")+finish()+"data: {\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"total_tokens\":3}}\n\ndata: [DONE]\n\n").getBytes(StandardCharsets.UTF_8));
             peer.getOutputStream().write("0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));peer.getOutputStream().flush();
         });LoopbackRelay proxy=new LoopbackRelay(0,TOKEN,()->config(upstream.base()));Socket client=send(proxy.port(),BODY)){
             BufferedReader reader=reader(client);String headers=headers(reader);assertTrue(headers.startsWith("HTTP/1.1 200"));assertTrue(headers.contains("text/event-stream"));assertFalse(headers.contains(KEY));
             String first=data(reader);assertEquals("你好🙂 first",new JSONObject(first).getJSONArray("choices").getJSONObject(0).getJSONObject("delta").getString("content"));
-            tail.countDown();assertTrue(data(reader).contains("second"));assertTrue(data(reader).contains("usage"));assertEquals("[DONE]",data(reader));assertEquals("",reader.readLine());assertNull(reader.readLine());
+            tail.countDown();assertTrue(data(reader).contains("second"));assertTrue(data(reader).contains("finish_reason"));assertTrue(data(reader).contains("usage"));assertEquals("[DONE]",data(reader));assertEquals("",reader.readLine());assertNull(reader.readLine());
             assertTrue(request.get().contains("Authorization: Bearer "+KEY));assertTrue(request.get().contains("Accept: text/event-stream"));
             assertFalse(request.get().contains(TOKEN));assertTrue(request.get().contains("\"model\":\"configured-model\""));assertTrue(request.get().contains("\"stream\":true"));assertTrue(request.get().startsWith("POST /v1/chat/completions HTTP/1.1"));
             upstream.healthy();
@@ -48,7 +49,7 @@ public class LoopbackRelayStreamingTest {
     }
     @Test public void consentIsCheckedBeforeConnectionAndExactTargetConsentPermitsIt()throws Exception {
         try(Fixture upstream=new Fixture("127.0.0.2",(peer,observed)->{
-            head(peer,200,"text/event-stream",false,"");peer.getOutputStream().write((event("allowed")+"data: [DONE]\n\n").getBytes(StandardCharsets.UTF_8));
+            head(peer,200,"text/event-stream",false,"");peer.getOutputStream().write((event("allowed")+finish()+"data: [DONE]\n\n").getBytes(StandardCharsets.UTF_8));
         })){
             AtomicReference<ModelConfig> current=new AtomicReference<>(config(upstream.base()));
             try(LoopbackRelay proxy=new LoopbackRelay(0,TOKEN,current::get)){
@@ -57,8 +58,13 @@ public class LoopbackRelayStreamingTest {
                 current.set(current.get().withCleartextConsent(ModelConfig.cleartextConsentFor(ModelConfig.DEFAULT_PROVIDER,"http://127.0.0.2:1")));
                 try(Socket client=send(proxy.port(),BODY)){assertTrue(readAll(client).startsWith("HTTP/1.1 503"));}assertEquals(0,proxy.requests());
                 current.set(current.get().withCleartextConsent(ModelConfig.cleartextConsentFor(ModelConfig.DEFAULT_PROVIDER,upstream.base())));
-                try(Socket client=send(proxy.port(),BODY)){String allowed=readAll(client);assertTrue(allowed.startsWith("HTTP/1.1 200"));assertTrue(allowed.contains("allowed"));}
-                assertEquals(1,proxy.requests());upstream.healthy();
+                // Changing consent cannot resurrect a route invalidated by the original native gate.
+                try(Socket client=send(proxy.port(),BODY)){assertTrue(readAll(client).startsWith("HTTP/1.1 503"));}
+                assertEquals(0,proxy.requests());assertFalse(upstream.accepted.await(150,TimeUnit.MILLISECONDS));proxy.close();
+                try(LoopbackRelay restarted=new LoopbackRelay(0,TOKEN,current::get)){
+                    try(Socket client=send(restarted.port(),BODY)){String allowed=readAll(client);assertTrue(allowed.startsWith("HTTP/1.1 200"));assertTrue(allowed.contains("allowed"));}
+                    assertEquals(1,restarted.requests());upstream.healthy();
+                }
             }
         }
     }
@@ -130,10 +136,10 @@ public class LoopbackRelayStreamingTest {
             assertTrue(ended.await(2,TimeUnit.SECONDS));upstream.healthy();
         }
     }
-    @Test public void configuredProtocolGateDoesNotSilentlyUseChatAgainstOtherProviders()throws Exception {
-        AtomicReference<ModelConfig> current=new AtomicReference<>(new ModelConfig("http://127.0.0.1:1",KEY,"model",false,20,10,"anthropic",4096));
+    @Test public void unsupportedProtocolPairDoesNotSilentlyUseChatAgainstGemini()throws Exception {
+        AtomicReference<ModelConfig> current=new AtomicReference<>(new ModelConfig("http://127.0.0.1:1",KEY,"model",false,20,10,"gemini",4096));
         try(LoopbackRelay proxy=new LoopbackRelay(0,TOKEN,current::get);Socket client=send(proxy.port(),BODY)){
-            assertTrue(readAll(client).startsWith("HTTP/1.1 503"));assertEquals(0,proxy.requests());
+            assertTrue(readAll(client).startsWith("HTTP/1.1 400"));assertEquals(0,proxy.requests());
         }
     }
     @Test public void modelsRemainLocalAndDoNotRequireRemoteTransportConsent()throws Exception {

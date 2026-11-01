@@ -18,5 +18,10 @@ final class TeamProjectIntegrationFiles implements CapabilityPort {
         if(!PREPARE.equals(name))return original.execute(name,input,live);if(live!=control)throw new SecurityException("不是原唯一整合者控制");JSONObject args=new JSONObject(input.toString());String operation=args.optString("_hostOperationId");args.remove("_hostOperationId");validate(name,args);if(!operation.matches("[a-f0-9-]{36}"))throw new SecurityException("组合副本必须由原Runner登记prepared动作");return projects.prepareIntegrated(binding,operation,control);
     }
     @Override public JSONObject contextSnapshot(String query)throws Exception{return original.contextSnapshot(query).put("fullProjectResult",new JSONObject().put("fixedBaselineOnly",true).put("requiresExactAppliedHeads",true).put("parentActiveCheckoutOverwritten",false).put("currentMainProjectVerified",false));}
+    // Preserve typed native consumers on the SAME original port/control; this adds no tool or authority.
+    @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String tool,JSONObject args,RunControl live)throws Exception{return PREPARE.equals(tool)?dev.pocketengine.core.NativeToolObservation.Requirement.NONE:original.observationRequirement(tool,args,live);}
+    @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String tool,String operation,RunControl live)throws Exception{return PREPARE.equals(tool)?null:original.takeToolObservation(tool,operation,live);}
+    @Override public dev.pocketengine.core.NativeToolPlan takeToolPlan(String tool,String operation,RunControl live)throws Exception{return PREPARE.equals(tool)?null:original.takeToolPlan(tool,operation,live);}
+    @Override public dev.pocketengine.core.NativeReadContextRepair nativeReadContextRepair(JSONArray messages,RunControl live)throws Exception{return original.nativeReadContextRepair(messages,live);}
     @Override public void close(){original.close();}
 }

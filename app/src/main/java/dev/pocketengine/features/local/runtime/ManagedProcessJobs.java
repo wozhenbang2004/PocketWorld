@@ -57,7 +57,22 @@ public final class ManagedProcessJobs implements AutoCloseable {
     public ManagedProcessJobs(File privateRuntimeDirectory,NativeProcessSupervisor supervisor) throws Exception {
         root=RuntimeFiles.directory(privateRuntimeDirectory,"jobs");this.supervisor=java.util.Objects.requireNonNull(supervisor);
     }
+    /** Monotone ordering in this original executor receipt cache, not task authority or a
+     * timestamp/hash invented as a source revision. Retained when individual logs are cleared. */
+    public synchronized long currentCheckoutSequence(String checkout)throws Exception {
+        dev.pocketengine.features.local.project.ProjectBuildPlan.identity(checkout);File orders=RuntimeFiles.directory(root,"checkout-orders"),file=new File(orders,checkout+".json");
+        if(java.nio.file.Files.isSymbolicLink(file.toPath())||java.nio.file.Files.isSymbolicLink(new File(orders,checkout+".json.pending").toPath()))throw new SecurityException("runtime_job_order_symlink_rejected");
+        if(file.exists()){JSONObject row=RuntimeFiles.read(file);Object value=row.opt("sequence");if(!"pocketworld.managed-checkout-order.v1".equals(row.optString("format"))||!checkout.equals(row.optString("checkoutId"))||!(value instanceof Long||value instanceof Integer)||((Number)value).longValue()<0)throw new SecurityException("runtime_job_order_unknown");return ((Number)value).longValue();}
+        long previous=0;File[] directories=root.listFiles();if(directories==null)throw new java.io.IOException("runtime_job_cache_unreadable");
+        for(File directory:directories){File receipt=new File(directory,"receipt.json");if(!receipt.isFile())continue;JSONObject actual=RuntimeFiles.read(receipt);if(checkout.equals(actual.optString("checkoutId"))&&actual.has("checkoutSequence")){Object value=actual.get("checkoutSequence");if(!(value instanceof Long||value instanceof Integer)||((Number)value).longValue()<1)throw new SecurityException("runtime_original_job_order_invalid");previous=Math.max(previous,((Number)value).longValue());}}
+        return previous;
+    }
+    private long nextCheckoutSequence(String checkout)throws Exception {
+        long old=currentCheckoutSequence(checkout);if(old==Long.MAX_VALUE)throw new IllegalStateException("runtime_job_order_exhausted");long next=old+1;File orders=RuntimeFiles.directory(root,"checkout-orders");RuntimeFiles.write(new File(orders,checkout+".json"),new JSONObject().put("format","pocketworld.managed-checkout-order.v1").put("checkoutId",checkout).put("sequence",next));return next;
+    }
     public boolean available() {return supervisor.available();}
+    /** Metadata-only accounting over the original logs/receipts; never a generic cache-delete entry. */
+    public JSONObject ownerStorageUsage(dev.pocketengine.core.RunControl original)throws Exception{return dev.pocketengine.features.local.project.NativeStorageTree.measure(root,original);}
     public boolean ptyAvailable(){return supervisor.ptyAvailable()&&inputSinkReady;}
     public void setProcessInputSink(java.util.function.Consumer<ProcessInputReceipt> nativeSink){inputSink=java.util.Objects.requireNonNull(nativeSink);inputSinkReady=true;}
     public void setReceiptSink(java.util.function.Consumer<JSONObject> nativeSink) {receiptSink=java.util.Objects.requireNonNull(nativeSink);}
@@ -66,7 +81,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
         for(File directory:directories) {
             File record=new File(directory,"receipt.json");if(!record.isFile())continue;
             JSONObject receipt=RuntimeFiles.read(record);
-            if(identity.equals(receipt.optString("environmentIdentity"))&&!receipt.optBoolean("resourcesReleased"))
+            if((identity==null||identity.equals(receipt.optString("environmentIdentity")))&&!Boolean.TRUE.equals(receipt.opt("resourcesReleased")))
                 throw new IllegalStateException("runtime_environment_has_live_or_unresolved_job");
         }
     }
@@ -93,7 +108,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 .put("timeoutMillis",timeoutMillis).put("runMode",ref.exact().getJSONObject("payload").optString("runMode","foreground"));
             Job job=new Job(invocation,jobDirectory,receipt,ownedLease);
             JSONObject reviewed=invocation.exact().getJSONObject("payload");
-            if("command".equals(invocation.exact().optString("intent"))){receipt.remove("argv");receipt.remove("requestedArgv");receipt.put("argvCount",reviewed.getJSONArray("argv").length()).put("argvDigest",ProjectSources.digest(new JSONObject().put("argv",reviewed.getJSONArray("argv")))).put("argumentValuesIncluded",false).put("workingDirectory",reviewed.getString("workingDirectory")).put("terminalMode",reviewed.getString("terminalMode"));}
+            if("command".equals(invocation.exact().optString("intent"))||dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())||dev.pocketengine.features.skills.ManagedSkillBackend.exact(invocation.exact())){JSONArray requested=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(reviewed):reviewed.getJSONArray("argv");receipt.remove("argv");receipt.remove("requestedArgv");receipt.put("argvCount",requested.length()).put("argvDigest",ProjectSources.digest(new JSONObject().put("argv",requested))).put("argumentValuesIncluded",false).put("workingDirectory",reviewed.getString("workingDirectory")).put("terminalMode",reviewed.getString("terminalMode"));}
             if(job.terminalInput!=null)receipt.put("terminalNativeContract",reviewed.getString("terminalNativeContract")).put("terminalOutputMerged",true).put("inputByteLimit",reviewed.getLong("inputByteLimit")).put("terminalRows",reviewed.getInt("terminalRows")).put("terminalColumns",reviewed.getInt("terminalColumns")).put("cleanupScope","owned_session_and_observed_descendants").put("allDescendantsTerminated",false).put("unobservedDetachedDescendantsPossible",true);
             List<String> frozenCommand=java.util.Collections.unmodifiableList(new ArrayList<>(command));
             Map<String,String> frozenEnvironment=java.util.Collections.unmodifiableMap(new HashMap<>(environment));
@@ -102,6 +117,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 if(closing)throw new IllegalStateException("runtime_jobs_closing");
                 // The monitor was released during validation: another invocation may now own it.
                 if(record.isFile())return query(ref);
+                receipt.put("checkoutSequence",nextCheckoutSequence(ref.checkoutId()));
                 RuntimeReceipt admitted=RuntimeReceipt.fromBackend(ref,receipt);
                 RuntimeFiles.write(record,receipt);live.put(id,job);
                 try {job.thread.start();} catch(RuntimeException|Error error) {
@@ -175,6 +191,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
             job.thread=new Thread(()->executePreparation(job,work),"project-prepare-"+id);
             synchronized(this) {
                 if(closing)throw new IllegalStateException("runtime_jobs_closing");if(record.isFile())return query(ref);
+                receipt.put("checkoutSequence",nextCheckoutSequence(ref.checkoutId()));
                 RuntimeReceipt admitted=RuntimeReceipt.fromBackend(ref,receipt);
                 RuntimeFiles.write(record,receipt);live.put(id,job);
                 try {job.thread.start();}catch(RuntimeException|Error failure) {live.remove(id);receipt.put("status","not_launched").put("resourcesReleased",true);RuntimeFiles.write(record,receipt);throw failure;}
@@ -246,8 +263,9 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 .put("kind",kind).put("provider","managed_process").put("projectExecution",ref.executionLink());
         if(ref.phase()==RuntimeExecutionRef.Phase.COMMAND) {
             JSONObject payload=ref.exact().getJSONObject("payload");
+            JSONArray arguments=dev.pocketengine.features.local.project.ProjectGit.exact(ref.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(payload):payload.getJSONArray("argv");
             receipt.put("requestedExecutable",payload.getString("executable"))
-                    .put("requestedArgv",new JSONArray(payload.getJSONArray("argv").toString()));
+                    .put("requestedArgv",new JSONArray(arguments.toString()));
         }
         return receipt;
     }
@@ -439,6 +457,8 @@ public final class ManagedProcessJobs implements AutoCloseable {
         for(File directory:directories){File record=new File(directory,"receipt.json");if(!record.isFile())continue;Job job=live.get(directory.getName());JSONObject receipt;
             if(job!=null){synchronized(job){receipt=ProjectSources.copy(job.receipt);}}else receipt=RuntimeFiles.read(record);
             if(checkout.equals(receipt.optString("checkoutId"))&&"owned_service".equals(receipt.optString("runMode"))&&!Boolean.TRUE.equals(receipt.opt("resourcesReleased")))throw new IllegalStateException("project_owned_service_holds_checkout_stop_original_first");
+            JSONObject link=receipt.optJSONObject("projectExecution");
+            if(checkout.equals(receipt.optString("checkoutId"))&&link!=null&&link.optString("intent").matches("git_(status|history|diff|init|stage|unstage|resolve|commit)")&&!Boolean.TRUE.equals(receipt.opt("resourcesReleased")))throw new IllegalStateException("project_git_observation_holds_checkout_wait_original_receipt");
         }
     }
     private JSONObject summary(RuntimeExecutionRef ref,JSONObject receipt) throws Exception {

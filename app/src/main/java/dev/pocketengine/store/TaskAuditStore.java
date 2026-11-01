@@ -218,16 +218,24 @@ public final class TaskAuditStore {
     }
     public static JSONObject eventPage(SQLiteDatabase db,String task,String cursor,int limit,int maxBytes)throws Exception{return page(db,task,"events",cursor,limit,maxBytes);}
     public static JSONObject operationPage(SQLiteDatabase db,String task,String cursor,int limit,int maxBytes)throws Exception{return page(db,task,"operations",cursor,limit,maxBytes);}
-    private static JSONObject page(SQLiteDatabase db,String task,String section,String cursor,int limit,int maxBytes)throws Exception{
+    /** Native tool-filtered original operation page; a filter is a query constraint, never a grant. */
+    public static JSONObject operationPage(SQLiteDatabase db,String task,String cursor,int limit,int maxBytes,Set<String> nativeTools)throws Exception{return page(db,task,"operations",cursor,limit,maxBytes,nativeTools,-1);}
+    private static JSONObject page(SQLiteDatabase db,String task,String section,String cursor,int limit,int maxBytes)throws Exception{return page(db,task,section,cursor,limit,maxBytes,null,-1);}
+    static String operationToolFilter(Set<String> nativeTools){
+        if(nativeTools==null||nativeTools.isEmpty()||nativeTools.size()>24)throw new IllegalArgumentException("原操作工具范围无效");java.util.List<String> names=new java.util.ArrayList<>(nativeTools);java.util.Collections.sort(names);for(String name:names)if(!name.matches("[a-z][a-z0-9_]{0,119}"))throw new IllegalArgumentException("原操作工具名无效");return " AND tool IN ('"+String.join("','",names)+"')";
+    }
+    public static JSONObject operationPage(SQLiteDatabase db,String task,String cursor,int limit,int maxBytes,Set<String> nativeTools,long nativeUpper)throws Exception{return page(db,task,"operations",cursor,limit,maxBytes,nativeTools,nativeUpper);}
+    private static JSONObject page(SQLiteDatabase db,String task,String section,String cursor,int limit,int maxBytes,Set<String> nativeTools,long nativeUpper)throws Exception{
         if(task==null||task.isEmpty()||task.length()>240||cursor==null||cursor.length()>2048||limit<1||limit>MAX_PAGE_ROWS||maxBytes<1024||maxBytes>MAX_PAGE_BYTES)throw new IllegalArgumentException("原任务历史读取范围无效");
-        boolean events=section.equals("events");String table=events?"task_events":"operations",position=events?"event_order":"rowid";long upper,last;
-        if(cursor.isEmpty()){try(Cursor row=db.rawQuery("SELECT COALESCE(MAX("+position+"),0) FROM "+table+" WHERE task_id=?",new String[]{task})){row.moveToFirst();upper=row.getLong(0);}last=upper;}
-        else{JSONObject c=decode(cursor);if(c.length()!=5||c.optInt("v")!=1||!task.equals(c.optString("taskId"))||!section.equals(c.optString("section"))||!(c.opt("upper") instanceof Number)||!(c.opt("last") instanceof Number))throw new IllegalArgumentException("原历史游标不匹配");upper=c.getLong("upper");last=c.getLong("last");if(upper<0||last<1||last>upper)throw new IllegalArgumentException("原历史游标边界无效");}
+        boolean events=section.equals("events");if(events&&nativeTools!=null)throw new IllegalArgumentException("事件页不能改用操作工具范围");String filter=nativeTools==null?"":operationToolFilter(nativeTools);
+        String table=events?"task_events":"operations",position=events?"event_order":"rowid";long upper,last;
+        if(cursor.isEmpty()){try(Cursor row=db.rawQuery("SELECT COALESCE(MAX("+position+"),0) FROM "+table+" WHERE task_id=?"+filter,new String[]{task})){row.moveToFirst();upper=row.getLong(0);if(nativeUpper>=0)upper=Math.min(upper,nativeUpper);}last=upper;}
+        else{JSONObject c=decode(cursor);if(c.length()!=5||c.optInt("v")!=1||!task.equals(c.optString("taskId"))||!section.equals(c.optString("section"))||!(c.opt("upper") instanceof Number)||!(c.opt("last") instanceof Number))throw new IllegalArgumentException("原历史游标不匹配");upper=c.getLong("upper");last=c.getLong("last");if(upper<0||last<1||last>upper||nativeUpper>=0&&upper>nativeUpper)throw new IllegalArgumentException("原历史游标边界无效");}
         JSONArray entries=new JSONArray();long used=0,scanned=0;boolean more=false,limited=false;long next=last;
         String select=events?"event_order,event_type,body_bytes,row_revision,native_seq":"rowid,operation_id,tool,state,run_id,created_at,length(CAST(arguments AS BLOB)),COALESCE(length(CAST(receipt AS BLOB)),0)";
         String boundary=cursor.isEmpty()?"":" AND "+position+"<?";
         String[] args=cursor.isEmpty()?new String[]{task,Long.toString(upper),Integer.toString(limit+1)}:new String[]{task,Long.toString(upper),Long.toString(last),Integer.toString(limit+1)};
-        try(Cursor rows=db.rawQuery("SELECT "+select+" FROM "+table+" WHERE task_id=? AND "+position+"<=?"+boundary+" ORDER BY "+position+" DESC LIMIT ?",args)){
+        try(Cursor rows=db.rawQuery("SELECT "+select+" FROM "+table+" WHERE task_id=?"+filter+" AND "+position+"<=?"+boundary+" ORDER BY "+position+" DESC LIMIT ?",args)){
             while(rows.moveToNext()){
                 if(entries.length()==limit){more=true;break;}scanned++;long at=rows.getLong(0);next=at;JSONObject item=new JSONObject().put("position",at);
                 long bytes=events?rows.getLong(2):rows.getLong(6)+rows.getLong(7);

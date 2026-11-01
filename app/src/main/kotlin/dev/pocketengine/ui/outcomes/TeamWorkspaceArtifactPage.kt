@@ -50,7 +50,8 @@ internal fun TeamWorkspaceArtifactPage(flow:AttachmentOutcomeCoordinator){
             }
             result?.let{page->
                 val text=page.optString(if(difference)"diff"else "content")
-                if(text.isEmpty())Text(if(difference)"当前比较范围没有文字差异。"else "这是一个实际保存的空文本文件。",color=SecondaryInk,fontSize=13.sp)
+                if(!difference&&page.optBoolean("contentAvailable",true)==false)Text(page.optString("message","原文件保留完整字节，可以查看原件或导出。"),color=SecondaryInk,fontSize=13.sp)
+                else if(text.isEmpty())Text(if(difference)"当前比较范围没有文字差异。"else "这是一个实际保存的空文本文件。",color=SecondaryInk,fontSize=13.sp)
                 else SelectionContainer{Text(text,fontFamily=FontFamily.Monospace,fontSize=14.sp,lineHeight=23.sp)}
                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
                     if(page.optInt("offset")>0)TextButton(onClick={if(difference)flow.readTeamDifference()else flow.readTeamFile()},enabled=!state.busy){Text("从开头查看")}
@@ -66,7 +67,8 @@ internal fun TeamWorkspaceArtifactPage(flow:AttachmentOutcomeCoordinator){
         }
         HorizontalDivider(color=Line)
         Column(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
-            OutlinedButton(onClick=flow::prepareExport,enabled=!state.busy&&meta!=null,modifier=Modifier.fillMaxWidth()){Text("导出这份固定版本")}
+            if(meta!=null&&meta.optString("kind")!="file_tombstone")OutlinedButton(onClick=flow::openOriginalFile,enabled=!state.busy,modifier=Modifier.fillMaxWidth()){Text("查看这份原件")}
+            OutlinedButton(onClick=flow::prepareExport,enabled=!state.busy&&meta!=null&&meta.optString("kind")!="file_tombstone",modifier=Modifier.fillMaxWidth()){Text("导出这份固定版本")}
             Button(onClick=flow::continueTask,enabled=!state.busy&&actual!=null,modifier=Modifier.fillMaxWidth()){Text("回原分工处理修改")}
         }
     }

@@ -26,7 +26,7 @@ public final class RuntimeTool {
         boolean present=executable.isFile() && executable.canExecute();
         boolean verified=present && RuntimeFiles.sha256(executable).equals(sha256);
         return new JSONObject().put("name",name).put("identity",identity).put("version",version).put("license",license)
-                .put("installed",present).put("hashVerified",verified);
+                .put("installed",present).put("hashVerified",verified).put("sha256",sha256);
     }
     public List<String> command(List<String> arguments) throws Exception {
         if(!describe().getBoolean("hashVerified"))throw new SecurityException("runtime_tool_missing_or_changed");

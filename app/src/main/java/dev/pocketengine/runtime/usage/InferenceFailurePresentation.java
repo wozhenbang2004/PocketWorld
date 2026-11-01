@@ -22,6 +22,9 @@ public final class InferenceFailurePresentation {
                     if(status==401||status==403)lines.add("请核对这项连接的凭据和权限；不会轮番换号或自动重发。");
                     if(status==429)lines.add("仅凭429不能区分频率、配额或套餐余额，剩余额度仍未知。");
                 }
+                case RATE_LIMIT -> {title="服务明确报告请求频率限制";lines.add("本次机器错误码明确分类；只允许原连接原模型内的有界重试，不表示配额余额已知。");}
+                case QUOTA_EXHAUSTED -> {title="服务报告配额或计费限制";lines.add("没有自动切换账号；具体剩余额度仍未观察到。");}
+                case POLICY_REFUSAL -> {title="服务按政策拒绝本次请求";lines.add("没有换号或换模型重试。");}
                 case NETWORK -> title="本地连接未能完整结束";
                 case TIMEOUT -> title="本次等待超时";
                 case PROTOCOL -> title="返回或本机处理未能完整核对";

@@ -6,6 +6,11 @@ import android.os.Looper
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import dev.pocketengine.ui.PocketWorldTheme
+import dev.pocketengine.ui.AffectGlyph
+import dev.pocketengine.ui.pocketDepth
+import dev.pocketengine.ui.PocketDepth
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.rememberScrollState
@@ -20,6 +25,8 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -43,7 +50,7 @@ object BrowserTaskOwnerPanel {
         val view = ComposeView(activity).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                MaterialTheme {
+                PocketWorldTheme {
                     LaunchedEffect(controller) { activity.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (isActive) { controller.refresh(); delay(1000) } } }
                     DisposableEffect(controller, activity.lifecycle) {
                         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_PAUSE) { controller.cancelFileOpen(); controller.flushGoal() } }
@@ -280,7 +287,7 @@ private fun statusLabel(status: String) = when (status) {
     val profile = state.child("profiles").array("profiles").rows().firstOrNull { it.optString("id") == state.optString("profileId") }
     val pending = active.array("approvals").rows().any { it.optString("state") == "pending" && it.optLong("expiresAt") > System.currentTimeMillis() }
     val label = when { c.snapshotError -> "上次已知状态 · 刷新暂不可用"; control.optBoolean("cancelRequested") -> "正在停止 · 等待原任务确认"; dialogPending -> "网页正在等你处理提示"; control.optBoolean("unresolved") -> "结果尚未核实 · 请回原任务核对"; space.optString("status") == "owner_control" -> "由你操作 · 自动研究暂停"; pending -> "需要确认网页操作"; state.has("pendingBrowserTask") -> "等待原任务接入网页"; active.optString("id").isNotEmpty() -> statusLabel(active.optString("status")); else -> "网页与研究分开；不会自动开始" }
-    Surface(tonalElevation = 2.dp) {
+    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).padding(end = 8.dp)) {
                 Text((active.optString("goal").ifBlank { viewed.optString("goal").ifBlank { "网页研究" } }), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
@@ -290,7 +297,7 @@ private fun statusLabel(status: String) = when (status) {
             TextButton(onClick = { c.expanded = true; c.workspaceView = "sources" }) { Text("来源") }
         }
     }
-    if (c.expanded && c.workspaceView != "page") ModalBottomSheet(onDismissRequest = page, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    if (c.expanded && c.workspaceView != "page") ModalBottomSheet(onDismissRequest = page, containerColor = MaterialTheme.colorScheme.surface, modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         ResearchWorkspace(c, c.workspaceView, page)
     }
 }
@@ -338,14 +345,25 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
     var readScopeReview by remember { mutableStateOf<ReadScopeReview?>(null) }
     var showPages by remember { mutableStateOf(false) }
     var showReadOptions by remember { mutableStateOf(false) }
+    var showExecutionOptions by remember(activeTask.optString("id")) { mutableStateOf(false) }
     val researchScroll = rememberScrollState(); val sourceScroll = rememberScrollState()
     LaunchedEffect(viewedTask.optString("id")) { sourceScroll.scrollTo(0) }
     Column(Modifier.fillMaxWidth().fillMaxHeight(0.88f).imePadding()) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(onClick = page) { Text("返回网页") }
-            TextButton(onClick = { c.workspaceView = "research" }) { Text("研究", fontWeight = if (mode == "research") FontWeight.SemiBold else FontWeight.Normal) }
-            TextButton(onClick = { c.workspaceView = "sources" }) { Text("来源", fontWeight = if (mode == "sources") FontWeight.SemiBold else FontWeight.Normal) }
-            TextButton(onClick = { identities = true }) { Text("登录资料") }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("浏览工作区", style = MaterialTheme.typography.titleLarge)
+                Text(profile?.optString("label").orEmpty().ifBlank { "独立登录资料" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            TextButton(onClick = { identities = true }) { Text("切换资料") }
+            IconButton(onClick = page, modifier = Modifier.semantics { contentDescription = "返回网页" }) { AffectGlyph("close", Modifier.size(20.dp)) }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("research" to "研究", "sources" to "来源").forEach { (key, title) ->
+                Surface(shape = RoundedCornerShape(10.dp), color = if (mode == key) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.weight(1f)) {
+                    TextButton(onClick = { c.workspaceView = key }, modifier = Modifier.heightIn(min = 48.dp), colors = ButtonDefaults.textButtonColors(contentColor = if (mode == key) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)) { Text(title, fontWeight = FontWeight.Medium) }
+                }
+            }
+            TextButton(onClick = page, modifier = Modifier.heightIn(min = 48.dp)) { Text("返回网页") }
         }
         if (pending.isNotEmpty()) Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) { Text("需要确认：${toolLabel(pending.first().optString("tool"))}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium); TextButton(onClick = { approval = pending.first() }, enabled = !c.busy) { Text("核对这次操作") } }
@@ -372,6 +390,14 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                 }
                 if (dialogPending) TextButton(onClick = { c.showPagePrompt() }) { Text("查看网页提示") }
                 else if (pageDialog.optString("status") == "resolved" && space.optString("status") == "owner_control") Text("网页提示已处理；请先核对当前页面，再决定是否继续研究。", style = MaterialTheme.typography.bodySmall)
+                Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        TextButton(onClick = { showExecutionOptions = !showExecutionOptions }, modifier = Modifier.fillMaxWidth()) {
+                            Text("浏览范围与执行设置", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                            AffectGlyph(if (showExecutionOptions) "chevron" else "chevron-right")
+                        }
+                        if (!showExecutionOptions) Text(if (actionScope?.optString("state") == "active") "已授权范围内连续浏览 · 余 ${actionScope.optInt("remainingActions")} 次" else "范围外操作仍需确认", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+                        if (showExecutionOptions) {
                 if (actionScope != null && actionScope.optString("state") != "not_granted" && activeTask.length() > 0) {
                     Text("日常浏览范围：${actionScope.optString("state")} · 余 ${actionScope.optInt("remainingActions")} 次", style = MaterialTheme.typography.bodySmall)
                     if (actionScope.optString("state") == "active") TextButton(onClick = { val id = activeTask.getString("id"); val revision = actionScope.getLong("revision"); c.command({ c.host.revokeTaskScopeForOwner(id, revision) }) }, enabled = !c.busy) { Text("撤销连续浏览范围") }
@@ -385,6 +411,9 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                     if (readState in setOf("active", "exhausted")) TextButton(onClick = { c.command({ c.host.revokeReadScopeForOwner(activeTask.getString("id"), readScope.getString("scopeId")) }) }, enabled = !c.busy) { Text("撤销只读范围") }
                 } else Text(if (actionScope?.optString("state") == "active") "站点内日常读取沿当前连续浏览范围；越域仍须确认。" else "未授予自动只读范围；网页读取仍逐次确认。", style = MaterialTheme.typography.bodySmall)
                 if (space.optString("status") == "active" && state.child("readScopeIdentity").optString("taskId") == activeTask.optString("id")) TextButton(onClick = { c.resetReadConsent(); readScopeOptions = true }, enabled = !c.busy) { Text("明确授予 / 更新本轮只读范围…") }
+                        }
+                    }
+                }
                 if (space.optString("status") == "owner_control") {
                     Text(space.optString("handoffReason").ifBlank { "你可以在网页中完成登录或检查结果，再交还给原任务。" }, style = MaterialTheme.typography.bodyMedium)
                     val returnPin = selectedHandoff ?: space.optJSONObject("continuePin")?.takeIf { handoffPages.isEmpty() }

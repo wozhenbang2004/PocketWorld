@@ -24,7 +24,7 @@ import org.json.JSONObject;
 
 /** Canonical W04 Backend using the existing RemoteModule file/command/job protocol and a pinned
  * owner-installed Linux launcher. No additional product task, retry, database or model CLI. */
-public final class CompanionSkillBackend implements SkillExecution.Backend,AutoCloseable {
+public final class CompanionSkillBackend implements NativeSkillBackend {
     public static final String BACKEND="companion-skill-canonical-v1";
     public static final int MAX_PACKAGE_BYTES=131072;
     private static final long HANDOFF_NANOS=TimeUnit.SECONDS.toNanos(5);
@@ -54,7 +54,7 @@ public final class CompanionSkillBackend implements SkillExecution.Backend,AutoC
         public static ReceiptRef from(SkillExecution.Plan plan,SkillExecution.Grant grant)throws Exception {
             JSONObject p=plan.review(),b=p.getJSONObject("backend"),q=p.getJSONObject("request");SkillExecution.Run run=plan.run();
             if(!plan.digest.equals(grant.planDigest)||!run.taskId.equals(grant.taskId)||!run.runId.equals(grant.runId)||run.epoch!=grant.epoch
-                    ||!SkillExecution.environmentBinding(plan).equals(grant.environmentBinding)||!BACKEND.equals(b.getString("backendId"))
+                    ||!SkillExecution.environmentBinding(plan).equals(grant.environmentBinding)||!(BACKEND.equals(b.getString("backendId"))||plan.managedPhone()&&ManagedSkillBackend.BACKEND.equals(b.getString("backendId")))
                     ||!"isolated_copy".equals(b.getString("workspaceMode")))throw new SecurityException("回执路由与原计划/授权不一致");
             return new ReceiptRef(run.ownerId,run.spaceId,run.taskId,run.runId,run.epoch,grant.operationId,plan.digest,grant.environmentBinding,
                     b.getString("installationId"),b.getString("workspaceId"),b.getString("workspaceRevision"),q.getInt("maxOutputBytes"),q.getInt("maxResultChars"));
@@ -63,8 +63,8 @@ public final class CompanionSkillBackend implements SkillExecution.Backend,AutoC
     private final EngineModule remote;
     private final Deployment deployment;
     private final LongSupplier clock;
-    interface DispatchCheck {void check(SkillExecution.Plan plan,SkillExecution.Grant grant,RunControl control)throws Exception;}
-    private volatile DispatchCheck dispatchCheck;
+    interface DispatchCheck extends NativeSkillBackend.DispatchCheck {}
+    private volatile NativeSkillBackend.DispatchCheck dispatchCheck;
     private final ThreadPoolExecutor io=executor(2,16,"skill-companion-wire"),cancellations=executor(1,32,"skill-companion-control");
     private volatile boolean closed;
     public CompanionSkillBackend(EngineModule remote,Deployment deployment,LongSupplier clock){
@@ -72,7 +72,8 @@ public final class CompanionSkillBackend implements SkillExecution.Backend,AutoC
         this.remote=remote;this.deployment=Objects.requireNonNull(deployment);this.clock=Objects.requireNonNull(clock);
     }
     /** One native HostPort binds the live TaskStore check; no cached approval flag. */
-    synchronized void bindDispatchCheck(DispatchCheck check){if(dispatchCheck!=null)throw new IllegalStateException("执行端已绑定其原任务宿主");dispatchCheck=Objects.requireNonNull(check);}
+    public synchronized void bindDispatchCheck(NativeSkillBackend.DispatchCheck check){if(dispatchCheck!=null)throw new IllegalStateException("执行端已绑定其原任务宿主");dispatchCheck=Objects.requireNonNull(check);}
+    synchronized void bindDispatchCheck(DispatchCheck check){bindDispatchCheck((NativeSkillBackend.DispatchCheck)check);}
     private static ThreadPoolExecutor executor(int threads,int queued,String name){return new ThreadPoolExecutor(threads,threads,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(queued),r->{Thread t=new Thread(r,name);t.setDaemon(true);return t;},new ThreadPoolExecutor.AbortPolicy());}
     private <T>T bounded(Callable<T> operation,long until)throws Exception {
         if(closed)throw new IOException("脚本连接已关闭");Future<T> future=io.submit(operation);
@@ -165,12 +166,12 @@ public final class CompanionSkillBackend implements SkillExecution.Backend,AutoC
     }
     public static final class Artifact {
         public final String path,sha256;private final byte[] bytes;
-        private Artifact(String path,String sha256,byte[] bytes){this.path=path;this.sha256=sha256;this.bytes=bytes.clone();}
+        Artifact(String path,String sha256,byte[] bytes){this.path=path;this.sha256=sha256;this.bytes=bytes.clone();}
         public byte[] bytes(){return bytes.clone();}public boolean untrusted(){return true;}public boolean imported(){return false;}
     }
     public static final class ArtifactInventory {
         public final List<Artifact> files;public final List<String> missingPaths;public final boolean truncated;
-        private ArtifactInventory(List<Artifact> files,List<String> missingPaths,boolean truncated){this.files=List.copyOf(files);this.missingPaths=List.copyOf(missingPaths);this.truncated=truncated;}
+        ArtifactInventory(List<Artifact> files,List<String> missingPaths,boolean truncated){this.files=List.copyOf(files);this.missingPaths=List.copyOf(missingPaths);this.truncated=truncated;}
         public boolean canonicalWorkspaceModified(){return false;}
     }
     public ArtifactInventory artifacts(ReceiptRef ref)throws Exception {
@@ -233,7 +234,7 @@ public final class CompanionSkillBackend implements SkillExecution.Backend,AutoC
     }
     private void checkpoint(SkillExecution.Dispatch d,RunControl control,long pause,long until)throws Exception {deadline(until);control.check();SkillExecution.Grant g=d.grant;
         if(!control.hasHostRun()||!control.matchesHostRun(g.taskId,g.runId,g.epoch)||control.isPaused()||pause!=control.pauseRevision()||clock.getAsLong()>=g.expiresAt||clock.getAsLong()>=d.plan.expiresAt)throw new SecurityException("授权、暂停或任务代次已变化");
-        DispatchCheck current=dispatchCheck;if(current==null)throw new SecurityException("缺少原TaskStore的持续精确授权核对");current.check(d.plan,g,control);deadline(until);control.check();}
+        NativeSkillBackend.DispatchCheck current=dispatchCheck;if(current==null)throw new SecurityException("缺少原TaskStore的持续精确授权核对");current.check(d.plan,g,control);deadline(until);control.check();}
     private static void deadline(long until)throws Exception {if(Thread.currentThread().isInterrupted()||System.nanoTime()>=until)throw new IOException("短派发握手截止；仅核对原操作");}
     private void original(ReceiptRef ref){if(!deployment.installationId.equals(ref.installationId))throw new SecurityException("不能转移旧操作到替换安装");}
     private JSONObject base()throws Exception{return new JSONObject().put("profileId",deployment.profileId);}private JSONObject workspace()throws Exception{return base().put("environmentId",deployment.environmentId);}

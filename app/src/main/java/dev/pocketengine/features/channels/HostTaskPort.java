@@ -31,6 +31,7 @@ public interface HostTaskPort {
                     .put("senderId",event.getString("senderId")).put("authenticatedBy",event.getString("authenticatedBy"))
                     .put("bindingEpoch",stored.getString("bindingEpoch")).put("taskGrantEpoch",stored.getString("taskGrantEpoch"))
                     .put("ownerId","owner").put("spaceId","private");
+            if(event.optString("conversationKind").startsWith("qq_guild_"))origin.put("conversationKind",event.getString("conversationKind")).put("qqGuildId",event.getString("qqGuildId")).put("transportEpoch",event.getString("transportEpoch"));
         }
         public JSONObject origin()throws Exception{return new JSONObject(origin.toString());}
     }

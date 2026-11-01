@@ -249,6 +249,8 @@ class ClaudeStreamDriver:
                 "reason": str(request.get("decision_reason") or request.get("title") or "Tool permission")[:2000],
                 "cwd": str(self.cwd), "sessionId": self.session_id, "promptRequestId": self.prompt_id,
                 "scopeEnforced": False}
+            self.progress.add("approval", "claude/can_use_tool", use_id, requestId=public_id,
+                              summary="Original single tool permission request; history is not approval authority")
 
     def _decisions(self):
         while True:

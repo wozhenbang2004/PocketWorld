@@ -11,7 +11,7 @@ final class CapabilityResults {
     static final int MAX_BYTES=32768;
     private static final Set<String> SSH_DATA=Set.of("path","stdout","stderr","content","files","bytes","version","currentVersion","outputTruncated","readOnly","cooperativeConditionalWrite","externalWriterRacePossible","workspaceIsSandbox","stagingPath","lockPath");
     private static final Set<String> BROWSER_DATA=Set.of("url","title","text","elements","observationId","navigation","expiresInMs","profileId","profileRevision","browserSessionId","profileIsolation","untrustedPageContent");
-    private static final Set<String> ATTACHMENT_DATA=Set.of("id","name","mimeType","size","sha256","createdAt");
+    private static final Set<String> ATTACHMENT_DATA=Set.of("id","name","mimeType","size","sha256","createdAt","editableSource","formatCheck","documentPlanDigest","parentArtifact","processing");
     private CapabilityResults(){}
 
     static JSONObject adapt(CapabilityDescriptor descriptor,JSONObject nativeResult,String operationId)throws Exception{return adapt(descriptor,nativeResult,operationId,null);}
@@ -22,7 +22,8 @@ final class CapabilityResults {
         if(descriptor.feature.equals("browser")&&descriptor.command.equals("observe"))return browserObservation(descriptor,nativeResult,capture);
         JSONObject out=envelope(descriptor,operationId,capture),receipt=new JSONObject();
         String status=nativeResult.optString("status");
-        if(descriptor.name.equals("attachments_create_text")){
+        if(descriptor.name.matches("attachments_create_document|attachments_transform_image|attachments_trim_media")&&nativeResult.optBoolean("outputNotPublished")&&"failed".equals(nativeResult.optString("status"))){status="failed";}
+        else if(descriptor.name.matches("attachments_create_text|attachments_create_document|attachments_transform_image|attachments_trim_media")){
             CapabilityDescriptor.uuid(nativeResult.optString("id"));if(!nativeResult.optString("sha256").matches("[a-f0-9]{64}"))throw new IllegalStateException("附件未返回实际字节摘要");status="created";
         }else if(!Set.of("completed","failed","cancelled","unknown","navigation_requested").contains(status)){
             status=descriptor.feature.equals("browser")&&nativeResult.opt("accepted") instanceof Boolean?"action_receipt":"unknown";
@@ -45,7 +46,7 @@ final class CapabilityResults {
             // SshModule uses operationId as its own runId. It is never the host attempt's runId.
             if(nativeResult.has("operationId"))receipt.put("operationId",nativeResult.getString("operationId"));
         }
-        if(descriptor.name.equals("attachments_create_text")){out.put("accepted",true);receipt.put("accepted",true);}
+        if(descriptor.name.matches("attachments_create_text|attachments_create_document|attachments_transform_image|attachments_trim_media")&&!status.equals("failed")){out.put("accepted",true);receipt.put("accepted",true);}
         out.put("receipt",receipt);
         Set<String> fields=descriptor.feature.equals("browser")?BROWSER_DATA:descriptor.feature.equals("ssh")?SSH_DATA:ATTACHMENT_DATA;
         JSONObject selected=new JSONObject();for(String key:fields)if(nativeResult.has(key))selected.put(key,nativeResult.get(key));
@@ -138,7 +139,7 @@ final class CapabilityResults {
         if(raw==null)throw new IllegalStateException("原native结果缺失");java.util.Set<String> fields=new java.util.HashSet<>();
         if(descriptor.feature.equals("ssh")){fields.addAll(SSH_DATA);fields.add("outputComplete");fields.add("nativeOutputRange");}
         else if(descriptor.name.equals("attachments_read_document"))fields.addAll(Set.of("attachmentId","sha256","parserVersion","engineVersion","extraction","extractionStatus","format","coverage","totalUnits","warnings","cacheUsed","truncated","nextUnit","nextChunk","chunks"));
-        else if(descriptor.name.equals("attachments_create_text"))fields.addAll(ATTACHMENT_DATA);
+        else if(descriptor.name.matches("attachments_create_text|attachments_create_document|attachments_transform_image|attachments_trim_media"))fields.addAll(ATTACHMENT_DATA);
         else throw new IllegalArgumentException("此producer尚未挂原始输出留存");
         fields.addAll(Set.of("status","accepted","exitCode","code","error","message","outputTruncated"));JSONObject selected=new JSONObject();for(String key:fields)if(raw.has(key))selected.put(key,raw.get(key));return (JSONObject)privateFiltered(selected,new int[]{0},0);
     }

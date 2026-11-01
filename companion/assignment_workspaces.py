@@ -243,8 +243,21 @@ def operation(manager, source_job, operation_id, error):
         return public(value)
 
 
+def record_for_reference(manager, reference, error):
+    if reference.get("mode") == "phone_project_package_independent_git":
+        import assignment_projects
+        return assignment_projects.record_for_reference(manager, reference, error)
+    record = lookup(manager, reference["sourceJobId"], reference["checkoutId"])
+    if record is None:
+        raise error("Original assignment checkout missing", 409)
+    return record
+
+
 def bound_environment(manager, request, original_env, error):
     reference = request.get("assignmentWorkspace")
+    if isinstance(reference, dict) and reference.get("mode") == "phone_project_package_independent_git":
+        import assignment_projects
+        return assignment_projects.bound_environment(manager, request, error)
     if not isinstance(reference, dict) or set(reference) != {"sourceJobId", "checkoutId", "checkoutVersion", "nativeAssignment", "preparationNativeAssignment", "reservationId", "approvalRevision", "approvalExpiresAt"}:
         raise error("Assignment execution requires native approved exact checkout/job reservation", 409)
     record = lookup(manager, reference["sourceJobId"], reference["checkoutId"])
@@ -275,6 +288,9 @@ def job_environment(manager, job, error):
     reference = job.get("assignmentWorkspace")
     if reference is None:
         return manager._environment(job["environmentId"])
+    if reference.get("mode") == "phone_project_package_independent_git":
+        import assignment_projects
+        return assignment_projects.environment(manager, assignment_projects.record_for_reference(manager, reference, error), error)
     record = lookup(manager, reference["sourceJobId"], reference["checkoutId"])
     if record is None or record["checkoutVersion"] != reference["checkoutVersion"] or record["nativeAssignment"] != reference["preparationNativeAssignment"]:
         raise error("Original assignment job lost its exact physical checkout binding", 409)
@@ -285,6 +301,8 @@ def contribution(manager, job, snapshot, error):
     reference = job.get("assignmentWorkspace")
     if reference is None:
         return
+    if reference.get("mode") == "phone_project_package_independent_git":
+        raise error("Use the original full-project contribution protocol; no UTF-8 selected-file fallback", 409)
     record = lookup(manager, reference["sourceJobId"], reference["checkoutId"])
     if record is None or record["checkoutVersion"] != reference["checkoutVersion"]:
         raise error("Original contribution checkout/base proof is missing", 409)

@@ -95,6 +95,7 @@ public final class TeamInferenceJournalTest {
                 models.add(receipt.getJSONObject("route").getString("requestedModel"));
                 assertEquals(11,receipt.getJSONObject("usage").getJSONObject("counters").getJSONObject("INPUT").getLong("value"));
             }
+            JSONArray logical=usage.getJSONArray("logicalRequests");assertEquals(3,logical.length());Set<String> originalMembers=new HashSet<>();for(int i=0;i<logical.length();i++){JSONObject request=logical.getJSONObject(i);assertEquals("SUCCEEDED",request.getString("state"));assertEquals(1,request.getJSONObject("control").getInt("maxAttempts"));JSONObject plan=request.getJSONObject("routeSnapshot");if("MEMBER".equals(plan.getString("purpose")))originalMembers.add(plan.getString("contextMemberId"));}assertEquals(Set.of("member-a","member-b"),originalMembers);
             assertEquals(Set.of("member-a","member-b"),memberIds);assertEquals(1,summaries);assertEquals(Set.of("member-model-a","member-model-b"),models);
             assertEquals(new HashSet<>(rig.wireModels),models);
             assertFalse(rig.run().getJSONArray("transcript").toString().contains("inference_receipt"));
@@ -143,7 +144,7 @@ public final class TeamInferenceJournalTest {
         try(Rig rig=new Rig(false)){
             AtomicInteger checks=new AtomicInteger();RunControl child=new RunControl();
             var target=rig.tasks.teamInferenceTarget(rig.operation,InferenceReceipt.Purpose.MEMBER,"member-a",new InferenceReceipt.CallSite(UUID.randomUUID().toString(),1,0,0),child,()->{
-                if(checks.incrementAndGet()>=3)throw new InterruptedException("native generation changed");
+                checks.incrementAndGet();if(rig.tasks.inferenceUsage(rig.operation).getInt("attempts")>0)throw new InterruptedException("native generation changed after original STARTED receipt");
             });
             try{ModelGateway.complete(rig.settings.get(),new JSONArray().put(new JSONObject().put("role","user").put("content","native invocation")),null,child,target);fail();}catch(InterruptedException stopped){}
             assertEquals(0,rig.requests.get());assertEquals(1,rig.tasks.inferenceUsage(rig.operation).getInt("cancelled"));assertEquals(0,rig.nativeRuns());
@@ -177,6 +178,13 @@ public final class TeamInferenceJournalTest {
             Set<Integer> generations=new HashSet<>();JSONArray receipts=usage.getJSONArray("receipts");
             for(int i=0;i<receipts.length();i++)generations.add(receipts.getJSONObject(i).getJSONObject("context").getJSONObject("callSite").getInt("runGeneration"));
             assertTrue(generations.contains(0));assertTrue(generations.stream().anyMatch(value->value>0));
+        }
+    }
+
+    @Test public void logicalCurrentnessNeverCallsCoordinatorWhileOriginalTaskStoreMonitorIsHeld()throws Exception {
+        try(Rig rig=new Rig(false)){
+            RunControl original=new RunControl();var target=rig.tasks.teamInferenceTarget(rig.operation,InferenceReceipt.Purpose.MEMBER,"member-a",new InferenceReceipt.CallSite(UUID.randomUUID().toString(),1,0,0),original,()->assertFalse("coordinator currentness cannot run under TaskStore monitor",Thread.holdsLock(rig.tasks)));
+            assertEquals("actual member output",ModelGateway.complete(rig.settings.get(),new JSONArray().put(new JSONObject().put("role","user").put("content","original standalone team")),null,original,target).getString("content"));assertEquals(1,rig.requests.get());assertEquals(0,rig.nativeRuns());assertEquals("SUCCEEDED",rig.tasks.inferenceUsage(rig.operation).getJSONArray("logicalRequests").getJSONObject(0).getString("state"));
         }
     }
 }

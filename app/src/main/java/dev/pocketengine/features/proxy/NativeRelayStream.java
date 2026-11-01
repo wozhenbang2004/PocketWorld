@@ -9,8 +9,8 @@ import java.util.*;
 import org.json.*;
 
 /** Bounded native frames through the existing provider state machines, not a second completion parser. */
-final class NativeRelayStream {
-    interface Sink {void frame(String event,JSONObject data)throws Exception;}
+public final class NativeRelayStream {
+    public interface Sink {void frame(String event,JSONObject data)throws Exception;}
     static void relay(InputStream input,NativeRelayPolicy.Prepared request,RunControl original,String secret,dev.pocketengine.runtime.usage.ProviderUsage.Observer usage,Sink sink)throws Exception{
         Redactor redactor=new Redactor(request.config.provider,secret,sink);
         ApiTurnStream.relayNative(input,request.config.provider,ProviderAdapters.selected(request.config.provider),request.tools,original,usage,(event,frame)->{
@@ -45,14 +45,25 @@ final class NativeRelayStream {
         String value(){return object.optString(key);}
     }
     /** Keep only possible credential suffixes; unrelated block/item streams never join. */
-    private static final class Redactor {
+    public static final class Redactor {
         final String protocol,secret;final Sink sink;final Deque<Frame> pending=new ArrayDeque<>();final Map<String,List<Text>> tails=new HashMap<>();int bytes;
-        Redactor(String protocol,String secret,Sink sink){this.protocol=protocol;this.secret=secret;this.sink=sink;}
-        void accept(String event,JSONObject original)throws Exception{
+        public Redactor(String protocol,String secret,Sink sink){this.protocol=protocol;this.secret=secret;this.sink=sink;}
+        public void accept(String event,JSONObject original)throws Exception{
             if(!event.isEmpty()&&!event.matches("[A-Za-z0-9_.-]{1,160}"))throw new java.io.IOException("native event 名称无效");
             if(!secret.isEmpty()&&event.contains(secret))throw new java.io.IOException("native event 与凭据冲突");
             Frame frame=new Frame(event,(JSONObject)ChatCompletionStream.scrub(original,secret),original.toString().getBytes(StandardCharsets.UTF_8).length);pending.add(frame);bytes+=frame.bytes;
             switch(protocol){
+                case "openai_chat":{
+                    JSONArray choices=original.optJSONArray("choices"),targets=frame.json.optJSONArray("choices");
+                    for(int c=0;choices!=null&&c<choices.length();c++){
+                        JSONObject delta=choices.getJSONObject(c).optJSONObject("delta"),target=targets.getJSONObject(c).optJSONObject("delta");
+                        if(delta==null||target==null)continue;
+                        for(String field:new String[]{"content","reasoning_content"})if(delta.opt(field) instanceof String)text(frame,target,field,delta.getString(field),"chat/"+c+"/"+field);
+                        JSONArray calls=delta.optJSONArray("tool_calls"),out=target.optJSONArray("tool_calls");
+                        for(int i=0;calls!=null&&i<calls.length();i++){JSONObject call=calls.getJSONObject(i),fn=call.optJSONObject("function"),dest=out.getJSONObject(i).optJSONObject("function");
+                            if(fn!=null&&dest!=null&&fn.opt("arguments") instanceof String)text(frame,dest,"arguments",fn.getString("arguments"),"chat/"+c+"/tool/"+call.optInt("index",-1));}
+                    }break;
+                }
                 case "openai_responses":{
                     String type=original.optString("type"),path="responses/"+original.optInt("output_index",-1)+"/"+original.optInt("content_index",-1)+"/";
                     if(type.endsWith(".delta")&&original.opt("delta") instanceof String)text(frame,frame.json,"delta",original.getString("delta"),path+type);
@@ -85,7 +96,7 @@ final class NativeRelayStream {
             if(suffix>0){List<Text> held=new ArrayList<>();int remaining=suffix;for(int i=fragments.size()-1;i>=0&&remaining>0;i--){Text fragment=fragments.get(i);if(!fragment.value().isEmpty()){held.add(0,fragment);fragment.frame.blocked++;remaining-=fragment.value().length();}}tails.put(path,held);}
         }
         void drain()throws Exception{while(!pending.isEmpty()&&pending.peek().blocked==0){Frame frame=pending.remove();bytes-=frame.bytes;sink.frame(frame.event,frame.json);}}
-        void finish()throws Exception{for(List<Text> held:tails.values())for(Text fragment:held)fragment.frame.blocked--;tails.clear();drain();}
+        public void finish()throws Exception{for(List<Text> held:tails.values())for(Text fragment:held)fragment.frame.blocked--;tails.clear();drain();}
     }
     private NativeRelayStream(){}
 }

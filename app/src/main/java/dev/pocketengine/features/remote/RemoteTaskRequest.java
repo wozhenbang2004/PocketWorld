@@ -32,13 +32,31 @@ public final class RemoteTaskRequest {
         if(capability==null||!INPUT_PROTOCOL.equals(capability.optString("protocol"))||capability.opt("supported")!=Boolean.TRUE||!capability.optBoolean("binaryStreaming")||!capability.optBoolean("workerStartsOnlyAfterReady")||!capability.optBoolean("monotonicStateRevision")
                 ||capability.optInt("maxFiles")<8||capability.optLong("maxFileBytes")<262144||capability.optLong("maxTotalBytes")<524288)throw new SecurityException("此环境未支持已核二进制附件暂存；不降级为文字写入，请保留无附件路径或更新执行端");
     }
+    public static final String INPUT_CONTINUATION_PROTOCOL="private_input_continuation_v1";
+    public static void requireInputContinuationCapability(JSONObject environment,String worker)throws Exception {
+        requireInputCapability(environment);JSONObject cap=environment.getJSONObject("privateInputCapabilities");boolean found=false;JSONArray workers=cap.optJSONArray("continuationWorkers");for(int i=0;workers!=null&&i<workers.length();i++)if(worker.equals(workers.getString(i)))found=true;
+        if(!INPUT_CONTINUATION_PROTOCOL.equals(cap.optString("continuationProtocol"))||!cap.optBoolean("originalSessionPrelaunchCheck")||!found)throw new SecurityException("此执行端未声明原会话附件续接；保留文字续接或更新执行端，不降级到新会话");
+    }
+    public static JSONObject inputContinuationSource(JSONObject source)throws Exception {
+        JSONObject value=new JSONObject();for(String key:new String[]{"jobId","jobOperationId","environmentId","worker","threadId","workspaceIdentity"})value.put(key,source.get(key));for(String key:new String[]{"turnId","sessionId","promptResultIdentity"})if(source.has(key)&&source.opt(key)!=JSONObject.NULL)value.put(key,source.get(key));return value;
+    }
+    public static void requireGroupApiMode(JSONObject proof,JSONObject request)throws Exception {
+        if(!"codex_app_server".equals(request.optString("worker"))||!request.optBoolean("readOnly")||!"apiKey".equals(proof.optString("authMode"))||proof.opt("accountReadVerified")!=Boolean.TRUE||proof.opt("configuredCredentialSourceVerified")!=Boolean.TRUE||proof.opt("billingBackendVerified")!=Boolean.FALSE||proof.opt("internalTokensKnown")!=Boolean.FALSE||proof.opt("internalCostKnown")!=Boolean.FALSE||!request.getString("environmentId").equals(proof.optString("environmentId"))||!request.getString("environmentBinding").equals(proof.optString("environmentBinding"))||!proof.optString("credentialGeneration").matches("[a-f0-9]{64}")||!proof.optString("proofToken").matches("[a-f0-9]{64}")||proof.optLong("observedAt")>System.currentTimeMillis()+5000||proof.optLong("expiresAt")<=System.currentTimeMillis()||proof.optLong("expiresAt")>proof.optLong("observedAt")+120000)throw new SecurityException("缺少当前原环境/只读API-key模式代次证明；未知不外传群资料");
+    }
     public static JSONObject inputReceipt(JSONObject actual,JSONObject scope)throws Exception {
         JSONObject request=scope.getJSONObject("request");
         for(String key:new String[]{"profileId","serviceBase"})if(!scope.getString(key).equals(actual.optString(key)))throw new SecurityException("附件回执改变了原目标");
         for(String key:new String[]{"environmentId","worker"})if(!request.getString(key).equals(actual.optString(key)))throw new SecurityException("附件回执不属于原环境/执行器");
         if(!scope.getString("jobOperationId").equals(actual.optString("operationId"))||!actual.optString("id").matches("[A-Za-z0-9_-]{1,80}")||!actual.optString("workspaceIdentity").matches("[a-f0-9]{64}"))throw new SecurityException("缺少原job或物理工作区回执");
         if(scope.has("jobId")&&!scope.getString("jobId").equals(actual.optString("id")))throw new SecurityException("附件回执属于另一job");
-        JSONObject state=actual.getJSONObject("inputState");JSONArray expected=inputManifest(scope.getJSONArray("files")),files=state.getJSONArray("files");
+        JSONObject state=actual.getJSONObject("inputState");
+        if(scope.has("groupInputSource")){if(!"EXTERNAL_GROUP".equals(state.optString("inferenceAudience"))||state.optJSONObject("groupInputSource")==null||state.optJSONObject("externalGroupApiMode")==null||!dev.pocketengine.store.TaskStore.capabilityFingerprint(scope.getJSONObject("groupInputSource")).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(state.getJSONObject("groupInputSource")))||!dev.pocketengine.store.TaskStore.capabilityFingerprint(scope.getJSONObject("externalGroupApiMode")).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(state.getJSONObject("externalGroupApiMode"))))throw new SecurityException("回执把原群来源/API-mode范围换成私人或另一群");}
+        else if(state.has("inferenceAudience")||state.has("groupInputSource")||state.has("externalGroupApiMode"))throw new SecurityException("私人输入不能被回执改成另一个外部受众");
+        JSONArray expected=inputManifest(scope.getJSONArray("files")),files=state.getJSONArray("files");
+        if(scope.has("continuationSource")){
+            JSONObject expectedSource=inputContinuationSource(scope.getJSONObject("continuationSource"));
+            if(!INPUT_CONTINUATION_PROTOCOL.equals(state.optString("continuationProtocol"))||(state.optJSONObject("continuationSource")==null||!dev.pocketengine.store.TaskStore.capabilityFingerprint(expectedSource).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(state.getJSONObject("continuationSource"))))||!expectedSource.getString("jobId").equals(actual.optString("resumeJobId"))||!expectedSource.getString("threadId").equals(actual.optString("threadId")))throw new SecurityException("输入续接回执改变了原job、会话或上一轮基线");
+        }else if(state.has("continuationProtocol")||state.has("continuationSource"))throw new SecurityException("首创输入不能被回执改成其它会话续接");
         if(!(state.opt("revision") instanceof Integer||state.opt("revision") instanceof Long)||state.getLong("revision")<1)throw new SecurityException("缺少原job单调输入版本，不能用时间戳猜附件进度");
         if(!INPUT_PROTOCOL.equals(state.optString("protocol"))||!scope.getString("manifestHash").equals(state.optString("manifestHash"))||!scope.getString("inputDirectory").equals(state.optString("inputDirectory"))||state.opt("cleanupConfirmed")!=Boolean.FALSE||files.length()!=expected.length())throw new SecurityException("暂存回执与明确所选附件不一致");
         if(!state.optString("phase").matches("awaiting_upload|uploading|ready|starting|running|completed|failed|cancelled|unknown|blocked|interrupted"))throw new SecurityException("未知附件阶段，未授权后继派发");

@@ -9,10 +9,11 @@ import java.net.URL;
 import java.util.*;
 import org.json.*;
 
-/** Native protocol in = same selected native protocol out. No account route or lossy translation. */
+/** Native requests and explicitly supported lossless cross-protocol requests share ModelGateway. */
 final class NativeRelayPolicy {
     static final class Rejected extends Exception { Rejected(String text){super(text);} }
     static final class Prepared {
+        dev.pocketengine.runtime.providers.GatewayRequest gateway;
         final ModelConfig config;final JSONObject wire;final JSONArray messages,tools;final URL endpoint;final boolean streaming,functionHistory;
         Prepared(ModelConfig config,JSONObject wire,JSONArray messages,JSONArray tools,URL endpoint,boolean streaming,boolean functionHistory){this.config=config;this.wire=wire;this.messages=messages;this.tools=tools;this.endpoint=endpoint;this.streaming=streaming;this.functionHistory=functionHistory;}
         void revalidate()throws Exception{ModelRequestPolicy.applyNative(config,messages,tools,new JSONObject(wire.toString()),functionHistory);}
@@ -21,8 +22,8 @@ final class NativeRelayPolicy {
     static JSONArray paths(ModelConfig config)throws Exception{
         return switch(config.provider){
             case "openai_chat"->new JSONArray().put("/v1/chat/completions");
-            case "openai_responses"->new JSONArray().put("/v1/responses");
-            case "anthropic"->new JSONArray().put("/v1/messages");
+            case "openai_responses"->new JSONArray().put("/v1/responses").put("/v1/messages");
+            case "anthropic"->new JSONArray().put("/v1/messages").put("/v1/chat/completions");
             case "gemini"->new JSONArray().put(geminiPath(config,false)).put(geminiPath(config,true));
             default->new JSONArray();
         };
@@ -30,7 +31,16 @@ final class NativeRelayPolicy {
     static String protocol(ModelConfig config){return config.usesAccount()?"unavailable":config.provider;}
     static boolean acceptsPath(String path){return path.equals("/v1/chat/completions")||path.equals("/v1/responses")||path.equals("/v1/messages")||path.startsWith("/v1beta/models/");}
     static Prepared prepare(ModelConfig selected,String path,JSONObject client)throws Exception{
-        if(selected.usesAccount()||selected.provider.equals("openai_chat"))throw new Rejected("此入口需要已明确选择的同协议 API-key 连接");
+        if(selected.usesAccount())throw new Rejected("外部网关仅接已授权的 API-key 连接");
+        if(selected.routePlan!=null&&!"EXTERNAL_RELAY".equals(selected.routePlan.audience))throw new Rejected("模型组未获外部服务受众授权，不能复用主任务许可");
+        dev.pocketengine.runtime.providers.ProtocolCodec.rejectOpaque(client);
+        String ingress=dev.pocketengine.runtime.providers.ProtocolCodec.ingress(path);
+        if(ingress.equals(selected.provider))validateNativeFields(ingress,client);
+        if(!ingress.equals(selected.provider)){
+            var translated=dev.pocketengine.runtime.providers.ProtocolCodec.prepare(selected,ingress,client);
+            Prepared result=new Prepared(translated.config,translated.wire,translated.messages,translated.tools,translated.endpoint,translated.stream,translated.functionHistory);result.gateway=translated;return result;
+        }
+        if(ingress.equals("openai_chat"))return chat(selected,path,client);
         boolean stream;
         if(selected.provider.equals("gemini")){
             if(path.equals(geminiPath(selected,true)))stream=true;
@@ -40,7 +50,7 @@ final class NativeRelayPolicy {
         }else{
             if(!path.equals(selected.provider.equals("anthropic")?"/v1/messages":"/v1/responses"))throw new Rejected("请求协议与本机已固定的 API-key 连接不一致，没有转换或切换连接");
             if(client.has("stream")&&!(client.get("stream") instanceof Boolean))throw new Rejected("stream 需要布尔值");stream=client.optBoolean("stream",false);
-            if(client.has("model")&&(!(client.get("model") instanceof String)||!selected.model.equals(client.getString("model"))))throw new Rejected("请求模型不是本机服务已选模型，没有代换");
+            if(client.has("model")&&(!(client.get("model") instanceof String)||!selected.model.equals(client.getString("model"))&&(selected.routePlan==null||!selected.routePlan.requestedAlias.equals(client.getString("model")))))throw new Rejected("请求模型不是本机服务已选模型，没有代换");
         }
         JSONObject wire=new JSONObject(client.toString());if(!selected.provider.equals("gemini"))wire.put("model",selected.model).put("stream",stream);
         JSONArray messages=new JSONArray(),tools=new JSONArray();ModelConfig request=selected;boolean functionHistory=false;
@@ -94,7 +104,95 @@ final class NativeRelayPolicy {
         JSONObject admitted=ModelRequestPolicy.applyNative(request,messages,tools,wire,functionHistory);
         if(summary!=null){if(!(summary instanceof String)||((String)summary).length()>64)throw new Rejected("reasoning summary 参数无效");admitted.getJSONObject("reasoning").put("summary",summary);}
         URL endpoint=ProviderAdapters.selected(request.provider).endpoint(request);if(stream)endpoint=ApiTurnStream.endpoint(request.provider,endpoint);
-        return new Prepared(request,admitted,messages,tools,endpoint,stream,functionHistory);
+        Prepared result=new Prepared(request,admitted,messages,tools,endpoint,stream,functionHistory);
+        JSONObject original=new JSONObject(client.toString());
+        result.gateway=new dev.pocketengine.runtime.providers.GatewayRequest(request,ingress,original,admitted,messages,tools,endpoint,stream,functionHistory,result::revalidate,candidate->prepare(candidate,path,original).gateway);
+        return result;
+    }
+    /** Field-level native disposition: declared fields retain their exact wire value; all other
+     * semantic fields reject before a physical attempt, including nested blocks and tool options. */
+    private static void validateNativeFields(String protocol,JSONObject raw)throws Exception{
+        JSONArray tools=raw.optJSONArray("tools");if(raw.has("tools")&&tools==null)throw new Rejected("tools需要已声明的函数数组");
+        Set<String> offered=new HashSet<>();
+        for(int i=0;tools!=null&&i<tools.length();i++){
+            JSONObject tool=tools.getJSONObject(i),fn=protocol.equals("openai_chat")?tool.getJSONObject("function"):tool;
+            if(protocol.equals("openai_chat")){keys(tool,"type","function");if(!"function".equals(tool.optString("type")))throw new Rejected("原生Chat仅接受客户端function，不授予托管工具");}
+            if(!protocol.equals("gemini")){
+                offered.add(name(fn,"name"));fn.getJSONObject(protocol.equals("anthropic")?"input_schema":"parameters");
+                if(protocol.equals("anthropic"))keys(fn,"type","name","description","input_schema","strict");else keys(fn,"type","name","description","parameters","strict");
+                if(dev.pocketengine.runtime.providers.ProtocolCodec.strict(fn)==dev.pocketengine.runtime.providers.ProtocolCodec.Strict.TRUE)throw new Rejected("当前原生能力目录尚未验证strict schema支持，未发送也未改成提示词");
+            }else{keys(tool,"functionDeclarations");JSONArray defs=tool.getJSONArray("functionDeclarations");for(int j=0;j<defs.length();j++)keys(defs.getJSONObject(j),"name","description","parameters","parametersJsonSchema");}
+        }
+        if(raw.has("tool_choice")){
+            Object selection=raw.get("tool_choice");
+            if(selection instanceof String){if(protocol.equals("anthropic")||!Set.of("auto","none","required").contains(selection))throw new Rejected("未支持的原生工具选择");}
+            else if(selection instanceof JSONObject){JSONObject choice=(JSONObject)selection;String kind=choice.optString("type");String forced="";
+                if(protocol.equals("anthropic")){keys(choice,"type","name","disable_parallel_tool_use");if(!Set.of("auto","none","any","tool").contains(kind))throw new Rejected("不允许未声明托管工具");if(kind.equals("tool"))forced=name(choice,"name");if(choice.has("disable_parallel_tool_use")&&!(choice.get("disable_parallel_tool_use") instanceof Boolean))throw new Rejected("并行工具选项需要布尔值");}
+                else if(protocol.equals("openai_chat")){keys(choice,"type","function");if(!kind.equals("function"))throw new Rejected("不允许未声明托管工具");JSONObject fn=choice.getJSONObject("function");keys(fn,"name");forced=name(fn,"name");}
+                else{keys(choice,"type","name");if(!kind.equals("function"))throw new Rejected("不允许未声明托管工具");forced=name(choice,"name");}
+                if(!forced.isEmpty()&&!offered.contains(forced))throw new Rejected("工具选择必须引用本次声明的函数");
+            }else throw new Rejected("原生工具选择格式无效");
+        }
+        if(raw.has("n")&&integer(raw.get("n"))!=1)throw new Rejected("只支持单候选模型回复");
+        if(raw.has("parallel_tool_calls")&&!(raw.get("parallel_tool_calls") instanceof Boolean))throw new Rejected("并行工具选项需要布尔值");
+        if(raw.has("text")){JSONObject text=raw.getJSONObject("text");keys(text,"format","verbosity");if(text.has("format"))validateOutputFormat(text.getJSONObject("format"));}
+        if(raw.has("output_config")){JSONObject output=raw.getJSONObject("output_config");keys(output,"effort","format");if(output.has("format"))throw new Rejected("当前原生输出schema能力尚未验证，未发送");}
+        if(raw.has("stream_options")){JSONObject options=raw.getJSONObject("stream_options");keys(options,"include_usage","include_obfuscation");for(Iterator<String> it=options.keys();it.hasNext();)if(!(options.get(it.next()) instanceof Boolean))throw new Rejected("流选项需要布尔值");}
+        JSONArray rows=raw.optJSONArray(protocol.equals("openai_responses")?"input":protocol.equals("gemini")?"contents":"messages");
+        for(int i=0;rows!=null&&i<rows.length();i++){
+            JSONObject row=rows.getJSONObject(i);
+            if(protocol.equals("openai_responses")){
+                switch(row.optString("type","message")){
+                    case "message":keys(row,"type","role","content");nativeParts(protocol,row.opt("content"));break;
+                    case "function_call":keys(row,"type","call_id","name","arguments");dev.pocketengine.runtime.providers.ProtocolJson.parse(row.getString("arguments"));break;
+                    case "function_call_output":keys(row,"type","call_id","output");if(!(row.get("output") instanceof String))throw new Rejected("当前原生工具结果仅支持完整文本，不能改写未知内容块");break;
+                    default:throw new Rejected("未知原生输入不能获得同源权限");
+                }
+            }else if(protocol.equals("gemini")){keys(row,"role","parts");nativeParts(protocol,row.get("parts"));}
+            else if(protocol.equals("anthropic")){keys(row,"role","content");nativeParts(protocol,row.get("content"));}
+            else{keys(row,"role","content","tool_calls","tool_call_id");nativeParts(protocol,row.opt("content"));JSONArray calls=row.optJSONArray("tool_calls");for(int j=0;calls!=null&&j<calls.length();j++){JSONObject c=calls.getJSONObject(j);keys(c,"id","type","function");JSONObject f=c.getJSONObject("function");keys(f,"name","arguments");dev.pocketengine.runtime.providers.ProtocolJson.parse(f.getString("arguments"));}}
+        }
+        if(raw.has("system"))nativeParts(protocol,raw.get("system"));
+        if(raw.has("systemInstruction")){JSONObject system=raw.getJSONObject("systemInstruction");keys(system,"parts");nativeParts(protocol,system.get("parts"));}
+        if(raw.has("generationConfig"))keys(raw.getJSONObject("generationConfig"),"maxOutputTokens","candidateCount","temperature","topP","topK","stopSequences","thinkingConfig");
+    }
+    private static void validateOutputFormat(JSONObject format)throws Exception{
+        keys(format,"type","name","description","schema","strict");dev.pocketengine.runtime.providers.ProtocolCodec.strict(format);
+        if(!"text".equals(format.optString("type"))||format.has("schema")||format.has("strict"))throw new Rejected("当前输出schema能力尚未验证，未发送或改写");
+    }
+    private static void nativeParts(String protocol,Object value)throws Exception{
+        if(value==null||value==JSONObject.NULL||value instanceof String)return;
+        if(!(value instanceof JSONArray))throw new Rejected("原生内容必须为文字或已支持块");JSONArray parts=(JSONArray)value;
+        for(int i=0;i<parts.length();i++){
+            JSONObject p=parts.getJSONObject(i);
+            if(protocol.equals("gemini")){
+                keys(p,"text","inlineData","functionCall","functionResponse");
+                if(p.has("inlineData"))keys(p.getJSONObject("inlineData"),"mimeType","data");
+                if(p.has("functionCall"))keys(p.getJSONObject("functionCall"),"id","name","args");
+                if(p.has("functionResponse"))keys(p.getJSONObject("functionResponse"),"id","name","response");continue;
+            }
+            switch(p.optString("type")){
+                case "text":case "input_text":case "output_text":keys(p,"type","text");break;
+                case "image_url":keys(p,"type","image_url");keys(p.getJSONObject("image_url"),"url","detail");break;
+                case "input_image":keys(p,"type","image_url","detail");break;
+                case "image":keys(p,"type","source");keys(p.getJSONObject("source"),"type","media_type","data");break;
+                case "tool_use":keys(p,"type","id","name","input");break;
+                case "tool_result":keys(p,"type","tool_use_id","content","is_error");if(p.has("is_error")&&!(p.get("is_error") instanceof Boolean))throw new Rejected("工具错误标记需要布尔值");nativeParts(protocol,p.get("content"));break;
+                default:throw new Rejected("未支持的原生块或媒体不能静默丢弃");
+            }
+        }
+    }
+    private static Prepared chat(ModelConfig selected,String path,JSONObject client)throws Exception{
+        if(client.has("model")&&(!(client.get("model") instanceof String)||!selected.model.equals(client.getString("model"))&&(selected.routePlan==null||!selected.routePlan.requestedAlias.equals(client.getString("model")))))throw new Rejected("请求模型不是本机服务已选模型，没有代换");
+        if(client.has("stream")&&!(client.get("stream") instanceof Boolean))throw new Rejected("stream 需要布尔值");
+        boolean stream=client.optBoolean("stream",false);JSONArray rows=client.optJSONArray("messages");if(rows==null||rows.length()<1||rows.length()>100)throw new Rejected("messages需为1至100项");
+        keys(client,"model","messages","stream","max_tokens","max_completion_tokens","reasoning_effort","tools","tool_choice","parallel_tool_calls","temperature","top_p","stop","seed","presence_penalty","frequency_penalty","user","metadata","store","stream_options","n");
+        JSONObject original=new JSONObject(client.toString()),wire=new JSONObject(client.toString()).put("model",selected.model).put("stream",stream);
+        ProxyRequestPolicy.Prepared nativeRequest=ProxyRequestPolicy.prepare(selected,wire,stream);JSONArray tools=nativeRequest.tools==null?new JSONArray():nativeRequest.tools;
+        URL endpoint=ProviderAdapters.selected(selected.provider).endpoint(nativeRequest.requestConfig);
+        Prepared result=new Prepared(nativeRequest.requestConfig,nativeRequest.wire,nativeRequest.messages,tools,endpoint,stream,false);
+        result.gateway=new dev.pocketengine.runtime.providers.GatewayRequest(nativeRequest.requestConfig,"openai_chat",original,nativeRequest.wire,nativeRequest.messages,tools,endpoint,stream,false,nativeRequest::revalidate,candidate->prepare(candidate,path,original).gateway);
+        return result;
     }
     private static ModelConfig reasoning(ModelConfig selected,JSONObject wire)throws Exception{
         ReasoningOptions supplied=null;

@@ -25,21 +25,16 @@ public final class ChannelProtocol {
         if(body.optString("kind").equals("group"))event.put("roomId",ChannelCore.identifier(body,"roomId"));
         return event;
     }
-    public static JSONObject canonicalQq(JSONObject envelope)throws Exception {
+    public static JSONObject canonicalQq(JSONObject envelope)throws Exception {return canonicalQq(envelope,"");}
+    static JSONObject canonicalQq(JSONObject envelope,String nativeBotUserId)throws Exception {
         if(envelope.optInt("op",-1)!=0)throw new IllegalArgumentException("不是消息分发事件");
-        String type=envelope.optString("t");
-        boolean group=type.equals("GROUP_AT_MESSAGE_CREATE")||type.equals("GROUP_MESSAGE_CREATE");
-        if(!group&&!type.equals("C2C_MESSAGE_CREATE"))throw new IllegalArgumentException("当前仅处理QQ单聊与群文字消息");
-        JSONObject body=envelope.getJSONObject("d"),author=body.getJSONObject("author");
-        if(author.optBoolean("bot",false))throw new IllegalArgumentException("忽略机器人消息");
-        String sender=author.optString(group?"member_openid":"user_openid");
-        // The scene-specific field is mandatory; display names and union/account claims do not identify the owner.
-        if(sender.isEmpty())throw new IllegalArgumentException("缺少平台场景用户标识");
-        JSONObject canonical=new JSONObject().put("messageId",ChannelCore.identifier(body,"id"))
-                .put("senderId",ChannelCore.identifier(new JSONObject().put("senderId",sender),"senderId"))
-                .put("kind",group?"group":"dm").put("text",ChannelCore.text(body,"content",4000,false));
-        if(group)canonical.put("roomId",ChannelCore.identifier(body,"group_openid"));
-        JSONObject parts=ChannelMessageParts.qq(body);canonical.put("messageParts",parts);String commandText=ChannelMessageParts.qqCommandText(body);if(!blank(commandText))canonical.put("text",commandText);
+        String type=envelope.optString("t"),scene=QqConversation.fromEventType(type);boolean group=scene.equals(QqConversation.GROUP)||scene.equals(QqConversation.GUILD),guild=scene.equals(QqConversation.GUILD)||scene.equals(QqConversation.GUILD_DM);
+        JSONObject body=envelope.getJSONObject("d"),author=body.getJSONObject("author");if(author.optBoolean("bot",false))throw new IllegalArgumentException("忽略机器人消息");
+        String sender=QqConversation.nativeId(author,guild?"id":group?"member_openid":"user_openid");if(guild&&!nativeBotUserId.isEmpty()&&sender.equals(nativeBotUserId))throw new IllegalArgumentException("忽略当前原生机器人回声");
+        JSONObject canonical=new JSONObject().put("messageId",QqConversation.nativeId(body,"id")).put("senderId",sender).put("conversationKind",scene).put("kind",group?"group":"dm").put("text",ChannelCore.text(body,"content",4000,true));
+        if(guild){canonical.put("qqGuildId",QqConversation.nativeId(body,"guild_id"));if(group)canonical.put("qqChannelId",QqConversation.nativeId(body,"channel_id")).put("roomId",QqConversation.nativeId(body,"channel_id"));}
+        else if(group)canonical.put("roomId",QqConversation.nativeId(body,"group_openid"));
+        JSONObject parts=ChannelMessageParts.qq(body);if(blank(canonical.getString("text"))){String elementText=ChannelMessageParts.currentText(parts);if(!blank(elementText))canonical.put("text",elementText);else{if(!ChannelMessageParts.qqHasMedia(parts))throw new IllegalArgumentException("QQ消息没有可保留的正文或媒体项");canonical.put("nativeMediaOnly",true).put("partialInput",true);}}canonical.put("messageParts",parts);String commandText=ChannelMessageParts.qqCommandText(body);if(scene.equals(QqConversation.GUILD)&&!nativeBotUserId.isEmpty()){for(String tag:new String[]{"<@"+nativeBotUserId+">","<@!"+nativeBotUserId+">"})if(commandText.startsWith(tag))commandText=commandText.substring(tag.length()).trim();}if(!blank(commandText))canonical.put("text",commandText);
         if(group){
             JSONArray incoming=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();JSONArray direct=body.optJSONArray("attachments");
             if(direct!=null){JSONArray safe=ChannelMessageParts.attachments(direct,"attachments");for(int i=0;i<safe.length();i++){JSONObject attachment=safe.getJSONObject(i);String key=attachment.getString("url")+"\u0000"+attachment.getLong("bytes");if(seen.add(key))incoming.put(attachment);}}

@@ -1,0 +1,64 @@
+package dev.pocketengine.features.local.project;
+
+import java.nio.charset.StandardCharsets;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+/** Projection of the original fixed managed Git program, never a model's JSON claim.
+ * Native process exit/group/lease and original task/run/op remain independently required. */
+public final class ProjectGitResult {
+    private ProjectGitResult(){}
+    public static JSONObject observe(JSONObject exact,JSONObject backend)throws Exception {
+        if(!ProjectGit.exact(exact))throw new SecurityException("不是原固定Git执行");JSONObject payload=exact.getJSONObject("payload"),request=ProjectGit.verifiedRequest(payload.getJSONObject("gitRequest"));String action=request.getString("action");
+        JSONObject route=backend.getJSONObject("projectExecution");for(String key:new String[]{"command","projectId","checkoutId","sourceDigest","planDigest","stepId","intent","requestDigest","runtimeId","runtimeIdentity"})if(!ProjectSources.canonical(exact.get(key)).equals(ProjectSources.canonical(route.opt(key))))throw new SecurityException("Git结果不是该原方案与运行环境");
+        Object count=backend.opt("argvCount");if(!"managed_process".equals(backend.optString("provider"))||!"command".equals(backend.optString("kind"))||!"python3".equals(backend.optString("requestedExecutable"))||!Boolean.FALSE.equals(backend.opt("argumentValuesIncluded"))||!(count instanceof Integer||count instanceof Long)||((Number)count).longValue()!=ProjectGit.arguments(payload).length()||!ProjectSources.digest(new JSONObject().put("argv",ProjectGit.arguments(payload))).equals(backend.optString("argvDigest")))throw new SecurityException("Git原参数摘要或真实backend不符");
+        JSONObject result=new JSONObject().put("format",ProjectGit.FORMAT).put("action",action).put("originalOperationId",backend.getString("operationId")).put("protocolAvailable",false).put("publicationUnknown",false).put("ok",false).put("untrusted",true).put("businessVerified",false);
+        Object exit=backend.opt("exitCode");boolean complete=Boolean.TRUE.equals(backend.opt("receiptReceived"))&&backend.optString("status").matches("completed|failed")&&(exit instanceof Integer||exit instanceof Long)&&Boolean.TRUE.equals(backend.opt("resourcesReleased"))&&Boolean.TRUE.equals(backend.opt("processGroupAbsent"))&&(Boolean.TRUE.equals(backend.opt("processExited"))||dev.pocketengine.features.local.runtime.NativeProcessSupervisor.validatesNoChildReceipt(backend));
+        if(!complete)return result.put("code","git_original_process_pending").put("message","原Git进程尚未取得完整退出与资源释放回执，只核对原操作");
+        if(dev.pocketengine.features.local.runtime.NativeProcessSupervisor.validatesNoChildReceipt(backend))return result.put("code","git_process_not_started").put("effectStatus","not_published").put("message","原native回执确认未创建子进程，Git未开始；可重新核对工具后另行明确操作");
+        String stdout=backend.optString("stdout");JSONObject protocol=null;
+        if(!backend.optBoolean("summaryOutputTruncated")&&!backend.optBoolean("outputTruncated")&&stdout.getBytes(StandardCharsets.UTF_8).length<=ProjectGit.MAX_RESULT_BYTES)try{protocol=new JSONObject(stdout.trim());}catch(Exception malformed){/* Missing result cannot attest that a mutation never happened. */}
+        if(protocol==null||!ProjectGit.FORMAT.equals(protocol.optString("format"))||!(protocol.opt("ok") instanceof Boolean))return result.put("code","git_original_result_unavailable").put("publicationUnknown",ProjectGit.writes(action)).put("message","原固定Git结果没有完整返回；日志仍在原进程，不据此声明变更成功，也不重放未确定操作");
+        result.put("protocolAvailable",true).put("code",protocol.getString("code"));
+        if(!protocol.getBoolean("ok")){boolean unknown=ProjectGit.writes(action)&&!"not_published".equals(protocol.optString("effectStatus"));return result.put("publicationUnknown",unknown).put("effectStatus",unknown?"unknown":"not_published").put("message",protocol.optString("message","原Git动作未完成"));}
+        if(!("git_"+action+"_observed").equals(protocol.optString("code")))throw new SecurityException("Git程序结果不是这次原动作");
+        JSONObject data=protocol.getJSONObject("result");validate(action,request,data);
+        // The fixed program can publish its final result just before native cancellation wins
+        // the enclosing process's exit race (also possible with a PRoot launcher). Retain the
+        // original failed exit; the complete validated result is not proof of process success,
+        // but neither may a known publication be turned into an unknown/replayable mutation.
+        if(((Number)exit).longValue()!=0||!"completed".equals(backend.optString("status")))return result.put("ok",false).put("data",ProjectSources.copy(data)).put("code","git_"+action+"_result_observed_process_failed").put("effectStatus",ProjectGit.writes(action)?"published":"read_observed").put("programResultComplete",true).put("nativeExecutionSuccessful",false).put("message","已取得这个原Git动作的完整结果，但原进程以失败或取消结束；原结果保留，取消不表示撤销了已发生的Git变更");
+        return result.put("ok",true).put("data",ProjectSources.copy(data)).put("message",ProjectGit.label(action)+"已取得原Git结果；不等于推送、正式项目导回或业务验收");
+    }
+    private static void validate(String action,JSONObject request,JSONObject data)throws Exception {
+        if(action.equals("status")){
+            if(!Boolean.TRUE.equals(data.opt("readOnly")))throw new SecurityException("Git状态结果缺少固定只读标记");
+            if(Boolean.FALSE.equals(data.opt("repositoryPresent"))){if(!data.optString("worktreeSha256").matches("[a-f0-9]{64}")||!Boolean.TRUE.equals(data.opt("canInitializeLocal")))throw new SecurityException("无Git状态缺少原工作树定位");return;}
+            ProjectGit.pin(data.getJSONObject("pin"));JSONArray entries=data.getJSONArray("entries");if(entries.length()>ProjectGit.MAX_STATUS_PAGE||data.getInt("offset")<0||data.getInt("nextOffset")<data.getInt("offset")||data.getInt("nextOffset")>data.getInt("totalEntries")||entries.length()!=data.getInt("nextOffset")-data.getInt("offset"))throw new SecurityException("Git状态分页不完整");
+            for(int i=0;i<entries.length();i++){JSONObject row=entries.getJSONObject(i);dev.pocketengine.features.workspace.VersionedWorkspace.path(row.getString("path"));if(!row.getString("indexStatus").matches("[.MADRCUT?!]")||!row.getString("worktreeStatus").matches("[.MADRCUT?!]")||!(row.opt("conflict") instanceof Boolean))throw new SecurityException("Git双状态字段无效");}
+        }else if(action.equals("history")){
+            if(!Boolean.TRUE.equals(data.opt("readOnly"))||!ProjectSources.canonical(request.getJSONObject("expected")).equals(ProjectSources.canonical(ProjectGit.pin(data.getJSONObject("pin"))))||!request.getJSONObject("expected").getString("head").equals(data.getString("revisionRoot"))||data.getInt("offset")!=request.getInt("offset")||data.getJSONArray("commits").length()>request.getInt("limit")||data.getInt("nextOffset")!=data.getInt("offset")+data.getJSONArray("commits").length())throw new SecurityException("提交历史不是原审阅HEAD或真实分页");
+            JSONArray commits=data.getJSONArray("commits");for(int i=0;i<commits.length();i++){JSONObject row=commits.getJSONObject(i);if(!row.optString("commitId").matches("(?:[a-f0-9]{40}|[a-f0-9]{64})")||!row.optString("treeId").matches("(?:[a-f0-9]{40}|[a-f0-9]{64})")||!Boolean.TRUE.equals(row.opt("metadataOnly"))||row.getString("subject").getBytes(StandardCharsets.UTF_8).length>512)throw new SecurityException("提交历史缺少原commit/tree真实身份");}
+        }else if(action.equals("diff")){
+            if(!Boolean.TRUE.equals(data.opt("readOnly"))||!request.getString("path").equals(data.getString("path"))||!request.getString("layer").equals(data.getString("layer"))||!ProjectSources.canonical(request.getJSONObject("expected")).equals(ProjectSources.canonical(ProjectGit.pin(data.getJSONObject("pin"))))||!data.optString("diffSha256").matches("[a-f0-9]{64}")||data.getString("diff").getBytes(StandardCharsets.UTF_8).length>ProjectGit.MAX_DIFF_PAGE_BYTES||data.getInt("offset")!=request.getInt("offset")||data.getInt("nextOffset")<data.getInt("offset")||data.getInt("nextOffset")>data.getInt("totalBytes"))throw new SecurityException("Git差异不是本次原路径、基线或字节范围");
+        }else if(action.equals("init")){ProjectGit.pin(data.getJSONObject("pin"));if(!Boolean.TRUE.equals(data.opt("initialized"))||!Boolean.FALSE.equals(data.opt("sourceFilesAutomaticallyStaged")))throw new SecurityException("Git初始化回执含不属于本次的自动暂存");}
+        else {
+            if(!action.equals(data.optString("action"))||!ProjectSources.canonical(request.getJSONArray("paths")).equals(ProjectSources.canonical(data.getJSONArray("paths")))||!ProjectSources.canonical(request.getJSONObject("expected")).equals(ProjectSources.canonical(ProjectGit.pin(data.getJSONObject("before"))))||!Boolean.FALSE.equals(data.opt("worktreeWritten"))||!Boolean.FALSE.equals(data.opt("networkUsed"))||!Boolean.FALSE.equals(data.opt("hooksExecuted")))throw new SecurityException("Git变更回执不是原选择或声明了额外效果");ProjectGit.pin(data.getJSONObject("after"));
+            if(action.equals("commit")){String oid=data.getString("commitId");if(!oid.matches("(?:[a-f0-9]{40}|[a-f0-9]{64})")||!oid.equals(data.getJSONObject("after").getString("head"))||!Boolean.TRUE.equals(data.opt("headPublished"))||!Boolean.TRUE.equals(data.opt("unselectedIndexPreserved"))||!ProjectSources.canonical(request.getJSONArray("reviewedEntries")).equals(ProjectSources.canonical(data.getJSONArray("reviewedEntries")))||!ProjectSources.canonical(request.getJSONArray("parents")).equals(ProjectSources.canonical(data.getJSONArray("parents")))||!request.getJSONObject("expected").getString("indexSha256").equals(data.getJSONObject("after").getString("indexSha256")))throw new SecurityException("提交没有保留原index或原分支真实发布事实");}
+            else if(!Boolean.TRUE.equals(data.opt("indexPublished"))||!Boolean.FALSE.equals(data.opt("filtersExecuted")))throw new SecurityException("原索引没有完整发布，或执行了不允许的filter");
+        }
+    }
+    /** Bounded model projection of this original result, not another Git command or output store. */
+    public static JSONObject modelView(JSONObject observation,int offset,int maximum)throws Exception {
+        if(offset<0||maximum<1||maximum>10)throw new IllegalArgumentException("Git原结果分页无效");JSONObject result=ProjectSources.copy(observation),data=result.optJSONObject("data");
+        if(data==null){if(offset!=0)throw new IllegalArgumentException("此Git结果没有状态分页");return result;}
+        JSONArray rows=data.optJSONArray("entries");if(rows==null){if(offset!=0)throw new IllegalArgumentException("此Git结果不是状态文件清单");return result;}
+        if(offset>rows.length())throw new IllegalArgumentException("Git原结果分页超出已读取页");JSONArray page=new JSONArray();int end=offset;
+        while(end<rows.length()&&page.length()<maximum){JSONObject row=rows.getJSONObject(end);JSONArray next=new JSONArray(page.toString()).put(row);if(next.toString().getBytes(StandardCharsets.UTF_8).length>14000)break;page=next;end++;}
+        if(end==offset&&offset<rows.length())throw new IllegalStateException("Git单个状态条目超过模型页预算，保留原运行日志供主人核对");
+        data.put("entries",page).put("resultEntryOffset",offset).put("resultNextEntryOffset",end<rows.length()?end:JSONObject.NULL).put("resultPageEntryCount",rows.length()).put("originalGitStatusOffset",data.optInt("offset")).put("originalGitStatusNextOffset",data.optInt("nextOffset"));
+        if(end<rows.length()||offset>0)data.put("resultEntriesOmitted",true);return result;
+    }
+    /** Small original-DB audit; full bounded data stays in original runtime output/log, not a second store. */
+    public static JSONObject summary(JSONObject observation)throws Exception {JSONObject result=new JSONObject();for(String key:new String[]{"format","action","originalOperationId","protocolAvailable","publicationUnknown","ok","code","effectStatus","message","untrusted","businessVerified"})if(observation.has(key))result.put(key,observation.get(key));JSONObject data=observation.optJSONObject("data");if(data!=null){for(String key:new String[]{"pin","before","after","commitId","treeId","path","layer","offset","nextOffset","totalEntries","totalBytes","truncated","repositoryPresent","worktreeSha256","gitVersion","indexLocked","reviewedEntries","parents"})if(data.has(key))result.put(key,data.get(key));}return result;}
+}
