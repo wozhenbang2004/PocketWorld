@@ -66,10 +66,13 @@ public final class OwnerExperienceArchiveNativeTest {
     }
     @Test public void knownLocalDeletionAndPackagedBarrierSuppressOldArchiveBodies()throws Exception {
         try(Fixture f=new Fixture()){
-            SourceRef ref=f.message("forget-message","user","不能从旧备份复活",100);Map<String,JSONObject> objects=new LinkedHashMap<>();JSONObject section=f.capture(objects);
+            SourceRef ref=f.message("forget-message","user","不能从旧备份复活",100);Map<String,JSONObject> objects=new LinkedHashMap<>();JSONObject section=f.capture(objects);String originalPage=section.getJSONArray("pages").getJSONObject(0).getString("object");
             f.tasks.conversationRepository().transaction(()->{f.tasks.conversationRepository().saveSource(new JSONObject(ref.toJson().toString()).put("revision",2L).put("conversationId","source-conversation").put("role","user").put("deleted",true));return null;});
             JSONObject blocked=f.archive.readPage(section,0,objects::get,new RunControl());assertFalse(blocked.toString().contains("不能从旧备份复活"));assertEquals("blocked_by_known_source_barrier",blocked.getJSONObject("data").getJSONArray("entries").getJSONObject(0).getString("status"));
+            assertEquals("Filtering must not mutate the original content-addressed page",originalPage,dev.pocketengine.features.local.project.ProjectSources.digest(objects.get(originalPage)));
+            blocked.getJSONObject("data").put("callerOnly",true);assertEquals("Returned projections must not alias archive objects",originalPage,dev.pocketengine.features.local.project.ProjectSources.digest(objects.get(originalPage)));
             JSONObject packaged=new JSONObject(section.toString());packaged.getJSONObject("barriers").getJSONArray("sourceBarriers").put(new JSONObject(ref.toJson().toString()).put("deleted",false).put("forgottenThrough",1L));packaged.put("sectionDigest",MemoryArchive.sectionDigest(packaged));assertFalse(f.archive.readPage(packaged,0,objects::get,new RunControl()).toString().contains("不能从旧备份复活"));
+            assertEquals(originalPage,dev.pocketengine.features.local.project.ProjectSources.digest(objects.get(originalPage)));
         }
         packagedForgetBarrierAlsoWinsOnAnEmptyColdTarget();
     }

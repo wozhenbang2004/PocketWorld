@@ -95,7 +95,9 @@ public final class OwnerExperienceArchive implements OwnerDataArchives.ObjectSec
         if(page.length()!=6||!PAGE.equals(page.optString("format"))||!expected.getString("kind").equals(page.optString("kind"))||!expected.getString("taskId").equals(page.optString("taskId"))||!Boolean.TRUE.equals(page.opt("archiveOnly"))||!Boolean.FALSE.equals(page.opt("executionAuthorized"))||!expected.getString("pageDigest").equals(MemoryArchive.sectionDigest(page.getJSONObject("data")))||page.getJSONObject("data").getJSONArray("entries").length()!=expected.getInt("entries"))throw new SecurityException("原经历页不完整、换版或hash不匹配");return page;
     }
     public JSONObject readPage(JSONObject input,int index,OwnerDataArchives.ObjectReader reader,RunControl original)throws Exception {
-        JSONObject section=checked(input);validatePages(section,reader,original);JSONObject page=page(section,index,reader,original),data=page.getJSONObject("data");JSONArray entries=data.getJSONArray("entries"),out=new JSONArray();
+        // ObjectReader may cache its content-addressed object. Detach only the selected data
+        // before filtering, so neither this projection nor its caller can rewrite the archive.
+        JSONObject section=checked(input);validatePages(section,reader,original);JSONObject page=page(section,index,reader,original),data=new JSONObject(page.getJSONObject("data").toString());JSONArray entries=data.getJSONArray("entries"),out=new JSONArray();
         for(int i=0;i<entries.length();i++){
             original.checkpoint();JSONObject row=entries.getJSONObject(i);boolean blocked=false;
             if("imported_message".equals(row.optString("kind"))){JSONObject locator=row.getJSONObject("importedLocator");blocked=packageImportedBlocked(section,locator)||tasks.conversationRepository().ownerImportedExperienceBlocked(locator);}

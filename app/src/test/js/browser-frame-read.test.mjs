@@ -2,6 +2,8 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
+import {performance} from 'node:perf_hooks';
+import {TextEncoder} from 'node:util';
 const scripts=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 class TextNode { constructor(value){this.nodeType=3;this.nodeValue=value;this.parentElement=null;} }
 class Element {
@@ -30,10 +32,11 @@ class Textarea extends Input {}
 function scene(body,url='https://embed.example/frame'){
  const document={body,documentElement:body,title:'fixture frame',activeElement:null,getElementById(){return null;},elementFromPoint(){return this.hit||body;}};
  const assign=(n,root=document)=>{n.ownerDocument=document;n._root=root;for(const child of n.childNodes||[])assign(child,root);if(n.shadowRoot){n.shadowRoot.host=n;for(const child of n.shadowRoot.childNodes||n.shadowRoot.children||[])assign(child,n.shadowRoot);}};assign(body);
- const context={document,location:{href:url},URL,Map,Set,WeakMap,WeakSet,JSON,Date,Math,Number,String,Array,innerWidth:640,innerHeight:480,scrollX:0,scrollY:0,Event:class {constructor(type){this.type=type;}},KeyboardEvent:class {constructor(type){this.type=type;}},HTMLInputElement:Input,HTMLTextAreaElement:Textarea,MutationObserver:class {constructor(callback){this.callback=callback;}observe(){}disconnect(){}takeRecords(){return [];}},getComputedStyle:e=>({display:e.attrs?.display||'block',visibility:e.attrs?.visibility||'visible'}),closed:false};context.window=context;vm.createContext(context);return context;
+ const context={document,location:{href:url},URL,Map,Set,WeakMap,WeakSet,JSON,Date,Math,Number,String,Array,performance,TextEncoder,innerWidth:640,innerHeight:480,scrollX:0,scrollY:0,Event:class {constructor(type){this.type=type;}},KeyboardEvent:class {constructor(type){this.type=type;}},HTMLInputElement:Input,HTMLTextAreaElement:Textarea,MutationObserver:class {constructor(callback){this.callback=callback;}observe(){}disconnect(){}takeRecords(){return [];}},getComputedStyle:e=>({display:e.attrs?.display||'block',visibility:e.attrs?.visibility||'visible'}),closed:false};context.window=context;vm.createContext(context);return context;
 }
 const run=(script,context)=>JSON.parse(vm.runInContext(script,context,{timeout:1500}));
 let passed=0;function check(name,fn){fn();passed++;process.stdout.write('PASS '+name+'\n');}
+check('VM provides the real Node clock and UTF-8 encoder used by production budgets',()=>{const c=scene(new Element('BODY'));assert.equal(vm.runInContext('performance',c),performance);assert.equal(vm.runInContext('TextEncoder',c),TextEncoder);assert.equal(vm.runInContext('new TextEncoder().encode("中文😀").byteLength',c),10);});
 check('main read never includes child DOM and declares omission',()=>{const body=new Element('BODY',{},['top text',new Element('IFRAME')]);const r=run(scripts.mainText,scene(body,'https://top.example/'));assert.equal(r.read.facts.childFramesOmitted,1);assert(r.read.facts.reasons.includes('child_frames_not_read'));assert(!r.text.includes('child-only'));assert.equal(r.read.facts.scope,'main_document_rendered_light_and_open_shadow_dom');});
 check('selected child content stays separate from its parent and action refs',()=>{const r=run(scripts.childText,scene(new Element('BODY',{},['child-only revenue 42'])));assert.equal(r.text,'child-only revenue 42');assert.equal(r.read.facts.scope,'selected_frame_rendered_light_and_open_shadow_dom');assert.deepEqual(r.elements,[]);assert.equal(r.read.facts.wholePageComplete,false);});
 check('same labels in two frame documents do not merge data',()=>{const a=run(scripts.childText,scene(new Element('BODY',{},['方案 A 42']))),b=run(scripts.childTextB,scene(new Element('BODY',{},['方案 B 73'])));assert.notEqual(a.text,b.text);assert.equal(a.text,'方案 A 42');assert.equal(b.text,'方案 B 73');assert.notEqual(a.read.facts.regionRef,b.read.facts.regionRef);});

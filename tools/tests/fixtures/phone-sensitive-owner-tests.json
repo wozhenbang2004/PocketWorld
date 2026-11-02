@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "group": "phone-sensitive-owner",
+  "referenceSourceCommit": "c96f72363b85c49877d441e2fc96f4cc32a21619",
+  "classes": [
+    {
+      "class": "dev.pocketengine.phone.observation.NativeSensitiveStepTest",
+      "source": "app/src/test/java/dev/pocketengine/phone/observation/NativeSensitiveStepTest.java",
+      "methods": [
+        "explicitPaymentTransferAndLocalConfirmationAreHumanOnly",
+        "paymentWordsElsewhereDoNotSealOrdinaryTargetsOrAppNavigation",
+        "cleartextOtpUsesNativePurposeNeverDigitsOrTheWordCodeAlone",
+        "permissionGrantNeedsNativeSystemResourceOrRecognizedElevationContext",
+        "originalOcrTargetAndAmbiguousRiskCoordinateRefuseWithoutLeakingRecognizedSecrets",
+        "deliveredVisionImageUsesAuthorizedLocalOcrRiskBeforeCoordinateDispatch",
+        "pureImageNoRiskAndOrdinaryOcrTargetPreserveExistingInputRatherThanClaimSafety",
+        "nativeWordUsesItsOriginalLineNotAnUnrelatedFinancialWordOrAWholePageExemption",
+        "ordinaryWordInsideSensitiveNativeLineCannotBypassItsBusinessStep",
+        "ocrSwipeUsesTheEntireOriginalStrokeButLeavesUnrelatedScrollingAlone",
+        "mixedOriginalLineCannotEraseAnExplicitCommitOrAnExistingChineseSlideRule",
+        "blockedCoordinateRiskReadDoesNotHoldControlOrPublishLateEvidence"
+      ]
+    },
+    {
+      "class": "dev.pocketengine.phone.display.PhoneObservationBoundariesNativeTest",
+      "source": "app/src/hostTest/java/dev/pocketengine/phone/display/PhoneObservationBoundariesNativeTest.java",
+      "methods": [
+        "foregroundUnrelatedTickerDoesNotInvalidateExactStableButton",
+        "backgroundPixelAnimationAndUnrelatedTickerDoNotInvalidateSemanticButton",
+        "exactReplacementMoveAncestorAndNewCoverEachRefuseOldTarget",
+        "separatelyBoundedUnrelatedWindowDoesNotInvalidateForegroundTarget",
+        "ownerPrimaryReaderToBrowserToHomeDoesNotPauseRetainedBackgroundTask",
+        "realOriginalTaskMigrationEvenNotResumedOnPrimaryPausesAndKeepsFacts",
+        "oldHelperOrSamePackagePrimaryCollisionPausesRatherThanGuessing",
+        "blockedReadLeavesUiPauseStopResponsiveAndDoesNotPublishLateRunReference",
+        "blockedBackgroundObserveStillAllowsOriginalOwnerInspectionAndStopWithoutLateRefs",
+        "blockedResolveThenCancelCannotDispatchAfterBinderReturns",
+        "acceptedMainGlobalEffectsKeepTheirKnownReceiptWhenPauseFollowsEntry",
+        "enteredMainCallbackWithNoReceiptYetRemainsUnknownAfterPause",
+        "acceptedMainLaunchKeepsItsKnownReceiptWhenPauseFollowsEntry",
+        "pauseAfterNativeEntryNeverTurnsAnEnteredEffectIntoAcceptedFalse",
+        "alreadyEnteredNativeTimeoutStaysUnknownAndNeverReplaysOldReference",
+        "sensitivePaymentAndTransferReachNeitherMainNorBackgroundNativeMutation",
+        "cleartextOtpHintAndSystemPermissionGrantAreHumanOnlyOnBothDrivers",
+        "ordinaryMessageSearchAndCodeFieldsStillRunWithoutPerStepApproval",
+        "changedOtpHintCannotReuseAnOrdinaryFieldReference",
+        "actualBackgroundCoordinatesCannotBypassSensitiveNativeTarget",
+        "recognizedSensitiveSheetWithUnnamedTargetHandsOwnerRatherThanGuessing",
+        "originalBackgroundOcrTargetCannotBypassTheHumanOnlyStep",
+        "pureImageWithoutRiskEvidenceKeepsItsExistingCoordinatePath",
+        "unrelatedContainerBodyDoesNotTurnOrdinaryEmptyInputOrConfirmIntoSensitiveSteps",
+        "directlyAssociatedOtpLabelStillHandsTheFieldToItsOwner",
+        "backgroundSwipeEndingAcrossRecognizedPaymentSliderHasNoHelperMutation",
+        "nativeOtpPurposeSurvivesPublicBodyClippingWithoutRetainingPrivateText",
+        "linkedPlatformLabelIsFreshnessBoundAndStillGatesAnOtherwiseEmptyField",
+        "existingOrdinaryMessageValueTalkingAboutOtpIsNotTheFieldPurpose",
+        "ordinarySearchAndEditorIdentityKeepsItsMeaningBesideOtpDocumentation"
+      ]
+    },
+    {
+      "class": "dev.pocketengine.phone.observation.PhoneTreeSequenceJournalTest",
+      "source": "app/src/test/java/dev/pocketengine/phone/observation/PhoneTreeSequenceJournalTest.java",
+      "methods": [
+        "twoFreshChildrenUseOriginalJournalPerStepAndOnlyOneProposalModelRound",
+        "sensitiveSecondChildSettlesOnlyItsPreparedRefusalAndRetainsTheRealPrefix",
+        "changedSecondTargetStopsWithoutRetargetOrPreparedSecondOperation",
+        "unknownFirstDispatchNeverReplaysOrPreparesTheSecondChild",
+        "ownerCancellationAfterFirstDispatchHasNoFurtherChildReadOrEffect",
+        "timedOutWaitDoesNotDispatchTheRemainingExistingClick",
+        "matchedWaitStillDispatchesTheNextClickThroughItsOriginalPreparedJournal",
+        "standaloneNativeConditionTimeoutRetainsItsOriginalReadOnlyMeaning"
+      ]
+    }
+  ],
+  "helpers": [
+    {
+      "class": "dev.pocketengine.phone.observation.PhoneCollectionFixtures",
+      "source": "app/src/test/java/dev/pocketengine/phone/observation/PhoneCollectionFixtures.java"
+    },
+    {
+      "class": "dev.pocketengine.phone.observation.PhoneTreeSequenceTest",
+      "source": "app/src/test/java/dev/pocketengine/phone/observation/PhoneTreeSequenceTest.java"
+    },
+    {
+      "class": "dev.pocketengine.testutil.HttpServer",
+      "source": "app/src/test/java/dev/pocketengine/testutil/HttpServer.java"
+    }
+  ]
+}

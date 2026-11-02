@@ -32,10 +32,12 @@ public final class AccessibilityForest {
         private final boolean visible;
         private final int drawingOrder;
         private final List<String> ancestors;
+        final NativeSensitiveStep.Facts sensitive;
         private Ref(AccessibilityNodeInfo node,int windowId,int[] path,String identity,List<String> lineage){
             this.windowId=windowId;this.path=path.clone();this.identity=identity;this.nativeIdentity=nativeIdentity(node);
             editable=node.isEditable();focused=node.isFocused();visible=node.isVisibleToUser();drawingOrder=node.getDrawingOrder();
             bounds=new Rect();node.getBoundsInScreen(bounds);ancestors=new ArrayList<>(lineage);
+            boolean password=node.isPassword();sensitive=new NativeSensitiveStep.Facts(password?null:node.getText(),password?null:node.getContentDescription(),password?null:node.getHintText(),password?"":relatedLabel(node),String.valueOf(node.getViewIdResourceName()),String.valueOf(node.getPackageName()),String.valueOf(node.getClassName()),node.isEditable(),node.isChecked());
         }
     }
     public final JSONArray nodes=new JSONArray(), windows=new JSONArray();
@@ -110,12 +112,14 @@ public final class AccessibilityForest {
         try {
             String id="n"+visited++;String ownIdentity=identity(node);mark(window+":"+Arrays.toString(path));mark(ownIdentity);
             Ref ref=new Ref(node,window,path,ownIdentity,ancestorIdentities);refs.put(id,ref);
+            if(ref.sensitive.truncated)limit("identity_text_limit",local);
             ancestorIdentities.add(ref.nativeIdentity+":"+ownIdentity);
             boolean password=node.isPassword();JSONArray children=new JSONArray();Rect bounds=new Rect();node.getBoundsInScreen(bounds);
             JSONArray nodePath=new JSONArray();for(int index:path)nodePath.put(index);
             JSONObject record=new JSONObject().put("id",id).put("identityFingerprint",identityPart(ownIdentity)).put("path",nodePath).put("windowId",window).put("parentId",parent==null?JSONObject.NULL:parent)
                     .put("children",children).put("text",password?"[password]":body(node.getText(),local))
                     .put("description",password?"":body(node.getContentDescription(),local))
+                    .put("hint",password?"":body(node.getHintText(),local)).put("labelledBy",password?"":body(relatedLabel(node),local)).put("packageName",limited(node.getPackageName(),250))
                     .put("className",limited(node.getClassName(),200)).put("resourceId",limited(node.getViewIdResourceName(),400)).put("role",role(node))
                     .put("clickable",node.isClickable()).put("editable",node.isEditable()).put("enabled",node.isEnabled())
                     .put("visible",node.isVisibleToUser()).put("password",password).put("checked",node.isChecked())
@@ -211,13 +215,19 @@ public final class AccessibilityForest {
     public static String identity(AccessibilityNodeInfo node){
         Rect r=new Rect();node.getBoundsInScreen(r);StringBuilder s=new StringBuilder();
         for(CharSequence value:new CharSequence[]{node.getPackageName(),node.getClassName(),node.getViewIdResourceName(),
-                node.isPassword()?null:node.getText(),node.isPassword()?null:node.getContentDescription()}){
+                node.isPassword()?null:node.getText(),node.isPassword()?null:node.getContentDescription(),node.isPassword()?null:node.getHintText(),node.isPassword()?null:relatedLabel(node)}){
             String part=identityPart(value);s.append(part.length()).append(':').append(part);
         }
         return s.append('|').append(node.getWindowId()).append('|').append(r.toShortString()).append('|').append(node.getChildCount())
                 .append('|').append(node.isVisibleToUser()).append('|').append(node.isEnabled()).append('|').append(node.isClickable())
                 .append('|').append(node.isEditable()).append('|').append(node.isFocused()).append('|').append(node.isPassword())
                 .append('|').append(node.isChecked()).append('|').append(node.isSelected()).append('|').append(node.isScrollable()).toString();
+    }
+    /** Platform labelFor relation, not a guessed match to another window's text. Read only on bounded workers. */
+    private static String relatedLabel(AccessibilityNodeInfo node){
+        AccessibilityNodeInfo label=node.getLabeledBy();if(label==null)return "";
+        try{label.refresh();return label.isPassword()?"":String.valueOf(label.getText()==null?"":label.getText())+" "+String.valueOf(label.getContentDescription()==null?"":label.getContentDescription())+" "+String.valueOf(label.getHintText()==null?"":label.getHintText());}
+        finally{if(label!=node)label.recycle();}
     }
     private String body(CharSequence value,Set<String> local){
         int length=length(value), keep=Math.min(length,Math.min(MAX_TEXT,MAX_BODY_CHARS-bodyChars));

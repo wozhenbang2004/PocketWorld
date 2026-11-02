@@ -14,20 +14,33 @@ public final class OcrTextTarget {
     public final int sourceWidth,sourceHeight,rasterWidth,rasterHeight,left,top,right,bottom;
     private final RunControl original;
     private final long pauseRevision;
+    private final NativeSensitiveStep.OcrEvidence sensitive;
     OcrTextTarget(String observationId,long pauseRevision,RunControl original,OcrPage page,OcrPage.Line line) {
-        this(observationId,pauseRevision,original,page,line.text,line.left,line.top,line.right,line.bottom,"line",line.index,null);
+        this(observationId,pauseRevision,original,page,line,NativeSensitiveStep.ocrEvidence(page));
     }
     OcrTextTarget(String observationId,long pauseRevision,RunControl original,OcrPage page,OcrPage.Word word) {
-        this(observationId,pauseRevision,original,page,word.text,word.left,word.top,word.right,word.bottom,"word",word.lineIndex,word.confidence);
+        this(observationId,pauseRevision,original,page,word,NativeSensitiveStep.ocrEvidence(page));
     }
-    private OcrTextTarget(String observationId,long pauseRevision,RunControl original,OcrPage page,String text,int left,int top,int right,int bottom,String granularity,int lineIndex,Float confidence) {
+    OcrTextTarget(String observationId,long pauseRevision,RunControl original,OcrPage page,OcrPage.Line line,NativeSensitiveStep.OcrEvidence sensitive) {
+        this(observationId,pauseRevision,original,page,line.text,line.left,line.top,line.right,line.bottom,"line",line.index,null,sensitive);
+    }
+    OcrTextTarget(String observationId,long pauseRevision,RunControl original,OcrPage page,OcrPage.Word word,NativeSensitiveStep.OcrEvidence sensitive) {
+        this(observationId,pauseRevision,original,page,word.text,word.left,word.top,word.right,word.bottom,"word",word.lineIndex,word.confidence,sensitive);
+    }
+    private OcrTextTarget(String observationId,long pauseRevision,RunControl original,OcrPage page,String text,int left,int top,int right,int bottom,String granularity,int lineIndex,Float confidence,NativeSensitiveStep.OcrEvidence sensitive) {
         this.observationId=java.util.Objects.requireNonNull(observationId);this.original=java.util.Objects.requireNonNull(original);this.pauseRevision=pauseRevision;
         sourceWidth=page.sourceWidth;sourceHeight=page.sourceHeight;rasterWidth=page.width;rasterHeight=page.height;
-        this.text=text;this.left=left;this.top=top;this.right=right;this.bottom=bottom;this.granularity=granularity;this.lineIndex=lineIndex;this.confidence=confidence;
+        this.text=text;this.left=left;this.top=top;this.right=right;this.bottom=bottom;this.granularity=granularity;this.lineIndex=lineIndex;this.confidence=confidence;this.sensitive=java.util.Objects.requireNonNull(sensitive);
+        OcrPage.Line parent=null;for(OcrPage.Line line:page.lines)if(line.index==lineIndex){parent=line;break;}
+        if(parent==null||left<parent.left||top<parent.top||right>parent.right||bottom>parent.bottom)throw new IllegalArgumentException("OCR target has no original enclosing line");
     }
     public boolean matches(RunControl control,String observationId,long revision) {
         return control==original&&this.observationId.equals(observationId)&&pauseRevision==revision
                 &&control.pauseRevision()==pauseRevision&&!control.isPaused()&&!control.isCancelled();
+    }
+    public void requireNonSensitive(RunControl control,long revision)throws Exception {
+        if(!matches(control,observationId,revision))throw new InterruptedException("native_ocr_target_changed");
+        sensitive.requireTarget(text,lineIndex,control,revision);
     }
     /** Called only after a physical driver matches its privately retained full-frame geometry. */
     public JSONObject tapArguments(int displayWidth,int displayHeight)throws Exception {

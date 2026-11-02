@@ -61,6 +61,26 @@ public final class SettingsStore {
     public synchronized void saveLocalObservation(boolean capture,boolean ocr)throws Exception {
         requireConfirmed();commitConfirmed(prefs.edit().putBoolean("localCaptureAllowed",capture).putBoolean("localOcrAllowed",ocr));
     }
+    /** Reversible agent preferences only. Model routes, grants, credentials and network policy are absent. */
+    public synchronized JSONObject agentPreferences()throws Exception {
+        requireConfirmed();return new JSONObject().put("enabled",prefs.getBoolean("allowAgentPreferences",false))
+                .put("revision",prefs.getLong("agentPreferencesRevision",1)).put("response_detail",prefs.getString("agentResponseDetail","standard"))
+                .put("operation_pace",prefs.getString("agentOperationPace","standard"));
+    }
+    public synchronized JSONObject saveAgentPreferences(boolean enabled,String detail,String pace,long expectedRevision)throws Exception {
+        JSONObject old=agentPreferences();if(old.getLong("revision")!=expectedRevision)throw new SecurityException("偏好已由主人改变，请刷新原设置");
+        requireAgentPreference("response_detail",detail);requireAgentPreference("operation_pace",pace);long next=Math.addExact(expectedRevision,1);
+        commitConfirmed(prefs.edit().putBoolean("allowAgentPreferences",enabled).putString("agentResponseDetail",detail).putString("agentOperationPace",pace).putLong("agentPreferencesRevision",next));
+        return new JSONObject().put("previous",old).put("current",agentPreferences()).put("reversible",true);
+    }
+    public synchronized JSONObject setAgentPreference(String key,String value,long expectedRevision)throws Exception {
+        requireAgentPreference(key,value);JSONObject old=agentPreferences();if(!old.getBoolean("enabled"))throw new SecurityException("主人尚未开启对话修改可逆偏好");
+        return saveAgentPreferences(true,key.equals("response_detail")?value:old.getString("response_detail"),key.equals("operation_pace")?value:old.getString("operation_pace"),expectedRevision);
+    }
+    private static void requireAgentPreference(String key,String value){
+        boolean valid=key.equals("response_detail")?java.util.Set.of("concise","standard","detailed").contains(value):key.equals("operation_pace")&&java.util.Set.of("fast","standard","careful").contains(value);
+        if(!valid)throw new IllegalArgumentException("仅可修改白名单回复详略或普通操作节奏，值须来自当前选项");
+    }
     private ModelConfig getSelected() throws Exception {
         requireConfirmed();
         if("account".equals(prefs.getString("modelRoute","api_key"))){

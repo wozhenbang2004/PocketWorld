@@ -1796,6 +1796,20 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             } catch (error: Exception) { main.post { if (!closed) state = state.copy(modelSaving = false, error = message(error)) } }
         }
     }
+    fun saveAgentPreferences(enabled: Boolean, detail: String, pace: String, expectedRevision: Long) {
+        if (state.agentPreferencesSaving) return
+        state = state.copy(agentPreferencesSaving = true, agentPreferencesError = null)
+        io.execute {
+            try {
+                val receipt = app.settings.saveAgentPreferences(enabled, detail, pace, expectedRevision)
+                val actual = JSONObject(receipt.getJSONObject("current").toString())
+                main.post { if (!closed) state = state.copy(agentPreferences = if (actual.optLong("revision", 0) >= state.agentPreferences.optLong("revision", 0)) actual else state.agentPreferences, agentPreferencesSaving = false, agentPreferencesError = null) }
+                app.sendState()
+            } catch (error: Exception) {
+                main.post { if (!closed) state = state.copy(agentPreferencesSaving = false, agentPreferencesError = message(error)) }
+            }
+        }
+    }
     fun saveLocalObservation(capture: Boolean, ocr: Boolean) {
         io.execute { try { app.settings.saveLocalObservation(capture, ocr); app.sendState() }
             catch (error: Exception) { main.post { if (!closed) state = state.copy(error = message(error)) } } }
@@ -1940,6 +1954,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             "state" -> {
                 val payload = event.optJSONObject("payload") ?: return
                 val config = payload.optJSONObject("config") ?: JSONObject()
+                val preferences = payload.optJSONObject("agentPreferences")
+                if (preferences != null && preferences.opt("enabled") is Boolean && preferences.optLong("revision", 0) > 0 && preferences.optLong("revision") >= state.agentPreferences.optLong("revision", 0))
+                    state = state.copy(agentPreferences = JSONObject(preferences.toString()))
                 taskListNextCursor = payload.optString("tasksNextCursor")
                 val incoming = payload.optJSONArray("tasks").objects().map(::taskFromJson)
                 val merged = incoming.map { row -> mergeTaskSummary(row, state.tasks.find { it.id == row.id }) }

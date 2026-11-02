@@ -13,7 +13,7 @@ on:
         description: 'Used only for target=host-tests; deliberately no full-suite option'
         type: choice
         default: device-receiver
-        options: [device-receiver, managed-runtime, gateway-continuation, memory-experience, browser-long-page, browser-expression, phone-observation-boundaries]
+        options: [device-receiver, managed-runtime, gateway-continuation, memory-experience, browser-long-page, browser-expression, phone-observation-boundaries, phone-sensitive-owner, agent-preferences]
   push:
     branches: [main]
     # Keep the production-input contract in tools/tests/test_apk_workflow_paths.py in sync.
@@ -40,7 +40,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: debug-apk-${{ github.ref }}
+  # Independent, explicitly selected host groups run on separate runners. Keep
+  # serialization within each group and APK build without canceling active work.
+  group: pocketworld-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('host-{0}', inputs.host_group) || 'apk' }}
   cancel-in-progress: false
 
 jobs:

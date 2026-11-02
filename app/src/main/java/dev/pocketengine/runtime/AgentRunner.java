@@ -489,6 +489,7 @@ public final class AgentRunner {
                     JSONObject args;
                     JSONObject receipt;
                     String recordedOperation=null;
+                    dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired nativeOwnerRequired=null;
                     try {
                         Object raw = call.getJSONObject("function").opt("arguments");
                         if (!(raw instanceof String)) throw new IllegalArgumentException();
@@ -558,7 +559,13 @@ public final class AgentRunner {
                         JSONObject dispatched=args;if(capabilities!=null&&capabilities.supports(name)&&(openOperation!=null||imageRequired||"phone_prepare_sequence".equals(name)))dispatched=new JSONObject(args.toString()).put("_hostOperationId",openOperation==null?call.getString("id"):openOperation);
                         // This is only progress over this native plan, never a tool grant or a new receipt.
                         if(activeStep!=null&&activePlan!=null)nativeSequenceProgress.get(activePlan).put("dispatchEnteredSteps",activeStep.index+1);
-                        receipt = capabilities!=null&&capabilities.supports(name)?capabilities.execute(name,dispatched,control):phone.execute(name,args,control);
+                        long dispatchRevision=control.pauseRevision();
+                        try { receipt = capabilities!=null&&capabilities.supports(name)?capabilities.execute(name,dispatched,control):phone.execute(name,args,control); }
+                        catch(dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired owner) {
+                            // A native, original-control-bound refusal BEFORE this child effect, not JSON permission.
+                            if(!java.util.Set.of("phone_click_node","phone_type","phone_tap","phone_swipe","phone_click_text","phone_scroll_node").contains(name)||!owner.belongsTo(control,dispatchRevision))throw owner;
+                            nativeOwnerRequired=owner;receipt=owner.notDispatchedReceipt();sequenceMayContinue=false;
+                        }
                         if(activeStep!=null&&activePlan!=null&&receipt!=null&&Boolean.FALSE.equals(receipt.opt("accepted")))nativeSequenceProgress.get(activePlan).put("dispatchEnteredSteps",activeStep.index);
                         if(phone!=null&&dev.pocketengine.phone.observation.PhoneTreeQuery.supports(name)&&receipt!=null){
                             JSONObject freshTree=receipt.optJSONObject("observation");
@@ -577,11 +584,16 @@ public final class AgentRunner {
                     boolean projectRunning="project_running".equals(receiptCode),nativeRunning=projectRunning&&nativeProjectRunning(journal,recordedOperation,receipt);
                     if(nativeRunning&&!ownedServiceOperations.contains(recordedOperation))ownedServiceOperations.add(recordedOperation);
                     history.put(toolResult(call, receipt, config,true));
+                    if(nativeOwnerRequired!=null)for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("sensitive_handoff_tail_not_dispatched","主人接管前，本批余下旧决定均未派发；交还后重新观察规划。").put("accepted",false).put("nativeDispatched",false),config));
                     checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
                     String toolStatus=projectRunning?nativeRunning?"running":"awaiting_user":receipt.optBoolean("ok",false)?"completed":"failed";
                     String toolMessage=projectRunning?nativeRunning?"原开发服务已启动且仍归此原执行；这不是程序结束或服务就绪，后续仅允许原授权的只读核对。":"运行中回执未能与原生已启动服务及原操作核对，未继续模型请求或新工具。"
                             :receipt.optString("message",receipt.optBoolean("ok",false)?"操作回执已收到。":"操作未成功，请检查当前页面。");
                     emit(taskId,"tool",toolStatus,toolMessage,name,receipt,config,sink);
+                    if(nativeOwnerRequired!=null){
+                        evidence.put("nativeSensitiveStep",receipt).put("originalEffectsRetained",true).put("automaticReplayAllowed",false);
+                        return finish(taskId,"awaiting_user",nativeOwnerRequired.getMessage(),evidence,steps,config,sink);
+                    }
                     if(projectRunning&&!nativeRunning){
                         evidence.put("requiresReconciliation",true).put("unverifiedProjectRunningAck",true);
                         return finish(taskId,"awaiting_user",toolMessage+"请核对原任务，不会凭JSON字段把未知效果改成已知运行。",evidence,steps,config,sink);

@@ -17,6 +17,15 @@ REGISTRY = json.loads(HOST.REGISTRY.read_text())
 
 
 class HostTestEntrypointTest(unittest.TestCase):
+    def test_independent_host_groups_do_not_share_the_apk_queue(self):
+        workflow = (HOST.ROOT / '.github/workflows/build-apk.yml').read_text()
+        block = re.search(r'(?ms)^concurrency:\n(.*?)(?=^jobs:)', workflow).group(1)
+        self.assertIn("github.event_name == 'workflow_dispatch'", block)
+        self.assertIn("inputs.target == 'host-tests'", block)
+        self.assertIn("format('host-{0}', inputs.host_group) || 'apk'", block)
+        self.assertIn('github.ref', block)
+        self.assertIn('cancel-in-progress: false', block)
+
     def test_selection_is_explicit_and_deduplicated(self):
         name = REGISTRY['device-receiver']['class']
         self.assertEqual(['device-receiver'], HOST.select(REGISTRY, ['device-receiver'], [name]))
@@ -41,6 +50,80 @@ class HostTestEntrypointTest(unittest.TestCase):
                 self.assertEqual(1, len(found), 'expected one exact registered source for ' + name)
                 if name == entry['class']:
                     self.assertIn('@Test', found[0].read_text())
+
+    def test_phone_sensitive_owner_registers_exact_sources_and_fifty_original_methods(self):
+        # This is an entry/source inventory contract, not execution of these product bodies.
+        manifest = json.loads((HOST.ROOT / 'tools/tests/fixtures/phone-sensitive-owner-tests.json').read_text())
+        self.assertEqual(1, manifest['schemaVersion'])
+        entry = REGISTRY[manifest['group']]
+        classes = [item['class'] for item in manifest['classes']]
+        helpers = [item['class'] for item in manifest['helpers']]
+        self.assertEqual(classes, [entry['class']] + entry['additionalClasses'])
+        self.assertEqual(helpers, entry['helpers'])
+        self.assertTrue(entry['robolectric'])
+        self.assertFalse(entry.get('native', False))
+        self.assertFalse(entry.get('python', False))
+        expected = {item['source'] for item in manifest['classes'] + manifest['helpers']}
+        includes = {name.replace('.', '/') + '.java' for name in classes + helpers}
+        actual = {path.relative_to(HOST.ROOT).as_posix()
+                  for root in ('app/src/hostTest/java', 'app/src/test/java')
+                  for path in (HOST.ROOT / root).rglob('*.java')
+                  if path.relative_to(HOST.ROOT / root).as_posix() in includes}
+        self.assertEqual(expected, actual)
+        self.assertEqual(6, len(actual))
+        for item in manifest['classes']:
+            source = (HOST.ROOT / item['source']).read_text()
+            methods = re.findall(r'@Test\s+public\s+void\s+(\w+)\s*\(', source)
+            self.assertEqual(len(methods), len(set(methods)), item['class'])
+            self.assertEqual(sorted(item['methods']), sorted(methods), item['class'])
+            self.assertNotIn('@Ignore', source)
+        self.assertEqual([12, 30, 8], [len(item['methods']) for item in manifest['classes']])
+
+    def test_phone_sensitive_owner_explicit_group_does_not_expand_the_shared_native_class(self):
+        group = 'phone-sensitive-owner'
+        primary = REGISTRY[group]['class']
+        self.assertEqual([group], HOST.select(REGISTRY, [group], []))
+        self.assertEqual([group], HOST.select(REGISTRY, [], [primary]))
+        self.assertEqual([group], HOST.select(REGISTRY, [group], [primary]))
+        # A helper has @Test bodies, but is compile-only, not another selected suite.
+        self.assertIn('dev.pocketengine.phone.observation.PhoneTreeSequenceTest', REGISTRY[group]['helpers'])
+        with self.assertRaises(HOST.PrerequisiteError):
+            HOST.select(REGISTRY, [], ['dev.pocketengine.phone.observation.PhoneTreeSequenceTest'])
+
+    def test_phone_sensitive_owner_cli_keeps_only_its_fifty_xml_cases_and_original_task(self):
+        # Explicit fake process/XML boundary only; no Gradle, JVM or App body is run here.
+        manifest = json.loads((HOST.ROOT / 'tools/tests/fixtures/phone-sensitive-owner-tests.json').read_text())
+        classes = [item['class'] for item in manifest['classes']]
+        counts = {item['class']: len(item['methods']) for item in manifest['classes']}
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+
+            def gradle_result(command, **kwargs):
+                self.assertIn('-PpocketworldHostTests=phone-sensitive-owner', command)
+                self.assertIn('--no-parallel', command)
+                self.assertIn('--max-workers=1', command)
+                self.assertEqual(['-x', ':app:buildAndroidRuntime', '-x', ':app:buildDisplayHelper', ':app:testDebugUnitTest'], command[-5:])
+                report = Path(next(arg.split('=', 1)[1] for arg in command if arg.startswith('-PpocketworldHostReport=')))
+                xml = report / 'junit'
+                xml.mkdir()
+                (report / 'gradle-selection.json').write_text(json.dumps({'junitXmlDirectory': str(xml), 'junitXmlRequired': True}))
+                for item in manifest['classes']:
+                    cases = ''.join('<testcase classname="' + item['class'] + '" name="' + name + '"/>' for name in item['methods'])
+                    (xml / ('TEST-' + item['class'] + '.xml')).write_text('<testsuite>' + cases + '</testsuite>')
+                return SimpleNamespace(returncode=0)
+
+            with patch.object(HOST, 'preflight', return_value=(output / 'jdk', output / 'sdk', 'gradle', {})), \
+                    patch.object(HOST.subprocess, 'run', side_effect=gradle_result) as launch, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, HOST.main(['--group', manifest['group'], '--output', str(output)]))
+                self.assertEqual(1, launch.call_count)
+            runs = list(output.glob('run-*'))
+            self.assertEqual(1, len(runs))
+            invocation = json.loads((runs[0] / 'invocation.json').read_text())
+            self.assertEqual([manifest['group']], invocation['groups'])
+            self.assertEqual(classes, invocation['classes'])
+            self.assertEqual(counts, json.loads((runs[0] / 'result.json').read_text())['executed'])
+            self.assertEqual(50, sum(counts.values()))
 
     def test_gateway_uses_exact_android_compatible_http_helper_and_byte_io(self):
         entry = REGISTRY['gateway-continuation']

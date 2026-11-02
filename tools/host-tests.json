@@ -79,5 +79,31 @@
     "helpers": [],
     "robolectric": true,
     "description": "Original foreground/background phone ports with bounded real-thread Binder-block fixtures, exact target/occlusion, owned-task continuity and original PH020/native-entry regressions; explicit Android windows/helper transport, not physical Android/OEM acceptance."
+  },
+  "phone-sensitive-owner": {
+    "class": "dev.pocketengine.phone.observation.NativeSensitiveStepTest",
+    "additionalClasses": [
+      "dev.pocketengine.phone.display.PhoneObservationBoundariesNativeTest",
+      "dev.pocketengine.phone.observation.PhoneTreeSequenceJournalTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.phone.observation.PhoneCollectionFixtures",
+      "dev.pocketengine.phone.observation.PhoneTreeSequenceTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Human-only sensitive native/OCR/coordinate steps, ordinary-form/pure-image preservation, original target/read/unknown fences and Runner/TaskStore sequence receipts; synthetic FG/BG fixtures, not physical Android/OEM or real payment acceptance."
+  },
+  "agent-preferences": {
+    "class": "dev.pocketengine.store.AgentPreferenceStoreTest",
+    "additionalClasses": [
+      "dev.pocketengine.store.AgentPreferenceBoundaryTest",
+      "dev.pocketengine.ui.AgentPreferenceUiNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original SettingsStore/TaskStore prepared-operation and CAS/withdrawal boundaries; actual AgentRunner loopback requests and seven direct phone-action pacing/cancel paths; native owner Controller/state flow, not model behavior, visual or physical-device acceptance."
   }
 }

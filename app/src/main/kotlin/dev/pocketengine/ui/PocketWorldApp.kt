@@ -956,6 +956,9 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
             state.modelTestTaskId?.let { id -> TextButton(onClick = { controller.focusTask(id) }) { Text("查看这次连接测试用量") } }
             state.error?.let { Text(it, fontSize = 12.sp, lineHeight = 20.sp, color = Danger, modifier = Modifier.padding(top = 10.dp)) }
             }
+                if (settingsSection == 1) SettingsSurface("任务偏好", "回复详略与普通操作节奏") {
+                    AgentPreferencesControls(state.agentPreferences, state.agentPreferencesSaving, state.agentPreferencesError, controller::saveAgentPreferences)
+                }
                 if (settingsSection == 1) SettingsSurface("手机执行", "授权与后台任务入口") {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地按需取图", fontSize = 14.sp); Text("独立于云截图发送；关闭后不会为 OCR 采集像素。更改用于后续运行。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localCaptureAllowed, { controller.saveLocalObservation(it, state.localOcrAllowed) }) }
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地 OCR", fontSize = 14.sp); Text("优先本地识字。像素不外发，但识别文字会作为有来源的上下文发送给所选推理服务。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localOcrAllowed, { controller.saveLocalObservation(state.localCaptureAllowed, it) }) }

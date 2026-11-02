@@ -43,6 +43,7 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.phone.observation.ObservationReport;
 import dev.pocketengine.phone.observation.AccessibilityForest;
 import dev.pocketengine.phone.observation.ObservationSafety;
+import dev.pocketengine.phone.observation.NativeSensitiveStep;
 import dev.pocketengine.phone.observation.NativeOcrTapPort;
 import dev.pocketengine.phone.observation.OcrTextTarget;
 import dev.pocketengine.phone.observation.NativePhoneEntry;
@@ -125,7 +126,8 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 ||target.sourceWidth!=expected.imageWidth||target.sourceHeight!=expected.imageHeight)
             return failure("stale_observation","OCR目标不属于当前完整截图，请重新观察。");
         final JSONObject arguments;
-        try{arguments=target.tapArguments(expected.tree.screen.width,expected.tree.screen.height);}
+        try{target.requireNonSensitive(control,expected.revision);arguments=target.tapArguments(expected.tree.screen.width,expected.tree.screen.height);}
+        catch(NativeSensitiveStep.OwnerRequired owner){clearReferences();throw owner;}
         catch(IllegalArgumentException invalid){return failure("coordinate_unverifiable",invalid.getMessage());}
         // The normal gesture path re-captures and compares the full-resolution pixel digest,
         // current tree/service/control/revision and overlay bounds before its one native action.
@@ -133,7 +135,8 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             control.checkpoint();PhoneAccessibilityService service=requireService();
             if(requireReference(arguments,control)!=expected)return failure("stale_observation","OCR目标已失效，请重新观察。");
             return gesture(service,expected,arguments,false,control,admission);
-        }catch(NativePhoneEntry.Refused refused){clearReferences();return failure("paused_or_changed",refused.getMessage());}
+        }catch(NativeSensitiveStep.OwnerRequired owner){clearReferences();throw owner;}
+        catch(NativePhoneEntry.Refused refused){clearReferences();return failure("paused_or_changed",refused.getMessage());}
         catch(PhoneFailure refused){clearReferences();return failure(refused.code,refused.getMessage());}
     }
 
@@ -181,7 +184,8 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         if(control.isPaused())return failure("task_paused","原执行已暂停，未滚动。");
         try{Snapshot expected=requireReference(args,control);PhoneAccessibilityService service=requireService();
             return onNodeWorker(service,control,expected.revision,()->nodeAction(service,expected,control,"phone_scroll_node",args.getString("nodeId"),null,admission,args.getString("direction")));
-        }catch(NativePhoneEntry.Refused refused){clearReferences();return failure("paused_or_changed",refused.getMessage());}
+        }catch(NativeSensitiveStep.OwnerRequired owner){clearReferences();throw owner;}
+        catch(NativePhoneEntry.Refused refused){clearReferences();return failure("paused_or_changed",refused.getMessage());}
         catch(PhoneFailure refused){clearReferences();JSONObject out=failure(refused.code,refused.getMessage());if(ObservationSafety.unknownEffect(refused.code))out.put("accepted",JSONObject.NULL);return out;}
         catch(InterruptedException stopped){clearReferences();throw stopped;}
         catch(Exception unknown){clearReferences();return failure("action_unknown","原生滚动回执未知，请核对；不会自动重试。").put("accepted",JSONObject.NULL);}
@@ -245,6 +249,8 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 }
                 default: throw new PhoneFailure("unknown_tool", "不支持的手机工具。");
             }
+        } catch (NativeSensitiveStep.OwnerRequired owner) {
+            clearReferences();throw owner;
         } catch (NativePhoneEntry.Refused refused) {
             clearReferences();return failure("paused_or_changed",refused.getMessage());
         } catch (PhoneFailure failure) {
@@ -292,11 +298,12 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         validate(service, expected, control, true);
     }
 
-    private void validate(PhoneAccessibilityService service, Snapshot expected, RunControl control, boolean needsTree) throws Exception {
+    private Tree validate(PhoneAccessibilityService service, Snapshot expected, RunControl control, boolean needsTree) throws Exception {
         validateReference(service,expected,control);
         Tree fresh = readTree(service);
         if ((needsTree && (!fresh.available || fresh.incomplete)) || !expected.tree.sameScreen(fresh))
             throw new PhoneFailure("stale_observation", "当前页面与观察不一致，请重新观察。");
+        return fresh;
     }
 
     private void validateReference(PhoneAccessibilityService service,Snapshot expected,RunControl control)throws Exception {
@@ -305,11 +312,11 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 ||SystemClock.uptimeMillis()-expected.created>REFERENCE_LIFETIME_MS)
             throw new PhoneFailure("stale_observation","页面引用已过期，请重新观察。");
     }
-    private void validateTarget(PhoneAccessibilityService service,Snapshot expected,RunControl control,AccessibilityForest.Ref target)throws Exception {
+    private Tree validateTarget(PhoneAccessibilityService service,Snapshot expected,RunControl control,AccessibilityForest.Ref target)throws Exception {
         validateReference(service,expected,control);Tree fresh=readTree(service);
         if(!expected.tree.screen.same(fresh.screen)||!expected.tree.forest.sameTarget(target,fresh.forest))
             throw new PhoneFailure("stale_node","目标、祖先、窗口或遮挡已变化，请重新观察。");
-        validateReference(service,expected,control);
+        validateReference(service,expected,control);return fresh;
     }
 
     private JSONObject nodeAction(PhoneAccessibilityService service, Snapshot expected, RunControl control,
@@ -354,10 +361,11 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 if(!node.isScrollable()||node.getActionList().stream().noneMatch(a->a.getId()==action))throw new PhoneFailure("not_scrollable","目标未声明此方向的原生滚动动作。");
             } else if (!node.isClickable()) throw new PhoneFailure("not_clickable", "目标未声明可点击，请重新观察并选择其他目标。");
             // Recheck this exact target's relevant context after resolve/refresh, not an unrelated ticker.
-            validateTarget(service,expected,control,selected);
+            Tree sensitiveContext=validateTarget(service,expected,control,selected);
             if (!node.refresh() || !AccessibilityForest.matches(selected,node))
                 throw new PhoneFailure("stale_node", "目标节点发生变化，请重新观察。");
             requireUnlocked(service);
+            NativeSensitiveStep.requireNode(sensitiveContext.forest,selected,tool,control,expected.revision);
             boolean accepted;
             if("phone_scroll_node".equals(tool)) {
                 final AccessibilityNodeInfo selectedNode=node;int action="forward".equals(direction)?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
@@ -414,7 +422,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         if (!expected.imageDigest.equals(currentImage.digest)
                 || expected.tree.screen.width != currentImage.fullWidth || expected.tree.screen.height != currentImage.fullHeight)
             throw new PhoneFailure("stale_observation", "当前画面像素已改变，未提交手势。请重新观察。");
-        PhoneUiSignals.Stamp validated=validateForUi(service,expected,control,false);
+        PhoneUiSignals.Stamp validated=validateForUi(service,expected,control,false,args,swipe);
         CompletableFuture<String> completion = new CompletableFuture<>();
         boolean accepted = onMain(control, expected.revision, () -> {
             validateReference(service,expected,control);
@@ -604,9 +612,14 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     }
 
     private PhoneUiSignals.Stamp validateForUi(PhoneAccessibilityService service,Snapshot expected,RunControl control,boolean needsTree)throws Exception {
+        return validateForUi(service,expected,control,needsTree,null,false);
+    }
+    private PhoneUiSignals.Stamp validateForUi(PhoneAccessibilityService service,Snapshot expected,RunControl control,boolean needsTree,JSONObject point,boolean swipe)throws Exception {
         return onTreeRead(()->guard(service,control,expected.revision),()->{
             PhoneUiSignals.Stamp before=service.uiSignals().snapshot(java.util.Collections.emptySet());
-            validate(service,expected,control,needsTree);requireUiUnchanged(service,before);return before;
+            Tree fresh=validate(service,expected,control,needsTree);
+            if(point!=null)NativeSensitiveStep.requireCoordinate(fresh.forest,coordinate(point,swipe?"x1":"x"),coordinate(point,swipe?"y1":"y"),swipe?coordinate(point,"x2"):coordinate(point,"x"),swipe?coordinate(point,"y2"):coordinate(point,"y"),swipe,control,expected.revision);
+            requireUiUnchanged(service,before);return before;
         });
     }
     /** Events only invalidate the physically validated tree across the UI queue; they never authorize an action. */

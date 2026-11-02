@@ -46,6 +46,8 @@ public final class AdaptivePhonePort implements PhonePort {
     private PhoneTreeCollection.State collection;
     private final java.util.concurrent.atomic.AtomicBoolean actionEffectInFlight=new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.Map<String,OcrTextTarget> textTargets=new java.util.LinkedHashMap<>();
+    private NativeSensitiveStep.OcrEvidence ocrSensitive;
+    private final PhoneReadGate sensitiveReads=new PhoneReadGate();
 
     /** All arguments come from the native host, including verified model image support and its uptime clock. */
     public AdaptivePhonePort(PhonePort source, Scope scope, boolean sendScreenshots,
@@ -68,7 +70,7 @@ public final class AdaptivePhonePort implements PhonePort {
     public boolean textTargetingAvailable(){return localCaptureAllowed&&localOcrAllowed&&source instanceof NativeOcrTapPort&&ocrAvailable();}
     public boolean matchesHostScope(String task,String run,int epoch){return scope.taskId.equals(task)&&scope.runId.equals(run)&&scope.epoch==epoch;}
     @Override public synchronized void clearReferences() {
-        latest = null; latestBinding = null; textTargets.clear();source.clearReferences();
+        latest = null; latestBinding = null; textTargets.clear();ocrSensitive=null;source.clearReferences();
         // Clearing references cannot reconcile a possibly dispatched operation.
     }
     @Override public synchronized JSONObject observe(boolean includeImage, RunControl control) throws Exception {
@@ -155,6 +157,7 @@ public final class AdaptivePhonePort implements PhonePort {
         }
         JSONObject result;
         try{result=((NativeTreeScrollPort)source).scrollNode(args,control,admission);}
+        catch(NativeSensitiveStep.OwnerRequired owner){synchronized(this){clearReferences();}throw owner;}
         catch(InterruptedException stopped){synchronized(this){clearReferences();}throw stopped;}
         catch(Exception unknown){result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");}
         synchronized(this){clearReferences();if(result==null)result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");
@@ -317,10 +320,16 @@ public final class AdaptivePhonePort implements PhonePort {
             pendingNeed = Need.TARGET_MISSING;
             return failure("coordinate_unverifiable", "尚未向模型提供当前真实图片，未派发坐标；请先升级观察。");
         }
+        if(coordinate){
+            // Reuse only the already-authorized, actually delivered image. No new capture or upload.
+            prepareCoordinateSensitiveEvidence(control);
+            if(!current(args.optString("observationId"),control))return failure("stale_observation","本地风险读取期间原观察已变化，未派发坐标。");
+        }
         Binding dispatchedBinding = withoutObservation ? null : latestBinding;
         JSONObject result;
         OcrTextTarget selected=null;
         try {
+            if(coordinate&&ocrSensitive!=null){boolean swipe="phone_swipe".equals(tool);ocrSensitive.requireCoordinate(args.getInt(swipe?"x1":"x"),args.getInt(swipe?"y1":"y"),args.getInt(swipe?"x2":"x"),args.getInt(swipe?"y2":"y"),swipe,control,control.pauseRevision());}
             if(CLICK_TEXT.equals(tool)){
                 selected=textTargets.get(args.optString("textTargetId"));
                 if(!(source instanceof NativeOcrTapPort)||selected==null||!selected.matches(control,args.optString("observationId"),control.pauseRevision()))
@@ -329,6 +338,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 else result=((NativeOcrTapPort)source).tapOcrText(selected,control,admission);
             }else result = source.execute(tool, args, control);
         }
+        catch (NativeSensitiveStep.OwnerRequired owner) { clearReferences();throw owner; }
         catch (InterruptedException cancelled) { throw cancelled; }
         catch (Exception unknown) {
             result = new JSONObject().put("ok", false).put("error", "action_unknown")
@@ -354,6 +364,17 @@ public final class AdaptivePhonePort implements PhonePort {
         if (dispatchedBinding != null) result.put("observationBinding", bindingJson(dispatchedBinding));
         if(selected!=null)result.put("ocrTextTarget",selected.receiptEvidence());
         return result.put("observationScope", scopeJson()).put("automaticReplayAllowed", false);
+    }
+
+    private void prepareCoordinateSensitiveEvidence(RunControl control)throws Exception {
+        if(ocrSensitive!=null||!localOcrAllowed||!ocrAvailable()||latest==null||!ObservationReport.hasImage(latest))return;
+        String mime=latest.optString("imageMimeType"),format="image/png".equals(mime)?"png":"image/jpeg".equals(mime)?"jpeg":"webp";
+        long revision=control.pauseRevision();byte[] pixels=Base64.getDecoder().decode(latest.getString("imageBase64"));
+        try{OcrPage page=sensitiveReads.call(()->{control.check();if(control.isPaused()||revision!=control.pauseRevision())throw new InterruptedException("coordinate_risk_read_changed");},()->ocr.recognizeImage(pixels,format,control));
+            control.check();
+            if(page.sourceWidth==latest.optInt("imageWidth")&&page.sourceHeight==latest.optInt("imageHeight"))ocrSensitive=NativeSensitiveStep.ocrEvidence(page);
+        }catch(InterruptedException stopped){throw stopped;}
+        catch(Exception unavailable){control.check();/* No evidence is not proof of safety, nor a new blanket image-only prohibition. */}
     }
 
     private Decision choose(JSONObject observation, Need need, RunControl control) throws Exception {
@@ -438,6 +459,7 @@ public final class AdaptivePhonePort implements PhonePort {
         if (page.lines.isEmpty()) return failure("ocr_no_text", "没有识别出可用文字；这不证明页面为空，请由主人核对。");
         JSONArray lines = new JSONArray(); int characters = 0; boolean truncated = false;
         java.util.Map<String,OcrTextTarget> minted=new java.util.LinkedHashMap<>();
+        NativeSensitiveStep.OcrEvidence sensitive=NativeSensitiveStep.ocrEvidence(page);
         java.util.Set<Integer> shownLines=new java.util.HashSet<>();
         for (OcrPage.Line line : page.lines) {
             control.check();
@@ -445,7 +467,7 @@ public final class AdaptivePhonePort implements PhonePort {
             JSONObject recognizedLine=new JSONObject().put("line", line.index).put("text", line.text)
                     .put("boundsPixels", new JSONArray().put(line.left).put(line.top).put(line.right).put(line.bottom));
             // A provider with real word capture never substitutes a whole-line center for a missing word.
-            if(!page.wordReadAttempted&&source instanceof NativeOcrTapPort){OcrTextTarget target=new OcrTextTarget(observation.getString("observationId"),observation.getLong("pauseRevision"),control,page,line);minted.put(target.id,target);recognizedLine.put("textTargetId",target.id).put("targetGranularity","line_center_not_a_specific_word");}
+            if(!page.wordReadAttempted&&source instanceof NativeOcrTapPort){OcrTextTarget target=new OcrTextTarget(observation.getString("observationId"),observation.getLong("pauseRevision"),control,page,line,sensitive);minted.put(target.id,target);recognizedLine.put("textTargetId",target.id).put("targetGranularity","line_center_not_a_specific_word");}
             lines.put(recognizedLine);
             shownLines.add(line.index);
             characters += line.text.length();
@@ -457,7 +479,7 @@ public final class AdaptivePhonePort implements PhonePort {
             if(words.length()>=128)break;
             JSONObject row=new JSONObject().put("word",word.index).put("line",word.lineIndex).put("text",word.text).put("confidence",word.confidence)
                     .put("boundsPixels",new JSONArray().put(word.left).put(word.top).put(word.right).put(word.bottom));
-            OcrTextTarget target=source instanceof NativeOcrTapPort?new OcrTextTarget(observation.getString("observationId"),observation.getLong("pauseRevision"),control,page,word):null;
+            OcrTextTarget target=source instanceof NativeOcrTapPort?new OcrTextTarget(observation.getString("observationId"),observation.getLong("pauseRevision"),control,page,word,sensitive):null;
             if(target!=null)row.put("textTargetId",target.id);
             int bytes=row.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length+(words.length()>0?1:0);if(wordBytes+bytes>8000)break;
             words.put(row);wordBytes+=bytes;if(target!=null)minted.put(target.id,target);
@@ -476,7 +498,7 @@ public final class AdaptivePhonePort implements PhonePort {
         String finalBlocked=authority(control);long finalNow=uptime.getAsLong();
         if(finalBlocked!=null||control.pauseRevision()!=observation.getLong("pauseRevision")||finalNow<at||finalNow-at>MAX_AGE_MS)
             return failure(finalBlocked==null?"stale_observation":finalBlocked,"原观察已变化，OCR文字和目标已丢弃，请重新观察。");
-        textTargets.clear();textTargets.putAll(minted);
+        textTargets.clear();textTargets.putAll(minted);ocrSensitive=sensitive;
         observation.getJSONObject("observationSources").put("ocrTextIncluded", true);
         return new JSONObject().put("ok", true);
     }
