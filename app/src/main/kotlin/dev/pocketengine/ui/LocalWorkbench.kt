@@ -4,10 +4,19 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -18,6 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.font.FontFamily
@@ -79,17 +90,16 @@ internal fun NativeLocalWorkbench(state: PocketUiState, controller: PocketWorldC
     LaunchedEffect(prepared) { prepared?.optString("id")?.takeIf { it.isNotBlank() }?.let { selectedId = it; switching = false; mode = 0; selectedJob = null; prepareRequest = null } }
     LaunchedEffect(materialized) { materialized?.optString("id")?.takeIf { it.isNotBlank() }?.let { selectedId = it; switching = false; mode = 1; selectedJob = null; materializeRequest = null } }
     val selected = checkouts.firstOrNull { it.optString("id") == selectedId }
-    LocalCaption("先选项目副本，再执行与核对。修改只有在审阅差异后才导回原项目；这里不自动运行高权限 Shell。")
     if (selected != null) {
-        Text(selected.optString("name"), fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
+        Text(selected.optString("name"), fontSize = 16.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 8.dp))
         LocalCaption("副本 ${selected.optString("id").take(8)} · 原项目 ${state.projects.find { it.id == selected.optString("projectId") }?.name ?: selected.optString("projectId").take(8)}" + if (selected.has("collectionOperationId")) " · Termux 取回结果" else "")
-        TextButton(onClick = { switching = !switching }) { Text(if (switching) "收起选择" else "切换或准备副本") }
     }
-    if (switching || selected == null) {
+    ProjectWorkbenchDisclosure("工作副本", switching || selected == null, { switching = !switching }, if (selected == null) "选择项目后开始" else "切换或准备副本") {
+        LocalCaption("在副本中工作，核对差异后才导回原项目。手动命令始终需要单独确认。")
         if (state.projects.isEmpty()) LocalCaption("还没有项目。请先在「项目」页创建并保存文件，再到这里准备工作副本。")
         else {
             LocalChoice("来源项目", state.projects.map { it.id to it.name }, projectId, { projectId = it })
-            Button(onClick = { projectId?.let { prepareRequest = controller.requestFeature("local", "prepare", JSONObject().put("projectId", it)) } }, enabled = projectId != null && "local.prepare" !in state.moduleBusy) { Text(if ("local.prepare" in state.moduleBusy) "准备中…" else "准备新的工作副本") }
+            PocketPressButton(onClick = { projectId?.let { prepareRequest = controller.requestFeature("local", "prepare", JSONObject().put("projectId", it)) } }, enabled = projectId != null && "local.prepare" !in state.moduleBusy) { Text(if ("local.prepare" in state.moduleBusy) "准备中…" else "准备新的工作副本") }
         }
         if (checkouts.isNotEmpty()) {
             LocalChoice("继续已有副本", checkouts.map { it.optString("id") to "${it.optString("name")} · ${it.optString("id").take(8)}${if (it.has("collectionOperationId")) " · 取回" else ""}" }, selectedId, { selectedId = it; switching = false; selectedJob = null; prepareRequest = null; materializeRequest = null })
@@ -97,12 +107,17 @@ internal fun NativeLocalWorkbench(state: PocketUiState, controller: PocketWorldC
     }
     if (selected == null) return
     val checkoutId = selected.getString("id")
-    HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Line)
+    HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Line)
+    PocketSegmentedTabs(listOf("工作", "预览"), if (mode == 4) 1 else 0, { mode = if (it == 1) 4 else 0 })
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("项目开发", "文件与导回", "执行回执", "手动工具").forEachIndexed { index, label -> FilterChip(selected = mode == index, onClick = { mode = index }, label = { Text(label) }) }
+        listOf(1 to "文件与导回", 2 to "执行回执", 3 to "手动工具").forEach { (index, label) ->
+            TextButton(onClick = { mode = if (mode == index) 0 else index }, modifier = Modifier.heightIn(min = 44.dp)) {
+                Text(label, fontSize = 13.sp, fontWeight = if (mode == index) FontWeight.Medium else FontWeight.Normal)
+            }
+        }
     }
     when (mode) {
-        0 -> NativeProjectDevelopment(selected, state, controller, onManualTools = { mode = 3 })
+        0, 4 -> NativeProjectDevelopment(selected, state, controller, onManualTools = { mode = 3 }, surface = if (mode == 4) ProjectWorkbenchFacet.Preview else ProjectWorkbenchFacet.Agent)
         3 -> LocalCommands(checkoutId, state, controller) { selectedJob = it; mode = 2 }
         1 -> LocalFiles(checkoutId, state, controller)
         2 -> {
@@ -111,17 +126,17 @@ internal fun NativeLocalWorkbench(state: PocketUiState, controller: PocketWorldC
             if (scoped.isEmpty()) LocalCaption("此副本还没有执行记录。启动命令后会在这里保留真实回执。")
             scoped.forEach { (job, termux) ->
                 val ref = LocalJobRef(job.optString("id"), termux)
-                Row(Modifier.fillMaxWidth().clickable { selectedJob = ref }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { selectedJob = if (selectedJob == ref) null else ref }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) { Text(localJobTitle(job, termux), fontSize = 14.sp); LocalCaption(localJobStatus(job.optString("status")) + " · " + job.optString("id").take(8)) }
                     Text(if (selectedJob == ref) "已展开" else "查看 ›", fontSize = 12.sp, color = SecondaryInk)
                 }
-                HorizontalDivider(color = Line)
-            }
-            selectedJob?.let { ref ->
-                val metadata = scoped.firstOrNull { (job, termux) -> job.optString("id") == ref.id && termux == ref.termux }?.first
-                LocalJobDetail(checkoutId, ref, metadata, state, controller) { receipt ->
-                    materializeRequest = controller.requestFeature("local", "termux.materialize", JSONObject().put("checkoutId", checkoutId).put("jobId", receipt.getString("id")))
+                if (selectedJob == ref) {
+                    // Keep the receipt owner outside an animated crossfade: there is only one polling leaf.
+                    LocalJobDetail(checkoutId, ref, job, state, controller) { receipt ->
+                        materializeRequest = controller.requestFeature("local", "termux.materialize", JSONObject().put("checkoutId", checkoutId).put("jobId", receipt.getString("id")))
+                    }
                 }
+                HorizontalDivider(color = Line)
             }
         }
     }
@@ -174,7 +189,7 @@ private fun LocalCommands(checkoutId: String, state: PocketUiState, controller: 
     OutlinedTextField(arguments, { arguments = it }, label = { Text("参数 · 每行一个，不按 Shell 拆词") }, minLines = 2, maxLines = 5, modifier = Modifier.fillMaxWidth(), enabled = !submitting)
     LocalCaption(if (termux) "初始目录：~/pocketworld/$checkoutId" else "执行目录：当前 App 私有工作副本 · 最长30秒")
     val runAllowed = !submitting && !pending && !nativePending && executable in tools && (!termux || ready && termuxState.optBoolean("enabled") && termuxState.optBoolean("runCommandAvailable"))
-    Button(onClick = {
+    PocketPressButton(onClick = {
         try {
             val argv = LocalWorkbenchGuard.argv(executable, arguments)
             val input = JSONObject().put("checkoutId", checkoutId)
@@ -185,13 +200,14 @@ private fun LocalCommands(checkoutId: String, state: PocketUiState, controller: 
         } catch (failure: Exception) { error = failure.message }
     }, enabled = runAllowed, modifier = Modifier.padding(top = 10.dp)) { Text("核对并执行") }
     error?.let { Text(it, color = Danger, fontSize = 12.sp) }
-    if (enableConfirmation) AlertDialog(onDismissRequest = { enableConfirmation = false }, containerColor = Color.White, title = { Text("连接 Termux？") }, text = { Text("这只启用本应用的连接选择，不代替系统权限。Termux 命令具有该账号的真实文件和网络权限；后续每次执行仍需你核对。") }, confirmButton = { Button(onClick = { controller.requestFeature("local", "termux.setEnabled", JSONObject().put("enabled", true)); enableConfirmation = false }) { Text("启用连接") } }, dismissButton = { TextButton(onClick = { enableConfirmation = false }) { Text("取消") } })
-    confirmation?.let { frozen -> AlertDialog(onDismissRequest = { confirmation = null }, containerColor = Color.White, title = { Text("执行这次操作？") }, text = { SelectionContainer { Text(frozen.description, fontSize = 13.sp, modifier = Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) } }, confirmButton = { Button(onClick = { submitted = frozen.command to controller.requestFeature("local", frozen.command, JSONObject(frozen.input.toString())); confirmation = null }, enabled = !submitting && !pending && !nativePending) { Text("确认这次执行") } }, dismissButton = { TextButton(onClick = { confirmation = null }) { Text("取消") } }) }
+    if (enableConfirmation) AlertDialog(onDismissRequest = { enableConfirmation = false }, containerColor = Color.White, title = { Text("连接 Termux？") }, text = { Text("这只启用本应用的连接选择，不代替系统权限。Termux 命令具有该账号的真实文件和网络权限；后续每次执行仍需你核对。") }, confirmButton = { PocketPressButton(onClick = { controller.requestFeature("local", "termux.setEnabled", JSONObject().put("enabled", true)); enableConfirmation = false }) { Text("启用连接") } }, dismissButton = { TextButton(onClick = { enableConfirmation = false }) { Text("取消") } })
+    confirmation?.let { frozen -> AlertDialog(onDismissRequest = { confirmation = null }, containerColor = Color.White, title = { Text("执行这次操作？") }, text = { SelectionContainer { Text(frozen.description, fontSize = 13.sp, modifier = Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) } }, confirmButton = { PocketPressButton(onClick = { submitted = frozen.command to controller.requestFeature("local", frozen.command, JSONObject(frozen.input.toString())); confirmation = null }, enabled = !submitting && !pending && !nativePending) { Text("确认这次执行") } }, dismissButton = { TextButton(onClick = { confirmation = null }) { Text("取消") } }) }
 }
 
 @Composable
 private fun LocalJobDetail(checkoutId: String, ref: LocalJobRef, metadata: JSONObject?, state: PocketUiState, controller: PocketWorldController, materialize: (JSONObject) -> Unit) {
     var requestId by remember(ref) { mutableStateOf<String?>(null) }
+    var showOutput by remember(ref) { mutableStateOf(false) }
     val context = LocalContext.current
     val lifecycle = remember(context) { generateSequence(context) { (it as? ContextWrapper)?.baseContext?.takeUnless { base -> base === it } }.filterIsInstance<LifecycleOwner>().firstOrNull()?.lifecycle }
     val latest by rememberUpdatedState(state)
@@ -210,18 +226,22 @@ private fun LocalJobDetail(checkoutId: String, ref: LocalJobRef, metadata: JSONO
     val receipt = LocalWorkbenchGuard.result(state.moduleResults["local.getJob"], input, requestId)?.takeIf { it.optString("id") == ref.id && input?.optString("jobId") == ref.id && input.optBoolean("termux") == ref.termux }
     val job = receipt ?: metadata ?: return
     LocalHeading(localJobTitle(job, ref.termux))
-    LocalCaption(localJobStatus(job.optString("status")))
+    PocketScene(job.optString("status")) { LocalCaption(localJobStatus(job.optString("status"))) }
     LocalCaption(job.optString("message"))
     if (job.has("transferError")) LocalCaption(job.optString("transferError"))
     if (job.has("exitCode") && !job.isNull("exitCode")) Text("退出码 ${job.optInt("exitCode")}", fontSize = 13.sp)
     if (job.has("outputComplete") && !job.optBoolean("outputComplete")) LocalCaption("输出读取未完整结束，请核对原回执，不视为完整输出。")
     if (job.optBoolean("outputTruncated")) LocalCaption("输出达到上限，以下内容已截断；不能当作完整结果。")
-    listOf("stdout" to "标准输出", "stderr" to "错误输出").forEach { (field, label) ->
-        if (receipt != null && receipt.has(field)) { LocalHeading(label); LocalCode(receipt.optString(field).ifEmpty { "（空）" }) }
+    if (receipt != null && (receipt.has("stdout") || receipt.has("stderr"))) {
+        ProjectWorkbenchDisclosure("输出日志", showOutput, { showOutput = !showOutput }) {
+            listOf("stdout" to "标准输出", "stderr" to "错误输出").forEach { (field, label) ->
+                if (receipt.has(field)) { LocalHeading(label); LocalCode(receipt.optString(field).ifEmpty { "（空）" }) }
+            }
+        }
     }
     if (ref.termux && job.optString("kind") == "workspace_collect" && job.optBoolean("transferReady")) {
         LocalCaption("完整文件回执已到达。另存为新副本，不覆盖当前副本；仍需逐文件审阅后才导回正式项目。")
-        Button(onClick = { materialize(job) }, enabled = "local.termux.materialize" !in state.moduleBusy) { Text("另存取回结果并审阅") }
+        PocketPressButton(onClick = { materialize(job) }, enabled = "local.termux.materialize" !in state.moduleBusy) { Text("另存取回结果并审阅") }
     }
     Row {
         TextButton(onClick = { refresh() }, enabled = "local.getJob" !in state.moduleBusy) { Text("刷新原回执") }
@@ -236,14 +256,21 @@ private fun LocalJobDetail(checkoutId: String, ref: LocalJobRef, metadata: JSONO
 internal fun LocalFiles(checkoutId: String, state: PocketUiState, controller: PocketWorldController) {
     val projectId = state.feature("local").optJSONArray("checkouts").objects().firstOrNull { it.optString("id") == checkoutId }?.optString("projectId")
     if (projectId.isNullOrBlank()) { LocalCaption("原工作副本尚未核对，草稿未移到其他项目。请刷新原项目后重开。"); return }
-    ProjectGitSection(projectId, checkoutId, state, controller)
+    var showVersions by rememberSaveable(checkoutId) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().animateContentSize(tween(160))) {
+        TextButton(onClick = { showVersions = !showVersions }, modifier = Modifier.heightIn(min = 44.dp)) {
+            Text(if (showVersions) "收起版本与 Git" else "版本与 Git", fontSize = 13.sp)
+        }
+        // This leaf may read repository state; size animation never keeps two copies of it alive.
+        if (showVersions) ProjectGitSection(projectId, checkoutId, state, controller)
+    }
     val session = controller.projectWorkbench
     val opened = session.opened(checkoutId)
     var requestId by remember(checkoutId) { mutableStateOf<String?>(null) }
     var dirtyPaths by remember(checkoutId) { mutableStateOf<List<String>>(emptyList()) }
     var draftListError by remember(checkoutId) { mutableStateOf<String?>(null) }
     var newPath by rememberSaveable(checkoutId) { mutableStateOf("") }
-    var adding by remember { mutableStateOf(false) }
+    var adding by remember(checkoutId) { mutableStateOf(false) }
     var binaryInfo by remember(checkoutId) { mutableStateOf<dev.pocketengine.features.local.project.ProjectFileTree.Node?>(null) }
     fun refresh() { requestId = controller.requestFeature("local", "changes", JSONObject().put("checkoutId", checkoutId)) }
     LaunchedEffect(checkoutId) { refresh() }
@@ -276,11 +303,11 @@ internal fun LocalFiles(checkoutId: String, state: PocketUiState, controller: Po
         Text("二进制文件 · ${file.bytes} 字节", style = MaterialTheme.typography.bodyMedium)
         Text("不支持文字编辑。文件可随项目包保存、导出；支持的页面资源可在预览中使用。", style = MaterialTheme.typography.bodyMedium)
         var identity by remember(file.path) { mutableStateOf(false) }
-        TextButton(onClick = { identity = !identity }) { Text(if (identity) "收起文件校验信息" else "文件校验信息") }
-        if (identity) SelectionContainer { Text("SHA-256\n" + file.sha256, style = MaterialTheme.typography.labelMedium) }
+        ProjectWorkbenchDisclosure("文件校验信息", identity, { identity = !identity }) {
+            SelectionContainer { Text("SHA-256\n" + file.sha256, style = MaterialTheme.typography.labelMedium) }
+        }
     } }, confirmButton = { TextButton(onClick = { binaryInfo = null }) { Text("返回文件树") } }) }
-    TextButton(onClick = { adding = !adding }) { Text(if (adding) "收起新增" else "新增文本文件") }
-    if (adding) {
+    ProjectWorkbenchDisclosure("新增文本文件", adding, { adding = !adding }) {
         OutlinedTextField(newPath, { newPath = it }, label = { Text("相对路径，例如 src/main.py") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedButton(onClick = { session.open(checkoutId, newPath.trim(), true) }, enabled = newPath.isNotBlank() && newPath.length <= 240) { Text("编辑新文件草稿") }
     }
@@ -370,15 +397,15 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().padding(horizontal = 16.dp)) {
                 Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text(path.substringAfterLast('/'), style = MaterialTheme.typography.titleLarge); Text(path, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    Column(Modifier.weight(1f)) { Text(path.substringAfterLast('/'), fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis); Text(path, fontSize = 12.sp, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     TextButton(onClick = { focus.clearFocus(); close() }, enabled = !busy) { Text("返回") }
                 }
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = mode == 0, onClick = { focus.clearFocus(); mode = 0 }, label = { Text("编辑") })
-                    FilterChip(selected = mode == 1, onClick = { focus.clearFocus(); mode = 1 }, label = { Text("差异与导回") }, enabled = reviewed != null)
-                    if (conflict) FilterChip(selected = mode == 2, onClick = { focus.clearFocus(); mode = 2 }, label = { Text("比较当前文件") })
+                val fileViews = listOf(0 to "编辑") + (if (reviewed != null) listOf(1 to "差异与导回") else emptyList()) + (if (conflict) listOf(2 to "比较当前文件") else emptyList())
+                if (fileViews.size > 1) {
+                    PocketSegmentedTabs(fileViews.map { it.second }, fileViews.indexOfFirst { it.first == mode }.coerceAtLeast(0), { index -> focus.clearFocus(); mode = fileViews[index].first })
                 }
-                Text(if (conflict) "文件已被修改 · 你的草稿已保留" else if (dirty) { if (durable) "未保存到工作副本 · 草稿已保留" else "正在保留未保存草稿…" } else if (needsFreshRead) "正在核对当前文件…" else "工作副本 · 保存后可核对差异", style = MaterialTheme.typography.labelMedium, color = if (conflict) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 6.dp))
+                val fileState = if (conflict) "文件已被修改 · 你的草稿已保留" else if (dirty) { if (durable) "未保存到工作副本 · 草稿已保留" else "正在保留未保存草稿…" } else if (needsFreshRead) "正在核对当前文件…" else "工作副本 · 保存后可核对差异"
+                PocketScene(fileState) { Text(fileState, fontSize = 13.sp, color = if (conflict) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 6.dp)) }
                 if (busy || current == null && restoreError == null) LinearProgressIndicator(Modifier.fillMaxWidth())
                 restoreError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 localError?.let { error -> Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis); TextButton(onClick = { notices = true }) { Text("查看问题详情") } }
@@ -401,7 +428,7 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
                             canSave = editableSize && !busy && !needsFreshRead && !conflict && dirty && !current.creating,
                             changed = ::update, saved = { needsFreshRead = true; reload(); mode = 1 }, blocksOtherWrites = { liveWriteBlocked = it })
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = {
+                            PocketPressButton(onClick = {
                                 try { focus.clearFocus(); val frozen = current.saveIntent(); saveIntent = frozen; submitted = "writeFile" to controller.requestFeature("local", "writeFile", frozen.input()); acknowledged = false }
                                 catch (failure: Exception) { localError = failure.message }
                             }, enabled = editableSize && !busy && !liveWriteBlocked && !needsFreshRead && !conflict && (current.creating || dirty), modifier = Modifier.weight(1f)) { Text("保存并看差异") }
@@ -422,7 +449,7 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
                         if (reviewed.optBoolean("truncated")) Text("原差异不完整，不能凭截断片段导回。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         if (dirty) Text("手机草稿尚未保存在副本，不在这份导回差异内。", style = MaterialTheme.typography.bodySmall)
                         Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(acknowledged, { acknowledged = it }, enabled = !busy && !dirty && !conflict && !needsFreshRead && reviewed.optBoolean("importable") && !reviewed.optBoolean("truncated")); Text("已核对差异和正式目标版本", style = MaterialTheme.typography.bodySmall) }
-                        Button(onClick = {
+                        PocketPressButton(onClick = {
                             try { val frozen = LocalWorkbenchGuard.importPayload(JSONObject(reviewed.toString())); submitted = "importToProject" to controller.requestFeature("local", "importToProject", frozen); acknowledged = false; localError = null }
                             catch (failure: Exception) { localError = failure.message }
                         }, enabled = acknowledged && !busy && !liveWriteBlocked && !dirty && !conflict && !needsFreshRead && reviewed.optBoolean("importable") && !reviewed.optBoolean("truncated") && importedVersion == null, modifier = Modifier.fillMaxWidth()) { Text(if (reviewed.optBoolean("deleted")) "确认删除正式项目文件" else "明确导回正式版本库") }
@@ -430,7 +457,8 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
                     }
                     else -> Spacer(Modifier.weight(1f))
                 }
-                if (notices || mode == 2) Column(Modifier.fillMaxWidth().heightIn(max = 160.dp).verticalScroll(rememberScrollState())) {
+                AnimatedVisibility(visible = notices || mode == 2, enter = expandVertically(tween(160)) + fadeIn(tween(120)), exit = shrinkVertically(tween(140)) + fadeOut(tween(90))) {
+                  Column(Modifier.fillMaxWidth().heightIn(max = 160.dp).verticalScroll(rememberScrollState())) {
                     Text("切换页面会保留草稿，不自动保存或运行。服务运行中，本页不能绕过已批准的写入范围。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     localError?.let { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
                     cacheError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -438,6 +466,7 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
                     TextButton(onClick = { reload() }, enabled = !busy && current != null) { Text("读最新副本，保留我的草稿") }
                     if (reviewed != null && !reviewed.optBoolean("deleted")) TextButton(onClick = { deleting = true }, enabled = !busy && !liveWriteBlocked && !dirty && !needsFreshRead && !conflict) { Text("从工作副本删除…", color = MaterialTheme.colorScheme.error) }
                     if (dirty) TextButton(onClick = { discard = true }, enabled = !busy) { Text("明确放弃未保存草稿…", color = MaterialTheme.colorScheme.error) }
+                  }
                 }
             }
         }
@@ -455,8 +484,24 @@ private fun LocalChoice(label: String, options: List<Pair<String, String>>, sele
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.heightIn(max = 320.dp)) { options.forEach { (id, name) -> DropdownMenuItem(text = { Text(name, fontSize = 13.sp) }, onClick = { choose(id); open = false }) } }
     }
 }
-@Composable private fun LocalCaption(text: String) { Text(text, fontSize = 12.sp, lineHeight = 19.sp, color = SecondaryInk, modifier = Modifier.padding(vertical = 4.dp)) }
-@Composable private fun LocalHeading(text: String) { Text(text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp)) }
-@Composable private fun LocalCode(text: String) { SelectionContainer { Text(text, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState())) } }
+/** A local disclosure keeps optional detail next to its source; no business leaf is crossfaded. */
+@Composable
+internal fun ProjectWorkbenchDisclosure(title: String, expanded: Boolean, onToggle: () -> Unit, summary: String? = null, content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        TextButton(onClick = onToggle, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).semantics { stateDescription = if (expanded) "已展开" else "已收起" }, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 6.dp)) {
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
+                Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                summary?.let { Text(it, fontSize = 12.sp, color = SecondaryInk) }
+            }
+            Text(if (expanded) "−" else "+", fontSize = 18.sp, color = SecondaryInk)
+        }
+        AnimatedVisibility(visible = expanded, enter = expandVertically(tween(160)) + fadeIn(tween(120)), exit = shrinkVertically(tween(140)) + fadeOut(tween(90))) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp), content = content)
+        }
+    }
+}
+@Composable private fun LocalCaption(text: String) { if (text.isNotBlank()) Text(text, fontSize = 13.sp, lineHeight = 20.sp, color = SecondaryInk, modifier = Modifier.padding(vertical = 3.dp)) }
+@Composable private fun LocalHeading(text: String) { Text(text, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)) }
+@Composable private fun LocalCode(text: String) { SelectionContainer { Text(text, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp).background(Color(0xFFF4F4F4), RoundedCornerShape(8.dp)).verticalScroll(rememberScrollState()).padding(12.dp)) } }
 private fun localJobTitle(job: JSONObject, termux: Boolean): String = when (job.optString("kind")) { "project_stage" -> "准备 Termux 副本"; "workspace_collect" -> "取回 Termux 文件"; "tool_probe" -> "探测 Termux 工具"; else -> (if (termux) "Termux · " + job.optString("executable") else "系统 · " + job.optJSONArray("argv")?.optString(0).orEmpty()) }
 private fun localJobStatus(status: String): String = when (status) { "awaiting_result" -> "已交给 Termux · 等待真实回执"; "unknown" -> "结果不明 · 仅核对，不重发"; "interrupted" -> "本机已中断 · 未重放"; "timed_out" -> "执行超时"; else -> taskStatus(status) }

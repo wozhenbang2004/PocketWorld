@@ -4,7 +4,7 @@ run-name: Debug APK · ${{ github.ref_name }} · ${{ github.run_number }}
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'uiux/**']
     paths: ['.github/workflows/build-apk.yml', 'app/build.gradle', 'app/src/main/**']
 
 permissions:
