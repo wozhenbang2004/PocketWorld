@@ -13,6 +13,7 @@ python_status=0
   test_phone_tasks.LocalSurfaceTests test_phone_tasks.UsbOwnershipTests) || python_status=$?
 node_status=0
 node --check companion/phone_task_desk.js || node_status=$?
+python3 tools/prepare-mika-focused-sources.py
 sources=app/src/main/java/dev/pocketengine/features/local/runtime/native
 g++ -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
   -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
@@ -25,7 +26,7 @@ g++ -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
 bash display-helper/test/run.sh
 ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain :app:buildDisplayHelper
 gradle_args=(--no-daemon --no-parallel --max-workers=1 --console=plain \
-  -Pkotlin.compiler.execution.strategy=in-process -x buildAndroidRuntime -x buildDisplayHelper \
+  -Pkotlin.compiler.execution.strategy=in-process -PmikaFocusedTests=true -x buildAndroidRuntime -x buildDisplayHelper \
   :app:testDebugUnitTest)
 selectors=()
 while IFS= read -r class; do

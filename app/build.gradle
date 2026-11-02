@@ -105,6 +105,40 @@ android.sourceSets.main.java.srcDir(rootProject.file('display-helper/src'))
 android.sourceSets.main.java.srcDir('src/pendingAdb/java')
 android.sourceSets.test.java.srcDir('src/pendingAdb/test')
 android.sourceSets.test.java.srcDir(rootProject.file('display-helper/test'))
+
+// The explicit Mika CI command compiles every selected Java test and its fixture
+// closure. The default unit-test source set and full-suite entry remain unchanged.
+if (providers.gradleProperty('mikaFocusedTests').orNull == 'true') {
+    def manifestFile = rootProject.file('app/build/mika-focused-tests/sources.json')
+    if (!manifestFile.isFile()) throw new GradleException('Run tools/prepare-mika-focused-sources.py before focused unit compilation')
+    def manifest = new groovy.json.JsonSlurper().parse(manifestFile)
+    def expected = rootProject.file('tools/mika-focused-tests.txt').readLines('UTF-8')
+            .collect { it.trim() }.findAll { it && !it.startsWith('#') }.toSet()
+    expected.add('dev.pocketengine.features.local.runtime.NativeOfflineUnavailableTest')
+    if (!(manifest.selectedClasses instanceof List) || manifest.selectedClasses.toSet() != expected || !(manifest.javaSources instanceof List) || manifest.javaSources.isEmpty())
+        throw new GradleException('Focused source manifest must retain every declared test class and the native-unavailable negative case')
+    if (!(manifest.selectedClassSources instanceof Map) || manifest.selectedClassSources.keySet() != expected ||
+            !manifest.javaSources.containsAll(manifest.selectedClassSources.values().findAll { it.endsWith('.java') }))
+        throw new GradleException('A selected Java test source is missing from the focused compilation inputs')
+    def allowedRoots = ['app/src/test', 'app/src/pendingAdb/test', 'display-helper/test']
+            .collect { rootProject.file(it).canonicalPath + File.separator }
+    def javaSources = manifest.javaSources.collect { path ->
+        def source = rootProject.file(path)
+        if (!source.isFile() || !source.name.endsWith('.java') || !allowedRoots.any { source.canonicalPath.startsWith(it) })
+            throw new GradleException('Focused Java input is not an existing repository test source: ' + path)
+        source
+    }
+    tasks.withType(org.gradle.api.tasks.compile.JavaCompile).configureEach {
+        if (name == 'compileDebugUnitTestJavaWithJavac') {
+            setSource(project.files(javaSources))
+            doFirst {
+                if (getSource().files.collect { it.canonicalFile }.toSet() != javaSources.collect { it.canonicalFile }.toSet())
+                    throw new GradleException('Focused Java task sources no longer match the complete reviewed fixture closure')
+                logger.lifecycle('Mika focused Java sources: {} for {} declared test classes including the independent native negative', javaSources.size(), expected.size())
+            }
+        }
+    }
+}
 // Android JNI stays in the APK; host tests retain Robolectric's OpenJDK provider.
 configurations.matching { it.name.endsWith('UnitTestRuntimeClasspath') }.configureEach {
     exclude group: 'org.conscrypt', module: 'conscrypt-android'
