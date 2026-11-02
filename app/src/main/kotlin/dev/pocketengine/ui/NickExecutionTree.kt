@@ -155,7 +155,7 @@ internal fun NickExecutionTree(steps: List<NickStepData>, modifier: Modifier = M
                         if (visibleChildHeights[step.id] != it.height) visibleChildHeights[step.id] = it.height
                     }) {
                         // Native Compose transitions respect system duration scaling and reverse in place.
-                        AnimatedVisibility(expanded,
+                        androidx.compose.animation.AnimatedVisibility(expanded,
                             enter = expandVertically(tween(180, easing = FastOutSlowInEasing),
                                 expandFrom = Alignment.Top) + fadeIn(tween(120)),
                             exit = shrinkVertically(tween(160, easing = FastOutSlowInEasing),
