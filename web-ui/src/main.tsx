@@ -30,6 +30,26 @@ function MountedApp() {
       console.info('PocketWebUi startup phase=handshake-sent');
       await bridge.command('app.ready');
       if (!disposed) console.info('PocketWebUi startup phase=handshake-accepted');
+      // A command receipt can arrive before its state snapshot. Wait for the
+      // actual App subscription and painted surface, not merely the handshake.
+      await new Promise<void>((resolve, reject) => {
+        let frame = 0;
+        const timeout = window.setTimeout(() => {
+          cancelAnimationFrame(frame);
+          reject(new Error('Application state did not reach the interactive surface'));
+        }, 30_000);
+        const check = () => {
+          if (disposed) { window.clearTimeout(timeout); resolve(); return; }
+          const state = bridge.getState();
+          if (state.host?.connected && state.host.ready && state.capabilities.commands.length > 0 &&
+              document.documentElement.dataset.pocketUi === 'ready') {
+            window.clearTimeout(timeout);
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          } else frame = requestAnimationFrame(check);
+        };
+        check();
+      });
+      if (!disposed) console.info('PocketWebUi startup phase=interactive-ready');
       if (!disposed) console.info('PocketWebUi ready source=library-web');
     }).catch(error => {
       if (!disposed) console.error('PocketWebUi startup-error', error instanceof Error ? error.message : 'unknown');

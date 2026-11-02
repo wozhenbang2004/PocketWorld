@@ -251,6 +251,7 @@ def scene_identity(xml, scene):
     root = ET.parse(xml).getroot()
     assert root.tag == "hierarchy", "Not an Android accessibility hierarchy"
     values = []
+    visible_nodes = []
     for node in root.iter("node"):
         if node.get("package") != APP_ID:
             continue
@@ -258,12 +259,21 @@ def scene_identity(xml, scene):
             parse_bounds(node.get("bounds"))
         except ValueError:
             continue
+        visible_nodes.append(node)
         values.extend(accessible_values(node))
     required = SCENE_LABELS[scene]
+    if scene == "workroom":
+        assert not any("正在恢复当前工作" in value for value in values), "The fresh workroom is still restoring; not a ready product scene"
     for label in required:
         assert any(label in value for value in values), "Expected " + scene + " accessibility content: " + label
     if scene in ("model-list", "model-purpose", "settings"):
-        assert not any("API 密钥" in value for value in values), "The model editor leaked into its parent directory"
+        model_fields = {"接口地址", "模型名称", "API 密钥", "每次回复的输出上限"}
+        for node in visible_nodes:
+            editable = node.get("editable") == "true" or node.get("class") in (
+                "android.widget.EditText", "android.widget.AutoCompleteTextView",
+            )
+            model_input = editable and any(value in model_fields for value in accessible_values(node))
+            assert not (node.get("password") == "true" or model_input), "The model editor leaked into its parent directory"
     if scene == "model-editor":
         assert not any("每次回复的输出上限" in value for value in values), "Advanced settings were expanded before selection"
     if scene == "model-purpose":
@@ -336,6 +346,41 @@ def verify_provider(args):
     write_json(args.out, identity)
     assert identity["compatible"], "Observed WebView major " + str(identity["major"]) + " is below the packaged Web UI's required major " + str(MIN_WEBVIEW_MAJOR)
     print(identity["major"])
+
+
+def foreground_identity(text):
+    """Read current resumed fields only, never task history or an Intent."""
+    fields = {}
+    for field, raw in re.findall(
+        r"^\s*(topResumedActivity|mResumedActivity|ResumedActivity)\s*[:=]\s*([^\r\n]*)$",
+        text, re.MULTILINE,
+    ):
+        assert field not in fields, "Ambiguous repeated foreground field: " + field
+        match = re.fullmatch(
+            r"ActivityRecord\{([0-9a-fA-F]+)\s+u([0-9]+)\s+([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)\s+([^}]*)\}\s*",
+            raw,
+        )
+        assert match, "Foreground field is missing a current ActivityRecord: " + field
+        record, user, component, tail = match.groups()
+        package, activity = component.split("/", 1)
+        if activity.startswith("."):
+            activity = package + activity
+        task = re.search(r"(?:^|\s)t([0-9]+)(?:\s|$)", tail)
+        assert task, "Foreground ActivityRecord has no task identity: " + field
+        fields[field] = {"record": record.lower(), "user": int(user), "task": int(task.group(1)),
+                         "component": package + "/" + activity, "observed": raw.strip()}
+    authority = "topResumedActivity" if "topResumedActivity" in fields else "mResumedActivity"
+    assert authority in fields, "No unambiguous topResumedActivity or mResumedActivity was observed"
+    selected = fields[authority]
+    assert selected["component"] == APP_ID + "/" + APP_ID + ".ui.ComposeActivity", "Formal WebView Activity is not the current foreground Activity"
+    for field, identity in fields.items():
+        assert all(identity[key] == selected[key] for key in ("record", "user", "task", "component")), "Conflicting current resumed Activity fields: " + authority + " / " + field
+    return {"activity": ENTRY_ACTIVITY, "authority": authority, "current": selected, "fields": fields,
+            "basis": "anchored current resumed Activity fields from dumpsys activity activities; task history is excluded"}
+
+
+def verify_foreground(args):
+    write_json(args.out, foreground_identity(pathlib.Path(args.dump).read_text(errors="replace")))
 
 
 def png_dimensions(path):
@@ -420,6 +465,11 @@ def verify_capture(args):
     assert device["activity"] == ENTRY_ACTIVITY and device["source_url"] == SOURCE_URL, "Wrong UI entry"
     assert device["pid"] and device["ready"] is True, "Actual Web UI did not become ready"
     assert device["final_pid"] == device["pid"], "App process changed during the captured journey"
+    for dump, receipt, key in (("activity-ready.txt", "foreground-ready.json", "foreground_ready"),
+                               ("activity-return.txt", "foreground-return.json", "foreground_final")):
+        foreground = foreground_identity((root / dump).read_text(errors="replace"))
+        assert json.loads((root / receipt).read_text()) == foreground, "Foreground receipt differs from observed Activity dump"
+        assert device[key] == foreground, "Device foreground identity differs from observed Activity dump"
     provider = webview_provider_identity((root / "webview-provider.txt").read_text(errors="replace"))
     assert provider["compatible"], "Observed WebView is older than the packaged JavaScript/CSS target"
     assert device["webview"] == provider, "WebView identity does not match the observed provider"
@@ -500,6 +550,10 @@ def main():
     provider.add_argument("--dump", required=True)
     provider.add_argument("--out", required=True)
     provider.set_defaults(function=verify_provider)
+    foreground = commands.add_parser("foreground")
+    foreground.add_argument("--dump", required=True)
+    foreground.add_argument("--out", required=True)
+    foreground.set_defaults(function=verify_foreground)
     capture = commands.add_parser("verify-capture")
     capture.add_argument("--directory", required=True)
     capture.add_argument("--apk", required=True)

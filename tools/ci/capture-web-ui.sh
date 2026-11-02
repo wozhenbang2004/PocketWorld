@@ -155,9 +155,8 @@ done
 PW_APP_PID=$(pw_adb shell pidof -s dev.pocketengine | tr -d '\r')
 [[ "$PW_APP_PID" =~ ^[0-9]+$ ]] || { echo "App process is not running" >&2; exit 1; }
 pw_adb shell dumpsys activity activities > "$PW_CAPTURE_DIR/activity-ready.txt"
-grep -Eq 'mResumedActivity.*dev\.pocketengine/\.ui\.ComposeActivity' "$PW_CAPTURE_DIR/activity-ready.txt" || {
-    echo "Formal WebView Activity is not foreground" >&2; exit 1;
-}
+python3 tools/ci/verify-web-ui.py foreground --dump "$PW_CAPTURE_DIR/activity-ready.txt" \
+    --out "$PW_CAPTURE_DIR/foreground-ready.json"
 
 pw_dump_layout() {
     local name=$1
@@ -298,9 +297,8 @@ PW_STAGE=record-device-identity
 PW_FINAL_PID=$(pw_adb shell pidof -s dev.pocketengine | tr -d '\r')
 [[ "$PW_FINAL_PID" == "$PW_APP_PID" ]] || { echo "App process changed or exited during capture" >&2; exit 1; }
 pw_adb shell dumpsys activity activities > "$PW_CAPTURE_DIR/activity-return.txt"
-grep -Eq 'mResumedActivity.*dev\.pocketengine/\.ui\.ComposeActivity' "$PW_CAPTURE_DIR/activity-return.txt" || {
-    echo "Formal WebView Activity is not foreground after returning" >&2; exit 1;
-}
+python3 tools/ci/verify-web-ui.py foreground --dump "$PW_CAPTURE_DIR/activity-return.txt" \
+    --out "$PW_CAPTURE_DIR/foreground-return.json"
 pw_adb shell dumpsys webviewupdate > "$PW_CAPTURE_DIR/webview-provider-final.txt"
 PW_ABIS="$PW_ABIS" PW_NATIVE_BRIDGE="$PW_NATIVE_BRIDGE" PW_APP_PID="$PW_APP_PID" \
 PW_FINAL_PID="$PW_FINAL_PID" PW_DEVICE_SERIAL="$PW_SERIAL" PW_API="$PW_API" \
@@ -322,6 +320,8 @@ pathlib.Path(sys.argv[1]).write_text(json.dumps({
     'emulator_version': (root / 'emulator-version.txt').read_text(errors='replace'),
     'webview_provider': (root / 'webview-provider.txt').read_text(errors='replace'),
     'webview': json.loads((root / 'webview-identity.json').read_text()),
+    'foreground_ready': json.loads((root / 'foreground-ready.json').read_text()),
+    'foreground_final': json.loads((root / 'foreground-return.json').read_text()),
 }, ensure_ascii=False, indent=2) + '\n')
 PY
 PW_STAGE=verify-captures
