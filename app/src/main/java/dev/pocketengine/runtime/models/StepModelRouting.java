@@ -45,9 +45,9 @@ public final class StepModelRouting {
         public JSONObject origin()throws Exception{return new JSONObject().put("format","pocketworld.step-model-origin.v1").put("configurationDigest",identity(usingLight?light:main));}
         /** Durable history stays intact; unproven/foreign opaque reasoning never crosses routes. */
         public JSONArray wireMessages(JSONArray history)throws Exception {
-            if(light==null)return history;String digest=identity(usingLight?light:main);JSONArray out=new JSONArray();
+            String digest=identity(usingLight?light:main);JSONArray out=new JSONArray();
             for(int i=0;i<history.length();i++){JSONObject row=new JSONObject(history.getJSONObject(i).toString());JSONObject origin=row.optJSONObject("nativeStepModelOrigin");row.remove("nativeStepModelOrigin");
-                if(origin==null?usingLight:!digest.equals(origin.optString("configurationDigest"))){row.remove("provider_data");JSONArray calls=row.optJSONArray("tool_calls");for(int n=0;calls!=null&&n<calls.length();n++){JSONObject call=calls.optJSONObject(n);if(call!=null){call.remove("provider_data");call.remove("opaque");JSONObject fn=call.optJSONObject("function");if(fn!=null){fn.remove("provider_data");fn.remove("opaque");}}}}
+                if(light!=null&&(origin==null?usingLight:!digest.equals(origin.optString("configurationDigest")))){row.remove("provider_data");JSONArray calls=row.optJSONArray("tool_calls");for(int n=0;calls!=null&&n<calls.length();n++){JSONObject call=calls.optJSONObject(n);if(call!=null){call.remove("provider_data");call.remove("opaque");JSONObject fn=call.optJSONObject("function");if(fn!=null){fn.remove("provider_data");fn.remove("opaque");}}}}
                 out.put(row);
             }return out;
         }
