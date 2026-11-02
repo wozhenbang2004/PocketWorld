@@ -59,7 +59,7 @@ public final class TeamMemberEvidencePort implements CapabilityPort {
     private JSONObject perform(String name,JSONObject args,TaskStore.TeamMemberRead read,RunControl original)throws Exception{
         JSONObject selection=read.view();
         if(TeamResearchReadAccess.supports(name)){Thread originalReader=Thread.currentThread();return host.researchRead(selection.optJSONObject("researchReadAccess"),name,args,original,()->{current();original.check();if(Thread.currentThread()==originalReader)read.checkCurrent();});}
-        if(name.equals("team_materials"))return new JSONObject().put("allowedRecords",read.allowedRecords()).put("allowedSources",read.allowedSources()).put("skills",selection.getJSONArray("skills")).put("resources",selection.getJSONArray("resources")).put("publicTeamFlowSharedSeparately",true);
+        if(name.equals("team_materials"))return new JSONObject().put("allowedRecords",read.allowedRecords()).put("allowedSources",read.allowedSources()).put("skills",selection.getJSONArray("skills")).put("resources",selection.getJSONArray("resources")).put("researchReadAccess",TeamResearchReadScope.checked(selection.optJSONObject("researchReadAccess"))).put("publicTeamFlowSharedSeparately",true);
         if(name.equals("memory_search")||name.equals("memory_recall")||name.equals("team_read_source")){
             if(!(features.module("memory") instanceof MemoryModule))throw new SecurityException("原记忆模块不可用");MemoryModule memory=(MemoryModule)features.module("memory");
             if(name.equals("memory_search"))return memory.searchAudience(TeamMemberEvidenceHost.ownerScope(),args.getString("query"),args.optInt("limit",8),read);

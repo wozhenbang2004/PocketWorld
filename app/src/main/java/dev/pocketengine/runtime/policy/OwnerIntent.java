@@ -32,7 +32,7 @@ public final class OwnerIntent {
     }
     public boolean permits(String tool,Predicate<String> effect){
         if(tool==null)return false;
-        if(tool.startsWith("run_"))return true;
+        if(RunOutcomeTools.supports(tool))return true;
         if(kind==Kind.DISCUSS)return false;
         return kind!=Kind.READ||!effect.test(tool);
     }

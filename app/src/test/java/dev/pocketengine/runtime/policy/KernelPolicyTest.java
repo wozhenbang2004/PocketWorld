@@ -8,6 +8,7 @@ import static org.junit.Assert.*;
 public final class KernelPolicyTest {
     @Test public void instructionQuestionsCannotBecomeDeviceActions()throws Exception {
         OwnerIntent intent=new OwnerIntent("告诉我如何转账");assertEquals(OwnerIntent.Kind.DISCUSS,intent.kind());assertFalse(intent.deviceReadAllowed());assertFalse(intent.permits("phone_click_node",s->true));
+        assertFalse("Only the exact native outcome tools may survive discussion",intent.permits("run_shell",s->true));
         intent.update("帮我打开设置");assertEquals(OwnerIntent.Kind.ACT,intent.kind());assertTrue(intent.permits("phone_click_node",s->true));
         intent.update("只读研究，不要修改文件");assertEquals(OwnerIntent.Kind.READ,intent.kind());assertTrue(intent.permits("inspect",s->false));assertFalse(intent.permits("write",s->true));
     }
