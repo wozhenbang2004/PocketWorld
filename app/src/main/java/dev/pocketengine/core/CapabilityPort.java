@@ -47,6 +47,8 @@ public interface CapabilityPort extends AutoCloseable {
     JSONArray tools() throws Exception;
     boolean supports(String name);
     boolean sideEffecting(String name);
+    /** Native IO accounting, distinct from effect/owner-intent classification. Never a model grant. */
+    default boolean requiresOperation(String name){return sideEffecting(name);}
     default void validate(String name,JSONObject arguments)throws Exception { }
     JSONObject execute(String name,JSONObject arguments,RunControl control)throws Exception;
 }

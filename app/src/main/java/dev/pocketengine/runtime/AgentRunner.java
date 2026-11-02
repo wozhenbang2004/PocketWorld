@@ -566,7 +566,7 @@ public final class AgentRunner {
                         control.sleep(args.getInt("ms"));
                         receipt = new JSONObject().put("ok", true).put("message", "等待结束。");
                     } else {
-                        if (journal != null && (sideEffecting(name)||capabilities!=null&&capabilities.sideEffecting(name))) {
+                        if (journal != null && (sideEffecting(name)||capabilities!=null&&capabilities.requiresOperation(name))) {
                             checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
                             long revision = control.pauseRevision();
                             openOperation = begin(journal, name, args, config);
