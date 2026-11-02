@@ -1,0 +1,15 @@
+<resources>
+    <string name="automatic_user_learning_title">Extract candidates from your words</string>
+    <string name="automatic_user_learning_detail">Off by default. After a successful private conversation task, extract reviewable candidates from your messages actually used in that task.</string>
+    <string name="automatic_user_learning_limit">Maximum per task</string>
+    <string name="automatic_user_learning_count">%1$d messages</string>
+    <string name="automatic_user_learning_review">Review and accept candidates in Memory. Turning this off stops future automatic extraction and keeps saved candidates. Forgetting and source withdrawal still apply.</string>
+    <string name="automatic_user_learning_working">Reading or saving settings…</string>
+    <string name="automatic_user_learning_unavailable">Saved settings are unavailable. Reload to confirm the current state before making changes.</string>
+    <string name="automatic_user_learning_reload">Reload settings</string>
+    <string name="automatic_user_learning_consent_title">Let the current model process your words?</string>
+    <string name="automatic_user_learning_consent">After a successful private conversation task, send up to %1$d of your messages actually used in that task to the currently configured model to draft candidates for review. Your words may contain personal information, and model calls may incur charges. Sources exclude webpages, tool output and other people’s messages. Candidates are not accepted automatically. You can turn this off at any time.</string>
+    <string name="automatic_user_learning_consent_accept">Agree and enable</string>
+    <string name="automatic_user_learning_cancel">Cancel</string>
+    <string name="automatic_user_learning_private_only">Automatic source settings can only be changed in the private workspace on this device.</string>
+</resources>
