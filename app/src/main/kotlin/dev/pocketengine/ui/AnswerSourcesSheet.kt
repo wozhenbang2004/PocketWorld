@@ -18,7 +18,7 @@ import org.json.JSONObject
 /** This modal keeps the underlying answer, list anchor and composer draft mounted. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun AnswerSourcesSheet(anchor: JSONObject, read: (JSONObject, Int, (JSONObject?, String?) -> Unit) -> Unit, frame: (JSONObject, (JSONObject?, String?) -> Unit) -> Unit, controller: PocketWorldController, back: () -> Unit) {
+internal fun AnswerSourcesSheet(anchor: JSONObject, read: (JSONObject, Int, (JSONObject?, String?) -> Unit) -> Unit, frame: (JSONObject, Int, (JSONObject?, String?) -> Unit) -> Unit, controller: PocketWorldController, back: () -> Unit) {
     var selected by remember(anchor.toString()) { mutableIntStateOf(-1) }
     var result by remember(anchor.toString()) { mutableStateOf<JSONObject?>(null) }
     var rawCitation by remember { mutableStateOf<JSONObject?>(null) }
@@ -63,7 +63,7 @@ internal fun AnswerSourcesSheet(anchor: JSONObject, read: (JSONObject, Int, (JSO
                         TextButton(onClick = { rawCitation = JSONObject(jump.toString()) }) { Text("读取原文 ${i + 1} · ${jump.optString("sourceId")}") }
                     }
                     val savedFrame = value.optJSONObject("frame")
-                    if (savedFrame != null && picture == null) TextButton(onClick = { loading = true; val request = ++generation; frame(savedFrame) { returned, failure -> if (alive && request == generation) { picture = returned?.optString("dataUrl")?.takeIf { returned.optBoolean("available") && it.isNotEmpty() }; error = failure ?: if (picture == null) "该观察的原图已清理或未保留。" else null; loading = false } } }) { Text("打开同一观察的保存图") }
+                    if (savedFrame != null && picture == null) TextButton(onClick = { loading = true; val request = ++generation; frame(anchor, selected) { returned, failure -> if (alive && request == generation) { picture = returned?.optString("dataUrl")?.takeIf { returned.optBoolean("available") && it.isNotEmpty() }; error = failure ?: if (picture == null) "该观察的原图已清理或未保留。" else null; loading = false } } }) { Text("打开同一观察的保存图") }
                     else if (savedFrame == null) Text("历史画面未保留", style = MaterialTheme.typography.bodySmall)
                     picture?.let { encoded -> val bitmap = remember(encoded) { runCatching { val bytes = Base64.getDecoder().decode(encoded.substringAfter(",")); BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull() }; bitmap?.let { Image(it.asImageBitmap(), "原观察保存图", Modifier.fillMaxWidth()) } }
                 }

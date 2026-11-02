@@ -21,15 +21,22 @@ public final class InferenceTrendQuery {
         JSONArray events=new JSONArray();int scanned=0,unreadable=0;long bytes=0;boolean more=false;String lastTask=task;long lastOrder=order;
         try(Cursor rows=db.rawQuery("SELECT e.task_id,e.event_order,e.body_bytes,CASE WHEN e.body_bytes BETWEEN 0 AND 65536 THEN e.event_json END,CASE WHEN length(CAST(t.ui_header AS BLOB))<=32768 THEN t.ui_header END FROM task_events e JOIN tasks t ON t.task_id=e.task_id WHERE e.event_type='inference_receipt' AND (e.task_id>? OR (e.task_id=? AND e.event_order>?)) ORDER BY e.task_id,e.event_order LIMIT 513",new String[]{task,task,Long.toString(order)})){
             while(rows.moveToNext()){
-                if(scanned==PAGE_ROWS||bytes+Math.max(0,rows.getLong(2))>MAX_BYTES){more=true;break;}scanned++;lastTask=rows.getString(0);lastOrder=rows.getLong(1);bytes+=Math.max(0,rows.getLong(2));
-                if(rows.isNull(3)||rows.isNull(4)){unreadable++;continue;}JSONObject header=new JSONObject(rows.getString(4)),origin=header.optJSONObject("origin");
-                if(!"owner".equals(header.optString("actorId"))||!"private".equals(header.optString("spaceId"))||origin!=null&&java.util.Set.of("channel","group","reviewed_external_group","native_remote_group_inputs").contains(origin.optString("kind")))continue;
-                JSONObject event=new JSONObject(rows.getString(3)),context=event.optJSONObject("context");if(context==null||!lastTask.equals(context.optString("taskId"))){unreadable++;continue;}
-                long at=event.optLong("startedAt",-1);if(at>=from&&at<until)events.put(event);
+                // Oversized SQL rows are not materialized by CASE. Advance past them as unknown
+                // instead of producing a cursor which can never move beyond that row.
+                String body=rows.isNull(3)?null:rows.getString(3),headerBody=rows.isNull(4)?null:rows.getString(4);
+                long rowBytes=(body==null?0:body.getBytes(StandardCharsets.UTF_8).length)+(headerBody==null?0:headerBody.getBytes(StandardCharsets.UTF_8).length);
+                if(scanned==PAGE_ROWS||bytes+rowBytes>MAX_BYTES){more=true;break;}scanned++;lastTask=rows.getString(0);lastOrder=rows.getLong(1);bytes+=rowBytes;
+                if(body==null||headerBody==null){unreadable++;continue;}
+                try{JSONObject header=new JSONObject(headerBody),origin=header.optJSONObject("origin");
+                    if(!"owner".equals(header.optString("actorId"))||!"private".equals(header.optString("spaceId"))||origin!=null&&java.util.Set.of("channel","group","reviewed_external_group","native_remote_group_inputs").contains(origin.optString("kind")))continue;
+                    JSONObject event=new JSONObject(body),context=event.optJSONObject("context");if(!"inference_receipt".equals(event.optString("type"))||context==null||!lastTask.equals(context.optString("taskId"))){unreadable++;continue;}
+                    long at=event.optLong("startedAt",-1);if(at>=from&&at<until)events.put(event);
+                }catch(org.json.JSONException malformed){unreadable++;}
             }
         }
         String next=more?Base64.getUrlEncoder().withoutPadding().encodeToString(new JSONObject().put("taskId",lastTask).put("order",lastOrder).toString().getBytes(StandardCharsets.UTF_8)):"";
-        return report(events,from,until,zone).put("receipts",events).put("scannedRows",scanned).put("scannedBytes",bytes).put("unreadableRows",unreadable)
+        JSONObject report=report(events,from,until,zone);unreadable+=report.getJSONObject("total").getInt("invalidReceipts");
+        return report.put("receipts",events).put("scannedRows",scanned).put("scannedBytes",bytes).put("unreadableRows",unreadable)
                 .put("hasMore",more).put("nextCursor",next).put("completeCoverage",(cursor==null||cursor.isEmpty())&&!more&&unreadable==0)
                 .put("coverage","bounded_private_owner_original_receipts_not_provider_bill").put("executionAuthorized",false);
     }

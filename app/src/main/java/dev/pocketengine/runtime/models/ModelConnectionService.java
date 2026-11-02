@@ -78,7 +78,7 @@ public final class ModelConnectionService {
     public void attachOwnerStore(dev.pocketengine.store.TaskStore tasks){ownerTasks=Objects.requireNonNull(tasks);}
     public dev.pocketengine.features.proxy.accounts.OpenRouterOnboarding openRouter(){return openRouter;}
     public JSONObject stepRouting()throws Exception{return stepRouting==null?new JSONObject().put("enabled",false).put("available",false):stepRouting.snapshot().put("available",true);}
-    public JSONObject saveStepRouting(boolean enabled,ModelTargetRef target)throws Exception{if(stepRouting==null)throw new IllegalStateException("轻量步骤配置尚未挂载");stepRouting.save(enabled,target);return snapshot();}
+    public JSONObject saveStepRouting(boolean enabled,ModelTargetRef target)throws Exception{synchronized(settings){if(stepRouting==null)throw new IllegalStateException("轻量步骤配置尚未挂载");stepRouting.save(enabled,target);return snapshot();}}
     public JSONObject probe(ModelBinding expected,boolean image,RunControl control)throws Exception {
         dev.pocketengine.store.TaskStore tasks=ownerTasks;if(tasks==null)throw new IllegalStateException("原模型诊断账本尚未挂载");
         final ModelConfig captured;final long selection;
