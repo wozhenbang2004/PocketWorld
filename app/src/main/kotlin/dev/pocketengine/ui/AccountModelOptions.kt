@@ -20,6 +20,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.pocketengine.runtime.models.AccountCatalogFacts
 import org.json.JSONObject
+import dev.pocketengine.R
+import dev.pocketengine.features.operations.LiteralUiText
 
 /** Read-only catalog facts plus explicit owner options; the native workflow fetches and validates again. */
 @Composable
@@ -51,21 +53,21 @@ internal fun AccountModelOptions(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 val window = metadata?.facts?.contextWindow()
                 val limit = metadata?.facts?.outputTokens()
-                Text(if (window?.known == true) "当前账号目录上下文：${window.value.tokens()} tokens" else "上下文：目录未声明，保留本机字节安全上限")
-                Text(if (limit?.known == true) "目录最大输出：${limit.value} tokens" else "最大输出：未知，不按模型名称补值")
+                Text(if (window?.known == true) LiteralUiText.text(R.string.w8_model_options_000, "当前账号目录上下文：") + window.value.tokens() + " tokens" else LiteralUiText.text(R.string.w8_model_options_001, "上下文：目录未声明，保留本机字节安全上限"))
+                Text(if (limit?.known == true) LiteralUiText.text(R.string.w8_model_options_002, "目录最大输出：") + limit.value + " tokens" else LiteralUiText.text(R.string.w8_model_options_003, "最大输出：未知，不按模型名称补值"))
                 val modalities = metadata?.inputModalities
-                Text(if (modalities?.known == true) "目录输入：${modalities.value.joinToString(" / ")}；本应用只发送已接入且获准的类型" else "输入类型：目录未声明；图片仍需独立核对")
-                TextButton(onClick = { menu = true }, enabled = metadata != null) { Text("推理设置：${effort.ifEmpty { "服务默认（不额外发送）" }}") }
+                Text(if (modalities?.known == true) LiteralUiText.text(R.string.w8_model_options_004, "目录输入：") + modalities.value.joinToString(" / ") + LiteralUiText.text(R.string.w8_model_options_005, "；本应用只发送已接入且获准的类型") else LiteralUiText.text(R.string.w8_model_options_006, "输入类型：目录未声明；图片仍需独立核对"))
+                TextButton(onClick = { menu = true }, enabled = metadata != null) { Text(LiteralUiText.text(R.string.w8_model_options_007, "推理设置：") + effort.ifEmpty { LiteralUiText.text(R.string.w8_model_options_008, "服务默认（不额外发送）") }) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text("服务默认（不额外发送）") }, onClick = { effort = ""; menu = false })
+                    DropdownMenuItem(text = { Text(LiteralUiText.text(R.string.w8_model_options_008, "服务默认（不额外发送）")) }, onClick = { effort = ""; menu = false })
                     levels.forEach { level -> DropdownMenuItem(text = { Text(level) }, onClick = { effort = level; menu = false }) }
                 }
-                OutlinedTextField(value = output, onValueChange = { if (it.length <= 8) output = it }, label = { Text("本地输出预留 · 128–32768") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Text("这是输入准入的本地预留，不会发送 max_output_tokens，也不能限制服务端输出。目录有最大输出时，准入至少预留该容量。")
-                OutlinedTextField(value = image, onValueChange = { if (it.length <= 8) image = it }, label = { Text("每张图片本地预留 · 0表示未配置") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Text("图片预留不是服务商实际计量。已知上下文但预留为0时，不发送图片；文本仍可用。")
-                Text("这些事实只属于这个账号及授权版本。刷新、换号或模型移除后重新核对；模型选择不代表推理或工具权限。")
-                if (!current) Text("账号或目录已变化，请关闭后重新读取。", color = Danger)
+                OutlinedTextField(value = output, onValueChange = { if (it.length <= 8) output = it }, label = { Text(LiteralUiText.text(R.string.w8_model_options_009, "本地输出预留 · 128–32768")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text(LiteralUiText.text(R.string.w8_model_options_010, "这是输入准入的本地预留，不会发送 max_output_tokens，也不能限制服务端输出。目录有最大输出时，准入至少预留该容量。"))
+                OutlinedTextField(value = image, onValueChange = { if (it.length <= 8) image = it }, label = { Text(LiteralUiText.text(R.string.w8_model_options_011, "每张图片本地预留 · 0表示未配置")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text(LiteralUiText.text(R.string.w8_model_options_012, "图片预留不是服务商实际计量。已知上下文但预留为0时，不发送图片；文本仍可用。"))
+                Text(LiteralUiText.text(R.string.w8_model_options_013, "这些事实只属于这个账号及授权版本。刷新、换号或模型移除后重新核对；模型选择不代表推理或工具权限。"))
+                if (!current) Text(LiteralUiText.text(R.string.w8_model_options_014, "账号或目录已变化，请关闭后重新读取。"), color = Danger)
                 failure?.let { Text(it, color = Danger) }
             }
         },
@@ -73,8 +75,8 @@ internal fun AccountModelOptions(
             try {
                 onSelect(JSONObject(reference.toString()).put("reasoningEffort", effort).put("outputReserve", outputValue).put("imageTokenReserve", imageValue))
                 onDismiss()
-            } catch (_: Exception) { failure = "选择未提交，请重新读取当前目录后再试。" }
-        }) { Text("选择此模型和选项") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("返回目录") } }
+            } catch (_: Exception) { failure = LiteralUiText.text(R.string.w8_model_options_015, "选择未提交，请重新读取当前目录后再试。") }
+        }) { Text(LiteralUiText.text(R.string.w8_model_options_016, "选择此模型和选项")) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(LiteralUiText.text(R.string.w8_model_options_017, "返回目录")) } }
     )
 }
