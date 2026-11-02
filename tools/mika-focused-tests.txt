@@ -29,6 +29,7 @@ dev.pocketengine.features.automation.OriginalConditionTaskHostNativeTest
 dev.pocketengine.features.conversation.AnswerSourceProjectionNativeTest
 dev.pocketengine.features.conversation.ConversationMetadataTest
 dev.pocketengine.features.conversation.InterruptedAttemptsTest
+dev.pocketengine.features.devices.DeviceOwnerInputsNativeTest
 dev.pocketengine.features.devices.DeviceOwnerQuestionIdentityTest
 dev.pocketengine.features.devices.DeviceProtocolTest
 dev.pocketengine.features.local.project.ProjectCommandSpecTest

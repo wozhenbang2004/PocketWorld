@@ -118,7 +118,13 @@ public final class DeviceTaskCoordinator {
     }
     /** Paired ordinary input is independent of task.respond approval decisions. */
     public JSONObject ownerInput(PairingCoordinator.Permission permission)throws Exception {
-        JSONObject args=permission.envelope().arguments(),task=requireTask(permission,args.getString("taskId"));var inputs=host.ordinaryInputs();if(inputs==null)throw new SecurityException("原设备普通输入宿主尚未安装");
+        JSONObject args=permission.envelope().arguments(),task=requireTask(permission,args.getString("taskId"));
+        // A committed original receipt is read under the same current Permission.
+        // controlOperation still verifies its immutable digest; no session, lease,
+        // mailbox or continuation is touched for an already accepted operation.
+        if(devices.snapshot(permission.callerDeviceId(),permission.envelope().operationId()).optBoolean("accepted"))
+            return devices.controlOperation(permission,()->{throw new SecurityException("原输入索引已变化，只核对原回执，不重新派发");}).put("newGrant",false).put("executionAuthorized",false);
+        var inputs=host.ordinaryInputs();if(inputs==null)throw new SecurityException("原设备普通输入宿主尚未安装");
         boolean answer="task.answerQuestion".equals(permission.envelope().method());var original=inputs.scope(task.getString("id"),answer);
         devices.requireControlLease(permission.callerDeviceId(),task.getString("id"),args.getString("runId"),args.getInt("executorEpoch"),args.getString("controlLeaseId"));
         JSONObject result=devices.controlOperation(permission,()->tasks.appendDeviceOwnerInput(permission,original));
