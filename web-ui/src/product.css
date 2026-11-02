@@ -235,10 +235,16 @@
   background: var(--pw-inset);
   box-shadow: none;
 }
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) [data-label],
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) > [data-label],
 .pw-field-label {
   color: var(--pw-ink);
   font: 500 14px/22px var(--pw-font);
+}
+/* Josh's source label also has data-label; its ink belongs to the physical
+ * button, never the form-label theme. Keep all press layers and motion intact. */
+.pw-press > .pw-press-front,
+.pw-press .pw-press-label {
+  color: inherit;
 }
 .pw-field-hint {
   color: var(--pw-muted);

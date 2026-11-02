@@ -489,20 +489,43 @@ async function runViewport(origin, viewport) {
     const editor = page.getByRole('textbox', { name: '工作输入', exact: true });
     const emptyDraft = '帮我整理项目资料，先给分类建议。';
     await editor.fill(emptyDraft);
+    stage = `${viewport.width}:unconfigured-draft`;
+    const unavailableSend = page.getByRole('button', { name: '请先连接模型', exact: true });
+    await unavailableSend.waitFor({ state: 'visible' });
+    assert(await unavailableSend.isDisabled(), 'An unconfigured model must not enable send');
+    await editor.press('Enter');
+    assert.equal(await editor.inputValue(), emptyDraft, 'Unconfigured Enter lost the unsent draft');
+    const emptyEvidence = await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.summary());
+    assert.equal(emptyEvidence.scenario, 'empty');
+    assert(!emptyEvidence.requests.some(request => request.action === 'composer.send'), 'Unconfigured Enter dispatched a send');
+    record.checks.push({ stage: 'unconfigured-draft', sendLabel: '请先连接模型', sendDisabled: true,
+      draftPreservedAfterEnter: true, sendDispatched: false });
+
+    // This is an explicit change of isolated test input, not a connection/save
+    // journey or an assertion that the original draft crossed a host session.
+    await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.setScenario('populated'));
     const send = page.getByRole('button', { name: '发送', exact: true });
+    await send.waitFor({ state: 'visible' });
+    const populatedEvidence = await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.summary());
+    assert.equal(populatedEvidence.scenario, 'populated');
+    assert(populatedEvidence.revision > emptyEvidence.revision, 'Fixture transition did not publish a new state');
+    const fixtureTransition = { from: emptyEvidence.scenario, to: populatedEvidence.scenario,
+      fromRevision: emptyEvidence.revision, toRevision: populatedEvidence.revision,
+      kind: 'explicit-isolated-fixture-injection', connectedOrSavedByUi: false };
+    record.checks.push({ stage: 'fixture-scenario-change', ...fixtureTransition });
+    await editor.fill(emptyDraft);
     const geometry = await reachable(send, { minSize: 44 });
     await page.mouse.move(geometry.x + geometry.width / 2, geometry.y + geometry.height / 2);
     await page.mouse.down();
     await page.waitForTimeout(110);
     assert.equal(await send.getAttribute('data-state'), 'pressed', 'Actual PressButton press state did not mount');
     await capture(page, viewport, '02-input-pressed', ['.afa-composer', '.pw-press[data-state="pressed"]'], { motion: true,
-      metadata: { gesture: 'pointer down, held, then dragged out/cancelled; no send' } });
+      metadata: { gesture: 'pointer down, held, then dragged out/cancelled; no send', fixtureTransition } });
     await page.mouse.move(Math.max(2, geometry.x - 20), Math.max(2, geometry.y - 40));
     await page.mouse.up();
     await settle(page, 300);
     assert.equal(await editor.inputValue(), emptyDraft, 'Cancelled press lost the input');
 
-    await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.setScenario('populated'));
     const conversation = page.locator('.pw-conversation-scroll');
     const linkedTask = page.locator('.pw-linked-task').filter({ hasText: '整理项目资料' });
     await linkedTask.scrollIntoViewIfNeeded();
