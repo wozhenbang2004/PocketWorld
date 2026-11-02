@@ -31,6 +31,7 @@ dev.pocketengine.features.local.runtime.NativeOfflineNetworkTest
 dev.pocketengine.features.local.runtime.NativeScriptPeerTest
 dev.pocketengine.features.local.runtime.WorkspaceFileAccessTest
 dev.pocketengine.features.memory.AutomaticMemoryPolicyTest
+dev.pocketengine.features.memory.AutomaticUserLearningHostNativeTest
 dev.pocketengine.features.operations.AppLanguageNativeTest
 dev.pocketengine.features.operations.IsolatedWebProbeCleanupTest
 dev.pocketengine.features.operations.LiteralUiTextNativeTest
