@@ -45,4 +45,22 @@ public final class ConversationPresentationTest {
             JSONObject reopened=new ConversationRepository(db,monitor).header("legacy-owner-conversation");assertEquals("机主保留标题",reopened.getString("title"));assertEquals(40,reopened.getLong("pinnedAt"));assertEquals(4,reopened.getLong("metadataRevision"));
         }
     }
+    @Test public void equalPinAndTimeCursorPagesNeverRepeatPinnedOrUnpinnedConversations()throws Exception{
+        try(SQLiteDatabase db=SQLiteDatabase.create(null)){
+            db.execSQL("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)");db.execSQL("INSERT INTO meta VALUES('assistant_history_new_install','1')");
+            ConversationRepository.createSchema(db);ConversationRepository repository=new ConversationRepository(db,new Object());repository.initializeEmpty();
+            repository.transaction(()->{
+                for(String id:new String[]{"pin-a","pin-b"})repository.saveConversation(new JSONObject().put("conversationId",id).put("title",id).put("updatedAt",10));
+                repository.saveConversation(new JSONObject().put("conversationId","unpinned-newer").put("title","newer").put("updatedAt",40));
+                repository.saveConversation(new JSONObject().put("conversationId","unpinned-older").put("title","older").put("updatedAt",5));return null;
+            });
+            repository.updatePresentation("pin-a",1,null,true,50);repository.updatePresentation("pin-b",1,null,true,50);
+            java.util.List<String> expected=java.util.List.of("pin-b","pin-a","unpinned-newer","unpinned-older"),actual=new java.util.ArrayList<>();java.util.Set<String> seen=new java.util.HashSet<>();String cursor="";
+            for(int page=0;page<expected.size();page++){
+                JSONObject result=repository.list(cursor,1);assertEquals(1,result.getJSONArray("conversations").length());String id=result.getJSONArray("conversations").getJSONObject(0).getString("conversationId");assertTrue("cursor repeated original conversation "+id,seen.add(id));actual.add(id);
+                assertEquals(page<expected.size()-1,result.getBoolean("hasMore"));cursor=result.getString("nextCursor");if(result.getBoolean("hasMore"))assertFalse(cursor.isEmpty());else assertEquals("",cursor);
+            }
+            assertEquals(expected,actual);assertEquals(4,seen.size());
+        }
+    }
 }

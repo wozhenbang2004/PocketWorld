@@ -200,7 +200,9 @@ public final class ConversationRepository {
     }
     public JSONObject list(String cursor,int limit)throws Exception{
         if(limit<1||limit>20)throw new IllegalArgumentException("会话分页最多20条");JSONObject pos=decode(cursor);List<String> args=new ArrayList<>();args.add(activeGeneration());String where="c.generation=? AND c.deleted=0";
-        if(pos.has("at")){where+=" AND (COALESCE(p.pinned_at,0)<? OR (COALESCE(p.pinned_at,0)=? AND (c.updated_at<? OR (c.updated_at=? AND c.conversation_id<?))))";args.add(Long.toString(pos.optLong("pin")));args.add(Long.toString(pos.optLong("pin")));args.add(pos.get("at").toString());args.add(pos.get("at").toString());args.add(pos.getString("id"));}
+        // rawQuery binds selectionArgs as text. COALESCE has no column affinity,
+        // so the pin cursor must be numeric before comparing the keyset tuple.
+        if(pos.has("at")){where+=" AND (COALESCE(p.pinned_at,0)<CAST(? AS INTEGER) OR (COALESCE(p.pinned_at,0)=CAST(? AS INTEGER) AND (c.updated_at<? OR (c.updated_at=? AND c.conversation_id<?))))";args.add(Long.toString(pos.optLong("pin")));args.add(Long.toString(pos.optLong("pin")));args.add(pos.get("at").toString());args.add(pos.get("at").toString());args.add(pos.getString("id"));}
         JSONArray rows=new JSONArray(),gaps=new JSONArray();String next="",lastId="";long lastAt=0,lastPin=0,bytes=0;int scanned=0;boolean more=false;
         try(Cursor row=db.rawQuery("SELECT c.conversation_id,length(CAST(c.header_json AS BLOB)),c.updated_at,COALESCE(p.pinned_at,0) FROM assistant_conversations c LEFT JOIN assistant_conversation_preferences p ON p.generation=c.generation AND p.conversation_id=c.conversation_id WHERE "+where+" ORDER BY COALESCE(p.pinned_at,0) DESC,c.updated_at DESC,c.conversation_id DESC LIMIT ?",append(args,Integer.toString(limit+1)))){
             while(row.moveToNext()){
