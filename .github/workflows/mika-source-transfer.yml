@@ -29,9 +29,9 @@ jobs:
           python3 - <<'PY'
           import base64, hashlib, json, pathlib
           m=json.loads(pathlib.Path('transfer/manifest.json').read_text())
-          assert m['source_commit']=='1ac28294ad9fb0c6fa47614f0457d0d523242936'
-          assert m['source_tree']=='4af703a2d778c8303fc2b2739184b191c87e80ad'
-          assert m['base']=='67a6f5cdea7d492771ad9e55ce7e6b139c8bea2a'
+          assert m['source_commit']=='3a07e00d405780b2d19455bd1f36e7bd4bedab83'
+          assert m['source_tree']=='c9b9170de0aad2195e18830d6df4a4a42c97a3c5'
+          assert m['base']=='0bccdaeadf519321bf38f23c2bb877a8605c0c32'
           assert m['target_branch']=='work/mika-53-capabilities-20261102'
           assert len(m['parts'])==2
           content=[]
@@ -41,19 +41,19 @@ jobs:
               assert len(b)==p['size'] and hashlib.sha256(b).hexdigest()==p['sha256']
               content.append(b)
           bundle=base64.b64decode(b''.join(content), validate=True)
-          assert len(bundle)==41294
-          assert hashlib.sha256(bundle).hexdigest()=='017cf773aa4ce5a03e4e093c88559899f1a2eccaf43c7eee6618798f8a58cb02'
+          assert len(bundle)==28566
+          assert hashlib.sha256(bundle).hexdigest()=='9622b59b218523aef09575bcc7a47c29e973071756b3d5f6b907325d56138503'
           pathlib.Path('/tmp/pocketworld-mika.bundle').write_bytes(bundle)
           PY
-          source_commit=1ac28294ad9fb0c6fa47614f0457d0d523242936
-          source_tree=4af703a2d778c8303fc2b2739184b191c87e80ad
-          expected_base=67a6f5cdea7d492771ad9e55ce7e6b139c8bea2a
+          source_commit=3a07e00d405780b2d19455bd1f36e7bd4bedab83
+          source_tree=c9b9170de0aad2195e18830d6df4a4a42c97a3c5
+          expected_base=0bccdaeadf519321bf38f23c2bb877a8605c0c32
           target_branch=work/mika-53-capabilities-20261102
           git bundle verify /tmp/pocketworld-mika.bundle
           git fetch /tmp/pocketworld-mika.bundle HEAD
           test "$(git rev-parse FETCH_HEAD)" = "$source_commit"
           test "$(git rev-parse "$source_commit^{tree}")" = "$source_tree"
-          git merge-base --is-ancestor 67a6f5cdea7d492771ad9e55ce7e6b139c8bea2a "$source_commit"
+          git merge-base --is-ancestor 0bccdaeadf519321bf38f23c2bb877a8605c0c32 "$source_commit"
           git diff --exit-code 63a8af6acdd6d9f70909cae43454416ca0a896dd "$source_commit" -- \
             ':(glob)**/DeviceCapabilityPort.java' ':(glob)**/DeviceWorkspaceArtifacts.java' \
             ':(glob)**/TaskStoreDeviceTasks.java'
