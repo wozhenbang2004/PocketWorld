@@ -27,7 +27,7 @@ public final class StepModelRoutingGroupAdmissionTest {
         SettingsStore settings=ModelDiagnosticsFixtureSettings.create(prefs,new SettingsStore.ApiSecrets(){public String get(String slot){return "";}public void put(String slot,String value){throw new AssertionError("No credential writes in this fixture");}});
         settings.save(new JSONObject().put("baseUrl","https://fixture.invalid/v1").put("model","main-model").put("sendScreenshots",false));settings.apiConnections();
         ModelConnectionService service=new ModelConnectionService(settings,Files.createTempDirectory("step-group-catalog").resolve("catalog.json"),Clock.systemUTC());service.install();
-        try{service.configure(settings.apiConfigForCatalog().capabilityBinding,ModelBinding.Format.OPENAI,URI.create("https://fixture.invalid/v1/models"));ModelBinding binding=settings.apiConfigForCatalog().capabilityBinding;
+        try{service.configure(null,ModelBinding.Format.OPENAI,URI.create("https://fixture.invalid/v1/models"));ModelBinding binding=settings.apiConfigForCatalog().capabilityBinding;
             service.editField(binding,"light-model",0,ModelFacts.Field.TOOL_CALLS,ModelFacts.OwnerValue.known(true),false);
             ModelTargetRef main=ModelTargetRef.exact(binding.connectionId(),"main-model"),light=ModelTargetRef.exact(binding.connectionId(),"light-model");
             JSONObject definition=new ModelGroup("definition",1,"main with a light read candidate",Set.of(binding.connectionId()),List.of(
