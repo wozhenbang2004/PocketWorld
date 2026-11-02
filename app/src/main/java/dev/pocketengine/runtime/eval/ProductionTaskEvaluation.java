@@ -16,7 +16,9 @@ public final class ProductionTaskEvaluation {
         final RunOutcome outcome;
         try{outcome=runner.run(taskId,task.getString("goal"),config,original,event->tasks.event(taskId,identity.runId(),identity.epoch(),event),tasks.journal(taskId,identity.runId(),identity.epoch(),original));tasks.endAttempt(taskId,identity.runId(),outcome.status,outcome.summary,outcome.evidence);}
         catch(Exception harness){original.cancel();return TaskEvaluation.report(c,"harness_error",false,"harness_execution_or_persistence_unconfirmed",null);}
-        CheckedEffects effects;try{effects=probe.check(tasks.get(taskId,false));}catch(Exception failure){return TaskEvaluation.report(c,"harness_error",false,"independent_probe_unavailable",outcome);}
-        return score(c,outcome,effects).put("taskId",taskId).put("runId",identity.runId()).put("epoch",identity.epoch()).put("usage",tasks.inferenceUsage(taskId));
+        CheckedEffects effects;RunOutcome settled;
+        try{JSONObject saved=tasks.get(taskId,false);if(saved==null||!identity.runId().equals(saved.optString("runId"))||identity.epoch()!=saved.optInt("coordinatorEpoch"))throw new SecurityException("evaluation_original_run_changed");settled=new RunOutcome(saved.getString("status"),outcome.summary,outcome.evidence);effects=probe.check(saved);}
+        catch(Exception failure){return TaskEvaluation.report(c,"harness_error",false,"independent_probe_or_original_run_unavailable",outcome);}
+        return score(c,settled,effects).put("runnerStatus",outcome.status).put("taskId",taskId).put("runId",identity.runId()).put("epoch",identity.epoch()).put("usage",tasks.inferenceUsage(taskId));
     }
 }

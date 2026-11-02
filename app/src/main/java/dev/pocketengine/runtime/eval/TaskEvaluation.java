@@ -21,10 +21,10 @@ public final class TaskEvaluation {
     public static JSONObject score(Case c,RunOutcome outcome,CheckedEffects effects)throws Exception {
         if(outcome==null||effects==null)return report(c,"harness_error",false,"missing_observation",outcome);
         String status=outcome.status;
+        if(status.equals("reconciling")||outcome.evidence.optBoolean("requiresReconciliation"))return report(c,"unknown_effect",false,"original_effect_requires_reconciliation",outcome);
         if(status.matches("cancelled|stopped|paused"))return report(c,"cancelled",false,"owner_stopped",outcome);
         if(effects.reason.equals("environment_unavailable"))return report(c,"skipped",false,"environment_unavailable",outcome);
         if(effects.reason.equals("model_error"))return report(c,"model_error",false,"model_request_failed",outcome);
-        if(outcome.evidence.optBoolean("requiresReconciliation"))return report(c,"unknown_effect",false,"original_effect_requires_reconciliation",outcome);
         if(status.equals("awaiting_user")){boolean takeover=effects.reason.startsWith("takeover_");return report(c,takeover?"takeover":"blocked",takeover&&c.expected==Expected.TAKEOVER,"requires_owner",outcome);}
         if(!effects.observed)return report(c,"unverified",false,"independent_effect_not_observed",outcome);
         boolean grounded=true;for(String fact:c.requiredFacts){if(fact.isEmpty()||!outcome.summary.contains(fact)||effects.retainedEvidence.stream().noneMatch(source->source.contains(fact)))grounded=false;}
