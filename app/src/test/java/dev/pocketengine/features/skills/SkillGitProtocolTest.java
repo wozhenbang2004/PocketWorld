@@ -1,9 +1,8 @@
 package dev.pocketengine.features.skills;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer.Exchange;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.RunControl;
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -45,7 +44,7 @@ public final class SkillGitProtocolTest {
             responses.put("/repos/demo/skills/git/trees/"+SUBTREE,new JSONObject().put("sha",SUBTREE).put("truncated",false).put("tree",entries).toString());
             responses.put("/repos/demo/skills/git/trees/"+ROOT,new JSONObject().put("sha",ROOT).put("truncated",false).put("tree",new JSONArray().put(new JSONObject().put("path","selected").put("type","tree").put("mode","040000").put("sha",SUBTREE))).toString());
         }
-        void handle(HttpExchange exchange)throws IOException {
+        void handle(Exchange exchange)throws Exception {
             requests.incrementAndGet();String path=exchange.getRequestURI().getPath();paths.computeIfAbsent(path,k->new AtomicInteger()).incrementAndGet();
             try {
                 if(path.contains("/git/trees/")&&beforeTree!=null){Runnable call=beforeTree;beforeTree=null;call.run();}

@@ -85,6 +85,71 @@ jobs:
           sys.exit(0 if all(row['status'] == 'source_verified' for row in rows) else 1)
           PY
 
+      - name: Configure the selected Java test source closure
+        run: |
+          set -euo pipefail
+          cat > host-test-artifacts/selected-java-tests.init.gradle <<'GRADLE'
+          import groovy.json.JsonOutput
+          import org.gradle.api.GradleException
+          import org.gradle.api.tasks.compile.JavaCompile
+
+          // This invocation validates 18 selected Java host tests and their real Java fixtures.
+          // Main Kotlin/Java tasks and the Android plugin's dependency classpaths stay intact.
+          gradle.projectsEvaluated {
+              def app = gradle.rootProject.findProject(':app')
+              if (app == null) throw new GradleException('Required :app project is absent')
+              def evidence = new File(gradle.rootProject.projectDir, 'host-test-artifacts')
+              def whitelist = new File(evidence, 'selected-test-classes.txt')
+              if (!whitelist.isFile()) throw new GradleException('Selected test whitelist is absent')
+              def selected = whitelist.readLines('UTF-8')
+              if (selected.size() != 18 || selected.toSet().size() != 18 ||
+                      selected.any { !(it ==~ /dev\.pocketengine(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+/) }) {
+                  throw new GradleException('Exactly 18 distinct selected test classes are required')
+              }
+              def javaRoot = app.file('src/test/java').canonicalFile
+              def fixtureRoots = [javaRoot, app.file('src/pendingAdb/test').canonicalFile]
+              def selectedSources = selected.collect { name ->
+                  def source = new File(javaRoot, name.replace('.', '/') + '.java').canonicalFile
+                  if (!source.toPath().startsWith(javaRoot.toPath()) || !source.isFile()) {
+                      throw new GradleException('Selected Java test source is absent: ' + name)
+                  }
+                  source
+              }
+              def expectedSources = selectedSources.toSet()
+              app.tasks.named('compileDebugUnitTestJavaWithJavac', JavaCompile).configure { task ->
+                  task.setSource(app.files(selectedSources))
+                  task.options.sourcepath = app.files(fixtureRoots)
+                  // Real fixture classes are discovered through javac sourcepath in this cold CI build.
+                  task.options.incremental = false
+                  task.doFirst {
+                      def actualSources = task.source.files.collect { it.canonicalFile }.toSet()
+                      if (actualSources != expectedSources) {
+                          throw new GradleException('Selected Java test compiler source set changed')
+                      }
+                      if (task.options.sourcepath.files.collect { it.canonicalFile }.toSet() != fixtureRoots.toSet()) {
+                          throw new GradleException('Selected Java test fixture sourcepath changed')
+                      }
+                      def relative = { file -> gradle.rootProject.relativePath(file) }
+                      def receipt = [
+                          task: task.path,
+                          primary_sources: selectedSources.collect(relative),
+                          fixture_sourcepath: fixtureRoots.collect(relative),
+                          main_compilation: 'Full production Kotlin/Java compilation remains unchanged',
+                          test_compilation_scope: '18 Java test sources plus real javac implicit Java fixtures',
+                          unselected_kotlin_test_compilation: false,
+                          repository_wide_test_compilation_verified: false,
+                      ]
+                      new File(evidence, 'selected-java-compile-scope.json').text =
+                              JsonOutput.prettyPrint(JsonOutput.toJson(receipt)) + '\n'
+                      logger.lifecycle('Selected Java test source count: ' + actualSources.size())
+                  }
+              }
+              // This is a Java-only selected-test invocation. No Kotlin test is selected.
+              // In particular, compileDebugKotlin is not disabled or reconfigured.
+              app.tasks.named('compileDebugUnitTestKotlin').configure { task -> task.enabled = false }
+          }
+          GRADLE
+
       - name: Prepare Android 35 for host unit tests
         run: |
           set -euo pipefail
@@ -113,11 +178,15 @@ jobs:
           test_args=()
           for test_class in "${selected_tests[@]}"; do test_args+=(--tests "$test_class"); done
           ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
+            --init-script host-test-artifacts/selected-java-tests.init.gradle \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.vfs.watch=false :app:testDebugUnitTest \
             "${test_args[@]}" \
             -x :app:buildAndroidRuntime -x :app:buildDisplayHelper \
             --dry-run 2>&1 | tee host-test-artifacts/task-graph.log
+          for main_task in compileDebugKotlin compileDebugJavaWithJavac; do
+            grep -q -E "^:app:${main_task}[[:space:]]" host-test-artifacts/task-graph.log
+          done
           # AGP's two class JAR tasks are required host-test compilation inputs,
           # distinct from an APK/AAB bundle task. Permit only these exact JAR tasks.
           if grep -E '^:app:(externalNativeBuild|configureCMake|buildCMake|generateJsonModel|assemble|bundle|publish|install)' host-test-artifacts/task-graph.log \
@@ -134,6 +203,7 @@ jobs:
           test_args=()
           for test_class in "${selected_tests[@]}"; do test_args+=(--tests "$test_class"); done
           ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
+            --init-script host-test-artifacts/selected-java-tests.init.gradle \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.vfs.watch=false :app:testDebugUnitTest \
             "${test_args[@]}" \
@@ -175,7 +245,10 @@ jobs:
               'commit': git('rev-parse', 'HEAD'), 'tree': git('rev-parse', 'HEAD^{tree}'),
               'event_commit': os.environ.get('GITHUB_SHA'), 'branch': os.environ.get('GITHUB_REF_NAME'),
               'run_id': os.environ.get('GITHUB_RUN_ID'), 'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
-              'scope': 'selected Android Gradle host JUnit classes; no device or native-runtime acceptance',
+              'scope': '18 selected Java host JUnit classes plus real implicit Java fixtures; full main Kotlin/Java tasks unchanged; no repository-wide test-compilation or device/runtime acceptance',
+              'test_compilation': 'selected Java primary sources with src/test/java and src/pendingAdb/test sourcepath',
+              'unselected_kotlin_test_compilation': False,
+              'repository_wide_test_compilation_verified': False,
               'whitelist_valid': whitelist_valid,
               'whitelist_sha256': hashlib.sha256(whitelist.read_bytes()).hexdigest() if whitelist.is_file() else None,
               'selected_tests': rows, 'apk_assembled': False, 'device_runtime_tested': False,
@@ -186,7 +259,7 @@ jobs:
           summary = '## AionUI targeted host unit tests\n\nCommit: `' + str(receipt['commit']) + '`\n\n'
           for row in rows:
               summary += '- `' + row['class'] + '`: ' + row['status'] + '; tests=' + str(row.get('tests', 'not available')) + '\n'
-          summary += '\nHost unit tests only. No APK, signing, installation, native-runtime or physical-device validation.\n'
+          summary += '\n18 selected Java host test classes and their real Java fixtures only. Full main Kotlin/Java compilation remains scheduled; unrelated Kotlin tests are not compiled in this invocation. No repository-wide test-compilation, APK, signing, installation, native-runtime or physical-device validation claim.\n'
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
               output.write(summary)
           print(json.dumps(receipt, indent=2))

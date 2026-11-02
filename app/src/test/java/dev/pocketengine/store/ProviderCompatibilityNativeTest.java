@@ -2,7 +2,7 @@ package dev.pocketengine.store;
 
 import android.app.Application;
 import android.content.SharedPreferences;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.runtime.ModelGateway;
@@ -36,17 +36,17 @@ import static org.junit.Assert.*;
 @Config(sdk=35,manifest=Config.NONE,application=Application.class)
 public final class ProviderCompatibilityNativeTest {
     private SettingsStore settings;private SharedPreferences prefs;private ModelConnectionService service;private Path cache;
-    private HttpServer http;private ExecutorService workers;private final AtomicInteger posts=new AtomicInteger(),gets=new AtomicInteger();
+    private HttpServer http;private final AtomicInteger posts=new AtomicInteger(),gets=new AtomicInteger();
     private volatile CountDownLatch entered,release;private volatile JSONObject body;
     @Before public void open()throws Exception {
         prefs=RuntimeEnvironment.getApplication().getSharedPreferences("private_settings",0);prefs.edit().clear().commit();settings=new SettingsStore(prefs,null);
-        workers=Executors.newCachedThreadPool(r->{Thread t=new Thread(r,"compat-native-fixture");t.setDaemon(true);return t;});http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);http.setExecutor(workers);
+        http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         http.createContext("/",exchange->{try{String text;if(exchange.getRequestMethod().equals("GET")){gets.incrementAndGet();text="{\"data\":[{\"id\":\"fixture-model\"}]}";}else{posts.incrementAndGet();body=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));if(entered!=null)entered.countDown();if(release!=null)release.await(5,TimeUnit.SECONDS);text="{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"OK\"}}]}";}
-            byte[] bytes=text.getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+            byte[] bytes=text.getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
         }catch(Exception ignored){/* cancelled original HTTP requests may close */}finally{exchange.close();}});http.start();
         cache=Files.createTempDirectory("provider-native-catalog").resolve("catalog.json");service=new ModelConnectionService(settings,cache,Clock.systemUTC());service.install();service.connections();
     }
-    @After public void close(){if(release!=null)release.countDown();if(http!=null)http.stop(0);if(workers!=null)workers.shutdownNow();}
+    @After public void close(){if(release!=null)release.countDown();if(http!=null)http.stop(0);}
     private String base(){return "http://127.0.0.1:"+http.getAddress().getPort()+"/v1";}
     private JSONObject options(String field)throws Exception{return new JSONObject().put("tokenField",field).put("streamUsage","OMIT");}
     private JSONObject add()throws Exception {

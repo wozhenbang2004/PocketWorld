@@ -1,6 +1,6 @@
 package dev.pocketengine.runtime;
 
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.runtime.models.ModelRequestPolicy;
@@ -104,7 +104,7 @@ public final class ProviderCompatibilityTest {
             else if(protocol.equals("anthropic")){JSONObject value=new JSONObject().put("type","message").put("role","assistant").put("stop_reason","end_turn").put("content",new JSONArray().put(new JSONObject().put("type","text").put("text","OK")));if(usage)value.put("usage",new JSONObject().put("input_tokens",3).put("output_tokens",1).put("cache_read_input_tokens",5).put("cache_creation_input_tokens",2));response=value.toString();}
             else if(request.optBoolean("stream")){type="text/event-stream";response="data: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";}
             else response="{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"OK\"}}]}";
-            byte[] bytes=response.getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().set("Content-Type",type);exchange.sendResponseHeaders(status,bytes.length);exchange.getResponseBody().write(bytes);
+            byte[] bytes=response.getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type",type);exchange.sendResponseHeaders(status,bytes.length);exchange.getResponseBody().write(bytes);
         }catch(Exception ignored){/* deliberate cancellation may close transport */}finally{exchange.close();}});http.start();}
         String base(){return "http://127.0.0.1:"+http.getAddress().getPort()+"/v1";}
         public void close(){http.stop(0);}
