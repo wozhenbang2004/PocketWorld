@@ -13,7 +13,7 @@ on:
         description: 'Used only for target=host-tests; deliberately no full-suite option'
         type: choice
         default: device-receiver
-        options: [device-receiver, managed-runtime, gateway-continuation, memory-experience]
+        options: [device-receiver, managed-runtime, gateway-continuation, memory-experience, browser-long-page]
   push:
     branches: [main]
     # Keep the production-input contract in tools/tests/test_apk_workflow_paths.py in sync.
@@ -113,6 +113,34 @@ jobs:
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.vfs.watch=false :app:assembleDebug 2>&1 | tee build-artifacts/build.log
 
+      - name: Apply stable project signing key
+        env:
+          POCKETWORLD_SIGNING_KEYSTORE_B64: ${{ secrets.POCKETWORLD_SIGNING_KEYSTORE_B64 }}
+          POCKETWORLD_SIGNING_PASSWORD: ${{ secrets.POCKETWORLD_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          test -n "$POCKETWORLD_SIGNING_KEYSTORE_B64" || { echo 'Project signing keystore is not configured'; exit 1; }
+          test -n "$POCKETWORLD_SIGNING_PASSWORD" || { echo 'Project signing password is not configured'; exit 1; }
+          SIGNING_DIR=$(mktemp -d "$RUNNER_TEMP/pocketworld-signing.XXXXXX")
+          export SIGNING_DIR
+          trap 'rm -rf -- "$SIGNING_DIR"' EXIT
+          python3 - <<'PY_SIGNING'
+          import base64, os, pathlib
+          value = base64.b64decode(os.environ.pop('POCKETWORLD_SIGNING_KEYSTORE_B64'), validate=True)
+          target = pathlib.Path(os.environ['SIGNING_DIR']) / 'project.p12'
+          target.write_bytes(value)
+          target.chmod(0o600)
+          PY_SIGNING
+          unset POCKETWORLD_SIGNING_KEYSTORE_B64
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --ks "$SIGNING_DIR/project.p12" --ks-type PKCS12 --ks-key-alias pocketworld \
+            --ks-pass env:POCKETWORLD_SIGNING_PASSWORD --key-pass env:POCKETWORLD_SIGNING_PASSWORD \
+            --v4-signing-enabled false "$APK"
+          unset POCKETWORLD_SIGNING_PASSWORD
+
       - name: Verify signed APK and packaged native payloads
         run: |
           set -euo pipefail
@@ -140,15 +168,19 @@ jobs:
                       assert data[:4] == b'\x7fELF' and data[4] == 2 and int.from_bytes(data[18:20], 'little') == 183, 'Not AArch64 ELF: ' + path
               with zipfile.ZipFile(io.BytesIO(z.read('assets/pocketengine-display-helper.jar'))) as helper:
                   assert helper.testzip() is None and 'classes.dex' in helper.namelist(), 'Display helper DEX missing'
+          certificate_sha256 = 'b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58'
+          signature = pathlib.Path('build-artifacts/signature.txt').read_text()
+          signer_digests = [line.split(':', 1)[1].strip().lower().replace(':', '') for line in signature.splitlines() if 'certificate SHA-256 digest:' in line]
+          assert signer_digests == [certificate_sha256], 'APK signer differs from the pinned project certificate'
           badging = pathlib.Path('build-artifacts/package.txt').read_text()
           assert "package: name='dev.pocketengine'" in badging
           assert "sdkVersion:'30'" in badging
           digest = hashlib.sha256(apk.read_bytes()).hexdigest()
-          receipt = {'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(), 'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'apk': 'app-debug.apk', 'bytes': apk.stat().st_size, 'sha256': digest, 'application_id': 'dev.pocketengine', 'abi': 'arm64-v8a', 'minimum_android_api': 30, 'signature': 'ephemeral Android debug key; not stable across fresh runners', 'validation': ['assembleDebug', 'APK signature', 'ZIP alignment', 'APK CRC', 'native ABI and catalog hashes', 'display helper DEX'], 'device_install_or_runtime_test': 'not performed'}
+          receipt = {'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(), 'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'apk': 'app-debug.apk', 'bytes': apk.stat().st_size, 'sha256': digest, 'application_id': 'dev.pocketengine', 'abi': 'arm64-v8a', 'minimum_android_api': 30, 'signature': 'stable PocketWorld project key', 'certificate_sha256': certificate_sha256, 'validation': ['assembleDebug', 'APK signature', 'ZIP alignment', 'APK CRC', 'native ABI and catalog hashes', 'display helper DEX'], 'device_install_or_runtime_test': 'not performed'}
           pathlib.Path('build-artifacts/apk-identity.json').write_text(json.dumps(receipt, indent=2) + '\n')
           pathlib.Path('build-artifacts/SHA256SUMS').write_text(digest + '  app-debug.apk\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('## Private debug APK\n\nCommit: `' + receipt['commit'] + '`\n\nSHA256: `' + digest + '`\n\nARM64 / Android 11+. Download the APK artifact below.\n\nTemporary debug signing only: a later fresh-runner build may not update an existing installation. No signing key is uploaded or cached. Build verification is not a device/runtime acceptance.\n')
+              summary.write('## Private debug APK\n\nCommit: `' + receipt['commit'] + '`\n\nSHA256: `' + digest + '`\n\nARM64 / Android 11+. Download the APK artifact below.\n\nStable project signing: future builds with the same certificate can update compatible installations. Old temporary-debug-key installations are not migrated automatically. Private signing material is not uploaded as an artifact or cached. Build verification is not a device/runtime acceptance.\n')
           PY
           cp "$APK" build-artifacts/app-debug.apk
           cp app/build/generated/android-runtime/native-build-receipt.json build-artifacts/native-build-receipt.json
@@ -204,6 +236,9 @@ jobs:
           set -euo pipefail
           python3 -B -m unittest discover -s tools/tests -p test_apk_workflow_paths.py -v
           python3 -B -m unittest discover -s tools/tests -p test_host_tests.py -v
+          if [[ "$HOST_TEST_GROUP" == browser-long-page ]]; then
+            python3 -B -m unittest discover -s tools/tests -p test_browser_long_page_entrypoint.py -v
+          fi
 
       - name: Prepare declared Android compile toolchains
         run: |
@@ -232,6 +267,36 @@ jobs:
           set -euo pipefail
           python3 -B tools/host-tests.py --group "$HOST_TEST_GROUP" --online \
             --output build-artifacts/host-tests 2>&1 | tee build-artifacts/host-tests/host-tests.log
+
+      - name: Prepare official isolated Chromium fixture runtime
+        if: ${{ inputs.host_group == 'browser-long-page' }}
+        run: |
+          set -euo pipefail
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/pocketworld-playwright-browsers"
+          export PLAYWRIGHT_MODULE="$RUNNER_TEMP/pocketworld-playwright/node_modules/playwright"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_MODULE=$PLAYWRIGHT_MODULE" >> "$GITHUB_ENV"
+          npm install --prefix "$RUNNER_TEMP/pocketworld-playwright" --ignore-scripts --no-audit --no-fund \
+            --registry https://registry.npmjs.org playwright@1.57.0
+          "$RUNNER_TEMP/pocketworld-playwright/node_modules/.bin/playwright" install --with-deps chromium
+          node --version
+          npm --version
+
+      - name: Check out fixed pre-fix source for the real Chromium red case
+        if: ${{ inputs.host_group == 'browser-long-page' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: afba870564e83034339ad084c2e7247260ea0c9c
+          path: .browser-long-page-baseline
+          persist-credentials: false
+
+      - name: Run original emitted long-DOM Chromium red and green fixtures
+        if: ${{ inputs.host_group == 'browser-long-page' }}
+        run: |
+          set -euo pipefail
+          python3 -B tools/browser-long-page.py --report-root build-artifacts/host-tests \
+            --baseline-source .browser-long-page-baseline/app/src/main/java/dev/pocketengine/browser/BrowserSemanticRead.java \
+            2>&1 | tee build-artifacts/host-tests/browser-long-page.log
 
       - name: Retain selected host results, exact classpath and failure log
         if: always()

@@ -41,6 +41,23 @@ class ApkWorkflowPathsTest(unittest.TestCase):
         self.patterns = push_paths(WORKFLOW.read_text())
         self.fixtures = json.loads((ROOT / "tools/tests/fixtures/apk-build-paths.json").read_text())
 
+    def test_stable_signing_is_ephemeral_and_passwords_use_environment(self):
+        workflow = WORKFLOW.read_text()
+        signing = workflow.split('      - name: Apply stable project signing key\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('secrets.POCKETWORLD_SIGNING_KEYSTORE_B64', signing)
+        self.assertIn('secrets.POCKETWORLD_SIGNING_PASSWORD', signing)
+        self.assertIn('umask 077', signing)
+        self.assertIn('set +x', signing)
+        self.assertIn('mktemp -d "$RUNNER_TEMP/', signing)
+        self.assertIn("trap 'rm -rf -- \"$SIGNING_DIR\"' EXIT", signing)
+        self.assertIn('--ks-pass env:POCKETWORLD_SIGNING_PASSWORD', signing)
+        self.assertIn('--key-pass env:POCKETWORLD_SIGNING_PASSWORD', signing)
+        self.assertNotIn('pass:$', signing)
+        self.assertIn('unset POCKETWORLD_SIGNING_PASSWORD', signing)
+        self.assertIn('signer_digests == [certificate_sha256]', workflow)
+        self.assertIn('b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58', workflow)
+        self.assertNotIn('Temporary debug signing only', workflow)
+
     def test_production_single_file_changes_trigger(self):
         for path in self.fixtures["build"]:
             with self.subTest(path=path):

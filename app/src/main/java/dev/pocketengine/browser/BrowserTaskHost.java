@@ -202,10 +202,10 @@ public final class BrowserTaskHost {
     }
     public void discardResearchViewForOwner(android.content.Intent prepared)throws Exception {browser.nativeDiscardResearchView(prepared);}
     public JSONArray historyForOwner()throws Exception {JSONArray history=new JSONArray(),rows=tasks.list();for(int i=0;i<rows.length()&&history.length()<20;i++){JSONObject task=rows.getJSONObject(i);JSONArray recorded=task.optJSONArray("events");for(int j=0;recorded!=null&&j<recorded.length();j++)if("browser_research_requested".equals(recorded.getJSONObject(j).optString("type"))){history.put(new JSONObject().put("taskId",task.getString("id")).put("goal",task.optString("goal")).put("status",task.optString("status")).put("updatedAt",task.optLong("updatedAt")));break;}}return history;}
-    /** Explicit owner re-open, not a permit restore. Uses only the saved sanitized page address in its original Profile. */
+    /** Explicit owner re-open, not a permit restore. Resolves the private exact destination behind its safe page projection in the original Profile. */
     public JSONObject reopenResearchPageForOwner(String taskId,String pageRecordId,String expectedManifest)throws Exception {
         worker();JSONObject selected=taskForOwner(taskId),manifest=selected.getJSONObject("researchPages");if(!TaskStore.capabilityFingerprint(manifest).equals(expectedManifest))throw new SecurityException("研究页清单已变化，请重新查看");JSONObject page=BrowserResearchPages.required(manifest,pageRecordId);if(page.getString("url").isEmpty())throw new IllegalStateException("此页没有可重开的HTTP地址，请回原任务手动选择");
-        return onMain(()->{JSONObject profile=browser.snapshot();if(!manifest.getString("profileId").equals(profile.optString("profileId")))throw new SecurityException("请先选回原研究的登录资料，未改用其他账号");return browser.nativeOpenOwnerTab(page.getString("url"));});
+        return onMain(()->{JSONObject profile=browser.snapshot();if(!manifest.getString("profileId").equals(profile.optString("profileId")))throw new SecurityException("请先选回原研究的登录资料，未改用其他账号");return browser.nativeReopenResearchPage(taskId,manifest.getString("profileId"),page);});
     }
     /** Same durable task, new original attempt/session refs. Unknown operations must be reconciled by the original TaskStore first. */
     public JSONObject recoverResearchForOwner(String taskId,String expectedManifest,JSONObject expectedProfile,boolean consent)throws Exception {

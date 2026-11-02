@@ -1,0 +1,51 @@
+// Actual production programs + actual local Chromium DOM. Not an Android WebView/provider/device claim.
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'/opt/codex/cua_node/lib/node_modules/playwright');
+const http=require('node:http'),fs=require('node:fs'),assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
+const scripts=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),destination=process.argv[3];
+const tail='长页尾端唯一中文词',samples=[],checks=[];let browser,server;
+const pages={
+ '/nodes':`<main>${Array.from({length:8200},(_,i)=>`<p>段落${i}：${'真实长页正文'.repeat(6)}</p>`).join('')}<section aria-label="尾部章节"><h2>最终章节</h2><p>${tail}</p></section></main>`,
+ '/chars':`<article>${'跨越字符预算的真实正文 '.repeat(23000)}${tail}</article>`,
+ '/table':`<table aria-label="大账本"><tbody>${Array.from({length:701},(_,i)=>`<tr>${Array.from({length:10},(_,c)=>`<td>R${i}C${c}${i===700&&c===9?' 表格最后行唯一值':''}</td>`).join('')}</tr>`).join('')}</tbody></table>`,
+ '/list':`<ul>${Array.from({length:701},(_,i)=>`<li>列表项${i}${i===700?' 列表最后项唯一值':''}</li>`).join('')}</ul>`,
+ '/surrogate':`<table><tr><td>${'x'.repeat(1500)}😀tail</td></tr><tr><td>after clipped cell</td></tr></table><ul><li>${'x'.repeat(2000)}😀tail</li><li>after clipped item</li></ul>`,
+ '/slot':`<div id="host"><span id="assigned" slot="first">${'VISIBLE_SECRET '.repeat(5000)}</span></div><script>document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<section aria-label="slotted region"><slot name="first"></slot></section><slot name="other"></slot>'</script>`,
+ '/short':'<section aria-label="短文"><p>短文已全部读取</p></section>',
+ '/shadow':'<div id="host"></div><script>const s=document.querySelector("#host").attachShadow({mode:"open"});s.innerHTML="<section>"+"<p>影子正文</p>".repeat(6500)+"<p>"+"长页尾端唯一中文词"+"</p></section>"</script>'
+};
+function record(name,detail){checks.push({name,...detail});console.log('PASS '+name)}
+(async()=>{try{
+ server=http.createServer((req,res)=>{res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<!doctype html><meta charset="utf-8"><title>Long semantic read fixture</title>'+ (pages[req.url]||pages['/short']))});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||undefined,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});const page=await browser.newPage();
+ const go=async path=>page.goto(`http://127.0.0.1:${server.address().port}${path}`,{waitUntil:'load'});
+ async function sample(kind,cursor=null,region=null,changes={}){
+  let code=scripts[kind].replaceAll('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',randomUUID());
+  if(cursor)code=code.replaceAll('cccccccc-cccc-4ccc-8ccc-cccccccccccc:c0',cursor);
+  if(region)code=code.replaceAll('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:r1',region);
+  for(const [before,after] of Object.entries(changes))code=code.replaceAll(before,after);
+  const raw=JSON.parse(await page.evaluate(code));
+  if(raw.read){const w=raw.read.facts.captureWork;assert(w.nodesVisited<=6000&&w.textCharsVisited<=180000&&w.queuedPeak<=6000&&w.layoutChecks<=6000);assert.equal(w.nodeLimit,6000);assert.equal(w.textCharLimit,180000);assert.equal(w.budgetMs,150);assert(raw.text.length<=6000);assert.equal(raw.read.data.length,raw.read.facts.returnedItems)}
+  samples.push({kind,url:page.url(),raw});return raw;
+ }
+ async function drain(kind,first=kind,baseline=false){let r=await sample(first),text='',rows=[],count=0,partialMiss=false;while(true){if(baseline&&r.status==='unavailable'&&r.code==='read_region_changed')return {r,text,rows,count,partialMiss};assert.equal(r.status,'observed',JSON.stringify(r));count++;text+=r.text;rows.push(...r.read.data);if(first==='query'&&r.read.data.length===0&&r.read.cursor){partialMiss=true;assert(r.read.facts.reasons.includes('query_search_incomplete'))}if(!r.read.cursor)break;assert(count<1500,'cursor did not make bounded progress');r=await sample('cursor_'+kind,r.read.cursor)}return {r,text,rows,count,partialMiss};}
+ await go('/nodes');const size=await page.evaluate(()=>({nodes:document.querySelectorAll('*').length,chars:document.body.textContent.length}));assert(size.nodes>6000&&size.chars>180000);
+ let out=await drain('text','text',process.argv.includes('--expect-prefix-failure'));
+ if(process.argv.includes('--expect-prefix-failure')){assert(!out.text.includes(tail),'baseline unexpectedly reaches tail; do not fake a red result');const evidence={status:'EXPECTED_PREFIX_TRUNCATION',browser:await browser.version(),platform:'local_desktop_chromium_not_android_webview',tailMissing:true,...size,pages:out.count,samples};fs.writeFileSync(destination,JSON.stringify(evidence,null,2));console.error('EXPECTED_PREFIX_TRUNCATION: original production cursor exhausted without the real DOM tail');process.exitCode=3;return}
+ assert(out.text.includes(tail));assert(out.count>1);record('real DOM beyond node and character budgets reaches tail',{...size,pages:out.count});
+ await go('/chars');out=await drain('text');assert(out.text.includes(tail));record('single text node beyond 180k resumes its unconsumed offset',{pages:out.count});
+ await go('/nodes');out=await drain('outline','query');assert(out.partialMiss);const match=out.rows.find(x=>x.role==='region'&&x.preview.includes(tail));assert(match);const selected=await sample('region_text',null,match.regionRef);assert.equal(selected.status,'observed');assert(selected.text.includes(tail));record('partial query carries remaining search then exposes a real tail region',{pages:out.count,regionRef:match.regionRef});
+ await go('/table');out=await drain('table');assert.equal(out.rows.length,701);assert.equal(new Set(out.rows.map(x=>x.index)).size,701);assert.equal(out.rows.at(-1).index,700);assert(out.text.includes('表格最后行唯一值'));assert.equal(out.rows.at(-1).cells.at(-1).text,'R700C9 表格最后行唯一值');record('row-range continuation reaches >160 rows and >1024 cells without duplicates',{pages:out.count,rows:out.rows.length,cells:out.rows.reduce((n,x)=>n+x.cells.length,0)});
+ await go('/table');await page.evaluate(()=>{const aside=document.createElement('aside');aside.id='unrelated-ticker';aside.textContent='before';document.body.append(aside)});let directory=await sample('outline'),tableRef=directory.read.data.find(x=>x.role==='table').regionRef;let local=await sample('region_table',null,tableRef);assert(local.read.cursor);await page.evaluate(()=>document.querySelector('#unrelated-ticker').textContent='unrelated animation changed');local=await sample('cursor_table',local.read.cursor);assert.equal(local.status,'observed');record('a stable selected table is not invalidated by unrelated text animation',{});
+ await go('/list');out=await drain('list');assert.equal(out.rows.length,701);assert(out.text.includes('列表最后项唯一值'));record('list continuation retains global item order',{pages:out.count});
+ await go('/nodes');let first=await sample('text');assert(first.read.cursor);await page.locator('p').first().evaluate(el=>el.textContent='原文档已经修改');let refused=await sample('cursor_text',first.read.cursor);assert.equal(refused.status,'unavailable');assert.equal(refused.code,'read_region_changed');record('mutation rejects an old scan/output cursor',{});
+ await go('/nodes');first=await sample('text');refused=await sample('cursor_text',first.read.cursor,null,{'fixture_epoch':'replacement_epoch'});assert.equal(refused.status,'unavailable');record('native navigation/run epoch cannot reuse the cursor',{});
+ await go('/nodes');first=await sample('text');refused=await sample('cursor_text',first.read.cursor,null,{'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb':'dddddddd-dddd-4ddd-8ddd-dddddddddddd'});assert.equal(refused.status,'unavailable');record('native document/observation namespace cannot reuse the cursor',{});
+ await go('/surrogate');out=await drain('table');assert.equal(out.rows.length,2);assert.equal(out.rows[0].cells[0].text,'x'.repeat(1500));assert(out.rows[0].cells[0].partial);assert.equal(out.rows[1].cells[0].text,'after clipped cell');out=await drain('list');assert.equal(out.rows.length,2);assert.equal(out.rows[0].text,'x'.repeat(2000));assert(out.rows[0].partial);assert.equal(out.rows[1].text,'after clipped item');record('structured surrogate clipping makes progress to the following row/item',{});
+ for(const change of ['host-hidden','slot-name','redistribute','assigned-text']){await go('/slot');const directory=await sample('outline'),ref=directory.read.data.find(x=>x.role==='region').regionRef;const first=await sample('region_text',null,ref);assert(first.read.cursor);await page.evaluate(change=>{const host=document.querySelector('#host'),assigned=document.querySelector('#assigned');if(change==='host-hidden')host.hidden=true;else if(change==='slot-name')host.shadowRoot.querySelector('slot').name='renamed';else if(change==='redistribute')assigned.slot='other';else assigned.firstChild.nodeValue='changed assigned value'},change);const denied=await sample('cursor_text',first.read.cursor);assert.equal(denied.code,'read_region_changed');assert(!JSON.stringify(denied).includes('VISIBLE_SECRET'));record('composed cursor rejects '+change,{})}
+ await go('/short');const missing=await sample('missing');assert.equal(missing.code,'read_region_not_found');assert.equal(missing.coverage.searchComplete,true);record('complete query miss is distinct from unsearched tail',{});
+ await go('/shadow');out=await drain('text');assert(out.text.includes(tail));record('composed open-shadow DOM remainder is retained',{pages:out.count});
+ await go('/shadow');first=await sample('text');await page.evaluate(()=>document.querySelector('#host').shadowRoot.querySelector('p').textContent='影子文档修改');refused=await sample('cursor_text',first.read.cursor);assert.equal(refused.code,'read_region_changed');record('shadow mutation invalidates continuation version',{});
+ fs.writeFileSync(destination,JSON.stringify({status:'PASS',browser:await browser.version(),platform:'local_desktop_chromium_not_android_webview',checks,samples},null,2));
+ console.log(JSON.stringify({status:'PASS',checks:checks.length,samples:samples.length,androidProviderVerified:false}));
+}finally{if(browser)await browser.close();if(server)await new Promise(resolve=>server.close(resolve))}})().catch(e=>{console.error(e);process.exitCode=1});

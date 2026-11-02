@@ -43,6 +43,11 @@ public final class BrowserProfiles {
     public JSONArray historyForOwner(BrowserProfileRegistry.Session session)throws Exception {main();return registry.historyForOwner(session);}
     public JSONObject recordOwnerVisit(BrowserProfileRegistry.Session session,String url,String title,boolean closed)throws Exception {main();return registry.visitForOwner(session,url,title,System.currentTimeMillis(),closed);}
     public JSONObject historyItemForOwner(BrowserProfileRegistry.Session session,String id)throws Exception {main();return registry.historyItemForOwner(session,id);}
+    public String historyUrlForOwner(BrowserProfileRegistry.Session session,String id)throws Exception {main();return registry.historyUrlForOwner(session,id);}
+    public boolean exactUrlsForOwner(BrowserProfileRegistry.Session session)throws Exception {main();return registry.exactUrlsForOwner(session);}
+    public void exactUrlsForOwner(BrowserProfileRegistry.Session session,boolean enabled)throws Exception {main();registry.exactUrlsForOwner(session,enabled);}
+    public JSONObject recoveryPageForOwner(BrowserProfileRegistry.Session session,String taskId,String logicalId,String url,String title,String state,String openedBy)throws Exception {main();return registry.recoveryPageForOwner(session,taskId,logicalId,url,title,state,openedBy);}
+    public String recoveryUrlForOwner(BrowserProfileRegistry.Session session,String taskId,JSONObject page)throws Exception {main();return registry.recoveryUrlForOwner(session,taskId,page);}
     public boolean bookmarkForOwner(BrowserProfileRegistry.Session session,String id)throws Exception {main();return registry.bookmarkForOwner(session,id);}
     public void clearHistoryForOwner(BrowserProfileRegistry.Session session,boolean bookmarksToo)throws Exception {main();registry.clearHistoryForOwner(session,bookmarksToo);}
     public BrowserProfileRegistry.Session openSession()throws Exception {main();return registry.openSession(supported);}

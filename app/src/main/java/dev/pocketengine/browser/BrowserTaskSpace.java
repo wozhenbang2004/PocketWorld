@@ -72,6 +72,9 @@ public final class BrowserTaskSpace {
     /** Implemented by the existing Activity; every method except cleanup runs behind the live gate. */
     public interface Driver {
         JSONObject metadata(Tab tab)throws Exception;
+        /** Only safe metadata leaves this port. Exact destinations remain in the original private Profile. */
+        default JSONObject recoveryRecord(String logicalId,String url,String title,String state,String openedBy)throws Exception {return BrowserResearchPages.page(logicalId,url,title,state,openedBy);}
+        default String recoveryUrl(JSONObject page)throws Exception {if(page.has("privateNavigationId"))throw new StalePage("原私有地址端口不可用，未改开脱敏地址");if(page.optBoolean("urlQueryOmitted"))throw new StalePage("原页参数未保存，不能用基础地址冒作原内容");return page.getString("url");}
         void open(Tab tab,String url,Gate gate)throws Exception;
         void select(Tab tab,Gate gate)throws Exception;
         void execute(Tab tab,String command,JSONObject arguments,Gate gate,CompletableFuture<JSONObject> result)throws Exception;
@@ -205,8 +208,9 @@ public final class BrowserTaskSpace {
         main();checkOriginal(originalControl);gate.check();CompletableFuture<JSONObject> result=new CompletableFuture<>();
         if(command.equals("open")){
             if(tabs.size()>=MAX_TASK_TABS)throw new IllegalStateException("一个任务最多4个浏览页，请先保留来源或关闭已有任务页");
-            Tab tab=new Tab(UUID.randomUUID().toString(),args.has("pageRecordId")?recoveryPage(args.getString("pageRecordId"),args.getString("url")).getString("logicalPageId"):UUID.randomUUID().toString());tabs.put(tab.tabId,tab);revision++;recordPage(tab,args.getString("url"),"","opening","task");
-            try{driver.open(tab,args.getString("url"),gate);gate.check();lastTaskTab=tab.tabId;publishManifest();result.complete(tab.identity().put("accepted",true).put("verified",false).put("status","navigation_requested"));}
+            JSONObject recovered=args.has("pageRecordId")?recoveryPage(args.getString("pageRecordId"),args.getString("url")):null;String navigationUrl=recovered==null?args.getString("url"):driver.recoveryUrl(recovered);
+            Tab tab=new Tab(UUID.randomUUID().toString(),recovered==null?UUID.randomUUID().toString():recovered.getString("logicalPageId"));tabs.put(tab.tabId,tab);revision++;
+            try{recordPage(tab,navigationUrl,"","opening","task");driver.open(tab,navigationUrl,gate);gate.check();lastTaskTab=tab.tabId;publishManifest();result.complete(tab.identity().put("accepted",true).put("verified",false).put("status","navigation_requested").put("freshObservationRequired",true));}
             catch(Exception failure){tab.invalidate();try{driver.closeOwned(tab);tabs.remove(tab.tabId);}catch(Exception cleanup){throw new IllegalStateException("新任务页创建失败且清理未完成",failure);}throw failure;}return result;
         }
         if(command.equals("finish")){gate.check();gate.entered();result.complete(endNative("task_finished"));return result;}
@@ -432,8 +436,8 @@ if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("nav
     public void navigationChangedNative(String tabId){main();Tab tab=tabs.get(tabId);if(tab!=null)tab.stopTransfers();observations.remove(tabId);clearReadObservations(tabId);}
     private void invalidateAllTabs(){synchronized(tabs){for(Tab tab:tabs.values())tab.invalidate();}}
     private void clearReadObservations(String tabId){readObservations.values().removeIf(value->tabId.equals(value.optString("tabId")));deliveredStructuredObservations.values().removeIf(value->tabId.equals(value.optString("tabId")));}
-    private JSONObject recoveryPage(String id,String url)throws Exception {if(recoveryPages==null)throw new StalePage("此原任务没有可重建的逻辑页清单");JSONObject row=BrowserResearchPages.required(recoveryPages,id);if(row.getString("url").isEmpty()||!row.getString("url").equals(url))throw new StalePage("重开地址必须是主人已看到的原逻辑页地址；未恢复原授权或未保存表单");for(Tab tab:tabs.values())if(tab.logicalPageId.equals(id))throw new StalePage("该逻辑页已经重建，未重复开页");return row;}
-    private void recordPage(Tab tab,String url,String title,String state,String openedBy)throws Exception {logicalPages.put(tab.logicalPageId,BrowserResearchPages.page(tab.logicalPageId,url,title,state,openedBy));while(logicalPages.size()>BrowserResearchPages.MAX_PAGES){String remove=null;for(Map.Entry<String,JSONObject> entry:logicalPages.entrySet())if(entry.getValue().getString("state").matches("closed|renderer_gone")){remove=entry.getKey();break;}if(remove==null)remove=logicalPages.keySet().iterator().next();logicalPages.remove(remove);}}
+    private JSONObject recoveryPage(String id,String url)throws Exception {if(recoveryPages==null)throw new StalePage("此原任务没有可重建的逻辑页清单");JSONObject row=BrowserResearchPages.required(recoveryPages,id);if(row.getString("url").isEmpty()||!row.getString("url").equals(url))throw new StalePage("重开地址必须是主人已看到的原逻辑页地址；未恢复原授权或未保存表单");driver.recoveryUrl(row);for(Tab tab:tabs.values())if(tab.logicalPageId.equals(id))throw new StalePage("该逻辑页已经重建，未重复开页");return row;}
+    private void recordPage(Tab tab,String url,String title,String state,String openedBy)throws Exception {logicalPages.put(tab.logicalPageId,driver.recoveryRecord(tab.logicalPageId,url,title,state,openedBy));while(logicalPages.size()>BrowserResearchPages.MAX_PAGES){String remove=null;for(Map.Entry<String,JSONObject> entry:logicalPages.entrySet())if(entry.getValue().getString("state").matches("closed|renderer_gone")){remove=entry.getKey();break;}if(remove==null)remove=logicalPages.keySet().iterator().next();logicalPages.remove(remove);}}
     private void recordCurrentPage(Tab tab,String state){try{JSONObject page=driver.metadata(tab);recordPage(tab,page.optString("url"),page.optString("title"),state,"task");}catch(Exception unavailable){JSONObject old=logicalPages.get(tab.logicalPageId);if(old!=null)try{old.put("state",state);}catch(Exception ignored){}}}
     public void pageLoadedNative(String tabId,String url,String title)throws Exception {main();Tab tab=tabs.get(tabId);if(tab==null||ended)return;recordPage(tab,url,title,"ready","task");publishManifest();}
     public void pageStartedNative(String tabId,String url)throws Exception {main();Tab tab=tabs.get(tabId);if(tab==null||ended)return;recordPage(tab,url,"","loading","task");publishManifest();}

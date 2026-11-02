@@ -1,6 +1,5 @@
 package dev.pocketengine.browser;
 
-import android.app.Application;
 import dev.pocketengine.core.*;
 import dev.pocketengine.features.capabilities.ModelCapabilityAdapters;
 import dev.pocketengine.store.TaskStore;
@@ -19,7 +18,7 @@ import static dev.pocketengine.browser.BrowserPageDialogActivityTest.j;
 /** Real native Activity/Host/SQLite, controlled native executor calls original startAttempt.
  * Rendered DOM is the existing explicit JS callback fixture; no provider pixels or remote model claim. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=Application.class)
+@Config(sdk=35,manifest=Config.NONE,application=dev.pocketengine.EngineApplication.class,shadows=BrowserPageDialogActivityTest.NoUnrelatedStartup.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class BrowserResearchRecoveryActivityTest {
     static CapabilityPort base(){return new CapabilityPort(){public JSONArray tools(){return new JSONArray();}public boolean supports(String n){return false;}public boolean sideEffecting(String n){return false;}public JSONObject execute(String n,JSONObject a,RunControl c){throw new AssertionError("no replacement executor");}};}
@@ -61,8 +60,10 @@ public final class BrowserResearchRecoveryActivityTest {
         Recovery(BrowserPageDialogActivityTest.F x)throws Exception {this.x=x;AtomicReference<JSONObject> attempt=new AtomicReference<>();host=new BrowserTaskHost(x.module,x.tasks,new ExecutionResources(),new BrowserTaskHost.OriginalTasks(){public void checkModelConfigured(){}public RunControl currentControl(String id){return x.taskId.equals(id)?live.get():null;}public void launch(String id)throws Exception {assertEquals(x.taskId,id);JSONObject started=x.tasks.startAttempt(id,"capabilities",40);RunControl c=new RunControl();c.bindHostRun(id,started.getString("runId"),started.getInt("coordinatorEpoch"));x.tasks.status(id,"running","native recovery fixture admitted original attempt");attempt.set(started);live.set(c);}},x.events::add);
             JSONObject manifest=BrowserResearchPages.fromTask(x.tasks.get(x.taskId,false)),profile=x.browser.snapshot();String expected=TaskStore.capabilityFingerprint(manifest);x.pump(x.worker.submit(()->host.recoverResearchForOwner(x.taskId,expected,profile,true)),false);JSONObject started=attempt.get();binding=new ModelCapabilityAdapters.Binding(x.taskId,started.getString("runId"),started.getInt("coordinatorEpoch"),live.get(),true,"");journal=x.tasks.journal(x.taskId,binding.runId,binding.epoch,live.get());port=(BrowserTaskCapabilityPort)x.pump(x.worker.submit(()->host.wrapIfRequested(binding,live.get(),base())),false);
         }
-        private <T>T pump(java.util.concurrent.Future<T> future)throws Exception {long until=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(8);while(!future.isDone()&&System.nanoTime()<until){x.tick(false);JSONArray approvals=x.tasks.get(x.taskId,false).getJSONArray("approvals");for(int i=0;i<approvals.length();i++){JSONObject a=approvals.getJSONObject(i);if(binding.runId.equals(a.optString("runId"))&&a.optString("state").equals("pending"))host.decideIfWaiting(x.taskId,a.getString("id"),true);}Thread.sleep(3);}x.tick(false);return future.get(2,java.util.concurrent.TimeUnit.SECONDS);}
+        private <T>T pump(java.util.concurrent.Future<T> future)throws Exception {return pump(future,false);}
+        private <T>T pump(java.util.concurrent.Future<T> future,boolean dom)throws Exception {long until=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(8);while(!future.isDone()&&System.nanoTime()<until){x.tick(dom);JSONArray approvals=x.tasks.get(x.taskId,false).getJSONArray("approvals");for(int i=0;i<approvals.length();i++){JSONObject a=approvals.getJSONObject(i);if(binding.runId.equals(a.optString("runId"))&&a.optString("state").equals("pending"))host.decideIfWaiting(x.taskId,a.getString("id"),true);}Thread.sleep(3);}x.tick(false);return future.get(2,java.util.concurrent.TimeUnit.SECONDS);}
         JSONObject open(JSONObject page)throws Exception {JSONObject args=j("url",page.getString("url"),"pageRecordId",page.getString("logicalPageId"));String op=journal.beginOperation("browser_task_open",args);return pump(x.worker.submit(()->{JSONObject receipt=port.execute("browser_task_open",new JSONObject(args.toString()).put("_hostOperationId",op),live.get());journal.finishOperation(op,receipt);port.afterTool("browser_task_open",args,receipt,live.get());return receipt;}));}
+        JSONObject observe(String tab)throws Exception {JSONObject args=j("tabId",tab);String op=journal.beginOperation("browser_task_observe",args);return pump(x.worker.submit(()->{JSONObject receipt=port.execute("browser_task_observe",new JSONObject(args.toString()).put("_hostOperationId",op),live.get());journal.finishOperation(op,receipt);port.afterTool("browser_task_observe",args,receipt,live.get());return receipt;}),true);}
         JSONObject snapshot()throws Exception {return x.pump(x.worker.submit(()->port.contextSnapshot("repeated recovery")),false).getJSONObject("taskBrowser");}
         public void close()throws Exception {try{x.pump(x.worker.submit(host::endForOwner),false);}finally{RunControl c=live.getAndSet(null);if(c!=null)c.cancel();x.tick(false);x.tasks.status(x.taskId,"paused","native recovery fixture executor settled");}}
     }
@@ -75,5 +76,39 @@ public final class BrowserResearchRecoveryActivityTest {
         JSONObject saved=initialThreePages(x);java.util.Set<String> ids=logicalIds(saved);try(Recovery unopened=new Recovery(x)){assertEquals(0,unopened.snapshot().getJSONArray("tabs").length());}
         JSONObject latest=BrowserResearchPages.fromTask(x.tasks.get(x.taskId,false));assertEquals(ids,logicalIds(latest));for(int i=0;i<latest.getJSONArray("pages").length();i++){JSONObject page=latest.getJSONArray("pages").getJSONObject(i);assertEquals("needs_reload",page.getString("state"));assertTrue(page.getBoolean("needsFreshObservation"));}try(Recovery again=new Recovery(x)){assertEquals(ids,logicalIds(again.snapshot().getJSONObject("recovery")));assertEquals(0,again.snapshot().getJSONArray("tabs").length());}
     }}
+
+    private static BrowserProfileRegistry.Session nativeSession(dev.pocketengine.BrowserActivity browser)throws Exception {java.lang.reflect.Field field=dev.pocketengine.BrowserActivity.class.getDeclaredField("profileSession");field.setAccessible(true);return (BrowserProfileRegistry.Session)field.get(browser);}
+    @Test public void queryAndHashRoutesReloadFromPrivateProfileAndColdResearchRequiresNewObservation()throws Exception {
+        try(BrowserPageDialogActivityTest.F x=new BrowserPageDialogActivityTest.F()){
+            BrowserProfiles profiles=BrowserProfiles.get(RuntimeEnvironment.getApplication());BrowserProfileRegistry.Session oldSession=nativeSession(x.browser);assertFalse(profiles.exactUrlsForOwner(oldSession));
+            // Exercise the real native opt-in, rather than quietly enabling a private test preference.
+            java.lang.reflect.Method setting=dev.pocketengine.BrowserActivity.class.getDeclaredMethod("showExactUrlSettings");setting.setAccessible(true);setting.invoke(x.browser);android.app.AlertDialog choice=org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();assertNotNull(choice);BrowserPageDialogActivityTest.click(choice.getButton(android.app.AlertDialog.BUTTON_POSITIVE));assertTrue(profiles.exactUrlsForOwner(oldSession));
+            String[] urls={"https://example.com/item?id=A","https://example.com/item?id=B","https://example.com/app#/item/A","https://example.com/app#/item/B"};JSONObject oldRead=null;String oldTab="";
+            for(int i=0;i<urls.length;i++){
+                String tab=x.tool("open",j("url","https://example.com/seed/"+i)).getString("tabId");android.webkit.WebView renderer=BrowserPageDialogActivityTest.web(x.browser);
+                // Controlled WebView fixture models a site-driven route change; the original journal
+                // has only the safe seed/open arguments, not a secret-filled recovery URL.
+                renderer.loadUrl(urls[i]);renderer.getWebViewClient().onPageStarted(renderer,urls[i],null);renderer.getWebViewClient().onPageFinished(renderer,urls[i]);if(i==0){oldTab=tab;oldRead=x.observe(tab);}
+            }
+            x.tool("finish",new JSONObject());JSONObject saved=BrowserResearchPages.fromTask(x.tasks.get(x.taskId,false));assertEquals(4,saved.getJSONArray("pages").length());java.util.Map<String,String> expected=new java.util.LinkedHashMap<>();for(int i=0;i<urls.length;i++){JSONObject page=saved.getJSONArray("pages").getJSONObject(i);assertTrue(page.has("privateNavigationId"));expected.put(page.getString("logicalPageId"),urls[i]);}assertFalse(saved.toString().contains("?id="));assertFalse(saved.toString().contains("#/item/"));
+            JSONObject firstPage=saved.getJSONArray("pages").getJSONObject(0);String savedFingerprint=TaskStore.capabilityFingerprint(saved);JSONObject ownerReopen=x.pump(x.worker.submit(()->x.host.reopenResearchPageForOwner(x.taskId,firstPage.getString("logicalPageId"),savedFingerprint)),false);assertTrue(ownerReopen.getBoolean("accepted"));assertFalse(ownerReopen.toString().contains("?id="));assertEquals(urls[0],BrowserPageDialogActivityTest.web(x.browser).getUrl());
+            x.control.cancel();x.control=null;x.tasks.status(x.taskId,"paused","original executor stopped before native profile file reload");
+            // Recreate the original profile registry from its real noBackup file, discarding the
+            // process-local singleton/session. No renderer/session/grant is restored from that file.
+            java.lang.reflect.Field instances=BrowserProfiles.class.getDeclaredField("INSTANCES");instances.setAccessible(true);((java.util.Map<?,?>)instances.get(null)).clear();BrowserProfiles cold=BrowserProfiles.get(RuntimeEnvironment.getApplication());java.lang.reflect.Field profileField=dev.pocketengine.BrowserActivity.class.getDeclaredField("profiles");profileField.setAccessible(true);profileField.set(x.browser,cold);x.browser.profileChangedForOwner();assertNotEquals(oldSession.sessionId,nativeSession(x.browser).sessionId);
+            TaskStore coldTasks=new TaskStore(RuntimeEnvironment.getApplication());try{assertEquals(TaskStore.capabilityFingerprint(saved),TaskStore.capabilityFingerprint(BrowserResearchPages.fromTask(coldTasks.get(x.taskId,false))));}finally{BrowserTaskPersistenceTest.closeDatabase(coldTasks);}
+            String staleTab=oldTab,staleObservation=oldRead.getString("observationId");
+            try(Recovery recovery=new Recovery(x)){
+                JSONObject start=recovery.snapshot();assertEquals(0,start.getJSONArray("tabs").length());assertFalse(start.getJSONObject("readScope").optString("state").equals("active"));assertFalse(start.getJSONObject("recovery").toString().contains("?id="));
+                java.lang.reflect.Field field=dev.pocketengine.BrowserActivity.class.getDeclaredField("taskSpace");field.setAccessible(true);BrowserTaskSpace space=(BrowserTaskSpace)field.get(x.browser);assertThrows(Exception.class,()->space.pin(j("tabId",staleTab,"observationId",staleObservation,"ref","n0")));
+                for(int i=0;i<saved.getJSONArray("pages").length();i++){
+                    JSONObject record=saved.getJSONArray("pages").getJSONObject(i),receipt=recovery.open(record);assertTrue(receipt.getBoolean("accepted"));assertTrue(receipt.getBoolean("freshObservationRequired"));assertFalse(receipt.toString().contains("?id="));String exact=expected.get(record.getString("logicalPageId"));assertEquals(exact,BrowserPageDialogActivityTest.web(x.browser).getUrl());
+                    assertThrows(Exception.class,()->space.pin(j("tabId",receipt.getString("tabId"),"observationId",staleObservation,"ref","n0")));JSONObject fresh=recovery.observe(receipt.getString("tabId"));assertEquals(exact,fresh.getString("url"));assertNotEquals(staleObservation,fresh.getString("observationId"));
+                }
+            }
+            JSONObject latest=BrowserResearchPages.fromTask(x.tasks.get(x.taskId,false));cold.exactUrlsForOwner(nativeSession(x.browser),false);JSONObject page=latest.getJSONArray("pages").getJSONObject(0);assertThrows(SecurityException.class,()->cold.recoveryUrlForOwner(nativeSession(x.browser),x.taskId,page));String latestFingerprint=TaskStore.capabilityFingerprint(latest);int before=x.browser.tabsForOwner().getJSONArray("tabs").length();assertThrows(Exception.class,()->x.pump(x.worker.submit(()->x.host.reopenResearchPageForOwner(x.taskId,page.getString("logicalPageId"),latestFingerprint)),false));assertEquals(before,x.browser.tabsForOwner().getJSONArray("tabs").length());
+            JSONObject baseHistory=cold.recordOwnerVisit(nativeSession(x.browser),"https://example.com/lookup?id=not-retained","Lookup",false);java.lang.reflect.Method showHistory=dev.pocketengine.BrowserActivity.class.getDeclaredMethod("showHistoryItem",BrowserProfileRegistry.Session.class,JSONObject.class);showHistory.setAccessible(true);showHistory.invoke(x.browser,nativeSession(x.browser),baseHistory);android.app.AlertDialog baseChoice=org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();assertEquals("仅打开基础地址",baseChoice.getButton(android.app.AlertDialog.BUTTON_POSITIVE).getText().toString());BrowserPageDialogActivityTest.click(baseChoice.getButton(android.app.AlertDialog.BUTTON_POSITIVE));assertEquals("https://example.com/lookup",BrowserPageDialogActivityTest.web(x.browser).getUrl());
+        }
+    }
 
 }

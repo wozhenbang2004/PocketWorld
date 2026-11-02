@@ -27,7 +27,7 @@ public final class BrowserProfileRegistry {
             for(int i=0;i<profiles.length();i++){
                 JSONObject profile=profiles.getJSONObject(i);
                 if(!profile.getString("providerName").matches("pw_[a-f0-9]{32}")||!profile.getString("id").matches("owner-default|profile-[a-f0-9-]{36}"))throw new IllegalStateException("浏览器资料记录无效");
-                storage(profile,false);if(profile.has("ownerHistory"))validateHistory(profile.getJSONArray("ownerHistory"));
+                storage(profile,false);if(profile.has("ownerHistory"))validateHistory(profile.getJSONArray("ownerHistory"));validatePrivateNavigations(profile);
             }
         }else{
             state=new JSONObject().put("version",1).put("revision",1L).put("selectedProfileId",BrowserLease.PROFILE)
@@ -47,7 +47,7 @@ public final class BrowserProfileRegistry {
                     .put("available",raw.getString("status").equals("active")&&(multiProfile||storage.equals("legacy-default")))
                     .put("storageKind",storage).put("profileIsolation",storage.equals("androidx")?"androidx-multi-profile":"default-webview-only")
                     .put("deletable",multiProfile&&storage.equals("androidx"))
-                    .put("deletionDetail",raw.optString("deletionDetail")));
+                    .put("deletionDetail",raw.optString("deletionDetail")).put("exactUrlRetention",raw.optBoolean("exactUrlRetention")));
         }
         return new JSONObject().put("revision",revision()).put("selectedProfileId",selected).put("profiles",profiles)
                 .put("multiProfileSupported",multiProfile).put("ownerManagementOnly",true).put("sharedWithSystemChrome",false)
@@ -79,30 +79,73 @@ public final class BrowserProfileRegistry {
         if(session!=null&&session.profileId.equals(id))invalidateSession();
         JSONObject next=copy(state);long revision=revision()+1;
         find(next,id).put("status","delete_pending").put("deletionDetail","pending_provider_cleanup").put("revision",revision).remove("ownerHistory");
+        find(next,id).remove("privateNavigations");find(next,id).remove("exactUrlRetention");
         next.put("revision",revision);if(id.equals(selectedId()))next.put("selectedProfileId","");save(next);
     }
 
-    /** Native owner history in the existing private profile file, separate from task/source history.
-     * Query/fragment are deliberately omitted; these rows cannot recover login redirects or unsaved forms. */
+    /** Native owner history contains display projections only. Exact destinations, when explicitly
+     * enabled by this owner, live behind opaque refs in the same no-backup profile file. */
     synchronized JSONArray historyForOwner(Session expected)throws Exception {requireOwnerSession(expected);JSONArray rows=required(expected.profileId).optJSONArray("ownerHistory");return rows==null?new JSONArray():new JSONArray(rows.toString());}
     synchronized JSONObject visitForOwner(Session expected,String rawUrl,String title,long at,boolean closed)throws Exception {
         requireOwnerSession(expected);JSONObject target=historyTarget(rawUrl);if(target==null)return null;JSONObject next=copy(state),profile=find(next,expected.profileId);JSONArray prior=profile.optJSONArray("ownerHistory"),rows=new JSONArray();JSONObject existing=null;
-        for(int i=0;prior!=null&&i<prior.length();i++){JSONObject row=prior.getJSONObject(i);if(row.getString("url").equals(target.getString("url")))existing=copy(row);else rows.put(copy(row));}
+        BrowserNavigationTarget destination=BrowserNavigationTarget.parse(rawUrl);String navigationId=destination.parameters&&profile.optBoolean("exactUrlRetention")?retainNavigation(profile,"history","","",destination.exactUrl):"";
+        for(int i=0;prior!=null&&i<prior.length();i++){JSONObject row=prior.getJSONObject(i);boolean same=navigationId.isEmpty()?(!row.has("privateNavigationId")&&row.getString("url").equals(target.getString("url"))&&row.getBoolean("urlQueryOmitted")==target.getBoolean("urlQueryOmitted")):navigationId.equals(row.optString("privateNavigationId"));if(same)existing=copy(row);else rows.put(copy(row));}
         JSONObject row=existing==null?new JSONObject().put("id",UUID.randomUUID().toString()).put("bookmark",false):existing;
-        String safeTitle=title==null?"":title;if(rawUrl!=null&&!rawUrl.isEmpty()&&(rawUrl.startsWith(safeTitle)||safeTitle.contains(rawUrl)))safeTitle=target.getString("url");
-        row.put("url",target.getString("url")).put("urlQueryOmitted",target.getBoolean("urlQueryOmitted")).put("title",clip(safeTitle,240)).put("visitedAt",Math.max(1,at)).put("closed",closed);
+        row.remove("privateNavigationId");if(!navigationId.isEmpty())row.put("privateNavigationId",navigationId);
+        row.put("url",target.getString("url")).put("urlQueryOmitted",target.getBoolean("urlQueryOmitted")).put("title",clip(destination.title(rawUrl,title),240)).put("visitedAt",Math.max(1,at)).put("closed",closed);
         JSONArray newest=new JSONArray().put(row);for(int i=0;i<rows.length()&&newest.length()<100;i++)newest.put(rows.getJSONObject(i));
         // A bookmark is never evicted merely because recent browsing filled the bounded history.
         if(rows.length()>=100){for(int i=99;i<rows.length();i++)if(rows.getJSONObject(i).getBoolean("bookmark")){int remove=-1;for(int j=newest.length()-1;j>0;j--)if(!newest.getJSONObject(j).getBoolean("bookmark")){remove=j;break;}if(remove<0)throw new IllegalStateException("书签数量已到上限，请先整理");newest.remove(remove);newest.put(rows.getJSONObject(i));}}
-        validateHistory(newest);profile.put("ownerHistory",newest);save(next);return copy(row);
+        validateHistory(newest);profile.put("ownerHistory",newest);pruneHistoryNavigations(profile);save(next);return copy(row);
     }
     synchronized JSONObject historyItemForOwner(Session expected,String id)throws Exception {requireOwnerSession(expected);BrowserTaskSpace.uuid(id);JSONArray rows=historyForOwner(expected);for(int i=0;i<rows.length();i++)if(rows.getJSONObject(i).getString("id").equals(id))return copy(rows.getJSONObject(i));throw new IllegalStateException("这条浏览记录已被清除，未替换成其他网页");}
     synchronized boolean bookmarkForOwner(Session expected,String id)throws Exception {requireOwnerSession(expected);JSONObject next=copy(state),profile=find(next,expected.profileId);JSONArray rows=profile.optJSONArray("ownerHistory");int count=0;for(int i=0;rows!=null&&i<rows.length();i++)if(rows.getJSONObject(i).getBoolean("bookmark"))count++;
         for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(row.getString("id").equals(id)){boolean value=!row.getBoolean("bookmark");if(value&&count>=30)throw new IllegalStateException("每份资料最多30个书签，请先整理");row.put("bookmark",value);save(next);return value;}}throw new IllegalStateException("这条浏览记录已变化，请刷新");}
-    synchronized void clearHistoryForOwner(Session expected,boolean bookmarksToo)throws Exception {requireOwnerSession(expected);JSONObject next=copy(state),profile=find(next,expected.profileId);JSONArray prior=profile.optJSONArray("ownerHistory"),kept=new JSONArray();for(int i=0;!bookmarksToo&&prior!=null&&i<prior.length();i++)if(prior.getJSONObject(i).getBoolean("bookmark"))kept.put(copy(prior.getJSONObject(i)));profile.put("ownerHistory",kept);save(next);}
+    synchronized void clearHistoryForOwner(Session expected,boolean bookmarksToo)throws Exception {requireOwnerSession(expected);JSONObject next=copy(state),profile=find(next,expected.profileId);JSONArray prior=profile.optJSONArray("ownerHistory"),kept=new JSONArray();for(int i=0;!bookmarksToo&&prior!=null&&i<prior.length();i++)if(prior.getJSONObject(i).getBoolean("bookmark"))kept.put(copy(prior.getJSONObject(i)));profile.put("ownerHistory",kept);pruneHistoryNavigations(profile);save(next);}
     private void requireOwnerSession(Session expected)throws Exception {if(expected==null||session!=expected||!expected.current()||!selectedId().equals(expected.profileId)||!required(expected.profileId).getString("status").equals("active"))throw new SecurityException("浏览记录所属资料已变化，请重新打开");}
-    private static JSONObject historyTarget(String raw)throws Exception {java.net.URI u;try{u=new java.net.URI(raw==null?"":raw);}catch(Exception invalid){return null;}if(!java.util.Set.of("http","https").contains(u.getScheme())||u.getHost()==null||u.getUserInfo()!=null||raw.length()>8192)return null;String clean=new java.net.URI(u.getScheme()+"://"+u.getRawAuthority()+(u.getRawPath()==null?"":u.getRawPath())).toASCIIString();if(clean.length()>2048)return null;return new JSONObject().put("url",clean).put("urlQueryOmitted",u.getRawQuery()!=null||u.getRawFragment()!=null);}
-    private static void validateHistory(JSONArray rows)throws Exception {if(rows.length()>100)throw new IllegalStateException("浏览历史数量超限");java.util.Set<String> ids=new java.util.HashSet<>();int bookmarks=0;for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(row.length()!=7||!ids.add(row.getString("id")))throw new IllegalStateException("浏览历史身份无效");BrowserTaskSpace.uuid(row.getString("id"));JSONObject target=historyTarget(row.getString("url"));if(target==null||!target.getString("url").equals(row.getString("url"))||row.getString("title").length()>240||row.getLong("visitedAt")<1||!(row.get("bookmark") instanceof Boolean)||!(row.get("closed") instanceof Boolean)||!(row.get("urlQueryOmitted") instanceof Boolean))throw new IllegalStateException("浏览历史内容无效");if(row.getBoolean("bookmark"))bookmarks++;}if(bookmarks>30)throw new IllegalStateException("书签数量超限");}
+    private static JSONObject historyTarget(String raw)throws Exception {BrowserNavigationTarget target=BrowserNavigationTarget.parse(raw);return target==null?null:new JSONObject().put("url",target.displayUrl).put("urlQueryOmitted",target.parameters);}
+    private static void validateHistory(JSONArray rows)throws Exception {if(rows.length()>100)throw new IllegalStateException("浏览历史数量超限");java.util.Set<String> ids=new java.util.HashSet<>();int bookmarks=0;for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);java.util.Set<String> keys=java.util.Set.of("id","url","urlQueryOmitted","title","visitedAt","bookmark","closed","privateNavigationId");for(var it=row.keys();it.hasNext();)if(!keys.contains(it.next()))throw new IllegalStateException("浏览历史含额外字段");if(row.length()!=(row.has("privateNavigationId")?8:7)||!ids.add(row.getString("id")))throw new IllegalStateException("浏览历史身份无效");BrowserTaskSpace.uuid(row.getString("id"));if(row.has("privateNavigationId"))BrowserTaskSpace.uuid(row.getString("privateNavigationId"));JSONObject target=historyTarget(row.getString("url"));if(target==null||!target.getString("url").equals(row.getString("url"))||row.getString("title").length()>240||row.getLong("visitedAt")<1||!(row.get("bookmark") instanceof Boolean)||!(row.get("closed") instanceof Boolean)||!(row.get("urlQueryOmitted") instanceof Boolean))throw new IllegalStateException("浏览历史内容无效");if(row.getBoolean("bookmark"))bookmarks++;}if(bookmarks>30)throw new IllegalStateException("书签数量超限");}
+
+    synchronized boolean exactUrlsForOwner(Session expected)throws Exception {requireOwnerSession(expected);return required(expected.profileId).optBoolean("exactUrlRetention");}
+    synchronized void exactUrlsForOwner(Session expected,boolean enabled)throws Exception {
+        requireOwnerSession(expected);JSONObject next=copy(state),profile=find(next,expected.profileId);profile.put("exactUrlRetention",enabled);
+        if(!enabled){profile.remove("privateNavigations");JSONArray rows=profile.optJSONArray("ownerHistory");for(int i=0;rows!=null&&i<rows.length();i++)rows.getJSONObject(i).remove("privateNavigationId");}
+        next.put("revision",revision()+1);save(next);
+    }
+    synchronized JSONObject recoveryPageForOwner(Session expected,String taskId,String logicalPageId,String rawUrl,String title,String pageState,String openedBy)throws Exception {
+        requireOwnerSession(expected);BrowserTaskSpace.uuid(taskId);JSONObject row=BrowserResearchPages.page(logicalPageId,rawUrl,title,pageState,openedBy);BrowserNavigationTarget target=BrowserNavigationTarget.parse(rawUrl);
+        if(target!=null&&target.parameters&&exactUrlsForOwner(expected)){
+            JSONObject next=copy(state),profile=find(next,expected.profileId);String id=retainNavigation(profile,"research",taskId,logicalPageId,target.exactUrl);row.put("privateNavigationId",id);JSONObject prior=required(expected.profileId).optJSONObject("privateNavigations");if(prior==null||!prior.has(id))save(next);
+        }
+        return row;
+    }
+    synchronized String recoveryUrlForOwner(Session expected,String taskId,JSONObject page)throws Exception {
+        requireOwnerSession(expected);BrowserTaskSpace.uuid(taskId);BrowserTaskSpace.uuid(page.getString("logicalPageId"));
+        return navigationUrl(required(expected.profileId),page,"research",taskId,page.getString("logicalPageId"));
+    }
+    synchronized String historyUrlForOwner(Session expected,String id)throws Exception {return navigationUrl(requiredOwnerProfile(expected),historyItemForOwner(expected,id),"history","","");}
+    private JSONObject requiredOwnerProfile(Session expected)throws Exception {requireOwnerSession(expected);return required(expected.profileId);}
+    private static String navigationUrl(JSONObject profile,JSONObject row,String kind,String taskId,String logicalPageId)throws Exception {
+        String display=row.getString("url");BrowserNavigationTarget visible=BrowserNavigationTarget.parse(display);if(visible==null||visible.parameters||!display.equals(visible.displayUrl))throw new SecurityException("保存的网页地址无效");
+        if(!row.has("privateNavigationId")){if(kind.equals("research")&&row.optBoolean("urlQueryOmitted"))throw new SecurityException("原页的查询参数或片段未保存，不能恢复原内容；请手动重新选择");return display;}
+        String id=row.getString("privateNavigationId");BrowserTaskSpace.uuid(id);JSONObject all=profile.optJSONObject("privateNavigations"),saved=all==null?null:all.optJSONObject(id);
+        if(!profile.optBoolean("exactUrlRetention")||saved==null||!kind.equals(saved.optString("kind"))||!taskId.equals(saved.optString("taskId"))||!logicalPageId.equals(saved.optString("logicalPageId")))throw new SecurityException("本页精确地址未保存或已清除，请在原网页重新选择；未改开其他内容");
+        BrowserNavigationTarget exact=BrowserNavigationTarget.parse(saved.getString("url"));if(exact==null||!exact.parameters||!display.equals(exact.displayUrl))throw new SecurityException("原私有地址与页面身份不符，未改开其他内容");return exact.exactUrl;
+    }
+    private static String retainNavigation(JSONObject profile,String kind,String taskId,String logicalPageId,String exact)throws Exception {
+        JSONObject all=profile.optJSONObject("privateNavigations");if(all==null){all=new JSONObject();profile.put("privateNavigations",all);}
+        for(var it=all.keys();it.hasNext();){String id=it.next();JSONObject row=all.getJSONObject(id);if(kind.equals(row.getString("kind"))&&taskId.equals(row.getString("taskId"))&&logicalPageId.equals(row.getString("logicalPageId"))&&exact.equals(row.getString("url")))return id;}
+        if(kind.equals("research")){java.util.List<String> old=new java.util.ArrayList<>();for(var it=all.keys();it.hasNext();){String previous=it.next();JSONObject row=all.getJSONObject(previous);if(kind.equals(row.getString("kind"))&&taskId.equals(row.getString("taskId"))&&logicalPageId.equals(row.getString("logicalPageId")))old.add(previous);}for(String previous:old)all.remove(previous);}
+        if(all.length()>=512)throw new IllegalStateException("私有精确地址已达保存上限，请在地址保存设置中清除后重试");String id=UUID.randomUUID().toString();all.put(id,new JSONObject().put("kind",kind).put("taskId",taskId).put("logicalPageId",logicalPageId).put("url",exact));return id;
+    }
+    private static void pruneHistoryNavigations(JSONObject profile)throws Exception {
+        JSONObject all=profile.optJSONObject("privateNavigations");if(all==null)return;java.util.Set<String> kept=new java.util.HashSet<>();JSONArray history=profile.optJSONArray("ownerHistory");for(int i=0;history!=null&&i<history.length();i++){String id=history.getJSONObject(i).optString("privateNavigationId");if(!id.isEmpty())kept.add(id);}
+        java.util.List<String> remove=new java.util.ArrayList<>();for(var it=all.keys();it.hasNext();){String id=it.next();if("history".equals(all.getJSONObject(id).optString("kind"))&&!kept.contains(id))remove.add(id);}for(String id:remove)all.remove(id);
+    }
+    private static void validatePrivateNavigations(JSONObject profile)throws Exception {
+        if(profile.has("exactUrlRetention")&&!(profile.get("exactUrlRetention") instanceof Boolean))throw new IllegalStateException("地址保存设置无效");JSONObject all=profile.optJSONObject("privateNavigations");if(profile.has("privateNavigations")&&(all==null||!profile.optBoolean("exactUrlRetention")))throw new IllegalStateException("私有导航设置无效");if(all==null)return;if(all.length()>512)throw new IllegalStateException("私有导航数量超限");
+        for(var it=all.keys();it.hasNext();){String id=it.next();BrowserTaskSpace.uuid(id);JSONObject row=all.getJSONObject(id);if(row.length()!=4||!java.util.Set.of("history","research").contains(row.getString("kind")))throw new IllegalStateException("私有导航身份无效");if(row.getString("kind").equals("research")){BrowserTaskSpace.uuid(row.getString("taskId"));BrowserTaskSpace.uuid(row.getString("logicalPageId"));}else if(!row.getString("taskId").isEmpty()||!row.getString("logicalPageId").isEmpty())throw new IllegalStateException("历史导航身份无效");BrowserNavigationTarget target=BrowserNavigationTarget.parse(row.getString("url"));if(target==null||!target.parameters||!target.exactUrl.equals(row.getString("url")))throw new IllegalStateException("私有导航地址无效");}
+    }
     private static String clip(String value,int max){if(value==null)return "";int end=Math.min(value.length(),max);if(end>0&&end<value.length()&&Character.isHighSurrogate(value.charAt(end-1))&&Character.isLowSurrogate(value.charAt(end)))end--;return value.substring(0,end);}
 
     synchronized JSONArray pendingDeletes()throws Exception {

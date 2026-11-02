@@ -30,5 +30,24 @@
     ],
     "robolectric": true,
     "description": "Original MemoryBook temporal/subject/source proof and original TaskStore/ConversationRepository portable read-only evidence; no model, device or background learning acceptance."
+  },
+  "browser-long-page": {
+    "class": "dev.pocketengine.browser.BrowserLongPageNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserSemanticReadTest",
+      "dev.pocketengine.browser.BrowserReadSettleTest",
+      "dev.pocketengine.browser.BrowserReadDeltaTest",
+      "dev.pocketengine.browser.BrowserStructuredSourceTest",
+      "dev.pocketengine.browser.BrowserReadRecipeTest",
+      "dev.pocketengine.browser.BrowserReadSettleNativeTest",
+      "dev.pocketengine.browser.BrowserFrameReadPresentationTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.EmitBrowserLongPageRead",
+      "dev.pocketengine.browser.EmitBrowserDynamicRead",
+      "dev.pocketengine.browser.EmitBrowserFrameRead"
+    ],
+    "robolectric": true,
+    "description": "Original native delivered-cursor/currentness/cancel gates and semantic/source/delta/settle regressions; explicit post-step runs emitted production programs on loopback Chromium, not Android WebView/provider/device acceptance."
   }
 }

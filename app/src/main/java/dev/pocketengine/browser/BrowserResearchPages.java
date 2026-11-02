@@ -1,7 +1,6 @@
 package dev.pocketengine.browser;
 
 import dev.pocketengine.store.TaskStore;
-import java.net.URI;
 import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -13,15 +12,15 @@ public final class BrowserResearchPages {
     private BrowserResearchPages() { }
     public static JSONObject page(String logicalPageId,String raw,String title,String state,String openedBy)throws Exception {
         BrowserTaskSpace.uuid(logicalPageId);if(!Set.of("opening","loading","ready","owner_control","closed","renderer_gone","unknown","needs_reload").contains(state)||!Set.of("task","owner_adopted").contains(openedBy))throw new IllegalArgumentException("逻辑页状态无效");
-        String url="";boolean omitted=false;try{URI u=new URI(raw==null?"":raw);if(Set.of("http","https").contains(u.getScheme())&&u.getHost()!=null&&u.getUserInfo()==null){String clean=new URI(u.getScheme()+"://"+u.getRawAuthority()+(u.getRawPath()==null?"":u.getRawPath())).toASCIIString();if(clean.length()<=2048){url=clean;omitted=u.getRawQuery()!=null||u.getRawFragment()!=null;}}}catch(Exception unavailable){/* A non-HTTP/auth destination is not converted into a recoverable navigation target. */}
-        String safeTitle=title==null?"":title;if(raw!=null&&!raw.isEmpty()&&(raw.startsWith(safeTitle)||safeTitle.contains(raw)))safeTitle=url;
+        BrowserNavigationTarget target=BrowserNavigationTarget.parse(raw);String url=target==null?"":target.displayUrl;boolean omitted=target!=null&&target.parameters;
+        String safeTitle=target==null?"":target.title(raw,title);
         return new JSONObject().put("logicalPageId",logicalPageId).put("url",url).put("urlQueryOmitted",omitted).put("title",clip(safeTitle,240)).put("state",state).put("openedBy",openedBy).put("needsFreshObservation",true);
     }
     public static void validate(JSONObject manifest)throws Exception {
         Set<String> keys=Set.of("version","taskId","runId","epoch","profileId","profileRevision","browserSessionId","browserSpaceId","revision","pages","phase","automaticReplayAllowed","actionRefsRestored");if(manifest.length()!=keys.size())throw new SecurityException("研究页清单字段不完整");for(var it=manifest.keys();it.hasNext();)if(!keys.contains(it.next()))throw new SecurityException("研究页清单含额外字段");
         if(manifest.getInt("version")!=1||manifest.getInt("epoch")<1||manifest.getLong("revision")<1||manifest.getLong("profileRevision")<1||!manifest.getString("profileId").matches("[A-Za-z0-9_-]{1,80}")||!Set.of("active","owner_control","ended","interrupted").contains(manifest.getString("phase"))||!Boolean.FALSE.equals(manifest.get("automaticReplayAllowed"))||!Boolean.FALSE.equals(manifest.get("actionRefsRestored")))throw new SecurityException("研究页恢复身份无效");
         for(String k:new String[]{"taskId","runId","browserSessionId","browserSpaceId"})BrowserTaskSpace.uuid(manifest.getString(k));JSONArray pages=manifest.getJSONArray("pages");if(pages.length()>MAX_PAGES)throw new SecurityException("研究页清单超限");Set<String> ids=new java.util.HashSet<>();
-        for(int i=0;i<pages.length();i++){JSONObject p=pages.getJSONObject(i);if(p.length()!=7||!ids.add(p.getString("logicalPageId"))||!(p.get("urlQueryOmitted") instanceof Boolean)||!Boolean.TRUE.equals(p.get("needsFreshObservation")))throw new SecurityException("逻辑页身份重复或不完整");JSONObject checked=page(p.getString("logicalPageId"),p.getString("url"),p.getString("title"),p.getString("state"),p.getString("openedBy"));if(!p.getString("url").equals(checked.getString("url"))||p.getString("title").length()>240)throw new SecurityException("逻辑页地址不是可复核的安全投影");}
+        for(int i=0;i<pages.length();i++){JSONObject p=pages.getJSONObject(i);Set<String> pageKeys=Set.of("logicalPageId","url","urlQueryOmitted","title","state","openedBy","needsFreshObservation","privateNavigationId");for(var it=p.keys();it.hasNext();)if(!pageKeys.contains(it.next()))throw new SecurityException("逻辑页含额外字段");if(p.length()!=(p.has("privateNavigationId")?8:7)||!ids.add(p.getString("logicalPageId"))||!(p.get("urlQueryOmitted") instanceof Boolean)||!Boolean.TRUE.equals(p.get("needsFreshObservation")))throw new SecurityException("逻辑页身份重复或不完整");if(p.has("privateNavigationId")){BrowserTaskSpace.uuid(p.getString("privateNavigationId"));if(p.getString("url").isEmpty()||!p.getBoolean("urlQueryOmitted"))throw new SecurityException("私有导航引用无效");}JSONObject checked=page(p.getString("logicalPageId"),p.getString("url"),p.getString("title"),p.getString("state"),p.getString("openedBy"));if(!p.getString("url").equals(checked.getString("url"))||p.getString("title").length()>240)throw new SecurityException("逻辑页地址不是可复核的安全投影");}
         if(manifest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>49152)throw new SecurityException("研究页清单过大");
     }
     public static JSONObject fromTask(JSONObject task)throws Exception {

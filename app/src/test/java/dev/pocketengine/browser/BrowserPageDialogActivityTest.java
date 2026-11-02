@@ -1,7 +1,6 @@
 package dev.pocketengine.browser;
 
 import android.app.AlertDialog;
-import android.app.Application;
 import android.os.Looper;
 import android.webkit.JsResult;
 import android.webkit.JsPromptResult;
@@ -31,9 +30,10 @@ import static org.junit.Assert.*;
 
 /** Actual Activity/JsResult/Host/SQLite/Runner; the renderer DOM and model replies are controlled fixtures, not physical WebView rendering. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=Application.class,shadows={BrowserPageDialogActivityTest.FrameworkJsResult.class,BrowserPageDialogActivityTest.FrameworkJsPromptResult.class})
+@Config(sdk=35,manifest=Config.NONE,application=dev.pocketengine.EngineApplication.class,shadows={BrowserPageDialogActivityTest.NoUnrelatedStartup.class,BrowserPageDialogActivityTest.FrameworkJsResult.class,BrowserPageDialogActivityTest.FrameworkJsPromptResult.class})
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class BrowserPageDialogActivityTest {
+    @Implements(dev.pocketengine.EngineApplication.class) public static class NoUnrelatedStartup extends org.robolectric.shadows.ShadowApplication { @org.robolectric.annotation.Implementation protected void onCreate(){} }
     // Test runtime adaptation only: Robolectric's default JS-result shadows skip the actual
     // ResultReceiver. These empty shadows run the fixed SDK35 methods, not invented callbacks.
     @Implements(value=JsResult.class,callThroughByDefault=true) public static class FrameworkJsResult { }
@@ -59,7 +59,7 @@ public final class BrowserPageDialogActivityTest {
         final BrowserModule module;final BrowserTaskHost host;final Set<Object> observedCallbacks=Collections.newSetFromMap(new IdentityHashMap<>());
         final Set<String> decisions=new HashSet<>();String taskId="";RunControl control;ModelCapabilityAdapters.Binding binding;RunJournal journal;BrowserTaskCapabilityPort port;
         F()throws Exception {
-            BrowserActivity.setOwnerPanelInstaller(null);activity=Robolectric.buildActivity(BrowserActivity.class).create().start().resume();browser=activity.get();browser.openForOwner("https://owner.example/original");tasks=new TaskStore(RuntimeEnvironment.getApplication());
+            BrowserActivity.setOwnerPanelInstaller(null);activity=Robolectric.buildActivity(BrowserActivity.class).create().start().resume();browser=activity.get();browser.openForOwner("https://owner.example/original");tasks=new TaskStore(RuntimeEnvironment.getApplication());if(RuntimeEnvironment.getApplication() instanceof dev.pocketengine.EngineApplication)((dev.pocketengine.EngineApplication)RuntimeEnvironment.getApplication()).tasks=tasks;
             module=new BrowserModule(new FeatureContext(RuntimeEnvironment.getApplication(),null,null,events::add));
             host=new BrowserTaskHost(module,tasks,resources,new BrowserTaskHost.OriginalTasks(){public void checkModelConfigured(){}public void launch(String id){taskId=id;}public RunControl currentControl(String id){return taskId.equals(id)?control:null;}},events::add);
             JSONObject selected=browser.snapshot();pump(worker.submit(()->host.startForOwner("处理网页提示后继续同一研究",selected,true,BrowserReadScope.forOwner(true,false,""))),true);

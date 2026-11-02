@@ -1,5 +1,5 @@
 // Real Chromium + local HTTP fixture. This is not an Android WebView/provider/device test.
-const {chromium}=require('/opt/codex/cua_node/lib/node_modules/playwright');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'/opt/codex/cua_node/lib/node_modules/playwright');
 const http=require('node:http'),fs=require('node:fs'),assert=require('node:assert/strict');
 const input=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),destination=process.argv[3];
 const samples=[],requests=[];let browser,server;
@@ -14,7 +14,7 @@ window.transient=()=>{const cell=body.querySelector('td');const old=cell.textCon
 (async()=>{try{
  server=http.createServer((req,res)=>{requests.push(req.url);if(req.url.startsWith('/rows')){const page=new URL(req.url,'http://fixture').searchParams.get('page');setTimeout(()=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify(page==='1'?[['Alpha',42],['Beta',73]]:[['Gamma',91],['Delta',18]]))},page==='1'?450:650)}else if(req.url==='/child')res.end('<p>IFRAME_SECRET_NOT_READ</p>');else{res.setHeader('Content-Type','text/html');res.end(html.replaceAll('PORT',server.address().port))}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
- browser=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});const page=await browser.newPage();await page.goto(`http://127.0.0.1:${server.address().port}/`,{waitUntil:'domcontentloaded'});
+ browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||undefined,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});const page=await browser.newPage();await page.goto(`http://127.0.0.1:${server.address().port}/`,{waitUntil:'domcontentloaded'});
  const start=Date.now();async function sample(phase,script=input.table){const raw=JSON.parse(await page.evaluate(script));samples.push({phase,elapsedMs:Date.now()-start,raw});assert(!JSON.stringify(raw).includes('IFRAME_SECRET_NOT_READ'));return raw;}
  const first=await sample('initial');assert.equal(first.read.dynamic.busy,true);assert.equal(first.read.dynamic.contentItems,0);
  await page.waitForFunction(()=>document.querySelector('section').getAttribute('aria-busy')==='false');let loaded=await sample('loaded');assert.equal(loaded.read.dynamic.contentItems,2);assert.equal(loaded.read.dynamic.pagination.find(x=>x.kind==='next').disabled,false);assert.equal(loaded.read.dynamic.pagination.find(x=>x.kind==='current').label,'1');
