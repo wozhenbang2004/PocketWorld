@@ -22,5 +22,6 @@ public final class OwnerQuestionReferenceTest {
         changed=new JSONObject(original.toString());changed.put("coordinatorEpoch",4);assertNull(OwnerQuestionReply.reference(changed));
         changed=new JSONObject(original.toString());changed.put("status","completed");assertNull(OwnerQuestionReply.reference(changed));
         changed=new JSONObject(original.toString());changed.getJSONObject("evidence").getJSONObject("ownerQuestion").put("waitRevision",0);assertNull(OwnerQuestionReply.reference(changed));
+        changed=new JSONObject(original.toString());changed.getJSONObject("evidence").getJSONObject("ownerQuestion").put("replyConsumed",true);assertNull(OwnerQuestionReply.reference(changed));
     }
 }

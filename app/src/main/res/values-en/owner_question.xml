@@ -1,0 +1,7 @@
+<resources>
+    <string name="w8_cv_question_title">A question for you</string>
+    <string name="w8_cv_question_note">Your answer stays in the original conversation. The assistant will continue if the original task can still run.</string>
+    <string name="w8_cv_question_answer">Your answer</string>
+    <string name="w8_cv_question_submit">Answer question</string>
+    <string name="w8_cv_question_saved">Your answer is saved in the original conversation. If work has paused, check the original task and its available actions.</string>
+</resources>

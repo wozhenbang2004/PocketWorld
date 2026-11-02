@@ -14,7 +14,7 @@ public final class OwnerQuestionReply {
         if(!"awaiting_user".equals(task.optString("status")))return null;
         JSONObject evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");
         if(question==null||!"pocketworld.owner-question.v1".equals(question.optString("format"))||!"answer".equals(question.optString("replyKind"))
-                ||!Boolean.FALSE.equals(question.opt("approval"))||!Boolean.FALSE.equals(question.opt("takeover")))return null;
+                ||!Boolean.FALSE.equals(question.opt("approval"))||!Boolean.FALSE.equals(question.opt("takeover"))||question.has("replyConsumed")&&!Boolean.FALSE.equals(question.opt("replyConsumed")))return null;
         String taskId=task.optString("id"),run=task.optString("runId"),request=question.optString("requestId");int epoch=task.optInt("coordinatorEpoch");Object revision=question.opt("waitRevision");
         if(!taskId.equals(question.optString("taskId"))||!run.equals(question.optString("runId"))||epoch<1||epoch!=question.optInt("coordinatorEpoch")
                 ||!taskId.matches("[a-fA-F0-9-]{36}")||!run.matches("[a-fA-F0-9-]{36}")||!request.matches("[a-fA-F0-9-]{36}")
