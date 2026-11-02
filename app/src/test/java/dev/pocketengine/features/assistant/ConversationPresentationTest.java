@@ -29,7 +29,20 @@ public final class ConversationPresentationTest {
             reopened.updatePresentation("older",3,null,false,50);
             assertEquals("newer",reopened.list("",20).getJSONArray("conversations").getJSONObject(0).getString("conversationId"));
             reopened.transaction(()->{reopened.deleteConversation("older","user_conversation_delete");return null;});
+            try(var prefs=db.rawQuery("SELECT count(*) FROM assistant_conversation_preferences WHERE conversation_id='older'",null)){assertTrue(prefs.moveToFirst());assertEquals(0,prefs.getInt(0));}
             try{reopened.updatePresentation("older",4,"复活删除会话",null,60);fail("deleted conversation");}catch(IllegalArgumentException expected){}
+        }
+    }
+    @Test public void legacyOwnerPresentationMigratesAndAbandonedStageErasesItsName()throws Exception{
+        try(SQLiteDatabase db=SQLiteDatabase.create(null)){
+            db.execSQL("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)");ConversationRepository.createSchema(db);Object monitor=new Object();ConversationRepository repository=new ConversationRepository(db,monitor);
+            JSONObject conversation=new JSONObject().put("conversationId","legacy-owner-conversation").put("title","自动标题").put("userTitle","机主保留标题").put("pinnedAt",40).put("metadataRevision",4).put("updatedAt",12).put("messages",new org.json.JSONArray());
+            JSONObject legacy=new JSONObject().put("version",2).put("conversations",new org.json.JSONArray().put(conversation)).put("sourceStates",new org.json.JSONArray());
+            repository.stageLegacy("abandoned",legacy,()->null);repository.discardStage("abandoned");
+            try(var prefs=db.rawQuery("SELECT count(*) FROM assistant_conversation_preferences WHERE generation='abandoned'",null)){assertTrue(prefs.moveToFirst());assertEquals(0,prefs.getInt(0));}
+            JSONObject counts=repository.stageLegacy("retained",legacy,()->null);
+            synchronized(monitor){db.beginTransaction();try{repository.activateStaged("retained","a".repeat(64),counts);db.setTransactionSuccessful();}finally{db.endTransaction();}repository.activatedAfterCommit();}
+            JSONObject reopened=new ConversationRepository(db,monitor).header("legacy-owner-conversation");assertEquals("机主保留标题",reopened.getString("title"));assertEquals(40,reopened.getLong("pinnedAt"));assertEquals(4,reopened.getLong("metadataRevision"));
         }
     }
 }

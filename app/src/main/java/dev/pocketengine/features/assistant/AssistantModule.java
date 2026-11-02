@@ -536,6 +536,29 @@ public final class AssistantModule implements EngineModule {
                     "user".equals(message.getString("role"))?"主人原对话消息":"助手原对话消息（未核实的参考）",message.getString("content"));
         });
     }
+    /** Native automatic-learning adapter only; model text cannot assert a USER role or task identity. */
+    public dev.pocketengine.features.KnowledgeLearningWorkflow.SourceDocument readAutomaticOwnerUtterance(SourceRef expected,String taskId,String runId,int epoch)throws Exception{
+        if(historyTasks==null||expected==null||epoch<1||runId==null||runId.isEmpty())throw new SecurityException("缺少原生主人任务来源");
+        synchronized(historyTasks){
+            JSONObject actual=historyTasks.get(taskId,false),origin=actual==null?null:actual.optJSONObject("origin");
+            if(actual==null||!"owner".equals(actual.optString("actorId"))||!"private".equals(actual.optString("spaceId"))||!"completed".equals(actual.optString("status"))
+                    ||!runId.equals(actual.optString("runId"))||epoch!=actual.optInt("coordinatorEpoch")||origin!=null&&Set.of("device","channel","group","automation").contains(origin.optString("kind")))throw new SecurityException("不是这次成功的原主人对话任务");
+            return sourceRead(()->{
+                JSONObject state=source(expected.sourceId);
+                if(state==null||!"user".equals(state.optString("role"))||!actual.optString("conversationId").equals(state.optString("conversationId")))throw new SecurityException("自动提炼只能读取该原对话的真实主人发言");
+                JSONArray inputs=actual.optJSONArray("ownerInputs");JSONObject adopted=null;
+                for(int i=0;inputs!=null&&i<inputs.length();i++){
+                    JSONObject row=inputs.getJSONObject(i);
+                    if(expected.sourceId.equals(row.optString("messageId"))){if(adopted!=null)throw new SecurityException("原主人来源身份重复");adopted=row;}
+                }
+                if(adopted==null||!taskId.equals(adopted.optString("acceptedTaskId"))||!"materialized".equals(adopted.optString("queueState"))
+                        ||!runId.equals(adopted.optString("materializedRunId"))||epoch!=adopted.optInt("materializedEpoch")||expected.revision!=adopted.optLong("ownerMessageRevision"))throw new SecurityException("原成功执行未实际采用这份主人消息修订");
+                // The existing reader rechecks exact SourceRef, body role/revision,
+                // deleted/retired/forget state under the same original source lock.
+                return readMemorySource(expected);
+            });
+        }
+    }
     private final class ConversationHistoryGate implements dev.pocketengine.features.memory.ConversationHistory.Gate {
         final AssistantModule owner=AssistantModule.this;final String conversation;
         ConversationHistoryGate(String id){conversation=id;}

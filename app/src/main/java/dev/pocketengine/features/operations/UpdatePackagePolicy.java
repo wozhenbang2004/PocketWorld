@@ -14,7 +14,7 @@ public final class UpdatePackagePolicy {
         if(!"pocketworld.private-update.v1".equals(input.optString("format"))||!expectedPackage.equals(input.optString("packageName")))throw new SecurityException("更新包名或清单格式不符");
         Object version=input.opt("versionCode"),size=input.opt("bytes");
         if(!(version instanceof Integer||version instanceof Long)||((Number)version).longValue()<1||!(size instanceof Integer||size instanceof Long)||((Number)size).longValue()<1||((Number)size).longValue()>300L*1024*1024||!input.optString("sha256").matches("[a-f0-9]{64}"))throw new SecurityException("更新版本、大小或SHA-256无效");
-        URI download=source(input.getString("downloadUrl"));if(!source.getScheme().equals(download.getScheme())||!source.getHost().equalsIgnoreCase(download.getHost())||source.getPort()!=download.getPort())throw new SecurityException("下载地址不属于主人配置的同一私有更新源");
+        URI download=source(input.getString("downloadUrl"));if(!source.getScheme().equals(download.getScheme())||!source.getHost().equalsIgnoreCase(download.getHost()))throw new SecurityException("下载地址不属于主人配置的同一私有更新源");
         String name=input.optString("versionName");if(name.length()>80||name.codePoints().anyMatch(Character::isISOControl))throw new SecurityException("版本名称无效");
         return new JSONObject().put("format","pocketworld.private-update.v1").put("packageName",expectedPackage).put("versionCode",version).put("versionName",name).put("bytes",size).put("sha256",input.getString("sha256")).put("downloadUrl",download.toString());
     }

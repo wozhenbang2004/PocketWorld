@@ -17,6 +17,7 @@ public final class OperationsSafetyTest {
     }
     @Test public void privateUpdateCannotChangeOriginPackageVersionOrSigner()throws Exception{
         JSONObject manifest=UpdatePackagePolicy.manifest(manifest(),"dev.pocketengine",3,URI.create("https://private.example/latest.json"));
+        assertEquals("https://private.example:443/package.apk",UpdatePackagePolicy.manifest(manifest().put("downloadUrl","https://private.example:443/package.apk"),"dev.pocketengine",3,URI.create("https://private.example/latest.json")).getString("downloadUrl"));
         UpdatePackagePolicy.packageIdentity(manifest,"dev.pocketengine",3,"dev.pocketengine",4,"next",Set.of("same"),Set.of("same"));
         for(String wrong:new String[]{"https://private.example/latest?token=secret","http://private.example/latest","https://user:secret@private.example/latest"})try{UpdatePackagePolicy.source(wrong);fail(wrong);}catch(IllegalArgumentException expected){}
         try{UpdatePackagePolicy.manifest(manifest().put("downloadUrl","https://other.example/package.apk"),"dev.pocketengine",3,URI.create("https://private.example/latest.json"));fail("cross origin");}catch(SecurityException expected){}
