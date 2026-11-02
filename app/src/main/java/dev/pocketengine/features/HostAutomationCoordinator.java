@@ -46,7 +46,7 @@ public class HostAutomationCoordinator implements AutomationModule.AlarmHost {
     @Override public long nextAutomationAt(long now)throws Exception {
         if(Thread.currentThread().isInterrupted())return -1;
         AutomationModule automation=module();if(automation==null)return -1;
-        JSONObject scope=scope();long next=plans==null?-1:automation.nextPlanTaskAt(scope,now);
+        JSONObject scope=scope();long next=plans==null?-1:automation.nextPlanTaskAt(scope,now);if(plans!=null)next=earlier(next,plans.nextSemanticWake(automation,now));
         if(!notificationsAllowed()||!automation.getFollowUpPolicy(scope).optBoolean("enabled",false))return next;
         List<JSONObject> records=records(automation,scope),due=new ArrayList<>();
         for(JSONObject record:records){if(Thread.currentThread().isInterrupted())return -1;long at=record.getLong("followUpAt");if(at>now)next=earlier(next,at);else due.add(record);}

@@ -32,6 +32,8 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         String ensureOriginalReadOnlyTask(JSONObject occurrence)throws Exception;
         void startOriginalReadOnlyTask(JSONObject occurrence)throws Exception;
         AutomationConditionOutcome readOriginalOutcome(JSONObject occurrence)throws Exception;
+        /** Read-only original TaskStore wake; -1 means wait for the real task event. */
+        default long nextOriginalWake(JSONObject occurrence,long now)throws Exception{return -1;}
         /** True only when this condition belongs to an already owner-approved original plan. */
         default boolean hasApprovedOriginalPlan(JSONObject occurrence)throws Exception{return false;}
         /** Idempotent TaskStore lookup/admission by this same occurrence, never a fresh grant. */
@@ -46,8 +48,13 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         for(int i=0;i<pending.length()&&prepared<limit;i++){if(Thread.currentThread().isInterrupted())break;JSONObject occurrence=pending.getJSONObject(i);String state=occurrence.getString("status");
             if(state.equals("condition_pending")){String originalTask=port.ensureOriginalReadOnlyTask(occurrence);occurrence=module.bindSemanticCheck(occurrence.getString("id"),originalTask);port.startOriginalReadOnlyTask(occurrence);prepared++;}
             if(state.matches("condition_action_pending|condition_action_unknown")){admitConditionAction(module,port,occurrence);continue;}
+            if(state.matches("condition_checking|condition_check_unknown"))port.startOriginalReadOnlyTask(occurrence);
             completeOriginalConditionCheck(module,port,occurrence);
         }return prepared;
+    }
+    public long nextSemanticWake(AutomationModule module,long now)throws Exception{
+        ConditionTaskPort port=conditionTasks;if(port==null)return -1;JSONArray pending=module.pendingSemanticChecksWindow(20,semanticCursor.get());long next=-1;
+        for(int i=0;i<pending.length();i++){long actual;try{actual=port.nextOriginalWake(pending.getJSONObject(i),now);}catch(Exception unavailable){continue;}if(actual>=0)next=next<0?actual:Math.min(next,actual);}return next;
     }
     private void completeOriginalConditionCheck(AutomationModule module,ConditionTaskPort port,JSONObject occurrence)throws Exception{
         AutomationConditionOutcome outcome=port.readOriginalOutcome(occurrence);if(outcome==null)return;
@@ -85,7 +92,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
     public JSONObject proposeScheduleForTask(AutomationModule module,String task,String run,int epoch,String operation,JSONObject draft,RunControl original)throws Exception{
         tasks.checkExtensionRun(task,run,epoch,original);JSONObject current=tasks.get(task,false);privateOwner(current);
         if(current.optJSONObject("origin")!=null||current.optString("conversationId").isBlank())throw new SecurityException("仅本机原对话能提议私人计划");
-        JSONObject origin=new JSONObject().put("ownerId","owner").put("spaceId","private").put("taskId",task).put("conversationId",current.getString("conversationId"));
+        JSONObject origin=new JSONObject().put("ownerId","owner").put("spaceId","private").put("taskId",task).put("conversationId",current.getString("conversationId")).put("runId",run).put("epoch",epoch);
         JSONObject proposal=module.proposeScheduleForTask(origin,operation,draft);tasks.checkExtensionRun(task,run,epoch,original);return new JSONObject().put("proposal",proposal).put("reviewRequired",true).put("scheduled",false).put("conditionCheckAvailable",proposal.getJSONObject("draft").optJSONObject("semanticCondition")==null||conditionTasks!=null).put("executionAuthorized",false);
     }
     public JSONObject scheduleProposalsForTask(AutomationModule module,String task,String run,int epoch,RunControl original)throws Exception{
@@ -99,9 +106,15 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
             case "approveSchedule":{
                 JSONObject proposal=null;JSONArray proposals=module.scheduleProposalsForTask(null);for(int i=0;i<proposals.length();i++)if(id.equals(proposals.getJSONObject(i).getString("id")))proposal=proposals.getJSONObject(i);
                 if(proposal==null)throw new IllegalArgumentException("原计划草案不存在");if(proposal.getJSONObject("draft").optJSONObject("semanticCondition")!=null&&conditionTasks==null)throw new IllegalStateException("原生只读条件检查尚不可用，草案未排程");JSONObject source=proposal.getJSONObject("origin"),original=tasks.get(source.getString("taskId"),false);
-                if(original==null||original.optJSONObject("origin")!=null||!source.getString("conversationId").equals(original.optString("conversationId")))throw new SecurityException("草案的原本机对话任务已变化");privateOwner(original);
-                result.put("schedule",module.approveScheduleProposalForOwner(id,input.getString("digest")));break;
+                if(original==null||original.optJSONObject("origin")!=null||!source.getString("conversationId").equals(original.optString("conversationId"))||!source.getString("runId").equals(original.optString("runId"))||source.getInt("epoch")!=original.optInt("coordinatorEpoch"))throw new SecurityException("草案的原本机对话任务已变化");privateOwner(original);
+                boolean semantic=proposal.getJSONObject("draft").optJSONObject("semanticCondition")!=null;
+                if(semantic&&!Boolean.TRUE.equals(input.opt("modelUseConsent")))throw new SecurityException("须明确同意固定匿名公共来源的每次模型条件检查用途");
+                JSONObject approved=module.approveScheduleProposalForOwner(id,input.getString("digest"));
+                if(semantic)module.approveSemanticReadForOwner(approved.getJSONObject("rule").getString("id"),approved.getJSONObject("rule").getLong("revision"),true);
+                result.put("schedule",approved);break;
             }
+            case "approveSemanticRead":result.put("rule",module.approveSemanticReadForOwner(id,input.getLong("revision"),Boolean.TRUE.equals(input.opt("modelUseConsent"))));break;
+            case "bindSemanticPlan":result.put("rule",module.bindSemanticPlanForOwner(id,input.getLong("revision"),input.getString("planId"),input.getLong("planRevision"),input.getString("stepId")));break;
             case "create":result.put("plan",handle(module,"createPlan",new JSONObject().put("plan",input.getJSONObject("plan")),true).getJSONObject("plan"));break;
             case "approve":{JSONObject plan=module.handle("getPlan",new JSONObject().put("scope",scope()).put("id",id)).getJSONObject("plan");validateRemoteWaitPlan(plan);validateBusinessWaitPlan(plan);result.put("plan",module.approvePlanExecution(scope(),id,input.getLong("revision"),input.getJSONObject("settings")));break;}
             case "start":result.put("plan",module.startPlanExecution(scope(),id,input.getLong("revision")));break;
@@ -129,7 +142,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         for(int i=0;i<plans.length();i++){JSONObject plan=executionView(module,plans.getJSONObject(i));plans.put(i,plan);plan.put("requirements",controls==null?new JSONObject().put("allowed",false).put("reason","native_host_unavailable"):controls.requirementsForPlan(plan));
             JSONObject next=plan.optJSONObject("nextStep");if(plan.optJSONObject("execution")!=null&&next!=null)plan.put("runtimeDecision",module.inspectPlanTask(scope(),plan.getString("id"),next.getString("id")));
         }
-        return new JSONObject().put("plans",plans).put("scheduleProposals",module.scheduleProposalsForTask(null)).put("remoteWaitCandidates",tasks.automationRemoteWaitCandidates(20)).put("businessWaitCandidates",businessWaitCandidates()).put("businessWaitSourceAvailable",businessEvents!=null).put("conditions",module.conditionsSnapshot()).put("taskAuthority","TaskStore").put("workerState","not_inferred_from_plan_state").put("snapshotProcess",snapshotProcess).put("snapshotSequence",snapshotSequence.incrementAndGet());
+        return new JSONObject().put("plans",plans).put("semanticRules",module.snapshot().getJSONArray("rules")).put("scheduleProposals",module.scheduleProposalsForTask(null)).put("remoteWaitCandidates",tasks.automationRemoteWaitCandidates(20)).put("businessWaitCandidates",businessWaitCandidates()).put("businessWaitSourceAvailable",businessEvents!=null).put("conditions",module.conditionsSnapshot()).put("taskAuthority","TaskStore").put("workerState","not_inferred_from_plan_state").put("snapshotProcess",snapshotProcess).put("snapshotSequence",snapshotSequence.incrementAndGet());
     }
     private JSONObject executionView(AutomationModule module,JSONObject plan)throws Exception{
         if(plan.optJSONObject("execution")==null)return plan;JSONArray steps=plan.getJSONArray("steps");

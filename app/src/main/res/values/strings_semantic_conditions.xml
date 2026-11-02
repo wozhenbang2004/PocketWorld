@@ -1,0 +1,12 @@
+<resources>
+    <string name="semantic_condition_scope">仅检查这个固定匿名公共 URL 的服务器正文，不使用登录态、私人记忆、手机或脚本。每个到期实例最多一次 GET、三次当前模型调用，调用可能产生费用。登录、需要 JS、读取不完整或失败会保留为错误，不当作条件为假。</string>
+    <string name="semantic_condition_consent">同意此固定来源按原周期交给当前模型判断条件</string>
+    <string name="semantic_condition_approve_read">同意此条件检查用途</string>
+    <string name="semantic_condition_read_approved">已同意当前来源修订的检查用途；模型结论是有来源的意见，不是独立核实的事实。重复满足不会再次触发。</string>
+    <string name="semantic_condition_plan_note">可绑定已批准、尚未派发的原计划步骤。建议先按“手动开始”批准目标，再在这里绑定，最后从原目标点击开始。该步骤会等待条件首次满足或由假变真；授权、有效期和剩余预算沿用原计划。</string>
+    <string name="semantic_condition_choose_plan">选择已批准的原目标</string>
+    <string name="semantic_condition_choose_step">选择等待条件的步骤</string>
+    <string name="semantic_condition_bind">让这个原步骤等待条件</string>
+    <string name="semantic_condition_bound">已绑定原步骤。只有有真实来源见证的上升沿进入原计划准入；未知结果只查询原任务，不重复派发。</string>
+    <string name="semantic_condition_no_plan">当前没有可绑定的已批准步骤。可以继续仅在条件满足时提醒，或先创建并审阅一个原目标。</string>
+</resources>
