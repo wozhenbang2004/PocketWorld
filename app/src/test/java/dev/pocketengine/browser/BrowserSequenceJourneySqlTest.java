@@ -1,10 +1,10 @@
 package dev.pocketengine.browser;
 
-import android.app.Application;
 import android.os.Looper;
 import android.webkit.WebView;
 import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.BrowserActivity;
+import dev.pocketengine.EngineApplication;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunOutcome;
 import dev.pocketengine.runtime.AgentRunner;
@@ -25,7 +25,7 @@ import static org.junit.Assert.*;
 /** Original Activity, TaskStore journal/approvals, Runner and local model HTTP.
  * Explicit page callback fixtures test the native control flow, not browser rendering or JS behavior. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=Application.class)
+@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE) @LooperMode(LooperMode.Mode.PAUSED)
 public final class BrowserSequenceJourneySqlTest {
     enum Mode { FULL, WAIT_MET, WAIT_UNMET, REPLACED_NODE, CANCEL_AFTER_FIRST }

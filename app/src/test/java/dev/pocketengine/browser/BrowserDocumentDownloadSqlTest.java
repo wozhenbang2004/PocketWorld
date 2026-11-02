@@ -1,9 +1,9 @@
 package dev.pocketengine.browser;
 
-import android.app.Application;
 import android.os.Looper;
 import android.webkit.WebView;
 import dev.pocketengine.BrowserActivity;
+import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.attachments.AttachmentRepository;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
@@ -22,7 +22,7 @@ import static org.junit.Assert.*;
 
 /** Original document stream/worker, Activity driver, journal, AttachmentBook and reopened bytes.
  * JS bridge replies are explicit interface fixtures; actual blob/data JS is tested separately. */
-@RunWith(RobolectricTestRunner.class) @Config(sdk=35,manifest=Config.NONE,application=Application.class)
+@RunWith(RobolectricTestRunner.class) @Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE) @LooperMode(LooperMode.Mode.PAUSED)
 public final class BrowserDocumentDownloadSqlTest {
     static JSONObject j(Object... values)throws Exception {JSONObject out=new JSONObject();for(int i=0;i<values.length;i+=2)out.put((String)values[i],values[i+1]);return out;}
