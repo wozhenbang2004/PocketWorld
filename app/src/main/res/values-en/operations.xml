@@ -50,4 +50,9 @@
     <string name="ops_update_unknown">Original download is uncertain; query it without submitting again</string>
     <string name="ops_update_manual">Check, download and install when you choose</string>
     <string name="ops_update_permission">Open system installation permission</string>
+    <string name="ops_language_loading_draft">The original draft is still loading. Language was not changed.</string>
+    <string name="ops_language_submitting">The original input is being submitted. Change language after its receipt returns.</string>
+    <string name="ops_language_voice_busy">Finish or review the current dictation before changing language. Your original draft is retained.</string>
+    <string name="ops_language_draft_changed">The draft changed or was not fully saved. Language was not changed.</string>
+    <string name="ops_language_change_unknown">The language change could not be confirmed. Your original draft is saved; check the current language.</string>
 </resources>

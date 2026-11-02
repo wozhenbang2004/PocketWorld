@@ -50,4 +50,9 @@
     <string name="ops_update_unknown">原下载结果未知；只查询，不重复提交</string>
     <string name="ops_update_manual">由你主动检查、下载与安装</string>
     <string name="ops_update_permission">打开系统安装来源设置</string>
+    <string name="ops_language_loading_draft">原草稿尚未读取，未切换语言</string>
+    <string name="ops_language_submitting">原输入仍在提交，请稍后切换语言</string>
+    <string name="ops_language_voice_busy">请先结束或核对当前听写，再切换语言；原草稿保留</string>
+    <string name="ops_language_draft_changed">草稿尚未完整保存或已变化，未切换语言</string>
+    <string name="ops_language_change_unknown">语言切换未能确认；原草稿已保存，请核对当前语言</string>
 </resources>

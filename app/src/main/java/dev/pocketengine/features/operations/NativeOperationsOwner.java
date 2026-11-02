@@ -33,7 +33,7 @@ public final class NativeOperationsOwner implements AutoCloseable {
     }
     private JSONObject notifications()throws Exception{NotificationManager manager=app.getSystemService(NotificationManager.class);boolean permission=Build.VERSION.SDK_INT<33||app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED;return new JSONObject().put("enabled",manager!=null&&manager.areNotificationsEnabled()).put("permissionGranted",permission);}
     public void startChecks(Consumer<JSONObject> progress)throws Exception{
-        if(app.tasks.ownerDiagnosticsBusy())throw new IllegalStateException("原任务仍在执行，请先完成或停止，再运行兼容性自检");
+        if(app.activeId()!=null||app.tasks.ownerDiagnosticsBusy())throw new IllegalStateException("原任务仍在执行，请先完成或停止，再运行兼容性自检");
         RunControl original=new RunControl();if(!active.compareAndSet(null,original))throw new IllegalStateException("兼容性自检仍在运行");
         List<CompatibilityCheckRunner.Check> checks=new ArrayList<>();
         checks.add(new CompatibilityCheckRunner.Check("device",2000,control->{control.check();return new JSONObject().put("status",Build.VERSION.SDK_INT>=30&&Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a")?"passed":"partial").put("sdk",Build.VERSION.SDK_INT).put("distribution","android_11_arm64");}));
