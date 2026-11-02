@@ -328,7 +328,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 if(messageDetails) {
                     message.id?.let { id -> SourceMemoryControl("message", id, message.content, state, controller, compact = true) }
                     message.memoryReference?.let { reference ->
-                        reference.optJSONObject("answerSources")?.let { anchor -> TextButton(onClick = { answerSourceAnchor = JSONObject(anchor.toString()) }) { Text("回答保存的来源", fontSize = 11.sp) } }
+                        reference.optJSONObject("answerSources")?.let { anchor -> TextButton(onClick = { answerSourceAnchor = JSONObject(anchor.toString()) }) { Text(androidx.compose.ui.res.stringResource(dev.pocketengine.R.string.w2_sources_title), fontSize = 11.sp) } }
                         if (reference.optBoolean("memoryProvided", true)) TextButton(onClick = { taskMemoryReference = JSONObject(reference.toString()) }) { Text(dev.pocketengine.features.operations.LiteralUiText.text(dev.pocketengine.R.string.ui_lit_16d6c3f848ab, "本次提供的记忆来源"), fontSize = 11.sp) }
                     }
                 }
@@ -588,7 +588,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                     Column(Modifier.fillMaxWidth()) {
                     if (assistantTask && !groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optJSONObject("origin")?.optString("kind") != "channel" && teamRunReferences(task).isEmpty()) TextButton(onClick = { controller.openBrowserResearch(task.id) }, modifier = Modifier.testTag("task_browser_research")) { Text(dev.pocketengine.features.operations.LiteralUiText.text(dev.pocketengine.R.string.ui_lit_578a637caf2e, "网页与研究工作区")) }
                     if (!pairedTask && !groupTask && task.raw.optString("spaceId", "private") == "private") TextButton(onClick = { taskMemoryReference = task.raw.optJSONObject("evidence")?.optJSONObject("memoryReference")?.let { JSONObject(it.toString()) } ?: JSONObject().put("taskId", task.id).put("runId", task.raw.optString("runId").ifBlank { "unavailable" }).put("requestId", "unavailable").put("answerId", "unavailable") }) { Text(dev.pocketengine.features.operations.LiteralUiText.text(dev.pocketengine.R.string.ui_lit_884ab50dcfbc, "这次请求的记忆来源与原证据"), fontSize = 12.sp) }
-                    task.raw.optJSONObject("evidence")?.optJSONObject("memoryReference")?.optJSONObject("answerSources")?.let { anchor -> TextButton(onClick = { answerSourceAnchor = JSONObject(anchor.toString()) }) { Text("回答保存的来源", fontSize = 12.sp) } }
+                    task.raw.optJSONObject("evidence")?.optJSONObject("memoryReference")?.optJSONObject("answerSources")?.let { anchor -> TextButton(onClick = { answerSourceAnchor = JSONObject(anchor.toString()) }) { Text(androidx.compose.ui.res.stringResource(dev.pocketengine.R.string.w2_sources_title), fontSize = 12.sp) } }
                     controller.nativeDetailedTraces()?.let { TaskTraceControls(it, task.raw.optString("runId").takeIf(String::isNotBlank), controller::runModelConnectionWork) }
                     if (!groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") TextButton(onClick = { capabilityPreparation = true }) { Text(dev.pocketengine.features.operations.LiteralUiText.text(dev.pocketengine.R.string.ui_lit_d2396bbcad19, "这项任务的技能与工具"), fontSize = 12.sp) }
                     }

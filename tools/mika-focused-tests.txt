@@ -21,6 +21,7 @@ dev.pocketengine.features.assistant.OwnerQuestionRunnerNativeTest
 dev.pocketengine.features.assistant.notifications.OwnerQuestionReferenceTest
 dev.pocketengine.features.automation.AutomationConversationDeliveryNativeTest
 dev.pocketengine.features.automation.AutomationConversationIdleMountedNativeTest
+dev.pocketengine.features.automation.AutomationConversationSourceBarrierNativeTest
 dev.pocketengine.features.automation.AutomationIntervalTest
 dev.pocketengine.features.automation.AutomationScheduleProposalTest
 dev.pocketengine.features.automation.AutomationSemanticConditionTest
@@ -28,6 +29,8 @@ dev.pocketengine.features.automation.OriginalConditionTaskHostNativeTest
 dev.pocketengine.features.conversation.AnswerSourceProjectionNativeTest
 dev.pocketengine.features.conversation.ConversationMetadataTest
 dev.pocketengine.features.conversation.InterruptedAttemptsTest
+dev.pocketengine.features.devices.DeviceOwnerQuestionIdentityTest
+dev.pocketengine.features.devices.DeviceProtocolTest
 dev.pocketengine.features.local.project.ProjectCommandSpecTest
 dev.pocketengine.features.local.project.ProjectFileQueriesTest
 dev.pocketengine.features.local.runtime.NativeLaunchObservationTest

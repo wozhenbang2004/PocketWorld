@@ -84,7 +84,7 @@ internal fun ConversationReader(controller: PocketWorldController) {
                         message.attachments.forEach { file -> ConversationFileRow(file, controller.state, { controller.openReaderAttachment(page.window, message.id!!, file) }) }
                         if (message.attachmentCount > message.attachments.size) Text("另有 ${message.attachmentCount - message.attachments.size} 个原附件引用，当前元数据不可读。", style = MaterialTheme.typography.bodySmall)
                         message.memoryReference?.let { native ->
-                            native.optJSONObject("answerSources")?.let { anchor -> TextButton(onClick = { answerSourceAnchor = JSONObject(anchor.toString()) }) { Text("回答保存的来源") } }
+                            native.optJSONObject("answerSources")?.let { anchor -> TextButton(onClick = { answerSourceAnchor = JSONObject(anchor.toString()) }) { Text(androidx.compose.ui.res.stringResource(dev.pocketengine.R.string.w2_sources_title)) } }
                             if (native.optBoolean("memoryProvided", true)) TextButton(onClick = { reference=JSONObject(native.toString()) }) { Text("这次答复的记忆来源") }
                         }
                         message.submission?.let { receipt -> Text(when (receipt.optString("status")) { "withdrawn" -> "已撤回排队消息 · 保留原文审计"; "consumed" -> "本条已有采用回执"; "queued", "accepted" -> "本条已有接收回执"; else -> "原接收状态待核" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
