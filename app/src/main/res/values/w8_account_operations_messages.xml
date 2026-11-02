@@ -1,0 +1,168 @@
+<resources>
+    <string name="w8_account_text_000" formatted="false">账号版本不可用，请重新读取。</string>
+    <string name="w8_account_text_001" formatted="false">账号已变化，请重新检查后确认。</string>
+    <string name="w8_account_text_002" formatted="false">账号尚未授权使用套餐模型。请在授权页面确认权限；登录成功不等于可以推理。</string>
+    <string name="w8_account_text_003" formatted="false">服务商要求稍后重试。冷却结束前不会继续请求模型。</string>
+    <string name="w8_account_text_004" formatted="false">账号或授权会话已变化，请重新读取状态后再操作。</string>
+    <string name="w8_account_text_005" formatted="false">授权未获同意。没有建立新的连接，可以重新授权或返回。</string>
+    <string name="w8_account_text_006" formatted="false">授权已过期，请重新发起。</string>
+    <string name="w8_account_text_007" formatted="false">本次请求已取消；已经发生的远端操作不会因此撤回。</string>
+    <string name="w8_account_text_008" formatted="false">需要重新授权。请使用此记录对应的账号登录。</string>
+    <string name="w8_account_text_009" formatted="false">此账号已停用。启用后仍需核对授权状态。</string>
+    <string name="w8_account_text_010" formatted="false">账号服务正在处理其他请求，请稍后重试。</string>
+    <string name="w8_account_text_011" formatted="false">已有授权进行中，请先继续或取消当前授权。</string>
+    <string name="w8_account_text_012" formatted="false">上次授权被中断，请重新发起。</string>
+    <string name="w8_account_text_013" formatted="false">已达到本机账号数量上限。</string>
+    <string name="w8_account_text_014" formatted="false">请填写 1–80 个字符的账号名称。</string>
+    <string name="w8_account_text_015" formatted="false">尚未确认远端授权已撤销，请到服务商账号设置中核对。</string>
+    <string name="w8_account_text_016" formatted="false">账号记录已不存在，请重新读取状态。</string>
+    <string name="w8_account_text_017" formatted="false">本机账号服务暂不可用，请返回后重试。</string>
+    <string name="w8_account_text_018" formatted="false">服务商返回的模型目录不可用，请稍后重新读取。</string>
+    <string name="w8_account_text_019" formatted="false">请求未完成，请重新读取状态后重试。详细信息以原生服务的安全诊断为准。</string>
+    <string name="w8_account_text_020" formatted="false">账号已变化，旧请求的回执未用于当前状态。请重新读取。</string>
+    <string name="w8_account_text_021" formatted="false">请求已返回，结果格式不可用。请重新读取状态。</string>
+    <string name="w8_account_text_022" formatted="false">已读取本机账号状态。</string>
+    <string name="w8_account_text_023" formatted="false">请在系统浏览器用 ChatGPT 完成登录。返回应用后会显示真实连接结果。</string>
+    <string name="w8_account_text_024" formatted="false">授权已取消；未把本次请求标为已连接。</string>
+    <string name="w8_account_text_025" formatted="false">已在本机退出登录，账号记录仍保留。</string>
+    <string name="w8_account_text_026" formatted="false">" 本机凭据清理尚未完成。"</string>
+    <string name="w8_account_text_027" formatted="false">" 服务商已确认撤销授权。"</string>
+    <string name="w8_account_text_028" formatted="false">" 远端撤销尚未确认，请到服务商设置核对。"</string>
+    <string name="w8_account_text_029" formatted="false">已设为当前账号。模型仍需单独选择。</string>
+    <string name="w8_account_text_030" formatted="false">已保存套餐使用说明，不会自动发送模型请求。</string>
+    <string name="w8_account_text_031" formatted="false">已允许手动再试；这不代表用量限制已解除。请返回原任务核对后继续。</string>
+    <string name="w8_account_text_032" formatted="false">账号已启用；可用性仍以授权和套餐权限为准。</string>
+    <string name="w8_account_text_033" formatted="false">账号已停用，不会自动重新授权。</string>
+    <string name="w8_account_text_034" formatted="false">原生服务已完成刷新，请核对下方账号状态。</string>
+    <string name="w8_account_text_035" formatted="false">请求未能提交。请重新读取状态，不要重复执行不确定的操作。</string>
+    <string name="w8_account_text_036" formatted="false">账号记录已变化，请重新读取后再操作。</string>
+    <string name="w8_account_text_037" formatted="false">无法打开系统浏览器，请点击继续登录或取消。</string>
+    <string name="w8_account_text_038" formatted="false">返回</string>
+    <string name="w8_account_text_039" formatted="false">ChatGPT 账号</string>
+    <string name="w8_account_text_040" formatted="false">刷新状态</string>
+    <string name="w8_account_text_041" formatted="false">用 ChatGPT 登录并选择套餐可用模型。API key 连接继续保留；登录不会授予手机操作权限。</string>
+    <string name="w8_account_text_042" formatted="false">主模型连接能力尚未读取，请刷新状态后再选择。</string>
+    <string name="w8_account_text_043" formatted="false">当前主模型引用已失效，请刷新模型目录并重新选择，或在设置中明确切回 API 模型。</string>
+    <string name="w8_account_text_044" formatted="false">当前使用 · ChatGPT 套餐</string>
+    <string name="w8_account_text_045" formatted="false">此账号模型已确认支持图片；仍需机主开启发送和原任务授权。</string>
+    <string name="w8_account_text_046" formatted="false">图片能力未知或未获支持，截图不会发送。</string>
+    <string name="w8_account_text_047" formatted="false">无法打开 Manage usage，请在 ChatGPT 设置中查看用量。</string>
+    <string name="w8_account_text_048" formatted="false">Manage usage · 管理用量</string>
+    <string name="w8_account_text_049" formatted="false">本机账号服务已关闭。请返回后重新打开；当前记录不代表可用连接。</string>
+    <string name="w8_account_text_050" formatted="false">本机凭据清理尚未完成。退出登录不等于旧凭据已经从存储中清除，请保留此提示并检查原生服务诊断。</string>
+    <string name="w8_account_text_051" formatted="false">账号状态尚未读取。请点击“刷新状态”，读取成功前不会发起授权或修改账号。</string>
+    <string name="w8_account_text_052" formatted="false">正在用 ChatGPT 登录</string>
+    <string name="w8_account_text_053" formatted="false">正在确认服务商授权。返回页面或打开浏览器不代表登录成功。</string>
+    <string name="w8_account_text_054" formatted="false">此授权已过期，请读取最新状态后重新发起。</string>
+    <string name="w8_account_text_055" formatted="false">在系统浏览器完成登录。页面不接收密码、验证码或令牌。</string>
+    <string name="w8_account_text_056" formatted="false">未能打开授权，请重新读取状态后重试。</string>
+    <string name="w8_account_text_057" formatted="false">继续 ChatGPT 登录</string>
+    <string name="w8_account_text_058" formatted="false">取消登录</string>
+    <string name="w8_account_text_059" formatted="false">还没有账号</string>
+    <string name="w8_account_text_060" formatted="false">点击“用 ChatGPT 登录”，在系统浏览器完成登录后返回此页。只在确认授权成功后显示已连接。</string>
+    <string name="w8_account_text_061" formatted="false">未命名账号</string>
+    <string name="w8_account_text_062" formatted="false">" · 当前账号"</string>
+    <string name="w8_account_text_063" formatted="false">收起</string>
+    <string name="w8_account_text_064" formatted="false">管理</string>
+    <string name="w8_account_text_065" formatted="false">本机请求退避至：</string>
+    <string name="w8_account_text_066" formatted="false">。这不是套餐额度重置时间。</string>
+    <string name="w8_account_text_067" formatted="false">已登录，但尚未授予套餐模型使用权限。当前不可选择模型，请重新授权并核对权限。</string>
+    <string name="w8_account_text_068" formatted="false">使用来源：ChatGPT 套餐。实际限制请以 ChatGPT 用量设置为准。</string>
+    <string name="w8_account_text_069" formatted="false">套餐或此应用的用量限制已到达，新的套餐请求已暂停。这里不推算余额或重置时间。</string>
+    <string name="w8_account_text_070" formatted="false">已查看用量，允许手动再试</string>
+    <string name="w8_account_text_071" formatted="false">收起诊断信息</string>
+    <string name="w8_account_text_072" formatted="false">诊断信息</string>
+    <string name="w8_account_text_073" formatted="false">当前已退出本机；远端授权撤销尚未确认。此记录仍保留，可重新连接。</string>
+    <string name="w8_account_text_074" formatted="false">当前授权到期：</string>
+    <string name="w8_account_text_075" formatted="false">启用此账号</string>
+    <string name="w8_account_text_076" formatted="false">关闭会停止新的账号请求，不会撤回已发生的远端操作。</string>
+    <string name="w8_account_text_077" formatted="false">正在读取模型</string>
+    <string name="w8_account_text_078" formatted="false">读取可用模型</string>
+    <string name="w8_account_text_079" formatted="false">重新用 ChatGPT 登录</string>
+    <string name="w8_account_text_080" formatted="false">设为当前账号</string>
+    <string name="w8_account_text_081" formatted="false">刷新授权</string>
+    <string name="w8_account_text_082" formatted="false">服务商可用模型</string>
+    <string name="w8_account_text_083" formatted="false">选择后使用此账号模型的 ChatGPT 套餐。图片依当前目录证据和机主授权决定；不自动授权工具或执行手机任务。</string>
+    <string name="w8_account_text_084" formatted="false">选择后交由原生宿主重新核对，用于账号连接验证。尚未接入主模型推理，不会自动授权工具或执行手机任务。</string>
+    <string name="w8_account_text_085" formatted="false">筛选模型</string>
+    <string name="w8_account_text_086" formatted="false">服务商没有返回可用模型。请核对套餐权限，或稍后重新读取。</string>
+    <string name="w8_account_text_087" formatted="false">没有匹配的模型，试试其他名称。</string>
+    <string name="w8_account_text_088" formatted="false">图片输入：目录支持</string>
+    <string name="w8_account_text_089" formatted="false">图片输入：目录不支持</string>
+    <string name="w8_account_text_090" formatted="false">图片输入：未知，不发送图片</string>
+    <string name="w8_account_text_091" formatted="false">缺少有效原生引用，不能选择。</string>
+    <string name="w8_account_text_092" formatted="false">选择</string>
+    <string name="w8_account_text_093" formatted="false">模型目录已过期或与账号版本不符，请重新读取，旧目录不能选择。</string>
+    <string name="w8_account_text_094" formatted="false">退出登录</string>
+    <string name="w8_account_text_095" formatted="false">给 ChatGPT 账号起个本机名称（可选）</string>
+    <string name="w8_account_text_096" formatted="false">账号名称</string>
+    <string name="w8_account_text_097" formatted="false">例如：我的个人账号</string>
+    <string name="w8_account_text_098" formatted="false">名称只用于本机辨认。点击登录后会打开系统浏览器；不要在这里填写密码或令牌。</string>
+    <string name="w8_account_text_100" formatted="false">用 ChatGPT 登录</string>
+    <string name="w8_account_text_101" formatted="false">取消添加</string>
+    <string name="w8_account_text_102" formatted="false">用其他 ChatGPT 账号登录</string>
+    <string name="w8_account_text_103" formatted="false">模型与选项已提交，原生宿主会重新读取当前账号目录；请核对实际结果。</string>
+    <string name="w8_account_text_104" formatted="false">已通过 ChatGPT 登录</string>
+    <string name="w8_account_text_105" formatted="false">在本应用选择 ChatGPT 模型后，推理使用你的 ChatGPT 套餐，并受套餐及此应用的使用限制。API key 连接单独保留。</string>
+    <string name="w8_account_text_106" formatted="false">账号登录不授予手机操作权限。截图仍需你明确允许发送，且模型目录确认支持。</string>
+    <string name="w8_account_text_107" formatted="false">请在 ChatGPT 设置中查看用量。</string>
+    <string name="w8_account_text_108" formatted="false">知道了</string>
+    <string name="w8_account_text_109" formatted="false">退出这个账号？</string>
+    <string name="w8_account_text_110" formatted="false">将先停止本机使用并清理凭据，再尝试撤销远端授权。已发生的远端操作不会撤回，账号记录会保留。远端撤销和本机清理可能需要另行核对。</string>
+    <string name="w8_account_text_111" formatted="false">账号已变化，请关闭此确认并重新检查。</string>
+    <string name="w8_account_text_112" formatted="false">账号已变化，未提交退出。请重新检查。</string>
+    <string name="w8_account_text_113" formatted="false">确认退出登录</string>
+    <string name="w8_account_text_114" formatted="false">保留账号</string>
+    <string name="w8_account_text_115" formatted="false">套餐请求已暂停 · 查看用量</string>
+    <string name="w8_account_text_116" formatted="false">已连接</string>
+    <string name="w8_account_text_117" formatted="false">已登录 · 无模型使用权限</string>
+    <string name="w8_account_text_118" formatted="false">已退出登录</string>
+    <string name="w8_account_text_119" formatted="false">授权中</string>
+    <string name="w8_account_text_120" formatted="false">正在刷新授权</string>
+    <string name="w8_account_text_121" formatted="false">需要重新授权</string>
+    <string name="w8_account_text_122" formatted="false">请求暂时退避</string>
+    <string name="w8_account_text_123" formatted="false">状态待核对</string>
+    <string name="w8_account_text_124" formatted="false">"已停用 · "</string>
+    <string name="w8_account_recovery_000" formatted="false">ChatGPT 套餐或此应用的用量限制已到达。已暂停套餐请求，请在 Manage usage 查看；这里没有余额或重置时间。</string>
+    <string name="w8_account_recovery_001" formatted="false">当前 ChatGPT 账号暂不具备用套餐连接此应用的资格。请查看套餐设置，或明确选择 API key 连接；重复登录不会解除限制。</string>
+    <string name="w8_account_recovery_002" formatted="false">ChatGPT 的地区或政策限制阻止了此次请求。请检查官方使用条件；重复登录不会解除限制。</string>
+    <string name="w8_account_recovery_003" formatted="false">ChatGPT 拒绝了本次账号权限。登录身份已保留；请核对授权设置，确认授权已撤销时再重新登录。</string>
+    <string name="w8_account_recovery_004" formatted="false">已保留 ChatGPT 登录身份，但尚未授权使用套餐推理。可主动重新授权套餐权限，或选择 API key 连接。</string>
+    <string name="w8_account_recovery_005" formatted="false">当前 ChatGPT 模型不支持此次输入或能力。请检查所选模型；原请求没有自动重试。</string>
+    <string name="w8_account_recovery_006" formatted="false">此 ChatGPT 连接不支持该请求入口，请更新应用或选择已支持的连接。</string>
+    <string name="w8_account_recovery_007" formatted="false">所选账号、模型或授权版本没有已核实的图片能力。请刷新目录并重新选择支持图片的模型；图片未发送。</string>
+    <string name="w8_account_recovery_008" formatted="false">ChatGPT 登录已过期。请主动重新开始登录；旧授权码不会重试。</string>
+    <string name="w8_account_recovery_009" formatted="false">你已拒绝 ChatGPT 登录。可保留 API key 连接，或稍后主动重新登录。</string>
+    <string name="w8_account_recovery_010" formatted="false">ChatGPT 暂时不可用或网络中断。登录信息已保留，请稍后手动再试。</string>
+    <string name="w8_ops_error_000" formatted="false">原任务仍在执行，请先完成或停止，再运行兼容性自检</string>
+    <string name="w8_ops_error_001" formatted="false">兼容性自检仍在运行</string>
+    <string name="w8_ops_error_002" formatted="false">原本机诊断宿主未接线</string>
+    <string name="w8_ops_error_003" formatted="false">自检页面已关闭</string>
+    <string name="w8_cv_error_000" formatted="false">对话设置已变化，请刷新后再试</string>
+    <string name="w8_cv_error_001" formatted="false">一次只修改名称或置顶状态</string>
+    <string name="w8_cv_error_002" formatted="false">对话名称应为1至120字，不能包含控制字符</string>
+    <string name="w8_update_message_000" formatted="false">应用下载目录不可用</string>
+    <string name="w8_update_message_001" formatted="false">更新目录不可用</string>
+    <string name="w8_update_message_002" formatted="false">更新状态超过限定大小</string>
+    <string name="w8_update_message_003" formatted="false">更新状态保存未确认</string>
+    <string name="w8_update_message_004" formatted="false">请先核对或取消原下载，不能用换源覆盖它</string>
+    <string name="w8_update_message_005" formatted="false">尚未配置正式私有分发源</string>
+    <string name="w8_update_message_006" formatted="false">私有更新源需要正式分发授权；未改用公开源</string>
+    <string name="w8_update_message_007" formatted="false">更新清单过大</string>
+    <string name="w8_update_message_008" formatted="false">更新选择已变化</string>
+    <string name="w8_update_message_009" formatted="false">请先核对当前更新清单</string>
+    <string name="w8_update_message_010" formatted="false">系统下载服务不可用</string>
+    <string name="w8_update_message_011" formatted="false">Pocket World update</string>
+    <string name="w8_update_message_012" formatted="false">原下载是否已创建尚不确定；只查询原编号，不重复下载</string>
+    <string name="w8_update_message_013" formatted="false">原更新文件定位无效</string>
+    <string name="w8_update_message_014" formatted="false">更新文件越界</string>
+    <string name="w8_update_message_015" formatted="false">原下载查询超过限定窗口</string>
+    <string name="w8_update_message_016" formatted="false">发现多个原下载，未推断唯一编号</string>
+    <string name="w8_update_message_017" formatted="false">不能取消另一更新</string>
+    <string name="w8_update_message_018" formatted="false">原更新文件清理未确认</string>
+    <string name="w8_update_message_019" formatted="false">更新文件大小或摘要不符</string>
+    <string name="w8_update_message_020" formatted="false">更新文件不是可读安装包</string>
+    <string name="w8_update_message_021" formatted="false">原更新尚未验证完成</string>
+    <string name="w8_update_message_022" formatted="false">请在系统设置允许本应用请求安装，再由你重新选择安装</string>
+    <string name="w8_update_message_023" formatted="false">原安装文件授权已变化</string>
+</resources>

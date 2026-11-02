@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import dev.pocketengine.R;
 
 /** Foreground owner maintenance surface; no remote/model entry or automatic startup work. */
 public final class NativeOperationsOwner implements AutoCloseable {
@@ -34,16 +35,16 @@ public final class NativeOperationsOwner implements AutoCloseable {
     }
     private JSONObject notifications()throws Exception{NotificationManager manager=app.getSystemService(NotificationManager.class);boolean permission=Build.VERSION.SDK_INT<33||app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED;return new JSONObject().put("enabled",manager!=null&&manager.areNotificationsEnabled()).put("permissionGranted",permission);}
     public void startChecks(Consumer<JSONObject> progress)throws Exception{
-        if(app.activeId()!=null||app.tasks.ownerDiagnosticsBusy())throw new IllegalStateException("原任务仍在执行，请先完成或停止，再运行兼容性自检");
-        RunControl original=new RunControl();if(!active.compareAndSet(null,original))throw new IllegalStateException("兼容性自检仍在运行");
+        if(app.activeId()!=null||app.tasks.ownerDiagnosticsBusy())throw new IllegalStateException(LiteralUiText.text(R.string.w8_ops_error_000, "原任务仍在执行，请先完成或停止，再运行兼容性自检"));
+        RunControl original=new RunControl();if(!active.compareAndSet(null,original))throw new IllegalStateException(LiteralUiText.text(R.string.w8_ops_error_001, "兼容性自检仍在运行"));
         List<CompatibilityCheckRunner.Check> checks=new ArrayList<>();
         checks.add(new CompatibilityCheckRunner.Check("device",2000,control->{control.check();return new JSONObject().put("status",Build.VERSION.SDK_INT>=30&&Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a")?"passed":"partial").put("sdk",Build.VERSION.SDK_INT).put("distribution","android_11_arm64");}));
         checks.add(new CompatibilityCheckRunner.Check("permissions",3000,control->{control.check();JSONObject value=notifications();return value.put("status",value.getBoolean("enabled")&&value.getBoolean("permissionGranted")?"passed":"partial").put("scope","notification_readiness_only");}));
         checks.add(new CompatibilityCheckRunner.Check("phone",5000,control->{control.check();return OperationsEvidence.phonePractice(app.phoneReadiness(),app.phonePracticeResult());}));
         checks.add(new CompatibilityCheckRunner.Check("browser",15000,new IsolatedWebProbe(app)));
-        checks.add(new CompatibilityCheckRunner.Check("runtime",13000,control->{EngineModule module=app.features.module("local");if(!(module instanceof OperationsRuntime runtime))throw new IllegalStateException("原本机诊断宿主未接线");return runtime.runOwnerCompatibilityProbe(control);}));
+        checks.add(new CompatibilityCheckRunner.Check("runtime",13000,control->{EngineModule module=app.features.module("local");if(!(module instanceof OperationsRuntime runtime))throw new IllegalStateException(LiteralUiText.text(R.string.w8_ops_error_002, "原本机诊断宿主未接线"));return runtime.runOwnerCompatibilityProbe(control);}));
         try{worker.execute(()->{try{CompatibilityCheckRunner.run(checks,original,progress);}catch(Exception failure){try{progress.accept(new JSONObject().put("ended",true).put("status","failed").put("reason","selfcheck_interrupted").put("resourcesReleased",false));}catch(Exception ignored){}}finally{active.compareAndSet(original,null);}});}
-        catch(RejectedExecutionException closed){active.compareAndSet(original,null);throw new IllegalStateException("自检页面已关闭");}
+        catch(RejectedExecutionException closed){active.compareAndSet(original,null);throw new IllegalStateException(LiteralUiText.text(R.string.w8_ops_error_003, "自检页面已关闭"));}
     }
     public void cancelChecks(){RunControl original=active.get();if(original!=null)original.cancel();}
     public boolean checksRunning(){return active.get()!=null;}

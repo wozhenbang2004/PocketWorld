@@ -1,0 +1,168 @@
+<resources>
+    <string name="w8_account_text_000" formatted="false">The account version is unavailable. Read the status again.</string>
+    <string name="w8_account_text_001" formatted="false">The account changed. Review it again before confirming.</string>
+    <string name="w8_account_text_002" formatted="false">Plan model access is not authorized. Review permissions on the authorization page; signing in alone does not permit inference.</string>
+    <string name="w8_account_text_003" formatted="false">The provider asked to retry later. No model request is made during the cooldown.</string>
+    <string name="w8_account_text_004" formatted="false">The account or authorization session changed. Read the status again before continuing.</string>
+    <string name="w8_account_text_005" formatted="false">Authorization was declined. No new connection was created. Authorize again or go back.</string>
+    <string name="w8_account_text_006" formatted="false">Authorization expired. Start it again.</string>
+    <string name="w8_account_text_007" formatted="false">This request was cancelled. Remote operations that already occurred are not undone.</string>
+    <string name="w8_account_text_008" formatted="false">Authorization is required again. Sign in with the account for this record.</string>
+    <string name="w8_account_text_009" formatted="false">This account is disabled. Review its authorization status after enabling it.</string>
+    <string name="w8_account_text_010" formatted="false">The account service is handling another request. Try again later.</string>
+    <string name="w8_account_text_011" formatted="false">Authorization is already in progress. Continue or cancel it first.</string>
+    <string name="w8_account_text_012" formatted="false">The previous authorization was interrupted. Start it again.</string>
+    <string name="w8_account_text_013" formatted="false">The local account limit has been reached.</string>
+    <string name="w8_account_text_014" formatted="false">Use 1–80 characters for the account name.</string>
+    <string name="w8_account_text_015" formatted="false">Remote authorization revocation is unconfirmed. Review the account settings with the provider.</string>
+    <string name="w8_account_text_016" formatted="false">The account record no longer exists. Read the status again.</string>
+    <string name="w8_account_text_017" formatted="false">The local account service is unavailable. Go back and try again.</string>
+    <string name="w8_account_text_018" formatted="false">The provider model catalog is unavailable. Read it again later.</string>
+    <string name="w8_account_text_019" formatted="false">The request did not complete. Read the status before trying again. Review the native service diagnostics for details.</string>
+    <string name="w8_account_text_020" formatted="false">The account changed. The old request receipt was not applied to the current state. Read it again.</string>
+    <string name="w8_account_text_021" formatted="false">The request returned an unreadable result. Read the status again.</string>
+    <string name="w8_account_text_022" formatted="false">Local account status read.</string>
+    <string name="w8_account_text_023" formatted="false">Finish signing in to ChatGPT in the system browser. Return here for the actual connection result.</string>
+    <string name="w8_account_text_024" formatted="false">Authorization cancelled. This request was not marked as connected.</string>
+    <string name="w8_account_text_025" formatted="false">Signed out locally. The account record is retained.</string>
+    <string name="w8_account_text_026" formatted="false">" Local credential cleanup is incomplete."</string>
+    <string name="w8_account_text_027" formatted="false">" The provider confirmed authorization revocation."</string>
+    <string name="w8_account_text_028" formatted="false">" Remote revocation is unconfirmed. Review the provider settings."</string>
+    <string name="w8_account_text_029" formatted="false">Current account selected. Choose its model separately.</string>
+    <string name="w8_account_text_030" formatted="false">Plan usage information saved. No model request is sent automatically.</string>
+    <string name="w8_account_text_031" formatted="false">Manual retry is now allowed. This does not prove that the usage limit has cleared. Review the original task before continuing.</string>
+    <string name="w8_account_text_032" formatted="false">Account enabled. Availability still depends on authorization and plan permissions.</string>
+    <string name="w8_account_text_033" formatted="false">Account disabled. Authorization will not restart automatically.</string>
+    <string name="w8_account_text_034" formatted="false">The native service finished refreshing. Review the account status below.</string>
+    <string name="w8_account_text_035" formatted="false">The request could not be submitted. Read the status; do not repeat an operation with an unknown outcome.</string>
+    <string name="w8_account_text_036" formatted="false">The account record changed. Read it again before continuing.</string>
+    <string name="w8_account_text_037" formatted="false">The system browser could not open. Continue signing in or cancel.</string>
+    <string name="w8_account_text_038" formatted="false">Back</string>
+    <string name="w8_account_text_039" formatted="false">ChatGPT accounts</string>
+    <string name="w8_account_text_040" formatted="false">Refresh status</string>
+    <string name="w8_account_text_041" formatted="false">Sign in with ChatGPT and choose a model available through your plan. API key connections remain available. Signing in does not grant phone control.</string>
+    <string name="w8_account_text_042" formatted="false">The main model connection status has not been read. Refresh it before selecting a model.</string>
+    <string name="w8_account_text_043" formatted="false">The current main model reference is no longer valid. Refresh the catalog and select a model again, or explicitly choose an API model in settings.</string>
+    <string name="w8_account_text_044" formatted="false">Currently using · ChatGPT plan</string>
+    <string name="w8_account_text_045" formatted="false">This account model has confirmed image support. Sending images and the original task authorization are still required.</string>
+    <string name="w8_account_text_046" formatted="false">Image support is unknown or unavailable. Screenshots will not be sent.</string>
+    <string name="w8_account_text_047" formatted="false">Manage usage could not open. Review usage in ChatGPT settings.</string>
+    <string name="w8_account_text_048" formatted="false">Manage usage</string>
+    <string name="w8_account_text_049" formatted="false">The local account service is closed. Go back and reopen it. Retained records do not prove an available connection.</string>
+    <string name="w8_account_text_050" formatted="false">Local credential cleanup is incomplete. Signing out does not prove that old credentials were removed. Keep this notice and review the native service diagnostics.</string>
+    <string name="w8_account_text_051" formatted="false">Account status has not been read. Select Refresh status. Authorization and account changes stay unavailable until it succeeds.</string>
+    <string name="w8_account_text_052" formatted="false">Signing in with ChatGPT</string>
+    <string name="w8_account_text_053" formatted="false">Confirming provider authorization. Returning here or opening the browser does not prove sign-in succeeded.</string>
+    <string name="w8_account_text_054" formatted="false">This authorization expired. Read the latest status before starting again.</string>
+    <string name="w8_account_text_055" formatted="false">Complete sign-in in the system browser. This page does not accept passwords, codes or tokens.</string>
+    <string name="w8_account_text_056" formatted="false">Authorization could not open. Read the status before trying again.</string>
+    <string name="w8_account_text_057" formatted="false">Continue ChatGPT sign-in</string>
+    <string name="w8_account_text_058" formatted="false">Cancel sign-in</string>
+    <string name="w8_account_text_059" formatted="false">No accounts yet</string>
+    <string name="w8_account_text_060" formatted="false">Select Sign in with ChatGPT and return after finishing in the system browser. Connected is shown only after authorization is confirmed.</string>
+    <string name="w8_account_text_061" formatted="false">Unnamed account</string>
+    <string name="w8_account_text_062" formatted="false">" · Current account"</string>
+    <string name="w8_account_text_063" formatted="false">Collapse</string>
+    <string name="w8_account_text_064" formatted="false">Manage</string>
+    <string name="w8_account_text_065" formatted="false">"Local requests pause until: "</string>
+    <string name="w8_account_text_066" formatted="false">. This is not a plan usage reset time.</string>
+    <string name="w8_account_text_067" formatted="false">Signed in without plan model permission. Models cannot be selected. Authorize again and review permissions.</string>
+    <string name="w8_account_text_068" formatted="false">Usage source: ChatGPT plan. Review actual limits in ChatGPT usage settings.</string>
+    <string name="w8_account_text_069" formatted="false">The plan or app usage limit was reached. New plan requests are paused. No balance or reset time is estimated here.</string>
+    <string name="w8_account_text_070" formatted="false">Usage reviewed; allow manual retry</string>
+    <string name="w8_account_text_071" formatted="false">Hide diagnostics</string>
+    <string name="w8_account_text_072" formatted="false">Diagnostics</string>
+    <string name="w8_account_text_073" formatted="false">Signed out locally. Remote authorization revocation is unconfirmed. This record is retained and can be reconnected.</string>
+    <string name="w8_account_text_074" formatted="false">"Current authorization expires: "</string>
+    <string name="w8_account_text_075" formatted="false">Enable this account</string>
+    <string name="w8_account_text_076" formatted="false">Disabling stops new account requests. It does not undo remote operations that already occurred.</string>
+    <string name="w8_account_text_077" formatted="false">Reading models</string>
+    <string name="w8_account_text_078" formatted="false">Read available models</string>
+    <string name="w8_account_text_079" formatted="false">Sign in with ChatGPT again</string>
+    <string name="w8_account_text_080" formatted="false">Set as current account</string>
+    <string name="w8_account_text_081" formatted="false">Refresh authorization</string>
+    <string name="w8_account_text_082" formatted="false">Available provider models</string>
+    <string name="w8_account_text_083" formatted="false">Selecting uses the ChatGPT plan for this account model. Images depend on catalog evidence and owner permission. It does not authorize tools or run phone tasks automatically.</string>
+    <string name="w8_account_text_084" formatted="false">The native host will review this selection for connection verification. Main model inference is not connected yet. It does not authorize tools or run phone tasks automatically.</string>
+    <string name="w8_account_text_085" formatted="false">Filter models</string>
+    <string name="w8_account_text_086" formatted="false">The provider returned no available models. Review plan permissions or read the catalog again later.</string>
+    <string name="w8_account_text_087" formatted="false">No matching models. Try another name.</string>
+    <string name="w8_account_text_088" formatted="false">Image input: supported by catalog</string>
+    <string name="w8_account_text_089" formatted="false">Image input: not supported by catalog</string>
+    <string name="w8_account_text_090" formatted="false">Image input: unknown; images are not sent</string>
+    <string name="w8_account_text_091" formatted="false">No valid native reference. This model cannot be selected.</string>
+    <string name="w8_account_text_092" formatted="false">Select</string>
+    <string name="w8_account_text_093" formatted="false">The model catalog expired or belongs to another account version. Read it again; the old catalog cannot be selected.</string>
+    <string name="w8_account_text_094" formatted="false">Sign out</string>
+    <string name="w8_account_text_095" formatted="false">Local name for this ChatGPT account (optional)</string>
+    <string name="w8_account_text_096" formatted="false">Account name</string>
+    <string name="w8_account_text_097" formatted="false">For example: my personal account</string>
+    <string name="w8_account_text_098" formatted="false">This name is only for local identification. Sign-in opens the system browser. Do not enter passwords or tokens here.</string>
+    <string name="w8_account_text_100" formatted="false">Sign in with ChatGPT</string>
+    <string name="w8_account_text_101" formatted="false">Cancel adding</string>
+    <string name="w8_account_text_102" formatted="false">Sign in with another ChatGPT account</string>
+    <string name="w8_account_text_103" formatted="false">Model and options submitted. The native host will read the current account catalog again. Review the actual result.</string>
+    <string name="w8_account_text_104" formatted="false">Signed in with ChatGPT</string>
+    <string name="w8_account_text_105" formatted="false">After selecting a ChatGPT model here, inference uses your ChatGPT plan and is subject to plan and app limits. API key connections remain separate.</string>
+    <string name="w8_account_text_106" formatted="false">Account sign-in does not grant phone control. Screenshots require your explicit permission and confirmed model catalog support.</string>
+    <string name="w8_account_text_107" formatted="false">Review usage in ChatGPT settings.</string>
+    <string name="w8_account_text_108" formatted="false">Got it</string>
+    <string name="w8_account_text_109" formatted="false">Sign out of this account?</string>
+    <string name="w8_account_text_110" formatted="false">Local use will stop and credentials will be cleared before remote authorization revocation is attempted. Existing remote operations are not undone and the account record is retained. Review remote revocation and local cleanup separately.</string>
+    <string name="w8_account_text_111" formatted="false">The account changed. Close this confirmation and review it again.</string>
+    <string name="w8_account_text_112" formatted="false">The account changed. Sign-out was not submitted. Review it again.</string>
+    <string name="w8_account_text_113" formatted="false">Confirm sign-out</string>
+    <string name="w8_account_text_114" formatted="false">Keep account</string>
+    <string name="w8_account_text_115" formatted="false">Plan requests paused · Review usage</string>
+    <string name="w8_account_text_116" formatted="false">Connected</string>
+    <string name="w8_account_text_117" formatted="false">Signed in · No model access</string>
+    <string name="w8_account_text_118" formatted="false">Signed out</string>
+    <string name="w8_account_text_119" formatted="false">Authorizing</string>
+    <string name="w8_account_text_120" formatted="false">Refreshing authorization</string>
+    <string name="w8_account_text_121" formatted="false">Authorization required</string>
+    <string name="w8_account_text_122" formatted="false">Requests in cooldown</string>
+    <string name="w8_account_text_123" formatted="false">Review status</string>
+    <string name="w8_account_text_124" formatted="false">"Disabled · "</string>
+    <string name="w8_account_recovery_000" formatted="false">The ChatGPT plan or app usage limit was reached. Plan requests are paused. Review Manage usage; no balance or reset time is available here.</string>
+    <string name="w8_account_recovery_001" formatted="false">This ChatGPT account is not currently eligible to connect this app through its plan. Review plan settings or explicitly select an API key connection. Signing in repeatedly does not remove the limit.</string>
+    <string name="w8_account_recovery_002" formatted="false">ChatGPT region or policy restrictions blocked this request. Review the official terms. Signing in repeatedly does not remove the restriction.</string>
+    <string name="w8_account_recovery_003" formatted="false">ChatGPT rejected this account permission. Sign-in identity is retained. Review authorization settings and sign in again only after revocation is confirmed.</string>
+    <string name="w8_account_recovery_004" formatted="false">ChatGPT sign-in identity is retained, but plan inference is not authorized. You may explicitly authorize plan access again or select an API key connection.</string>
+    <string name="w8_account_recovery_005" formatted="false">The current ChatGPT model does not support this input or capability. Review the selected model. The original request was not retried automatically.</string>
+    <string name="w8_account_recovery_006" formatted="false">This ChatGPT connection does not support the requested route. Update the app or select a supported connection.</string>
+    <string name="w8_account_recovery_007" formatted="false">The selected account, model or authorization version has no verified image capability. Refresh the catalog and select an image-capable model. Images were not sent.</string>
+    <string name="w8_account_recovery_008" formatted="false">ChatGPT sign-in expired. Explicitly start sign-in again. The old authorization code will not be retried.</string>
+    <string name="w8_account_recovery_009" formatted="false">You declined ChatGPT sign-in. Keep the API key connection or explicitly sign in again later.</string>
+    <string name="w8_account_recovery_010" formatted="false">ChatGPT is temporarily unavailable or the network disconnected. Sign-in information is retained. Try again manually later.</string>
+    <string name="w8_ops_error_000" formatted="false">The original task is still running. Finish or stop it before running compatibility checks.</string>
+    <string name="w8_ops_error_001" formatted="false">Compatibility checks are already running.</string>
+    <string name="w8_ops_error_002" formatted="false">Local diagnostics are unavailable.</string>
+    <string name="w8_ops_error_003" formatted="false">The check page is closed.</string>
+    <string name="w8_cv_error_000" formatted="false">Conversation settings changed. Refresh before trying again.</string>
+    <string name="w8_cv_error_001" formatted="false">Change only the name or pin state at a time.</string>
+    <string name="w8_cv_error_002" formatted="false">Use a conversation name of 1–120 characters without control characters.</string>
+    <string name="w8_update_message_000" formatted="false">The app download directory is unavailable.</string>
+    <string name="w8_update_message_001" formatted="false">The update directory is unavailable.</string>
+    <string name="w8_update_message_002" formatted="false">The update state exceeds its size limit.</string>
+    <string name="w8_update_message_003" formatted="false">Saving the update state is unconfirmed.</string>
+    <string name="w8_update_message_004" formatted="false">Review or cancel the original download before changing its source.</string>
+    <string name="w8_update_message_005" formatted="false">No approved private distribution source is configured.</string>
+    <string name="w8_update_message_006" formatted="false">The private update source requires distribution authorization. No public source was substituted.</string>
+    <string name="w8_update_message_007" formatted="false">The update manifest is too large.</string>
+    <string name="w8_update_message_008" formatted="false">The selected update changed.</string>
+    <string name="w8_update_message_009" formatted="false">Review the current update manifest first.</string>
+    <string name="w8_update_message_010" formatted="false">The system download service is unavailable.</string>
+    <string name="w8_update_message_011" formatted="false">Pocket World update</string>
+    <string name="w8_update_message_012" formatted="false">Whether the original download was created is unknown. Query its original identifier; do not download it again.</string>
+    <string name="w8_update_message_013" formatted="false">The original update file reference is invalid.</string>
+    <string name="w8_update_message_014" formatted="false">The update file is outside its allowed directory.</string>
+    <string name="w8_update_message_015" formatted="false">The original download query exceeded its bounded window.</string>
+    <string name="w8_update_message_016" formatted="false">Multiple original downloads were found. A unique identifier was not assumed.</string>
+    <string name="w8_update_message_017" formatted="false">Another update cannot be cancelled.</string>
+    <string name="w8_update_message_018" formatted="false">Cleanup of the original update file is unconfirmed.</string>
+    <string name="w8_update_message_019" formatted="false">The update file size or digest does not match.</string>
+    <string name="w8_update_message_020" formatted="false">The update file is not a readable app package.</string>
+    <string name="w8_update_message_021" formatted="false">The original update has not finished verification.</string>
+    <string name="w8_update_message_022" formatted="false">Allow this app to request installation in system settings, then select installation again yourself.</string>
+    <string name="w8_update_message_023" formatted="false">The original installation file authorization changed.</string>
+</resources>
