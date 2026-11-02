@@ -97,3 +97,14 @@ Android or actual user-task acceptance.
 - Relative module/file paths: checked and present at handoff.
 - TypeScript build, real DOM visuals, pointer/keyboard journeys, Android WebView, performance,
   application route wiring and end-to-end owner/receipt contracts: await root's CI/device evidence.
+
+
+## Composer send availability (mobile composition refinement)
+
+`composer.tsx` retains the saved Affect Composer DOM, textarea auto-sizing, voice state,
+attachments, toolbar and controlled input owner/epoch behavior. Optional `sendDisabled`
+and `sendLabel` props default to the original behavior. The existing `canSend` guard now
+protects both its source PressButton and textarea Enter submission; disabling send does
+not disable editing or clear the controlled draft. This allows the product to retain a
+first draft while the user connects a model. No timer, synthetic submission or new
+composer implementation is introduced.

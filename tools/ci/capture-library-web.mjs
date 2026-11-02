@@ -29,7 +29,9 @@ const manifest = {
     'Only components actually mounted and checked below are evidenced; no claim of all 42 groups.',
     'Browser pointer gestures are scripted; Android touch/IME/accessibility remain separate checks.',
   ],
-  fixture: { version: 1, bridgeProtocol: 'v1/id/documentId/state/revision', persistence: 'none', externalCalls: 'blocked' },
+  fixture: { version: 2, bridgeProtocol: 'v1/id/documentId/state/revision', persistence: 'none', externalCalls: 'blocked',
+    taskSchema: 'PocketWebState UiTask + TaskStore bounded history pages; no synthetic agent tree or future steps',
+    content: 'Representative project-material review, synthetic content; no file or task is changed' },
   startedAt: new Date().toISOString(), viewports: [], captures: [], errors: [], requests: [], assets: [],
 };
 let stage = 'preflight';
@@ -83,69 +85,91 @@ function emptySnapshot() {
 function populatedSnapshot() {
   const value = emptySnapshot();
   const at = Date.UTC(2026, 10, 1, 12, 0);
-  const members = [
-    { id: 'fixture-planner', name: '夹具 · 规划成员', status: 'returned', task: '仅用于组件布局核对' },
-    { id: 'fixture-reviewer', name: '夹具 · 审阅成员', status: 'waiting_approval', task: '静态 UI 夹具，未执行工作' },
+  const taskId = 'visual-fixture-task-review';
+  const runId = 'visual-fixture-run';
+  // This is the real bounded history page shape. The content is representative
+  // test input. It is not a tool receipt, file reference, or production execution.
+  const historyEvents = [
+    { position: 3, eventKey: `task:${taskId}:event-order:3`, type: 'result', status: 'available', bodyBytes: 168,
+      event: { type: 'result', status: 'needs_confirmation', runId, at: at + 90_000,
+        message: '已有资料分类建议，请确认后再继续。现有文件保持原位置。' } },
+    { position: 2, eventKey: `task:${taskId}:event-order:2`, type: 'observation', status: 'available', bodyBytes: 146,
+      event: { type: 'observation', status: 'completed', runId, at: at + 60_000,
+        message: '项目资料可按需求、会议和参考资料分组。' } },
+    { position: 1, eventKey: `task:${taskId}:event-order:1`, type: 'run', status: 'available', bodyBytes: 112,
+      event: { type: 'run', status: 'running', runId, at,
+        message: '先整理分类建议，再由你确认。' } },
   ];
   const task = {
-    id: 'visual-fixture-task-review', goal: '隔离视觉夹具 · 核对页面结构', status: 'needs_confirmation',
-    summary: '此记录只用于观察正式组件布局；没有模型调用、设备操作或真实交付。',
-    executionMode: 'background', updatedAt: at,
+    id: taskId, goal: '整理项目资料', status: 'needs_confirmation',
+    summary: '建议分为需求、会议和参考资料三组。现有文件尚未移动，等你核对。',
+    executionMode: 'background', updatedAt: at + 90_000,
     raw: {
-      kind: 'assistant', status: 'needs_confirmation', runId: 'visual-fixture-run', coordinatorEpoch: 1,
+      id: taskId, kind: 'assistant', status: 'needs_confirmation', runId, coordinatorEpoch: 1,
       revision: 1, toolLimit: 30, modelCallLimit: 16,
-      executionScope: { fixture: true, toolLimit: 30, modelCallLimit: 16 },
-      steps: [
-        { id: 'fixture-step-read', title: '夹具步骤 · 读取约束', status: 'complete', durationMillis: 1200 },
-        { id: 'fixture-step-review', title: '夹具步骤 · 待审阅布局', status: 'needs_approval', children: [
-          { id: 'fixture-sub-title', title: '夹具子步骤 · 信息层级', status: 'returned' },
-          { id: 'fixture-sub-control', title: '夹具子步骤 · 控件密度', status: 'pending' },
-        ] },
-        { id: 'fixture-step-delivery', title: '夹具步骤 · 尚未交付', status: 'pending' },
-      ],
-      operations: [{
-        operationId: 'visual-fixture-operation', title: '夹具工具卡 · read_layout', state: 'returned',
-        arguments: { source: 'isolated UI fixture', path: 'layout-notes.md' },
-        receipt: { fixture: true, description: '静态结构示例；未运行工具。' }, durationMillis: 1200,
-      }],
-      executionTree: { roots: [{ id: 'fixture-coordinator', name: '夹具 · 协调成员', status: 'waiting_approval',
-        task: '静态协作关系，不代表正在执行', children: members }] },
-      handoffs: { agents: members, routes: [{ id: 'fixture-route', fromId: members[0].id, toId: members[1].id,
-        title: '夹具材料交接', items: [{ id: 'fixture-material', title: '夹具 · 层级检查清单',
-          summary: '只展示卡片与展开布局', status: 'returned',
-          materials: [{ id: 'fixture-file', title: 'fixture-layout.md' }], reason: '隔离测试数据，未发生实际交接。' }] }] },
-      findings: { agents: members, findings: [{ id: 'fixture-finding', title: '夹具发现 · 输入区保持可达',
-        agentId: members[1].id, agentName: members[1].name, file: 'fixture-layout.md',
-        body: '这段文字仅用于验证展开后的阅读密度与换行。', reviewed: false }] },
-      memory: [{ id: 'fixture-memory', text: '隔离夹具：保持黑白灰与紧凑信息层级。',
-        scope: '项目', sourceLabel: '隔离视觉夹具', revision: 1 }],
-      contextWindow: { model: '视觉夹具，非模型', used: 2400, total: 8000, unit: 'fixture tokens',
-        message: '示例数值，不是真实调用用量。', segments: [
-          { id: 'fixture-context', name: '夹具上下文', value: 1600, items: [{ id: 'fixture-context-file', title: 'fixture-layout.md', value: 1600 }] },
-          { id: 'fixture-history', name: '夹具对话', value: 800 },
-        ] },
+      summary: '建议分为需求、会议和参考资料三组。现有文件尚未移动，等你核对。',
+      executionScope: { toolLimit: 30, modelCallLimit: 16 },
+      operations: [], events: historyEvents.map(row => row.event).reverse(),
+      historyEventPage: { taskId, section: 'events', entries: historyEvents, hasMore: false, readLimited: false, nextCursor: '' },
+      historyOperationPage: { taskId, section: 'operations', entries: [], hasMore: false, readLimited: false, nextCursor: '' },
+      taskCoreReadLimited: false,
     },
   };
   Object.assign(value.state, {
-    conversations: [{ id: 'visual-fixture-conversation', title: '隔离视觉夹具 · 工作区', updatedAt: at }],
+    modelName: 'gpt-4.1-mini', baseUrl: 'https://api.example.invalid/v1', hasApiKey: true,
+    conversations: [{ id: 'visual-fixture-conversation', title: '项目资料整理', updatedAt: at + 90_000 }],
     conversationId: 'visual-fixture-conversation',
     messages: [
-      { id: 'visual-fixture-user', role: 'user', content: '隔离视觉夹具：请展示清晰的信息层级。', at, taskId: null, attachments: [] },
+      { id: 'visual-fixture-user-1', role: 'user', content: '帮我整理这个项目的资料，先给方案，确认后再移动文件。', at, taskId: null, attachments: [] },
+      { id: 'visual-fixture-assistant-1', role: 'assistant', content: '可以。我会先按内容归类，保留原文件名称和位置。遇到重复资料会单独列出来，等你决定。', at: at + 1000, taskId: null, attachments: [], sourceRevision: 1 },
+      { id: 'visual-fixture-user-2', role: 'user', content: '会议记录按日期保留，需求草稿也先别合并。', at: at + 2000, taskId: null, attachments: [] },
       { id: 'visual-fixture-assistant', role: 'assistant',
-        content: '这是用于**组件布局验收**的隔离文字。\n\n- 核对任务与来源的关系\n- 保留原状态和可读的操作范围\n\n这里没有真实任务或执行回执。',
-        at: at + 1000, taskId: task.id, attachments: [], sourceRevision: 1 },
+        content: '分类建议已经准备好：\n\n- **需求**：目标、需求草稿和待确认事项\n- **会议**：按日期保留每次讨论\n- **参考资料**：外部链接与背景材料\n\n需求草稿不会合并，现有文件也没有移动。你可以先核对这份建议，再决定下一步。',
+        at: at + 90_000, taskId: task.id, attachments: [], sourceRevision: 1 },
+      { id: 'visual-fixture-user-3', role: 'user', content: '好，我先看看分类是否合适。', at: at + 91_000, taskId: null, attachments: [] },
+      { id: 'visual-fixture-assistant-3', role: 'assistant', content: '从上面的任务卡可以回到这次整理。确认前不移动文件；需要修改分类时，也可以在原任务里补充。', at: at + 92_000, taskId: null, attachments: [], sourceRevision: 1 },
     ],
-    tasks: [task, { id: 'visual-fixture-task-paused', goal: '隔离视觉夹具 · 尚待补充材料',
-      status: 'paused', summary: '静态暂停示例，没有后台工作。', executionMode: 'background', updatedAt: at - 1000,
+    tasks: [task, { id: 'visual-fixture-task-paused', goal: '补充周会记录',
+      status: 'paused', summary: '等你补充本周的讨论要点。', executionMode: 'background', updatedAt: at - 1000,
       raw: { runId: 'visual-fixture-paused-run', coordinatorEpoch: 1, revision: 1 } }],
-    projects: [{ id: 'visual-fixture-project', name: '隔离视觉夹具 · 界面笔记' }],
+    projects: [{ id: 'visual-fixture-project', name: '新产品计划' }],
     projectId: 'visual-fixture-project',
-    files: [{ path: 'notes/fixture-layout.md', version: 1 }, { path: 'fixture-readme.md', version: 1 }],
-    ownerSnapshots: { teams: { teams: [{ id: 'visual-fixture-team', name: '隔离视觉夹具 · 评审组',
-      status: 'paused', description: '只核对定义卡片，成员未执行任务。', members, revision: 1, sourceLabel: '隔离 UI 夹具' }], runs: [] } },
+    files: [{ path: '需求草稿.md', version: 1 }, { path: '会议/11月讨论.md', version: 1 }, { path: '参考资料.md', version: 1 }],
   });
   Object.assign(value.composer, { key: 'visual-fixture.populated', conversationId: value.state.conversationId });
   return value;
+}
+
+function verifyFixtureInputs() {
+  const populated = populatedSnapshot();
+  const forbidden = ['steps', 'executionTree', 'handoffs', 'findings', 'memory', 'contextWindow'];
+  for (const task of populated.state.tasks) {
+    for (const field of forbidden) assert(!(field in task.raw), `Fixture invents an ordinary TaskStore root: ${field}`);
+    if (task.status !== 'needs_confirmation') continue;
+    for (const [key, section] of [['historyEventPage', 'events'], ['historyOperationPage', 'operations']]) {
+      const page = task.raw[key];
+      assert.equal(page.taskId, task.id); assert.equal(page.section, section);
+      assert.equal(typeof page.hasMore, 'boolean'); assert.equal(typeof page.readLimited, 'boolean');
+      assert.equal(typeof page.nextCursor, 'string');
+      let previous = Infinity;
+      for (const row of page.entries) {
+        assert(Number.isSafeInteger(row.position) && row.position < previous, 'TaskStore pages must retain descending position');
+        previous = row.position;
+        assert(['available', 'read_limited'].includes(row.status));
+        assert(Number.isSafeInteger(row.bodyBytes) && row.bodyBytes >= 0);
+        if (section === 'events' && row.status === 'available') assert.equal(row.event.runId, task.raw.runId);
+        if (section === 'operations') {
+          assert.equal(row.runId, task.raw.runId); assert.equal(typeof row.operationId, 'string');
+          assert.equal(typeof row.tool, 'string'); assert.equal(typeof row.createdAt, 'number');
+          assert(!('durationMillis' in row), 'Registration time is not an execution duration');
+        }
+      }
+    }
+  }
+  assert.equal(populated.state.hasApiKey, true);
+  assert(!('apiKey' in populated.state), 'The fixture must not contain a saved secret');
+  return { tasks: populated.state.tasks.length, historyEvents: populated.state.tasks[0].raw.historyEventPage.entries.length,
+    historyOperations: populated.state.tasks[0].raw.historyOperationPage.entries.length };
 }
 
 // This function is serialized by Playwright. Everything it touches lives in the
@@ -158,8 +182,10 @@ function installFixture(options) {
   let epoch = 1;
   let scenario = 'empty';
   let label = 'initializing';
+  let nextReviewRejection = null;
   const requests = [];
   const violations = [];
+  const expectedRejections = [];
   const receipts = new Map();
   const commands = [
     'app.ready', 'app.refresh', 'composer.edit', 'composer.reading', 'composer.send',
@@ -175,10 +201,11 @@ function installFixture(options) {
       node = document.createElement('div'); node.id = 'pocket-ci-evidence-identity';
       node.setAttribute('aria-hidden', 'true');
       Object.assign(node.style, { position: 'fixed', inset: 'auto 0 0', zIndex: '2147483647', pointerEvents: 'none',
-        background: '#111', color: '#fff', font: '9px/13px monospace', padding: '2px 4px', textAlign: 'center' });
+        background: '#ededed', color: '#555', font: '10px/14px sans-serif', padding: '2px 4px', textAlign: 'center',
+        borderTop: '1px solid #d5d5d5' });
       document.body.append(node);
     }
-    node.textContent = `WEB UI FIXTURE · NOT ANDROID / REAL TASKS · ${options.commit.slice(0, 8)} · ${innerWidth}px · ${label}`;
+    node.textContent = 'Web界面预览 · 测试数据 · 非实机';
   };
   document.addEventListener('DOMContentLoaded', badge, { once: true });
   const receive = message => {
@@ -227,6 +254,11 @@ function installFixture(options) {
             case 'tasks.review': {
               const task = snapshot.state.tasks.find(row => row.id === args.id);
               if (!task) throw new Error('Unknown fixture review target');
+              if (nextReviewRejection) {
+                failure = nextReviewRejection; nextReviewRejection = null;
+                expectedRejections.push({ action: request.action, taskId: task.id, message: failure });
+                break;
+              }
               value = { reviewHandle: `visual-only-${documentId}-${revision}`, expiresInMs: 120000, task: copy(task),
                 actions: [{ action: 'tasks.confirm', label: '核对结果' }, { action: 'tasks.scope', label: '调整原任务范围' }],
                 approvals: [], unresolvedOperations: [] }; break;
@@ -237,8 +269,8 @@ function installFixture(options) {
             case 'projects.open':
               if (args.projectId !== snapshot.state.projectId || !snapshot.state.files.some(file => file.path === args.path)) throw new Error('Unknown fixture file');
               Object.assign(snapshot.state, { filePath: args.path, fileVersion: 1, fileReady: true,
-                fileContent: '# 隔离视觉夹具\n\n这段内容只用于真实编辑组件的布局。\n',
-                fileBaseline: '# 隔离视觉夹具\n\n这段内容只用于真实编辑组件的布局。\n' }); publish(); break;
+                fileContent: '# 新产品需求\n\n先把核心目标做清楚，再逐步补充功能。\n\n## 待确认\n\n- 第一版面向的使用者\n- 最常完成的一件事\n- 上线前必须验证的结果\n',
+                fileBaseline: '# 新产品需求\n\n先把核心目标做清楚，再逐步补充功能。\n\n## 待确认\n\n- 第一版面向的使用者\n- 最常完成的一件事\n- 上线前必须验证的结果\n' }); publish(); break;
             case 'projects.close': snapshot.state.filePath = null; snapshot.state.fileReady = false; publish(); break;
             default:
               // Buttons may mount to inspect their real design. No test gesture is
@@ -263,8 +295,12 @@ function installFixture(options) {
       publish(); badge();
     },
     label(next) { label = next; badge(); },
-    summary() { return { scenario, revision, documentId, requests: copy(requests), violations: [...violations],
-      persistence: 'none', tasks: snapshot.state.tasks.map(task => task.id) }; },
+    rejectNextReview(message) {
+      if (typeof message !== 'string' || !message.trim() || nextReviewRejection) throw new Error('Invalid controlled review rejection');
+      nextReviewRejection = message;
+    },
+    summary() { return { scenario, label, revision, documentId, requests: copy(requests), violations: [...violations],
+      expectedRejections: copy(expectedRejections), persistence: 'none', tasks: snapshot.state.tasks.map(task => task.id) }; },
   }, configurable: false });
 }
 
@@ -295,8 +331,15 @@ async function verifyBundle() {
   assert((await fs.readFile(path.join(bundle, 'index.html'), 'utf8')).includes('data-pocket-ui="library-web"'));
   manifest.bundle = { ...identity, identitySha256: sha256(await fs.readFile(path.join(bundle, 'build-identity.json'))) };
   manifest.fixture.sourceSha256 = sha256(await fs.readFile(import.meta.filename));
+  manifest.fixture.schemaChecks = verifyFixtureInputs();
+  manifest.fixture.inputSha256 = sha256(JSON.stringify({ empty: emptySnapshot(), populated: populatedSnapshot() }));
+  manifest.acceptance = { structure: 'checked by this script', visualDesign: 'requires reviewing the actual images and video',
+    sourceGroups: 'Only mounted selectors are recorded; no count target or all-32/all-42 claim',
+    android: 'not exercised by this fixture' };
   manifest.sourceFiles = [];
-  for (const file of ['web-ui/src/App.tsx', 'web-ui/src/Secondary.tsx', 'web-ui/src/bridge.ts', 'app/src/main/kotlin/dev/pocketengine/ui/web/PocketWebState.kt']) {
+  for (const file of ['web-ui/src/App.tsx', 'web-ui/src/Secondary.tsx', 'web-ui/src/app.css', 'web-ui/src/secondary.css',
+    'web-ui/src/product.css', 'web-ui/src/task-presentation.ts', 'web-ui/src/bridge.ts',
+    'app/src/main/kotlin/dev/pocketengine/ui/web/PocketWebState.kt']) {
     manifest.sourceFiles.push({ path: file, sha256: sha256(await fs.readFile(path.join(repo, file))) });
   }
 }
@@ -361,8 +404,6 @@ async function capture(page, viewport, name, selectors, options = {}) {
     assert(bounds && bounds.width > 0 && bounds.height > 0, `Mounted component has no layout: ${selector}`);
     mounted.push({ selector, count: await page.locator(selector).count(), bounds });
   }
-  const stepCount = await page.locator('pocket-execution-steps .step').count();
-  if (selectors.includes('pocket-execution-steps')) assert.equal(stepCount, 3, 'Actual source stepper did not receive the fixture steps');
   const layout = await page.evaluate(() => ({
     innerWidth, innerHeight, documentWidth: document.documentElement.scrollWidth, bodyWidth: document.body.scrollWidth,
     fonts: ['Inter', 'Noto Sans SC', 'JetBrains Mono'].map(family => ({ family, loaded: document.fonts.check(`400 16px "${family}"`) })),
@@ -383,12 +424,12 @@ async function capture(page, viewport, name, selectors, options = {}) {
   assert.equal(png.readUInt32BE(20), viewport.height);
   manifest.captures.push({ file, width: viewport.width, viewport, stage: name, kind: 'web-ui-isolated-fixture',
     android: false, realTasks: false, scenario: fixture.scenario, revision: fixture.revision, mounted, layout,
-    stepCount, capturedAt: new Date().toISOString(), ...options.metadata });
+    capturedAt: new Date().toISOString(), ...options.metadata });
 }
 
 async function navigate(page, name) {
   const open = page.getByRole('button', { name: '全部工作', exact: true });
-  await reachable(open); await open.click();
+  await reachable(open, { minSize: 44 }); await open.click();
   const content = page.locator('.pw-work-drawer');
   await content.waitFor({ state: 'visible' });
   await content.getByRole('link', { name, exact: true }).click();
@@ -430,7 +471,7 @@ async function runViewport(origin, viewport) {
   try {
     await page.goto(origin + '/', { waitUntil: 'networkidle' });
     await page.waitForFunction(() => document.documentElement.dataset.pocketUi === 'ready');
-    await page.getByRole('heading', { name: '想把什么交给我？', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '连接模型，开始工作', exact: true }).waitFor();
     const fonts = await page.evaluate(async () => {
       const faces = await Promise.all(['Inter', 'Noto Sans SC', 'JetBrains Mono'].map(family => document.fonts.load(`400 16px "${family}"`, '工作PocketWorld')));
       await document.fonts.ready;
@@ -439,110 +480,235 @@ async function runViewport(origin, viewport) {
     assert(fonts.every(faces => faces.length > 0 && faces.every(face => face.status === 'loaded')), 'Actual production font faces not loaded');
     record.fontFaces = fonts;
     record.userAgent = await page.evaluate(() => navigator.userAgent);
-    record.checks.push({ stage: 'empty', allWork: await reachable(page.getByTestId('all_work'), { minSize: 36 }),
+    const allWork = page.getByTestId('all_work');
+    record.checks.push({ stage: 'empty', allWork: await reachable(allWork, { minSize: 44 }),
       composer: await reachable(page.getByRole('textbox', { name: '工作输入', exact: true }), { minSize: 30 }) });
     await capture(page, viewport, '01-empty', ['.pw-start .pw-agent-avatar', '.afa-composer', '[data-testid="all_work"]']);
-    // Keep the breathing/blink motion visible in the unedited video. No state is
-    // advanced and no task progresses while waiting.
+    // Keep the actual avatar breathing/blink in the raw video. No task advances.
     await page.waitForTimeout(1400);
     const editor = page.getByRole('textbox', { name: '工作输入', exact: true });
-    await editor.fill('隔离视觉夹具：把信息层级梳理清楚。');
-    await capture(page, viewport, '02-input-filled', ['.afa-composer textarea', '.pw-press']);
+    const emptyDraft = '帮我整理项目资料，先给分类建议。';
+    await editor.fill(emptyDraft);
     const send = page.getByRole('button', { name: '发送', exact: true });
-    const geometry = await reachable(send, { minSize: 32 });
+    const geometry = await reachable(send, { minSize: 44 });
     await page.mouse.move(geometry.x + geometry.width / 2, geometry.y + geometry.height / 2);
     await page.mouse.down();
     await page.waitForTimeout(110);
     assert.equal(await send.getAttribute('data-state'), 'pressed', 'Actual PressButton press state did not mount');
-    await capture(page, viewport, '03-input-pressed', ['.pw-press[data-state="pressed"]'], { motion: true,
+    await capture(page, viewport, '02-input-pressed', ['.afa-composer', '.pw-press[data-state="pressed"]'], { motion: true,
       metadata: { gesture: 'pointer down, held, then dragged out/cancelled; no send' } });
     await page.mouse.move(Math.max(2, geometry.x - 20), Math.max(2, geometry.y - 40));
     await page.mouse.up();
     await settle(page, 300);
-    assert.equal(await editor.inputValue(), '隔离视觉夹具：把信息层级梳理清楚。', 'Cancelled press lost the input');
-    await page.getByTestId('all_work').click();
-    await capture(page, viewport, '04-all-work', ['.pw-work-drawer', '.pw-work-sidebar']);
-    await page.getByRole('button', { name: '关闭全部工作', exact: true }).click();
-    await page.locator('.pw-work-drawer').waitFor({ state: 'hidden' });
-    // Reopen/close in opposite directions so actual Vaul entry and exit remain
-    // in the raw video. Do not alter animations or generate interpolated frames.
-    await page.getByTestId('all_work').click();
-    await page.waitForTimeout(160);
-    await page.getByRole('button', { name: '关闭全部工作', exact: true }).click();
-    await page.locator('.pw-work-drawer').waitFor({ state: 'hidden' });
+    assert.equal(await editor.inputValue(), emptyDraft, 'Cancelled press lost the input');
+
     await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.setScenario('populated'));
-    await navigate(page, '全部任务');
-    await capture(page, viewport, '05-task-list', ['.pw-task-list .pw-task-row', '[role="tablist"]']);
-    await page.locator('.pw-task-row').filter({ hasText: '隔离视觉夹具 · 核对页面结构' }).click();
-    const drawer = page.locator('.pw-task-drawer');
-    await drawer.waitFor({ state: 'visible' });
-    await capture(page, viewport, '06-task-steps', ['.pw-task-drawer', 'pocket-execution-steps', '.ui-tcc']);
-    const tool = drawer.locator('.ui-tcc__head').first();
-    await tool.scrollIntoViewIfNeeded(); await tool.click();
-    await capture(page, viewport, '07-tool-expanded', ['.ui-tcc__head[aria-expanded="true"]', '.ui-tcc__sections']);
-    const tree = drawer.getByRole('tree', { name: 'Agent协作关系', exact: true });
-    await tree.scrollIntoViewIfNeeded();
-    await capture(page, viewport, '08-agent-members', ['[role="tree"][aria-label="Agent协作关系"]', '.cb-agent-node']);
-    const fold = drawer.getByRole('button', { name: '收起 夹具 · 协调成员 的成员', exact: true });
-    await fold.click(); await page.waitForTimeout(100);
-    await drawer.getByRole('button', { name: '展开 夹具 · 协调成员 的成员', exact: true }).click();
+    const conversation = page.locator('.pw-conversation-scroll');
+    const linkedTask = page.locator('.pw-linked-task').filter({ hasText: '整理项目资料' });
+    await linkedTask.scrollIntoViewIfNeeded();
+    const conversationDraft = '会议记录仍按日期保留。';
+    await editor.fill(conversationDraft);
+    await settle(page, 250);
+    const reading = async () => conversation.evaluate(node => {
+      const view = node.getBoundingClientRect();
+      const first = [...node.querySelectorAll('[data-message-index]')].find(row => row.getBoundingClientRect().bottom > view.top + 1);
+      return { top: node.scrollTop, height: node.clientHeight, scrollHeight: node.scrollHeight,
+        anchor: first?.getAttribute('data-message-index') ?? null };
+    });
+    const sourceReading = await reading();
+    await capture(page, viewport, '03-current-work', ['.pw-message-stream', '.pw-linked-task', '.afa-composer']);
+    await allWork.click();
+    await capture(page, viewport, '04-work-menu', ['.pw-work-drawer', '.pw-work-sidebar']);
+    const workMenu = page.locator('.pw-work-drawer');
+    await workMenu.getByRole('link', { name: '全部任务', exact: true }).click();
+    await workMenu.waitFor({ state: 'hidden' });
     await settle(page);
-    const handoff = drawer.getByRole('region', { name: '材料交接', exact: true });
-    await handoff.scrollIntoViewIfNeeded();
-    await capture(page, viewport, '09-handoff', ['.afa-handoffagents', '.afa-handoffroutes']);
-    const review = drawer.getByRole('region', { name: '原任务核对', exact: true });
-    await review.getByRole('button', { name: '查看可用操作', exact: true }).click();
-    const feedback = review.getByRole('textbox', { name: '本次结果反馈', exact: true });
-    await feedback.fill('隔离夹具文字，不提交任何决定。');
-    await feedback.scrollIntoViewIfNeeded();
-    await capture(page, viewport, '10-task-review', ['.pw-protected-actions', 'textarea']);
-    stage = `${viewport.width}:11-scope-form`;
-    const tools = review.getByRole('textbox', { name: '工具调用总上限', exact: true });
-    const models = review.getByRole('textbox', { name: '模型调用总上限', exact: true });
-    const confirmScope = review.getByRole('button', { name: '确认本次范围修订', exact: true });
+    const taskRow = page.locator('.pw-task-row').filter({ hasText: '整理项目资料' });
+    const rowBefore = await reachable(taskRow, { minSize: 44 });
+    await capture(page, viewport, '05-task-list', ['.pw-task-list .pw-task-row', '[role="tablist"]']);
+    await taskRow.click();
+    const drawer = page.locator('.pw-task-drawer');
+    const primary = page.getByTestId('task-primary-action');
+    const assertOverview = async () => {
+      await page.locator('.pw-task-drawer[data-task-layer="overview"]').waitFor({ state: 'visible' });
+      assert.equal(await drawer.locator('.acc-review-queue').count(), 0, 'A single task contains the global review queue');
+      assert.equal(await drawer.locator('.pw-scope-editor').count(), 0, 'Scope form is dumped into the task overview');
+      assert.equal(await drawer.locator('[role="tree"][aria-label="Agent协作关系"],.afa-handoffagents').count(), 0, 'Ordinary TaskStore fixture unexpectedly mounts synthetic collaboration');
+      await reachable(primary, { minSize: 44 });
+    };
+    await assertOverview();
+    await capture(page, viewport, '06-task-overview', ['.pw-task-drawer[data-task-layer="overview"]', '.pw-task-overview', '[data-testid="task-primary-action"]']);
+    await drawer.getByRole('button', { name: '查看执行过程', exact: true }).click();
+    await page.locator('.pw-task-drawer[data-task-layer="process"]').waitFor({ state: 'visible' });
+    await capture(page, viewport, '07-task-process', ['.pw-task-drawer[data-task-layer="process"]']);
+    await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
+    await assertOverview();
+    const reviewFailure = '这次任务暂时无法核对，请重试。';
+    await page.evaluate(message => window.__POCKET_VISUAL_FIXTURE__.rejectNextReview(message), reviewFailure);
+    await primary.click();
+    await page.locator('.pw-task-drawer[data-task-layer="review"]').waitFor({ state: 'visible' });
+    const taskError = drawer.locator('.pw-task-local-error[data-task-id="visual-fixture-task-review"][role="alert"]');
+    await taskError.filter({ hasText: reviewFailure }).waitFor({ state: 'visible' });
+    await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
+    await drawer.getByRole('button', { name: '查看执行过程', exact: true }).click();
+    await page.locator('.pw-task-drawer[data-task-layer="process"]').waitFor({ state: 'visible' });
+    assert.equal((await taskError.textContent()).trim(), reviewFailure, 'Changing a task layer lost its unresolved command error');
+    const errorGeometry = await taskError.boundingBox();
+    assert(errorGeometry && errorGeometry.y >= 0 && errorGeometry.y + errorGeometry.height <= viewport.height,
+      'The task error is outside the visible drawer');
+    await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
+    await primary.click();
+    await page.locator('.pw-task-drawer[data-task-layer="review"]').waitFor({ state: 'visible' });
+    const feedback = drawer.getByRole('textbox', { name: '本次结果反馈', exact: true });
+    await feedback.waitFor({ state: 'visible' });
+    assert.equal(await taskError.count(), 0, 'A successful explicit review retry left its old local error mounted');
+    record.checks.push({ stage: 'controlled-review-rejection', expectedMessage: reviewFailure, taskId: 'visual-fixture-task-review',
+      reviewErrorVisible: true, processErrorVisible: true, explicitRetryRecovered: true });
+    await feedback.fill('分类方向合适，会议记录仍按日期保留。');
+    assert.equal(await drawer.locator('.pw-scope-editor').count(), 0, 'Review opens the scope form before its explicit entry');
+    await capture(page, viewport, '08-task-review', ['.pw-task-drawer[data-task-layer="review"]', '.pw-protected-actions']);
+    await drawer.getByRole('button', { name: '修订本次范围', exact: true }).click();
+    await page.locator('.pw-task-drawer[data-task-layer="scope"]').waitFor({ state: 'visible' });
+    const tools = drawer.getByRole('textbox', { name: '工具调用总上限', exact: true });
+    const models = drawer.getByRole('textbox', { name: '模型调用总上限', exact: true });
+    const confirmScope = drawer.getByRole('button', { name: '确认本次范围修订', exact: true });
     for (const field of [tools, models]) {
-      assert.equal(await field.count(), 1, 'The labelled numeric text field is ambiguous');
-      assert.equal(await field.getAttribute('inputmode'), 'numeric', 'The actual source field lost numeric input intent');
-      assert.equal(await field.getAttribute('pattern'), '[0-9]*', 'The actual source field lost its numeric pattern');
+      assert.equal(await field.getAttribute('inputmode'), 'numeric');
+      assert.equal(await field.getAttribute('pattern'), '[0-9]*');
     }
-    assert.equal(await tools.inputValue(), '30', 'Reviewed tool limit did not populate the real field');
-    assert.equal(await models.inputValue(), '16', 'Reviewed model limit did not populate the real field');
-    await tools.fill('401');
-    assert(await confirmScope.isDisabled(), 'Out-of-range tool limit must block scope submission');
-    await tools.fill('36');
-    await models.fill('513');
-    assert(await confirmScope.isDisabled(), 'Out-of-range model limit must block scope submission');
-    await models.fill('20');
-    assert.equal(await tools.inputValue(), '36', 'Tool limit edit did not remain in the controlled field');
-    assert.equal(await models.inputValue(), '20', 'Model limit edit did not remain in the controlled field');
-    assert(await confirmScope.isEnabled(), 'Valid reviewed scope draft should enable its actual control');
-    const scopeDraft = { tools: '36', models: '20', invalidToolLimitBlocked: true, invalidModelLimitBlocked: true, submitted: false };
-    record.checks.push({ stage: '11-scope-form', scopeDraft });
-    await tools.scrollIntoViewIfNeeded();
-    await capture(page, viewport, '11-scope-form', ['.pw-scope-editor', '[role="radiogroup"]'], { metadata: { scopeDraft } });
-    await drawer.getByRole('button', { name: '关闭任务详情', exact: true }).click();
+    assert.equal(await tools.inputValue(), '30'); assert.equal(await models.inputValue(), '16');
+    await tools.fill('401'); assert(await confirmScope.isDisabled(), 'Out-of-range tool limit must block submission');
+    await tools.fill('36'); await models.fill('513');
+    assert(await confirmScope.isDisabled(), 'Out-of-range model limit must block submission');
+    await models.fill('20'); assert(await confirmScope.isEnabled(), 'Valid reviewed draft should enable its control');
+    record.checks.push({ stage: 'scope-deep-view', tools: '36', models: '20', invalidLimitsBlocked: true, submitted: false });
+    await drawer.getByRole('button', { name: '返回当前处理', exact: true }).click();
+    assert.equal(await feedback.inputValue(), '分类方向合适，会议记录仍按日期保留。', 'Deeper scope view lost the review draft');
+    await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
+    await assertOverview();
+    await drawer.getByRole('button', { name: '返回原工作', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });
+    const rowAfter = await reachable(taskRow, { minSize: 44 });
+    assert(Math.abs(rowAfter.y - rowBefore.y) <= 2, 'Closing a task lost its task-list position');
+    record.checks.push({ stage: 'return-to-list', rowBefore, rowAfter });
+
+    await navigate(page, '继续当前工作');
+    const returnedReading = await reading();
+    assert.equal(returnedReading.anchor, sourceReading.anchor, 'Tasks navigation lost the source message anchor');
+    assert(Math.abs(returnedReading.top - sourceReading.top) <= 2, 'Tasks navigation lost the source reading position');
+    assert.equal(await editor.inputValue(), conversationDraft, 'Tasks navigation lost the composer draft');
+    await reachable(linkedTask, { minSize: 44 }); await linkedTask.click();
+    await assertOverview(); await primary.click();
+    await page.locator('.pw-task-drawer[data-task-layer="review"]').waitFor({ state: 'visible' });
+    await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
+    await drawer.getByRole('button', { name: '返回原工作', exact: true }).click();
+    await drawer.waitFor({ state: 'hidden' });
+    const afterTaskReading = await reading();
+    assert.equal(afterTaskReading.anchor, sourceReading.anchor, 'Task overlay lost the source message anchor');
+    assert(Math.abs(afterTaskReading.top - sourceReading.top) <= 2, 'Task overlay lost the source reading position');
+    assert.equal(await editor.inputValue(), conversationDraft);
+    record.checks.push({ stage: 'return-to-current-work', sourceReading, returnedReading, afterTaskReading, draftPreserved: true });
+    await capture(page, viewport, '09-back-to-current-work', ['.pw-message-stream', '.afa-composer']);
+
     await navigate(page, '项目与文件');
-    await capture(page, viewport, '12-project-files', ['.pw-projects-page', '.pw-project-work']);
-    await page.getByRole('tab', { name: '目录层级', exact: true }).click();
-    await capture(page, viewport, '13-project-tree', ['.pw-file-tree', '[role="tree"]']);
-    await navigate(page, '团队协作');
-    await capture(page, viewport, '14-team-definition', ['.pw-secondary[aria-label="团队"]', '.pw-source-record']);
+    const firstFile = page.locator('.pw-file-list .pw-file-object').first();
+    const fileGeometry = await reachable(firstFile, { minSize: 44 });
+    assert(fileGeometry.y <= 240, `First project file starts too low: ${fileGeometry.y}px`);
+    assert.equal(await page.locator('.pw-projects-page h1,.pw-projects-page h2').filter({ hasText: '新产品计划' }).count(), 0, 'Project repeats its app-bar title in page content');
+    record.checks.push({ stage: 'project-first-object', firstFile: fileGeometry, limit: 240 });
+    await capture(page, viewport, '10-project-files', ['.pw-projects-page', '.pw-file-list .pw-file-object']);
+    await page.getByRole('button', { name: '文件显示方式', exact: true }).click();
+    await page.getByRole('radio', { name: '目录层级', exact: true }).click();
+    await capture(page, viewport, '11-project-tree', ['.pw-file-tree', '[role="tree"]']);
+
     await navigate(page, '设置与连接');
-    await page.getByRole('button', { name: /^模型设置/ }).click();
+    await page.getByRole('button', { name: /^模型与连接/ }).click();
+    await page.locator('.pw-secondary-header').getByRole('heading', { name: '模型与连接', exact: true }).waitFor();
+    await page.getByRole('button', { name: /^模型与连接/ }).click();
+    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
+    assert.equal(await page.getByLabel('API 密钥', { exact: true }).count(), 0, 'Model list renders the secret editor before selection');
+    await capture(page, viewport, '12-model-connections', ['.pw-model-list', '.pw-model-current', '.pw-model-connections']);
+    const editConnection = page.getByRole('button', { name: '编辑当前 API 连接', exact: true });
+    await reachable(editConnection, { minSize: 44 }); await editConnection.click();
     const url = page.getByRole('textbox', { name: '接口地址', exact: true });
-    await url.fill('https://fixture.invalid/v1');
-    await page.getByRole('textbox', { name: '模型名称', exact: true }).fill('隔离布局夹具，非模型');
-    await url.scrollIntoViewIfNeeded();
-    await capture(page, viewport, '15-model-form', ['.pw-secondary[aria-label="模型设置"]', '.pw-form-grid']);
+    await url.waitFor({ state: 'visible' });
+    assert.equal(await url.inputValue(), 'https://api.example.invalid/v1');
+    const key = page.getByLabel('API 密钥', { exact: true });
+    assert.equal(await key.inputValue(), '', 'Saved credential leaked into the editor');
+    const advanced = page.getByRole('button', { name: /^高级设置/ });
+    assert.equal(await advanced.getAttribute('aria-expanded'), 'false', 'Advanced settings are initially expanded');
+    await capture(page, viewport, '13-model-editor', ['.pw-model-editor', '.pw-form-grid', '.pw-model-advanced']);
+    const provider = page.locator('.pw-selection-field').filter({ has: page.getByText('接口协议', { exact: true }) }).getByRole('button');
+    await provider.click();
+    await page.getByRole('option', { name: 'OpenAI Responses', exact: true }).click();
+    const modelDraftUrl = 'https://draft.example.invalid/v1';
+    await url.fill(modelDraftUrl);
+    await advanced.click();
+    const outputLimit = page.getByRole('textbox', { name: '每次回复的输出上限', exact: true });
+    assert(await outputLimit.isEnabled(), 'Responses output limit must be editable');
+    await outputLimit.fill('8192');
     const toggle = page.getByRole('switch', { name: '允许按需发送截图' });
-    await toggle.scrollIntoViewIfNeeded();
+    await toggle.scrollIntoViewIfNeeded(); await reachable(toggle, { minSize: 44 });
     await toggle.click();
-    await capture(page, viewport, '16-form-controls', ['.pw-settings-divided', '[role="switch"]']);
+    await capture(page, viewport, '14-model-advanced', ['.pw-model-advanced', '[role="switch"]']);
+    const modelDraftScreenshots = await toggle.getAttribute('aria-checked');
+    // Ordinary values survive subpage returns. The secret remains local to one
+    // editor mount and no save/test is sent to the fixture host.
+    await key.fill('fixture-unsaved-secret');
+    const backModels = page.getByRole('button', { name: '返回模型与连接', exact: true });
+    await backModels.scrollIntoViewIfNeeded(); await backModels.click();
+    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
+    await editConnection.click();
+    assert.equal(await key.inputValue(), '', 'Cancelled credential draft survived a fresh editor');
+    assert.equal(await url.inputValue(), modelDraftUrl, 'Page back lost the ordinary model URL draft');
+    assert((await provider.textContent()).includes('OpenAI Responses'), 'Page back lost the provider draft');
+    assert.equal(await advanced.getAttribute('aria-expanded'), 'false', 'Re-entering an editor opens the advanced panel automatically');
+    await advanced.click();
+    assert.equal(await outputLimit.inputValue(), '8192', 'Page back lost the advanced output draft');
+    assert.equal(await toggle.getAttribute('aria-checked'), modelDraftScreenshots, 'Page back lost the screenshot preference draft');
+    await key.fill('fixture-unsaved-hardware-back-secret');
+    const nativeBack = async () => {
+      const handled = await page.evaluate(() => window.PocketWeb.handleBack());
+      assert.equal(handled, true, 'The real PocketWeb back handler did not consume its subpage');
+      await settle(page, 80);
+    };
+    await nativeBack();
+    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
+    await editConnection.click();
+    assert.equal(await key.inputValue(), '', 'Host back kept a secret in the next editor mount');
+    assert.equal(await url.inputValue(), modelDraftUrl, 'Host back lost the ordinary model URL draft');
+    await advanced.click();
+    assert.equal(await outputLimit.inputValue(), '8192', 'Host back lost the advanced output draft');
+    await nativeBack();
+    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
+    await nativeBack();
+    assert.equal(await page.locator('.pw-model-list').count(), 0, 'Host back remained in the model list instead of its source directory');
+    await page.locator('.pw-secondary-header').getByRole('heading', { name: '模型与连接', exact: true }).waitFor();
+    const sourceModelEntry = page.getByRole('button', { name: /^模型与连接/ });
+    await sourceModelEntry.waitFor({ state: 'visible' });
+    record.checks.push({ stage: 'model-draft-and-host-back', urlDraftPreserved: true, providerDraftPreserved: true,
+      advancedOutput: '8192', screenshotDraftPreserved: true, secretClearedOnPageBack: true, secretClearedOnHostBack: true,
+      hostBack: 'window.PocketWeb.handleBack: edit → list → original settings directory', saved: false });
+    await sourceModelEntry.click();
+    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
+    await page.keyboard.press('Tab');
+    await page.locator('.pw-secondary-header').getByRole('button', { name: '返回', exact: true }).focus();
+    const focus = await page.locator('.pw-secondary-header').getByRole('button', { name: '返回', exact: true }).evaluate(node => {
+      const css = getComputedStyle(node);
+      return { visible: node.matches(':focus-visible'), outlineStyle: css.outlineStyle, outlineWidth: css.outlineWidth, boxShadow: css.boxShadow };
+    });
+    assert(focus.visible && (parseFloat(focus.outlineWidth) >= 1 && focus.outlineStyle !== 'none' || focus.boxShadow !== 'none'), 'Keyboard focus has no visible indicator');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await settle(page);
+    assert(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches));
+    await reachable(editConnection, { minSize: 44 });
+    record.checks.push({ stage: 'keyboard-and-reduced-motion', focus, reducedMotion: true,
+      limitation: 'Browser preference and reachable focus only; Android accessibility and subjective motion review remain separate' });
     record.fixture = await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.summary());
     assert(record.fixture.requests.some(request => request.action === 'app.ready'), 'No actual bridge handshake');
     assert(!record.fixture.requests.some(request => ['composer.send', 'tasks.confirm', 'tasks.scope', 'settings.saveModel', 'settings.testModel', 'projects.create', 'projects.newFile'].includes(request.action)), 'A business action was dispatched');
     assert.equal(record.fixture.violations.length, 0);
+    assert.equal(record.fixture.expectedRejections.length, 1, 'The controlled host rejection was not exercised exactly once');
     record.status = 'passed';
   } catch (error) {
     record.status = 'failed'; record.failure = String(error.stack || error);

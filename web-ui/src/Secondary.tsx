@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  RiArrowLeftLine, RiArrowRightSLine, RiCheckLine, RiComputerLine, RiDatabase2Line,
+  RiAddLine, RiArrowLeftLine, RiArrowRightSLine, RiCheckLine, RiComputerLine, RiDatabase2Line,
   RiFileList3Line, RiKey2Line, RiLink, RiMicLine, RiPuzzle2Line, RiRefreshLine,
   RiSettings3Line, RiShieldCheckLine, RiSmartphoneLine, RiTeamLine,
 } from '@remixicon/react';
 import { bridge } from './bridge';
 import { PressButton } from './library';
 import {
-  Accordion, AccordionItem, Button, CheckboxField, ComboBoxField, HostFileUpload,
-  IconButton, ObjectTable, RadioOptions, SearchField, SelectField, SettingsDialog,
+  Accordion, AccordionItem, Button, CheckboxField, HostFileUpload,
+  IconButton, RadioOptions, SearchField, SelectField, SettingsDialog,
   StretchSwitch, TextAreaField, TextField, type FieldOption,
 } from './forms-library';
 import './secondary.css';
@@ -23,7 +23,8 @@ import { backgroundConnection, connectionProfilePayload, wirelessEndpoints, wire
  */
 type Data = Record<string, any>;
 type Snapshot = { state?: Data; composer?: Data | null; capabilities?: { commands?: string[] } };
-type Props = { route: string; onBack: () => void; snapshot: Snapshot };
+type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
+type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
@@ -91,21 +92,46 @@ function CapabilityAction({ action, supported, run, args = {}, children, primary
     : <Button variant="secondary" disabled={inactive} onClick={click} title={!supported(action) ? '当前页面尚未开放此操作' : undefined}>{waiting ? '处理中…' : children}</Button>;
 }
 
-function ModelSettings({ state, supported, run, navigate }: { state: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void }) {
+type ModelDraft = { url: string; model: string; provider: string; screenshots: boolean; supportsImageInput: boolean; maxOutputTokens: string };
+// This explicit allowlist is the only model-edit state retained by Secondary.
+// The API key, transport consent and review objects never enter this cache.
+const ordinaryModelDraft = (value: ModelDraft): ModelDraft => ({
+  url: value.url, model: value.model, provider: value.provider, screenshots: value.screenshots,
+  supportsImageInput: value.supportsImageInput, maxOutputTokens: value.maxOutputTokens,
+});
+function ModelSettings({ state, supported, run, adding = false, draft, onDraftChange, registerTransientBack }: {
+  state: Data; supported: (action: string) => boolean; run: Run; adding?: boolean;
+  draft?: ModelDraft; onDraftChange: (draft: ModelDraft | null) => void; registerTransientBack: BackHandlerRegistration;
+}) {
   const [form, setForm] = useState(() => ({
-    url: text(state.baseUrl), model: state.modelRoute === 'account' ? '' : text(state.modelName),
-    apiKey: '', provider: state.modelRoute === 'account' ? 'openai_chat' : text(state.modelProvider, 'openai_chat'),
-    screenshots: state.screenshots !== false, supportsImageInput: Boolean(state.supportsImageInput),
-    maxOutputTokens: text(state.maxOutputTokens, '4096'),
+    ...(draft || {
+      url: adding ? '' : text(state.baseUrl), model: adding || state.modelRoute === 'account' ? '' : text(state.modelName),
+      provider: adding || state.modelRoute === 'account' ? 'openai_chat' : text(state.modelProvider, 'openai_chat'),
+      screenshots: state.screenshots !== false, supportsImageInput: Boolean(state.supportsImageInput),
+      maxOutputTokens: text(state.maxOutputTokens, '4096'),
+    }), apiKey: '',
   }));
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirty] = useState(Boolean(draft));
   const savedRevision = useRef(Number(state.modelSavedRevision) || 0);
   const editRevision = useRef(0);
   const submitted = useRef<{ editRevision: number; apiKey: string } | null>(null);
   const [transport, setTransport] = useState<Data | null>(null);
   const [formError, setFormError] = useState('');
   const [requesting, setRequesting] = useState(false);
-  const [consentTarget, setConsentTarget] = useState(text(state.cleartextConsent));
+  const [consentTarget, setConsentTarget] = useState(adding ? '' : text(state.cleartextConsent));
+  const alive = useRef(true);
+  const clearSecret = () => { editRevision.current++; submitted.current = null; setTransport(null); setForm(current => ({ ...current, apiKey: '' })); };
+  useEffect(() => {
+    registerTransientBack(transport ? () => { clearSecret(); return true; } : null);
+    return () => registerTransientBack(null);
+  }, [transport, registerTransientBack]);
+  useEffect(() => {
+    alive.current = true;
+    const hide = () => { if (document.visibilityState !== 'visible') clearSecret(); };
+    document.addEventListener('visibilitychange', hide);
+    window.addEventListener('pagehide', clearSecret);
+    return () => { alive.current = false; submitted.current = null; document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', clearSecret); };
+  }, []);
   useEffect(() => {
     const revision = Number(state.modelSavedRevision) || 0;
     if (revision > savedRevision.current) {
@@ -113,11 +139,11 @@ function ModelSettings({ state, supported, run, navigate }: { state: Data; suppo
       const original = submitted.current;
       submitted.current = null;
       if (original) {
-        if (original.editRevision === editRevision.current) setDirty(false);
+        if (original.editRevision === editRevision.current) { setDirty(false); onDraftChange(null); }
         setForm(current => current.apiKey === original.apiKey ? { ...current, apiKey: '' } : current);
       }
     }
-    if (!dirty || revision > savedRevision.current) setForm(current => ({
+    if (!adding && (!dirty || revision > savedRevision.current)) setForm(current => ({
       ...current, url: text(state.baseUrl), model: state.modelRoute === 'account' ? '' : text(state.modelName),
       provider: state.modelRoute === 'account' ? 'openai_chat' : text(state.modelProvider, 'openai_chat'),
       screenshots: state.screenshots !== false, supportsImageInput: Boolean(state.supportsImageInput), maxOutputTokens: text(state.maxOutputTokens, '4096'),
@@ -125,9 +151,10 @@ function ModelSettings({ state, supported, run, navigate }: { state: Data; suppo
   }, [state.baseUrl, state.modelName, state.modelProvider, state.modelRoute, state.modelSavedRevision, dirty]);
   const change = (key: keyof typeof form, value: string | boolean) => {
     editRevision.current++;
-    setDirty(true); setForm(current => ({ ...current, [key]: value }));
-    if (key === 'provider' || key === 'url') { setConsentTarget(''); setTransport(null); }
-    if (key === 'provider' || key === 'url' || key === 'model') setForm(current => ({ ...current, supportsImageInput: false }));
+    const next = { ...form, [key]: value };
+    if (key === 'provider' || key === 'url') { setConsentTarget(''); setTransport(null); next.apiKey = ''; }
+    if (key === 'provider' || key === 'url' || key === 'model') next.supportsImageInput = false;
+    setDirty(true); setForm(next); onDraftChange(ordinaryModelDraft(next));
   };
   const providers = [
     { id: 'openai_chat', label: 'OpenAI Chat Completions' }, { id: 'openai_responses', label: 'OpenAI Responses' },
@@ -147,7 +174,9 @@ function ModelSettings({ state, supported, run, navigate }: { state: Data; suppo
     setFormError(''); setRequesting(true);
     try {
       if (supported('settings.reviewModelTransport')) {
+        const originalEdit = editRevision.current;
         const review = object(await run('settings.reviewModelTransport', { provider: form.provider, url: form.url }));
+        if (!alive.current || originalEdit !== editRevision.current) return;
         if (review.required && review.consentTarget !== consentTarget && review.consentTarget !== state.cleartextConsent) {
           setTransport({ ...review, action, provider: form.provider, url: form.url }); return;
         }
@@ -158,40 +187,138 @@ function ModelSettings({ state, supported, run, navigate }: { state: Data; suppo
         }
         await perform(action, '');
       }
-    } catch (error) { setFormError(error instanceof Error ? error.message : String(error)); }
-    finally { setRequesting(false); }
+    } catch (error) { if (alive.current) setFormError(error instanceof Error ? error.message : String(error)); }
+    finally { if (alive.current) setRequesting(false); }
   };
-  return <>
-    <Card title={text(state.modelName, '模型设置')} description={state.modelRoute === 'account' ? '当前使用 ChatGPT 账号模型' : 'API 连接与推理能力'}>
-      <div className="pw-settings-links"><Button variant="ghost" trailingIcon={RiArrowRightSLine} onClick={() => navigate('accounts')}>ChatGPT 账号与模型</Button><Button variant="ghost" trailingIcon={RiArrowRightSLine} onClick={() => navigate('models')}>API 模型目录</Button></div>
-      {state.modelRoute === 'account' && <><p className="pw-field-hint">保存 API 配置会明确切换到该连接；测试连接不会改变当前账号模型。</p><CapabilityAction action="settings.useApiKeyModel" supported={supported} run={run} disabled={Boolean(state.modelSaving)}>切回已保存的 API 模型</CapabilityAction></>}
-    </Card>
-    <Card title="API 连接" description="密钥只提交给手机宿主，不从保存配置中回填。">
+  return <div data-model-layer="edit" className="pw-model-edit-layer">
+    <Card className="pw-model-editor">
+      <p className="pw-model-editor-context">{adding ? '保存后使用这项 API 配置。已有工作保留原连接。' : '修改当前 API 配置；测试连接不会切换模型。'}</p>
       <div className="pw-form-grid">
         <SelectField label="接口协议" options={providers} value={form.provider} onChange={value => change('provider', value)} />
         <TextField label="接口地址" type="url" value={form.url} onChange={value => change('url', value)} placeholder="https://…" autoComplete="off" />
         <TextField label="模型名称" value={form.model} onChange={value => change('model', value)} autoComplete="off" />
         <TextField label="API 密钥" type="password" value={form.apiKey} onChange={value => change('apiKey', value)} autoComplete="new-password"
-          hint={state.hasApiKey && form.provider === state.modelProvider && form.url.trim() === state.baseUrl ? '此协议与地址已有密钥；留空继续使用原密钥。' : '更换协议或地址时，请填写对应的密钥。'} />
-        <TextField label="每次回复的输出上限" value={form.maxOutputTokens} onChange={value => change('maxOutputTokens', value.replace(/\D/g, '').slice(0, 5))} inputMode="numeric"
-          isDisabled={form.provider === 'openai_chat' || Boolean(state.modelCatalogEnabled)} hint={state.modelCatalogEnabled ? '在模型目录中核对精确参数和容量。' : form.provider === 'openai_chat' ? 'Chat 兼容协议的输出限制沿用服务端配置。' : '128–32768 tokens'} />
+          hint={!adding && state.hasApiKey && form.provider === state.modelProvider && form.url.trim() === state.baseUrl ? '此协议与地址已有密钥；留空继续使用原密钥。' : '更换协议或地址时，请填写对应的密钥。'} />
       </div>
-      <div className="pw-settings-divided">
-        <CheckboxField isSelected={form.supportsImageInput} onChange={value => change('supportsImageInput', value)} isDisabled={Boolean(state.modelCatalogEnabled) || state.modelRoute === 'account'}>此模型支持图像输入</CheckboxField>
-        <StretchSwitch label="允许按需发送截图" description="优先读取结构树；仅在已配置图像能力且确有需要时发送像素。" checked={form.screenshots} onChange={value => change('screenshots', value)} />
-      </div>
+      <Accordion className="pw-model-advanced" variant="divided">
+        <AccordionItem id="advanced" title="高级设置" description="输出上限、图像输入与截图">
+          <div className="pw-form-grid">
+            <TextField label="每次回复的输出上限" value={form.maxOutputTokens} onChange={value => change('maxOutputTokens', value.replace(/\D/g, '').slice(0, 5))} inputMode="numeric"
+              isDisabled={form.provider === 'openai_chat' || Boolean(state.modelCatalogEnabled)} hint={state.modelCatalogEnabled ? '在模型目录中核对精确参数和容量。' : form.provider === 'openai_chat' ? 'Chat 兼容协议的输出限制沿用服务端配置。' : '128–32768 tokens'} />
+            <CheckboxField isSelected={form.supportsImageInput} onChange={value => change('supportsImageInput', value)} isDisabled={Boolean(state.modelCatalogEnabled) || state.modelRoute === 'account'}>此模型支持图像输入</CheckboxField>
+            <StretchSwitch label="允许按需发送截图" description="优先读取结构树；仅在已配置图像能力且确有需要时发送像素。" checked={form.screenshots} onChange={value => change('screenshots', value)} />
+          </div>
+        </AccordionItem>
+      </Accordion>
       {formError && <p role="alert" className="pw-field-error">{formError}</p>}
-      <div className="pw-form-actions"><Button variant="secondary" disabled={requesting || state.modelTesting || !supported('settings.testModel')} onClick={() => request('settings.testModel')}>{state.modelTesting ? '测试中…' : '测试连接'}</Button><PressButton compact disabled={requesting || state.modelSaving || !supported('settings.saveModel')} onClick={() => request('settings.saveModel')}>{state.modelSaving ? '保存中…' : state.modelRoute === 'account' ? '保存并切换 API 模型' : '保存模型'}</PressButton></div>
+      <div className="pw-form-actions"><Button variant="secondary" disabled={requesting || state.modelTesting || !supported('settings.testModel')} onClick={() => request('settings.testModel')}>{state.modelTesting ? '测试中…' : '测试连接'}</Button><PressButton compact disabled={requesting || state.modelSaving || !supported('settings.saveModel')} onClick={() => request('settings.saveModel')}>{state.modelSaving ? '保存中…' : state.modelRoute === 'account' ? '保存并切换 API 模型' : '保存连接'}</PressButton></div>
       {state.modelTest && <p className="pw-receipt-copy" aria-live="polite">{text(state.modelTest)}</p>}
       {state.modelTestTaskId && <CapabilityAction action="tasks.open" supported={supported} run={run} args={{ id: state.modelTestTaskId }}>查看本次实际调用与用量</CapabilityAction>}
       {state.error && <p className="pw-field-error" role="alert">{text(state.error)}</p>}
     </Card>
-    <SettingsDialog isOpen={Boolean(transport)} title="允许这个明文模型连接？" onClose={() => setTransport(null)}>
+    <SettingsDialog isOpen={Boolean(transport)} title="允许这个明文模型连接？" onClose={clearSecret}>
       {transport && <><Facts items={[[ '协议', providers.find(x => x.id === transport.provider)?.label ], ['地址', transport.displayTarget || transport.url]]} />
         <p>凭据、文本和按需截图将通过 HTTP 明文传输。更换协议或地址后需要重新核对。</p>
-        <div className="pw-form-actions"><Button variant="secondary" onClick={() => setTransport(null)}>取消</Button><PressButton compact onClick={async () => { const reviewed = transport; setTransport(null); if (reviewed.provider !== form.provider || reviewed.url !== form.url) return; setConsentTarget(text(reviewed.consentTarget)); try { await perform(reviewed.action, text(reviewed.consentTarget)); } catch (error) { setFormError(error instanceof Error ? error.message : String(error)); } }}>允许此协议与地址</PressButton></div>
+        <div className="pw-form-actions"><Button variant="secondary" onClick={clearSecret}>取消</Button><PressButton compact onClick={async () => { const reviewed = transport; setTransport(null); if (reviewed.provider !== form.provider || reviewed.url !== form.url) return; setConsentTarget(text(reviewed.consentTarget)); try { await perform(reviewed.action, text(reviewed.consentTarget)); } catch (error) { setFormError(error instanceof Error ? error.message : String(error)); } }}>允许此协议与地址</PressButton></div>
       </>}
     </SettingsDialog>
+  </div>;
+}
+
+type ModelView = { kind: 'list' | 'edit' | 'add' | 'connection' | 'catalog' | 'model'; id?: string };
+const modelConnectionRows = (data: Data) => Array.isArray(data.connections)
+  ? list(data.connections) : list(object(data.connections).connections);
+const MODEL_PROVIDERS: Record<string, string> = { openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic', gemini: 'Gemini' };
+
+/** The BoardUI SettingsModal row recipe keeps browsing separate from editing.
+ * Only the current API configuration has a Web write capability. Saved profile
+ * rows remain readable; they must never be submitted as the current connection. */
+function ModelConnections({ state, data, supported, run, navigate, open }: { state: Data; data: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void; open: (view: ModelView) => void }) {
+  const profiles = modelConnectionRows(data);
+  const selectedId = text(object(data.connections).selectedConnectionId);
+  const selectedConnection = profiles.find(row => recordId(row) === selectedId);
+  const api = object(data.api);
+  const account = state.modelRoute === 'account';
+  const configured = Boolean(text(state.baseUrl).trim());
+  return <div className="pw-model-list" data-model-layer="list">
+    <Card className="pw-model-current">
+      <span className="pw-model-eyebrow">当前模型</span>
+      <h2>{text(state.modelName, '尚未选择模型')}</h2>
+      <p>{account ? 'ChatGPT 账号' : MODEL_PROVIDERS[text(state.modelProvider)] || text(state.modelProvider, 'API 连接')}{!account && state.baseUrl ? ' · ' + text(state.baseUrl) : ''}</p>
+      <div className="pw-form-actions">
+        <Button variant="secondary" trailingIcon={RiArrowRightSLine} onClick={() => account ? navigate('accounts') : open({ kind: 'catalog' })}>选择模型</Button>
+        {account && configured && <CapabilityAction action="settings.useApiKeyModel" supported={supported} run={run} disabled={Boolean(state.modelSaving)}>使用保留的 API 模型</CapabilityAction>}
+      </div>
+    </Card>
+    <Card title="API 连接" className="pw-model-connections">
+      <div className="pw-settings-links">
+        {configured && <Button variant="ghost" aria-label="编辑当前 API 连接" trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'edit' })}>
+          <span><span>{first(selectedConnection || {}, ['name', 'label'], '当前 API 配置')}</span><small>{account ? '保留的 API 连接' : text(api.model || state.modelName, '未填写模型名称')}{' · '}{text(state.baseUrl)}</small></span>
+        </Button>}
+        {profiles.filter(row => recordId(row) !== selectedId || !configured).map((row, index) => <Button key={recordId(row, String(index))} variant="ghost" trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'connection', id: recordId(row) })}>
+          <span><span>{first(row, ['name', 'label', 'id'], '已保存连接')}</span><small>{first(row, ['model', 'provider'])}{row.enabled === false ? ' · 已停用' : ''}</small></span>
+        </Button>)}
+        <Button variant="ghost" leadingIcon={RiAddLine} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={!supported('settings.saveModel')} onClick={() => open({ kind: 'add' })}><span><span>添加 API 连接</span><small>配置并使用一项 API 连接</small></span></Button>
+      </div>
+      {!configured && profiles.length === 0 && <Empty>还没有 API 连接。添加后可以测试并保存。</Empty>}
+    </Card>
+    <div className="pw-model-related pw-settings-links">
+      <Button variant="ghost" leadingIcon={RiKey2Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate('accounts')}><span><span>ChatGPT 账号</span><small>授权、账号模型与套餐用量</small></span></Button>
+      <Button variant="ghost" leadingIcon={RiFileList3Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'catalog' })}><span><span>查看模型目录</span><small>当前 API 的模型与能力</small></span></Button>
+    </div>
+  </div>;
+}
+
+function ModelConnectionDetail({ connection }: { connection: Data | undefined }) {
+  return connection ? <Card className="pw-model-connection-detail">
+    <Facts items={[[ '名称', first(connection, ['name', 'label', 'id']) ], ['协议', first(connection, ['provider', 'protocol']) ], ['模型', connection.model], ['地址', first(connection, ['baseUrl', 'endpoint']) ], ['状态', connection.enabled === false ? '已停用' : '已启用'], ['凭据', connection.hasApiKey || connection.credentialsConfigured ? '已配置' : '未配置']]} />
+    <p className="pw-field-hint">此页面可查看已保存连接。当前版本尚未接入这项连接的独立编辑与切换。</p>
+  </Card> : <Empty>这项连接已不在当前目录，请返回后刷新。</Empty>;
+}
+
+const modelFactText = (value: any) => {
+  const fact = object(value);
+  if (fact.known !== true) return '未知';
+  if (typeof fact.value === 'boolean') return fact.value ? '支持' : '不支持';
+  if (Array.isArray(fact.value)) return fact.value.join('、');
+  if (fact.value && typeof fact.value === 'object') return text(fact.value.tokens, '未知') + (fact.value.tokens ? ' tokens' : '');
+  return text(fact.value, '未知');
+};
+
+function ModelCatalog({ state, data, selectedId, supported, run, open, registerTransientBack }: { state: Data; data: Data; selectedId?: string; supported: (action: string) => boolean; run: Run; open: (view: ModelView) => void; registerTransientBack: BackHandlerRegistration }) {
+  const [modelReview, setModelReview] = useState<Data | null>(null), [reviewing, setReviewing] = useState(false);
+  useEffect(() => {
+    registerTransientBack(modelReview ? () => { setModelReview(null); return true; } : null);
+    return () => registerTransientBack(null);
+  }, [modelReview, registerTransientBack]);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const models = list(data.models), model = models.find(row => first(row, ['modelId', 'id', 'name']) === selectedId);
+  const locked = Boolean(state.modelSelectionBusy || state.chatBusy || state.chatSubmitting || state.phoneSubmitting || state.modelSaving || state.modelTesting) || state.activeTaskId != null;
+  if (!selectedId) return <Card className="pw-model-catalog">
+    <div className="pw-model-catalog-heading"><p>当前 API 连接的可用模型</p><CapabilityAction action="models.snapshot" supported={supported} run={run}>刷新</CapabilityAction></div>
+    {models.length > 0 ? <div className="pw-settings-links">{models.map(row => {
+      const id = first(row, ['modelId', 'id', 'name']);
+      return <Button key={id} variant="ghost" trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'model', id })}><span><span>{first(row, ['name', 'label', 'modelId', 'id'])}</span><small>{id === text(object(data.api).model) ? '当前 API 模型' : row.catalogFresh ? '来自已读取目录' : '能力与来源需核对'}</small></span></Button>;
+    })}</div> : <Empty>{Array.isArray(data.models) ? '当前目录没有模型。可返回配置 API 的明确模型名称。' : '正在读取当前连接的模型目录；未读取到的数据不会补成可用模型。'}</Empty>}
+  </Card>;
+  if (!model) return <Empty>这个模型已不在当前目录，请返回重新选择。</Empty>;
+  return <>
+    <Card className="pw-model-detail">
+      <Facts items={[[ '上下文容量', modelFactText(object(model.facts).CONTEXT_WINDOW) ], ['输出上限', modelFactText(object(model.facts).OUTPUT_TOKENS) ], ['图像输入', modelFactText(object(model.facts).IMAGE_INPUT) ], ['工具调用', modelFactText(object(model.facts).TOOL_CALLS) ], ['目录状态', model.catalogFresh ? '已读取' : '未读取或已过期']]} />
+      <p className="pw-field-hint">选择前核对当前连接、模型能力与参数。不会自动发起推理。</p>
+      <div className="pw-form-actions"><Button variant="primary" disabled={!supported('models.review') || reviewing || locked} onClick={async () => {
+        setReviewing(true);
+        try { const review = object(await run('models.review', { modelId: first(model, ['modelId', 'id', 'name']) })); if (alive.current && typeof review.reviewHandle === 'string') setModelReview(review); }
+        catch { /* The current page retains the original host error. */ }
+        finally { if (alive.current) setReviewing(false); }
+      }}>{reviewing ? '核对中…' : '核对并选择此模型'}</Button></div>
+    </Card>
+    <SettingsDialog isOpen={modelReview !== null} title="确认模型选择" onClose={() => setModelReview(null)}>{modelReview && <>
+      <Facts items={[[ '模型', modelReview.modelId ], ['输出上限', modelReview.outputTokens ], ['图像预算预留', modelReview.imageTokenReserve ]]} />
+      <p className="pw-field-hint">使用宿主刚核对的连接、模型能力与参数。窗口变化或审阅过期后需要重新核对。</p>
+      <div className="pw-form-actions"><Button variant="secondary" onClick={() => setModelReview(null)}>取消</Button><PressButton compact disabled={!supported('models.select') || locked} onClick={async () => { const review = modelReview; setModelReview(null); try { await run('models.select', { reviewHandle: review.reviewHandle }); } catch { /* A consumed or unknown review must not be replayed. */ } }}>确认选择</PressButton></div>
+    </>}</SettingsDialog>
   </>;
 }
 
@@ -371,9 +498,8 @@ function Collection({ data, keys, label, children, titleKeys }: { data: Data; ke
 }
 
 function DomainPage({ domain, state, data, supported, run }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run }) {
-  const [query, setQuery] = useState(''), [selected, setSelected] = useState(''), [selectedModel, setSelectedModel] = useState(''), [entry, setEntry] = useState<Data | null>(null);
+  const [query, setQuery] = useState(''), [entry, setEntry] = useState<Data | null>(null);
   const [draft, setDraft] = useState<Data>({});
-  const [modelReview, setModelReview] = useState<Data | null>(null), [reviewingModel, setReviewingModel] = useState(false);
   const clearProfileSecrets = () => setDraft(current => ({ ...current, token: '', password: '', privateKey: '', passphrase: '' }));
   const closeProfile = () => { clearProfileSecrets(); setEntry(null); };
   useEffect(() => {
@@ -383,35 +509,12 @@ function DomainPage({ domain, state, data, supported, run }: { domain: string; s
     window.addEventListener('pagehide', clearProfileSecrets);
     return () => { document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', clearProfileSecrets); };
   }, [domain]);
-  useEffect(() => { setModelReview(null); }, [selectedModel]);
   const update = (key: string, value: any) => setDraft(current => ({ ...current, [key]: value }));
   const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={run} primary={primary}>{label}</CapabilityAction>;
-  const readable = (label: string, value: Data, fields: Array<[string, string[]]>) => <Facts items={fields.map(([title, keys]) => [title, first(value, keys)])} />;
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   const mcpPick = object(object(object(state.ownerResponses).mcp).pickConfig);
   const pickedMcpConfig = object(object(mcpPick.result).config);
   const mcpPickPending = Array.isArray(state.ownerPending) && state.ownerPending.includes('mcp.pickConfig');
-  if (domain === 'models') {
-    const connections = list(rowsAt(data, ['connections', 'profiles']));
-    const models = list(data.models);
-    const connection = connections.find(row => recordId(row) === selected);
-    const model = models.find(row => first(row, ['modelId', 'id', 'name']) === selectedModel);
-    return <Card title="API 连接与模型目录" description="能力来源、人工覆盖和真实参数属于各自连接，不自动继承其他协议的密钥。">
-      {!hasRows(data, ['connections', 'profiles']) ? <Empty>尚未读取 API 连接。</Empty> :
-        <ObjectTable label="API 连接" rows={connections} getRowId={recordId} onRowOpen={row => setSelected(recordId(row))}
-          columns={[
-            { id: 'name', label: '连接', render: row => <span className="pw-object-title">{first(row, ['name', 'label', 'id'])}<small>{first(row, ['provider', 'protocol'])}</small></span>, sortValue: row => first(row, ['name', 'label', 'id']) },
-            { id: 'state', label: '状态', render: row => typeof row.enabled === 'boolean' ? row.enabled ? '已启用' : '已停用' : statusText(row.status) },
-            { id: 'endpoint', label: '地址', render: row => first(row, ['baseUrl', 'endpoint']), secondary: true },
-          ]} empty="当前读取窗口没有 API 连接。" />}
-      {connection && <div className="pw-selected-object"><h3>{first(connection, ['name', 'label', 'id'])}</h3><Facts items={[[ '协议', first(connection, ['provider', 'protocol']) ], ['地址', first(connection, ['baseUrl', 'endpoint']) ], ['凭据', connection.hasApiKey || connection.credentialsConfigured ? '已配置' : '未配置'], ['版本', connection.revision]]} />
-        <div className="pw-form-actions">{act('models.selectConnection', { connectionId: recordId(connection), expectedRevision: connection.revision }, '使用此连接')}{act('models.reviewConnection', { connectionId: recordId(connection), expectedRevision: connection.revision }, '核对连接与能力')}{act('models.refresh', { connectionId: recordId(connection) }, '读取模型目录')}</div>
-      </div>}
-      {models.length > 0 ? <ComboBoxField label="模型目录" options={models.map(row => ({ id: first(row, ['modelId', 'id', 'name']), label: first(row, ['name', 'label', 'modelId', 'id']), description: first(row, ['provider', 'sourceLabel']) }))} value={selectedModel} onChange={setSelectedModel} /> : <Empty>{Array.isArray(data.models) ? '当前目录没有可显示的模型。' : '尚未读取此连接的模型目录。'}</Empty>}
-      {model && <div className="pw-selected-object">{readable('模型能力', model, [['来源', ['source', 'capabilitySource']], ['输入能力', ['inputDescription', 'inputModalities']], ['核对时间', ['checkedAt', 'updatedAt']]])}<div className="pw-form-actions"><Button variant="secondary" disabled={!supported('models.review') || reviewingModel || Boolean(state.modelSelectionBusy) || state.activeTaskId != null || Boolean(state.chatBusy || state.chatSubmitting || state.phoneSubmitting || state.modelSaving || state.modelTesting)} onClick={async () => { setReviewingModel(true); try { const review = object(await run('models.review', { modelId: first(model, ['modelId', 'id', 'name']) })); if (typeof review.reviewHandle === 'string') setModelReview(review); } catch { /* Original error stays on the page. */ } finally { setReviewingModel(false); } }}>核对并选择此模型</Button></div></div>}
-      <SettingsDialog isOpen={modelReview !== null} title="确认原模型选择" onClose={() => setModelReview(null)}>{modelReview && <><Facts items={[[ '模型', modelReview.modelId ], ['输出上限', modelReview.outputTokens ], ['图像预算预留', modelReview.imageTokenReserve ]]} /><p className="pw-field-hint">使用宿主刚核对的原连接、模型能力与参数。原窗口变化或审阅过期后需要重新核对。</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => setModelReview(null)}>取消</Button><Button variant="primary" disabled={!supported('models.select') || Boolean(state.modelSelectionBusy) || state.activeTaskId != null || Boolean(state.chatBusy || state.chatSubmitting || state.phoneSubmitting || state.modelSaving || state.modelTesting)} onClick={async () => { const review = modelReview; setModelReview(null); try { await run('models.select', { reviewHandle: review.reviewHandle }); } catch { /* Never replay a consumed or unknown review. */ } }}>确认选择</Button></div></>}</SettingsDialog>
-    </Card>;
-  }
   if (domain === 'accounts') return <Card title="ChatGPT 账号" description="只显示授权状态、可用模型与用量；不回填通话或登录凭据。">
     <div className="pw-form-actions">{act('accounts.beginLogin', {}, '添加账号', true)}{act('accounts.refresh', {}, '刷新账号状态')}</div>
     <Collection data={data} keys={['accounts']} label="账号">{row => <>
@@ -525,15 +628,37 @@ function DataManagement({ kind, data, supported, run }: { kind: 'archives' | 'st
   </Card>;
 }
 
-export default function Secondary({ route, onBack, snapshot }: Props) {
+const SETTINGS_GROUPS = [
+  { id: 'models', title: '模型与连接', detail: '当前模型、API 与 ChatGPT 账号', icon: RiKey2Line, entries: ['model-settings', 'accounts'] },
+  { id: 'devices', title: '设备与执行', detail: '手机、电脑、服务器与本机环境', icon: RiComputerLine, entries: ['phone', 'devices', 'remote', 'ssh', 'local'] },
+  { id: 'work', title: '工作与数据', detail: '历史、调用记录、存储与备份', icon: RiFileList3Line, entries: ['history', 'usage', 'storage', 'archives'] },
+  { id: 'memory', title: '记忆与主动任务', detail: '私人记忆、学习、提醒与跟进', icon: RiDatabase2Line, entries: ['memory', 'memoryReview', 'learning', 'automation', 'commitments'] },
+  { id: 'extensions', title: '协作与扩展', detail: '渠道、团队、技能、插件与工具', icon: RiPuzzle2Line, entries: ['channels', 'teams', 'groups', 'skills', 'plugins', 'pluginCatalog', 'mcp'] },
+  { id: 'media', title: '语音与媒体', detail: '语音文件、实时通话与本机服务', icon: RiMicLine, entries: ['media', 'realtime', 'proxy'] },
+];
+const COMMON_SETTINGS = [
+  { id: 'model-settings', title: '模型与连接', detail: '选择模型或修改当前 API 配置', icon: RiKey2Line },
+  { id: 'phone', title: '手机能力', detail: '观察、执行、后台与通知', icon: RiSmartphoneLine },
+  { id: 'history', title: '任务历史', detail: '查看原任务与结果', icon: RiFileList3Line },
+  { id: 'usage', title: '模型调用记录', detail: '查看实际调用与用量', icon: RiFileList3Line },
+  { id: 'archives', title: '备份与迁移', detail: '导出或恢复原数据', icon: RiDatabase2Line },
+  { id: 'storage', title: '项目存储', detail: '占用与清理审阅', icon: RiDatabase2Line },
+];
+
+export default function Secondary({ route, onBack, snapshot, registerBackHandler }: Props) {
   const state = object(snapshot.state);
   const commands = snapshot.capabilities?.commands || [];
   const supported = (action: string) => commands.includes(action);
   const normalize = (next: string) => (next || 'settings').replace(/^connections[:/]/, '').replace(/^settings[:/]/, '');
   const [page, setPage] = useState(normalize(route));
+  const [modelView, setModelView] = useState<ModelView>({ kind: 'list' });
+  const modelDrafts = useRef<Partial<Record<'edit' | 'add', ModelDraft>>>({});
+  const transientBack = useRef<(() => boolean) | null>(null);
+  const registerTransientBack: BackHandlerRegistration = handler => { transientBack.current = handler; };
   const [query, setQuery] = useState(''), [notice, setNotice] = useState(''), [error, setError] = useState('');
+  const trail = useRef<string[]>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
   const mounted = useRef(true), generation = useRef(0);
-  useEffect(() => { setPage(normalize(route)); }, [route]);
+  useEffect(() => { generation.current++; trail.current = []; setPage(normalize(route)); setModelView({ kind: 'list' }); setNotice(''); setError(''); }, [route]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   const run: Run = async (action, args = {}) => {
     if (!supported(action)) throw new Error('当前页面尚未开放此操作。');
@@ -547,14 +672,19 @@ export default function Secondary({ route, onBack, snapshot }: Props) {
       throw failure;
     }
   };
-  const navigate = (next: string) => { generation.current++; setNotice(''); setError(''); setPage(next); };
+  const rememberScroll = () => scrollPositions.current.set(page + ((page === 'models' || page === 'model-settings') ? ':' + modelView.kind + ':' + (modelView.id || '') : ''), scroll.current?.scrollTop || 0);
+  const navigate = (next: string) => { rememberScroll(); generation.current++; trail.current.push(page); setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setPage(next); };
+  const openModel = (view: ModelView) => { rememberScroll(); generation.current++; setNotice(''); setError(''); setModelView(view); };
+  const isModelPage = page === 'models' || page === 'model-settings';
   const domain = SECONDARY_DOMAINS.find(x => x.id === page);
+  const hostSection = isModelPage ? 'models' : domain?.id;
   const canEnter = supported('connections.enter'), canLeave = supported('connections.leave');
   useEffect(() => {
-    if (!domain || !canEnter) return;
-    void bridge.command('connections.enter', { section: page }).catch(failure => { if (mounted.current) setError(failure instanceof Error ? failure.message : String(failure)); });
-    return () => { if (canLeave) void bridge.command('connections.leave', { section: page }).catch(() => {}); };
-  }, [page, canEnter, canLeave]);
+    if (!hostSection || !canEnter) return;
+    let current = true;
+    void bridge.command('connections.enter', { section: hostSection }).catch(failure => { if (mounted.current && current) setError(failure instanceof Error ? failure.message : String(failure)); });
+    return () => { current = false; if (canLeave) void bridge.command('connections.leave', { section: hostSection }).catch(() => {}); };
+  }, [hostSection, canEnter, canLeave]);
   useEffect(() => {
     if ((page === 'archives' || page === 'storage') && supported(page + '.open')) {
       void bridge.command(page + '.open', {}).catch(() => {});
@@ -567,36 +697,66 @@ export default function Secondary({ route, onBack, snapshot }: Props) {
     void bridge.command('settings.openSystem', { section: 'background' }).catch(failure => { if (mounted.current) setError(failure instanceof Error ? failure.message : String(failure)); });
     return () => { if (canCloseBackground) void bridge.command('background.close', {}).catch(() => {}); };
   }, [page, canOpenBackground, canCloseBackground]);
-  const feature = object(object(state.features)[page === 'commitments' ? 'automation' : page]);
-  const owner = object(object(state.ownerSnapshots)[page]);
-  const specialized = page === 'models' ? object(state.modelConnections) : page === 'devices' ? object(state.deviceWorkspace) : {};
+  const dataPage = isModelPage ? 'models' : page;
+  const feature = object(object(state.features)[dataPage === 'commitments' ? 'automation' : dataPage]);
+  const owner = object(object(state.ownerSnapshots)[dataPage]);
+  const specialized = isModelPage ? object(state.modelConnections) : page === 'devices' ? object(state.deviceWorkspace) : {};
   const data = { ...feature, ...owner, ...specialized };
-  const domainError = text(object(state.ownerErrors)[page]) || Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith(page + '.')).map(([, value]) => text(value)).filter(Boolean).join('\n');
-  const pageTitle = page === 'settings' || page === 'connections' ? '设置与连接' : page === 'model-settings' ? '模型设置' : page === 'phone' ? '手机能力' : page === 'background' ? '后台运行设置' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || '设置与连接';
-  const filtered = useMemo(() => SECONDARY_DOMAINS.filter(item => (item.title + item.detail).includes(query.trim())), [query]);
-  const back = () => page === 'settings' || page === 'connections' ? onBack() : navigate(page === 'background' ? 'phone' : 'settings');
+  const domainError = text(object(state.ownerErrors)[dataPage]) || Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith(dataPage + '.')).map(([, value]) => text(value)).filter(Boolean).join('\n');
+  const settingsGroup = SETTINGS_GROUPS.find(group => page === 'group:' + group.id);
+  const connection = modelConnectionRows(data).find(row => recordId(row) === modelView.id);
+  const pageTitle = isModelPage ? ({ list: '模型与连接', edit: '编辑 API 连接', add: '添加 API 连接', connection: first(connection || {}, ['name', 'label'], '已保存连接'), catalog: '模型目录', model: modelView.id || '模型详情' }[modelView.kind])
+    : settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : page === 'phone' ? '手机能力' : page === 'background' ? '后台运行设置' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || '设置');
+  const settingsEntries = [...COMMON_SETTINGS, ...SECONDARY_DOMAINS.filter(item => item.id !== 'models')];
+  const filtered = settingsEntries.filter(item => (item.title + item.detail).includes(query.trim()));
+  const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
+  useEffect(() => {
+    const element = scroll.current;
+    if (!element) return;
+    element.scrollTop = scrollPositions.current.get(viewKey) || 0;
+  }, [viewKey]);
+  const consumeBack = () => {
+    if (transientBack.current?.()) return true;
+    rememberScroll();
+    if (isModelPage && modelView.kind !== 'list') { openModel({ kind: modelView.kind === 'model' ? 'catalog' : 'list' }); return true; }
+    const previous = trail.current.pop();
+    if (previous) { generation.current++; setNotice(''); setError(''); setPage(previous); setModelView({ kind: 'list' }); return true; }
+    if (page === 'settings' || page === 'connections') return false;
+    generation.current++; setPage(page === 'background' ? 'phone' : 'settings'); setModelView({ kind: 'list' }); return true;
+  };
+  // Both the Android back event and the visible back button consume the same
+  // current layer. Only the settings root delegates to the enclosing app.
+  const latestBack = useRef(consumeBack);
+  latestBack.current = consumeBack;
+  useEffect(() => {
+    registerBackHandler?.(() => latestBack.current());
+    return () => registerBackHandler?.(null);
+  }, [registerBackHandler]);
+  const back = () => { if (!consumeBack()) onBack(); };
+  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span><small>{item.detail}</small></span></Button>)}</div>;
+  const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : 'app.refresh';
   return <section className="pw-secondary" aria-label={pageTitle}>
-    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label="返回" onClick={back} /><div><h1>{pageTitle}</h1><p>{domain?.detail || '同一工作引擎，清楚的对象与真实回执'}</p></div><IconButton icon={RiRefreshLine} aria-label="刷新当前状态" disabled={!supported(page === 'background' ? 'background.refresh' : 'app.refresh')} onClick={() => { void run(page === 'background' ? 'background.refresh' : 'app.refresh', {}).catch(() => {}); }} /></header>
-    <div className="pw-secondary-scroll">
+    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelView.kind === 'model' ? '返回模型目录' : '返回模型与连接' : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div><IconButton icon={RiRefreshLine} aria-label="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} /></header>
+    <div className="pw-secondary-scroll" ref={scroll}>
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
-      {(page === 'settings' || page === 'connections') ? <>
-        <Card title="常用设置"><div className="pw-settings-links">{[['model-settings', '模型设置', '连接参数、输入能力与回复预算', RiKey2Line], ['phone', '手机能力', '观察、执行、后台、通知与语音', RiSmartphoneLine], ['history', '任务历史', '原任务、操作与结果记录', RiFileList3Line], ['usage', '模型调用记录', '实际调用、统计未知项与用量', RiFileList3Line], ['archives', '备份与迁移', '选择、核对、导出与恢复原操作', RiDatabase2Line], ['storage', '项目存储', '真实占用、保留建议与清理审阅', RiDatabase2Line]].map(([id, title, detail, Icon]) => {
-          const Glyph = Icon as typeof RiKey2Line;
-          return <Button key={String(id)} variant="ghost" leadingIcon={Glyph} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(String(id))}><span><span>{String(title)}</span><small>{String(detail)}</small></span></Button>;
-        })}</div></Card>
-        <Card title="连接与能力"><SearchField aria-label="筛选连接与能力" placeholder="筛选连接与能力" value={query} onChange={setQuery} shape="rounded" />
-          <Accordion defaultExpandedKeys={['模型与连接', '记忆与主动任务']} variant="divided">{Array.from(new Set(SECONDARY_DOMAINS.map(item => item.group))).map(group => <AccordionItem key={group} id={group} title={group}>
-            <div className="pw-settings-links">{filtered.filter(item => item.group === group).map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span><small>{item.detail}</small></span></Button>)}</div>
-          </AccordionItem>)}</Accordion>{filtered.length === 0 && <Empty>没有匹配的入口。</Empty>}
-        </Card>
-      </> : page === 'model-settings' ? <ModelSettings state={state} supported={supported} run={run} navigate={navigate} />
-        : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} />
-        : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} navigate={navigate} />
-        : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
-        : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} />
-        : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} />
-        : <Empty>此入口未找到，可返回连接与能力。</Empty>}
+      <div className="pw-secondary-page" key={viewKey}>
+        {(page === 'settings' || page === 'connections') ? <>
+          <SearchField aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
+          {query.trim() ? <Card className="pw-settings-index">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</Card>
+            : <Card className="pw-settings-index"><div className="pw-settings-links">{SETTINGS_GROUPS.map(group => <Button key={group.id} variant="ghost" leadingIcon={group.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate('group:' + group.id)}><span><span>{group.title}</span><small>{group.detail}</small></span></Button>)}</div></Card>}
+        </> : settingsGroup ? <Card className="pw-settings-index">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</Card>
+          : isModelPage ? modelView.kind === 'list' ? <ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} />
+            : modelView.kind === 'edit' || modelView.kind === 'add' ? <ModelSettings key={modelView.kind} state={state} supported={supported} run={run} adding={modelView.kind === 'add'} draft={modelDrafts.current[modelView.kind]} onDraftChange={value => { if (value) modelDrafts.current[modelView.kind as 'edit' | 'add'] = value; else delete modelDrafts.current[modelView.kind as 'edit' | 'add']; }} registerTransientBack={registerTransientBack} />
+            : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} />
+            : <ModelCatalog key={modelView.kind + ':' + modelView.id} state={state} data={data} selectedId={modelView.kind === 'model' ? modelView.id : undefined} supported={supported} run={run} open={openModel} registerTransientBack={registerTransientBack} />
+          : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} />
+          : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} navigate={navigate} />
+          : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
+          : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} />
+          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} />
+          : <Empty>此入口未找到，可返回设置。</Empty>}
+      </div>
     </div>
   </section>;
 }

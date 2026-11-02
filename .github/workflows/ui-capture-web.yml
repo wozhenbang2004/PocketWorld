@@ -143,7 +143,7 @@ jobs:
           retention-days: 14
           compression-level: 0
 
-      - name: Prepare an official ARM-compatible Android 11 emulator
+      - name: Prepare an official ARM-compatible Android 15 capture emulator
         run: |
           set -euo pipefail
           mkdir -p build-artifacts/web-ui-captures
@@ -156,10 +156,12 @@ jobs:
           apt-cache policy libpulse0 > build-artifacts/web-ui-captures/emulator-libpulse0-policy.txt
           dpkg-query -W -f '${binary:Package}\t${Version}\t${Architecture}\n' libpulse0 \
             > build-artifacts/web-ui-captures/emulator-libpulse0-installed.txt
-          # Android's official API30 x86_64 images include ARM64 support.
-          # The script checks the actual guest ABI and installation before acceptance.
-          # https://developer.android.com/studio/releases/emulator#3000_february_19_2020
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-30;google_apis;x86_64'
+          # Google's API35 x86_64 prebuilt declares x86_64,arm64-v8a and
+          # libndk_translation.so; this is not an API30 compatibility test.
+          # https://android.googlesource.com/platform/prebuilts/android-emulator-build/system-images/+/refs/heads/main/generic/system-images/android-35/google_apis/x86_64/build.prop
+          # The downloaded image must still pass actual guest API/ABI/native-bridge
+          # and active WebView >=111 gates. Never replace or sideload a provider.
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-35;google_apis;x86_64'
           PW_EMULATOR_QEMU="$ANDROID_HOME/emulator/qemu/linux-x86_64/qemu-system-x86_64"
           test -x "$PW_EMULATOR_QEMU"
           # Account for the official SDK's bundled library directories when

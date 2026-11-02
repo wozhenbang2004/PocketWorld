@@ -564,7 +564,7 @@
       "hostActions": [
         "projects.open"
       ],
-      "controlledChanges": "Source FileArt/FileCard and files region; remove seed folders/documents/people; default compact list, real path filtering; type illustration is not content preview",
+      "controlledChanges": "Source FileArt/FileCard and files region; remove seed folders/documents/people; default compact list, real path filtering; type illustration is not content preview; optional controlled view/onViewChange/showToolbar retain local defaults and FileArt/FileCard/ContextMenu; App owns one BoardUI view popover/search without synthetic DOM event forwarding",
       "status": {
         "sourceCopied": true,
         "adapted": true,
@@ -628,7 +628,7 @@
       "id": "PW-25",
       "source": "upstream/affect/src/demos/components-b/tools.tsx::PermissionRequestDemo + components-c/pro.tsx::ReviewCenterDemo / library independent v3 0e69029b",
       "adapter": "Review.tsx",
-      "renderedAt": "App: attention task drawer + phone goal/range review",
+      "renderedAt": "App: current task > review child layer + phone goal/range review",
       "hostFields": [
         "tasks.id/raw",
         "phoneDraft"
@@ -643,7 +643,7 @@
         "phone.prepare",
         "phone.start"
       ],
-      "controlledChanges": "Retain original queue/detail + request heading/reason/scope/action hierarchy; remove fixture requests/confidence/auto-grants/implicit Enter/fake Undo; one-use original host reviewHandle",
+      "controlledChanges": "Retain original request heading/reason/scope/action hierarchy and original one-use host reviewHandle; current task no longer mounts the unrelated global task queue; overview, process, review and scope are bounded Vaul child layers; scope editor appears only on entry; no fixture requests/confidence/auto-grants/implicit Enter/fake Undo",
       "status": {
         "sourceCopied": true,
         "adapted": true,
@@ -657,7 +657,7 @@
       "id": "PW-26",
       "source": "upstream/affect/src/demos/components-c/upstream/decision-inbox-clean.tsx / official Affect free source 37b91fa MIT",
       "adapter": "DecisionInbox.tsx",
-      "renderedAt": "App: tasks > all > real attention task inbox",
+      "renderedAt": "App: tasks > attention filter only, replacing the normal task rows for that filter",
       "hostFields": [
         "tasks"
       ],

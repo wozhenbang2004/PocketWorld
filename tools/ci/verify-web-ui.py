@@ -28,6 +28,8 @@ APP_ID = "dev.pocketengine"
 ENTRY_ACTIVITY = "dev.pocketengine/.ui.ComposeActivity"
 SOURCE_URL = "https://pocketengine.local/assets/pocket-ui/index.html"
 MIN_WEBVIEW_MAJOR = 111
+CAPTURE_ANDROID_API = 35
+CAPTURE_SYSTEM_IMAGE = "system-images;android-35;google_apis;x86_64"
 
 
 def sha256(path):
@@ -339,7 +341,19 @@ def verify_capture(args):
     assert identity["sha256"] == sha256(args.apk), "Captured APK differs from the verified package"
     device = json.loads((root / "device.json").read_text())
     assert "arm64-v8a" in device["abi_list"].split(","), "Guest does not advertise ARM64 compatibility"
-    assert device["api"] == 30, "Unexpected capture Android API"
+    assert device["api"] == CAPTURE_ANDROID_API, "Unexpected capture Android API"
+    assert device["system_image"] == CAPTURE_SYSTEM_IMAGE, "Unexpected selected system image"
+    assert device["native_bridge"] == "libndk_translation.so", "Official ARM64 translation bridge was not observed"
+    properties = dict(re.findall(r"^\[([^\]]+)\]: \[(.*)\]$", (root / "device-properties.txt").read_text(), re.MULTILINE))
+    assert properties["ro.build.version.sdk"] == str(device["api"]), "API identity differs from observed getprop"
+    assert properties["ro.product.cpu.abilist"] == device["abi_list"], "ABI identity differs from observed getprop"
+    assert properties["ro.dalvik.vm.native.bridge"] == device["native_bridge"], "Native bridge identity differs from observed getprop"
+    assert properties["ro.build.fingerprint"] == device["build_fingerprint"], "Build fingerprint differs from observed getprop"
+    image = dict(line.split("=", 1) for line in (root / "image-source.properties").read_text().splitlines() if "=" in line and not line.lstrip().startswith("#"))
+    image = {key.strip(): value.strip() for key, value in image.items()}
+    assert image["AndroidVersion.ApiLevel"] == str(CAPTURE_ANDROID_API), "Installed image API differs from capture target"
+    assert image["SystemImage.Abi"] == "x86_64" and image["SystemImage.TagId"] == "google_apis", "Installed image architecture or flavor differs from capture target"
+    assert device["minimum_api30_runtime_verified"] is False, "API35 capture cannot establish minimum API30 runtime compatibility"
     assert device["activity"] == ENTRY_ACTIVITY and device["source_url"] == SOURCE_URL, "Wrong UI entry"
     assert device["pid"] and device["ready"] is True, "Actual Web UI did not become ready"
     assert device["final_pid"] == device["pid"], "App process changed during the captured journey"
@@ -374,7 +388,8 @@ def verify_capture(args):
         "source": "formal Android WebView application with transplanted library UI",
         "device": device, "apk": identity, "captures": files,
         "interaction_scope": "fresh app entry, actual work switcher open/close, return, short screen recording",
-        "limitations": ["Android emulator capture, not a physical phone", "No model or phone-execution task initiated by the capture script",
+        "limitations": ["Android 15/API35 emulator capture, not a physical phone",
+                       "Minimum supported Android 11/API30 runtime compatibility remains unverified by this capture", "No model or phone-execution task initiated by the capture script",
                        "Does not prove every business journey, touch performance, accessibility or visual acceptance"],
         "status": "capture integrity and startup checks passed; inspect PNG/MP4 for design acceptance",
     })

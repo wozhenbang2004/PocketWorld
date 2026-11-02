@@ -505,7 +505,8 @@
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
-        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Task tool records use the bounded TaskAuditStore operation schema through task-presentation.ts. Read-model contract tests are separate from rendered and native acceptance."
       },
       "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
       "runtime_validation": "not-performed",
@@ -538,7 +539,7 @@
       ],
       "source_locator": "agent-stepper.js",
       "implementation": {
-        "status": "source-adapted; retained originals verified; product JSX present",
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
         "files": [
           {
             "path": "web-ui/src/library/execution.tsx",
@@ -556,7 +557,8 @@
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
-        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. Ordinary task.raw does not provide steps/workPlan/executionTree; inferred fixture steps are removed from the main task flow. Real Team WorkPlan owner-window binding remains open."
       },
       "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
       "runtime_validation": "not-performed",
@@ -589,7 +591,7 @@
       ],
       "source_locator": "src/demos/components-b/agents.tsx::AgentTreeDemo",
       "implementation": {
-        "status": "source-adapted; retained originals verified; product JSX present",
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
         "files": [
           {
             "path": "web-ui/src/library/agents.tsx",
@@ -607,7 +609,8 @@
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
-        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. Ordinary task.raw does not provide a real multi-agent tree; real team-domain ownership and member/run projection remain open."
       },
       "business_connection": "conditional read-only task raw.executionTree rendering; actual host data shape and action coverage not established",
       "runtime_validation": "not-performed",
@@ -640,7 +643,7 @@
       ],
       "source_locator": "src/demos/components-a/agents.tsx::AgentHandoff",
       "implementation": {
-        "status": "source-adapted; retained originals verified; product JSX present",
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
         "files": [
           {
             "path": "web-ui/src/library/agents.tsx",
@@ -653,7 +656,8 @@
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
-        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. Ordinary task.raw handoffs are not a production contract; real team handoff review integration remains open."
       },
       "business_connection": "conditional read-only task raw.handoffs rendering; actual host data shape and action coverage not established",
       "runtime_validation": "not-performed",
@@ -686,7 +690,7 @@
       ],
       "source_locator": "src/demos/components-a/agents.tsx::AgentFindings",
       "implementation": {
-        "status": "source-adapted; retained originals verified; product JSX present",
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
         "files": [
           {
             "path": "web-ui/src/library/agents.tsx",
@@ -699,7 +703,8 @@
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
-        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. Ordinary task.raw findings are not a production contract; actual team finding/output references remain open."
       },
       "business_connection": "conditional read-only task raw.findings rendering; actual host data shape and review callback coverage not established",
       "runtime_validation": "not-performed",
@@ -732,7 +737,7 @@
       ],
       "source_locator": "src/demos/components-b/context.tsx::MemoryPanelDemo",
       "implementation": {
-        "status": "source-adapted; retained originals verified; product JSX present",
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
         "files": [
           {
             "path": "web-ui/src/library/context.tsx",
@@ -745,7 +750,8 @@
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
-        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. A synthetic task.raw memory panel is not a production memory projection; actual memory-domain binding remains open."
       },
       "business_connection": "partial read-only task raw.memory view; memory create/save/forget/source callbacks are not passed by the product call",
       "runtime_validation": "not-performed",
@@ -778,7 +784,7 @@
       ],
       "source_locator": "src/demos/components-b/context.tsx::ContextWindowDemo",
       "implementation": {
-        "status": "source-adapted; retained originals verified; product JSX present",
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
         "files": [
           {
             "path": "web-ui/src/library/context.tsx",
@@ -791,7 +797,8 @@
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
-        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. A synthetic task.raw contextWindow is not a production context-budget projection; actual usage/context owner binding remains open."
       },
       "business_connection": "conditional read-only task raw.contextWindow view; actual capacity/segment facts not established by source inspection",
       "runtime_validation": "not-performed",
@@ -2487,5 +2494,23 @@
       "21 secondary structured domains still have incomplete typed mutations/deep review and unverified owner runtime"
     ],
     "hash_checkpoint_note": "All retained-source and adapted/product SHA records remain from their earlier provenance checkpoint. This update changes integration metadata only and does not claim a fresh hash verification."
+  },
+  "product_composition_review": {
+    "baseline_commit": "337a863bec0a5f7b8aee90bd62b4c82392c688ce",
+    "baseline_disposition": "CI20 assembly rejected in whole-product review despite bounded source visual checks passing",
+    "current_scope": "Mobile work-to-task-to-review-to-return flow; single project identity and local view control; model list-to-object-to-editor; shared consumer skin",
+    "source_policy_head": "20261102T105020Z-ef79c367",
+    "source_components": "Previously selected actual-source controls are retained; no new component family or native replacement introduced",
+    "consumer_paths": [
+      "src/App.tsx",
+      "src/app.css",
+      "src/Secondary.tsx",
+      "src/secondary.css",
+      "src/product.css",
+      "src/product-skin-sources.md",
+      "src/task-presentation.ts"
+    ],
+    "acceptance": "Implementation pending integration build and current-rendered whole-journey review; not approved by source/component count",
+    "remaining": "Complete 21-domain action migration, PW09-14 real domain projections and Android runtime acceptance remain open"
   }
 }

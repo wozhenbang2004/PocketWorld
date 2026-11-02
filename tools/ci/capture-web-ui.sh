@@ -71,8 +71,15 @@ if "$PW_ADB" devices | awk '{print $1}' | grep -qx "$PW_SERIAL"; then
 fi
 
 PW_STAGE=create-avd
+# API35's official Google APIs x86_64 image declares ARM64 translation. The
+# booted guest and provider below remain authoritative; minimum API30 runtime
+# compatibility is a separate, still unverified target.
+PW_SYSTEM_IMAGE='system-images;android-35;google_apis;x86_64'
+PW_IMAGE_ROOT="$PW_ANDROID_SDK/system-images/android-35/google_apis/x86_64"
+cp "$PW_IMAGE_ROOT/source.properties" "$PW_CAPTURE_DIR/image-source.properties"
+cp "$PW_IMAGE_ROOT/package.xml" "$PW_CAPTURE_DIR/image-package.xml"
 "$PW_AVDMANAGER" create avd --force --name "$PW_AVD_NAME" \
-    --package 'system-images;android-30;google_apis;x86_64' --device pixel_3a <<<'no' \
+    --package "$PW_SYSTEM_IMAGE" --device pixel_3a <<<'no' \
     > "$PW_CAPTURE_DIR/avd-create.txt" 2>&1
 # Current official software renderer; old swiftshader_indirect is deprecated.
 "$PW_EMULATOR" -avd "$PW_AVD_NAME" -port 5580 -no-window -no-audio \
@@ -96,12 +103,19 @@ done
 
 PW_STAGE=abi-gate
 pw_adb shell getprop > "$PW_CAPTURE_DIR/device-properties.txt"
+PW_API=$(pw_adb shell getprop ro.build.version.sdk | tr -d '\r')
+PW_ANDROID_RELEASE=$(pw_adb shell getprop ro.build.version.release | tr -d '\r')
+PW_BUILD_FINGERPRINT=$(pw_adb shell getprop ro.build.fingerprint | tr -d '\r')
+[[ "$PW_API" == 35 ]] || { echo "Expected the official API35 capture guest; observed API $PW_API" >&2; exit 1; }
 PW_ABIS=$(pw_adb shell getprop ro.product.cpu.abilist | tr -d '\r')
 PW_NATIVE_BRIDGE=$(pw_adb shell getprop ro.dalvik.vm.native.bridge | tr -d '\r')
 case ",$PW_ABIS," in
     *,arm64-v8a,*) ;;
-    *) echo "This API30 guest does not advertise ARM64; do not strip or rebuild the APK to pass" >&2; exit 1 ;;
+    *) echo "This API35 guest does not advertise ARM64; do not strip or rebuild the APK to pass" >&2; exit 1 ;;
 esac
+[[ "$PW_NATIVE_BRIDGE" == libndk_translation.so ]] || {
+    echo "Official x86_64 guest ARM64 translation bridge was not observed" >&2; exit 1;
+}
 pw_adb shell wm size 1080x2220
 pw_adb shell wm density 440
 pw_adb shell settings put system font_scale 1.0
@@ -217,11 +231,15 @@ grep -Eq 'mResumedActivity.*dev\.pocketengine/\.ui\.ComposeActivity' "$PW_CAPTUR
 }
 pw_adb shell dumpsys webviewupdate > "$PW_CAPTURE_DIR/webview-provider-final.txt"
 PW_ABIS="$PW_ABIS" PW_NATIVE_BRIDGE="$PW_NATIVE_BRIDGE" PW_APP_PID="$PW_APP_PID" \
-PW_FINAL_PID="$PW_FINAL_PID" PW_DEVICE_SERIAL="$PW_SERIAL" python3 - "$PW_CAPTURE_DIR/device.json" <<'PY'
+PW_FINAL_PID="$PW_FINAL_PID" PW_DEVICE_SERIAL="$PW_SERIAL" PW_API="$PW_API" \
+PW_ANDROID_RELEASE="$PW_ANDROID_RELEASE" PW_BUILD_FINGERPRINT="$PW_BUILD_FINGERPRINT" \
+PW_SYSTEM_IMAGE="$PW_SYSTEM_IMAGE" python3 - "$PW_CAPTURE_DIR/device.json" <<'PY'
 import json, os, pathlib, sys
 root = pathlib.Path(sys.argv[1]).parent
 pathlib.Path(sys.argv[1]).write_text(json.dumps({
-    'api': 30, 'system_image': 'system-images;android-30;google_apis;x86_64',
+    'api': int(os.environ['PW_API']), 'android_release': os.environ['PW_ANDROID_RELEASE'],
+    'build_fingerprint': os.environ['PW_BUILD_FINGERPRINT'], 'system_image': os.environ['PW_SYSTEM_IMAGE'],
+    'minimum_api30_runtime_verified': False,
     'abi_list': os.environ['PW_ABIS'], 'native_bridge': os.environ['PW_NATIVE_BRIDGE'],
     'serial': os.environ['PW_DEVICE_SERIAL'], 'pid': os.environ['PW_APP_PID'], 'final_pid': os.environ['PW_FINAL_PID'],
     'activity': 'dev.pocketengine/.ui.ComposeActivity',

@@ -1,0 +1,435 @@
+/* PocketWorld consumer theme. Load after app.css and secondary.css.
+ * Existing BoardUI / Affect / Ovio / Josh controls remain the implementation.
+ * This file adapts their public tokens and retained root classes; it does not
+ * own page composition, task navigation, project layout, or source motion.
+ * Exact entry points and scope: product-skin-sources.md.
+ */
+:root {
+  --pw-font: "Inter", "Noto Sans SC", system-ui, sans-serif;
+  --pw-mono: "JetBrains Mono", ui-monospace, monospace;
+  --pw-canvas: #fff;
+  --pw-surface: #fff;
+  --pw-inset: #f7f7f7;
+  --pw-selected: #ededed;
+  --pw-edge: #e5e5e5;
+  --pw-edge-hover: #c9c9c9;
+  --pw-ink: #262626;
+  --pw-copy: #555;
+  --pw-muted: #737373;
+  --pw-disabled: #969696;
+  --pw-strong: #262626;
+  --pw-focus: #626262;
+  --pw-radius-control: 10px;
+  --pw-radius-popover: 14px;
+  --pw-shadow-input: 0 1px 2px rgb(0 0 0 / .04);
+  --pw-shadow-floating: 0 2px 6px rgb(0 0 0 / .05), 0 12px 32px rgb(0 0 0 / .12);
+  --pw-shadow-sheet: 0 -2px 8px rgb(0 0 0 / .04), 0 -12px 40px rgb(0 0 0 / .1);
+
+  /* BoardUI semantic aliases also reach its portaled menus. */
+  --font-inter: var(--pw-font);
+  --font-sans: var(--pw-font);
+  --font-mono-source: var(--pw-mono);
+  --color-text-primary: var(--pw-ink);
+  --color-text-secondary: var(--pw-copy);
+  --color-text-tertiary: var(--pw-muted);
+  --color-text-placeholder: var(--pw-muted);
+  --color-text-disabled: var(--pw-disabled);
+  --color-input-disabled-text: var(--pw-muted);
+  --color-foreground-icon-primary: var(--pw-ink);
+  --color-foreground-icon-secondary: var(--pw-copy);
+  --color-foreground-icon-tertiary: var(--pw-muted);
+  --color-background-full: var(--pw-surface);
+  --color-background-primary-default: var(--pw-surface);
+  --color-background-primary-hover: var(--pw-inset);
+  --color-background-primary-active: var(--pw-selected);
+  --color-background-primary-disabled: var(--pw-inset);
+  --color-background-secondary-default: var(--pw-inset);
+  --color-background-tertiary-default: var(--pw-inset);
+  --color-background-tertiary-hover: var(--pw-selected);
+  --color-input-disabled-background: var(--pw-inset);
+  --color-border-button-default: var(--pw-edge);
+  --color-border-button-hover: var(--pw-edge-hover);
+  --color-border-button-active: var(--pw-focus);
+  --color-border-focus-ring: var(--pw-focus);
+  --color-separator-border: var(--pw-edge);
+  --color-dropdown-item-hover-background: var(--pw-inset);
+  --color-button-ghost-background: transparent;
+  --color-button-ghost-hover: var(--pw-inset);
+  --color-button-ghost-active: var(--pw-selected);
+  --color-button-ghost-foreground: var(--pw-copy);
+  --color-button-ghost-disabled: transparent;
+  --color-button-ghost-disabled-foreground: var(--pw-disabled);
+  --color-text-error-primary: var(--pw-ink);
+  --color-foreground-icon-error: var(--pw-copy);
+  --color-background-tertiary-error: var(--pw-inset);
+  --color-border-error-default: var(--pw-copy);
+  --color-text-error-placeholder: var(--pw-muted);
+  --color-tab-count-selected-background: var(--pw-selected);
+  --color-segmented-control-background: var(--pw-inset);
+  --color-segmented-control-selected-background: var(--pw-surface);
+  --radius-2lg: var(--pw-radius-control);
+  --shadow-xs: none;
+  --shadow-card: none;
+  --shadow-dropdown: var(--pw-shadow-floating);
+  --text-body-regular: 14px;
+  --text-body-regular--line-height: 22px;
+  --text-body-medium: 14px;
+  --text-body-medium--line-height: 22px;
+  --text-body-2-regular: 12px;
+  --text-body-2-regular--line-height: 18px;
+  --text-body-2-medium: 12px;
+  --text-body-2-medium--line-height: 18px;
+  --text-caption-1-medium: 12px;
+  --text-caption-1-medium--line-height: 18px;
+  --text-caption-1-regular: 12px;
+  --text-caption-1-regular--line-height: 18px;
+  --ovio-accent: var(--pw-strong);
+  --ovio-track: var(--pw-inset);
+  --ovio-ink: var(--pw-ink);
+  --ovio-font: var(--pw-font);
+}
+
+/* Source frame tokens: ordinary content has an edge, never floating elevation. */
+.afa.pw-library,
+:is(.pw-app, .pw-drawer) .pw-command {
+  --afa-bg: var(--pw-surface);
+  --afa-surface: var(--pw-inset);
+  --afa-line: var(--pw-edge);
+  --afa-ink: var(--pw-ink);
+  --afa-text: var(--pw-copy);
+  --afa-soft: var(--pw-muted);
+  --afa-accent: var(--pw-copy);
+  --afa-shadow: none;
+  font: 14px/22px var(--pw-font);
+}
+.cb-demo.pw-library,
+:is(.pw-app, .pw-drawer) .pw-permission {
+  --cb-bg: var(--pw-surface);
+  --cb-tray: var(--pw-inset);
+  --cb-ink: var(--pw-ink);
+  --cb-muted: var(--pw-muted);
+  --cb-line: var(--pw-edge);
+  --cb-hover: var(--pw-inset);
+  --cb-blue: var(--pw-copy);
+  --cb-blue-bg: var(--pw-inset);
+  --cb-ok: var(--pw-copy);
+  --cb-ok-bg: var(--pw-inset);
+  --cb-warn: var(--pw-copy);
+  --cb-warn-bg: var(--pw-inset);
+  --cb-red: var(--pw-ink);
+  --cb-red-bg: var(--pw-inset);
+  --cb-shadow: none;
+  font: 14px/22px var(--pw-font);
+}
+:is(.pw-app, .pw-drawer) :is(.pw-review-center, .pw-inline-diff) {
+  --acc-bg: var(--pw-surface);
+  --acc-tray: var(--pw-inset);
+  --acc-muted: var(--pw-muted);
+  --acc-text: var(--pw-ink);
+  --acc-edge: var(--pw-edge);
+  --acc-blue: var(--pw-copy);
+  --acc-blue-wash: var(--pw-inset);
+  --acc-shadow: 0 0 0 1px var(--pw-edge);
+  font: 14px/22px var(--pw-font);
+}
+.pw-files {
+  --au-bg: var(--pw-surface);
+  --au-surface: var(--pw-surface);
+  --au-text: var(--pw-ink);
+  --au-muted: var(--pw-muted);
+  --au-subtle: var(--pw-inset);
+  --au-hover: var(--pw-selected);
+  --au-border: var(--pw-edge);
+  --au-strong: var(--pw-strong);
+  --au-blue: var(--pw-copy);
+  font: 14px/22px var(--pw-font);
+}
+.pw-library :is(.afa-label, .afa-eyebrow, .afa-status, .cb-status, small) {
+  font-size: 12px;
+  line-height: 18px;
+}
+.pw-library :is(.afa-popover, .afa-tooltip, .acc-popover) {
+  border-color: var(--pw-edge);
+  background: var(--pw-surface);
+  box-shadow: var(--pw-shadow-floating);
+}
+
+/* BoardUI buttons preserve their variants and source press response. */
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion {
+  min-height: 44px;
+  height: auto;
+  border-radius: var(--pw-radius-control);
+  font-family: var(--pw-font);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  box-shadow: none;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-primary,
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-danger {
+  background: var(--pw-strong);
+  color: #fff;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-primary:disabled,
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-danger:disabled {
+  background: var(--pw-selected);
+  color: var(--pw-disabled);
+  opacity: 1;
+}
+.pw-library .afa-btn, :is(.pw-app, .pw-drawer) .acc-btn {
+  min-height: 44px;
+  border-radius: var(--pw-radius-control);
+  font-size: 14px !important;
+  line-height: 22px !important;
+  font-weight: 500;
+  box-shadow: none;
+}
+.pw-library :is(.afa-btn, .acc-btn):focus-visible {
+  outline: 2px solid var(--pw-focus);
+  outline-offset: 2px;
+}
+.pw-library .afa-primary, :is(.pw-app, .pw-drawer) .acc-btn-primary {
+  background: var(--pw-strong) !important;
+  color: #fff !important;
+}
+.pw-library :is(.afa-btn, .afa-iconbtn):disabled {
+  opacity: .5;
+}
+.pw-library .afa-iconbtn {
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: var(--pw-radius-control);
+}
+
+/* BoardUI InputBase / TextareaBase: same field shell in forms and popups.
+ * No native field reset: the React Aria associations and source adornments stay.
+ */
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) > [role="group"] {
+  min-height: 44px;
+  border: 1px solid var(--pw-edge);
+  border-radius: var(--pw-radius-control);
+  padding: 10px 12px;
+  background: var(--pw-inset);
+  color: var(--pw-copy);
+  box-shadow: var(--pw-shadow-input);
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) > [role="group"]:focus-within {
+  border-color: var(--pw-focus);
+  background: var(--pw-surface);
+  box-shadow: 0 0 0 2px var(--pw-selected), var(--pw-shadow-input);
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) :is(input, textarea) {
+  font-family: var(--pw-font);
+  font-size: 14px;
+  line-height: 22px;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) :is(input, textarea):focus-visible {
+  outline: none;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) [role="group"][data-invalid] {
+  border-color: var(--pw-copy);
+  border-inline-start-width: 3px;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) [role="group"][data-disabled] {
+  border-color: var(--pw-edge);
+  background: var(--pw-inset);
+  box-shadow: none;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) [data-label],
+.pw-field-label {
+  color: var(--pw-ink);
+  font: 500 14px/22px var(--pw-font);
+}
+.pw-field-hint {
+  color: var(--pw-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+.pw-select-trigger {
+  min-height: 44px;
+  border-color: var(--pw-edge);
+  border-radius: var(--pw-radius-control);
+  background: var(--pw-inset);
+  box-shadow: var(--pw-shadow-input);
+  font: 400 14px/22px var(--pw-font);
+}
+.pw-select-trigger:focus-visible {
+  border-color: var(--pw-focus);
+  outline: 2px solid var(--pw-focus);
+  outline-offset: 2px;
+}
+.pw-select-trigger:disabled {
+  color: var(--pw-disabled);
+  box-shadow: none;
+}
+.pw-option-copy > small {
+  font: 400 12px/18px var(--pw-font);
+  color: var(--pw-muted);
+}
+.pw-radio-option {
+  min-height: 44px;
+  font: 400 14px/22px var(--pw-font);
+}
+/* Selected radio/checkbox layers keep source cross-fade/scale and check glyphs. */
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([role="radio"], label:has(input[type="checkbox"])) .bg-gradient-to-b {
+  background-image: none;
+  background-color: var(--pw-strong);
+}
+
+/* Source popup surface is a stable BoardUI shared recipe, including portals. */
+.shadow-dropdown {
+  border-color: var(--pw-edge);
+  border-radius: var(--pw-radius-popover);
+  background-color: var(--pw-surface);
+  box-shadow: var(--pw-shadow-floating);
+  font-family: var(--pw-font);
+  font-size: 14px;
+  line-height: 22px;
+}
+.shadow-dropdown :is([role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]) {
+  min-height: 44px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 22px;
+}
+.shadow-dropdown :is([role="option"], [role="menuitemradio"], [role="menuitemcheckbox"])[data-selected] {
+  background: var(--pw-selected);
+  color: var(--pw-ink);
+  font-weight: 500;
+}
+.shadow-dropdown :is([role="option"], [role="menuitem"])[data-disabled] {
+  color: var(--pw-disabled);
+}
+
+/* BoardUI disclosure and tabs keep their measured panel/indicator transitions. */
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) [class~="group/item"] {
+  box-shadow: none;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) [class~="group/item"] [slot="trigger"] {
+  min-height: 44px;
+  color: var(--pw-ink);
+  font-family: var(--pw-font);
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) [class~="group/item"] [slot="trigger"] .text-headline-medium {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) [role="tab"] {
+  min-height: 44px;
+  font-family: var(--pw-font);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* Retained composer: low elevation belongs to the editor, focus to its shell. */
+:is(.pw-app, .pw-drawer) .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
+  border-color: var(--pw-edge);
+  background: var(--pw-surface);
+  box-shadow: 0 1px 3px rgb(0 0 0 / .04), 0 5px 14px rgb(0 0 0 / .07);
+}
+:is(.pw-app, .pw-drawer) .pw-composer-region .pw-composer-host .afa-composer > .afa-card:focus-within {
+  border-color: var(--pw-focus);
+  box-shadow: 0 0 0 2px var(--pw-selected), 0 5px 14px rgb(0 0 0 / .07);
+}
+.pw-composer-host .afa-composer textarea {
+  color: var(--pw-ink);
+  font-family: var(--pw-font);
+  font-size: 15px;
+  line-height: 24px;
+}
+.pw-composer-host .afa-composer textarea::placeholder {
+  color: var(--pw-muted);
+  opacity: 1;
+}
+
+/* Affect official components use their own CSS variables, not a grayscale filter.
+ * The hairline shadows here are edges only; state motion remains source-owned.
+ */
+:is(.pw-app, .pw-drawer) :is(.ui-tcc, .ui-tcc-group) {
+  --ui-tcc-card: var(--pw-surface);
+  --ui-tcc-strong: var(--pw-ink);
+  --ui-tcc-ink: var(--pw-ink);
+  --ui-tcc-text: var(--pw-copy);
+  --ui-tcc-muted: var(--pw-muted);
+  --ui-tcc-line: var(--pw-edge);
+  --ui-tcc-wash: var(--pw-inset);
+  --ui-tcc-wash-big: var(--pw-inset);
+  --ui-tcc-code: var(--pw-inset);
+  --ui-tcc-accent: var(--pw-copy);
+  --ui-tcc-red: var(--pw-ink);
+  --ui-tcc-red-bg: var(--pw-inset);
+  --ui-tcc-red-line: var(--pw-edge);
+  --ui-tcc-shadow: 0 0 0 1px var(--pw-edge);
+  --ui-tcc-focus: var(--pw-focus);
+  --ui-tcc-mono: var(--pw-mono);
+  font-family: var(--pw-font);
+  font-size: 14px;
+  line-height: 22px;
+}
+:is(.pw-app, .pw-drawer) .ui-dic {
+  --ui-dic-card: var(--pw-surface);
+  --ui-dic-strong: var(--pw-ink);
+  --ui-dic-ink: var(--pw-ink);
+  --ui-dic-text: var(--pw-copy);
+  --ui-dic-muted: var(--pw-muted);
+  --ui-dic-line: var(--pw-edge);
+  --ui-dic-wash: var(--pw-inset);
+  --ui-dic-alert: var(--pw-copy);
+  --ui-dic-ok: var(--pw-copy);
+  --ui-dic-ok-bg: var(--pw-inset);
+  --ui-dic-solid: var(--pw-strong);
+  --ui-dic-solid-hover: #404040;
+  --ui-dic-on-solid: #fff;
+  --ui-dic-shadow: 0 0 0 1px var(--pw-edge);
+  --ui-dic-shadow-hover: 0 0 0 1px var(--pw-edge-hover);
+  --ui-dic-focus: var(--pw-focus);
+  font-family: var(--pw-font);
+  font-size: 14px;
+  line-height: 22px;
+  filter: none;
+}
+:is(.pw-app, .pw-drawer) .ui-dic__btn {
+  min-height: 44px;
+  border-radius: var(--pw-radius-control);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* Source FilesBrowser art retains its shape and hover movement, with solid ink. */
+.pw-files .au-sc-file-preview {
+  background: var(--pw-inset);
+  filter: none;
+}
+.pw-files .au-sc-file-art {
+  --file-color: #737373;
+}
+.pw-files .au-sc-art-paper {
+  background: var(--pw-surface);
+  border-color: var(--pw-edge);
+  box-shadow: none;
+}
+.pw-files .au-sc-art-back {
+  background: var(--file-color);
+  box-shadow: none;
+}
+.pw-files .au-sc-art-paper > i,
+.pw-files .au-sc-art-image,
+.pw-files .au-sc-art-cells > i {
+  background: #dedede;
+}
+.pw-files .au-sc-art-cells > i:nth-child(-n+3),
+.pw-files .au-sc-art-paper > i:first-child {
+  background: #bdbdbd;
+}
+.pw-files .au-sc-art-paper > b {
+  background: var(--file-color);
+  color: #fff;
+  box-shadow: none;
+  font-family: var(--pw-font);
+}
+
+/* No page-sized animation/reset is introduced. Josh press layers, Grok canvas,
+ * Vaul drag, Ovio liquid geometry, Accordion reveal, source flow beams, and
+ * every existing reduced-motion path remain owned by their retained sources.
+ */

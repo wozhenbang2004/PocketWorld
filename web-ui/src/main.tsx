@@ -6,6 +6,7 @@ import './fonts.css';
 import './app.css';
 import './library.css';
 import './secondary.css';
+import './product.css';
 
 const element = document.getElementById('app');
 if (!element) throw new Error('PocketWorld application mount is missing');
