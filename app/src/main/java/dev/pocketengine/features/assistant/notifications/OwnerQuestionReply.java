@@ -11,11 +11,14 @@ public final class OwnerQuestionReply {
     public interface Host { JSONObject answerOwnerQuestionFromNotification(JSONObject exact,String text)throws Exception; }
     private OwnerQuestionReply() {}
     public static JSONObject reference(JSONObject task)throws Exception{
-        if(!"awaiting_user".equals(task.optString("status")))return null;
+        if(task==null||!"assistant".equals(task.optString("kind"))||!"capabilities".equals(task.optString("executionMode"))||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))
+                ||task.optString("conversationId").isBlank()||task.has("sourceLearningJob")||!"awaiting_user".equals(task.optString("status")))return null;
+        JSONObject origin=task.optJSONObject("origin");if(origin!=null&&!"owner_reviewed_realtime".equals(origin.optString("kind")))return null;
         JSONObject evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");
         if(question==null||!"pocketworld.owner-question.v1".equals(question.optString("format"))||!"answer".equals(question.optString("replyKind"))
                 ||!Boolean.FALSE.equals(question.opt("approval"))||!Boolean.FALSE.equals(question.opt("takeover"))||question.has("replyConsumed")&&!Boolean.FALSE.equals(question.opt("replyConsumed")))return null;
         String taskId=task.optString("id"),run=task.optString("runId"),request=question.optString("requestId");int epoch=task.optInt("coordinatorEpoch");Object revision=question.opt("waitRevision");
+        JSONObject mailbox=task.optJSONObject("ownerInputMailbox");if(mailbox==null||!Boolean.FALSE.equals(mailbox.opt("open"))||!run.equals(mailbox.optString("runId"))||epoch!=mailbox.optInt("epoch")||!task.getString("conversationId").equals(mailbox.optString("conversationId")))return null;
         if(!taskId.equals(question.optString("taskId"))||!run.equals(question.optString("runId"))||epoch<1||epoch!=question.optInt("coordinatorEpoch")
                 ||!taskId.matches("[a-fA-F0-9-]{36}")||!run.matches("[a-fA-F0-9-]{36}")||!request.matches("[a-fA-F0-9-]{36}")
                 ||!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<1||!(question.opt("question") instanceof String)||question.getString("question").length()>4000)return null;

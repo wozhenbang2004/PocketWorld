@@ -135,8 +135,9 @@ public final class OwnerQuestionInputs {
     }
     private static JSONObject unconsumedIdentity(JSONObject task,JSONObject question)throws Exception{
         JSONObject nativeQuestion=new JSONObject(question.toString());nativeQuestion.remove("replyConsumed");
-        return OwnerQuestionReply.reference(new JSONObject().put("id",task.getString("id")).put("runId",task.getString("runId")).put("coordinatorEpoch",task.getInt("coordinatorEpoch"))
-                .put("status",task.getString("status")).put("evidence",new JSONObject().put("ownerQuestion",nativeQuestion)));
+        JSONObject value=new JSONObject().put("id",task.getString("id")).put("runId",task.getString("runId")).put("coordinatorEpoch",task.getInt("coordinatorEpoch"))
+                .put("status",task.getString("status")).put("evidence",new JSONObject().put("ownerQuestion",nativeQuestion));
+        for(String key:new String[]{"kind","executionMode","actorId","spaceId","conversationId","ownerInputMailbox","origin"})if(task.has(key))value.put(key,task.get(key));return OwnerQuestionReply.reference(value);
     }
     public static void requirePrivateTask(JSONObject task)throws Exception{
         if(task==null||!"assistant".equals(task.optString("kind"))||!"capabilities".equals(task.optString("executionMode"))||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.has("sourceLearningJob"))throw new SecurityException("问题答复不属于原主人私人能力任务");
