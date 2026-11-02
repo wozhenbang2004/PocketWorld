@@ -42,7 +42,16 @@ public final class TeamMemberEvidenceHost implements TeamCoordinator.EvidenceFac
             EngineModule skills=features.module("skills");if(skills instanceof dev.pocketengine.features.skills.SkillsModule)value.put("skills",((dev.pocketengine.features.skills.SkillsModule)skills).catalogueForHost(ownerScope()).getJSONArray("skills"));
             JSONArray resources=new JSONArray();EngineModule attachments=features.module("attachments");if(attachments!=null){JSONArray rows=attachments.handle("list",new JSONObject()).getJSONArray("attachments");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);String mime=row.optString("mimeType");if(row.optLong("size")>65536||!mime.startsWith("text/"))continue;resources.put(new JSONObject().put("kind","attachment").put("id",row.getString("id")).put("name",row.optString("name")).put("sha256",row.getString("sha256")));}}
             EngineModule workspace=features.module("workspace");if(workspace!=null){JSONArray rows=workspace.handle("listArtifacts",new JSONObject()).getJSONArray("artifacts");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!row.optString("kind").equals("text_file"))continue;resources.put(new JSONObject().put("kind","workspace_artifact").put("id",row.getString("id")).put("name",row.optString("path")).put("sha256",row.getString("sha256")));}}
+            if(workspace instanceof dev.pocketengine.features.workspace.WorkspaceModule)value.put("researchProjects",workspace.snapshot().getJSONArray("projects"));
             require();return value.put("resources",resources).put("accountsAndCredentialsSelectable",false);
+        }
+        /** Owner-page metadata only. This list neither shares files nor creates a member read. */
+        public JSONObject researchProjectFiles(String projectId)throws Exception {
+            require();if(projectId==null||!projectId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("请从原项目列表选择项目");
+            dev.pocketengine.features.workspace.WorkspaceModule module=workspace();if(module==null)throw new SecurityException("原项目模块不可用");
+            JSONArray source=module.handle("list",new JSONObject().put("projectId",projectId)).getJSONArray("files"),files=new JSONArray();
+            for(int i=0;i<source.length();i++){JSONObject row=source.getJSONObject(i);if(!row.optBoolean("deleted")&&"text".equals(row.optString("kind"))&&row.optLong("sizeBytes",Long.MAX_VALUE)<=2L*1024*1024)files.put(new JSONObject(row.toString()).put("projectId",projectId));}
+            require();return new JSONObject().put("projectId",projectId).put("files",files).put("selectionOnly",true).put("executionAuthorized",false);
         }
         public synchronized TaskStore.TeamMemberMaterialReview review(JSONObject input)throws Exception{
             require();pendingShared=null;sharedSelections=null;selected=capture(this,coordinator.memberScopePlan(run,member),input);pending=tasks.reviewTeamMemberMaterials(window,selected);return pending;
@@ -51,6 +60,7 @@ public final class TeamMemberEvidenceHost implements TeamCoordinator.EvidenceFac
         public synchronized TaskStore.TeamMemberMaterialReview reviewRenewal()throws Exception {
             require();pendingShared=null;sharedSelections=null;JSONObject old=current();if(!"active".equals(old.optString("state"))||old.optLong("revision")<1)throw new SecurityException("没有可续审的原有效分享版本；撤回或换材料请重新选择");
             TeamCoordinator.MemberScopePlan plan=coordinator.memberScopeRenewalPlan(run,member);JSONObject value=plan.view();for(String key:new String[]{"allowedRecords","allowedSources","skills","resources"})value.put(key,new JSONArray(old.getJSONArray(key).toString()));
+            if(old.has("researchReadAccess"))value.put("researchReadAccess",TeamResearchReadScope.checked(old.getJSONObject("researchReadAccess")));
             selected=new Selection(TeamMemberEvidenceHost.this,this,plan,value,old);selected.verifyMaterialsCurrent();pending=tasks.reviewTeamMemberMaterials(window,selected);return pending;
         }
         public synchronized TaskStore.TeamMemberMaterialGroupReview reviewTogether(JSONObject input)throws Exception {

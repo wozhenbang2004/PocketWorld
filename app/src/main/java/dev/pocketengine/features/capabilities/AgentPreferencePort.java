@@ -10,9 +10,11 @@ import org.json.JSONObject;
 public final class AgentPreferencePort implements CapabilityPort {
     public static final String LIST="agent_settings_list",SET="agent_settings_set";
     private final SettingsStore settings;private final CapabilityPort existing;private final RunControl original;
+    private final boolean enabledAtAdmission;
     private final ModelCapabilityAdapters.Binding binding;private final ModelCapabilityAdapters.Authority authority;
-    public AgentPreferencePort(SettingsStore settings,CapabilityPort existing,ModelCapabilityAdapters.Binding binding,ModelCapabilityAdapters.Authority authority,RunControl original){this.settings=java.util.Objects.requireNonNull(settings);this.existing=java.util.Objects.requireNonNull(existing);this.binding=java.util.Objects.requireNonNull(binding);this.authority=java.util.Objects.requireNonNull(authority);this.original=java.util.Objects.requireNonNull(original);}
-    private boolean enabled(){try{return settings.agentPreferences().getBoolean("enabled");}catch(Exception unavailable){return false;}}
+    public AgentPreferencePort(SettingsStore settings,CapabilityPort existing,ModelCapabilityAdapters.Binding binding,ModelCapabilityAdapters.Authority authority,RunControl original){this.settings=java.util.Objects.requireNonNull(settings);this.existing=java.util.Objects.requireNonNull(existing);this.binding=java.util.Objects.requireNonNull(binding);this.authority=java.util.Objects.requireNonNull(authority);this.original=java.util.Objects.requireNonNull(original);enabledAtAdmission=ownerEnabled();}
+    private boolean ownerEnabled(){try{return settings.agentPreferences().getBoolean("enabled");}catch(Exception unavailable){return false;}}
+    private boolean enabled(){return enabledAtAdmission&&ownerEnabled();}
     private void check(String name,RunControl live)throws Exception {if(live!=original||!enabled())throw new SecurityException("原偏好工具未启用或已撤回");binding.check(live);authority.check(name,live);}
     public JSONArray tools()throws Exception {return appendTools(existing.tools());}
     private JSONArray appendTools(JSONArray offered)throws Exception {JSONArray out=new JSONArray(offered.toString());if(!enabled())return out;out.put(tool(LIST,"查看主人允许对话修改的两个可逆偏好及当前revision；不返回模型、密钥、权限、联网或删除设置。",new JSONObject()));out.put(tool(SET,"仅用当前revision修改回复详略或普通操作节奏；主人关闭后隐藏调用也拒绝，回执保留真实旧值和新值。",new JSONObject().put("key",choice("response_detail","operation_pace")).put("value",choice("concise","standard","detailed","fast","careful")).put("expectedRevision",new JSONObject().put("type","integer").put("minimum",1)),"key","value","expectedRevision"));return out;}
