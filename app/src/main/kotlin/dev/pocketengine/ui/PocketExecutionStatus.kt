@@ -46,6 +46,7 @@ internal fun PocketExecutionStatus(
 }
 
 /** Native monochrome port of Affect UI Thinking Loader ray geometry (37b91fa, MIT).
+ * Copyright (c) 2026 Florian Höller (adfects); see licenses/affectui-MIT.txt.
  * No demo phases, elapsed times, or automatic completion are synthesized. */
 @Composable
 private fun ExecutionRays(modifier: Modifier) {

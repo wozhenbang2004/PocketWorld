@@ -535,8 +535,17 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             host.modelDrafts[task.id]?.let { ModelStreamPreview(it) }
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(resultAnchor))
             if (task.summary.isNotBlank()) {
-                Text("已有结果", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp, bottom = 10.dp))
-                RichConversationMessageBody(task.summary)
+                Surface(modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp),
+                    shape = RoundedCornerShape(14.dp), color = Soft) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AffectGlyph("file", color = SecondaryInk)
+                            Text("已有结果", style = MaterialTheme.typography.titleSmall)
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        RichConversationMessageBody(task.summary)
+                    }
+                }
             }
             val resultFiles = taskResultAttachments(task)
             if (resultFiles.isNotEmpty()) {
@@ -855,6 +864,10 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
     var supportsImageInput by remember(provider, url, model, state.modelProvider, state.baseUrl, state.modelName, state.supportsImageInput, state.modelRoute) { mutableStateOf(state.modelRoute != "account" && provider == state.modelProvider && url.trim() == state.baseUrl && model.trim() == state.modelName && state.supportsImageInput) }
     var editApi by remember(state.modelRoute) { mutableStateOf(false) }
     var settingsSection by rememberSaveable { mutableIntStateOf(0) }
+    val modelScroll = rememberScrollState()
+    val phoneScroll = rememberScrollState()
+    val connectionsScroll = rememberScrollState()
+    val settingsScroll = when (settingsSection) { 1 -> phoneScroll; 2 -> connectionsScroll; else -> modelScroll }
     var providerOptions by remember { mutableStateOf(false) }
     var outputTokens by remember(state.maxOutputTokens) { mutableStateOf(state.maxOutputTokens.toString()) }
     val configuredOutput = if (provider == "openai_chat") state.maxOutputTokens else outputTokens.toIntOrNull() ?: 0
@@ -878,7 +891,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
             Box(Modifier.padding(horizontal = 18.dp).padding(bottom = 16.dp)) {
                 PocketSegmentedTabs(listOf("模型", "手机", "连接"), settingsSection) { settingsSection = it }
             }
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            Column(Modifier.weight(1f).verticalScroll(settingsScroll).padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                 if (settingsSection == 0) SettingsSurface(state.modelName.ifBlank { "选择模型" }, if (state.modelRoute == "account") "ChatGPT 套餐" else "API 连接") {
                     SettingEntry("ChatGPT 账号与模型目录", "连接账号，选择可用模型") { controller.openConnection("accounts") }
                     HorizontalDivider(color = Line)
@@ -889,7 +902,6 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                 Text("当前账号模型：" + state.modelName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
                 Text("支持文字与工具调用，暂不支持截图、音频和视频。账号刷新、停用或退出后可能需要重新选择目录模型；不会自动换号、降级或重试付费请求。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp))
                 OutlinedButton(onClick = controller::useApiKeyModel, enabled = !state.modelSaving, modifier = Modifier.padding(top = 12.dp)) { Text(if (state.modelSaving) "切换中…" else "切回已保存的 API 密钥模型") }
-                TextButton(onClick = { editApi = !editApi }) { Text(if (editApi) "收起 API 连接编辑" else "配置新的 API 密钥模型") }
                 state.error?.let { Text(it, color = Danger, fontSize = 12.sp) }
             }
                 }

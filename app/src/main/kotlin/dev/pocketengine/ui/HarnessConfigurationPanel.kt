@@ -29,13 +29,18 @@ internal fun HarnessConfigurationPanel(taskId: String, snapshot: JSONObject, con
         try { controller.requestRemoteTask(command, input); error = null }
         catch (failure: Exception) { error = failure.message }
     }
-    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起 CLI 配置与恢复" else "CLI 配置与恢复") }
+    val gateway = snapshot.optJSONObject("harnessGateway")
+    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起 CLI 配置与模型网关" else "CLI 配置与模型网关") }
+    val gatewayStatus = gateway?.optJSONObject("status")
+    if (!expanded && gatewayStatus != null) Text(if (gatewayStatus.optBoolean("requiresReconcile")) "模型网关有未确认请求 · 展开只读核对" else if (gatewayStatus.optBoolean("running")) "模型网关运行中 · 展开查看期限或停止" else "原模型网关已停止 · 记录保留", style = MaterialTheme.typography.bodyMedium)
     if (!expanded) return
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        HarnessGatewayPanel(gateway, enabled, ::send)
+        HorizontalDivider(Modifier.padding(vertical = 4.dp), color = Line)
         Text("只管理这个准确目标的配置", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         Text("预览不写文件。确认只替换逐项列出的配置，不批准 CLI 运行；文件读回也不是模型接管或 API 计费证明。外部修改会保留并阻止不安全恢复。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp)
         if (selection != null) OutlinedButton(onClick = { send("openHarnessConfig", JSONObject().put("selection", JSONObject(selection.toString()))) }, enabled = enabled && config == null) { Text("核对本次原生 Profile 与目标") }
-        else Text("本次任务尚无原生 gateway/Profile 配置绑定。需先由原入口准备有期限的 API-only relay；这里不接收账号凭据、手填 token 或任意配置路径。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp)
+        else Text("启用上方已审阅的原任务网关后，使用“预览此原任务的 CLI 配置”继续。这里不接收账号凭据、手填 token 或任意配置路径。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp)
         operations.forEach { operation ->
             val id = operation.optString("operationId")
             val request = operation.optJSONObject("arguments")?.optJSONObject("request")

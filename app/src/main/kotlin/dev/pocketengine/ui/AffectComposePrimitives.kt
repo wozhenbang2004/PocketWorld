@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 internal fun AffectGlyph(name: String, modifier: Modifier = Modifier, color: Color = Ink) {
     val data = when (name) {
         "tool" -> "M10.2 2.4a3.5 3.5 0 0 0-4.3 4.6L2.6 10.3a1.4 1.4 0 0 0 2 2L7.9 9a3.5 3.5 0 0 0 4.6-4.3l-2 2-1.6-.4-.4-1.6 1.7-2.3Z"
+        "globe" -> "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M3 12h18M12 3c-4 4-4 14 0 18M12 3c4 4 4 14 0 18"
         "clock" -> "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"
         "plus" -> "M12 4v16M4 12h16"
         "arrow" -> "m12 19 0-14m-6 6 6-6 6 6"

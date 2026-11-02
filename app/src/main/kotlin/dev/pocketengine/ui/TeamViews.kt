@@ -142,12 +142,16 @@ internal fun TeamRunDetail(state: PocketUiState, controller: PocketWorldControll
                 if (collaborationOpen) TeamCollaborationPage(run, definition, commands, teamBusyCommands(state), lastReceipt, null, { command, payload -> controller.requestFeature("teams", command, payload) }, { controller.closeTeam() }, receipts, onDetails = { collaborationOpen = false }, workItems = {
                     if (run != null && (run.optJSONObject("workPlan") != null || run.optString("status") == "completed" && run.optString("discussionFormat") == dev.pocketengine.features.teams.TeamEvidenceDiscussion.FORMAT)) TeamWorkPlanControls(run, controller::openTeamWorkPlanPage, controller::runEcosystemControlWork, { id -> childTaskId = id; controller.getTask(id) }, controller::openTeamArtifact, controller::openTeamProjectRoundPage, controller::openTeamFailedProjectRoundPage)
                 }, outcomes = { chosen ->
-                    if (run != null) TeamRunMemberControls(run, "configureMember" in teamBusyCommands(state)) { command, input -> controller.requestFeature("teams", command, input) }
-                    if (run != null) TeamMemberMaterialControls(run, controller::openTeamMemberMaterialsPage, controller::runEcosystemControlWork)
                     if (run != null && run.optString("mode") == "produce") {
                         if (run.optJSONObject("productionScope")?.optJSONArray("assignments").objects().any { it.optJSONObject("remoteSelection")?.optBoolean("fullProject") == true }) TeamPhoneIntegratorControls(runId, controller::openTeamPhoneIntegratorPage, controller::runEcosystemControlWork)
                         TeamWritePanel(run, chosen, state, controller) { id -> childTaskId = id; controller.getTask(id) }
                         TeamWorkspaceArtifactLinks(run, chosen?.optString("id"), controller::openTeamArtifact)
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 12.dp))
+                    Text("成员与协作资料", style = MaterialTheme.typography.titleSmall)
+                    if (run != null) {
+                        TeamRunMemberControls(run, "configureMember" in teamBusyCommands(state)) { command, input -> controller.requestFeature("teams", command, input) }
+                        TeamMemberMaterialControls(run, controller::openTeamMemberMaterialsPage, controller::runEcosystemControlWork)
                     }
                 })
                 else if (run == null) TeamCaption("正在读取真实团队任务…")

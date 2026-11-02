@@ -21,14 +21,14 @@ internal object TaskExecutionPresentation {
         val active = status in setOf("preparing", "running", "verifying", "pausing", "stopping", "cancelling")
         val knownInFlight = operations.any { it.optString("runId") == task.optString("runId") && it.optString("state") == "prepared" }
         if (uncertain || status in setOf("reconciling", "reconciliation_required", "unknown") || evidence?.optBoolean("requiresReconciliation") == true)
-            return Current("先核对原操作结果", "可能已有动作发生。请查看原回执并逐项核对；这里不会重新执行或自动重发。", Tone.UNCERTAIN, Target.RECONCILIATION, "核对原操作")
+            return Current("有操作结果待核对", "操作可能已经发生，请先核对结果，避免重复提交。", Tone.UNCERTAIN, Target.RECONCILIATION, "核对操作结果")
         if (evidence?.optBoolean("projectServiceDrainPending") == true)
             return Current("服务收尾仍待确认", "停止请求不等于进程结束或资源已释放。先查看原服务回执，不要重复启动。", Tone.WAITING, Target.PROCESS, "查看收尾记录")
         val approvals = objects(task.optJSONArray("approvals")).filter { it.optString("state", it.optString("status")) == "pending" && it.optLong("expiresAt", Long.MAX_VALUE) > now }
         if (approvals.isNotEmpty() || status in setOf("waiting_approval", "awaiting_approval", "waiting_permission", "awaiting_permission"))
-            return Current("需要你审阅这次操作", "核对下方原对象、参数和影响范围。批准后仍需等待实际回执；旧授权不会在此恢复。", Tone.WAITING, Target.APPROVAL, "审阅操作范围")
+            return Current("需要你的确认", "请核对操作对象与影响范围，再决定是否允许。", Tone.WAITING, Target.APPROVAL, "查看并确认")
         if (unconfirmed && !(active && knownInFlight))
-            return Current("有原操作尚待核对", "当前窗口不能确认所有原调用的结果。请逐项查看原记录，不会自动重试或重发。", Tone.UNCERTAIN, Target.RECONCILIATION, "核对原操作")
+            return Current("有操作结果待核对", "部分操作的结果尚未确认，核对前不会自动重试。", Tone.UNCERTAIN, Target.RECONCILIATION, "核对操作结果")
         if (task.optBoolean("cancelRequested") && active || status in setOf("stopping", "cancelling"))
             return Current("正在停止，等待确认", "已请求停止后续派发。最后记录仍可查看，尚不能据此确认外部进程已经结束。", Tone.WAITING, Target.PROCESS, "查看最后记录")
         if (status in setOf("awaiting_user", "waiting_user", "awaiting_answer", "waiting_answer"))
@@ -40,24 +40,24 @@ internal object TaskExecutionPresentation {
         if (status in setOf("paused", "interrupted"))
             return Current(if (status == "paused") "已暂停" else "执行已中断", "保留原目标与已有结果。继续前需重新核对当前状态，历史工具调用不会自动重放。", Tone.WAITING, Target.FEEDBACK, "核对后继续原任务")
         if (status in setOf("cancelled", "canceled", "stopped"))
-            return Current("原任务已停止", "已有结果和原调用记录仍可查看。此状态本身不证明远端服务已终止。", Tone.STOPPED, Target.PROCESS, "查看停止前记录")
+            return Current("任务已停止", "已有结果和原调用记录仍可查看。此状态本身不证明远端服务已终止。", Tone.STOPPED, Target.PROCESS, "查看停止前记录")
         if (status == "completed")
-            return Current("原任务已完成", "结果与原过程仍保留；每次工具回执的含义可单独展开核对。", Tone.RETURNED, Target.RESULT, "查看已有成果")
-        if (status == "queued") return Current("等待执行", "原任务已排队。没有执行回执时，不将排队显示为已完成。", Tone.WAITING)
+            return Current("任务已完成", "成果与执行记录已保留，可随时回看。", Tone.RETURNED, Target.RESULT, "查看成果")
+        if (status == "queued") return Current("等待执行", "任务已加入队列，开始后会显示执行动态。", Tone.WAITING)
         val latest = objects(task.optJSONArray("events")).lastOrNull { it.optString("type") in setOf("run", "model", "tool", "observation", "verification", "owner_input", "capability_changed", "context_budget") }
         if (active) {
             val description = latest?.takeIf { it.optString("status") == "running" }?.optString("message")?.let { excerpt(it, 240) }
             val title = when {
                 status == "pausing" -> "正在暂停，等待确认"
-                status == "preparing" -> "准备执行原任务"
+                status == "preparing" -> "准备执行"
                 status == "verifying" -> "正在核对实际结果"
                 latest?.optString("type") == "model" -> "正在决定下一步"
-                latest?.optString("type") == "tool" && latest.optString("status") == "running" -> "正在等待原工具回执"
-                else -> "原任务执行中"
+                latest?.optString("type") == "tool" && latest.optString("status") == "running" -> "等待工具返回"
+                else -> "正在执行"
             }
-            return Current(title, description?.takeIf { it.isNotBlank() } ?: "当前摘要尚未报告新的具体步骤；可展开过程读取原记录。这里不估算完成百分比。", Tone.RUNNING)
+            return Current(title, description?.takeIf { it.isNotBlank() } ?: "正在处理你的目标，最新操作会显示在下方。", Tone.RUNNING)
         }
-        return Current("当前执行状态待核对", "尚未取得可识别的原执行状态。可刷新原任务与原记录，不据此创建替代任务。", Tone.NEUTRAL, Target.PROCESS, "查看原记录")
+        return Current("执行状态待核对", "暂时无法确认当前状态，请查看执行记录。", Tone.NEUTRAL, Target.PROCESS, "查看原记录")
     }
 
     fun records(page: JSONObject, section: String): List<Record> = objects(page.optJSONArray("entries")).mapNotNull { row ->
@@ -78,11 +78,11 @@ internal object TaskExecutionPresentation {
             state == "project_stopping" -> { tone = Tone.WAITING; label = "服务正在收尾 · 尚无资源释放确认" }
             receipt?.optString("code") == "approval_required" -> { tone = Tone.WAITING; label = "等待本次操作授权" }
             state == "resolved" && receipt?.optString("source") == "owner_reconciliation" -> { tone = Tone.NEUTRAL; label = when (receipt.optString("outcome")) { "occurred" -> "主人已核对发生 · 非自动验证"; "not_occurred" -> "主人已核对未发生 · 不会自动重试"; else -> "主人已记录核对结论" } }
-            state == "prepared" -> { tone = Tone.WAITING; label = "已登记 · 尚无终态回执" }
+            state == "prepared" -> { tone = Tone.WAITING; label = "已登记，等待结果" }
             receipt?.optString("status") in setOf("cancelled", "canceled", "stopped") -> { tone = Tone.STOPPED; label = "调用已停止 · 详见原回执" }
-            receipt != null && (receipt.has("ok") && !receipt.optBoolean("ok") || receipt.optString("status") == "failed" || receipt.opt("exitCode") is Number && receipt.optInt("exitCode") != 0) -> { tone = Tone.ERROR; label = "调用返回错误 · 不等于未执行" }
-            receipt?.optBoolean("terminal", true) == false -> { tone = Tone.WAITING; label = "已有非终态回执" }
-            receipt != null -> { tone = Tone.RETURNED; label = "已收到调用回执 · 目标仍需核对" }
+            receipt != null && (receipt.has("ok") && !receipt.optBoolean("ok") || receipt.optString("status") == "failed" || receipt.opt("exitCode") is Number && receipt.optInt("exitCode") != 0) -> { tone = Tone.ERROR; label = "调用出错 · 请核对操作结果" }
+            receipt?.optBoolean("terminal", true) == false -> { tone = Tone.WAITING; label = "已返回部分结果" }
+            receipt != null -> { tone = Tone.RETURNED; label = "已返回 · 结果可展开查看" }
             else -> { tone = Tone.NEUTRAL; label = "原状态：" + excerpt(state.ifBlank { "未报告" }, 80) }
         }
         return Record("operation:" + row.optString("operationId", row.optString("position")), excerpt(row.optString("tool").ifBlank { "原工具调用" }, 120), label, tone, row.optLong("createdAt"), row.optString("runId"), row.optJSONObject("arguments")?.toString().orEmpty(), receipt?.toString().orEmpty(), row.optString("status") == "read_limited", row.optLong("bodyBytes"))

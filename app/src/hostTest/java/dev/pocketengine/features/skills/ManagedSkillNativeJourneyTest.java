@@ -81,6 +81,30 @@ public final class ManagedSkillNativeJourneyTest {
         static void closeDb(TaskStore tasks)throws Exception{var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);((SQLiteDatabase)field.get(tasks)).close();}
         @Override public void close()throws Exception{try{if(window!=null)window.close();if(host!=null)host.close();control.cancel();if(work!=null&&!work.isDone())try{work.get(6,TimeUnit.SECONDS);}catch(Exception pending){}if(local!=null)local.close();}finally{if(tasks!=null)closeDb(tasks);/* Keep this fixture's temp evidence for the scoped test workspace lifecycle. No unknown process tree deletion. */}}
     }
+
+    @Test public void completedPhoneSkillCopyCleanupRetainsExactOriginalInputLogsAndFixedArtifact()throws Exception {
+        try(Fixture f=new Fixture("python3",PY,"cache-cleanup")){
+            f.local.bindNativeExecutionCachesForHost(f.tasks);
+            var work=f.execute();f.approve(f.review());JSONObject completed=work.get(12,TimeUnit.SECONDS);assertTrue(completed.toString(),completed.getBoolean("ok"));
+            byte[] fixed=f.saved();assertTrue(new String(fixed,StandardCharsets.UTF_8).contains("45.00"));JSONObject originalLog=f.host.readExecutionLog(f.id(),f.operation(),0,16000);assertTrue(originalLog.getJSONArray("chunks").length()>0);
+            String selected="native_cache:skill_copy:"+f.operation();JSONObject inventory=f.local.ownerStorageInventoryForHost(new RunControl());JSONObject target=null;
+            for(int i=0;i<inventory.getJSONArray("groups").length();i++){JSONObject row=inventory.getJSONArray("groups").getJSONObject(i);if(selected.equals(row.getString("id")))target=row;}
+            assertNotNull(target);assertTrue(target.toString(),target.getBoolean("cleanable"));
+            var review=f.local.reviewOwnerStorageForHost(Set.of(selected),new RunControl());var confirmed=review.confirm();String cleanup=confirmed.actionId();
+            // Existing FeatureHost owns the one native external intent/worker, never a new test executor.
+            try(var features=new FeatureHost(event->{},f.tasks,()->false)){
+                features.register(f.workspace);features.register(f.local);features.submitOwnerStorageCleanupForOwner(confirmed);
+                long until=System.nanoTime()+8_000_000_000L;JSONObject observed=null;
+                while(System.nanoTime()<until){observed=features.ownerStorageCleanupForOwner(cleanup);if(observed.optString("status").matches("completed|reconciling|failed"))break;Thread.sleep(20);}
+                assertNotNull(observed);assertEquals(observed.toString(),"completed",observed.getString("status"));assertFalse(Files.exists(f.copy()));
+                assertArrayEquals(fixed,f.saved());assertEquals("40.00",f.originalInput());assertFalse(f.tasks.hasUnresolved(cleanup));JSONObject retainedLog=f.host.readExecutionLog(f.id(),f.operation(),0,16000);assertEquals(originalLog.getJSONArray("chunks").toString(),retainedLog.getJSONArray("chunks").toString());assertEquals(originalLog.getLong("nextCursor"),retainedLog.getLong("nextCursor"));
+                JSONObject receiptOnly=f.host.reconcile(f.id(),f.operation(),false);assertEquals("completed",receiptOnly.getJSONObject("receipt").getString("status"));assertArrayEquals(fixed,f.saved());
+                JSONObject cold=features.queryOwnerStorageCleanupForOwner(cleanup,new RunControl());assertTrue(cold.getBoolean("allTargetsCurrentlyAbsent"));assertFalse(cold.getBoolean("deletionAttributionProven"));
+                assertThrows(Exception.class,()->features.submitOwnerStorageCleanupForOwner(confirmed));assertNull(f.callbackFailure.get());
+            }
+        }
+    }
+
     private static final String PY="from pathlib import Path\nimport sys\nassert sys.stdin.read() == ''\np=Path('input/data.txt').read_text()\nPath('output').mkdir(exist_ok=True)\nPath('output/result.bin').write_bytes(b'\\x00\\xff' + p.replace('40.00','45.00').encode() + b'|' + sys.argv[1].encode())\nprint('OWN_SKILL:45.00:stdin-eof')\nprint('字节日志😀'*5000, flush=True)\nimport time\ntime.sleep(.5)\n";
     @Test public void pythonSkillUsesExactNativeApprovalOneOriginalJobAndColdResultsNeverReplay()throws Exception {
         try(Fixture f=new Fixture("python3",PY,"$(literal no shell) 中文")){

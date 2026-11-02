@@ -6,6 +6,9 @@ import android.os.Looper
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.AnimatedVisibility
+import dev.pocketengine.ui.PocketExecutionStatus
+import dev.pocketengine.ui.TaskExecutionPresentation
 import androidx.compose.foundation.shape.RoundedCornerShape
 import dev.pocketengine.ui.PocketSegmentedTabs
 import dev.pocketengine.ui.PocketWorldTheme
@@ -246,7 +249,7 @@ private data class ReadScopeReview(val consent: BrowserReadScope.Consent, val ta
 private fun JSONArray.rows(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
 private fun JSONObject.child(name: String) = optJSONObject(name) ?: JSONObject()
 private fun JSONObject.array(name: String) = optJSONArray(name) ?: JSONArray()
-private fun toolLabel(tool: String) = when (tool.removePrefix("browser_task_")) {
+internal fun toolLabel(tool: String) = when (tool.removePrefix("browser_task_")) {
     "observe_visual" -> "查看网页图像"; "open" -> "打开研究页"; "select" -> "切换研究页"; "observe" -> "读取网页"; "navigate" -> "打开页面链接"
     "evaluate" -> "只读计算当前网页"; "inspect" -> "检查正文与页面状态"; "script" -> "运行这段页面脚本"; "network" -> "页面网络证据"
     "select_option" -> "选择下拉选项"
@@ -345,6 +348,7 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
     var readScopeOptions by remember { mutableStateOf(false) }
     var readScopeReview by remember { mutableStateOf<ReadScopeReview?>(null) }
     var showPages by remember { mutableStateOf(false) }
+    var selectedPageDetails by remember(state.optString("profileId"), activeTask.optString("id")) { mutableStateOf<String?>(null) }
     var showReadOptions by remember { mutableStateOf(false) }
     var showExecutionOptions by remember(activeTask.optString("id")) { mutableStateOf(false) }
     val researchScroll = rememberScrollState(); val sourceScroll = rememberScrollState()
@@ -363,8 +367,11 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                 c.workspaceView = if (it == 1) "sources" else "research"
             }
         }
-        if (pending.isNotEmpty()) Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) { Text("需要确认：${toolLabel(pending.first().optString("tool"))}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium); TextButton(onClick = { approval = pending.first() }, enabled = !c.busy) { Text("核对这次操作") } }
+        if (pending.isNotEmpty()) BrowserWorkSurface(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            PocketExecutionStatus("需要你的确认 · ${pending.size} 项", TaskExecutionPresentation.Tone.WAITING, prominent = true)
+            Text(toolLabel(pending.first().optString("tool")), style = MaterialTheme.typography.bodyMedium)
+            Text("核对范围后，再决定是否允许。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Button(onClick = { approval = pending.first() }, enabled = !c.busy, modifier = Modifier.fillMaxWidth()) { Text("核对这次操作") }
         }
         if (mode == "sources" && control.optBoolean("unresolved")) TextButton(onClick = { c.workspaceView = "research" }) { Text("当前研究有未知结果 · 去核对，未自动重试") }
         if (c.expanded) Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(if (mode == "sources") sourceScroll else researchScroll).padding(start = 16.dp, end = 16.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -374,13 +381,70 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                 Text("原任务：${state.child("entryTask").optString("goal")}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 TextButton(onClick = { c.returnToTask(c.contextTaskId) }) { Text("回原任务") }
             }
-            if (control.optBoolean("unresolved")) Surface(color = MaterialTheme.colorScheme.errorContainer) {
-                Column(Modifier.padding(12.dp)) { Text("结果尚未核实", fontWeight = FontWeight.SemiBold); Text("请先核对原操作，不重复点击、提交或交还旧决定。", style = MaterialTheme.typography.bodySmall); TextButton(onClick = { c.returnToTask(activeTask.getString("id")) }) { Text("回原任务核对") } }
+            if (control.optBoolean("unresolved")) BrowserWorkSurface {
+                PocketExecutionStatus("结果尚未核实", TaskExecutionPresentation.Tone.UNCERTAIN, prominent = true)
+                Text("请先核对原操作，不重复点击、提交或交还旧决定。", style = MaterialTheme.typography.bodySmall)
+                Button(onClick = { c.returnToTask(activeTask.getString("id")) }) { Text("回原任务核对") }
             }
             if (control.optBoolean("cancelRequested")) Text("已请求停止，正在等待原任务结束与页面资源释放；没有把按钮点击当作停止完成。", style = MaterialTheme.typography.bodySmall)
             if (running) {
-                Text(if (dialogPending) "网页正在等你确认或取消" else if (space.optString("status") == "owner_control") "主人已接管 · 自动浏览暂停" else if (pending.isNotEmpty()) "等待确认这次网页操作" else statusLabel(activeTask.optString("status")), fontWeight = FontWeight.SemiBold)
-                Text(activeTask.optString("goal"), style = MaterialTheme.typography.bodyMedium, maxLines = 3)
+                BrowserWorkSurface {
+                    Text("当前研究", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(activeTask.optString("goal"), style = MaterialTheme.typography.titleMedium)
+                    if (pending.isEmpty() && !control.optBoolean("unresolved")) {
+                    val current = TaskExecutionPresentation.current(activeTask, System.currentTimeMillis())
+                    val blocked = dialogPending || space.optString("status") == "owner_control" || pending.isNotEmpty() || control.optBoolean("cancelRequested")
+                    PocketExecutionStatus(
+                        if (dialogPending) "网页提示等你处理" else if (space.optString("status") == "owner_control") "由你操作 · 自动浏览暂停" else if (control.optBoolean("cancelRequested")) "正在停止 · 等待原回执" else current.title,
+                        if (blocked) TaskExecutionPresentation.Tone.WAITING else current.tone,
+                        animateRunning = !blocked && current.tone == TaskExecutionPresentation.Tone.RUNNING)
+                    Text(if (space.optString("status") == "owner_control") "页面与原任务仍关联，核对后再明确交还。" else current.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            if (mode == "research" && pages.isNotEmpty()) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("浏览页面", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    TextButton(onClick = { showPages = !showPages }) { Text(if (showPages) "收起管理" else "管理 ${pages.size} 页") }
+                }
+                Text("选择页面查看详情", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    pages.forEach { tab ->
+                        val selected = tab.optString("tabId") == selectedPageDetails || selectedPageDetails == null && tab.optBoolean("selected")
+                        BrowserPageCard(tab, selected) { selectedPageDetails = tab.optString("tabId") }
+                    }
+                }
+                val detailPages = if (showPages || space.optString("status") == "owner_control" && selectedHandoff == null) pages else pages.filter { it.optString("tabId") == selectedPageDetails || selectedPageDetails == null && it.optBoolean("selected") }
+                detailPages.forEach { tab ->
+                    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (detailPages.size > 1) Text(tab.optString("title").ifBlank { browserDomain(tab.optString("url")) }, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(if (tab.optString("openedBy") == "task") "本任务页面 · 接管后自动浏览暂停" else if (handoffPages.any { it.optString("tabId") == tab.optString("tabId") }) "原任务接管页 · 核对后可交还" else "我的页面 · 未自动交给任务", style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button(onClick = { c.command({ if (tab.optString("openedBy") == "task") c.host.takeOverPage(tab.getString("tabId")) else c.host.selectOwnerPage(tab.getString("tabId")) }) }, enabled = !c.busy) { Text(if (tab.optString("openedBy") == "task") "接管保留" else "查看") }
+                            if (tab.optString("openedBy") == "owner" && space.optString("status") == "active") TextButton(onClick = { c.adopt(tab) }, enabled = !c.busy && !state.optJSONObject("researchControl").let { it?.optBoolean("unresolved") ?: true }) { Text("交给当前任务") }
+                            if (tab.optString("openedBy") == "owner") TextButton(onClick = { c.command({ c.host.closeOwnerPage(tab.getString("tabId")) }) }, enabled = !c.busy) { Text("关闭") }
+                        }
+                    }
+                }
+            }
+            if (running) {
+                if (space.optString("status") == "owner_control") {
+                    Text(space.optString("handoffReason").ifBlank { "你可以在网页中完成登录或检查结果，再交还给原任务。" }, style = MaterialTheme.typography.bodyMedium)
+                    val returnPin = selectedHandoff ?: space.optJSONObject("continuePin")?.takeIf { handoffPages.isEmpty() }
+                    if (returnPin != null) Button(onClick = { val pinned = JSONObject(returnPin.toString()); c.command({ c.host.returnForOwner(pinned) }) }, enabled = !c.busy && !control.optBoolean("unresolved") && !control.optBoolean("cancelRequested") && !state.optBoolean("fileChooserPending") && !state.optBoolean("uploadInProgress") && !dialogPending) { Text(if (selectedHandoff != null) "交还当前页并继续" else "继续原浏览任务") }
+                    else Text("先选择要交还的原页面，再继续同一任务。", style = MaterialTheme.typography.bodySmall)
+                    Text("继续后会重新读取网页；登录密码与验证码由你在网页中输入。", style = MaterialTheme.typography.bodySmall)
+                }
+                BrowserActivityTrail(activeTask)
+                if (viewedTask.optString("id") == activeTask.optString("id") && (sources.isNotEmpty() || state.array("downloads").length() > 0)) {
+                    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            AffectGlyph("file", Modifier.size(18.dp))
+                            Text("已保留 ${sources.size} 个来源 · ${state.array("downloads").length()} 项下载记录", Modifier.weight(1f).padding(horizontal = 8.dp), style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = { c.workspaceView = "sources" }) { Text("查看依据") }
+                        }
+                    }
+                }
                 val siteNotice = state.child("siteNotice")
                 if (siteNotice.optString("taskId") == activeTask.optString("id") && siteNotice.optString("reason") in setOf("site_permission_denied", "geolocation_denied", "site_request_cancelled")) {
                     Text("网页的设备权限请求已拒绝或取消，研究可继续处理其他内容。", style = MaterialTheme.typography.bodySmall)
@@ -395,7 +459,7 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                             AffectGlyph(if (showExecutionOptions) "chevron" else "chevron-right")
                         }
                         if (!showExecutionOptions) Text(if (actionScope?.optString("state") == "active") "已授权范围内连续浏览 · 余 ${actionScope.optInt("remainingActions")} 次" else "范围外操作仍需确认", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
-                        if (showExecutionOptions) {
+                        AnimatedVisibility(showExecutionOptions) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (actionScope != null && actionScope.optString("state") != "not_granted" && activeTask.length() > 0) {
                     Text("日常浏览范围：${actionScope.optString("state")} · 余 ${actionScope.optInt("remainingActions")} 次", style = MaterialTheme.typography.bodySmall)
                     if (actionScope.optString("state") == "active") TextButton(onClick = { val id = activeTask.getString("id"); val revision = actionScope.getLong("revision"); c.command({ c.host.revokeTaskScopeForOwner(id, revision) }) }, enabled = !c.busy) { Text("撤销连续浏览范围") }
@@ -409,15 +473,8 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                     if (readState in setOf("active", "exhausted")) TextButton(onClick = { c.command({ c.host.revokeReadScopeForOwner(activeTask.getString("id"), readScope.getString("scopeId")) }) }, enabled = !c.busy) { Text("撤销只读范围") }
                 } else Text(if (actionScope?.optString("state") == "active") "站点内日常读取沿当前连续浏览范围；越域仍须确认。" else "未授予自动只读范围；网页读取仍逐次确认。", style = MaterialTheme.typography.bodySmall)
                 if (space.optString("status") == "active" && state.child("readScopeIdentity").optString("taskId") == activeTask.optString("id")) TextButton(onClick = { c.resetReadConsent(); readScopeOptions = true }, enabled = !c.busy) { Text("明确授予 / 更新本轮只读范围…") }
-                        }
+                        } }
                     }
-                }
-                if (space.optString("status") == "owner_control") {
-                    Text(space.optString("handoffReason").ifBlank { "你可以在网页中完成登录或检查结果，再交还给原任务。" }, style = MaterialTheme.typography.bodyMedium)
-                    val returnPin = selectedHandoff ?: space.optJSONObject("continuePin")?.takeIf { handoffPages.isEmpty() }
-                    if (returnPin != null) Button(onClick = { val pinned = JSONObject(returnPin.toString()); c.command({ c.host.returnForOwner(pinned) }) }, enabled = !c.busy && !control.optBoolean("unresolved") && !control.optBoolean("cancelRequested") && !state.optBoolean("fileChooserPending") && !state.optBoolean("uploadInProgress") && !dialogPending) { Text(if (selectedHandoff != null) "交还当前页并继续" else "继续原浏览任务") }
-                    else Text("在下方查看要交还的原页面，再继续同一任务。", style = MaterialTheme.typography.bodySmall)
-                    Text("继续后会重新读取网页；登录密码与验证码由你在网页中输入。", style = MaterialTheme.typography.bodySmall)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("${pages.count { it.optString("openedBy") == "task" }} / 4 个任务页", style = MaterialTheme.typography.bodyMedium)
@@ -453,24 +510,6 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
             }
             c.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
             if (c.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            if (mode == "research" && pages.isNotEmpty()) {
-                TextButton(onClick = { showPages = !showPages }) { Text("页面与接管 · ${pages.size}页") }
-                if (showPages || space.optString("status") == "owner_control" && selectedHandoff == null) {
-                HorizontalDivider()
-                Text("浏览页面", fontWeight = FontWeight.SemiBold)
-                pages.forEach { page ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                            Text(page.optString("title").ifBlank { page.optString("url").ifBlank { "空白页" } }, maxLines = 2, style = MaterialTheme.typography.bodyMedium)
-                            Text(if (page.optString("openedBy") == "task") "本任务页面" else if (handoffPages.any { it.optString("tabId") == page.optString("tabId") }) "原任务接管页 · 可交还" else "我的页面", style = MaterialTheme.typography.labelMedium)
-                        }
-                        TextButton(onClick = { c.command({ if (page.optString("openedBy") == "task") c.host.takeOverPage(page.getString("tabId")) else c.host.selectOwnerPage(page.getString("tabId")) }) }, enabled = !c.busy) { Text(if (page.optString("openedBy") == "task") "接管保留" else "查看") }
-                        if (page.optString("openedBy") == "owner" && space.optString("status") == "active") TextButton(onClick = { c.adopt(page) }, enabled = !c.busy && !state.optJSONObject("researchControl").let { it?.optBoolean("unresolved") ?: true }) { Text("交给当前任务") }
-                        if (page.optString("openedBy") == "owner") TextButton(onClick = { c.command({ c.host.closeOwnerPage(page.getString("tabId")) }) }, enabled = !c.busy) { Text("关闭") }
-                    }
-                }
-            }
-                }
             if (mode == "research" && viewedTask.array("browserUploadAttempts").length() > 0) {
                 Text("上传尝试 · 不自动重传", fontWeight = FontWeight.SemiBold)
                 viewedTask.array("browserUploadAttempts").rows().takeLast(10).forEach { attempt ->
@@ -486,7 +525,8 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                 Text("保留的依据 · ${sources.size}", Modifier.padding(top = 12.dp), fontWeight = FontWeight.SemiBold)
                 TextButton(onClick = { c.command({ history = c.host.historyForOwner().rows() }) }, enabled = !c.busy) { Text("研究记录") }
             }
-            if (viewedTask.optString("id").isNotEmpty()) Text(viewedTask.optString("goal"), style = MaterialTheme.typography.bodySmall, maxLines = 2)
+            if (viewedTask.optString("id").isNotEmpty()) Text(viewedTask.optString("goal"), style = MaterialTheme.typography.titleMedium, maxLines = 3)
+            if (sources.isNotEmpty()) Text("保存的是当时读到的内容，不代表已核实；原文与当前网页分别查看。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             val savedPages = state.child("researchPages")
             if (savedPages.array("pages").length() > 0) {
                 TextButton(onClick = { showRecoveryPages = !showRecoveryPages }) { Text(if (showRecoveryPages) "收起研究页面" else "研究页面 · ${savedPages.array("pages").length()}") }
@@ -513,9 +553,13 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
             }
             if (sources.isEmpty()) Text("读取网页后可保留原文摘录与出处，结束后仍能从原任务找回。", style = MaterialTheme.typography.bodySmall)
             sources.forEachIndexed { index, source ->
-                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("${index + 1}. ${source.optString("title").ifBlank { "网页来源" }}", style = MaterialTheme.typography.bodyMedium)
-                    Text(source.optString("excerpt"), maxLines = 3, style = MaterialTheme.typography.bodySmall)
+                BrowserWorkSurface {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Surface(shape = RoundedCornerShape(6.dp), color = MaterialTheme.colorScheme.surfaceVariant) { Text("${index + 1}", Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium) }
+                        Text(browserDomain(source.optString("url").ifBlank { source.optString("displayUrl") }), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text(source.optString("title").ifBlank { "网页来源" }, style = MaterialTheme.typography.titleMedium)
+                    Text(source.optString("excerpt"), maxLines = 4, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
                     if (source.optString("profileId") != state.optString("profileId")) Text("来自另一个登录资料；当时原文仍可回查，另看网页需先明确选回原资料。", style = MaterialTheme.typography.bodySmall)
                     if (source.optString("kind") == "browser_semantic_observation") Text(sourceScopeNote(source), maxLines = 3, style = MaterialTheme.typography.bodySmall)
                     if (source.optString("kind") == "public_http_observation") Text(if (source.child("http").optBoolean("bodyTruncated") || source.child("http").optBoolean("projectionTruncated")) "匿名 HTTP · 正文片段；回看使用原登录资料" else "匿名 HTTP · 未渲染；回看使用原登录资料", style = MaterialTheme.typography.bodySmall)

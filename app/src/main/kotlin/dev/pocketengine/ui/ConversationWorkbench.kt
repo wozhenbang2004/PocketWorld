@@ -129,28 +129,29 @@ private fun ConversationTable(block: RichMessageDocument.Block, link: (String) -
 @Composable
 internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask: (String) -> Unit,
     onLoadDetails: (String) -> Unit, modifier: Modifier = Modifier) {
-    var expanded by rememberSaveable(task.id, task.runId) { mutableStateOf(false) }
+    var expanded by rememberSaveable(task.id, task.runId) {
+        mutableStateOf(task.status in setOf("preparing", "running", "awaiting_user", "waiting_approval", "reconciling", "unknown", "failed"))
+    }
+    LaunchedEffect(task.id, task.runId) {
+        if (expanded && !task.detailsLoaded) onLoadDetails(task.id)
+    }
     var showAll by rememberSaveable(task.id, task.runId) { mutableStateOf(false) }
-    Column(modifier.fillMaxWidth().testTag("conversation_task_" + task.id)) {
+    Surface(modifier = modifier.fillMaxWidth().testTag("conversation_task_" + task.id).pocketDepth(PocketDepth.CONTENT, 14.dp),
+        shape = RoundedCornerShape(14.dp), color = Color.White) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f).clickable(enabled = task.id.isNotBlank()) {
                 expanded = !expanded
                 if (expanded && !task.detailsLoaded) onLoadDetails(task.id)
             }.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val iconCount = task.operations.size.coerceIn(1, 3)
-                Box(Modifier.width((22 + 18 * (iconCount - 1)).dp).height(22.dp)) {
-                    repeat(iconCount) { index ->
-                        androidx.compose.material3.Surface(
-                            modifier = Modifier.offset(x = (18 * index).dp).size(22.dp),
-                            shape = RoundedCornerShape(6.dp), color = androidx.compose.ui.graphics.Color.White,
-                            border = androidx.compose.foundation.BorderStroke(.5.dp, androidx.compose.ui.graphics.Color(0xffe9e9e9)),
-                            shadowElevation = 1.dp) {
-                            Box(contentAlignment = Alignment.Center) { AffectGlyph("tool", Modifier.size(12.dp), SecondaryInk) }
-                        }
-                    }
-                }
-                Text(if(task.detailsLoaded) "执行过程 · 最近 ${task.operations.size} 次调用" else "查看执行过程",
+                AffectGlyph(when {
+                    task.status in setOf("unknown", "reconciling") -> "question"
+                    task.status == "failed" -> "warning"
+                    task.confirmedComplete -> "check"
+                    else -> "clock"
+                }, Modifier.size(20.dp), Ink)
+                Text(if(task.detailsLoaded) "${task.label} · ${task.operations.size} 条调用记录" else "${task.label} · 执行过程",
                     fontSize = 13.sp, lineHeight = 20.sp, color = Ink,
                     modifier = Modifier.weight(1f), maxLines = 2)
                 AffectGlyph("chevron", Modifier.size(12.dp), SecondaryInk)
@@ -185,12 +186,14 @@ internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask
             }
         }
     }
+    }
 }
 
 @Composable
 private fun ConversationOperation(operation: TaskPresentation.Operation) {
     val tone = when {
         operation.uncertain -> TaskExecutionPresentation.Tone.UNCERTAIN
+        operation.awaitingApproval -> TaskExecutionPresentation.Tone.WAITING
         operation.state == "failed" -> TaskExecutionPresentation.Tone.ERROR
         operation.state == "prepared" -> TaskExecutionPresentation.Tone.WAITING
         else -> TaskExecutionPresentation.Tone.NEUTRAL

@@ -1,6 +1,11 @@
 package dev.pocketengine.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -49,12 +54,31 @@ internal fun TaskExecutionProcess(task: UiTask, controller: PocketWorldControlle
     }
     fun openProcess() { expanded = true; if (page == null && !busy) load("operations") }
     val current = TaskExecutionPresentation.current(task.raw, System.currentTimeMillis())
+    val recentRows = task.raw.optJSONArray("operations")
+    val recentEntries = org.json.JSONArray()
+    if (recentRows != null) for (index in maxOf(0, recentRows.length() - 3) until recentRows.length()) {
+        recentRows.optJSONObject(index)?.let(recentEntries::put)
+    }
+    val recentActivity = TaskExecutionPresentation.records(JSONObject().put("entries", recentEntries), "operations")
     Column(Modifier.fillMaxWidth().padding(vertical = 12.dp).testTag("task_execution_process")) {
+        Surface(modifier = Modifier.fillMaxWidth().pocketDepth(PocketDepth.CONTENT, 14.dp),
+            shape = RoundedCornerShape(14.dp), color = Color.White) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
         Text("当前步骤", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         PocketExecutionStatus(current.title, current.tone, prominent = true, animateRunning = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp).semantics { heading() }.testTag("task_execution_current"))
         Text(current.detail, fontSize = 14.sp, lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+        if (!expanded && recentActivity.isNotEmpty()) {
+            HorizontalDivider(color = Line, modifier = Modifier.padding(top = 14.dp, bottom = 10.dp))
+            Text("最近活动", style = MaterialTheme.typography.labelMedium, color = SecondaryInk)
+            recentActivity.forEachIndexed { index, record ->
+                key(record.key) { ExecutionActivityStep(record, index == recentActivity.lastIndex) }
+            }
+        }
         if (current.target != TaskExecutionPresentation.Target.NONE) TextButton(onClick = { if (current.target == TaskExecutionPresentation.Target.PROCESS) openProcess() else focus(current.target) }, modifier = Modifier.heightIn(min = 48.dp).testTag("task_execution_next_action"), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) { Text(current.action, fontSize = 14.sp) }
+        HorizontalDivider(color = Line, modifier = Modifier.padding(top = 4.dp))
         TextButton(onClick = { if (expanded) expanded = false else openProcess() }, modifier = Modifier.heightIn(min = 48.dp).testTag("task_execution_toggle"), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) { Text(if (expanded) "收起执行过程" else "展开执行过程与工具回执", fontSize = 14.sp) }
+            }
+        }
         if (expanded) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -133,4 +157,43 @@ private fun processColor(tone: TaskExecutionPresentation.Tone): Color = when (to
     TaskExecutionPresentation.Tone.UNCERTAIN, TaskExecutionPresentation.Tone.ERROR -> MaterialTheme.colorScheme.error
     TaskExecutionPresentation.Tone.RUNNING, TaskExecutionPresentation.Tone.WAITING -> MaterialTheme.colorScheme.primary
     else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+/** Retained Agent Run activity anatomy: real original rows, never synthesized future steps. */
+@Composable
+private fun ExecutionActivityStep(record: TaskExecutionPresentation.Record, last: Boolean) {
+    var details by rememberSaveable(record.key, record.at) { mutableStateOf(false) }
+    val line = Line
+    Column(Modifier.fillMaxWidth().drawBehind {
+        if (!last) drawLine(line, Offset(10.dp.toPx(), 30.dp.toPx()),
+            Offset(10.dp.toPx(), size.height), 1.dp.toPx())
+    }.padding(top = 10.dp, bottom = 8.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .clickable(role = Role.Button) { details = !details }
+            .semantics { stateDescription = if (details) "原记录已展开" else "原记录已收起" },
+            verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            val icon = when (record.tone) {
+                TaskExecutionPresentation.Tone.RETURNED -> "check"
+                TaskExecutionPresentation.Tone.ERROR -> "warning"
+                TaskExecutionPresentation.Tone.UNCERTAIN -> "question"
+                TaskExecutionPresentation.Tone.WAITING, TaskExecutionPresentation.Tone.RUNNING -> "clock"
+                TaskExecutionPresentation.Tone.STOPPED -> "stop"
+                else -> "tool"
+            }
+            AffectGlyph(icon, Modifier.size(20.dp), SecondaryInk)
+            Column(Modifier.weight(1f)) {
+                Text(record.title, style = MaterialTheme.typography.bodyMedium, color = Ink)
+                Text(record.label, style = MaterialTheme.typography.bodySmall, color = SecondaryInk,
+                    modifier = Modifier.padding(top = 3.dp))
+            }
+            AffectGlyph(if (details) "chevron" else "chevron-right", Modifier.size(14.dp), SecondaryInk)
+        }
+        androidx.compose.animation.AnimatedVisibility(visible = details) {
+            Column(Modifier.fillMaxWidth().padding(start = 30.dp, top = 6.dp)) {
+                if (record.arguments.isNotBlank()) ProcessText("本次参数", record.arguments)
+                if (record.receipt.isNotBlank()) ProcessText("原返回记录", record.receipt)
+                else Text("尚无终态回执，请保留原操作等待核对。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+            }
+        }
+    }
 }

@@ -9,9 +9,9 @@ import org.json.JSONObject;
 public final class TaskPresentation {
     public static final class Operation {
         public final String id,tool,state,label,output,runId;
-        public final boolean uncertain;
+        public final boolean uncertain,awaitingApproval;
         public final long at;
-        Operation(String id,String tool,String state,String label,String output,String runId,boolean uncertain,long at){this.id=id;this.tool=tool;this.state=state;this.label=label;this.output=output;this.runId=runId;this.uncertain=uncertain;this.at=at;}
+        Operation(String id,String tool,String state,String label,String output,String runId,boolean uncertain,boolean awaitingApproval,long at){this.id=id;this.tool=tool;this.state=state;this.label=label;this.output=output;this.runId=runId;this.uncertain=uncertain;this.awaitingApproval=awaitingApproval;this.at=at;}
     }
     public static final class Snapshot {
         public final String id,runId,goal,status,label,summary,next;
@@ -29,7 +29,7 @@ public final class TaskPresentation {
             boolean awaitingApproval=receipt!=null&&receipt.optString("code").equals("approval_required");
             String label=uncertain?"结果待核对":state.equals("prepared")?"已登记，等待收据":awaitingApproval?"等待操作授权":receipt!=null&&receipt.has("ok")&&!receipt.optBoolean("ok")?"工具返回错误":receipt!=null&&receipt.optBoolean("accepted")?"调用已接受":state.equals("receipt")?"已有工具回执":"状态待确认";
             String output="";if(receipt!=null){for(String key:new String[]{"message","summary","text","stdout","stderr"}){String value=receipt.optString(key,"");if(!value.isBlank())output=append(output,key,value);}if(data!=null)for(String key:new String[]{"message","summary","text","stdout","stderr","name","path","mimeType"}){String value=data.optString(key,"");if(!value.isBlank())output=append(output,key,value);}}
-            operations.add(new Operation(operation.optString("operationId"),tool,state,label,output,operation.optString("runId"),uncertain,operation.optLong("createdAt",operation.optLong("at"))));
+            operations.add(new Operation(operation.optString("operationId"),tool,state,label,output,operation.optString("runId"),uncertain,awaitingApproval,operation.optLong("createdAt",operation.optLong("at"))));
         }
         String next=switch(status){case "reconciling","unknown"->"先核对可能已经发生的动作，原任务会等待";case "needs_confirmation"->"请到原任务核对结果，再确认是否完成";case "waiting_approval","awaiting_approval"->"需要在原任务确认这次具体操作";case "paused","cancelled","interrupted","failed","awaiting_user"->"查看已有结果，补充后可继续原任务";case "completed"->"原任务已结束；结果与过程仍保留";default->"过程与结果来自原任务，后续操作在原任务中处理";};
         return new Snapshot(task.optString("id"),task.optString("runId"),task.optString("goal"),status,statusLabel(status),task.optString("summary"),next,all!=null,operations,total);

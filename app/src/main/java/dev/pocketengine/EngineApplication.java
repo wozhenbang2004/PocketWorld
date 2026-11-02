@@ -112,7 +112,13 @@ public final class EngineApplication extends Application implements dev.pocketen
             catch(Exception unavailable){error("ChatGPT 账号状态尚未准备，请打开账号页核对；未清空旧状态。");}
         });
         remoteOwnerWorkflows=new dev.pocketengine.features.RemoteOwnerWorkflows(features,tasks,this::publish);
-        remoteOwnerWorkflows.bindGatewayOwner(this::startExistingTaskHarnessGateway);
+        remoteOwnerWorkflows.bindGatewayOwner(new dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Host(){
+            public dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Access capture(String task,String run,String child)throws Exception{return captureExistingTaskHarnessGateway(task,run,child);}
+            public JSONObject existing(String task,String run)throws Exception{return existingTaskHarnessGateway(task,run);}
+            public JSONObject query(String task,String run,String lease)throws Exception{var bridge=existingTaskHarnessGatewayBridge(task,run,lease);return bridge.queryOriginal().put("target",((dev.pocketengine.features.proxy.ProxyModule)features.module("proxy")).harnessGatewayTarget(lease));}
+            public void revoke(String task,String run,String lease)throws Exception{existingTaskHarnessGatewayBridge(task,run,lease).close();}
+            public TaskStore.HarnessGatewayConfiguration configuration(String task,String run,String child,String lease)throws Exception{return existingTaskHarnessGatewayBridge(task,run,lease).configurationFor(child);}
+        });
         remoteAttentionNotifications=new dev.pocketengine.features.remote.RemoteAttentionNotifications(this,tasks,dev.pocketengine.ui.ComposeActivity.class);
         EngineModule memory=addModule("memory",()->new dev.pocketengine.features.memory.MemoryModule(context,memorySources::resolve,dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackend.create()));
         EngineModule assistant=addModule("assistant",()->new dev.pocketengine.features.assistant.AssistantModule(context,memory,this::runAssistantTurn,tasks));
@@ -346,14 +352,24 @@ public final class EngineApplication extends Application implements dev.pocketen
     public synchronized String activeId(){return activeTaskId;}
     /** Read-only native service fence; does not return, create or rebind a task controller. */
     public boolean ownsNativeTaskControl(String task,RunControl original){return ownsRunControl(task,original);}
-    /** Called only by the actual foreground RemoteOwnerWorkflows window. Existing run/grant only. */
-    private JSONObject startExistingTaskHarnessGateway(String task,JSONObject exactTarget,long expiresAt)throws Exception {
-        RunControl original=retainedTaskControl(task);if(original==null||!original.hasHostRun()||!task.equals(exactTarget.optString("taskId")))throw new SecurityException("仅已有原任务能启用网关，不创建新Runner或手机授权");
-        var proxy=features.module("proxy");var remote=features.module("remote");if(!(proxy instanceof dev.pocketengine.features.proxy.ProxyModule)||!(remote instanceof dev.pocketengine.features.remote.RemoteModule))throw new IllegalStateException("原网关/电脑宿主未就绪");
-        var bridge=((dev.pocketengine.features.proxy.ProxyModule)proxy).prepareHarnessGateway(tasks,original,(dev.pocketengine.features.remote.RemoteModule)remote,exactTarget,expiresAt);
-        try{startForegroundService(new Intent(this,PhoneRunService.class).setAction(PhoneRunService.START_GATEWAY).putExtra("gatewayLeaseId",bridge.leaseId()));return bridge.snapshot().put("serviceRequested",true).put("runtimeVerified",false);}
-        catch(RuntimeException unavailable){bridge.close();throw unavailable;}
+    /** Native review captures an actual retained control; no inactive task gets a new controller. */
+    private dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Access captureExistingTaskHarnessGateway(String task,String run,String child)throws Exception {
+        RunControl original=retainedTaskControl(task);if(original==null||!original.hasHostRun()||!run.equals(original.hostRunIdentity().runId()))throw new SecurityException("没有仍活动的原父任务control；此页只读，不创建任务或后台授权");
+        var identity=original.hostRunIdentity();var owner=tasks.issueHarnessGatewayConfigurationOwner(original,child);long revision=settings.relaySelectionRevision();ModelConfig captured=settings.captureRelaySelection();if(revision!=settings.relaySelectionRevision())throw new SecurityException("原RELAY选择正在变化，请重新核对");
+        dev.pocketengine.runtime.models.InferenceAudiencePolicy.require(captured,dev.pocketengine.runtime.models.NativeInferenceScope.externalRelay(),original);if(captured.usesAccount())throw new SecurityException("外部Harness仅支持已配置的API RELAY，不使用ChatGPT账号");SettingsStore.validate(captured);dev.pocketengine.runtime.ModelGateway.validate(captured);
+        String digest=dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(captured);
+        return new dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Access(){
+            public void checkCurrent()throws Exception{owner.checkCurrent();if(retainedTaskControl(task)!=original||settings.relaySelectionRevision()!=revision||!digest.equals(dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(settings.captureRelaySelection())))throw new SecurityException("原control或RELAY选择代次已改变，请重新核对");}
+            public JSONObject view()throws Exception{checkCurrent();return new JSONObject().put("taskId",task).put("runId",run).put("epoch",identity.epoch()).put("taskDeadline",tasks.taskExecutionDeadline(task,run,identity.epoch())).put("provider",captured.provider).put("model",captured.model).put("configurationDigest",digest).put("digestKind","native_relay_configuration_not_work_profile").put("apiOnly",true).put("billingBackendVerified",false).put("budget",tasks.executionScopeRemaining(task,run,identity.epoch()));}
+            public JSONObject start(dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Approval approval)throws Exception{approval.checkCurrent();if(!approval.issuedFor(this))throw new SecurityException("不是此原control的前台批准");JSONObject scope=approval.view(),target=scope.getJSONObject("target");long expires=scope.getLong("expiresAt");checkCurrent();if(!task.equals(target.optString("taskId"))||!digest.equals(target.optString("profileDigest")))throw new SecurityException("不是屏幕上原RELAY范围");
+                var proxy=features.module("proxy");var remote=features.module("remote");if(!(proxy instanceof dev.pocketengine.features.proxy.ProxyModule)||!(remote instanceof dev.pocketengine.features.remote.RemoteModule))throw new IllegalStateException("原网关/电脑宿主未就绪");
+                var bridge=((dev.pocketengine.features.proxy.ProxyModule)proxy).prepareHarnessGateway(tasks,original,(dev.pocketengine.features.remote.RemoteModule)remote,target,expires,owner,approval::checkCurrent);
+                try{approval.checkCurrent();checkCurrent();if(!bridge.matchesReview(digest,revision))throw new SecurityException("原模型选择在批准期间变化；没有登记远端租约");startForegroundService(new Intent(EngineApplication.this,PhoneRunService.class).setAction(PhoneRunService.START_GATEWAY).putExtra("gatewayLeaseId",bridge.leaseId()));return bridge.snapshot().put("target",new JSONObject(target.toString())).put("serviceRequested",true).put("runtimeVerified",false);}catch(Exception unavailable){bridge.close();throw unavailable;}
+            }
+        };
     }
+    private dev.pocketengine.features.proxy.NativeHarnessGatewayBridge existingTaskHarnessGatewayBridge(String task,String run,String lease)throws Exception {var module=features.module("proxy");if(!(module instanceof dev.pocketengine.features.proxy.ProxyModule))throw new SecurityException("原网关不可用");var bridge=((dev.pocketengine.features.proxy.ProxyModule)module).existingHarnessGateway(task,run);if(bridge==null||!bridge.leaseId().equals(lease))throw new SecurityException("原准确网关不在本进程；保留SQL未知，不重建");return bridge;}
+    private JSONObject existingTaskHarnessGateway(String task,String run)throws Exception {var module=features.module("proxy");if(!(module instanceof dev.pocketengine.features.proxy.ProxyModule))return null;var proxy=(dev.pocketengine.features.proxy.ProxyModule)module;var bridge=proxy.existingHarnessGateway(task,run);return bridge==null?null:bridge.snapshot().put("target",proxy.harnessGatewayTarget(bridge.leaseId()));}
     public synchronized RunControl control(String id){return id!=null&&id.equals(activeTaskId)?activeControl:null;}
     public synchronized ModelConfig config(String id){return id!=null&&id.equals(activeTaskId)?activeConfig:null;}
     public synchronized String mode(String id){return id!=null&&id.equals(activeTaskId)&&activeMode!=null?activeMode:"main_screen";}

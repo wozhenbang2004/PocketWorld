@@ -12,7 +12,7 @@ import org.json.JSONObject;
 
 /** Native owner page only. Transport modules and model JSON cannot create these ephemeral reviews. */
 public final class RemoteOwnerWorkflows {
-    private static final class Window {final String id,task;final Object nativeOwner;JSONObject source;String review,profileBinding;JSONObject result,artifact,snapshotFile;long reviewedAt,readGeneration,lastReadAttemptAt,lastSuccessfulReadAt;String queryStatus="not_queried",eventReadStatus="not_queried";volatile long lifecycleRevision;volatile boolean closed;boolean fresh,savingResult;JSONObject directory,conversationResult,projectFirst,projectEnvironment,projectReview,projectPage,projectDiff,projectOperation,projectReadSource;String projectReadOperation;volatile String projectDigest;long projectExpires;boolean projectBusy;String conversationDigest;long conversationExpiresAt;dev.pocketengine.features.channels.ChannelsModule.PrivateInputSource conversationSource;final Map<String,JSONObject> selectedFiles=new LinkedHashMap<>();TaskStore.TeamRemoteOwnerWindow teamWindow;final Map<String,TaskStore.TeamRemoteOwnerReview> teamReviews=new LinkedHashMap<>();Window(String id,String task,Object nativeOwner){this.id=id;this.task=task;this.nativeOwner=nativeOwner;}}
+    private static final class Window {dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Page gateway;volatile long gatewayRevision;final String id,task;final Object nativeOwner;JSONObject source;String review,profileBinding;JSONObject result,artifact,snapshotFile;long reviewedAt,readGeneration,lastReadAttemptAt,lastSuccessfulReadAt;String queryStatus="not_queried",eventReadStatus="not_queried";volatile long lifecycleRevision;volatile boolean closed;boolean fresh,savingResult;JSONObject directory,conversationResult,projectFirst,projectEnvironment,projectReview,projectPage,projectDiff,projectOperation,projectReadSource;String projectReadOperation;volatile String projectDigest;long projectExpires;boolean projectBusy;String conversationDigest;long conversationExpiresAt;dev.pocketengine.features.channels.ChannelsModule.PrivateInputSource conversationSource;final Map<String,JSONObject> selectedFiles=new LinkedHashMap<>();TaskStore.TeamRemoteOwnerWindow teamWindow;final Map<String,TaskStore.TeamRemoteOwnerReview> teamReviews=new LinkedHashMap<>();Window(String id,String task,Object nativeOwner){this.id=id;this.task=task;this.nativeOwner=nativeOwner;}}
     /** Private constructor: a review JSON cannot become an owner-approved external message. */
     public static final class ConversationResultApproval {
         private final RemoteOwnerWorkflows host;private final Window window;private final String value,digest;private final long lifecycle,expires;
@@ -45,9 +45,8 @@ public final class RemoteOwnerWorkflows {
     private final dev.pocketengine.features.remote.RemoteInputAttachments inputs;
     private final dev.pocketengine.features.remote.NativeHarnessConfigs harnessConfigs;
     private final Map<String,Window> windows=new LinkedHashMap<>();
-    @FunctionalInterface public interface GatewayOwner {JSONObject start(String task,JSONObject exactTarget,long expiresAt)throws Exception;}
-    private GatewayOwner gatewayOwner;
-    public synchronized void bindGatewayOwner(GatewayOwner owner){if(gatewayOwner!=null)throw new IllegalStateException("原gateway owner不能替换");gatewayOwner=java.util.Objects.requireNonNull(owner);}
+    private dev.pocketengine.features.remote.NativeHarnessGatewayOwner gatewayOwner;
+    public synchronized void bindGatewayOwner(dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Host owner){if(gatewayOwner!=null)throw new IllegalStateException("原gateway owner不能替换");gatewayOwner=new dev.pocketengine.features.remote.NativeHarnessGatewayOwner(tasks,this::module,java.util.Objects.requireNonNull(owner));}
     private volatile Object foregroundOwner;
     /** Actual Activity resume/pause only; foregrounding never restores an old review. */
     public void setForeground(Object nativeOwner,boolean value){
@@ -64,10 +63,8 @@ public final class RemoteOwnerWorkflows {
     public synchronized void close(String id){inputs.close(id);harnessConfigs.close(id);Window window=windows.remove(id);if(window!=null){window.closed=true;window.lifecycleRevision++;if(window.teamWindow!=null)window.teamWindow.close();}}
     public JSONObject handle(String command,JSONObject input)throws Exception{return handle(null,command,input);}
     public JSONObject handle(Object nativeOwner,String command,JSONObject input)throws Exception{
-        if(command.equals("enableTaskGateway")){
-            synchronized(this){if(nativeOwner==null||foregroundOwner!=nativeOwner||gatewayOwner==null||input.length()!=3||!input.has("taskId")||!input.has("target")||!input.has("expiresAt"))throw new SecurityException("只允许当前原生前台主人为已有任务启用准确网关");return gatewayOwner.start(input.getString("taskId"),input.getJSONObject("target"),input.getLong("expiresAt"));}
-        }
-        if(dev.pocketengine.features.remote.NativeHarnessConfigs.command(command))return harnessConfigs.handle(nativeOwner,command,input);
+        if(dev.pocketengine.features.remote.NativeHarnessGatewayOwner.command(command))return gatewayCommand(nativeOwner,command,input);
+        if(dev.pocketengine.features.remote.NativeHarnessConfigs.command(command)){JSONObject result=harnessConfigs.handle(nativeOwner,command,input);Window original; synchronized(this){original=windows.get(input.getString("windowId"));}if(original!=null&&original.gateway!=null&&gatewayOwner!=null)result.getJSONObject("snapshot").put("harnessGateway",gatewayOwner.snapshot(original.gateway));return result;}
         if(dev.pocketengine.features.remote.RemoteInputAttachments.command(command))return inputs.handle(nativeOwner,command,input);
         if(command.startsWith("project."))return projectCommand(nativeOwner,command,input);
         java.util.Set<String> allowed=new java.util.HashSet<>(java.util.Set.of("windowId","taskId","reviewId"));
@@ -375,11 +372,19 @@ public final class RemoteOwnerWorkflows {
         if(inputScope!=null){JSONArray files=inputScope.optJSONArray("files");for(int i=0;files!=null&&i<files.length();i++){JSONObject file=files.getJSONObject(i);try{conversationInputs.put(channels().capturePrivateRemoteInput(file.getString("attachmentId"),file.getString("sha256")).view());}catch(IllegalStateException|SecurityException unavailable){/* Old/other sources cannot become a return destination. */}}}
         synchronized(this){if(window.projectPage!=null)snapshot.put("projectHistoryPage",new JSONObject(window.projectPage.toString()));if(window.projectDiff!=null)snapshot.put("projectHistoryDiff",new JSONObject(window.projectDiff.toString()));if(window.projectOperation!=null)snapshot.put("projectHistoryOperation",new JSONObject(window.projectOperation.toString()));if(window.projectReview!=null&&window.projectDigest!=null)snapshot.put("projectHistoryReview",new JSONObject().put("scope",new JSONObject(window.projectReview.toString())).put("digest",window.projectDigest).put("expiresAt",window.projectExpires));snapshot.put("projectBusy",window.projectBusy);}
         snapshot.put("projectHistorySources",tasks.originalRemoteProjectHistorySources(window.task));if(window.projectReadSource!=null)snapshot.put("projectHistoryReadSource",new JSONObject(window.projectReadSource.toString()));
+        if(gatewayOwner!=null)snapshot.put("harnessGateway",window.gateway==null?gatewayOwner.summary(window.task):gatewayOwner.snapshot(window.gateway));
         snapshot.put("conversationInputSources",conversationInputs);try{snapshot.put("conversationResultDeliveries",channels().originalRemoteResults(window.task));}catch(IllegalStateException|SecurityException unavailable){snapshot.put("conversationDeliveryRead","unavailable_not_empty_or_delivered");}
         synchronized(this){if(window.result!=null)snapshot.put("result",new JSONObject(window.result.toString()));if(window.artifact!=null)snapshot.put("artifact",new JSONObject(window.artifact.toString()));}
         synchronized(this){if(window.snapshotFile!=null)snapshot.put("snapshotFile",new JSONObject(window.snapshotFile.toString()));}
         synchronized(this){if(lifecycle>=0)checkReadCurrent(window,lifecycle,generation);}
         JSONObject result=new JSONObject().put("snapshot",snapshot);if(operation!=null)result.put("operation",operation);return result;
+    }
+    private JSONObject gatewayCommand(Object owner,String command,JSONObject input)throws Exception {
+        Window window;long lifecycle;
+        synchronized(this){window=required(input.getString("windowId"));if(owner==null||foregroundOwner!=owner||window.nativeOwner!=owner||!window.task.equals(input.getString("taskId"))||window.teamWindow!=null||gatewayOwner==null)throw new SecurityException("只允许当前原生前台私人原任务页管理网关");lifecycle=window.lifecycleRevision;
+            if(command.equals("gateway.inspect")||window.gateway==null||!gatewayOwner.windowCurrent(window.gateway)&&(command.equals("gateway.query")||command.equals("gateway.revoke")||command.equals("gateway.configure"))){long gatewayRevision=++window.gatewayRevision;window.gateway=gatewayOwner.page(window.task,()->{synchronized(RemoteOwnerWorkflows.this){if(window.closed||windows.get(window.id)!=window||window.lifecycleRevision!=lifecycle||window.gatewayRevision!=gatewayRevision||foregroundOwner!=window.nativeOwner)throw new SecurityException("网关范围审阅已关闭、过期或退出前台");}});if(!command.equals("gateway.inspect"))gatewayOwner.observe(window.gateway);}}
+        if(command.equals("gateway.configure")){JSONObject result=harnessConfigs.openGateway(owner,window.id,window.task,gatewayOwner.configuration(window.gateway,input));result.getJSONObject("snapshot").put("harnessGateway",gatewayOwner.snapshot(window.gateway));return result;}
+        JSONObject gateway=gatewayOwner.handle(window.gateway,command,input),result=response(window,window.fresh,null);result.getJSONObject("snapshot").put("harnessGateway",gateway);return result;
     }
     private JSONObject projectCommand(Object owner,String command,JSONObject input)throws Exception {
         java.util.Set<String> allowed=new java.util.HashSet<>(java.util.Set.of("windowId","taskId","reviewId"));

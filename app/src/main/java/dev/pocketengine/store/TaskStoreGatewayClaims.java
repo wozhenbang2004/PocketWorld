@@ -7,6 +7,7 @@ import dev.pocketengine.features.proxy.NativeHarnessGatewayBridge;
 import java.util.Set;
 import java.util.UUID;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 /** Original Tasks DB control index only. No budget, model usage, task, runner or tool grant.
  * Inactive lease/claim tombstones remain with original audit retention, including after a task
@@ -19,7 +20,7 @@ final class TaskStoreGatewayClaims {
         db.execSQL("CREATE TABLE IF NOT EXISTS harness_gateway_claims(lease_id TEXT NOT NULL,request_id TEXT NOT NULL,request_digest TEXT NOT NULL,claim_id TEXT NOT NULL UNIQUE,state TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(lease_id,request_id))");
     }
     static void register(SQLiteDatabase db,JSONObject descriptor)throws Exception {
-        Set<String> keys=Set.of("leaseId","clientBindingId","generation","environmentId","environmentBinding","bindingId","profileDigest","taskId","runId","epoch","audience","purpose","expiresAt");
+        Set<String> keys=new java.util.HashSet<>(Set.of("leaseId","clientBindingId","generation","environmentId","environmentBinding","bindingId","profileDigest","taskId","runId","epoch","audience","purpose","expiresAt"));if(descriptor.has("configurationOwner"))keys.add("configurationOwner");
         if(descriptor.length()!=keys.size())throw new SecurityException("原网关租约字段不完整");for(var it=descriptor.keys();it.hasNext();)if(!keys.contains(it.next()))throw new SecurityException("租约不保存凭据或请求体");
         for(String key:new String[]{"leaseId","clientBindingId","generation","environmentId","bindingId","taskId","runId"})id(descriptor.getString(key));
         if(!"OWNER_PRIVATE".equals(descriptor.getString("audience"))||!"EXTERNAL_RELAY".equals(descriptor.getString("purpose"))||!descriptor.getString("profileDigest").matches("[a-f0-9]{64}")||descriptor.getString("environmentBinding").length()>256||descriptor.getString("environmentBinding").isEmpty())throw new SecurityException("只签发固定私人API-only桥接租约");
@@ -50,5 +51,18 @@ final class TaskStoreGatewayClaims {
     }
     static void revoke(SQLiteDatabase db,String lease,String state){ContentValues row=new ContentValues();row.put("state",state);db.update("harness_gateway_leases",row,"lease_id=? AND state='ACTIVE'",new String[]{lease});}
     static void recover(SQLiteDatabase db){db.execSQL("UPDATE harness_gateway_claims SET state='UNKNOWN' WHERE state='MAY_HAVE_DISPATCHED'");db.execSQL("UPDATE harness_gateway_leases SET state='REQUIRES_RECONCILE' WHERE state='ACTIVE'");}
+    static void requireNoUnknown(SQLiteDatabase db,String task,String run,int epoch)throws Exception {try(Cursor pending=db.rawQuery("SELECT 1 FROM harness_gateway_leases l WHERE l.task_id=? AND l.run_id=? AND l.epoch=? AND (l.state='REQUIRES_RECONCILE' OR EXISTS(SELECT 1 FROM harness_gateway_claims c WHERE c.lease_id=l.lease_id AND c.state='UNKNOWN')) LIMIT 1",new String[]{task,run,String.valueOf(epoch)})){if(pending.moveToFirst())throw new SecurityException("原任务有未知桥接请求；只查原编号，不发行替代租约");}}
+    static JSONObject descriptor(SQLiteDatabase db,String lease)throws Exception {id(lease);try(Cursor row=db.rawQuery("SELECT descriptor FROM harness_gateway_leases WHERE lease_id=?",new String[]{lease})){if(!row.moveToFirst())throw new SecurityException("原lease不存在");return new JSONObject(row.getString(0));}}
+    static JSONArray records(SQLiteDatabase db,String task,String run)throws Exception {
+        JSONArray result=new JSONArray();
+        try(Cursor leases=db.rawQuery("SELECT lease_id,descriptor,state FROM harness_gateway_leases WHERE task_id=? AND run_id=? ORDER BY rowid DESC LIMIT 16",new String[]{task,run})){
+            while(leases.moveToNext()){
+                JSONObject row=new JSONObject().put("descriptor",new JSONObject(leases.getString(1))).put("state",leases.getString(2));JSONArray requests=new JSONArray();
+                try(Cursor claims=db.rawQuery("SELECT request_id,request_digest,claim_id,state,updated_at FROM harness_gateway_claims WHERE lease_id=? ORDER BY created_at LIMIT 128",new String[]{leases.getString(0)})){while(claims.moveToNext())requests.put(new JSONObject().put("requestId",claims.getString(0)).put("requestDigest",claims.getString(1)).put("claimId",claims.getString(2)).put("state",claims.getString(3)).put("updatedAt",claims.getLong(4)));}
+                result.put(row.put("requests",requests).put("readOnly",true).put("resubmitted",false));
+            }
+        }
+        return result;
+    }
     private static void id(String value){if(value==null||!value.matches("[A-Za-z0-9_-]{1,80}"))throw new SecurityException("准确网关原生身份必需");}
 }

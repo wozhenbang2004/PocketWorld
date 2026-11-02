@@ -28,6 +28,11 @@ private val PocketColors = lightColorScheme(
     surface = Color.White, onSurface = Ink,
     surfaceVariant = Soft, onSurfaceVariant = SecondaryInk,
     surfaceTint = ActionInk,
+    inverseSurface = Ink, inverseOnSurface = Color.White, inversePrimary = Color(0xffdddddd),
+    surfaceBright = Color.White, surfaceDim = Color(0xffdedede),
+    surfaceContainerLowest = Color.White, surfaceContainerLow = Color(0xfff7f7f7),
+    surfaceContainer = Color(0xfff2f2f2), surfaceContainerHigh = Color(0xffececec),
+    surfaceContainerHighest = Color(0xffe6e6e6), scrim = Color.Black,
     outline = Color(0xff777777), outlineVariant = Line,
     error = Danger, onError = Color.White,
     errorContainer = Color(0xfff0f0f0), onErrorContainer = Color(0xff242424)

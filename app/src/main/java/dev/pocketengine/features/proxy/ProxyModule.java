@@ -10,6 +10,7 @@ import org.json.JSONObject;
 
 public final class ProxyModule implements EngineModule {
     private NativeHarnessGatewayBridge harnessGateway;
+    private JSONObject harnessGatewayTarget;
     private final FeatureContext context;private final LoopbackRelay.AccountRoute accounts;private final LoopbackRelay.InferenceFactory inferenceFactory;private LoopbackRelay relay;private String sessionId="";private ModelConfig bound;private final java.util.ArrayDeque<JSONObject> recentInference=new java.util.ArrayDeque<>();
     public ProxyModule(FeatureContext context){this(context,null);}
     public ProxyModule(FeatureContext context,LoopbackRelay.AccountRoute accounts){this(context,accounts,null);}
@@ -55,14 +56,23 @@ public final class ProxyModule implements EngineModule {
     /** Existing native owner/run entry only, not a model command. The actual task grant stays authoritative. */
     public synchronized NativeHarnessGatewayBridge prepareHarnessGateway(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.core.RunControl original,
             dev.pocketengine.features.remote.RemoteModule remote,JSONObject target,long expiresAt)throws Exception {
+        return prepareHarnessGateway(tasks,original,remote,target,expiresAt,null);
+    }
+    public synchronized NativeHarnessGatewayBridge prepareHarnessGateway(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.core.RunControl original,dev.pocketengine.features.remote.RemoteModule remote,JSONObject target,long expiresAt,dev.pocketengine.store.TaskStore.HarnessGatewayConfigurationOwner configurationOwner)throws Exception {
+        return prepareHarnessGateway(tasks,original,remote,target,expiresAt,configurationOwner,null);
+    }
+    public synchronized NativeHarnessGatewayBridge prepareHarnessGateway(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.core.RunControl original,dev.pocketengine.features.remote.RemoteModule remote,JSONObject target,long expiresAt,dev.pocketengine.store.TaskStore.HarnessGatewayConfigurationOwner configurationOwner,NativeHarnessGatewayBridge.StartupFence startup)throws Exception {
         if(harnessGateway!=null&&harnessGateway.running())throw new IllegalStateException("请先停止原远端模型网关");
         if(target.length()!=8)throw new SecurityException("准确原电脑目标必需，不接收群来源或替代授权字段");
         for(String key:new String[]{"profileId","_profileBinding","serviceBase","environmentId","environmentBinding","bindingId","profileDigest","taskId"})if(!target.has(key))throw new SecurityException("准确原电脑目标不完整");
         var identity=original.hostRunIdentity();if(identity==null||!identity.taskId().equals(target.getString("taskId")))throw new SecurityException("不是当前原任务native控制器");
-        harnessGateway=NativeHarnessGatewayBridge.forTask(tasks,original,new LoopbackRelay.ConfigSource(){public ModelConfig get()throws Exception{return context.settings.captureRelaySelection();}public long selectionRevision()throws Exception{return context.settings.relaySelectionRevision();}},remote.harnessGatewayTransport(target),target.getString("environmentId"),target.getString("environmentBinding"),target.getString("bindingId"),target.getString("profileDigest"),expiresAt);
-        return harnessGateway;
+        harnessGateway=NativeHarnessGatewayBridge.forTask(tasks,original,new LoopbackRelay.ConfigSource(){public ModelConfig get()throws Exception{return context.settings.captureRelaySelection();}public long selectionRevision()throws Exception{return context.settings.relaySelectionRevision();}},remote.harnessGatewayTransport(target),target.getString("environmentId"),target.getString("environmentBinding"),target.getString("bindingId"),target.getString("profileDigest"),expiresAt,configurationOwner,startup);
+        harnessGatewayTarget=new JSONObject(target.toString());return harnessGateway;
     }
     public synchronized NativeHarnessGatewayBridge originalHarnessGateway(String lease){return harnessGateway!=null&&harnessGateway.leaseId().equals(lease)?harnessGateway:null;}
+    /** Native original owner observation, never a model handle command. */
+    public synchronized NativeHarnessGatewayBridge existingHarnessGateway(String task,String run)throws Exception {if(harnessGateway==null)return null;JSONObject value=harnessGateway.snapshot();return task.equals(value.optString("taskId"))&&run.equals(value.optString("runId"))?harnessGateway:null;}
+    public synchronized JSONObject harnessGatewayTarget(String lease)throws Exception {if(originalHarnessGateway(lease)==null||harnessGatewayTarget==null)throw new SecurityException("原准确租约不可用");return new JSONObject(harnessGatewayTarget.toString());}
     private dev.pocketengine.runtime.usage.NativeInferenceWork beginInference(ModelConfig captured,dev.pocketengine.core.RunControl original,String session)throws Exception{
         var work=inferenceFactory.open(captured,original,session);synchronized(this){recentInference.addLast(work.reference());while(recentInference.size()>8)recentInference.removeFirst();}return work;
     }

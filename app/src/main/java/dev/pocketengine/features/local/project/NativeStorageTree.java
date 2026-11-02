@@ -19,7 +19,8 @@ public final class NativeStorageTree {
             if(type.equals("special"))throw new SecurityException("存储范围包含特殊文件，未将其当作可回收缓存");
         }
         JSONObject pin()throws Exception{return new JSONObject().put("path",path).put("kind",type).put("bytes",bytes).put("modified",modified.toString()).put("fileKey",key);}
-        void unchanged(Path target)throws Exception {BasicFileAttributes actual=Files.readAttributes(target,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);String actualType=actual.isDirectory()?"directory":actual.isRegularFile()?"file":actual.isSymbolicLink()?"link":"special";if(!type.equals(actualType)||!Objects.equals(fileKey,actual.fileKey())||!modified.equals(actual.lastModifiedTime())||bytes!=(actual.isRegularFile()?actual.size():0))throw new SecurityException("所选存储资源在审阅后已变化；未继续删除");}
+        void unchanged(Path target)throws Exception {unchanged(Files.readAttributes(target,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS));}
+        void unchanged(BasicFileAttributes actual)throws Exception {String actualType=actual.isDirectory()?"directory":actual.isRegularFile()?"file":actual.isSymbolicLink()?"link":"special";if(!type.equals(actualType)||!Objects.equals(fileKey,actual.fileKey())||!modified.equals(actual.lastModifiedTime())||bytes!=(actual.isRegularFile()?actual.size():0))throw new SecurityException("所选存储资源在审阅后已变化；未继续删除");}
     }
     public static final class Snapshot {
         private final Path root;private final List<Node> nodes;private final String digest;public final long logicalBytes;public final int files,links;
@@ -31,11 +32,40 @@ public final class NativeStorageTree {
         /** Delete only nodes present in the original exact snapshot. A new child
          * or changed identity stops this phase; unknown resources are not swept. */
         public JSONObject delete(RunControl original)throws Exception {
+            return delete(original,false);
+        }
+        /** Explicit native Skill-copy cleanup only: its producer deliberately
+         * removes directory write bits. Restore owner-write on the same issued
+         * snapshot's directories, never file contents, links or another tree. */
+        public JSONObject deleteOwnerReadOnlyCopy(RunControl original)throws Exception {
+            return delete(original,true);
+        }
+        private JSONObject delete(RunControl original,boolean restoreOwnerDirectoryWrite)throws Exception {
             requireCurrent(original);int removed=0;long logical=0;List<Node> reverse=new ArrayList<>(nodes);reverse.sort(Comparator.comparingInt((Node node)->node.path.isEmpty()?0:node.path.split("/").length).reversed().thenComparing(node->node.path,Comparator.reverseOrder()));
+            int restored=0,descriptorRestored=0,pathRestored=0;if(restoreOwnerDirectoryWrite)for(Node node:nodes)if(node.type.equals("directory")){
+                original.checkpoint();Path target=node.path.isEmpty()?root:root.resolve(node.path);requireAncestors(root,target);node.unchanged(target);
+                DirectoryWrite change=restoreDirectoryOwnerWrite(node,target);requireAncestors(root,target);node.unchanged(target);if(change!=DirectoryWrite.UNCHANGED){restored++;if(change==DirectoryWrite.DESCRIPTOR)descriptorRestored++;else pathRestored++;}
+            }
             for(Node node:reverse){original.checkpoint();Path target=node.path.isEmpty()?root:root.resolve(node.path);requireAncestors(root,target);if(node.type.equals("directory")){BasicFileAttributes actual=Files.readAttributes(target,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);if(!actual.isDirectory()||!Objects.equals(node.fileKey,actual.fileKey()))throw new SecurityException("原缓存目录身份已变化，未继续清理");}else node.unchanged(target);Files.delete(target);removed++;logical+=node.bytes;}
-            return new JSONObject().put("snapshotDigest",digest).put("removedEntries",removed).put("logicalBytesRemoved",logical).put("targetAbsent",!Files.exists(root,LinkOption.NOFOLLOW_LINKS)).put("actualDiskBytesFreed",JSONObject.NULL).put("crossFileTransaction",false);
+            JSONObject result=new JSONObject().put("snapshotDigest",digest).put("removedEntries",removed).put("logicalBytesRemoved",logical).put("targetAbsent",!Files.exists(root,LinkOption.NOFOLLOW_LINKS)).put("actualDiskBytesFreed",JSONObject.NULL).put("crossFileTransaction",false);if(restoreOwnerDirectoryWrite)result.put("ownerDirectoryWriteRestored",restored).put("directoryHandleRestorations",descriptorRestored).put("nofollowPathRestorations",pathRestored).put("sameUidPathRaceEliminated",false);return result;
         }
         public JSONObject observe()throws Exception{return new JSONObject().put("snapshotDigest",digest).put("targetAbsent",!Files.exists(root,LinkOption.NOFOLLOW_LINKS)).put("observationOnly",true).put("deletionAttributionProven",false).put("replayAllowed",false);}
+    }
+    private enum DirectoryWrite {UNCHANGED,DESCRIPTOR,PATH}
+    /** Prefer the provider's opened NOFOLLOW directory handle (fstat/fchmod on
+     * Unix providers). A provider without SecureDirectoryStream uses its
+     * NOFOLLOW POSIX view with before/after identity checks; that path fallback
+     * is not an OS sandbox and cannot eliminate hostile same-UID path races. */
+    private static DirectoryWrite restoreDirectoryOwnerWrite(Node node,Path target)throws Exception {
+        try(DirectoryStream<Path> parent=Files.newDirectoryStream(target.getParent())){
+            if(parent instanceof SecureDirectoryStream){
+                @SuppressWarnings("unchecked") SecureDirectoryStream<Path> directory=(SecureDirectoryStream<Path>)parent;
+                try(SecureDirectoryStream<Path> opened=directory.newDirectoryStream(target.getFileName(),LinkOption.NOFOLLOW_LINKS)){
+                    var view=opened.getFileAttributeView(java.nio.file.attribute.PosixFileAttributeView.class);if(view==null)throw new java.io.IOException("此目录句柄未提供POSIX权限，未改用跟随路径的chmod");var before=view.readAttributes();node.unchanged(before);var permissions=new HashSet<>(before.permissions());if(!permissions.add(java.nio.file.attribute.PosixFilePermission.OWNER_WRITE))return DirectoryWrite.UNCHANGED;view.setPermissions(permissions);node.unchanged(view.readAttributes());return DirectoryWrite.DESCRIPTOR;
+                }
+            }
+        }
+        var view=Files.getFileAttributeView(target,java.nio.file.attribute.PosixFileAttributeView.class,LinkOption.NOFOLLOW_LINKS);if(view==null)throw new java.io.IOException("此平台未提供不跟随链接的目录权限，清理结果需核对");var before=view.readAttributes();node.unchanged(before);var permissions=new HashSet<>(before.permissions());if(!permissions.add(java.nio.file.attribute.PosixFilePermission.OWNER_WRITE))return DirectoryWrite.UNCHANGED;view.setPermissions(permissions);node.unchanged(view.readAttributes());return DirectoryWrite.PATH;
     }
     /** Inventory-only walk uses constant retained memory, even for a large
      * protected rootfs. Incomplete/failed counts are never cleanup authority. */

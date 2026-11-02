@@ -432,7 +432,7 @@ class HarnessConfigs:
         gateway lease. Credentials are memory-only, and must be re-registered on restart.
         """
         keys = {"leaseId", "endpoint", "accessToken", "expiresAt", "environmentBinding", "profileDigest", "taskId", "runId", "epoch", "audience", "purpose"}
-        if set(lease) != keys or lease["expiresAt"] <= self.manager.now() or not isinstance(lease["epoch"], int):
+        if set(lease) not in (keys, keys | {"configurationOwner", "generation", "bindingId"}) or lease["expiresAt"] <= self.manager.now() or not isinstance(lease["epoch"], int):
             raise ConfigError("An unexpired exact gateway lease is required", 403)
         if lease["audience"] != "OWNER_PRIVATE" or lease["purpose"] != "EXTERNAL_RELAY":
             raise ConfigError("Configuration control cannot admit external-group or APP_OWNER gateway authority; use the original verified relay owner", 403)
@@ -449,15 +449,28 @@ class HarnessConfigs:
         lease = self.endpoints.get(identifier(request.get("endpointLeaseRef")))
         if lease is None or lease["expiresAt"] <= self.manager.now():
             raise ConfigError("Gateway lease is missing, expired, or revoked", 403)
-        for key in ("environmentBinding", "profileDigest", "taskId", "runId", "epoch"):
+        if "gatewayOwnerBinding" in request:
+            owner = lease.get("configurationOwner")
+            expected = (owner | {"leaseId": lease["leaseId"], "generation": lease["generation"]}) if owner else None
+            if expected is None or request["gatewayOwnerBinding"] != expected or any(request.get(k) != owner[k] for k in ("taskId", "runId", "epoch")) or request.get("bindingId") != lease["bindingId"]:
+                raise ConfigError("Configuration owner does not match the registered native parent/child lease", 403)
+        elif "configurationOwner" in lease:
+            raise ConfigError("This parent lease requires its exact registered child configuration owner", 403)
+        else:
+            for key in ("taskId", "runId", "epoch"):
+                if request.get(key) != lease[key]:
+                    raise ConfigError("Configuration request does not match the original gateway lease", 403)
+        for key in ("environmentBinding", "profileDigest"):
             if request.get(key) != lease[key]:
-                raise ConfigError("Configuration request does not match the original gateway lease", 403)
+                raise ConfigError("Configuration request changed gateway environment or Profile", 403)
         if lease["environmentBinding"] != target["environmentBinding"]:
             raise ConfigError("Gateway lease target generation changed", 403)
         return lease
 
     def plan(self, request):
         allowed = {"operationId", "bindingId", "environmentId", "environmentBinding", "identityDigest", "profileDigest", "endpointLeaseRef", "taskId", "runId", "epoch", "model"}
+        if "gatewayOwnerBinding" in request:
+            allowed.add("gatewayOwnerBinding")
         if set(request) != allowed:
             raise ConfigError("Plan accepts exact native references, not paths, credentials, arbitrary fields or execution grants", 400)
         with self.manager.lock:
@@ -540,6 +553,7 @@ class HarnessConfigs:
                                "before": masked(key, plan["before"][key]), "after": masked(key, plan["after"][key])} for key in sorted(plan["after"]) for value in [plan["after"][key]]]}],
                 "scopeDelta": {"scope": plan["identity"]["scope"], "configRoot": plan["target"]["root"], "executionAuthorized": False},
                 "gatewayScope": plan["gatewayScope"],
+                **({"gatewayOwnerBinding": plan["request"]["gatewayOwnerBinding"]} if "gatewayOwnerBinding" in plan["request"] else {}),
                 "authRestoreGroups": [{"name": "effective_authentication", "fields": group} for group in plan["authGroups"]],
                 "expiresAt": plan["expiresAt"], "restoreOf": plan["restoreOf"], "conflicts": plan["conflicts"], "writeConsistency": "OPTIMISTIC",
                 "runtimeVerified": False, "nextSessionRequired": True}

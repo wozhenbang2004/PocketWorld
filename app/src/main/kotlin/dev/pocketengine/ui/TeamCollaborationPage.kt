@@ -6,6 +6,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import java.util.UUID
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -110,6 +114,7 @@ internal fun TeamCollaborationPage(
     var mode by rememberSaveable(runId) { mutableStateOf("discussion") }
     var drafts by rememberSaveable(runId) { mutableStateOf(mapOf<String, String>()) }
     var tab by rememberSaveable(runId) { mutableIntStateOf(0) }
+    var composerOptions by rememberSaveable(runId) { mutableStateOf(false) }
     var pending by remember(runId) { mutableStateOf<List<String>?>(null) }
     var localError by remember(runId) { mutableStateOf<String?>(null) }
     var edit by remember { mutableStateOf(false) }
@@ -171,8 +176,20 @@ internal fun TeamCollaborationPage(
                     if(run.optJSONObject("discussion")?.optString("status")=="inconclusive") Text(run.optJSONObject("discussion")?.optString("message").orEmpty(),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(horizontal=20.dp))
                 }
                 Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected == null, { selected = null }, label = { Text("共同现场") })
-                    members.filterNot { it.optBoolean("hidden") || it.optBoolean("exited") }.forEach { slot -> FilterChip(selected == slot.optString("id"), { selected = slot.optString("id") }, label = { Text(slot.optString("name") + " · " + collaborationStatus(slot.optString("status"))) }) }
+                    TeamMemberNode("共同现场", "全部成员", "共享消息与成果", selected == null) { selected = null }
+                    members.filterNot { it.optBoolean("hidden") || it.optBoolean("exited") }.forEach { slot ->
+                        TeamMemberNode(slot.optString("name"), collaborationStatus(slot.optString("status")), slot.optString("role"), selected == slot.optString("id")) { selected = slot.optString("id") }
+                    }
+                }
+                val questions = rows.filter { it.optString("kind") == "assignment_question" && it.optString("state") == "pending" }
+                if (questions.isNotEmpty()) Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), shape = MaterialTheme.shapes.medium) {
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("需要你的回答 · ${questions.size}", style = MaterialTheme.typography.labelLarge)
+                            Text(questions.first().optString("content"), style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                        }
+                        TextButton(onClick = { val question = questions.first(); tab = 0; selected = question.optString("memberId"); replyId = question.getString("messageId"); if (members.any { it.optString("id") == selected }) recipient = selected!! }, enabled = run.optString("status") != "cancelled") { Text("查看并回答") }
+                    }
                 }
                 TabRow(tab, containerColor = Color.White) { listOf("对话", "分工", "成果").forEachIndexed { i, label -> Tab(tab == i, { tab = i }, text = { Text(label) }) } }
                 Box(Modifier.weight(1f).fillMaxWidth()) { listStates.SaveableStateProvider("$runId|$tab|$selected") { val listState = rememberLazyListState()
@@ -199,34 +216,93 @@ internal fun TeamCollaborationPage(
                             }
                         }
                     } else if (tab == 1) {
+                        items(members.filter { !it.optBoolean("hidden") && !it.optBoolean("exited") && (selected == null || it.optString("id") == selected) }, key = { "role:" + it.getString("id") }) { slot ->
+                            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.medium) {
+                                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(slot.optString("name"), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                                        Text(collaborationStatus(slot.optString("status")), style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    Text(slot.optString("assignment").ifBlank { slot.optString("role") }, style = MaterialTheme.typography.bodyMedium)
+                                    slot.optString("acceptance").takeIf { it.isNotBlank() }?.let { Text("交付要求 · $it", style = MaterialTheme.typography.bodySmall) }
+                                    val deps = slot.optJSONArray("dependsOn")
+                                    if (deps != null && deps.length() > 0) Text("前置成员 · " + (0 until deps.length()).joinToString("、") { name(deps.getString(it)) }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
                         item { workItems?.invoke() }
                         items(teamRows(run.optJSONObject("board")?.optJSONArray("cards")).filter { selected == null || it.optString("memberId") == selected }, key = { it.getString("id") }) { card ->
                             Column { Text("${name(card.optString("memberId"))} · ${collaborationStatus(card.optString("status"))}", style = MaterialTheme.typography.labelMedium); Text(card.optString("title")); if (card.optString("acceptance").isNotBlank()) Text("验收：${card.optString("acceptance")}", style = MaterialTheme.typography.bodySmall); HorizontalDivider() }
                         }
                         item { onDetails?.let { TextButton(onClick = it) { Text("查看真实执行、审批与证据") } }; if (definition != null && "savePlan" in commands) TextButton(onClick = { edit = true }) { Text("编辑下次目标的分工") } }
                     } else {
-                        item { outcomes?.invoke(members.find { it.optString("id") == selected }); if (run.optString("summary").isNotBlank()) { Text("协调回执", style = MaterialTheme.typography.titleSmall); Text(run.optString("summary")) } }
+                        item {
+                            Text(if (selected == null) "共同成果" else "${name(selected!!)}的成果", style = MaterialTheme.typography.titleLarge)
+                            Text("原文件、审阅和协调回执分开核对；回执不代替成果验收。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (run.optString("summary").isNotBlank()) { Text("协调回执", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp)); SelectionContainer { Text(run.optString("summary")) }; HorizontalDivider(Modifier.padding(vertical = 12.dp)) }
+                            outcomes?.invoke(members.find { it.optString("id") == selected })
+                        }
                     }
                 }
                 } }
                 HorizontalDivider()
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        members.filterNot { it.optBoolean("exited") }.forEach { slot -> FilterChip(recipient == slot.optString("id"), { if (reply?.optString("kind") != "assignment_question") recipient = slot.optString("id") }, label = { Text("@${slot.optString("name")} · ${slot.optString("id")}") }) }
+                AffectComposerFrame(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    editor = {
+                        if (reply != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("回复 ${name(reply.optString("memberId"))}：${reply.optString("content").take(100)}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { replyId = "" }) { Text("取消引用") }
+                        }
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = text, onValueChange = { drafts = drafts + (draftKey to it) }, enabled = pending == null,
+                            modifier = Modifier.fillMaxWidth().semantics { contentDescription = if (reply?.optString("kind") == "assignment_question") "回答这条原问题（不是文件批准）" else "发给 ${name(recipient)}" }.heightIn(min = 44.dp, max = 120.dp).padding(horizontal = 4.dp, vertical = 8.dp),
+                            minLines = 1, maxLines = 4,
+                            textStyle = LocalTextStyle.current.copy(fontSize = 16.sp, lineHeight = 24.sp, color = Ink),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(Ink),
+                            decorationBox = { inner -> Box {
+                                if (text.isEmpty()) Text(if (reply?.optString("kind") == "assignment_question") "回答这条原问题（不是文件批准）" else "发给 ${name(recipient)}…", fontSize = 16.sp, lineHeight = 24.sp, color = SecondaryInk)
+                                inner()
+                            } }
+                        )
+                        if (composerOptions) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                members.filterNot { it.optBoolean("exited") }.forEach { slot -> FilterChip(recipient == slot.optString("id"), { if (reply?.optString("kind") != "assignment_question") recipient = slot.optString("id") }, label = { Text("@${slot.optString("name")} · ${slot.optString("id")}") }) }
+                            }
+                            if (reply == null) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("discussion" to "讨论", "queue" to "下一工作点", "steer" to "暂停改方向").forEach { (id, label) -> FilterChip(mode == id, { mode = id }, label = { Text(label) }) } }
+                        }
+                    },
+                    toolbar = {
+                        TextButton(onClick = { composerOptions = !composerOptions }, modifier = Modifier.weight(1f).semantics { contentDescription = if (composerOptions) "收起发送选项" else "收件人与方式" }) {
+                            Text(if (composerOptions) "收起发送选项" else "${name(recipient)} · " + when(mode) { "queue" -> "下一工作点"; "steer" -> "暂停改方向"; else -> "讨论" }, style = MaterialTheme.typography.labelMedium)
+                            AffectGlyph("chevron", Modifier.padding(start = 6.dp).size(12.dp), SecondaryInk)
+                        }
+                        AffectSendButton(label = if (pending != null) "保存中" else if (reply?.optString("kind") == "assignment_question") "回答" else "发送", onClick = ::send,
+                            submitting = pending != null,
+                            enabled = pending == null && text.isNotBlank() && text.length <= 4000 && run.optString("status") != "cancelled" && (if (reply?.optString("kind") == "assignment_question") "answerAssignment" else if (mode == "steer") "feedback" else "sendMessage") in commands)
+                    },
+                    footer = {
+                        Column(Modifier.weight(1f).padding(horizontal = 6.dp, vertical = 8.dp)) {
+                            Text(if (mode == "steer" && reply?.optString("kind") != "assignment_question") "保存后暂停所选成员；不会停止无关成员。" else if (run.optJSONObject("workPlan") != null && reply?.optString("assignmentId").isNullOrBlank()) "普通@给成员下一安全工作点；精确Reply保留原assignment，均不补预算。" else "普通消息只到所选成员；排队≠进入模型≠已消费。", style = MaterialTheme.typography.labelSmall, color = SecondaryInk)
+                            (localError ?: error)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                        }
                     }
-                    if (reply != null) Row(verticalAlignment = Alignment.CenterVertically) { Text("回复 ${name(reply.optString("memberId"))}：${reply.optString("content").take(100)}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f)); TextButton(onClick = { replyId = "" }) { Text("取消引用") } }
-                    else Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("discussion" to "讨论", "queue" to "下一工作点", "steer" to "暂停改方向").forEach { (id, label) -> FilterChip(mode == id, { mode = id }, label = { Text(label) }) } }
-                    OutlinedTextField(text, { drafts = drafts + (draftKey to it) }, modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 4, label = { Text(if (reply?.optString("kind") == "assignment_question") "回答这条原问题（不是文件批准）" else "发给 ${name(recipient)}") }, enabled = pending == null)
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (mode == "steer" && reply?.optString("kind") != "assignment_question") "保存后暂停所选成员；不会停止无关成员。" else if (run.optJSONObject("workPlan") != null && reply?.optString("assignmentId").isNullOrBlank()) "普通@给成员下一安全工作点；精确Reply保留原assignment，均不补预算。" else "普通消息只到所选成员；排队≠进入模型≠已消费。", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                        Button(onClick = ::send, enabled = pending == null && text.isNotBlank() && text.length <= 4000 && run.optString("status") != "cancelled" && (if (reply?.optString("kind") == "assignment_question") "answerAssignment" else if (mode == "steer") "feedback" else "sendMessage") in commands) { Text(if (pending != null) "保存中" else if (reply?.optString("kind") == "assignment_question") "回答" else "发送") }
-                    }
-                    (localError ?: error)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                }
+                )
             }
         }
     }
     if (edit && definition != null) TeamAssignmentEditor(definition, busyCommands, lastResult, error, onCommand, receipts) { edit = false }
+}
+
+/** Selection nodes use only persisted members; no decorative runners or inferred progress. */
+@Composable
+private fun TeamMemberNode(name: String, status: String, responsibility: String, selected: Boolean, onSelect: () -> Unit) {
+    Surface(color = if (selected) MaterialTheme.colorScheme.surfaceContainer else Color.Transparent, shape = MaterialTheme.shapes.medium) {
+        Column(Modifier.widthIn(min = 124.dp, max = 184.dp).selectable(selected = selected, role = Role.Tab, onClick = onSelect).padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(name, style = MaterialTheme.typography.labelLarge, color = Ink, maxLines = 1)
+            Text(status, style = MaterialTheme.typography.labelSmall, color = SecondaryInk, maxLines = 1)
+            if (responsibility.isNotBlank()) Text(responsibility, style = MaterialTheme.typography.bodySmall, color = SecondaryInk, maxLines = 2)
+        }
+    }
 }
 
 /** Read-only native provenance within the existing shared flow, not an artifact viewer or an approval. */

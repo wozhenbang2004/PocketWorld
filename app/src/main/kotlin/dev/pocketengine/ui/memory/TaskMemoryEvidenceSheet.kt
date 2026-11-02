@@ -2,6 +2,7 @@ package dev.pocketengine.ui.memory
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -34,10 +35,8 @@ fun TaskMemoryEvidenceSheet(
     historyCitations: List<JSONObject> = emptyList()
 ) {
     var historyCitation by remember(taskId, runId, requestId, answerId) { mutableStateOf<JSONObject?>(null) }
-    var historyExpanded by remember(taskId, runId) { mutableStateOf(false) }
     var historyLimit by remember(taskId, runId) { mutableStateOf(10) }
     var rawCitation by remember(taskId, runId, requestId, answerId) { mutableStateOf<JSONObject?>(null) }
-    var rawCitationsExpanded by remember(taskId, runId) { mutableStateOf(false) }
     var rawCitationLimit by remember(taskId, runId) { mutableStateOf(10) }
     var rawReturnPosition by remember(taskId, runId) { mutableStateOf<Int?>(null) }
     var receipt by remember(taskId, runId, requestId, answerId) { mutableStateOf<JSONObject?>(null) }
@@ -62,6 +61,9 @@ fun TaskMemoryEvidenceSheet(
     val scroll = rememberScrollState()
     val busy = mutation != null || pending.any { it in memoryMutations }
     val reading = pending.any { it in memoryReads }
+    var sourceTab by remember(taskId, runId, requestId, answerId) { mutableIntStateOf(0) }
+    var expandedSourceIds by remember(taskId, runId, requestId, answerId) { mutableStateOf(setOf<String>()) }
+    LaunchedEffect(sourceTab) { scroll.scrollTo(0) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     LaunchedEffect(rawCitation?.toString(), historyCitation?.toString()) {
         if (rawCitation != null || historyCitation != null) scroll.scrollTo(0)
@@ -180,15 +182,22 @@ fun TaskMemoryEvidenceSheet(
                 Text("本次任务记忆", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 TextButton(onClick = onDismiss) { Text("返回回答") }
             }
+            val overview = historyCitation == null && rawCitation == null && traceTask == null && reviewing == null && sourceDocument == null && !taskSearchOpen
+            if (overview) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("本次参考" to (receipt?.optJSONArray("records")?.length() ?: -1), "原件读取" to rawCitations.size, "会话历史" to historyCitations.size).forEachIndexed { index, (label, count) ->
+                    FilterChip(selected = sourceTab == index, onClick = { sourceTab = index }, label = { Text(if (count < 0) "$label · 待核对" else "$label · $count") })
+                }
+            }
             Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (busy || reading || receiptRequest != null) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (busy) EvidenceText("操作已提交，正在核对；返回不会撤销已提交的操作。")
             notice?.let { EvidenceText(it) }
             if (reviewing == null && !taskSearchOpen && traceTask == null) error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp, lineHeight = 21.sp) }
             val proof = receipt
-            if (historyCitation == null && rawCitation == null && traceTask == null && reviewing == null && sourceDocument == null && !taskSearchOpen && rawCitations.isNotEmpty()) {
-                TextButton(onClick = { rawCitationsExpanded = !rawCitationsExpanded }) { Text(if (rawCitationsExpanded) "收起原件读取回执" else "查看原件读取回执（${rawCitations.size} 个范围）") }
-                if (rawCitationsExpanded) {
+            if (historyCitation == null && rawCitation == null && traceTask == null && reviewing == null && sourceDocument == null && !taskSearchOpen && sourceTab == 1) {
+                Text("原件读取回执", style = MaterialTheme.typography.titleMedium)
+                if (rawCitations.isEmpty()) EvidenceText("本次没有可核对的原件读取范围；不会用当前搜索补造历史来源。")
+                run {
                 EvidenceText("只列出本任务真实工具回执中的精确来源；打开后再次核对原指纹和范围。保留安全输出不等于远端wire全文，读取或显示不代表模型已采用。")
                 rawCitations.takeLast(rawCitationLimit).asReversed().forEachIndexed { index, source ->
                     TextButton(onClick = {
@@ -200,9 +209,10 @@ fun TaskMemoryEvidenceSheet(
                 HorizontalDivider()
                 }
             }
-            if (historyCitation == null && rawCitation == null && traceTask == null && reviewing == null && sourceDocument == null && !taskSearchOpen && historyCitations.isNotEmpty()) {
-                TextButton(onClick = { historyExpanded = !historyExpanded }) { Text(if (historyExpanded) "收起会话历史原件" else "查看这次找回的会话历史（${historyCitations.size} 个范围）") }
-                if (historyExpanded) {
+            if (historyCitation == null && rawCitation == null && traceTask == null && reviewing == null && sourceDocument == null && !taskSearchOpen && sourceTab == 2) {
+                Text("找回的会话历史", style = MaterialTheme.typography.titleMedium)
+                if (historyCitations.isEmpty()) EvidenceText("本次未记录历史找回范围；这里只呈现真实回执。")
+                run {
                     EvidenceText("只列本任务真实历史工具回执；只覆盖原会话尚保留的消息和任务操作，不等于完整长期历史。")
                     historyCitations.takeLast(historyLimit).asReversed().forEachIndexed { index, source ->
                         val jump = source.getJSONObject("sourceJump")
@@ -226,6 +236,7 @@ fun TaskMemoryEvidenceSheet(
                     onQueryChanged = { taskQuery = it; taskRows = emptyList(); taskPage = null; taskSearchRequest = null; error = null },
                     onSearch = { searchTasks() }, onMore = { taskPage?.optString("nextCursor")?.takeIf { it.isNotBlank() }?.let { searchTasks(it) } },
                     onOpenTask = onOpenTask, onBack = { taskSearchOpen = false; taskSearchRequest = null; error = null }, onReadTrace = { traceTask = it })
+                overview && sourceTab != 0 -> Unit
                 proof == null -> {
                     Text(if (reading || receiptRequest != null) "正在读取本次运行的来源回执…" else "未记录本次提供的记忆来源", fontSize = 16.sp, fontWeight = FontWeight.Medium)
                     EvidenceText("回执缺失或重启后无法核对时，不能用新的搜索结果追认本次来源。你仍可返回原任务。")
@@ -253,8 +264,7 @@ fun TaskMemoryEvidenceSheet(
                 }
                 else -> {
                     Text(when (proof.optString("phase")) { "provided_to_request" -> "本次提供给模型的记忆来源"; "prepared" -> "仅检索，尚未提供给模型"; else -> "本次来源回执不可用" }, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                    EvidenceText("回执只说明本次提供了什么参考，不能证明模型实际采用，也不代表任务成功或获得新的执行权限。")
-                    TaskMemorySelectionDetails(proof)
+                    TaskMemoryReferenceBoundary(proof)
                     if (proof.optString("status") == "invalidated") EvidenceText("部分来源已失效。仍有效的条目可以核对；失效条目已收起旧正文。")
                     else if (proof.optString("status") != "current") EvidenceText("本次回执已失效或暂不可核对；旧正文已收起。")
                     val rows = proof.getJSONArray("records")
@@ -262,7 +272,10 @@ fun TaskMemoryEvidenceSheet(
                     for (index in 0 until rows.length()) {
                         val record = rows.getJSONObject(index)
                         HorizontalDivider()
-                        Text("记忆 ${index + 1} · ${if (record.optString("selection") == "core") "核心参考" else "检索参考"}", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("${index + 1} · ${if (record.optString("selection") == "core") "核心参考" else "检索命中"}", style = MaterialTheme.typography.titleSmall)
+                            Text(when (proof.optString("phase")) { "provided_to_request" -> "已提供 · 采用未证实"; "prepared" -> "仅检索"; else -> "提供状态不可核对" }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         EvidenceText("版本 ${TaskMemoryEvidenceGuard.revision(record)} · ${rowStatus(record.optString("status"))}")
                         if (proof.optBoolean("selectionDiagnosticsAvailable")) EvidenceText(if (record.optString("selectionReason") == "owner_core") "选入原因：你明确选择的核心参考" else "选入原因：匹配这轮任务的检索词")
                         if (proof.optString("status") in setOf("current", "invalidated") && record.optString("status") == "current") {
@@ -271,10 +284,14 @@ fun TaskMemoryEvidenceSheet(
                         }
                         val refs = record.optJSONArray("sourceRefs") ?: JSONArray()
                         if (refs.length() == 0) EvidenceText("无外部任务或消息来源；可能是你明确保存的记忆，不能据此推断原始证据。")
-                        for (r in 0 until refs.length()) {
+                        val sourceKey = record.getString("id") + ":" + TaskMemoryEvidenceGuard.revision(record)
+                        if (refs.length() > 0) TextButton(onClick = { expandedSourceIds = if (sourceKey in expandedSourceIds) expandedSourceIds - sourceKey else expandedSourceIds + sourceKey }) { Text(if (sourceKey in expandedSourceIds) "收起引用链" else "核对引用链 · ${refs.length()} 个原始来源") }
+                        if (sourceKey in expandedSourceIds) for (r in 0 until refs.length()) {
                             val source = refs.getJSONObject(r)
-                            Column {
-                                EvidenceText("${if (source.optString("kind") == "task_evidence") "任务证据" else "消息来源"} · 来源版本 ${TaskMemoryEvidenceGuard.revision(source)}")
+                            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.medium) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("来源 ${r + 1} · ${if (source.optString("kind") == "task_evidence") "任务证据" else "消息来源"}", style = MaterialTheme.typography.labelLarge)
+                                EvidenceText("记忆版本 ${TaskMemoryEvidenceGuard.revision(record)} → 原件版本 ${TaskMemoryEvidenceGuard.revision(source)}")
                                 TextButton(onClick = {
                                     expectedSource = JSONObject(source.toString()); sourceDocument = null; error = null
                                     sourceRequest = onRequest("readTaskMemorySource", TaskMemoryEvidenceGuard.target(proof)
@@ -284,6 +301,7 @@ fun TaskMemoryEvidenceSheet(
                                     TextButton(onClick = { traceTask = JSONObject().put("taskId", sourceTask) }, enabled = !busy) { Text("查阅原任务的执行记录") }
                                     TextButton(onClick = { onOpenTask(sourceTask) }, enabled = !busy) { Text("打开原任务") }
                                 }
+                            }
                             }
                         }
                         if (proof.optString("phase") == "provided_to_request" && proof.optString("status") in setOf("current", "invalidated") && record.optString("status") == "current")
@@ -300,6 +318,19 @@ fun TaskMemoryEvidenceSheet(
             Spacer(Modifier.height(24.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun TaskMemoryReferenceBoundary(receipt: JSONObject) {
+    var expanded by remember(receipt.optString("receiptId")) { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("参考来源 · 不代表已采用", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f).padding(vertical = 14.dp))
+        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起说明" else "来源说明") }
+    }
+    if (expanded) {
+        EvidenceText("回执只说明本次提供了什么参考，不能证明模型实际采用，也不代表任务成功或获得新的执行权限。")
+        TaskMemorySelectionDetails(receipt)
     }
 }
 

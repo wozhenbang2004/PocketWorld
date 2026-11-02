@@ -113,9 +113,20 @@ class HarnessGateway:
                 # Preserve their config transaction contract; no CLI token can reach this bridge.
                 return False
             lease = self._lease(lease_id)
-            for key in ("taskId", "runId", "epoch", "profileDigest", "environmentBinding"):
+            if "configurationOwner" in lease:
+                owner = lease["configurationOwner"]
+                expected = owner | {"leaseId": lease["leaseId"], "generation": lease["generation"]}
+                if original.get("gatewayOwnerBinding") != expected or any(original.get(k) != owner[k] for k in ("taskId", "runId", "epoch")) or original.get("bindingId") != lease["bindingId"]:
+                    raise BridgeError("Original driver job changed registered native configuration owner", 403)
+            elif "gatewayOwnerBinding" in original:
+                raise BridgeError("Unregistered parent/child binding cannot authorize a job", 403)
+            else:
+                for key in ("taskId", "runId", "epoch"):
+                    if lease[key] != original.get(key):
+                        raise BridgeError("Original driver job does not match the native gateway owner", 403)
+            for key in ("profileDigest", "environmentBinding"):
                 if lease[key] != original.get(key):
-                    raise BridgeError("Original driver job does not match the native gateway owner", 403)
+                    raise BridgeError("Original driver job changed gateway Profile or environment", 403)
             if lease.get("jobId") not in (None, job["id"]):
                 raise BridgeError("Original gateway lease already belongs to another job", 409)
             if job["environmentId"] != lease["environmentId"]:
@@ -136,7 +147,7 @@ class HarnessGateway:
         return lease is not None
 
     def _persist_lease(self, lease):
-        public = {k: v for k, v in lease.items() if k in (FIELDS - {"accessToken"}) | {"jobId"}}
+        public = {k: v for k, v in lease.items() if k in (FIELDS - {"accessToken"}) | {"jobId", "configurationOwner"}}
         self.db.execute("INSERT OR REPLACE INTO gateway_leases VALUES(?,?,?)", (lease["leaseId"], json.dumps(public, sort_keys=True), lease["state"]))
         self.db.commit()
 
@@ -158,12 +169,24 @@ class HarnessGateway:
         return lease
 
     def register(self, value, endpoint):
-        if set(value) != FIELDS:
+        if set(value) not in (FIELDS, FIELDS | {"configurationOwner"}):
             raise BridgeError("Bridge accepts only the exact original native lease descriptor")
         lease = dict(value)
         for key in ("leaseId", "clientBindingId", "generation", "environmentId", "bindingId", "taskId", "runId"):
             ident(lease[key])
         integer(lease["epoch"], 1, 2**31 - 1)
+        if "configurationOwner" in lease:
+            owner = lease["configurationOwner"]
+            if not isinstance(owner, dict) or set(owner) != {"taskId", "runId", "epoch", "parentTaskId", "parentRunId", "parentEpoch", "sourceDigest"}:
+                raise BridgeError("Exact native configuration owner relation required", 403)
+            for key in ("taskId", "runId", "parentTaskId", "parentRunId"):
+                ident(owner[key])
+            # Original remote children start at epoch 0; the native billable parent starts at 1.
+            integer(owner["epoch"], 0, 2**31 - 1)
+            integer(owner["parentEpoch"], 1, 2**31 - 1)
+            if any(owner[k] != lease[p] for k, p in (("parentTaskId", "taskId"), ("parentRunId", "runId"), ("parentEpoch", "epoch"))) or not isinstance(owner["sourceDigest"], str) or not re.fullmatch("[a-f0-9]{64}", owner["sourceDigest"]):
+                raise BridgeError("Configuration owner is not bound to the registered parent lease", 403)
+
         integer(lease["expiresAt"], self.manager.now() + 1, self.manager.now() + 600000)
         if not isinstance(lease["profileDigest"], str) or not re.fullmatch("[a-f0-9]{64}", lease["profileDigest"]):
             raise BridgeError("Frozen Profile digest required")
@@ -181,7 +204,7 @@ class HarnessGateway:
             old = self.db.execute("SELECT descriptor,state FROM gateway_leases WHERE lease_id=?", (lease["leaseId"],)).fetchone()
             if old:
                 current = self.leases.get(lease["leaseId"])
-                if current is None or any(current.get(k) != lease[k] for k in FIELDS):
+                if current is None or any(current.get(k) != lease.get(k) for k in FIELDS | {"configurationOwner"}):
                     raise BridgeError("Lease identity cannot be rebound or revived after restart", 409)
                 self._lease(lease["leaseId"])
                 return self._view_lease(current)
@@ -190,7 +213,7 @@ class HarnessGateway:
             endpoint = endpoint() if callable(endpoint) else endpoint
             lease.update(state="ACTIVE", endpoint=endpoint)
             # This also binds T04's endpointLeaseRef to this actual host-issued lifecycle.
-            self.manager.harness_configs.register_endpoint({k: lease[k] for k in ("leaseId", "accessToken", "expiresAt", "environmentBinding", "profileDigest", "taskId", "runId", "epoch", "audience", "purpose")} | {"endpoint": endpoint})
+            self.manager.harness_configs.register_endpoint({k: lease[k] for k in ("leaseId", "accessToken", "expiresAt", "environmentBinding", "profileDigest", "taskId", "runId", "epoch", "audience", "purpose")} | {"endpoint": endpoint} | ({"configurationOwner": lease["configurationOwner"], "generation": lease["generation"], "bindingId": lease["bindingId"]} if "configurationOwner" in lease else {}))
             self.leases[lease["leaseId"]] = lease
             self._persist_lease(lease)
             return self._view_lease(lease)

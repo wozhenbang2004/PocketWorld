@@ -326,7 +326,46 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
             }
             controller.projectWorkbench.selectView(checkout.getString("projectId"), ProjectWorkbenchFacet.Agent.index)
         })
-        if (agentSurface) TextButton(onClick = { controller.projectWorkbench.selectView(checkout.getString("projectId"), ProjectWorkbenchFacet.Run.index) }) { Text("查看运行状态和日志") }
+        if (agentSurface) {
+            // Only link to recorded outcomes of this selected task. Navigation grants no execution.
+            val savedPreview = current.raw.optJSONArray("developmentPreviews").objects().lastOrNull()?.takeIf {
+                it.optBoolean("persisted") && it.optString("previewId").isNotBlank() &&
+                    it.optString("checkoutId") == id && it.optString("projectId") == checkout.getString("projectId")
+            }
+            val savedPackage = current.raw.optJSONArray("operations").objects().any { operation ->
+                ProjectWorkbenchGuard.executionReceipt(current, operation)?.let { actual ->
+                    actual.optString("intent") == "freeze_package" && actual.optBoolean("artifactReady") &&
+                        actual.optBoolean("receiptReceived") && actual.optString("status") == "completed"
+                } == true
+            }
+            if (savedPreview != null || savedPackage) {
+                HorizontalDivider(Modifier.padding(top = 16.dp, bottom = 12.dp), color = Line)
+                Text("当前成果", style = MaterialTheme.typography.titleSmall)
+                savedPreview?.let { recorded ->
+                    TextButton(onClick = { controller.projectWorkbench.selectView(checkout.getString("projectId"), ProjectWorkbenchFacet.Preview.index) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("project_saved_preview_navigation")) {
+                        AffectGlyph("file", color = SecondaryInk)
+                        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                            Text(recorded.optString("entryPath"), style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(if (recorded.optString("sourceDigest") == inspection?.optString("sourceDigest")) "已保存预览 · 查看" else "较早版本预览 · 查看",
+                                style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                        }
+                        AffectGlyph("chevron-right", color = SecondaryInk)
+                    }
+                }
+                if (savedPackage) TextButton(onClick = { controller.projectWorkbench.selectView(checkout.getString("projectId"), ProjectWorkbenchFacet.Run.index) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("project_saved_package_navigation")) {
+                    AffectGlyph("file", color = SecondaryInk)
+                    Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                        Text("固定项目包已保存", style = MaterialTheme.typography.bodyMedium)
+                        Text("到运行记录核对原成果", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                    }
+                    AffectGlyph("chevron-right", color = SecondaryInk)
+                }
+            }
+            TextButton(onClick = { controller.projectWorkbench.selectView(checkout.getString("projectId"), ProjectWorkbenchFacet.Run.index) }) { Text("查看运行状态和日志") }
+        }
         if (previewSurface) ProjectLivePreviewSection(current, id, controller)
         if (agentSurface && current.status in setOf("preparing", "running")) {
             val text = feedback[current.id].orEmpty()
