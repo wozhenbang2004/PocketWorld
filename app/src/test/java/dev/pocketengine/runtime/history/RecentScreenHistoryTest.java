@@ -21,6 +21,7 @@ public final class RecentScreenHistoryTest {
     @Test public void expiredPrivateAndPausedFramesNeverFallbackToAnotherPicture()throws Exception {
         RunControl control=new RunControl();AtomicLong clock=new AtomicLong(100);try(RecentScreenHistory history=new RecentScreenHistory(control,()->{},clock::get)){
             JSONObject privateFrame=frame().put("secure",true);history.retain(privateFrame,control);assertEquals(0,history.index(control).length());
+            JSONObject paymentFrame=frame().put("nodes",new JSONArray().put(new JSONObject().put("text","转账金额 ¥12.00")));history.retain(paymentFrame,control);assertEquals(0,history.index(control).length());
             JSONObject first=frame();history.retain(first,control);String id=first.getString("historicalScreenId");clock.set(300101);assertNull(history.recall(id,control));
             JSONObject second=frame();history.retain(second,control);control.pause();assertThrows(SecurityException.class,()->history.recall(second.getString("historicalScreenId"),control));control.resume();assertEquals(0,history.index(control).length());
         }

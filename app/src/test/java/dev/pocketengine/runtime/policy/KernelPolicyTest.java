@@ -22,6 +22,13 @@ public final class KernelPolicyTest {
         }
         assertNull(PhoneActionPolicy.before("phone_observe",new JSONObject(),page));
     }
+    @Test public void paymentContextWithAGenericConfirmationAndIgnoredNodeHintCannotBypassOwnerHandoff()throws Exception {
+        JSONObject page=page("确认");page.getJSONArray("nodes").put(new JSONObject().put("id","amount").put("text","转账金额 ¥12.00").put("editable",true)).put(new JSONObject().put("id","exit").put("text","返回"));
+        assertNotNull(PhoneActionPolicy.before("phone_click_node",new JSONObject().put("nodeId","n"),page));
+        assertNull(PhoneActionPolicy.before("phone_click_node",new JSONObject().put("nodeId","exit"),page));
+        assertNotNull(PhoneActionPolicy.before("phone_tap",new JSONObject().put("nodeId","exit").put("x",300).put("y",900),page));
+        assertNotNull(PhoneActionPolicy.before("phone_type",new JSONObject().put("nodeId","amount").put("text","12.00"),page));
+    }
     @Test public void obstacleHintDoesNotResolveOrAuthorizeAnything()throws Exception {
         JSONObject receipt=RunOutcomeTools.obstacle(new JSONObject().put("kind","captcha").put("detail","需要真人验证"));assertFalse(receipt.getBoolean("obstacleResolved"));assertFalse(receipt.getBoolean("effectsDispatched"));
         JSONObject input=new JSONObject().put("kind","access_blocked").put("reason","访问限制").put("performed","已读取首页").put("remaining","未提交").put("recoverable",true);JSONObject declaration=RunOutcomeTools.declaration(input);assertFalse(declaration.getBoolean("automaticRetryAuthorized"));assertFalse(declaration.getBoolean("businessVerified"));assertTrue(RunOutcomeTools.summary(input).contains("未提交"));
