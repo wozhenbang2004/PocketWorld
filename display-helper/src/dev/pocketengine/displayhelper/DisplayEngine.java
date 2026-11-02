@@ -79,6 +79,11 @@ final class DisplayEngine {
     JSONObject handle(JSONObject request) throws Exception {
         String cmd=request.optString("command");
         if("hello".equals(cmd)||"status".equals(cmd))return status();
+        if("audio_recovery.get".equals(cmd)||"audio_recovery.set".equals(cmd)){
+            requirePrivilegedEnvironment();android.app.KeyguardManager keyguard=context.getSystemService(android.app.KeyguardManager.class);
+            if(keyguard==null||keyguard.isDeviceLocked()||keyguard.isKeyguardLocked())throw new Failure("screen_locked","请先由机主解锁手机。",false);
+            return DisplayAudioCommands.handle(cmd.endsWith(".get")?"audio.get":"audio.set",request);
+        }
         if("primary_ownership".equals(cmd)){
             requirePrivilegedEnvironment();android.app.KeyguardManager keyguard=context.getSystemService(android.app.KeyguardManager.class);
             if(keyguard==null||keyguard.isDeviceLocked()||keyguard.isKeyguardLocked())throw new Failure("screen_locked","请先由机主解锁手机。",false);

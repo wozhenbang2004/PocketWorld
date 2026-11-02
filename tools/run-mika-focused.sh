@@ -25,5 +25,12 @@ while IFS= read -r class; do
 done < tools/mika-focused-tests.txt
 LD_LIBRARY_PATH="$native_dir/current${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   ./gradlew "${gradle_args[@]}" "${selectors[@]}"
+cp -R app/build/reports/tests/testDebugUnitTest "$native_dir/main-reports"
+cp -R app/build/test-results/testDebugUnitTest "$native_dir/main-results"
+unavailable_status=0
 LD_LIBRARY_PATH="$native_dir/unavailable${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  ./gradlew "${gradle_args[@]}" --tests dev.pocketengine.features.local.runtime.NativeOfflineUnavailableTest
+  ./gradlew "${gradle_args[@]}" --tests dev.pocketengine.features.local.runtime.NativeOfflineUnavailableTest || unavailable_status=$?
+mkdir -p app/build/reports/tests/testDebugUnitTest/main-capabilities app/build/test-results/testDebugUnitTest/main-capabilities
+cp -R "$native_dir/main-reports/." app/build/reports/tests/testDebugUnitTest/main-capabilities/
+cp -R "$native_dir/main-results/." app/build/test-results/testDebugUnitTest/main-capabilities/
+exit "$unavailable_status"

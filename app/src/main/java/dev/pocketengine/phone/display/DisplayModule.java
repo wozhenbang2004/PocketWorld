@@ -173,6 +173,11 @@ public final class DisplayModule implements EngineModule {
         }
         return new JSONObject().put("socketName",socket).put("token",secret).put("ownerUid",android.os.Process.myUid());
     }
+    /** Explicit owner undo of the private audio ledger, even after the old display has gone. Not a model command. */
+    public synchronized JSONObject audioRecovery(String command,JSONObject payload)throws Exception {
+        if(!java.util.Set.of("audio.get","audio.set").contains(command)||!ownerTaskId.isEmpty()||bootstrapBusy()||!isConnected())throw new SecurityException("owner_audio_recovery_unavailable");
+        JSONObject answer=client().call("audio_recovery."+command.substring("audio.".length()),new JSONObject(payload.toString()),null);requireOk(answer);return answer;
+    }
     /** Metadata only, using the original authenticated helper; never creates a display or task. */
     public JSONObject primaryOwnership(RunControl original,boolean ownerPausedRead)throws Exception {
         if(original==null||!original.hasHostRun())throw new SecurityException("original_phone_run_required");

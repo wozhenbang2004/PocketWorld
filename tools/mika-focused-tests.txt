@@ -11,6 +11,7 @@ dev.pocketengine.browser.BrowserToolSequenceTest
 dev.pocketengine.browser.BrowserWaitBarrierTest
 dev.pocketengine.core.NativeToolPlanTest
 dev.pocketengine.displayhelper.DisplayAppOwnershipTest
+dev.pocketengine.displayhelper.DisplaySessionDirectoryBoundaryTest
 dev.pocketengine.features.KnowledgeLearningWorkflowTest
 dev.pocketengine.features.assistant.AutomaticOwnerUtteranceNativeTest
 dev.pocketengine.features.assistant.ConversationPresentationTest
@@ -30,6 +31,7 @@ dev.pocketengine.features.local.runtime.WorkspaceFileAccessTest
 dev.pocketengine.features.memory.AutomaticMemoryPolicyTest
 dev.pocketengine.features.operations.AppLanguageNativeTest
 dev.pocketengine.features.operations.IsolatedWebProbeCleanupTest
+dev.pocketengine.features.operations.LiteralUiTextNativeTest
 dev.pocketengine.features.operations.OperationsSafetyTest
 dev.pocketengine.features.proxy.accounts.OpenRouterOnboardingTest
 dev.pocketengine.features.skills.ManagedScriptBridgeSessionTest
@@ -37,11 +39,14 @@ dev.pocketengine.features.skills.ManagedSkillPolicyTest
 dev.pocketengine.features.skills.SkillCataloguePagingTest
 dev.pocketengine.features.teams.TeamResearchReadAccessTest
 dev.pocketengine.features.teams.TeamResearchReadScopeTest
+dev.pocketengine.features.teams.TeamResearchSelectionPageTest
+dev.pocketengine.phone.PhoneAudioCommandScopeTest
 dev.pocketengine.phone.PhoneBoundaryTest
 dev.pocketengine.phone.PhoneDynamicPolicyTest
 dev.pocketengine.phone.PhonePracticeEvidenceTest
 dev.pocketengine.phone.PhoneRecoveryPolicyTest
 dev.pocketengine.phone.PhoneSetupLifecycleTest
+dev.pocketengine.phone.PhoneWindowPackagesTest
 dev.pocketengine.phone.observation.PhoneExtensionJournalTest
 dev.pocketengine.runtime.KernelHistoryRunnerTest
 dev.pocketengine.runtime.KernelRunnerContractTest
@@ -54,6 +59,7 @@ dev.pocketengine.runtime.context.RunContextBudgetTest
 dev.pocketengine.runtime.eval.ProductionTaskEvaluationTest
 dev.pocketengine.runtime.eval.TaskEvaluationTest
 dev.pocketengine.runtime.history.RecentScreenHistoryTest
+dev.pocketengine.runtime.models.StepModelRoutingGroupAdmissionTest
 dev.pocketengine.runtime.models.StepModelRoutingTest
 dev.pocketengine.runtime.policy.KernelPolicyTest
 dev.pocketengine.runtime.routes.PhoneRouteSessionTest
@@ -68,3 +74,4 @@ dev.pocketengine.store.ModelProbeNativeJourneyTest
 dev.pocketengine.store.TaskStorePhoneRoutesTest
 dev.pocketengine.store.TaskStoreScriptPhoneNativeAdmissionTest
 dev.pocketengine.store.TaskStoreScriptPhoneScopeTest
+dev.pocketengine.ui.ResearchReadAccessDraftTest
