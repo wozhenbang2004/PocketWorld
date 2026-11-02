@@ -36,7 +36,7 @@ public final class StepModelRouting {
         public void failed(Exception failure){if(usingLight){successfulReads=0;mainTurns=2;}}
         public void after(String name,JSONObject args,JSONObject receipt,JSONObject latest){
             boolean okay=receipt!=null&&receipt.optBoolean("ok",false)&&!receipt.optString("code").contains("unknown")&&!(receipt.has("accepted")&&receipt.isNull("accepted"))
-                    &&!receipt.optBoolean("requiresPause")&&safeTool(name,args);
+                    &&!receipt.optBoolean("requiresPause")&&!(receipt.has("matched")&&!receipt.optBoolean("matched"))&&safeTool(name,args);
             String current=place(latest);
             if(okay&&!current.isEmpty()&&current.equals(place)){successfulReads=Math.min(3,successfulReads+1);}else {successfulReads=0;mainTurns=2;}
             place=current;
@@ -56,7 +56,7 @@ public final class StepModelRouting {
     private static String place(JSONObject observation){if(observation==null)return "";for(String key:new String[]{"packageName","package","appPackage","browserSpaceId"}){String value=observation.optString(key);if(!value.isEmpty()&&value.length()<300)return key+":"+value;}return "";}
     private static boolean safeTool(String name,JSONObject args){
         // Explicit closed set: arbitrary capabilities, scripts, writes and native batches remain MAIN.
-        return java.util.Set.of("phone_observe","phone_tree_query","phone_query_tree","phone_wait","browser_observe","browser_read","browser_read_source").contains(name)
+        return java.util.Set.of("phone_observe","phone_query","phone_condition_wait","phone_wait","browser_task_observe","browser_task_read_public","browser_task_read_page","browser_task_read_source").contains(name)
                 &&args!=null&&!args.optBoolean("includeImage")&&!args.optBoolean("captureImage");
     }
 }
