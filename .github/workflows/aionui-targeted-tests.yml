@@ -17,8 +17,6 @@ jobs:
     if: ${{ github.event.repository.private }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      GRADLE_USER_HOME: ${{ runner.temp }}/aionui-targeted-gradle
     defaults:
       run:
         shell: bash
@@ -42,6 +40,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           : "${ANDROID_HOME:?Android SDK is required}"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/aionui-targeted-gradle" >> "$GITHUB_ENV"
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           test -x "$SDKMANAGER"
           set +o pipefail
