@@ -1,0 +1,16 @@
+package dev.pocketengine.runtime.usage;
+import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.core.RunControl;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.*;
+import org.json.*;
+import org.junit.Test;
+import static org.junit.Assert.*;
+public final class OtlpTraceExportTest {
+ private static JSONObject archive()throws Exception{return new JSONObject().put("format","pocketworld.content-free-trace.v1").put("runId","20000000-0000-0000-0000-000000000002").put("bodyIncluded",false).put("prompt","PROMPT-DO-NOT-EXPORT").put("spans",new JSONArray().put(new JSONObject().put("name","model.MAIN").put("startedAt",System.currentTimeMillis()).put("elapsedNanos",10000).put("status","COMPLETED").put("correlation","10000000-0000-0000-0000-000000000001").put("body","PROMPT-DO-NOT-EXPORT")));}
+ private static JSONObject send(String ack,AtomicInteger requests,AtomicReference<String> received)throws Exception{HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.createContext("/v1/traces",exchange->{try{requests.incrementAndGet();received.set(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));byte[] body=ack.getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);}finally{exchange.close();}});server.start();try{return OtlpTraceExport.send(archive(),"http://127.0.0.1:"+server.getAddress().getPort()+"/v1/traces","Authorization","fixture-not-a-real-token",new RunControl());}finally{server.stop(0);}}
+ @Test public void partial200IsNotSuccessAndIsNeverAutomaticallyRetried()throws Exception{AtomicInteger requests=new AtomicInteger();AtomicReference<String> body=new AtomicReference<>();JSONObject result=send("{\"partialSuccess\":{\"rejectedSpans\":\"1\",\"errorMessage\":\"fixture rejection\"}}",requests,body);assertEquals("partially_rejected",result.getString("status"));assertEquals(1,requests.get());assertFalse(result.getBoolean("automaticRetry"));assertFalse(body.get().contains("PROMPT-DO-NOT-EXPORT"));assertFalse(body.get().contains("fixture-not-a-real-token"));JSONObject span=new JSONObject(body.get()).getJSONArray("resourceSpans").getJSONObject(0).getJSONArray("scopeSpans").getJSONObject(0).getJSONArray("spans").getJSONObject(0);assertTrue(span.getString("traceId").matches("[a-f0-9]{32}"));assertTrue(span.get("startTimeUnixNano") instanceof String);}
+ @Test public void malformedRejectionCountIsNotAcceptedAsZero()throws Exception{AtomicInteger requests=new AtomicInteger();assertThrows(Exception.class,()->send("{\"partialSuccess\":{\"rejectedSpans\":\"not-a-number\"}}",requests,new AtomicReference<>()));assertEquals(1,requests.get());}
+ @Test public void endpointAndBodyPolicyRejectUnapprovedFormats()throws Exception{assertThrows(IllegalArgumentException.class,()->OtlpTraceExport.endpoint("http://external.invalid/v1/traces"));assertThrows(IllegalArgumentException.class,()->OtlpTraceExport.endpoint("https://user:secret@host.invalid/v1/traces"));assertThrows(SecurityException.class,()->OtlpTraceExport.preview(archive().put("bodyIncluded",true)));assertEquals("accepted",send("{}",new AtomicInteger(),new AtomicReference<>()).getString("status"));}
+}
