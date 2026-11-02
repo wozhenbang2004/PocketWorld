@@ -23,6 +23,7 @@ public final class OwnerIntent {
         if(text.isEmpty())return Kind.UNSPECIFIED;
         // Negated execution and questions about instructions take precedence over action words.
         if(text.matches("(?s).*(不要操作|别操作|不要执行|别执行|先别动|不要点击|只讨论|仅讨论|只解释|仅解释|只告诉我|do not (act|execute|click)|don't (act|execute|click)).*"))return Kind.DISCUSS;
+        if(text.matches("(?s)^(该不该|要不要|你觉得|为什么|should i|what is|what are|why ).*"))return Kind.DISCUSS;
         if(text.matches("(?s)^(请|麻烦|可以|能否|你能|能不能|想|我想|先|只是|帮我|告诉我|给我|向我|讲讲|解释|说明|介绍|what|why|explain|tell me|show me|can you|could you|please|how|what's|what is|what are|is it|should i|would it).*" )
                 &&text.matches("(?s).*(如何|怎么(做|操作|使用|转账|付款|支付|发消息|删除|设置)|原理|解释|说明|介绍|方案|how (to|do|can|would)|explain|tell me how|what (is|are)|why ).*"))return Kind.DISCUSS;
         if(text.matches("(?s).*(只读|仅读取|仅查询|仅研究|不要修改|别修改|不做修改|read.only|only (read|research|look up)|without (changing|modifying|writing)).*"))return Kind.READ;

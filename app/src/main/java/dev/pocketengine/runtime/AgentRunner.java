@@ -617,18 +617,17 @@ public final class AgentRunner {
                     // The real operation receipt and text checkpoint already committed above.
                     // Unknown/approval/pause outcomes stop before any extension code is invoked.
                     if(capabilities!=null&&!control.isPaused()&&pauseSeen[0]==control.pauseRevision())capabilities.afterTool(name,safeJson(args,config,false),safeToolReceipt(name,receipt,config),control);
-                    if(routes!=null)try{routes.after(name,args,receipt,routeBefore,recordedOperation,control);}catch(Exception ineligible){routes.disableLearning();}
                     routing.after(name,args,receipt,latest);
                     // A successful read can still time out with an unmet predicate. Only this
                     // native plan step uses matched as a prerequisite; standalone WAIT is unchanged.
                     if(!receipt.optBoolean("ok",false)||activeStep!=null&&activeStep.tool.requiresMatched()&&!Boolean.TRUE.equals(receipt.opt("matched")))sequenceMayContinue=false;
-                    if(capabilities!=null&&receipt.optBoolean("ok",false)&&!control.isPaused()&&!control.isCancelled()&&pauseSeen[0]==control.pauseRevision()){
+                    if((capabilities!=null||routes!=null&&PhoneRouteSession.REPLAY.equals(name))&&receipt.optBoolean("ok",false)&&!control.isPaused()&&!control.isCancelled()&&pauseSeen[0]==control.pauseRevision()){
                         String nativeOperation=recordedOperation==null?call.getString("id"):recordedOperation;
                         if(imageRequired){dev.pocketengine.core.NativeToolObservation observation=capabilities.takeToolObservation(name,nativeOperation,control);
                             if(observation!=null)try{nativeImages.add(observation.consume(name,nativeOperation,control));}catch(Exception stale){observation.close();control.check();emit(taskId,"tool_observation","failed","图片已失效，没有作为本轮模型视觉输入。",name,null,config,sink);}
                             else emit(taskId,"tool_observation","failed","未取得可交付的实际图片，本轮没有附图。",name,null,config,sink);
                         }
-                        dev.pocketengine.core.NativeToolPlan proposed=PhoneRouteSession.REPLAY.equals(name)&&routes!=null?routes.take(nativeOperation,control):capabilities.takeToolPlan(name,nativeOperation,control);
+                        dev.pocketengine.core.NativeToolPlan proposed=PhoneRouteSession.REPLAY.equals(name)&&routes!=null?routes.take(nativeOperation,control):capabilities==null?null:capabilities.takeToolPlan(name,nativeOperation,control);
                         if(proposed!=null){nativePlans.add(proposed);nativeSequenceProgress.put(proposed,new JSONObject().put("parentOperationId",nativeOperation).put("totalSteps",proposed.size()).put("dispatchEnteredSteps",0));if(activePlan!=null)throw new SecurityException("native_sequence_nested_plan_forbidden");try{proposed.consume(name,nativeOperation,control);activePlan=proposed;}catch(Exception stale){proposed.close();control.check();sequenceMayContinue=false;emit(taskId,"native_sequence","failed","短序列的现场已改变，未派发其中动作。",name,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,sink);}}
                     }
                     if (phone!=null&&(changesScreen(name) || "phone_wait".equals(name))) {
@@ -638,6 +637,7 @@ public final class AgentRunner {
                         observed = true;
                         if (!latest.optBoolean("ok", true)) return finish(taskId, "awaiting_user", "操作后无法重新观察，请检查手机权限并接管。", evidence, steps, config, sink);
                     }
+                    if(routes!=null){try{routes.after(name,args,receipt,routeBefore,latest,recordedOperation,control);}catch(Exception ineligible){routes.disableLearning();}if(!routes.replayPostcondition(name,receipt,latest)){sequenceMayContinue=false;emit(taskId,"native_route","diverged","本步实际回执保留，但回读页面与成功路线锚点不同；余下步骤没有派发，交回原模型。",name,new JSONObject().put("executedReceiptRetained",true).put("remainingNotDispatched",true).put("automaticReplay",false),config,sink);}}
                 }
                 // All tool_call_ids are resolved before any native user image/new step is added.
                 if (observed) appendCapturedObservation(history, latest, config, contextBudget,screens,control);observed=false;
@@ -1139,7 +1139,7 @@ public final class AgentRunner {
     private static void appendHistoricalObservation(JSONArray history,JSONObject observation,ModelConfig config,RunContextBudget budget)throws Exception {
         appendObservation(history,observation,config,budget);JSONObject last=history.getJSONObject(history.length()-1),first=last.getJSONArray("content").getJSONObject(0);String text=first.getString("text");if(!text.startsWith(OBSERVATION_PREFIX))throw new SecurityException("历史图未产生原生图像消息");first.put("text",RecentScreenHistory.PREFIX+text.substring(OBSERVATION_PREFIX.length()));
     }
-    private boolean toolEffecting(String name){return capabilities!=null&&capabilities.supports(name)?capabilities.sideEffecting(name):sideEffecting(name);}
+    private boolean toolEffecting(String name){if(Set.of(PhoneRouteSession.REPLAY,PhoneRouteSession.FORGET,RecentScreenHistory.FORGET,"phone_prepare_sequence","browser_task_prepare_sequence").contains(name))return true;return capabilities!=null&&capabilities.supports(name)?capabilities.sideEffecting(name):sideEffecting(name);}
     private static void appendObservation(JSONArray history, JSONObject observation, ModelConfig config, RunContextBudget contextBudget) throws Exception {
         if(observation.optBoolean("noDeviceObservation"))return;
         JSONObject nativeData=dev.pocketengine.features.memory.TaskMemoryHistory.observationData(observation);
