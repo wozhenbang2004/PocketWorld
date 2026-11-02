@@ -54,8 +54,8 @@
         "parentTaskId": "root-task-1",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"arguments\":{\"text\":\"你好 👋\",\"x\":42,\"y\":63},\"effect\":\"write\",\"toolName\":\"phone.tap\"},\"argumentsDigest\":\"05ee437cda2a26ed6dfcc3d0f1fbdc387758c06f4a9cd5c32f2247aab830db65\",\"attempt\":1,\"authorizationEpoch\":1,\"budget\":{\"allocationId\":\"ba1_74cbe70c6571f2d84ee5e70d0f133c65dc71c9517ed7e3aade92b3369c088bee\",\"modelCalls\":0,\"toolCalls\":4},\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"capabilityVersion\":\"phone-v1\",\"deadline\":2000000001000,\"delegationChain\":[],\"executorEpoch\":1,\"grantId\":\"grant-1\",\"instanceId\":\"instance-b-1\",\"localTaskId\":\"task-b-1\",\"maxDelegationDepth\":2,\"messageType\":\"ToolInvocation\",\"method\":\"tool.invoke\",\"operationId\":\"operation-1\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentTaskId\":\"root-task-1\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"request-1\",\"resourceBinding\":{\"displayId\":0,\"screenMode\":\"main_screen\"},\"rootTaskId\":\"root-task-1\",\"runId\":\"run-b-1\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"traceId\":\"trace-1\",\"visitedDevices\":[\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}",
-      "argumentsDigest": "05ee437cda2a26ed6dfcc3d0f1fbdc387758c06f4a9cd5c32f2247aab830db65",
+      "canonical": "{\"arguments\":{\"arguments\":{\"text\":\"你好 👋\",\"x\":42,\"y\":63},\"effect\":\"write\",\"toolName\":\"phone.tap\"},\"argumentsDigest\":\"ac78ec100c82f5711a2b0dabc462339c8cf2df24829c6866191dbdf957983ad6\",\"attempt\":1,\"authorizationEpoch\":1,\"budget\":{\"allocationId\":\"ba1_74cbe70c6571f2d84ee5e70d0f133c65dc71c9517ed7e3aade92b3369c088bee\",\"modelCalls\":0,\"toolCalls\":4},\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"capabilityVersion\":\"phone-v1\",\"deadline\":2000000001000,\"delegationChain\":[],\"executorEpoch\":1,\"grantId\":\"grant-1\",\"instanceId\":\"instance-b-1\",\"localTaskId\":\"task-b-1\",\"maxDelegationDepth\":2,\"messageType\":\"ToolInvocation\",\"method\":\"tool.invoke\",\"operationId\":\"operation-1\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentTaskId\":\"root-task-1\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"request-1\",\"resourceBinding\":{\"displayId\":0,\"screenMode\":\"main_screen\"},\"rootTaskId\":\"root-task-1\",\"runId\":\"run-b-1\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"traceId\":\"trace-1\",\"visitedDevices\":[\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}",
+      "argumentsDigest": "ac78ec100c82f5711a2b0dabc462339c8cf2df24829c6866191dbdf957983ad6",
       "receiverTaskId": "dt1_33f3bbcc8f7842110ad70da4962335f03210d209012fae128400315413c446c7"
     },
     {
@@ -103,8 +103,8 @@
         "parentTaskId": "root-task-1",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"arguments\":{},\"effect\":\"read\",\"toolName\":\"phone.observe\"},\"attempt\":1,\"authorizationEpoch\":1,\"budget\":{\"allocationId\":\"ba1_74cbe70c6571f2d84ee5e70d0f133c65dc71c9517ed7e3aade92b3369c088bee\",\"modelCalls\":0,\"toolCalls\":4},\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"capabilityVersion\":\"phone-v1\",\"deadline\":2000000001000,\"delegationChain\":[],\"executorEpoch\":1,\"grantId\":\"grant-1\",\"instanceId\":\"instance-b-1\",\"localTaskId\":\"task-b-1\",\"maxDelegationDepth\":2,\"messageType\":\"ToolInvocation\",\"method\":\"tool.invoke\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentTaskId\":\"root-task-1\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"read-1\",\"resourceBinding\":{\"displayId\":0,\"screenMode\":\"main_screen\"},\"rootTaskId\":\"root-task-1\",\"runId\":\"run-b-1\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"traceId\":\"trace-1\",\"visitedDevices\":[\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}",
-      "argumentsDigest": "e2b0793f007400b34890dd1d0ae2c6f7c71d441984ed824b07d9fdf7087eab3b",
+      "canonical": "{\"arguments\":{\"arguments\":{},\"effect\":\"read\",\"toolName\":\"phone.observe\"},\"attempt\":1,\"authorizationEpoch\":1,\"budget\":{\"allocationId\":\"ba1_74cbe70c6571f2d84ee5e70d0f133c65dc71c9517ed7e3aade92b3369c088bee\",\"modelCalls\":0,\"toolCalls\":4},\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"capabilityVersion\":\"phone-v1\",\"deadline\":2000000001000,\"delegationChain\":[],\"executorEpoch\":1,\"grantId\":\"grant-1\",\"instanceId\":\"instance-b-1\",\"localTaskId\":\"task-b-1\",\"maxDelegationDepth\":2,\"messageType\":\"ToolInvocation\",\"method\":\"tool.invoke\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentTaskId\":\"root-task-1\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"read-1\",\"resourceBinding\":{\"displayId\":0,\"screenMode\":\"main_screen\"},\"rootTaskId\":\"root-task-1\",\"runId\":\"run-b-1\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"traceId\":\"trace-1\",\"visitedDevices\":[\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}",
+      "argumentsDigest": "aec945164ea7cbf38917c5333adb55c27e31289841ec1f537ce7d47610482374",
       "receiverTaskId": "dt1_33f3bbcc8f7842110ad70da4962335f03210d209012fae128400315413c446c7"
     },
     {
@@ -161,8 +161,8 @@
         "parentTaskId": "root-task-1",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"contextSnapshot\":{\"artifactRefs\":[],\"retention\":\"task\",\"summary\":\"只使用选定项目\"},\"executionMode\":\"agent\",\"goal\":\"在本机项目运行测试\",\"modelSource\":{\"kind\":\"local\"}},\"argumentsDigest\":\"4ad6374098a898277f5dd030e6dea4f6a61f247ae48bd17fe0c25ef366b24d8e\",\"attempt\":1,\"authorizationEpoch\":1,\"budget\":{\"allocationId\":\"ba1_86d453ec6ac666555793f13d40d23db8f3e1c3bac3e86080d6dc079c49eaaf80\",\"modelCalls\":0,\"toolCalls\":4},\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"capabilityVersion\":\"phone-v1\",\"deadline\":2000000001000,\"delegationChain\":[],\"executorEpoch\":1,\"grantId\":\"grant-1\",\"instanceId\":\"instance-b-1\",\"localTaskId\":\"task-b-1\",\"maxDelegationDepth\":2,\"messageType\":\"GoalSubmission\",\"method\":\"task.submitGoal\",\"operationId\":\"goal-op-1\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentTaskId\":\"root-task-1\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"goal-1\",\"resourceBinding\":{\"displayId\":0,\"screenMode\":\"main_screen\"},\"rootTaskId\":\"root-task-1\",\"runId\":\"run-b-1\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"traceId\":\"trace-1\",\"visitedDevices\":[\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}",
-      "argumentsDigest": "4ad6374098a898277f5dd030e6dea4f6a61f247ae48bd17fe0c25ef366b24d8e",
+      "canonical": "{\"arguments\":{\"contextSnapshot\":{\"artifactRefs\":[],\"retention\":\"task\",\"summary\":\"只使用选定项目\"},\"executionMode\":\"agent\",\"goal\":\"在本机项目运行测试\",\"modelSource\":{\"kind\":\"local\"}},\"argumentsDigest\":\"87fdbfc7fb654d08143e63eaa15c89adacb7067bc74172abd10faa87e266200e\",\"attempt\":1,\"authorizationEpoch\":1,\"budget\":{\"allocationId\":\"ba1_86d453ec6ac666555793f13d40d23db8f3e1c3bac3e86080d6dc079c49eaaf80\",\"modelCalls\":0,\"toolCalls\":4},\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"capabilityVersion\":\"phone-v1\",\"deadline\":2000000001000,\"delegationChain\":[],\"executorEpoch\":1,\"grantId\":\"grant-1\",\"instanceId\":\"instance-b-1\",\"localTaskId\":\"task-b-1\",\"maxDelegationDepth\":2,\"messageType\":\"GoalSubmission\",\"method\":\"task.submitGoal\",\"operationId\":\"goal-op-1\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentTaskId\":\"root-task-1\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"goal-1\",\"resourceBinding\":{\"displayId\":0,\"screenMode\":\"main_screen\"},\"rootTaskId\":\"root-task-1\",\"runId\":\"run-b-1\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"traceId\":\"trace-1\",\"visitedDevices\":[\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}",
+      "argumentsDigest": "87fdbfc7fb654d08143e63eaa15c89adacb7067bc74172abd10faa87e266200e",
       "receiverTaskId": "dt1_752ca2bd65e20de67e58f0d44c97690047ea22faee1b68d56705f26db9db547b"
     },
     {
@@ -181,8 +181,8 @@
         "arguments": {},
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{},\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"messageType\":\"DeviceRequest\",\"method\":\"device.describe\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"request-1\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
-      "argumentsDigest": "50011ce36cfd8ad811302e4f498bfdc9e4672f53568de6d9b1c3f05e7278d491"
+      "canonical": "{\"arguments\":{},\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"messageType\":\"DeviceRequest\",\"method\":\"device.describe\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"request-1\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "cfdd5bd6e2435feb5f92d7b681b48c59a050f4554ee2305285d797e7c99077c1"
     },
     {
       "name": "operation.get",
@@ -204,8 +204,8 @@
         "authorizationEpoch": 1,
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"operationId\":\"operation-1\"},\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"operation.get\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"operation-get\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
-      "argumentsDigest": "8a5438c6a4151aa6d5287a91d2ce8cf3163e25a5488ddb106604c7b2a723be20"
+      "canonical": "{\"arguments\":{\"operationId\":\"operation-1\"},\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"operation.get\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"operation-get\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "4d5f2e45b3a01a62bead1e1f2fa2c759024508beb57691d48551f21ca885e968"
     },
     {
       "name": "task.get",
@@ -227,8 +227,8 @@
         "authorizationEpoch": 1,
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"taskId\":\"task-b-1\"},\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.get\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-get\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
-      "argumentsDigest": "e3a1768ad891754f661edef14ea78c69c292ccce040bf1e8655abe03c4f93e6a"
+      "canonical": "{\"arguments\":{\"taskId\":\"task-b-1\"},\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.get\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-get\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "82c07a010b494768f7615ed27eb41786a9b96b44fac3eb2ee0a0e9000ba25ea2"
     },
     {
       "name": "task.events",
@@ -252,8 +252,8 @@
         "authorizationEpoch": 1,
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"cursor\":\"seq-3\",\"limit\":32,\"taskId\":\"task-b-1\"},\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.events\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-events\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
-      "argumentsDigest": "fd5b3d1556e8869a5e83a9e9696e065de77fd24a942e0ea874516bb42b007106"
+      "canonical": "{\"arguments\":{\"cursor\":\"seq-3\",\"limit\":32,\"taskId\":\"task-b-1\"},\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.events\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-events\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "61fdb9e8be574487a308bb0354b1e8047723f94ab241ff64b2bbfc264633c4f6"
     },
     {
       "name": "task.respond",
@@ -283,8 +283,8 @@
         "argumentsDigest": "71a7a9545f9d40b8dae81d4f2cb6eb9889dc43d66bdbcef29e10f21b2be9c7fb",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"argumentsDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"controlLeaseId\":\"lease-1\",\"decision\":\"approve\",\"executorEpoch\":1,\"originalRequestId\":\"approval-1\",\"runId\":\"run-b-1\",\"taskId\":\"task-b-1\"},\"argumentsDigest\":\"b3dff6916b3eeb6e7ed6475f333b1fba6ff2212981728e122ffc1b3116eb633f\",\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.respond\",\"operationId\":\"op-task-respond\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-respond\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
-      "argumentsDigest": "b3dff6916b3eeb6e7ed6475f333b1fba6ff2212981728e122ffc1b3116eb633f"
+      "canonical": "{\"arguments\":{\"argumentsDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"controlLeaseId\":\"lease-1\",\"decision\":\"approve\",\"executorEpoch\":1,\"originalRequestId\":\"approval-1\",\"runId\":\"run-b-1\",\"taskId\":\"task-b-1\"},\"argumentsDigest\":\"71a7a9545f9d40b8dae81d4f2cb6eb9889dc43d66bdbcef29e10f21b2be9c7fb\",\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.respond\",\"operationId\":\"op-task-respond\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-respond\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "71a7a9545f9d40b8dae81d4f2cb6eb9889dc43d66bdbcef29e10f21b2be9c7fb"
     },
     {
       "name": "task.pause",
@@ -311,8 +311,8 @@
         "argumentsDigest": "701e8d759c9bea5a329399090f8b75520c04ffeef06b49eb39f7feef556a8ac3",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"controlLeaseId\":\"lease-1\",\"executorEpoch\":1,\"runId\":\"run-b-1\",\"taskId\":\"task-b-1\"},\"argumentsDigest\":\"08ffc67a889a46a012867849e4f1de61f77f18fd4fc46527e2416efc62a695b8\",\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.pause\",\"operationId\":\"op-task-pause\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-pause\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
-      "argumentsDigest": "08ffc67a889a46a012867849e4f1de61f77f18fd4fc46527e2416efc62a695b8"
+      "canonical": "{\"arguments\":{\"controlLeaseId\":\"lease-1\",\"executorEpoch\":1,\"runId\":\"run-b-1\",\"taskId\":\"task-b-1\"},\"argumentsDigest\":\"701e8d759c9bea5a329399090f8b75520c04ffeef06b49eb39f7feef556a8ac3\",\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.pause\",\"operationId\":\"op-task-pause\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-pause\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "701e8d759c9bea5a329399090f8b75520c04ffeef06b49eb39f7feef556a8ac3"
     },
     {
       "name": "task.cancel",
@@ -339,8 +339,8 @@
         "argumentsDigest": "35752d24f2a9f25e0888126f3a6487f317151cb3c806baa5c6655705f9308bc7",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"controlLeaseId\":\"lease-1\",\"executorEpoch\":1,\"runId\":\"run-b-1\",\"taskId\":\"task-b-1\"},\"argumentsDigest\":\"d430eab39cb6ecbeee10a374d3650c8465808ecee6c532811288abd214b79085\",\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.cancel\",\"operationId\":\"op-task-cancel\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-cancel\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
-      "argumentsDigest": "d430eab39cb6ecbeee10a374d3650c8465808ecee6c532811288abd214b79085"
+      "canonical": "{\"arguments\":{\"controlLeaseId\":\"lease-1\",\"executorEpoch\":1,\"runId\":\"run-b-1\",\"taskId\":\"task-b-1\"},\"argumentsDigest\":\"35752d24f2a9f25e0888126f3a6487f317151cb3c806baa5c6655705f9308bc7\",\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.cancel\",\"operationId\":\"op-task-cancel\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-cancel\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "35752d24f2a9f25e0888126f3a6487f317151cb3c806baa5c6655705f9308bc7"
     },
     {
       "name": "task.acquireControl",
@@ -367,8 +367,8 @@
         "argumentsDigest": "678e4f98305aa514320122b12d4aaaf707cc9ba4d59feea5a4bcdac02bc4d2d7",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"executorEpoch\":1,\"runId\":\"run-b-1\",\"taskId\":\"task-b-1\",\"ttlMs\":10000},\"argumentsDigest\":\"d4eac7bac32a7699bb2fa660c96aa85692d63dd75de1106d23414dcbbf633e33\",\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.acquireControl\",\"operationId\":\"op-task-acquireControl\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-acquireControl\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
-      "argumentsDigest": "d4eac7bac32a7699bb2fa660c96aa85692d63dd75de1106d23414dcbbf633e33"
+      "canonical": "{\"arguments\":{\"executorEpoch\":1,\"runId\":\"run-b-1\",\"taskId\":\"task-b-1\",\"ttlMs\":10000},\"argumentsDigest\":\"678e4f98305aa514320122b12d4aaaf707cc9ba4d59feea5a4bcdac02bc4d2d7\",\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.acquireControl\",\"operationId\":\"op-task-acquireControl\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"task-acquireControl\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "678e4f98305aa514320122b12d4aaaf707cc9ba4d59feea5a4bcdac02bc4d2d7"
     },
     {
       "name": "artifact.describe",
@@ -390,8 +390,8 @@
         "authorizationEpoch": 1,
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"artifactId\":\"artifact-1\"},\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"artifact.describe\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"artifact-describe\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
-      "argumentsDigest": "9e5298d50dcf41435a9c30ec53d079bf5758b06c683800d31f0b667c59919dfc"
+      "canonical": "{\"arguments\":{\"artifactId\":\"artifact-1\"},\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"artifact.describe\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"artifact-describe\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "348751a9150b967ed1e82459fe8ab473943b82e5aa0146bd7482335e769ea89f"
     },
     {
       "name": "artifact.readChunk",
@@ -416,8 +416,8 @@
         "authorizationEpoch": 1,
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"artifactId\":\"artifact-1\",\"contentDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"length\":262144,\"offset\":0},\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"artifact.readChunk\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"artifact-readChunk\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
-      "argumentsDigest": "51440ce0873192a6794414cbbf876b870d5f080755d7fe957603ff962b350593"
+      "canonical": "{\"arguments\":{\"artifactId\":\"artifact-1\",\"contentDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"length\":262144,\"offset\":0},\"authorizationEpoch\":1,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"grant-1\",\"messageType\":\"DeviceRequest\",\"method\":\"artifact.readChunk\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"artifact-readChunk\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "ad5279e14010a894b7fee405165f7a3d06443abf9a9566dfd5f59ab7c8c2b8f6"
     },
     {
       "name": "unknown-major",
@@ -1170,8 +1170,8 @@
         "parentTaskId": "root-task-1",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
       },
-      "canonical": "{\"arguments\":{\"arguments\":{\"a\":\"\\n/\",\"\":1,\"😀\":2},\"effect\":\"write\",\"toolName\":\"phone.tap\"},\"argumentsDigest\":\"747451173447bb0861e779b326477ad90a0fa42bd681b808182b1f6ddbd72050\",\"attempt\":1,\"authorizationEpoch\":1,\"budget\":{\"allocationId\":\"ba1_74cbe70c6571f2d84ee5e70d0f133c65dc71c9517ed7e3aade92b3369c088bee\",\"modelCalls\":0,\"toolCalls\":4},\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"capabilityVersion\":\"phone-v1\",\"deadline\":2000000001000,\"delegationChain\":[],\"executorEpoch\":1,\"grantId\":\"grant-1\",\"instanceId\":\"instance-b-1\",\"localTaskId\":\"task-b-1\",\"maxDelegationDepth\":2,\"messageType\":\"ToolInvocation\",\"method\":\"tool.invoke\",\"operationId\":\"unicode-key-op\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentTaskId\":\"root-task-1\",\"protocolProfile\":\"pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb\",\"protocolVersion\":\"1.0\",\"requestId\":\"unicode-keys\",\"resourceBinding\":{\"displayId\":0,\"screenMode\":\"main_screen\"},\"rootTaskId\":\"root-task-1\",\"runId\":\"run-b-1\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"traceId\":\"trace-1\",\"visitedDevices\":[\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}",
-      "argumentsDigest": "747451173447bb0861e779b326477ad90a0fa42bd681b808182b1f6ddbd72050",
+      "canonical": "{\"arguments\":{\"arguments\":{\"a\":\"\\n/\",\"\":1,\"😀\":2},\"effect\":\"write\",\"toolName\":\"phone.tap\"},\"argumentsDigest\":\"52d48a805350b331069cd58b24949bd65424c9ca02c3fd87950ad928899c119d\",\"attempt\":1,\"authorizationEpoch\":1,\"budget\":{\"allocationId\":\"ba1_74cbe70c6571f2d84ee5e70d0f133c65dc71c9517ed7e3aade92b3369c088bee\",\"modelCalls\":0,\"toolCalls\":4},\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"capabilityVersion\":\"phone-v1\",\"deadline\":2000000001000,\"delegationChain\":[],\"executorEpoch\":1,\"grantId\":\"grant-1\",\"instanceId\":\"instance-b-1\",\"localTaskId\":\"task-b-1\",\"maxDelegationDepth\":2,\"messageType\":\"ToolInvocation\",\"method\":\"tool.invoke\",\"operationId\":\"unicode-key-op\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentTaskId\":\"root-task-1\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"unicode-keys\",\"resourceBinding\":{\"displayId\":0,\"screenMode\":\"main_screen\"},\"rootTaskId\":\"root-task-1\",\"runId\":\"run-b-1\",\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"traceId\":\"trace-1\",\"visitedDevices\":[\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}",
+      "argumentsDigest": "52d48a805350b331069cd58b24949bd65424c9ca02c3fd87950ad928899c119d",
       "receiverTaskId": "dt1_33f3bbcc8f7842110ad70da4962335f03210d209012fae128400315413c446c7"
     },
     {
@@ -1652,7 +1652,9 @@
         },
         "argumentsDigest": "3264daa14ba4bfba4f4cf9fbbe3c13778071b86d3264677a3102a7573dc109d5",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
-      }
+      },
+      "canonical": "{\"arguments\":{\"allocationId\":\"ba1_original_allocation\",\"controlLeaseId\":\"lease-original\",\"executorEpoch\":1,\"originalRequestId\":\"7ecda730-73ee-494c-9ccd-62ebbd365be7\",\"runId\":\"run-original\",\"taskId\":\"dt1_original_task\",\"text\":\"Fixture ordinary owner input\",\"waitRevision\":4},\"argumentsDigest\":\"3264daa14ba4bfba4f4cf9fbbe3c13778071b86d3264677a3102a7573dc109d5\",\"authorizationEpoch\":2,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"owner-grant-1\",\"instanceId\":\"target-instance-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.answerQuestion\",\"operationId\":\"input-answerQuestion\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"ordinary-answerQuestion\",\"resourceBinding\":{\"displayId\":\"primary\",\"kind\":\"desktop\",\"sessionId\":1},\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "3264daa14ba4bfba4f4cf9fbbe3c13778071b86d3264677a3102a7573dc109d5"
     },
     {
       "name": "task.answerQuestion-reject-approval",
@@ -1689,7 +1691,8 @@
         },
         "argumentsDigest": "41cc16d5f5e80c3951581a87ac11c41c2c28e6050d6b4107b52d28662c08d446",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
-      }
+      },
+      "error": "invalid_request"
     },
     {
       "name": "task.answerQuestion-reject-decision",
@@ -1726,7 +1729,8 @@
         },
         "argumentsDigest": "7d0e766ca574876c5c6bf0cfa3b80e380a31be8963059399a0ba0c50ac9ab249",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
-      }
+      },
+      "error": "invalid_request"
     },
     {
       "name": "task.answerQuestion-reject-takeover",
@@ -1763,7 +1767,8 @@
         },
         "argumentsDigest": "a84ecab8bde39629d17d4a679a4a5e7795184ead33083c5d0a27ebd39e256295",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
-      }
+      },
+      "error": "invalid_request"
     },
     {
       "name": "task.steer-exact-original-binding",
@@ -1797,7 +1802,9 @@
         },
         "argumentsDigest": "88fd0da150a6220dcc9746e90ddfba847a75e1251375a2e8c5fd2f7caabd2d5c",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
-      }
+      },
+      "canonical": "{\"arguments\":{\"allocationId\":\"ba1_original_allocation\",\"controlLeaseId\":\"lease-original\",\"executorEpoch\":1,\"runId\":\"run-original\",\"taskId\":\"dt1_original_task\",\"text\":\"Fixture ordinary owner input\"},\"argumentsDigest\":\"88fd0da150a6220dcc9746e90ddfba847a75e1251375a2e8c5fd2f7caabd2d5c\",\"authorizationEpoch\":2,\"callerDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deadline\":2000000001000,\"grantId\":\"owner-grant-1\",\"instanceId\":\"target-instance-1\",\"messageType\":\"DeviceRequest\",\"method\":\"task.steer\",\"operationId\":\"input-steer\",\"originDeviceId\":\"pw1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocolProfile\":\"pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739\",\"protocolVersion\":\"1.0\",\"requestId\":\"ordinary-steer\",\"resourceBinding\":{\"displayId\":\"primary\",\"kind\":\"desktop\",\"sessionId\":1},\"targetDeviceId\":\"pw1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "argumentsDigest": "88fd0da150a6220dcc9746e90ddfba847a75e1251375a2e8c5fd2f7caabd2d5c"
     },
     {
       "name": "task.steer-reject-approval",
@@ -1832,7 +1839,8 @@
         },
         "argumentsDigest": "c114cd5ed396643cc6c541e420db603b4606813c0c70912a13b865eb8e4a9923",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
-      }
+      },
+      "error": "invalid_request"
     },
     {
       "name": "task.steer-reject-decision",
@@ -1867,7 +1875,8 @@
         },
         "argumentsDigest": "3d8776a65d8e90890349858e3111ea79dd010e0ca448925795aebd1a62251685",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
-      }
+      },
+      "error": "invalid_request"
     },
     {
       "name": "task.steer-reject-takeover",
@@ -1902,7 +1911,8 @@
         },
         "argumentsDigest": "dd8dedc153eca7b91217f78239362970b47ae2d48c377500bcc6228b0b2757ae",
         "protocolProfile": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
-      }
+      },
+      "error": "invalid_request"
     }
   ],
   "receiverTaskIds": [
