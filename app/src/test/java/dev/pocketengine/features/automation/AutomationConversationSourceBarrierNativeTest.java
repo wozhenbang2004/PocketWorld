@@ -15,6 +15,7 @@ import dev.pocketengine.features.memory.OwnerSourceRunContext;
 import dev.pocketengine.features.memory.SourceRef;
 import dev.pocketengine.features.memory.TaskMemoryNativeHost;
 import dev.pocketengine.features.memory.TaskStoreMemoryQuery;
+import dev.pocketengine.features.skills.SkillsModule;
 import dev.pocketengine.store.SecretVault;
 import dev.pocketengine.store.SettingsStore;
 import dev.pocketengine.store.TaskStore;
@@ -63,7 +64,7 @@ public final class AutomationConversationSourceBarrierNativeTest {
             AtomicReference<AssistantModule> bound=new AtomicReference<>();
             memory=new MemoryModule(context,(identity,kind,source)->bound.get().resolveSource(identity,source));
             assistant=new AssistantModule(context,memory,null,tasks);bound.set(assistant);
-            host=new FeatureHost(event->{});host.register(memory);host.register(assistant);
+            host=new FeatureHost(event->{});host.register(memory);host.register(assistant);host.register(new SkillsModule(context));
             sources=new MemorySourceBridge(host,tasks);sources.bindAssistant(assistant);
             nativeOwner=new TaskMemoryNativeHost(host,tasks,sources);
 
