@@ -1939,6 +1939,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
             "assistant" -> when (command) {
                 "list" -> state = state.copy(conversations = parseConversations(result.optJSONArray("conversations")))
+                "rename", "setPinned", "delete" -> native("getFeatures")
                 "get" -> {
                     if(requestId!=latestChatGet)return
                     val id = result.optString("conversationId")
@@ -2028,6 +2029,6 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (inspectionRefreshPending && !state.inspectionBusy) { inspectionRefreshPending = false; observeInspection() }
         app.sendState()
     }
-    private fun parseConversations(array: org.json.JSONArray?): List<UiConversation> = array.objects().map { UiConversation(it.optString("conversationId"), it.optString("title"), it.optLong("updatedAt")) }
+    private fun parseConversations(array: org.json.JSONArray?): List<UiConversation> = array.objects().map { UiConversation(it.optString("conversationId"), it.optString("title"), it.optLong("updatedAt"), it.optLong("pinnedAt"), it.optLong("metadataRevision", 1)) }
     private fun message(error: Throwable): String = error.message?.take(300) ?: "操作未完成，请检查连接和配置"
 }

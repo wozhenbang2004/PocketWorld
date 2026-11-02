@@ -36,7 +36,7 @@ public final class TaskStoreScriptPhoneScopeTest {
     }
     @After public void close(){if(original!=null)original.cancel();if(db!=null)db.close();}
     private interface Action{void run()throws Exception;}
-    private static void rejected(Action action)throws Exception {try{action.run();fail("Expected native rejection");}catch(SecurityException|IllegalStateException expected){}}
+    private static void rejected(Action action)throws Exception {try{action.run();fail("Expected native rejection");}catch(SecurityException|IllegalStateException|InterruptedException expected){}}
     private JSONObject args()throws Exception{return new JSONObject().put("x",10).put("y",20);}
     private int remaining()throws Exception {try(Cursor row=db.rawQuery("SELECT grant_json FROM runs WHERE run_id=?",new String[]{run})){assertTrue(row.moveToFirst());return new JSONObject(row.getString(0)).getInt("remainingOperations");}}
     private TaskStore.ScriptPhoneScope scope()throws Exception{return tasks.scriptPhoneScope(task,run,epoch,parent,original,Set.of("phone_tap"));}
@@ -87,6 +87,18 @@ public final class TaskStoreScriptPhoneScopeTest {
     @Test public void exactPreparedArgumentsStillApplyInsideNativeScope()throws Exception {
         try(var scope=scope()){
             scope.invoke("phone_tap",()->{String op=journal.beginOperation("phone_tap",args());rejected(()->tasks.requirePreparedCapability(task,run,epoch,op,"phone_tap",new JSONObject().put("x",11).put("y",20)));tasks.requirePreparedCapability(task,run,epoch,op,"phone_tap",args());journal.finishOperation(op,new JSONObject().put("ok",true));return op;});
+        }
+    }
+    @Test public void callbackCeilingNeverRefillsOriginalBudget()throws Exception {
+        try(var scope=scope()){
+            for(int i=0;i<32;i++)scope.invoke("phone_tap",()->{String op=journal.beginOperation("phone_tap",args());journal.finishOperation(op,new JSONObject().put("ok",true));return op;});
+            assertEquals(7,remaining());rejected(()->scope.invoke("phone_tap",()->journal.beginOperation("phone_tap",args())));assertEquals(7,remaining());
+        }
+    }
+    @Test public void parentCompletionAndPermissionRevocationCannotBeReopened()throws Exception {
+        try(var scope=scope()){
+            tasks.authorizeTools(task,run,new JSONArray().put("skills_execute"));int before=remaining();rejected(()->scope.invoke("phone_tap",()->journal.beginOperation("phone_tap",args())));assertEquals(before,remaining());
+            journal.finishOperation(parent,new JSONObject().put("ok",true));rejected(()->scope.invoke("phone_tap",()->"late"));
         }
     }
 }

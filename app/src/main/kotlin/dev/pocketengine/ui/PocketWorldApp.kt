@@ -234,8 +234,11 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
         if (state.backgroundSetupOpen) BackgroundPhoneSetup(state, controller)
         if (conversationPicker) ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = { conversationPicker = false }, containerColor = Color.White) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp).navigationBarsPadding()) {
-                ConversationHistoryBrowser(state.conversations.map { ConversationHistory.Item(it.id, it.title, it.updatedAt) }, state.conversationId, state.chatBusy || state.chatSubmitting,
-                    { controller.openConversation(it); conversationPicker = false }, { controller.newConversation(); conversationPicker = false }, allowReadWhenBlocked = true)
+                ConversationHistoryBrowser(state.conversations.map { ConversationHistory.Item(it.id, it.title, it.updatedAt, it.pinnedAt, it.metadataRevision) }, state.conversationId, state.chatBusy || state.chatSubmitting,
+                    { controller.openConversation(it); conversationPicker = false }, { controller.newConversation(); conversationPicker = false }, allowReadWhenBlocked = true,
+                    onRename = { item, title -> controller.requestFeature("assistant", "rename", JSONObject().put("conversationId", item.id).put("metadataRevision", item.metadataRevision).put("title", title)) },
+                    onPin = { item, pinned -> controller.requestFeature("assistant", "setPinned", JSONObject().put("conversationId", item.id).put("metadataRevision", item.metadataRevision).put("pinned", pinned)) },
+                    onDelete = { item -> controller.requestFeature("assistant", "delete", JSONObject().put("conversationId", item.id)) })
             }
         }
         if (projectDialog) NameDialog("新建项目", "项目名称", "例如：我的小工具", { projectDialog = false }) { name -> controller.createProject(name); projectDialog = false }
@@ -326,7 +329,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 }
                 (message.taskId ?: message.submission?.optString("taskId"))?.takeIf { it.isNotBlank() }?.let { id ->
                     if (state.messages.lastOrNull { (it.taskId ?: it.submission?.optString("taskId")) == id }?.id == message.id) state.tasks.find { it.id == id }?.let { linked ->
-                        ConversationTaskJournal(TaskPresentation.fromTaskStore(linked.raw), { if (teamRunReferences(linked).isNotEmpty()) controller.openTeam(teamRunReferences(linked).first()) else controller.focusTask(it) }, controller::getTask)
+                        ConversationTaskJournal(TaskPresentation.fromTaskStore(linked.raw), { if (teamRunReferences(linked).isNotEmpty()) controller.openTeam(teamRunReferences(linked).first()) else controller.focusTask(it) }, controller::getTask, readAudit = { cursor, done -> controller.readTaskAudit(id, "events", cursor, done) })
                     }
                 }
             } }

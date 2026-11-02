@@ -246,6 +246,12 @@ public final class DisplayModule implements EngineModule {
         JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
         return request("tap",pinned,control,expectedRevision,false,java.util.Objects.requireNonNull(admission));
     }
+    /** Typed extensions retain the original session and the original physical-write admission. */
+    JSONObject requestAdmitted(String command,JSONObject payload,RunControl control,long revision,String expectedSession,int expectedDisplay,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+        JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
+        return request(command,pinned,control,revision,false,java.util.Objects.requireNonNull(admission));
+    }
     private JSONObject request(String command,JSONObject payload,RunControl control,long expectedRevision,boolean ownerTakeover,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
         JSONObject current=session();String sessionId=current.optString("sessionId");int display=current.optInt("displayId",-1);
         if(!isConnected()||!current.optBoolean("sessionActive")||display<=0||sessionId.isEmpty())throw new IllegalStateException("后台屏未就绪，请先连接并建立独立屏幕");

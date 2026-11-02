@@ -1,0 +1,46 @@
+name: Mika capability checks
+on:
+  push:
+    branches: [work/mika-53-capabilities-20261102]
+    paths: ['app/**', 'display-helper/**', 'gradle/**', '*.gradle', '.github/workflows/mika-capability-checks.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mika-capabilities-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  targeted:
+    if: ${{ github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install the declared Android compilation platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+      - name: Compile and test the changed capability boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -x buildAndroidRuntime -x buildDisplayHelper \
+            :app:testDebugUnitTest \
+            --tests dev.pocketengine.store.TaskStoreScriptPhoneScopeTest \
+            --tests dev.pocketengine.features.automation.AutomationIntervalTest \
+            --tests dev.pocketengine.core.NativeToolPlanTest \
+            --tests dev.pocketengine.browser.BrowserPageProgramsTest \
+            --tests dev.pocketengine.runtime.models.StepModelRoutingTest \
+            --tests dev.pocketengine.phone.PhoneBoundaryTest \
+            --tests dev.pocketengine.features.conversation.ConversationMetadataTest \
+            --tests dev.pocketengine.features.conversation.InterruptedAttemptsTest \
+            --tests dev.pocketengine.features.assistant.ConversationPresentationTest
