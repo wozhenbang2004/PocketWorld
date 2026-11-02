@@ -104,6 +104,7 @@ public final class TaskStoreProjectHost implements ProjectDevelopment.HostPort {
     public void recordBackendReceipt(JSONObject backend)throws Exception {
         JSONObject link=backend.optJSONObject("projectExecution");if(link==null||!"native_host_operation".equals(link.optString("authority")))throw new SecurityException("不是原生项目回执");
         if(dev.pocketengine.features.skills.ManagedSkillBackend.INTENT.equals(link.optString("intent"))){tasks.recordManagedSkillBackendReceiptForHost(new JSONObject(backend.toString()));return;}
+        if(ProjectGitImport.INTENT.equals(link.optString("intent"))){tasks.recordOwnerGitImportBackendForHost(new JSONObject(backend.toString()));return;}
         JSONObject binding=new JSONObject();for(String key:new String[]{"taskId","runId","operationId","coordinatorEpoch"})binding.put(key,link.get(key));
         JSONObject row=tasks.projectOperationForHost(binding),args=row.getJSONObject("arguments"),plan=ProjectBuildPlan.verified(args.getJSONObject("plan"));
         JSONObject exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,args.getString("stepId")));if(java.util.Set.of("freezeProjectPackage","collectProjectOutput").contains(exact.getString("command")))throw new SecurityException("文件成果回执只由原Local/catalog生产，不采纳外部终端回调");tasks.recordProjectOperation(binding,exact,new JSONObject(backend.toString()));tasks.finishOwnerGitFromReceipt(binding);

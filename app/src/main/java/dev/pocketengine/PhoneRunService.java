@@ -30,6 +30,8 @@ import org.json.JSONObject;
 
 public final class PhoneRunService extends Service {
     public static final String START="dev.pocketengine.START",STOP="dev.pocketengine.STOP",CONTINUE="dev.pocketengine.CONTINUE";
+    public static final String START_GATEWAY="dev.pocketengine.START_GATEWAY",STOP_GATEWAY="dev.pocketengine.STOP_GATEWAY";
+    private volatile dev.pocketengine.features.proxy.NativeHarnessGatewayBridge gatewayOnly;
     private static final String CHANNEL=PhoneReadiness.TASK_CHANNEL;
     private static final int NOTIFICATION=100;
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
@@ -65,10 +67,12 @@ public final class PhoneRunService extends Service {
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent==null){stopSelf(startId);return START_NOT_STICKY;}
         String id=intent.getStringExtra("taskId");
+        if(STOP_GATEWAY.equals(intent.getAction())){var bridge=gatewayOnly;if(bridge!=null&&bridge.leaseId().equals(intent.getStringExtra("gatewayLeaseId")))stopGatewayOnly(bridge,startId);else if(runningId==null)stopSelfResult(startId);return START_NOT_STICKY;}
         if(PhoneNotificationControls.handles(intent.getAction())){
             PhoneNotificationControls.dispatch(app,intent,runningId,runningRunId,runningEpoch,ownerControl);
             if(runningId==null)stopSelf(startId);return START_NOT_STICKY;
         }
+        if(START_GATEWAY.equals(intent.getAction())){startGatewayOnly(intent,startId);return START_NOT_STICKY;}
         RunControl control=app.control(id);ModelConfig config=app.config(id);
         if(CONTINUE.equals(intent.getAction())){
             if(id!=null&&id.equals(runningId)&&waitingForUser&&control==ownerControl&&!control.isCancelled()&&!control.isPaused()){
@@ -96,6 +100,29 @@ public final class PhoneRunService extends Service {
             },750);
         }catch(Exception ex){finish(id,new RunOutcome("failed",ex.getMessage()==null?"无法启动手机任务":ex.getMessage(),new JSONObject()),startId);}
         return START_NOT_STICKY;
+    }
+    /** Service resource ownership is separate from task execution. This branch never creates a
+     * PhonePort, AgentRunner, phone.local lease, or a replacement RunControl/grant. */
+    private void startGatewayOnly(Intent intent,int startId){
+        if(runningId!=null||gatewayOnly!=null)return;
+        try{
+            Object module=app.features.module("proxy");if(!(module instanceof dev.pocketengine.features.proxy.ProxyModule))throw new SecurityException("原网关宿主不可用");
+            var bridge=((dev.pocketengine.features.proxy.ProxyModule)module).originalHarnessGateway(intent.getStringExtra("gatewayLeaseId"));
+            if(bridge==null)throw new SecurityException("没有原生签发的当前任务网关租约");
+            JSONObject state=bridge.snapshot();RunControl control=bridge.originalControl();String id=state.getString("taskId");
+            if(!app.ownsNativeTaskControl(id,control)||control.isCancelled()||control.isPaused())throw new SecurityException("原任务控制器已变化");
+            gatewayOnly=bridge;runningId=id;runningRunId=state.getString("runId");runningEpoch=state.getInt("epoch");ownerControl=control;lastStartId=startId;
+            startForeground(NOTIFICATION,notification(app.tasks.get(id,false)));
+            worker.execute(()->{try{bridge.start();main.post(()->watchGatewayOnly(bridge,startId));}catch(Exception stopped){main.post(()->stopGatewayOnly(bridge,startId));}});
+        }catch(Exception unavailable){var bridge=gatewayOnly;gatewayOnly=null;if(bridge!=null)CLEANUP.execute(bridge::close);runningId=null;runningRunId=null;stopSelfResult(startId);}
+    }
+    private void watchGatewayOnly(dev.pocketengine.features.proxy.NativeHarnessGatewayBridge bridge,int startId){
+        if(destroyed||gatewayOnly!=bridge)return;
+        if(!bridge.running()||bridge.originalControl().isCancelled()||!app.ownsNativeTaskControl(runningId,bridge.originalControl())){stopGatewayOnly(bridge,startId);return;}
+        main.postDelayed(()->watchGatewayOnly(bridge,startId),500);
+    }
+    private void stopGatewayOnly(dev.pocketengine.features.proxy.NativeHarnessGatewayBridge bridge,int startId){
+        if(gatewayOnly!=bridge)return;gatewayOnly=null;CLEANUP.execute(bridge::close);runningId=null;runningRunId=null;ownerControl=null;stopForeground(STOP_FOREGROUND_REMOVE);stopSelfResult(startId);
     }
     private void run(String id,String runId,int epoch,String goal,ModelConfig config,RunControl control,int startId,boolean manualOnly){
 
@@ -183,8 +210,12 @@ public final class PhoneRunService extends Service {
         boolean identified=t!=null&&!id.isEmpty()&&!t.optString("runId").isEmpty()&&t.optInt("coordinatorEpoch")>0;
         try{if(identified)openIntent=PhoneNotificationControls.open(this,t);}catch(Exception invalid){identified=false;}
         PendingIntent open=PendingIntent.getActivity(this,0,openIntent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        String text=t==null?"正在准备":t.optString("summary");if(text.isEmpty())text="运行中 · 可随时停止";
-        Notification.Builder builder=new Notification.Builder(this,CHANNEL).setSmallIcon(R.drawable.ic_app).setContentTitle(t==null?"手机任务":t.optString("goal","手机任务")).setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE);
+        String text=gatewayOnly!=null?"仅模型推理 · 不执行手机或工具 · 可随时停止":t==null?"正在准备":t.optString("summary");if(text.isEmpty())text="运行中 · 可随时停止";
+        Notification.Builder builder=new Notification.Builder(this,CHANNEL).setSmallIcon(R.drawable.ic_app).setContentTitle(gatewayOnly!=null?"远端模型网关":t==null?"手机任务":t.optString("goal","手机任务")).setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE);
+        if(gatewayOnly!=null){
+            var bridge=gatewayOnly;Intent stopIntent=new Intent(this,PhoneRunService.class).setAction(STOP_GATEWAY).setData(android.net.Uri.parse("pocketengine-gateway://stop/"+bridge.leaseId())).putExtra("gatewayLeaseId",bridge.leaseId());
+            PendingIntent stop=PendingIntent.getService(this,0,stopIntent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);builder.addAction(new Notification.Action.Builder(null,"停止模型网关",stop).build());return builder.build();
+        }
         if(identified)try{
             PendingIntent stop=PendingIntent.getService(this,0,PhoneNotificationControls.command(this,STOP,t),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
             builder.addAction(new Notification.Action.Builder(null,"停止",stop).build());
@@ -201,6 +232,6 @@ public final class PhoneRunService extends Service {
     }
     private static String safeMessage(Exception e){String m=e.getMessage();return m==null?"任务执行异常，请查看步骤后重试":m.length()>250?m.substring(0,250):m;}
     private synchronized void releaseWakeLock(){if(wakeLock!=null){if(wakeLock.isHeld())wakeLock.release();wakeLock=null;}}
-    @Override public void onDestroy(){destroyed=true;waitingForUser=false;ownerWaitGeneration++;main.removeCallbacksAndMessages(null);closeHeldAsync();if(runningId!=null){String id=runningId;RunControl owner=app.control(id);app.stop(id);try{if(runningRunId!=null&&!runningRunId.isEmpty())app.tasks.endAttempt(id,runningRunId,"cancelled","执行服务已结束，目标与上下文已保留，可核对后继续原任务",new JSONObject());else app.setStatus(id,"interrupted","执行服务已结束，请检查已有结果",owner);}catch(Exception failure){app.error("任务中断状态保存失败，请核对已有结果");}app.released(id,owner);}app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();releaseWakeLock();PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone!=null)phone.hideControls();super.onDestroy();}
+    @Override public void onDestroy(){if(gatewayOnly!=null){destroyed=true;var bridge=gatewayOnly;gatewayOnly=null;main.removeCallbacksAndMessages(null);CLEANUP.execute(bridge::close);runningId=null;runningRunId=null;app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();super.onDestroy();return;}destroyed=true;waitingForUser=false;ownerWaitGeneration++;main.removeCallbacksAndMessages(null);closeHeldAsync();if(runningId!=null){String id=runningId;RunControl owner=app.control(id);app.stop(id);try{if(runningRunId!=null&&!runningRunId.isEmpty())app.tasks.endAttempt(id,runningRunId,"cancelled","执行服务已结束，目标与上下文已保留，可核对后继续原任务",new JSONObject());else app.setStatus(id,"interrupted","执行服务已结束，请检查已有结果",owner);}catch(Exception failure){app.error("任务中断状态保存失败，请核对已有结果");}app.released(id,owner);}app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();releaseWakeLock();PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone!=null)phone.hideControls();super.onDestroy();}
     @Override public IBinder onBind(Intent intent){return null;}
 }

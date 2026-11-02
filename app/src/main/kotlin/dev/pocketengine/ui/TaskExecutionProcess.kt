@@ -49,10 +49,9 @@ internal fun TaskExecutionProcess(task: UiTask, controller: PocketWorldControlle
     }
     fun openProcess() { expanded = true; if (page == null && !busy) load("operations") }
     val current = TaskExecutionPresentation.current(task.raw, System.currentTimeMillis())
-    val emphasis = processColor(current.tone)
     Column(Modifier.fillMaxWidth().padding(vertical = 12.dp).testTag("task_execution_process")) {
         Text("当前步骤", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(current.title, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium, color = emphasis, modifier = Modifier.padding(top = 6.dp).semantics { heading() }.testTag("task_execution_current"))
+        PocketExecutionStatus(current.title, current.tone, prominent = true, animateRunning = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp).semantics { heading() }.testTag("task_execution_current"))
         Text(current.detail, fontSize = 14.sp, lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
         if (current.target != TaskExecutionPresentation.Target.NONE) TextButton(onClick = { if (current.target == TaskExecutionPresentation.Target.PROCESS) openProcess() else focus(current.target) }, modifier = Modifier.heightIn(min = 48.dp).testTag("task_execution_next_action"), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) { Text(current.action, fontSize = 14.sp) }
         TextButton(onClick = { if (expanded) expanded = false else openProcess() }, modifier = Modifier.heightIn(min = 48.dp).testTag("task_execution_toggle"), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) { Text(if (expanded) "收起执行过程" else "展开执行过程与工具回执", fontSize = 14.sp) }
@@ -86,7 +85,7 @@ private fun TaskExecutionRecord(record: TaskExecutionPresentation.Record, curren
     if (record.key.startsWith("operation:")) {
         Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             AffectToolCallCard(id = record.key + ":" + record.at, name = record.title,
-                statusLabel = record.label, output = if (record.limited) "" else record.receipt,
+                statusLabel = record.label, tone = record.tone, output = if (record.limited) "" else record.receipt,
                 arguments = if (record.limited) "" else record.arguments,
                 needsReview = record.tone == TaskExecutionPresentation.Tone.UNCERTAIN || record.tone == TaskExecutionPresentation.Tone.ERROR,
                 modifier = Modifier.testTag("task_execution_record_" + record.key))

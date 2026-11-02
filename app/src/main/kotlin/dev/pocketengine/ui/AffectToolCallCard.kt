@@ -34,7 +34,8 @@ import androidx.compose.ui.unit.sp
 // Native differences: monochrome; actual receipt labels; no fabricated duration or automatic retry.
 @Composable
 internal fun AffectToolCallCard(id: String, name: String, statusLabel: String,
-    output: String, needsReview: Boolean, modifier: Modifier = Modifier, arguments: String = "") {
+    output: String, needsReview: Boolean, modifier: Modifier = Modifier, arguments: String = "",
+    tone: TaskExecutionPresentation.Tone = TaskExecutionPresentation.Tone.NEUTRAL) {
     var expanded by rememberSaveable(id) { mutableStateOf(needsReview) }
     var manuallyToggled by rememberSaveable(id) { mutableStateOf(false) }
     var showFull by rememberSaveable(id) { mutableStateOf(false) }
@@ -56,7 +57,7 @@ internal fun AffectToolCallCard(id: String, name: String, statusLabel: String,
                 Column(Modifier.weight(1f)) {
                     Text(name, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium,
                         fontSize = 13.sp, lineHeight = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Ink)
-                    Text(statusLabel, fontSize = 13.sp, lineHeight = 18.sp, color = SecondaryInk)
+                    PocketExecutionStatus(statusLabel, tone, Modifier.padding(top = 3.dp))
                 }
                 if(needsReview) Text("需核对", fontSize = 12.sp, color = Ink)
                 AffectGlyph("chevron", Modifier.size(12.dp).rotate(rotation), SecondaryInk)

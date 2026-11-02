@@ -45,6 +45,9 @@ public final class RemoteOwnerWorkflows {
     private final dev.pocketengine.features.remote.RemoteInputAttachments inputs;
     private final dev.pocketengine.features.remote.NativeHarnessConfigs harnessConfigs;
     private final Map<String,Window> windows=new LinkedHashMap<>();
+    @FunctionalInterface public interface GatewayOwner {JSONObject start(String task,JSONObject exactTarget,long expiresAt)throws Exception;}
+    private GatewayOwner gatewayOwner;
+    public synchronized void bindGatewayOwner(GatewayOwner owner){if(gatewayOwner!=null)throw new IllegalStateException("原gateway owner不能替换");gatewayOwner=java.util.Objects.requireNonNull(owner);}
     private volatile Object foregroundOwner;
     /** Actual Activity resume/pause only; foregrounding never restores an old review. */
     public void setForeground(Object nativeOwner,boolean value){
@@ -61,6 +64,9 @@ public final class RemoteOwnerWorkflows {
     public synchronized void close(String id){inputs.close(id);harnessConfigs.close(id);Window window=windows.remove(id);if(window!=null){window.closed=true;window.lifecycleRevision++;if(window.teamWindow!=null)window.teamWindow.close();}}
     public JSONObject handle(String command,JSONObject input)throws Exception{return handle(null,command,input);}
     public JSONObject handle(Object nativeOwner,String command,JSONObject input)throws Exception{
+        if(command.equals("enableTaskGateway")){
+            synchronized(this){if(nativeOwner==null||foregroundOwner!=nativeOwner||gatewayOwner==null||input.length()!=3||!input.has("taskId")||!input.has("target")||!input.has("expiresAt"))throw new SecurityException("只允许当前原生前台主人为已有任务启用准确网关");return gatewayOwner.start(input.getString("taskId"),input.getJSONObject("target"),input.getLong("expiresAt"));}
+        }
         if(dev.pocketengine.features.remote.NativeHarnessConfigs.command(command))return harnessConfigs.handle(nativeOwner,command,input);
         if(dev.pocketengine.features.remote.RemoteInputAttachments.command(command))return inputs.handle(nativeOwner,command,input);
         if(command.startsWith("project."))return projectCommand(nativeOwner,command,input);

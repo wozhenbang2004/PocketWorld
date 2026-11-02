@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import dev.pocketengine.ui.PocketSegmentedTabs
 import dev.pocketengine.ui.PocketWorldTheme
 import dev.pocketengine.ui.AffectGlyph
 import dev.pocketengine.ui.pocketDepth
@@ -357,13 +358,10 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
             TextButton(onClick = { identities = true }) { Text("切换资料") }
             IconButton(onClick = page, modifier = Modifier.semantics { contentDescription = "返回网页" }) { AffectGlyph("close", Modifier.size(20.dp)) }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("research" to "研究", "sources" to "来源").forEach { (key, title) ->
-                Surface(shape = RoundedCornerShape(10.dp), color = if (mode == key) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.weight(1f)) {
-                    TextButton(onClick = { c.workspaceView = key }, modifier = Modifier.heightIn(min = 48.dp), colors = ButtonDefaults.textButtonColors(contentColor = if (mode == key) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)) { Text(title, fontWeight = FontWeight.Medium) }
-                }
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+            PocketSegmentedTabs(listOf("研究", "来源"), if (mode == "sources") 1 else 0) {
+                c.workspaceView = if (it == 1) "sources" else "research"
             }
-            TextButton(onClick = page, modifier = Modifier.heightIn(min = 48.dp)) { Text("返回网页") }
         }
         if (pending.isNotEmpty()) Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) { Text("需要确认：${toolLabel(pending.first().optString("tool"))}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium); TextButton(onClick = { approval = pending.first() }, enabled = !c.busy) { Text("核对这次操作") } }

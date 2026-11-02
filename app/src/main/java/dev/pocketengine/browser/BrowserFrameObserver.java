@@ -72,6 +72,43 @@ public final class BrowserFrameObserver implements AutoCloseable {
     }
     public void invalidate(){revision++;active="";armed="";frames.clear();issued.clear();awaitingDelivery.clear();deltas.clear();clearPresentation();document=UUID.randomUUID().toString();}
     public void read(JSONObject request,String observationId,String nativeEpoch,Check current,CompletableFuture<JSONObject> result)throws Exception {
+        BrowserSemanticRead.validate(request);
+        if(request.has("settle")){readSettled(request,observationId,nativeEpoch,current,result);return;}
+        readOnce(request,observationId,nativeEpoch,current,result);
+    }
+    private void readSettled(JSONObject request,String observationId,String nativeEpoch,Check current,CompletableFuture<JSONObject> result)throws Exception {
+        if(closed)throw new IllegalStateException("网页读取通道已关闭");current.check();
+        final BrowserReadSettle.Tracker tracker=new BrowserReadSettle.Tracker(request.getJSONObject("settle"));
+        final long started=android.os.SystemClock.elapsedRealtime(),expected=revision;final String selectedDocument=document;
+        Frame<JavaScriptReplyProxy> chosen;try{chosen=request.has("frameRef")?frames.requirePresentedChild(request.getString("frameRef"),started):frames.main();}catch(BrowserTaskSpace.FrameReadUnavailable unavailable){result.complete(unavailableFrame(view.getUrl()==null?"":view.getUrl(),"frame_ref_not_current"));return;}
+        final Frame<JavaScriptReplyProxy> selected=chosen;
+        final android.os.Handler main=new android.os.Handler(android.os.Looper.getMainLooper());
+        class Poll implements Runnable {
+            CompletableFuture<JSONObject> probe;
+            public void run(){if(result.isDone())return;try{
+                current.check();if(closed||revision!=expected||!document.equals(selectedDocument))throw new BrowserTaskSpace.StalePage("原稳定读取文档已变化");
+                probe=new CompletableFuture<>();probe.whenComplete((value,error)->{if(result.isDone())return;try{
+                    current.check();if(closed||revision!=expected||!document.equals(selectedDocument))throw new BrowserTaskSpace.StalePage("稳定读取期间原页面已变化");if(error!=null){result.completeExceptionally(error);return;}
+                    long elapsed=android.os.SystemClock.elapsedRealtime()-started;boolean met=tracker.sample(value,elapsed),retryMissing=value.optString("code").equals("read_region_not_found")&&!request.has("regionRef");
+                    if(!value.optString("status").equals("observed")&&!retryMissing){result.complete(value);return;}
+                    if(met||elapsed>=tracker.timeout||tracker.samples>=BrowserReadSettle.MAX_SAMPLES){
+                        JSONObject evidence=tracker.evidence(met,elapsed);BrowserReadSettle.validateEvidence(evidence);
+                        if(value.optString("status").equals("observed")){value.getJSONObject("read").put("settle",evidence);value.put("message",met?"指定有界投影已满足局部稳定条件；分页/虚拟行仍需逐页读取，不是网络或业务完成。":"等待已到界，本次仅返回最后实际投影；稳定条件未满足，不重放翻页或换来源。");}else value.put("settle",evidence);
+                        result.complete(value);return;
+                    }
+                    main.postDelayed(this,BrowserReadSettle.POLL_MS);
+                }catch(Exception stale){result.completeExceptionally(stale);}});
+                readOnce(request,observationId,nativeEpoch,current,probe);
+            }catch(Exception failure){result.completeExceptionally(failure);}}
+        }
+        Poll poll=new Poll();result.whenComplete((value,error)->{main.removeCallbacks(poll);if(poll.probe!=null&&!poll.probe.isDone())poll.probe.cancel(false);main.post(()->releaseSettle(selected,observationId));});poll.run();
+    }
+    /** Release only this observer's nonce-local state, even after cancellation. Never read a replacement document. */
+    private void releaseSettle(Frame<JavaScriptReplyProxy> selected,String observationId){
+        if(closed)return;String code="(()=>{/*__pw_settle_cleanup*/const s=globalThis["+JSONObject.quote(key)+"],t=s&&s.settling;if(t&&t.nonce==="+JSONObject.quote(observationId)+"){t.observer.disconnect();clearTimeout(t.timer);s.settling=null}})()";
+        try{if(selected==null)view.evaluateJavascript(code,ignored->{});else selected.proxy.executeJavaScript(guarded(code,selected,"semanticRead"),new WebViewOutcomeReceiver<String,JavaScriptExecutionException>(){public void onResult(String ignored){}public void onError(JavaScriptExecutionException ignored){}});}catch(Exception|LinkageError gone){/* Fixed timer remains the bounded fallback; no page read, request or replay. */}
+    }
+    private void readOnce(JSONObject request,String observationId,String nativeEpoch,Check current,CompletableFuture<JSONObject> result)throws Exception {
         if(closed)throw new IllegalStateException("网页读取通道已关闭");BrowserSemanticRead.validate(request);current.check();clearPresentation();
         final long expected=revision,now=android.os.SystemClock.elapsedRealtime();final String url=view.getUrl()==null?"":view.getUrl();
         Frame<JavaScriptReplyProxy> chosen;

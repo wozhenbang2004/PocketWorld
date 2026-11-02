@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
@@ -462,6 +463,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
     var reconciliationNote by rememberSaveable(task.id) { mutableStateOf("") }
     var capabilityPreparation by remember(task.id) { mutableStateOf(false) }
     var auditDetails by rememberSaveable(task.id) { mutableStateOf(false) }
+    var contextDetails by rememberSaveable(task.id) { mutableStateOf(false) }
     val host = controller.state
     LaunchedEffect(host.savedFeedbackRevision) { if (host.savedFeedbackTaskId == task.id && feedback.trim() == host.savedFeedback.trim()) feedback = "" }
     val phoneTask = isPhoneTask(task)
@@ -497,7 +499,6 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 }
                 processScope.launch { anchor.bringIntoView() }
             }
-            if (assistantTask && !groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optJSONObject("origin")?.optString("kind") != "channel" && teamRunReferences(task).isEmpty()) TextButton(onClick = { controller.openBrowserResearch(task.id) }, modifier = Modifier.testTag("task_browser_research")) { Text("网页与研究工作区") }
             val queuedConversation=task.raw.optString("conversationId")
             if(assistantTask&&!groupTask&&queuedConversation.isNotBlank()&&task.raw.optString("actorId")=="owner"&&task.raw.optString("spaceId")=="private"&&task.raw.optJSONObject("origin")?.optString("kind") !in setOf("channel","group"))TextButton(onClick={controller.openQueuedOwnerInputs(task.id,queuedConversation)},modifier=Modifier.testTag("task_queued_inputs")){Text("查看待处理输入")}
             task.raw.optJSONObject("developmentContext")?.let { project -> TextButton(onClick = { controller.returnToDevelopmentProject(project.getString("projectId")); close() }) { Text("回到项目文件与网页预览") } }
@@ -542,7 +543,6 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 Text("已保存成果", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
                 resultFiles.forEach { file -> ConversationFileRow(file, host, { controller.openTaskResultAttachment(task.id, file) }) }
             }
-            if (!groupTask && task.raw.optString("spaceId", "private") == "private") TextButton(onClick = { taskMemoryReference = task.raw.optJSONObject("evidence")?.optJSONObject("memoryReference")?.let { JSONObject(it.toString()) } ?: JSONObject().put("taskId", task.id).put("runId", task.raw.optString("runId").ifBlank { "unavailable" }).put("requestId", "unavailable").put("answerId", "unavailable") }) { Text("这次请求的记忆来源与原证据", fontSize = 12.sp) }
             val projectArtifacts = if (groupTask) emptyList() else workspaceArtifacts(host, taskId = task.id)
             if (projectArtifacts.isNotEmpty()) {
                 Text("项目文件成果", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
@@ -557,7 +557,19 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             }
             if (mediaTask) MediaTaskPanel(task, host, controller, showArtifacts = resultFiles.isEmpty())
             else if ((!groupTask || controller.groupTaskReady) && pendingCapabilityApprovals(task).isEmpty()) CapabilityApprovals(task, controller)
-            if (!groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") TextButton(onClick = { capabilityPreparation = true }) { Text("这项任务的技能与工具", fontSize = 12.sp) }
+            if (!groupTask && task.raw.optString("spaceId", "private") == "private") {
+                TextButton(onClick = { contextDetails = !contextDetails }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("task_context_tools").semantics { stateDescription = if (contextDetails) "已展开" else "已收起" }) {
+                    Text("上下文与工具", modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                    AffectGlyph(if (contextDetails) "chevron" else "chevron-right")
+                }
+                androidx.compose.animation.AnimatedVisibility(visible = contextDetails) {
+                    Column(Modifier.fillMaxWidth()) {
+                    if (assistantTask && !groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optJSONObject("origin")?.optString("kind") != "channel" && teamRunReferences(task).isEmpty()) TextButton(onClick = { controller.openBrowserResearch(task.id) }, modifier = Modifier.testTag("task_browser_research")) { Text("网页与研究工作区") }
+                    if (!groupTask && task.raw.optString("spaceId", "private") == "private") TextButton(onClick = { taskMemoryReference = task.raw.optJSONObject("evidence")?.optJSONObject("memoryReference")?.let { JSONObject(it.toString()) } ?: JSONObject().put("taskId", task.id).put("runId", task.raw.optString("runId").ifBlank { "unavailable" }).put("requestId", "unavailable").put("answerId", "unavailable") }) { Text("这次请求的记忆来源与原证据", fontSize = 12.sp) }
+                    if (!groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") TextButton(onClick = { capabilityPreparation = true }) { Text("这项任务的技能与工具", fontSize = 12.sp) }
+                    }
+                }
+            }
             RemoteTaskApprovals(task, controller)
             RemoteSteerPanel(task.raw, host.moduleBusy.any { it in setOf("remote.steerJob", "remote.getSteerMessage") },
                 host.moduleErrors["remote.steerJob"] ?: host.moduleErrors["remote.getSteerMessage"],
@@ -655,6 +667,7 @@ private fun ProjectsScreen(state: PocketUiState, controller: PocketWorldControll
             }
         }
     }
+    NativeProjectGitImport(controller.projectGitImports, showEntry = false)
     if (versions) ModalBottomSheet(
         modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp),
         onDismissRequest = { versions = false },
@@ -670,6 +683,7 @@ private fun ProjectsScreen(state: PocketUiState, controller: PocketWorldControll
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { versions = false; creating = true }) { Text("新建项目") }
                     TextButton(onClick = { controller.projectPackages.openSourceImport() }, enabled = !controller.projectPackages.state.busy) { Text("导入已有项目") }
+                    TextButton(onClick = { versions = false; controller.projectGitImports.open() }, enabled = !controller.projectGitImports.state.busy, modifier = Modifier.testTag("project_git_import_open")) { Text("从 Git 导入…") }
                     TextButton(onClick = { controller.openConnection("local") }) { Text("运行环境") }
                 }
             }

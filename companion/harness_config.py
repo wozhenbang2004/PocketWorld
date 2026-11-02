@@ -799,6 +799,9 @@ class HarnessConfigs:
         self.db.execute("UPDATE harness_root_leases SET job_id=?,state='ACTIVE',proof=? WHERE resource_key=?", (job["id"], encoded(proof), target["resourceKey"]))
         self.db.commit()
         job["harnessConfigOperationId"] = operation
+        callback = getattr(self.manager, "harness_endpoint_job_bound", None)
+        if callback is not None:
+            callback(plan["request"]["endpointLeaseRef"], job, plan["request"])
         return {SUPPORTED[target["family"]][3]: target["root"]}
 
     def settle_job(self, job, process_group_stopped):
@@ -820,8 +823,8 @@ class HarnessConfigs:
             job["harnessEndpointLeaseState"] = "revocation_required"
             callback = getattr(self.manager, "harness_endpoint_finished", None)
             if callback is not None:
-                callback(lease_id, job["id"])
-                job["harnessEndpointLeaseState"] = "revoked_by_original_bridge"
+                revoked = callback(lease_id, job["id"])
+                job["harnessEndpointLeaseState"] = "revoked_by_original_bridge" if revoked is True else "not_bridge_registered"
 
     def job_live(self, job):
         operation = job.get("harnessConfigOperationId")
@@ -846,10 +849,12 @@ class HarnessConfigs:
         # is imported into this service. Before-images are never a logging source.
         for lease in list(self.endpoints.values()):
             text = text.replace(lease["accessToken"], "[gateway credential hidden]")
-        return text
+        bridge = getattr(self.manager, "harness_gateway", None)
+        return bridge.redact(text) if bridge is not None else text
 
     def redaction_tail(self):
-        return max([len(self.manager.token), *(len(lease["accessToken"]) for lease in self.endpoints.values())]) - 1
+        bridge = getattr(self.manager, "harness_gateway", None)
+        return max(max([len(self.manager.token), *(len(lease["accessToken"]) for lease in self.endpoints.values())]) - 1, bridge.redaction_tail() if bridge is not None else 0)
 
     def effective_state(self, request):
         with self.manager.lock:

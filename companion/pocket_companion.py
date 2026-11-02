@@ -37,6 +37,7 @@ import project_history
 import group_input_audience
 import input_files
 import harness_config
+import harness_gateway
 import job_events
 from codex_driver import CodexAppServerDriver, DriverError
 from claude_driver import ClaudeStreamDriver, command as claude_command, inspect_cli as inspect_claude_cli, session_uuid
@@ -139,6 +140,9 @@ class JobManager:
         self.closed = False
         self.environments = self._environments(config.get("environments", []))
         self.harness_configs = harness_config.HarnessConfigs(self)
+        self.harness_gateway = harness_gateway.HarnessGateway(self)
+        self.harness_endpoint_finished = self.harness_gateway.job_finished
+        self.harness_endpoint_job_bound = self.harness_gateway.bind_job
         for path in sorted(self.state.glob("job-*.json"))[-500:]:
             try:
                 job = json.loads(path.read_text(encoding="utf-8"))
@@ -1458,6 +1462,7 @@ class JobManager:
             running = [j["id"] for j in self.jobs.values() if j["status"] not in TERMINAL]
         for jobid in running:
             self.cancel(jobid)
+        self.harness_gateway.close()
         self.pool.shutdown(wait=True, cancel_futures=False)
         with self.lock:
             self.ledger.close()
@@ -1467,9 +1472,12 @@ class CompanionServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, manager):
+    def __init__(self, address, manager, gateway_only=False):
         self.manager = manager
+        self.gateway_only = gateway_only
         super().__init__(address, CompanionHandler)
+        if not gateway_only:
+            manager.harness_gateway.listener_factory = lambda: CompanionServer(("127.0.0.1", 0), manager, gateway_only=True)
 
 
 class CompanionHandler(BaseHTTPRequestHandler):
@@ -1498,6 +1506,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
     def _route(self, post):
         try:
             self.connection.settimeout(15)
+            if post and self.path in {"/v1/responses", "/v1/messages", "/v1/chat/completions"}:
+                self.server.manager.harness_gateway.client(self)
+                return
+            if self.server.gateway_only:
+                raise RequestError("This managed listener accepts gateway inference only", 404)
             expected = "Bearer " + self.server.manager.token
             if not hmac.compare_digest(self.headers.get("Authorization", "").encode(), expected.encode()):
                 raise RequestError("Unauthorized", 401)
@@ -1521,11 +1534,19 @@ class CompanionHandler(BaseHTTPRequestHandler):
             if not post and parts == ["v1", "status"]:
                 result = {"name": "Pocket World Companion", "protocolVersion": 1, "sshTransport": "system_openssh", "directPhoneSsh": False, "jobsPersistent": True, "processSandbox": False,
                           "localArtifactTransfer": os.name != "nt" and hasattr(os, "O_NOFOLLOW"), "sshArtifactTransfer": False,
-                          "operationReconciliation": True, "perWorkspaceExecutionLease": True}
+                          "operationReconciliation": True, "perWorkspaceExecutionLease": True,
+                          "gatewayBridge": manager.harness_gateway.capability()}
             elif not post and parts == ["v1", "environments"]:
                 result = manager.list_environments()
             elif len(parts) >= 2 and parts[:2] in (["v1", "harnesses"], ["v1", "harness-config"]):
                 result = harness_config.route(manager, parts, post, request, {key: values[0] for key, values in parse_qs(url.query).items()}, RequestError)
+            elif len(parts) >= 2 and parts[:2] == ["v1", "gateway"]:
+                # Same process / JobManager / authenticated phone transport / original DB.
+                # TLS remains on the remote listener. Only the CLI endpoint is HTTP-loopback.
+                parsed = parse_qs(url.query, keep_blank_values=True)
+                if any(len(values) != 1 for values in parsed.values()):
+                    raise RequestError("Repeated bridge binding fields are not accepted")
+                result = harness_gateway.route(manager, parts, post, request, {key: values[0] for key, values in parsed.items()}, lambda: manager.harness_gateway.endpoint(self.server))
             elif post and parts == ["v1", "workers", "probe"]:
                 result = manager.probe_worker(request)
             elif len(parts) == 3 and parts[:2] == ["v1", "operations"] and not post:
@@ -1619,7 +1640,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
             else:
                 raise RequestError("Endpoint not found", 404)
             self._send(200, {"ok": True, "result": result})
-        except RequestError as error:
+        except (RequestError, harness_gateway.BridgeError) as error:
             self._send(error.status, {"ok": False, "message": str(error)})
         except (OSError, ValueError, TimeoutError, sqlite3.Error):
             self._send(500, {"ok": False, "message": "Companion could not process the request"})

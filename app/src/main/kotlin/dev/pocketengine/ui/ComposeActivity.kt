@@ -63,6 +63,7 @@ class ComposeActivity : ComponentActivity() {
         controller.projectPackages.restore(savedInstanceState)
         controller.ownerArchives.restore(savedInstanceState)
         controller.projectStorage.restore(savedInstanceState)
+        controller.projectGitImports.restore(savedInstanceState)
         importTaskId = savedInstanceState?.getString("ownerImportTask")
         importProjectId = savedInstanceState?.getString("ownerImportProject")
         exportPath = savedInstanceState?.getString("ownerExportPath")
@@ -76,8 +77,8 @@ class ComposeActivity : ComponentActivity() {
         deliverSharedFiles(intent)
         deliverAccountEntry(intent)
     }
-    override fun onResume() { super.onResume(); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.foreground(true); controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true) } }
-    override fun onPause() { (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
+    override fun onResume() { super.onResume(); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.foreground(true); controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
+    override fun onPause() { (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.projectGitImports.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent); deliverAccountEntry(intent) }
     private fun deliverRemoteAttention(intent: Intent?) {
         dev.pocketengine.features.remote.RemoteAttentionNotifications.openRequestedTask((application as EngineApplication).tasks, intent) { controller.showRemoteAttention(it) }
@@ -153,6 +154,7 @@ class ComposeActivity : ComponentActivity() {
         controller.projectPackages.save(outState)
         controller.ownerArchives.save(outState)
         controller.projectStorage.save(outState)
+        controller.projectGitImports.save(outState)
         super.onSaveInstanceState(outState)
     }
     override fun onDestroy() { if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }

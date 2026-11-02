@@ -189,7 +189,13 @@ internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask
 
 @Composable
 private fun ConversationOperation(operation: TaskPresentation.Operation) {
-    AffectToolCallCard(id = operation.id, name = operation.tool, statusLabel = operation.label,
+    val tone = when {
+        operation.uncertain -> TaskExecutionPresentation.Tone.UNCERTAIN
+        operation.state == "failed" -> TaskExecutionPresentation.Tone.ERROR
+        operation.state == "prepared" -> TaskExecutionPresentation.Tone.WAITING
+        else -> TaskExecutionPresentation.Tone.NEUTRAL
+    }
+    AffectToolCallCard(id = operation.id, name = operation.tool, statusLabel = operation.label, tone = tone,
         output = operation.output, needsReview = operation.uncertain || operation.state == "failed",
         modifier = Modifier.padding(vertical = 4.dp).testTag("conversation_operation_" + operation.id))
 }

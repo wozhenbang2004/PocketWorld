@@ -54,7 +54,7 @@
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User initiated ChatGPT sign-in in the system browser with a visible cancel control; ends on callback, cancellation or original login timeout"/>
         </service>
         <service android:name=".PhoneRunService" android:exported="false" android:foregroundServiceType="specialUse">
-            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User initiated phone automation with visible notification, pause and stop controls"/>
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User initiated phone automation or API-only model gateway for an existing authorized task, with visible notification and stop controls"/>
         </service>
     </application>
 </manifest>

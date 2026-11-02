@@ -9,6 +9,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class ProxyModule implements EngineModule {
+    private NativeHarnessGatewayBridge harnessGateway;
     private final FeatureContext context;private final LoopbackRelay.AccountRoute accounts;private final LoopbackRelay.InferenceFactory inferenceFactory;private LoopbackRelay relay;private String sessionId="";private ModelConfig bound;private final java.util.ArrayDeque<JSONObject> recentInference=new java.util.ArrayDeque<>();
     public ProxyModule(FeatureContext context){this(context,null);}
     public ProxyModule(FeatureContext context,LoopbackRelay.AccountRoute accounts){this(context,accounts,null);}
@@ -21,7 +22,7 @@ public final class ProxyModule implements EngineModule {
             .put("modelRoute",account?"account":"api_key").put("model",selection.routePlan==null?selection.model:selection.routePlan.requestedAlias).put("actualPrimaryModel",selection.model).put("modelGroup",selection.routePlan!=null&&selection.routePlan.groupRevision>0).put("accountRouteAvailable",false)
             .put("externalRelayAllowed",!account).put("blockedReason",account?"CHATGPT_PLAN_APP_ONLY":"")
             .put("endpoints",endpoints(selection))
-            .put("phoneExecution",false).put("scope","loopback_only").put("requests",relay==null?0:relay.requests())
+            .put("harnessGateway",harnessGateway==null?JSONObject.NULL:harnessGateway.snapshot()).put("phoneExecution",false).put("scope","loopback_only").put("requests",relay==null?0:relay.requests())
             .put("routeCurrent",relay==null?JSONObject.NULL:relay.routeCurrent()).put("routeChangeRequiresRestart",true)
             .put("capabilityDirectoryBound",selection.capabilityBinding!=null).put("recentInferenceReferences",recentInference()).put("usageListScope","current_service_process_recent_8_not_total");
     }
@@ -51,10 +52,21 @@ public final class ProxyModule implements EngineModule {
             default:throw new IllegalArgumentException("不支持的反代操作");
         }
     }
+    /** Existing native owner/run entry only, not a model command. The actual task grant stays authoritative. */
+    public synchronized NativeHarnessGatewayBridge prepareHarnessGateway(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.core.RunControl original,
+            dev.pocketengine.features.remote.RemoteModule remote,JSONObject target,long expiresAt)throws Exception {
+        if(harnessGateway!=null&&harnessGateway.running())throw new IllegalStateException("请先停止原远端模型网关");
+        if(target.length()!=8)throw new SecurityException("准确原电脑目标必需，不接收群来源或替代授权字段");
+        for(String key:new String[]{"profileId","_profileBinding","serviceBase","environmentId","environmentBinding","bindingId","profileDigest","taskId"})if(!target.has(key))throw new SecurityException("准确原电脑目标不完整");
+        var identity=original.hostRunIdentity();if(identity==null||!identity.taskId().equals(target.getString("taskId")))throw new SecurityException("不是当前原任务native控制器");
+        harnessGateway=NativeHarnessGatewayBridge.forTask(tasks,original,new LoopbackRelay.ConfigSource(){public ModelConfig get()throws Exception{return context.settings.captureRelaySelection();}public long selectionRevision()throws Exception{return context.settings.relaySelectionRevision();}},remote.harnessGatewayTransport(target),target.getString("environmentId"),target.getString("environmentBinding"),target.getString("bindingId"),target.getString("profileDigest"),expiresAt);
+        return harnessGateway;
+    }
+    public synchronized NativeHarnessGatewayBridge originalHarnessGateway(String lease){return harnessGateway!=null&&harnessGateway.leaseId().equals(lease)?harnessGateway:null;}
     private dev.pocketengine.runtime.usage.NativeInferenceWork beginInference(ModelConfig captured,dev.pocketengine.core.RunControl original,String session)throws Exception{
         var work=inferenceFactory.open(captured,original,session);synchronized(this){recentInference.addLast(work.reference());while(recentInference.size()>8)recentInference.removeFirst();}return work;
     }
     private JSONArray recentInference()throws Exception{JSONArray result=new JSONArray();for(JSONObject ref:recentInference)result.put(new JSONObject(ref.toString()));return result;}
     private static JSONArray endpoints(ModelConfig selected)throws Exception{JSONArray result=new JSONArray();if(selected.usesAccount())return result;result.put("/v1/models");JSONArray paths=NativeRelayPolicy.paths(selected);for(int i=0;i<paths.length();i++)result.put(paths.get(i));return result;}
-    @Override public synchronized void close(){if(relay!=null){relay.close();relay=null;}bound=null;}
+    @Override public synchronized void close(){if(harnessGateway!=null){harnessGateway.close();harnessGateway=null;}if(relay!=null){relay.close();relay=null;}bound=null;}
 }

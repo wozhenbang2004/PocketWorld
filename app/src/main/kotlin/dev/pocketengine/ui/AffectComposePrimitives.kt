@@ -36,6 +36,9 @@ internal fun AffectGlyph(name: String, modifier: Modifier = Modifier, color: Col
         "file" -> "M6 2h8l4 4v16H6ZM14 2v5h4M9 12h6m-6 4h6"
         "copy" -> "M8 8h12v12H8ZM4 15H3V3h12v1"
         "close" -> "m6 6 12 12M18 6 6 18"
+        "question" -> "M9.1 9a3 3 0 1 1 5 2.2c-1.3.7-2.1 1.1-2.1 2.8M12 17h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"
+        "warning" -> "m12 3 10 18H2ZM12 9v5M12 17h.01"
+        "stop" -> "M7 7h10v10H7Z"
         "check" -> "m5 12 4 4L19 6"
         else -> "m12 2 2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4Z"
     }

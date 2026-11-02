@@ -67,6 +67,12 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         String versionProbe=chosen.optString("observedVersion",chosen.optString("version","verified_native_tool"));String firstLine=versionProbe.split("\\R",2)[0];if(firstLine.isEmpty()||firstLine.length()>120||firstLine.chars().anyMatch(Character::isISOControl))throw new SecurityException("原解释器版本首行无法完整展示，请核对原工具探测");
         return new JSONObject().put("runtimeIdentity",identity()).put("interpreter",interpreter).put("interpreterArgv",argv).put("runtimeSha256",chosen.getString("sha256")).put("runtimeVersion",firstLine).put("runtimeVersionScope","first_line_of_native_probe").put("runtimeVersionProbeSha256",ProjectSources.sha256(versionProbe.getBytes(java.nio.charset.StandardCharsets.UTF_8))).put("bootstrapArgv",bootstrap).put("bootstrapSha256",python.getString("sha256")).put("path",path).put("guestProjectRoot",androidRuntime==null?"":"/workspace").put("executionLocation","this_phone").put("osSandbox",false);
     }
+    /** Same installed, verified Git/Python generation. This native description
+     * does not accept a model executable, shell, URL, environment or credential. */
+    public synchronized JSONObject gitImportToolsForHost()throws Exception {
+        JSONObject python=skillToolsForHost("python3"),facts=describe(),git=null;JSONArray observed=facts.getJSONArray("tools");for(int i=0;i<observed.length();i++){JSONObject candidate=observed.getJSONObject(i);if("git".equals(candidate.optString("name"))&&(candidate.optBoolean("hashVerified")||candidate.optBoolean("probeVerified")))git=candidate;}
+        if(git==null||!git.optString("sha256").matches("[a-f0-9]{64}"))throw new IllegalStateException("原托管环境Git尚未实际准备，请先核对开发工具；未切到电脑或任意shell");JSONArray argv=new JSONArray();if(androidRuntime!=null)argv.put(androidRuntime.guestTool("git"));else for(String value:tools.get("git").command(List.of()))argv.put(value);if(argv.length()!=1)throw new SecurityException("Git导入只接受原单个准确Git二进制");String gitProbe=git.optString("observedVersion",git.optString("version","")),version=gitProbe.split("\\R",2)[0];if(version.isEmpty()||version.length()>120||version.chars().anyMatch(Character::isISOControl))throw new SecurityException("原Git版本探测首行无法准确展示");return new JSONObject().put("runtimeIdentity",identity()).put("gitArgv",argv).put("gitExecutableSha256",git.getString("sha256")).put("gitVersion",version).put("gitVersionProbeSha256",ProjectSources.sha256(gitProbe.getBytes(java.nio.charset.StandardCharsets.UTF_8))).put("bootstrapSha256",python.getString("bootstrapSha256")).put("path",python.getString("path")).put("guestProjectRoot",python.getString("guestProjectRoot"));
+    }
     public String identity() {return androidRuntime==null?identity:androidRuntime.identity();}
     /** Native host hook for its original TaskStore receipt row; no new task or execution authority. */
     public void setReceiptSink(java.util.function.Consumer<JSONObject> nativeSink) {jobs.setReceiptSink(nativeSink);}
@@ -107,9 +113,17 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
                 .put("managedOutputCollectionAvailable",true).put("phases",new JSONArray().put("PROBE").put("STAGE").put("COMMAND"));
     }
     @Override public RuntimeReceipt dispatch(RuntimeInvocation invocation) throws Exception {
+        if(dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact()))throw new SecurityException("Git网络导入需要原生主人一次性租约；普通项目命令不能自报该intent");return dispatchOriginal(invocation,null);
+    }
+    public RuntimeReceipt dispatchGitImport(RuntimeInvocation invocation,dev.pocketengine.features.local.project.ProjectGitImport.ProcessGrant originalGrant)throws Exception {
+        java.util.Objects.requireNonNull(originalGrant);boolean entered=false;try{originalGrant.claim(this,invocation);entered=true;return dispatchOriginal(invocation,originalGrant);}finally{if(!entered)originalGrant.close();}
+    }
+    private RuntimeReceipt dispatchOriginal(RuntimeInvocation invocation,AutoCloseable nativeImportLease) throws Exception {
+        boolean passedToJobs=false;try{
         requireProvider(invocation.executionRef());invocation.checkCurrent();
         if(dev.pocketengine.features.skills.ManagedSkillBackend.exact(invocation.exact()))dev.pocketengine.features.skills.ManagedSkillBackend.requireProgram(invocation.exact());
-        if(androidRuntime!=null)return dispatchAndroid(invocation);
+        if(dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())){if(nativeImportLease==null||invocation.executionRef().phase()!=RuntimeExecutionRef.Phase.COMMAND)throw new SecurityException("缺少原Git导入的固定命令租约");dev.pocketengine.features.local.project.ProjectGitImport.requireProgram(invocation.exact());}
+        if(androidRuntime!=null){passedToJobs=true;return dispatchAndroid(invocation,nativeImportLease);}
         if(!identity.equals(invocation.exact().getString("runtimeIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");
         if(!describe().getBoolean("canExecute"))throw new IllegalStateException("runtime_environment_not_prepared");
         RuntimeWorkspace workspace=invocation.workspace();workspace.verify(invocation);
@@ -130,7 +144,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             case COMMAND:
                 RuntimeTool tool=tools.get(payload.getString("executable"));
                 if(tool==null)throw new IllegalArgumentException("runtime_tool_not_installed");
-                JSONArray requested=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(payload):payload.getJSONArray("argv");List<String> argv=new ArrayList<>();
+                JSONArray requested=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(payload):dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGitImport.arguments(payload):payload.getJSONArray("argv");List<String> argv=new ArrayList<>();
                 for(int i=0;i<requested.length();i++)argv.add(requested.getString(i));command=tool.command(argv);break;
             default:throw new IllegalArgumentException("runtime_phase_requires_native_artifact_reader");
         }
@@ -143,10 +157,12 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         if(commandSpec!=null){JSONObject ordinary=commandSpec.getJSONObject("environment");for(java.util.Iterator<String> keys=ordinary.keys();keys.hasNext();){String name=keys.next();environment.put(name,ordinary.getString(name));}if("pty".equals(commandSpec.getString("terminalMode")))environment.put("TERM","xterm-256color");}
         long timeout=payload.optLong("timeoutMillis",300000);
         if(timeout<1 || timeout>86400000)throw new IllegalArgumentException("runtime_timeout_invalid");
-        AutoCloseable lease=environments.acquire(selected);
-        return jobs.start(invocation,command,environment,directory,timeout,lease);
+        AutoCloseable lease=nativeImportLease==null?environments.acquire(selected):nativeImportLease;
+        passedToJobs=true;return jobs.start(invocation,command,environment,directory,timeout,lease);
+        }finally{if(nativeImportLease!=null&&!passedToJobs)nativeImportLease.close();}
     }
-    private RuntimeReceipt dispatchAndroid(RuntimeInvocation invocation) throws Exception {
+    private RuntimeReceipt dispatchAndroid(RuntimeInvocation invocation,AutoCloseable nativeImportLease) throws Exception {
+        boolean passedToJobs=false;try {
         AndroidRuntimePreparation profile=androidRuntime;
         if(!identity().equals(invocation.exact().getString("runtimeIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");
         RuntimeWorkspace workspace=invocation.workspace();workspace.verify(invocation);
@@ -171,18 +187,25 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
                     for(List<String> probe:profile.probeCommands()){for(String arg:probe)script.append(ProjectSources.quote(arg)).append(' ');script.append('\n');}
                     guest.add(profile.guestTool("sh"));guest.addAll(List.of("-c",script.toString()));break;
                 case COMMAND:
-                    guest.add(profile.guestTool(payload.getString("executable")));JSONArray args=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(payload):payload.getJSONArray("argv");for(int i=0;i<args.length();i++)guest.add(args.getString(i));break;
+                    guest.add(profile.guestTool(payload.getString("executable")));JSONArray args=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(payload):dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGitImport.arguments(payload):payload.getJSONArray("argv");for(int i=0;i<args.length();i++)guest.add(args.getString(i));break;
                 default:throw new IllegalArgumentException("runtime_phase_requires_native_artifact_reader");
             }
             String relative=payload.optString("workingDirectory",".");cwd=workspace.resolve(relative,false);
             timeout=payload.optLong("timeoutMillis",300000);if(timeout<1||timeout>86400000)throw new IllegalArgumentException("runtime_timeout_invalid");
             Map<String,String> ordinary=new LinkedHashMap<>();if(commandSpec!=null){JSONObject requested=commandSpec.getJSONObject("environment");for(java.util.Iterator<String> keys=requested.keys();keys.hasNext();){String name=keys.next();ordinary.put(name,requested.getString(name));}if("pty".equals(commandSpec.getString("terminalMode")))ordinary.put("TERM","xterm-256color");}
-            command=profile.command(workspace,relative,guest,ordinary);environment=profile.hostEnvironment(identity());lease=profile.acquire();
+            command=profile.command(workspace,relative,guest,ordinary);environment=profile.hostEnvironment(identity());lease=nativeImportLease==null?profile.acquire():nativeImportLease;
         }
-        return jobs.start(invocation,command,environment,cwd,timeout,lease);
+        passedToJobs=true;return jobs.start(invocation,command,environment,cwd,timeout,lease);
+        }finally{if(nativeImportLease!=null&&!passedToJobs)nativeImportLease.close();}
     }
     private static void requireProvider(RuntimeExecutionRef ref) throws Exception {
         if(!RUNTIME_ID.equals(ref.exact().optString("runtimeId")))throw new SecurityException("runtime_original_provider_required");
+    }
+    /** Native Git intake observation only. A registered SQL intent can precede
+     * the original job receipt; absence is query-only unknown, never permission
+     * to start or reconstruct the old operation. */
+    public RuntimeReceipt gitImportReceiptForHost(RuntimeExecutionRef ref)throws Exception {
+        requireProvider(ref);if(!dev.pocketengine.features.local.project.ProjectGitImport.exact(ref.exact()))throw new SecurityException("runtime_not_original_git_import");return jobs.existing(ref);
     }
     @Override public RuntimeReceipt query(RuntimeExecutionRef ref) throws Exception {requireProvider(ref);return jobs.query(ref);}
     @Override public RuntimeReceipt requestCancel(RuntimeExecutionRef ref) throws Exception {requireProvider(ref);return jobs.requestCancel(ref);}

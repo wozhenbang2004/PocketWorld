@@ -41,6 +41,7 @@ public final class LocalModule implements EngineModule {
     private final Map<String,dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified> previews=new LinkedHashMap<>();
     private volatile boolean closed;
     private final Object projectPackageStaging=new Object();
+    private dev.pocketengine.features.local.project.ProjectGitImport nativeGitImport;
     public LocalModule(FeatureContext context,EngineModule projects)throws Exception {
         this(context,projects,dev.pocketengine.features.local.runtime.android.AndroidManagedRuntimeFactory.create(context.android));
     }
@@ -246,7 +247,7 @@ public final class LocalModule implements EngineModule {
     private JSONObject sourceSelectionEvidence(String selection,String sha,String manifest)throws Exception {
         File file=new File(packageImportRoot(),selection+".source.json");if(!Files.exists(file.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))return null;
         if(Files.isSymbolicLink(file.toPath())||!file.isFile()||file.length()>32768)throw new SecurityException("原来源选择说明无法核对");JSONObject retained=JsonFiles.read(file),evidence=retained.getJSONObject("evidence");
-        if(!"pocketworld.project-source-cache.v1".equals(retained.optString("format"))||!sha.equals(retained.optString("archiveSha256"))||!manifest.equals(retained.optString("manifestIdentity"))||!"pocketworld.project-source-selection.v1".equals(evidence.optString("format"))||!selection.equals(evidence.optString("selectionId"))||!manifest.equals(evidence.optString("manifestIdentity"))||!java.util.Set.of("saf_tree","external_zip").contains(evidence.optString("sourceKind"))||!Boolean.TRUE.equals(evidence.opt("completeSelection"))||!Boolean.FALSE.equals(evidence.opt("executionAuthorityRestored"))||!Boolean.FALSE.equals(evidence.opt("sourcePermissionPersisted")))throw new SecurityException("原来源选择与实际包字节不同，未导入");return new JSONObject(evidence.toString());
+        if(!"pocketworld.project-source-cache.v1".equals(retained.optString("format"))||!sha.equals(retained.optString("archiveSha256"))||!manifest.equals(retained.optString("manifestIdentity"))||!"pocketworld.project-source-selection.v1".equals(evidence.optString("format"))||!selection.equals(evidence.optString("selectionId"))||!manifest.equals(evidence.optString("manifestIdentity"))||!java.util.Set.of("saf_tree","external_zip","git_https").contains(evidence.optString("sourceKind"))||!Boolean.TRUE.equals(evidence.opt("completeSelection"))||!Boolean.FALSE.equals(evidence.opt("executionAuthorityRestored"))||!Boolean.FALSE.equals(evidence.opt("sourcePermissionPersisted")))throw new SecurityException("原来源选择与实际包字节不同，未导入");return new JSONObject(evidence.toString());
     }
     public JSONObject clearInterruptedSourceImportsForOwner()throws Exception {
         if(closed)throw new IllegalStateException("原项目模块已关闭");synchronized(projectPackageStaging){File directory=packageImportRoot();File[] files=directory.listFiles();if(files==null)throw new IllegalStateException("无法列出来源读取缓存");int removed=0;for(File file:files){String name=file.getName();boolean ownIncomplete=name.matches("source-read-[A-Za-z0-9_-]+")||name.matches("source-(?:archive|package)-[A-Za-z0-9_-]+\\.pending")||name.matches("[a-f0-9-]{36}\\.source\\.json")&&!new File(directory,name.substring(0,36)+".zip").exists();if(!ownIncomplete)continue;if(Files.isSymbolicLink(file.toPath()))Files.delete(file.toPath());else if(file.isDirectory())deleteOwnPackageStaging(file);else Files.delete(file.toPath());removed++;}return new JSONObject().put("removedIncompleteCaches",removed).put("completeSelectionsRetained",true).put("projectsOrToolsDeleted",false);}
@@ -264,11 +265,12 @@ public final class LocalModule implements EngineModule {
         if(closed)throw new IllegalStateException("原项目模块已关闭");synchronized(projectPackageStaging){JSONArray result=new JSONArray();File[] files=packageImportRoot().listFiles(file->file.getName().matches("[a-f0-9-]{36}\\.zip"));if(files==null||files.length>4)throw new IllegalStateException("项目包临时目录超出范围，请核对原目录");java.util.Arrays.sort(files,java.util.Comparator.comparing(File::getName));for(File file:files){String selection=file.getName().substring(0,36);if(Files.isSymbolicLink(file.toPath()))throw new SecurityException("项目包临时目录含链接，未读取目标");String sha=packageFileHash(file);try{result.put(stagedProjectPackage(selection,sha).put("available",true));}catch(Exception invalid){result.put(new JSONObject().put("selectionId",selection).put("sha256",sha).put("sizeBytes",file.length()).put("available",false).put("message","原临时包无法完整校验；可明确移除此缓存，不影响原项目"));}}return result;}
     }
     public void discardStagedProjectPackageForOwner(String selection,String sha)throws Exception {synchronized(projectPackageStaging){File file=new File(packageImportRoot(),packageIdentity(selection)+".zip");if(Files.isSymbolicLink(file.toPath())||!file.isFile()||!packageHash(sha).equals(packageFileHash(file)))throw new SecurityException("所选临时包已变化，未移除其他内容");Files.delete(file.toPath());Files.deleteIfExists(new File(packageImportRoot(),selection+".source.json").toPath());}}
-    public JSONObject planProjectPackageImportForOwner(String selection,String sha,String projectName,String targetCheckout)throws Exception {
+    public JSONObject planProjectPackageImportForOwner(String selection,String sha,String projectName,String targetCheckout)throws Exception {return planProjectPackageImport(selection,sha,projectName,targetCheckout,null);}
+    private JSONObject planProjectPackageImport(String selection,String sha,String projectName,String targetCheckout,dev.pocketengine.features.local.project.ProjectGitImport.Result nativeGit)throws Exception {
         JSONObject staged=inspectStagedProjectPackageForOwner(selection,sha);if(projectName==null||projectName.trim().isEmpty()||projectName.length()>80)throw new IllegalArgumentException("请输入1至80字项目名");
         if(!staged.getJSONObject("manifest").getString("mode").equals("source_project"))throw new IllegalArgumentException("请选择源码项目包");
         JSONObject plan=new JSONObject().put("format","pocketworld.project-package-import-plan.v1").put("selectionId",selection).put("packageSha256",sha).put("manifestIdentity",staged.getString("manifestIdentity")).put("projectName",projectName.trim()).put("clientImportId",UUID.randomUUID().toString());
-        JSONObject sourceEvidence=staged.optJSONObject("sourceEvidence");if(sourceEvidence!=null){if(targetCheckout!=null&&!targetCheckout.isEmpty())throw new SecurityException("现有源码只能明确创建新项目，不覆盖或借用原项目权限");plan.put("sourceEvidenceSha256",ProjectSources.digest(sourceEvidence));}
+        JSONObject sourceEvidence=staged.optJSONObject("sourceEvidence");if(sourceEvidence!=null&&"git_https".equals(sourceEvidence.optString("sourceKind"))&&nativeGit==null)throw new SecurityException("Git原读取需要在原Git入口审阅其固定历史与源码，不能作为普通ZIP绕过发布");if(sourceEvidence!=null){if(targetCheckout!=null&&!targetCheckout.isEmpty())throw new SecurityException("现有源码只能明确创建新项目，不覆盖或借用原项目权限");plan.put("sourceEvidenceSha256",ProjectSources.digest(sourceEvidence));}
         if(targetCheckout==null||targetCheckout.isEmpty())plan.put("mode","new_project");
         else synchronized(this){JSONObject actual=ProjectSources.describe(export(targetCheckout));plan.put("mode","same_project_new_checkout").put("targetCheckoutId",targetCheckout).put("projectId",actual.getString("projectId")).put("expectedTargetSourceDigest",actual.getString("sourceDigest"));}
         plan.put("planDigest",ProjectSources.digest(plan));return new JSONObject().put("plan",plan).put("manifest",staged.getJSONObject("manifest")).put("message","导入会创建新的工作副本，不覆盖原目录、不恢复任务或运行授权。原项目选项也保留旧任务和旧副本；在新副本明确开始新的项目任务。");
@@ -283,10 +285,11 @@ public final class LocalModule implements EngineModule {
         var keys=plan.keys();while(keys.hasNext())if(!allowed.contains(keys.next()))throw new SecurityException("项目包方案含未支持字段，未恢复授权");return plan;
     }
     /** Copy a new, unpublished checkout outside the runtime monitor; the final native publication is short. */
-    public JSONObject importProjectPackageForOwner(JSONObject originalPlan)throws Exception {
+    public JSONObject importProjectPackageForOwner(JSONObject originalPlan)throws Exception {return importProjectPackage(originalPlan,null,null);}
+    private JSONObject importProjectPackage(JSONObject originalPlan,dev.pocketengine.features.local.project.ProjectGitImport.Result nativeGit,RunControl gitControl)throws Exception {
         JSONObject plan=verifiedPackageImportPlan(originalPlan);String client=plan.getString("clientImportId"),sha=plan.getString("packageSha256"),id=UUID.nameUUIDFromBytes(("project-package-checkout:"+client).getBytes(StandardCharsets.UTF_8)).toString();
         synchronized(this){JSONObject prior=existingPackageImport(id,client,sha,plan);if(prior!=null)return prior;}
-        JSONObject staged=inspectStagedProjectPackageForOwner(plan.getString("selectionId"),sha);if(!plan.getString("manifestIdentity").equals(staged.getString("manifestIdentity")))throw new SecurityException("原项目包清单已变化");JSONObject sourceEvidence=staged.optJSONObject("sourceEvidence");if(plan.has("sourceEvidenceSha256")!=(sourceEvidence!=null)||sourceEvidence!=null&&!plan.getString("sourceEvidenceSha256").equals(ProjectSources.digest(sourceEvidence)))throw new SecurityException("原来源选择说明在审阅后变化，未导入");
+        JSONObject staged=inspectStagedProjectPackageForOwner(plan.getString("selectionId"),sha);if(!plan.getString("manifestIdentity").equals(staged.getString("manifestIdentity")))throw new SecurityException("原项目包清单已变化");JSONObject sourceEvidence=staged.optJSONObject("sourceEvidence");if(sourceEvidence!=null&&"git_https".equals(sourceEvidence.optString("sourceKind"))){if(nativeGit==null||gitControl==null)throw new SecurityException("Git导入不能借普通项目包恢复其未审历史");nativeGit.requireCurrent(gitControl);JSONObject pins=nativeGit.metadata();pins.remove("files");if(!ProjectSources.digest(pins).equals(ProjectSources.digest(sourceEvidence.getJSONObject("original"))))throw new SecurityException("待发布Git版本与原来源选择不同");}else if(nativeGit!=null)throw new SecurityException("本次原来源不是Git读取");if(plan.has("sourceEvidenceSha256")!=(sourceEvidence!=null)||sourceEvidence!=null&&!plan.getString("sourceEvidenceSha256").equals(ProjectSources.digest(sourceEvidence)))throw new SecurityException("原来源选择说明在审阅后变化，未导入");
         dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen; synchronized(projectPackageStaging){File archive=new File(packageImportRoot(),plan.getString("selectionId")+".zip");frozen=dev.pocketengine.features.local.project.ProjectPackageArchive.read(archive);if(!sha.equals(packageFileHash(archive))||!frozen.identity.equals(plan.getString("manifestIdentity")))throw new SecurityException("原项目包字节或清单不一致");}
         String projectId=plan.getString("mode").equals("new_project")?UUID.nameUUIDFromBytes(("project-package-import:"+client).getBytes(StandardCharsets.UTF_8)).toString():plan.getString("projectId");
         File staging=new File(root,"package-checkout-staging");if(Files.isSymbolicLink(staging.toPath())||!staging.isDirectory()&&!staging.mkdirs()||!staging.getAbsoluteFile().equals(staging.getCanonicalFile()))throw new IllegalStateException("无法建立原项目导入暂存目录");File prepared=Files.createTempDirectory(staging.toPath(),"checkout-").toFile();
@@ -297,9 +300,12 @@ public final class LocalModule implements EngineModule {
                 try(FileOutputStream output=new FileOutputStream(target)){output.write(bytes);output.getFD().sync();}if(file.getBoolean("executable")&&!target.setExecutable(true,true))throw new IllegalStateException("无法保留所选项目脚本的主人执行位");
                 if(ProjectSources.sourcePath(path))baseline.put(new JSONObject().put("path",path).put("sha256",file.getString("sha256")).put("bytes",bytes.length).put("sourceVersion",0));
             }
+            if(nativeGit!=null)nativeGit.copyGitMetadata(files,gitControl);
             JSONObject checkout=new JSONObject().put("id",id).put("projectId",projectId).put("name",plan.getString("projectName")).put("createdAt",System.currentTimeMillis()).put("files",baseline)
                 .put("sourceImport",new JSONObject().put("clientId",client).put("packageSha256",sha).put("manifestIdentity",frozen.identity).put("mode",plan.getString("mode")).put("executionAuthorityRestored",false));
             if(sourceEvidence!=null)checkout.getJSONObject("sourceImport").put("sourceKind",sourceEvidence.getString("sourceKind")).put("sourceEvidenceSha256",plan.getString("sourceEvidenceSha256"));
+            if(nativeGit!=null){JSONObject pins=nativeGit.metadata();pins.remove("files");checkout.getJSONObject("sourceImport").put("gitOriginal",pins).put("gitHistoryCopied",true).put("credentialsRestored",false);}
+
             JsonFiles.write(new File(prepared,"checkout.json"),checkout);
             synchronized(this){
                 if(closed||Thread.currentThread().isInterrupted())throw new IllegalStateException("原项目模块已关闭或导入等待已取消，未发布新工作副本");JSONObject prior=existingPackageImport(id,client,sha,plan);if(prior!=null)return prior;
@@ -334,6 +340,38 @@ public final class LocalModule implements EngineModule {
     }
     public synchronized JSONObject saveOwnerStoragePolicyForHost(int keepGenerations,int keepBackups,boolean generated,String expectedRevision)throws Exception {
         JSONObject old=ownerStoragePolicyForHost();if(!old.getString("revision").equals(expectedRevision)||keepGenerations<0||keepGenerations>5||keepBackups<0||keepBackups>5)throw new SecurityException("原保留规则已变化，请重新读取");JSONObject next=new JSONObject().put("keepOldRuntimeGenerations",keepGenerations).put("keepRecentBackupCopies",keepBackups).put("suggestGeneratedCleanup",generated);JsonFiles.write(new File(root,"owner-storage-policy.json"),next);return ownerStoragePolicyForHost();
+    }
+    public static final class GitPublicationReview implements AutoCloseable {
+        private final LocalModule issuer;private final dev.pocketengine.features.local.project.ProjectGitImport.Result source;private final JSONObject plan;private final RunControl original;private final long expires=System.currentTimeMillis()+120000;private boolean used,closed;
+        private GitPublicationReview(LocalModule issuer,dev.pocketengine.features.local.project.ProjectGitImport.Result source,JSONObject plan,RunControl original){this.issuer=issuer;this.source=source;this.plan=plan;this.original=original;}
+        private void current()throws Exception{original.checkpoint();if(closed||issuer.closed||System.currentTimeMillis()>=expires)throw new SecurityException("原Git新项目审阅已失效；未重新确认或执行");}
+        public JSONObject metadata()throws Exception{current();return new JSONObject().put("actionId",plan.getString("clientImportId")).put("sourceActionId",source.actionId()).put("plan",new JSONObject(plan.toString())).put("source",source.metadata()).put("expiresAt",expires).put("overwritesExistingProject",false).put("taskOrGrantRestored",false);}
+        public synchronized GitPublicationConfirmed confirm()throws Exception{current();if(used)throw new SecurityException("原Git发布审阅已确认，只核对原导入编号");used=true;return new GitPublicationConfirmed(this);}
+        @Override public synchronized void close(){closed=true;}
+    }
+    public static final class GitPublicationConfirmed {
+        private final GitPublicationReview review;private boolean entered;private GitPublicationConfirmed(GitPublicationReview review){this.review=review;}
+        public String actionId()throws Exception{return review.plan.getString("clientImportId");}
+        public RunControl original(){return review.original;}
+        public JSONObject metadata()throws Exception{JSONObject value=review.metadata(),source=value.getJSONObject("source");source.put("fileCount",source.getJSONArray("files").length());source.remove("files");return value;}
+        private synchronized void enter(LocalModule actual)throws Exception{review.current();if(entered||review.issuer!=actual)throw new SecurityException("Git发布没有同一原生审阅或已进入，只查询原导入动作");entered=true;}
+    }
+    /** Original package import remains the single new-project publisher. Git
+     * metadata never comes from a model ZIP, JSON host path or raw clone result. */
+    public GitPublicationReview reviewGitPublicationForOwner(dev.pocketengine.features.local.project.ProjectGitImport.Result source,RunControl original)throws Exception {
+        if(original==null||original.hasHostRun()||closed)throw new SecurityException("Git新项目从主人原生页面明确审阅");source.requireCurrent(original);JSONObject pins=source.metadata();String selection=source.actionId();JSONObject staged;
+        synchronized(projectPackageStaging){File target=new File(packageImportRoot(),selection+".zip");if(Files.exists(target.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)){staged=stagedProjectPackage(selection,null);if(!"git_https".equals(staged.getJSONObject("sourceEvidence").optString("sourceKind"))||!pins.getString("manifestSha256").equals(staged.getJSONObject("sourceEvidence").getJSONObject("original").optString("manifestSha256"))||!pins.getString("gitMetadataDigest").equals(staged.getJSONObject("sourceEvidence").getJSONObject("original").optString("gitMetadataDigest")))throw new SecurityException("原Git临时来源与当前已读版本不同，未替换原选择");}
+            else{sourceStageCapacity(packageImportRoot());staged=publishSourceSelection(dev.pocketengine.features.local.project.ProjectSourceImport.nativeGit(source),selection,sourceCurrent(original));}}
+        JSONObject proposal=planProjectPackageImport(selection,staged.getString("sha256"),pins.getString("projectName"),null,source).getJSONObject("plan");return new GitPublicationReview(this,source,proposal,original);
+    }
+    public GitPublicationResult executeGitPublicationForOwner(GitPublicationConfirmed selected)throws Exception {java.util.Objects.requireNonNull(selected).enter(this);selected.review.source.requireCurrent(selected.review.original);return new GitPublicationResult(selected.review.plan,importProjectPackage(selected.review.plan,selected.review.source,selected.review.original).put("found",true));}
+    /** Exact native import/query fact, not a model-supplied success JSON. */
+    public static final class GitPublicationResult {private final String value,plan;private GitPublicationResult(JSONObject plan,JSONObject value){this.plan=plan.toString();this.value=value.toString();}public JSONObject metadata()throws Exception{return new JSONObject(value);}public JSONObject originalPlan()throws Exception{return new JSONObject(plan);}}
+    public GitPublicationResult queryGitPublicationForOwner(JSONObject originalNativePlan)throws Exception{return new GitPublicationResult(originalNativePlan,findProjectPackageImportForOwner(originalNativePlan));}
+
+    /** Native owner Git intake only, not a feature/model command or second runtime. */
+    public synchronized dev.pocketengine.features.local.project.ProjectGitImport gitImportsForOwner()throws Exception {
+        if(closed||!(projectRuntime instanceof ManagedProjectRuntime))throw new SecurityException("原本机Git读取环境不可用");if(nativeGitImport==null)nativeGitImport=new dev.pocketengine.features.local.project.ProjectGitImport(new File(root,"git-source-intakes"),(ManagedProjectRuntime)projectRuntime);return nativeGitImport;
     }
     /** Native Skill host only: retain the original runtime, never create a second
      * runner or turn a model-supplied native=true marker into an executor. */

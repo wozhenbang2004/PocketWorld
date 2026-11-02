@@ -548,6 +548,11 @@ public final class RemoteModule implements EngineModule {
     }
     /** Native assignment host only. Model handle() deliberately has no selected-copy submit route. */
     /** Native owner only. These methods are intentionally absent from EngineModule.handle/model tools. */
+    /** Paired native gateway transport only. Deliberately absent from handle()/model tools. */
+    public dev.pocketengine.features.proxy.NativeHarnessGatewayBridge.Transport harnessGatewayTransport(JSONObject nativeTarget)throws Exception {
+        JSONObject bound=new JSONObject(nativeTarget.toString());String profile=identifier(bound,"profileId");requireProfileRevision(profile,required(bound,"_profileBinding",64));required(bound,"serviceBase",2048);
+        return (path,body)->{if(!path.matches("/v1/gateway/(?:leases(?:/[A-Za-z0-9_-]{1,80}(?:/(?:requests|cancel))?)?|requests/[A-Za-z0-9_-]{1,80}(?:/(?:body|claim|frames|failure))?)(?:\\?.*)?"))throw new SecurityException("不是原gateway协议路径");return harnessReadWrite(bound,path,body);};
+    }
     public JSONObject harnessConfigProbe(JSONObject input)throws Exception {return harnessReadWrite(input,"/v1/harnesses/probe",input.getJSONObject("request"));}
     public JSONObject harnessConfigPlan(JSONObject input)throws Exception {
         JSONObject request=new JSONObject(input.getJSONObject("request").toString());String path="/v1/harness-config/plans";

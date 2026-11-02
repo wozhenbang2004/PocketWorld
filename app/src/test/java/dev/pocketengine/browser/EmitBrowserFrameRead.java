@@ -23,6 +23,9 @@ public final class EmitBrowserFrameRead {
         emitted.put("liveInspect",BrowserPagePrograms.inspect()).put("rawScript",BrowserPagePrograms.script("document.body.textContent='actual mutation'; return {observed:document.body.textContent};","actual-token"));
         emitted.put("rawScriptError",BrowserPagePrograms.script("document.body.textContent='effect before throw'; throw new Error('after effect');","actual-token"));
         emitted.put("networkWitness",BrowserNetworkWitness.script("fixtureNetwork","registration"));
+        JSONObject settling=new JSONObject().put("mode","table").put("query","Ledger").put("settle",new JSONObject().put("timeoutMs",6000).put("stableMs",600));
+        emitted.put("settledTable",BrowserSemanticRead.script(settling,key,"original-native-test-scope",id,doc,false));
+        emitted.put("settledTableNext",BrowserSemanticRead.script(settling,key,"original-native-test-scope","a0000000-0000-0000-0000-000000000002",doc,false));
         Files.writeString(Path.of(args[0]),emitted.toString());
     }
 }

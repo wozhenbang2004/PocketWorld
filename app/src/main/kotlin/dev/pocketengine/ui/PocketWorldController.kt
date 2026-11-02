@@ -58,6 +58,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         selectProject(checkout.getString("projectId")); developmentCheckoutId = checkout.getString("id"); developmentNavigationRevision++
     }, { file -> attachmentOutcomes.openFile(file) })
     internal val projectStorage = ProjectStorageCoordinator(app, io, main, ::privateWorkspaceView) { id -> ownerArchives.openCache(id) }
+    internal val projectGitImports = ProjectGitImportCoordinator(app, io, main, ::privateWorkspaceView, { state.requestedProjectRevision.toString() + ":" + projectWorkbench.navigationRevision() }) { checkout ->
+        closeProjectPreview(); closeProjectLivePreview()
+        projectWorkbench.selectCheckout(checkout.getString("projectId"), checkout.getString("id"), replace = true)
+        projectWorkbench.selectView(checkout.getString("projectId"), 1)
+        selectProject(checkout.getString("projectId")); developmentCheckoutId = checkout.getString("id"); developmentNavigationRevision++
+    }
     internal val projectGit = ProjectGitCoordinator(app, io, main, ::privateWorkspaceView)
     internal val attachmentOutcomes = AttachmentOutcomeCoordinator(activity,app,io,main,::outcomeOwnerWindow,::focusTask,::releaseOutcomeWindow).also { flow -> app.teamWorkspaceOutcomes?.let { flow.bindTeamOutcomes(it,::openTeamAssignment) } }
     fun openTeamArtifact(selected:dev.pocketengine.features.attachments.TeamWorkspaceOutcomeHost.Selection) = attachmentOutcomes.openTeamArtifact(selected)
@@ -931,7 +937,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
 
     fun attach() { app.addObserver(observer);loadOwnerComposer(); refresh() }
-    fun detach() { projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
+    /** Native owner action; the host resolves the existing original control, never payload authority. */
+    fun enableExistingTaskGateway(taskId: String, exactTarget: JSONObject, expiresAt: Long): String? = requestOwnerDomain("remoteTask", "enableTaskGateway", JSONObject().put("taskId", taskId).put("target", exactTarget).put("expiresAt", expiresAt))
+
+    fun detach() { projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
     fun refresh() { authorizationOpening = null; ownerDomain?.let { requestOwnerDomain(it, "snapshot") }; native("getState"); native("getFeatures"); native("rescheduleAutomation"); feature("assistant", "list") }
     fun suggestInput(text: String, phoneTask: Boolean? = null) {
         if (text.isNotBlank()) state = state.copy(suggestedInputRevision = state.suggestedInputRevision + 1, suggestedInput = text, suggestedPhoneTask = phoneTask)

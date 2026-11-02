@@ -14,17 +14,18 @@ public final class BrowserSemanticRead {
     public static JSONObject schema()throws Exception {
         return new JSONObject().put("type","object").put("additionalProperties",false).put("required",new JSONArray().put("mode"))
                 .put("properties",new JSONObject().put("mode",new JSONObject().put("type","string").put("enum",new JSONArray().put("outline").put("text").put("table").put("list")))
-                        .put("query",string(160)).put("frameRef",string(36)).put("regionRef",string(100)).put("cursor",string(100)).put("baseRevision",string(64)));
+                        .put("query",string(160)).put("settle",BrowserReadSettle.schema()).put("frameRef",string(36)).put("regionRef",string(100)).put("cursor",string(100)).put("baseRevision",string(64)));
     }
     private static JSONObject string(int max)throws Exception{return new JSONObject().put("type","string").put("maxLength",max);}
     public static void validate(JSONObject read)throws Exception {
         if(read==null)throw new IllegalArgumentException("需要明确的网页只读请求");
-        Set<String> keys=Set.of("mode","query","frameRef","regionRef","cursor","baseRevision");for(java.util.Iterator<String> it=read.keys();it.hasNext();)if(!keys.contains(it.next()))throw new IllegalArgumentException("网页只读请求含额外字段");
+        Set<String> keys=Set.of("mode","query","frameRef","regionRef","cursor","baseRevision","settle");for(java.util.Iterator<String> it=read.keys();it.hasNext();)if(!keys.contains(it.next()))throw new IllegalArgumentException("网页只读请求含额外字段");
         if(!Set.of("outline","text","table","list").contains(read.getString("mode")))throw new IllegalArgumentException("不支持的语义读取模式");
         for(String key:new String[]{"query","regionRef","cursor"})if(read.has(key)){Object value=read.get(key);if(!(value instanceof String)||((String)value).trim().isEmpty()||((String)value).length()>(key.equals("query")?160:100))throw new IllegalArgumentException("网页只读选择为空或过长");}
         if(read.has("regionRef")&&(read.has("query")||read.getString("mode").equals("outline")))throw new IllegalArgumentException("outline先用query建立区域，regionRef只在text/table/list选择且不叠加query");
         if(read.has("cursor")&&(read.has("query")||read.has("regionRef")))throw new IllegalArgumentException("续读只接受原cursor和相同mode，不重新选区域");
         if(read.has("baseRevision")&&(!read.has("regionRef")||read.has("cursor")||!read.getString("baseRevision").matches("[a-f0-9]{64}")))throw new IllegalArgumentException("区域刷新需已展示的原区域与64位原read revision，不接受未知基线或续读混用");
+        BrowserReadSettle.validate(read);
         if(read.has("frameRef"))BrowserTaskSpace.uuid(read.getString("frameRef"));
         for(String key:new String[]{"regionRef","cursor"})if(read.has(key)&&!read.getString(key).matches("[0-9a-f-]{36}:[rc][0-9]{1,6}"))throw new IllegalArgumentException("只接受本页原生只读区域/续读引用");
     }
@@ -41,7 +42,7 @@ public final class BrowserSemanticRead {
     public static JSONObject result(JSONObject raw)throws Exception {
         if(!raw.optBoolean("semanticRead"))throw new IllegalStateException("网页只读回执缺少正式类型");
         if(raw.optString("status").equals("unavailable"))return new JSONObject(raw.toString()).put("accepted",true).put("verified",false).put("untrustedPageContent",true);
-        JSONObject read=raw.getJSONObject("read");validateFacts(read.getJSONObject("facts"));if(!read.getString("mode").equals(read.getJSONObject("facts").getString("mode"))||read.getJSONArray("data").length()!=read.getJSONObject("facts").getInt("returnedItems"))throw new IllegalStateException("语义数据与覆盖计数不一致");
+        JSONObject read=raw.getJSONObject("read");if(read.has("dynamic"))BrowserReadSettle.validateDynamic(read.getJSONObject("dynamic"));if(read.has("settle"))BrowserReadSettle.validateEvidence(read.getJSONObject("settle"));validateFacts(read.getJSONObject("facts"));if(!read.getString("mode").equals(read.getJSONObject("facts").getString("mode"))||read.getJSONArray("data").length()!=read.getJSONObject("facts").getInt("returnedItems"))throw new IllegalStateException("语义数据与覆盖计数不一致");
         if(!(raw.opt("text") instanceof String)||raw.getString("text").length()>6000||raw.getJSONArray("elements").length()!=0)throw new IllegalStateException("语义读取不可伪造动作refs或超出正文预算");
         String digest=hex(MessageDigest.getInstance("SHA-256").digest(new JSONObject().put("text",raw.getString("text")).put("data",read.get("data")).toString().getBytes(StandardCharsets.UTF_8)));
         String revision=hex(MessageDigest.getInstance("SHA-256").digest(new JSONObject().put("text",raw.getString("text")).put("data",read.get("data")).put("facts",read.get("facts")).toString().getBytes(StandardCharsets.UTF_8)));
@@ -52,10 +53,10 @@ public final class BrowserSemanticRead {
         if(raw.toString().getBytes(StandardCharsets.UTF_8).length>OUTPUT_BYTES)return new JSONObject().put("semanticRead",true).put("status","unavailable").put("code","semantic_output_budget").put("url",raw.optString("url")).put("title",raw.optString("title")).put("accepted",true).put("verified",false).put("readOnlyEvidence",true).put("untrustedPageContent",true).put("automaticReplayAllowed",false);return raw;
     }
     public static JSONObject sourceFacts(JSONObject read)throws Exception {
-        JSONObject facts=new JSONObject(read.getJSONObject("facts").toString());validateFacts(facts);String digest=read.getString("projectionSha256");if(!digest.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("语义读取缺少投影摘要");facts.put("projectionSha256",digest);if(read.has("delivery")){validateDelivery(read.getJSONObject("delivery"));facts.put("delivery",new JSONObject(read.getJSONObject("delivery").toString()));}return facts;
+        JSONObject facts=new JSONObject(read.getJSONObject("facts").toString());validateFacts(facts);String digest=read.getString("projectionSha256");if(!digest.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("语义读取缺少投影摘要");facts.put("projectionSha256",digest);for(String key:new String[]{"dynamic","settle"})if(read.has(key)){if(key.equals("dynamic"))BrowserReadSettle.validateDynamic(read.getJSONObject(key));else BrowserReadSettle.validateEvidence(read.getJSONObject(key));facts.put(key,new JSONObject(read.getJSONObject(key).toString()));}if(read.has("delivery")){validateDelivery(read.getJSONObject("delivery"));facts.put("delivery",new JSONObject(read.getJSONObject("delivery").toString()));}return facts;
     }
     public static void validateSourceFacts(JSONObject facts)throws Exception {
-        JSONObject copy=new JSONObject(facts.toString());String digest=copy.getString("projectionSha256");copy.remove("projectionSha256");if(copy.has("delivery")){validateDelivery(copy.getJSONObject("delivery"));copy.remove("delivery");}if(!digest.matches("[a-f0-9]{64}"))throw new SecurityException("语义来源摘要无效");validateFacts(copy);
+        JSONObject copy=new JSONObject(facts.toString());String digest=copy.getString("projectionSha256");copy.remove("projectionSha256");for(String key:new String[]{"dynamic","settle"})if(copy.has(key)){if(key.equals("dynamic"))BrowserReadSettle.validateDynamic(copy.getJSONObject(key));else BrowserReadSettle.validateEvidence(copy.getJSONObject(key));copy.remove(key);}if(copy.has("delivery")){validateDelivery(copy.getJSONObject("delivery"));copy.remove("delivery");}if(!digest.matches("[a-f0-9]{64}"))throw new SecurityException("语义来源摘要无效");validateFacts(copy);
     }
     private static void validateDelivery(JSONObject value)throws Exception {BrowserReadDelta.validateDelivery(value);}
     private static void validateFacts(JSONObject facts)throws Exception {
@@ -119,7 +120,7 @@ if(request.cursor){
  if(!fresh(c.el))return fail('read_region_detached');captured=scan(c.el,false);if(captured.version!==c.version)return fail('read_region_changed');
  target=c.el;items=c.items;presentableRegions=c.regionRecords||[];from=c.next;regionRef=c.regionRef;baseReasons=new Set(c.reasons);targetVersion=c.version;
 }else{
- if(request.regionRef){const old=state.regions.get(request.regionRef);if(!old||now-old.created>120000||!fresh(old.el))return fail('read_region_expired_or_unknown');captured=scan(old.el,false);if(!request.baseRevision&&!old.partial&&captured.version!==old.version)return fail('read_region_changed');target=old.el;regionRef=request.regionRef;targetVersion=captured.version}
+ if(request.regionRef){const old=state.regions.get(request.regionRef);if(!old||now-old.created>120000||!fresh(old.el))return fail('read_region_expired_or_unknown');captured=scan(old.el,false);if(!request.settle&&!request.baseRevision&&!old.partial&&captured.version!==old.version)return fail('read_region_changed');target=old.el;regionRef=request.regionRef;targetVersion=captured.version}
  else{captured=scan(document.body||document.documentElement,true);// Discoveries are not presented knowledge; only final returned rows are committed below.
   if(kind==='outline'){presentableRegions=captured.regions;items=captured.regions.filter(r=>!request.query||r.matched).map(r=>({regionRef:r.ref,role:r.role,name:r.name,preview:r.preview,documentOrder:r.order,state:stateOf(r.el),readOnlyEvidence:true}));target=document.body||document.documentElement;targetVersion=captured.version}
   else{let possible=captured.regions.filter(r=>kind==='text'?(!request.query||r.matched):kind==='table'?(r.role==='table'||r.role==='grid'):(r.role==='list'));if(request.query)possible=possible.filter(r=>r.matched);if(kind==='text'&&!request.query)possible=captured.regions.filter(r=>r.el===(document.body||document.documentElement));if(possible.length!==1)return fail(possible.length?'read_region_ambiguous':'read_region_not_found');const picked=possible[0];target=picked.el;regionRef=picked.ref;if(target!==(document.body||document.documentElement))captured=scan(target,false);targetVersion=captured.version}
@@ -150,6 +151,33 @@ if(kind==='outline'){const byRef=new Map(presentableRegions.map(r=>[r.ref,r]));f
 else if(regionRef)state.regions.set(regionRef,{el:target,version:targetVersion,created:now,partial:captured.reasons.size>0});
 while(state.regions.size>512)state.regions.delete(state.regions.keys().next().value);
 const reasons=[...baseReasons].slice(0,16),facts={mode:kind,regionRef,projectionVersion:targetVersion,from,to,totalCaptured:items.length,returnedItems:data.length,omittedItems:Math.max(0,to-from-data.length),partial:reasons.length>0,reasons,wholePageComplete:false,scope:frameScope,textCharsScanned:captured.chars,nodesScanned:captured.nodes,childFramesOmitted:captured.frames,openShadowRootsRead:captured.shadows,closedShadowCoverage:'not_asserted',nameComputation:'bounded_dom_labels_not_browser_accessibility_tree',textProjection:'whitespace_normalized_dom_text',captureWork:work};
-return {semanticRead:true,status:'observed',url:location.href,title:document.title||'',text,elements:[],read:{mode:kind,data,cursor,facts,baseRevision:request.baseRevision||null},readOnlyEvidence:true};
+const dynamic=readDynamics(target);
+return {semanticRead:true,status:'observed',url:location.href,title:document.title||'',text,elements:[],read:{mode:kind,data,cursor,facts,dynamic,baseRevision:request.baseRevision||null},readOnlyEvidence:true};
+function readDynamics(root){
+ // Only this document's selected region and nearest semantic container; never enter a child frame.
+ let container=root;for(let p=root.parentElement;p;p=p.parentElement){container=p;if(['MAIN','ARTICLE','SECTION','BODY'].includes(p.tagName)||['region','main','article'].includes(role(p)))break}
+ const out={scope:'selected_region_and_nearest_container',busy:false,contentItems:kind==='table'?items.filter(r=>r.cells&&r.cells.some(c=>!['columnheader'].includes(c.role))).length:kind==='list'?items.length:text.trim()?1:0,observerActive:false,mutationVersion:0,pagination:[],paginationPartial:false,nodesVisited:0,networkIdleProven:false,trust:'untrusted_rendered_dom'};
+ if(kind==='outline')return out;
+ let track=state.settling;if(request.settle){
+  if(!track||track.nonce!==nonce||track.root!==root||track.container!==container){if(track){track.observer.disconnect();clearTimeout(track.timer)}track=null;
+   if(typeof MutationObserver==='function'&&typeof setTimeout==='function'){
+    try{const t={nonce,root,container,version:0,active:true};t.observer=new MutationObserver(()=>{t.version=Math.min(1000000000,t.version+1)});t.observer.observe(container,{subtree:true,childList:true,characterData:true,attributes:true});t.timer=setTimeout(()=>{t.active=false;t.observer.disconnect();if(state.settling===t)state.settling=null},Math.min(6000,request.settle.timeoutMs||4000)+250);track=t;state.settling=t}catch(_){track=null}
+   }
+  }
+  if(track){if(track.observer.takeRecords().length)track.version=Math.min(1000000000,track.version+1);out.observerActive=track.active;out.mutationVersion=track.version}
+ }else if(track){track.observer.disconnect();clearTimeout(track.timer);state.settling=null}
+ const queue=[container],seen=new WeakSet(),end=Date.now()+15;
+ while(queue.length&&out.nodesVisited<256&&Date.now()<=end){const n=queue.shift();if(!n||seen.has(n))continue;seen.add(n);out.nodesVisited++;if(n.nodeType!==1||['SCRIPT','STYLE','NOSCRIPT','TEMPLATE','IFRAME','FRAME','INPUT','TEXTAREA'].includes(n.tagName)||!visibleSubtree(n))continue;
+  const r=role(n),rendered=getComputedStyle(n).display==='contents'||n.getClientRects().length>0;if(!rendered)continue;
+  if(n.getAttribute('aria-busy')==='true'||r==='progressbar')out.busy=true;
+  if(n.tagName==='A'||n.tagName==='BUTTON'||r==='link'||r==='button'||n.hasAttribute('aria-current')){
+   const label=clip(compact(n.getAttribute('aria-label')||labelText(n)),120),current=n.hasAttribute('aria-current')&&!['false',''].includes(n.getAttribute('aria-current')),rel=compact(n.getAttribute('rel')).split(' ');
+   const k=current?'current':rel.includes('next')||/^(next|next page|下一页|下页)$/i.test(label)?'next':rel.includes('prev')||/^(previous|previous page|prev|上一页|上页)$/i.test(label)?'previous':/^(load more|show more|加载更多|更多)$/i.test(label)?'load_more':null;
+   if(k){if(out.pagination.length>=8)out.paginationPartial=true;else{let href=null;if(n.tagName==='A')try{const u=new URL(n.href,location.href);if(['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&u.href.length<=2048)href=u.href}catch(_){}out.pagination.push({kind:k,label,href,disabled:!!n.disabled||n.getAttribute('aria-disabled')==='true',current})}}
+  }
+  const children=composedChildren(n);for(let i=0;i<children.length;i++){if(queue.length>=256){out.paginationPartial=true;break}queue.push(children[i])}
+ }
+ if(queue.length)out.paginationPartial=true;return out;
+}
 """;
 }
