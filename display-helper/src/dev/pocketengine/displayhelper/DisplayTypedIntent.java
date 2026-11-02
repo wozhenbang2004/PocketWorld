@@ -32,6 +32,7 @@ final class DisplayTypedIntent {
         if(intent.resolveActivityInfo(pm,PackageManager.MATCH_DEFAULT_ONLY)==null)throw new SecurityException("intent_handler_unresolved");gate.check();gate.requireAppFree(pkg,user);gate.check();
         try{context.startActivity(intent,ActivityOptions.makeBasic().setLaunchDisplayId(display).toBundle());}
         catch(android.content.ActivityNotFoundException|SecurityException refused){return new JSONObject().put("ok",false).put("accepted",false).put("code","background_intent_platform_refused").put("automaticFallback",false);}
+        catch(Exception unknown){return new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("code","background_intent_outcome_unknown").put("automaticReplayAllowed",false).put("requiresReconciliation",true).put("verifiedBusinessSuccess",false);}
         return new JSONObject().put("ok",true).put("accepted",true).put("status","launch_requested").put("packageName",pkg).put("userId",user).put("verifiedBusinessSuccess",false).put("messageSent",false).put("requiresPostconditionCheck",true);
     }
     static Intent build(String kind,JSONObject p)throws Exception {

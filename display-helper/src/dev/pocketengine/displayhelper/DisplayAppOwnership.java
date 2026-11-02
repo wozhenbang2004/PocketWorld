@@ -7,6 +7,13 @@ import org.json.JSONObject;
 
 /** Adds all-display package/profile facts for resource admission; it does not move or close any task. */
 final class DisplayAppOwnership {
+    /** Authenticated metadata read without creating a display or assuming the app process's user. */
+    static JSONObject primary(String dump)throws Exception {
+        JSONObject facts=attach(new JSONObject(),dump);JSONArray primary=new JSONArray(),all=facts.getJSONArray("all");
+        for(int i=0;i<all.length();i++){JSONObject row=all.getJSONObject(i);if(row.getInt("displayId")==0)primary.put(new JSONObject(row.toString()));}
+        boolean known=facts.optBoolean("allDisplayIdentitiesKnown")&&primary.length()>0;
+        return new JSONObject().put("status",known?"observed":"unknown").put("primary",primary).put("identityScope","resumed_tasks_only").put("readOnly",true).put("containsScreenContent",false).put("taskMigrationPerformed",false);
+    }
     /** Called at the actual native launch fence; an empty process resource map is not proof of screen freedom. */
     static void requireAppFree(String dump,String pkg,int user,int ownDisplay)throws Exception {
         if(ownDisplay<=0||user<0||!pkg.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+"))throw new SecurityException("app_admission_identity_invalid");
