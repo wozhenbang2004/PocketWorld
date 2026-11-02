@@ -72,7 +72,7 @@ public final class AutomationConversationIdleMountedNativeTest {
         }
         JSONObject first=tasks.automationConversationDeliveryPage("",20),second=tasks.automationConversationDeliveryPage(first.getString("nextCursor"),20),third=tasks.automationConversationDeliveryPage(second.getString("nextCursor"),20);
         assertTrue(first.getBoolean("hasMore"));assertTrue(second.getBoolean("hasMore"));assertFalse(contains(first.getJSONArray("taskIds"),target));assertFalse(contains(second.getJSONArray("taskIds"),target));assertTrue("waiting target must be beyond the first40 index entries",contains(third.getJSONArray("taskIds"),target));
-        tasks.initializeExecutionScope(target,4);JSONObject execution=tasks.startAttempt(target,"background",4);String run=execution.getString("runId");int epoch=execution.getInt("coordinatorEpoch");String content="Actual mounted original scheduled result";
+        JSONObject execution=tasks.startAttempt(target,"background",4);String run=execution.getString("runId");int epoch=execution.getInt("coordinatorEpoch");String content="Actual mounted original scheduled result";
         tasks.endAttempt(target,run,"completed",content,new JSONObject());JSONObject selected=tasks.claimAutomationConversationDelivery(target);String delivery=selected.getString("deliveryId");assertTrue(selected.getBoolean("dispatchAllowed"));
         tasks.recordAutomationConversationDelivery(selected,new JSONObject().put("accepted",false).put("waitingForOriginalConversation",true).put("deliveryId",delivery));
         assertEquals("waiting_for_original_conversation",tasks.get(target,false).getJSONObject("automationConversationDelivery").getString("phase"));assertNull(history.read(()->history.sourceByReply(delivery)));
