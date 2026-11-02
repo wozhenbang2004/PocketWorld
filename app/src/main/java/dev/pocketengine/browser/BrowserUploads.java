@@ -53,9 +53,8 @@ public final class BrowserUploads {
     public static android.net.Uri stageArtifact(Context context,String taskId,JSONObject pin,RunControl original)throws Exception {
         if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("上传原件核验不能阻塞原生主线程");
         JSONObject actual=artifactPin(context,taskId,pin.getString("id"),pin.getString("sha256"));if(!actual.toString().equals(pin.toString()))throw new SecurityException("上传原件版本已变化");
-        dev.pocketengine.features.attachments.OwnerFilePreviewSource source=AttachmentRepository.get(context).privateOriginalForHost(pin.getString("id"),pin.getString("sha256"),original);byte[] bytes=source.bytes(original);
-        try{original.check();artifactPin(context,taskId,pin.getString("id"),pin.getString("sha256"));return new dev.pocketengine.features.attachments.AttachmentViewSnapshots(context).prepare(pin.getString("name"),pin.getString("mimeType"),pin.getString("sha256"),bytes,original).getData();}
-        finally{java.util.Arrays.fill(bytes,(byte)0);}
+        AttachmentRepository repository=AttachmentRepository.get(context);repository.privateOriginalForHost(pin.getString("id"),pin.getString("sha256"),original).requireCurrent(original);
+        return repository.verifiedViewIntent(pin.getString("id"),pin.getString("sha256"),original).getData();
     }
     public static String openArtifactInputScript(String pageKey,String url,String observation,JSONObject target)throws Exception {
         String ref=target.getString("ref");if(!ref.matches("n[0-9]{1,3}")||!target.optString("tag").equals("INPUT")||!target.optString("type").equals("file")||!target.optString("nodeKey").matches("k[1-9][0-9]{0,6}"))throw new SecurityException("上传需要当前真实file input");
