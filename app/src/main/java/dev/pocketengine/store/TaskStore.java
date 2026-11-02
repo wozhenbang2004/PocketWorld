@@ -37,6 +37,8 @@ public final class TaskStore {
     private final TaskStoreDeviceTrust deviceTrust;
     private final File artifacts;
     private final dev.pocketengine.features.assistant.ConversationRepository conversationRepository;
+    private final ThreadLocal<ScriptPhoneScope> scriptPhoneCall=new ThreadLocal<>();
+    private final java.util.Map<String,ScriptPhoneScope> scriptPhoneScopes=new java.util.HashMap<>();
     public TaskStore(Context context) {
         artifacts=new File(context.getFilesDir(),"artifacts");if(!artifacts.exists())artifacts.mkdirs();
         Database database=new Database(context);db=database.getWritableDatabase();
@@ -6038,6 +6040,71 @@ public final class TaskStore {
                 if(used<0||retries<0||retries>=dev.pocketengine.runtime.SafeModelRecovery.MAX_RETRIES_PER_TASK||waitMillis>dev.pocketengine.runtime.SafeModelRecovery.MAX_TOTAL_WAIT_MILLIS-used)return false;
                 recovery.put("waitedMillis",used+waitMillis).put("retries",retries+1);calls.put(failedCall);task.put("modelRecoveryBudget",recovery);write(task);return true;
     }
+    @FunctionalInterface public interface ScriptPhoneAction<T>{T run()throws Exception;}
+    /** An in-process child call of one original prepared local Skill operation. It is
+     * deliberately neither serializable nor an execution grant. The original journal,
+     * current grant, operation debit and phone driver remain authoritative. */
+    public final class ScriptPhoneScope implements AutoCloseable {
+        private final String task,run,parent,parentArguments;private final int epoch;
+        private final RunControl original;private final java.util.Set<String> allowed;
+        private boolean closed,inFlight;private int calls;private String tool="",child="";
+        private ScriptPhoneScope(String task,String run,int epoch,String parent,RunControl original,Set<String> allowed,String arguments){
+            this.task=task;this.run=run;this.epoch=epoch;this.parent=parent;this.original=original;this.allowed=new java.util.LinkedHashSet<>(allowed);parentArguments=arguments;
+        }
+        private void current()throws Exception {
+            if(closed||scriptPhoneScopes.get(parent)!=this||!original.matchesHostRun(task,run,epoch))throw new SecurityException("脚本手机回调已失效");
+            original.check();if(original.isPaused())throw new SecurityException("原任务已暂停");
+            JSONObject t=required(task);if(t.optJSONObject("origin")!=null||!"owner".equals(t.optString("actorId"))||!"private".equals(t.optString("spaceId"))||!run.equals(t.optString("runId"))||epoch!=t.optInt("coordinatorEpoch")||t.optBoolean("cancelRequested")||!t.optString("status").matches("running|preparing"))throw new SecurityException("脚本回调不属于当前私人任务");
+            try(Cursor rows=db.rawQuery("SELECT run_id,tool,state,arguments FROM operations WHERE task_id=? AND operation_id=?",new String[]{task,parent})){
+                if(!rows.moveToFirst()||!run.equals(rows.getString(0))||!"skills_execute".equals(rows.getString(1))||!"prepared".equals(rows.getString(2))||!parentArguments.equals(capabilityFingerprint(new JSONObject(rows.getString(3)))))throw new SecurityException("原脚本父操作已结束、未知或身份改变");
+            }
+            try(Cursor rows=db.rawQuery("SELECT operation_id,run_id,tool,state FROM operations WHERE task_id=? AND state IN ('prepared','unknown','project_running','project_stopping','remote_job_prepared','remote_job_sending','remote_job_unknown','remote_approval_sending','remote_approval_unknown','remote_question_prepared','remote_question_sending','remote_question_unknown')",new String[]{task})){
+                while(rows.moveToNext()){
+                    String id=rows.getString(0);boolean ownParent=parent.equals(id),ownChild=inFlight&&!child.isEmpty()&&child.equals(id)&&tool.equals(rows.getString(2));
+                    if(!run.equals(rows.getString(1))||!"prepared".equals(rows.getString(3))||!ownParent&&!ownChild)throw new SecurityException("其他动作或未知副作用仍待核对，不能执行脚本回调");
+                }
+            }
+        }
+        public <T>T invoke(String name,ScriptPhoneAction<T> action)throws Exception {
+            java.util.Objects.requireNonNull(action);
+            synchronized(TaskStore.this){current();if(inFlight||scriptPhoneCall.get()!=null||!allowed.contains(name)||calls>=32)throw new SecurityException("脚本回调不在本次有界手机范围");inFlight=true;calls++;tool=name;child="";scriptPhoneCall.set(this);}
+            try{return action.run();}finally{scriptPhoneCall.remove();synchronized(TaskStore.this){inFlight=false;tool="";child="";}}
+        }
+        @Override public void close(){synchronized(TaskStore.this){closed=true;scriptPhoneScopes.remove(parent,this);}}
+    }
+    public synchronized ScriptPhoneScope scriptPhoneScope(String task,String run,int epoch,String parent,RunControl original,Set<String> allowed)throws Exception {
+        java.util.Objects.requireNonNull(original);java.util.Objects.requireNonNull(allowed);
+        if(allowed.isEmpty()||allowed.size()>24||scriptPhoneScopes.containsKey(parent))throw new SecurityException("没有唯一脚本手机回调范围");
+        for(String name:allowed)if(name==null||!name.matches("phone_(observe|list_apps|launch_app|click_node|tap|type|swipe|back|home|query|find|extract|collect|wait|dialog|gesture|press_key|set_wheel|share_text|open_link)"))throw new SecurityException("脚本只能请求已授权本机手机工具");
+        String args;try(Cursor row=db.rawQuery("SELECT arguments FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool='skills_execute' AND state='prepared'",new String[]{task,run,parent})){if(!row.moveToFirst())throw new SecurityException("没有原脚本prepared操作");args=capabilityFingerprint(new JSONObject(row.getString(0)));}
+        ScriptPhoneScope scope=new ScriptPhoneScope(task,run,epoch,parent,original,allowed,args);scriptPhoneScopes.put(parent,scope);
+        try{scope.current();for(String name:allowed)checkCapabilityCurrent(task,run,epoch,name);return scope;}catch(Exception error){scope.close();throw error;}
+    }
+    private void scriptChildPrepared(String task,String run,int epoch,String operation,String name)throws Exception {
+        ScriptPhoneScope scope=scriptPhoneCall.get();if(scope==null)return;
+        if(!scope.task.equals(task)||!scope.run.equals(run)||scope.epoch!=epoch||!scope.inFlight||!scope.tool.equals(name)||!scope.child.isEmpty())throw new SecurityException("不是脚本本次唯一子操作");
+        scope.child=operation;scope.current();
+        appendEvent(required(task),new JSONObject().put("type","script_child_prepared").put("runId",run).put("coordinatorEpoch",epoch).put("parentOperationId",scope.parent).put("operationId",operation).put("tool",name));
+    }
+    private boolean scriptPreparedAllowed(String task,String run,int epoch,RunControl control)throws Exception {
+        ScriptPhoneScope scope=scriptPhoneCall.get();if(scope==null)return false;
+        if(!scope.task.equals(task)||!scope.run.equals(run)||scope.epoch!=epoch||control!=scope.original||!scope.inFlight)throw new SecurityException("脚本回调不是原控制器调用");scope.current();return true;
+    }
+    /** Native capability authority retains its exact argument check, admitting only
+     * the one original prepared parent while an opaque native child scope is active. */
+    public synchronized void requirePreparedCapability(String task,String run,int epoch,String operation,String tool,JSONObject args)throws Exception {
+        JSONObject t=required(task);if(!run.equals(t.optString("runId"))||epoch!=t.optInt("coordinatorEpoch"))throw new SecurityException("原operation执行身份已失效");
+        ScriptPhoneScope scope=scriptPhoneCall.get();if(scope!=null){scope.current();if(!scope.task.equals(task)||!scope.run.equals(run)||scope.epoch!=epoch||!scope.child.equals(operation)||!scope.tool.equals(tool))throw new SecurityException("不是原脚本本次child操作");}
+        boolean found=false;String expected=capabilityFingerprint(args);
+        try(Cursor rows=db.rawQuery("SELECT operation_id,run_id,tool,state,arguments FROM operations WHERE task_id=?",new String[]{task})){
+            while(rows.moveToNext()){
+                String id=rows.getString(0),state=rows.getString(3);
+                if(id.equals(operation)){if(found||!run.equals(rows.getString(1))||!tool.equals(rows.getString(2))||!"prepared".equals(state)||!expected.equals(capabilityFingerprint(new JSONObject(rows.getString(4)))))throw new SecurityException("operation已用、参数已变或不属于本执行");found=true;}
+                else if("prepared".equals(state)||"unknown".equals(state)){if(scope==null||!scope.parent.equals(id))throw new SecurityException("已有operation待核对，不能继续派发");}
+            }
+        }
+        if(!found)throw new SecurityException("缺少原AgentRunner登记的operation");
+    }
     public RunJournal journal(String id,String runId,int epoch,RunControl control){return journal(id,runId,epoch,control,null);}
     private RunJournal journal(String id,String runId,int epoch,RunControl control,ReviewedExternalGroupClaim reviewedClaim){return new RunJournal(){
         @Override public int executionStepCeiling(int captured)throws Exception {synchronized(TaskStore.this){
@@ -6090,7 +6157,7 @@ public final class TaskStore {
             db.beginTransaction();try{if(tool.equals("project_execute")){if(!canonical(args).equals(canonical(sanitize(args))))throw new SecurityException("原项目执行参数超过journal可无损记录范围，未登记prepared");if(!args.has("planRef"))dev.pocketengine.features.local.project.ProjectPlanRecords.requireInline(args);else if(args.has("plan"))throw new SecurityException("模型执行参数不能混合inline与planRef");projectArguments(id,runId,epoch,args);}boolean liveEdit=tool.equals("project_execute")&&projectLiveEditAllowed(id,runId,epoch,args),ptyInput=tool.equals("project_process_input")&&projectProcessInputAllowed(id,runId,epoch,args);if(ptyInput&&!canonical(args).equals(canonical(sanitize(args))))throw new SecurityException("原输入参数超过journal可无损记录范围");journalFence(reviewedClaim,id,runId,epoch,control,true,tool.equals("project_stop")||liveEdit||ptyInput||teamParentServiceAllowed(id,runId,epoch,tool,args,control));if(tool.equals("project_stop"))ownedServiceRow(id,runId,epoch,args.getString("executionId"));if(TaskStoreDeviceTasks.deviceTask(required(id)))deviceTasks.checkCapability(id,runId,epoch,tool);boolean phoneTool=!TaskStoreDeviceTasks.deviceTask(required(id))&&!required(id).optString("executionMode").equals("capabilities")&&tool.matches("phone_(launch_app|click_node|tap|type|swipe|back|home)");if(!phoneTool&&!toolGranted(runId,tool))throw new SecurityException("宿主未授权此执行能力");
                 JSONObject grant=grant(runId);JSONObject scopeTask=required(id);debitExecutionScope(scopeTask,runId,false);write(scopeTask);int remaining=grant.optInt("remainingOperations");if(remaining<=0)throw new IllegalStateException("本次授权操作预算已耗尽");grant.put("remainingOperations",remaining-1);
                 ContentValues g=new ContentValues();g.put("grant_json",grant.toString());db.update("runs",g,"run_id=?",new String[]{runId});
-                String op=UUID.randomUUID().toString();ContentValues v=new ContentValues();v.put("operation_id",op);v.put("task_id",id);v.put("run_id",runId);v.put("tool",tool);v.put("arguments",sanitize(args).toString());v.put("state","prepared");v.put("created_at",System.currentTimeMillis());db.insertOrThrow("operations",null,v);if(tool.equals("project_execute"))dev.pocketengine.features.local.project.ProjectPlanRecords.pin(db,op,args);reserveTeamProjectPrepared(id,runId,epoch,op,tool);JSONObject parent=required(id),parentPool=parent.optJSONObject("teamReservationPool");if(parentPool!=null&&parentPool.getJSONObject("budgetSource").optBoolean("includeParentInference")&&(tool.matches("teams_(plan|start|message|control)")||nativeTeamRoundPool(parent)))reserveTeamParentPreparedJournal(parent,runId,epoch,op);appendEvent(required(id),new JSONObject().put("type","operation_intent").put("operationId",op).put("tool",tool).put("runId",runId));db.setTransactionSuccessful();return op;
+                String op=UUID.randomUUID().toString();ContentValues v=new ContentValues();v.put("operation_id",op);v.put("task_id",id);v.put("run_id",runId);v.put("tool",tool);v.put("arguments",sanitize(args).toString());v.put("state","prepared");v.put("created_at",System.currentTimeMillis());db.insertOrThrow("operations",null,v);scriptChildPrepared(id,runId,epoch,op,tool);if(tool.equals("project_execute"))dev.pocketengine.features.local.project.ProjectPlanRecords.pin(db,op,args);reserveTeamProjectPrepared(id,runId,epoch,op,tool);JSONObject parent=required(id),parentPool=parent.optJSONObject("teamReservationPool");if(parentPool!=null&&parentPool.getJSONObject("budgetSource").optBoolean("includeParentInference")&&(tool.matches("teams_(plan|start|message|control)")||nativeTeamRoundPool(parent)))reserveTeamParentPreparedJournal(parent,runId,epoch,op);appendEvent(required(id),new JSONObject().put("type","operation_intent").put("operationId",op).put("tool",tool).put("runId",runId));db.setTransactionSuccessful();return op;
             }finally{db.endTransaction();}
         }}
         public void finishOperation(String operationId,JSONObject receipt)throws Exception{synchronized(TaskStore.this){
@@ -6869,7 +6936,7 @@ public final class TaskStore {
     private void fence(String id,String runId,int epoch,RunControl control,boolean dispatch,boolean ownedInference,String preparedStop)throws Exception{
         if(control!=null)control.check();JSONObject t=required(id);if(!runId.equals(t.optString("runId"))||epoch!=t.optInt("coordinatorEpoch"))throw new SecurityException("旧执行代次已失效");
         if(TaskStoreDeviceTasks.deviceTask(t)){deviceTasks.fence(id,runId,epoch,control,dispatch);if(dispatch&&hasUnresolved(id)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("原设备动作结果尚未核对，不派发新效果");return;}
-        if(dispatch){if(control==null||control.isPaused()||t.optBoolean("cancelRequested"))throw new IllegalStateException("任务已暂停或取消");if(hasUnresolved(id)&&!onlyTeamRoundReadPending(id,runId,epoch,control)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("有动作结果待核对，禁止继续派发");JSONObject grant=grant(runId);executionScopeCurrent(t,runId,grant);if(grant.optLong("expiresAt")<=System.currentTimeMillis()||!"owner".equals(grant.optString("principalId"))||!"private".equals(grant.optString("spaceId"))||!t.optString("executionMode").equals(grant.optString("mode")))throw new SecurityException("执行授权已失效");
+        if(dispatch){if(control==null||control.isPaused()||t.optBoolean("cancelRequested"))throw new IllegalStateException("任务已暂停或取消");if(hasUnresolved(id)&&!scriptPreparedAllowed(id,runId,epoch,control)&&!onlyTeamRoundReadPending(id,runId,epoch,control)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("有动作结果待核对，禁止继续派发");JSONObject grant=grant(runId);executionScopeCurrent(t,runId,grant);if(grant.optLong("expiresAt")<=System.currentTimeMillis()||!"owner".equals(grant.optString("principalId"))||!"private".equals(grant.optString("spaceId"))||!t.optString("executionMode").equals(grant.optString("mode")))throw new SecurityException("执行授权已失效");
             if(!t.optString("executionMode").equals("capabilities"))try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id=?",new String[]{"phone.local"})){if(!lease.moveToFirst()||!runId.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())throw new SecurityException("手机资源租约已失效");}
         }
     }
@@ -6916,7 +6983,8 @@ public final class TaskStore {
     /** Shared capability runner events capture their admitted run, never the currently newest one. */
     public synchronized void event(String id,String runId,int epoch,JSONObject event)throws Exception{
         JSONObject task=read(id);if(task==null||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))return;
-        applyEvent(task,event,true);
+        JSONObject captured=new JSONObject(event.toString()).put("runId",runId).put("coordinatorEpoch",epoch);
+        applyEvent(task,captured,true);
     }
     private void applyEvent(JSONObject task,JSONObject event,boolean currentRun)throws Exception{
         if("inference_receipt".equals(event.optString("type")))throw new SecurityException("通用事件不能伪装原生模型计量");
