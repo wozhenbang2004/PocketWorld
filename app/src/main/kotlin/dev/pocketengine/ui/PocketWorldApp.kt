@@ -423,6 +423,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 else TextButton(onClick = controller::openChatGptUsage, modifier = Modifier.testTag("composer_chatgpt_usage")) { Text("查看用量", fontSize = 12.sp) }
             }
             AffectComposerFrame(
+                modifier = Modifier.testTag("conversation_composer_frame"),
                 editor = {
             if(!phone&&ownerDraft!=null)dev.pocketengine.ui.memory.OwnerSourceDraftPanel(ownerDraft,controller,ownerEpoch)
             if(!phone&&state.selectedChatAttachments.isNotEmpty())Column(Modifier.heightIn(max = 144.dp).verticalScroll(rememberScrollState())) { state.selectedChatAttachments.forEach { file -> Row(verticalAlignment = Alignment.CenterVertically) {
@@ -450,6 +451,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                     AffectToolButton("plus", if (state.attachmentImporting) "正在导入附件" else "添加附件",
                         onClick = { if(phone) controller.pickAttachments() else controller.openChatAttachmentPicker() },
                         enabled = !state.attachmentImporting && !state.chatSubmitting)
+                    AffectToolButton("more", "输入方式与选项", { composerDetails = !composerDetails })
                     Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                         TextButton(onClick = settings, modifier = Modifier.widthIn(max = 156.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp)) {
@@ -469,21 +471,23 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                         onClick = send, enabled = canSend, submitting = state.chatSubmitting)
                 },
                 footer = {
-                    Box {
-                        TextButton(onClick = { chatTools = true }, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                            Text(if(phone) if(mode == "background") "手机 · 后台独立屏" else "手机 · 主屏" else "当前对话", fontSize = 13.sp, color = SecondaryInk)
-                            AffectGlyph("chevron", Modifier.size(12.dp), SecondaryInk)
+                    if (composerDetails) {
+                        Box {
+                            TextButton(onClick = { chatTools = true }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                                Text(if(phone) if(mode == "background") "手机 · 后台独立屏" else "手机 · 主屏" else "当前对话", fontSize = 13.sp, color = SecondaryInk)
+                                AffectGlyph("chevron", Modifier.size(12.dp), SecondaryInk)
+                            }
+                            DropdownMenu(expanded = chatTools, onDismissRequest = { chatTools = false }) {
+                                DropdownMenuItem(text = { Text("对话") }, onClick = { chatTools = false; onPhone(false) })
+                                DropdownMenuItem(text = { Text("操作手机") }, onClick = { chatTools = false; onPhone(true) })
+                                DropdownMenuItem(text = { Text("团队协作") }, onClick = { chatTools = false; collaborate() })
+                                DropdownMenuItem(text = { Text("网页研究") }, onClick = { chatTools = false; controller.openBrowserResearch() })
+                            }
                         }
-                        DropdownMenu(expanded = chatTools, onDismissRequest = { chatTools = false }) {
-                            DropdownMenuItem(text = { Text("对话") }, onClick = { chatTools = false; onPhone(false) })
-                            DropdownMenuItem(text = { Text("操作手机") }, onClick = { chatTools = false; onPhone(true) })
-                            DropdownMenuItem(text = { Text("团队协作") }, onClick = { chatTools = false; collaborate() })
-                            DropdownMenuItem(text = { Text("网页研究") }, onClick = { chatTools = false; controller.openBrowserResearch() })
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { composerDetails = !composerDetails }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                            Text(if(composerDetails) "收起选项" else "输入选项", fontSize = 13.sp, color = SecondaryInk)
                         }
-                    }
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick = { composerDetails = !composerDetails }, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                        Text(if(composerDetails) "收起选项" else "输入选项", fontSize = 13.sp, color = SecondaryInk)
                     }
                 }
             )

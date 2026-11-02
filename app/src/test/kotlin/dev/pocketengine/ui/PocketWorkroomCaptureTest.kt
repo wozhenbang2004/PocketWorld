@@ -227,6 +227,25 @@ class PocketWorkroomCaptureTest {
             frame(screen.window, width, height)
             assertTrue("Actual App empty-state content is mounted", hasText("想做什么？"))
             assertEquals("Fixture must not start a task", 0, app.tasks.list().length())
+            val composer = nodes().firstOrNull {
+                it.config.getOrNull(SemanticsProperties.TestTag) == "conversation_composer_frame"
+            } ?: error("Actual composer frame is not mounted")
+            assertTrue("Default composer stays within two rows: ${composer.boundsInRoot}",
+                composer.boundsInRoot.height <= 112 * screen.resources.displayMetrics.density)
+            assertFalse("Low-frequency footer is disclosed on demand", hasText("当前对话"))
+            fun toggleInputOptions() {
+                val options = nodes().firstOrNull {
+                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("输入方式与选项") == true &&
+                        it.config.getOrNull(SemanticsActions.OnClick)?.action != null
+                } ?: error("Visible input options control is missing")
+                assertTrue(options.config[SemanticsActions.OnClick].action!!.invoke())
+                frame(screen.window, width, height)
+            }
+            toggleInputOptions()
+            assertTrue("Input modes remain reachable", hasText("当前对话"))
+            assertTrue("Input options can close", hasText("收起选项"))
+            toggleInputOptions()
+            assertFalse("Input modes return to the compact default", hasText("当前对话"))
             capture(screen.window, "01-workroom-empty", "主 Agent 工作入口空态", "PocketWorldApp page", width, height)
 
             val allWork = nodes().firstOrNull {
