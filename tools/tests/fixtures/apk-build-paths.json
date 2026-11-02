@@ -1,0 +1,42 @@
+{
+  "build": [
+    ".github/workflows/build-apk.yml",
+    "app/build.gradle",
+    "app/gradle.lockfile",
+    "app/src/main/AndroidManifest.xml",
+    "app/src/main/java/dev/pocketengine/EngineApplication.java",
+    "app/src/main/kotlin/dev/pocketengine/ui/PocketWorldApp.kt",
+    "app/src/main/res/values/strings.xml",
+    "app/src/main/assets/runtime/catalog.json",
+    "app/src/main/java/dev/pocketengine/features/local/runtime/native/process_supervisor.cpp",
+    "app/src/main/java/dev/pocketengine/features/local/runtime/native/source-lock.json",
+    "app/src/main/java/dev/pocketengine/features/local/runtime/native/patches/proot.patch",
+    "app/src/pendingAdb/java/dev/pocketengine/phone/AdbSession.java",
+    "display-helper/src/dev/pocketengine/displayhelper/DisplayEngine.java",
+    "tools/build-display-helper.sh",
+    "tools/build-android-runtime.py",
+    "tools/build.sh",
+    "build.gradle",
+    "settings.gradle",
+    "gradle.properties",
+    "gradlew",
+    "gradlew.bat",
+    "gradle/wrapper/gradle-wrapper.jar",
+    "gradle/wrapper/gradle-wrapper.properties",
+    "gradle/verification-metadata.xml",
+    "gradle/dependency-locks/debugRuntimeClasspath.lockfile",
+    "tools/tests/test_apk_workflow_paths.py",
+    "tools/tests/fixtures/apk-build-paths.json"
+  ],
+  "ignore": [
+    "README-Companion-Setup.txt",
+    "docs/PROJECT-STATE.md",
+    "companion/desktop_adapter.py",
+    "relay/server.py",
+    "app/src/hostTest/java/dev/pocketengine/features/devices/DeviceReceiverLifecycleTest.java",
+    "app/src/test/java/dev/pocketengine/core/RunControlTest.java",
+    "app/src/pendingAdb/test/dev/pocketengine/phone/AdbSessionTest.java",
+    "display-helper/README.md",
+    "tools/host-tests.py"
+  ]
+}

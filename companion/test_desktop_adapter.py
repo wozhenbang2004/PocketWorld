@@ -45,7 +45,7 @@ class ContractDriver:
         self.raw = PNG
 
     def capabilities(self):
-        return {"contractFixture": True, "nativeGuiVerified": False}
+        return {"contractFixture": True, "nativeGuiVerified": False, "tools": ["set_value", "verify_state", "type_text", "click", "press_key", "hotkey", "scroll"]}
 
     def stop(self):
         return {"processGroupStoppedVerified": True, "contractFixture": True}
@@ -54,16 +54,44 @@ class ContractDriver:
         self.calls.append((tool, copy.deepcopy(arguments)))
         if tool == "get_accessibility_tree":
             return {"structuredContent": {"processes": [{"pid": 123, "windows": [456]}]}, "content": []}
+        if tool == "verify_state":
+            # Model the pinned PUBLIC semantic probe: a real fresh read, but no
+            # snapshot publication/invalidation and no input dispatch.
+            element = {"element_index": 0, "role": "Edit", "label": "Document", "enabled": True,
+                       "frame": {"x": 10, "y": 10, "w": 1, "h": 1}}
+            if self.value.strip(): element["value"] = self.value
+            predicate = arguments["expect"][0]["element"]
+            matched = (predicate["selector"].get("role") == element["role"] and
+                       predicate["selector"].get("label_contains", "").casefold() in element["label"].casefold() and
+                       predicate.get("enabled", True) == element["enabled"] and
+                       ("value_equals" not in predicate or predicate["value_equals"] == element.get("value")))
+            status = "satisfied" if matched else "unsatisfied"
+            return {"structuredContent": {"status": status, "stable": matched, "samples": 1, "elapsed_ms": 0,
+                    "predicates": [{"index": 0, "status": status, "unknown_reason": None, "observed_json": json.dumps(element)}]}}
         if tool in {"get_window_state", "get_desktop_state"}:
             if arguments.get("include_accessibility_tree", True):
                 self.snapshot += 1
-            state = {"pid": 123, "window_id": 456, "window_title": "Controlled Test Editor", "screenshot_width": 1, "screenshot_height": 1,
+            width, height = struct.unpack(">II", self.raw[16:24])
+            state = {"pid": 123, "window_id": 456, "window_title": "Controlled Test Editor", "screenshot_width": width, "screenshot_height": height,
                      "capture_id": "capture-" + str(len(self.calls)), "snapshot_id": "s%08x" % self.snapshot,
                      "elements_complete": True, "elements": [{"element_token": "s%08x:0" % self.snapshot,
-                                                               "role": "Edit", "label": "Document", "value": self.value}]}
+                                                               "element_index": 0, "role": "Edit", "label": "Document", "value": self.value,
+                                                               "enabled": True, "actions": ["set_value"], "frame": {"x": 10, "y": 10, "w": 1, "h": 1},
+                                                               "screenshot_frame": {"x": 0, "y": 0, "w": 1, "h": 1}}]}
+            if not self.value.strip():
+                state["elements"][0].pop("value")  # Pinned UIA omits empty/whitespace (also failed reads).
+            if not arguments.get("include_accessibility_tree", True):
+                state.pop("elements"); state.pop("elements_complete")
+                state["screenshot_refreshed_snapshot"] = True
             return {"structuredContent": state, "content": [{"type": "image", "mimeType": "image/png", "data": base64.b64encode(self.raw).decode()}]}
         if tool == "type_text":
-            self.value = arguments["text"]
+            # Pinned f595 Windows UIA type_text appends CurrentValue + text.
+            self.value += arguments["text"]
+            if self.fail_action:
+                raise CuaError("Fixture response lost after input", effect_unknown=True)
+            return {"structuredContent": {"effect": "unverifiable", "verified": False, "path": "contract_fixture"}}
+        if tool == "set_value":
+            self.value = arguments["value"]
             if self.fail_action:
                 raise CuaError("Fixture response lost after input", effect_unknown=True)
             return {"structuredContent": {"effect": "unverifiable", "verified": False, "path": "contract_fixture"}}
@@ -159,11 +187,11 @@ class DesktopContractTests(unittest.TestCase):
         self.assertEqual("completed", result["status"])
         self.assertTrue(result["businessResultVerified"])
         self.assertEqual(1, len(self.dispatched))
-        self.assertEqual(1, sum(tool == "type_text" for tool, _ in self.driver.calls))
+        self.assertEqual(1, sum(tool == "set_value" for tool, _ in self.driver.calls))
         self.assertNotEqual(result["beforeObservationRef"]["id"], result["afterObservationRef"]["id"])
         with self.assertRaises(DesktopError):
             self.action(observation, lease)
-        self.assertEqual(1, sum(tool == "type_text" for tool, _ in self.driver.calls))
+        self.assertEqual(1, sum(tool == "set_value" for tool, _ in self.driver.calls))
 
     def test_wrong_window_old_frame_geometry_and_manual_input_refuse_before_dispatch(self):
         lease, observed = self.lease(), self.observe()
@@ -175,7 +203,7 @@ class DesktopContractTests(unittest.TestCase):
         with self.assertRaises(DesktopError):
             self.action(observed, lease)
         self.assertEqual([], self.dispatched)
-        self.assertFalse(any(tool == "type_text" for tool, _ in self.driver.calls))
+        self.assertFalse(any(tool in {"type_text", "set_value"} for tool, _ in self.driver.calls))
 
     def test_changed_pixels_are_not_silently_accepted_as_same_capture(self):
         lease, observed = self.lease(), self.observe()
@@ -205,7 +233,7 @@ class DesktopContractTests(unittest.TestCase):
             self.action(observed, lease)
         with self.assertRaises(DesktopError):
             self.adapter.control("acquire", self.binding, "peer-B", {"action": "acquire"}, self.current)
-        self.assertEqual(1, sum(tool == "type_text" for tool, _ in self.driver.calls))
+        self.assertEqual(1, sum(tool == "set_value" for tool, _ in self.driver.calls))
 
     def test_local_stop_and_lock_screen_are_not_transport_success(self):
         observed, lease = self.observe(), self.lease()

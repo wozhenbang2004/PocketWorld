@@ -27,7 +27,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import org.json.JSONObject;
 import org.json.JSONArray;
 
-public final class EngineApplication extends Application implements dev.pocketengine.features.automation.AutomationModule.AlarmHostProvider,dev.pocketengine.phone.OwnerScreenContextHost {
+public final class EngineApplication extends Application implements dev.pocketengine.features.automation.AutomationModule.AlarmHostProvider,dev.pocketengine.phone.OwnerScreenContextHost,dev.pocketengine.features.notifications.NotificationsModule.Host {
     private dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications assistantTaskNotifications;
     private final java.util.Set<String> taskNoticePending=java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final java.util.Set<String> taskNoticeDirty=java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -287,6 +287,10 @@ public final class EngineApplication extends Application implements dev.pocketen
             error("模型能力目录暂不可用，请检查存储；目录绑定的模型不会使用猜测能力。");
         }
     }
+    @Override public dev.pocketengine.features.notifications.NotificationsModule notificationsModule(){
+        EngineModule module=features==null?null:features.module("notifications");
+        return module instanceof dev.pocketengine.features.notifications.NotificationsModule?(dev.pocketengine.features.notifications.NotificationsModule)module:null;
+    }
     private void initializeFeatures(){
         groupOwnerWorkflows=new dev.pocketengine.features.NativeGroupOwnerWorkflows(this,dev.pocketengine.ui.ComposeActivity.class);
         features=new FeatureHost(this::publish,tasks,()->activeId()!=null,resources);FeatureContext context=new FeatureContext(this,settings,new SecretVault(this),this::publish);
@@ -313,6 +317,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(assistant instanceof dev.pocketengine.features.assistant.AssistantModule)memorySources.bindAssistant((dev.pocketengine.features.assistant.AssistantModule)assistant);
         if(assistant instanceof dev.pocketengine.features.assistant.AssistantModule)((dev.pocketengine.features.assistant.AssistantModule)assistant).setSourceSynchronizer(()->memorySources.synchronize(json("ownerId","owner","spaceId","private")));
         addModule("display",()->new dev.pocketengine.phone.display.DisplayModule(context));
+        addModule("notifications",()->new dev.pocketengine.features.notifications.NotificationsModule(context));
         automationPlans=new dev.pocketengine.features.AutomationPlanHost(tasks,new dev.pocketengine.features.AutomationPlanHost.CurrentControl(){
             public RunControl get(String id){return retainedTaskControl(id);}
             public boolean authorizationValid(JSONObject task)throws Exception{
@@ -595,6 +600,13 @@ public final class EngineApplication extends Application implements dev.pocketen
     private dev.pocketengine.features.proxy.NativeHarnessGatewayBridge existingTaskHarnessGatewayBridge(String task,String run,String lease)throws Exception {var module=features.module("proxy");if(!(module instanceof dev.pocketengine.features.proxy.ProxyModule))throw new SecurityException("原网关不可用");var bridge=((dev.pocketengine.features.proxy.ProxyModule)module).existingHarnessGateway(task,run);if(bridge==null||!bridge.leaseId().equals(lease))throw new SecurityException("原准确网关不在本进程；保留SQL未知，不重建");return bridge;}
     private JSONObject existingTaskHarnessGateway(String task,String run)throws Exception {var module=features.module("proxy");if(!(module instanceof dev.pocketengine.features.proxy.ProxyModule))return null;var proxy=(dev.pocketengine.features.proxy.ProxyModule)module;var bridge=proxy.existingHarnessGateway(task,run);return bridge==null?null:bridge.snapshot().put("target",proxy.harnessGatewayTarget(bridge.leaseId()));}
     public synchronized RunControl control(String id){return id!=null&&id.equals(activeTaskId)?activeControl:null;}
+    /** Native task-sheet scope page only; never exposed through feature/model JSON. */
+    public dev.pocketengine.features.local.project.OwnerProjectEditScope.Page openOwnerEditScopePage(String id)throws Exception {
+        var local=features.module("local");var workspace=features.module("workspace");
+        if(!(local instanceof dev.pocketengine.features.local.LocalModule)||!(workspace instanceof dev.pocketengine.features.workspace.WorkspaceModule))throw new IllegalStateException("原项目文件宿主不可用");
+        tasks.ownerEditScopeFacts(id,capabilityControls.get(id));
+        return new dev.pocketengine.features.local.project.OwnerProjectEditScope.Page(tasks,(dev.pocketengine.features.local.LocalModule)local,(dev.pocketengine.features.workspace.WorkspaceModule)workspace,capabilityControls::get,id,()->pushTask(id));
+    }
     public synchronized ModelConfig config(String id){return id!=null&&id.equals(activeTaskId)?activeConfig:null;}
     public synchronized String mode(String id){return id!=null&&id.equals(activeTaskId)&&activeMode!=null?activeMode:"main_screen";}
     public synchronized boolean attachPort(String id,PhonePort port){if(id==null||!id.equals(activeTaskId)||activeControl==null||activeControl.isCancelled())return false;activePort=port;return true;}

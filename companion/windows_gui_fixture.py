@@ -73,14 +73,17 @@ def main():
     window = user.CreateWindowExW(0, klass.name, "PocketWorld Test Editor", 0x00CF0000, 40, 40, 640, 480, None, None, instance, None)
     if not window:
         raise ctypes.WinError(ctypes.get_last_error())
-    edit = user.CreateWindowExW(0x200, "EDIT", "", 0x40000000 | 0x10000000 | 0x00010000 | 0x00200000 | 0x4 | 0x40,
+    edit = user.CreateWindowExW(0x200, "EDIT", "OLD 旧文", 0x40000000 | 0x10000000 | 0x00010000 | 0x00200000 | 0x4 | 0x40,
                               16, 16, 590, 340, window, w.HMENU(1001), instance, None)
     button = user.CreateWindowExW(0, "BUTTON", "保存测试文件", 0x40000000 | 0x10000000 | 0x00010000,
                                 16, 370, 180, 36, window, w.HMENU(1002), instance, None)
-    if not edit or not button:
+    decoration = user.CreateWindowExW(0, "STATIC", "DECORATION A", 0x40000000 | 0x10000000,
+                                    230, 375, 310, 24, window, w.HMENU(1003), instance, None)
+    if not edit or not button or not decoration:
         raise ctypes.WinError(ctypes.get_last_error())
     user.ShowWindow(window, 5); user.UpdateWindow(window)
-    print(json.dumps({"pid": os.getpid(), "windowId": window, "fixture": "native_controlled_editor"}), flush=True)
+    print(json.dumps({"pid": os.getpid(), "windowId": window, "editWindowId": edit, "decorationWindowId": decoration,
+                      "fixture": "native_controlled_editor"}), flush=True)
     message = w.MSG()
     while True:
         result = user.GetMessageW(ctypes.byref(message), None, 0, 0)

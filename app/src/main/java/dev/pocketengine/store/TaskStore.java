@@ -5059,7 +5059,12 @@ public final class TaskStore {
             try{if(acceptsPrivateOutputTask(t))dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOutputContext(db,outputSources,id,runId);}catch(Exception unavailable){throw new dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable(unavailable);}
             if(ownerSourceCapable)dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOwnerSourceContinuation(db,conversationRepository,id,runId,t.getString("conversationId"));
             if(phoneMode){ContentValues lease=new ContentValues();lease.put("resource_id","phone.local");lease.put("run_id",runId);lease.put("epoch",epoch);lease.put("expires_at",expires);db.insertWithOnConflict("leases",null,lease,SQLiteDatabase.CONFLICT_REPLACE);}
-            JSONArray approvals=t.optJSONArray("approvals");if(!phoneMode&&approvals!=null)for(int i=0;i<approvals.length();i++){JSONObject approval=approvals.getJSONObject(i);if(approval.optString("state").equals("approved")&&approval.optLong("expiresAt")>now){if("project_execute".equals(approval.optString("tool"))&&approval.optJSONObject("arguments")!=null&&approval.getJSONObject("arguments").has("planRef"))continueProjectPlanApproval(t,approval,runId,epoch,now);else approval.put("runId",runId);}}
+            JSONArray approvals=t.optJSONArray("approvals");if(!phoneMode&&approvals!=null)for(int i=0;i<approvals.length();i++){JSONObject approval=approvals.getJSONObject(i);
+                if(ownerEditApproval(approval)&&approval.optString("state").matches("scope_active|scope_waiting_run")){
+                    if("scope_waiting_run".equals(approval.getString("state"))&&!t.optBoolean("cancelRequested")&&approval.optLong("expiresAt")>now&&t.optString("runId").equals(approval.optString("runId"))&&t.optInt("coordinatorEpoch")==approval.optInt("epoch"))approval.put("state","scope_active").put("runId",runId).put("epoch",epoch).put("pauseRevision",0L);
+                    else approval.put("state","invalidated").put("reason","original_edit_run_ended");
+                }
+                if(approval.optString("state").equals("approved")&&approval.optLong("expiresAt")>now){if("project_execute".equals(approval.optString("tool"))&&approval.optJSONObject("arguments")!=null&&approval.getJSONObject("arguments").has("planRef"))continueProjectPlanApproval(t,approval,runId,epoch,now);else approval.put("runId",runId);}}
             t.remove("automationConditionWaitId");t.remove("nativeExecutionMode");t.put("runId",runId).put("coordinatorEpoch",epoch).put("executionMode",mode).put("status","preparing").put("cancelRequested",false).put("stepCeiling",ceiling).put("approvalState","granted").put("leaseResource","phone.local").put("summary","正在恢复任务并重新观察当前现场");write(t);db.setTransactionSuccessful();return copy(t,false);
         }finally{db.endTransaction();}
     }
@@ -5757,11 +5762,13 @@ public final class TaskStore {
             // Only the original consumed startup approval can delegate these particular
             // existing source edits. Each write still spends an original journal operation.
             JSONObject teamFileScope=teamProjectFileGrant(required(binding.getString("taskId")),row.getJSONObject("arguments").getJSONObject("plan"));
-            JSONObject approval=teamFileScope!=null?new JSONObject().put("approved",true).put("approvalId",teamFileScope.getString("grantId")):liveService==null?requireCapabilityApproval(binding.getString("taskId"),binding.getString("runId"),"project_execute",row.getJSONObject("journalArguments"),capability):new JSONObject().put("approved",true).put("approvalId",liveService.getJSONObject("receipt").getJSONObject("projectExecution").getString("approvalId"));
+            JSONObject ownerEditPermit=teamFileScope==null&&liveService==null?admitOwnerProjectEditScope(binding,exact,original,row):null;
+            JSONObject approval=ownerEditPermit!=null?new JSONObject().put("approved",true).put("approvalId",ownerEditPermit.getString("scopeId")):teamFileScope!=null?new JSONObject().put("approved",true).put("approvalId",teamFileScope.getString("grantId")):liveService==null?requireCapabilityApproval(binding.getString("taskId"),binding.getString("runId"),"project_execute",row.getJSONObject("journalArguments"),capability):new JSONObject().put("approved",true).put("approvalId",liveService.getJSONObject("receipt").getJSONObject("projectExecution").getString("approvalId"));
             if(!approval.optBoolean("approved")){db.setTransactionSuccessful();return new JSONObject(approval.toString()).put("fresh",false).put("approvalRequired",true);}
             original.check();if(original.isPaused())throw new SecurityException("项目派发前已暂停");
             consumeTeamProjectFileGrant(required(binding.getString("taskId")),teamFileScope);
             JSONObject route=new JSONObject(binding.toString()).put("jobId",row.getString("operationId")).put("authority","native_host_operation").put("approvalId",approval.getString("approvalId")).put("capabilityFingerprint",capabilityFingerprint(capability));
+            if(ownerEditPermit!=null)route.put("ownerEditScopePermit",ownerEditPermit);
             JSONObject teamSelected=teamProjectSelection(required(binding.getString("taskId")));if(teamSelected!=null)route.put("teamProjectSelectionHash",teamSelected.getString("selectionHash"));
             if(liveService!=null)route.put("liveEditServiceExecutionId",serviceId).put("liveEditPolicyDigest",liveService.getJSONObject("receipt").getJSONObject("executionReceipt").getJSONObject("devWatch").getString("policyDigest"));
             for(String key:new String[]{"command","planDigest","stepId","intent","projectId","checkoutId","sourceDigest","requestDigest"})route.put(key,exact.get(key));
@@ -6067,6 +6074,85 @@ public final class TaskStore {
         if(intent==null||!binding.getString("runId").equals(intent.optString("runId"))||!"project_stop".equals(intent.optString("tool"))||!"unknown".equals(intent.optString("state"))||!target.equals(intent.getJSONObject("arguments").getString("executionId")))throw new SecurityException("停止回执不属于原意图");
         JSONObject receipt=new JSONObject().put("code","project_stop_requested").put("status","stop_requested").put("ok",true).put("accepted",true).put("processTerminal",false).put("executionId",target).put("projectStopTarget",target).put("binding",binding).put("replayAllowed",false).put("message","停止要求已交给原owned进程；是否已退出仍以原服务回执为准");
         ContentValues update=new ContentValues();update.put("state","receipt");update.put("receipt",sanitize(receipt).toString());if(db.update("operations",update,"task_id=? AND run_id=? AND operation_id=? AND tool='project_stop' AND state='unknown'",new String[]{binding.getString("taskId"),binding.getString("runId"),binding.getString("operationId")})!=1)throw new SecurityException("停止回执登记已变化");return receipt;
+    }
+    private JSONObject ownerEditScopeTask(String id)throws Exception {
+        JSONObject task=required(id);requirePrivateOwner(task);
+        if(!"assistant".equals(task.optString("kind"))||!"capabilities".equals(task.optString("executionMode"))||task.has("origin")||task.optBoolean("cancelRequested")||task.optString("status").matches("completed|cancelled|failed|stopping|reconciling"))throw new SecurityException("连续编辑仅属于本机主人原私人项目任务；来源、身份或停止状态不能借此升级");return task;
+    }
+    /** Native page read only: opening does not grant, continue, renew or refill anything. */
+    public synchronized JSONObject ownerEditScopeFacts(String id,RunControl original)throws Exception {
+        JSONObject task=ownerEditScopeTask(id);String run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
+        if(original!=null&&(original.isCancelled()||!original.matchesHostRun(id,run,epoch)))throw new SecurityException("原项目控制器已失效");
+        if(original==null&&task.optString("status").matches("preparing|running|pausing"))throw new SecurityException("原执行仍在交接，未取得真实控制器");
+        if(hasUnresolved(id))throw new SecurityException("原任务仍有未知或在途动作，请先核对；新范围不清除原障碍");
+        JSONObject scope=task.optJSONObject("executionScope"),g=grant(run);long expiry=scope==null?g.getLong("expiresAt"):TaskExecutionScope.effectiveDeadline(scope);
+        if(expiry<=System.currentTimeMillis())throw new SecurityException("原任务期限已过，请先明确调整原任务范围");
+        JSONObject facts=new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("scopeRevision",scope==null?0:scope.getLong("revision")).put("expiresAt",expiry).put("pauseRevision",original==null?-1:original.pauseRevision()).put("bindNextExplicitRun",original==null);
+        if(task.optJSONObject("developmentContext")!=null)facts.put("developmentContext",new JSONObject(task.getJSONObject("developmentContext").toString()));return facts;
+    }
+    private static boolean ownerEditApproval(JSONObject row){return dev.pocketengine.features.local.project.OwnerProjectEditScope.TOOL.equals(row.optString("tool"));}
+    public synchronized JSONObject ownerEditScopeSnapshot(String id)throws Exception {
+        JSONObject task=required(id);requirePrivateOwner(task);JSONArray rows=task.optJSONArray("approvals");JSONObject found=null;
+        for(int i=0;rows!=null&&i<rows.length();i++)if(ownerEditApproval(rows.getJSONObject(i)))found=rows.getJSONObject(i);
+        if(found==null)return new JSONObject().put("state","not_authorized");JSONObject result=new JSONObject(found.toString());
+        if(result.optString("state").matches("scope_active|scope_waiting_run")){if(result.getLong("expiresAt")<=System.currentTimeMillis())result.put("state","expired");else if(task.optBoolean("cancelRequested")||!result.getString("runId").equals(task.optString("runId")))result.put("state","invalidated");else if(result.getInt("remainingOperations")==0)result.put("state","exhausted");}return result;
+    }
+    public synchronized JSONObject approveOwnerEditScope(String id,dev.pocketengine.features.local.project.OwnerProjectEditScope.Review review,String digest)throws Exception {
+        JSONObject shown=review.requireNative(this,digest),facts=shown.getJSONObject("binding"),policy=shown.getJSONObject("policy");
+        db.beginTransaction();try{
+            JSONObject current=ownerEditScopeFacts(id,review.originalControl());if(!capabilityFingerprint(current).equals(capabilityFingerprint(facts))||!id.equals(facts.getString("taskId"))||policy.getLong("expiresAt")<=System.currentTimeMillis()||policy.getLong("expiresAt")>facts.getLong("expiresAt"))throw new SecurityException("原项目任务、暂停代次或期限已变化，请重新审阅");
+            JSONObject task=ownerEditScopeTask(id);JSONArray rows=task.optJSONArray("approvals");if(rows==null)rows=new JSONArray();if(rows.length()>=100)throw new IllegalStateException("原任务审批记录已满");
+            for(int i=0;i<rows.length();i++){JSONObject saved=rows.getJSONObject(i);if(ownerEditApproval(saved)&&digest.equals(saved.optString("reviewDigest"))){db.setTransactionSuccessful();return new JSONObject(saved.toString()).put("newRunCreated",false).put("automaticallyContinued",false).put("originalApprovalAlreadyRecorded",true);}}
+            for(int i=0;i<rows.length();i++){JSONObject previous=rows.getJSONObject(i);if(ownerEditApproval(previous)&&previous.optString("state").matches("scope_active|scope_waiting_run"))previous.put("state","revoked").put("reason","owner_replaced_scope");
+                // A reviewed range replaces only covered definitely-undispatched edit prompts.
+                // Commands, deletes, other projects and all sensitive actions remain pending.
+                if(!"pending".equals(previous.optString("state"))||!facts.getString("runId").equals(previous.optString("runId")))continue;
+                boolean covered=false;JSONObject args=previous.optJSONObject("arguments");
+                if(args!=null&&"workspace_write".equals(previous.optString("tool"))&&"workspace".equals(policy.getJSONObject("target").optString("kind")))covered=dev.pocketengine.features.local.project.OwnerProjectEditScope.workspaceEligible(policy,policy.getJSONObject("target"),args,args.optInt("expectedVersion")==0)&&policy.getJSONObject("target").getString("projectId").equals(args.optString("projectId"));
+                if(args!=null&&"project_execute".equals(previous.optString("tool")))try{JSONObject resolved=projectStoredArguments(id,facts.getString("runId"),args),plan=resolved.getJSONObject("plan");covered=dev.pocketengine.features.local.project.OwnerProjectEditScope.projectEligible(policy,dev.pocketengine.features.local.project.ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,resolved.getString("stepId"))),plan);}catch(Exception unavailable){covered=false;}
+                if(covered)previous.put("state","invalidated").put("reason","native_owner_edit_scope_approved");
+            }
+            JSONObject approved=new JSONObject().put("id",UUID.randomUUID().toString()).put("tool",dev.pocketengine.features.local.project.OwnerProjectEditScope.TOOL).put("runId",facts.getString("runId")).put("epoch",facts.getInt("epoch")).put("state",facts.getBoolean("bindNextExplicitRun")?"scope_waiting_run":"scope_active").put("capability",policy).put("scopeBinding",facts).put("reviewDigest",digest).put("pauseRevision",facts.getLong("pauseRevision")).put("remainingOperations",policy.getInt("operationLimit")).put("operationIds",new JSONArray()).put("expiresAt",policy.getLong("expiresAt")).put("approvedAt",System.currentTimeMillis()).put("source","native_owner_project_edit_panel");
+            rows.put(approved);task.put("approvals",rows);review.requireNative(this,digest);write(task);db.setTransactionSuccessful();return new JSONObject(approved.toString()).put("newRunCreated",false).put("automaticallyContinued",false);
+        }finally{db.endTransaction();}
+    }
+    public synchronized JSONObject revokeOwnerEditScope(String id,String expected)throws Exception {
+        JSONObject task=required(id);requirePrivateOwner(task);JSONArray rows=task.optJSONArray("approvals");for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(ownerEditApproval(row)&&expected.equals(row.optString("id"))){row.put("state","revoked").put("revokedAt",System.currentTimeMillis());write(task);return new JSONObject(row.toString()).put("alreadyDispatchedEffectsRolledBack",false);}}throw new SecurityException("原编辑范围已变化，请刷新原任务");
+    }
+    private JSONObject ownerEditScopeCandidate(String id,String run,int epoch,RunControl original)throws Exception {
+        JSONObject task=ownerEditScopeTask(id);if(original==null||original.isCancelled()||original.isPaused()||!original.matchesHostRun(id,run,epoch))throw new SecurityException("连续编辑需要原任务当前未暂停控制器");
+        JSONObject found=null;JSONArray rows=task.optJSONArray("approvals");for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(ownerEditApproval(row)&&row.optString("state").equals("scope_active")){if(found!=null)throw new SecurityException("原任务有不一致的活动编辑范围");found=row;}}
+        if(found==null)return null;JSONObject scope=task.optJSONObject("executionScope");long revision=scope==null?0:scope.getLong("revision");
+        if(!run.equals(found.getString("runId"))||epoch!=found.getInt("epoch")||original.pauseRevision()!=found.getLong("pauseRevision")||found.getLong("expiresAt")<=System.currentTimeMillis()||revision!=found.getJSONObject("scopeBinding").getLong("scopeRevision")||!ownerEditContextCurrent(task,found)||found.getInt("remainingOperations")<1)return null;return found;
+    }
+    private static boolean ownerEditContextCurrent(JSONObject task,JSONObject scope)throws Exception {JSONObject before=scope.getJSONObject("scopeBinding").optJSONObject("developmentContext"),now=task.optJSONObject("developmentContext");return before==null?now==null:now!=null&&capabilityFingerprint(before).equals(capabilityFingerprint(now));}
+    private JSONObject consumeOwnerEditScope(JSONObject scope,String id,String run,int epoch,String operation,String tool,JSONObject args)throws Exception {
+        if(hasUnresolvedExcept(id,operation))throw new SecurityException("原任务有其他未决效果；编辑范围不能绕过核对");
+        try(Cursor row=db.rawQuery("SELECT tool,arguments,state,receipt FROM operations WHERE task_id=? AND run_id=? AND operation_id=?",new String[]{id,run,operation})){if(!row.moveToFirst()||!tool.equals(row.getString(0))||!"prepared".equals(row.getString(2))||!capabilityFingerprint(args).equals(capabilityFingerprint(new JSONObject(row.getString(1))))||!row.isNull(3)&&new JSONObject(row.getString(3)).has("ownerEditScopePermit"))throw new SecurityException("范围只允许原Runner这一次准确prepared，不重放或复用许可");}
+        JSONObject permit=new JSONObject().put("scopeId",scope.getString("id")).put("reviewDigest",scope.getString("reviewDigest")).put("taskId",id).put("runId",run).put("epoch",epoch).put("operationId",operation).put("tool",tool).put("argumentsHash",capabilityFingerprint(args)).put("pauseRevision",scope.getLong("pauseRevision")).put("target",new JSONObject(scope.getJSONObject("capability").getJSONObject("target").toString()));
+        scope.put("remainingOperations",scope.getInt("remainingOperations")-1);scope.getJSONArray("operationIds").put(operation);JSONObject task=required(id);JSONArray rows=task.getJSONArray("approvals");for(int i=0;i<rows.length();i++)if(scope.getString("id").equals(rows.getJSONObject(i).optString("id")))rows.put(i,scope);write(task);
+        ContentValues retained=new ContentValues();retained.put("receipt",new JSONObject().put("ownerEditScopePermit",permit).toString());if(db.update("operations",retained,"task_id=? AND run_id=? AND operation_id=? AND state='prepared'",new String[]{id,run,operation})!=1)throw new SecurityException("原编辑意图已被消费");return permit;
+    }
+    public synchronized JSONObject admitOwnerWorkspaceEditScope(String id,String run,int epoch,RunControl original,String operation,JSONObject args,JSONObject nativeTarget,boolean creating)throws Exception {
+        JSONObject candidate=required(id);if(candidate.has("origin")||!"assistant".equals(candidate.optString("kind")))return null;
+        db.beginTransaction();try{checkCapabilityCurrent(id,run,epoch,"workspace_write");JSONObject scope=ownerEditScopeCandidate(id,run,epoch,original);if(scope==null||!dev.pocketengine.features.local.project.OwnerProjectEditScope.workspaceEligible(scope.getJSONObject("capability"),nativeTarget,args,creating)){db.setTransactionSuccessful();return null;}JSONObject result=consumeOwnerEditScope(scope,id,run,epoch,operation,"workspace_write",args);db.setTransactionSuccessful();return result;}finally{db.endTransaction();}
+    }
+    private JSONObject admitOwnerProjectEditScope(JSONObject binding,JSONObject exact,RunControl original,JSONObject row)throws Exception {
+        JSONObject task=required(binding.getString("taskId"));if(task.has("origin")||!"assistant".equals(task.optString("kind")))return null;
+        JSONObject scope=ownerEditScopeCandidate(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),original);if(scope==null||!dev.pocketengine.features.local.project.OwnerProjectEditScope.projectEligible(scope.getJSONObject("capability"),exact,row.getJSONObject("arguments").getJSONObject("plan")))return null;
+        return consumeOwnerEditScope(scope,binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),binding.getString("operationId"),"project_execute",row.getJSONObject("journalArguments"));
+    }
+    /** Recheck the one original permit at the existing native commit gate; no budget is refunded. */
+    public synchronized void checkOwnerEditScopePermit(JSONObject permit,RunControl original)throws Exception {
+        String id=permit.getString("taskId"),run=permit.getString("runId"),operation=permit.getString("operationId"),tool=permit.getString("tool");int epoch=permit.getInt("epoch");JSONObject task=ownerEditScopeTask(id);checkCapabilityCurrent(id,run,epoch,tool);
+        requireToolOutputSources(id,run,epoch,original);
+        if(original==null||original.isCancelled()||original.isPaused()||!original.matchesHostRun(id,run,epoch)||original.pauseRevision()!=permit.getLong("pauseRevision")||hasUnresolvedExcept(id,operation))throw new SecurityException("原编辑范围或控制已失效，未派发新的文件效果");
+        JSONObject scope=null;JSONArray rows=task.getJSONArray("approvals");for(int i=0;i<rows.length();i++)if(permit.getString("scopeId").equals(rows.getJSONObject(i).optString("id")))scope=rows.getJSONObject(i);
+        JSONObject current=task.optJSONObject("executionScope");if(scope==null||!ownerEditApproval(scope)||!"scope_active".equals(scope.optString("state"))||!permit.getString("reviewDigest").equals(scope.optString("reviewDigest"))||!run.equals(scope.getString("runId"))||epoch!=scope.getInt("epoch")||scope.getLong("expiresAt")<=System.currentTimeMillis()||!ownerEditContextCurrent(task,scope)||(current==null?0:current.getLong("revision"))!=scope.getJSONObject("scopeBinding").getLong("scopeRevision"))throw new SecurityException("原编辑范围已撤销、过期或任务范围修订改变");
+        try(Cursor row=db.rawQuery("SELECT tool,arguments,state,receipt FROM operations WHERE task_id=? AND run_id=? AND operation_id=?",new String[]{id,run,operation})){if(!row.moveToFirst()||!tool.equals(row.getString(0))||!row.getString(2).matches("prepared|unknown")||!permit.getString("argumentsHash").equals(capabilityFingerprint(new JSONObject(row.getString(1)))))throw new SecurityException("许可不是此原在途操作");JSONObject receipt=new JSONObject(row.getString(3)),saved=receipt.optJSONObject("ownerEditScopePermit");if(saved==null&&receipt.optJSONObject("projectExecution")!=null)saved=receipt.getJSONObject("projectExecution").optJSONObject("ownerEditScopePermit");if(saved==null||!capabilityFingerprint(saved).equals(capabilityFingerprint(permit)))throw new SecurityException("缺少原操作准确许可，不能重放");}
+    }
+    public synchronized JSONObject checkOwnerProjectEditScopeIfPresent(JSONObject binding,RunControl original)throws Exception {
+        JSONObject row=projectOperationForHost(binding),receipt=row.optJSONObject("receipt"),route=receipt==null?null:receipt.optJSONObject("projectExecution"),permit=route==null?null:route.optJSONObject("ownerEditScopePermit");if(permit==null)return null;checkOwnerEditScopePermit(permit,original);return new JSONObject(permit.getJSONObject("target").toString());
     }
     public synchronized JSONObject requireCapabilityApproval(String id,String runId,String tool,JSONObject args,JSONObject capability)throws Exception{
         JSONObject task=required(id);if(!runId.equals(task.optString("runId")))throw new SecurityException("审批执行代次已失效");

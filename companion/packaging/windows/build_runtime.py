@@ -151,8 +151,8 @@ def read_lock(path, approved_sha256):
         if "/" in wheel or not wheel.endswith(".whl") or wheel.casefold() in wheels or not isinstance(item["sha256"], str) or not HASH.fullmatch(item["sha256"]):
             raise ValueError("Unique local hash-locked wheel filenames required")
         names.add(name); wheels.add(wheel.casefold())
-    if not {"pyinstaller", "cryptography", "qrcode", "colorama"} <= names:
-        raise ValueError("PyInstaller, cryptography and pinned native QR dependencies required")
+    if not {"pyinstaller", "cryptography", "qrcode", "colorama", "pillow"} <= names:
+        raise ValueError("PyInstaller, cryptography, pinned native QR and desktop PNG decoder dependencies required")
     return value
 
 
@@ -203,10 +203,12 @@ def prepared_environment(lock, wheelhouse):
     locked = {normalized(item["name"]): item["version"] for item in lock["packages"]}
     if installed != locked:
         raise ValueError("Prepared distribution set/versions differ; use an already-prepared dedicated builder")
-    if locked["cryptography"] != "50.0.0" or locked["qrcode"] != "8.2" or locked["colorama"] != "0.4.6" or locked["pyinstaller"].split(".")[0] != "6":
+    if locked["cryptography"] != "50.0.0" or locked["qrcode"] != "8.2" or locked["colorama"] != "0.4.6" or locked["pillow"] != "13.0.0" or locked["pyinstaller"].split(".")[0] != "6":
         raise ValueError("Runtime dependencies differ from current product/spec contract")
     pairing = json.loads(regular(SOURCE / "companion/packaging/windows-pairing-dependencies.json").read_text(encoding="utf-8"))
     require_pairing_wheels(lock, pairing)
+    desktop = json.loads(regular(SOURCE / "companion/packaging/windows-desktop-dependencies.json").read_text(encoding="utf-8"))
+    require_desktop_wheel(lock, desktop)
     licenses = {"python/LICENSE.txt": regular(Path(sys.base_prefix) / "LICENSE.txt").read_bytes()}
     for item in lock["packages"]:
         for name, raw in wheel_licenses(Path(wheelhouse) / item["wheel"], item).items():
@@ -220,6 +222,12 @@ def require_pairing_wheels(lock, product_pairing_lock):
         actual = package_records.get(normalized(item["name"]), {})
         if any(actual.get(key) != item[key] for key in ("version", "wheel", "sha256")):
             raise ValueError("QR wheels differ from the product's fixed official wheel lock")
+
+
+def require_desktop_wheel(lock, product_lock):
+    actual = next((item for item in lock["packages"] if normalized(item["name"]) == product_lock["component"]), {})
+    if actual.get("version") != product_lock["version"] or not any(all(actual.get(key) == wheel[key] for key in ("wheel", "sha256")) for wheel in product_lock["wheels"]):
+        raise ValueError("Desktop PNG decoder differs from the product's fixed official wheel lock")
 
 
 def build_environment(output):
@@ -254,7 +262,7 @@ def record_outputs(source, source_commit, lock, lock_sha256, versions, frozen, n
     management = {name: file_hash(Path(source) / "companion/packaging/windows" / name) for name in MANAGEMENT}
     return {"format": "pocketworld.windows-runtime-build.v1", "sourceCommit": source_commit,
             "platform": "windows-x64", "pythonVersion": lock["pythonVersion"], "pyinstallerVersion": versions["pyinstaller"],
-            "cryptographyVersion": versions["cryptography"], "qrcodeVersion": versions["qrcode"], "coloramaVersion": versions["colorama"],
+            "cryptographyVersion": versions["cryptography"], "qrcodeVersion": versions["qrcode"], "coloramaVersion": versions["colorama"], "pillowVersion": versions["pillow"],
             "toolchainDescription": lock["toolchainDescription"], "inputLockSha256": lock_sha256, "inputs": lock,
             "unsignedFiles": unsigned, "licenseFiles": licenses, "managementUnsignedFiles": management,
             "specSha256": file_hash(Path(source) / "companion/packaging/windows/pocket-companion.spec"),

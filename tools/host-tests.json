@@ -1,0 +1,21 @@
+{
+  "device-receiver": {
+    "class": "dev.pocketengine.features.devices.DeviceReceiverLifecycleTest",
+    "helpers": ["dev.pocketengine.features.devices.DeviceIngressNativeTest"],
+    "robolectric": true,
+    "description": "Original Android Service/SQLite lifecycle on Robolectric, synthetic loopback TLS; not a device test."
+  },
+  "managed-runtime": {
+    "class": "dev.pocketengine.features.local.runtime.ManagedRuntimeFlowTest",
+    "helpers": [],
+    "native": true,
+    "description": "Actual Linux desktop JNI, Python and Node processes/files; not Android ARM64 runtime acceptance."
+  },
+  "gateway-continuation": {
+    "class": "dev.pocketengine.GatewayContinuationAppJourneyTest",
+    "helpers": [],
+    "robolectric": true,
+    "python": true,
+    "description": "Original App/SQL/Service plus original Companion fixture on loopback; not a phone/WAN test."
+  }
+}

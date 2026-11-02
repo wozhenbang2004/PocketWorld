@@ -22,7 +22,7 @@ UPSTREAM_COMMIT = "f595a4fb6f524e555e5e422aab81c3457fe4a713"
 UPSTREAM_VERSION = "0.38.0"
 MCP_VERSION = "2025-06-18"  # Actual fixed upstream's supported legacy initialize.
 MAX_RESPONSE = 24 * 1024 * 1024
-ALLOWED = frozenset({"get_accessibility_tree", "get_window_state", "get_desktop_state", "click", "type_text", "hotkey", "press_key", "scroll"})
+ALLOWED = frozenset({"get_accessibility_tree", "get_window_state", "get_desktop_state", "verify_state", "click", "type_text", "set_value", "hotkey", "press_key", "scroll"})
 CAPABILITY_VERSION = "desktop-v2"
 
 
@@ -196,13 +196,17 @@ class McpCuaDriver:
                 raise CuaError("Driver response identity or protocol failed; no action replay", effect_unknown=True)
             return reply["result"]
 
-    def call(self, tool, arguments):
+    def validate_call(self, tool, arguments):
+        """Read-only admission before the original operation records input intent."""
         self.start()
         if tool not in ALLOWED or tool not in self.tools:
             raise CuaError("This Driver tool is not admitted by the desktop adapter")
         schema = self.tools[tool].get("inputSchema", {})
         if not isinstance(arguments, dict) or set(arguments) - set(schema.get("properties", {})) or not set(schema.get("required", [])) <= arguments.keys():
             raise CuaError("Desktop arguments do not match the actual pinned Driver schema", 400)
+
+    def call(self, tool, arguments):
+        self.validate_call(tool, arguments)
         # Business code builds this exact, narrow argument set. No arbitrary Cua
         # tool name, output path, JS, shell, perception or browser hook is exposed.
         return self._request("tools/call", {"name": tool, "arguments": arguments})
@@ -240,4 +244,8 @@ class McpCuaDriver:
                 "desktopCaptureDisplays": ["primary"], "spacesIncluded": False, "perceptionIncluded": False,
                 "singleKeys": {"admitted": ["Enter", "Escape", "Tab"], "runtimeAvailable": "press_key" in self.tools and not self._broken,
                                "target": "exact_observed_window", "compoundFocusClick": False, "nativeGuiVerified": False},
+                "setText": {"semantics": "replace_entire_uia_value_including_empty", "runtimeAvailable": {"set_value", "verify_state"} <= self.tools.keys() and not self._broken,
+                            "requires": "enabled_exact_text_token_with_set_value_action_and_target_region", "automaticKeystrokeFallback": False,
+                            "missingValueReadback": "unknown_not_empty; pinned UIA omits empty, whitespace and failed reads; never replay",
+                            "nativeGuiVerified": False},
                 "drag": False, "reasonDrag": "Not admitted until the pinned Windows drag contract and physical behavior are separately verified"}

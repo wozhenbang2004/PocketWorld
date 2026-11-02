@@ -120,14 +120,19 @@ class PackagingIntegrityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Windows signature"):
                 bundle_module.bundle(self.frozen,self.driver,self.sha,"5"*40,"release",self.root/"release.zip",self.provenance)
 
-    def test_frozen_spec_keeps_pinned_qr_metadata_without_image_encoder_dependencies(self):
+    def test_frozen_spec_keeps_qr_and_actual_target_decoder_dependency_contracts(self):
         # Static build-contract evidence only, not an executed Windows frozen build.
         source=(Path(bundle_module.__file__).parent/"pocket-companion.spec").read_text()
         compile(source, "pocket-companion.spec", "exec")
         self.assertIn('copy_metadata(item["name"])', source)
         self.assertIn('"qrcode": "8.2", "colorama": "0.4.6"', source)
         self.assertIn('"qrcode.image.pure"', source)
-        self.assertIn('excludes=["PIL", "png", "qrcode.image.pil"]', source)
+        self.assertIn('excludes=["png", "qrcode.image.pil"]', source)
+        self.assertIn('"PIL.Image", "PIL.PngImagePlugin"', source)
+        self.assertIn('copy_metadata("pillow")', source)
+        self.assertIn('"windows-desktop-dependencies.json"', source)
+        self.assertIn('"requirements-windows-desktop.txt"', source)
+        self.assertIn('desktop_lock["licenseSha256"]', source)
         self.assertIn('item["licenseSha256"]', source)
         self.assertIn('"windows-pairing-THIRD-PARTY-NOTICES.txt"', source)
 

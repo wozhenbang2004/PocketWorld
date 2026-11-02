@@ -1,0 +1,59 @@
+// Loaded only by the explicit host-test entrypoint; no additional dependencies or lock changes.
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+
+def registry = new JsonSlurper().parse(rootProject.file('tools/host-tests.json'))
+def selected = providers.gradleProperty('pocketworldHostTests').get().split(',').toList()
+if (selected.isEmpty() || selected.any { !registry.containsKey(it) }) {
+    throw new GradleException('Choose registered host-test groups using tools/host-tests.py --list')
+}
+def entries = selected.collect { registry[it] }
+def classes = entries.collect { it['class'] }
+def sources = (classes + entries.collectMany { it.helpers }).unique().collect { it.replace('.', '/') + '.java' }
+sources.each {
+    if (!file('src/hostTest/java/' + it).isFile()) throw new GradleException('Missing registered host-test source: ' + it)
+}
+// Do not compile the unrelated ordinary test matrix or all hostTest classes.
+android.sourceSets.test.java.setSrcDirs(['src/hostTest/java'])
+android.sourceSets.test.java.setIncludes(sources as Set)
+// Kotlin has its own conventional test roots; the registered host sources are Java.
+// Keep unrelated ordinary Compose/state test sources out of this selected compile.
+kotlin.sourceSets.matching { it.name in ['test', 'testDebug', 'testRelease'] }.configureEach {
+    kotlin.setSrcDirs([])
+}
+
+tasks.withType(Test).configureEach {
+    if (name != 'testDebugUnitTest') return
+    filter {
+        setFailOnNoMatchingTests(true)
+        classes.each { includeTestsMatching(it) }
+    }
+    maxParallelForks = 1
+    forkEvery = 1 // Isolate Android/real-JSON/native fixtures between selected classes.
+    maxHeapSize = '1024m'
+    enableAssertions = true
+    outputs.upToDateWhen { false }
+    workingDir rootProject.projectDir
+    systemProperty 'pocket.gateway.source', rootProject.projectDir.absolutePath
+    ['a25.python', 'a25.node', 'pocket.gateway.python', 'robolectric.dependency.dir'].each { key ->
+        def value = providers.gradleProperty(key).orNull
+        if (value != null) systemProperty key, value
+    }
+    if (providers.gradleProperty('robolectric.dependency.dir').isPresent()) systemProperty 'robolectric.offline', 'true'
+    def library = providers.gradleProperty('pocketworldHostNativeDir').orNull
+    if (library != null) systemProperty 'java.library.path', library
+    def hostReport = file(providers.gradleProperty('pocketworldHostReport').get())
+    reports.junitXml.required = true
+    reports.junitXml.outputLocation = new File(hostReport, 'junit')
+    testLogging { events 'passed', 'skipped', 'failed'; exceptionFormat 'full'; showStandardStreams = true }
+    doFirst {
+        def report = file(providers.gradleProperty('pocketworldHostReport').get())
+        report.mkdirs()
+        new File(report, 'classpath.txt').text = classpath.files.collect { it.absolutePath }.join(System.lineSeparator()) + System.lineSeparator()
+        new File(report, 'gradle-selection.json').text = JsonOutput.prettyPrint(JsonOutput.toJson([
+            groups: selected, classes: classes, sources: sources,
+            dependencyLock: 'app/gradle.lockfile', testTask: path,
+            assertions: true, deviceTest: false
+        ])) + '\n'
+    }
+}

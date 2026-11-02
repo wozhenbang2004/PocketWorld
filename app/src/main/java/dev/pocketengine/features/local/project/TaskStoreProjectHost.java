@@ -22,6 +22,8 @@ public final class TaskStoreProjectHost implements ProjectDevelopment.HostPort {
     private void live(JSONObject binding,JSONObject exact,RunControl original,JSONObject capability)throws Exception {
         if(current(binding)!=original)throw new SecurityException("项目原控制器已变化");
         synchronized(tasks){tasks.checkCapabilityCurrent(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),TOOL);tasks.projectOperation(binding,exact);JSONArray rows=tasks.get(binding.getString("taskId"),false).getJSONArray("operations");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!binding.getString("operationId").equals(row.getString("operationId"))&&row.optString("state").matches("prepared|unknown")&&!tasks.projectServiceAllowsInFlightEdit(binding,row)&&!tasks.projectServiceAllowsTeamObservation(binding,row)&&!tasks.projectServiceAllowsInFlightInput(binding,row))throw new SecurityException("原任务有其他未决动作");}}
+        JSONObject editTarget=tasks.checkOwnerProjectEditScopeIfPresent(binding,original);
+        if(editTarget!=null&&!editTarget.getString("runtimeIdentity").equals(local.projectRuntimeForHost(editTarget.getString("runtimeId")).optString("identity")))throw new SecurityException("原编辑范围所选运行环境身份已变化，请重新审阅");
         if(capability!=null&&!local.projectCapabilityStillCurrent(exact,capability))throw new SecurityException("已审阅的实际执行位置或版本已变化");
         original.check();
     }

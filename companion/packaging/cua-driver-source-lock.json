@@ -141,6 +141,31 @@
       "path": "libs/cua-driver/rust/crates/platform-windows/src/tools/drag.rs",
       "sha256": "9ecb0dd34521706b832d7fefc9a3553c3e9256cfce024269fba8ec9f131129e3",
       "gitBlobSha1": "3234bafccd9f64701d3f8d6f1884ff17c4fb3a1e"
+    },
+    {
+      "path": "libs/cua-driver/rust/crates/platform-windows/src/tools/set_value.rs",
+      "sha256": "22cd16ae40451be99476acfd3846123242b2bf9eefccbed5f62fa1d481c90364",
+      "gitBlobSha1": "17bce1f961d80c18b73ca3c36df27bb43bb3758f"
+    },
+    {
+      "path": "libs/cua-driver/rust/crates/cua-driver-core/src/expectation.rs",
+      "sha256": "1ce170608152331889c9b24d6c0d4fbfe60cdcc2f06d0c965a088e8377356800",
+      "gitBlobSha1": "54fcf78b70fedb6c494655617f9ce77162d76aaa"
+    },
+    {
+      "path": "libs/cua-driver/rust/crates/cua-driver-contract/src/verification.rs",
+      "sha256": "3345671784de3113dd281b3eab14f4efdb519e9f6d19d313222ae6ad21bf3aa5",
+      "gitBlobSha1": "72ed6462e5e8a164634ec6fa3e53bf20317ca47e"
+    },
+    {
+      "path": "libs/cua-driver/rust/crates/platform-windows/src/uia/snapshot.rs",
+      "sha256": "5f2bad5bc2b9f8f7d8d37ab1bfc0df09fb5c1c396b366fcf28d1c4fd3219a757",
+      "gitBlobSha1": "03dad695502f62d9fff5913e528f6bff4f5ae69c"
+    },
+    {
+      "path": "libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs",
+      "sha256": "90361fbcd469c2f26eccd129232d6959ceccc7b3a8bb044988d3d808839c5bcc",
+      "gitBlobSha1": "11c6b16ad9e524ced58a33f505cc0d79232fd741"
     }
   ],
   "binaryArtifacts": [],

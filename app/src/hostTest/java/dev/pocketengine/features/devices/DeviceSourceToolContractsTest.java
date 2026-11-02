@@ -22,6 +22,16 @@ public final class DeviceSourceToolContractsTest {
         denied("workspace-v1","workspace.read",new JSONObject().put("path","../private"));denied("workspace-v1","workspace.write",new JSONObject().put("path","a.txt").put("content","x"));
         assertTrue(DeviceSourceToolContracts.guidance("workspace.location").contains("guiDirectorySandbox=false"));assertNull(DeviceSourceToolContracts.effect("desktop-v1","desktop.act"));assertEquals(0,DeviceSourceToolContracts.variants("workspace-v1","invented.shell").length());
     }
+    @Test public void textReplacementCanClearButInsertionCannotBecomeEmptyOrForeground()throws Exception{
+        JSONObject replace=new JSONObject().put("kind","set_text").put("lease",lease()).put("elementToken","s1234abcd:7").put("text","")
+                .put("verification",new JSONObject().put("kind","element_value_equals").put("selector",new JSONObject().put("role","Edit")).put("value",""));
+        DeviceSourceToolContracts.validate("desktop-v2","desktop.act",replace);
+        denied("desktop-v2","desktop.act",new JSONObject(replace.toString()).put("deliveryMode","foreground"));
+        denied("desktop-v2","desktop.act",new JSONObject().put("kind","insert_text").put("lease",lease()).put("text",""));
+        denied("desktop-v2","desktop.act",new JSONObject(replace.toString()).put("text","a\u0000b"));
+        assertTrue(DeviceSourceToolContracts.guidance("desktop.act").contains("ValuePattern"));
+        assertTrue(DeviceSourceToolContracts.guidance("desktop.act").contains("不自动按键清空或降为追加"));
+    }
     @Test public void phoneAndCommandNumericAndTextBoundsAreNativeWireSafe()throws Exception{
         DeviceSourceToolContracts.validate("1.0","phone_type",new JSONObject().put("nodeId","native-node").put("text","中文"));
         denied("1.0","phone_type",new JSONObject().put("text","no focus fallback"));denied("1.0","phone_tap",new JSONObject().put("x",1.0).put("y",1));

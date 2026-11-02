@@ -277,8 +277,16 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         JSONObject approvalCapability=new JSONObject().put("feature",tool.feature).put("command",tool.command);
         if(tool.feature.equals("teams")&&tool.command.equals("start"))approvalCapability.put("teamDefinition",host.teamDefinition(args.getString("teamId")));
+        JSONObject ownerEditPermit=null;dev.pocketengine.features.workspace.VersionedWorkspace.FileSnapshot ownerEditFile=null;
+        if(name.equals("workspace_write")&&!operationId.isEmpty()&&host.module("workspace") instanceof dev.pocketengine.features.workspace.WorkspaceModule){
+            var workspace=(dev.pocketengine.features.workspace.WorkspaceModule)host.module("workspace");
+            ownerEditFile=workspace.fileSnapshotForHost(args.getString("projectId"),args.getString("path"),0);
+            if(ownerEditFile.version!=args.getInt("expectedVersion"))throw new IllegalStateException("文件版本已变化，请读取最新版本；未覆盖原文件");
+            ownerEditPermit=tasks.admitOwnerWorkspaceEditScope(taskId,runId,epoch,control,operationId,args,dev.pocketengine.features.local.project.OwnerProjectEditScope.workspaceTarget(workspace,args.getString("projectId")),ownerEditFile.version==0||ownerEditFile.tombstone);
+        }
         String consumedApprovalId="";
-        if(tool.write&&!tool.command.equals("$skill_execute")&&!tool.command.equals("$method_decision")){
+        if(ownerEditPermit!=null)consumedApprovalId=ownerEditPermit.getString("scopeId");
+        if(ownerEditPermit==null&&tool.write&&!tool.command.equals("$skill_execute")&&!tool.command.equals("$method_decision")){
             if(!allowWrites)throw new SecurityException("该执行仅允许读取证据");
             JSONObject capability=approvalCapability;
             if(tool.preset!=null)capability.put("pluginId",tool.preset.getString("id")).put("tool",tool.preset.getString("tool")).put("installationId",tool.preset.getString("expectedInstallationId")).put("version",tool.preset.getString("expectedVersion")).put("expectedExecutionIdentity",tool.preset.getString("expectedExecutionIdentity"));
@@ -293,7 +301,16 @@ public final class HostToolSupervisor implements CapabilityPort {
         control.check();tasks.checkCapability(taskId,runId,epoch,name,control);
         EngineModule module=host.module(tool.feature);if(module==null)throw new IllegalStateException("所选能力已不可用");
         JSONObject result;
-        if(tool.command.equals("$method_decision")){
+        if(ownerEditPermit!=null){
+            var workspace=(dev.pocketengine.features.workspace.WorkspaceModule)module;
+            // The scope and original snapshot CAS are checked at the same short native write
+            // entry. Revocation cannot race this entry into an unreviewed later dispatch.
+            synchronized(tasks){tasks.checkOwnerEditScopePermit(ownerEditPermit,control);final JSONObject[] saved=new JSONObject[1];final var expected=ownerEditFile;
+                control.dispatchAtPauseRevision(ownerEditPermit.getLong("pauseRevision"),()->saved[0]=workspace.writeBytesForHost(expected,dev.pocketengine.features.local.project.ProjectExactPatch.encode(args.getString("content"))).json().put("content",args.getString("content")));
+                result=saved[0].put("ownerEditScopePermit",ownerEditPermit);
+            }
+        }
+        else if(tool.command.equals("$method_decision")){
             if(!allowWrites||operationId.isEmpty()||!(module instanceof dev.pocketengine.features.memory.MemoryModule)||memoryFence==null||control!=memoryControl||control!=workingControl)throw new SecurityException("方法决定必须来自原任务已登记的审计操作");
             host.synchronizeMemory(privateScope());final String decisionOperation=operationId;
             // This tool owns one prepared audit row. The generic read fence would reject that

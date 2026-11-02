@@ -11,6 +11,7 @@ import binascii
 import copy
 from decimal import Decimal
 import hashlib
+import io
 import json
 import re
 import struct
@@ -263,6 +264,96 @@ class DesktopAdapter:
         raw = self._image(result)
         return result, structured, raw
 
+    @staticmethod
+    def _target_element(state, token):
+        matches = [item for item in state.get("elements", []) if item.get("element_token") == token]
+        if len(matches) != 1:
+            raise DesktopError("Exact original UIA target is unavailable; observe again")
+        return matches[0]
+
+    @staticmethod
+    def _text_element(state, token):
+        element = DesktopAdapter._target_element(state, token)
+        if (element.get("role") not in {"Edit", "Document"} or element.get("enabled") is not True
+                or "set_value" not in element.get("actions", []) or state.get("adapter_truncated")):
+            raise DesktopError("Full text replacement requires an enabled UIA text element advertising ValuePattern; no keystroke fallback")
+        return element
+
+    def _fresh_target(self, snapshot, payload, current):
+        """Public verify_state reads live UIA without replacing retained tokens.
+
+        The semantic selector is only an assertion about the ORIGINAL target,
+        never permission to select/rebind a different token. The original COM
+        identity, native frame, pixel region and snapshot epoch remain required.
+        """
+        element = self._target_element(snapshot["state"], payload["element_token"])
+        if not isinstance(element.get("frame"), dict) or set(element["frame"]) != {"x", "y", "w", "h"}:
+            raise DesktopError("Original text target lacks exact native UIA bounds; no input dispatched")
+        selector = {"role": element["role"]}
+        if isinstance(element.get("label"), str) and element["label"].strip():
+            selector["label_contains"] = element["label"]
+        predicate = {"selector": selector, "exists": True, "enabled": True}
+        if isinstance(element.get("value"), str) and element["value"]:
+            predicate["value_equals"] = element["value"]
+        target = snapshot["target"]
+        result = self.driver.call("verify_state", {"pid": target["pid"], "window_id": target["windowId"],
+                                  "expect": [{"element": predicate}], "timeout_ms": 0, "stable_samples": 1, "include_screenshot": False})
+        self._current(current)
+        state = result.get("structuredContent", {})
+        if not isinstance(state, dict):
+            raise DesktopError("Fresh UIA semantic verification has no structured provenance; no input dispatched")
+        outcomes = state.get("predicates", [])
+        if (result.get("isError") or state.get("status") != "satisfied" or state.get("stable") is not True
+                or type(state.get("samples")) is not int or state["samples"] != 1
+                or not isinstance(outcomes, list) or len(outcomes) != 1 or not isinstance(outcomes[0], dict) or outcomes[0].get("index") != 0
+                or outcomes[0].get("status") != "satisfied" or outcomes[0].get("unknown_reason") is not None):
+            raise DesktopError("Fresh original UIA target semantics are changed, ambiguous or unverifiable; no input dispatched")
+        try:
+            evidence = outcomes[0]["observed_json"]
+            if not isinstance(evidence, str) or len(evidence.encode("utf-8")) > 2000:
+                raise ValueError("Pinned semantic evidence bound exceeded")
+            observed = json.loads(evidence)
+        except (KeyError, TypeError, ValueError) as failure:
+            raise DesktopError("Fresh UIA target evidence is unavailable/truncated; no input dispatched") from failure
+        if (not isinstance(observed, dict) or any(observed.get(key) != element.get(key) for key in ("role", "label", "enabled", "selected", "frame"))
+                or observed.get("value", "") != element.get("value", "")):
+            raise DesktopError("Fresh UIA target value/identity semantics/bounds changed; no input dispatched")
+
+    @staticmethod
+    def _region_fingerprints(raw, elements):
+        """Decode with Pillow, never compare compressed PNG bytes as target pixels.
+
+        Only exact in-capture rectangles supplied by the pinned Driver qualify.
+        This is a preflight guard, NOT a new target resolver: input retains the
+        original snapshot's COM-backed token and never uses these coordinates.
+        """
+        dimensions = DesktopAdapter._png_dimensions(raw)
+        boxes = {}
+        for element in elements:
+            rectangle, token = element.get("screenshot_frame"), element.get("element_token")
+            if not isinstance(rectangle, dict) or set(rectangle) != {"x", "y", "w", "h"} or any(type(v) is not int for v in rectangle.values()):
+                continue
+            x, y, w, h = (rectangle[key] for key in ("x", "y", "w", "h"))
+            if not (0 <= x < x + w <= dimensions["width"] and 0 <= y < y + h <= dimensions["height"]) or not isinstance(token, str) or token in boxes:
+                continue
+            boxes[token] = (x, y, x + w, y + h)
+        if not boxes:
+            return {}
+        try:
+            from PIL import Image
+            with Image.open(io.BytesIO(raw), formats=["PNG"]) as image:
+                if image.size != (dimensions["width"], dimensions["height"]) or getattr(image, "n_frames", 1) != 1:
+                    raise DesktopError("Target guard requires one exact static capture")
+                image.load()
+                with image.convert("RGBA") as pixels:
+                    result = {}
+                    for token, box in boxes.items():
+                        with pixels.crop(box) as region:
+                            result[token] = {"box": box, "sha256": hashlib.sha256(region.tobytes()).hexdigest()}
+                    return result
+        except (ImportError, OSError, ValueError) as failure:
+            raise DesktopError("PNG target guard decoder unavailable or invalid; no input dispatched") from failure
+
     def observe(self, binding, arguments, metadata, current):
         self._current(current)
         if set(arguments) - {"pid", "windowId", "discovery"}:
@@ -309,7 +400,9 @@ class DesktopAdapter:
             if len(self.snapshots) >= 16:
                 self.snapshots.pop(next(iter(self.snapshots)))
             self.snapshots[identifier] = {"ref": reference, "health": after, "target": target, "binding": copy.deepcopy(binding),
-                                          "hash": value["captureSha256"], "state": copy.deepcopy(value["state"]), "consumed": False}
+                                          "hash": value["captureSha256"], "state": copy.deepcopy(value["state"]), "consumed": False,
+                                          "audience": {key: metadata[key] for key in ("taskId", "requestRunId", "requestExecutorEpoch")},
+                                          "targetRegions": self._region_fingerprints(raw, state.get("elements", []))}
             return value
 
     @staticmethod
@@ -324,6 +417,8 @@ class DesktopAdapter:
             snapshot = self.snapshots.get(observation_ref.get("id"))
             if not snapshot or not resource_equal(snapshot["ref"], observation_ref) or snapshot["consumed"] or observation_ref["expiresAt"] <= self.clock() or not resource_equal(snapshot["binding"], binding):
                 raise DesktopError("Observation is missing, consumed, stale or belongs to another resource; observe again")
+            if observation_ref["driverGeneration"] != self.generation or not resource_equal(snapshot["audience"], {key: metadata[key] for key in ("taskId", "requestRunId", "requestExecutorEpoch")}):
+                raise DesktopError("Observation belongs to another original task/run/executor epoch; observe again", 403)
             target = snapshot["target"]
             health = self._health(target)
             resource = self._scope(binding, health, target)
@@ -334,6 +429,15 @@ class DesktopAdapter:
             with self.manager.lock:
                 self._lease(resource, owner, arguments.get("lease"), {"HELD"})
             tool, payload = self._action(arguments, snapshot)
+            semantic_target = arguments["kind"] == "set_text"
+            if arguments["kind"] == "click" and "element_token" in payload:
+                element = self._target_element(snapshot["state"], payload["element_token"])
+                # UIA click can fall back to its cached center. Relax pixels
+                # only with a fresh assertion of IDENTICAL native geometry and
+                # a real semantic action; otherwise keep the full-frame guard.
+                semantic_target = (element.get("enabled") is True and not snapshot["state"].get("adapter_truncated")
+                                   and bool(set(element.get("actions", [])) & {"invoke", "toggle", "select", "expand", "collapse"})
+                                   and "verify_state" in self.driver.capabilities().get("tools", []))
             semantic = self._semantic_action(tool, payload, snapshot)
             prior_refusal = None
             if payload["delivery_mode"] == "foreground":
@@ -342,10 +446,25 @@ class DesktopAdapter:
                 if not prior_refusal or reference == metadata.get("operationId") or not resource_equal(prior_refusal, {"owner": owner, "binding": binding, "healthBinding": health["binding"], "semantic": semantic,
                                                                                                                      "taskId": metadata["taskId"], "requestRunId": metadata["requestRunId"], "requestExecutorEpoch": metadata["requestExecutorEpoch"]}):
                     raise DesktopError("Foreground needs a NEW operation and fresh observation matching an exact original known-no-input background refusal", 403)
-            # Fresh capture-only read preserves Cua element tokens. Comparing
-            # exact PNG bytes catches stale content as well as OS geometry.
+            # Fresh capture-only read preserves the exact retained COM target.
+            # A new UIA walk would stale its token; never rebind by name/index.
+            if semantic_target:
+                self._fresh_target(snapshot, payload, current)
             _, live_state, live_png = self._capture(target, preflight=True)
-            if hashlib.sha256(live_png).hexdigest() != snapshot["hash"]:
+            if "element_token" in payload and (live_state.get("snapshot_id") != snapshot["state"].get("snapshot_id")
+                    or live_state.get("screenshot_refreshed_snapshot") is not True
+                    or not payload["element_token"].startswith(str(live_state.get("snapshot_id")) + ":")):
+                raise DesktopError("Original UIA snapshot was replaced; no input dispatched, observe again")
+            if self._png_dimensions(live_png) != {"width": snapshot["state"]["screenshot_width"], "height": snapshot["state"]["screenshot_height"], "mediaType": "image/png"}:
+                raise DesktopError("Capture dimensions changed; no input dispatched, observe again")
+            if semantic_target:
+                token = payload["element_token"]
+                element = self._target_element(snapshot["state"], token)
+                original = snapshot["targetRegions"].get(token)
+                live = self._region_fingerprints(live_png, [element]).get(token)
+                if original is None or live != original or any(live_state.get(key) != snapshot["state"].get(key) for key in ("window_title", "window_bounds", "capture_coverage")):
+                    raise DesktopError("Original UIA target pixels/window semantics changed or lack an exact region; no input dispatched, observe again")
+            elif hashlib.sha256(live_png).hexdigest() != snapshot["hash"]:
                 raise DesktopError("Target pixels changed after approval; no input dispatched, observe again")
             if arguments["kind"] == "click" and "x" in arguments:
                 capture_id = live_state.get("capture_id")
@@ -355,6 +474,9 @@ class DesktopAdapter:
             health = self._health(target)
             if health["binding"] != snapshot["health"]["binding"] or health["lastInputTick"] != snapshot["health"]["lastInputTick"]:
                 raise DesktopError("Desktop changed during preflight; no input dispatched")
+            admit = getattr(self.driver, "validate_call", None)
+            if callable(admit):
+                admit(tool, payload)
             self._current(current)
             with self.manager.lock:
                 self._lease(resource, owner, arguments["lease"], {"HELD"})
@@ -375,7 +497,8 @@ class DesktopAdapter:
                 self._current(current)
                 after = self.observe(binding, target or {}, metadata, current)
                 matched = self._verify(arguments.get("verification"), after)
-                verified = matched and not action_result.get("isError")
+                replaced = arguments["kind"] != "set_text" or self._replacement_verified(payload, snapshot, after)
+                verified = matched and replaced and not action_result.get("isError")
                 effect = action_result.get("structuredContent", {})
                 refused = outcome["kind"] == "refused_pre_dispatch"
                 status = "failed" if refused else "completed" if verified else "unknown"
@@ -387,6 +510,7 @@ class DesktopAdapter:
                 receipt = {"status": status, "beforeObservationRef": observation_ref, "afterObservationRef": after["observationRef"],
                            "afterObservation": after, "inputDispatched": outcome["inputDispatched"], "inputDispatchAttempted": True,
                            "actionOutcome": outcome, "observedConditionMatched": matched, "deliveryMode": payload["delivery_mode"],
+                           "textReplacementVerified": replaced if arguments["kind"] == "set_text" else None,
                            "driverResult": self._bounded(effect, maximum=4096), "driverIsError": bool(action_result.get("isError")),
                            "businessResultVerified": verified, "remoteEffectsVerified": verified,
                            "verificationScope": "observed_window_condition_only", "userGoalVerified": False,
@@ -466,12 +590,21 @@ class DesktopAdapter:
             raise DesktopError("Pixel focus must be a separate click and re-observation", 400)
         if kind in {"insert_text", "set_text"}:
             text = arguments.get("text")
-            if not isinstance(text, str) or not text or len(text.encode("utf-8")) > 12000 or "\x00" in text:
+            if not isinstance(text, str) or (not text and kind != "set_text") or len(text.encode("utf-8")) > 12000 or "\x00" in text:
                 raise DesktopError("Text must be bounded UTF-8", 400)
             if (kind == "set_text") != (token is not None):
                 raise DesktopError("set_text requires UIA element; insert_text never silently replaces an element value", 400)
             if kind == "set_text" and mode != "background":
                 raise DesktopError("Full UIA value replacement cannot become foreground insertion; use separately observed explicit insert_text semantics", 409)
+            if kind == "set_text":
+                self._text_element(snapshot["state"], token)
+                if not {"set_value", "verify_state"} <= set(self.driver.capabilities().get("tools", [])):
+                    raise DesktopError("Pinned Driver did not advertise full ValuePattern replacement and non-mutating semantic verification; no insertion or hotkey fallback")
+                # Exact f595 schema has value, not text/delay_ms/scope. The
+                # original operation owns one direct SetValue, including clear.
+                payload.pop("scope")
+                payload["value"] = text
+                return "set_value", payload
             payload["text"] = text
             payload["delay_ms"] = 0
             return "type_text", payload
@@ -502,6 +635,22 @@ class DesktopAdapter:
             payload.update(direction=arguments["direction"], by=arguments.get("by", "line"), amount=_integer(arguments.get("amount", 3), 1, 50, "amount"))
             return "scroll", payload
         raise DesktopError("Unsupported desktop action; drag is deliberately unavailable", 409)
+
+    @staticmethod
+    def _replacement_verified(payload, snapshot, after):
+        original = DesktopAdapter._text_element(snapshot["state"], payload["element_token"])
+        state = after.get("state", {})
+        # Tokens are intentionally fresh after input. A unique semantic text
+        # target plus the exact complete value is readback, not dispatch success.
+        selector = {"role": original["role"], "screenshot_frame": original.get("screenshot_frame")}
+        if original.get("label") and original.get("label") != original.get("value"):
+            selector["label"] = original["label"]
+        matches = [item for item in state.get("elements", []) if all(item.get(key) == value for key, value in selector.items())]
+        if len(matches) != 1 or state.get("adapter_truncated"):
+            return False
+        element = matches[0]
+        return ("set_value" in element.get("actions", []) and element.get("enabled") is True
+                and isinstance(element.get("value"), str) and element["value"] == payload["value"])
 
     @staticmethod
     def _validate_verification(condition):
@@ -538,4 +687,7 @@ class DesktopAdapter:
         # unique semantic selector in the NEW actual window snapshot.
         if len(matches) != 1:
             return False
-        return kind == "element_present" or matches[0].get("value") == condition["value"]
+        # The pinned UIA builder omits empty/whitespace values AND failed or
+        # unsupported reads. Pattern availability cannot distinguish them.
+        # Missing value is unknown, never proof of a successful clear.
+        return kind == "element_present" or (isinstance(matches[0].get("value"), str) and matches[0]["value"] == condition.get("value"))

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "component": "pillow",
+  "version": "13.0.0",
+  "purpose": "Decode original bounded PNGs and compare exact UIA target regions; no image generation",
+  "source": "https://github.com/python-pillow/Pillow/tree/13.0.0",
+  "metadataSource": "https://pypi.org/pypi/pillow/13.0.0/json",
+  "license": "MIT-CMU",
+  "licenseFile": "licenses/pillow-LICENSE.txt",
+  "licenseSha256": "15181e7363dca9aed78b79bebebc7fde7f1814b8bd311ea3b87ae8ccadfc185b",
+  "wheels": [
+    {
+      "wheel": "pillow-13.0.0-cp311-cp311-win_amd64.whl",
+      "bytes": 7278471,
+      "sha256": "d7710eb676e9bb68965cb045be0d333b4c0d7f9dfbaa7fbf121385b1588683d3",
+      "url": "https://files.pythonhosted.org/packages/7d/f6/6e2d96413e4c9dbec12ea584d9e646d602877d4cce3ea669099f959deac6/pillow-13.0.0-cp311-cp311-win_amd64.whl"
+    },
+    {
+      "wheel": "pillow-13.0.0-cp312-cp312-win_amd64.whl",
+      "bytes": 7272166,
+      "sha256": "ff3fe9eb621fbb9db4c4be33ab946f6bac5f98ab50ca8d3260503653656c961b",
+      "url": "https://files.pythonhosted.org/packages/ff/cd/73a79ecdc822076002eb24b5e1e4a530b0bb5310fcb6d239abbec877110b/pillow-13.0.0-cp312-cp312-win_amd64.whl"
+    },
+    {
+      "wheel": "pillow-13.0.0-cp313-cp313-win_amd64.whl",
+      "bytes": 7284777,
+      "sha256": "9dda0788a9932776a75d8bcc020076edc308ce2508b51f6739a45e3158b3fc42",
+      "url": "https://files.pythonhosted.org/packages/d7/ed/1b16fb66a37e1b9e41370b93b2c614c7da761a5b2a41dc333f7af4639962/pillow-13.0.0-cp313-cp313-win_amd64.whl"
+    },
+    {
+      "wheel": "pillow-13.0.0-cp314-cp314t-win_amd64.whl",
+      "bytes": 7286695,
+      "sha256": "9a635068d9793c7f0d929f39f18b58f1bd86c236e8e7b64167b86af9232ebca0",
+      "url": "https://files.pythonhosted.org/packages/85/d5/ef3a8ae7609c8ab26570abf18194882534b480d245a9148b895a2262c004/pillow-13.0.0-cp314-cp314t-win_amd64.whl"
+    },
+    {
+      "wheel": "pillow-13.0.0-cp314-cp314-win_amd64.whl",
+      "bytes": 7281830,
+      "sha256": "f7cbb7a64e7ec664775195e4f81923bc8a93d9451b963f844e59118f63147a7a",
+      "url": "https://files.pythonhosted.org/packages/50/e2/7ad17747517e4c813dca78257d6bb593466f8231baf1384bc98d92745edb/pillow-13.0.0-cp314-cp314-win_amd64.whl"
+    }
+  ]
+}

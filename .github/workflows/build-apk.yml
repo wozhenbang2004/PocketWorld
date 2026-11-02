@@ -3,9 +3,38 @@ run-name: Debug APK · ${{ github.ref_name }} · ${{ github.run_number }}
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Build an APK, or run one selected host integration group (no APK)'
+        type: choice
+        default: apk
+        options: [apk, host-tests]
+      host_group:
+        description: 'Used only for target=host-tests; deliberately no full-suite option'
+        type: choice
+        default: device-receiver
+        options: [device-receiver, managed-runtime, gateway-continuation]
   push:
     branches: [main]
-    paths: ['.github/workflows/build-apk.yml', 'app/build.gradle', 'app/src/main/**']
+    # Keep the production-input contract in tools/tests/test_apk_workflow_paths.py in sync.
+    paths:
+      - '.github/workflows/build-apk.yml'
+      - 'app/build.gradle'
+      - 'app/gradle.lockfile'
+      - 'app/src/main/**'
+      - 'app/src/pendingAdb/java/**'
+      - 'display-helper/src/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - 'gradle/**'
+      - 'tools/build.sh'
+      - 'tools/build-display-helper.sh'
+      - 'tools/build-android-runtime.py'
+      - 'tools/tests/test_apk_workflow_paths.py'
+      - 'tools/tests/fixtures/apk-build-paths.json'
 
 permissions:
   contents: read
@@ -16,7 +45,7 @@ concurrency:
 
 jobs:
   apk:
-    if: ${{ github.event.repository.private }}
+    if: ${{ github.event.repository.private && (github.event_name != 'workflow_dispatch' || inputs.target != 'host-tests') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -38,6 +67,9 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
+
+      - name: Check production build trigger contract
+        run: python3 -B -m unittest discover -s tools/tests -p test_apk_workflow_paths.py -v
 
       - name: Prepare pinned Android and native toolchains
         run: |
@@ -137,4 +169,77 @@ jobs:
           name: pocketworld-build-failure-${{ github.run_number }}-${{ github.run_attempt }}
           path: build-artifacts/*.log
           if-no-files-found: ignore
+          retention-days: 7
+
+  host-tests:
+    # Manual, bounded, single-group verification. Never add this to every APK push.
+    if: ${{ github.event.repository.private && github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      HOST_TEST_GROUP: ${{ inputs.host_group }}
+      POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
+    steps:
+      - name: Check out selected revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Check lightweight build and host CLI contracts
+        run: |
+          set -euo pipefail
+          python3 -B -m unittest discover -s tools/tests -p test_apk_workflow_paths.py -v
+          python3 -B -m unittest discover -s tools/tests -p test_host_tests.py -v
+
+      - name: Prepare declared Android compile toolchains
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts/host-tests
+          : "${ANDROID_HOME:?Android SDK is required}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/android-host-tests" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-host-tests" >> "$GITHUB_ENV"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          # AGP config uses the declared NDK even though no Android native build runs.
+          "$SDKMANAGER" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+          {
+            java -version
+            python3 --version
+            if [[ "$HOST_TEST_GROUP" == managed-runtime ]]; then node --version; c++ --version; fi
+          } > build-artifacts/host-tests/tool-versions.txt 2>&1
+
+      - name: Run the selected original host test bodies
+        run: |
+          set -euo pipefail
+          python3 -B tools/host-tests.py --group "$HOST_TEST_GROUP" --online \
+            --output build-artifacts/host-tests 2>&1 | tee build-artifacts/host-tests/host-tests.log
+
+      - name: Retain selected host results, exact classpath and failure log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-host-${{ inputs.host_group }}-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            build-artifacts/host-tests/
+            app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: error
           retention-days: 7

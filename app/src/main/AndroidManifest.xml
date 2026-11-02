@@ -46,6 +46,9 @@
             <intent-filter><action android:name="android.accessibilityservice.AccessibilityService"/></intent-filter>
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service"/>
         </service>
+        <service android:name=".features.notifications.OwnerNotificationListenerService" android:exported="false" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter>
+        </service>
         <service android:name=".phone.display.adb.AdbBootstrapService" android:exported="false" android:process=":adb_bootstrap" android:stopWithTask="true"/>
         <service android:name=".features.channels.ChannelReceiveService" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled QQ bot and Weixin iLink text receiving with a visible notification and stop control; authorized requests use the existing task host"/>

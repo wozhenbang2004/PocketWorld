@@ -115,3 +115,8 @@ def runtimeNativeTask = tasks.register('buildAndroidRuntime', Exec) {
 }
 android.sourceSets.main.jniLibs.srcDir(runtimeNativeOutput.map { it.dir('jniLibs') })
 tasks.named('preBuild').configure { dependsOn runtimeNativeTask }
+
+// Opt-in source/fixture registration only; ordinary unit tests and APK builds are unchanged.
+if (providers.gradleProperty('pocketworldHostTests').isPresent()) {
+    apply from: rootProject.file('tools/host-tests.gradle')
+}

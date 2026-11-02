@@ -27,7 +27,7 @@ class RuntimeBuildContracts(unittest.TestCase):
                 "basePrefixSha256": "2" * 64, "environmentSha256": "3" * 64, "pythonLicenseSha256": "4" * 64,
                 "toolchainDescription": "INERT contract fixture, NOT an approved or installed Windows builder",
                 "packages": [{"name": name, "version": version, "wheel": name + "-" + version + "-py3-none-any.whl", "sha256": "5" * 64}
-                             for name, version in [("pyinstaller", "6.0.0"), ("cryptography", "50.0.0"), ("qrcode", "8.2"), ("colorama", "0.4.6")]]}
+                             for name, version in [("pyinstaller", "6.0.0"), ("cryptography", "50.0.0"), ("qrcode", "8.2"), ("colorama", "0.4.6"), ("pillow", "13.0.0")]]}
 
     def write_lock(self, value):
         path = self.root / "reviewed-inputs.json"
@@ -89,6 +89,19 @@ class RuntimeBuildContracts(unittest.TestCase):
         next(item for item in lock["packages"] if item["name"] == "qrcode")["sha256"] = "0" * 64
         with self.assertRaisesRegex(ValueError, "official wheel lock"):
             builder.require_pairing_wheels(lock, product)
+
+    def test_desktop_decoder_requires_exact_official_wheel_and_retained_license(self):
+        product = json.loads((Path(__file__).parent / "packaging/windows-desktop-dependencies.json").read_text())
+        lock = self.locked()
+        record = next(record for record in lock["packages"] if record["name"] == "pillow")
+        record.update({key: product["wheels"][0][key] for key in ("wheel", "sha256")})
+        builder.require_desktop_wheel(lock, product)
+        license_path = Path(__file__).parent.parent / product["licenseFile"]
+        self.assertEqual(product["licenseSha256"], builder.file_hash(license_path))
+        self.assertEqual("13.0.0", product["version"])
+        record["sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "official wheel lock"):
+            builder.require_desktop_wheel(lock, product)
 
     def test_provenance_covers_actual_files_and_existing_consumer_fields_not_a_success_claim(self):
         source = self.root / "source"; management = source / "companion/packaging/windows"; management.mkdir(parents=True)

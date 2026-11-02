@@ -534,6 +534,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return (app.features.module("teams") as? dev.pocketengine.features.teams.TeamsModule
             ?: throw IllegalStateException("原文件团队宿主不可用")).newDraftScopePage(runId)
     }
+    fun openOwnerEditScopePage(taskId: String): dev.pocketengine.features.local.project.OwnerProjectEditScope.Page {
+        check(!closed)
+        return app.openOwnerEditScopePage(taskId)
+    }
     fun openTeamRemoteRevisionPage(runId: String, assignmentId: String): dev.pocketengine.features.teams.TaskStoreTeamWriteHost.RemoteRevisionPage {
         check(!closed)
         return (app.features.module("teams") as? dev.pocketengine.features.teams.TeamsModule
@@ -1252,6 +1256,20 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             state = state.copy(notice = "原任务快捷入口已打开。切到需要的 App 后，点「捕获并预览」选择这次内容。")
         else state = state.copy(notice = null)
     }
+    internal val notificationPreviewsOwner by lazy { dev.pocketengine.features.notifications.NotificationOwnerWorkflows(activity, app.notificationsModule(), app.tasks, dev.pocketengine.features.attachments.AttachmentRepository.get(app).book) }
+    internal var notificationPreviewsOpen by mutableStateOf(false); private set
+    internal var notificationPreviewsFocused by mutableStateOf(false); private set
+    internal var notificationPreviewsForeground by mutableStateOf(false); private set
+    internal var notificationPreviewsWindowRevision by mutableStateOf(0); private set
+    internal var notificationPreviewsSourceRevision by mutableStateOf(0L); private set
+    internal var notificationPreviewsOwnerEpoch by mutableStateOf(0L); private set
+    internal fun notificationPreviewsFocus(focused: Boolean) { notificationPreviewsFocused = focused; ++notificationPreviewsWindowRevision }
+    internal fun notificationPreviewsForeground(foreground: Boolean) { notificationPreviewsForeground = foreground; if (!foreground) { ++notificationPreviewsOwnerEpoch; notificationPreviewsFocus(false) } }
+    fun openNotificationPreviews() {
+        if (app.notificationsModule() == null) { state = state.copy(error = "原通知预览模块暂不可用，请检查存储后重开应用"); return }
+        notificationPreviewsOpen = true
+    }
+    fun closeNotificationPreviews() { notificationPreviewsOpen = false; app.sendState() }
     fun openNotifications() {
         if (Build.VERSION.SDK_INT >= 33 && !state.notificationsEnabled) activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 41)
         else activity.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName))
@@ -1937,6 +1955,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
             "feature_event" -> {
                 val payload = event.optJSONObject("payload") ?: return
+                if (event.optString("feature") == "notifications") ++notificationPreviewsSourceRevision
                 if (event.optString("feature") == "memory" && payload.optString("event") == "memory_changed") invalidateTaskMemoryReadings()
                 if (event.optString("feature") == "assistant") {
                     val id = payload.optString("conversationId")

@@ -58,6 +58,15 @@ class DeviceScopeMaterialUiTest {
         fun layout(view: View) { if (view is androidx.compose.ui.node.RootForTest) view.measureAndLayoutForTest(); if (view is ViewGroup) for (i in 0 until view.childCount) layout(view.getChildAt(i)) }
         repeat(6) { androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications(); shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(60)); root.measure(View.MeasureSpec.makeMeasureSpec(393, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(852, View.MeasureSpec.EXACTLY)); root.layout(0, 0, 393, 852); layout(root); Thread.sleep(12) }
     }
+    private fun finishActivity(pending: org.robolectric.android.controller.ActivityController<DeviceWorkspaceFixtureActivity>) {
+        pending.pause().stop().destroy()
+        // Compose posts dispatcher cancellation from Activity destruction. Complete it while
+        // this test's Looper/vsync queue still exists, before Robolectric resets that queue.
+        // Otherwise AndroidUiDispatcher can retain scheduled flags for discarded callbacks,
+        // so the following test renders its first frame but cannot apply checkbox edits.
+        androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+        shadowOf(Looper.getMainLooper()).idleFor(org.robolectric.shadows.ShadowChoreographer.getFrameDelay().plusMillis(16))
+    }
     private fun awaitDialog(root: View): android.app.Dialog {
         val until = System.nanoTime() + 6_000_000_000L
         while (System.nanoTime() < until) { settle(root); ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.let { return it } }
@@ -68,6 +77,12 @@ class DeviceScopeMaterialUiTest {
         assertTrue("Current source render is not blank", pixels.toSet().size > 16)
         File(output, "$name.png").outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }; bitmap.recycle()
         File(output, "$name-semantics.txt").writeText(texts(root).joinToString("\n")); println("DEVICE_UI_NATIVE_FIXTURE $name 393x852 API35; NOT REAL PAIRING")
+    }
+    @Test fun alternatingFileAndProjectJourneysKeepTheirOwnSelectionAndConsent() {
+        repeat(2) {
+            explicitFilesKeepBudgetAndRequireExactReviewConsent()
+            projectSelectionAndStagedImportNeedSeparateExplicitConsent()
+        }
     }
     @Test fun explicitFilesKeepBudgetAndRequireExactReviewConsent() {
         val now = System.currentTimeMillis()
@@ -112,7 +127,7 @@ class DeviceScopeMaterialUiTest {
             nativeView = JSONObject(nativeView.toString()).also { it.getJSONArray("options").getJSONObject(0).put("toolDeclarations", JSONArray().put(obj("toolName" to "project_read_file", "effect" to "read"))) }
             settle(root); clickTag(root,"device_scope_option_route")
             assertTrue(nodes(root).none { it.config.getOrNull(SemanticsProperties.TestTag) == "device_scope_file_route_book-file" })
-        } finally { pending.pause().stop().destroy() }
+        } finally { finishActivity(pending) }
     }
     @Test fun projectSelectionAndStagedImportNeedSeparateExplicitConsent() {
         val now = System.currentTimeMillis(); val digest = "c".repeat(64)
@@ -161,7 +176,7 @@ class DeviceScopeMaterialUiTest {
             importView = JSONObject(pendingImport.toString()).put("reviewId","fresh-review"); settle(root)
             assertTrue(tagged(root,"device_scope_project_import_confirm").config.contains(SemanticsProperties.Disabled)); assertEquals(0,confirmations)
             clickTag(root,"device_scope_project_import_consent"); clickTag(root,"device_scope_project_import_confirm"); assertEquals(1,confirmations)
-        } finally { pending.pause().stop().destroy() }
+        } finally { finishActivity(pending) }
     }
 
 }

@@ -172,6 +172,10 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
     LaunchedEffect(tab, settings, connections, selectedTaskId, conversationPicker, teamLaunch) {
         if(tab!=0||settings||connections||selectedTaskId!=null||conversationPicker||teamLaunch)controller.voiceInputModeChanged()
     }
+    if (controller.notificationPreviewsOpen) {
+        PocketWorldTheme { OwnerNotificationPreviewsPage(controller) }
+        return
+    }
     PocketWorldTheme {
         Scaffold(
             containerColor = PageSurface,
@@ -498,6 +502,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             if (pairedTask || task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") DeviceTaskHistoryControls(task, controller.nativeDeviceWorkspace(), controller::runDeviceWorkspaceWork, controller.deviceWorkspaceRevision, controller::deviceWorkspaceChanged)
             if (pairedTask) DevicePairedTaskControls(task, controller.nativeDeviceWorkspace(), controller::runDeviceWorkspaceWork, controller::runDeviceWorkspaceControlWork, controller.deviceWorkspaceRevision, controller::deviceWorkspaceChanged) { controller.openConnection("models"); close() }
             if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask) ExecutionScopeControls(task,controller)
+            if (assistantTask && task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.status !in setOf("completed", "cancelled", "failed", "stopping", "reconciling")) OwnerProjectEditScopeControls(task.id, controller::openOwnerEditScopePage, controller::runDeviceWorkspaceWork)
             if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask && task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optString("kind") in setOf("phone", "assistant") && task.status !in setOf("completed", "cancelled", "failed", "interrupted", "reconciling")) DeviceTaskScopeEntry(task, controller.nativeDeviceTaskScope(), controller::runDeviceWorkspaceWork) { controller.deviceTaskWorkspaceChanged(task.id) }
             if (!groupTask && !mediaTask && !memoryConsolidationTask && (phoneTask || assistantTask) && teamRunReferences(task).isEmpty()) TaskExecutionProcess(task, controller) { target ->
                 val anchor = when (target) {
@@ -950,6 +955,8 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地 OCR", fontSize = 14.sp); Text("优先本地识字。像素不外发，但识别文字会作为有来源的上下文发送给所选推理服务。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localOcrAllowed, { controller.saveLocalObservation(state.localCaptureAllowed, it) }) }
                     BackgroundConnectionSummary(state, controller, compact = true)
                     SettingEntry("视觉补充", if (state.screenshots) "已允许按需发送截图，优先读取结构树" else "未允许发送截图，可在模型连接中调整") { settingsSection = 0; editApi = true }
+                    HorizontalDivider(color = Line)
+                    SettingEntry("其他应用通知预览", "本机选择应用并复核；不会自动发送模型", { close(); controller.openNotificationPreviews() })
                     HorizontalDivider(color = Line)
                     SettingEntry("任务通知", if (state.notificationsEnabled) "已开启，可以从通知暂停或停止" else "未开启，后台手机任务需要此入口", controller::openNotifications)
                     HorizontalDivider(color = Line)

@@ -126,12 +126,12 @@ class DesktopOriginalJobIntegrationTests(unittest.TestCase):
         self.assertEqual(first["id"], second["id"])
         self.assertEqual("completed", first["status"], first)
         self.assertEqual(1, self.claims[action.get("operationId")])
-        self.assertEqual(1, sum(tool == "type_text" for tool, _ in self.driver.calls))
+        self.assertEqual(1, sum(tool == "set_value" for tool, _ in self.driver.calls))
         changed = action.json(); changed["arguments"]["arguments"]["text"] = "different"
         changed["argumentsDigest"] = wire.arguments_digest(changed)
         with self.assertRaises(DesktopError):
             self.invoke(wire.parse_request(json.dumps(changed).encode()))
-        self.assertEqual(1, sum(tool == "type_text" for tool, _ in self.driver.calls))
+        self.assertEqual(1, sum(tool == "set_value" for tool, _ in self.driver.calls))
 
     def test_lost_response_original_job_is_unknown_and_not_refunded_or_replayed(self):
         observed, lease = self.observed_and_lease()
@@ -142,7 +142,7 @@ class DesktopOriginalJobIntegrationTests(unittest.TestCase):
         self.assertTrue(result["desktopDispatchAttempted"])
         self.assertEqual(result["id"], self.invoke(action)["id"])
         self.assertEqual(1, self.claims[action.get("operationId")])
-        self.assertEqual(1, sum(tool == "type_text" for tool, _ in self.driver.calls))
+        self.assertEqual(1, sum(tool == "set_value" for tool, _ in self.driver.calls))
 
     def test_single_gui_operation_settlement_is_not_shared_driver_or_os_queue_stop(self):
         observed, lease = self.observed_and_lease()
@@ -193,7 +193,7 @@ class DesktopOriginalJobIntegrationTests(unittest.TestCase):
         self.coordinator.revoke_locally(self.a.device_id, self.manager.now())
         with self.assertRaises(PermissionError):
             self.jobs.query(query, self.coordinator.check_permission(self.peer_a, query, self.manager.now()))
-        self.assertEqual(1, sum(tool == "type_text" for tool, _ in self.driver.calls))
+        self.assertEqual(1, sum(tool == "set_value" for tool, _ in self.driver.calls))
 
     def test_archived_original_audience_supports_current_read_without_live_gui_or_execution(self):
         observed, lease = self.observed_and_lease()
@@ -208,7 +208,7 @@ class DesktopOriginalJobIntegrationTests(unittest.TestCase):
         self.assertTrue(result["historicalReadOnly"])
         self.assertEqual("completed", result["lastKnownStatus"])
         self.assertEqual(job["desktopReceipt"], result["desktopReceipt"])
-        self.assertEqual(1, sum(tool == "type_text" for tool, _ in self.driver.calls))
+        self.assertEqual(1, sum(tool == "set_value" for tool, _ in self.driver.calls))
 
     def test_task_cancel_does_not_call_global_stop_or_change_expired_shared_lease(self):
         _observed, lease = self.observed_and_lease()

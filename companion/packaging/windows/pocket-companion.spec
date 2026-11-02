@@ -35,9 +35,20 @@ for item in pairing_lock["components"]:
 hidden += ["qrcode", "qrcode.main", "qrcode.constants", "qrcode.exceptions", "qrcode.util",
            "qrcode.base", "qrcode.LUT", "qrcode.image.base", "qrcode.image.pure",
            "qrcode.compat.png", "qrcode.image.styles.moduledrawers.base", "colorama"]
+desktop_lock_path = COMPANION / "packaging" / "windows-desktop-dependencies.json"
+desktop_lock = json.loads(desktop_lock_path.read_text(encoding="utf-8"))
+if desktop_lock["component"] != "pillow" or desktop_lock["version"] != "13.0.0" or importlib.metadata.version("pillow") != desktop_lock["version"]:
+    raise RuntimeError("Prepare the exact hash-locked desktop PNG decoder before building")
+desktop_license = ROOT / desktop_lock["licenseFile"]
+if hashlib.sha256(desktop_license.read_bytes()).hexdigest() != desktop_lock["licenseSha256"]:
+    raise RuntimeError("Pinned desktop decoder license material changed")
+desktop_data = [(str(desktop_lock_path), "build-materials"),
+                (str(COMPANION / "requirements-windows-desktop.txt"), "build-materials"),
+                (str(desktop_license), "licenses")] + copy_metadata("pillow")
+hidden += ["PIL.Image", "PIL.PngImagePlugin"]
 a = Analysis([str(COMPANION / "desktop_worker.py")], pathex=[str(COMPANION)], binaries=[],
-             datas=[(str(ROOT / "licenses" / "cua-driver-MIT.txt"), "licenses")] + pairing_data,
-             hiddenimports=hidden, hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=["PIL", "png", "qrcode.image.pil"], noarchive=False)
+             datas=[(str(ROOT / "licenses" / "cua-driver-MIT.txt"), "licenses")] + pairing_data + desktop_data,
+             hiddenimports=hidden, hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=["png", "qrcode.image.pil"], noarchive=False)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="PocketWorld-Companion", debug=False,
           strip=False, upx=False, console=True, manifest=str(Path(SPECPATH) / "PocketWorld-Companion.manifest"))

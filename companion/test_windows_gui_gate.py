@@ -59,11 +59,34 @@ class RealWindowsGuiAcceptance(unittest.TestCase):
                 self.assertEqual(1, len(edits), "The controlled edit must have one real UIA identity; do not fall back to blind typing")
                 lease = adapter.control("acquire", binding, "explicit-local-test-operator", {"action": "acquire"}, current)["lease"]
                 value = "你好，PocketWorld！\r\n手机是主端，电脑只做轻量桥接。"
-                typed = adapter.act(binding, before["observationRef"], "explicit-local-test-operator",
-                                    {"kind": "set_text", "lease": lease, "elementToken": edits[0]["element_token"], "text": value,
-                                     "verification": {"kind": "element_value_equals", "selector": {"role": edits[0]["role"]}, "value": value}},
-                                    metadata, current, lambda: None)
-                self.assertEqual("completed", typed["status"], typed)
+                # R4-F003: a genuinely NONEMPTY native control, then English,
+                # Chinese and final value. No select-all/typing fallback.
+                self.assertIn("OLD", edits[0].get("value", ""))
+                current_observation = before
+                for index, replacement in enumerate(("NEW", "新文", value)):
+                    target_edit = [item for item in current_observation["state"].get("elements", []) if item.get("role") == edits[0]["role"] and item.get("element_token")]
+                    self.assertEqual(1, len(target_edit))
+                    if index == 0:
+                        # R4-F007: mutate ONLY the controlled fixture's native
+                        # decoration. This is not foreground/user input, and is
+                        # never used against a real user's application.
+                        import ctypes
+                        from ctypes import wintypes
+                        user = ctypes.WinDLL("user32", use_last_error=True)
+                        user.SetWindowTextW.argtypes, user.SetWindowTextW.restype = [wintypes.HWND, wintypes.LPCWSTR], wintypes.BOOL
+                        user.UpdateWindow.argtypes, user.UpdateWindow.restype = [wintypes.HWND], wintypes.BOOL
+                        self.assertTrue(user.SetWindowTextW(target["decorationWindowId"], "DECORATION B changed"))
+                        user.UpdateWindow(target["decorationWindowId"])
+                        time.sleep(0.1)
+                        _, _, changed_png = adapter._capture({"pid": target["pid"], "windowId": target["windowId"]}, preflight=True)
+                        self.assertNotEqual(before["captureSha256"], hashlib.sha256(changed_png).hexdigest(), "The actual unrelated region must really change")
+                    typed = adapter.act(binding, current_observation["observationRef"], "explicit-local-test-operator",
+                                        {"kind": "set_text", "lease": lease, "elementToken": target_edit[0]["element_token"], "text": replacement,
+                                         "verification": {"kind": "element_value_equals", "selector": {"role": edits[0]["role"]}, "value": replacement}},
+                                        {**metadata, "operationId": "controlled-replace-" + str(index)}, current, lambda: None)
+                    self.assertEqual("completed", typed["status"], typed)
+                    self.assertTrue(typed["textReplacementVerified"], typed)
+                    current_observation = typed["afterObservation"]
                 background_operation = "controlled-save-background-1"
                 refused = adapter.act(binding, typed["afterObservationRef"], "explicit-local-test-operator",
                                     {"kind": "hotkey", "lease": lease, "keys": ["ctrl", "s"],
@@ -83,6 +106,18 @@ class RealWindowsGuiAcceptance(unittest.TestCase):
                 self.assertEqual(value.encode("utf-8"), actual)
                 self.assertEqual(hashlib.sha256(value.encode()).hexdigest(), hashlib.sha256(actual).hexdigest())
                 self.assertFalse(saved["userGoalVerified"], "The adapter's window condition cannot itself certify a whole phone/network journey")
+                cleared = adapter.act(binding, saved["afterObservationRef"], "explicit-local-test-operator",
+                                      {"kind": "set_text", "lease": lease, "elementToken": next(item["element_token"] for item in saved["afterObservation"]["state"]["elements"] if item.get("role") == edits[0]["role"]), "text": "",
+                                       "verification": {"kind": "element_value_equals", "selector": {"role": edits[0]["role"]}, "value": ""}},
+                                      {**metadata, "operationId": "controlled-clear-once"}, current, lambda: None)
+                self.assertEqual("unknown", cleared["status"], "Pinned UIA omits empty AND failed value reads; absence cannot prove clear")
+                self.assertFalse(cleared["textReplacementVerified"])
+                # Separate native TEST-ONLY readback proves whether the fixture
+                # really cleared; it is not injected into the product receipt.
+                user.GetWindowTextLengthW.argtypes, user.GetWindowTextLengthW.restype = [wintypes.HWND], ctypes.c_int
+                ctypes.set_last_error(0)
+                self.assertEqual(0, user.GetWindowTextLengthW(target["editWindowId"]))
+                self.assertEqual(0, ctypes.get_last_error(), "Zero length with a native error is not a successful empty read")
                 print(json.dumps({"scope": "controlled_local_windows_gui_and_file_only", "windowsBuild": sys.getwindowsversion().build,
                                   "driverSha256": pin, "bytes": len(actual), "fileSha256": hashlib.sha256(actual).hexdigest(),
                                   "beforeObservationRef": before["observationRef"], "afterObservationRef": saved["afterObservationRef"],

@@ -66,7 +66,7 @@ final class DeviceSourceToolContracts {
     static String guidance(String name){return switch(name){
         case "desktop.observe" -> "{discovery:true}只列进程/窗口，不是action-ready。用准确pid+windowId取该窗口的新observationRef、state.elements[element_token]及真实capture。{}仅整显示观察。";
         case "desktop.control" -> "先acquire取得原job的payload.desktopReceipt.lease；每次act传该准确lease。HELD过期不自动转让：只可显式release原lease再acquire；unknown/NEEDS_RECONCILE不可自动释放或重放。";
-        case "desktop.act" -> "必须外层observationRef=最新实际送入当前模型的同窗口frame，arguments.lease来自已结算的desktop.control。set_text替换元素全文，insert_text只插入，不混坐标focus+输入。每次act后改用payload.desktopReceipt.afterObservation的新ref，不复用旧ref。verification仅证明新观察的窗口条件，不证明文件保存；没条件或unknown不得称业务成功。foreground仅准确known-no-input background拒绝后独立新操作+新ref，禁止自动升级。";
+        case "desktop.act" -> "必须外层observationRef=最新实际送入当前模型的同窗口frame，arguments.lease来自已结算的desktop.control。set_text用目标UIA ValuePattern完整替换（text空串为清空；固定UIA省略空值/读失败时只可回unknown，不能把缺value当清空成功或重放）；不支持时明确拒绝，不自动按键清空或降为追加。insert_text只插入，不混坐标focus+输入。每次act后改用payload.desktopReceipt.afterObservation的新ref，不复用旧ref。verification仅证明新观察的窗口条件，不证明文件保存；没条件或unknown不得称业务成功。foreground仅准确known-no-input background拒绝后独立新操作+新ref，禁止自动升级。";
         case "workspace.location" -> "只用{}读取该准确已授权workspace的native rootPath/pathStyle，供SaveAs定位；不能猜Documents/cwd或从binding反推。locationOnly=true，guiDirectorySandbox=false；不代表GUI具备OS目录写入沙箱。";
         case "workspace.write" -> "仅workspace相对path；expectedVersion来自原workspace.read的sha256版本，新文件为absent。不能覆盖版本不明/已变文件。";
         case "workspace.project.export" -> "只回读本任务已原生审阅导入的receiveOperationId所标识的新项目副本，目标按原清单封装修改字节；不读取整个workspace。收到后仅落原附件，需主人选包审阅导入。";
@@ -89,7 +89,7 @@ final class DeviceSourceToolContracts {
         if(name.equals("command.run")){JSONArray argv=args.getJSONArray("argv");if(argv.length()<1)throw new SecurityException("argv不能为空");for(int i=0;i<argv.length();i++)if(argv.getString(i).indexOf(0)>=0)throw new SecurityException("argv含NUL");}
         if(name.equals("desktop.act")){
             if(args.has("elementToken")&&!args.getString("elementToken").matches("s[0-9a-f]{8}:[0-9]+"))throw new SecurityException("不是原窗口element_token");
-            if(args.has("text")&&(args.getString("text").isEmpty()||bytes(args.getString("text"))>12000||args.getString("text").indexOf(0)>=0))throw new SecurityException("桌面输入必须是有界UTF8文本");
+            if(args.has("text")&&((args.getString("text").isEmpty()&&!args.optString("kind").equals("set_text"))||bytes(args.getString("text"))>12000||args.getString("text").indexOf(0)>=0))throw new SecurityException("桌面输入必须是有界UTF8文本");
             if(args.has("keys")){JSONArray keys=args.getJSONArray("keys");if(keys.length()<2)throw new SecurityException("hotkey需2至5个键");for(int i=0;i<keys.length();i++)if(!keys.getString(i).matches("[A-Za-z0-9_]{1,20}"))throw new SecurityException("快捷键身份无效");}
             JSONObject condition=args.optJSONObject("verification");if(condition!=null)validateCondition(condition);
         }
