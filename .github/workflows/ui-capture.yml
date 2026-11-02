@@ -79,7 +79,22 @@ jobs:
       - name: Render isolated Robolectric API 35 UI fixtures
         run: |
           set -euo pipefail
+          # Android's test compiler uses the Android boot classpath. Existing JVM-only
+          # fixtures also use the JDK HTTP server; expose that installed JDK module
+          # only to test compilation, without changing production dependencies.
+          "$JAVA_HOME/bin/jmod" extract --dir build-artifacts/jdk-httpserver "$JAVA_HOME/jmods/jdk.httpserver.jmod"
+          "$JAVA_HOME/bin/jar" --create --file build-artifacts/jdk-httpserver-test.jar -C build-artifacts/jdk-httpserver/classes .
+          cat > build-artifacts/capture-jdk.init.gradle <<'GRADLE'
+          allprojects {
+              afterEvaluate {
+                  if (plugins.hasPlugin('com.android.application')) {
+                      dependencies.add('testImplementation', files(rootProject.file('build-artifacts/jdk-httpserver-test.jar')))
+                  }
+              }
+          }
+          GRADLE
           ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
+            --init-script build-artifacts/capture-jdk.init.gradle \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.vfs.watch=false \
             :app:testDebugUnitTest --tests dev.pocketengine.ui.PocketWorkroomCaptureTest \
