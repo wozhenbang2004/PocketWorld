@@ -1,0 +1,32 @@
+<resources>
+    <string name="schedule_proposal_invalid">草案内容、来源身份或摘要已变化；请重新读取，或在原对话明确重新提出。</string>
+    <string name="schedule_proposal_once">一次：%1$s</string>
+    <string name="schedule_proposal_interval">每隔 %1$s</string>
+    <string name="schedule_proposal_anchor">固定起点：%1$s</string>
+    <string name="schedule_proposal_daily">每天 %1$s（日历时区 %2$s）</string>
+    <string name="schedule_proposal_weekly">每周 %1$s %2$s（日历时区 %3$s）</string>
+    <string name="schedule_proposal_monthly">每月 %1$d 日 %2$s（日历时区 %3$s）</string>
+    <string name="schedule_proposal_short_last">短月没有这一天时，使用当月最后一天。</string>
+    <string name="schedule_proposal_short_skip">短月没有这一天时，跳过该月。</string>
+    <string name="schedule_proposal_display_zone">以下绝对时间按本机时区 %1$s 显示，含当时 UTC 偏移。</string>
+    <string name="schedule_proposal_next">接下来最多三次日历时间：</string>
+    <string name="schedule_proposal_expired">这个草案没有未来日历时间，请在原对话重新提出。</string>
+    <string name="schedule_proposal_dst">夏令时缺失时间：%1$s；重复时间：%2$s。</string>
+    <string name="schedule_proposal_dst_gap_skip">跳过</string>
+    <string name="schedule_proposal_dst_gap_shift">向后平移</string>
+    <string name="schedule_proposal_dst_earlier">使用较早一次</string>
+    <string name="schedule_proposal_dst_later">使用较晚一次</string>
+    <string name="schedule_proposal_phone_note">批准只保存时间安排。到期后先显示原提醒，由你在原任务中核对并授权开始；不会因时间审批自动操作手机。需要自动条件动作时，另绑定已批准的原计划步骤。</string>
+    <string name="schedule_proposal_reminder_note">批准后保存本机提醒安排，不授予手机或外部操作权限。</string>
+    <string name="schedule_proposal_timing">这是日历预览；系统后台可能延后，实际投递仍核对原运行条件。批准只针对下方固定来源和摘要。</string>
+    <string name="schedule_proposal_source_task">原任务：%1$s</string>
+    <string name="schedule_proposal_source_run">原执行：%1$s · 代次 %2$d</string>
+    <string name="schedule_proposal_digest">显示版本摘要：%1$s</string>
+    <string name="schedule_proposal_approve">批准这个安排</string>
+    <string name="schedule_proposal_approved">这个安排已批准</string>
+    <string name="schedule_proposal_duration_days">%1$d 天</string>
+    <string name="schedule_proposal_duration_hours">%1$d 小时</string>
+    <string name="schedule_proposal_duration_minutes">%1$d 分钟</string>
+    <string name="schedule_proposal_duration_seconds">%1$d 秒</string>
+    <string name="schedule_proposal_duration_millis">%1$d 毫秒</string>
+</resources>

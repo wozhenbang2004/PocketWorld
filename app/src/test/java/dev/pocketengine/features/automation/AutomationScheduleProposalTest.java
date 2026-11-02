@@ -32,4 +32,13 @@ public final class AutomationScheduleProposalTest {
         String operation=UUID.randomUUID().toString();book.proposeSchedule(nativeOrigin,operation,draft(),90000);JSONObject changed=new JSONObject(nativeOrigin.toString()).put("runId",UUID.randomUUID().toString()).put("epoch",2);
         assertThrows(SecurityException.class,()->book.proposeSchedule(changed,operation,draft(),90001));assertEquals(0,book.rules().length());
     }
+    @Test public void oldDisplayedDigestCannotApproveAnotherOriginalRunProposal()throws Exception{
+        AutomationBook book=new AutomationBook(new File(temp.getRoot(),"old-digest.json"));JSONObject firstOrigin=origin(),first=book.proposeSchedule(firstOrigin,UUID.randomUUID().toString(),draft(),90000);
+        JSONObject nextOrigin=new JSONObject(firstOrigin.toString()).put("runId",UUID.randomUUID().toString()).put("epoch",2),next=book.proposeSchedule(nextOrigin,UUID.randomUUID().toString(),draft(),90001);
+        assertNotEquals(first.getString("digest"),next.getString("digest"));assertThrows(SecurityException.class,()->book.approveScheduleProposal(next.getString("id"),first.getString("digest"),90002));assertEquals(0,book.rules().length());
+    }
+    @Test public void elapsedOnceCannotBeApprovedAsANewFutureArrangement()throws Exception{
+        AutomationBook book=new AutomationBook(new File(temp.getRoot(),"elapsed-draft.json"));JSONObject row=book.proposeSchedule(origin(),UUID.randomUUID().toString(),draft(),90000);
+        assertThrows(IllegalStateException.class,()->book.approveScheduleProposal(row.getString("id"),row.getString("digest"),100001));assertEquals(0,book.rules().length());
+    }
 }

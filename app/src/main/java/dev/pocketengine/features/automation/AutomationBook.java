@@ -70,13 +70,25 @@ public final class AutomationBook {
     /** The exact displayed digest is approved by the existing native owner window only. */
     public JSONObject approveScheduleProposal(String proposal,String digest,long now)throws Exception {
         synchronized(lock){JSONObject state=read();JSONArray rows=state.optJSONArray("proposals");int at=rows==null?-1:indexOf(rows,proposal);if(at<0)throw new IllegalArgumentException("计划草案不存在");JSONObject row=rows.getJSONObject(at);
+            reviewedProposalForDisplay(row);
             if(!digest.equals(row.getString("digest"))||!digest.equals(proposalDigest(row.getJSONObject("origin"),row.getJSONObject("draft"))))throw new SecurityException("显示的计划草案已变化");
+            JSONObject exactSchedule=row.getJSONObject("draft").getJSONObject("schedule");if(AutomationSchedule.nextAt(exactSchedule,Math.max(0,now-1))<0)throw new IllegalStateException("草案时间已过或日历已耗尽，请在原对话明确重新提出安排");
             if(!row.getString("status").matches("pending|approved"))throw new SecurityException("此草案不能批准");
             JSONObject rule=null;JSONArray rules=state.getJSONArray("rules");int existing=indexOf(rules,proposal);
             if(existing>=0){rule=rules.getJSONObject(existing);if(!canonicalObject(row.getJSONObject("origin")).equals(rule.optJSONObject("nativeOrigin")==null?"":canonicalObject(rule.getJSONObject("nativeOrigin"))))throw new SecurityException("原计划来源已变化");}
             else{rule=save(row.getJSONObject("draft"),now,proposal,row.getJSONObject("origin"));state=read();rows=state.getJSONArray("proposals");at=indexOf(rows,proposal);row=rows.getJSONObject(at);}
             row.put("status","approved").put("ruleId",rule.getString("id")).put("approvedAt",now);write(state);return new JSONObject().put("proposal",copy(row)).put("rule",copy(rule)).put("executionAuthorized",false);
         }
+    }
+    /** Pure display integrity only, not owner approval or task/source authority. */
+    public static JSONObject reviewedProposalForDisplay(JSONObject submitted)throws Exception{
+        JSONObject row=copy(submitted),origin=row.getJSONObject("origin"),draft=row.getJSONObject("draft");
+        if(!row.optString("id").matches("[a-f0-9-]{36}")||!row.optString("status").matches("pending|approved")||origin.length()!=6||!"owner".equals(origin.optString("ownerId"))||!"private".equals(origin.optString("spaceId"))||!origin.optString("taskId").matches("[a-f0-9-]{36}")||!origin.optString("runId").matches("[a-f0-9-]{36}")||!(origin.opt("epoch") instanceof Integer)||origin.optInt("epoch")<1||origin.optString("conversationId").isBlank()||origin.optString("conversationId").length()>160)throw new SecurityException("草案缺准确原对话执行身份，请在原对话明确重提");
+        for(var keys=draft.keys();keys.hasNext();)if(!java.util.Set.of("title","kind","goal","schedule","semanticCondition").contains(keys.next()))throw new SecurityException("草案包含未审阅字段");
+        text(draft.optString("title"),1,200,"提醒名称");if(!java.util.Set.of("reminder","phone_goal").contains(draft.optString("kind")))throw new SecurityException("草案类型无效");if("phone_goal".equals(draft.optString("kind")))text(draft.optString("goal"),1,4000,"原目标");
+        JSONObject normalized=validateSchedule(draft.getJSONObject("schedule"));if(!canonicalObject(normalized).equals(canonicalObject(draft.getJSONObject("schedule"))))throw new SecurityException("草案日历定义不是原规范化版本");
+        if(draft.optJSONObject("semanticCondition")!=null){JSONObject condition=AutomationConditionOutcome.definition(draft.getJSONObject("semanticCondition"));dev.pocketengine.browser.PublicHttpReader.validate(new JSONObject().put("url",condition.getString("sourceKey")));}
+        if(!row.optString("digest").matches("[a-f0-9]{64}")||!row.getString("digest").equals(proposalDigest(origin,draft)))throw new SecurityException("草案显示内容与原digest不符，请重新读取");return row;
     }
     private static String proposalDigest(JSONObject origin,JSONObject draft)throws Exception {
         // Fixed field order is reconstructed from validated semantic data, independent of JSON map order.
@@ -90,6 +102,7 @@ public final class AutomationBook {
         synchronized(lock){JSONObject state=read(),rule=state.getJSONArray("rules").getJSONObject(indexRequired(state.getJSONArray("rules"),id));JSONObject definition=rule.optJSONObject("semanticCondition");
             if(definition==null||rule.getLong("revision")!=revision||!rule.optBoolean("enabled")||rule.optBoolean("taskRequestsRevoked"))throw new SecurityException("原条件规则已变化或暂停");
             dev.pocketengine.browser.PublicHttpReader.validate(new JSONObject().put("url",definition.getString("sourceKey")));
+            JSONObject previous=rule.optJSONObject("semanticReadApproval");if(previous!=null&&previous.optBoolean("modelUseConsent")&&id.equals(previous.optString("ruleId"))&&revision==previous.optLong("ruleRevision")&&definition.getString("sourceKey").equals(previous.optString("sourceKey"))&&definition.getLong("sourceRevision")==previous.optLong("sourceRevision")&&previous.optInt("maxSourceReads")==1&&previous.optInt("maxModelRequests")==3&&"public_anonymous_get".equals(previous.optString("sourceScope")))return copy(rule);
             JSONObject approval=new JSONObject().put("ruleId",id).put("ruleRevision",revision).put("sourceKey",definition.getString("sourceKey")).put("sourceRevision",definition.getLong("sourceRevision")).put("modelUseConsent",true).put("maxSourceReads",1).put("maxModelRequests",3).put("approvedAt",now).put("sourceScope","public_anonymous_get");rule.put("semanticReadApproval",approval);write(state);return copy(rule);
         }
     }

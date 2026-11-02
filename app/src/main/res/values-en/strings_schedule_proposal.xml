@@ -1,0 +1,32 @@
+<resources>
+    <string name="schedule_proposal_invalid">The draft, original identity or digest has changed. Reload it or explicitly propose it again in the original conversation.</string>
+    <string name="schedule_proposal_once">Once: %1$s</string>
+    <string name="schedule_proposal_interval">Every %1$s</string>
+    <string name="schedule_proposal_anchor">Fixed anchor: %1$s</string>
+    <string name="schedule_proposal_daily">Daily at %1$s (calendar zone %2$s)</string>
+    <string name="schedule_proposal_weekly">Weekly on %1$s at %2$s (calendar zone %3$s)</string>
+    <string name="schedule_proposal_monthly">Day %1$d each month at %2$s (calendar zone %3$s)</string>
+    <string name="schedule_proposal_short_last">Use the last day when the month does not have this date.</string>
+    <string name="schedule_proposal_short_skip">Skip months that do not have this date.</string>
+    <string name="schedule_proposal_display_zone">Absolute times below use this device’s zone, %1$s, including the UTC offset at that time.</string>
+    <string name="schedule_proposal_next">Up to three upcoming calendar times:</string>
+    <string name="schedule_proposal_expired">This draft has no future calendar time. Propose it again in the original conversation.</string>
+    <string name="schedule_proposal_dst">Missing daylight-saving time: %1$s; repeated time: %2$s.</string>
+    <string name="schedule_proposal_dst_gap_skip">skip</string>
+    <string name="schedule_proposal_dst_gap_shift">shift forward</string>
+    <string name="schedule_proposal_dst_earlier">use the earlier occurrence</string>
+    <string name="schedule_proposal_dst_later">use the later occurrence</string>
+    <string name="schedule_proposal_phone_note">Approval saves the schedule. When due, the original reminder asks you to review and authorize the original task. Time approval does not automatically operate the phone. Automatic condition actions require a separate binding to an already approved original plan step.</string>
+    <string name="schedule_proposal_reminder_note">Approval saves a local reminder. It grants no phone or external action authority.</string>
+    <string name="schedule_proposal_timing">This is a calendar preview. Background delivery may be delayed and still checks original run conditions. Approval applies only to the fixed origin and digest below.</string>
+    <string name="schedule_proposal_source_task">Original task: %1$s</string>
+    <string name="schedule_proposal_source_run">Original run: %1$s · epoch %2$d</string>
+    <string name="schedule_proposal_digest">Displayed version digest: %1$s</string>
+    <string name="schedule_proposal_approve">Approve this schedule</string>
+    <string name="schedule_proposal_approved">Schedule approved</string>
+    <string name="schedule_proposal_duration_days">%1$d days</string>
+    <string name="schedule_proposal_duration_hours">%1$d hours</string>
+    <string name="schedule_proposal_duration_minutes">%1$d minutes</string>
+    <string name="schedule_proposal_duration_seconds">%1$d seconds</string>
+    <string name="schedule_proposal_duration_millis">%1$d milliseconds</string>
+</resources>
