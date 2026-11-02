@@ -110,7 +110,7 @@ public final class DeviceOwnerInputsNativeTest {
         }
         JSONObject base(String type,String method,String operation,JSONObject args)throws Exception{return new JSONObject().put("protocolVersion",DeviceProtocol.VERSION).put("protocolProfile",DeviceProtocol.PROFILE).put("messageType",type).put("method",method).put("requestId",UUID.randomUUID().toString()).put("operationId",operation)
             .put("originDeviceId",peer.deviceId()).put("callerDeviceId",peer.deviceId()).put("targetDeviceId",target).put("instanceId","input-receiver").put("grantId","input-grant").put("authorizationEpoch",1).put("resourceBinding",resource).put("deadline",deadline)
-            .put("visitedDevices",new JSONArray().put(peer.deviceId())).put("maxDelegationDepth",0).put("delegationChain",new JSONArray()).put("arguments",args);}
+            .put("visitedDevices",new JSONArray().put(peer.deviceId())).put("maxDelegationDepth",1).put("delegationChain",new JSONArray()).put("arguments",args);}
         DeviceTaskEnvelope parse(JSONObject value)throws Exception{value.put("argumentsDigest",DeviceProtocol.argumentsDigest(value));return DeviceProtocol.validateRequest(DeviceProtocol.canonicalBytes(value),peer,target,System.currentTimeMillis());}
         PairingCoordinator.Permission permission(JSONObject value)throws Exception{return pairing.checkPermission(peer,parse(value),System.currentTimeMillis());}
         JSONObject owner(JSONObject value)throws Exception{

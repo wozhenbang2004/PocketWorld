@@ -188,6 +188,10 @@ class PhoneDispatchTests(unittest.IsolatedAsyncioTestCase):
         await self.router.execute("steer", self.input_params("native-steer", text="Use the second fixture section"))
         self.assertEqual(1, sum(item.method == "task.submitGoal" for item in self.sent))
         self.assertEqual(["task.acquireControl", "task.answerQuestion", "task.steer"], [item.method for item in self.sent if item.method in {"task.acquireControl", "task.answerQuestion", "task.steer"}])
+        for item in self.sent:
+            if item.method in {"task.acquireControl", "task.answerQuestion", "task.steer"}:
+                self.assertEqual([self.fixture.a.device_id], item.get("visitedDevices"))
+                self.assertEqual(1, item.get("maxDelegationDepth")); self.assertEqual([], item.get("delegationChain"))
         raw = " ".join(row[0] for row in self.db.execute("SELECT details FROM operations"))
         self.assertNotIn(answer["text"], raw); self.assertNotIn("Which fixture section?", raw)
 

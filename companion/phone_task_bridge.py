@@ -409,7 +409,9 @@ class PhoneTaskRouter:
                      requestId=str(uuid.uuid4()), operationId=control_id, originDeviceId=self.service.identity.device_id,
                      callerDeviceId=self.service.identity.device_id, targetDeviceId=peer.device_id, instanceId=original["instanceId"],
                      grantId=route.grant["grantId"], authorizationEpoch=route.grant["authorizationEpoch"], resourceBinding=original["resourceBinding"],
-                     deadline=min(now + 15000, route.deadline), visitedDevices=[self.service.identity.device_id], maxDelegationDepth=0,
+                     # The unchanged codec counts the origin in visitedDevices:
+                     # this direct hop has length one and no delegation proof.
+                     deadline=min(now + 15000, route.deadline), visitedDevices=[self.service.identity.device_id], maxDelegationDepth=1,
                      delegationChain=[], arguments=args)
         value["argumentsDigest"] = wire.arguments_digest(value)
         envelope = wire.parse_request(wire.canonical_bytes(value))
