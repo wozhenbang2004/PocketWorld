@@ -1,4 +1,8 @@
 <resources>
+    <string name="w8_cv_tool_operation">Tool operation</string>
+    <string name="w8_cv_stdout">Standard output</string>
+    <string name="w8_cv_stderr">Error output</string>
+    <string name="w8_cv_output_limited">(This card shows part of the output. Open the original task for the full record.)</string>
     <string name="w8_cv_000">This link is unavailable. Copy its address to open it manually.</string>
     <string name="w8_cv_001">Open external link</string>
     <string name="w8_cv_002">This link comes from conversation content. Review the full address first.</string>

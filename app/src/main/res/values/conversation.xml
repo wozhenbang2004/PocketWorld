@@ -1,4 +1,8 @@
 <resources>
+    <string name="w8_cv_tool_operation">工具操作</string>
+    <string name="w8_cv_stdout">标准输出</string>
+    <string name="w8_cv_stderr">错误输出</string>
+    <string name="w8_cv_output_limited">（当前卡片只展示部分内容，请到原任务核对完整记录）</string>
     <string name="w8_cv_000">链接暂时无法打开。你可以复制地址后手动处理。</string>
     <string name="w8_cv_001">打开外部链接</string>
     <string name="w8_cv_002">链接来自会话内容。请先核对完整地址。</string>

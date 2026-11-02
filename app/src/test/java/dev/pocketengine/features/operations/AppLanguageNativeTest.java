@@ -18,6 +18,15 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk={30,35},manifest=Config.NONE,application=Application.class)
 public final class AppLanguageNativeTest {
+    @Test public void taskOutputLabelsFollowSelectionWhileNativeBodyStaysExact()throws Exception{
+        Application app=RuntimeEnvironment.getApplication();LiteralUiText.install(app);String body="主人原文 / native result must stay exact";
+        JSONObject task=new JSONObject().put("id","original-task").put("status","running").put("goal",body).put("summary",body)
+            .put("operations",new JSONArray().put(new JSONObject().put("operationId","original-operation").put("state","receipt").put("receipt",new JSONObject().put("stdout",body))));
+        try{
+            AppLanguage.select(app,"en");var english=dev.pocketengine.features.conversation.TaskPresentation.fromTaskStore(task);assertEquals("Tool operation",english.operations.get(0).tool);assertEquals("Standard output\n"+body,english.operations.get(0).output);assertEquals(body,english.goal);assertEquals(body,english.summary);
+            AppLanguage.select(app,"zh-Hans");var chinese=dev.pocketengine.features.conversation.TaskPresentation.fromTaskStore(task);assertEquals("标准输出\n"+body,chinese.operations.get(0).output);assertEquals(body,chinese.goal);
+        }finally{AppLanguage.select(app,"system");}
+    }
     @Test public void languageSelectionPreservesOriginalConversationDraftVoiceAnchorAndPendingIdentity()throws Exception{
         Application app=RuntimeEnvironment.getApplication();AppLanguage.select(app,"system");
         OwnerComposerStore original=new OwnerComposerStore(app.getFilesDir());OwnerComposerState state=original.load().get(3,TimeUnit.SECONDS);
