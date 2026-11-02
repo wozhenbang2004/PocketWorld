@@ -127,6 +127,7 @@ public final class OwnerQuestionInputs {
     }
     /** Bounded native owner display only. This never carries a token, controller or grant. */
     public static JSONObject pageQuestion(JSONObject task)throws Exception{
+        if(task!=null&&"phone".equals(task.optString("kind")))return OwnerPhoneQuestions.pageQuestion(task);
         try{requirePrivateTask(task);}catch(SecurityException differentOrigin){return null;}
         if(!"awaiting_user".equals(task.optString("status")))return null;
         JSONObject evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");if(question==null)return null;

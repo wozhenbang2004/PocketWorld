@@ -21,6 +21,9 @@ public final class OwnerQuestionReplyReceiver extends BroadcastReceiver {
             }catch(Exception unavailable){/* No reply body, credentials or task content enter diagnostics. */}
             try{
                 JSONObject view=new JSONObject(intent.getStringExtra("noticeView"));NotificationManager manager=context.getSystemService(NotificationManager.class);
+                // The original phone Service observes the committed task and updates its own
+                // foreground notice. Its existing phone navigation remains the owner route.
+                if("phone_hold".equals(view.optString("noticeKind")))return;
                 if(manager!=null){
                     PendingIntent open=PendingIntent.getActivity(context,0,AssistantTaskNotifications.open(context,view),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
                     Context localized=dev.pocketengine.features.operations.AppLanguage.wrap(context);

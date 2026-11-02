@@ -37,6 +37,7 @@ internal fun OwnerQuestionPanel(task: JSONObject, busy: Boolean, error: String?,
     val identity = view.optJSONObject("identity") ?: return
     val taskId = identity.optString("taskId")
     val requestId = identity.optString("requestId")
+    val phoneSource = view.optString("sourceKind") == "native_phone_owner_input"
     var draft by rememberSaveable(taskId, requestId) { mutableStateOf("") }
     var accepted by rememberSaveable(taskId, requestId) { mutableStateOf(false) }
     LaunchedEffect(result?.toString(), taskId, requestId) {
@@ -58,13 +59,15 @@ internal fun OwnerQuestionPanel(task: JSONObject, busy: Boolean, error: String?,
                 "saved_budget_exhausted" -> R.string.w8_cv_question_budget
                 "saved_original_host_busy", "saved_original_conversation_busy" -> R.string.w8_cv_question_busy
                 "saved_source_sync_required", "saved_source_unavailable" -> R.string.w8_cv_question_sources
+                "saved_phone_lease_unavailable" -> R.string.w8_cv_phone_question_session
                 "original_worker_requested" -> R.string.w8_cv_question_checking
-                else -> R.string.w8_cv_question_saved
+                else -> if (phoneSource) R.string.w8_cv_phone_question_saved else R.string.w8_cv_question_saved
             }), style = MaterialTheme.typography.bodySmall)
-            if (state != "original_worker_requested") Button(onClick = if (scope) onReviewScope else if (source) onReviewSources else onOpenConversation,
-                modifier = Modifier.testTag("owner-question-review")) { Text(stringResource(if (scope) R.string.w8_cv_question_review_scope else if (source) R.string.w8_cv_question_review_sources else R.string.w8_cv_question_open_conversation)) }
+            if (phoneSource) view.optString("answerText").takeIf { it.isNotBlank() }?.let { SelectionContainer { Text(it, style = MaterialTheme.typography.bodyMedium) } }
+            if (state != "original_worker_requested") Button(onClick = if (scope || phoneSource && !source) onReviewScope else if (source) onReviewSources else onOpenConversation,
+                modifier = Modifier.testTag("owner-question-review")) { Text(stringResource(if (scope || phoneSource && !source) R.string.w8_cv_question_review_scope else if (source) R.string.w8_cv_question_review_sources else R.string.w8_cv_question_open_conversation)) }
         } else {
-            Text(stringResource(R.string.w8_cv_question_note), style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(if (phoneSource) R.string.w8_cv_phone_question_note else R.string.w8_cv_question_note), style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(draft, { if (it.length <= 4000) draft = it }, label = { Text(stringResource(R.string.w8_cv_question_answer)) },
                 minLines = 2, maxLines = 6, enabled = !busy, modifier = Modifier.fillMaxWidth().testTag("owner-question-answer"))
             Button(onClick = { onAnswer(JSONObject(identity.toString()), draft) }, enabled = draft.isNotBlank() && !busy,

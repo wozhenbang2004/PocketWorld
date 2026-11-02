@@ -12,4 +12,7 @@
     <string name="w8_cv_question_review_scope">审阅原任务范围</string>
     <string name="w8_cv_question_review_sources">查看原文件与来源</string>
     <string name="w8_cv_question_open_conversation">回原对话处理</string>
+    <string name="w8_cv_phone_question_note">回答会保存在这个原手机任务。原授权仍有效时，助手会使用原会话接着处理。</string>
+    <string name="w8_cv_phone_question_saved">回答已保存在原手机任务。尚未继续时，请核对原任务范围与状态。</string>
+    <string name="w8_cv_phone_question_session">回答已保留。原手机执行会话已到期或改变，请核对原任务后处理。</string>
 </resources>

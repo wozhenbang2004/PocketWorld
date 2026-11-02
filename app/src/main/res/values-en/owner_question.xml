@@ -12,4 +12,7 @@
     <string name="w8_cv_question_review_scope">Review original task scope</string>
     <string name="w8_cv_question_review_sources">Review original files and sources</string>
     <string name="w8_cv_question_open_conversation">Return to original conversation</string>
+    <string name="w8_cv_phone_question_note">Your answer stays in this original phone task. The assistant will continue in its original session if its authorization is still valid.</string>
+    <string name="w8_cv_phone_question_saved">Your answer is saved in the original phone task. If work has paused, review its original scope and status.</string>
+    <string name="w8_cv_phone_question_session">Your answer is saved. The original phone session has expired or changed. Review the original task before proceeding.</string>
 </resources>
