@@ -14,4 +14,8 @@ public final class BrowserPopupRouteTest {
     @Test public void parentNavigationRevocationAndCredentialUrlsCannotKeepAPopupAuthority()throws Exception {
         AtomicBoolean live=new AtomicBoolean(true);try(var route=new BrowserPopupRoute(identity(),()->{if(!live.get())throw new SecurityException();})){var request=route.request("https://login.example/");assertThrows(Exception.class,()->route.request("https://owner:secret@login.example/"));live.set(false);assertThrows(SecurityException.class,request::approveForOwner);assertThrows(SecurityException.class,()->route.reply(()->{}));}
     }
+    @Test public void revocationStillCancelsOnlyTheOriginalUnconsumedNativeCallbackOnce()throws Exception {
+        AtomicBoolean live=new AtomicBoolean(true);AtomicInteger accepted=new AtomicInteger(),cancelled=new AtomicInteger();var route=new BrowserPopupRoute(identity(),()->{if(!live.get())throw new SecurityException();});live.set(false);route.close();assertThrows(SecurityException.class,()->route.reply(accepted::incrementAndGet));assertTrue(route.cancelReply(cancelled::incrementAndGet));assertFalse(route.cancelReply(cancelled::incrementAndGet));assertEquals(0,accepted.get());assertEquals(1,cancelled.get());
+        try(var delivered=new BrowserPopupRoute(identity(),()->{})){delivered.reply(accepted::incrementAndGet);delivered.close();assertFalse(delivered.cancelReply(cancelled::incrementAndGet));assertEquals(1,accepted.get());assertEquals(1,cancelled.get());}
+    }
 }
