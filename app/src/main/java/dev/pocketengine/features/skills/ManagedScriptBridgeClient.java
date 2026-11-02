@@ -27,6 +27,6 @@ with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
         if b'\\n' in data: break
     response = json.loads(bytes(data).split(b'\\n',1)[0].decode('utf-8',errors='strict'))
     print(json.dumps(response,ensure_ascii=False,separators=(',',':')))
-    if not response.get('ok',True): raise SystemExit(2)
+    if not response.get('ok',True) or response.get('status') in ('unknown','rejected','failed','cancelled','needs_confirmation','awaiting_user'): raise SystemExit(2)
 """;}
 }
