@@ -2,7 +2,7 @@ package dev.pocketengine.features.automation;
 
 import android.app.Application;
 import android.database.sqlite.SQLiteDatabase;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.browser.ConditionPublicReadFixture;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -41,7 +42,7 @@ public final class OriginalConditionTaskHostNativeTest {
     private static final String SOURCE="https://public.example/price";
     private static final class Fixture implements AutoCloseable {
         final Application app=RuntimeEnvironment.getApplication();final TaskStore tasks;final SQLiteDatabase db;final AutomationPlanHost plans;final AutomationModule module;final AutomationBook book;final OriginalConditionTaskHost nativeHost;
-        final long now=System.currentTimeMillis();final JSONObject rule;JSONObject occurrence,request;String id,run,planId;int epoch,reads,admissions,starts;RunControl original;boolean losePlanAck;
+        final long now=System.currentTimeMillis();final JSONObject rule;JSONObject occurrence,request;volatile JSONObject nativeReceipt;String id,run,planId;int epoch,reads,admissions,starts;RunControl original;boolean losePlanAck;
         Fixture()throws Exception{
             app.deleteDatabase("pocket-world.db");tasks=new TaskStore(app);var f=TaskStore.class.getDeclaredField("db");f.setAccessible(true);db=(SQLiteDatabase)f.get(tasks);plans=new AutomationPlanHost(tasks);
             module=new AutomationModule(new FeatureContext(app,new SettingsStore(app),new SecretVault(app),event->{}),plans::resolveEvidence,plans);book=new AutomationBook(new File(app.getFilesDir(),"automation/rules.json"),plans);
@@ -63,17 +64,22 @@ public final class OriginalConditionTaskHostNativeTest {
             occurrence=book.claimDue(System.currentTimeMillis(),20).getJSONObject(0);id=nativeHost.ensureOriginalReadOnlyTask(occurrence);occurrence=module.bindSemanticCheck(occurrence.getString("id"),id);request=module.semanticCheckRequest(occurrence.getString("id"));nativeHost.startOriginalReadOnlyTask(occurrence);
         }
         RunOutcome run(boolean requestRead,int sourceStatus)throws Exception{
-            AtomicInteger calls=new AtomicInteger();HttpServer model=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);var worker=Executors.newSingleThreadExecutor();
-            model.createContext("/",exchange->{try{exchange.getRequestBody().readAllBytes();int n=calls.incrementAndGet();JSONObject message=new JSONObject().put("role","assistant");boolean tool=requestRead&&n==1;
+            AtomicInteger calls=new AtomicInteger(),delivered=new AtomicInteger();AtomicReference<Throwable> wireFailure=new AtomicReference<>();HttpServer model=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);var worker=Executors.newSingleThreadExecutor();
+            model.createContext("/",exchange->{try{JSONObject actualRequest=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));int n=calls.incrementAndGet();
+                try{JSONArray tools=actualRequest.optJSONArray("tools");boolean sourceOffered=false;for(int i=0;tools!=null&&i<tools.length();i++){String name=tools.getJSONObject(i).getJSONObject("function").getString("name");assertTrue("private or effecting tool reached condition model: "+name,java.util.Set.of(AutomationConditionReadPort.TOOL,"run_handle_obstacle","run_end_not_done","run_ask_user").contains(name));sourceOffered|=AutomationConditionReadPort.TOOL.equals(name);}if(n==1)assertTrue(sourceOffered);
+                    if(n>1){assertNotNull("second model call preceded native read receipt",nativeReceipt);JSONObject sourceMessage=null;JSONArray messages=actualRequest.getJSONArray("messages");for(int i=0;i<messages.length();i++){JSONObject candidate=messages.getJSONObject(i);if("tool".equals(candidate.optString("role"))&&candidate.opt("content") instanceof String){JSONObject content=new JSONObject(candidate.getString("content"));if(content.optJSONObject("http")!=null&&SOURCE.equals(content.getJSONObject("http").optString("requestedUrl")))sourceMessage=content;}}
+                        assertNotNull("actual model HTTP body omitted original GET receipt",sourceMessage);assertEquals(sourceStatus,sourceMessage.getJSONObject("http").getInt("statusCode"));assertEquals(nativeReceipt.getBoolean("ok"),sourceMessage.getBoolean("ok"));if(sourceStatus==200){assertEquals("PRICE=5",sourceMessage.getString("text"));assertEquals(nativeReceipt.getString("observationId"),sourceMessage.getString("observationId"));assertEquals(PublicConditionObservation.sha256("PRICE=5"),sourceMessage.getJSONObject("http").getString("bodySha256"));}else assertEquals("http_status",sourceMessage.getString("code"));delivered.incrementAndGet();}
+                }catch(Throwable failed){wireFailure.compareAndSet(null,failed);}
+                JSONObject message=new JSONObject().put("role","assistant");boolean tool=requestRead&&n==1;
                 if(tool)message.put("tool_calls",new JSONArray().put(new JSONObject().put("id","condition-read").put("type","function").put("function",new JSONObject().put("name",AutomationConditionReadPort.TOOL).put("arguments","{}"))));else message.put("content","{\"met\":true,\"evidence\":\"PRICE=5\"}");
                 byte[] bytes=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",message).put("finish_reason",tool?"tool_calls":"stop"))).toString().getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
             }catch(Exception failure){throw new RuntimeException(failure);}finally{exchange.close();}});model.start();
             try{
-                AutomationConditionReadPort port=new AutomationConditionReadPort(tasks,request,id,run,epoch,original,()->module.requireSemanticCheckCurrent(request),(args,control,gate)->{reads++;return PublicConditionObservation.fromNativeRead(ConditionPublicReadFixture.consume(args,control,gate,sourceStatus,"PRICE=5"),control,gate);});
+                AutomationConditionReadPort port=new AutomationConditionReadPort(tasks,request,id,run,epoch,original,()->module.requireSemanticCheckCurrent(request),(args,control,gate)->{reads++;PublicConditionObservation actual=PublicConditionObservation.fromNativeRead(ConditionPublicReadFixture.consume(args,control,gate,sourceStatus,"PRICE=5"),control,gate);nativeReceipt=actual.receipt();return actual;});
                 assertFalse(port.supports("phone_tap"));assertThrows(SecurityException.class,()->port.validate(AutomationConditionReadPort.TOOL,new JSONObject().put("url","https://other.example")));
                 ModelConfig config=new ModelConfig("http://127.0.0.1:"+model.getAddress().getPort(),"fixture-key","condition-fixture",false,3,5);
                 RunOutcome outcome=worker.submit(()->new AgentRunner(null,port).run(id,tasks.get(id,false).getString("goal"),config,original,event->{try{tasks.event(id,run,epoch,event);}catch(Exception failed){throw new IllegalStateException(failed);}},tasks.journal(id,run,epoch,original))).get(20,TimeUnit.SECONDS);
-                tasks.finishCapabilityAttempt(id,run,epoch,original,outcome);assertEquals(requestRead?2:1,calls.get());return outcome;
+                tasks.finishCapabilityAttempt(id,run,epoch,original,outcome);if(wireFailure.get()!=null)throw new AssertionError("original model HTTP request violated native condition source boundary",wireFailure.get());assertEquals(requestRead?2:1,calls.get());assertEquals(requestRead?1:0,delivered.get());return outcome;
             }finally{model.stop(0);worker.shutdownNow();worker.awaitTermination(2,TimeUnit.SECONDS);}
         }
         public void close(){db.close();}
