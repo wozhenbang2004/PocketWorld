@@ -482,6 +482,7 @@ public final class AgentRunner {
                     steps++;
                     JSONObject args;
                     JSONObject receipt;
+                    ScriptPhoneTurn scriptPhone=null;
                     String recordedOperation=null;
                     try {
                         Object raw = call.getJSONObject("function").opt("arguments");
@@ -574,7 +575,16 @@ public final class AgentRunner {
                         JSONObject dispatched=args;if(capabilities!=null&&capabilities.supports(name)&&(openOperation!=null||imageRequired||Set.of("phone_prepare_sequence","browser_task_prepare_sequence").contains(name)))dispatched=new JSONObject(args.toString()).put("_hostOperationId",openOperation==null?call.getString("id"):openOperation);
                         // This is only progress over this native plan, never a tool grant or a new receipt.
                         if(activeStep!=null&&activePlan!=null)nativeSequenceProgress.get(activePlan).put("dispatchEnteredSteps",activeStep.index+1);
-                        receipt = capabilities!=null&&capabilities.supports(name)?capabilities.execute(name,dispatched,control):phone.execute(name,args,control);
+                        if("skills_execute".equals(name)&&phone!=null&&journal!=null&&openOperation!=null&&ScriptPhoneDispatch.available()){
+                            scriptPhone=new ScriptPhoneTurn(taskId,openOperation,history,latest,steps,tools,config,control,sink,journal,contextBudget,intent);
+                            try(AutoCloseable registration=ScriptPhoneDispatch.register(taskId,openOperation,control,scriptPhone)){
+                                receipt=capabilities.execute(name,dispatched,control);
+                            }finally{scriptPhone.close();steps=scriptPhone.steps();latest=scriptPhone.latest();evidence=latest;observed|=scriptPhone.observed();}
+                            if(receipt!=null)receipt.put("nativePhoneCallbacks",new JSONObject().put("parentOperationId",openOperation).put("childCalls",scriptPhone.calls()).put("originalJournalUsed",true).put("newTaskCreated",false));
+                            JSONObject phoneBarrier=scriptPhone.barrier();
+                            if(receipt!=null&&phoneBarrier!=null)receipt.put("requiresPause",true).put("scriptPhoneBarrier",phoneBarrier).put("message",phoneBarrier.optString("message","原脚本手机回调已停止，请核对原任务现场。"));
+                            if(scriptPhone.unknown()&&receipt!=null)receipt.put("requiresPause",true).put("requiresReconciliation",true).put("scriptPhoneUnknown",true);
+                        }else receipt = capabilities!=null&&capabilities.supports(name)?capabilities.execute(name,dispatched,control):phone.execute(name,args,control);
                         if(activeStep!=null&&activePlan!=null&&receipt!=null&&Boolean.FALSE.equals(receipt.opt("accepted")))nativeSequenceProgress.get(activePlan).put("dispatchEnteredSteps",activeStep.index);
                         if(phone!=null&&dev.pocketengine.phone.observation.PhoneTreeQuery.supports(name)&&receipt!=null){
                             JSONObject freshTree=receipt.optJSONObject("observation");
@@ -593,6 +603,8 @@ public final class AgentRunner {
                     boolean projectRunning="project_running".equals(receiptCode),nativeRunning=projectRunning&&nativeProjectRunning(journal,recordedOperation,receipt);
                     if(nativeRunning&&!ownedServiceOperations.contains(recordedOperation))ownedServiceOperations.add(recordedOperation);
                     history.put(toolResult(call, receipt, config,true));
+                    boolean scriptSteered=scriptPhone!=null&&scriptPhone.inputs().length()>0;
+                    if(scriptSteered){for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("owner_steered","主人在脚本回调期间补充要求；本批余下决定尚未派发。").put("accepted",false),config));appendOwnerInputs(history,scriptPhone.inputs(),config);recallIntent=latestOwnerRecallQuery(history,recallIntent);sequenceMayContinue=false;}
                     checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
                     String toolStatus=projectRunning?nativeRunning?"running":"awaiting_user":receipt.optBoolean("ok",false)?"completed":"failed";
                     String toolMessage=projectRunning?nativeRunning?"原开发服务已启动且仍归此原执行；这不是程序结束或服务就绪，后续仅允许原授权的只读核对。":"运行中回执未能与原生已启动服务及原操作核对，未继续模型请求或新工具。"
@@ -614,6 +626,7 @@ public final class AgentRunner {
                     if ("accessibility_unavailable".equals(receipt.optString("code", receipt.optString("error")))) {
                         return finish(taskId, "awaiting_user", "手机操作权限已断开，请重新开启后继续。", evidence, steps, config, sink);
                     }
+                    if(scriptSteered)break; // The parent receipt and any unknown barrier above win first.
                     // The real operation receipt and text checkpoint already committed above.
                     // Unknown/approval/pause outcomes stop before any extension code is invoked.
                     if(capabilities!=null&&!control.isPaused()&&pauseSeen[0]==control.pauseRevision())capabilities.afterTool(name,safeJson(args,config,false),safeToolReceipt(name,receipt,config),control);
@@ -732,6 +745,56 @@ public final class AgentRunner {
         for(int i=0;i<history.length();i++){String id=history.getJSONObject(i).optString("ownerMessageId");if(!id.isEmpty())included.put(id);}
         JSONArray rows=ownerInputs.poll(included,turnBoundary,closeIfEmpty,control);
         control.check();if(rows==null||rows.length()>64)throw new SecurityException("原任务输入队列不可核对");return rows;
+    }
+
+    /** Runs only inside one native ScriptPhoneScope. The original Runner remains the sole
+     * controller; child operations use its journal, cumulative steps and current phone port. */
+    private final class ScriptPhoneTurn implements ScriptPhoneDispatch.Actions,AutoCloseable {
+        private final String task,parent;private final JSONArray history;private final ModelConfig config;private final RunControl original;private final EventSink sink;private final RunJournal journal;private final RunContextBudget budget;private final OwnerIntent intent;
+        private final Set<String> allowed;private volatile boolean alive=true;private int count,steps;private JSONObject latest,barrier;private JSONArray incoming=new JSONArray();private boolean observed,unknown,hasLiveObservation;
+        ScriptPhoneTurn(String task,String parent,JSONArray history,JSONObject latest,int steps,JSONArray offered,ModelConfig config,RunControl original,EventSink sink,RunJournal journal,RunContextBudget budget,OwnerIntent intent)throws Exception {
+            this.task=task;this.parent=parent;this.history=history;this.latest=new JSONObject(latest.toString());this.steps=steps;this.config=config;this.original=original;this.sink=sink;this.journal=journal;this.budget=budget;this.intent=intent;
+            Set<String> closed=Set.of("phone_observe","phone_list_apps","phone_launch_app","phone_click_node","phone_tap","phone_type","phone_swipe","phone_back","phone_home","phone_wait","phone_query","phone_extract");Set<String> names=new LinkedHashSet<>();for(int i=0;i<offered.length();i++){String name=offered.getJSONObject(i).getJSONObject("function").getString("name");if(closed.contains(name)&&intent.permits(name,AgentRunner.this::toolEffecting))names.add(name);}allowed=Set.copyOf(names);
+        }
+        public Set<String> allowedTools(){return allowed;}
+        private void current(String tool)throws Exception {if(!alive||unknown||!allowed.contains(tool)||original.isPaused())throw new SecurityException("原脚本手机回调已停止或不在本次范围");original.check();}
+        public synchronized JSONObject invoke(String tool,JSONObject supplied)throws Exception {
+            current(tool);JSONObject args=new JSONObject(java.util.Objects.requireNonNull(supplied).toString());
+            JSONArray steer=pollOwnerInputs(history,false,false,original);if(steer.length()>0){incoming=steer;alive=false;return failure("owner_steered","主人已补充要求；此脚本手机动作尚未派发。").put("accepted",false);}
+            if(count>=32||steps>=executionStepCeiling(config,journal))return failure("step_limit_not_dispatched","原任务或本次脚本手机回调预算已耗尽，尚未派发。").put("accepted",false);
+            validateScriptArguments(tool,args);if(capabilities!=null&&capabilities.supports(tool))capabilities.validate(tool,args);else validate(tool,args,latest);
+            if(toolEffecting(tool)&&!hasLiveObservation)return failure("fresh_observation_required","脚本必须先phone_observe取得本次原回调新现场，不能使用父模型旧节点。").put("accepted",false);
+            JSONObject financial=PhoneActionPolicy.before(tool,args,latest);if(financial!=null){barrier=new JSONObject(financial.toString());alive=false;return financial;}
+            if(capabilities!=null){JSONObject gate=capabilities.beforeTool(tool,safeJson(args,config,false),original);if(gate!=null){if(gate.optBoolean("ok",true)||!Boolean.FALSE.equals(gate.opt("accepted")))throw new SecurityException("原生回调只接受明确未派发拒绝");return safeJson(gate,config,false);}}
+            current(tool);steps++;count++;String child=null;JSONObject receipt=null;boolean finished=false,preparing=false;
+            try {
+                checkpoint(task,journal,history,steps,latest,config,sink,budget);preparing=true;child=begin(journal,tool,args,config);preparing=false;current(tool);
+                if("phone_observe".equals(tool)){receipt=phone.observe(false,original);if(receipt==null)throw new IllegalStateException("empty_script_observation");latest=receipt;observed=true;hasLiveObservation=receipt.optBoolean("ok",true);}
+                else if("phone_wait".equals(tool)){original.sleep(args.getInt("ms"));receipt=new JSONObject().put("ok",true).put("accepted",true).put("message","原脚本等待结束");}
+                else{JSONObject dispatched=capabilities!=null&&capabilities.supports(tool)&&capabilities.sideEffecting(tool)?new JSONObject(args.toString()).put("_hostOperationId",child):args;receipt=capabilities!=null&&capabilities.supports(tool)?capabilities.execute(tool,dispatched,original):phone.execute(tool,args,original);if(receipt==null)throw new IllegalStateException("empty_script_receipt");}
+                completeOperation(journal,child,receipt,config);child=null;finished=true;
+                String code=receipt.optString("code",receipt.optString("error"));if(code.contains("unknown")||code.equals("action_timeout")||receipt.has("accepted")&&receipt.isNull("accepted")||receipt.optBoolean("requiresReconciliation")){unknown=true;alive=false;}
+                if(unknown||code.equals("approval_required")||code.equals("needs_user")||code.equals("accessibility_unavailable")||receipt.optBoolean("requiresPause")||"reconcile".equals(receipt.optString("nextObservationAction"))){barrier=new JSONObject(receipt.toString());alive=false;}
+                if(alive&&phone!=null&&(changesScreen(tool)||"phone_wait".equals(tool))){current(tool);JSONObject fresh=phone.observe(false,original);if(fresh==null||!fresh.optBoolean("ok",true))throw new IllegalStateException("script_post_observation_unavailable");latest=fresh;observed=true;hasLiveObservation=true;receipt.put("observation",safeJson(fresh,config,false));}
+                JSONObject tree=receipt.optJSONObject("observation");if(tree!=null){latest=new JSONObject(tree.toString());observed=true;hasLiveObservation=true;}
+                checkpoint(task,journal,history,steps,latest,config,sink,budget);
+                if(alive&&capabilities!=null&&!original.isPaused())capabilities.afterTool(tool,safeJson(args,config,false),safeToolReceipt(tool,receipt,config),original);
+                emit(task,"script_phone",receipt.optBoolean("ok",true)?"completed":"failed","原脚本子调用已在同一任务记账。",tool,new JSONObject().put("parentOperationId",parent).put("receipt",safeToolReceipt(tool,receipt,config)),config,sink);
+                return safeJson(receipt,config,false);
+            }catch(Exception failed){
+                if(child!=null||preparing){unknown=true;alive=false;receipt=failure("script_phone_effect_unknown","原脚本手机操作登记或回执未能确认，请核对原操作，不能重放。").put("accepted",JSONObject.NULL).put("requiresReconciliation",true);barrier=new JSONObject(receipt.toString());if(child!=null)try{completeOperation(journal,child,receipt,config);}catch(Exception persistence){failed.addSuppressed(persistence);}return receipt;}
+                if(original.isCancelled()||Thread.currentThread().isInterrupted())throw failed;
+                alive=false;hasLiveObservation=false;
+                if(finished&&receipt!=null){receipt.put("postObservationAvailable",false).put("requiresPause",true).put("nextObservationAction","reconcile").put("message","原动作回执已保存，随后回读未能完成；请核对当前现场，不会重新派发已完成动作。");barrier=new JSONObject(receipt.toString());return safeJson(receipt,config,false);}
+                receipt=failure("script_phone_stopped","原脚本手机调用未能继续；此子调用未取得原prepared操作，已完成回执仍在原操作账中。").put("accepted",false).put("requiresPause",true);barrier=new JSONObject(receipt.toString());return receipt;
+            }
+        }
+        private void validateScriptArguments(String tool,JSONObject args)throws Exception {
+            if(tool.equals("phone_query")||tool.equals("phone_extract")){if(args.has("_hostOperationId"))throw new SecurityException("脚本不能提供原生operation身份");return;}
+            Set<String> keys=switch(tool){case "phone_observe","phone_list_apps"->Set.of();case "phone_launch_app"->Set.of("packageName");case "phone_click_node"->Set.of("observationId","nodeId");case "phone_tap"->Set.of("observationId","x","y");case "phone_type"->Set.of("observationId","nodeId","text");case "phone_swipe"->Set.of("observationId","x1","y1","x2","y2","durationMs");case "phone_back","phone_home"->Set.of("observationId");case "phone_wait"->Set.of("ms");default->throw new SecurityException("脚本手机工具不在闭集中");};for(var it=args.keys();it.hasNext();)if(!keys.contains(it.next()))throw new SecurityException("脚本参数不能携带任务/授权/原生操作身份");
+        }
+        public void close(){alive=false;synchronized(this){/* wait for the current original callback to leave */}}
+        synchronized int steps(){return steps;}synchronized int calls(){return count;}synchronized JSONObject latest(){return latest;}synchronized JSONArray inputs(){return incoming;}synchronized boolean observed(){return observed;}synchronized boolean unknown(){return unknown;}synchronized JSONObject barrier(){return barrier;}
     }
     private static java.util.List<String> ownerMessageIds(JSONArray history)throws Exception{
         Set<String> ids=new LinkedHashSet<>();for(int i=0;i<history.length();i++){JSONObject row=history.getJSONObject(i);String id=row.optString("ownerMessageId");if(!id.isEmpty())ids.add(id);}return immutableOwnerIds(ids);
