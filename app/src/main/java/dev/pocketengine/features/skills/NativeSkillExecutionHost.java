@@ -118,7 +118,7 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
     }
     private void checkSelectedConfiguration(JSONObject view)throws Exception {if("this_phone".equals(view.optString("executionLocation")))checkPhoneConfiguration(view);else checkProfile(view.getJSONObject("deployment"));}
     private NativeSkillBackend backend(SkillExecutionConfiguration.Selection selected,String task,String run,int epoch,String operation,RunControl original)throws Exception {
-        if(selected.phone()){if(local==null)throw new SkillExecution.Unavailable("原手机托管运行环境不可用");return new ManagedSkillBackend(android,local,tasks,selected.phoneDeployment,operation,original,false,scriptPhoneActions(task,run,epoch,original));}
+        if(selected.phone()){if(local==null)throw new SkillExecution.Unavailable("原手机托管运行环境不可用");return new ManagedSkillBackend(android,local,tasks,selected.phoneDeployment,operation,original,false,scriptPhoneActions(task,run,epoch,original),changed);}
         return new CompanionSkillBackend(remote,selected.deployment,System::currentTimeMillis);
     }
     private NativeSkillBackend receiptBackend(JSONObject record,CompanionSkillBackend.ReceiptRef reference)throws Exception {
