@@ -131,7 +131,9 @@ public final class OwnerQuestionInputs {
         if(!"awaiting_user".equals(task.optString("status")))return null;
         JSONObject evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");if(question==null)return null;
         JSONObject identity=unconsumedIdentity(task,question);
-        if(identity==null)return null;return new JSONObject().put("identity",identity).put("question",question.getString("question")).put("answered",Boolean.TRUE.equals(question.opt("replyConsumed"))).put("executionAuthorized",false);
+        if(identity==null)return null;JSONObject view=new JSONObject().put("identity",identity).put("question",question.getString("question")).put("answered",Boolean.TRUE.equals(question.opt("replyConsumed"))).put("conversationId",task.getString("conversationId")).put("executionAuthorized",false);
+        JSONObject state=task.optJSONObject("ownerQuestionReplyState");if(state!=null&&"pocketworld.owner-question-reply-state.v1".equals(state.optString("format"))&&task.getString("runId").equals(state.optString("runId"))&&task.getInt("coordinatorEpoch")==state.optInt("epoch")
+                &&question.getString("requestId").equals(state.optString("requestId"))&&question.optString("replyMessageId").equals(state.optString("messageId")))view.put("continuationState",state.getString("state")).put("ownerAction",state.getString("ownerAction"));return view;
     }
     private static JSONObject unconsumedIdentity(JSONObject task,JSONObject question)throws Exception{
         JSONObject nativeQuestion=new JSONObject(question.toString());nativeQuestion.remove("replyConsumed");

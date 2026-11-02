@@ -4,4 +4,12 @@
     <string name="w8_cv_question_answer">Your answer</string>
     <string name="w8_cv_question_submit">Answer question</string>
     <string name="w8_cv_question_saved">Your answer is saved in the original conversation. If work has paused, check the original task and its available actions.</string>
+    <string name="w8_cv_question_expired">Your answer is saved. The original task authorization has expired. Review its scope first.</string>
+    <string name="w8_cv_question_budget">Your answer is saved. The original budget is insufficient. Review its recorded usage and scope first.</string>
+    <string name="w8_cv_question_busy">Your answer is saved. The conversation or phone still has active work. Check the original conversation.</string>
+    <string name="w8_cv_question_sources">Your answer is saved. The original sources need checking. Review its files and sources first.</string>
+    <string name="w8_cv_question_checking">Your answer is saved. Checking whether the original task can still continue.</string>
+    <string name="w8_cv_question_review_scope">Review original task scope</string>
+    <string name="w8_cv_question_review_sources">Review original files and sources</string>
+    <string name="w8_cv_question_open_conversation">Return to original conversation</string>
 </resources>

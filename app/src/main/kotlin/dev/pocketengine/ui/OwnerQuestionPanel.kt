@@ -30,7 +30,7 @@ internal fun hasOrdinaryOwnerQuestion(task: JSONObject): Boolean = try {
 
 /** Original native ordinary question. No feature/model route, approval or takeover UI. */
 @Composable
-internal fun OwnerQuestionPanel(task: JSONObject, busy: Boolean, error: String?, result: JSONObject?, onAnswer: (JSONObject, String) -> Unit) {
+internal fun OwnerQuestionPanel(task: JSONObject, busy: Boolean, error: String?, result: JSONObject?, onReviewScope: () -> Unit, onReviewSources: () -> Unit, onOpenConversation: () -> Unit, onAnswer: (JSONObject, String) -> Unit) {
     val view = remember(task.toString()) {
         try { task.optJSONObject("ownerQuestionView") ?: OwnerQuestionInputs.pageQuestion(task) } catch (_: Exception) { null }
     } ?: return
@@ -49,7 +49,20 @@ internal fun OwnerQuestionPanel(task: JSONObject, busy: Boolean, error: String?,
         Text(stringResource(R.string.w8_cv_question_title), style = MaterialTheme.typography.titleSmall)
         SelectionContainer { Text(view.optString("question"), style = MaterialTheme.typography.bodyMedium) }
         if (accepted || view.optBoolean("answered")) {
-            Text(stringResource(R.string.w8_cv_question_saved), style = MaterialTheme.typography.bodySmall)
+            val currentResult = result?.takeIf { it.optString("taskId") == taskId && it.optString("requestId") == requestId }
+            val state = view.optString("continuationState").ifBlank { currentResult?.optString("continuationState").orEmpty() }
+            val scope = state in setOf("saved_scope_expired", "saved_budget_exhausted", "saved_scope_unavailable", "saved_original_authority_changed")
+            val source = state in setOf("saved_source_sync_required", "saved_source_unavailable")
+            Text(stringResource(when (state) {
+                "saved_scope_expired" -> R.string.w8_cv_question_expired
+                "saved_budget_exhausted" -> R.string.w8_cv_question_budget
+                "saved_original_host_busy", "saved_original_conversation_busy" -> R.string.w8_cv_question_busy
+                "saved_source_sync_required", "saved_source_unavailable" -> R.string.w8_cv_question_sources
+                "original_worker_requested" -> R.string.w8_cv_question_checking
+                else -> R.string.w8_cv_question_saved
+            }), style = MaterialTheme.typography.bodySmall)
+            if (state != "original_worker_requested") Button(onClick = if (scope) onReviewScope else if (source) onReviewSources else onOpenConversation,
+                modifier = Modifier.testTag("owner-question-review")) { Text(stringResource(if (scope) R.string.w8_cv_question_review_scope else if (source) R.string.w8_cv_question_review_sources else R.string.w8_cv_question_open_conversation)) }
         } else {
             Text(stringResource(R.string.w8_cv_question_note), style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(draft, { if (it.length <= 4000) draft = it }, label = { Text(stringResource(R.string.w8_cv_question_answer)) },

@@ -4,4 +4,12 @@
     <string name="w8_cv_question_answer">你的回答</string>
     <string name="w8_cv_question_submit">回答这个问题</string>
     <string name="w8_cv_question_saved">回答已保存在原对话。若未继续，请查看原任务的状态与可用操作。</string>
+    <string name="w8_cv_question_expired">回答已保存。原任务的授权期限已到，请先审阅任务范围。</string>
+    <string name="w8_cv_question_budget">回答已保存。原任务的剩余预算不足，请先审阅已有用量和任务范围。</string>
+    <string name="w8_cv_question_busy">回答已保存。原对话或手机仍有执行，请回原对话核对。</string>
+    <string name="w8_cv_question_sources">回答已保存。原来源需要重新核对，请先查看文件与来源。</string>
+    <string name="w8_cv_question_checking">回答已保存，正在检查原任务是否仍可继续。</string>
+    <string name="w8_cv_question_review_scope">审阅原任务范围</string>
+    <string name="w8_cv_question_review_sources">查看原文件与来源</string>
+    <string name="w8_cv_question_open_conversation">回原对话处理</string>
 </resources>
