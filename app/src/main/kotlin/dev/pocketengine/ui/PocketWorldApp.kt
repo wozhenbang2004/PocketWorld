@@ -495,6 +495,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
     val reconciliationAnchor = remember(task.id) { BringIntoViewRequester() }
     val resultAnchor = remember(task.id) { BringIntoViewRequester() }
     val feedbackAnchor = remember(task.id) { BringIntoViewRequester() }
+    val executionScopeAnchor = remember(task.id) { BringIntoViewRequester() }
     ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).navigationBarsPadding().imePadding()) {
             TextButton(onClick = close, modifier = Modifier.testTag("task_return_source")) { Text(returnLabel, fontSize = 14.sp) }
@@ -503,7 +504,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             DeviceTaskProvenance(task) { controller.openConnection("devices"); close() }
             if (pairedTask || task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") DeviceTaskHistoryControls(task, controller.nativeDeviceWorkspace(), controller::runDeviceWorkspaceWork, controller.deviceWorkspaceRevision, controller::deviceWorkspaceChanged)
             if (pairedTask) DevicePairedTaskControls(task, controller.nativeDeviceWorkspace(), controller::runDeviceWorkspaceWork, controller::runDeviceWorkspaceControlWork, controller.deviceWorkspaceRevision, controller::deviceWorkspaceChanged) { controller.openConnection("models"); close() }
-            if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask) ExecutionScopeControls(task,controller)
+            if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask) Box(Modifier.bringIntoViewRequester(executionScopeAnchor)) { ExecutionScopeControls(task,controller) }
             if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask && task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optString("kind") in setOf("phone", "assistant") && task.status !in setOf("completed", "cancelled", "failed", "interrupted", "reconciling")) DeviceTaskScopeEntry(task, controller.nativeDeviceTaskScope(), controller::runDeviceWorkspaceWork) { controller.deviceTaskWorkspaceChanged(task.id) }
             if (!groupTask && !mediaTask && !memoryConsolidationTask && (phoneTask || assistantTask) && teamRunReferences(task).isEmpty()) TaskExecutionProcess(task, controller) { target ->
                 val anchor = when (target) {
@@ -610,7 +611,10 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             TaskImage(task)
             if (!pairedTask && !active && task.status == "needs_confirmation") Row(Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = { controller.confirmReviewedTask(task, true, if (groupTask) "" else feedback) }) { Text(dev.pocketengine.features.operations.LiteralUiText.text(dev.pocketengine.R.string.ui_lit_0c171e72b365, "确认已完成")) }; OutlinedButton(onClick = { controller.confirmReviewedTask(task, false, if (groupTask) "" else feedback) }) { Text(dev.pocketengine.features.operations.LiteralUiText.text(dev.pocketengine.R.string.ui_lit_cf2a34697d0f, "还需处理")) } }
             if (groupTask && task.status != "completed" && !assistantExecuting) Button(onClick = { resumeConsent = true }, enabled = controller.groupTaskReady && !task.raw.optBoolean("cancelRequested") && unknown.isEmpty() && pendingCapabilityApprovals(task).isEmpty() && task.status in setOf("paused", "awaiting_user", "needs_confirmation", "interrupted"), modifier = Modifier.padding(top = 12.dp)) { Text(dev.pocketengine.features.operations.LiteralUiText.text(dev.pocketengine.R.string.ui_lit_d76daaf84e36, "按原群授权继续原任务")) }
-            OwnerQuestionPanel(task.raw, "owner.answerOwnerQuestion" in host.moduleBusy, host.moduleErrors["owner.answerOwnerQuestion"], host.moduleResults["owner.answerOwnerQuestion"]) { identity, text ->
+            OwnerQuestionPanel(task.raw, "owner.answerOwnerQuestion" in host.moduleBusy, host.moduleErrors["owner.answerOwnerQuestion"], host.moduleResults["owner.answerOwnerQuestion"],
+                onReviewScope = { processScope.launch { executionScopeAnchor.bringIntoView() } },
+                onReviewSources = { controller.openTaskOutcomes(task.id) },
+                onOpenConversation = { controller.openConversation(task.raw.optString("conversationId")); close() }) { identity, text ->
                 controller.requestOwnerAction("answerOwnerQuestion", JSONObject().put("taskId", task.id).put("questionIdentity", identity).put("text", text))
             }
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(feedbackAnchor))

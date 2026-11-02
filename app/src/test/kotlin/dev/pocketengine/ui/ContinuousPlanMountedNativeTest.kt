@@ -23,7 +23,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.features.HostAutomationCoordinator
-import com.sun.net.httpserver.HttpServer
+import dev.pocketengine.testutil.HttpServer
 import java.io.File
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets

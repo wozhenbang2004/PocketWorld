@@ -79,6 +79,14 @@ import org.json.JSONObject
     if (busy && result == null) LinearProgressIndicator(Modifier.fillMaxWidth())
     val plan = plans.find { it.optString("id") == selected }
     if (plan == null) {
+        snapshot?.optJSONArray("scheduleProposals").objects().filter { it.optString("status") == "pending" }.forEach { proposal ->
+            ScheduleProposalReview(proposal, busy) { command, payload -> send(command, payload) }
+            HorizontalDivider(color = Line, modifier = Modifier.padding(vertical = 12.dp))
+        }
+        snapshot?.optJSONArray("semanticRules").objects().filter { it.optJSONObject("semanticCondition") != null }.forEach { rule ->
+            SemanticConditionControls(rule, plans, busy) { command, payload -> send(command, payload) }
+            HorizontalDivider(color = Line, modifier = Modifier.padding(vertical = 12.dp))
+        }
         Button(onClick = { creating = true }, enabled = !busy) { Text("建立一个持续目标") }
         if (plans.isEmpty() && !busy) PlanCaption("从一个明确目标开始，安排成功路径和需要时的失败恢复。文件成果可按你指定的标准自动核验。")
         plans.forEach { row ->

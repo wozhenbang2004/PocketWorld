@@ -349,10 +349,35 @@ public final class PhoneRunService extends Service {
         if(port instanceof BackgroundPhonePort)outcome.evidence.put("audioRestore",((BackgroundPhonePort)port).restoreTaskAudio());
         heldPort=port;waitingForUser=true;
         boolean unresolved=app.tasks.hasUnresolved(id);String status=unresolved?"reconciling":outcome.status;
-        app.tasks.finish(id,status,outcome.summary,outcome.evidence);app.pushTask(id);
-        app.publish(EngineApplication.json("type","owner_takeover","taskId",id,"manualAllowed",!unresolved,"status",status));
+        app.tasks.finish(id,status,outcome.summary,outcome.evidence);
         ++ownerWaitGeneration; // The same canonical task deadline remains supervised during owner handoff.
+        try{app.retainOwnerPhoneQuestion(id,control,port,runningConfig,ownerWaitGeneration,ownerPhoneQuestionHost());}catch(Exception notAnOrdinaryOriginalHold){/* No answer action is exposed without a real original Held. */}
+        app.pushTask(id);app.publish(EngineApplication.json("type","owner_takeover","taskId",id,"manualAllowed",!unresolved,"status",status));
     }
+    /** A volatile reference to this exact normal-phone hold; no display movement or device
+     * goal callback is involved. Dispatch is serialized on this Service's original worker. */
+    private dev.pocketengine.features.assistant.OwnerPhoneQuestions.PhysicalOwner ownerPhoneQuestionHost(){
+        return new dev.pocketengine.features.assistant.OwnerPhoneQuestions.PhysicalOwner(){
+            @Override public void requireHeld(dev.pocketengine.features.assistant.OwnerPhoneQuestions.Held expected)throws Exception{
+                if(destroyed||deviceGoal!=null||deviceTools!=null||gatewayParent!=null||gatewayOnly!=null||!waitingForUser||heldPort==null||heldPort!=expected.physicalPort()||ownerControl!=expected.originalControl()||!expected.taskId().equals(runningId)||!expected.runId().equals(runningRunId)||expected.epoch()!=runningEpoch||expected.waitGeneration()!=ownerWaitGeneration||expected.capturedModel()!=runningConfig)throw new SecurityException("原手机物理等待会话或代次已改变");
+            }
+            @Override public void requestContinuation(dev.pocketengine.features.assistant.OwnerPhoneQuestions.Held expected)throws Exception{
+                requireHeld(expected);if(!main.post(()->{
+                    try{
+                        requireHeld(expected);app.continueOwnerPhoneQuestion(expected,()->{
+                            requireHeld(expected);if(expected.originalControl().isPaused()||expected.originalControl().isCancelled())throw new SecurityException("原手机已再次暂停或停止");
+                            waitingForUser=false;ownerWaitGeneration++;int start=lastStartId;
+                            worker.execute(()->run(expected.taskId(),expected.runId(),expected.epoch(),runningGoal,runningConfig,expected.originalControl(),start,false));
+                        });
+                    }catch(Exception notDispatched){
+                        if(!destroyed&&heldPort==expected.physicalPort()&&ownerControl==expected.originalControl()&&expected.taskId().equals(runningId)){waitingForUser=true;ownerWaitGeneration++;}
+                        app.ownerPhoneQuestionContinuationFailed(expected);
+                    }
+                }))throw new IllegalStateException("原手机服务主线程已关闭");
+            }
+        };
+    }
+
     private void startLeaseWatch(String id,String run,int epoch,RunControl original){
         if(leaseWatch!=null)leaseWatch.cancel(false);deadlineReached=false;
         leaseWatch=leaseSupervisor.scheduleWithFixedDelay(()->{
@@ -411,6 +436,7 @@ public final class PhoneRunService extends Service {
                     builder.addAction(new Notification.Action.Builder(null,owner.isPaused()?"继续原任务":"暂停",control).build());}
             }
         }catch(Exception invalid){app.error("原任务通知控制暂不可用，请打开应用核对");}
+        if(identified)try{dev.pocketengine.features.assistant.notifications.OwnerPhoneQuestionNotification.add(builder,this,t);}catch(Exception unavailable){/* Existing stop/navigation actions remain available. */}
         return builder.build();
     }
     private static String safeMessage(Exception e){String m=e.getMessage();return m==null?"任务执行异常，请查看步骤后重试":m.length()>250?m.substring(0,250):m;}
