@@ -10,6 +10,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import dev.pocketengine.R
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import java.util.Base64
@@ -19,6 +22,7 @@ import org.json.JSONObject
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AnswerSourcesSheet(anchor: JSONObject, read: (JSONObject, Int, (JSONObject?, String?) -> Unit) -> Unit, frame: (JSONObject, Int, (JSONObject?, String?) -> Unit) -> Unit, controller: PocketWorldController, back: () -> Unit) {
+    val context = LocalContext.current
     var selected by remember(anchor.toString()) { mutableIntStateOf(-1) }
     var result by remember(anchor.toString()) { mutableStateOf<JSONObject?>(null) }
     var rawCitation by remember { mutableStateOf<JSONObject?>(null) }
@@ -31,41 +35,41 @@ internal fun AnswerSourcesSheet(anchor: JSONObject, read: (JSONObject, Int, (JSO
     BackHandler { if (rawCitation != null) rawCitation = null else if (selected >= 0) returnToList() else back() }
     ModalBottomSheet(onDismissRequest = back, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            TextButton(onClick = { if (rawCitation != null) rawCitation = null else if (selected >= 0) returnToList() else back() }) { Text(if (rawCitation != null) "返回这项来源" else if (selected >= 0) "返回本次来源" else "返回原回答") }
-            Text("回答保存的来源", style = MaterialTheme.typography.titleLarge)
-            Text("原任务 ${anchor.optString("taskId")}\n原轮次 ${anchor.optString("runId")}\n回答 ${anchor.optString("answerId")}", style = MaterialTheme.typography.labelSmall)
-            Text("这里读取当时保留的文本和观察；可读来源不证明答案已核实。未保存的历史画面不会用当前屏幕补造。", style = MaterialTheme.typography.bodySmall)
-            if (anchor.optBoolean("coverageLimited")) Text("这份来源清单有覆盖上限，未列全的来源不等于不存在。", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { if (rawCitation != null) rawCitation = null else if (selected >= 0) returnToList() else back() }) { Text(stringResource(if (rawCitation != null) R.string.w2_sources_back_source else if (selected >= 0) R.string.w2_sources_back_list else R.string.w2_sources_back_answer)) }
+            Text(stringResource(R.string.w2_sources_title), style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.w2_sources_original_identity, anchor.optString("taskId"), anchor.optString("runId"), anchor.optString("answerId")), style = MaterialTheme.typography.labelSmall)
+            Text(stringResource(R.string.w2_sources_notice), style = MaterialTheme.typography.bodySmall)
+            if (anchor.optBoolean("coverageLimited")) Text(stringResource(R.string.w2_sources_coverage_limited), style = MaterialTheme.typography.bodySmall)
             if (rawCitation != null) {
                 dev.pocketengine.ui.memory.TaskMemoryRawCitationPanel(anchor.getString("taskId"), anchor.getString("runId"), rawCitation!!, controller.state.ownerResponses("taskMemory"), { command, payload -> controller.requestOwnerDomain("taskMemory", command, payload) }, { task -> back(); controller.focusTask(task) }, { rawCitation = null }, controller.state.memoryRefreshRevision)
             } else if (selected < 0) {
                 val entries = anchor.optJSONArray("entries")
-                if (entries == null || entries.length() == 0) Text("这条回答没有保留可定位的网页或观察清单；原记忆来源仍可从消息菜单核对。")
+                if (entries == null || entries.length() == 0) Text(stringResource(R.string.w2_sources_empty))
                 for (i in 0 until (entries?.length() ?: 0)) {
                     val entry = entries!!.getJSONObject(i)
                     TextButton(onClick = {
                         selected = i; loading = true; error = null; val request = ++generation
                         read(anchor, i) { value, failure -> if (alive && request == generation) { result = value; error = failure; loading = false } }
-                    }, modifier = Modifier.fillMaxWidth()) { Text("${i + 1} · ${when (entry.optString("type")) { "browser_source_retained" -> "保存的网页观察"; "observation" -> "手机观察"; else -> "精确原文引用" }} · 原事件 ${entry.optLong("eventOrder")}") }
+                    }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.w2_sources_entry, i + 1, stringResource(when (entry.optString("type")) { "browser_source_retained" -> R.string.w2_sources_web_observation; "observation" -> R.string.w2_sources_phone_observation; else -> R.string.w2_sources_exact_citation }), entry.optLong("eventOrder"))) }
                 }
             } else result?.let { value ->
-                if (!value.optBoolean("available")) Text("原来源已改变、清理或暂不可读。没有回落到新版本。")
+                if (!value.optBoolean("available")) Text(stringResource(R.string.w2_sources_unavailable))
                 else {
-                    Text(value.optString("title", "原来源范围"), style = MaterialTheme.typography.titleMedium)
+                    Text(value.optString("title", stringResource(R.string.w2_sources_original_range)), style = MaterialTheme.typography.titleMedium)
                     if (value.optString("url").isNotBlank()) Text(value.getString("url"), style = MaterialTheme.typography.bodySmall)
-                    value.optJSONObject("sourceIdentity")?.let { source -> val identities = listOf("sourceId" to "来源", "observationId" to "观察", "documentId" to "文档").mapNotNull { (key, label) -> source.optString(key).takeIf(String::isNotBlank)?.let { "$label $it" } }; if (identities.isNotEmpty()) Text(identities.joinToString(" · "), style = MaterialTheme.typography.labelSmall) }
+                    value.optJSONObject("sourceIdentity")?.let { source -> val identities = listOf("sourceId" to stringResource(R.string.w2_sources_identity_source), "observationId" to stringResource(R.string.w2_sources_identity_observation), "documentId" to stringResource(R.string.w2_sources_identity_document)).mapNotNull { (key, label) -> source.optString(key).takeIf(String::isNotBlank)?.let { "$label $it" } }; if (identities.isNotEmpty()) Text(identities.joinToString(" · "), style = MaterialTheme.typography.labelSmall) }
                     if (value.has("body")) SelectionContainer { Text(value.getString("body"), style = MaterialTheme.typography.bodyMedium) }
-                    value.optJSONObject("structuredProjection")?.let { fields -> TextButton(onClick = { structuredOpen = !structuredOpen }) { Text(if (structuredOpen) "收起当时保存的结构化范围" else "查看当时保存的结构化范围") }; if (structuredOpen) SelectionContainer { Text(fields.toString(2), style = MaterialTheme.typography.bodySmall) } }
-                    value.optJSONObject("range")?.let { range -> Text("UTF-16字符范围 ${range.optInt("offset")} + ${range.optInt("chars")} / ${range.optInt("totalChars")}", style = MaterialTheme.typography.labelSmall) }
+                    value.optJSONObject("structuredProjection")?.let { fields -> TextButton(onClick = { structuredOpen = !structuredOpen }) { Text(if (structuredOpen) stringResource(R.string.w2_sources_structured_collapse) else stringResource(R.string.w2_sources_structured_expand)) }; if (structuredOpen) SelectionContainer { Text(fields.toString(2), style = MaterialTheme.typography.bodySmall) } }
+                    value.optJSONObject("range")?.let { range -> Text(stringResource(R.string.w2_sources_utf16_range, range.optInt("offset"), range.optInt("chars"), range.optInt("totalChars")), style = MaterialTheme.typography.labelSmall) }
                     val jumps = value.optJSONArray("jumps")
                     for (i in 0 until (jumps?.length() ?: 0)) {
                         val jump = jumps!!.getJSONObject(i)
-                        TextButton(onClick = { rawCitation = JSONObject(jump.toString()) }) { Text("读取原文 ${i + 1} · ${jump.optString("sourceId")}") }
+                        TextButton(onClick = { rawCitation = JSONObject(jump.toString()) }) { Text(stringResource(R.string.w2_sources_read_original, i + 1, jump.optString("sourceId"))) }
                     }
                     val savedFrame = value.optJSONObject("frame")
-                    if (savedFrame != null && picture == null) TextButton(onClick = { loading = true; val request = ++generation; frame(anchor, selected) { returned, failure -> if (alive && request == generation) { picture = returned?.optString("dataUrl")?.takeIf { returned.optBoolean("available") && it.isNotEmpty() }; error = failure ?: if (picture == null) "该观察的原图已清理或未保留。" else null; loading = false } } }) { Text("打开同一观察的保存图") }
-                    else if (savedFrame == null) Text("历史画面未保留", style = MaterialTheme.typography.bodySmall)
-                    picture?.let { encoded -> val bitmap = remember(encoded) { runCatching { val bytes = Base64.getDecoder().decode(encoded.substringAfter(",")); BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull() }; bitmap?.let { Image(it.asImageBitmap(), "原观察保存图", Modifier.fillMaxWidth()) } }
+                    if (savedFrame != null && picture == null) TextButton(onClick = { loading = true; val request = ++generation; frame(anchor, selected) { returned, failure -> if (alive && request == generation) { picture = returned?.optString("dataUrl")?.takeIf { returned.optBoolean("available") && it.isNotEmpty() }; error = failure ?: if (picture == null) context.getString(R.string.w2_sources_frame_unavailable) else null; loading = false } } }) { Text(stringResource(R.string.w2_sources_open_frame)) }
+                    else if (savedFrame == null) Text(stringResource(R.string.w2_sources_frame_not_retained), style = MaterialTheme.typography.bodySmall)
+                    picture?.let { encoded -> val bitmap = remember(encoded) { runCatching { val bytes = Base64.getDecoder().decode(encoded.substringAfter(",")); BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull() }; bitmap?.let { Image(it.asImageBitmap(), stringResource(R.string.w2_sources_frame_description), Modifier.fillMaxWidth()) } }
                 }
             }
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
