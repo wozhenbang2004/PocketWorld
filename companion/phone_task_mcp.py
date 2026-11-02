@@ -10,6 +10,9 @@ VERSION = "2025-11-25"
 
 def tool_definitions():
     identity = {"operationId": {"type": "string"}, "peerDeviceId": {"type": "string"}}
+    control = {**identity, "controlOperationId": {"type": "string"}, "taskId": {"type": "string"}, "runId": {"type": "string"},
+               "executorEpoch": {"type": "integer", "minimum": 1}, "allocationId": {"type": "string"}}
+    input_fields = {**control, "controlLeaseId": {"type": "string"}, "text": {"type": "string", "minLength": 1, "maxLength": 4000}}
     shapes = {
         "doctor": ({"peerDeviceId": {"type": "string"}}, ["peerDeviceId"], True),
         "list": ({"peerDeviceId": {"type": "string"}}, ["peerDeviceId"], True),
@@ -21,6 +24,9 @@ def tool_definitions():
         "wait": ({**identity, "timeoutMs": {"type": "integer", "minimum": 0, "maximum": 45000}}, list(identity), True),
         "events": ({**identity, "cursor": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 256}}, list(identity), True),
         "cancel": ({**identity, "cancelOperationId": {"type": "string"}}, [*identity, "cancelOperationId"], False),
+        "acquire_control": ({**control, "ttlMs": {"type": "integer", "minimum": 1, "maximum": 300000}, "previousLeaseId": {"type": "string"}}, list(control), False),
+        "answer": ({**input_fields, "originalRequestId": {"type": "string"}, "waitRevision": {"type": "integer", "minimum": 1}}, [*input_fields, "originalRequestId", "waitRevision"], False),
+        "steer": (input_fields, list(input_fields), False),
     }
     descriptions = {
         "doctor": "Read the selected paired phone's bounded native description. Does not verify model inference or authorize execution.",
@@ -30,6 +36,9 @@ def tool_definitions():
         "wait": "Read the same phone task for up to 45 seconds. Timeout or disconnect does not fail/cancel the task and never starts a replacement.",
         "events": "Read original phone task events with the original event cursor.",
         "cancel": "Request cancellation of the exact original operation using a distinct cancelOperationId. Requested is not proof of stopped. Unknown is never replayed.",
+        "acquire_control": "Explicitly acquire control for the exact original native task/run/epoch/allocation using a separate controlOperationId. Existing controller identity is required to renew. Does not approve effects or create a run.",
+        "answer": "Save an answer to the exact native ordinary question UUID/waitRevision in its original task. Requires current paired write grant and control lease. Never use for approval/takeover. Retains original run, model, allocation and remaining budget; unknown writes are never replayed.",
+        "steer": "Append bounded guidance to the original active phone goal through its existing Runner input polling. Requires exact run/epoch/allocation/current control lease. Does not approve effects, renew grants or start a replacement task.",
     }
     return [{"name": "phone_task_" + action, "description": descriptions[action],
              "inputSchema": {"type": "object", "properties": properties, "required": required, "additionalProperties": False},
@@ -57,7 +66,7 @@ def rpc(client, message, *, fixed_peer=None):
                 raise ValueError("Initialize requires protocol version, capabilities and clientInfo")
             result = {"protocolVersion": VERSION, "capabilities": {"tools": {"listChanged": False}},
                       "serverInfo": {"name": "pocketworld-phone-tasks", "version": "1.0.0"},
-                      "instructions": "Phone TaskStore is the only executor. Keep original operation identities. Native confirmations stay on phone. Ordinary answer/steer are not exposed until the phone's native typed input API is integrated."}
+                      "instructions": "Phone TaskStore is the only executor. Keep original operation/control identities. Native approvals and takeover stay on phone. Answer only a native ordinary question; steer only the original active goal. Read current native task/run/allocation and explicitly acquire its control lease first. Unknown writes are never replayed."}
         elif method == "ping":
             result = {}
         elif method == "tools/list":

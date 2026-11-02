@@ -47,8 +47,13 @@ class Client:
             raise ClientError("Invalid private Companion token file")
 
     def execute(self, action, params):
-        mutation = action in {"run", "cancel", "answer", "steer", "usb_open", "usb_close"}
-        operation_id = params.get("cancelOperationId") if action == "cancel" else params.get("operationId")
+        mutation = action in {"run", "cancel", "acquire_control", "answer", "steer", "usb_open", "usb_close"}
+        if action == "cancel":
+            operation_id = params.get("cancelOperationId")
+        elif action in {"acquire_control", "answer", "steer"}:
+            operation_id = params.get("controlOperationId")
+        else:
+            operation_id = params.get("operationId")
         body = json.dumps({"action": action, "params": params}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) > 65536:
             raise ClientError("Request exceeds the original control bound")

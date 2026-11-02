@@ -34,6 +34,19 @@ def parser():
         if action == "wait": item.add_argument("--timeout-ms", type=int, default=30000)
         if action == "events": item.add_argument("--cursor"); item.add_argument("--limit", type=int, default=100)
         if action == "cancel": item.add_argument("--cancel-operation-id")
+    for action in ("acquire-control", "answer", "steer"):
+        item = sub.add_parser(action, help="Use the exact current original task/run/allocation; native approvals stay on phone")
+        item.add_argument("operation_id", help="Original goal submission operation ID")
+        item.add_argument("--control-operation-id", help="Assigned once before this write; unknown writes are never resent")
+        item.add_argument("--task", required=True); item.add_argument("--run", required=True)
+        item.add_argument("--epoch", required=True, type=int); item.add_argument("--allocation", required=True)
+        if action == "acquire-control":
+            item.add_argument("--ttl-ms", type=int, default=30000); item.add_argument("--previous-lease")
+        else:
+            item.add_argument("text"); item.add_argument("--control-lease", required=True)
+        if action == "answer":
+            item.add_argument("--question", required=True, help="Native ordinary question request UUID")
+            item.add_argument("--wait-revision", required=True, type=int)
     return command
 
 
@@ -84,9 +97,20 @@ def main(argv=None):
             if args.action == "cancel":
                 params["cancelOperationId"] = args.cancel_operation_id or str(uuid.uuid4())
                 print("Original cancellation: " + params["cancelOperationId"], file=sys.stderr, flush=True)
+        elif args.action in {"acquire-control", "answer", "steer"}:
+            control_id = args.control_operation_id or str(uuid.uuid4())
+            print("Original control operation: " + control_id, file=sys.stderr, flush=True)
+            params.update(operationId=args.operation_id, controlOperationId=control_id, taskId=args.task, runId=args.run,
+                          executorEpoch=args.epoch, allocationId=args.allocation)
+            if args.action == "acquire-control":
+                params["ttlMs"] = args.ttl_ms
+                if args.previous_lease is not None: params["previousLeaseId"] = args.previous_lease
+            else:
+                params.update(controlLeaseId=args.control_lease, text=args.text)
+            if args.action == "answer": params.update(originalRequestId=args.question, waitRevision=args.wait_revision)
         result = client.execute(args.action.replace("-", "_"), params)
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 3 if result.get("status") == "unknown" else 0
+        return 3 if result.get("status") == "unknown" or result.get("effectState") == "unknown" else 0
     except (OSError, ValueError, ClientError) as failure:
         print("Phone task action unavailable: " + str(failure), file=sys.stderr)
         return 2

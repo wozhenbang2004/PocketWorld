@@ -83,6 +83,15 @@ class PhoneTaskRouter:
                     raise PhoneTaskError("Task snapshot belongs to another original task", 502)
                 if request.method == "operation.get" and payload.get("operationId") not in (None, request.arguments["operationId"]):
                     raise PhoneTaskError("Receipt belongs to another original operation", 502)
+                if request.method in {"task.acquireControl", "task.answerQuestion", "task.steer"} and payload.get("accepted"):
+                    if payload.get("localTaskId") != request.arguments["taskId"]:
+                        raise PhoneTaskError("Control receipt belongs to another original task", 502)
+                    if request.method in {"task.answerQuestion", "task.steer"}:
+                        native = payload.get("payload", {})
+                        if (native.get("inputSaved") is not True or native.get("taskId") != request.arguments["taskId"]
+                                or native.get("runId") != request.arguments["runId"] or native.get("executorEpoch") != request.arguments["executorEpoch"]
+                                or native.get("allocationId") != request.arguments["allocationId"] or native.get("sourceKind") != "native_paired_task_input"):
+                            raise PhoneTaskError("Input receipt changed the original native scope", 502)
             future.set_result(result)
         except Exception:
             future.set_exception(PhoneTaskError("Invalid original response; its outcome remains unknown", 502))
@@ -118,7 +127,7 @@ class PhoneTaskRouter:
 
     @staticmethod
     def _public(value):
-        return {key: copy.deepcopy(value[key]) for key in ("operationId", "peerDeviceId", "grantId", "status", "effectState", "taskId", "runId", "executorEpoch", "accepted", "updatedAt", "kind", "cancellation") if key in value}
+        return {key: copy.deepcopy(value[key]) for key in ("operationId", "targetOperationId", "peerDeviceId", "grantId", "status", "effectState", "taskId", "runId", "executorEpoch", "allocationId", "accepted", "updatedAt", "kind", "cancellation", "controlLeaseId", "controlLeaseExpiresAt", "inputMessageId", "inputSaved", "continuationRequested", "continuationState") if key in value}
 
     def _connection(self, peer_id):
         wire.device_id(peer_id)
@@ -173,6 +182,9 @@ class PhoneTaskRouter:
                      status="dispatch_prepared", effectState="unknown", kind=envelope.method, updatedAt=self.manager.now())
         if original is not None:
             value["targetOperationId"] = original["operationId"]
+        allocation = envelope.get("budget", {}).get("allocationId") or envelope.arguments.get("allocationId")
+        if allocation:
+            value["allocationId"] = allocation
         with self.manager.lock:
             previous = self.manager.ledger.execute("SELECT fingerprint,details FROM operations WHERE operation_id=?", (operation_id,)).fetchone()
             if previous:
@@ -208,8 +220,20 @@ class PhoneTaskRouter:
             value["cancellation"] = copy.deepcopy(receipt["cancellation"])
         if receipt.get("accepted") and receipt.get("localTaskId"):
             value["taskId"] = receipt["localTaskId"]
+        native = receipt.get("payload", {})
+        if receipt.get("accepted") and isinstance(native, dict):
+            if value.get("kind") == "task.acquireControl" and native.get("leaseId"):
+                value.update(controlLeaseId=native["leaseId"], controlLeaseExpiresAt=native["expiresAt"])
+            if value.get("kind") in {"task.answerQuestion", "task.steer"}:
+                for name in ("inputSaved", "continuationRequested", "continuationState"):
+                    if name in native:
+                        value[name] = native[name]
+                if native.get("messageId"):
+                    value["inputMessageId"] = native["messageId"]
 
     async def execute(self, action, params):
+        if action in {"acquire_control", "answer", "steer"}:
+            return await self._ordinary_input(action, params)
         if action in {"usb_open", "usb_close", "usb_status"}:
             return await self._usb_action(action, params)
         if action == "list":
@@ -239,8 +263,11 @@ class PhoneTaskRouter:
                         self.service.receiver.pairing.accept_history_grant_receipt(peer, receipt, self.manager.now())
             except Exception:
                 raise PhoneTaskError("Receiving-owner signed grant receipt could not be verified", 403)
+            capabilities = {capability for receipt in description["grantReceipts"] for capability in receipt["body"]["grant"]["capabilities"]
+                            if self.manager.now() < receipt["body"]["grant"]["expiresAt"]}
             return {"description": response["result"], "modelInferenceVerified": False, "phoneConfirmationLocalOnly": True,
-                    "ordinaryAnswerAvailable": False, "steerAvailable": False}
+                    "ordinaryAnswerAvailable": "task.answerQuestion" in capabilities, "steerAvailable": "task.steer" in capabilities,
+                    "inputStillRequiresOriginalRunAndControlLease": True}
         if action == "run":
             wire._keys(params, {"operationId", "peerDeviceId", "grantId", "resourceBinding", "goal", "toolCalls", "modelCalls", "ttlMs", "capabilityVersion"})
             operation_id = wire.identifier(params["operationId"], "operationId")
@@ -321,6 +348,72 @@ class PhoneTaskRouter:
                     return result
                 await asyncio.sleep(min(0.5, max(0, end - asyncio.get_running_loop().time())))
         raise PhoneTaskError("Unsupported phone task action; native confirmation cannot be replaced by text", 404)
+
+    async def _ordinary_input(self, action, params):
+        required = {"operationId", "peerDeviceId", "controlOperationId", "taskId", "runId", "executorEpoch", "allocationId"}
+        optional = {"ttlMs", "previousLeaseId"} if action == "acquire_control" else set()
+        if action != "acquire_control":
+            required |= {"controlLeaseId", "text"}
+        if action == "answer":
+            required |= {"originalRequestId", "waitRevision"}
+        wire._keys(params, required, optional)
+        original_id = wire.identifier(params["operationId"], "operationId")
+        control_id = wire.identifier(params["controlOperationId"], "controlOperationId")
+        if control_id == original_id:
+            raise PhoneTaskError("A control write needs its own operation identity")
+        _, original = self._row(original_id)
+        if original.get("peerDeviceId") != params["peerDeviceId"] or original.get("kind") != "task.submitGoal" or original.get("taskId") != params["taskId"]:
+            raise PhoneTaskError("Input must target the same original goal and selected phone", 403)
+        fingerprint = hashlib.sha256(wire.canonical_bytes(params)).hexdigest()
+        with self.manager.lock:
+            known = self.manager.ledger.execute("SELECT 1 FROM operations WHERE operation_id=?", (control_id,)).fetchone()
+        if known:
+            previous_fingerprint, previous = self._row(control_id)
+            if fingerprint != previous_fingerprint or previous.get("targetOperationId") != original_id:
+                raise PhoneTaskError("Original control input parameters changed", 409)
+            return self._public(previous)
+        for name in ("taskId", "runId", "allocationId"):
+            wire.identifier(params[name], name)
+        wire.integer(params["executorEpoch"], "executorEpoch", 1)
+        snapshot = await self._read(original, "task.get", original["taskId"])
+        native = snapshot.get("result", {}).get("ownerInput", {})
+        if (snapshot.get("taskId") != params["taskId"] or snapshot.get("runId") != params["runId"]
+                or snapshot.get("executorEpoch") != params["executorEpoch"] or native.get("allocationId") != params["allocationId"]
+                or native.get("format") != "pocketworld.device-owner-input.v1" or native.get("nativePortPresent") is not True
+                or native.get("originalSessionPresent") is not True):
+            raise PhoneTaskError("Read the current original native input scope; run/allocation changed", 409)
+        method = {"acquire_control": "task.acquireControl", "answer": "task.answerQuestion", "steer": "task.steer"}[action]
+        args = {name: params[name] for name in ("taskId", "runId", "executorEpoch")}
+        if action == "acquire_control":
+            args["ttlMs"] = wire.integer(params.get("ttlMs", 30000), "ttlMs", 1, 300000)
+            if "previousLeaseId" in params:
+                args["previousLeaseId"] = wire.identifier(params["previousLeaseId"], "previousLeaseId")
+        else:
+            wire.text(params["text"], "text", 4000)
+            if not params["text"].strip():
+                raise PhoneTaskError("Ordinary task input cannot be blank")
+            args.update(controlLeaseId=wire.identifier(params["controlLeaseId"], "controlLeaseId"), allocationId=params["allocationId"], text=params["text"])
+            if action == "answer":
+                question = native.get("ordinaryQuestion", {})
+                if (question.get("requestId") != params["originalRequestId"] or question.get("waitRevision") != params["waitRevision"]
+                        or question.get("approval") is not False or question.get("takeover") is not False):
+                    raise PhoneTaskError("This is not the exact current ordinary question; no approval was sent", 409)
+                args.update(originalRequestId=wire.identifier(params["originalRequestId"], "originalRequestId"), waitRevision=wire.integer(params["waitRevision"], "waitRevision", 1))
+            elif native.get("runningInputState") != "requires_current_write_grant_and_control_lease":
+                raise PhoneTaskError("Steering requires the original active native goal", 409)
+        connection, peer, route = self._route(original["peerDeviceId"], original["grantId"])
+        if method not in route.grant["capabilities"]:
+            raise PhoneTaskError("The receiving owner's current grant does not include this input method", 403)
+        now = self.manager.now()
+        value = dict(protocolVersion=wire.VERSION, protocolProfile=wire.PROFILE, messageType="DeviceRequest", method=method,
+                     requestId=str(uuid.uuid4()), operationId=control_id, originDeviceId=self.service.identity.device_id,
+                     callerDeviceId=self.service.identity.device_id, targetDeviceId=peer.device_id, instanceId=original["instanceId"],
+                     grantId=route.grant["grantId"], authorizationEpoch=route.grant["authorizationEpoch"], resourceBinding=original["resourceBinding"],
+                     deadline=min(now + 15000, route.deadline), visitedDevices=[self.service.identity.device_id], maxDelegationDepth=0,
+                     delegationChain=[], arguments=args)
+        value["argumentsDigest"] = wire.arguments_digest(value)
+        envelope = wire.parse_request(wire.canonical_bytes(value))
+        return await self._mutation(control_id, params, connection, peer, route, envelope, original)
 
     async def _usb_action(self, action, params):
         from phone_task_usb import OwnedUsbForward, attach

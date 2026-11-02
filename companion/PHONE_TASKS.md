@@ -31,10 +31,25 @@ phone task. Unknown modification outcomes return exit code 3; query the same ID.
 Do not choose a new operation ID to retry an unconfirmed write. Cancellation has
 its own original operation ID and reports requested/stopped separately.
 
-Ordinary `answer` and `steer` tools are deliberately absent until the phone's
-native, run-bound ordinary-input API is integrated. `task.respond` remains a
-native approval operation and is never reused for text answers. Phone approvals
-stay on the phone.
+`acquire-control`, `answer` and `steer` use the receiving phone's original native
+GoalSession and Runner mailbox. Read `status ID` first and copy its exact `taskId`,
+`runId`, `executorEpoch` and `result.ownerInput.allocationId`. Acquisition uses a
+separate `--control-operation-id` and `--task`, `--run`, `--epoch`, `--allocation`;
+renewal requires the exact `--previous-lease`. It changes no task/run budget.
+Use `answer ID 'text'` with that scope, `--control-lease`, native `--question` UUID
+and `--wait-revision`; `steer ID 'text'` accepts guidance only while the original
+goal is active. Each input has its own control operation ID, printed before the
+first possible write. Query an unknown input with `status CONTROL_ID`; neither
+the input nor its question is automatically replayed.
+
+These verbs require the current pinned protocol profile and an explicitly
+owner-reviewed receiving-phone grant containing the chosen method. Old profile
+or grant records are never upgraded automatically. Saved text is native paired
+task input, without a private conversation USER source or memory identity.
+Answer continuation keeps the original run, captured model, allocation and
+remaining authorization; unavailable original dependencies leave the answer
+saved. `task.respond` remains a separate native approval operation. Phone
+approvals and takeover stay on the phone.
 
 ## Local Desk and MCP
 
@@ -46,7 +61,11 @@ The Desk retains a goal draft in the current page and displays original IDs befo
 submitting. Check connection reads the selected phone's current signed scope
 receipts and lets the owner choose an exact existing scope; backend pairing and
 grant validation still run before submission. It makes no automatic mutation or
-polling retries.
+polling retries. After a current task read, its input controls display only the
+native ordinary question or running guidance route and the current control
+lease. Answer and guidance drafts follow the selected original operation in the
+same page. An unconfirmed control write remains locked to its visible ID until
+the owner reads that original receipt; changing tasks preserves the draft.
 
 `mcp` runs a newline-framed stdio MCP server. The Desk also serves `/mcp` with an
 independent local session bearer, `Accept: application/json, text/event-stream`,
@@ -54,6 +73,9 @@ and MCP protocol version `2025-11-25`. POST replies are JSON; GET returns 405
 because no standalone SSE stream is offered. HTTP initialization negotiates the
 version; subsequent requests need `MCP-Protocol-Version: 2025-11-25`. No sampling,
 remote model execution, phone approval or device-pairing tool is exposed.
+`phone_task_acquire_control`, `phone_task_answer` and `phone_task_steer` use the
+same closed scope contract and existing local Client; approval/decision/takeover
+fields are rejected.
 
 MCP transport/lifecycle/tool contracts were checked against the official
 [2025-11-25 specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).

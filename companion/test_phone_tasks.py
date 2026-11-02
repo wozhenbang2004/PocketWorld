@@ -42,7 +42,7 @@ class PhoneDispatchTests(unittest.IsolatedAsyncioTestCase):
         # This fixture explicitly adds read/cancel capabilities on the receiving
         # owner grant, through its native persisted grant record before signing.
         original = f.trust.grant("grant-1")
-        original["capabilities"] += ["task.get", "task.events", "operation.cancel"]
+        original["capabilities"] += ["task.get", "task.events", "operation.cancel", "task.acquireControl", "task.answerQuestion", "task.steer"]
         f.db.execute("UPDATE device_grants SET body_json=? WHERE grant_id='grant-1'", (json.dumps(original),)); f.db.commit()
         signed = f.coordinator.issue_grant_receipt(f.b, "grant-1", f.now)
         owner.accept_outgoing_grant(f.peer_b, signed, f.now)
@@ -56,6 +56,8 @@ class PhoneDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.router = PhoneTaskRouter(self.service)
         self.sent = []
         self.mode = "accepted"
+        self.waiting_question = False
+        self.question_id = "0cb39508-9c87-4cd5-bcf0-b8cf2c97f016"
         self.connection = SimpleNamespace(lane="control", closed=False, state="online")
         # A normal object is used as the native connection identity (hash key).
         class Link:
@@ -72,7 +74,7 @@ class PhoneDispatchTests(unittest.IsolatedAsyncioTestCase):
     def send(self, raw):
         request = wire.parse_request(raw)
         self.sent.append(request)
-        if self.mode == "disconnect":
+        if self.mode == "disconnect" or self.mode == "disconnect-write" and request.method in {"task.acquireControl", "task.answerQuestion", "task.steer"}:
             self.router.connection_closed(self.connection)
             return True
         f = self.fixture
@@ -82,18 +84,32 @@ class PhoneDispatchTests(unittest.IsolatedAsyncioTestCase):
             payload = dict(protocolVersion=wire.VERSION,protocolProfile=wire.PROFILE,messageType="DeviceDescription",deviceId=f.b.device_id,
                            instanceId=f.b.instance_id,capturedAt=now,validUntil=now+30000,capabilities=[{"id":"phone","version":"1.0"}],grantReceipts=[signed],metadata={"platform":"android"},executionAuthorized=False)
         elif request.method == "task.get":
+            allocation = self.sent[0].get("budget")["allocationId"]
+            native = dict(format="pocketworld.device-owner-input.v1", nativePortPresent=True, originalSessionPresent=True,
+                          taskId="actual-phone-task", runId="actual-phone-run", executorEpoch=2, allocationId=allocation,
+                          sourceKind="native_paired_task_input", formalSourceRefAvailable=False, executionAuthorized=False,
+                          runningInputState="unavailable" if self.waiting_question else "requires_current_write_grant_and_control_lease")
+            if self.waiting_question:
+                native["ordinaryQuestion"] = dict(requestId=self.question_id, waitRevision=4, question="Which fixture section?", approval=False, takeover=False)
             payload = dict(protocolVersion=wire.VERSION,protocolProfile=wire.PROFILE,messageType="TaskSnapshot", taskId="actual-phone-task",executorDeviceId=f.b.device_id,
-                           instanceId=f.b.instance_id,state="running",revision=2,eventCursor="0",updatedAt=now,runId="actual-phone-run",executorEpoch=2,result={"summary":"fixture result read, never cached"})
+                           instanceId=f.b.instance_id,state="waiting_dependency" if self.waiting_question else "running",revision=2,eventCursor="0",updatedAt=now,runId="actual-phone-run",executorEpoch=2,
+                           result={"summary":"fixture result read, never cached", "ownerInput":native, "origin":{"grantId":"grant-1"}})
         else:
             operation = request.get("operationId") or request.arguments["operationId"]
             source = request if request.get("operationId") else self.sent[0]
+            goal = self.sent[0]
             audience = dict(kind="operation", objectId=operation, originDeviceId=f.a.device_id, callerDeviceId=f.a.device_id,
-                            targetDeviceId=f.b.device_id, instanceId=f.b.instance_id,rootTaskId=source.get("rootTaskId"),localTaskId=source.get("localTaskId"),
+                            targetDeviceId=f.b.device_id, instanceId=f.b.instance_id,rootTaskId=source.get("rootTaskId") or goal.get("rootTaskId"),localTaskId=source.get("localTaskId") or goal.get("localTaskId"),
                             grantId="grant-1",authorizationEpoch=1,resourceBinding=f.binding,acceptedAt=now,retainedUntil=now+60000,
                             runId="actual-phone-run",executorEpoch=2,taskId="actual-phone-task")
             payload = dict(protocolVersion=wire.VERSION,protocolProfile=wire.PROFILE,messageType="OperationReceipt",executorDeviceId=f.b.device_id,
                            instanceId=f.b.instance_id,operationId=operation,argumentsDigest=source.get("argumentsDigest"),status="running",accepted=True,effectState="reported",
                            payload={},acceptedAt=now,audience=audience,localTaskId="actual-phone-task",runId="actual-phone-run",executorEpoch=2)
+            if request.method == "task.acquireControl":
+                payload.update(status="succeeded", payload=dict(leaseId="native-control-lease", expiresAt=now+30000, executionMoved=False))
+            elif request.method in {"task.answerQuestion", "task.steer"}:
+                payload["payload"] = dict(inputSaved=True, messageId="native-message-"+operation, taskId="actual-phone-task", runId="actual-phone-run", executorEpoch=2,
+                                          allocationId=request.arguments["allocationId"], sourceKind="native_paired_task_input", formalSourceRefAvailable=False, executionAuthorized=False)
         response = dict(protocolVersion=wire.VERSION,protocolProfile=wire.PROFILE,messageType="DeviceResponse", requestId=request.get("requestId"),method=request.method,
                         executorDeviceId=f.b.device_id,instanceId=f.b.instance_id,result=payload)
         if self.mode == "wrong-instance":
@@ -149,6 +165,66 @@ class PhoneDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.service.receiver.trust.outgoing_grant(self.fixture.b.device_id,"grant-1"))
         self.assertEqual(["device.describe"],[item.method for item in self.sent])
 
+    def input_params(self, operation="ordinary-input", **updates):
+        value = dict(operationId=self.params["operationId"], peerDeviceId=self.params["peerDeviceId"], controlOperationId=operation,
+                     taskId="actual-phone-task", runId="actual-phone-run", executorEpoch=2, allocationId=self.sent[0].get("budget")["allocationId"],
+                     controlLeaseId="native-control-lease", text="native ordinary answer, never source cached")
+        value.update(updates)
+        return value
+
+    async def test_original_control_answer_and_steer_use_exact_native_scope_without_resubmission(self):
+        await self.router.execute("run", self.params)
+        acquire = self.input_params("native-acquire")
+        acquire.pop("controlLeaseId"); acquire.pop("text")
+        lease = await self.router.execute("acquire_control", acquire)
+        self.assertEqual("native-control-lease", lease["controlLeaseId"], lease)
+        self.assertEqual("actual-phone-run", lease["runId"])
+        self.waiting_question = True
+        answer = self.input_params(originalRequestId=self.question_id, waitRevision=4)
+        saved = await self.router.execute("answer", answer)
+        self.assertTrue(saved["inputSaved"], saved); self.assertEqual("actual-phone-task", saved["taskId"])
+        self.assertEqual(answer["allocationId"], saved["allocationId"])
+        self.waiting_question = False
+        await self.router.execute("steer", self.input_params("native-steer", text="Use the second fixture section"))
+        self.assertEqual(1, sum(item.method == "task.submitGoal" for item in self.sent))
+        self.assertEqual(["task.acquireControl", "task.answerQuestion", "task.steer"], [item.method for item in self.sent if item.method in {"task.acquireControl", "task.answerQuestion", "task.steer"}])
+        raw = " ".join(row[0] for row in self.db.execute("SELECT details FROM operations"))
+        self.assertNotIn(answer["text"], raw); self.assertNotIn("Which fixture section?", raw)
+
+    async def test_wrong_run_allocation_question_or_approval_cannot_dispatch_input(self):
+        await self.router.execute("run", self.params); self.waiting_question = True
+        for updates in ({"runId":"obsolete-run"}, {"executorEpoch":1}, {"allocationId":"wrong-allocation"}, {"waitRevision":3}, {"originalRequestId":"another-question"}, {"approval":True}, {"decision":"approved"}, {"takeover":True}):
+            arguments = self.input_params(originalRequestId=self.question_id, waitRevision=4)
+            arguments.update(updates)
+            with self.assertRaises((PhoneTaskError, wire.ProtocolError)):
+                await self.router.execute("answer", arguments)
+        self.assertFalse(any(item.method == "task.answerQuestion" for item in self.sent))
+        self.assertEqual(1, self.db.execute("SELECT COUNT(*) FROM operations").fetchone()[0])
+
+    async def test_unknown_input_survives_restart_without_preflight_or_write_replay(self):
+        await self.router.execute("run", self.params); self.waiting_question = True; self.mode = "disconnect-write"
+        answer = self.input_params(originalRequestId=self.question_id, waitRevision=4)
+        first = await self.router.execute("answer", answer)
+        self.assertEqual("unknown", first["status"]); self.assertEqual(answer["controlOperationId"], first["operationId"])
+        before = len(self.sent); reopened = PhoneTaskRouter(self.service)
+        self.assertEqual("unknown", (await reopened.execute("answer", answer))["status"]); self.assertEqual(before, len(self.sent))
+        with self.assertRaises(PhoneTaskError):
+            await reopened.execute("answer", dict(answer, text="changed after unknown"))
+        self.assertEqual(before, len(self.sent))
+
+    async def test_receiving_owner_old_grant_does_not_gain_new_input_verbs(self):
+        await self.router.execute("run", self.params)
+        # Reset only the controlled fixture's source receipt; receiving owner signs
+        # the unchanged old capability set. This is not a production grant edit.
+        original = self.fixture.trust.grant("grant-1"); original["capabilities"].remove("task.steer")
+        self.fixture.db.execute("UPDATE device_grants SET body_json=? WHERE grant_id='grant-1'", (json.dumps(original),)); self.fixture.db.commit()
+        signed = self.fixture.coordinator.issue_grant_receipt(self.fixture.b, "grant-1", self.manager.now())
+        self.db.execute("DELETE FROM device_outgoing_grants"); self.db.commit()
+        self.service.receiver.pairing.accept_outgoing_grant(self.fixture.peer_b, signed, self.manager.now())
+        with self.assertRaises(PhoneTaskError):
+            await self.router.execute("steer", self.input_params())
+        self.assertFalse(any(item.method == "task.steer" for item in self.sent))
+
 
 class LocalSurfaceTests(unittest.TestCase):
     def setUp(self):
@@ -186,6 +262,14 @@ class LocalSurfaceTests(unittest.TestCase):
         stdio(self.client,source,out)
         records=[json.loads(line) for line in out.getvalue().splitlines()]
         self.assertEqual(2,len(records)); self.assertIn("phone_task_run",[tool["name"] for tool in records[1]["result"]["tools"]])
+        names={tool["name"] for tool in records[1]["result"]["tools"]}
+        self.assertTrue({"phone_task_acquire_control", "phone_task_answer", "phone_task_steer"} <= names)
+        ordinary=dict(operationId="original", peerDeviceId=self.peer, controlOperationId="answer-write", taskId="original-task", runId="original-run", executorEpoch=1,
+                      allocationId="original-allocation", controlLeaseId="original-lease", text="owner text", originalRequestId="native-question", waitRevision=4)
+        for field in ("decision", "approval", "takeover"):
+            response=rpc(self.client,{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"phone_task_answer","arguments":dict(ordinary, **{field:True})}})
+            self.assertIn("error", response)
+        self.assertEqual([], self.calls)
     def test_write_failure_returns_original_unknown_without_retry_or_proxy(self):
         with tempfile.TemporaryDirectory() as root:
             path=Path(root)/"token";path.write_text("fixture-companion-token-only-1234567890");path.chmod(0o600)
@@ -193,6 +277,9 @@ class LocalSurfaceTests(unittest.TestCase):
             with patch.dict(os.environ,{"HTTP_PROXY":"http://untrusted.invalid:99","HTTPS_PROXY":"http://untrusted.invalid:99"}):
                 value=client.execute("run",{"operationId":"kept-original-id"})
             self.assertEqual("unknown",value["status"]);self.assertEqual("kept-original-id",value["operationId"]);self.assertFalse(value["automaticRetry"])
+            for action in ("acquire_control", "answer", "steer"):
+                value=client.execute(action,{"operationId":"original-goal", "controlOperationId":"original-input-write"})
+                self.assertEqual("unknown",value["status"]);self.assertEqual("original-input-write",value["operationId"]);self.assertFalse(value["automaticRetry"])
 
 
 class UsbOwnershipTests(unittest.TestCase):
