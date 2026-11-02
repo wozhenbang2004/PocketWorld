@@ -281,6 +281,11 @@ class LocalSurfaceTests(unittest.TestCase):
                 value=client.execute(action,{"operationId":"original-goal", "controlOperationId":"original-input-write"})
                 self.assertEqual("unknown",value["status"]);self.assertEqual("original-input-write",value["operationId"]);self.assertFalse(value["automaticRetry"])
 
+    def test_actual_desk_controller_preserves_each_original_draft_when_selection_changes_during_write(self):
+        result=subprocess.run(["node", str(Path(__file__).with_name("test_phone_task_desk.cjs"))], capture_output=True, text=True, timeout=10)
+        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+        self.assertIn("2 cases passed",result.stdout)
+
 
 class UsbOwnershipTests(unittest.TestCase):
     def test_serial_boot_and_cleanup_only_our_exact_forward(self):

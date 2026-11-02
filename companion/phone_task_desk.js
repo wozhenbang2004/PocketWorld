@@ -6,6 +6,23 @@ let currentTask = null, selectedOperation = "", lockedControl = null;
 const inputDrafts = new Map();
 const byId = id => document.getElementById(id);
 const show = value => { byId("result").textContent = JSON.stringify(value, null, 2); };
+function recordInputResult(action, params, result) {
+  const selected = params.operationId === byId("operation").value.trim();
+  const draft = selected ? {answer:byId("answer-text").value, steer:byId("steer-text").value, control:byId("control-operation").value, locked:lockedControl}
+    : inputDrafts.get(params.operationId);
+  if (!draft) return;
+  if (result.status === "unknown" || result.effectState === "unknown") draft.locked = params.controlOperationId;
+  else if (draft.locked === params.controlOperationId) draft.locked = null;
+  const field = action === "answer" ? "answer" : action === "steer" ? "steer" : null;
+  if (result.inputSaved === true && field && draft[field] === params.text) draft[field] = "";
+  inputDrafts.set(params.operationId, draft);
+  if (selected) { lockedControl = draft.locked; byId("answer-text").value = draft.answer; byId("steer-text").value = draft.steer; }
+}
+function recordControlRead(operation, result) {
+  if (result.effectState === "unknown" || result.status === "unknown") return;
+  if (operation === lockedControl) lockedControl = null;
+  for (const draft of inputDrafts.values()) if (draft.locked === operation) draft.locked = null;
+}
 async function call(action, params) {
   const response = await fetch("/api", {method:"POST", cache:"no-store", credentials:"omit", redirect:"error", headers:{"Authorization":"Bearer " + token,"Content-Type":"application/json"},body:JSON.stringify({action,params})});
   const value = await response.json();
@@ -22,18 +39,13 @@ async function perform(action, params) {
     if (action === "doctor") updateScopes(result.description);
     if (result.task && (params.operationId === byId("operation").value.trim() || result.targetOperationId === byId("operation").value.trim())) currentTask = result.task;
     if (["acquire_control", "answer", "steer"].includes(action)) {
-      if (result.status === "unknown" || result.effectState === "unknown") lockedControl = params.controlOperationId;
-      else if (lockedControl === params.controlOperationId) lockedControl = null;
-      if (result.inputSaved === true) {
-        const field = byId(action === "answer" ? "answer-text" : "steer-text");
-        if (field.value === params.text) field.value = "";
-      }
+      recordInputResult(action, params, result);
       try {
         const latest = await call("status", {peerDeviceId:peer, operationId:params.operationId});
         if (params.operationId === byId("operation").value.trim() && latest.task) currentTask = latest.task;
-      } catch (readUnavailable) { currentTask = null; }
+      } catch (readUnavailable) { if (params.operationId === byId("operation").value.trim()) currentTask = null; }
     }
-    if (action === "status" && params.operationId === lockedControl && result.effectState !== "unknown" && result.status !== "unknown") lockedControl = null;
+    if (action === "status") recordControlRead(params.operationId, result);
     show(result); byId("notice").textContent = result.status === "unknown" || result.effectState === "unknown" ? "Outcome unknown. Keep this operation ID and read its status." : result.inputSaved === true ? "Input saved in the original task. Reading its state does not prove model consumption." : "Original phone response received.";
   }
   catch(error) { byId("notice").textContent = error.message; }
