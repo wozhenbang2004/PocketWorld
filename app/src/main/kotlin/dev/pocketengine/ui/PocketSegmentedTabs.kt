@@ -20,7 +20,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun PocketSegmentedTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+internal fun PocketSegmentedTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) =
+    PocketSegmentedTabs(labels, selected, onSelect, true)
+
+@Composable
+internal fun PocketSegmentedTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, enabled: Boolean) {
     if (labels.isEmpty()) return
     BoxWithConstraints(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Soft)) {
         val slotWidth = ((maxWidth - 8.dp) / labels.size).coerceAtLeast(0.dp)
@@ -37,7 +41,7 @@ internal fun PocketSegmentedTabs(labels: List<String>, selected: Int, onSelect: 
             labels.forEachIndexed { index, label ->
                 Box(Modifier.weight(1f).heightIn(min = 48.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .selectable(selected = selected == index, role = Role.Tab, onClick = { onSelect(index) })
+                    .selectable(selected = selected == index, enabled = enabled, role = Role.Tab, onClick = { onSelect(index) })
                     .padding(horizontal = 4.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
                     Text(label, style = MaterialTheme.typography.labelLarge,
                         fontWeight = if (selected == index) FontWeight.Medium else FontWeight.Normal,

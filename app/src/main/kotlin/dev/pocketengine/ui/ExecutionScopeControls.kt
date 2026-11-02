@@ -1,6 +1,12 @@
 package dev.pocketengine.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -40,7 +46,20 @@ import java.util.Date
     var minutes by rememberSaveable(task.id, revision) { mutableStateOf(if (scope == null) 0 else -1) }
     val deadline = scope?.optLong("deadlineAt") ?: -1L
     Column(Modifier.fillMaxWidth().testTag("task_execution_scope")) {
-        TextButton(onClick = { open = !open }) { Text(if (scope == null) "审阅旧任务范围并升级" else "任务范围与累计预算") }
+        Surface(color = Soft, shape = RoundedCornerShape(10.dp)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { open = !open }
+                .semantics { stateDescription = if (open) "范围设置已展开" else "范围设置已收起" }
+                .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AffectGlyph("tool", Modifier.size(18.dp), SecondaryInk)
+                Column(Modifier.weight(1f)) {
+                    Text(if (scope == null) "审阅旧任务范围并升级" else "任务范围与累计预算", fontSize = 13.sp, color = Ink)
+                    if (scope != null) Text("工具 ${scope.optInt("toolsUsed")} / ${scope.optInt("toolLimit")} · 模型 ${scope.optInt("modelCallsUsed")} / ${scope.optInt("modelCallLimit")}",
+                        fontSize = 12.sp, color = SecondaryInk)
+                }
+                AffectGlyph(if (open) "chevron" else "chevron-right", Modifier.size(14.dp), SecondaryInk)
+            }
+        }
         if (open) {
             Text(if (scope == null) "此旧任务仍使用原10分钟权限；下面的明确确认才会升级，打开本页不会续期。" else "工具 ${scope.optInt("toolsUsed")}/${scope.optInt("toolLimit")} · 模型 ${scope.optInt("modelCallsUsed")}/${scope.optInt("modelCallLimit")} · " + if (deadline == 0L) "至完成、停止或预算耗尽" else "到期：${DateFormat.getDateTimeInstance().format(Date(deadline))}", fontSize = 13.sp, color = SecondaryInk)
             val names = scope?.optJSONArray("tools")

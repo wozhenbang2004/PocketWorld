@@ -813,8 +813,15 @@ class JobManager:
             else:
                 proc = Path("/proc")
                 if proc.is_dir():
-                    entries = [path for path in proc.iterdir() if path.name.isdigit()]
-                    if len(entries) <= 4096:
+                    # SIGKILL is a request: descendants may remain runnable for
+                    # a scheduler tick after the leader was reaped. Observe the
+                    # SAME original pgid for a bounded interval, never send a
+                    # second kill to a possibly reused PID/pgid to fake proof.
+                    settled_by = time.monotonic() + .5
+                    while True:
+                        entries = [path for path in proc.iterdir() if path.name.isdigit()]
+                        if len(entries) > 4096:
+                            break
                         live = False
                         for path in entries:
                             try:
@@ -826,6 +833,9 @@ class JobManager:
                                 continue
                         proof["processGroupStoppedVerified"] = not live
                         proof["verificationMethod"] = "original_pgid_no_live_proc_members"
+                        if not live or time.monotonic() >= settled_by:
+                            break
+                        time.sleep(.01)
         return proof
 
     def cancel(self, jobid):

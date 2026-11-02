@@ -55,8 +55,8 @@ internal fun AffectToolCallCard(id: String, name: String, statusLabel: String,
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 AffectGlyph("tool", Modifier.size(16.dp), SecondaryInk)
                 Column(Modifier.weight(1f)) {
-                    Text(name, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium,
-                        fontSize = 13.sp, lineHeight = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Ink)
+                    Text(toolDisplayName(name), fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp, lineHeight = 21.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Ink)
                     PocketExecutionStatus(statusLabel, tone, Modifier.padding(top = 3.dp))
                 }
                 if(needsReview) Text("需核对", fontSize = 12.sp, color = Ink)
@@ -67,6 +67,8 @@ internal fun AffectToolCallCard(id: String, name: String, statusLabel: String,
                 exit = shrinkVertically(animationSpec = tween(380, easing = ease)) + fadeOut(tween(200))) {
                 Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
                     HorizontalDivider(color = Color(0xffeeeeee), thickness = .5.dp)
+                    if (toolDisplayName(name) != name) Text(name, fontFamily = FontFamily.Monospace,
+                        color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                     if (arguments.isNotBlank()) {
                         Text("本次参数", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
                         SelectionContainer {
@@ -77,7 +79,7 @@ internal fun AffectToolCallCard(id: String, name: String, statusLabel: String,
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("实际返回", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        AffectToolButton(if(copied) "check" else "copy", if(copied) "已复制" else "复制原返回",
+                        AffectToolButton(if(copied) "check" else "copy", if(copied) "已复制" else "复制返回内容",
                             enabled = output.isNotEmpty(), onClick = {
                                 try { clipboard.setText(AnnotatedString(output)); copied = true } catch (_: Exception) { copied = false }
                             })
@@ -96,7 +98,7 @@ internal fun AffectToolCallCard(id: String, name: String, statusLabel: String,
                     if(clipped || showFull) TextButton(onClick = { showFull = !showFull }, contentPadding = PaddingValues(0.dp)) {
                         Text(if(showFull) "收起全文" else "展开完整返回", fontSize = 13.sp)
                     }
-                    if(needsReview) Text("返回状态仍需核对，不会自动重新执行。", color = Ink, fontSize = 13.sp,
+                    if(needsReview) Text("请先核对结果，不会自动重试。", color = Ink, fontSize = 13.sp,
                         modifier = Modifier.padding(top = 8.dp))
                 }
             }

@@ -172,9 +172,12 @@ class HarnessGatewayTransportTest(unittest.TestCase):
         raw.setsockopt(socket.SOL_SOCKET,socket.SO_LINGER,__import__('struct').pack('ii',1,0));raw.close()
         end=time.monotonic()+3
         while self.gateway.requests[req["bridgeRequestId"]]["state"]!="UNKNOWN" and time.monotonic()<end:time.sleep(.01)
-        self.assertEqual("UNKNOWN",self.gateway.requests[req["bridgeRequestId"]]["state"])
-        self.assertEqual("REQUIRES_RECONCILE",self.gateway.leases[self.lease["leaseId"]]["state"])
-        self.assertNotIn(self.lease["leaseId"],self.manager.harness_configs.endpoints)
+        # Observe the complete production transition, not a midpoint while
+        # SQLite releases the GIL inside the same changed monitor.
+        with self.gateway.changed:
+            self.assertEqual("UNKNOWN",self.gateway.requests[req["bridgeRequestId"]]["state"])
+            self.assertEqual("REQUIRES_RECONCILE",self.gateway.leases[self.lease["leaseId"]]["state"])
+            self.assertNotIn(self.lease["leaseId"],self.manager.harness_configs.endpoints)
     def test_tls_remote_control_uses_same_manager_managed_loopback_listener_and_reclaims_it(self):
         # The actual original fixture stays bound to loopback. Only its address descriptor here
         # models the TLS/non-loopback branch; this test never exposes an external listener.

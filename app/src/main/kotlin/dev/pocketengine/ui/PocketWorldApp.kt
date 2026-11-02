@@ -527,11 +527,8 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(approvalAnchor))
             if (!mediaTask && (!groupTask || controller.groupTaskReady) && pendingCapabilityApprovals(task).isNotEmpty()) CapabilityApprovals(task, controller)
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(reconciliationAnchor))
-            if (unknown.isNotEmpty() && !mediaTask && !sourceLearningTask) Column(Modifier.fillMaxWidth().padding(top = 20.dp).clip(Rounded).background(Soft).padding(16.dp)) {
-                Text("先核对可能已发生的动作", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Text("确认前任务会等待，避免重复发送或提交。", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
-                unknown.forEach { operation -> val id = operation.optString("operationId", operation.optString("id")); Column(Modifier.padding(top = 14.dp)) { Text(operation.optString("summary", operation.optString("tool", "待核对操作")), fontSize = 13.sp); Row { TextButton(onClick = { controller.resolveReviewedTask(task, id, "occurred") }, enabled = id.isNotBlank()) { Text("已经发生") }; TextButton(onClick = { controller.resolveReviewedTask(task, id, "not_occurred") }, enabled = id.isNotBlank()) { Text("没有发生") } } } }
-            }
+            if (unknown.isNotEmpty() && !mediaTask && !sourceLearningTask)
+                TaskReconciliationCard(task.id, unknown) { id, outcome -> controller.resolveReviewedTask(task, id, outcome) }
             host.modelDrafts[task.id]?.let { ModelStreamPreview(it) }
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(resultAnchor))
             if (task.summary.isNotBlank()) {

@@ -2,6 +2,8 @@ package dev.pocketengine.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.stateDescription
@@ -47,7 +49,7 @@ internal fun TaskExecutionProcess(task: UiTask, controller: PocketWorldControlle
         controller.readTaskAudit(task.id, which, cursor) { result, failure ->
             if (alive && identity == request) {
                 if (result != null && result.optString("format") == "pocketworld.task-audit-page.v1" && result.optString("taskId") == task.id && result.optString("section") == which) { page = result; section = which; error = failure }
-                else error = failure ?: "原记录窗口尚未核对成功，已有内容仍保留。"
+                else error = failure ?: "暂时无法更新，已有记录仍保留。"
                 busy = false
             }
         }
@@ -64,40 +66,39 @@ internal fun TaskExecutionProcess(task: UiTask, controller: PocketWorldControlle
         Surface(modifier = Modifier.fillMaxWidth().pocketDepth(PocketDepth.CONTENT, 14.dp),
             shape = RoundedCornerShape(14.dp), color = Color.White) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Text("当前步骤", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("执行动态", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         PocketExecutionStatus(current.title, current.tone, prominent = true, animateRunning = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp).semantics { heading() }.testTag("task_execution_current"))
         Text(current.detail, fontSize = 14.sp, lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
         if (!expanded && recentActivity.isNotEmpty()) {
             HorizontalDivider(color = Line, modifier = Modifier.padding(top = 14.dp, bottom = 10.dp))
-            Text("最近活动", style = MaterialTheme.typography.labelMedium, color = SecondaryInk)
+            Text("最近 ${recentActivity.size} 项活动", style = MaterialTheme.typography.labelMedium, color = SecondaryInk)
             recentActivity.forEachIndexed { index, record ->
                 key(record.key) { ExecutionActivityStep(record, index == recentActivity.lastIndex) }
             }
         }
         if (current.target != TaskExecutionPresentation.Target.NONE) TextButton(onClick = { if (current.target == TaskExecutionPresentation.Target.PROCESS) openProcess() else focus(current.target) }, modifier = Modifier.heightIn(min = 48.dp).testTag("task_execution_next_action"), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) { Text(current.action, fontSize = 14.sp) }
         HorizontalDivider(color = Line, modifier = Modifier.padding(top = 4.dp))
-        TextButton(onClick = { if (expanded) expanded = false else openProcess() }, modifier = Modifier.heightIn(min = 48.dp).testTag("task_execution_toggle"), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) { Text(if (expanded) "收起执行过程" else "展开执行过程与工具回执", fontSize = 14.sp) }
+        TextButton(onClick = { if (expanded) expanded = false else openProcess() }, modifier = Modifier.heightIn(min = 48.dp).testTag("task_execution_toggle"), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) { Text(if (expanded) "收起活动记录" else "查看全部活动", fontSize = 14.sp) }
             }
         }
         if (expanded) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { load("operations") }, enabled = !busy) { Text("工具与回执", fontSize = 13.sp) }
-                TextButton(onClick = { load("events") }, enabled = !busy) { Text("步骤记录", fontSize = 13.sp) }
-            }
-            Text("按由近到早读取原任务的一个记录窗口。展开、刷新或回看都不会继续执行、批准或重放调用。", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            PocketSegmentedTabs(listOf("工具活动", "步骤记录"), if (section == "operations") 0 else 1,
+                onSelect = { load(if (it == 0) "operations" else "events") }, enabled = !busy)
+            Text("只读查看 · 最近记录在前", fontSize = 12.sp, lineHeight = 18.sp,
+                color = SecondaryInk, modifier = Modifier.padding(vertical = 8.dp))
             error?.let { message -> Text(message, color = MaterialTheme.colorScheme.error, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 8.dp)) }
             val shown = page?.let { TaskExecutionPresentation.records(it, section) }.orEmpty()
-            if (shown.isEmpty() && !busy && page != null) Text("本窗口没有可展开的原记录，不能据此推断整个任务没有执行。", fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(vertical = 12.dp))
+            if (shown.isEmpty() && !busy && page != null) Text("本页暂无记录。", fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(vertical = 12.dp))
             shown.forEachIndexed { index, record -> key(record.key) { TaskExecutionRecord(record, run, index == shown.lastIndex) } }
-            if (busy) Text("正在读取原记录，已有窗口仍可查看…", fontSize = 14.sp, lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
+            if (busy) Text("正在更新记录…", fontSize = 14.sp, lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
             page?.let { original ->
-                Text("本页 ${shown.size} 条" + if (original.optBoolean("readLimited")) " · 有正文超过本页字节预算，未用摘要冒充原件。" else " · 不代表全任务累计步骤或全部成果。", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("本页 ${shown.size} 条" + if (original.optBoolean("readLimited")) " · 部分较大内容未加载" else " · 当前读取窗口", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 val next = original.optString("nextCursor")
                 Column {
                     TextButton(onClick = { load(section) }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("刷新最新记录") }
-                    if (next.isNotEmpty()) TextButton(onClick = { load(section, next) }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("查看较早一页 · 不累计正文") }
-                    else Text("本次读取没有更早一页；超限正文和原审计仍由原任务保留。", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (next.isNotEmpty()) TextButton(onClick = { load(section, next) }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("查看更早记录") }
+                    else Text("已到本次记录窗口末尾。", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -131,16 +132,16 @@ private fun TaskExecutionRecord(record: TaskExecutionPresentation.Record, curren
     }.padding(start = 28.dp, top = 10.dp, bottom = 10.dp)) {
         Text(record.title, fontSize = 14.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium)
         Text(record.label, fontSize = 13.sp, lineHeight = 20.sp, color = color, modifier = Modifier.padding(top = 4.dp))
-        Text(if (record.at > 0) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(record.at)) else "原时间未报告", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+        Text(if (record.at > 0) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(record.at)) else "时间未报告", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
         if (record.runId.isNotEmpty() && record.runId != currentRun) Text("来自此前执行 · " + record.runId.takeLast(8), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (record.limited) Text("原正文 ${record.bodyBytes} 字节，本页未读取。原件没有删除，也没有以本条标题替代。", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
         else {
-            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.heightIn(min = 48.dp).testTag("task_execution_record_" + record.key), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) { Text(if (expanded) "收起本条记录" else if (record.key.startsWith("event:")) "查看这条原步骤" else "查看原参数与返回", fontSize = 13.sp) }
+            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.heightIn(min = 48.dp).testTag("task_execution_record_" + record.key), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) { Text(if (expanded) "收起详情" else if (record.key.startsWith("event:")) "查看步骤详情" else "查看参数与返回", fontSize = 13.sp) }
             if (expanded) {
                 if (record.arguments.isNotBlank()) ProcessText("本次参数", record.arguments)
-                if (record.receipt.isNotBlank()) ProcessText("原返回记录", record.receipt)
-                else Text("此条尚无可展示的终态返回。没有回执不是调用未执行的证明。", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("原操作定位：" + record.key.removePrefix("operation:"), fontSize = 12.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (record.receipt.isNotBlank()) ProcessText("返回内容", record.receipt)
+                else Text("尚未收到确定结果，请先核对。", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("操作编号：" + record.key.removePrefix("operation:"), fontSize = 12.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -165,12 +166,12 @@ private fun ExecutionActivityStep(record: TaskExecutionPresentation.Record, last
     var details by rememberSaveable(record.key, record.at) { mutableStateOf(false) }
     val line = Line
     Column(Modifier.fillMaxWidth().drawBehind {
-        if (!last) drawLine(line, Offset(10.dp.toPx(), 30.dp.toPx()),
-            Offset(10.dp.toPx(), size.height), 1.dp.toPx())
+        if (!last) drawLine(line, Offset(12.dp.toPx(), 34.dp.toPx()),
+            Offset(12.dp.toPx(), size.height), 1.dp.toPx())
     }.padding(top = 10.dp, bottom = 8.dp)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
             .clickable(role = Role.Button) { details = !details }
-            .semantics { stateDescription = if (details) "原记录已展开" else "原记录已收起" },
+            .semantics { stateDescription = if (details) "详情已展开" else "详情已收起" },
             verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             val icon = when (record.tone) {
                 TaskExecutionPresentation.Tone.RETURNED -> "check"
@@ -180,19 +181,33 @@ private fun ExecutionActivityStep(record: TaskExecutionPresentation.Record, last
                 TaskExecutionPresentation.Tone.STOPPED -> "stop"
                 else -> "tool"
             }
-            AffectGlyph(icon, Modifier.size(20.dp), SecondaryInk)
+            Box(Modifier.size(24.dp).background(Soft, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                AffectGlyph(icon, Modifier.size(16.dp), SecondaryInk)
+            }
             Column(Modifier.weight(1f)) {
-                Text(record.title, style = MaterialTheme.typography.bodyMedium, color = Ink)
-                Text(record.label, style = MaterialTheme.typography.bodySmall, color = SecondaryInk,
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(toolDisplayName(record.title), style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium, color = Ink, modifier = Modifier.weight(1f))
+                    Surface(color = Soft, shape = RoundedCornerShape(6.dp), border = BorderStroke(.5.dp, Line)) {
+                        Text(executionToneCaption(record.tone), fontSize = 11.sp, color = SecondaryInk,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
+                    }
+                }
+                if (toolDisplayName(record.title) != record.title)
+                    Text(record.title, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 17.sp,
+                        color = SecondaryInk, modifier = Modifier.padding(top = 4.dp))
+                else Text(record.label, style = MaterialTheme.typography.bodySmall, color = SecondaryInk,
                     modifier = Modifier.padding(top = 3.dp))
             }
             AffectGlyph(if (details) "chevron" else "chevron-right", Modifier.size(14.dp), SecondaryInk)
         }
         androidx.compose.animation.AnimatedVisibility(visible = details) {
-            Column(Modifier.fillMaxWidth().padding(start = 30.dp, top = 6.dp)) {
+            Column(Modifier.fillMaxWidth().padding(start = 34.dp, top = 6.dp)) {
+                Text(record.label, fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(bottom = 6.dp))
                 if (record.arguments.isNotBlank()) ProcessText("本次参数", record.arguments)
-                if (record.receipt.isNotBlank()) ProcessText("原返回记录", record.receipt)
-                else Text("尚无终态回执，请保留原操作等待核对。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                if (record.receipt.isNotBlank()) ProcessText("返回内容", record.receipt)
+                else Text("尚未收到确定结果，请先核对。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
             }
         }
     }
