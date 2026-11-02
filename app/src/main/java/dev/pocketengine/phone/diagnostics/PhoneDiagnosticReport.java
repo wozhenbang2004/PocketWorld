@@ -18,9 +18,9 @@ public final class PhoneDiagnosticReport {
         helper.put("bootstrapPhase",state(phase,"idle|binding|checking_existing|pairing|paired|connecting|uploading|ready|needs_pairing|service_unavailable|bind_timeout|cancelled|bootstrap_outcome_unknown|pairing_outcome_unknown|stop_unknown|bootstrap_process_exited|identity_forgotten|forget_failed|forget_blocked|forgetting"));out.put("helper",helper);
         JSONObject checks=new JSONObject();for(String key:new String[]{"mainObservation","mainScreenshot","mainExecution","taskNotifications","backgroundPreparation","backgroundExecution","backgroundInput","backgroundCapture","backgroundIme"}){
             JSONObject item=readiness.optJSONObject(key);checks.put(key,item==null?"unknown":state(item.optString("state"),"ready|blocked|unknown"));}out.put("readiness",checks);
-        JSONArray results=new JSONArray();JSONArray source=selfCheck==null?null:selfCheck.optJSONArray("checks");if(source!=null)for(int i=0;i<Math.min(source.length(),20);i++){
-            JSONObject row=source.optJSONObject(i);if(row==null)continue;String id=row.optString("id");if(!id.matches("[a-z_]{1,40}"))continue;
-            results.put(new JSONObject().put("id",id).put("state",state(row.optString("state"),"passed|failed|unknown|blocked|skipped")));}out.put("selfCheck",results);
+        JSONArray results=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();JSONArray source=selfCheck==null?null:selfCheck.optJSONArray("checks");if(source!=null)for(int i=0;i<Math.min(source.length(),20);i++){
+            JSONObject row=source.optJSONObject(i);if(row==null)continue;String id=row.optString("id");if(!PhonePracticeEvidence.CHECK_IDS.contains(id)||!seen.add(id))continue;String reason=row.optString("reasonCode");
+            results.put(new JSONObject().put("id",id).put("state",state(row.optString("state"),"passed|failed|unknown|blocked|skipped")).put("reasonCode",PhonePracticeEvidence.knownReason(reason)?reason:JSONObject.NULL));}out.put("selfCheck",results);
         return out.put("containsScreenContent",false).put("containsCredentials",false).put("containsTaskText",false).put("requiresOwnerPreview",true).put("deviceVerified",false);
     }
     public static String text(JSONObject report)throws Exception{return report.toString(2);}
