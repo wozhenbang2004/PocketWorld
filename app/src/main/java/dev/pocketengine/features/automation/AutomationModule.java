@@ -70,7 +70,7 @@ public final class AutomationModule implements EngineModule {
                 .put("executionPlansSupported",true).put("executionPlanControl","native_owner_review_only").put("executionPlanTaskAuthority","existing_TaskStore")
                 .put("existingRemoteCommandWaitSupported",true).put("remoteWaitResultScope","exact_original_command_exit_zero_only")
                 .put("runConditionsSupported",true).put("conditionSnapshot","native_read_only").put("conditionRecheckMillis",AutomationConditions.RECHECK_MILLIS)
-                .put("scheduleTypes",new JSONArray(new String[]{"once","daily","weekly","monthly"})).put("schedulePreview","native_read_only")
+                .put("scheduleTypes",new JSONArray(new String[]{"once","interval","daily","weekly","monthly"})).put("schedulePreview","native_read_only")
                 .put("followUpDeliveryPolicySupported",true).put("followUpDeliveryDefault","disabled").put("followUpDeliveryDriver","host_only")
                 .put("commands",new JSONArray(new String[]{"list","save","setEnabled","delete","receipts","checkDue","prepareTask",
                         "createCommitment","listCommitments","getCommitment","updateCommitment","snoozeCommitment","cancelCommitment","completeCommitment","dueCommitments","getFollowUpPolicy","evaluateFollowUp",
