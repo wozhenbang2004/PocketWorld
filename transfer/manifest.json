@@ -1,15 +1,15 @@
 {
   "target_branch": "work/mika-53-capabilities-20261102",
-  "base": "4f5174238378de9a7aeef3a598646969fe8e2549",
-  "source_commit": "f68f1de03736a01da5cdd9f08430c9522aa55c56",
-  "source_tree": "6acb0cfdb14971c49271f367b32992c5e9b3b28a",
-  "bundle_sha256": "921463c3d6464391b0f51eb4edaca5da795d9f5fa81bbe0f4871d351f9a536f6",
-  "bundle_size": 8974,
+  "base": "b04dbdfdff74b12ca7bd30d892a97bab7a848a8c",
+  "source_commit": "c53c621c55fbe3b3b65c4a1ba9615203b7e254e8",
+  "source_tree": "ed82deeb38455c9862be076231a5f1a829b6ae16",
+  "bundle_sha256": "56f31d3eb8cee29a22632d78f299dd9a97f51d717c8dcb8888e8273c74d575d2",
+  "bundle_size": 5303,
   "parts": [
     {
       "path": "transfer/part-000.b64",
-      "sha256": "7b124841dcfdc1894adf98c1662550d60bb31537f241450c1d1ce7cef489b887",
-      "size": 11968
+      "sha256": "ec94e79fa8fa8e4b541abdbf1a7d4cf46e3287b3c76f73d826d44195b995d6b2",
+      "size": 7072
     }
   ]
 }
