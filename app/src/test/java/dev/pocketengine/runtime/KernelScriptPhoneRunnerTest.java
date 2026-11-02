@@ -3,6 +3,7 @@ package dev.pocketengine.runtime;
 import dev.pocketengine.core.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -69,8 +70,8 @@ public final class KernelScriptPhoneRunnerTest {
         try(AutoCloseable installation=install(skill,original);KernelRunnerContractTest.Wire wire=new KernelRunnerContractTest.Wire(reply(true),reply(false))){RunOutcome outcome=run(wire,phone,skill,journal,original,null);assertEquals("awaiting_user",outcome.status);assertEquals(1,wire.sent.size());assertEquals(1,phone.writes);assertTrue(journal.receipts.get(1).getBoolean("accepted"));assertTrue(skill.clickReceipt.getBoolean("accepted"));assertFalse(skill.clickReceipt.getBoolean("postObservationAvailable"));}
     }
     @Test public void queuedOwnerInputCannotSkipAnUnknownParentBarrier()throws Exception {
-        Phone phone=new Phone();Skill skill=new Skill();skill.steerOnly=true;skill.parentUnknown=true;Journal journal=new Journal();RunControl original=control();boolean[] sent={false};
-        AgentRunner.OwnerInputs inputs=(included,boundary,close,current)->{if(skill.executing&&!sent[0]){sent[0]=true;return new JSONArray().put(new JSONObject().put("messageId","queued-during-script").put("mode","steer").put("content","请先停下并核对现场"));}return new JSONArray();};
-        try(AutoCloseable installation=install(skill,original);KernelRunnerContractTest.Wire wire=new KernelRunnerContractTest.Wire(reply(true),reply(false))){RunOutcome outcome=run(wire,phone,skill,journal,original,inputs);assertEquals("awaiting_user",outcome.status);assertEquals(1,wire.sent.size());assertEquals(0,phone.writes);assertTrue(journal.history.toString().contains("queued-during-script"));assertTrue(outcome.evidence.getBoolean("requiresReconciliation"));}
+        Phone phone=new Phone();Skill skill=new Skill();skill.steerOnly=true;skill.parentUnknown=true;Journal journal=new Journal();RunControl original=control();String messageId=UUID.randomUUID().toString();boolean[] sent={false};
+        AgentRunner.OwnerInputs inputs=(included,boundary,close,current)->{if(skill.executing&&!sent[0]){sent[0]=true;return new JSONArray().put(new JSONObject().put("messageId",messageId).put("mode","steer").put("content","请先停下并核对现场"));}return new JSONArray();};
+        try(AutoCloseable installation=install(skill,original);KernelRunnerContractTest.Wire wire=new KernelRunnerContractTest.Wire(reply(true),reply(false))){RunOutcome outcome=run(wire,phone,skill,journal,original,inputs);assertEquals(outcome.summary+" "+outcome.evidence,"awaiting_user",outcome.status);assertEquals(1,wire.sent.size());assertEquals(0,phone.writes);assertTrue(journal.history.toString().contains(messageId));assertTrue(outcome.evidence.getBoolean("requiresReconciliation"));}
     }
 }

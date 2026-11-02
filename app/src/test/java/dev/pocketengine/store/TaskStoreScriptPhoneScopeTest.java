@@ -57,7 +57,19 @@ public final class TaskStoreScriptPhoneScopeTest {
     }
     @Test public void parentPreparedNeverAdmitsOrdinaryParallelDispatch()throws Exception {
         rejected(()->journal.beginOperation("phone_tap",args()));
-        try(var scope=scope()){rejected(()->tasks.requirePreparedCapability(task,run,epoch,parent,"skills_execute",new JSONObject().put("scriptPath","task.py")));}
+        int before=remaining();
+        try(var scope=scope()){
+            // Runner installs callbacks before the original parent host performs its first
+            // exact admission. Installing a scope cannot forbid that legitimate admission.
+            tasks.requirePreparedCapability(task,run,epoch,parent,"skills_execute",new JSONObject().put("scriptPath","task.py"));
+            rejected(()->journal.beginOperation("phone_tap",args()));
+            scope.invoke("phone_tap",()->{
+                // The native child invocation may never reuse its parent's prepared identity.
+                rejected(()->tasks.requirePreparedCapability(task,run,epoch,parent,"skills_execute",new JSONObject().put("scriptPath","task.py")));
+                return null;
+            });
+        }
+        assertEquals(before,remaining());
     }
     @Test public void unknownSiblingAndForeignPreparedAreNotExceptionsToBarrier()throws Exception {
         String unknown=seed("unknown");rejected(()->scope());db.delete("operations","operation_id=?",new String[]{unknown});
