@@ -5,12 +5,15 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.RemoteInput;
+import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
+import dev.pocketengine.features.operations.AppLanguage;
+import dev.pocketengine.R;
 import dev.pocketengine.phone.AndroidPhoneReadiness;
 import dev.pocketengine.phone.access.*;
 import dev.pocketengine.phone.diagnostics.PhoneDiagnosticReport;
@@ -55,13 +58,14 @@ public final class PhoneSetupModule implements EngineModule {
         return PhoneDiagnosticReport.create(version,new JSONObject().put("sdkInt",android.os.Build.VERSION.SDK_INT).put("abi",android.os.Build.SUPPORTED_ABIS.length==0?"":android.os.Build.SUPPORTED_ABIS[0]),display.snapshot(),AndroidPhoneReadiness.snapshot(context.android,display),practice);
     }
     private synchronized void submitCode(String session,String code)throws Exception {if(closed)throw new SecurityException("phone_setup_closed");JSONObject request=pairing.submit(session,code);cancelNotice();try{display.handle("adb.pair",request);}finally{request.remove("pairingCode");}}
-    void submitNotification(String session,String code){main.post(()->{try{submitCode(session,code);context.emit(id(),new JSONObject().put("event","pairing_code_submitted"));}catch(Exception refused){context.emit(id(),new JSONObject(java.util.Map.of("event","pairing_entry_refused","message","输入窗口已失效、当前码无效或资源正在使用，请回手机设置重新开始。")));}});}
+    void submitNotification(String session,String code){main.post(()->{try{submitCode(session,code);context.emit(id(),new JSONObject().put("event","pairing_code_submitted"));}catch(Exception refused){context.emit(id(),new JSONObject(java.util.Map.of("event","pairing_entry_refused","message",AppLanguage.wrap(context.android).getString(R.string.phone_setup_pairing_refused))));}});}
     private void show(PairingEntrySession.Entry entry)throws Exception {
-        NotificationManager manager=context.android.getSystemService(NotificationManager.class);if(manager==null||!manager.areNotificationsEnabled())throw new SecurityException("pairing_notification_unavailable");manager.createNotificationChannel(new NotificationChannel(CHANNEL,"手机配对输入",NotificationManager.IMPORTANCE_DEFAULT));
+        Context localized=AppLanguage.wrap(context.android);
+        NotificationManager manager=context.android.getSystemService(NotificationManager.class);if(manager==null||!manager.areNotificationsEnabled())throw new SecurityException("pairing_notification_unavailable");manager.createNotificationChannel(new NotificationChannel(CHANNEL,localized.getString(R.string.phone_setup_pairing_channel),NotificationManager.IMPORTANCE_DEFAULT));
         Intent intent=new Intent(context.android,PhoneSetupReceiver.class).setAction("dev.pocketengine.PAIR_CODE").setData(Uri.parse("pocketworld-internal://pair/"+entry.id())).putExtra("pairingSessionId",entry.id());
-        PendingIntent pending=PendingIntent.getBroadcast(context.android,NOTICE,intent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_MUTABLE);RemoteInput input=new RemoteInput.Builder("pairing_code").setLabel("系统当前的六位配对码").build();
-        Notification.Action action=new Notification.Action.Builder(android.R.drawable.ic_lock_lock,"输入当前配对码",pending).addRemoteInput(input).build();
-        manager.notify(NOTICE,new Notification.Builder(context.android,CHANNEL).setSmallIcon(android.R.drawable.ic_lock_lock).setContentTitle("手机无线调试配对").setContentText("仅本次两分钟输入窗口有效。配对成功后仍需连接并核对助手。").setVisibility(Notification.VISIBILITY_SECRET).setTimeoutAfter(120000).setOnlyAlertOnce(true).addAction(action).build());
+        PendingIntent pending=PendingIntent.getBroadcast(context.android,NOTICE,intent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_MUTABLE);RemoteInput input=new RemoteInput.Builder("pairing_code").setLabel(localized.getString(R.string.phone_setup_pairing_code_label)).build();
+        Notification.Action action=new Notification.Action.Builder(android.R.drawable.ic_lock_lock,localized.getString(R.string.phone_setup_pairing_enter),pending).addRemoteInput(input).build();
+        manager.notify(NOTICE,new Notification.Builder(localized,CHANNEL).setSmallIcon(android.R.drawable.ic_lock_lock).setContentTitle(localized.getString(R.string.phone_setup_pairing_title)).setContentText(localized.getString(R.string.phone_setup_pairing_detail)).setVisibility(Notification.VISIBILITY_SECRET).setTimeoutAfter(120000).setOnlyAlertOnce(true).addAction(action).build());
     }
     private synchronized void expire(String expected){try{JSONObject state=pairing.snapshot();if(!state.optBoolean("active")||expected.equals(state.optString("sessionId"))){pairing.cancel();cancelNotice();}}catch(Exception ignored){}}
     private void cancelNotice(){NotificationManager manager=context.android.getSystemService(NotificationManager.class);if(manager!=null)manager.cancel(NOTICE);}
