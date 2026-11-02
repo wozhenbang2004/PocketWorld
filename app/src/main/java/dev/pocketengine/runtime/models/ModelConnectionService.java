@@ -83,14 +83,15 @@ public final class ModelConnectionService {
         dev.pocketengine.store.TaskStore tasks=ownerTasks;if(tasks==null)throw new IllegalStateException("原模型诊断账本尚未挂载");
         final ModelConfig captured;final long selection;
         synchronized(settings){requireBinding(expected);captured=settings.apiConfigForCatalog();selection=settings.apiSelectionRevision();}
-        try(var usage=dev.pocketengine.runtime.usage.NativeInferenceWork.open(tasks,dev.pocketengine.store.TaskStore.NativeInferenceKind.CONNECTION_TEST,java.util.UUID.randomUUID().toString(),control)){
-            dev.pocketengine.runtime.models.InferenceAudiencePolicy.require(captured,NativeInferenceScope.ownerApp("owner","private",usage.target().context.taskId,usage.target().context.runId,usage.target().context.epoch,control),control);
-            var target=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(usage.target(),()->{control.check();synchronized(settings){requireBinding(expected);if(settings.apiSelectionRevision()!=selection)throw new SecurityException("原模型配置已变化，探测已停止");}});
+        try(var usage=tasks.beginModelCapabilityProbe(java.util.UUID.randomUUID().toString(),control,image)){
+            var nativeTarget=usage.target();
+            dev.pocketengine.runtime.models.InferenceAudiencePolicy.require(captured,NativeInferenceScope.ownerApp("owner","private",nativeTarget.context.taskId,nativeTarget.context.runId,nativeTarget.context.epoch,control),control);
+            var target=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(nativeTarget,()->{control.check();synchronized(settings){requireBinding(expected);if(settings.apiSelectionRevision()!=selection)throw new SecurityException("原模型配置已变化，探测已停止");}});
             try{JSONObject result=ModelCapabilityProbe.run(captured,image,control,target);control.check();
                 synchronized(settings){requireBinding(expected);if(settings.apiSelectionRevision()!=selection)throw new SecurityException("原模型配置已变化，旧探测未用于当前模型");}
                 JSONObject ref=usage.reference();tasks.event(ref.getString("taskId"),ref.getString("runId"),ref.getInt("epoch"),new JSONObject().put("type","model_capability_probe").put("probe",result));
-                JSONObject retained=new JSONObject(result.toString()).put("inferenceReference",ref);synchronized(this){lastProbe=retained;}usage.completed();return new JSONObject(retained.toString());
-            }catch(Exception failure){usage.failed(failure);throw failure;}
+                JSONObject retained=new JSONObject(result.toString()).put("inferenceReference",ref);synchronized(this){lastProbe=retained;}usage.finish("completed");return new JSONObject(retained.toString());
+            }catch(Exception failure){usage.finish(control.isCancelled()||failure instanceof InterruptedException?"cancelled":"failed");throw failure;}
         }
     }
 
