@@ -30,8 +30,15 @@ while IFS= read -r class; do
   [[ -z "$class" || "$class" == \#* ]] && continue
   selectors+=(--tests "$class")
 done < tools/mika-focused-tests.txt
+main_status=0
 LD_LIBRARY_PATH="$native_dir/current${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  ./gradlew "${gradle_args[@]}" "${selectors[@]}"
+  ./gradlew "${gradle_args[@]}" "${selectors[@]}" || main_status=$?
+# A compilation failure has no test evidence to preserve or repeat in another JVM.
+if ! compgen -G 'app/build/test-results/testDebugUnitTest/TEST-*.xml' >/dev/null; then
+  if [[ "$main_status" != 0 ]]; then exit "$main_status"; fi
+  printf '%s\n' 'Focused tests produced no XML evidence.' >&2
+  exit 1
+fi
 cp -R app/build/reports/tests/testDebugUnitTest "$native_dir/main-reports"
 cp -R app/build/test-results/testDebugUnitTest "$native_dir/main-results"
 unavailable_status=0
@@ -40,4 +47,5 @@ LD_LIBRARY_PATH="$native_dir/unavailable${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 mkdir -p app/build/reports/tests/testDebugUnitTest/main-capabilities app/build/test-results/testDebugUnitTest/main-capabilities
 cp -R "$native_dir/main-reports/." app/build/reports/tests/testDebugUnitTest/main-capabilities/
 cp -R "$native_dir/main-results/." app/build/test-results/testDebugUnitTest/main-capabilities/
+if [[ "$main_status" != 0 ]]; then exit "$main_status"; fi
 exit "$unavailable_status"
