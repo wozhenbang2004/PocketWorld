@@ -721,7 +721,9 @@ async function runViewport(origin, viewport) {
     record.checks.push({ stage: 'project-first-object', firstFile: fileGeometry, limit: 240 });
     await capture(page, viewport, '10-project-files', ['.pw-projects-page', '.pw-file-list .pw-file-object']);
     await page.getByRole('button', { name: '文件显示方式', exact: true }).click();
-    await page.getByRole('radio', { name: '目录层级', exact: true }).click();
+    const treeViewOption = page.locator('label.pw-radio-option').filter({ has: page.getByRole('radio', { name: '目录层级', exact: true }) });
+    await reachable(treeViewOption, { minSize: 44 });
+    await treeViewOption.click();
     await capture(page, viewport, '11-project-tree', ['.pw-file-tree', '[role="tree"]']);
 
     await navigate(page, '设置与连接');
