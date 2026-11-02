@@ -646,6 +646,32 @@ public final class AssistantModule implements EngineModule {
         commit(()->{JSONObject conversation=find(conversationId),message=newMessage(conversationId,"assistant",text,config).put("taskId",taskId);copyMemoryReference(response,message);conversation.getJSONArray("messages").put(message);trimMessages(conversation);conversation.put("updatedAt",System.currentTimeMillis());return null;});
         synchronizeSources();context.emit(id(),new JSONObject().put("phase","idle").put("conversationId",conversationId).put("taskId",taskId));
     }
+    /** Original Automation/TaskStore delivery only. Absent from handle, model tools and exported intents. */
+    public JSONObject appendNativeTaskDelivery(String conversationId,String taskId,String deliveryId,JSONObject response)throws Exception{
+        if(historyTasks==null)throw new SecurityException("缺少原任务结果权威");
+        JSONObject actual=historyTasks.get(taskId,false),origin=actual==null?null:actual.optJSONObject("origin");
+        if(actual==null||origin==null||!"automation".equals(origin.optString("kind"))||!"owner".equals(actual.optString("actorId"))||!"private".equals(actual.optString("spaceId"))
+                ||!conversationId.equals(actual.optString("conversationId"))||!conversationId.equals(origin.optString("originConversationId"))||origin.optString("originTaskId").isEmpty())throw new SecurityException("结果不属于这个原生创建对话");
+        String expected="automation:"+origin.getString("ruleId")+":"+origin.getString("occurrenceId")+":"+taskId;
+        if(!expected.equals(deliveryId)||deliveryId.length()>240)throw new SecurityException("原计划结果身份不可核对");
+        String text=response.getString("content");if(text.isBlank()||text.length()>24000)throw new IllegalArgumentException("原结果超过本次对话展示范围，请保留原任务链接");
+        String digest=fingerprint(text,"automation_delivery",new JSONArray());JSONObject result;
+        synchronized(admission){
+            if(active.get()!=null&&(activeTurn==null||conversationId.equals(activeTurn.optString("conversationId"))))return new JSONObject().put("accepted",false).put("waitingForOriginalConversation",true).put("deliveryId",deliveryId);
+            result=commit(()->{
+                JSONObject prior=durable()?historyRepository.sourceByReply(deliveryId):null;
+                if(prior==null)for(int i=0;i<sources.length();i++)if(deliveryId.equals(sources.getJSONObject(i).optString("nativeReplyId"))){prior=sources.getJSONObject(i);break;}
+                if(prior!=null){if(!digest.equals(prior.optString("nativeReplyDigest"))||!taskId.equals(prior.optString("nativeTaskId")))throw new SecurityException("原投递编号不能更换结果");return new JSONObject().put("accepted",true).put("duplicate",true).put("messageId",prior.getString("sourceId")).put("available",!prior.optBoolean("deleted")&&!prior.optBoolean("memoryContextRetired")&&prior.optLong("memorySourceRetiredThrough")<prior.optLong("revision"));}
+                JSONObject current=historyTasks.get(taskId,false);
+                if(!Set.of("completed","needs_confirmation","failed","cancelled","interrupted","awaiting_user").contains(current.optString("status"))||!current.optString("runId").equals(response.optString("runId"))||current.optInt("coordinatorEpoch")!=response.optInt("epoch")||!current.optString("summary").equals(text))throw new SecurityException("只能投递原任务当前确切结果，不能换正文或轮次");
+                JSONObject conversation=find(conversationId),message=newMessage(conversationId,"assistant",text,context.model()).put("taskId",taskId).put("nativeDeliveryId",deliveryId).put("nativeRunId",actual.optString("runId")).put("nativeEpoch",actual.optInt("coordinatorEpoch"));
+                copyMemoryReference(response,message);JSONObject state=source(message.getString("id"));state.put("nativeReplyId",deliveryId).put("nativeReplyDigest",digest).put("nativeTaskId",taskId);
+                conversation.getJSONArray("messages").put(message);trimMessages(conversation);conversation.put("updatedAt",System.currentTimeMillis());return new JSONObject().put("accepted",true).put("duplicate",false).put("messageId",message.getString("id")).put("available",true);
+            });
+        }
+        synchronizeSources();result.put("conversationId",conversationId).put("taskId",taskId).put("deliveryId",deliveryId).put("executionAuthorized",false);
+        context.emit(id(),new JSONObject(result.toString()).put("phase","native_task_delivery"));return result;
+    }
     private JSONArray list()throws Exception{
         if(durable())return historyRepository.read(()->historyRepository.list("",20).getJSONArray("conversations"));
         synchronized(storage){healthy();java.util.List<JSONObject> ordered=new java.util.ArrayList<>();for(int i=0;i<conversations.length();i++)ordered.add(conversations.getJSONObject(i));ordered.sort(java.util.Comparator.comparingLong((JSONObject c)->c.optLong("pinnedAt")).reversed().thenComparing(java.util.Comparator.comparingLong((JSONObject c)->c.optLong("updatedAt",c.optLong("createdAt"))).reversed()).thenComparing(c->c.optString("conversationId")));JSONArray rows=new JSONArray();for(JSONObject c:ordered)rows.put(new JSONObject().put("conversationId",c.getString("conversationId")).put("title",c.optString("userTitle",c.optString("title"))).put("pinnedAt",c.optLong("pinnedAt")).put("metadataRevision",dev.pocketengine.features.conversation.ConversationMetadata.revision(c)).put("updatedAt",c.optLong("updatedAt",c.optLong("createdAt"))));return rows;}

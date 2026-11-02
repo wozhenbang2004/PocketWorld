@@ -18,17 +18,24 @@ public final class AssistantTaskNotifications {
     public AssistantTaskNotifications(Context context,TaskStore tasks){this.context=context.getApplicationContext();this.tasks=tasks;manager=this.context.getSystemService(NotificationManager.class);}
     private static String tag(JSONObject view)throws Exception{return "assistant-task:"+view.getString("taskId")+":"+view.getString("token");}
     public void update(String task)throws Exception{
+        Context localized=dev.pocketengine.features.operations.AppLanguage.wrap(context);
         TaskStore.OwnerTaskNotice claim=tasks.ownerTaskNotice(task);if(claim==null||manager==null)return;JSONObject view=claim.view();String tag=tag(view);
         if(view.optBoolean("cancelOnly")){if(tasks.ownerTaskNoticeCurrent(claim)){manager.cancel(tag,ID);tasks.ownerTaskNoticePhase(claim,"obsolete");}return;}
         if(!tasks.ownerTaskNoticeCurrent(claim))return;String replaced=view.optString("replacesToken");if(replaced.matches("[a-f0-9]{64}"))manager.cancel("assistant-task:"+view.getString("taskId")+":"+replaced,ID);
         if(Build.VERSION.SDK_INT>=33&&context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED||!manager.areNotificationsEnabled()){tasks.ownerTaskNoticePhase(claim,"permission_required");return;}
-        manager.createNotificationChannel(new NotificationChannel(CHANNEL,"助手结果与待处理事项",NotificationManager.IMPORTANCE_DEFAULT));NotificationChannel channel=manager.getNotificationChannel(CHANNEL);if(channel==null||channel.getImportance()==NotificationManager.IMPORTANCE_NONE){tasks.ownerTaskNoticePhase(claim,"permission_required");return;}
+        manager.createNotificationChannel(new NotificationChannel(CHANNEL,localized.getString(dev.pocketengine.R.string.w8_notice_channel),NotificationManager.IMPORTANCE_DEFAULT));NotificationChannel channel=manager.getNotificationChannel(CHANNEL);if(channel==null||channel.getImportance()==NotificationManager.IMPORTANCE_NONE){tasks.ownerTaskNoticePhase(claim,"permission_required");return;}
         // Mark before the external binder call. A crash/uncertain return never authorizes a repost.
         if(!tasks.beginOwnerTaskNoticePosting(claim)||!tasks.ownerTaskNoticeCurrent(claim))return;
         Intent target=open(context,view);PendingIntent pending=PendingIntent.getActivity(context,0,target,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        Notification notification=new Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(TaskNotificationState.title(view.getString("status"))).setContentText(TaskNotificationState.summary(view.getString("status")))
-            .setCategory(Notification.CATEGORY_STATUS).setVisibility(Notification.VISIBILITY_PRIVATE).setAutoCancel(true).setOnlyAlertOnce(true).setContentIntent(pending).build();
+        Notification.Builder builder=new Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(TaskNotificationState.title(localized,view.getString("status"))).setContentText(TaskNotificationState.summary(localized,view.getString("status")))
+            .setCategory(Notification.CATEGORY_STATUS).setVisibility(Notification.VISIBILITY_PRIVATE).setAutoCancel(true).setOnlyAlertOnce(true).setContentIntent(pending);
+        if(view.optJSONObject("ownerQuestion")!=null){
+            Intent reply=new Intent(context,OwnerQuestionReplyReceiver.class).setAction(OwnerQuestionReply.ACTION).setData(target.getData()).putExtra("questionIdentity",view.getJSONObject("ownerQuestion").toString()).putExtra("noticeToken",view.getString("token")).putExtra("noticeView",view.toString());
+            PendingIntent answer=PendingIntent.getBroadcast(context,0,reply,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_MUTABLE);
+            builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_send,localized.getString(dev.pocketengine.R.string.w8_notice_reply),answer).addRemoteInput(new RemoteInput.Builder(OwnerQuestionReply.KEY).setLabel(localized.getString(dev.pocketengine.R.string.w8_notice_reply_label)).build()).setAllowGeneratedReplies(false).build());
+        }
+        Notification notification=builder.build();
         try{manager.notify(tag,ID,notification);if(tasks.ownerTaskNoticeCurrent(claim))tasks.ownerTaskNoticePhase(claim,"posted");else manager.cancel(tag,ID);}
         catch(RuntimeException unconfirmed){tasks.ownerTaskNoticePhase(claim,"unconfirmed");throw unconfirmed;}
     }

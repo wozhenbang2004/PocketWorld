@@ -1,5 +1,8 @@
 package dev.pocketengine.ui
 
+import dev.pocketengine.R
+import androidx.compose.ui.res.stringResource
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -7,6 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -19,6 +23,7 @@ import org.json.JSONObject
 @Composable
 internal fun InterruptedAttemptJournal(taskId: String, initial: List<InterruptedAttempts.Attempt>,
     readPage: ((String, (JSONObject?, String?) -> Unit) -> Unit)? = null) {
+    val context = LocalContext.current
     var open by remember(taskId) { mutableStateOf(false) }
     var attempts by remember(taskId) { mutableStateOf(initial) }
     var retained by remember(taskId) { mutableStateOf(JSONArray()) }
@@ -36,7 +41,7 @@ internal fun InterruptedAttemptJournal(taskId: String, initial: List<Interrupted
         readPage(next) { page, error ->
             if (!mounted[0]) return@readPage
             reading = false
-            if (error != null || page == null) { failure = error ?: "原记录暂不可读"; return@readPage }
+            if (error != null || page == null) { failure = error ?: context.getString(R.string.w8_cv_037); return@readPage }
             try {
                 require(page.getString("taskId") == taskId)
                 val incoming = InterruptedAttempts.eventsFromAuditPage(page)
@@ -47,29 +52,29 @@ internal fun InterruptedAttemptJournal(taskId: String, initial: List<Interrupted
                 retained = combined; cursor = page.optString("nextCursor"); more = page.optBoolean("hasMore")
                 partial = partial || page.optBoolean("readLimited") || resetting && next.isNotEmpty()
                 attempts = InterruptedAttempts.fromEvents(combined, more || partial); loaded = true
-            } catch (_: Exception) { failure = "原记录身份或格式不可核对，未展示替代文字。" }
+            } catch (_: Exception) { failure = context.getString(R.string.w8_cv_038) }
         }
     }
     if (initial.isNotEmpty() || readPage != null) TextButton(onClick = { open = true; if (!loaded) load("") }, modifier = Modifier.testTag("conversation_interrupted_open_" + taskId)) {
-        Text(if (initial.isEmpty()) "读取中断时的原文字" else "中断时已显示的文字 · ${initial.size} 段", fontSize = 13.sp)
+        Text(if (initial.isEmpty()) stringResource(R.string.w8_cv_039) else stringResource(R.string.w8_cv_interrupted_count, initial.size), fontSize = 13.sp)
     }
     if (open) ModalBottomSheet(onDismissRequest = { open = false }) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 22.dp).verticalScroll(rememberScrollState())) {
-            Text("中断时的原文字", style = MaterialTheme.typography.titleLarge)
-            Text("这里读取原任务审计中的已显示片段。它们尚未完成，不代表最终回答；未收到的尾部仍未知。", fontSize = 13.sp, modifier = Modifier.padding(vertical = 12.dp))
+            Text(stringResource(R.string.w8_cv_040), style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.w8_cv_041), fontSize = 13.sp, modifier = Modifier.padding(vertical = 12.dp))
             attempts.forEachIndexed { index, attempt ->
                 HorizontalDivider(Modifier.padding(vertical = 12.dp))
-                Text("片段 ${index + 1} · 保留 ${attempt.retainedChars} 字符", style = MaterialTheme.typography.titleSmall)
-                if (attempt.runId.isEmpty()) Text("这份历史未记录执行轮次。", fontSize = 12.sp)
-                if (!attempt.contiguous || attempt.conflicting) Text("当前片段有缺口或冲突，只显示可核对的原记录。", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                Text(stringResource(R.string.w8_cv_fragment_count, index + 1, attempt.retainedChars), style = MaterialTheme.typography.titleSmall)
+                if (attempt.runId.isEmpty()) Text(stringResource(R.string.w8_cv_042), fontSize = 12.sp)
+                if (!attempt.contiguous || attempt.conflicting) Text(stringResource(R.string.w8_cv_043), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                 SelectionContainer { Text(attempt.text, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(vertical = 12.dp).testTag("conversation_interrupted_text")) }
             }
-            if (attempts.isEmpty() && !reading) Text("当前已读窗口没有保留片段。", fontSize = 13.sp)
-            if (partial) Text("部分记录超过本次读取窗口；未将缺失范围补成正文。", fontSize = 12.sp)
+            if (attempts.isEmpty() && !reading) Text(stringResource(R.string.w8_cv_044), fontSize = 13.sp)
+            if (partial) Text(stringResource(R.string.w8_cv_045), fontSize = 12.sp)
             failure?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
             if (reading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 12.dp))
-            if (readPage != null && (more || failure != null)) TextButton(onClick = { load(if (loaded) cursor else "") }, enabled = !reading) { Text(if (failure != null) "重新读取这页" else "读取更早记录") }
-            TextButton(onClick = { open = false }, modifier = Modifier.fillMaxWidth()) { Text("返回原对话") }
+            if (readPage != null && (more || failure != null)) TextButton(onClick = { load(if (loaded) cursor else "") }, enabled = !reading) { Text(if (failure != null) stringResource(R.string.w8_cv_046) else stringResource(R.string.w8_cv_047)) }
+            TextButton(onClick = { open = false }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.w8_cv_048)) }
         }
     }
 }

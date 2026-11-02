@@ -38,7 +38,7 @@ public final class InterruptedAttempts {
         for(Parts parts:groups.values()){
             StringBuilder text=new StringBuilder();int next=0,chars=0;boolean contiguous=!parts.bad;
             for(Map.Entry<Integer,String> chunk:parts.chunks.entrySet()){
-                if(chunk.getKey()!=next){contiguous=false;text.append("\n〔此范围的原片段未载入：").append(next).append("–").append(chunk.getKey()).append("〕\n");}
+                if(chunk.getKey()!=next){contiguous=false;text.append("\n〔… ").append(next).append("–").append(chunk.getKey()).append(" …〕\n");}
                 if(chunk.getKey()<next){parts.bad=true;contiguous=false;continue;}
                 text.append(chunk.getValue());chars+=chunk.getValue().length();next=chunk.getKey()+chunk.getValue().length();
             }
