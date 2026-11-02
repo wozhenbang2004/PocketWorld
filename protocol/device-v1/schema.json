@@ -199,7 +199,9 @@
             "task.acquireControl",
             "artifact.describe",
             "artifact.readChunk",
-            "operation.cancel"
+            "operation.cancel",
+            "task.answerQuestion",
+            "task.steer"
           ]
         },
         "observationRef": {
@@ -594,6 +596,139 @@
             },
             "description": "New outer cancel operationId+digest; arguments.operationId+argumentsDigest bind the original SQL target. Current original caller peer/pin, C owner management capability/current resource, short native ticket and separate rate guard only. Source visibility/A continuing execution/historyRead cannot block this de-escalation. Never return original contents or execute new tools."
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.answerQuestion"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              },
+              "arguments": {
+                "type": "object",
+                "properties": {
+                  "taskId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "runId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "controlLeaseId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "allocationId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "executorEpoch": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000,
+                    "pattern": "\\S"
+                  },
+                  "originalRequestId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "waitRevision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "taskId",
+                  "runId",
+                  "controlLeaseId",
+                  "allocationId",
+                  "executorEpoch",
+                  "text",
+                  "originalRequestId",
+                  "waitRevision"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "operationId",
+              "argumentsDigest"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.steer"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              },
+              "arguments": {
+                "type": "object",
+                "properties": {
+                  "taskId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "runId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "controlLeaseId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "allocationId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "executorEpoch": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000,
+                    "pattern": "\\S"
+                  }
+                },
+                "required": [
+                  "taskId",
+                  "runId",
+                  "controlLeaseId",
+                  "allocationId",
+                  "executorEpoch",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "operationId",
+              "argumentsDigest"
+            ]
+          }
         }
       ]
     },
@@ -965,7 +1100,9 @@
             "task.acquireControl",
             "artifact.describe",
             "artifact.readChunk",
-            "operation.cancel"
+            "operation.cancel",
+            "task.answerQuestion",
+            "task.steer"
           ]
         },
         "executorDeviceId": {
@@ -1136,7 +1273,9 @@
                   "task.respond",
                   "task.pause",
                   "task.cancel",
-                  "task.acquireControl"
+                  "task.acquireControl",
+                  "task.answerQuestion",
+                  "task.steer"
                 ]
               }
             }
@@ -1201,7 +1340,9 @@
             "task.acquireControl",
             "artifact.describe",
             "artifact.readChunk",
-            "operation.cancel"
+            "operation.cancel",
+            "task.answerQuestion",
+            "task.steer"
           ]
         },
         "executorDeviceId": {
@@ -1276,7 +1417,9 @@
               "task.cancel",
               "task.acquireControl",
               "artifact.describe",
-              "artifact.readChunk"
+              "artifact.readChunk",
+              "task.answerQuestion",
+              "task.steer"
             ]
           },
           "minItems": 1
@@ -1374,7 +1517,9 @@
               "task.cancel",
               "task.acquireControl",
               "artifact.describe",
-              "artifact.readChunk"
+              "artifact.readChunk",
+              "task.answerQuestion",
+              "task.steer"
             ]
           },
           "minItems": 1
@@ -1527,7 +1672,9 @@
               "task.cancel",
               "task.acquireControl",
               "artifact.describe",
-              "artifact.readChunk"
+              "artifact.readChunk",
+              "task.answerQuestion",
+              "task.steer"
             ]
           },
           "minItems": 1

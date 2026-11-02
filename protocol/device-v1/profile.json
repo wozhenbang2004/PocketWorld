@@ -3,8 +3,8 @@
   "protocolVersion": "1.0",
   "files": {
     "schema.json": {
-      "sha256": "3a21e521981ccb593874dfa5b19da2a2e51b83ba0ff2ae7ca4a10a524a5b2fc1",
-      "bytes": 67322
+      "sha256": "7a7fb50e38260b675b6c357d7c8f09d8e84519b20dc89f7f7d3fbf3872c524a4",
+      "bytes": 71926
     },
     "onboarding-schema.json": {
       "sha256": "bb90a84565660837fb89bd0b3158f8e268b42e65ec01d27bbb123c5b380be2b0",
@@ -87,5 +87,28 @@
     "revocation": "Current owner revoke, epoch/scope revision, pin/instance change or grant expiry explicitly denies remote executable recovery. Historical immutable commit remains local only and cannot restore active trust.",
     "schemaMigration": "No new table, column, database, Runner or version; state-specific records reuse original invite receipt_json and candidate record_json."
   },
-  "profileId": "pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb"
+  "ordinaryTaskInputs": {
+    "methods": [
+      "task.answerQuestion",
+      "task.steer"
+    ],
+    "approvalMethodRemains": "task.respond",
+    "requires": [
+      "current_exact_peer_grant",
+      "original_task_run_epoch_allocation",
+      "current_control_lease",
+      "original_native_goal_session"
+    ],
+    "answerRequires": [
+      "native_ordinary_question_uuid",
+      "exact_wait_revision",
+      "approval_false",
+      "takeover_false"
+    ],
+    "storage": "original_TaskStore_ownerInputs_and_controlOperation_only",
+    "privateUserSourceCreated": false,
+    "newAttemptOrGrant": false,
+    "oldProfileOrGrantIsNotUpgraded": true
+  },
+  "profileId": "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
 }
