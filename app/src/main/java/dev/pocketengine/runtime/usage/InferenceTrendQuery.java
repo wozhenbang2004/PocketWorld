@@ -23,7 +23,7 @@ public final class InferenceTrendQuery {
             while(rows.moveToNext()){
                 if(scanned==PAGE_ROWS||bytes+Math.max(0,rows.getLong(2))>MAX_BYTES){more=true;break;}scanned++;lastTask=rows.getString(0);lastOrder=rows.getLong(1);bytes+=Math.max(0,rows.getLong(2));
                 if(rows.isNull(3)||rows.isNull(4)){unreadable++;continue;}JSONObject header=new JSONObject(rows.getString(4)),origin=header.optJSONObject("origin");
-                if(!"owner".equals(header.optString("actorId"))||!"private".equals(header.optString("spaceId"))||origin!=null&&java.util.Set.of("channel","group").contains(origin.optString("kind")))continue;
+                if(!"owner".equals(header.optString("actorId"))||!"private".equals(header.optString("spaceId"))||origin!=null&&java.util.Set.of("channel","group","reviewed_external_group","native_remote_group_inputs").contains(origin.optString("kind")))continue;
                 JSONObject event=new JSONObject(rows.getString(3)),context=event.optJSONObject("context");if(context==null||!lastTask.equals(context.optString("taskId"))){unreadable++;continue;}
                 long at=event.optLong("startedAt",-1);if(at>=from&&at<until)events.put(event);
             }

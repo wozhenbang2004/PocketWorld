@@ -26,22 +26,29 @@ public final class ModelConnectionService {
     private final CatalogHttpClient http;
     private final Clock clock;
     private final ConnectionInferenceObservations inferenceObservations;
+    private StepModelRoutingSettings stepRouting;
+    private dev.pocketengine.store.TaskStore ownerTasks;
+    private JSONObject lastProbe;
+    private final dev.pocketengine.features.proxy.accounts.OpenRouterOnboarding openRouter;
     private Attempt attempt;
     private record Attempt(ModelBinding binding, ModelCatalog.Ticket ticket, long started, String status, String code) { }
 
     public ModelConnectionService(SettingsStore settings, Path privateCache, Clock clock) throws IOException {
         this(settings, new ModelCatalog(privateCache, clock), new CatalogHttpClient(clock, 15000), clock);
+        stepRouting=new StepModelRoutingSettings(settings,privateCache.resolveSibling("step-model-routing.json"));
     }
     public ModelConnectionService(SettingsStore settings, ModelCatalog catalog, CatalogHttpClient http, Clock clock) {
         this.settings=Objects.requireNonNull(settings);this.catalog=Objects.requireNonNull(catalog);
         this.http=Objects.requireNonNull(http);this.clock=Objects.requireNonNull(clock);inferenceObservations=new ConnectionInferenceObservations(clock);
+        openRouter=new dev.pocketengine.features.proxy.accounts.OpenRouterOnboarding(settings);
     }
 
     /** Application-only mounting. Existing AgentRunner/context and Gateway remain the consumers. */
     public void install() {
+        StepModelRouting.install(main->stepRouting==null?null:stepRouting.capture(main));
         dev.pocketengine.runtime.usage.InferenceCapture.installPresentationObserver(new dev.pocketengine.runtime.usage.InferenceCapture.Sink(){
             public void started(dev.pocketengine.runtime.usage.InferenceReceipt receipt){}
-            public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt)throws Exception{inferenceObservations.committed(receipt);}
+            public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt)throws Exception{inferenceObservations.committed(receipt);dev.pocketengine.runtime.usage.TaskDetailedTrace.receiptCommitted(receipt);}
         });
         ModelRequestPolicy.installHostSource(this::resolve);
         dev.pocketengine.runtime.ModelGateway.installModelGroupAdmission(settings::requireModelGroupAdmission);
@@ -65,6 +72,26 @@ public final class ModelConnectionService {
                     fact.source==ModelFacts.Source.OWNER_OVERRIDE?ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE:ContextBudgetPolicy.SourceKind.PROVIDER_METADATA,
                     Math.max(1,view.ownerRevision()),Math.max(1,fact.observedAtMillis));
         });
+    }
+
+    /** Native owner mounting only. Probe calls still use the original accounting and scope gates. */
+    public void attachOwnerStore(dev.pocketengine.store.TaskStore tasks){ownerTasks=Objects.requireNonNull(tasks);}
+    public dev.pocketengine.features.proxy.accounts.OpenRouterOnboarding openRouter(){return openRouter;}
+    public JSONObject stepRouting()throws Exception{return stepRouting==null?new JSONObject().put("enabled",false).put("available",false):stepRouting.snapshot().put("available",true);}
+    public JSONObject saveStepRouting(boolean enabled,ModelTargetRef target)throws Exception{if(stepRouting==null)throw new IllegalStateException("轻量步骤配置尚未挂载");stepRouting.save(enabled,target);return snapshot();}
+    public JSONObject probe(ModelBinding expected,boolean image,RunControl control)throws Exception {
+        dev.pocketengine.store.TaskStore tasks=ownerTasks;if(tasks==null)throw new IllegalStateException("原模型诊断账本尚未挂载");
+        final ModelConfig captured;final long selection;
+        synchronized(settings){requireBinding(expected);captured=settings.apiConfigForCatalog();selection=settings.apiSelectionRevision();}
+        try(var usage=dev.pocketengine.runtime.usage.NativeInferenceWork.open(tasks,dev.pocketengine.store.TaskStore.NativeInferenceKind.CONNECTION_TEST,java.util.UUID.randomUUID().toString(),control)){
+            dev.pocketengine.runtime.models.InferenceAudiencePolicy.require(captured,NativeInferenceScope.ownerApp("owner","private",usage.target().context.taskId,usage.target().context.runId,usage.target().context.epoch,control),control);
+            var target=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(usage.target(),()->{control.check();synchronized(settings){requireBinding(expected);if(settings.apiSelectionRevision()!=selection)throw new SecurityException("原模型配置已变化，探测已停止");}});
+            try{JSONObject result=ModelCapabilityProbe.run(captured,image,control,target);control.check();
+                synchronized(settings){requireBinding(expected);if(settings.apiSelectionRevision()!=selection)throw new SecurityException("原模型配置已变化，旧探测未用于当前模型");}
+                JSONObject ref=usage.reference();tasks.event(ref.getString("taskId"),ref.getString("runId"),ref.getInt("epoch"),new JSONObject().put("type","model_capability_probe").put("probe",result));
+                JSONObject retained=new JSONObject(result.toString()).put("inferenceReference",ref);synchronized(this){lastProbe=retained;}usage.completed();return new JSONObject(retained.toString());
+            }catch(Exception failure){usage.failed(failure);throw failure;}
+        }
     }
 
     public ModelCatalog.View resolve(ModelConfig selected) throws Exception {
@@ -109,6 +136,7 @@ public final class ModelConnectionService {
                     .put("modelGroups",settings.modelGroupsSnapshot()).put("catalogEnabled",binding!=null).put("connections",settings.apiConnectionsSnapshot()).put("maxCatalogAgeMillis",MAX_CATALOG_AGE_MILLIS)
                     .put("modelsEndpoint",binding==null?defaultEndpoint(current):binding.modelsEndpoint().toASCIIString())
                     .put("catalogFormat",binding==null?ModelCatalogRoutes.defaultFormat(current.provider).name():binding.format().name());
+            out.put("stepRouting",stepRouting());synchronized(this){if(lastProbe!=null&&current.capabilityBinding!=null&&current.capabilityBinding.toJson().toString().equals(lastProbe.getJSONObject("binding").toString())&&current.model.equals(lastProbe.optString("model"))&&ModelRoutePlan.configurationDigest(current).equals(lastProbe.optString("configurationDigest")))out.put("capabilityProbe",new JSONObject(lastProbe.toString()));}
             try{ModelConfig active=settings.get();out.put("activeRoute",active.usesAccount()?"account":"api_key").put("nativeSelection",active.publicJson());}catch(Exception unavailable){out.put("selectionUnavailable",true).put("selectionMessage","所选模型组或原连接已变化；请重新核对用途选择。没有回退。");}
             JSONArray models=new JSONArray();
             if(binding!=null){
