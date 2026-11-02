@@ -91,6 +91,31 @@ public final class SkillBook {
         }
     }
 
+    /** Stable, bounded metadata pages for skills unrelated to the current goal's lexical terms.
+     * A page cursor binds the complete eligible version set and host capability scope. */
+    public JSONObject cataloguePageForHost(JSONObject authenticatedScope,Set<String> hostCapabilities,JSONObject cursor,int pageSize,long now)throws Exception {
+        String[] owner=scope(authenticatedScope);Set<String> capabilities=hostCapabilities(hostCapabilities);
+        if(pageSize<1||pageSize>20)throw new IllegalArgumentException("技能目录每页为1至20项");
+        synchronized(lock){JSONArray rows=state().getJSONArray("skills"),identity=new JSONArray(),page=new JSONArray();List<JSONObject> eligible=new ArrayList<>();int invalid=0;
+            for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(!matches(record,owner))continue;
+                JSONObject current=inspectCurrent(record,capabilities,now);if(current.getString("status").equals("invalid"))invalid++;
+                if(!current.getString("status").equals("active"))continue;
+                eligible.add(discoveryMetadata(record,new JSONObject().put("score",0).put("matchReasons",new JSONArray())));
+            }
+            eligible.sort(Comparator.comparing((JSONObject row)->row.optString("name")).thenComparing(row->row.optString("id")));
+            for(JSONObject row:eligible)identity.put(new JSONArray().put(row.getString("id")).put(row.getInt("revision")).put(row.getString("digest")));
+            List<String> sortedCapabilities=new ArrayList<>(capabilities);sortedCapabilities.sort(Comparator.naturalOrder());
+            String fingerprint=digest(new JSONObject().put("owner",owner[0]).put("space",owner[1]).put("capabilities",new JSONArray(sortedCapabilities).toString()).put("versions",identity.toString()));
+            int offset=0;
+            if(cursor!=null){if(cursor.length()!=2||!fingerprint.equals(cursor.optString("catalogueDigest"))||!(cursor.opt("offset") instanceof Integer||cursor.opt("offset") instanceof Long))throw new SecurityException("技能目录或宿主能力已变化，请从第一页重新发现");long raw=cursor.getLong("offset");if(raw<0||raw>eligible.size())throw new SecurityException("技能目录游标越界");offset=(int)raw;}
+            int end=Math.min(offset+pageSize,eligible.size());for(int i=offset;i<end;i++)page.put(eligible.get(i));
+            return new JSONObject().put("skills",page).put("totalCount",eligible.size()).put("pageSize",pageSize).put("offset",offset)
+                    .put("catalogueDigest",fingerprint).put("nextCursor",end<eligible.size()?new JSONObject().put("catalogueDigest",fingerprint).put("offset",end):JSONObject.NULL)
+                    .put("hasMore",end<eligible.size()).put("metadataOnly",true).put("status",invalid==0?"ok":"partial").put("invalidCount",invalid)
+                    .put("untrustedReference",true).put("executable",false).put("grantsAdded",new JSONArray());
+        }
+    }
+
     /** Native supervisor only: scope/capabilities come from authenticated host state, never tool arguments. */
     public JSONObject discoverForHost(JSONObject authenticatedScope,String query,Set<String> hostCapabilities,int limit,int maxChars,long now)throws Exception {
         String[] owner=scope(authenticatedScope);Set<String> capabilities=hostCapabilities(hostCapabilities),terms=queryTerms(query);
