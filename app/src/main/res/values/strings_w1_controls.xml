@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="w1_preferences_allow">允许通过对话调整偏好</string>
+    <string name="w1_preferences_allow_description">允许新任务通过对话修改回复详略和普通操作节奏；关闭立即停止后续修改。</string>
+    <string name="w1_preferences_response_detail">回复详略</string>
+    <string name="w1_preferences_detail_concise">简洁</string>
+    <string name="w1_preferences_detail_standard">标准</string>
+    <string name="w1_preferences_detail_detailed">详细</string>
+    <string name="w1_preferences_operation_pace">普通操作节奏</string>
+    <string name="w1_preferences_pace_fast">快速</string>
+    <string name="w1_preferences_pace_standard">标准</string>
+    <string name="w1_preferences_pace_careful">从容</string>
+    <string name="w1_preferences_pace_description">从容会在普通手机动作前稍作停顿。偏好不会改变授权、事实或完成标准。</string>
+    <string name="w1_preferences_restore_standard">恢复标准</string>
+    <string name="w1_preferences_unavailable">偏好设置尚未读到，请重新打开设置。</string>
+    <string name="w1_preferences_saving">正在保存偏好…</string>
+    <string name="w1_research_error_site_list_length">站点列表过长</string>
+    <string name="w1_research_error_sites_unique">最多选择四个不重复的公共 HTTPS 站点</string>
+    <string name="w1_research_error_site_origin">只填写站点地址，例如 https://example.org，不含页面路径</string>
+    <string name="w1_research_error_public_https">仅允许无凭据的明确公共HTTPS站点</string>
+    <string name="w1_research_error_files_unique">最多选择三十二个不重复的项目文件</string>
+    <string name="w1_research_error_project_choice">请从原项目列表选择文件</string>
+    <string name="w1_research_error_relative_path">需项目相对路径</string>
+    <string name="w1_research_error_path_scope">项目路径不能跳出显选范围</string>
+    <string name="w1_research_title">成员可主动查阅的资料</string>
+    <string name="w1_research_description">默认不开放。网站只用匿名公共读取；项目只读本页明确选择的文字文件。实际版本会在下一步审阅中列出。</string>
+    <string name="w1_research_sites_label">允许的公共 HTTPS 站点，每行一个，最多四个</string>
+    <string name="w1_research_sites_placeholder">https://example.org</string>
+    <string name="w1_research_choose_project">从原项目选择文件</string>
+    <string name="w1_research_no_projects">还没有可选择的原项目。</string>
+    <string name="w1_research_no_files">这个项目没有可分享的文字文件。</string>
+    <string name="w1_research_project_fallback">原项目</string>
+    <string name="w1_research_file_metadata">当前版本 %1$d · %2$d 字节</string>
+    <string name="w1_research_selected_files">已选 %1$d 个文件；切换项目不会自动共享其他文件。</string>
+    <string name="w1_research_remove_file">移除</string>
+    <string name="w1_research_review_summary">只读研究范围：匿名公共站点 %1$d 个，原项目文件 %2$d 个。账号和登录状态不共享。</string>
+    <string name="w1_research_review_file_metadata">%1$s · 版本 %2$d · 内容 %3$s · %4$d 字节</string>
+</resources>
