@@ -163,6 +163,7 @@ jobs:
           name: uiux-native-capture-failure-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             build-artifacts/*.log
+            app/build/uiux-captures/
             app/build/reports/tests/testDebugUnitTest/
             app/build/test-results/testDebugUnitTest/TEST-dev.pocketengine.ui.PocketWorkroomCaptureTest.xml
           if-no-files-found: ignore

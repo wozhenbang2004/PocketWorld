@@ -117,6 +117,27 @@ class PocketWorkroomCaptureTest {
 
     private fun hasText(value: String): Boolean = nodes().any { text(it).contains(value) }
 
+    private fun assertMountedNickChild(title: String, status: String, width: Int, height: Int) {
+        val mounted = nodes()
+        // Nick deliberately clears child Text semantics; the owning Row exposes its title/state.
+        val child = mounted.firstOrNull {
+            it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(title) == true &&
+                it.config.getOrNull(SemanticsProperties.StateDescription) == status
+        }
+        val diagnostics = mounted.filter {
+            it.config.getOrNull(SemanticsProperties.ContentDescription) != null ||
+                it.config.getOrNull(SemanticsProperties.StateDescription) != null
+        }.joinToString("; ") {
+            "description=${it.config.getOrNull(SemanticsProperties.ContentDescription)}, " +
+                "state=${it.config.getOrNull(SemanticsProperties.StateDescription)}, bounds=${it.boundsInRoot}"
+        }
+        assertNotNull("Actual Nick child $title / $status is mounted; $diagnostics", child)
+        val bounds = child!!.boundsInRoot
+        assertTrue("Nick child $title has nonzero bounds: $bounds", bounds.width > 0f && bounds.height > 0f)
+        assertTrue("Nick child $title intersects the captured viewport: $bounds",
+            bounds.right > 0f && bounds.bottom > 0f && bounds.left < width && bounds.top < height)
+    }
+
     // Same PAUSED-looper layout and frame approach as VoiceDraftComposerRenderTest.
     private fun frame(window: Window, width: Int, height: Int) {
         repeat(12) {
@@ -242,8 +263,10 @@ class PocketWorkroomCaptureTest {
                 }
             }
             frame(screen.window, width, height)
-            assertTrue("Actual Nick children are mounted", hasText("运行构建检查"))
-            assertTrue(hasText("检查预览入口"))
+            assertTrue("ComponentFrame replaced the App content", hasText("周报面板 · 当前执行"))
+            assertTrue("Actual Nick main step is mounted", hasText("在这台手机构建页面"))
+            assertMountedNickChild("运行构建检查", "执行中", width, height)
+            assertMountedNickChild("检查预览入口", "待执行", width, height)
             capture(screen.window, "03-nick-running-children", "当前执行与子步骤", "NickExecutionTree component", width, height)
 
             fun task(id: String, goal: String, status: String) = UiTask(
