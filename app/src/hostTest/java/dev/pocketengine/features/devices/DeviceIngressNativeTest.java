@@ -12,7 +12,7 @@ import dev.pocketengine.runtime.AgentRunner;
 import dev.pocketengine.runtime.models.InferenceAudiencePolicy;
 import dev.pocketengine.runtime.models.NativeInferenceScope;
 import dev.pocketengine.store.SettingsStore;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -219,7 +219,7 @@ public final class DeviceIngressNativeTest {
     @Test public void originalRunnerGoalNeedsNativeBModelChoiceAndApprovalResumesSameRunWithoutPrivateContext()throws Exception{
         tasks.createCapabilityTask("AMBIENT_PRIVATE_TASK_MUST_NOT_LEAK","");
         AtomicInteger requests=new AtomicInteger();java.util.List<String> bodies=new java.util.concurrent.CopyOnWriteArrayList<>();
-        HttpServer http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);http.createContext("/",exchange->{try{requests.incrementAndGet();bodies.add(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));byte[] response="{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Controlled local model fixture response\"}}]}".getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,response.length);exchange.getResponseBody().write(response);}finally{exchange.close();}});http.start();
+        HttpServer http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);http.createContext("/",exchange->{try{requests.incrementAndGet();bodies.add(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));byte[] response="{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Controlled local model fixture response\"}}]}".getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,response.length);exchange.getResponseBody().write(response);}finally{exchange.close();}});http.start();
         try{
             var constructor=SettingsStore.class.getDeclaredConstructor(android.content.SharedPreferences.class,SettingsStore.ApiSecrets.class);constructor.setAccessible(true);SettingsStore settings=constructor.newInstance(RuntimeEnvironment.getApplication().getSharedPreferences("private_settings",0),new NativeSecrets());
             var models=new dev.pocketengine.runtime.models.ModelConnectionService(settings,Files.createTempDirectory("device-owner-model-fixture").resolve("catalog"),java.time.Clock.systemUTC());models.install();models.connections();

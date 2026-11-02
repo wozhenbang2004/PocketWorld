@@ -10,7 +10,8 @@
   "device-receiver": {
     "class": "dev.pocketengine.features.devices.DeviceReceiverLifecycleTest",
     "helpers": [
-      "dev.pocketengine.features.devices.DeviceIngressNativeTest"
+      "dev.pocketengine.features.devices.DeviceIngressNativeTest",
+      "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
     "description": "Original Android Service/SQLite lifecycle on Robolectric, synthetic loopback TLS; not a device test."

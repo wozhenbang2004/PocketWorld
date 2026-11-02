@@ -6,7 +6,7 @@ import org.json.JSONObject;
 public final class EmitBrowserLongPageRead {
     public static void main(String[] args)throws Exception {
         if(args.length==2&&args[0].equals("verify")){
-            JSONObject evidence=new JSONObject(java.nio.file.Files.readString(java.nio.file.Path.of(args[1])));org.json.JSONArray samples=evidence.getJSONArray("samples");
+            JSONObject evidence=new JSONObject(new String(java.nio.file.Files.readAllBytes(java.nio.file.Path.of(args[1])),java.nio.charset.StandardCharsets.UTF_8));org.json.JSONArray samples=evidence.getJSONArray("samples");
             for(int i=0;i<samples.length();i++){JSONObject raw=samples.getJSONObject(i).getJSONObject("raw");JSONObject projected=BrowserSemanticRead.result(raw);if(projected.optString("status").equals("observed"))BrowserSemanticRead.validateSourceFacts(BrowserSemanticRead.sourceFacts(projected.getJSONObject("read")));}
             System.out.println("Validated "+samples.length()+" captured read receipts with production result/source validators");return;
         }

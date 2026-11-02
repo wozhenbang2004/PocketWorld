@@ -53,7 +53,7 @@ public final class ManagedRuntimeFlowTest {
         if(directory!=null)try(var paths=Files.walk(directory)) {for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}
     }
     private void source(String path,String value) throws Exception {
-        Path file=active.resolve(path);Files.createDirectories(file.getParent());Files.writeString(file,value);
+        Path file=active.resolve(path);Files.createDirectories(file.getParent());Files.write(file,value.getBytes(StandardCharsets.UTF_8));
         JSONArray files=snapshot.getJSONArray("files");
         for(int i=0;i<files.length();i++)if(path.equals(files.getJSONObject(i).getString("path"))){files.getJSONObject(i).put("content",value);return;}
         files.put(new JSONObject().put("path",path).put("content",value));
@@ -86,12 +86,12 @@ public final class ManagedRuntimeFlowTest {
         source("build.mjs","import{mkdirSync,writeFileSync,copyFileSync}from'node:fs';import{title}from'./helper.mjs';mkdirSync('dist',{recursive:true});writeFileSync('dist/index.html','<!doctype html><link rel=stylesheet href=styles.css><h1>'+title+'</h1><script src=client.js></script>');copyFileSync('styles.css','dist/styles.css');copyFileSync('client.js','dist/client.js');console.log('BUILT '+title);\n");
         RuntimeInvocation fixed=invocation("fixed","project.runtime.run","node",new JSONArray().put("build.mjs"),()->{});
         runtime.dispatch(fixed);RuntimeReceipt built=waitFor(fixed.executionRef());assertEquals(built.json().toString(),0,built.json().getInt("exitCode"));
-        assertEquals("BUILT First\n",built.json().getString("stdout"));assertTrue(Files.readString(active.resolve("dist/index.html")).contains("First"));
-        assertEquals(Files.readString(active.resolve("styles.css")),Files.readString(active.resolve("dist/styles.css")));
+        assertEquals("BUILT First\n",built.json().getString("stdout"));assertTrue(new String(Files.readAllBytes(active.resolve("dist/index.html")),StandardCharsets.UTF_8).contains("First"));
+        assertEquals(new String(Files.readAllBytes(active.resolve("styles.css")),StandardCharsets.UTF_8),new String(Files.readAllBytes(active.resolve("dist/styles.css")),StandardCharsets.UTF_8));
         source("helper.mjs","export const title='Modified in the SAME project';\n");
         RuntimeInvocation next=invocation("continued","project.runtime.run","node",new JSONArray().put("build.mjs"),()->{});
         runtime.dispatch(next);assertEquals(0,waitFor(next.executionRef()).json().getInt("exitCode"));
-        assertTrue(Files.readString(active.resolve("dist/index.html")).contains("Modified in the SAME project"));
+        assertTrue(new String(Files.readAllBytes(active.resolve("dist/index.html")),StandardCharsets.UTF_8).contains("Modified in the SAME project"));
         runtime.close();runtime=ManagedProjectRuntime.create(directory.toFile(),pack,tools);
         assertEquals(0,runtime.query(fixed.executionRef()).json().getInt("exitCode"));
         System.out.println("A25F actualDesktopJNI=true; NodeBuildFailureThenRepair=true; sameActiveTree=true; persistedOriginalReceipt=true; AndroidDevice=false");
@@ -118,7 +118,7 @@ public final class ManagedRuntimeFlowTest {
     @Test public void pauseOrActiveSourceChangePreventsLaunchAndChangedEnvironmentNeedsReview() throws Exception {
         source("main.py","from pathlib import Path\nPath('SHOULD_NOT_EXIST').write_text('bad')\n");
         RuntimeInvocation changed=invocation("changed","project.runtime.run","python3",new JSONArray().put("main.py"),()->{});
-        Files.writeString(active.resolve("main.py"),"different actual bytes");
+        Files.write(active.resolve("main.py"),"different actual bytes".getBytes(StandardCharsets.UTF_8));
         assertThrows(SecurityException.class,()->runtime.dispatch(changed));assertFalse(Files.exists(active.resolve("SHOULD_NOT_EXIST")));
         source("main.py","print('valid')\n");RuntimeInvocation paused=invocation("paused","project.runtime.run","python3",new JSONArray().put("main.py"),()->{});
         original.pause();original.resume();assertThrows(SecurityException.class,()->runtime.dispatch(paused));
@@ -150,7 +150,7 @@ public final class ManagedRuntimeFlowTest {
             RuntimeReceipt unknown=cold.query(call.executionRef());assertEquals("unknown",unknown.status());
             assertFalse(unknown.json().getBoolean("receiptReceived"));
             assertEquals("unknown",cold.dispatch(call).status());
-            assertEquals("x",Files.readString(active.resolve("launch-count")));
+            assertEquals("x",new String(Files.readAllBytes(active.resolve("launch-count")),StandardCharsets.UTF_8));
         }
         runtime.requestCancel(call.executionRef());assertTrue(waitFor(call.executionRef()).json().getBoolean("processExited"));
     }

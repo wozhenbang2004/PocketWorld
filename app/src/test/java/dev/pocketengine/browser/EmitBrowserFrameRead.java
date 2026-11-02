@@ -2,6 +2,7 @@ package dev.pocketengine.browser;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
 
 /** Emits the actual current production scripts for the bounded Node DOM fixture, not a copied implementation. */
@@ -26,6 +27,6 @@ public final class EmitBrowserFrameRead {
         JSONObject settling=new JSONObject().put("mode","table").put("query","Ledger").put("settle",new JSONObject().put("timeoutMs",6000).put("stableMs",600));
         emitted.put("settledTable",BrowserSemanticRead.script(settling,key,"original-native-test-scope",id,doc,false));
         emitted.put("settledTableNext",BrowserSemanticRead.script(settling,key,"original-native-test-scope","a0000000-0000-0000-0000-000000000002",doc,false));
-        Files.writeString(Path.of(args[0]),emitted.toString());
+        Files.write(Path.of(args[0]),emitted.toString().getBytes(StandardCharsets.UTF_8));
     }
 }
