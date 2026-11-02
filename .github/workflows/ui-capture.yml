@@ -1,0 +1,152 @@
+name: Capture native UI fixtures
+run-name: Native UI fixtures · ${{ github.ref_name }} · ${{ github.run_number }}
+
+on:
+  push:
+    branches: ['uiux/**']
+    paths:
+      - '.github/workflows/ui-capture.yml'
+      - 'app/src/test/kotlin/dev/pocketengine/ui/PocketWorkroomCaptureTest.kt'
+      - 'app/src/main/kotlin/dev/pocketengine/ui/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-capture-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    if: ${{ github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out selected revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Prepare pinned Android and native toolchains
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts
+          : "${ANDROID_HOME:?Android SDK is required}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-user-home" >> "$GITHUB_ENV"
+          # The runner's defaults change; install the versions declared by this project.
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          "$SDKMANAGER" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+          for tool in curl make patch ninja; do command -v "$tool"; done
+          # CMake 3.31.6 is an upstream pin, not the SDK's similarly named 3.31.5 package.
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, tarfile
+          lock = json.loads(pathlib.Path('app/src/main/java/dev/pocketengine/features/local/runtime/native/source-lock.json').read_text())
+          cmake = lock['toolchain']['cmake']
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'pocketworld-cmake'
+          root.mkdir(parents=True, exist_ok=True)
+          archive = root / 'cmake.tar.gz'
+          subprocess.run(['curl', '--fail', '--location', '--proto', '=https', '--proto-redir', '=https', '--tlsv1.2', '--retry', '3', '--output', str(archive), cmake['url']], check=True)
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == cmake['sha256'], 'CMake source-lock mismatch'
+          with tarfile.open(archive) as bundle:
+              bundle.extractall(root, filter='data')
+          home = root / ('cmake-' + cmake['version'] + '-linux-x86_64')
+          subprocess.run([str(home / 'bin/cmake'), '--version'], check=True)
+          pathlib.Path('local.properties').write_text('sdk.dir=' + os.environ['ANDROID_HOME'] + '\ncmake.dir=' + str(home) + '\n')
+          with open(os.environ['GITHUB_PATH'], 'a') as path:
+              path.write(str(home / 'bin') + '\n')
+          PY
+
+
+      - name: Render isolated Robolectric API 35 UI fixtures
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.vfs.watch=false \
+            :app:testDebugUnitTest --tests dev.pocketengine.ui.PocketWorkroomCaptureTest \
+            2>&1 | tee build-artifacts/ui-capture.log
+
+      - name: Verify native capture files
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, struct, subprocess, xml.etree.ElementTree as ET
+          root = pathlib.Path('app/build/uiux-captures')
+          pngs = sorted(root.rglob('*.png'))
+          manifests = sorted(root.rglob('*.json'))
+          assert pngs, 'No native UI PNGs were produced'
+          assert manifests, 'No native capture JSON was produced'
+          report = pathlib.Path('app/build/test-results/testDebugUnitTest/TEST-dev.pocketengine.ui.PocketWorkroomCaptureTest.xml')
+          assert report.is_file(), 'Capture test report is missing'
+          suite = ET.parse(report).getroot()
+          assert int(suite.attrib.get('tests', '0')) > 0, 'No capture tests ran'
+          assert int(suite.attrib.get('failures', '0')) == 0 and int(suite.attrib.get('errors', '0')) == 0, 'Capture tests failed'
+          files = []
+          for path in pngs:
+              data = path.read_bytes()
+              assert len(data) >= 24 and data[:8] == b'\x89PNG\r\n\x1a\n', 'Invalid PNG: ' + str(path)
+              width, height = struct.unpack('>II', data[16:24])
+              assert width > 0 and height > 0, 'Empty PNG dimensions: ' + str(path)
+              files.append({'file': str(path.relative_to(root)), 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'width': width, 'height': height})
+          for path in manifests:
+              json.loads(path.read_text())
+          receipt = {
+              'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'rendering': 'Robolectric API 35 native UI with isolated fixtures; not a physical-device capture',
+              'test_class': 'dev.pocketengine.ui.PocketWorkroomCaptureTest',
+              'captures': files,
+              'capture_json': [str(path.relative_to(root)) for path in manifests],
+              'device_install_or_runtime_test': 'not performed',
+              'visual_acceptance': 'requires inspection of the rendered PNGs'
+          }
+          pathlib.Path('build-artifacts/ui-capture-identity.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Native UI fixtures\n\nCommit: ' + receipt['commit'] + '\n\n' + str(len(pngs)) + ' PNGs from Robolectric API 35 using isolated fixtures. These are native UI test renders, not physical-device captures. Test success does not replace visual inspection or a real-device journey.\n')
+          PY
+
+      - name: Retain private native UI captures and test evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: uiux-native-captures-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            app/build/uiux-captures/
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/TEST-dev.pocketengine.ui.PocketWorkroomCaptureTest.xml
+            build-artifacts/ui-capture.log
+            build-artifacts/ui-capture-identity.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Retain capture failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: uiux-native-capture-failure-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            build-artifacts/*.log
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/TEST-dev.pocketengine.ui.PocketWorkroomCaptureTest.xml
+          if-no-files-found: ignore
+          retention-days: 7
