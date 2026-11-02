@@ -101,6 +101,7 @@ internal object PocketWebState {
             .put("ownerPending", JSONArray(state.ownerPending.toList())).put("ownerErrors", JSONObject(state.ownerErrors))
             .put("ownerSource", publicValue(state.ownerSource))
             .put("moduleResults", JSONObject().also { out -> state.moduleResults.forEach { (key, value) -> out.put(key, publicValue(value)) } })
+            .put("moduleResultInputs", JSONObject().also { out -> state.moduleResultInputs.forEach { (key, value) -> out.put(key, publicValue(value)) } })
             .put("moduleBusy", JSONArray(state.moduleBusy.toList())).put("moduleErrors", JSONObject(state.moduleErrors))
             .put("taskActionErrors", JSONObject(state.taskActionErrors)).put("backgroundSetupOpen", state.backgroundSetupOpen)
             .put("requestedTaskId", state.requestedTaskId ?: JSONObject.NULL).put("requestedTaskRevision", state.requestedTaskRevision)
@@ -166,7 +167,10 @@ internal object PocketWebState {
             .put("voiceText", draft?.voiceText ?: "").put("voiceInputId", draft?.voiceInputId ?: "")
             .put("pending", JSONArray().also { out -> controller.composerPending.forEach { pending ->
                 out.put(JSONObject().put("clientMessageId", pending.clientId).put("draftKey", pending.draftKey)
-                    .put("draftRevision", pending.draftRevision).put("canRetryLocallyUnsent", controller.canRetryLocallyUnsent(pending.clientId)))
+                    .put("draftRevision", pending.draftRevision).put("conversationId", pending.conversationId).put("mode", pending.mode)
+                    .put("status", state.chatReceipts[pending.clientId]?.opt("status") ?: JSONObject.NULL)
+                    .put("receipt", publicValue(state.chatReceipts[pending.clientId]))
+                    .put("canRetryLocallyUnsent", controller.canRetryLocallyUnsent(pending.clientId)))
             } })
         return JSONObject().put("state", data).put("composer", composer)
     }

@@ -67,6 +67,7 @@ jobs:
           name: pocketworld-web-build-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             web-ui/package-lock.json
+            web-ui/public/licenses/
             app/src/main/assets/pocket-ui/
             build-artifacts/web-*.log
           if-no-files-found: ignore

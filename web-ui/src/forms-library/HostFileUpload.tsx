@@ -15,9 +15,10 @@ export function formatFileSize(bytes: number) {
   if (bytes >= 1024 * 1024) { const mb = bytes / (1024 * 1024); return `${mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10} MB`; }
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
-export function HostFileUpload({ onChoose, status = 'idle', file, error, progress, disabled = false, label = '选择文件' }: {
+export function HostFileUpload({ onChoose, status = 'idle', file, error, progress, disabled = false, label = '选择文件', statusDescription }: {
   onChoose: () => void; status?: 'idle' | 'importing' | 'complete' | 'unknown' | 'error';
   file?: { name: string; size?: number }; error?: string; progress?: number; disabled?: boolean; label?: string;
+  statusDescription?: string;
 }) {
   const boxRef = useRef<HTMLButtonElement>(null);
   const [box, setBox] = useState({ width: 533, height: 164 });
@@ -31,7 +32,7 @@ export function HostFileUpload({ onChoose, status = 'idle', file, error, progres
       </svg>
       <span className="pw-upload-icon">{file ? <RiFileTextLine size={24} aria-hidden /> : <RiUploadCloud2Line size={24} aria-hidden />}</span>
       <span className="pw-upload-title">{file?.name ?? label}</span>
-      <span className="pw-upload-description">{status === 'importing' ? '正在读取原文件…' : status === 'complete' ? '已收到导入回执' : status === 'unknown' ? '提交结果待核对，请勿重复导入' : file?.size != null ? formatFileSize(file.size) : '使用系统文件选择器，保留文件来源'}</span>
+      <span className="pw-upload-description">{statusDescription ?? (status === 'importing' ? '正在读取原文件…' : status === 'complete' ? '已收到导入回执' : status === 'unknown' ? '提交结果待核对，请勿重复导入' : file?.size != null ? formatFileSize(file.size) : '使用系统文件选择器，保留文件来源')}</span>
     </button>
     {error && <p className="pw-field-error" role="alert">{error}</p>}
   </div>;

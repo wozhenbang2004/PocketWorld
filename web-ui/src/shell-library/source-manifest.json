@@ -369,7 +369,8 @@
     "BoardUI registry aliases changed to local relative modules",
     "Ovio aliases changed to local relative modules; minimal selected",
     "Tree selected item gains controlled prop; no drag mutations",
-    "Source originals retained alongside adapters; no fixture data used"
+    "Source originals retained alongside adapters; no fixture data used",
+    "Vaul 1.1.2 React 19 compatibility only: RefObject<HTMLDivElement | null> in context/use-snap-points; browser-compatible ReturnType<typeof setTimeout> replaces NodeJS.Timeout. Upstream source remains byte-identical."
   ],
   "usage": [
     {

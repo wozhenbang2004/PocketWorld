@@ -204,7 +204,7 @@ export function Root({
   const dragEndTime = React.useRef<Date | null>(null);
   const lastTimeDragPrevented = React.useRef<Date | null>(null);
   const isAllowedToDrag = React.useRef<boolean>(false);
-  const nestedOpenChangeTimer = React.useRef<NodeJS.Timeout | null>(null);
+  const nestedOpenChangeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerStart = React.useRef(0);
   const keyboardIsOpen = React.useRef(false);
   const shouldAnimate = React.useRef(!defaultOpen);

@@ -12,6 +12,7 @@ import {
   StretchSwitch, TextAreaField, TextField, type FieldOption,
 } from './forms-library';
 import './secondary.css';
+import { backgroundConnection, connectionProfilePayload, wirelessEndpoints, wirelessPort } from './forms-library/host-contracts';
 
 /**
  * Product composition of the selected BoardUI SettingsModal/settings rows,
@@ -194,19 +195,141 @@ function ModelSettings({ state, supported, run, navigate }: { state: Data; suppo
   </>;
 }
 
-function PhoneSettings({ state, supported, run }: { state: Data; supported: (action: string) => boolean; run: Run }) {
+function PhoneSettings({ state, supported, run, navigate }: { state: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void }) {
   const ready = object(state.phoneReadiness);
   return <>
     <Card title="手机观察与执行" description="本地取图、OCR 和云端发送分别设置。">
       <StretchSwitch label="允许本地按需取图" description="更改用于后续运行；关闭后不为 OCR 采集像素。" checked={state.localCaptureAllowed !== false} disabled={!supported('settings.saveLocalObservation')} onChange={capture => { void run('settings.saveLocalObservation', { capture, ocr: state.localOcrAllowed !== false }).catch(() => {}); }} />
       <StretchSwitch label="允许本地 OCR" description="像素在本地识字；有来源的识别文字可发送给已选推理服务。" checked={state.localOcrAllowed !== false} disabled={!supported('settings.saveLocalObservation')} onChange={ocr => { void run('settings.saveLocalObservation', { capture: state.localCaptureAllowed !== false, ocr }).catch(() => {}); }} />
       <Facts items={[[ '当前执行能力', first(ready, ['message', 'summary', 'status']) ], ['无障碍服务', state.accessibilityEnabled ? '已连接' : '未连接'], ['任务通知', state.notificationsEnabled ? '已开启' : '未开启']]} />
-      <div className="pw-form-actions">{[['accessibility', '界面读取与主屏控制'], ['notifications', '任务通知'], ['background', '后台连接与授权'], ['wireless', '无线调试设置']].map(([section, title]) => <CapabilityAction key={section} action="settings.openSystem" supported={supported} run={run} args={{ section }}>{title}</CapabilityAction>)}</div>
+      <div className="pw-form-actions">{[['accessibility', '界面读取与主屏控制'], ['notifications', '任务通知'], ['wireless', '无线调试设置']].map(([section, title]) => <CapabilityAction key={section} action="settings.openSystem" supported={supported} run={run} args={{ section }}>{title}</CapabilityAction>)}<Button variant="secondary" disabled={!supported('settings.openSystem')} onClick={() => navigate('background')}>后台连接与授权</Button></div>
     </Card>
     <Card title="浏览器与语音" description="语音识别只填入草稿，仍由你决定发送。">
       <Facts items={[[ '系统听写', state.speechAvailable ? '可用' : '暂不可用'], ['朗读', state.speaking ? '正在朗读' : '未在朗读']]} />
       <div className="pw-form-actions"><CapabilityAction action="settings.openBrowser" args={{ purpose: 'research' }} supported={supported} run={run}>网页研究工作区</CapabilityAction><CapabilityAction action="settings.openBrowser" args={{ purpose: 'browse' }} supported={supported} run={run}>内置浏览器</CapabilityAction><CapabilityAction action={state.speaking ? 'voice.stopSpeaking' : 'voice.speakLatest'} supported={supported} run={run}>{state.speaking ? '停止朗读' : '朗读最近回复'}</CapabilityAction></div>
     </Card>
+  </>;
+}
+
+/** Original BackgroundPhoneSetup flow composed with the selected BoardUI
+ * fields, radio options, accordion and SettingsModal. It reads the existing
+ * display state; this page does not create a task or a second connection. */
+function BackgroundSettings({ state, supported, run, navigate }: { state: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void }) {
+  const display = object(object(state.features).display), adb = object(display.adb), discovery = object(adb.discovery);
+  const pending = Array.isArray(state.moduleBusy) ? state.moduleBusy.map(String) : [];
+  const connection = backgroundConnection(display, state.activeTaskId, pending);
+  const [connecting, setConnecting] = useState(() => connection.requiresConnectionCheck || connection.phase === 'paired' || connection.identityPresent);
+  const [manual, setManual] = useState(false), [portText, setPortText] = useState(''), [selected, setSelected] = useState('');
+  const [code, setCode] = useState(''), [pairPort, setPairPort] = useState<number | undefined>();
+  const [mainScreenConsent, setMainScreenConsent] = useState(false), [requesting, setRequesting] = useState(false);
+  const [unknownResult, setUnknownResult] = useState(false);
+  const [awaiting, setAwaiting] = useState<{ key: string; before: string; busySeen: boolean } | null>(null);
+  const pairGuard = useRef(false);
+  const ownerOpened = useRef(state.backgroundSetupOpen === true);
+  const kind = connecting ? 'connect' : 'pairing';
+  const endpoints = wirelessEndpoints(discovery, kind);
+  const endpointKeys = endpoints.map(item => item.id).join('|');
+  const endpoint = endpoints.find(item => item.id === selected);
+  const port = manual ? wirelessPort(portText) : endpoint?.port;
+  const host = manual ? '127.0.0.1' : endpoint?.host || '127.0.0.1';
+  const requiresCheck = connection.requiresConnectionCheck || unknownResult;
+  const resultSignature = (key: string) => JSON.stringify([object(state.moduleResults)[key] ?? null, object(state.moduleErrors)[key] ?? null]);
+  const closeSecrets = () => setCode('');
+  useEffect(() => {
+    if (state.backgroundSetupOpen === true) ownerOpened.current = true;
+    else if (ownerOpened.current) { setCode(''); navigate('phone'); }
+  }, [state.backgroundSetupOpen]);
+  useEffect(() => {
+    if (!connection.busy) {
+      if (connection.requiresConnectionCheck || connection.phase === 'paired' || connection.identityPresent) setConnecting(true);
+      else if (['needs_pairing', 'identity_forgotten'].includes(connection.phase)) { setConnecting(false); setPairPort(undefined); }
+    }
+    if (connection.requiresConnectionCheck || ['paired', 'needs_pairing', 'identity_forgotten'].includes(connection.phase)) setCode('');
+    if (connection.helperConnected && !connection.requiresConnectionCheck) setUnknownResult(false);
+  }, [connection.phase, connection.requiresConnectionCheck, connection.busy, connection.identityPresent, connection.helperConnected]);
+  useEffect(() => { if (connection.taskOwned) { setCode(''); setMainScreenConsent(false); } }, [connection.taskOwned]);
+  useEffect(() => { setCode(''); setPortText(''); setManual(false); setSelected(''); }, [kind]);
+  useEffect(() => { setCode(''); }, [host, port]);
+  useEffect(() => {
+    if (!endpoints.some(item => item.id === selected)) setSelected(endpoints.length === 1 ? endpoints[0].id : '');
+  }, [endpointKeys, selected]);
+  useEffect(() => {
+    const hide = () => { if (document.visibilityState !== 'visible') closeSecrets(); };
+    document.addEventListener('visibilitychange', hide);
+    window.addEventListener('pagehide', closeSecrets);
+    return () => { document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', closeSecrets); };
+  }, []);
+  useEffect(() => {
+    if (!awaiting) return;
+    if (pending.includes(awaiting.key)) {
+      if (!awaiting.busySeen) setAwaiting({ ...awaiting, busySeen: true });
+    } else if (awaiting.busySeen || resultSignature(awaiting.key) !== awaiting.before) {
+      setAwaiting(null); pairGuard.current = false;
+    }
+  }, [pending.join('|'), state.moduleResults, state.moduleErrors, awaiting]);
+  const submit = async () => {
+    if (requesting || awaiting || pairGuard.current || port == null) return;
+    if (connecting ? !connection.canConnect || port === pairPort : !connection.canPair || requiresCheck || !/^\d{6}$/.test(code)) return;
+    const action = connecting ? 'background.connect' : 'background.pair';
+    if (!supported(action)) return;
+    const key = connecting ? 'display.adb.connect' : 'display.adb.pair';
+    const args = connecting ? { host, port, ...(pairPort != null ? { pairingPort: pairPort } : {}) } : { host, port, pairingCode: code };
+    pairGuard.current = true; setRequesting(true); setCode('');
+    setAwaiting({ key, before: resultSignature(key), busySeen: false });
+    if (!connecting) setPairPort(port);
+    try { await run(action, args); }
+    catch { setUnknownResult(true); setConnecting(true); setAwaiting(null); pairGuard.current = false; }
+    finally { setRequesting(false); }
+  };
+  const errors = Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith('display.')).map(([, value]) => text(value)).filter(Boolean);
+  const headline = connection.busy || requesting || awaiting ? '正在核对本次连接' : requiresCheck ? '上次连接结果待核对' : connection.screenEstablished ? '独立屏幕已建立' : connection.helperConnected ? '后台助手已连接' : !connection.loaded ? '正在读取后台连接' : !connection.supported ? '后台独立屏需要 Android 14 或以上' : connection.phase === 'paired' ? '配对已确认，还需要连接助手' : '连接手机后台助手';
+  const alternate = connection.backend === 'shizuku' || connection.backend === 'adb';
+  const permissions = state.accessibilityEnabled === true && state.notificationsEnabled === true;
+  const steps = [
+    { title: '系统准备', done: connection.loaded && connection.supported && permissions, detail: !connection.loaded ? '先读取真实系统与连接状态' : !connection.supported ? '当前系统不支持后台独立屏，可明确选择主屏模式' : !permissions ? '完成界面读取权限与任务通知后返回' : '权限已读取，继续核对后台连接' },
+    { title: alternate ? '已选连接授权' : '本机配对身份', done: !requiresCheck && (alternate ? connection.helperConnected : connection.identityPresent || connection.phase === 'paired' || connection.helperConnected), detail: requiresCheck ? '核对原连接，避免重复提交配对码' : alternate ? '保留已选择的兼容连接方式' : connection.identityPresent || connection.phase === 'paired' || connection.helperConnected ? '已读取本机身份，连接时会核对有效性' : '使用当前系统窗口的配对端口与六位码' },
+    { title: '连接核对', done: connection.helperConnected && !connection.busy && !requiresCheck, detail: connection.helperConnected && !requiresCheck ? '助手已连接，正式使用时核对实际独立屏' : '配对后使用无线调试主页的另一连接端口' },
+    { title: '返回原目标', done: false, detail: connection.taskOwned ? '原任务持有执行资源，回到原任务查看' : '完成设置后返回，由你确认是否开始原目标' },
+  ];
+  const locked = connection.taskOwned || connection.busy || requesting || awaiting !== null;
+  const connected = connection.helperConnected && connection.backend === 'wireless_adb' && !display.releasePending && !display.recoveryRequired;
+  return <>
+    <Card title={headline} description={connection.screenEstablished ? '宿主已核验当前独立显示会话。' : connection.helperConnected ? '正式开始任务时才建立或核验独立显示会话。' : '完成系统授权与连接后返回原目标；本页不会自动开始任务。'}>
+      <ol className="pw-background-steps">{steps.map((step, index) => <li key={step.title} data-complete={step.done}><span className="pw-background-step-marker" aria-label={step.done ? '已完成' : '步骤 ' + (index + 1)}>{step.done ? <RiCheckLine size={15} aria-hidden /> : index + 1}</span><div><h3>{step.title}</h3><p>{step.detail}</p></div></li>)}</ol>
+      <Facts items={[[ '当前连接方式', ({ wireless_adb: '手机内无线连接', shizuku: 'Shizuku 兼容连接', adb: '受信任电脑 ADB' } as Data)[connection.backend] ], ['连接消息', adb.message ], ['当前执行资源', connection.taskOwned ? '由原手机任务持有' : undefined ]]} />
+      <div className="pw-form-actions"><CapabilityAction action="background.refresh" supported={supported} run={run}>刷新核对状态</CapabilityAction>{connection.taskOwned && state.activeTaskId && <CapabilityAction action="tasks.open" args={{ id: state.activeTaskId }} supported={supported} run={run}>回到原任务</CapabilityAction>}</div>
+      {awaiting && !connection.busy && <p className="pw-field-hint" role="status">请求已登记，正在等待实际连接回执。可刷新核对状态，请勿重复提交。</p>}
+      {errors.map((message, index) => <p className="pw-field-error" role="alert" key={index}>{message}</p>)}
+    </Card>
+    {!connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && <Card title={connecting ? '连接后台助手' : '与这台手机配对'} description={connecting ? '回到系统无线调试主页，读取连接端口。它与配对窗口的端口不同。' : '在开发者选项开启无线调试，打开“使用配对码配对设备”，保持当前窗口可见。'}>
+      {requiresCheck && <p className="pw-background-attention" role="status">上次请求的结果尚未确认。请连接并核对原助手，不要重复提交配对码。</p>}
+      {!connection.wirelessAvailable ? <Empty>此安装包尚未提供手机内无线配对能力。</Empty> : <>
+        <div className="pw-form-actions"><Button variant="secondary" disabled={locked || !supported('settings.openSystem')} onClick={() => { setCode(''); void run('settings.openSystem', { section: 'wireless' }).catch(() => {}); }}>前往无线调试设置</Button><CapabilityAction action="background.discover" supported={supported} run={run} disabled={connection.taskOwned || pending.includes('display.adb.discover')}>查找本机服务</CapabilityAction></div>
+        <div className="pw-background-endpoints">
+          {!manual && endpoints.length > 0 && <RadioOptions label={connecting ? '本机连接服务' : '当前配对窗口'} value={selected} isDisabled={locked} options={endpoints.map((item, index) => ({ id: item.id, label: '本机服务 ' + (index + 1) + ' · 端口 ' + item.port, description: item.host }))} onChange={value => { setCode(''); setSelected(value); }} />}
+          {!manual && endpoints.length === 0 && <Empty>{discovery.discovering ? '正在查找本机服务，请保持系统无线调试打开。' : '暂未发现本机服务。打开系统页面后再查找，或填写此手机页面上的端口。'}</Empty>}
+          {!manual && endpoints.length === 0 && text(discovery.errorCode) && <p className="pw-field-hint">{text(discovery.message)}</p>}
+          {manual && <TextField label={connecting ? '无线调试主页的连接端口' : '当前配对窗口的端口'} inputMode="numeric" value={portText} isDisabled={locked} onChange={value => { setCode(''); setPortText(value.replace(/\D/g, '').slice(0, 5)); }} isInvalid={Boolean(portText && port == null)} hint="仅连接这台手机的 127.0.0.1，不填写其他设备地址。" />}
+          <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setPortText(''); setManual(current => !current); }}>{manual ? '改用自动发现' : '未找到？填写本机端口'}</Button>
+        </div>
+        {!connecting && <TextField label="系统窗口当前的六位配对码" type="password" inputMode="numeric" autoComplete="off" value={code} isDisabled={locked || !connection.canPair || requiresCheck} onChange={value => setCode(value.replace(/\D/g, '').slice(0, 6))} hint="仅用于本次配对，提交或离开后清空。" />}
+        {connecting && port != null && port === pairPort && <p className="pw-background-attention">这是刚才的配对端口，请填写无线调试主页的另一连接端口。</p>}
+        <div className="pw-form-actions"><PressButton compact disabled={locked || port == null || !supported(connecting ? 'background.connect' : 'background.pair') || (connecting ? !connection.canConnect || port === pairPort : !connection.canPair || requiresCheck || !/^\d{6}$/.test(code))} onClick={() => { void submit(); }}>{connecting ? requiresCheck ? '恢复并核对原连接' : '完成手机连接' : '确认配对并继续'}</PressButton>
+          {!connecting ? <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setConnecting(true); }}>{connection.identityPresent ? '使用已保存身份连接' : '此前配对过？直接连接'}</Button> : <Button variant="ghost" disabled={locked || !connection.canPair || requiresCheck} onClick={() => { setCode(''); setConnecting(false); }}>重新读取配对窗口</Button>}
+        </div>
+      </>}
+      {(connection.busy || connection.recoveryRequired || awaiting) && <div className="pw-form-actions"><Button variant="secondary" disabled={!supported('background.cancel') || pending.includes('display.adb.cancel')} onClick={() => { setCode(''); void run('background.cancel', {}).catch(() => {}); }}>停止本次连接与启动</Button></div>}
+    </Card>}
+    {connection.loaded && !connection.supported && <Card title="此系统使用主屏兼容模式" description="后台独立屏需要 Android 14 或以上；执行主屏任务时会切换应用并占用当前屏幕。"><Button variant="secondary" disabled={connection.taskOwned || connection.busy || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>选择主屏兼容模式</Button></Card>}
+    <Card title="本机能力检查" description="逐项来自当前系统检查。已连接仍需核对输入、取帧和输入法隔离能力；从系统设置返回后刷新。">
+      {list(object(state.phoneReadiness).groups).length === 0 ? <Empty>尚未取得本机能力检查结果。</Empty> : <Accordion variant="divided">{list(object(state.phoneReadiness).groups).map(group => <AccordionItem key={text(group.id)} id={text(group.id)} title={<span className="pw-readiness-title"><span>{text(group.title)}</span><small>{({ ready: '可用', blocked: '需准备', unsupported: '本机不支持', unknown: '尚未核实' } as Data)[text(group.state)] || '尚未核实'}</small></span>}>
+        {list(group.checks).length === 0 ? <p className="pw-field-hint">尚未取得实际检查明细。</p> : list(group.checks).map((check, index) => <div key={text(check.id, String(index))} className="pw-readiness-check"><p>{text(check.message, '尚未取得实际状态')}</p>{check.state !== 'ready' && <div className="pw-form-actions">{['accessibility', 'notifications'].includes(check.action) ? <CapabilityAction action="settings.openSystem" args={{ section: check.action }} supported={supported} run={run}>{check.action === 'accessibility' ? '检查界面权限' : '检查任务通知'}</CapabilityAction> : ['background_setup', 'retry'].includes(check.action) ? <CapabilityAction action="background.refresh" supported={supported} run={run}>重新核对</CapabilityAction> : check.action === 'main_screen_choice' ? <Button variant="secondary" disabled={connection.taskOwned || connection.busy || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>选择主屏兼容模式</Button> : null}</div>}</div>)}
+      </AccordionItem>)}</Accordion>}
+      <div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run}>允许任务通知</CapabilityAction>}</div>
+    </Card>
+    <Card><Accordion variant="divided"><AccordionItem id="background-advanced" title="高级兼容与原连接状态"><Facts items={[[ '已选方式', connection.backend || '尚未读取' ], ['Shizuku', object(display.shizuku).message ], ['助手连接', connection.loaded ? connection.helperConnected ? '已连接' : '未连接' : '尚未核实' ], ['独立屏会话', connection.screenEstablished ? '宿主已核验' : '尚未建立或核验'], ['会话标识', display.sessionId ], ['连接恢复', requiresCheck ? '需要核对原连接' : undefined ]]} /><p className="pw-field-hint">保留已选择的连接方式。Shizuku、电脑 ADB 的配置及释放、遗忘操作尚未接入此页面。</p></AccordionItem></Accordion></Card>
+    <div className="pw-background-return"><Button variant="secondary" onClick={() => { setCode(''); navigate('phone'); }}>{connection.helperConnected && !requiresCheck ? '连接已完成，返回手机能力' : '返回手机能力'}</Button></div>
+    <SettingsDialog isOpen={mainScreenConsent} title="改用主屏兼容模式？" onClose={() => setMainScreenConsent(false)}><p>助手执行时会切换应用并占用当前屏幕。请先完成界面读取与任务通知授权；此处只选择模式，不会开始原目标。</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => setMainScreenConsent(false)}>暂不使用</Button><CapabilityAction action="background.selectMainScreen" supported={supported} run={run} disabled={connection.taskOwned || connection.busy} primary>明确选择主屏模式</CapabilityAction></div></SettingsDialog>
   </>;
 }
 
@@ -250,15 +373,29 @@ function Collection({ data, keys, label, children, titleKeys }: { data: Data; ke
 function DomainPage({ domain, state, data, supported, run }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run }) {
   const [query, setQuery] = useState(''), [selected, setSelected] = useState(''), [selectedModel, setSelectedModel] = useState(''), [entry, setEntry] = useState<Data | null>(null);
   const [draft, setDraft] = useState<Data>({});
+  const [modelReview, setModelReview] = useState<Data | null>(null), [reviewingModel, setReviewingModel] = useState(false);
+  const clearProfileSecrets = () => setDraft(current => ({ ...current, token: '', password: '', privateKey: '', passphrase: '' }));
+  const closeProfile = () => { clearProfileSecrets(); setEntry(null); };
+  useEffect(() => {
+    if (domain !== 'ssh' && domain !== 'remote') return;
+    const hide = () => { if (document.visibilityState !== 'visible') clearProfileSecrets(); };
+    document.addEventListener('visibilitychange', hide);
+    window.addEventListener('pagehide', clearProfileSecrets);
+    return () => { document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', clearProfileSecrets); };
+  }, [domain]);
+  useEffect(() => { setModelReview(null); }, [selectedModel]);
   const update = (key: string, value: any) => setDraft(current => ({ ...current, [key]: value }));
   const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={run} primary={primary}>{label}</CapabilityAction>;
   const readable = (label: string, value: Data, fields: Array<[string, string[]]>) => <Facts items={fields.map(([title, keys]) => [title, first(value, keys)])} />;
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
+  const mcpPick = object(object(object(state.ownerResponses).mcp).pickConfig);
+  const pickedMcpConfig = object(object(mcpPick.result).config);
+  const mcpPickPending = Array.isArray(state.ownerPending) && state.ownerPending.includes('mcp.pickConfig');
   if (domain === 'models') {
     const connections = list(rowsAt(data, ['connections', 'profiles']));
     const models = list(data.models);
     const connection = connections.find(row => recordId(row) === selected);
-    const model = models.find(row => recordId(row) === selectedModel);
+    const model = models.find(row => first(row, ['modelId', 'id', 'name']) === selectedModel);
     return <Card title="API 连接与模型目录" description="能力来源、人工覆盖和真实参数属于各自连接，不自动继承其他协议的密钥。">
       {!hasRows(data, ['connections', 'profiles']) ? <Empty>尚未读取 API 连接。</Empty> :
         <ObjectTable label="API 连接" rows={connections} getRowId={recordId} onRowOpen={row => setSelected(recordId(row))}
@@ -270,12 +407,13 @@ function DomainPage({ domain, state, data, supported, run }: { domain: string; s
       {connection && <div className="pw-selected-object"><h3>{first(connection, ['name', 'label', 'id'])}</h3><Facts items={[[ '协议', first(connection, ['provider', 'protocol']) ], ['地址', first(connection, ['baseUrl', 'endpoint']) ], ['凭据', connection.hasApiKey || connection.credentialsConfigured ? '已配置' : '未配置'], ['版本', connection.revision]]} />
         <div className="pw-form-actions">{act('models.selectConnection', { connectionId: recordId(connection), expectedRevision: connection.revision }, '使用此连接')}{act('models.reviewConnection', { connectionId: recordId(connection), expectedRevision: connection.revision }, '核对连接与能力')}{act('models.refresh', { connectionId: recordId(connection) }, '读取模型目录')}</div>
       </div>}
-      {models.length > 0 ? <ComboBoxField label="模型目录" options={models.map(row => ({ id: recordId(row), label: first(row, ['name', 'label', 'id']), description: first(row, ['provider', 'sourceLabel']) }))} value={selectedModel} onChange={setSelectedModel} /> : <Empty>{Array.isArray(data.models) ? '当前目录没有可显示的模型。' : '尚未读取此连接的模型目录。'}</Empty>}
-      {model && <div className="pw-selected-object">{readable('模型能力', model, [['来源', ['source', 'capabilitySource']], ['输入能力', ['inputDescription', 'inputModalities']], ['核对时间', ['checkedAt', 'updatedAt']]])}<div className="pw-form-actions">{act('models.select', { connectionId: selected || model.connectionId, modelId: recordId(model), expectedRevision: model.revision }, '选择模型')}{act('models.reviewCapabilities', { connectionId: selected || model.connectionId, modelId: recordId(model), expectedRevision: model.revision }, '核对能力')}</div></div>}
+      {models.length > 0 ? <ComboBoxField label="模型目录" options={models.map(row => ({ id: first(row, ['modelId', 'id', 'name']), label: first(row, ['name', 'label', 'modelId', 'id']), description: first(row, ['provider', 'sourceLabel']) }))} value={selectedModel} onChange={setSelectedModel} /> : <Empty>{Array.isArray(data.models) ? '当前目录没有可显示的模型。' : '尚未读取此连接的模型目录。'}</Empty>}
+      {model && <div className="pw-selected-object">{readable('模型能力', model, [['来源', ['source', 'capabilitySource']], ['输入能力', ['inputDescription', 'inputModalities']], ['核对时间', ['checkedAt', 'updatedAt']]])}<div className="pw-form-actions"><Button variant="secondary" disabled={!supported('models.review') || reviewingModel || Boolean(state.modelSelectionBusy) || state.activeTaskId != null || Boolean(state.chatBusy || state.chatSubmitting || state.phoneSubmitting || state.modelSaving || state.modelTesting)} onClick={async () => { setReviewingModel(true); try { const review = object(await run('models.review', { modelId: first(model, ['modelId', 'id', 'name']) })); if (typeof review.reviewHandle === 'string') setModelReview(review); } catch { /* Original error stays on the page. */ } finally { setReviewingModel(false); } }}>核对并选择此模型</Button></div></div>}
+      <SettingsDialog isOpen={modelReview !== null} title="确认原模型选择" onClose={() => setModelReview(null)}>{modelReview && <><Facts items={[[ '模型', modelReview.modelId ], ['输出上限', modelReview.outputTokens ], ['图像预算预留', modelReview.imageTokenReserve ]]} /><p className="pw-field-hint">使用宿主刚核对的原连接、模型能力与参数。原窗口变化或审阅过期后需要重新核对。</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => setModelReview(null)}>取消</Button><Button variant="primary" disabled={!supported('models.select') || Boolean(state.modelSelectionBusy) || state.activeTaskId != null || Boolean(state.chatBusy || state.chatSubmitting || state.phoneSubmitting || state.modelSaving || state.modelTesting)} onClick={async () => { const review = modelReview; setModelReview(null); try { await run('models.select', { reviewHandle: review.reviewHandle }); } catch { /* Never replay a consumed or unknown review. */ } }}>确认选择</Button></div></>}</SettingsDialog>
     </Card>;
   }
   if (domain === 'accounts') return <Card title="ChatGPT 账号" description="只显示授权状态、可用模型与用量；不回填通话或登录凭据。">
-    <div className="pw-form-actions">{act('accounts.beginLogin', {}, '添加账号', true)}{act('accounts.refresh', {}, '刷新账号')}</div>
+    <div className="pw-form-actions">{act('accounts.beginLogin', {}, '添加账号', true)}{act('accounts.refresh', {}, '刷新账号状态')}</div>
     <Collection data={data} keys={['accounts']} label="账号">{row => <>
       <Facts items={[[ '套餐', row.plan || row.planName ], ['凭据', row.credentialsConfigured ? '已配置' : undefined], ['版本', row.version], ['冷却状态', row.cooldownStatus]]} />
       <div className="pw-form-actions">{act('accounts.select', { accountId: recordId(row), expectedVersion: row.version }, '使用此账号')}{act('accounts.models', { accountId: recordId(row), expectedVersion: row.version }, '读取可用模型')}{act('accounts.reviewLogout', { accountId: recordId(row), expectedVersion: row.version }, '退出前核对')}</div>
@@ -295,18 +433,18 @@ function DomainPage({ domain, state, data, supported, run }: { domain: string; s
     <Card title={domain === 'remote' ? 'Companion 环境' : 'SSH 主机'} description={domain === 'remote' ? '连接你信任的电脑环境，查看其真实能力与原任务。' : '主机公钥核对、文件与终端；SSH 不等于可恢复的 Companion 任务。'}>
       <Collection data={data} keys={['profiles', 'hosts']} label={domain === 'remote' ? '电脑环境' : 'SSH 主机'}>{row => <>
         <Facts items={[[ '地址', first(row, ['baseUrl', 'host']) ], ['用户名', row.username ], ['工作区', row.workspace ], ['凭据', row.hasToken || row.credentialsConfigured ? '已配置' : '未配置'], ['公钥指纹', row.hostKeyFingerprint]]} />
-        <div className="pw-form-actions">{act(domain === 'remote' ? 'remote.probe' : 'ssh.probeHostKey', { profileId: recordId(row) }, domain === 'remote' ? '探测能力' : '核对主机公钥')}{act(domain === 'remote' ? 'remote.reconnect' : 'ssh.listFiles', { profileId: recordId(row), path: row.workspace || '' }, domain === 'remote' ? '同步原任务' : '查看工作区')}<Button variant="secondary" onClick={() => { setEntry(row); setDraft({ ...row, token: '', password: '', privateKey: '' }); }}>编辑连接</Button></div>
+        <div className="pw-form-actions">{act(domain === 'remote' ? 'remote.probe' : 'ssh.probeHostKey', { profileId: recordId(row) }, domain === 'remote' ? '探测能力' : '核对主机公钥')}{act(domain === 'remote' ? 'remote.reconnect' : 'ssh.listFiles', { profileId: recordId(row), path: row.workspace || '' }, domain === 'remote' ? '同步原任务' : '查看工作区')}<Button variant="secondary" onClick={() => { setEntry(row); setDraft({ name: text(row.name), baseUrl: text(row.baseUrl), host: text(row.host), port: text(row.port, '22'), username: text(row.username), workspace: text(row.workspace), authType: row.authType === 'password' ? 'password' : 'key', token: '', password: '', privateKey: '', passphrase: '' }); }}>编辑连接</Button></div>
       </>}</Collection>
       <Button variant="secondary" onClick={() => { setEntry({}); setDraft(domain === 'remote' ? { name: '', baseUrl: '', token: '' } : { name: '', host: '', port: '22', username: '', workspace: '', authType: 'key', password: '', privateKey: '', passphrase: '' }); }}>添加{domain === 'remote' ? '电脑环境' : 'SSH 主机'}</Button>
     </Card>
     <Collection data={data} keys={['jobs']} label="原任务">{row => <div className="pw-form-actions">{row.taskId && act('tasks.open', { id: row.taskId }, '打开原任务与回执')}{act(domain + '.cancelJob', { profileId: row.profileId, jobId: recordId(row) }, '请求停止')}</div>}</Collection>
-    <SettingsDialog isOpen={entry !== null} title={domain === 'remote' ? '电脑环境连接' : 'SSH 连接'} onClose={() => setEntry(null)}>
+    <SettingsDialog isOpen={entry !== null} title={domain === 'remote' ? '电脑环境连接' : 'SSH 连接'} onClose={closeProfile}>
       <div className="pw-form-grid">
         <TextField label="名称" value={text(draft.name)} onChange={value => update('name', value)} />
-        {domain === 'remote' ? <><TextField label="Companion 地址" type="url" value={text(draft.baseUrl)} onChange={value => update('baseUrl', value)} /><TextField label="连接令牌" type="password" autoComplete="new-password" value={text(draft.token)} onChange={value => update('token', value)} hint="留空是否沿用由原连接宿主核对，令牌不回填。" /></> : <>
-          <TextField label="主机" value={text(draft.host)} onChange={value => update('host', value)} /><TextField label="端口" inputMode="numeric" value={text(draft.port, '22')} onChange={value => update('port', value.replace(/\D/g, '').slice(0, 5))} /><TextField label="用户名" value={text(draft.username)} onChange={value => update('username', value)} /><TextField label="工作区" value={text(draft.workspace)} onChange={value => update('workspace', value)} /><SelectField label="认证方式" value={text(draft.authType, 'key')} options={[{ id: 'password', label: '密码' }, { id: 'key', label: '私钥' }]} onChange={value => update('authType', value)} />{draft.authType === 'key' ? <><TextAreaField label="私钥" value={text(draft.privateKey)} onChange={value => update('privateKey', value)} autoComplete="off" /><TextField label="私钥口令（如有）" type="password" value={text(draft.passphrase)} onChange={value => update('passphrase', value)} autoComplete="new-password" /></> : <TextField label="密码" type="password" value={text(draft.password)} onChange={value => update('password', value)} autoComplete="new-password" />}
+        {domain === 'remote' ? <><TextField label="Companion 地址" type="url" value={text(draft.baseUrl)} onChange={value => update('baseUrl', value)} /><TextField label="连接令牌" type="password" autoComplete="new-password" value={text(draft.token)} onChange={value => update('token', value)} hint="相同服务可留空保留已存令牌；更换服务需重新填写。令牌不回填。" /></> : <>
+          <TextField label="主机" value={text(draft.host)} onChange={value => update('host', value)} /><TextField label="端口" inputMode="numeric" value={text(draft.port, '22')} onChange={value => update('port', value.replace(/\D/g, '').slice(0, 5))} /><TextField label="用户名" value={text(draft.username)} onChange={value => update('username', value)} /><TextField label="工作区" value={text(draft.workspace)} onChange={value => update('workspace', value)} /><SelectField label="认证方式" value={text(draft.authType, 'key')} options={[{ id: 'password', label: '密码' }, { id: 'key', label: '私钥' }]} onChange={value => { clearProfileSecrets(); update('authType', value); }} />{draft.authType === 'key' ? <><TextAreaField label="私钥" value={text(draft.privateKey)} onChange={value => update('privateKey', value)} autoComplete="off" /><TextField label="私钥口令（如有）" type="password" value={text(draft.passphrase)} onChange={value => update('passphrase', value)} autoComplete="new-password" /></> : <TextField label="密码" type="password" value={text(draft.password)} onChange={value => update('password', value)} autoComplete="new-password" />}
         </>}
-      </div><div className="pw-form-actions"><CapabilityAction action={domain + '.saveProfile'} args={{ ...draft, profileId: recordId(entry || {}), expectedRevision: entry?.revision, port: Number(draft.port || 22) }} supported={supported} run={run} primary>保存连接</CapabilityAction></div>
+      </div><div className="pw-form-actions"><Button variant="secondary" onClick={closeProfile}>取消</Button><CapabilityAction action={domain + '.saveProfile'} args={connectionProfilePayload(domain, draft, entry)} supported={supported} run={async (action, args) => { clearProfileSecrets(); return run(action, args); }} disabled={(Array.isArray(state.moduleBusy) && state.moduleBusy.includes(domain + '.saveProfile')) || !text(draft.name).trim() || (domain === 'remote' ? !text(draft.baseUrl).trim() : !text(draft.host).trim() || !text(draft.username).trim() || !text(draft.workspace).trim().startsWith('/') || wirelessPort(text(draft.port)) == null)} primary>保存连接</CapabilityAction></div>
     </SettingsDialog>
   </>;
   if (domain === 'memory' || domain === 'memoryReview' || domain === 'learning') return <Card title={title} description={domain === 'memory' ? '正式记忆、来源和作用域；候选接受与可执行技能启用分开。' : '核对原记录、来源与版本后再决定；进行中的操作保留原回执。'}>
@@ -341,7 +479,7 @@ function DomainPage({ domain, state, data, supported, run }: { domain: string; s
         <Facts items={[[ '版本', row.revision || row.version ], ['摘要', row.digest ], ['来源', first(row, ['source', 'sourceKind']) ], ['凭据', row.credentialsConfigured ? '已配置' : undefined]]} />
         <div className="pw-form-actions">{act(domain + '.read', { id: recordId(row), expectedRevision: row.revision, expectedDigest: row.digest }, domain === 'skills' ? '阅读当前正文' : '查看工具与权限')}{act(domain + '.reviewEnabled', { id: recordId(row), enabled: row.enabled !== true, expectedRevision: row.revision, expectedDigest: row.digest }, row.enabled ? '核对并停用' : '核对并启用')}</div>
       </>}</Collection>
-      <HostFileUpload label={domain === 'mcp' ? '选择 MCP 配置' : domain === 'skills' ? '选择技能包' : '选择插件配置'} onChoose={() => { void run(domain + '.pickImport', {}).catch(() => {}); }} disabled={!supported(domain + '.pickImport')} status={data.importing ? 'importing' : data.importStatus === 'unknown' ? 'unknown' : 'idle'} error={text(data.importError)} file={data.selectedFile ? { name: text(data.selectedFile.name), size: data.selectedFile.size } : undefined} />
+      {domain === 'mcp' ? <><HostFileUpload label="选择 MCP 配置" onChoose={() => { void run('mcp.pickConfig', {}).catch(() => {}); }} disabled={!supported('mcp.pickConfig') || mcpPickPending} status={mcpPickPending ? 'importing' : mcpPick.ok === false ? 'error' : 'idle'} statusDescription={mcpPickPending ? '等待系统文件选择与原读取回执…' : mcpPick.ok === true ? '配置已读取，待核对保存' : '系统选择器读取不含凭据的 JSON 配置，上限 64 KB'} error={mcpPick.ok === false ? text(mcpPick.error) : undefined} />{mcpPick.ok === true && <div className="pw-selected-object"><h3>已读取的配置</h3><Facts items={[[ '配置标识', pickedMcpConfig.id ], ['名称', pickedMcpConfig.name ], ['端点', pickedMcpConfig.endpoint ], ['协议版本', pickedMcpConfig.protocolVersion ]]} /><p className="pw-field-hint">配置只完成读取，尚未保存、安装或授予工具权限。此页面的后续核对与保存操作待接入。</p></div>}</> : <p className="pw-field-hint">{domain === 'skills' ? '技能包' : '插件配置'}文件选择与导入尚未接入此页面。</p>}
     </Card>
     <Collection data={data} keys={['pendingOperations', 'previews']} label="当前准备与审阅记录">{row => <div className="pw-form-actions">{act(domain + '.openReview', { id: recordId(row), expectedRevision: row.revision }, '打开原审阅')}{act(domain + '.cancel', { operationId: row.operationId || recordId(row) }, '取消本次准备')}</div>}</Collection>
   </>;
@@ -423,16 +561,22 @@ export default function Secondary({ route, onBack, snapshot }: Props) {
       return () => { if (supported(page + '.close')) void bridge.command(page + '.close', {}).catch(() => {}); };
     }
   }, [page, commands.join('|')]);
+  const canOpenBackground = supported('settings.openSystem'), canCloseBackground = supported('background.close');
+  useEffect(() => {
+    if (page !== 'background' || !canOpenBackground) return;
+    void bridge.command('settings.openSystem', { section: 'background' }).catch(failure => { if (mounted.current) setError(failure instanceof Error ? failure.message : String(failure)); });
+    return () => { if (canCloseBackground) void bridge.command('background.close', {}).catch(() => {}); };
+  }, [page, canOpenBackground, canCloseBackground]);
   const feature = object(object(state.features)[page === 'commitments' ? 'automation' : page]);
   const owner = object(object(state.ownerSnapshots)[page]);
   const specialized = page === 'models' ? object(state.modelConnections) : page === 'devices' ? object(state.deviceWorkspace) : {};
   const data = { ...feature, ...owner, ...specialized };
   const domainError = text(object(state.ownerErrors)[page]) || Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith(page + '.')).map(([, value]) => text(value)).filter(Boolean).join('\n');
-  const pageTitle = page === 'settings' || page === 'connections' ? '设置与连接' : page === 'model-settings' ? '模型设置' : page === 'phone' ? '手机能力' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || '设置与连接';
+  const pageTitle = page === 'settings' || page === 'connections' ? '设置与连接' : page === 'model-settings' ? '模型设置' : page === 'phone' ? '手机能力' : page === 'background' ? '后台运行设置' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || '设置与连接';
   const filtered = useMemo(() => SECONDARY_DOMAINS.filter(item => (item.title + item.detail).includes(query.trim())), [query]);
-  const back = () => page === 'settings' || page === 'connections' ? onBack() : navigate('settings');
+  const back = () => page === 'settings' || page === 'connections' ? onBack() : navigate(page === 'background' ? 'phone' : 'settings');
   return <section className="pw-secondary" aria-label={pageTitle}>
-    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label="返回" onClick={back} /><div><h1>{pageTitle}</h1><p>{domain?.detail || '同一工作引擎，清楚的对象与真实回执'}</p></div><IconButton icon={RiRefreshLine} aria-label="刷新当前状态" disabled={!supported('app.refresh')} onClick={() => { void run('app.refresh', {}).catch(() => {}); }} /></header>
+    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label="返回" onClick={back} /><div><h1>{pageTitle}</h1><p>{domain?.detail || '同一工作引擎，清楚的对象与真实回执'}</p></div><IconButton icon={RiRefreshLine} aria-label="刷新当前状态" disabled={!supported(page === 'background' ? 'background.refresh' : 'app.refresh')} onClick={() => { void run(page === 'background' ? 'background.refresh' : 'app.refresh', {}).catch(() => {}); }} /></header>
     <div className="pw-secondary-scroll">
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
@@ -447,7 +591,8 @@ export default function Secondary({ route, onBack, snapshot }: Props) {
           </AccordionItem>)}</Accordion>{filtered.length === 0 && <Empty>没有匹配的入口。</Empty>}
         </Card>
       </> : page === 'model-settings' ? <ModelSettings state={state} supported={supported} run={run} navigate={navigate} />
-        : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} />
+        : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} />
+        : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} navigate={navigate} />
         : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
         : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} />
         : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} />

@@ -2,6 +2,8 @@
 
 This file accompanies the source provenance inventory in `SOURCES.json`. The inventory distinguishes selected entry sources, actual integration, and validation; a planned entry is not a claim that its complete library is bundled or that its interactions pass.
 
+Integration status: the current App mounts PW-03, PW-39, PW-40, and PW-41. PW-03 has a source-level models.review/select confirmation contract. PW-04, PW-36, and the 21 secondary domains retain explicit functional gaps; MCP configuration reading is not installation. Source provenance, call-site presence, functioning host contracts, runtime verification, and visual acceptance are tracked separately. This does not alter any license identity or declare these components complete.
+
 Attribution applies to actual reused source files and their later adaptations. Reference screenshots, videos, marketing material, and brand artwork are not licensed for redistribution merely because a related code repository is open source. Research media is not part of the product UI.
 
 ## Provenance distinctions

@@ -245,7 +245,7 @@
       ],
       "source_locator": "src/demos/components-b/tools.tsx::ModelPickerDemo",
       "implementation": {
-        "status": "source-adapted; retained originals verified; adapter-only (not used in product)",
+        "status": "source-adapted; product JSX present; not runtime or visually validated",
         "files": [
           {
             "path": "web-ui/src/library/composer.tsx",
@@ -254,18 +254,23 @@
           }
         ],
         "changes": [
-          "Selected library model menu and keyboard structure; real controlled options. No product JSX use at this checkpoint."
+          "Current App mounts the selected ModelPicker with real model directory rows; selection calls models.review({modelId}), shows explicit PermissionReview, then models.select({reviewHandle})."
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
         "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
       },
-      "business_connection": "not connected: source adapter is exported but not used in a product feature at this checkpoint",
+      "business_connection": "Implemented static review/select host contract; task/busy/capability/binding gates are present. Successful model switching, stale-ticket handling and actual owner receipts remain unverified.",
       "runtime_validation": "not-performed",
       "visual_validation": "not-performed",
       "rendered_usage": {
-        "status": "no product JSX call site; exported adapter is not feature integration",
-        "files": []
+        "status": "current App static call-site inspection only; no runtime rendering evidence",
+        "path": "web-ui/src/App.tsx",
+        "inspected_at_utc": "2026-11-02T11:38:45.710402+00:00",
+        "symbol_occurrences": {
+          "ModelPicker": 1
+        },
+        "hash_status": "No source or product hashes re-run in this metadata update; earlier implementation-file hashes belong to the prior provenance checkpoint."
       }
     },
     {
@@ -291,13 +296,13 @@
           }
         ],
         "changes": [
-          "Selected plan/queued-note/adopted-note relationship; current product call supplies composer.pending read-only and does not imply full steering actions."
+          "Selected steering source receives pending rows only after exact clientMessageId association to a real user message submission with content; receipts/query/return and eligible locally-unsent retry remain separate."
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
         "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
       },
-      "business_connection": "partial read-only pending-note view: current product call has no onAction/onSubmit steering callbacks",
+      "business_connection": "partial: pending identity/text mismatch has a static mapping fix, but complete queued/adopted/edit/withdraw/steer owner UX and device validation remain open; no completion claim",
       "runtime_validation": "not-performed",
       "visual_validation": "not-performed",
       "rendered_usage": {
@@ -311,7 +316,8 @@
               "AgentSteering": 1
             }
           }
-        ]
+        ],
+        "current_status_note": "App pending rows are now explicitly mapped; previous recorded App hash is a historical checkpoint, not current integration evidence."
       }
     },
     {
@@ -1936,12 +1942,12 @@
           }
         ],
         "changes": [
-          "controlled source FileUpload path/layout; no random progress or completion timer"
+          "Actual selected HostFileUpload now calls mcp.pickConfig and follows the host owner response for config-read status; reading configuration is not installation. Skills/plugins do not offer fabricated picker actions."
         ],
         "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
         "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
       },
-      "business_connection": "partial: capability-gated existing typed handlers; complete owner mutation/deep-review coverage remains pending per private coverage record",
+      "business_connection": "partial: MCP config selection/read contract is statically wired through ownerPending and ownerResponses; config review/install, skills/plugins pickers and actual host/runtime validation remain open",
       "runtime_validation": "not-performed",
       "visual_validation": "not-performed",
       "additional_sources": [
@@ -1958,7 +1964,8 @@
         "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
         "symbol_occurrences": {
           "HostFileUpload": 1
-        }
+        },
+        "current_status_note": "Latest Secondary/HostFileUpload source has MCP picker wiring; retained earlier file hashes are historical and were not refreshed in this status-only update."
       }
     },
     {
@@ -2090,7 +2097,7 @@
       ],
       "source_locator": "motion/shimmer-loader.tsx::Skeleton/ShimmerText",
       "implementation": {
-        "status": "source-adapted; retained originals verified; adapter-only (not used in product)",
+        "status": "source-adapted; product JSX present; not runtime or visually validated",
         "files": [
           {
             "path": "web-ui/src/library/feedback.tsx",
@@ -2104,18 +2111,24 @@
           }
         ],
         "changes": [
-          "Actual official skeleton/shimmer source with controlled loading. No product JSX use at this checkpoint."
+          "Actual official Skeleton/ShimmerText are mounted for host handshake recovery, file loading and model directory reads."
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
         "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
       },
-      "business_connection": "not connected: adapter exists but has no product JSX use at this checkpoint",
+      "business_connection": "Presentation wired to actual loading states; animation, accessibility and device behavior not yet verified.",
       "runtime_validation": "not-performed",
       "visual_validation": "not-performed",
       "rendered_usage": {
-        "status": "no product JSX call site; exported adapter is not feature integration",
-        "files": []
+        "status": "current App static call-site inspection only; no runtime rendering evidence",
+        "path": "web-ui/src/App.tsx",
+        "inspected_at_utc": "2026-11-02T11:38:45.710402+00:00",
+        "symbol_occurrences": {
+          "Skeleton": 10,
+          "ShimmerText": 3
+        },
+        "hash_status": "No source or product hashes re-run in this metadata update; earlier implementation-file hashes belong to the prior provenance checkpoint."
       }
     },
     {
@@ -2157,7 +2170,7 @@
       ],
       "source_locator": "src/index.tsx；src/styles.css；src/state.ts；hooks/assets/types",
       "implementation": {
-        "status": "source-adapted; retained originals verified; adapter-only (not used in product)",
+        "status": "source-adapted; product JSX present; not runtime or visually validated",
         "files": [
           {
             "path": "web-ui/src/library/feedback.tsx",
@@ -2166,18 +2179,23 @@
           }
         ],
         "changes": [
-          "Actual published sonner@2.0.8 API plus retained precise source commit; neutral theme. No product Toaster mount or toast call at this checkpoint."
+          "Actual published Sonner Toaster is mounted; toast calls reflect bridge rejection and actual clipboard success paths."
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
         "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
       },
-      "business_connection": "not connected: Sonner adapter exists but no product Toaster mount or toast call at this checkpoint",
+      "business_connection": "Transient presentation wiring exists. No persistent task result or command acknowledgement is counted as completed work; actual error/copy/swipe/focus behavior remains unverified.",
       "runtime_validation": "not-performed",
       "visual_validation": "not-performed",
       "rendered_usage": {
-        "status": "no product JSX call site; exported adapter is not feature integration",
-        "files": []
+        "status": "current App static call-site inspection only; no runtime rendering evidence",
+        "path": "web-ui/src/App.tsx",
+        "inspected_at_utc": "2026-11-02T11:38:45.710402+00:00",
+        "symbol_occurrences": {
+          "Toaster": 1
+        },
+        "hash_status": "No source or product hashes re-run in this metadata update; earlier implementation-file hashes belong to the prior provenance checkpoint."
       }
     },
     {
@@ -2199,7 +2217,7 @@
       ],
       "source_locator": "components/base/progress/progress.tsx",
       "implementation": {
-        "status": "source-adapted; retained originals verified; adapter-only (not used in product)",
+        "status": "source-adapted; product JSX present; not runtime or visually validated",
         "files": [
           {
             "path": "web-ui/src/library/feedback.tsx",
@@ -2213,19 +2231,25 @@
           }
         ],
         "changes": [
-          "Actual 2026-11-01 official free BoardUI registry progress source; shared genuine BoardUI helpers. No product JSX use at this checkpoint."
+          "Actual registry ProgressBar/ProgressCircle are mounted for chatBusy, fileSaving and attachmentImporting with indeterminate state; no invented percent."
         ],
         "origin_map": "web-ui/src/library/PROVENANCE.json",
         "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
         "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
       },
-      "business_connection": "not connected: progress source adapter exists but no product JSX use at this checkpoint",
+      "business_connection": "Presentation receives real host busy states; progress interaction/accessibility and runtime rendering remain unverified.",
       "runtime_validation": "not-performed",
       "visual_validation": "not-performed",
       "source_note": "The selected free component was added from official public registry snapshots captured 2026-11-01; it is not present in the older ec5c Git archive. Overlay code may include compatibility changes.",
       "rendered_usage": {
-        "status": "no product JSX call site; exported adapter is not feature integration",
-        "files": []
+        "status": "current App static call-site inspection only; no runtime rendering evidence",
+        "path": "web-ui/src/App.tsx",
+        "inspected_at_utc": "2026-11-02T11:38:45.710402+00:00",
+        "symbol_occurrences": {
+          "ProgressBar": 2,
+          "ProgressCircle": 1
+        },
+        "hash_status": "No source or product hashes re-run in this metadata update; earlier implementation-file hashes belong to the prior provenance checkpoint."
       }
     },
     {
@@ -2399,12 +2423,6 @@
     "scope": "Retained-source SHA-256 checks, adapted-file identities and static product call-site/route mapping only; no browser/device or aesthetic acceptance",
     "reviewed_at_utc": "2026-11-02T11:09:30.152766+00:00",
     "component_groups_with_reviewed_source_port": 42,
-    "component_groups_without_product_call_site": [
-      "PW-03",
-      "PW-39",
-      "PW-40",
-      "PW-41"
-    ],
     "retained_original_checks": {
       "library": {
         "original_files_checked": 52,
@@ -2457,6 +2475,15 @@
       }
     ],
     "runtime_validation": "not performed by this provenance review",
-    "visual_validation": "not performed; no score-based acceptance claim"
+    "visual_validation": "not performed; no score-based acceptance claim",
+    "integration_status_updated_at_utc": "2026-11-02T11:38:45.710402+00:00",
+    "current_integration_status": "PW-03/39/40/41 are now mounted in App. Source availability, product call sites, real function/owner contracts, runtime behavior and visual acceptance remain independent; no component is declared complete by this update.",
+    "open_integration_items": [
+      "PW-03 actual review/select execution and stale-state journeys await validation",
+      "PW-04 complete steering/queued-input owner journeys remain partial",
+      "PW-36 MCP read does not establish install; skills/plugins pickers remain open",
+      "21 secondary structured domains still have incomplete typed mutations/deep review and unverified owner runtime"
+    ],
+    "hash_checkpoint_note": "All retained-source and adapted/product SHA records remain from their earlier provenance checkpoint. This update changes integration metadata only and does not claim a fresh hash verification."
   }
 }
