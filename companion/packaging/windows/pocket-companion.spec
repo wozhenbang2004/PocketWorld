@@ -1,0 +1,44 @@
+# Run only in an audited, already-prepared Windows x64 builder. No dependency install here.
+from pathlib import Path
+import hashlib
+import importlib.metadata
+import json
+from PyInstaller.utils.hooks import copy_metadata
+
+ROOT = Path(SPECPATH).resolve().parents[2]
+COMPANION = ROOT / "companion"
+if not COMPANION.is_dir():
+    raise RuntimeError("Spec must live in the product companion/packaging/windows directory")
+required = ["device_protocol.py", "device_identity.py", "device_pairing.py", "device_artifacts.py", "desktop_runtime.py"]
+if any(not (COMPANION / name).is_file() for name in required):
+    raise RuntimeError("Build the integrated product tree; required shared protocol/identity/artifact modules are missing")
+hidden = [path.stem for path in COMPANION.glob("*.py")
+          if not path.stem.startswith("test_") and not path.stem.endswith("_fixture_server") and path.stem != "windows_gui_fixture"]
+# The build environment is prepared from the hash-locked wheels separately.
+# Never install dependencies or create credentials while freezing the runtime.
+pairing_lock_path = COMPANION / "packaging" / "windows-pairing-dependencies.json"
+pairing_lock = json.loads(pairing_lock_path.read_text(encoding="utf-8"))
+pairing_data = [(str(pairing_lock_path), "build-materials"),
+                (str(COMPANION / "requirements-windows-pairing.txt"), "build-materials"),
+                (str(ROOT / "licenses" / "windows-pairing-THIRD-PARTY-NOTICES.txt"), "licenses")]
+expected_pairing_versions = {"qrcode": "8.2", "colorama": "0.4.6"}
+if {item["name"]: item["version"] for item in pairing_lock["components"]} != expected_pairing_versions:
+    raise RuntimeError("Unexpected pairing dependency contract")
+for item in pairing_lock["components"]:
+    if importlib.metadata.version(item["name"]) != item["version"]:
+        raise RuntimeError("Prepare the exact hash-locked pairing dependency before building")
+    license_path = ROOT / item["licenseFile"]
+    if hashlib.sha256(license_path.read_bytes()).hexdigest() != item["licenseSha256"]:
+        raise RuntimeError("Pinned pairing license material changed")
+    pairing_data += copy_metadata(item["name"])
+    pairing_data.append((str(license_path), "licenses"))
+hidden += ["qrcode", "qrcode.main", "qrcode.constants", "qrcode.exceptions", "qrcode.util",
+           "qrcode.base", "qrcode.LUT", "qrcode.image.base", "qrcode.image.pure",
+           "qrcode.compat.png", "qrcode.image.styles.moduledrawers.base", "colorama"]
+a = Analysis([str(COMPANION / "desktop_worker.py")], pathex=[str(COMPANION)], binaries=[],
+             datas=[(str(ROOT / "licenses" / "cua-driver-MIT.txt"), "licenses")] + pairing_data,
+             hiddenimports=hidden, hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=["PIL", "png", "qrcode.image.pil"], noarchive=False)
+pyz = PYZ(a.pure)
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="PocketWorld-Companion", debug=False,
+          strip=False, upx=False, console=True, manifest=str(Path(SPECPATH) / "PocketWorld-Companion.manifest"))
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="PocketWorld-Companion")

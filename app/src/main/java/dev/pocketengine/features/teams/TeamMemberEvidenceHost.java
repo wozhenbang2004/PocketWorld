@@ -13,17 +13,25 @@ import org.json.JSONObject;
 
 /** The existing discussion's native material picker, not the owner's default private capability table. */
 public final class TeamMemberEvidenceHost implements TeamCoordinator.EvidenceFactory {
-    private final FeatureHost features;private final TaskStore tasks;private final TaskMemoryUse.SourceReader sources;
+    /** Native metadata/currentness callback, not a body reader and never a model capability. */
+    public interface SourceCurrent {void check(SourceRef expected)throws Exception;}
+    private final FeatureHost features;private final TaskStore tasks;private final TaskMemoryUse.SourceReader sources;private final SourceCurrent sourceCurrent;
     private final Set<TeamMemberEvidencePort> live=java.util.concurrent.ConcurrentHashMap.newKeySet();
-    public TeamMemberEvidenceHost(FeatureHost features,TaskStore tasks,TaskMemoryUse.SourceReader sources){this.features=java.util.Objects.requireNonNull(features);this.tasks=java.util.Objects.requireNonNull(tasks);this.sources=java.util.Objects.requireNonNull(sources);}
+    public TeamMemberEvidenceHost(FeatureHost features,TaskStore tasks,TaskMemoryUse.SourceReader sources){this(features,tasks,sources,null);}
+    public TeamMemberEvidenceHost(FeatureHost features,TaskStore tasks,TaskMemoryUse.SourceReader sources,SourceCurrent sourceCurrent){this.features=java.util.Objects.requireNonNull(features);this.tasks=java.util.Objects.requireNonNull(tasks);this.sources=java.util.Objects.requireNonNull(sources);this.sourceCurrent=sourceCurrent;}
     static JSONObject ownerScope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
     @Override public CapabilityPort forMember(TeamCoordinator.MemberEvidenceCall call)throws Exception{call.checkCurrent();TeamMemberEvidencePort port=new TeamMemberEvidencePort(this,features,tasks,sources,call);live.add(port);return port;}
+    TeamMemberEvidencePort forResearch(TeamCoordinator.MemberEvidenceCall call,TaskStore.TeamResearchBinding binding)throws Exception{call.checkCurrent();if(sourceCurrent==null)throw new SecurityException("持续研究缺少原生来源元数据复核，未降级为默认私域");TeamMemberEvidencePort port=new TeamMemberEvidencePort(this,features,tasks,sources,call);port.bindResearch(binding);live.add(port);return port;}
+    void checkResearchSources(TaskStore.TeamResearchBinding binding)throws Exception {
+        if(Thread.holdsLock(tasks))throw new IllegalStateException("派生来源metadata复核必须在Tasks锁外");
+        for(TaskStore.TeamResearchSourceProof proof:tasks.teamResearchSourceProofs(binding)){proof.checkCurrent();checkMaterialMetadata(proof.view(),proof);proof.checkCurrent();}
+    }
     void closed(TeamMemberEvidencePort port){live.remove(port);}
     private void changed(String run,String member){for(TeamMemberEvidencePort port:live)if(port.belongsTo(run,member))port.invalidateMaterials();}
     public Page open(TeamCoordinator coordinator,String run,String member)throws Exception{return new Page(coordinator,run,member);}
     public final class Page implements AutoCloseable {
         private final TeamCoordinator coordinator;private final String run,member;private final TaskStore.TeamMemberMaterialWindow window;private volatile boolean alive=true;
-        private Selection selected;private TaskStore.TeamMemberMaterialReview pending;
+        private Selection selected;private TaskStore.TeamMemberMaterialReview pending;private java.util.List<Selection> sharedSelections;private TaskStore.TeamMemberMaterialGroupReview pendingShared;
         private Page(TeamCoordinator coordinator,String run,String member)throws Exception{this.coordinator=coordinator;this.run=run;this.member=member;window=tasks.openTeamMemberMaterialWindow(run);coordinator.memberScopePlan(run,member);}
         public void setForeground(boolean foreground){window.setForeground(alive&&foreground);}
         private void require()throws Exception{if(!alive)throw new SecurityException("原资料选择页已关闭");window.require();}
@@ -37,15 +45,29 @@ public final class TeamMemberEvidenceHost implements TeamCoordinator.EvidenceFac
             require();return value.put("resources",resources).put("accountsAndCredentialsSelectable",false);
         }
         public synchronized TaskStore.TeamMemberMaterialReview review(JSONObject input)throws Exception{
-            require();selected=capture(this,coordinator.memberScopePlan(run,member),input);pending=tasks.reviewTeamMemberMaterials(window,selected);return pending;
+            require();pendingShared=null;sharedSelections=null;selected=capture(this,coordinator.memberScopePlan(run,member),input);pending=tasks.reviewTeamMemberMaterials(window,selected);return pending;
         }
-        public synchronized JSONObject approve(TaskStore.TeamMemberMaterialReview review,String digest)throws Exception{require();if(review!=pending||selected==null)throw new SecurityException("请先审阅本页准确资料");selected.verifyMaterialsCurrent();JSONObject value=tasks.approveTeamMemberMaterials(review,digest);pending=null;changed(run,member);return value;}
-        public JSONObject revoke(long revision)throws Exception{require();JSONObject value=tasks.revokeTeamMemberMaterials(window,member,revision);changed(run,member);return value;}
+        /** A separate native action: preserve only the same current child/material identities. */
+        public synchronized TaskStore.TeamMemberMaterialReview reviewRenewal()throws Exception {
+            require();pendingShared=null;sharedSelections=null;JSONObject old=current();if(!"active".equals(old.optString("state"))||old.optLong("revision")<1)throw new SecurityException("没有可续审的原有效分享版本；撤回或换材料请重新选择");
+            TeamCoordinator.MemberScopePlan plan=coordinator.memberScopeRenewalPlan(run,member);JSONObject value=plan.view();for(String key:new String[]{"allowedRecords","allowedSources","skills","resources"})value.put(key,new JSONArray(old.getJSONArray(key).toString()));
+            selected=new Selection(TeamMemberEvidenceHost.this,this,plan,value,old);selected.verifyMaterialsCurrent();pending=tasks.reviewTeamMemberMaterials(window,selected);return pending;
+        }
+        public synchronized TaskStore.TeamMemberMaterialGroupReview reviewTogether(JSONObject input)throws Exception {
+            require();JSONObject current=coordinator.get(run);java.util.ArrayList<Selection> selections=new java.util.ArrayList<>();JSONArray members=current.getJSONArray("members");for(int i=0;i<members.length();i++){JSONObject slot=members.getJSONObject(i);if(!slot.optBoolean("exited"))selections.add(capture(this,coordinator.memberScopePlan(run,slot.getString("id")),input));}pending=null;selected=null;sharedSelections=java.util.List.copyOf(selections);pendingShared=tasks.reviewTeamMemberMaterialsTogether(window,sharedSelections);return pendingShared;
+        }
+        public synchronized JSONObject approveTogether(TaskStore.TeamMemberMaterialGroupReview review,String digest)throws Exception {
+            require();if(review==null||review!=pendingShared||sharedSelections==null)throw new SecurityException("请先审阅本次列出的当前成员与同一显选资料");for(Selection selection:sharedSelections)selection.verifyMaterialsCurrent();JSONObject result=tasks.approveTeamMemberMaterialsTogether(review,digest);pendingShared=null;for(Selection selection:sharedSelections){String id=selection.nativePlan().view().getString("memberId");changed(run,id);coordinator.researchMaterialsChanged(run,id);}sharedSelections=null;return result;
+        }
+        public synchronized JSONObject approve(TaskStore.TeamMemberMaterialReview review,String digest)throws Exception{require();if(review!=pending||selected==null)throw new SecurityException("请先审阅本页准确资料");selected.verifyMaterialsCurrent();boolean renewal=selected.nativePlan().preservesResearchCheckpoints();JSONObject value=renewal?coordinator.approveResearchMaterialRenewal(selected.nativePlan(),()->tasks.approveTeamMemberMaterials(review,digest)):tasks.approveTeamMemberMaterials(review,digest);pending=null;changed(run,member);if(!renewal)coordinator.researchMaterialsChanged(run,member);return value;}
+        public JSONObject revoke(long revision)throws Exception{require();JSONObject value=tasks.revokeTeamMemberMaterials(window,member,revision);changed(run,member);coordinator.researchMaterialsChanged(run,member);return value;}
         @Override public void close(){alive=false;window.close();}
     }
     public static final class Selection {
-        private final TeamMemberEvidenceHost issuer;private final Page page;private final TeamCoordinator.MemberScopePlan nativePlan;private final String value;
-        private Selection(TeamMemberEvidenceHost issuer,Page page,TeamCoordinator.MemberScopePlan plan,JSONObject value){this.issuer=issuer;this.page=page;nativePlan=plan;this.value=value.toString();}
+        private final TeamMemberEvidenceHost issuer;private final Page page;private final TeamCoordinator.MemberScopePlan nativePlan;private final String value,renewalBase;
+        private Selection(TeamMemberEvidenceHost issuer,Page page,TeamCoordinator.MemberScopePlan plan,JSONObject value){this(issuer,page,plan,value,null);}
+        private Selection(TeamMemberEvidenceHost issuer,Page page,TeamCoordinator.MemberScopePlan plan,JSONObject value,JSONObject renewalBase){this.issuer=issuer;this.page=page;nativePlan=plan;this.value=value.toString();this.renewalBase=renewalBase==null?null:renewalBase.toString();}
+        public JSONObject renewalBase()throws Exception{return renewalBase==null?null:new JSONObject(renewalBase);}
         public boolean belongsTo(TaskStore tasks,TaskStore.TeamMemberMaterialWindow window){return issuer.tasks==tasks&&page.window==window;}
         public TeamCoordinator.MemberScopePlan nativePlan(){return nativePlan;}
         public JSONObject view()throws Exception{return new JSONObject(value);}
@@ -68,6 +90,21 @@ public final class TeamMemberEvidenceHost implements TeamCoordinator.EvidenceFac
         // Source privacy/current-version and exact span rules belong only to C4's original SourceReader adapter.
         if(audience!=null&&memory instanceof dev.pocketengine.features.memory.MemoryModule){TaskMemoryUse reader=((dev.pocketengine.features.memory.MemoryModule)memory).taskMemoryUse(null,sources);JSONArray rows=audience.allowedSources();for(int i=0;i<rows.length();i++){JSONObject span=rows.getJSONObject(i);JSONObject read=reader.readAudienceSource(ownerScope(),SourceRef.fromJson(span.getJSONObject("sourceRef")),span.getInt("offset"),span.getInt("chars"),audience);if(!read.optString("status").equals("current"))throw new SecurityException("所选准确来源已不可用");}}
         if(audience!=null)audience.checkCurrent();
+    }
+    /** No SourceReader.read. The single memory validator owns formal versions/forget;
+     * Bridge owns backing-source currentness. Native Skill/package validators may check
+     * their own immutable metadata/bytes here, always outside Tasks and outside Book. */
+    void checkMaterialMetadata(JSONObject selected,ReadAudience audience)throws Exception {
+        if(Thread.holdsLock(tasks))throw new IllegalStateException("来源元数据复核不能持Tasks锁进入Book或模块");
+        if(sourceCurrent==null)throw new SecurityException("原生来源当前性校验未挂载");
+        audience.checkCurrent();EngineModule memory=features.module("memory");
+        if(!(memory instanceof dev.pocketengine.features.memory.MemoryModule)){
+            if(audience.allowedRecords().length()>0||audience.allowedSources().length()>0)throw new SecurityException("原记忆模块未挂载");
+        }else ((dev.pocketengine.features.memory.MemoryModule)memory).taskMemoryUse(null,sources).checkAudienceMetadataCurrent(ownerScope(),audience);
+        JSONArray spans=audience.allowedSources();for(int i=0;i<spans.length();i++)sourceCurrent.check(SourceRef.fromJson(spans.getJSONObject(i).getJSONObject("sourceRef")));
+        JSONArray skills=selected.getJSONArray("skills");EngineModule skillModule=features.module("skills");for(int i=0;i<skills.length();i++){JSONObject pin=skills.getJSONObject(i);if(!(skillModule instanceof dev.pocketengine.features.skills.SkillsModule))throw new SecurityException("显选技能模块不可用");JSONObject actual=skillModule.handle("get",new JSONObject().put("scope",ownerScope()).put("id",pin.getString("id"))).getJSONObject("skill");if(actual.getInt("revision")!=pin.getInt("revision")||!actual.getString("digest").equals(pin.getString("digest"))||!actual.optBoolean("enabled"))throw new SecurityException("显选技能已换版/停用");}
+        JSONArray resources=selected.getJSONArray("resources");for(int i=0;i<resources.length();i++){JSONObject pin=resources.getJSONObject(i);EngineModule module=features.module(pin.getString("kind").equals("attachment")?"attachments":"workspace");if(module==null)throw new SecurityException("显选原件模块不可用");JSONObject actual=null;if(pin.getString("kind").equals("attachment"))actual=module.handle("get",new JSONObject().put("id",pin.getString("id")));else{JSONArray catalog=module.handle("listArtifacts",new JSONObject()).getJSONArray("artifacts");for(int n=0;n<catalog.length();n++)if(pin.getString("id").equals(catalog.getJSONObject(n).optString("id")))actual=catalog.getJSONObject(n);if(actual!=null&&(!"text_file".equals(actual.optString("kind"))||"retired".equals(actual.optString("availability"))))actual=null;}if(actual==null||!pin.getString("sha256").equals(actual.optString("sha256")))throw new SecurityException("显选原件已撤回或版本变化");}
+        audience.checkCurrent();
     }
     JSONObject resource(JSONObject selected)throws Exception{
         String kind=selected.getString("kind"),id=selected.getString("id"),sha=selected.getString("sha256");JSONObject value;

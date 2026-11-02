@@ -187,6 +187,19 @@ public final class TaskMemoryUse {
                 .put("text",first.text.substring(offset,end)).put("readRange",TaskMemoryTrace.rawRange(offset,end,first.text.length()))
                 .put("audience",audience.metadata()).put("readObserved",true).put("modelUseVerified",false).put("executionAuthorized",false).put("formalMemorySaved",false);
     }
+    /** Native metadata/formal-forget barrier only; never reads or returns a source body.
+     * The original native audience/Bridge must independently check backing-source versions.
+     * Scope callbacks stay outside Book's short lock; this method grants no read/execution. */
+    public void checkAudienceMetadataCurrent(JSONObject authenticatedScope,ReadAudience readAudience)throws Exception {
+        if(readAudience==null)throw new SecurityException("成员资料元数据复核必须有原生audience，不回退主人私域");
+        MemoryBook.Scope scope=scope(authenticatedScope);MemoryAudienceSelection audience=MemoryAudienceSelection.capture(readAudience,scope);
+        audience.check();
+        synchronized(book){
+            book.requireAudienceSnapshotCurrent(scope,new JSONObject().put("records",new JSONArray(audience.records)),audience);
+            JSONArray spans=new JSONArray(audience.sources);for(int i=0;i<spans.length();i++)requireSourceNotForgotten(authenticatedScope,SourceRef.fromJson(spans.getJSONObject(i).getJSONObject("sourceRef")));
+        }
+        audience.check();
+    }
     private void requireSourceNotForgotten(JSONObject scope,SourceRef expected)throws Exception{
         if(book.isSourceForgotten(scope,expected))throw new SecurityException("原文此版本已被主人遗忘，显选成员范围不能复活旧来源");
     }

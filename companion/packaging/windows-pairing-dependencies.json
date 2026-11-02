@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "name": "qrcode",
+      "version": "8.2",
+      "wheel": "qrcode-8.2-py3-none-any.whl",
+      "bytes": 45986,
+      "sha256": "16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f",
+      "url": "https://files.pythonhosted.org/packages/dd/b8/d2d6d731733f51684bbf76bf34dab3b70a9148e8f2cef2bb544fccec681a/qrcode-8.2-py3-none-any.whl",
+      "licenseFile": "licenses/python-qrcode-LICENSE.txt",
+      "licenseSha256": "40dfb903c94ee3f789500131311186548ecba5cefd3557623d7700e2522ab994"
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "wheel": "colorama-0.4.6-py2.py3-none-any.whl",
+      "bytes": 25335,
+      "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+      "url": "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl",
+      "licenseFile": "licenses/colorama-LICENSE.txt",
+      "licenseSha256": "cac35c02686e5d04a5a7140bfb3b36e73aed496656e891102e428886d7930318"
+    }
+  ],
+  "qrSource": "https://github.com/lincolnloop/python-qrcode/tree/v8.2",
+  "qrApi": "QRCode.add_data/make/get_matrix",
+  "extras": [],
+  "rendering": "Native opaque black/white integer-pixel DIB; four-module quiet zone"
+}

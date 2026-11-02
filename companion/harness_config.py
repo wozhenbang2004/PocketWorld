@@ -21,6 +21,7 @@ import uuid
 from urllib.parse import urlsplit
 
 from workspace_files import FileError
+from platform_backend import PlatformError
 
 ADAPTER = "pocketworld-config-1"
 SUPPORTED = {"codex": ("0.164.0-alpha.11", "codex-config-v1", "config.toml", "CODEX_HOME", "codex_app_server"),
@@ -239,12 +240,27 @@ class CodexFields:
         return "[model_providers.pocketworld]\n" + "".join(key + " = " + encoded(value[key]) + "\n" for key in keys)
 
 
+class BomFields:
+    def __init__(self, family, raw):
+        self.editor = CodexFields(raw[1:]) if family == "codex" else JsonFields(raw[1:])
+
+    def __getattr__(self, name):
+        return getattr(self.editor, name)
+
+    def set(self, path, desired):
+        return "\ufeff" + self.editor.set(path, desired)
+
+
 class HarnessConfigs:
     def __init__(self, manager):
         self.manager = manager
         self.db = manager.ledger
         self.endpoints = {}  # ephemeral, never provider credentials or ChatGPT session tokens
         self.probed_identities = {}
+        self.windows_storage = None
+        if manager.platform.name == "windows":
+            from harness_config_windows import WindowsHarnessStorage
+            self.windows_storage = WindowsHarnessStorage(manager)
         self.db.execute("CREATE TABLE IF NOT EXISTS harness_plans(plan_id TEXT PRIMARY KEY, operation_id TEXT UNIQUE NOT NULL, digest TEXT NOT NULL, private_plan TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS harness_receipts(operation_id TEXT PRIMARY KEY, plan_digest TEXT NOT NULL, receipt TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS harness_root_leases(resource_key TEXT PRIMARY KEY, operation_id TEXT NOT NULL, binding_id TEXT NOT NULL, job_id TEXT, state TEXT NOT NULL, proof TEXT NOT NULL DEFAULT '{}')")
@@ -255,7 +271,7 @@ class HarnessConfigs:
     def _target(self, request, current=True):
         eid, bid = identifier(request.get("environmentId")), identifier(request.get("bindingId"))
         env = self.manager._environment(eid)
-        if env.get("kind", "local") != "local" or os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        if env.get("kind", "local") != "local" or self.windows_storage is None and (os.name == "nt" or not hasattr(os, "O_NOFOLLOW")):
             raise ConfigError("Configuration control currently requires a POSIX local Companion target")
         binding = self.manager.environment_binding(eid)
         if current and request.get("environmentBinding") != binding:
@@ -268,23 +284,34 @@ class HarnessConfigs:
         family = target.get("family")
         if family not in SUPPORTED:
             raise ConfigError("Unknown Harness family; configuration is read-only")
-        raw_root = Path(bounded(target.get("configRoot"), 2048))
-        if not raw_root.is_absolute() or raw_root != raw_root.resolve():
-            raise ConfigError("Configuration root must be canonical and must not contain symlinks", 403)
-        # The inherited secure directory walker also rejects symbolic-link ancestors.
-        fd = self.manager.files.directory({"root": "/", "kind": "local"}, list(raw_root.parts[1:]))
-        try:
-            info = os.fstat(fd)
-        finally:
-            os.close(fd)
+        if self.windows_storage is not None:
+            try:
+                raw_root, root_identity = self.windows_storage.bind_root(bounded(target.get("configRoot"), 2048))
+            except PlatformError as error:
+                raise ConfigError(str(error), error.status) from error
+        else:
+            raw_root = Path(bounded(target.get("configRoot"), 2048))
+            if not raw_root.is_absolute() or raw_root != raw_root.resolve():
+                raise ConfigError("Configuration root must be canonical and must not contain symlinks", 403)
+            # Original no-follow POSIX directory walker stays unchanged.
+            fd = self.manager.files.directory({"root": "/", "kind": "local"}, list(raw_root.parts[1:]))
+            try:
+                info = os.fstat(fd)
+                root_identity = [info.st_dev, info.st_ino]
+            finally:
+                os.close(fd)
         target.update(root=str(raw_root), environmentId=eid, environmentBinding=binding,
-                      rootIdentity=[info.st_dev, info.st_ino], bindingId=bid)
+                      rootIdentity=root_identity, bindingId=bid)
         target["resourceKey"] = digest([binding, str(raw_root)])
-        target["physicalRootKey"] = digest([info.st_dev, info.st_ino])
+        target["physicalRootKey"] = digest(root_identity)
         return env, target
 
-    @staticmethod
-    def _executable(target):
+    def _executable(self, target):
+        if self.windows_storage is not None:
+            try:
+                return self.windows_storage.executable(bounded(target.get("executable"), 2048))
+            except PlatformError as error:
+                raise ConfigError(str(error), error.status) from error
         executable = Path(bounded(target.get("executable"), 2048))
         if not executable.is_absolute() or not executable.is_file():
             raise ConfigError("Explicit Harness executable is missing")
@@ -295,6 +322,14 @@ class HarnessConfigs:
     def _identity(self, target):
         """External --version IO. Caller must NOT hold the original manager lock."""
         executable, stamp = self._executable(target)
+        if self.windows_storage is not None:
+            try:
+                output = self.windows_storage.version_probe(target, executable, PROBE_TIMEOUT)
+            except PlatformError as error:
+                raise ConfigError(str(error), error.status) from error
+            if self._executable(target) != (executable, stamp):
+                raise ConfigError("Harness executable changed during its version probe")
+            return self._version_identity(target, executable, stamp, output)
         # This non-inference probe is bounded and cannot inherit session credentials.
         env = {key: value for key, value in os.environ.items() if key in {"PATH", "SYSTEMROOT", "LANG", "LC_ALL"}}
         process, output, proof = None, bytearray(), None
@@ -333,6 +368,10 @@ class HarnessConfigs:
             raise ConfigError("Harness probe process-group cleanup was not verified")
         if self._executable(target) != (executable, stamp):
             raise ConfigError("Harness executable changed during its version probe")
+        return self._version_identity(target, executable, stamp, bytes(output))
+
+    @staticmethod
+    def _version_identity(target, executable, stamp, output):
         version = output.decode("utf-8", "strict").strip()
         family = target["family"]
         expected, schema, _, _, _ = SUPPORTED[family]
@@ -366,6 +405,11 @@ class HarnessConfigs:
 
     @staticmethod
     def _editor(family, raw):
+        if raw is not None and raw.startswith("\ufeff"):
+            # Decode the document for its reviewed field parser, but retain the
+            # exact UTF-8 BOM in EVERY edited/compensated original byte image.
+            # This is configuration readback, never a runtime-inference claim.
+            return BomFields(family, raw)
         return CodexFields(raw or "") if family == "codex" else JsonFields(raw if raw is not None else "{}\n")
 
     def _overrides(self, env, target):
@@ -375,6 +419,14 @@ class HarnessConfigs:
             raise ConfigError("Inherited configuration/auth override makes effective state unverified")
         if family == "claude":
             for root, name in ((target["root"], "managed-settings.json"), (env["root"], ".claude/settings.json"), (env["root"], ".claude/settings.local.json")):
+                if self.windows_storage is not None:
+                    try:
+                        exists = self.windows_storage.read_optional(root, name) is not None
+                    except PlatformError as error:
+                        raise ConfigError(str(error), error.status) from error
+                    if exists:
+                        raise ConfigError("A managed/project settings override requires a separate reviewed schema")
+                    continue
                 if not os.path.lexists(Path(root) / name.split("/")[0]):
                     continue
                 if self.manager.files.raw({"root": root, "kind": "local"}, name) is not None:
@@ -572,6 +624,13 @@ class HarnessConfigs:
         return {"operationId": operation, "state": "not_found", "configApplied": False, "runtimeVerified": False}
 
     def _receipt(self, plan, state, **values):
+        # A later readback/SQLite exception must not erase a persisted native
+        # replacement/delete intent or its exact recovery-material identities.
+        if "nativeStorage" not in values:
+            previous = self.db.execute("SELECT receipt FROM harness_receipts WHERE operation_id=?", (plan["operationId"],)).fetchone()
+            previous = json.loads(previous[0]) if previous else {}
+            if "nativeStorage" in previous:
+                values["nativeStorage"] = previous["nativeStorage"]
         receipt = {"operationId": plan["operationId"], "planId": plan["planId"], "planDigest": plan["planDigest"], "state": state,
                    "restoreOf": plan["restoreOf"],
                    "environmentId": plan["target"]["environmentId"], "environmentBinding": plan["identity"]["environmentBinding"], "bindingId": plan["target"]["bindingId"],
@@ -635,15 +694,21 @@ class HarnessConfigs:
             self._receipt(plan, "PREPARED")
             self._receipt(plan, "APPLYING")
             try:
-                self._replace(target, plan["beforeRaw"], plan["afterRaw"])
+                native_storage = (self._replace(target, plan["beforeRaw"], plan["afterRaw"], plan=plan) if self.windows_storage is not None
+                                  else self._replace(target, plan["beforeRaw"], plan["afterRaw"]))
+                native_facts = {"nativeStorage": native_storage} if native_storage is not None else {}
+                if native_storage is not None and native_storage.get("verified") is not True:
+                    return self._receipt(plan, "RECOVERY_REQUIRED", unknown=True, **native_facts)
                 actual = self._read(target)
                 if actual != plan["afterRaw"]:
-                    return self._receipt(plan, "RECOVERY_REQUIRED", drifted=True, unknown=True)
+                    return self._receipt(plan, "RECOVERY_REQUIRED", drifted=True, unknown=True, **native_facts)
+                if native_storage is not None and not self._same_identity_now(target, plan["identity"]):
+                    return self._receipt(plan, "RECOVERY_REQUIRED", unknown=True, **native_facts)
                 editor = self._editor(target["family"], actual)
                 if any(editor.get(key) != value for key, value in plan["after"].items()):
-                    return self._receipt(plan, "RECOVERY_REQUIRED", unknown=True)
-                self._receipt(plan, "READBACK_VERIFIED", configApplied=True, effectiveReadback=True, actualFileDigest=self._file_digest(actual))
-                receipt = self._receipt(plan, "COMMITTED", configApplied=True, effectiveReadback=True, actualFileDigest=self._file_digest(actual), restored=plan["restoreOf"] is not None)
+                    return self._receipt(plan, "RECOVERY_REQUIRED", unknown=True, **native_facts)
+                self._receipt(plan, "READBACK_VERIFIED", configApplied=True, effectiveReadback=True, actualFileDigest=self._file_digest(actual), **native_facts)
+                receipt = self._receipt(plan, "COMMITTED", configApplied=True, effectiveReadback=True, actualFileDigest=self._file_digest(actual), restored=plan["restoreOf"] is not None, **native_facts)
                 if plan["restoreOf"]:
                     self.db.execute("DELETE FROM harness_root_leases WHERE resource_key=? AND operation_id=?", (target["resourceKey"], plan["restoreOf"]))
                 else:
@@ -654,7 +719,30 @@ class HarnessConfigs:
             except (OSError, ConfigError, FileError):
                 return self._receipt(plan, "RECOVERY_REQUIRED", unknown=True)
 
-    def _replace(self, target, before, after):
+    def _replace(self, target, before, after, *, plan=None):
+        if self.windows_storage is not None:
+            if plan is None:
+                raise ConfigError("Original approved Harness transaction is required")
+            def current():
+                if self.manager.closed or self.manager.now() >= plan["expiresAt"] or not self._same_identity_now(target, plan["identity"]):
+                    raise PlatformError("Original approved Harness identity/plan is no longer current")
+                _, actual_target = self._target(plan["target"])
+                if actual_target != target:
+                    raise PlatformError("Original Harness root/environment changed")
+                if plan["restoreOf"] is None:
+                    self._lease(plan["request"], target)
+            def record_intent(value):
+                self._receipt(plan, "APPLYING", nativeStorage={"nativeReplacement": value})
+            identity = None
+            if after is None:
+                original = self.operation(plan["restoreOf"])
+                identity = original.get("nativeStorage", {}).get("nativeReplacement", {}).get("objects", {}).get("target", {}).get("fileIdentity")
+            try:
+                return self.windows_storage.replace(target, SUPPORTED[target["family"]][2],
+                                                    None if before is None else before.encode("utf-8"), None if after is None else after.encode("utf-8"),
+                                                    current, record_intent, original_file_identity=identity)
+            except PlatformError as error:
+                raise ConfigError(str(error), error.status) from error
         directory = self.manager.files.directory({"root": target["root"], "kind": "local"}, [])
         name = SUPPORTED[target["family"]][2]
         temporary = ".pocketworld-config-" + uuid.uuid4().hex
@@ -881,6 +969,10 @@ class HarnessConfigs:
             return {"bindingId": target["bindingId"], "operationId": rows[0], "jobId": rows[1], "managed": True, "drifted": drift,
                     "configApplied": self.operation(rows[0])["configApplied"], "effectiveReadback": not drift,
                     "nextSessionRequired": True, "runtimeVerified": False, "writeConsistency": "OPTIMISTIC"}
+
+    def close(self):
+        if self.windows_storage is not None:
+            self.windows_storage.close()
 
 
 def route(manager, parts, post, request, query, error_type):

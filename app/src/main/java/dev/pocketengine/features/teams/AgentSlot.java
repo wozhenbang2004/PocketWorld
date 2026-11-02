@@ -12,6 +12,7 @@ public final class AgentSlot {
         String runner=input.optString("runner","model");if(!runner.matches("model|codex_app_server|claude|kimi"))throw new IllegalArgumentException("成员runner未识别");
         JSONObject slot=new JSONObject().put("id",id).put("name",JsonFiles.text(input,"name",48)).put("role",JsonFiles.text(input,"role",1200)).put("runner",runner);
         if(input.has("model")&&!input.optString("model").isEmpty())slot.put("model",JsonFiles.text(input,"model",200));
+        if(input.has("modelTarget"))slot.put("modelTarget",dev.pocketengine.runtime.models.ModelTargetRef.fromJson(input.getJSONObject("modelTarget")).toJson());
         slot.put("assignment",input.has("assignment")?JsonFiles.text(input,"assignment",2000):slot.getString("role"));
         if(input.has("acceptance"))slot.put("acceptance",JsonFiles.text(input,"acceptance",1200));
         JSONArray dependencies=new JSONArray();

@@ -31,7 +31,7 @@ internal fun ConnectionCatalog(titles: Map<String, String>, description: (String
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val groups = listOf(
         "模型" to listOf("accounts", "models", "proxy"),
-        "工作" to listOf("local", "remote", "ssh", "teams", "groups", "channels"),
+        "工作" to listOf("local", "devices", "remote", "ssh", "teams", "groups", "channels"),
         "记忆" to listOf("memory", "memoryReview", "automation", "commitments", "learning"),
         "扩展" to listOf("skills", "plugins", "pluginCatalog", "mcp", "media", "realtime")
     )

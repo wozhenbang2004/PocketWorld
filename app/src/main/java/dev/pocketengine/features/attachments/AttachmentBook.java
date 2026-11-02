@@ -81,7 +81,7 @@ public final class AttachmentBook {
     }
     private static String nativeResultId(String operation,String role,String task,String run,String digest)throws Exception{
         checkId(operation);if(role==null||!role.matches("[a-z][a-z0-9_]{0,39}")||digest==null||!digest.matches("[a-f0-9]{64}"))throw new SecurityException("缺少原生固定产物计划身份");
-        boolean scoped=task!=null&&!task.isEmpty()||run!=null&&!run.isEmpty();if(scoped){checkId(task);checkId(run);}
+        boolean scoped=task!=null&&!task.isEmpty()||run!=null&&!run.isEmpty();if(scoped){checkNativeScopeId(task);checkNativeScopeId(run);}
         // Do not include digest in the route: changed semantics under one operation/role must be rejected.
         return UUID.nameUUIDFromBytes(("pocketworld-native-result-v1\0"+operation+"\0"+role+"\0"+(task==null?"":task)+"\0"+(run==null?"":run)).getBytes(StandardCharsets.UTF_8)).toString();
     }
@@ -194,6 +194,13 @@ public final class AttachmentBook {
     public static String displayName(String input){String name=input==null?"attachment":input.replaceAll("[\\p{Cntrl}/\\\\]","_").trim();if(name.isEmpty()||name.equals(".")||name.equals(".."))name="attachment";return name.substring(0,Math.min(160,name.length()));}
     public static String mimeType(String raw){return raw!=null&&raw.matches("[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+")?raw.toLowerCase(java.util.Locale.ROOT):"application/octet-stream";}
     private static JSONObject visible(JSONObject original)throws Exception{JSONObject result=new JSONObject(original.toString()),source=result.optJSONObject("source");if(source!=null){source.remove("uri");source.remove("url");}return result;}
+    /** These native task/run identifiers are hashed into a UUID, never used as a file path.
+     * Keep blob/operation IDs on their original UUID validation; only the canonical device task
+     * identity is added here. This is syntax validation, not an execution permission. */
+    private static void checkNativeScopeId(String id){
+        if(id!=null&&id.matches("dt1_[a-f0-9]{64}"))return;
+        checkId(id);
+    }
     private static void checkId(String id){if(id==null||!id.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("附件ID无效");}
     private static String hex(byte[] bytes){StringBuilder text=new StringBuilder();for(byte b:bytes)text.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return text.toString();}
     private static void atomicJson(File file,JSONObject value)throws Exception{File temp=new File(file.getParentFile(),file.getName()+".pending");try(FileOutputStream output=new FileOutputStream(temp)){output.write(value.toString().getBytes(StandardCharsets.UTF_8));output.getFD().sync();}move(temp,file);}

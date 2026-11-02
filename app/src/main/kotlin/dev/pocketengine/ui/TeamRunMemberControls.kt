@@ -10,7 +10,7 @@ import java.util.UUID
 import org.json.JSONObject
 
 /** Editing this roster changes this actual run, not only the next-run definition template. */
-@Composable internal fun TeamRunMemberControls(run: JSONObject, busy: Boolean, submit: (String, JSONObject) -> String) {
+@Composable internal fun TeamRunMemberControls(run: JSONObject, busy: Boolean, modelSnapshot: (() -> JSONObject)? = null, runWork: ((Runnable) -> Unit)? = null, submit: (String, JSONObject) -> String) {
     var expanded by rememberSaveable(run.getString("id")) { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     val all = run.optJSONArray("members").objects()
@@ -36,6 +36,7 @@ import org.json.JSONObject
                     TextButton(onClick = { action(member, "visibility", JSONObject().put("hidden", !member.optBoolean("hidden"))) }, enabled = !busy) { Text(if (member.optBoolean("hidden")) "显示此成员（不恢复执行）" else "仅隐藏现场入口（不暂停）") }
                 }
                 if (member.optString("runner", "model") == "model") {
+                    if (modelSnapshot != null && runWork != null) TeamMemberModelTargetControls(run, member, busy, modelSnapshot, runWork) { reference -> action(member, "model_target", JSONObject().put("modelTarget", reference)) }
                     OutlinedTextField(model, { model = it }, label = { Text("当前已配置提供方的模型名") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
                     TextButton(onClick = { action(member, "model", JSONObject().put("model", model)) }, enabled = !busy && model.isNotBlank() && model.length <= 200 && model != member.optString("model")) { Text("切换下次执行模型并暂停原成员") }
                 }

@@ -84,4 +84,8 @@ public final class CompactionPlanTest {
         }
     }
 
+    @Test public void oldGenericNotReplayedRemainsUnsettledAndNeverBecomesProvenUndispatched()throws Exception {
+        JSONArray raw=history();raw.getJSONObject(3).put("content",new JSONObject().put("ok",false).put("code","not_replayed").put("message","no complete historical receipt").toString());assertThrows(CompactionPlan.Unavailable.class,()->plan(raw));
+    }
+
 }

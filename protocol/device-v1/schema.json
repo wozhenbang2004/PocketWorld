@@ -1,0 +1,2453 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pocketworld:device:1.0",
+  "title": "PocketWorld device v1",
+  "description": "Machine-readable wire shapes. Native validators additionally enforce UTF-8/duplicate rejection, 65536-byte/16-depth/4096-node bounds, safe integers, semantic SHA-256, authenticated caller/audience/deadline and local owner grants. JSON cannot construct an admission.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Request"
+    },
+    {
+      "$ref": "#/$defs/TaskSnapshot"
+    },
+    {
+      "$ref": "#/$defs/TaskEvent"
+    },
+    {
+      "$ref": "#/$defs/ArtifactDescriptor"
+    },
+    {
+      "$ref": "#/$defs/DeviceResponse"
+    },
+    {
+      "$ref": "#/$defs/DeviceError"
+    },
+    {
+      "$ref": "#/$defs/OperationReceipt"
+    },
+    {
+      "$ref": "#/$defs/DeviceDescription"
+    }
+  ],
+  "$defs": {
+    "Request": {
+      "type": "object",
+      "properties": {
+        "originDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "argumentsDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "replyCursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "executorEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "rootTaskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "deadline": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Absolute UTC milliseconds: last permitted new business effect, not network timeout. Effective deadline is the intersection with receiver grant/original task/capability policy. No generic one-hour Goal limit; command/gateway keep their own existing limits."
+        },
+        "maxDelegationDepth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Maximum total device edges since origin: A→B=1; A→B→C=2. No third edge in v1. PairGrant.allowDelegation=false still permits the paired peer to call directly."
+        },
+        "delegationChain": {
+          "type": "array",
+          "maxItems": 1,
+          "items": {
+            "$ref": "#/$defs/DelegationProof"
+          }
+        },
+        "parentTaskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "protocolVersion": {
+          "const": "1.0"
+        },
+        "authorizationEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "messageType": {
+          "enum": [
+            "DeviceRequest",
+            "ToolInvocation",
+            "GoalSubmission"
+          ]
+        },
+        "capabilityVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "callerDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "operationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "budget": {
+          "type": "object",
+          "properties": {
+            "allocationId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            "toolCalls": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 400
+            },
+            "modelCalls": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000
+            }
+          },
+          "required": [
+            "allocationId",
+            "toolCalls",
+            "modelCalls"
+          ],
+          "additionalProperties": false,
+          "description": "Stable native original-parent reservation identity, never authorization. Tool sessions keep one allocation across operations/runs/reconnect; Goal includes the original prepared operation. Receiver and owner grant lifetime pools never refill from new IDs."
+        },
+        "traceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "visitedDevices": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^pw1_[a-f0-9]{64}$"
+          }
+        },
+        "grantId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "dependencySnapshot": {
+          "type": "object"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "targetDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "runId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "localTaskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "description": "Stable caller-chosen receiver session correlation; receiver_task_id maps it to an actual dt1_ local task. Predictability grants no authority."
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "resourceBinding": {
+          "type": "object"
+        },
+        "method": {
+          "enum": [
+            "device.describe",
+            "tool.invoke",
+            "operation.get",
+            "task.submitGoal",
+            "task.get",
+            "task.events",
+            "task.respond",
+            "task.pause",
+            "task.cancel",
+            "task.acquireControl",
+            "artifact.describe",
+            "artifact.readChunk",
+            "operation.cancel"
+          ]
+        },
+        "observationRef": {
+          "type": "object"
+        },
+        "protocolProfile": {
+          "type": "string",
+          "pattern": "^pwp1_[a-f0-9]{64}$",
+          "description": "Required authoritative PocketWorld profile digest; unknown/missing profile is rejected before authorization. See profile.json."
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "messageType",
+        "method",
+        "requestId",
+        "originDeviceId",
+        "callerDeviceId",
+        "targetDeviceId",
+        "deadline",
+        "arguments",
+        "protocolProfile"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "device.describe"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              },
+              "arguments": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "tool.invoke"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "ToolInvocation"
+              },
+              "arguments": {
+                "type": "object",
+                "properties": {
+                  "toolName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "effect": {
+                    "enum": [
+                      "read",
+                      "write",
+                      "external"
+                    ]
+                  },
+                  "arguments": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "toolName",
+                  "effect",
+                  "arguments"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "rootTaskId",
+              "localTaskId",
+              "runId",
+              "attempt",
+              "executorEpoch",
+              "instanceId",
+              "capabilityVersion",
+              "resourceBinding",
+              "parentTaskId",
+              "budget"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "operation.get"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.submitGoal"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "GoalSubmission"
+              },
+              "arguments": {
+                "type": "object",
+                "properties": {
+                  "goal": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 12000
+                  },
+                  "executionMode": {
+                    "const": "agent"
+                  },
+                  "contextSnapshot": {
+                    "type": "object"
+                  },
+                  "modelSource": {
+                    "type": "object"
+                  },
+                  "delegationAuthorization": {
+                    "$ref": "#/$defs/DelegationProof"
+                  }
+                },
+                "required": [
+                  "goal",
+                  "executionMode"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "rootTaskId",
+              "localTaskId",
+              "runId",
+              "attempt",
+              "executorEpoch",
+              "instanceId",
+              "operationId",
+              "argumentsDigest",
+              "parentTaskId",
+              "budget"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.get"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.events"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.respond"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              }
+            },
+            "required": [
+              "operationId",
+              "argumentsDigest"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.pause"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              }
+            },
+            "required": [
+              "operationId",
+              "argumentsDigest"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.cancel"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              }
+            },
+            "required": [
+              "operationId",
+              "argumentsDigest"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.acquireControl"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              }
+            },
+            "required": [
+              "operationId",
+              "argumentsDigest"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "artifact.describe"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "artifact.readChunk"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "not": {
+                  "const": "device.describe"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "grantId",
+              "authorizationEpoch"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "tool.invoke"
+              },
+              "arguments": {
+                "properties": {
+                  "effect": {
+                    "enum": [
+                      "write",
+                      "external"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "operationId",
+              "argumentsDigest",
+              "parentTaskId",
+              "budget"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "operation.cancel"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "operationId",
+              "argumentsDigest",
+              "resourceBinding"
+            ],
+            "properties": {
+              "arguments": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "argumentsDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "argumentsDigest"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "description": "New outer cancel operationId+digest; arguments.operationId+argumentsDigest bind the original SQL target. Current original caller peer/pin, C owner management capability/current resource, short native ticket and separate rate guard only. Source visibility/A continuing execution/historyRead cannot block this de-escalation. Never return original contents or execute new tools."
+          }
+        }
+      ]
+    },
+    "TaskSnapshot": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "1.0"
+        },
+        "taskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "executorDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "messageType": {
+          "const": "TaskSnapshot"
+        },
+        "state": {
+          "enum": [
+            "accepted",
+            "cancel_requested",
+            "cancelled",
+            "failed",
+            "interrupted",
+            "needs_reconcile",
+            "pause_requested",
+            "paused",
+            "queued_local",
+            "running",
+            "submitting",
+            "succeeded",
+            "waiting_approval",
+            "waiting_dependency",
+            "waiting_resource"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "eventCursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "updatedAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "runId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "executorEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "result": {},
+        "dependencies": {},
+        "protocolProfile": {
+          "type": "string",
+          "pattern": "^pwp1_[a-f0-9]{64}$",
+          "description": "Required authoritative PocketWorld profile digest; unknown/missing profile is rejected before authorization. See profile.json."
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "messageType",
+        "taskId",
+        "executorDeviceId",
+        "instanceId",
+        "state",
+        "revision",
+        "eventCursor",
+        "updatedAt",
+        "protocolProfile"
+      ],
+      "additionalProperties": false,
+      "dependentRequired": {
+        "runId": [
+          "executorEpoch"
+        ],
+        "executorEpoch": [
+          "runId"
+        ]
+      }
+    },
+    "TaskEvent": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "1.0"
+        },
+        "taskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "executorDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "messageType": {
+          "const": "TaskEvent"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "data": {
+          "type": "object"
+        },
+        "protocolProfile": {
+          "type": "string",
+          "pattern": "^pwp1_[a-f0-9]{64}$",
+          "description": "Required authoritative PocketWorld profile digest; unknown/missing profile is rejected before authorization. See profile.json."
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "messageType",
+        "taskId",
+        "executorDeviceId",
+        "instanceId",
+        "sequence",
+        "cursor",
+        "kind",
+        "createdAt",
+        "data",
+        "protocolProfile"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactDescriptor": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "1.0"
+        },
+        "taskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "executorDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "messageType": {
+          "const": "ArtifactDescriptor"
+        },
+        "artifactId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "contentDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[^\\u0000-\\u001f/\\\\:]+$",
+          "description": "1..160 Unicode scalar values, same native cache basename policy; reject C0 controls, path separators, colon, dot and dot-dot; no NFC rewrite.",
+          "not": {
+            "enum": [
+              ".",
+              ".."
+            ]
+          }
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "transferId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+        },
+        "versionId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "project_bundle",
+            "screenshot"
+          ]
+        },
+        "runId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "description": "Optional genuine target execution run. Thin Companion without a target run omits runId/executorEpoch; no source run or invented epoch 1."
+        },
+        "executorEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "operationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "observationRef": {
+          "type": "object"
+        },
+        "resourceBinding": {
+          "type": "object"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "requestRunId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "description": "Original source request run correlation only, never target execution authority."
+        },
+        "requestExecutorEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Original source request epoch, paired with requestRunId."
+        },
+        "protocolProfile": {
+          "type": "string",
+          "pattern": "^pwp1_[a-f0-9]{64}$",
+          "description": "Required authoritative PocketWorld profile digest; unknown/missing profile is rejected before authorization. See profile.json."
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "messageType",
+        "taskId",
+        "executorDeviceId",
+        "instanceId",
+        "artifactId",
+        "contentDigest",
+        "size",
+        "mediaType",
+        "name",
+        "revision",
+        "protocolProfile"
+      ],
+      "additionalProperties": false,
+      "dependentRequired": {
+        "runId": [
+          "executorEpoch"
+        ],
+        "executorEpoch": [
+          "runId"
+        ],
+        "requestRunId": [
+          "requestExecutorEpoch"
+        ],
+        "requestExecutorEpoch": [
+          "requestRunId"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "screenshot"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "observationRef",
+              "resourceBinding",
+              "expiresAt"
+            ],
+            "properties": {
+              "resourceBinding": {
+                "minProperties": 1
+              },
+              "observationRef": {
+                "required": [
+                  "capturedAt"
+                ],
+                "properties": {
+                  "capturedAt": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "DeviceResponse": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "1.0"
+        },
+        "messageType": {
+          "const": "DeviceResponse"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "method": {
+          "enum": [
+            "device.describe",
+            "tool.invoke",
+            "operation.get",
+            "task.submitGoal",
+            "task.get",
+            "task.events",
+            "task.respond",
+            "task.pause",
+            "task.cancel",
+            "task.acquireControl",
+            "artifact.describe",
+            "artifact.readChunk",
+            "operation.cancel"
+          ]
+        },
+        "executorDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "result": {
+          "type": "object"
+        },
+        "protocolProfile": {
+          "type": "string",
+          "pattern": "^pwp1_[a-f0-9]{64}$",
+          "description": "Required authoritative PocketWorld profile digest; unknown/missing profile is rejected before authorization. See profile.json."
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "messageType",
+        "requestId",
+        "method",
+        "executorDeviceId",
+        "instanceId",
+        "result",
+        "protocolProfile"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.get"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/TaskSnapshot"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "artifact.describe"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/ArtifactDescriptor"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "task.events"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "type": "object",
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "maxItems": 256,
+                    "items": {
+                      "$ref": "#/$defs/TaskEvent"
+                    }
+                  },
+                  "nextCursor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "hasMore": {
+                    "type": "boolean"
+                  },
+                  "snapshotRequired": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "events",
+                  "nextCursor",
+                  "hasMore",
+                  "snapshotRequired"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "artifact.readChunk"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "type": "object",
+                "properties": {
+                  "artifactId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "transferId": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "length": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 262144
+                  },
+                  "contentDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "status": {
+                    "const": "ready"
+                  }
+                },
+                "required": [
+                  "artifactId",
+                  "transferId",
+                  "offset",
+                  "length",
+                  "contentDigest",
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "enum": [
+                  "tool.invoke",
+                  "task.submitGoal",
+                  "operation.get",
+                  "operation.cancel",
+                  "task.respond",
+                  "task.pause",
+                  "task.cancel",
+                  "task.acquireControl"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/OperationReceipt"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "device.describe"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/DeviceDescription"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "DeviceError": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "1.0"
+        },
+        "messageType": {
+          "const": "DeviceError"
+        },
+        "requestId": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "method": {
+          "enum": [
+            "device.describe",
+            "tool.invoke",
+            "operation.get",
+            "task.submitGoal",
+            "task.get",
+            "task.events",
+            "task.respond",
+            "task.pause",
+            "task.cancel",
+            "task.acquireControl",
+            "artifact.describe",
+            "artifact.readChunk",
+            "operation.cancel"
+          ]
+        },
+        "executorDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "retryable": {
+              "const": false
+            },
+            "effectState": {
+              "enum": [
+                "not_dispatched",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "effectState"
+          ],
+          "additionalProperties": false
+        },
+        "protocolProfile": {
+          "type": "string",
+          "pattern": "^pwp1_[a-f0-9]{64}$",
+          "description": "Required authoritative PocketWorld profile digest; unknown/missing profile is rejected before authorization. See profile.json."
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "messageType",
+        "requestId",
+        "error",
+        "protocolProfile"
+      ],
+      "additionalProperties": false
+    },
+    "ForwardingScope": {
+      "type": "object",
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "enum": [
+              "device.describe",
+              "tool.invoke",
+              "operation.get",
+              "task.submitGoal",
+              "task.get",
+              "task.events",
+              "task.respond",
+              "task.pause",
+              "task.cancel",
+              "task.acquireControl",
+              "artifact.describe",
+              "artifact.readChunk"
+            ]
+          },
+          "minItems": 1
+        },
+        "toolNames": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "toolBudget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 400
+        },
+        "modelBudget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "maxDelegationDepth": {
+          "const": 2
+        },
+        "targetResources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/TargetResource"
+          },
+          "description": "Exact authorized target/resource pairs. Never expand independent target/resource sets as a Cartesian product."
+        }
+      },
+      "required": [
+        "capabilities",
+        "toolNames",
+        "toolBudget",
+        "modelBudget",
+        "maxDelegationDepth",
+        "targetResources"
+      ],
+      "additionalProperties": false
+    },
+    "DelegationProof": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "1.0"
+        },
+        "messageType": {
+          "const": "DelegationProof"
+        },
+        "issuerDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "delegateDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "rootTaskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "parentTaskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "grantId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "authorizationEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "enum": [
+              "device.describe",
+              "tool.invoke",
+              "operation.get",
+              "task.submitGoal",
+              "task.get",
+              "task.events",
+              "task.respond",
+              "task.pause",
+              "task.cancel",
+              "task.acquireControl",
+              "artifact.describe",
+              "artifact.readChunk"
+            ]
+          },
+          "minItems": 1
+        },
+        "toolNames": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "toolBudget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 400
+        },
+        "modelBudget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "deadline": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "remainingDepth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "previousProofDigest": {
+          "type": "string",
+          "pattern": "^(?:[a-f0-9]{64})?$"
+        },
+        "issuerCertificateDer": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "maxLength": 22000
+        },
+        "issuerCertificateFingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "signature": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "maxLength": 200
+        },
+        "sourceAllocationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "targetShares": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 129,
+          "items": {
+            "$ref": "#/$defs/SourceTargetShare"
+          },
+          "description": "A original native reservation freezes these non-overlapping B/C/D exact-resource shares. Tool/model sums <= signed source totals. Offline unused/unknown shares never migrate or refill. Stable shareId excludes run/epoch/signature/root/op."
+        },
+        "protocolProfile": {
+          "type": "string",
+          "pattern": "^pwp1_[a-f0-9]{64}$",
+          "description": "Required authoritative PocketWorld profile digest; unknown/missing profile is rejected before authorization. See profile.json."
+        },
+        "targetResources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/TargetResource"
+          },
+          "description": "Exact authorized target/resource pairs. Never expand independent target/resource sets as a Cartesian product."
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "messageType",
+        "issuerDeviceId",
+        "delegateDeviceId",
+        "rootTaskId",
+        "parentTaskId",
+        "grantId",
+        "authorizationEpoch",
+        "capabilities",
+        "toolNames",
+        "toolBudget",
+        "modelBudget",
+        "deadline",
+        "remainingDepth",
+        "previousProofDigest",
+        "issuerCertificateDer",
+        "issuerCertificateFingerprint",
+        "signature",
+        "sourceAllocationId",
+        "targetShares",
+        "protocolProfile",
+        "targetResources"
+      ],
+      "additionalProperties": false
+    },
+    "PairGrant": {
+      "type": "object",
+      "properties": {
+        "grantId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "peerDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "localDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "authorizationEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "issuedAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "enum": [
+              "device.describe",
+              "tool.invoke",
+              "operation.get",
+              "task.submitGoal",
+              "task.get",
+              "task.events",
+              "task.respond",
+              "task.pause",
+              "task.cancel",
+              "task.acquireControl",
+              "artifact.describe",
+              "artifact.readChunk"
+            ]
+          },
+          "minItems": 1
+        },
+        "toolNames": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "resources": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object"
+          },
+          "minItems": 1
+        },
+        "allowedOrigins": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^pw1_[a-f0-9]{64}$"
+          }
+        },
+        "allowDelegation": {
+          "type": "boolean"
+        },
+        "maxDelegationDepth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "toolBudget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 400
+        },
+        "modelBudget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "forwardingScope": {
+          "$ref": "#/$defs/ForwardingScope"
+        },
+        "historyRead": {
+          "$ref": "#/$defs/HistoryReadPolicy"
+        }
+      },
+      "required": [
+        "grantId",
+        "peerDeviceId",
+        "localDeviceId",
+        "authorizationEpoch",
+        "issuedAt",
+        "expiresAt",
+        "capabilities",
+        "toolNames",
+        "resources",
+        "allowedOrigins",
+        "allowDelegation",
+        "maxDelegationDepth",
+        "toolBudget",
+        "modelBudget"
+      ],
+      "additionalProperties": false,
+      "description": "Native receiving-owner grant. Neither a serialized grant nor a device certificate constructs a Permission. allowDelegation governs acceptance of forwarded origins; separate optional forwardingScope explicitly governs onward use by an accepted Goal. Permission/spend authority must be checked against the original live SQLite rows and lifetime owner budget."
+    },
+    "PhoneAppResource": {
+      "type": "object",
+      "properties": {
+        "screenMode": {
+          "enum": [
+            "main_screen",
+            "background"
+          ]
+        },
+        "packageNames": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+$"
+          }
+        },
+        "allowWholeDisplayCapture": {
+          "type": "boolean"
+        },
+        "allowWholeDisplayInput": {
+          "type": "boolean",
+          "default": false,
+          "description": "Independent from whole-display capture. Native execution still enforces current owner input scope and observed app-window binding."
+        }
+      },
+      "required": [
+        "screenMode",
+        "packageNames"
+      ],
+      "additionalProperties": false
+    },
+    "PhoneProjectResource": {
+      "type": "object",
+      "properties": {
+        "screenMode": {
+          "const": "capabilities"
+        },
+        "projectId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,80}$"
+        },
+        "checkoutId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,80}$"
+        },
+        "runtimeId": {
+          "enum": [
+            "termux",
+            "managed_process_v1"
+          ]
+        },
+        "sourceDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "screenMode"
+      ],
+      "additionalProperties": false,
+      "dependentRequired": {
+        "projectId": [
+          "checkoutId",
+          "runtimeId"
+        ],
+        "checkoutId": [
+          "projectId",
+          "runtimeId"
+        ],
+        "runtimeId": [
+          "projectId",
+          "checkoutId"
+        ]
+      }
+    },
+    "DesktopResource": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "desktop"
+        },
+        "sessionId": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "displayId": {
+          "const": "primary"
+        },
+        "windowId": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "sessionId",
+        "displayId"
+      ],
+      "additionalProperties": false
+    },
+    "WorkspaceResource": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "workspace"
+        },
+        "environmentId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$"
+        },
+        "binding": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "kind",
+        "environmentId",
+        "binding"
+      ],
+      "additionalProperties": false
+    },
+    "SourceTargetShare": {
+      "type": "object",
+      "properties": {
+        "shareId": {
+          "type": "string",
+          "pattern": "^ds1_[a-f0-9]{64}$"
+        },
+        "targetDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "resourceBinding": {
+          "type": "object"
+        },
+        "toolBudget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 400
+        },
+        "modelBudget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "shareId",
+        "targetDeviceId",
+        "resourceBinding",
+        "toolBudget",
+        "modelBudget"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryReadPolicy": {
+      "type": "object",
+      "properties": {
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "operation.get",
+              "task.get",
+              "task.events",
+              "artifact.describe",
+              "artifact.readChunk"
+            ]
+          }
+        }
+      },
+      "required": [
+        "expiresAt",
+        "methods"
+      ],
+      "additionalProperties": false,
+      "description": "Explicit receiving owner result-reading retention, independent from execution expiresAt; <=30 days after grant issue. Missing means no independently retained read authority. Never authorizes new tools, controls, model calls or refunds."
+    },
+    "AcceptedHistoryAudience": {
+      "type": "object",
+      "properties": {
+        "objectId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "rootTaskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "description": "Immutable original accepted request root correlation, not target execution authority."
+        },
+        "localTaskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "description": "Immutable original accepted request local correlation, not a forged PC task or target run."
+        },
+        "runId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "description": "Optional actual target run, only when one genuinely exists. Never copy a source request run or invent a PC TaskStore run."
+        },
+        "grantId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "originDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "callerDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "targetDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "executorEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Actual target executor epoch, paired with optional runId; accepted-but-not-started and lightweight PC commands omit both."
+        },
+        "authorizationEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "acceptedAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "retainedUntil": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "kind": {
+          "enum": [
+            "operation",
+            "task",
+            "artifact"
+          ]
+        },
+        "resourceBinding": {
+          "type": "object"
+        },
+        "sourceShareId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "sourceIssuerDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "sourceGrantId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "sourceAuthorizationEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sourceProofFingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "requestRunId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "requestExecutorEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "taskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "argumentsDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Optional original accepted semantic digest from the same immutable original SQL record; required for operation management, never inferred from caller JSON."
+        }
+      },
+      "required": [
+        "kind",
+        "objectId",
+        "originDeviceId",
+        "callerDeviceId",
+        "targetDeviceId",
+        "instanceId",
+        "rootTaskId",
+        "localTaskId",
+        "grantId",
+        "authorizationEpoch",
+        "resourceBinding",
+        "acceptedAt",
+        "retainedUntil"
+      ],
+      "additionalProperties": false,
+      "dependentRequired": {
+        "sourceShareId": [
+          "sourceIssuerDeviceId",
+          "sourceGrantId",
+          "sourceAuthorizationEpoch",
+          "sourceProofFingerprint"
+        ],
+        "sourceIssuerDeviceId": [
+          "sourceShareId",
+          "sourceGrantId",
+          "sourceAuthorizationEpoch",
+          "sourceProofFingerprint"
+        ],
+        "sourceGrantId": [
+          "sourceShareId",
+          "sourceIssuerDeviceId",
+          "sourceAuthorizationEpoch",
+          "sourceProofFingerprint"
+        ],
+        "sourceAuthorizationEpoch": [
+          "sourceShareId",
+          "sourceIssuerDeviceId",
+          "sourceGrantId",
+          "sourceProofFingerprint"
+        ],
+        "sourceProofFingerprint": [
+          "sourceShareId",
+          "sourceIssuerDeviceId",
+          "sourceGrantId",
+          "sourceAuthorizationEpoch"
+        ],
+        "runId": [
+          "executorEpoch"
+        ],
+        "executorEpoch": [
+          "runId"
+        ],
+        "requestRunId": [
+          "requestExecutorEpoch"
+        ],
+        "requestExecutorEpoch": [
+          "requestRunId"
+        ]
+      },
+      "description": "Immutable ORIGINAL SQL acceptance audience; never a wire factory for HistoryPermission. Current native source visibility, paired certificate/epoch/revocation and owner policy must still be checked. A fresh query has its own direct origin/caller, separate from this original action origin."
+    },
+    "OperationReceipt": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "1.0"
+        },
+        "messageType": {
+          "const": "OperationReceipt"
+        },
+        "executorDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "operationId": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "argumentsDigest": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "cancel_requested",
+            "cancelled",
+            "failed",
+            "interrupted",
+            "needs_reconcile",
+            "not_found",
+            "pause_requested",
+            "paused",
+            "prepared",
+            "queued_local",
+            "rejected",
+            "running",
+            "submitting",
+            "succeeded",
+            "unknown",
+            "waiting_approval",
+            "waiting_dependency",
+            "waiting_resource"
+          ]
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "effectState": {
+          "enum": [
+            "not_dispatched",
+            "unknown",
+            "reported"
+          ]
+        },
+        "payload": {
+          "type": "object"
+        },
+        "acceptedAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "audience": {
+          "$ref": "#/$defs/AcceptedHistoryAudience"
+        },
+        "jobId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "localTaskId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "runId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "executorEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "cancellation": {
+          "type": "object",
+          "properties": {
+            "targetOperationId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            "requested": {
+              "type": "boolean"
+            },
+            "stopped": {
+              "type": "boolean"
+            },
+            "targetArgumentsDigest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "targetOperationId",
+            "requested",
+            "stopped",
+            "targetArgumentsDigest"
+          ],
+          "additionalProperties": false
+        },
+        "protocolProfile": {
+          "type": "string",
+          "pattern": "^pwp1_[a-f0-9]{64}$",
+          "description": "Required authoritative PocketWorld profile digest; unknown/missing profile is rejected before authorization. See profile.json."
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "messageType",
+        "executorDeviceId",
+        "instanceId",
+        "operationId",
+        "argumentsDigest",
+        "status",
+        "accepted",
+        "effectState",
+        "payload",
+        "protocolProfile"
+      ],
+      "additionalProperties": false,
+      "dependentRequired": {
+        "runId": [
+          "executorEpoch"
+        ],
+        "executorEpoch": [
+          "runId"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "accepted": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "acceptedAt",
+              "audience"
+            ],
+            "properties": {
+              "operationId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+              },
+              "argumentsDigest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "status": {
+                "not": {
+                  "enum": [
+                    "not_found",
+                    "rejected"
+                  ]
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "unknown",
+                  "not_found",
+                  "rejected"
+                ]
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "acceptedAt"
+                  ]
+                },
+                {
+                  "required": [
+                    "audience"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "unknown",
+                  "not_found"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "effectState": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "cancellation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "type": "object",
+                "properties": {
+                  "managementOnly": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "managementOnly"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ],
+      "description": "ORIGINAL SQLite facts, not proof of new authority or physical exactly-once. Accepted receipt binds original operation digest/audience/acceptedAt; optional target run is genuine. reported means native report, NOT business verification. Unknown/not_found never causes automatic replay/refund; client must match actual authenticated sender and original prepared wire. Native body remains opaque payload, not authority."
+    },
+    "DeviceDescription": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "1.0"
+        },
+        "messageType": {
+          "const": "DeviceDescription"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "capturedAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "validUntil": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "id",
+              "version"
+            ]
+          }
+        },
+        "grantReceipts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/PairGrantReceipt"
+          }
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "executionAuthorized": {
+          "const": false
+        },
+        "protocolProfile": {
+          "type": "string",
+          "pattern": "^pwp1_[a-f0-9]{64}$",
+          "description": "Required authoritative PocketWorld profile digest; unknown/missing profile is rejected before authorization. See profile.json."
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "messageType",
+        "deviceId",
+        "instanceId",
+        "capturedAt",
+        "validUntil",
+        "capabilities",
+        "grantReceipts",
+        "metadata",
+        "executionAuthorized",
+        "protocolProfile"
+      ],
+      "additionalProperties": false,
+      "description": "Paired-identity metadata via private DiscoveryPermission only, no dummy execution grant. Captured lifetime <=30s; signed receipts only for actual caller own current native SQL grants. Candidate/pending have zero access. Readiness metadata does not authorize execution."
+    },
+    "PairGrantReceipt": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "1.0"
+        },
+        "messageType": {
+          "const": "PairGrantReceipt"
+        },
+        "issuerDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "issuerCertificateFingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/PairGrant"
+            },
+            "targetInstanceId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            "issuedAt": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "grant",
+            "targetInstanceId",
+            "issuedAt"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "type": "string",
+          "maxLength": 200,
+          "contentEncoding": "base64"
+        },
+        "protocolProfile": {
+          "type": "string",
+          "pattern": "^pwp1_[a-f0-9]{64}$",
+          "description": "Required authoritative PocketWorld profile digest; unknown/missing profile is rejected before authorization. See profile.json."
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "messageType",
+        "issuerDeviceId",
+        "issuerCertificateFingerprint",
+        "body",
+        "signature",
+        "protocolProfile"
+      ],
+      "additionalProperties": false
+    },
+    "TargetResource": {
+      "type": "object",
+      "properties": {
+        "targetDeviceId": {
+          "type": "string",
+          "pattern": "^pw1_[a-f0-9]{64}$"
+        },
+        "resourceBinding": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "targetDeviceId",
+        "resourceBinding"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "x-canonicalization": {
+    "encoding": "UTF-8",
+    "members": "Unicode codepoint lexicographic order",
+    "whitespace": "none",
+    "numbers": "safe signed integers only; decimals encoded as strings",
+    "strings": "JSON minimal escapes; control characters lower-case hex",
+    "operationDigest": "SHA-256 canonical entire request excluding requestId, operationId, argumentsDigest, traceId, replyCursor",
+    "decimalToolArguments": "GUI pixels/session identifiers are safe integers. Fractional tools must advertise decimal strings in their tool schema; drivers must validate and convert without silent truncation."
+  },
+  "x-transportStates": [
+    "connecting",
+    "degraded",
+    "incompatible",
+    "offline",
+    "online",
+    "revoked"
+  ],
+  "x-identities": {
+    "receiverTaskId": "dt1_ + SHA256(canonical {protocolVersion,originDeviceId,callerDeviceId,targetDeviceId,messageType,rootTaskId,localTaskId,operationId only for GoalSubmission}); excludes run/attempt/signature/digest",
+    "allocationId": "ba1_ + SHA256(canonical {protocolVersion,parentTaskId,targetDeviceId,resourceBinding,kind=tool_session|goal,parentOperationId only for goal}); native only; no authorization",
+    "forwardingAuthorization": "Initial Goal only. Original caller signs after original parent budget reserve, binds receiverTaskId as parent. Receiver must have explicit forwardingScope. Final target independently verifies its own current PairGrant, original origin, scope and total-edge bound."
+  },
+  "historyQueryPolicy": {
+    "nativeFactory": "OutgoingGrant.historyQuery / history_query, or restored read-only HistoryRoute from original signed outgoing-grant SQL and actual current mTLS peer",
+    "maxQueryTtlMs": 30000,
+    "perPeerQueriesPerMinute": 240,
+    "globalQueriesPerMinute": 1024,
+    "executionBudgetCharged": false,
+    "defaultForwardedSourceVisible": false
+  },
+  "operationManagementPolicy": {
+    "method": "operation.cancel",
+    "currentOwnerCapabilityRequired": true,
+    "queryTtlMs": 30000,
+    "perPeerPerMinute": 60,
+    "globalPerMinute": 240,
+    "executionBudgetCharged": false,
+    "guiLeaseRequired": false,
+    "ownerGrantExpiryIgnored": false,
+    "historyReadAuthorityCanCancel": false,
+    "localOwnerStopAlwaysAvailable": true,
+    "sourceVisibleRequired": false,
+    "originContinuingExecutionAuthorityRequired": false,
+    "returnsOriginalContent": false,
+    "originalTargetDigestMustMatchNativeSql": true
+  },
+  "discoveryPolicy": {
+    "perPeerPerMinute": 24,
+    "globalPerMinute": 128,
+    "requiresFormalPairedIdentity": true,
+    "candidateAllowed": false,
+    "executionPermissionCreated": false,
+    "signedReceiptsOnlyForActualCaller": true,
+    "maxGrantReceipts": 16
+  }
+}

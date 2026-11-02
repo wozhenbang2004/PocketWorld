@@ -26,6 +26,8 @@ import org.json.JSONObject
 internal class PocketWorldController(private val activity: ComposeActivity, private val app: EngineApplication) {
     var state by mutableStateOf(PocketUiState())
         private set
+    var deviceWorkspaceRevision by mutableStateOf(0L)
+        private set
     internal var remoteAttentionNotice by mutableStateOf<JSONObject?>(null)
         private set
     internal fun showRemoteAttention(locator: JSONObject) { remoteAttentionNotice=JSONObject(locator.toString()); if(locator.optJSONObject("original")?.optString("fingerprint")!=locator.optJSONObject("current")?.optString("fingerprint"))state=state.copy(notice="原通知对应旧状态；已打开原任务，问题和审批将重新查询，不响应旧请求。"); focusTask(locator.getString("taskId")) }
@@ -496,6 +498,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         check(!closed)
         return app.tasks.teamParentPlanForOwner(taskId, approvalId)
     }
+    fun openTeamResearchBudgetPage(runId: String): dev.pocketengine.features.teams.TeamResearchHost.Page {
+        check(!closed)
+        return app.openTeamResearchBudgetPage(runId)
+    }
     fun openTeamMemberMaterialsPage(runId: String, memberId: String): dev.pocketengine.features.teams.TeamMemberEvidenceHost.Page {
         check(!closed)
         return app.openTeamMemberMaterialsPage(runId, memberId)
@@ -630,6 +636,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
     private fun retainedGroupReceipts(id: String, receipt: JSONObject): Map<String, JSONObject> = (state.groupOwnerReceipts + (id to receipt)).entries.toList().takeLast(64).associate { it.toPair() }
+    fun nativeDeviceWorkspace(): dev.pocketengine.features.devices.NativeDeviceWorkspaceHost? = app.deviceWorkspaceHost
+    fun nativeDeviceTaskScope(): dev.pocketengine.features.devices.NativeDeviceTaskScopeHost? = app.deviceTaskScopeHost
+    // Existing I/O queue for pairing/metadata waits. Urgent original stop never waits behind it.
+    fun runDeviceWorkspaceWork(work: Runnable) { check(!closed); io.execute(work) }
+    fun runDeviceWorkspaceControlWork(work: Runnable) { check(!closed); controls.execute(work) }
+    fun deviceTaskWorkspaceChanged(id: String) { if (!closed) io.execute { app.pushTask(id) }; deviceWorkspaceChanged() }
+    fun deviceWorkspaceChanged() { if (!closed) app.publish(JSONObject().put("type", "device_workspace_changed")) }
     fun nativeModelConnections(): dev.pocketengine.runtime.models.ModelConnectionService? = app.modelConnections
     fun runModelConnectionWork(work: Runnable) { check(!closed); io.execute(work) }
     fun modelConnectionChanged() { if (!closed) io.execute { app.sendState() } }
@@ -1780,6 +1793,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     private fun receive(event: JSONObject) {
         when (event.optString("type")) {
+            "device_workspace_changed" -> deviceWorkspaceRevision++
             "model_stream" -> state = state.copy(modelDrafts = ModelStreamDrafts.accept(state.modelDrafts, event, state.tasks))
             "state" -> {
                 val payload = event.optJSONObject("payload") ?: return

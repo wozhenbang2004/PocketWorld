@@ -6,7 +6,7 @@ import org.json.JSONObject;
 
 /** Native caller provenance. Never deserialized from HTTP, a model answer, or a tool argument. */
 public final class NativeInferenceScope {
-    public enum Entry { OWNER_APP, OWNER_BACKGROUND, EXTERNAL_RELAY, EXTERNAL_GROUP }
+    public enum Entry { OWNER_APP, OWNER_BACKGROUND, EXTERNAL_RELAY, EXTERNAL_GROUP, PAIRED_DEVICE_GOAL }
     public final Entry entry;
     public final String actorId,spaceId,taskId,runId;
     public final int epoch;
@@ -36,6 +36,12 @@ public final class NativeInferenceScope {
     public static NativeInferenceScope externalRelay() {
         return new NativeInferenceScope(Entry.EXTERNAL_RELAY,"external_client","device_loopback","","",0,null,"",null,"");
     }
+    /** B-local owner-selected model policy + original PairGrant/run proof; never ownerApp identity. */
+    public static NativeInferenceScope pairedDeviceGoal(dev.pocketengine.store.TaskStoreDeviceTasks.GoalModelApproval proof,RunControl original)throws Exception{
+        java.util.Objects.requireNonNull(proof).checkCurrent(original);var run=original.hostRunIdentity();var admission=proof.deviceAdmission();
+        return new NativeInferenceScope(Entry.PAIRED_DEVICE_GOAL,admission.principalId(),admission.spaceId(),run.taskId(),run.runId(),run.epoch(),original,
+                proof.publicView().getString("reviewId"),()->proof.checkCurrent(original),admission.origin().toString());
+    }
     /** Freeze the authenticated GroupHostPort.Request.origin() supplied by the native host. */
     public static NativeInferenceScope externalGroup(JSONObject authenticatedOrigin,String task,String run,int epoch,RunControl original) {
         Objects.requireNonNull(authenticatedOrigin);
@@ -52,7 +58,7 @@ public final class NativeInferenceScope {
         if(original!=null&&actual!=original)throw new SecurityException("模型调用控制器已改变");
         if(actual!=null)actual.check();
         if(!taskId.isEmpty()&&!actual.matchesHostRun(taskId,runId,epoch))throw new SecurityException("模型调用执行代次已改变");
-        if(entry==Entry.OWNER_BACKGROUND||entry==Entry.EXTERNAL_GROUP&&consent!=null)consent.check();
+        if(entry==Entry.OWNER_BACKGROUND||entry==Entry.PAIRED_DEVICE_GOAL||entry==Entry.EXTERNAL_GROUP&&consent!=null)consent.check();
         if(actual!=null)actual.check();
     }
     public JSONObject publicJson()throws Exception {

@@ -29,6 +29,8 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 from workspace_files import WorkspaceFiles, FileError
+from platform_backend import get_backend, NativeProcessStartError, PlatformError
+from platform_windows import WindowsJobProcess
 import assignment_workspaces
 import assignment_projects
 import cold_session
@@ -99,6 +101,7 @@ class JobManager:
             raise ValueError("Companion token must contain at least 32 characters")
         self.token = token
         self.config = config
+        self.platform = get_backend()
         self.instance_id = str(uuid.uuid4())
         self.auth_generation_salt = secrets.token_bytes(32)  # process-local opaque revisions, never persisted credentials
         self.state = Path(config.get("stateDir", "~/.pocketengine/companion")).expanduser().resolve()
@@ -106,7 +109,10 @@ class JobManager:
         self.lock = threading.RLock()
         self.jobs = {}
         self.processes = {}
+        self._unsettled_native_starts = []  # Original handles, never a second job/ledger.
         self.drivers = {}
+        self.native_device_admissions = {}
+        self.device_companion = None  # Explicit native startup only, never the legacy HTTP token.
         self.probe_slots = threading.BoundedSemaphore(2)
         self.stopping = set()
         self.resources = set()
@@ -135,7 +141,7 @@ class JobManager:
                 receipt.update(status="unknown", message="Companion restarted before a steering acknowledgement; not replayed")
                 self.ledger.execute("UPDATE steer_messages SET receipt=?, updated_at=? WHERE message_id=?", (json.dumps(receipt), self.now(), message_id))
         self.ledger.commit()
-        self.files = WorkspaceFiles(self.state, self.ledger)
+        self.files = self.platform.workspace_files(self.state, self.ledger)
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="pocket-job")
         self.closed = False
         self.environments = self._environments(config.get("environments", []))
@@ -193,14 +199,24 @@ class JobManager:
             if eid in result:
                 raise ValueError("Duplicate environment id")
             item = dict(entry)
+            if not isinstance(item.get("commandOutputEncoding", "utf-8"), str) or item.get("commandOutputEncoding", "utf-8") not in {"utf-8", "cp936"}:
+                raise ValueError("commandOutputEncoding must explicitly be utf-8 or cp936")
             if "writeAllowed" in item and not isinstance(item["writeAllowed"], bool):
                 raise ValueError("writeAllowed must be an explicit boolean")
             kind = item.get("kind", "local")
             if kind == "local":
-                root = Path(text(item.get("root"), "workspace root", 2048)).expanduser().resolve()
-                if not root.is_dir():
-                    raise ValueError("A configured local workspace is missing")
-                item["root"] = str(root)
+                raw_root = text(item.get("root"), "workspace root", 2048)
+                if os.name == "nt":
+                    from platform_windows import local_root
+                    root = local_root(str(Path(raw_root).expanduser()))
+                    with self.platform.directory(root):
+                        pass
+                    item["root"] = root
+                else:
+                    root = Path(raw_root).expanduser().resolve()
+                    if not root.is_dir():
+                        raise ValueError("A configured local workspace is missing")
+                    item["root"] = str(root)
             elif kind == "ssh":
                 host = text(item.get("host"), "SSH host", 253)
                 if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", host):
@@ -244,13 +260,21 @@ class JobManager:
             workers = []
             for worker in item.get("workers", ["command"]):
                 executable = WORKERS.get(worker)
-                available = None if item.get("kind") == "ssh" else worker == "command" or bool(shutil.which(executable))
+                if item.get("kind") == "ssh":
+                    available = None
+                elif worker == "command":
+                    installed = [value if os.path.isabs(value) else shutil.which(value) for value in item.get("commands", {}).values()]
+                    available = any(value and Path(value).is_file() and (os.name != "nt" or Path(value).suffix.lower() == ".exe") for value in installed)
+                else:
+                    resolved = shutil.which(executable)
+                    available = bool(resolved) and (os.name != "nt" or Path(resolved).suffix.lower() == ".exe")
                 workers.append({"id": worker, "available": available, "availability": "unverified_remote" if available is None else "installed" if available else "missing", "autonomousTools": worker == "kimi", "capabilities": worker_capabilities(worker)})
             entries.append({"id": eid, "label": item.get("label", eid), "kind": item.get("kind", "local"), "workers": workers,
                             "writeAllowed": bool(item.get("writeAllowed", False)), "sandboxed": False,
                             "bindingHash": self.environment_binding(eid), "workspace": item["root"],
                             "harnesses": [{key: value.get(key) for key in ("bindingId", "family", "scope")} for value in item.get("harnesses", [])],
-                            "harnessConfiguration": {"protocol": "harness_config_v1", "writeConsistency": "OPTIMISTIC", "runtimeVerified": False},
+                            "harnessConfiguration": {"protocol": "harness_config_v1", "writeConsistency": "OPTIMISTIC", "runtimeVerified": False, "platformSupported": os.name != "nt" or self.harness_configs.windows_storage is not None},
+                            "nativePlatformCapabilities": self.platform.capabilities() if item.get("kind", "local") == "local" else {"platform": "ssh_posix_only", "windowsSshSecondHop": False},
                             "privateInputCapabilities": input_files.capabilities(item),
                             "projectAssignmentCapabilities": assignment_projects.capability(item, str(self.state / "assignment-projects")),
                             "projectHistoryCapabilities": project_history.capability(item),
@@ -262,7 +286,7 @@ class JobManager:
         item = self._environment(eid)
         # No credential contents or token-derived identity are exposed. A restart invalidates
         # an unsubmitted review; accepted operations still reconcile by their original ID.
-        scope = {key: item.get(key) for key in ("kind", "root", "host", "user", "port", "writeAllowed", "workers", "commands", "knownHosts", "identityFile", "sshConfig", "harnesses")}
+        scope = {key: item.get(key) for key in ("kind", "root", "host", "user", "port", "writeAllowed", "workers", "commands", "knownHosts", "identityFile", "sshConfig", "harnesses", "commandOutputEncoding")}
         scope.update({key: item[key] for key in ("codexHome", "codexProviderVariables") if key in item})
         scope.update(instance=self.instance_id, environmentId=eid)
         return hashlib.sha256(json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -295,8 +319,7 @@ class JobManager:
             if group_probe:
                 group_generation = group_input_audience.generation(self, env)
                 child_env = group_input_audience.child_environment(env, child_env)
-            options = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-            process = subprocess.Popen(launch, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=child_env, bufsize=0, **options)
+            process = self._spawn(env, launch, cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=child_env)
             driver = CodexAppServerDriver(process, env["root"], False, lambda _state: None, lambda: self.closed, 10)
             result = driver.probe(model)
             if group_probe:
@@ -305,17 +328,19 @@ class JobManager:
             result.update(environmentId=request["environmentId"], worker=worker, readOnly=True,
                           capabilities={**worker_capabilities(worker), "protocolVerified": True, "inputSteering": result["inputSteeringVerified"]})
             return result
-        except (OSError, ValueError, DriverError, group_input_audience.Unavailable):
+        except (OSError, ValueError, DriverError, PlatformError, group_input_audience.Unavailable):
             return {"environmentId": request["environmentId"], "worker": worker, "available": False,
                     "protocolVerified": False, "accountConfigured": False, "modelInferenceVerified": False,
                     "capabilities": worker_capabilities(worker), "message": "Codex protocol/account probe failed; inspect its installed version and account on the computer"}
         finally:
             try:
                 if process is not None:
-                    self._terminate(process)
+                    proof = self._terminate(process)
                     for stream in (process.stdin, process.stdout):
                         if stream is not None:
                             stream.close()
+                    if isinstance(process, WindowsJobProcess) and proof.get("processGroupStoppedVerified"):
+                        process.close()
             finally:
                 self.probe_slots.release()
 
@@ -327,7 +352,7 @@ class JobManager:
         try:
             return inspect_claude_cli(self._cli_text(env, ["claude", "--version"]),
                                      self._cli_text(env, ["claude", "--help"]))
-        except (RequestError, OSError, ValueError):
+        except (RequestError, OSError, ValueError, PlatformError):
             return {"available": False, "cliFlagsVerified": False, "protocolVerified": False,
                     "accountConfigured": None, "modelInferenceVerified": False,
                     "message": "Claude CLI version/help unavailable; no session or model turn was started"}
@@ -338,9 +363,7 @@ class JobManager:
         launch, cwd = self._launch(env, argv)
         child_env = dict(os.environ)
         child_env.pop("POCKETENGINE_COMPANION_TOKEN", None)
-        options = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-        process = subprocess.Popen(launch, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, env=child_env, bufsize=0, **options)
+        process = self._spawn(env, launch, cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=child_env)
         chunks, size = [], [0]
         def drain():
             try:
@@ -364,9 +387,11 @@ class JobManager:
         except subprocess.TimeoutExpired:
             raise ValueError("CLI diagnostic timed out")
         finally:
-            self._terminate(process)
+            proof = self._terminate(process)
             reader.join(timeout=1)
             process.stdout.close()
+            if isinstance(process, WindowsJobProcess) and proof.get("processGroupStoppedVerified"):
+                process.close()
 
     def _environment(self, eid):
         if eid not in self.environments:
@@ -415,6 +440,8 @@ class JobManager:
 
     def _launch(self, env, argv):
         if env.get("kind", "local") == "ssh":
+            if os.name == "nt":
+                raise RequestError("Windows Companion SSH second hop is not supported; use the phone's original direct SSH capability", 409)
             remote = "cd -- " + shlex.quote(env["root"]) + " && exec " + shlex.join(argv)
             return self.ssh_prefix(env) + [remote], None
         executable = argv[0]
@@ -425,7 +452,27 @@ class JobManager:
             # replace the probed worker through a relative or dot-PATH entry in the new checkout.
             resolved = executable if os.path.isabs(executable) else shutil.which(executable)
             argv = [str(Path(resolved).resolve()), *argv[1:]]
+        elif os.name == "nt":
+            resolved = executable if os.path.isabs(executable) else shutil.which(executable)
+            if not resolved or Path(resolved).suffix.lower() != ".exe":
+                raise RequestError("Windows native command requires an installed allowlisted .exe; shell/batch fallback is unavailable", 409)
+            argv = [str(Path(resolved).absolute()), *argv[1:]]
         return argv, env["root"]
+
+    def _spawn(self, environment, argv, cwd, *, stdin, stdout, stderr, env):
+        if os.name == "nt":
+            if environment.get("kind", "local") != "local":
+                raise RequestError("Native Windows process backend requires a local environment", 409)
+            with self.lock:
+                if self._unsettled_native_starts:
+                    raise PlatformError("Original native process construction cleanup is unverified; local stop/restart is required")
+                try:
+                    return self.platform.spawn_command(argv, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, env=env, bufsize=0)
+                except NativeProcessStartError as failure:
+                    if not failure.cleanup_proof.get("processGroupStoppedVerified"):
+                        self._unsettled_native_starts.append(failure.process)
+                    raise
+        return subprocess.Popen(argv, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, env=env, bufsize=0, start_new_session=True)
 
     @staticmethod
     def resource_id(env):
@@ -437,6 +484,8 @@ class JobManager:
     def workspace_identity(env):
         if env.get("kind", "local") != "local":
             return None  # No local inode proof for an SSH workspace.
+        if os.name == "nt":
+            return get_backend().root_binding(env["root"])
         info = os.stat(env["root"], follow_symlinks=False)
         if not stat.S_ISDIR(info.st_mode):
             raise RequestError("Configured workspace is no longer the original regular directory", 409)
@@ -457,9 +506,14 @@ class JobManager:
             return {"id": found[0], "operationId": operation, "status": "unknown", "archived": True, "lastKnownStatus": found[1],
                     "message": "Execution receipt is no longer retained; the operation remains reserved and must not be replayed"}
 
-    def submit(self, request):
+    def submit(self, request, *, native_device_admission=None):
         operation = identifier(request.get("operationId"), "operationId")
-        fingerprint = hashlib.sha256(json.dumps(request, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        if native_device_admission is not None:
+            from device_companion import NativeCommandAdmission
+            NativeCommandAdmission.require(native_device_admission, self, request)
+            fingerprint = native_device_admission.fingerprint
+        else:
+            fingerprint = hashlib.sha256(json.dumps(request, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         request = dict(request)
         with self.lock:
             found = self.ledger.execute("SELECT fingerprint FROM operations WHERE operation_id=?", (operation,)).fetchone()
@@ -590,6 +644,10 @@ class JobManager:
                    "worker": request.get("worker", "command"), "resourceId": self.resource_id(env), "status": "queued", "createdAt": self.now(), "updatedAt": self.now(),
                    "output": "", "outputTruncated": False, "exitCode": None, "message": "Queued", "remoteEffectsVerified": False}
             job["workspaceIdentity"] = self.workspace_identity(env)
+            if job["worker"] == "command":
+                job["outputEncoding"] = env.get("commandOutputEncoding", "utf-8")
+            if native_device_admission is not None:
+                job["nativeDeviceOperation"] = native_device_admission.audience()
             if assignment_record is not None:
                 job.update(assignmentWorkspace=dict(request["assignmentWorkspace"]), assignmentEnvironmentBinding=request["environmentBinding"], externalJobLimits=dict(assignment_record["limits"]), processStarted=False, dispatchFenceFinal=False, notStartedConfirmed=False,
                            inferenceUsage={"modelCalls": None, "inputTokens": None, "outputTokens": None, "cost": None, "status": "unknown", "source": "external_cli_no_per_request_accounting"},
@@ -619,11 +677,16 @@ class JobManager:
                 job["_harnessConfigRequest"] = {key: request[key] for key in ("harnessConfigOperationId", "harnessOwnerBinding")}
             # Reserve idempotency before dispatch. If the job document cannot be saved,
             # subsequent queries remain conservative instead of repeating a side effect.
-            self.ledger.execute("INSERT INTO operations(operation_id,fingerprint,job_id,last_status,updated_at) VALUES (?, ?, ?, ?, ?)", (operation, fingerprint, job["id"], "queued", job["updatedAt"]))
+            if native_device_admission is not None:
+                job["budgetClaim"] = native_device_admission.prepare(job)
+            else:
+                self.ledger.execute("INSERT INTO operations(operation_id,fingerprint,job_id,last_status,updated_at) VALUES (?, ?, ?, ?, ?)", (operation, fingerprint, job["id"], "queued", job["updatedAt"]))
             if assignment_record is not None and request["assignmentWorkspace"].get("mode") == assignment_projects.MODE:
                 assignment_projects.bind_job(self, assignment_record, job)
             self.ledger.commit()
             self.jobs[job["id"]] = job
+            if native_device_admission is not None:
+                self.native_device_admissions[job["id"]] = native_device_admission
             self._save(job)
             self._prune()
             if input_state is None:
@@ -641,6 +704,8 @@ class JobManager:
                 (self.state / ("job-" + old["id"] + ".json")).unlink(missing_ok=True)
 
     def _save(self, job):
+        if job.get("nativeDeviceOperation"):
+            job["nativeDeviceRevision"] = job.get("nativeDeviceRevision", 0) + 1
         if not job.get("inputState"):
             atomic_json(self.state / ("job-" + job["id"] + ".json"), job)
             if job.get("operationId"):
@@ -776,6 +841,8 @@ class JobManager:
 
     @staticmethod
     def _terminate_group(process, hard=False):
+        if isinstance(process, WindowsJobProcess):
+            return get_backend().terminate(process, hard=hard)
         proof = {"terminationRequested": True, "leaderReaped": False, "processGroupKillAttempted": False, "processGroupStoppedVerified": False}
         try:
             if os.name == "nt":
@@ -840,6 +907,10 @@ class JobManager:
 
     def cancel(self, jobid):
         with self.lock:
+            desktop = self.jobs.get(jobid, {}).get("protocol") == "desktop-v1" and self.jobs.get(jobid, {}).get("status") not in TERMINAL
+        if desktop and self.device_companion is not None:
+            return self.device_companion.cancel_desktop(jobid)
+        with self.lock:
             job = self.jobs.get(identifier(jobid, "jobId"))
             if job is None:
                 raise RequestError("Job not found", 404)
@@ -856,7 +927,7 @@ class JobManager:
             driver = self.drivers.get(jobid)
         if process is not None and (driver is None or job.get("assignmentWorkspace")):
             proof = self._terminate(process, hard=bool(job.get("assignmentWorkspace")))
-            if job.get("assignmentWorkspace"):
+            if job.get("assignmentWorkspace") or job.get("nativeDeviceOperation"):
                 with self.lock:
                     self.jobs[jobid]["processCleanupProof"] = proof
                     self._save(self.jobs[jobid])
@@ -873,12 +944,18 @@ class JobManager:
         assignment = False
         group_input = bool(codex and codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP")
         cleanup = None
+        start_failure = None
+        native_admission = self.native_device_admissions.get(jobid)
         try:
+            if native_admission is not None:
+                native_admission.check_current()
             with self.resource_changed:
                 job = self.jobs[jobid]
                 assignment = bool(job.get("assignmentWorkspace"))
                 resource = job["resourceId"]
                 while resource in self.resources and jobid not in self.stopping and not self.closed:
+                    if native_admission is not None:
+                        native_admission.check_current()
                     self.resource_changed.wait(timeout=0.2)
                 if jobid in self.stopping or self.closed:
                     job.update(status="cancelled", message="Cancelled before dispatch", updatedAt=self.now())
@@ -905,6 +982,8 @@ class JobManager:
             with self.resource_changed:
                 if self.closed or jobid in self.stopping:
                     raise RequestError("Cancelled before original worker dispatch", 409)
+                if native_admission is not None:
+                    native_admission.check_current()
                 actual_env = assignment_workspaces.job_environment(self, job, RequestError)
                 if job.get("workspaceIdentity") and job["workspaceIdentity"] != self.workspace_identity(actual_env):
                     raise RequestError("Original workspace changed before worker launch", 409)
@@ -925,8 +1004,10 @@ class JobManager:
                         raise RequestError(str(failure), 409) from failure
                 if job.get("worker") == "claude":
                     child_env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
-                options = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-                process = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE if codex else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL if codex else subprocess.STDOUT, env=child_env, bufsize=0, **options)
+                if native_admission is not None:
+                    child_env = native_admission.child_environment(child_env)
+                process = self._spawn(actual_env, argv, cwd, stdin=subprocess.PIPE if codex else subprocess.DEVNULL,
+                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL if codex else subprocess.STDOUT, env=child_env)
                 process._pocket_cleanup_lock = threading.Lock()
                 self.processes[jobid] = process
                 job.update(status="running", processStarted=True, dispatchFenceFinal=False, message="Remote SSH process started" if remote else "Process started", updatedAt=self.now())
@@ -1022,7 +1103,9 @@ class JobManager:
             reader = threading.Thread(target=self._read_output, args=(jobid, process, reader_stop), daemon=True)
             reader.start()
             deadline = time.monotonic() + timeout
-            while process.poll() is None:
+            while process.poll() is None or isinstance(process, WindowsJobProcess) and process.tree_active_count() != 0:
+                if native_admission is not None:
+                    native_admission.check_current()
                 with self.lock:
                     stopping = jobid in self.stopping or self.closed
                 if stopping or time.monotonic() >= deadline:
@@ -1037,6 +1120,8 @@ class JobManager:
             reader.join(timeout=2)
             reader_stop.set()
             reader.join(timeout=0.3)
+            if isinstance(process, WindowsJobProcess):
+                cleanup = self._terminate(process, hard=True)
             with self.lock:
                 job = self.jobs[jobid]
                 stopped = jobid in self.stopping or self.closed or timed_out
@@ -1046,10 +1131,20 @@ class JobManager:
                 else:
                     status = "completed" if code == 0 else "failed"
                     message = "Process exited; inspect output and artifacts" if code == 0 else "Process failed; inspect output"
+                if isinstance(process, WindowsJobProcess):
+                    job["processCleanupProof"] = cleanup
+                    if not cleanup.get("processGroupStoppedVerified"):
+                        status, message = "unknown", "Original Windows Job Object did not confirm zero active processes; effects/resource remain unverified"
                 job.update(status=status, exitCode=code, message=message, updatedAt=self.now(), timedOut=timed_out)
                 self._save(job)
-        except (OSError, ValueError, sqlite3.Error, DriverError, RequestError) as error:
-            if process is not None:
+        except (OSError, ValueError, sqlite3.Error, DriverError, RequestError, PlatformError) as error:
+            if isinstance(error, NativeProcessStartError):
+                process, start_failure = error.process, error.start_facts
+                cleanup = error.cleanup_proof
+                with self.lock:
+                    self.processes[jobid] = process
+                    self.jobs[jobid]["processStartFacts"] = dict(start_failure)
+            elif process is not None:
                 cleanup = self._terminate(process, hard=assignment)
             with self.lock:
                 before_dispatch = isinstance(error, RequestError) and process is None or isinstance(error, DriverError) and codex and driver is not None and not driver.turn_dispatched and (not getattr(driver, "fork_dispatched", False) or getattr(driver, "fork_refused", False))
@@ -1066,7 +1161,9 @@ class JobManager:
                 except (OSError, ValueError, sqlite3.Error):
                     with self.lock:
                         self.jobs[jobid].update(status="unknown", message="Steering receipt could not be persisted; inspect the original operation before continuing")
-            if process is not None and process.poll() is not None and self.jobs[jobid].get("projectHistoryScope"):
+            if isinstance(process, WindowsJobProcess) and cleanup is None:
+                cleanup = self._terminate(process, hard=True)
+            if self.jobs[jobid].get("projectHistoryScope") and process is not None and start_failure is None and process.poll() is not None:
                 try:
                     project_history.after(self, self.jobs[jobid], RequestError)
                 except (OSError, ValueError, sqlite3.Error, RequestError):
@@ -1084,7 +1181,8 @@ class JobManager:
                     job = self.jobs[jobid]
                     if process is not None and cleanup is None:
                         cleanup = self._terminate(process, hard=True)
-                    job.update(dispatchFenceFinal=True, notStartedConfirmed=process is None, processStarted=process is not None)
+                    job.update(dispatchFenceFinal=start_failure is None or (cleanup or {}).get("processGroupStoppedVerified") is True,
+                               notStartedConfirmed=process is None, processStarted=process is not None)
                     if cleanup is not None:
                         job["processCleanupProof"] = cleanup
                     if process is not None and not cleanup.get("processGroupStoppedVerified"):
@@ -1096,9 +1194,20 @@ class JobManager:
                     job["inferenceUsage"] = {"modelCalls": None, "inputTokens": None, "outputTokens": None, "cost": None, "status": "unknown", "source": "external_cli_no_per_request_accounting"}
                     self._save(job)
                 job = self.jobs[jobid]
+                if native_admission is not None:
+                    # Native operation cancellation reports this ORIGINAL tree's
+                    # proof, never an empty PID table or a terminal status alone.
+                    job.update(processStarted=process is not None, notStartedConfirmed=process is None)
+                    if cleanup is not None:
+                        job["processCleanupProof"] = cleanup
+                    elif process is None:
+                        job["processCleanupProof"] = {"notStartedConfirmed": True, "processGroupStoppedVerified": True}
+                    job["dispatchFenceFinal"] = job.get("processCleanupProof", {}).get("processGroupStoppedVerified") is True
+                    self._save(job)
                 if job.get("inputState"):
                     job["inputState"]["phase"] = job["status"]
-                    job.update(dispatchFenceFinal=True, notStartedConfirmed=process is None, processStarted=process is not None)
+                    job.update(dispatchFenceFinal=start_failure is None or (cleanup or {}).get("processGroupStoppedVerified") is True,
+                               notStartedConfirmed=process is None, processStarted=process is not None)
                     self._save(job)
                 if job.get("harnessConfigOperationId"):
                     if process is not None and cleanup is None:
@@ -1108,28 +1217,40 @@ class JobManager:
                     job["dispatchFenceFinal"] = stopped
                     self.harness_configs.settle_job(job, stopped)
                     self._save(job)
-                self.processes.pop(jobid, None)
+                unverified_start = start_failure is not None and not (cleanup or {}).get("processGroupStoppedVerified")
+                if not unverified_start:
+                    self.processes.pop(jobid, None)
                 self.drivers.pop(jobid, None)
+                self.native_device_admissions.pop(jobid, None)
                 self.stopping.discard(jobid)
-                if acquired_resource is not None and not ((assignment or group_input) and process is not None and not cleanup.get("processGroupStoppedVerified")):
+                if acquired_resource is not None and not ((assignment or group_input or isinstance(process, WindowsJobProcess) or start_failure is not None) and process is not None and not (cleanup or {}).get("processGroupStoppedVerified")):
                     self.resources.discard(acquired_resource)
                 self.resource_changed.notify_all()
             if process is not None and process.stdout is not None:
                 process.stdout.close()
             if process is not None and process.stdin is not None:
                 process.stdin.close()
+            if isinstance(process, WindowsJobProcess):
+                if cleanup is None:
+                    cleanup = self._terminate(process, hard=True)
+                if cleanup.get("processGroupStoppedVerified"):
+                    process.close()
 
     def _read_output(self, jobid, process, stopped):
         pending = ""
-        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        native = isinstance(process, WindowsJobProcess) or bool(self.jobs[jobid].get("nativeDeviceOperation"))
+        encoding = self.jobs[jobid].get("outputEncoding", "utf-8") if native else "utf-8"
+        decoder = codecs.getincrementaldecoder(encoding)("strict" if native else "replace")
+        decode_failed = False
         def append(value):
             value = value.replace(self.token, "[token hidden]")
             with self.lock:
                 job = self.jobs[jobid]
-                room = MAX_OUTPUT - len(job["output"])
+                room = MAX_OUTPUT - len(job["output"].encode("utf-8"))
+                encoded = value.encode("utf-8")
                 if room > 0:
-                    job["output"] += value[:room]
-                if len(value) > max(0, room):
+                    job["output"] += encoded[:room].decode("utf-8", errors="ignore")
+                if len(encoded) > max(0, room):
                     job["outputTruncated"] = True
                 job["updatedAt"] = self.now()
         try:
@@ -1138,9 +1259,21 @@ class JobManager:
                     continue
                 chunk = process.stdout.read(4096)
                 if not chunk:
-                    pending += decoder.decode(b"", final=True)
+                    if not decode_failed:
+                        try:
+                            pending += decoder.decode(b"", final=True)
+                        except UnicodeDecodeError:
+                            decode_failed = True
                     break
-                pending += decoder.decode(chunk)
+                with self.lock:
+                    self.jobs[jobid]["rawOutputBytesDrained"] = self.jobs[jobid].get("rawOutputBytesDrained", 0) + len(chunk)
+                if decode_failed:
+                    continue  # Still drain every byte; never deadlock the child.
+                try:
+                    pending += decoder.decode(chunk)
+                except UnicodeDecodeError:
+                    decode_failed = True
+                    continue
                 # Redact before splitting; retain enough tail to match a token across reads.
                 pending = pending.replace(self.token, "[token hidden]")
                 keep = len(self.token) - 1
@@ -1150,6 +1283,10 @@ class JobManager:
             pass
         finally:
             append(pending)
+            if native:
+                with self.lock:
+                    self.jobs[jobid].update(outputDecodeStatus="invalid_declared_encoding" if decode_failed else "decoded_declared_encoding",
+                                            outputEncoding=encoding, outputLosslesslyDecoded=not decode_failed)
 
     def approve(self, jobid, request):
         with self.lock:
@@ -1470,10 +1607,22 @@ class JobManager:
         with self.lock:
             self.closed = True
             running = [j["id"] for j in self.jobs.values() if j["status"] not in TERMINAL]
+        if self.device_companion is not None:
+            self.device_companion.close()
         for jobid in running:
             self.cancel(jobid)
         self.harness_gateway.close()
         self.pool.shutdown(wait=True, cancel_futures=False)
+        # Failed construction can leave an ORIGINAL created process even though
+        # _spawn never returned. Keep it reachable until explicit local close;
+        # request final Job cleanup without upgrading an unknown stop to success.
+        with self.lock:
+            unsettled = list({id(p): p for p in [*self._unsettled_native_starts, *self.processes.values()]}.values())
+        for process in unsettled:
+            self._terminate(process, hard=True)
+            if isinstance(process, WindowsJobProcess):
+                process.close()  # KILL_ON_JOB_CLOSE is a request, not new proof.
+        self.harness_configs.close()
         with self.lock:
             self.ledger.close()
 
@@ -1713,7 +1862,7 @@ def initialize(path: Path, workspace: str):
     print("Created configuration and private token file. Enter the token on your phone; it is not printed here.")
 
 
-def main():
+def main(*, config_override=None):
     parser = argparse.ArgumentParser(description="PocketEngine owner Companion")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--init", action="store_true")
@@ -1722,7 +1871,14 @@ def main():
     if args.init:
         initialize(args.config.expanduser().resolve(), args.workspace)
         return
-    config = json.loads(args.config.expanduser().read_text(encoding="utf-8"))
+    if config_override is not None:
+        from windows_installation import NativeInstalledConfig, same_path
+        if not isinstance(config_override, NativeInstalledConfig) or not same_path(str(args.config), config_override.config_path):
+            raise ValueError("Installed configuration override requires original verified native context")
+        config_override.check_current()
+        config = config_override.json()
+    else:
+        config = json.loads(args.config.expanduser().read_text(encoding="utf-8"))
     host = config.get("listen", "127.0.0.1")
     try:
         loopback = ipaddress.ip_address(host).is_loopback
@@ -1735,19 +1891,49 @@ def main():
     if os.name != "nt" and token_path.stat().st_mode & 0o077:
         raise ValueError("Token file must not be accessible to other users (chmod 600)")
     manager = JobManager(config, token_path.read_text(encoding="utf-8").strip())
-    server = CompanionServer((host, int(config.get("port", 8766))), manager)
-    if tls:
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.load_cert_chain(config["tlsCert"], config["tlsKey"])
-        server.socket = context.wrap_socket(server.socket, server_side=True)
-    print("Pocket World Companion listening; authentication required; press Ctrl+C to stop.")
+    if isinstance(config.get("devices"), dict) and config["devices"].get("enabled") is True:
+        from device_companion import DeviceCompanionService
+        try:
+            manager.device_companion = DeviceCompanionService(manager)
+            manager.device_companion.start()
+        except BaseException:
+            manager.close()
+            raise
+    serve_original_manager(manager)
+
+
+def serve_original_manager(manager):
+    """Continue the SAME original manager after an explicit native owner action.
+
+    Pairing has no new Agent, HTTP-token permission conversion or parallel DB.
+    The native entry may attach the original paired service before this call.
+    """
+    if not isinstance(manager, JobManager) or manager.closed:
+        raise ValueError("A current original Companion manager is required")
+    config = manager.config
+    host = config.get("listen", "127.0.0.1")
     try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = host == "localhost"
+    tls = bool(config.get("tlsCert") and config.get("tlsKey"))
+    if not loopback and (not config.get("allowRemote", False) or not tls):
+        raise ValueError("Non-loopback binding requires allowRemote=true and TLS certificate/key")
+    server = None
+    try:
+        server = CompanionServer((host, int(config.get("port", 8766))), manager)
+        if tls:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(config["tlsCert"], config["tlsKey"])
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+        print("Pocket World Companion listening; authentication required; press Ctrl+C to stop.")
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        if server is not None:
+            server.server_close()
         manager.close()
 
 

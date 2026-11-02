@@ -225,7 +225,7 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
             }
         }
         if (settings) SettingsSheet(state, controller, { settings = false }) { settings = false; connectionSection = null; connections = true }
-        if (connections) ConnectionCenter(state, controller, connectionSection) { connections = false }
+        if (connections) ConnectionCenter(state, controller, connectionSection, onOpenTask = { id, source -> connectionSection = source; openTask(id) }) { connections = false }
         if (taskMemorySearch) TaskMemorySearchSheet(controller) { taskMemorySearch = false }
         if (selectedTask != null) TaskSheet(selectedTask, state.activeTaskId == selectedTask.id, controller, if (taskReturnConnection != null) "返回原入口" else "返回" + listOf("对话", "任务", "项目")[taskReturnTab], ::closeTask)
         if (teamLaunch) TeamLaunchSheet(state, controller, draft) { teamLaunch = false }
@@ -456,8 +456,9 @@ private fun RecoveredComposerVoiceReview(draft:dev.pocketengine.features.assista
 @Composable
 internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldController, returnLabel: String = "返回", close: () -> Unit) {
     if (task.raw.optString("kind") == "inference") { InferenceRecordSheet(task, controller, returnLabel, close); return }
+    val pairedTask = task.raw.optJSONObject("origin")?.optString("kind") == "paired_device"
     var taskMemoryReference by remember(task.id) { mutableStateOf<JSONObject?>(null) }
-    taskMemoryReference?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
+    taskMemoryReference?.takeUnless { pairedTask }?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
     var feedback by rememberSaveable(task.id) { mutableStateOf("") }
     var resumeConsent by remember(task.id) { mutableStateOf(false) }
     var reconciliationNote by rememberSaveable(task.id) { mutableStateOf("") }
@@ -475,10 +476,10 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
     val sourceLearningTask = task.raw.optJSONObject("sourceLearningJob") != null
     val memoryConsolidationTask = sourceLearningTask || task.raw.optJSONObject("nativeEventTypeFlags")?.optBoolean("memory_owner_consolidation") == true || task.raw.optJSONArray("events").objects().any { it.optString("type") == "memory_owner_consolidation" }
     val mediaTask = MediaOwnerUi.isTask(task.raw)
-    LaunchedEffect(task.id, groupTask) { if (!groupTask) controller.refreshWorkspaceArtifacts() }
+    LaunchedEffect(task.id, groupTask) { if (!groupTask && !pairedTask) controller.refreshWorkspaceArtifacts() }
     val assistantTask = task.raw.optString("kind") == "assistant" && !mediaTask && !memoryConsolidationTask
     val assistantExecuting = assistantTask && task.status in setOf("preparing", "running", "pausing", "stopping")
-    val unknown = unresolvedOperations(task)
+    val unknown = unresolvedOperations(task).filterNot { it.optString("tool") in setOf("device_invoke_tool", "device_delegate_goal", "device_operation_get") }
     val processScope = rememberCoroutineScope()
     val approvalAnchor = remember(task.id) { BringIntoViewRequester() }
     val reconciliationAnchor = remember(task.id) { BringIntoViewRequester() }
@@ -489,7 +490,11 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             TextButton(onClick = close, modifier = Modifier.testTag("task_return_source")) { Text(returnLabel, fontSize = 14.sp) }
             Text("${taskStatus(task.status)} · ${executionLocation(task.executionMode)}", color = SecondaryInk, fontSize = 14.sp)
             Text(task.goal, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, lineHeight = 28.sp, modifier = Modifier.padding(top = 10.dp, bottom = 12.dp))
-            if (!groupTask && !mediaTask && !memoryConsolidationTask) ExecutionScopeControls(task,controller)
+            DeviceTaskProvenance(task) { controller.openConnection("devices"); close() }
+            if (pairedTask || task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") DeviceTaskHistoryControls(task, controller.nativeDeviceWorkspace(), controller::runDeviceWorkspaceWork, controller.deviceWorkspaceRevision, controller::deviceWorkspaceChanged)
+            if (pairedTask) DevicePairedTaskControls(task, controller.nativeDeviceWorkspace(), controller::runDeviceWorkspaceWork, controller::runDeviceWorkspaceControlWork, controller.deviceWorkspaceRevision, controller::deviceWorkspaceChanged) { controller.openConnection("models"); close() }
+            if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask) ExecutionScopeControls(task,controller)
+            if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask && task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optString("kind") in setOf("phone", "assistant") && task.status !in setOf("completed", "cancelled", "failed", "interrupted", "reconciling")) DeviceTaskScopeEntry(task, controller.nativeDeviceTaskScope(), controller::runDeviceWorkspaceWork) { controller.deviceTaskWorkspaceChanged(task.id) }
             if (!groupTask && !mediaTask && !memoryConsolidationTask && (phoneTask || assistantTask) && teamRunReferences(task).isEmpty()) TaskExecutionProcess(task, controller) { target ->
                 val anchor = when (target) {
                     TaskExecutionPresentation.Target.APPROVAL -> approvalAnchor
@@ -500,7 +505,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 processScope.launch { anchor.bringIntoView() }
             }
             val queuedConversation=task.raw.optString("conversationId")
-            if(assistantTask&&!groupTask&&queuedConversation.isNotBlank()&&task.raw.optString("actorId")=="owner"&&task.raw.optString("spaceId")=="private"&&task.raw.optJSONObject("origin")?.optString("kind") !in setOf("channel","group"))TextButton(onClick={controller.openQueuedOwnerInputs(task.id,queuedConversation)},modifier=Modifier.testTag("task_queued_inputs")){Text("查看待处理输入")}
+            if(!pairedTask&&assistantTask&&!groupTask&&queuedConversation.isNotBlank()&&task.raw.optString("actorId")=="owner"&&task.raw.optString("spaceId")=="private"&&task.raw.optJSONObject("origin")?.optString("kind") !in setOf("channel","group"))TextButton(onClick={controller.openQueuedOwnerInputs(task.id,queuedConversation)},modifier=Modifier.testTag("task_queued_inputs")){Text("查看待处理输入")}
             task.raw.optJSONObject("developmentContext")?.let { project -> TextButton(onClick = { controller.returnToDevelopmentProject(project.getString("projectId")); close() }) { Text("回到项目文件与网页预览") } }
             if (taskOriginLabel(task) == "主人私聊") {
                 val origin = task.raw.getJSONObject("origin")
@@ -516,18 +521,18 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 TextButton(onClick = { controller.openConnection("groups"); close() }) { Text("查看群授权、成员与投递") }
             }
             if (taskOriginLabel(task) == "语音复核") Text("来自你核对的本机最终字幕；服务来源标记不是身份认证。保存只建立待执行任务，后续工具与外发仍需原任务授权。", fontSize = 12.sp, lineHeight = 19.sp, color = SecondaryInk, modifier = Modifier.padding(bottom = 10.dp))
-            if (active) Row(Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedButton(onClick = { if (task.status == "paused") controller.continuePhone() else controller.pausePhone() }) { Text(if (task.status == "paused") "继续" else "暂停") }; TextButton(onClick = controller::stopPhone, colors = ButtonDefaults.textButtonColors(contentColor = Danger)) { Text("停止后续操作") } }
-            if (assistantExecuting) TextButton(onClick = { controller.stopReviewedTask(task) }, colors = ButtonDefaults.textButtonColors(contentColor = Danger), modifier = Modifier.padding(top = 12.dp)) { Text("停止后续工具操作") }
-            if (!groupTask && task.raw.optJSONObject("origin")?.optString("kind") != "channel" && !mediaTask && !memoryConsolidationTask && (phoneTask || assistantTask) && task.status in setOf("preparing", "running", "pausing", "paused", "awaiting_user")) {
+            if (!pairedTask && active) Row(Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedButton(onClick = { if (task.status == "paused") controller.continuePhone() else controller.pausePhone() }) { Text(if (task.status == "paused") "继续" else "暂停") }; TextButton(onClick = controller::stopPhone, colors = ButtonDefaults.textButtonColors(contentColor = Danger)) { Text("停止后续操作") } }
+            if (!pairedTask && assistantExecuting) TextButton(onClick = { controller.stopReviewedTask(task) }, colors = ButtonDefaults.textButtonColors(contentColor = Danger), modifier = Modifier.padding(top = 12.dp)) { Text("停止后续工具操作") }
+            if (!pairedTask && !groupTask && task.raw.optJSONObject("origin")?.optString("kind") != "channel" && !mediaTask && !memoryConsolidationTask && (phoneTask || assistantTask) && task.status in setOf("preparing", "running", "pausing", "paused", "awaiting_user")) {
                 val mainScreenBusy = phoneTask && task.executionMode == "main_screen" && task.status !in setOf("paused", "awaiting_user")
                 TextButton(onClick = { controller.openQuickPanel(task) }, enabled = !mainScreenBusy, modifier = Modifier.testTag("task_quick_panel")) { Text("在其他 App 补充上下文") }
                 if (mainScreenBusy) Text("先暂停主屏任务，再切到需要的 App 捕获内容。", color = SecondaryInk, fontSize = 12.sp)
             }
             host.taskActionErrors[task.id]?.let { Text(it, color = Danger, fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 8.dp)) }
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(approvalAnchor))
-            if (!mediaTask && (!groupTask || controller.groupTaskReady) && pendingCapabilityApprovals(task).isNotEmpty()) CapabilityApprovals(task, controller)
+            if (!pairedTask && !mediaTask && (!groupTask || controller.groupTaskReady) && pendingCapabilityApprovals(task).isNotEmpty()) CapabilityApprovals(task, controller)
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(reconciliationAnchor))
-            if (unknown.isNotEmpty() && !mediaTask && !sourceLearningTask)
+            if (!pairedTask && unknown.isNotEmpty() && !mediaTask && !sourceLearningTask)
                 TaskReconciliationCard(task.id, unknown) { id, outcome -> controller.resolveReviewedTask(task, id, outcome) }
             host.modelDrafts[task.id]?.let { ModelStreamPreview(it) }
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(resultAnchor))
@@ -549,21 +554,21 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 Text("已保存成果", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
                 resultFiles.forEach { file -> ConversationFileRow(file, host, { controller.openTaskResultAttachment(task.id, file) }) }
             }
-            val projectArtifacts = if (groupTask) emptyList() else workspaceArtifacts(host, taskId = task.id)
+            val projectArtifacts = if (pairedTask || groupTask) emptyList() else workspaceArtifacts(host, taskId = task.id)
             if (projectArtifacts.isNotEmpty()) {
                 Text("项目文件成果", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
                 projectArtifacts.forEach { WorkspaceArtifactRow(it, controller, task.id) }
             }
             host.error?.let { Text(it, color = Danger, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 12.dp)) }
-            if(!groupTask&&!memoryConsolidationTask)TextButton(onClick={controller.openTaskOutcomes(task.id)}){Text("文件、来源与可继续成果")}
+            if(!pairedTask&&!groupTask&&!memoryConsolidationTask)TextButton(onClick={controller.openTaskOutcomes(task.id)}){Text("文件、来源与可继续成果")}
             if(groupTask)for(operation in task.raw.optJSONArray("operations").objects().filter{it.optString("tool").startsWith("group_media_")})TextButton(onClick={controller.openGroupMediaOutcome(task,operation.optString("operationId"))}){Text("查看原媒体操作与成果")}
             if (memoryConsolidationTask) {
                 Text("这是你明确请求的候选提炼记录；完成只表示提炼处理结束，不代表已采用记忆。", fontSize = 12.sp, lineHeight = 20.sp, color = SecondaryInk)
                 TextButton(onClick = { controller.openConnection("memoryReview"); close() }) { Text("打开原记忆候选审阅") }
             }
             if (mediaTask) MediaTaskPanel(task, host, controller, showArtifacts = resultFiles.isEmpty())
-            else if ((!groupTask || controller.groupTaskReady) && pendingCapabilityApprovals(task).isEmpty()) CapabilityApprovals(task, controller)
-            if (!groupTask && task.raw.optString("spaceId", "private") == "private") {
+            else if (!pairedTask && (!groupTask || controller.groupTaskReady) && pendingCapabilityApprovals(task).isEmpty()) CapabilityApprovals(task, controller)
+            if (!pairedTask && !groupTask && task.raw.optString("spaceId", "private") == "private") {
                 TextButton(onClick = { contextDetails = !contextDetails }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("task_context_tools").semantics { stateDescription = if (contextDetails) "已展开" else "已收起" }) {
                     Text("上下文与工具", modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
                     AffectGlyph(if (contextDetails) "chevron" else "chevron-right")
@@ -571,36 +576,36 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 androidx.compose.animation.AnimatedVisibility(visible = contextDetails) {
                     Column(Modifier.fillMaxWidth()) {
                     if (assistantTask && !groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optJSONObject("origin")?.optString("kind") != "channel" && teamRunReferences(task).isEmpty()) TextButton(onClick = { controller.openBrowserResearch(task.id) }, modifier = Modifier.testTag("task_browser_research")) { Text("网页与研究工作区") }
-                    if (!groupTask && task.raw.optString("spaceId", "private") == "private") TextButton(onClick = { taskMemoryReference = task.raw.optJSONObject("evidence")?.optJSONObject("memoryReference")?.let { JSONObject(it.toString()) } ?: JSONObject().put("taskId", task.id).put("runId", task.raw.optString("runId").ifBlank { "unavailable" }).put("requestId", "unavailable").put("answerId", "unavailable") }) { Text("这次请求的记忆来源与原证据", fontSize = 12.sp) }
+                    if (!pairedTask && !groupTask && task.raw.optString("spaceId", "private") == "private") TextButton(onClick = { taskMemoryReference = task.raw.optJSONObject("evidence")?.optJSONObject("memoryReference")?.let { JSONObject(it.toString()) } ?: JSONObject().put("taskId", task.id).put("runId", task.raw.optString("runId").ifBlank { "unavailable" }).put("requestId", "unavailable").put("answerId", "unavailable") }) { Text("这次请求的记忆来源与原证据", fontSize = 12.sp) }
                     if (!groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") TextButton(onClick = { capabilityPreparation = true }) { Text("这项任务的技能与工具", fontSize = 12.sp) }
                     }
                 }
             }
-            RemoteTaskApprovals(task, controller)
-            RemoteSteerPanel(task.raw, host.moduleBusy.any { it in setOf("remote.steerJob", "remote.getSteerMessage") },
+            if (!pairedTask) RemoteTaskApprovals(task, controller)
+            if (!pairedTask) RemoteSteerPanel(task.raw, host.moduleBusy.any { it in setOf("remote.steerJob", "remote.getSteerMessage") },
                 host.moduleErrors["remote.steerJob"] ?: host.moduleErrors["remote.getSteerMessage"],
                 host.moduleResults["remote.steerJob"], host.moduleResultInputs["remote.steerJob"]) { command, payload -> controller.requestFeature("remote", command, payload) }
-            teamRunReferences(task).forEach { runId -> OutlinedButton(onClick = { controller.openTeam(runId) }, modifier = Modifier.padding(top = 12.dp)) { Text("查看团队成员、会话与任务") } }
-            if (phoneTask && task.executionMode == "background" && task.status != "completed") OutlinedButton(onClick = { controller.openInspection(task.id) }, modifier = Modifier.padding(top = 14.dp)) { Text("查看独立屏与接管") }
+            if (!pairedTask) teamRunReferences(task).forEach { runId -> OutlinedButton(onClick = { controller.openTeam(runId) }, modifier = Modifier.padding(top = 12.dp)) { Text("查看团队成员、会话与任务") } }
+            if (!pairedTask && phoneTask && task.executionMode == "background" && task.status != "completed") OutlinedButton(onClick = { controller.openInspection(task.id) }, modifier = Modifier.padding(top = 14.dp)) { Text("查看独立屏与接管") }
             if (phoneTask && task.status == "reconciling" && unknown.isEmpty()) Text("正在读取待核对的动作，请稍候或重新打开此任务。", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 16.dp))
-            if (!phoneTask && task.raw.optString("kind") != "assistant" && task.status == "reconciling" && unknown.isEmpty()) Column(Modifier.fillMaxWidth().padding(top = 18.dp).clip(Rounded).background(Soft).padding(16.dp)) {
+            if (!pairedTask && !phoneTask && task.raw.optString("kind") != "assistant" && task.status == "reconciling" && unknown.isEmpty()) Column(Modifier.fillMaxWidth().padding(top = 18.dp).clip(Rounded).background(Soft).padding(16.dp)) {
                 Text("核对外部执行结果", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 Text("先到对应服务或电脑检查实际结果，再记录核对结论。这里不会自动重试。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 6.dp))
                 OutlinedTextField(reconciliationNote, { reconciliationNote = it }, label = { Text("核对说明") }, minLines = 2, maxLines = 4, modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = { controller.reconcileExternalTask(task.id, "not_occurred", reconciliationNote) }, enabled = reconciliationNote.isNotBlank()) { Text("确认未发生") }; Button(onClick = { controller.reconcileExternalTask(task.id, "occurred", reconciliationNote) }, enabled = reconciliationNote.isNotBlank()) { Text("确认已发生") } }
             }
-            if (task.status == "completed" && !groupTask && !memoryConsolidationTask) SourceMemoryControl("task", task.id, task.summary, host, controller)
+            if (!pairedTask && task.status == "completed" && !groupTask && !memoryConsolidationTask) SourceMemoryControl("task", task.id, task.summary, host, controller)
             TaskImage(task)
-            if (!active && task.status == "needs_confirmation") Row(Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = { controller.confirmReviewedTask(task, true, if (groupTask) "" else feedback) }) { Text("确认已完成") }; OutlinedButton(onClick = { controller.confirmReviewedTask(task, false, if (groupTask) "" else feedback) }) { Text("还需处理") } }
+            if (!pairedTask && !active && task.status == "needs_confirmation") Row(Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = { controller.confirmReviewedTask(task, true, if (groupTask) "" else feedback) }) { Text("确认已完成") }; OutlinedButton(onClick = { controller.confirmReviewedTask(task, false, if (groupTask) "" else feedback) }) { Text("还需处理") } }
             if (groupTask && task.status != "completed" && !assistantExecuting) Button(onClick = { resumeConsent = true }, enabled = controller.groupTaskReady && !task.raw.optBoolean("cancelRequested") && unknown.isEmpty() && pendingCapabilityApprovals(task).isEmpty() && task.status in setOf("paused", "awaiting_user", "needs_confirmation", "interrupted"), modifier = Modifier.padding(top = 12.dp)) { Text("按原群授权继续原任务") }
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(feedbackAnchor))
-            if (task.status != "completed" && !groupTask && !memoryConsolidationTask && !mediaTask) {
+            if (!pairedTask && task.status != "completed" && !groupTask && !memoryConsolidationTask && !mediaTask) {
                 OutlinedTextField(value = feedback, onValueChange = { feedback = it }, label = { Text("补充要求") }, placeholder = { Text("补充目标或说明你刚处理了什么…") }, modifier = Modifier.fillMaxWidth().padding(top = 22.dp), minLines = 2, maxLines = 5, shape = RoundedCornerShape(14.dp))
                 if (assistantExecuting) Text("先停止当前执行，再将补充保存并继续原任务。", fontSize = 11.sp, color = SecondaryInk, modifier = Modifier.padding(top = 8.dp))
                 Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedButton(onClick = { controller.updateTask(task.id, feedback) }, enabled = feedback.isNotBlank() && !assistantExecuting) { Text("保存补充") }; if (!active && !assistantExecuting && (phoneTask || assistantTask)) Button(onClick = { resumeConsent = true }, enabled = unknown.isEmpty() && pendingCapabilityApprovals(task).isEmpty() && task.status != "reconciling" && task.status != "stopping") { Text("继续此任务") } }
             }
             if (!phoneTask && !assistantTask && !mediaTask) Text(if (task.raw.optString("feature") == "remote") "原电脑会话与本次授权可从上方入口核对；未知结果仅查询，不会重提任务。" else "这是${executionLocation(task.executionMode)}任务，后续操作请回到对应能力入口；此处保留执行结果与记录。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 14.dp))
-            if (sourceLearningTask) dev.pocketengine.ui.memory.SourceLearningJobPanel(task.raw, controller) { close(); controller.openConnection("memoryReview") }
+            if (!pairedTask && sourceLearningTask) dev.pocketengine.ui.memory.SourceLearningJobPanel(task.raw, controller) { close(); controller.openConnection("memoryReview") }
             AssistantTaskNoticeStatus(task.raw,controller)
             TextButton(onClick = { auditDetails = !auditDetails }, modifier = Modifier.padding(top = 16.dp)) {
                 Text(if (auditDetails) "收起用量与原始记录" else "用量与原始记录", fontSize = 14.sp)
@@ -614,8 +619,8 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             Spacer(Modifier.height(24.dp))
         }
     }
-    if (resumeConsent) AlertDialog(onDismissRequest = { resumeConsent = false }, containerColor = Color.White, title = { Text("继续原任务") }, text = { Text(if (groupTask) "保留原群目标、来源、受众和累计额度，只从原任务续接；群或成员授权已变化、媒体已生成或效果未知时会拒绝，不会创建替代任务。" else if (assistantTask) "保留原任务目标、上下文与补充要求，继续调用已授权的工具。新的写操作仍需宿主授权。" else if (task.executionMode == "background") "将使用后台独立屏，读取保留的上下文并重新观察当前现场；独立屏不可用时会等待。" else "将操作手机主屏并占用当前屏幕；任务会先重新观察，再根据保留的上下文继续。") }, confirmButton = { Button(onClick = { controller.resumeTask(task, if (groupTask) "" else feedback); resumeConsent = false }) { Text("继续执行") } }, dismissButton = { TextButton(onClick = { resumeConsent = false }) { Text("取消") } })
-    if (capabilityPreparation) TaskCapabilityPage(task.id, controller.skillExecutionHost(), controller::runPluginCatalogWork,
+    if (!pairedTask && resumeConsent) AlertDialog(onDismissRequest = { resumeConsent = false }, containerColor = Color.White, title = { Text("继续原任务") }, text = { Text(if (groupTask) "保留原群目标、来源、受众和累计额度，只从原任务续接；群或成员授权已变化、媒体已生成或效果未知时会拒绝，不会创建替代任务。" else if (assistantTask) "保留原任务目标、上下文与补充要求，继续调用已授权的工具。新的写操作仍需宿主授权。" else if (task.executionMode == "background") "将使用后台独立屏，读取保留的上下文并重新观察当前现场；独立屏不可用时会等待。" else "将操作手机主屏并占用当前屏幕；任务会先重新观察，再根据保留的上下文继续。") }, confirmButton = { Button(onClick = { controller.resumeTask(task, if (groupTask) "" else feedback); resumeConsent = false }) { Text("继续执行") } }, dismissButton = { TextButton(onClick = { resumeConsent = false }) { Text("取消") } })
+    if (!pairedTask && capabilityPreparation) TaskCapabilityPage(task.id, controller.skillExecutionHost(), controller::runPluginCatalogWork,
         { controller.taskCapabilitySnapshot(task.id) }, { operation, artifact, sha -> controller.readTaskSkillArtifact(task.id, operation, artifact, sha) },
         { plugin, tool -> capabilityPreparation = false; close(); controller.openTaskMcpPreparation(task.id, plugin, tool) }, { capabilityPreparation = false }, controller::runEcosystemControlWork, jsHost = controller.pluginExecutionHost())
 }

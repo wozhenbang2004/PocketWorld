@@ -1,0 +1,3 @@
+# Optional explicit onboarding/signature backend, not required for stdlib TLS imports.
+# pyca/cryptography: Apache-2.0 OR BSD-3-Clause. No vendored application source.
+cryptography==50.0.0

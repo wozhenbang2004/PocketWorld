@@ -29,10 +29,10 @@ import org.json.JSONObject
 
 /** Native administration over the existing feature contracts, without another engine or store. */
 @Composable
-internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldController, initialSection: String? = null, close: () -> Unit) {
+internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldController, initialSection: String? = null, onOpenTask: ((String, String) -> Unit)? = null, close: () -> Unit) {
     var section by rememberSaveable { mutableStateOf(initialSection) }
-    val titles = mapOf("models" to "API 模型与能力", "accounts" to "ChatGPT 账号", "remote" to "电脑与服务器", "ssh" to "SSH 连接", "local" to "手机开发环境", "memory" to "私人记忆", "memoryReview" to "记忆学习审核", "automation" to "提醒与主动任务", "commitments" to "承诺与跟进", "channels" to "消息渠道", "skills" to "技能", "learning" to "经验技能", "plugins" to "插件", "pluginCatalog" to "我的插件目录", "mcp" to "MCP 工具导入", "teams" to "协作团队", "groups" to "群协作", "media" to "生图与语音文件", "realtime" to "实时音视频", "proxy" to "本机模型服务")
-    val nativePage = section in setOf("models", "memoryReview", "mcp", "accounts", "learning", "pluginCatalog", "groups")
+    val titles = mapOf("devices" to "我的设备", "models" to "API 模型与能力", "accounts" to "ChatGPT 账号", "remote" to "电脑与服务器", "ssh" to "SSH 连接", "local" to "手机开发环境", "memory" to "私人记忆", "memoryReview" to "记忆学习审核", "automation" to "提醒与主动任务", "commitments" to "承诺与跟进", "channels" to "消息渠道", "skills" to "技能", "learning" to "经验技能", "plugins" to "插件", "pluginCatalog" to "我的插件目录", "mcp" to "MCP 工具导入", "teams" to "协作团队", "groups" to "群协作", "media" to "生图与语音文件", "realtime" to "实时音视频", "proxy" to "本机模型服务")
+    val nativePage = section in setOf("devices", "models", "memoryReview", "mcp", "accounts", "learning", "pluginCatalog", "groups")
     LaunchedEffect(initialSection, state.requestedConnectionRevision) { if (initialSection != null) section = initialSection }
     DisposableEffect(section) {
         val domain = section
@@ -57,6 +57,18 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                     val error = state.ownerErrors[domain]
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         when (domain) {
+                            "devices" -> {
+                                val deviceHost = controller.nativeDeviceWorkspace()
+                                if (deviceHost != null) MyDevicesPanel(deviceHost, state.tasks,
+                                    controller::runDeviceWorkspaceWork, controller::deviceWorkspaceChanged,
+                                    { id -> if (onOpenTask != null) onOpenTask(id, "devices") else controller.focusTask(id) },
+                                    { section = "models" }, { section = null }, nativeRevision = controller.deviceWorkspaceRevision, runOnControl = controller::runDeviceWorkspaceControlWork)
+                                else Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Text("设备暂不可用", style = MaterialTheme.typography.titleMedium)
+                                    Text("暂未读取到设备状态，请稍后重新打开。", style = MaterialTheme.typography.bodyMedium)
+                                    TextButton(onClick = { section = null }) { Text("返回连接中心") }
+                                }
+                            }
                             "models" -> {
                                 val service = controller.nativeModelConnections()
                                 if (service != null) ModelConnectionsPage(service, controller::runModelConnectionWork, controller::modelConnectionChanged, { section = null })
@@ -107,6 +119,7 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                         if (section == null) {
                             ConnectionCatalog(titles, description = { id ->
                                 when (id) {
+                                    "devices" -> "连接你的手机与电脑，管理设备任务和权限"
                                     "accounts" -> "账号授权与主模型选择"
                                     "memoryReview" -> "核对学习候选、查看来源与管理遗忘"
                                     "learning" -> "从已审记忆整理经验，审阅后另行启用"

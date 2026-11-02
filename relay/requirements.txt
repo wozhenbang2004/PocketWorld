@@ -1,0 +1,2 @@
+# Optional isolated relay / Python device WSS transport; no dependency for legacy HTTPS.
+websockets==16.0

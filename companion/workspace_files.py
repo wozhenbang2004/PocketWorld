@@ -132,7 +132,7 @@ class WorkspaceFiles:
         row = self.database.execute("SELECT receipt FROM file_operations WHERE operation_id=?", (operation,)).fetchone()
         return json.loads(row[0]) if row else {"operationId": operation, "status": "not_found", "message": "No file write receipt was accepted; no write was submitted by this query"}
 
-    def write(self, environment_id, env, request):
+    def write(self, environment_id, env, request, *, current=lambda: None):
         if not env.get("writeAllowed", False):
             raise FileError("File writes are not enabled for this environment", 403)
         path = request.get("path")
@@ -143,7 +143,7 @@ class WorkspaceFiles:
         operation = request.get("operationId")
         if not isinstance(operation, str) or not 1 <= len(operation) <= 80 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in operation):
             raise FileError("A valid operationId is required")
-        return self._write_bytes(environment_id, env, request, content.encode("utf-8"))
+        return self._write_bytes(environment_id, env, request, content.encode("utf-8"), current)
 
     def restore_original(self, environment_id, env, request, original_bytes, current):
         """Internal original-snapshot bytes only; not a generic JSON/base64 upload endpoint."""

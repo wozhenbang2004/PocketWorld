@@ -18,6 +18,7 @@ public final class TeamMemberEvidencePort implements CapabilityPort {
     private static final Set<String> READS=Set.of("team_materials","memory_search","memory_recall","team_read_source","team_read_material","skills_list","skills_read");
     private final TeamMemberEvidenceHost host;private final FeatureHost features;private final TaskStore tasks;private final TaskMemoryUse.SourceReader sources;private final TeamCoordinator.MemberEvidenceCall caller;
     private final ArrayList<TaskStore.TeamMemberRead> returned=new ArrayList<>();private volatile boolean closed,invalidated;
+    private TaskStore.TeamResearchBinding research;
     TeamMemberEvidencePort(TeamMemberEvidenceHost host,FeatureHost features,TaskStore tasks,TaskMemoryUse.SourceReader sources,TeamCoordinator.MemberEvidenceCall caller){this.host=host;this.features=features;this.tasks=tasks;this.sources=sources;this.caller=caller;}
     public static boolean readTool(String tool){return READS.contains(tool);}
     boolean belongsTo(String run,String member){try{JSONObject who=caller.view();return run.equals(who.getString("teamRunId"))&&member.equals(who.getString("memberId"));}catch(Exception invalid){return false;}}
@@ -43,7 +44,13 @@ public final class TeamMemberEvidencePort implements CapabilityPort {
         else if(name.equals("skills_read")){allowed=Set.of("id","digest","path","offset","length");if(!args.getString("digest").matches("[a-f0-9]{64}")||args.getString("id").length()>80)throw new IllegalArgumentException("请选择原技能id/digest");if(args.has("path"))dev.pocketengine.features.workspace.VersionedWorkspace.path(args.getString("path"));}
         else allowed=Set.of();if(!allowed.containsAll(keys))throw new SecurityException("读取参数不能携带新scope、member或账号权限");if(args.has("offset"))TeamMemberEvidenceHost.integer(args,"offset",0,Integer.MAX_VALUE);if(args.has("length"))TeamMemberEvidenceHost.integer(args,"length",1,12000);
     }
-    @Override public JSONObject execute(String name,JSONObject args,RunControl original)throws Exception{throw new SecurityException("成员资料读取须由原协调器先预留并登记准确read operation");}
+    void bindResearch(TaskStore.TeamResearchBinding nativeBinding)throws Exception{if(research!=null||nativeBinding==null||!nativeBinding.owns(caller))throw new SecurityException("不能替换研究成员原读取范围");nativeBinding.checkCurrent();research=nativeBinding;returned.addAll(tasks.retainedTeamResearchMemberReads(nativeBinding));}
+    @Override public JSONObject execute(String name,JSONObject args,RunControl original)throws Exception{
+        if(research==null)throw new SecurityException("成员资料读取须由原协调器先预留并登记准确read operation");
+        validate(name,args);TaskStore.TeamMemberRead read=tasks.currentTeamResearchMemberRead(research,caller,name,args,original);
+        JSONObject value=read.observe(()->perform(name,args,read));current();read.markReturned();returned.add(read);
+        return value.put("readObserved",true).put("modelUseVerified",false).put("executionAuthorized",false).put("audience",new JSONObject().put("id",read.audienceId()).put("revision",read.revision()));
+    }
     public JSONObject executeRead(String name,JSONObject args,RunControl original,JSONObject originalRead)throws Exception{
         validate(name,args);current();TaskStore.TeamMemberRead read=tasks.teamMemberRead(caller,originalRead,name,args,original);JSONObject result=read.observe(()->perform(name,args,read));current();read.markReturned();returned.add(read);return result.put("readObserved",true).put("modelUseVerified",false).put("executionAuthorized",false).put("audience",new JSONObject().put("id",read.audienceId()).put("revision",read.revision()));
     }
@@ -63,10 +70,22 @@ public final class TeamMemberEvidencePort implements CapabilityPort {
         if(name.equals("skills_list")){JSONArray rows=new JSONArray();for(int i=0;i<selected.length();i++){JSONObject expected=selected.getJSONObject(i),actual=skills.handle("get",new JSONObject().put("scope",TeamMemberEvidenceHost.ownerScope()).put("id",expected.getString("id"))).getJSONObject("skill");if(actual.getInt("revision")!=expected.getInt("revision")||!actual.getString("digest").equals(expected.getString("digest"))||!actual.optBoolean("enabled"))throw new SecurityException("原技能已换版/停用");rows.put(new JSONObject(expected.toString()).put("name",actual.optString("name")));}return new JSONObject().put("skills",rows);}
         JSONObject expected=null;for(int i=0;i<selected.length();i++)if(args.getString("id").equals(selected.getJSONObject(i).getString("id")))expected=selected.getJSONObject(i);if(expected==null||!args.getString("digest").equals(expected.getString("digest")))throw new SecurityException("不是本成员显选技能版本");String path=args.optString("path","SKILL.md");boolean allowed=false;JSONArray paths=expected.getJSONArray("paths");for(int i=0;i<paths.length();i++)allowed|=path.equals(paths.getString(i));if(!allowed)throw new SecurityException("技能资源未显选给此成员");return skills.readForHost(TeamMemberEvidenceHost.ownerScope(),expected.getString("id"),path,args.optInt("offset",0),args.optInt("length",8000),expected.getInt("revision"),expected.getString("digest"),READS);
     }
-    private void checkReturned()throws Exception{current();for(TaskStore.TeamMemberRead read:returned){read.checkCurrent();host.checkMaterials(read.view(),read);read.checkCurrent();}current();}
+    private void checkReturned()throws Exception{current();if(research==null)checkReturnedMaterials();else checkReturnedMetadata();current();}
+    private void checkReturnedMaterials()throws Exception{if(research!=null){tasks.checkTeamResearchReadProofs(research,returned);if(!returned.isEmpty()){TaskStore.TeamMemberRead read=returned.get(0);host.checkMaterials(read.view(),read);read.checkCurrent();}return;}for(TaskStore.TeamMemberRead read:returned){read.checkCurrent();host.checkMaterials(read.view(),read);read.checkCurrent();}}
+    /** Read-only terminal publication recheck. close() never restores a tool or source grant. */
+    void checkReturnedForSettlement()throws Exception{if(research!=null)host.checkResearchSources(research);if(invalidated)throw new SecurityException("成员资料已换版/撤回，旧结果不发布");caller.checkCurrent();checkReturnedMaterials();caller.checkCurrent();}
+    /** Original published source checks for model/summary/RAW admission, without body reads. */
+    void checkReturnedMetadata()throws Exception{current();if(research!=null){host.checkResearchSources(research);tasks.checkTeamResearchReadProofs(research,returned);if(!returned.isEmpty()){TaskStore.TeamMemberRead read=returned.get(0);host.checkMaterialMetadata(read.view(),read);read.checkCurrent();}}else for(TaskStore.TeamMemberRead read:returned){read.checkCurrent();host.checkMaterialMetadata(read.view(),read);read.checkCurrent();}current();}
+    /** Original Runner reference-retention lane. IDs/versions are emitted only after the
+     * same native SQL + unique metadata/forget gate; no owner core or bodies are loaded. */
+    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl original)throws Exception {
+        if(!caller.owns(original))throw new SecurityException("不是原成员控制器");checkReturned();JSONArray memory=new JSONArray(),skills=new JSONArray();java.util.Set<String> recordIds=new java.util.HashSet<>(),skillIds=new java.util.HashSet<>();
+        for(TaskStore.TeamMemberRead read:returned){JSONObject selected=read.view();JSONArray rows=read.allowedRecords();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);String key=row.getString("id")+":"+row.getLong("revision");if(recordIds.add(key))memory.put(new JSONObject(row.toString()));}rows=selected.getJSONArray("skills");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);String key=row.getString("id")+":"+row.getInt("revision")+":"+row.getString("digest");if(skillIds.add(key))skills.put(new JSONObject().put("id",row.getString("id")).put("revision",row.getInt("revision")).put("digest",row.getString("digest")));}}
+        checkReturned();return new JSONObject().put("tools",tools()).put("reference",new JSONObject().put("context","").put("referenceValidation",new JSONObject().put("memory",memory).put("skills",skills)));
+    }
     @Override public void beforeModelRequest(String requestId,JSONArray projected,RunControl original)throws Exception{if(!caller.owns(original))throw new SecurityException("不是原成员控制");checkReturned();}
     @Override public boolean responseCurrent(RunControl original)throws Exception{if(!caller.owns(original))return false;try{checkReturned();return true;}catch(SecurityException revoked){return false;}}
-    @Override public void close(){closed=true;returned.clear();host.closed(this);}
+    @Override public void close(){closed=true;host.closed(this);}
     private static JSONObject tool(String name,String description,JSONObject properties,String... required)throws Exception{return new JSONObject().put("type","function").put("function",new JSONObject().put("name",name).put("description",description).put("parameters",new JSONObject().put("type","object").put("properties",properties).put("required",new JSONArray(required)).put("additionalProperties",false)));}
     private static JSONObject props(Object... fields)throws Exception{JSONObject properties=new JSONObject();for(int i=0;i<fields.length;i+=2)properties.put((String)fields[i],fields[i+1]);return properties;}
     private static JSONObject text(int max)throws Exception{return new JSONObject().put("type","string").put("maxLength",max);}

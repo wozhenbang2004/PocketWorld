@@ -1,0 +1,4 @@
+# Windows native pairing QR support. Prepared builder only; no runtime downloads.
+# Use --require-hashes --only-binary=:all:. No Pillow/pypng extras are needed.
+qrcode==8.2 --hash=sha256:16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f
+colorama==0.4.6 ; sys_platform == "win32" --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6

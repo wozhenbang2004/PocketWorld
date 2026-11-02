@@ -1,0 +1,50 @@
+{
+  "format": "pocketworld.device-framing.v1",
+  "version": 1,
+  "header": "uint32 big endian; high bit binary, low31 payload length",
+  "limits": {
+    "controlBytes": 65536,
+    "chunkBytes": 262144,
+    "binaryPayloadBytes": 262200
+  },
+  "binaryLayout": [
+    "transferId UUID bytes16",
+    "offset uint64 big endian restricted signed-positive",
+    "SHA256 raw32",
+    "raw<=262144"
+  ],
+  "fixtures": [
+    {
+      "name": "utf8-control",
+      "kind": "control",
+      "wireHex": "0000001a7b2266697874757265223a22e79c9fe5ae9ee68ea7e588b6227d",
+      "controlUtf8": "{\"fixture\":\"真实控制\"}",
+      "valid": true
+    },
+    {
+      "name": "binary-fixed-chunk",
+      "kind": "chunk",
+      "wireHex": "8000003c12345678123442348234123456789abc0000010000000000c5dbae22661af6db18a1f676db82a7ef7de46d27c3a263a872f00478b0d99fc40001feff",
+      "transferId": "12345678-1234-4234-8234-123456789abc",
+      "offset": 1099511627776,
+      "dataHex": "0001feff",
+      "valid": true
+    },
+    {
+      "name": "chunk-checksum-mismatch",
+      "kind": "chunk",
+      "wireHex": "8000003c12345678123442348234123456789abc0000010000000000c5dbae22661af6db18a1f676db82a7ef7de46d27c3a263a872f00478b0d99fc40001fefe",
+      "valid": false
+    },
+    {
+      "name": "oversized-control-before-allocation",
+      "wireHex": "00010001",
+      "valid": false
+    },
+    {
+      "name": "short-binary-header",
+      "wireHex": "80000037",
+      "valid": false
+    }
+  ]
+}

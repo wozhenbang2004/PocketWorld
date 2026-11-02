@@ -37,6 +37,22 @@ public final class MemoryReadAudienceTest {
     private TaskMemoryUse direct(MemoryBook book,TaskMemoryUse.SourceReader source){return new TaskMemoryUse(book,null,source);}
     private SourceRef source(){return new SourceRef("message","original-message",3,"owner","private");}
 
+    @Test public void metadataGateRejectsFormalForgetBeforeNextMainAndSummaryWithoutReadingBodies()throws Exception {
+        MemoryBook book=new MemoryBook(file());JSONObject record=book.save(scope(),row("selected formal"),1);Audience audience=new Audience().allow(record);int[] bodies={0};TaskMemoryUse use=direct(book,ref->{bodies[0]++;throw new AssertionError("metadata gate read body");});
+        use.checkAudienceMetadataCurrent(scope(),audience);book.forgetReviewed(scope(),record.getString("id"),record.getLong("revision"));
+        for(String purpose:List.of("MAIN","SUMMARY")){denied(()->use.checkAudienceMetadataCurrent(scope(),audience));assertEquals(purpose,0,bodies[0]);}
+    }
+    @Test public void metadataGateRejectsRecordRevisionAndAudienceRevocationWithoutBodyFallback()throws Exception {
+        MemoryBook book=new MemoryBook(file());JSONObject record=book.save(scope(),row("selected version"),1);Audience audience=new Audience().allow(record);int[] bodies={0};TaskMemoryUse use=direct(book,ref->{bodies[0]++;throw new AssertionError("metadata gate read body");});
+        use.checkAudienceMetadataCurrent(scope(),audience);book.save(scope(),new JSONObject(record.toString()).put("text","new private revision"),2);
+        denied(()->use.checkAudienceMetadataCurrent(scope(),audience));Audience empty=new Audience();use.checkAudienceMetadataCurrent(scope(),empty);empty.revoked=true;denied(()->use.checkAudienceMetadataCurrent(scope(),empty));assertEquals(0,bodies[0]);
+    }
+    @Test public void metadataGateRejectsForgottenExactSourceSpanAndNeverCallsExternalScopeUnderBook()throws Exception {
+        SourceRef ref=source();MemoryBook book=new MemoryBook(file(),(scope,kind,id)->new SourceRef.State(ref,false));JSONObject record=book.importFromSources(scope(),row("source fact").put("sourceRefs",new JSONArray().put(ref.toJson())),1);
+        int[] bodies={0};ReadAudience selected=new ReadAudience(){public String ownerId(){return "owner";}public String spaceId(){return "private";}public String audienceId(){return "native-meta";}public long revision(){return 1;}public JSONArray allowedRecords(){return new JSONArray();}public JSONArray allowedSources()throws Exception{return new Audience().span(ref,0,4).sources;}public void checkCurrent(){assertFalse("external native callback under Book",Thread.holdsLock(book));}};
+        TaskMemoryUse use=direct(book,source->{bodies[0]++;throw new AssertionError("metadata gate read body");});use.checkAudienceMetadataCurrent(scope(),selected);book.forgetReviewed(scope(),record.getString("id"),record.getLong("revision"));denied(()->use.checkAudienceMetadataCurrent(scope(),selected));assertEquals(0,bodies[0]);
+    }
+
     @Test public void emptyMemberNeverFallsBackToPrivateCoreButOwnerStillReadsOwnCore()throws Exception{
         MemoryBook book=new MemoryBook(file());book.save(scope(),row("OWNER_PRIVATE_CORE_DO_NOT_SHARE").put("core",true),1);Audience audience=new Audience();
         assertEquals(0,book.contextSnapshot(scope(),"",16,12000,audience).getJSONArray("records").length());

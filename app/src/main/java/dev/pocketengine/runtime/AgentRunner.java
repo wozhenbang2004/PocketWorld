@@ -390,7 +390,7 @@ public final class AgentRunner {
                     emit(taskId, "verification", "running", "正在重新观察结果，等待你确认。", null, null, config, sink);
                     evidence = phone==null?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink);
                     evidence.put("modelSummary", clean(answer, config));
-                    JSONObject finalMessage=new JSONObject().put("role","assistant").put("content",clean(answer,config));if(response.optJSONObject("provider_data")!=null)finalMessage.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));history.put(finalMessage);
+                    int finalAnswerIndex=history.length();JSONObject finalMessage=new JSONObject().put("role","assistant").put("content",clean(answer,config));if(response.optJSONObject("provider_data")!=null)finalMessage.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));history.put(finalMessage);
                     if(memoryDependency!=null){finalMessage.put("memoryContext",memoryDependency);evidence.put("memoryContext",memoryDependency);}if(memoryReference!=null){finalMessage.put("memoryReference",memoryReference);evidence.put("memoryReference",memoryReference);}
                     appendObservation(history, evidence, config, contextBudget);
                     checkpoint(taskId, journal, history, steps, evidence, config, sink, contextBudget);
@@ -405,6 +405,11 @@ public final class AgentRunner {
                         checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget);
                         continue;
                     }
+                    // Only this actual final-answer / empty-input-boundary path certifies
+                    // a current turn. Step/model ceilings may retain an earlier answer as
+                    // audit data, but must never turn it into task completion evidence.
+                    RunControl.HostRunIdentity finalRun=control.hostRunIdentity();
+                    if(finalRun!=null){evidence.put("nativeFinalAnswer",new JSONObject().put("format","pocketworld.runner-final-answer.v1").put("taskId",taskId).put("runId",finalRun.runId()).put("coordinatorEpoch",finalRun.epoch()).put("messageIndex",finalAnswerIndex).put("historyLength",history.length()).put("answerFingerprint",CompactionPlan.fingerprint(finalMessage.getString("content"))).put("inputBoundaryEmpty",true));checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget);}
                     String verificationNotice = phone==null?"以下答复基于实际工具结果；外部效果仍以对应收据为准。":evidence.optBoolean("ok", true) ? "模型已结束操作，请核对当前页面。" : "结果页面暂时无法重新读取，请在手机上亲自确认。";
                     return finish(taskId, "needs_confirmation", verificationNotice + "\n" + clean(answer, config), evidence, steps, config, sink);
                 }
@@ -435,6 +440,11 @@ public final class AgentRunner {
                         appendOwnerInputs(history,midBatch,config);recallIntent=latestOwnerRecallQuery(history,recallIntent);break;
                     }
                     if (steps >= executionStepCeiling(config,journal)) {
+                        // These batch entries have not reached argument admission, beforeTool,
+                        // operation preparation or dispatch. Preserve that known boundary now;
+                        // a later restore must not invent a generic unknown/not_replayed tail.
+                        validateCalls(calls);
+                        for(int remaining=index;remaining<calls.length();remaining++)history.put(toolResult(calls.getJSONObject(remaining),failure("step_limit_not_dispatched","本批此调用尚未派发，已在本次操作步数上限前停止；原已完成回执保留，继续须依据当前范围重新规划。").put("accepted",false).put("effectStatus","not_dispatched"),config));
                         checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
                         return finish(taskId, "needs_confirmation", "已达到本次操作步数上限，请检查当前结果后决定是否继续。", evidence, steps, config, sink);
                     }

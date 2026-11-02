@@ -237,18 +237,34 @@ public final class FeatureHost implements AutoCloseable {
     public JSONObject readTeamForTask(String task,String run,int epoch,JSONObject args,dev.pocketengine.core.RunControl original)throws Exception{var source=tasks.teamParentOrigin(task,run,epoch,"teams_get","",args,original);tasks.teamParentAccess(source,args.getString("teamRunId"),false);return module("teams").handle("get",json("runId",args.getString("teamRunId")));}
     public boolean hasParentTeamOrchestration(){EngineModule module=module("teams");return module instanceof dev.pocketengine.features.teams.TeamsModule&&((dev.pocketengine.features.teams.TeamsModule)module).parentOrchestrationConfigured();}
     public JSONObject teamParentCall(String task,String run,int epoch,String tool,String operation,JSONObject args,dev.pocketengine.core.RunControl original)throws Exception{EngineModule module=module("teams");if(!(module instanceof dev.pocketengine.features.teams.TeamsModule))throw new SecurityException("原团队模块未接入");return ((dev.pocketengine.features.teams.TeamsModule)module).parentCall(task,run,epoch,tool,operation,args,original);}
-    public JSONObject startTeamForTask(String parent,String parentRun,String operationId,JSONObject args,JSONObject expectedDefinition,dev.pocketengine.core.RunControl control)throws Exception{
+    /** Original parent native read receipts are source metadata, never a second permission store. */
+    public void checkTeamResearchParentInputs(String task,String run,int epoch,dev.pocketengine.core.RunControl original)throws Exception {
+        if(Thread.holdsLock(tasks))throw new IllegalStateException("研究材料/Book复核不得在Tasks锁内");
+        if(!tasks.hasTeamResearchParentInputs(task))return;
+        var source=tasks.teamParentOrigin(task,run,epoch,"teams_get","",new JSONObject(),original);org.json.JSONArray refs=tasks.teamResearchParentInputReferences(source);EngineModule selected=module("teams");
+        if(!(selected instanceof dev.pocketengine.features.teams.TeamsModule teams))throw new SecurityException("原团队读取宿主不可用，不发送旧来源正文");teams.checkParentResearchInputs(source,refs);source.checkCurrent();
+    }
+    public JSONObject startTeamForTask(String parent,String parentRun,String operationId,JSONObject args,JSONObject expectedDefinition,dev.pocketengine.core.RunControl control)throws Exception{return startTeamForTask(parent,parentRun,operationId,args,expectedDefinition,control,"");}
+    public JSONObject startTeamForTask(String parent,String parentRun,String operationId,JSONObject args,JSONObject expectedDefinition,dev.pocketengine.core.RunControl control,String consumedApprovalId)throws Exception{
         if(tasks==null)throw new IllegalStateException("宿主任务存储不可用");EngineModule module=module("teams");if(module==null)throw new IllegalStateException("团队模块不可用");
         control.check();JSONObject link=tasks.beginRelatedExternal(parent,parentRun,"teams","start",operationId,args);emitTask(parent);emitTask(operationId);
         if(link.getBoolean("knownOperation"))return module.handle("get",json("runId",operationId)).put("hostTaskId",operationId).put("taskId",operationId).put("parentTaskId",parent);
+        boolean researchStartEntered=false;
         try{control.check();JSONObject result;synchronized(module){if(!TaskStore.capabilityFingerprint(expectedDefinition).equals(TaskStore.capabilityFingerprint(teamDefinition(args.getString("teamId")))))throw new SecurityException("团队成员或执行位置已变化，请重新确认");JSONObject nativeInput=new JSONObject(args.toString()).put("_taskId",operationId).put("_runId",operationId).put("_operationId",operationId);
             if(expectedDefinition.optString("mode").equals("produce")){
                 EngineModule workspace=module("workspace");JSONObject original=tasks.get(parent,false);
                 if(!(module instanceof dev.pocketengine.features.teams.TeamsModule)||workspace==null||original==null||!control.matchesHostRun(parent,parentRun,original.getInt("coordinatorEpoch")))throw new SecurityException("文件协作缺少原父任务项目与执行控制");
                 var scope=((dev.pocketengine.features.teams.TeamsModule)module).captureWriteScope(parent,parentRun,original.getJSONObject("developmentContext").getString("projectId"),expectedDefinition);
                 tasks.bindTeamWriteScope(operationId,scope);control.check();result=((dev.pocketengine.features.teams.TeamsModule)module).startNative(nativeInput,scope);
-            }else result=module.handle("start",nativeInput);}updateTask(operationId,result);return result.put("hostTaskId",operationId).put("taskId",operationId).put("parentTaskId",parent);}
-        catch(Exception failure){updateTask(operationId,json("status",failure instanceof IllegalArgumentException||failure instanceof SecurityException?"failed":"unknown","message",safe(failure)));throw failure;}
+            }else {
+                dev.pocketengine.store.TaskStore.TeamParentOrigin researchSource=null;
+                if(module instanceof dev.pocketengine.features.teams.TeamsModule selected&&selected.continuousResearchConfigured()){
+                    JSONObject owner=tasks.get(parent,false);researchSource=tasks.teamParentOrigin(parent,parentRun,owner.getInt("coordinatorEpoch"),"teams_start",operationId,args,control);tasks.bindTeamResearchParentStart(researchSource,consumedApprovalId,expectedDefinition);
+                }
+                researchStartEntered=researchSource!=null;result=module.handle("start",nativeInput);
+                if(researchSource!=null){tasks.completeTeamResearchParentStart(researchSource);String originalTeam=operationId;control.onCancel(()->nativeOwnerCleanup(()->{try{module("teams").handle("cancel",json("runId",originalTeam));}catch(Exception ignored){}}));}
+            }}updateTask(operationId,result);return result.put("hostTaskId",operationId).put("taskId",operationId).put("parentTaskId",parent);}
+        catch(Exception failure){updateTask(operationId,json("status",researchStartEntered?"unknown":failure instanceof IllegalArgumentException||failure instanceof SecurityException?"failed":"unknown","message",safe(failure)));throw failure;}
     }
     /** A private AgentRunner operation becomes one tracked remote child; never a second scheduler. */
     public JSONObject startRemoteForTask(String parent,String parentRun,int epoch,String operationId,JSONObject payload,JSONObject selection,dev.pocketengine.core.RunControl control)throws Exception {

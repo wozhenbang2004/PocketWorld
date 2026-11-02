@@ -150,8 +150,9 @@ internal fun TeamRunDetail(state: PocketUiState, controller: PocketWorldControll
                     HorizontalDivider(Modifier.padding(vertical = 12.dp))
                     Text("成员与协作资料", style = MaterialTheme.typography.titleSmall)
                     if (run != null) {
-                        TeamRunMemberControls(run, "configureMember" in teamBusyCommands(state)) { command, input -> controller.requestFeature("teams", command, input) }
+                        TeamRunMemberControls(run, "configureMember" in teamBusyCommands(state), modelSnapshot = { controller.nativeModelConnections()?.snapshot() ?: error("原模型连接不可用") }, runWork = controller::runEcosystemControlWork) { command, input -> controller.requestFeature("teams", command, input) }
                         TeamMemberMaterialControls(run, controller::openTeamMemberMaterialsPage, controller::runEcosystemControlWork)
+                        TeamResearchBudgetControls(run, controller::openTeamResearchBudgetPage, controller::runEcosystemControlWork)
                     }
                 })
                 else if (run == null) TeamCaption("正在读取真实团队任务…")

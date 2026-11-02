@@ -20,5 +20,5 @@ public record ModelTargetRef(Kind kind,String connectionId,String modelId,String
         if("group".equals(j.optString("kind"))&&keys.equals(Set.of("kind","groupId","groupRevision"))){Object v=j.get("groupRevision");if(!(v instanceof Integer||v instanceof Long))throw new IllegalArgumentException("integer_revision_required");return group(j.getString("groupId"),((Number)v).longValue());}
         throw new IllegalArgumentException("invalid_model_target_reference");
     }
-    static String checked(String s,int length){if(s==null||s.isBlank()||s.length()>length||!s.matches("[A-Za-z0-9_.:/@+-]+"))throw new IllegalArgumentException("invalid_model_reference");return s;}
+    static String checked(String s,int length){if(s==null||s.isEmpty()||s.length()>length||!s.matches("[A-Za-z0-9_.:/@+-]+"))throw new IllegalArgumentException("invalid_model_reference");return s;}
 }

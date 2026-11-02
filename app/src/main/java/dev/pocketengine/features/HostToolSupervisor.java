@@ -38,6 +38,14 @@ public final class HostToolSupervisor implements CapabilityPort {
     private final Map<String,Tool> routes=new LinkedHashMap<>();
     private final Map<String,Tool> nativeRoutes=new LinkedHashMap<>();
     private final Map<String,Boolean> availability=new LinkedHashMap<>();
+    @FunctionalInterface public interface NativeDeviceRoutes { CapabilityPort current()throws Exception; }
+    private NativeDeviceRoutes nativeDeviceRoutes;private CapabilityPort nativeDevicePort;
+    /** Native App wiring only. Paired-device goals take their closed project/device path BEFORE this
+     * owner/private supervisor is ever constructed. A model cannot register a provider or route. */
+    public void installNativeDeviceRoutes(NativeDeviceRoutes provider)throws Exception{
+        JSONObject task=tasks.get(taskId,false);if(task==null||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.optJSONObject("origin")!=null)throw new SecurityException("原设备源工具只能挂本机私人owner任务，不能给弱来源变owner");nativeDeviceRoutes=java.util.Objects.requireNonNull(provider);
+    }
+    private void refreshNativeDeviceRoutes()throws Exception{if(nativeDeviceRoutes==null)return;if(nativeDevicePort!=null&&memoryControl!=null&&nativeDevicePort.responseCurrent(memoryControl))return;CapabilityPort next=nativeDeviceRoutes.current(),previous=nativeDevicePort;nativeDevicePort=next;if(previous!=null&&previous!=next)previous.close();}
     public HostToolSupervisor(FeatureHost host,TaskStore tasks,String taskId,String runId,int epoch,boolean allowWrites)throws Exception{
         this(host,tasks,taskId,runId,epoch,allowWrites,false,null);
     }
@@ -81,12 +89,12 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(parentTeamTask){
         add("teams","$teams","teams_list","列出主人已配置团队的真实成员与工作模式。",false,new JSONObject());
         addTeamParentTool("start","teams_start","在原父任务启动已有团队，或只以原planRef+planHash启动已核提案；原生主人批准准确scope/预算前不派发。",true);
-        if(host.hasParentTeamOrchestration())addTeamParentTool("get","teams_get","按原父团队读取状态、成员、事件、冻结成果索引或正文范围；不重启，不把模型总结当文件。",false);else add("teams","get","teams_get","读取本父任务拥有的原团队，不重启。",false,props("teamRunId",text(80)),"teamRunId");
+        if(host.hasParentTeamOrchestration())addTeamParentTool("get","teams_get","按原父团队读取状态/事件、research_summary或member_output准确阶段的有界正文（后续页带expectedOutputHash），及制作成果；不重启，不把研究结论当文件。",false);else add("teams","get","teams_get","读取本父任务拥有的原团队，不重启。",false,props("teamRunId",text(80)),"teamRunId");
         if(host.hasParentTeamOrchestration()){
             addTeamParentTool("$parent_plan","teams_plan","为原生已选项目和已配置成员提出1至8项互斥文字文件工作及依赖/验收/可见预算；只保存提案ref/hash，不授权或启动。",true);
             addTeamParentTool("$parent_message","teams_message","定向给原member/assignment，queue不唤醒；continue仅在原scope/剩余预算内安全续接。回答必须精确question/answer ID，父代理不是主人批准。",true);
             addTeamParentTool("$parent_wait","teams_wait","有界等待原团队事件cursor，超时仍pending；主人steer优先打断，不轮询模型或重新spawn。",false);
-            addTeamParentTool("$parent_control","teams_control","按原团队版本暂停/停止、只恢复父代理所暂停的原工作项且不增额、交接未开始项、请求独审/主人精确整合或修订。没有模型approve动作。",true);
+            addTeamParentTool("$parent_control","teams_control","按原团队版本暂停/停止、只恢复父代理所暂停的原工作项/准确researchRound且不增额、交接未开始项、请求独审/主人精确整合或修订。没有模型approve动作。",true);
         }
         }
         nativeRoutes.putAll(routes);refreshPluginRoutes();
@@ -119,6 +127,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         finalCapabilities=snapshot;
     }
     @Override public void afterTool(String name,JSONObject arguments,JSONObject receipt,RunControl original)throws Exception{
+        if(nativeDevicePort!=null&&nativeDevicePort.supports(name))nativeDevicePort.afterTool(name,arguments,receipt,original);
         if(working==null||!host.hasWorkingMemory(working))return;if(original!=workingControl)throw new SecurityException("不能跨Run写工作记忆");
         JSONObject current=workingSnapshot();if(current==null)return;JSONArray old=current.getJSONArray("notes"),notes=new JSONArray();
         for(int i=Math.max(0,old.length()-6);i<old.length();i++)notes.put(old.getJSONObject(i));
@@ -135,14 +144,18 @@ public final class HostToolSupervisor implements CapabilityPort {
     }
     private void closeWorking(){var previous=working;RunControl owner=workingControl;Runnable cancelled=workingCancellation;working=null;workingControl=null;workingFence=null;workingCancellation=null;if(owner!=null&&cancelled!=null)owner.removeCancelAction(cancelled);if(previous!=null)host.releaseWorkingMemory(previous);}
     @Override public void endRun(RunControl original){closeWorking();}
-    @Override public void close(){try{modelRequestAbandoned("");}catch(Exception ignored){}if(finalCapabilities!=null)finalCapabilities.invalidate();finalCapabilities=null;closeWorking();taskMemory=null;memorySelection=null;memoryTask=null;memoryControl=null;memoryFence=null;}
+    @Override public void close(){try{modelRequestAbandoned("");}catch(Exception ignored){}if(nativeDevicePort!=null)nativeDevicePort.close();nativeDevicePort=null;nativeDeviceRoutes=null;if(finalCapabilities!=null)finalCapabilities.invalidate();finalCapabilities=null;closeWorking();taskMemory=null;memorySelection=null;memoryTask=null;memoryControl=null;memoryFence=null;}
     @Override public boolean responseCurrent(RunControl original)throws Exception{
+        host.checkTeamResearchParentInputs(taskId,runId,epoch,original);
+        if(nativeDevicePort!=null&&!nativeDevicePort.responseCurrent(original))return false;
         if(workingControl!=null&&original!=workingControl)throw new SecurityException("参考校验不是原执行控制");
         var originalSelection=memorySelection;
         String expected=admittedReferences;long generation=admittedMemoryRevision;boolean temporary=admittedWorkingMemory;JSONObject current=contextSnapshot(referenceQuery);memorySelection=originalSelection;
         return temporary==admittedWorkingMemory&&generation==host.memoryContextRevision()&&expected.equals(TaskStore.capabilityFingerprint(current.getJSONObject("referenceValidation")));
     }
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl original)throws Exception{
+        host.checkTeamResearchParentInputs(taskId,runId,epoch,original);
+        if(nativeDevicePort!=null)nativeDevicePort.beforeModelRequest(requestId,messages,original);
         if(taskMemory==null||memorySelection==null)return;if(original!=memoryControl)throw new SecurityException("记忆发送不是原执行控制");
         if(admittedMemoryRevision!=host.memoryContextRevision())throw new SecurityException("参考上下文已变化，尚未提供旧片段");
         JSONObject selected=taskMemory.validateTaskMemorySelection(privateScope(),memorySelection,memoryFence);String context=selected.getString("context");
@@ -159,17 +172,19 @@ public final class HostToolSupervisor implements CapabilityPort {
             tasks.prepareMemoryReference(memoryIntent,original);return new JSONObject();});
     }
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl original)throws Exception{
-        if(memoryIntent==null||!requestId.equals(memoryIntent.requestId))return null;
-        return memoryFence.admit(()->{
+        JSONObject device=nativeDevicePort==null?null:nativeDevicePort.afterModelResponse(requestId,answerId,original);
+        if(memoryIntent==null||!requestId.equals(memoryIntent.requestId))return device;
+        JSONObject memory=memoryFence.admit(()->{
             taskMemory.validateTaskMemorySelection(privateScope(),memorySelection,memoryFence);
             var intent=memoryIntent;JSONObject receipt=tasks.completeMemoryReference(intent,answerId,original);memoryIntent=null;
             var ref=new dev.pocketengine.features.memory.TaskMemoryUse.ReceiptRef(memoryTask,requestId,answerId);
             JSONObject proof=taskMemory.confirmTaskMemoryUse(privateScope(),memorySelection,ref,memoryFence);
             if(!"provided_to_request".equals(proof.optString("phase")))throw new IllegalStateException("原请求的记忆提供回执无法核对");
             return ref.toJson().put("receiptId",receipt.getString("selectionId")).put("executionAuthorized",false).put("modelUseVerified",false);
-        });
+        });return device==null?memory:memory.put("deviceVisual",device);
     }
     @Override public void modelRequestAbandoned(String requestId)throws Exception{
+        if(nativeDevicePort!=null)nativeDevicePort.modelRequestAbandoned(requestId);
         var intent=memoryIntent;if(intent!=null&&(requestId.isEmpty()||requestId.equals(intent.requestId))){tasks.abandonMemoryReference(intent);memoryIntent=null;}
     }
 
@@ -187,7 +202,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         routes.clear();routes.putAll(next);
     }
-    @Override public JSONArray tools()throws Exception {refreshPluginRoutes();JSONArray result=new JSONArray();for(Tool tool:routes.values())result.put(new JSONObject(tool.definition.toString()));return result;}
+    @Override public JSONArray tools()throws Exception {refreshNativeDeviceRoutes();refreshPluginRoutes();JSONArray result=new JSONArray();for(Tool tool:routes.values())result.put(new JSONObject(tool.definition.toString()));if(nativeDevicePort!=null){JSONArray device=nativeDevicePort.tools();for(int i=0;i<device.length();i++){JSONObject definition=device.getJSONObject(i);if(routes.containsKey(definition.getJSONObject("function").getString("name")))throw new SecurityException("扩展和原native设备工具命名冲突");result.put(definition);}}return result;}
     @Override public JSONObject contextSnapshot(String query)throws Exception{
         JSONObject task=tasks.get(taskId,false);
         if(task==null||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.optBoolean("cancelRequested")||!task.optString("status").matches("preparing|running|queued"))throw new SecurityException("参考上下文的宿主任务身份已失效");
@@ -227,9 +242,10 @@ public final class HostToolSupervisor implements CapabilityPort {
         referenceQuery=query;admittedReferences=TaskStore.capabilityFingerprint(validation);admittedMemoryRevision=host.memoryContextRevision();
         snapshot.remove("records");return snapshot.put("context",reference.toString()).put("authority","lower_priority_reference_data").put("executionAuthorized",false);
     }
-    @Override public boolean supports(String name){return routes.containsKey(name);}
-    @Override public boolean sideEffecting(String name){Tool tool=routes.get(name);return tool==null||tool.write;}
+    @Override public boolean supports(String name){return routes.containsKey(name)||nativeDevicePort!=null&&nativeDevicePort.supports(name);}
+    @Override public boolean sideEffecting(String name){if(nativeDevicePort!=null&&nativeDevicePort.supports(name))return nativeDevicePort.sideEffecting(name);Tool tool=routes.get(name);return tool==null||tool.write;}
     @Override public void validate(String name,JSONObject arguments)throws Exception{
+        if(name!=null&&name.matches("device_invoke_tool|device_delegate_goal|device_operation_get")&&nativeDeviceRoutes!=null){refreshNativeDeviceRoutes();if(nativeDevicePort==null||!nativeDevicePort.supports(name))throw new CapabilityPort.Unavailable();nativeDevicePort.validate(name,arguments);return;}
         Tool tool=routes.get(name);if(tool==null)throw new SecurityException("本任务没有该工具路由");
         if(tool.preset!=null&&!pluginCurrent(name,tool))throw new CapabilityPort.Unavailable();
         JSONObject args=arguments==null?new JSONObject():arguments;if(args.toString().length()>131072)throw new IllegalArgumentException("工具参数过大");
@@ -249,6 +265,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         }return false;
     }
     @Override public JSONObject execute(String name,JSONObject arguments,RunControl control)throws Exception{
+        if(name!=null&&name.matches("device_invoke_tool|device_delegate_goal|device_operation_get")&&nativeDeviceRoutes!=null){refreshNativeDeviceRoutes();if(nativeDevicePort==null||!nativeDevicePort.supports(name))throw new CapabilityPort.Unavailable();return nativeDevicePort.execute(name,arguments,control);}
         Tool tool=routes.get(name);if(tool==null)throw new SecurityException("本任务没有该工具路由");
         java.util.Objects.requireNonNull(control).check();tasks.checkCapability(taskId,runId,epoch,name,control);
         JSONObject args=new JSONObject((arguments==null?new JSONObject():arguments).toString());String operationId=args.optString("_hostOperationId");args.remove("_hostOperationId");
@@ -258,6 +275,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         JSONObject approvalCapability=new JSONObject().put("feature",tool.feature).put("command",tool.command);
         if(tool.feature.equals("teams")&&tool.command.equals("start"))approvalCapability.put("teamDefinition",host.teamDefinition(args.getString("teamId")));
+        String consumedApprovalId="";
         if(tool.write&&!tool.command.equals("$skill_execute")&&!tool.command.equals("$method_decision")){
             if(!allowWrites)throw new SecurityException("该执行仅允许读取证据");
             JSONObject capability=approvalCapability;
@@ -268,6 +286,7 @@ public final class HostToolSupervisor implements CapabilityPort {
                 host.emitApproval(new JSONObject().put("taskId",taskId).put("runId",runId).put("approvalId",id).put("tool",name).put("capability",capability).put("arguments",redacted(args,0)).put("message",message));
                 return new JSONObject().put("ok",false).put("accepted",false).put("code","approval_required").put("approvalId",id).put("message",message);
             }
+            consumedApprovalId=approval.getString("approvalId");
         }
         control.check();tasks.checkCapability(taskId,runId,epoch,name,control);
         EngineModule module=host.module(tool.feature);if(module==null)throw new IllegalStateException("所选能力已不可用");
@@ -295,7 +314,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         else if(tool.command.equals("$projects"))result=new JSONObject().put("projects",module.snapshot().getJSONArray("projects"));
         else if(tool.command.equals("$teams"))result=new JSONObject().put("teams",module.snapshot().getJSONArray("teams"));
-        else if(tool.feature.equals("teams")&&tool.command.equals("start"))result=host.startTeamForTask(taskId,runId,operationId.isEmpty()?UUID.randomUUID().toString():operationId,args,approvalCapability.getJSONObject("teamDefinition"),control);
+        else if(tool.feature.equals("teams")&&tool.command.equals("start"))result=host.startTeamForTask(taskId,runId,operationId.isEmpty()?UUID.randomUUID().toString():operationId,args,approvalCapability.getJSONObject("teamDefinition"),control,consumedApprovalId);
         else if(tool.feature.equals("teams")&&tool.command.equals("get"))result=host.readTeamForTask(taskId,runId,epoch,args,control);
         else if(tool.command.equals("$profiles"))result=new JSONObject().put("profiles",module.snapshot().getJSONArray("profiles"));
         else if(tool.command.equals("$skills_list")){if(!(module instanceof SkillsModule))throw new IllegalStateException("技能模块不支持宿主验证");host.synchronizeMemory(privateScope());JSONObject task=tasks.get(taskId,false);result=discoverSkills((SkillsModule)module,task.optString("goal")+"\n"+task.optString("feedback"));}
@@ -319,6 +338,8 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         control.check();tasks.checkCapability(taskId,runId,epoch,name,control);if(result==null)throw new IllegalStateException("工具没有返回真实结果");return result;
     }
+    @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject arguments,RunControl original)throws Exception{return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.observationRequirement(name,arguments,original):dev.pocketengine.core.NativeToolObservation.Requirement.NONE;}
+    @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl original)throws Exception{return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.takeToolObservation(name,operation,original):null;}
     /** Current pinned native routes plus stable plugin capability identities; this creates no grants. */
     public Set<String> skillCapabilityNames()throws Exception {
         java.util.HashSet<String> names=new java.util.HashSet<>(routes.keySet());
