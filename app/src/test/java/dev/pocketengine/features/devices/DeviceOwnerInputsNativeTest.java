@@ -173,6 +173,11 @@ public final class DeviceOwnerInputsNativeTest {
         assertTrue(saved.getBoolean("inputSaved"));assertFalse(saved.getBoolean("continuationRequested"));assertEquals(0,f.continuations.get());assertEquals(1,f.requests.get());assertEquals(1,f.count("runs"));assertEquals(grant,f.grant());assertTrue(f.original.isPaused());
         assertEquals("awaiting_user",f.tasks.get(f.task,false).getString("status"));assertEquals(1,f.tasks.get(f.task,false).getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));
     }}
+    @Test public void nativeInputKeepsThePinnedUnicodeScalarLimitWithoutCreatingAModelCall()throws Exception{try(Fixture f=new Fixture(4)){
+        String lease=f.acquire("control",null).getString("leaseId"),text="🙂".repeat(4000),grant=f.grant();JSONObject saved=f.coordinator.ownerInput(f.permission(f.input("task.steer","supplementary-input",lease,text)));assertTrue(saved.getBoolean("inputSaved"));
+        assertEquals(text,f.tasks.get(f.task,false).getJSONArray("ownerInputs").getJSONObject(0).getString("content"));assertEquals(0,f.requests.get());assertEquals(grant,f.grant());assertEquals(1,f.count("runs"));
+        assertThrows(DeviceProtocol.ProtocolException.class,()->f.permission(f.input("task.steer","over-scalar-bound",lease,text+"🙂")));assertEquals(1,f.tasks.get(f.task,false).getJSONArray("ownerInputs").length());
+    }}
     private record Material(KeyPair keys,X509Certificate cert){}
     private record Peers(DeviceIdentity.AuthenticatedPeer caller,String target){}
     private static Material certificate()throws Exception{
