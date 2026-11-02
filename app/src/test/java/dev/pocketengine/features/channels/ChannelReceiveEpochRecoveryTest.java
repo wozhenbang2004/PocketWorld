@@ -36,9 +36,9 @@ public final class ChannelReceiveEpochRecoveryTest {
     @Test public void anAbsentCurrentEpochCannotPassEvenWhenProviderAndTimestampStillMatch()throws Exception {
         try(Fixture f=new Fixture()){
             JSONObject original=f.core.profile(f.profile);String session=f.begin();
-            Path file=f.path.resolve("channels.json");JSONObject stored=new JSONObject(Files.readString(file));
+            Path file=f.path.resolve("channels.json");JSONObject stored=new JSONObject(new String(Files.readAllBytes(file),StandardCharsets.UTF_8));
             stored.getJSONArray("profiles").getJSONObject(0).remove("transportEpoch");
-            Files.writeString(file,stored.toString(),StandardCharsets.UTF_8);
+            Files.write(file,stored.toString().getBytes(StandardCharsets.UTF_8));
             ChannelCore migrated=new ChannelCore(f.path.toFile());
             assertEquals(original.getLong("updatedAt"),migrated.profile(f.profile).getLong("updatedAt"));
             assertNotEquals(original.getString("transportEpoch"),migrated.profile(f.profile).getString("transportEpoch"));
@@ -49,9 +49,9 @@ public final class ChannelReceiveEpochRecoveryTest {
     @Test public void legacyForegroundMetadataIsInterruptedAndOnlyExplicitNewReviewCanStartAgain()throws Exception {
         try(Fixture f=new Fixture()){
             String old=f.begin();Path file=f.path.resolve("background-receiver.json");
-            JSONObject legacy=new JSONObject(Files.readString(file));
+            JSONObject legacy=new JSONObject(new String(Files.readAllBytes(file),StandardCharsets.UTF_8));
             legacy.getJSONArray("profiles").getJSONObject(0).remove("transportEpoch");
-            Files.writeString(file,legacy.toString(),StandardCharsets.UTF_8);
+            Files.write(file,legacy.toString().getBytes(StandardCharsets.UTF_8));
             ChannelReceiveLease restored=new ChannelReceiveLease(f.path.toFile());
             assertEquals("interrupted",restored.snapshot().getString("status"));
             assertFalse(restored.snapshot().getBoolean("foregroundActive"));
@@ -75,11 +75,11 @@ public final class ChannelReceiveEpochRecoveryTest {
         Fixture()throws Exception{}
         String begin()throws Exception {String id=lease.begin(new JSONArray().put(profile),core,true).getString("sessionId");lease.foreground(id);return id;}
         ChannelCore withProfileTimestamp(long timestamp)throws Exception {
-            Path file=path.resolve("channels.json");JSONObject stored=new JSONObject(Files.readString(file));
+            Path file=path.resolve("channels.json");JSONObject stored=new JSONObject(new String(Files.readAllBytes(file),StandardCharsets.UTF_8));
             // A deterministic fixture for a valid millisecond clock collision/rollback:
             // retain the actual newly generated transport epoch and all other saved fields.
             stored.getJSONArray("profiles").getJSONObject(0).put("updatedAt",timestamp);
-            Files.writeString(file,stored.toString(),StandardCharsets.UTF_8);return new ChannelCore(path.toFile());
+            Files.write(file,stored.toString().getBytes(StandardCharsets.UTF_8));return new ChannelCore(path.toFile());
         }
         public void close()throws Exception {try(var files=Files.walk(path)){for(Path file:files.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(file);}}
     }

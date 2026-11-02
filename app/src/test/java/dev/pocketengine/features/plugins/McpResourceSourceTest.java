@@ -4,6 +4,7 @@ import android.app.Application;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.skills.SkillBook;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
@@ -51,7 +52,7 @@ public final class McpResourceSourceTest {
             book.setEnabled(scope(),first.getString("id"),true,first.getString("digest"),true,1200);assertEquals(firstText,book.readForHost(scope(),first.getString("id"),"SKILL.md",0,12000,1,first.getString("digest"),Set.of(),1300).getString("content"));
             body.set(text("second"));String next=client.readSkillResource(URI,new RunControl());currentHash.set(McpSkillSource.sha256(next));SkillBook.SourceReview update=book.inspectMcpSource(scope(),first.getString("id"),new McpSkillSource.Fetched(binding(client,next),next,current),1400);
             assertEquals("upstream_changed",update.view().getString("classification"));assertFalse(book.get(scope(),first.getString("id"),1400).getBoolean("enabled"));assertThrows(SecurityException.class,()->book.readForHost(scope(),first.getString("id"),"SKILL.md",0,12000,1,first.getString("digest"),Set.of(),1400));
-            JSONObject second=book.applySourceReview(scope(),update,SkillBook.SourceChoice.REPLACE,false,1500);assertEquals(2,second.getInt("revision"));assertFalse(second.getBoolean("enabled"));assertEquals(firstText,Files.readString(new File(root,first.getString("id")+"/1/source-check/SKILL.md").toPath()));
+            JSONObject second=book.applySourceReview(scope(),update,SkillBook.SourceChoice.REPLACE,false,1500);assertEquals(2,second.getInt("revision"));assertFalse(second.getBoolean("enabled"));assertEquals(firstText,new String(Files.readAllBytes(new File(root,first.getString("id")+"/1/source-check/SKILL.md").toPath()),StandardCharsets.UTF_8));
             assertThrows(SkillBook.SourceUnavailable.class,()->book.applySourceReview(scope(),update,SkillBook.SourceChoice.REPLACE,false,1600));assertEquals(0,f.count("tools/call"));
         }
     }

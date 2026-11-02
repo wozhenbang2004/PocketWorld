@@ -26,7 +26,7 @@ public final class SkillSourceUpdateTest {
         JSONObject first()throws Exception{return apply(check(null),false);}
         JSONObject current(JSONObject row)throws Exception{return book.get(scope(),row.getString("id"),2000);}
         File file(JSONObject row,String path)throws Exception{return new File(root,row.getString("id")+"/"+row.getInt("revision")+"/source-check/"+path);}
-        void localEdit(JSONObject row,String body)throws Exception{Files.writeString(file(row,"reference.txt").toPath(),body,StandardCharsets.UTF_8);}
+        void localEdit(JSONObject row,String body)throws Exception{Files.write(file(row,"reference.txt").toPath(),body.getBytes(StandardCharsets.UTF_8));}
         JSONObject zipUpdate(JSONObject row,JSONObject files)throws Exception{
             byte[] zip=SkillArchive.write("source-check",files);JSONObject inspection=book.inspectPackage(scope(),new ByteArrayInputStream(zip),row.getString("id"),2000);
             JSONObject options=new JSONObject().put("source","owner-local-zip").put("id",row.getString("id")).put("revision",row.getInt("revision")).put("expectedCurrentDigest",row.getString("digest")).put("inspectedDigest",inspection.getJSONObject("package").getString("digest"));
@@ -66,12 +66,12 @@ public final class SkillSourceUpdateTest {
         try(Fixture f=new Fixture()) {
             JSONObject first=f.first();f.localEdit(first,"Owner local change🙂");SkillBook.SourceReview review=f.check(first.getString("id"));assertEquals("local_changed",review.view().getString("classification"));assertFalse(review.view().getJSONObject("comparison").getBoolean("currentContentVerified"));
             assertEquals("invalid",f.current(first).getString("status"));assertThrows(SkillBook.SourceUnavailable.class,()->f.apply(review,false));
-            JSONObject fork=f.book.applySourceReview(scope(),review,SkillBook.SourceChoice.FORK,false,2200);assertNotEquals(first.getString("id"),fork.getString("id"));assertFalse(fork.getBoolean("enabled"));assertEquals("Owner local change🙂",Files.readString(f.file(first,"reference.txt").toPath()));
+            JSONObject fork=f.book.applySourceReview(scope(),review,SkillBook.SourceChoice.FORK,false,2200);assertNotEquals(first.getString("id"),fork.getString("id"));assertFalse(fork.getBoolean("enabled"));assertEquals("Owner local change🙂",new String(Files.readAllBytes(f.file(first,"reference.txt").toPath()),StandardCharsets.UTF_8));
         }
     }
     @Test public void addedLocalFileAndReadableDeletionAreNotSilentlyIgnored()throws Exception {
         try(Fixture f=new Fixture()) {
-            JSONObject first=f.first();Files.writeString(f.file(first,"owner-notes.txt").toPath(),"Do not overwrite",StandardCharsets.UTF_8);
+            JSONObject first=f.first();Files.write(f.file(first,"owner-notes.txt").toPath(),"Do not overwrite".getBytes(StandardCharsets.UTF_8));
             SkillBook.SourceReview extra=f.check(first.getString("id"));assertEquals("local_changed",extra.view().getString("classification"));assertEquals("owner-notes.txt",extra.view().getJSONObject("comparison").getJSONArray("removed").getString(0));
             Files.delete(f.file(first,"owner-notes.txt").toPath());Files.delete(f.file(first,"reference.txt").toPath());SkillBook.SourceReview missing=f.check(first.getString("id"));assertEquals("local_changed",missing.view().getString("classification"));assertThrows(SkillBook.SourceUnavailable.class,()->f.apply(missing,false));
         }
@@ -92,7 +92,7 @@ public final class SkillSourceUpdateTest {
     }
     @Test public void postPreviewFileChangeEnableDisableAndDeletionAllRejectOldApply()throws Exception {
         try(Fixture f=new Fixture()) {
-            JSONObject first=f.first();f.server.setFiles(SkillGitProtocolTest.files("remote"));SkillBook.SourceReview preview=f.check(first.getString("id"));f.localEdit(first,"late edit");assertEquals("stale_target",assertThrows(SkillBook.SourceUnavailable.class,()->f.apply(preview,true)).code);assertEquals("late edit",Files.readString(f.file(first,"reference.txt").toPath()));
+            JSONObject first=f.first();f.server.setFiles(SkillGitProtocolTest.files("remote"));SkillBook.SourceReview preview=f.check(first.getString("id"));f.localEdit(first,"late edit");assertEquals("stale_target",assertThrows(SkillBook.SourceUnavailable.class,()->f.apply(preview,true)).code);assertEquals("late edit",new String(Files.readAllBytes(f.file(first,"reference.txt").toPath()),StandardCharsets.UTF_8));
         }
         try(Fixture f=new Fixture()) {
             JSONObject first=f.first();SkillBook.SourceReview preview=f.check(first.getString("id"));f.book.setEnabled(scope(),first.getString("id"),true,first.getString("digest"),true,2100);f.book.setEnabled(scope(),first.getString("id"),false,"",false,2200);assertEquals("stale_target",assertThrows(SkillBook.SourceUnavailable.class,()->f.apply(preview,true)).code);

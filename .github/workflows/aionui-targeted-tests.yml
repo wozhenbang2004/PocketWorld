@@ -4,7 +4,13 @@ run-name: AionUI host tests · ${{ github.ref_name }} · ${{ github.run_number }
 on:
   push:
     branches: ['work/aionui-absorption']
-    paths: ['.github/workflows/aionui-targeted-tests.yml', 'app/src/test/kotlin/dev/pocketengine/ui/ContinuousPlanMountedNativeTest.kt']
+    paths:
+      - '.github/workflows/aionui-targeted-tests.yml'
+      - 'app/src/test/kotlin/dev/pocketengine/ui/ContinuousPlanMountedNativeTest.kt'
+      - 'app/src/test/java/dev/pocketengine/features/channels/ChannelReceiveEpochRecoveryTest.java'
+      - 'app/src/test/java/dev/pocketengine/features/plugins/McpResourceSourceTest.java'
+      - 'app/src/test/java/dev/pocketengine/features/plugins/McpResourceSkillJourneyTest.java'
+      - 'app/src/test/java/dev/pocketengine/features/skills/SkillSourceUpdateTest.java'
 
 permissions:
   contents: read

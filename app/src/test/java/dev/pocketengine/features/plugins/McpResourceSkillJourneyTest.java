@@ -9,6 +9,7 @@ import dev.pocketengine.features.skills.SkillsModule;
 import dev.pocketengine.store.SecretVault;
 import dev.pocketengine.store.SettingsStore;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
@@ -92,10 +93,10 @@ public final class McpResourceSkillJourneyTest {
     }
     @Test public void installationRemovalBlocksSourceReadsButPreservesLocalEvidence()throws Exception {
         try(Journey j=new Journey()){
-            JSONObject first=j.first();j.approve(first);File bytes=new File(j.android.getFilesDir(),"skills/"+first.getString("id")+"/1/source-check/SKILL.md");String original=Files.readString(bytes.toPath());
+            JSONObject first=j.first();j.approve(first);File bytes=new File(j.android.getFilesDir(),"skills/"+first.getString("id")+"/1/source-check/SKILL.md");String original=new String(Files.readAllBytes(bytes.toPath()),StandardCharsets.UTF_8);
             j.plugins.handle("remove",new JSONObject().put("id","remote"));
             assertThrows(SecurityException.class,()->j.skills.readForHost(scope(),first.getString("id"),"SKILL.md",0,12000,1,first.getString("digest"),Set.of()));
-            assertEquals(1,j.skills.reconcileMcpSources(scope()).getInt("revoked"));assertEquals(original,Files.readString(bytes.toPath()));assertTrue(new File(bytes.getParentFile().getParentFile(),"retained.json").isFile());
+            assertEquals(1,j.skills.reconcileMcpSources(scope()).getInt("revoked"));assertEquals(original,new String(Files.readAllBytes(bytes.toPath()),StandardCharsets.UTF_8));assertTrue(new File(bytes.getParentFile().getParentFile(),"retained.json").isFile());
         }
     }
     @Test public void absentCapabilityPaginationLoopAndCrossUriAreBoundedWithoutReads()throws Exception {
