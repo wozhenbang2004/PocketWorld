@@ -1,0 +1,142 @@
+name: AionUI targeted host unit tests
+run-name: AionUI host tests · ${{ github.ref_name }} · ${{ github.run_number }}
+
+on:
+  push:
+    branches: ['work/aionui-absorption']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aionui-targeted-tests-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  channel-receiver-identity:
+    if: ${{ github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GRADLE_USER_HOME: ${{ runner.temp }}/aionui-targeted-gradle
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the exact pushed revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare Android 35 for host unit tests
+        run: |
+          set -euo pipefail
+          mkdir -p host-test-artifacts
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          : "${ANDROID_HOME:?Android SDK is required}"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0'
+          java -version
+          test -s "$ANDROID_HOME/platforms/android-35/android.jar"
+          # No native toolchain is installed for this host-only test job.
+          # If AGP still requires the declared NDK/CMake during configuration,
+          # retain the actual error; do not substitute another version or build an APK.
+
+      - name: Check the selected host task graph
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.vfs.watch=false :app:testDebugUnitTest \
+            --tests dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest \
+            --tests dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest \
+            -x :app:buildAndroidRuntime -x :app:buildDisplayHelper \
+            --dry-run 2>&1 | tee host-test-artifacts/task-graph.log
+          if grep -E '^:app:(externalNativeBuild|configureCMake|buildCMake|generateJsonModel|assemble|bundle|publish|install)' host-test-artifacts/task-graph.log; then
+            echo 'Unexpected native, packaging, installation or publishing task; host test scope is blocked.' >&2
+            exit 1
+          fi
+
+      - name: Run only the receiver identity JUnit classes
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.vfs.watch=false :app:testDebugUnitTest \
+            --tests dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest \
+            --tests dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest \
+            -x :app:buildAndroidRuntime -x :app:buildDisplayHelper \
+            2>&1 | tee host-test-artifacts/gradle-tests.log
+
+      - name: Record source identity and exact selected JUnit results
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p host-test-artifacts
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess, sys, xml.etree.ElementTree as ET
+          classes = [
+              'dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest',
+              'dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest',
+          ]
+          rows = []
+          for name in classes:
+              path = pathlib.Path('app/build/test-results/testDebugUnitTest') / ('TEST-' + name + '.xml')
+              row = {'class': name, 'report': str(path)}
+              if not path.is_file():
+                  row['status'] = 'not_run_or_no_report'
+              else:
+                  try:
+                      suite = ET.parse(path).getroot()
+                      for key in ('tests', 'failures', 'errors', 'skipped'):
+                          row[key] = int(suite.attrib.get(key, '0'))
+                      row['status'] = 'passed' if row['tests'] > 0 and not any(row[key] for key in ('failures', 'errors', 'skipped')) else 'failed_or_skipped'
+                  except (ET.ParseError, ValueError) as error:
+                      row.update(status='invalid_report', error=str(error))
+              rows.append(row)
+          def git(*args):
+              result = subprocess.run(['git', *args], capture_output=True, text=True)
+              return result.stdout.strip() if result.returncode == 0 else None
+          receipt = {
+              'commit': git('rev-parse', 'HEAD'), 'tree': git('rev-parse', 'HEAD^{tree}'),
+              'event_commit': os.environ.get('GITHUB_SHA'), 'branch': os.environ.get('GITHUB_REF_NAME'),
+              'run_id': os.environ.get('GITHUB_RUN_ID'), 'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
+              'scope': 'selected Android Gradle host JUnit classes; no device or native-runtime acceptance',
+              'selected_tests': rows, 'apk_assembled': False, 'device_runtime_tested': False,
+              'skipped_tasks': [':app:buildAndroidRuntime', ':app:buildDisplayHelper'],
+              'passed': all(row['status'] == 'passed' for row in rows),
+          }
+          pathlib.Path('host-test-artifacts/test-identity.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          summary = '## AionUI targeted host unit tests\n\nCommit: `' + str(receipt['commit']) + '`\n\n'
+          for row in rows:
+              summary += '- `' + row['class'] + '`: ' + row['status'] + '; tests=' + str(row.get('tests', 'not available')) + '\n'
+          summary += '\nHost unit tests only. No APK, signing, installation, native-runtime or physical-device validation.\n'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write(summary)
+          print(json.dumps(receipt, indent=2))
+          sys.exit(0 if receipt['passed'] else 1)
+          PY
+
+      - name: Retain private test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aionui-channel-host-tests-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            host-test-artifacts/
+            app/build/test-results/testDebugUnitTest/TEST-dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest.xml
+            app/build/test-results/testDebugUnitTest/TEST-dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest.xml
+          if-no-files-found: warn
+          retention-days: 7
