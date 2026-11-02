@@ -147,7 +147,8 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         if(!isConnected())throw new SecurityException("后台会话已变更，请先由机主核对");
         ownerPermit=new OwnerPermit(taskId,control,control.pauseRevision());
     }
-    public JSONObject closeSession(){clearReferences();try{JSONObject result=module.releaseSession(sessionId,displayId);if(result.optBoolean("releaseConfirmed")&&appResources!=null)appResources.releaseOwner(resourceOwner);return result;}catch(Exception unknown){try{return new JSONObject().put("ok",false).put("releaseConfirmed",false).put("error","cleanup_unknown").put("message","后台屏释放未确认，请重新连接核对。");}catch(Exception impossible){return new JSONObject();}}}
+    public JSONObject closeSession(){clearReferences();JSONObject audio;try{audio=restoreTaskAudio();}catch(Exception pending){audio=new JSONObject();try{audio.put("status","audio_recovery_pending").put("pending",true);}catch(Exception ignored){}}
+        try{JSONObject result=module.releaseSession(sessionId,displayId).put("audioRestore",audio);if(result.optBoolean("releaseConfirmed")&&appResources!=null)appResources.releaseOwner(resourceOwner);return result;}catch(Exception unknown){try{return new JSONObject().put("ok",false).put("releaseConfirmed",false).put("audioRestore",audio).put("error","cleanup_unknown").put("message","后台屏释放未确认，请重新连接核对。");}catch(Exception impossible){return new JSONObject();}}}
     @Override public dev.pocketengine.phone.PhoneUiSignals uiSignals(RunControl control)throws Exception {worker();guard(control,control.pauseRevision());PhoneAccessibilityService service=PhoneAccessibilityService.get();if(service==null)return null;return service.uiSignals();}
     @Override public synchronized JSONObject observe(boolean includeImage,RunControl control)throws Exception {
         worker();control.check();
