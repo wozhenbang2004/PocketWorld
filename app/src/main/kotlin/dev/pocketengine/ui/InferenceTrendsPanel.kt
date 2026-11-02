@@ -6,6 +6,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import dev.pocketengine.R
 import androidx.compose.ui.unit.dp
 import java.time.LocalDate
 import java.time.ZoneId
@@ -16,6 +19,7 @@ import org.json.JSONObject
 /** Read-only range view; root supplies the original private-owner TaskStore reader. */
 @Composable
 internal fun InferenceTrendsPanel(read: (Long, Long, String, String, (JSONObject?, String?) -> Unit) -> Unit) {
+    val context = LocalContext.current
     var open by remember { mutableStateOf(false) }
     var from by remember { mutableStateOf(LocalDate.now().minusDays(6).toString()) }
     var until by remember { mutableStateOf(LocalDate.now().toString()) }
@@ -26,43 +30,44 @@ internal fun InferenceTrendsPanel(read: (Long, Long, String, String, (JSONObject
     var loading by remember { mutableStateOf(false) }; var error by remember { mutableStateOf<String?>(null) }
     fun load(reset: Boolean) {
         if (loading) return
-        runCatching { if (reset) { val z = ZoneId.of(zone); capturedFrom = LocalDate.parse(from).atStartOfDay(z).toInstant().toEpochMilli(); capturedUntil = LocalDate.parse(until).plusDays(1).atStartOfDay(z).toInstant().toEpochMilli(); capturedZone = zone; retained = JSONArray(); next = ""; unreadable = 0 }; require(capturedFrom > 0 && capturedUntil > capturedFrom) }.onFailure { error = "请核对日期范围与时区。" }.onSuccess {
+        runCatching { if (reset) { val z = ZoneId.of(zone); capturedFrom = LocalDate.parse(from).atStartOfDay(z).toInstant().toEpochMilli(); capturedUntil = LocalDate.parse(until).plusDays(1).atStartOfDay(z).toInstant().toEpochMilli(); capturedZone = zone; retained = JSONArray(); next = ""; unreadable = 0 }; require(capturedFrom > 0 && capturedUntil > capturedFrom) }.onFailure { error = context.getString(R.string.w2_trends_invalid_range) }.onSuccess {
             loading = true; error = null
             read(capturedFrom, capturedUntil, capturedZone, if (reset) "" else next) { page, failure ->
                 loading = false
-                if (page == null) error = failure ?: "原用量记录暂不可读"
-                else runCatching { val incoming = page.getJSONArray("receipts"); require(retained.length() + incoming.length() <= 4096) { "display_limit" }; val joined = JSONArray(retained.toString()); for (i in 0 until incoming.length()) joined.put(incoming.get(i)); unreadable += page.optInt("unreadableRows"); retained = joined; next = page.optString("nextCursor"); result = InferenceTrendQuery.report(joined, capturedFrom, capturedUntil, capturedZone).put("hasMore", page.optBoolean("hasMore")).put("completeCoverage", !page.optBoolean("hasMore") && unreadable == 0) }.onFailure { error = "已到本次4096条显示上限或原记录不可核对；保留已读范围，可缩小日期后重读。" }
+                if (page == null) error = failure ?: context.getString(R.string.w2_trends_records_unavailable)
+                else runCatching { val incoming = page.getJSONArray("receipts"); require(retained.length() + incoming.length() <= 4096) { "display_limit" }; val joined = JSONArray(retained.toString()); for (i in 0 until incoming.length()) joined.put(incoming.get(i)); unreadable += page.optInt("unreadableRows"); retained = joined; next = page.optString("nextCursor"); result = InferenceTrendQuery.report(joined, capturedFrom, capturedUntil, capturedZone).put("hasMore", page.optBoolean("hasMore")).put("completeCoverage", !page.optBoolean("hasMore") && unreadable == 0) }.onFailure { error = context.getString(R.string.w2_trends_display_limit) }
             }
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = { open = !open }) { Text(if (open) "收起跨任务用量趋势" else "跨任务用量趋势") }
+        TextButton(onClick = { open = !open }) { Text(stringResource(if (open) R.string.w2_trends_collapse else R.string.w2_trends_expand)) }
         if (open) {
-            Text("按原调用时间分组", style = MaterialTheme.typography.titleMedium)
-            Text("输入/输出、缓存与未知项保留原提供方口径；历史连接删除后仍使用回执身份。", style = MaterialTheme.typography.bodySmall)
-            OutlinedTextField(from, { from = it }, label = { Text("开始日期 YYYY-MM-DD") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(until, { until = it }, label = { Text("结束日期（含当天）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(zone, { zone = it }, label = { Text("分组时区") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Button(onClick = { load(true) }, enabled = !loading) { Text("读取原记录") }
+            Text(stringResource(R.string.w2_trends_group_by_time), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.w2_trends_counters_notice), style = MaterialTheme.typography.bodySmall)
+            OutlinedTextField(from, { from = it }, label = { Text(stringResource(R.string.w2_trends_start_date)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(until, { until = it }, label = { Text(stringResource(R.string.w2_trends_end_date)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(zone, { zone = it }, label = { Text(stringResource(R.string.w2_trends_time_zone)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Button(onClick = { load(true) }, enabled = !loading) { Text(stringResource(R.string.w2_trends_read)) }
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             result?.let { report ->
-                Text(if (report.optBoolean("completeCoverage")) "已覆盖本次保留记录范围" else "当前有界窗口，可能尚有记录未纳入；不代表全部账单。", style = MaterialTheme.typography.bodySmall)
-                Text("${report.optJSONObject("total")?.optInt("attempts") ?: 0} 次原调用 · ${report.optJSONObject("total")?.optInt("unfinished") ?: 0} 次结果未确认", style = MaterialTheme.typography.titleSmall)
+                Text(if (report.optBoolean("completeCoverage")) stringResource(R.string.w2_trends_complete_coverage) else stringResource(R.string.w2_trends_limited_coverage), style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.w2_trends_call_summary, report.optJSONObject("total")?.optInt("attempts") ?: 0, report.optJSONObject("total")?.optInt("unfinished") ?: 0), style = MaterialTheme.typography.titleSmall)
                 val days = report.optJSONArray("daily") ?: JSONArray()
-                for (i in 0 until days.length()) { val day = days.getJSONObject(i); val usage = day.getJSONObject("usage"); Text("${day.getString("date")}　${usage.optInt("attempts")} 次调用", style = MaterialTheme.typography.bodyMedium) }
+                for (i in 0 until days.length()) { val day = days.getJSONObject(i); val usage = day.getJSONObject("usage"); Text(stringResource(R.string.w2_trends_daily_calls, day.getString("date"), usage.optInt("attempts")), style = MaterialTheme.typography.bodyMedium) }
                 HorizontalDivider()
                 val models = report.optJSONArray("breakdown") ?: JSONArray()
                 for (i in 0 until models.length()) {
                     val row = models.getJSONObject(i)
                     Text("${row.getString("model")} · ${row.getString("purpose")}", style = MaterialTheme.typography.titleSmall)
-                    Text("历史连接 ${row.getString("historicalProviderId")} · ${row.getString("protocol")}", style = MaterialTheme.typography.labelSmall)
+                    Text(stringResource(R.string.w2_trends_historical_connection, row.getString("historicalProviderId"), row.getString("protocol")), style = MaterialTheme.typography.labelSmall)
                     val groups = row.getJSONObject("usage").getJSONArray("groups")
-                    for (n in 0 until groups.length()) { val counters = groups.getJSONObject(n).getJSONObject("counters"); Text("输入 ${trendCount(counters.optJSONObject("INPUT"))} · 输出 ${trendCount(counters.optJSONObject("OUTPUT"))} · 服务总计 ${trendCount(counters.optJSONObject("TOTAL"))}", style = MaterialTheme.typography.bodySmall) }
+                    for (n in 0 until groups.length()) { val counters = groups.getJSONObject(n).getJSONObject("counters"); Text(stringResource(R.string.w2_trends_counter_summary, trendCount(counters.optJSONObject("INPUT")), trendCount(counters.optJSONObject("OUTPUT")), trendCount(counters.optJSONObject("TOTAL"))), style = MaterialTheme.typography.bodySmall) }
                 }
-                if (report.optBoolean("hasMore")) TextButton(onClick = { load(false) }, enabled = !loading && retained.length() < 4096) { Text("继续读取下一个原记录窗口") }
+                if (report.optBoolean("hasMore")) TextButton(onClick = { load(false) }, enabled = !loading && retained.length() < 4096) { Text(stringResource(R.string.w2_trends_read_next)) }
             }
         }
     }
 }
-private fun trendCount(count: JSONObject?): String = if (count == null || count.optBoolean("overflow")) "未知" else (if (count.isNull("knownSubtotal")) "未知" else count.optLong("knownSubtotal").toString()) + "（${count.optInt("unknownCalls")}次未知/${count.optInt("partialCalls")}次部分返回）"
+@Composable
+private fun trendCount(count: JSONObject?): String = if (count == null || count.optBoolean("overflow")) stringResource(R.string.w2_trends_unknown) else stringResource(R.string.w2_trends_count_detail, if (count.isNull("knownSubtotal")) stringResource(R.string.w2_trends_unknown) else count.optLong("knownSubtotal").toString(), count.optInt("unknownCalls"), count.optInt("partialCalls"))
