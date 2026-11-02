@@ -1,10 +1,10 @@
 package dev.pocketengine.browser;
 
-import android.app.Application;
 import android.os.Looper;
 import android.webkit.CookieManager;
 import android.webkit.WebView;
 import dev.pocketengine.BrowserActivity;
+import dev.pocketengine.EngineApplication;
 import dev.pocketengine.core.ExecutionResources;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunJournal;
@@ -39,7 +39,7 @@ import static org.junit.Assert.*;
 
 /** Real Activity/TaskStore/HTTP; evaluateJavascript results are explicit page fixtures, not rendered JS. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,application=Application.class)
+@Config(sdk=35,application=EngineApplication.class)
 @LooperMode(LooperMode.Mode.PAUSED)
 public final class BrowserTaskActivityTest {
     private static final String[] TOOLS={"open","select","observe","navigate","click","type","scroll","download","download_status","retain_source","close","finish"};
