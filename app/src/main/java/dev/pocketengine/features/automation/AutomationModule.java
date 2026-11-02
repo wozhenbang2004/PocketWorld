@@ -105,6 +105,7 @@ public final class AutomationModule implements EngineModule {
     public JSONObject approveScheduleProposalForOwner(String id,String digest)throws Exception{JSONObject result=book.approveScheduleProposal(id,digest,System.currentTimeMillis());reschedule(context.android);return result;}
     /** Native original host only; model/feature JSON cannot publish a condition verdict. */
     public JSONArray pendingSemanticChecks(int limit)throws Exception{return book.pendingSemanticChecks(limit);}
+    public JSONArray pendingSemanticChecksWindow(int limit,int offset)throws Exception{return book.pendingSemanticChecks(limit,offset);}
     public JSONArray pendingSemanticChecksForOriginalTask(String task)throws Exception{return book.pendingSemanticChecks(20,task);}
     public JSONObject bindSemanticCheck(String occurrence,String task)throws Exception{return book.bindSemanticCheck(occurrence,task,System.currentTimeMillis());}
     public JSONObject completeSemanticCheck(String occurrence,AutomationConditionOutcome outcome)throws Exception{

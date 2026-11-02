@@ -38,4 +38,14 @@ public final class AutomationSemanticConditionTest {
         String original=UUID.randomUUID().toString();assertEquals("condition_action_registered",restored.recordSemanticPlanAction(row.getString("id"),original,false,100002).getString("status"));assertEquals(original,restored.recordSemanticPlanAction(row.getString("id"),original,false,100003).getString("conditionActionTaskId"));assertThrows(SecurityException.class,()->restored.recordSemanticPlanAction(row.getString("id"),UUID.randomUUID().toString(),false,100004));assertEquals(0,restored.pendingSemanticChecks(20).length());
     }
 
+    @Test public void oncePendingCheckRetainsTheOriginalAlarmUntilBoundAndThenWaitsForTaskEvent()throws Exception{
+        AutomationBook book=new AutomationBook(new File(temp.getRoot(),"once-check.json"));JSONObject once=rule().put("schedule",new JSONObject().put("type","once").put("at",100000));book.save(once,99999);JSONObject row=book.claimDue(100000,10).getJSONObject(0);
+        assertEquals(100000,book.nextAt());book.bindSemanticCheck(row.getString("id"),UUID.randomUUID().toString(),100000);assertEquals(-1,book.nextAt());
+    }
+    @Test public void boundedWindowsReachLaterChecksWithoutReplayingEarlierUnknownTasks()throws Exception{
+        AutomationBook book=new AutomationBook(new File(temp.getRoot(),"fair-checks.json"));for(int i=0;i<25;i++)book.save(rule().put("title","条件"+i).put("schedule",new JSONObject().put("type","once").put("at",100000)),99999);
+        var rows=book.claimDue(100000,20);var second=book.claimDue(100000,20);for(int i=0;i<second.length();i++)rows.put(second.getJSONObject(i));assertEquals(25,rows.length());for(int i=0;i<20;i++)book.bindSemanticCheck(rows.getJSONObject(i).getString("id"),UUID.randomUUID().toString(),100000);book.recoverInterrupted(100001);
+        var later=book.pendingSemanticChecks(4,20);assertEquals(4,later.length());for(int i=0;i<4;i++)assertEquals("condition_pending",later.getJSONObject(i).getString("status"));assertEquals("condition_check_unknown",book.pendingSemanticChecks(4,0).getJSONObject(0).getString("status"));assertEquals(100000,book.nextAt());
+    }
+
 }

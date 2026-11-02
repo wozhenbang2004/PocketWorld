@@ -183,7 +183,7 @@ public final class AutomationBook {
     public long nextAt()throws Exception {
         synchronized(lock){long earliest=Long.MAX_VALUE;JSONObject state=read();JSONArray rules=state.getJSONArray("rules");
             for(int i=0;i<rules.length();i++){JSONObject rule=rules.getJSONObject(i);if(rule.optBoolean("enabled")&&!rule.isNull("nextAt"))earliest=Math.min(earliest,rule.getLong("nextAt"));}
-            JSONArray receipts=state.getJSONArray("receipts");for(int i=0;i<receipts.length();i++){JSONObject receipt=receipts.getJSONObject(i);if("deferred".equals(receipt.optString("status")))earliest=Math.min(earliest,receipt.getLong("dispatchAfter"));}
+            JSONArray receipts=state.getJSONArray("receipts");for(int i=0;i<receipts.length();i++){JSONObject receipt=receipts.getJSONObject(i);if("deferred".equals(receipt.optString("status")))earliest=Math.min(earliest,receipt.getLong("dispatchAfter"));else if(receipt.optString("status").matches("condition_pending|condition_action_pending"))earliest=Math.min(earliest,receipt.getLong("occurrenceAt"));}
             return earliest==Long.MAX_VALUE?-1:earliest;
         }
     }
@@ -278,10 +278,13 @@ public final class AutomationBook {
         }
     }
     /** Native existing AlarmHost discovery. No task, model call or source read occurs here. */
-    public JSONArray pendingSemanticChecks(int limit)throws Exception{return pendingSemanticChecks(limit,null);}
-    public JSONArray pendingSemanticChecks(int limit,String originalTask)throws Exception {
-        if(limit<1||limit>20||originalTask!=null&&!originalTask.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("条件检查候选或原任务无效");synchronized(lock){JSONObject state=read();JSONArray result=new JSONArray(),receipts=state.getJSONArray("receipts");
-            for(int i=0;i<receipts.length()&&result.length()<limit;i++){JSONObject row=receipts.getJSONObject(i);if((originalTask==null||originalTask.equals(row.optString("conditionTaskId")))&&row.optString("status").matches("condition_pending|condition_checking|condition_check_unknown|condition_action_pending|condition_action_unknown"))result.put(copy(row));}return result;
+    public JSONArray pendingSemanticChecks(int limit)throws Exception{return pendingSemanticChecks(limit,null,0);}
+    public JSONArray pendingSemanticChecks(int limit,String originalTask)throws Exception{return pendingSemanticChecks(limit,originalTask,0);}
+    public JSONArray pendingSemanticChecks(int limit,int offset)throws Exception{return pendingSemanticChecks(limit,null,offset);}
+    private JSONArray pendingSemanticChecks(int limit,String originalTask,int offset)throws Exception {
+        if(limit<1||limit>20||originalTask!=null&&!originalTask.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("条件检查候选或原任务无效");synchronized(lock){JSONObject state=read();JSONArray result=new JSONArray(),receipts=state.getJSONArray("receipts");java.util.List<JSONObject> eligible=new java.util.ArrayList<>();
+            for(int i=0;i<receipts.length();i++){JSONObject row=receipts.getJSONObject(i);if((originalTask==null||originalTask.equals(row.optString("conditionTaskId")))&&row.optString("status").matches("condition_pending|condition_checking|condition_check_unknown|condition_action_pending|condition_action_unknown"))eligible.add(row);}
+            for(int i=0;i<Math.min(limit,eligible.size());i++)result.put(copy(eligible.get(Math.floorMod((long)offset+i,eligible.size()))));return result;
         }
     }
     /** Root binds the original TaskStore read-only task before any inference is admitted. */

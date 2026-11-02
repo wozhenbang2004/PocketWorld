@@ -39,9 +39,10 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         default JSONObject reconcileApprovedOriginalPlan(JSONObject occurrence)throws Exception{return null;}
     }
     private volatile ConditionTaskPort conditionTasks;
+    private final java.util.concurrent.atomic.AtomicInteger semanticCursor=new java.util.concurrent.atomic.AtomicInteger();
     public void installConditionTaskPort(ConditionTaskPort port){if(conditionTasks!=null)throw new IllegalStateException("原条件任务宿主已安装");conditionTasks=java.util.Objects.requireNonNull(port);}
     private int processSemanticChecks(AutomationModule module,int limit)throws Exception{
-        ConditionTaskPort port=conditionTasks;if(port==null)return 0;JSONArray pending=module.pendingSemanticChecks(Math.min(20,Math.max(1,limit)));int prepared=0;
+        ConditionTaskPort port=conditionTasks;if(port==null)return 0;int window=Math.min(20,Math.max(1,limit));JSONArray pending=module.pendingSemanticChecksWindow(window,semanticCursor.getAndAdd(window));int prepared=0;
         for(int i=0;i<pending.length()&&prepared<limit;i++){if(Thread.currentThread().isInterrupted())break;JSONObject occurrence=pending.getJSONObject(i);String state=occurrence.getString("status");
             if(state.equals("condition_pending")){String originalTask=port.ensureOriginalReadOnlyTask(occurrence);occurrence=module.bindSemanticCheck(occurrence.getString("id"),originalTask);port.startOriginalReadOnlyTask(occurrence);prepared++;}
             if(state.matches("condition_action_pending|condition_action_unknown")){admitConditionAction(module,port,occurrence);continue;}
@@ -85,7 +86,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         tasks.checkExtensionRun(task,run,epoch,original);JSONObject current=tasks.get(task,false);privateOwner(current);
         if(current.optJSONObject("origin")!=null||current.optString("conversationId").isBlank())throw new SecurityException("仅本机原对话能提议私人计划");
         JSONObject origin=new JSONObject().put("ownerId","owner").put("spaceId","private").put("taskId",task).put("conversationId",current.getString("conversationId"));
-        JSONObject proposal=module.proposeScheduleForTask(origin,operation,draft);tasks.checkExtensionRun(task,run,epoch,original);return new JSONObject().put("proposal",proposal).put("reviewRequired",true).put("scheduled",false).put("executionAuthorized",false);
+        JSONObject proposal=module.proposeScheduleForTask(origin,operation,draft);tasks.checkExtensionRun(task,run,epoch,original);return new JSONObject().put("proposal",proposal).put("reviewRequired",true).put("scheduled",false).put("conditionCheckAvailable",proposal.getJSONObject("draft").optJSONObject("semanticCondition")==null||conditionTasks!=null).put("executionAuthorized",false);
     }
     public JSONObject scheduleProposalsForTask(AutomationModule module,String task,String run,int epoch,RunControl original)throws Exception{
         tasks.checkExtensionRun(task,run,epoch,original);JSONObject current=tasks.get(task,false);privateOwner(current);if(current.optJSONObject("origin")!=null||current.optString("conversationId").isBlank())throw new SecurityException("计划查询必须来自本机原对话");return new JSONObject().put("proposals",module.scheduleProposalsForTask(task)).put("executionAuthorized",false);
@@ -97,7 +98,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
             case "snapshot":break;
             case "approveSchedule":{
                 JSONObject proposal=null;JSONArray proposals=module.scheduleProposalsForTask(null);for(int i=0;i<proposals.length();i++)if(id.equals(proposals.getJSONObject(i).getString("id")))proposal=proposals.getJSONObject(i);
-                if(proposal==null)throw new IllegalArgumentException("原计划草案不存在");JSONObject source=proposal.getJSONObject("origin"),original=tasks.get(source.getString("taskId"),false);
+                if(proposal==null)throw new IllegalArgumentException("原计划草案不存在");if(proposal.getJSONObject("draft").optJSONObject("semanticCondition")!=null&&conditionTasks==null)throw new IllegalStateException("原生只读条件检查尚不可用，草案未排程");JSONObject source=proposal.getJSONObject("origin"),original=tasks.get(source.getString("taskId"),false);
                 if(original==null||original.optJSONObject("origin")!=null||!source.getString("conversationId").equals(original.optString("conversationId")))throw new SecurityException("草案的原本机对话任务已变化");privateOwner(original);
                 result.put("schedule",module.approveScheduleProposalForOwner(id,input.getString("digest")));break;
             }
