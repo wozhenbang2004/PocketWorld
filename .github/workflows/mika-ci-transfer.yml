@@ -29,11 +29,11 @@ jobs:
           python3 - <<'PY'
           import base64, hashlib, json, pathlib
           m=json.loads(pathlib.Path('transfer/manifest.json').read_text())
-          assert m['source_commit']=='1b3e1dc5ed4f6144983a1b392b628b404695acad'
-          assert m['source_tree']=='74c4cf37831f5530abfa16cce232024bc450c3a6'
-          assert m['base']=='a09795549e1922b9f69f243768d6fc584f610741'
+          assert m['source_commit']=='1095b67d62d4964525137942d1048107f2d7b652'
+          assert m['source_tree']=='7221e17d2a82d40b102b98061f2e0cd00e898c3d'
+          assert m['base']=='886a28d071cd6d8e5977c8c001716230f8e42faf'
           assert m['target_branch']=='work/mika-53-capabilities-20261102'
-          assert len(m['parts'])==3
+          assert len(m['parts'])==2
           content=[]
           for i,p in enumerate(m['parts']):
               assert p['path']==f'transfer/part-{i:03d}.b64'
@@ -41,19 +41,19 @@ jobs:
               assert len(b)==p['size'] and hashlib.sha256(b).hexdigest()==p['sha256']
               content.append(b)
           bundle=base64.b64decode(b''.join(content), validate=True)
-          assert len(bundle)==55019
-          assert hashlib.sha256(bundle).hexdigest()=='833636cb50fbc7bfa8c3d92f27881b0809ae2ed0fb15a33757c8e34e4c2b00a2'
+          assert len(bundle)==35979
+          assert hashlib.sha256(bundle).hexdigest()=='647a92a28df34f6ec46bd53852a722349e1118154a7b35260b4ea0a4e7eafb0e'
           pathlib.Path('/tmp/pocketworld-mika.bundle').write_bytes(bundle)
           PY
-          source_commit=1b3e1dc5ed4f6144983a1b392b628b404695acad
-          source_tree=74c4cf37831f5530abfa16cce232024bc450c3a6
-          expected_base=a09795549e1922b9f69f243768d6fc584f610741
+          source_commit=1095b67d62d4964525137942d1048107f2d7b652
+          source_tree=7221e17d2a82d40b102b98061f2e0cd00e898c3d
+          expected_base=886a28d071cd6d8e5977c8c001716230f8e42faf
           target_branch=work/mika-53-capabilities-20261102
           git bundle verify /tmp/pocketworld-mika.bundle
           git fetch /tmp/pocketworld-mika.bundle HEAD
           test "$(git rev-parse FETCH_HEAD)" = "$source_commit"
           test "$(git rev-parse "$source_commit^{tree}")" = "$source_tree"
-          git merge-base --is-ancestor a09795549e1922b9f69f243768d6fc584f610741 "$source_commit"
+          git merge-base --is-ancestor 886a28d071cd6d8e5977c8c001716230f8e42faf "$source_commit"
           git diff --exit-code 63a8af6acdd6d9f70909cae43454416ca0a896dd "$source_commit" -- \
             ':(glob)**/DeviceCapabilityPort.java' ':(glob)**/DeviceWorkspaceArtifacts.java' \
             ':(glob)**/TaskStoreDeviceTasks.java'
