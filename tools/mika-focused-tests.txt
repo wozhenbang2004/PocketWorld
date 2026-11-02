@@ -48,6 +48,7 @@ dev.pocketengine.features.operations.OperationsSafetyTest
 dev.pocketengine.features.proxy.accounts.ChatGptSignInServiceTest
 dev.pocketengine.features.proxy.accounts.OpenRouterOnboardingTest
 dev.pocketengine.features.skills.ManagedScriptBridgeSessionTest
+dev.pocketengine.features.skills.ManagedScriptArtifactPublisherNativeTest
 dev.pocketengine.features.skills.ManagedSkillPolicyTest
 dev.pocketengine.features.skills.SkillCataloguePagingTest
 dev.pocketengine.features.teams.TeamResearchReadAccessTest
