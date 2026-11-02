@@ -1,0 +1,18 @@
+/* PW-22: controlled adaptation of library Affect Files/Folder v3.
+ * Original workspace.tsx is retained. Type art is a type illustration, never file content.
+ * All seed folders/documents/people are removed; every entry comes from current project state.
+ */
+import {useMemo,useState} from 'react';
+import {IconButton} from '../forms-library';
+import {ContextMenuTrigger,ContextMenu,ContextMenuItem} from './adapted/boardui/components/base/context-menu/context-menu';
+import {RiFileLine,RiFolderLine,RiListCheck,RiGridLine,RiMoreLine,RiFileCopyLine} from '@remixicon/react';
+type FileItem={name:string;type:string;meta:string};
+export function FileArt({type}:{type:string}){return <div className={`au-sc-file-art au-sc-art-${type.toLowerCase()}`}><div className="au-sc-art-back"/><div className="au-sc-art-paper">{type==='XLS'?<div className="au-sc-art-cells">{Array.from({length:18},(_,i)=><i key={i}/>)}</div>:<>{type==='PDF'&&<div className="au-sc-art-image"/>}{Array.from({length:type==='PDF'?4:6},(_,i)=><i key={i}/>)}</>}<b>{type}</b></div></div>}
+function FileCard({file,onClick}:{file:FileItem;onClick:()=>void}){return <button className="au-sc-file-card" onClick={onClick}><div className="au-sc-file-preview"><FileArt type={file.type}/></div><strong>{file.name}</strong><small>{file.meta}</small></button>}
+
+export type ProjectFile={path:string;version?:number;[key:string]:unknown};
+export function FilesBrowser({files,selectedPath,onOpen,onCopyPath,label='项目文件'}:{files:ProjectFile[];selectedPath?:string|null;onOpen:(file:ProjectFile)=>void;onCopyPath?:(path:string)=>void;label?:string}){
+ const[view,setView]=useState<'List'|'Grid'>('List'),[query,setQuery]=useState('');
+ const shown=useMemo(()=>files.filter(f=>f.path.toLocaleLowerCase().includes(query.toLocaleLowerCase())),[files,query]);
+ return <section className="au-sc-files pw-files" aria-label={label}><div className="pw-files-toolbar"><label className="pw-file-search"><RiFolderLine size={17}/><input type="search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索当前项目文件" aria-label="搜索当前项目文件"/></label><div className="pw-view-buttons" role="group" aria-label="文件显示方式"><button type="button" aria-label="列表" aria-pressed={view==='List'} onClick={()=>setView('List')}><RiListCheck size={18}/></button><button type="button" aria-label="网格" aria-pressed={view==='Grid'} onClick={()=>setView('Grid')}><RiGridLine size={18}/></button></div></div>{view==='Grid'?<div className="au-sc-file-grid">{shown.map(file=><FileCard key={file.path} file={{name:file.path.split('/').pop()||file.path,type:(file.path.split('.').pop()||'FILE').toUpperCase().slice(0,5),meta:file.version!=null?`版本 ${file.version}`:file.path}} onClick={()=>onOpen(file)}/>)}</div>:<div className="pw-file-list">{shown.map(file=><ContextMenuTrigger key={file.path}>{({isOpen,open})=><><div className="pw-file-object" data-open={isOpen||undefined} aria-current={selectedPath===file.path?'true':undefined}><button type="button" className="pw-file-open" onClick={()=>onOpen(file)}><RiFileLine size={19}/><span><b>{file.path.split('/').pop()||file.path}</b><small>{file.path}</small></span>{file.version!=null&&<small>v{file.version}</small>}</button><IconButton icon={RiMoreLine} size="small" aria-label={`${file.path} 的操作`} onClick={event=>open(event.currentTarget)}/></div><ContextMenu aria-label={`${file.path} 的操作`} onAction={key=>{if(key==='open')onOpen(file);else if(key==='copy')onCopyPath?.(file.path)}}><ContextMenuItem id="open" icon={RiFileLine}>打开文件</ContextMenuItem>{onCopyPath&&<ContextMenuItem id="copy" icon={RiFileCopyLine}>复制文件路径</ContextMenuItem>}</ContextMenu></>}</ContextMenuTrigger>)}</div>}{!shown.length&&<p className="pw-empty-small">{query?'当前项目没有匹配的文件。':'这个项目还没有文件。'}</p>}</section>
+}

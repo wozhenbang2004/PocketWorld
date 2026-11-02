@@ -3,16 +3,17 @@ package dev.pocketengine.ui
 import android.os.Bundle
 import android.content.Intent
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.media.MediaController
 
-/** Pocket World's native product UI; Java engine modules retain their existing identity and data. */
+/** Compatibility Activity identity; all business UI is rendered by the bundled library Web interface. */
 class ComposeActivity : ComponentActivity() {
     private lateinit var controller: PocketWorldController
+    private lateinit var webHost: dev.pocketengine.ui.web.PocketWebHost
     internal lateinit var media: MediaController
         private set
     private var importTaskId: String? = null
@@ -68,7 +69,13 @@ class ComposeActivity : ComponentActivity() {
         importProjectId = savedInstanceState?.getString("ownerImportProject")
         exportPath = savedInstanceState?.getString("ownerExportPath")
         if (exportPath != null) controller.exportRestored()
-        setContent { PocketWorldApp(controller) }
+        val webPresentation = savedInstanceState?.getString("libraryWebPresentation")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
+        webHost = dev.pocketengine.ui.web.PocketWebHost(this, controller, webPresentation)
+        setContentView(webHost.view)
+        webHost.start()
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() { webHost.handleBack { moveTaskToBack(true) } }
+        })
         controller.attach()
         engine.publish(media.state())
         deliverPhoneTask(intent)
@@ -77,8 +84,8 @@ class ComposeActivity : ComponentActivity() {
         deliverSharedFiles(intent)
         deliverAccountEntry(intent)
     }
-    override fun onResume() { super.onResume(); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.foreground(true); controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
-    override fun onPause() { (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.projectGitImports.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
+    override fun onResume() { super.onResume(); if (::webHost.isInitialized) webHost.resume(); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.foreground(true); controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
+    override fun onPause() { if (::webHost.isInitialized) webHost.pause(); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.projectGitImports.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent); deliverAccountEntry(intent) }
     private fun deliverRemoteAttention(intent: Intent?) {
         dev.pocketengine.features.remote.RemoteAttentionNotifications.openRequestedTask((application as EngineApplication).tasks, intent) { controller.showRemoteAttention(it) }
@@ -149,6 +156,7 @@ class ComposeActivity : ComponentActivity() {
     }
     override fun onSaveInstanceState(outState: Bundle) {
         controller.persistOwnerComposer()
+        if (::webHost.isInitialized) outState.putString("libraryWebPresentation", webHost.savePresentationState())
         outState.putString("ownerImportTask", importTaskId); outState.putString("ownerImportProject", importProjectId); outState.putString("ownerExportPath", exportPath)
         controller.attachmentOutcomes.save(outState)
         controller.projectPackages.save(outState)
@@ -157,5 +165,5 @@ class ComposeActivity : ComponentActivity() {
         controller.projectGitImports.save(outState)
         super.onSaveInstanceState(outState)
     }
-    override fun onDestroy() { if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }
+    override fun onDestroy() { if (::webHost.isInitialized) webHost.close(); if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }
 }

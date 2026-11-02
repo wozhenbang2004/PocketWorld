@@ -1,0 +1,13 @@
+# 真实原码与批准版对应
+
+原作者 Josh W. Comeau 最后完整 pre 代码块保留为 josh-original.html；批准版不是作者原版。来源与字节身份见 UPSTREAM-SOURCE.json。
+
+| 原码 | 本轮变化 |
+| --- | --- |
+| .pushable / .shadow / .edge / .front | 原层级与 CSS 声明完整保留；选择器加 #josh-neutral-review 作用域并放入 @layer josh-button-original |
+| 原 front 内文案 | 添加 material/sheen 受力表面与不缩放 label；本次中文文案 |
+| 原 edge / shadow / front 状态 | 添加静止 base，中性材质、受力微变、行程10px；按下78ms、松开210ms，以具体保存代码为准 |
+| hover brightness 与浏览器原生状态 | 局部覆盖为中性材质/appearance；不把此前整体变白观察推定为已自动测试解决 |
+| 无脚本原示例 | 增加 pointer/keyboard/cancel/reduced-motion handler 与演示计数 |
+
+完整变化见 upstream-to-approved.diff；review-approved.html 是用户实际按过且强认可的精确片段。offline.html 只添加文档外壳与宿主 dotted 背景，不改片段、不加载联网资源。原作者教程未提供独立 SPDX，不能标 MIT；保留原作者署名、链接和原码，进一步发布仍需按实际许可核对。

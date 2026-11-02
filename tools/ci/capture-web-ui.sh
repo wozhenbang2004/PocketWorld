@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# Capture the installed formal Android WebView app, never a substitute browser page.
+set -euo pipefail
+
+PW_REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$PW_REPO_ROOT"
+PW_CAPTURE_DIR=${1:-build-artifacts/web-ui-captures}
+PW_APK=${2:-build-artifacts/app-debug.apk}
+PW_ANDROID_SDK=${ANDROID_HOME:?Android SDK is required}
+PW_ADB="$PW_ANDROID_SDK/platform-tools/adb"
+PW_EMULATOR="$PW_ANDROID_SDK/emulator/emulator"
+PW_AVDMANAGER="$PW_ANDROID_SDK/cmdline-tools/latest/bin/avdmanager"
+PW_SERIAL=emulator-5580
+PW_AVD_NAME="pocketworld_web_${GITHUB_RUN_ID:-local}_${GITHUB_RUN_ATTEMPT:-$$}"
+PW_AVD_ROOT=${RUNNER_TEMP:-${TMPDIR:-/tmp}}/pocketworld-web-avd
+export ANDROID_AVD_HOME="$PW_AVD_ROOT"
+mkdir -p "$PW_CAPTURE_DIR" "$ANDROID_AVD_HOME"
+PW_CAPTURE_DIR=$(realpath "$PW_CAPTURE_DIR")
+PW_APK=$(realpath "$PW_APK")
+PW_STAGE=preflight
+PW_EMULATOR_PID=
+PW_LOGCAT_PID=
+PW_RECORD_PID=
+
+pw_adb() { timeout 30s "$PW_ADB" -s "$PW_SERIAL" "$@"; }
+
+pw_cleanup() {
+    PW_EXIT_CODE=$?
+    trap - EXIT INT TERM
+    set +e
+    if [[ "$PW_EXIT_CODE" != 0 ]]; then
+        PW_FAILURE_STAGE="$PW_STAGE" PW_FAILURE_CODE="$PW_EXIT_CODE" python3 - "$PW_CAPTURE_DIR/failure.json" <<'PY'
+import json, os, pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    'stage': os.environ['PW_FAILURE_STAGE'], 'exit_code': int(os.environ['PW_FAILURE_CODE']),
+    'status': 'failed; partial files are diagnostic evidence, not acceptance',
+}, indent=2) + '\n')
+PY
+    fi
+    if [[ -n "$PW_EMULATOR_PID" ]]; then
+        pw_adb logcat -d -v threadtime > "$PW_CAPTURE_DIR/device-logcat-final.txt" 2>&1
+        pw_adb shell dumpsys activity activities > "$PW_CAPTURE_DIR/activity-final.txt" 2>&1
+        if [[ "$PW_EXIT_CODE" != 0 ]]; then
+            pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/failure.png"
+        fi
+        # This AVD and recording were created by this script on the CI runner.
+        if [[ -n "$PW_RECORD_PID" ]] && kill -0 "$PW_RECORD_PID" 2>/dev/null; then
+            pw_adb shell pkill -INT screenrecord
+            kill "$PW_RECORD_PID" 2>/dev/null
+        fi
+        pw_adb emu kill > "$PW_CAPTURE_DIR/emulator-stop.txt" 2>&1
+        kill "$PW_EMULATOR_PID" 2>/dev/null
+    fi
+    if [[ -n "$PW_LOGCAT_PID" ]]; then kill "$PW_LOGCAT_PID" 2>/dev/null; fi
+    exit "$PW_EXIT_CODE"
+}
+trap pw_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+test -s "$PW_APK"
+test -s build-artifacts/apk-identity.json
+test -c /dev/kvm
+test -r /dev/kvm && test -w /dev/kvm
+"$PW_EMULATOR" -version > "$PW_CAPTURE_DIR/emulator-version.txt" 2>&1
+"$PW_EMULATOR" -accel-check > "$PW_CAPTURE_DIR/acceleration.txt" 2>&1
+"$PW_ADB" start-server
+if "$PW_ADB" devices | awk '{print $1}' | grep -qx "$PW_SERIAL"; then
+    echo "Capture port is already owned by another emulator" >&2
+    exit 1
+fi
+
+PW_STAGE=create-avd
+"$PW_AVDMANAGER" create avd --force --name "$PW_AVD_NAME" \
+    --package 'system-images;android-30;google_apis;x86_64' --device pixel_3a <<<'no' \
+    > "$PW_CAPTURE_DIR/avd-create.txt" 2>&1
+# Current official software renderer; old swiftshader_indirect is deprecated.
+"$PW_EMULATOR" -avd "$PW_AVD_NAME" -port 5580 -no-window -no-audio \
+    -no-snapshot -no-boot-anim -gpu software -accel on -memory 2048 -cores 2 \
+    -camera-back none -camera-front none \
+    > "$PW_CAPTURE_DIR/emulator.log" 2>&1 &
+PW_EMULATOR_PID=$!
+
+PW_STAGE=boot
+PW_BOOT_DEADLINE=$((SECONDS + 300))
+PW_BOOTED=false
+while (( SECONDS < PW_BOOT_DEADLINE )); do
+    kill -0 "$PW_EMULATOR_PID" 2>/dev/null || { echo "Emulator exited before boot" >&2; exit 1; }
+    if [[ $(pw_adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') == 1 ]]; then
+        PW_BOOTED=true
+        break
+    fi
+    sleep 2
+done
+[[ "$PW_BOOTED" == true ]] || { echo "Android did not boot within 300 seconds" >&2; exit 1; }
+
+PW_STAGE=abi-gate
+pw_adb shell getprop > "$PW_CAPTURE_DIR/device-properties.txt"
+PW_ABIS=$(pw_adb shell getprop ro.product.cpu.abilist | tr -d '\r')
+PW_NATIVE_BRIDGE=$(pw_adb shell getprop ro.dalvik.vm.native.bridge | tr -d '\r')
+case ",$PW_ABIS," in
+    *,arm64-v8a,*) ;;
+    *) echo "This API30 guest does not advertise ARM64; do not strip or rebuild the APK to pass" >&2; exit 1 ;;
+esac
+pw_adb shell wm size 1080x2220
+pw_adb shell wm density 440
+pw_adb shell settings put system font_scale 1.0
+pw_adb shell settings put system accelerometer_rotation 0
+pw_adb shell settings put system user_rotation 0
+pw_adb shell settings put global window_animation_scale 1.0
+pw_adb shell settings put global transition_animation_scale 1.0
+pw_adb shell settings put global animator_duration_scale 1.0
+pw_adb shell input keyevent KEYCODE_WAKEUP
+pw_adb shell wm dismiss-keyguard
+pw_adb shell dumpsys webviewupdate > "$PW_CAPTURE_DIR/webview-provider.txt"
+PW_STAGE=webview-provider-gate
+python3 tools/ci/verify-web-ui.py provider --dump "$PW_CAPTURE_DIR/webview-provider.txt" \
+    --out "$PW_CAPTURE_DIR/webview-identity.json" > /dev/null
+
+PW_STAGE=install
+pw_adb install -r -t "$PW_APK" > "$PW_CAPTURE_DIR/install.txt" 2>&1
+pw_adb logcat -c
+"$PW_ADB" -s "$PW_SERIAL" logcat -v threadtime > "$PW_CAPTURE_DIR/device-logcat.txt" 2>&1 &
+PW_LOGCAT_PID=$!
+PW_STAGE=start-formal-app
+pw_adb shell am start -W -n dev.pocketengine/.ui.ComposeActivity > "$PW_CAPTURE_DIR/start.txt" 2>&1
+PW_READY=false
+PW_READY_DEADLINE=$((SECONDS + 90))
+while (( SECONDS < PW_READY_DEADLINE )); do
+    if grep -Eqi 'PocketWebUi.*(resource-error|console-error|render-process-gone|main-frame-error)' "$PW_CAPTURE_DIR/device-logcat.txt"; then
+        echo "Web UI failed during startup; see captured logcat" >&2
+        exit 1
+    fi
+    if grep -Eq 'PocketWebUi.*ready source=library-web' "$PW_CAPTURE_DIR/device-logcat.txt"; then
+        PW_READY=true
+        break
+    fi
+    sleep 1
+done
+[[ "$PW_READY" == true ]] || { echo "Formal library Web UI ready signal was not observed" >&2; exit 1; }
+PW_APP_PID=$(pw_adb shell pidof -s dev.pocketengine | tr -d '\r')
+[[ "$PW_APP_PID" =~ ^[0-9]+$ ]] || { echo "App process is not running" >&2; exit 1; }
+pw_adb shell dumpsys activity activities > "$PW_CAPTURE_DIR/activity-ready.txt"
+grep -Eq 'mResumedActivity.*dev\.pocketengine/\.ui\.ComposeActivity' "$PW_CAPTURE_DIR/activity-ready.txt" || {
+    echo "Formal WebView Activity is not foreground" >&2; exit 1;
+}
+
+pw_dump_layout() {
+    local name=$1
+    local remote=/sdcard/pocketworld-web-layout.xml
+    for attempt in 1 2 3 4 5; do
+        if pw_adb shell uiautomator dump --compressed "$remote" >> "$PW_CAPTURE_DIR/uiautomator.txt" 2>&1; then
+            pw_adb exec-out cat "$remote" > "$PW_CAPTURE_DIR/$name.tmp"
+            if python3 - "$PW_CAPTURE_DIR/$name.tmp" <<'PY'
+import sys, xml.etree.ElementTree as ET
+assert ET.parse(sys.argv[1]).getroot().tag == 'hierarchy'
+PY
+            then
+                mv "$PW_CAPTURE_DIR/$name.tmp" "$PW_CAPTURE_DIR/$name"
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+    echo "Android accessibility hierarchy could not be read" >&2
+    return 1
+}
+
+PW_STAGE=entry-capture
+sleep 1
+pw_dump_layout entry.xml
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/01-workroom.png"
+PW_STAGE=screen-recording
+timeout 35s "$PW_ADB" -s "$PW_SERIAL" shell screenrecord --time-limit 24 --bit-rate 4000000 \
+    --size 720x1480 /sdcard/pocketworld-web-interaction.mp4 \
+    > "$PW_CAPTURE_DIR/screenrecord.txt" 2>&1 &
+PW_RECORD_PID=$!
+sleep 3
+
+PW_STAGE=open-work-switcher
+PW_POINT=$(python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/entry.xml" \
+    --label '全部工作' --out "$PW_CAPTURE_DIR/open-work-target.json")
+read -r PW_X PW_Y <<< "$PW_POINT"
+[[ "$PW_X" =~ ^[0-9]+$ && "$PW_Y" =~ ^[0-9]+$ ]]
+pw_adb shell input tap "$PW_X" "$PW_Y"
+sleep 1
+pw_dump_layout all-work.xml
+PW_CLOSE_POINT=$(python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/all-work.xml" \
+    --label '关闭全部工作' --out "$PW_CAPTURE_DIR/close-work-target.json")
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/02-all-work.png"
+sleep 3
+
+PW_STAGE=return-to-work
+read -r PW_X PW_Y <<< "$PW_CLOSE_POINT"
+[[ "$PW_X" =~ ^[0-9]+$ && "$PW_Y" =~ ^[0-9]+$ ]]
+pw_adb shell input tap "$PW_X" "$PW_Y"
+sleep 1
+pw_dump_layout return.xml
+python3 - "$PW_CAPTURE_DIR/return.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+nodes = list(ET.parse(sys.argv[1]).getroot().iter('node'))
+assert not any(n.get('content-desc') == '关闭全部工作' or n.get('text') == '关闭全部工作' for n in nodes), 'Work switcher did not close'
+PY
+python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/return.xml" \
+    --label '全部工作' --out "$PW_CAPTURE_DIR/return-work-target.json" > /dev/null
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/03-workroom-return.png"
+wait "$PW_RECORD_PID"
+PW_RECORD_PID=
+pw_adb pull /sdcard/pocketworld-web-interaction.mp4 "$PW_CAPTURE_DIR/04-interaction.mp4" \
+    > "$PW_CAPTURE_DIR/recording-pull.txt" 2>&1
+PW_STAGE=record-device-identity
+PW_FINAL_PID=$(pw_adb shell pidof -s dev.pocketengine | tr -d '\r')
+[[ "$PW_FINAL_PID" == "$PW_APP_PID" ]] || { echo "App process changed or exited during capture" >&2; exit 1; }
+pw_adb shell dumpsys activity activities > "$PW_CAPTURE_DIR/activity-return.txt"
+grep -Eq 'mResumedActivity.*dev\.pocketengine/\.ui\.ComposeActivity' "$PW_CAPTURE_DIR/activity-return.txt" || {
+    echo "Formal WebView Activity is not foreground after returning" >&2; exit 1;
+}
+pw_adb shell dumpsys webviewupdate > "$PW_CAPTURE_DIR/webview-provider-final.txt"
+PW_ABIS="$PW_ABIS" PW_NATIVE_BRIDGE="$PW_NATIVE_BRIDGE" PW_APP_PID="$PW_APP_PID" \
+PW_FINAL_PID="$PW_FINAL_PID" PW_DEVICE_SERIAL="$PW_SERIAL" python3 - "$PW_CAPTURE_DIR/device.json" <<'PY'
+import json, os, pathlib, sys
+root = pathlib.Path(sys.argv[1]).parent
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    'api': 30, 'system_image': 'system-images;android-30;google_apis;x86_64',
+    'abi_list': os.environ['PW_ABIS'], 'native_bridge': os.environ['PW_NATIVE_BRIDGE'],
+    'serial': os.environ['PW_DEVICE_SERIAL'], 'pid': os.environ['PW_APP_PID'], 'final_pid': os.environ['PW_FINAL_PID'],
+    'activity': 'dev.pocketengine/.ui.ComposeActivity',
+    'source_url': 'https://pocketengine.local/assets/pocket-ui/index.html', 'ready': True,
+    'physical_phone': False, 'size_px': [1080, 2220], 'density_dpi': 440,
+    'nominal_viewport_dp': [1080 * 160 / 440, 2220 * 160 / 440],
+    'font_scale': 1.0, 'system_animation_scale': 1.0,
+    'emulator_version': (root / 'emulator-version.txt').read_text(errors='replace'),
+    'webview_provider': (root / 'webview-provider.txt').read_text(errors='replace'),
+    'webview': json.loads((root / 'webview-identity.json').read_text()),
+}, ensure_ascii=False, indent=2) + '\n')
+PY
+PW_STAGE=verify-captures
+python3 tools/ci/verify-web-ui.py verify-capture --directory "$PW_CAPTURE_DIR" \
+    --apk "$PW_APK" --apk-identity build-artifacts/apk-identity.json
+cp build-artifacts/apk-identity.json "$PW_CAPTURE_DIR/apk-identity.json"
+PW_STAGE=complete

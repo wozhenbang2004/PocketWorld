@@ -1,0 +1,265 @@
+{
+  "scope": "actual library source ports and controlled adapters; unchanged original bytes retained as .source.txt to avoid compiling demonstration fixtures",
+  "sources": [
+    {
+      "path": "upstream/grokbot/theme.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "1176579e0b97b5e681e38ba4f9ece80b1ace51d3d59b5ead429915a85362cb9a"
+    },
+    {
+      "path": "upstream/grokbot/engine.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "30395af7bea75d7d97b3624fbce75b3e0bd21acb5fa860fa279a3e403ba1f3c3"
+    },
+    {
+      "path": "upstream/grokbot/easing.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "0112807e14ab37964bc9a2abb7e9dedf269c5a1757528a0af94ff62285060843"
+    },
+    {
+      "path": "upstream/grokbot/painter.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "6962454c28c632b29da87fefc6558b5e8cfb1d1e9eb22932ed52e44ea7bdb6e6"
+    },
+    {
+      "path": "upstream/grokbot/types.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "656002705d09455264bc527bb18e29d653e254be5e917156af67cc9698e72e11"
+    },
+    {
+      "path": "upstream/grokbot/element.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "9b8e6d81084582fd9922d6d3853c5191220a13f4fe17e129d5eb7b187fa424f0"
+    },
+    {
+      "path": "upstream/grokbot/index.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "655e0576fbb321f86802b8bfa75bb6b5a06d365ef8eed94fe9dbcdb056c012f9"
+    },
+    {
+      "path": "upstream/grokbot/react.tsx",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "4f050b2f10fcaae00a458eefab463f7e3b2eb8e67e25d5cff1ee296710a3cef5"
+    },
+    {
+      "path": "upstream/grokbot/geometry.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "01b04100a1503c3c4d8d627299202fc8317d983238f687916cc44792f026bab4"
+    },
+    {
+      "path": "upstream/grokbot/data/states.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "e0f8d2bea3e2ea4dda2a618fe0380ce11958c249f9054c7a27d76045f7f4eab6"
+    },
+    {
+      "path": "upstream/grokbot/data/shapes.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "ce728ee2d2ff0ee3765b148ec29c754147afc770933664685f907d06b181c786"
+    },
+    {
+      "path": "upstream/grokbot/data/expressions.ts",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "7cdc9d80539369937b65b32471112a3f7b3125a8e417415fcc765476e227fb83"
+    },
+    {
+      "path": "upstream/grokbot/LICENSE-grokbot-web.txt",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "ad63a0156a7e781a3469721c3f3e09f9112cc088850a06e4c67d47ed7f94fe9b"
+    },
+    {
+      "path": "upstream/grokbot/LICENSE-GrokBot.txt",
+      "source": "grokbot-web@616c1dd / BSD-3-Clause",
+      "sha256": "4a376c37fe7b2ca71573cae6224a936fbc1e6b8eb47f7a6ee77939124fec843e"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-a/chat.tsx.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "8d32708b2a3b32410204569ae42cb6502a20480acdc40b139a2bcfeb67a60696"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-a/common.tsx.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "271a0bcf71e90a18a22fcc494968279db2ad856ca2ad7c2bfe238a44a7a091de"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-a/agents.tsx.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "e73e8f5dc075c66ebc4db69da41bbe122a58a8d8f5822e6ac9f6536d398f2617"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-a/styles.css.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "f779eab43d45833c8dac1786302ab9b92fc1b3659944873b8980fe79fdd56d50"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-b/tools.tsx.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "b3e383910e0ec43bbc28e8d1d634735bc795db48ab42d21c993673d3c3532bcb"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-b/context.tsx.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "66a0cdc06352c3225156ea00f9501ce7052ee769c090bf1bd68bd44f794707fe"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-b/agents.tsx.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "a32bd7872bd158f86f9902b0c6e53ae44d024307fd8ec1236cb5cf3521e0e899"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-b/styles.css.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "c4b6ea15daeeede271ee3fddb9cc026a9c567a0d426880a926a83ad8f458266c"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-b/agents.css.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "fa00beebc85e6b1650ccbc9eb6cc2497031a18e79ac6356766ebbf8a80019d99"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-b/context.css.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "74605b98f23feb4326a2335cabbe721bfac9ac961ec03d4443f917ecd04bd66e"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-b/tools.css.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "26ff45ae4c08f1b4ace3306ae862cc437731658c13af9d8de17d8d16f5f2b46e"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/blocks-motion/motion.tsx.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "aee9f3376daf6db2eca5bf1849df91116f35795abffce9d057efe4ba05fe8946"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/blocks-motion/styles.css.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "46ebc0d4008aa7d7c14f0107d098fc109eb5e30f249fe885a35c8c36edcc49d4"
+    },
+    {
+      "path": "upstream/affect-official/components/tool-call-card-clean.tsx.source.txt",
+      "source": "Affect official@37b91fa / MIT",
+      "sha256": "93f758484bf5521e2a1316d94c28ad7dd8e55aacc44a11795bc57939a12d0d96"
+    },
+    {
+      "path": "upstream/affect-official/components/message-actions-clean.tsx.source.txt",
+      "source": "Affect official@37b91fa / MIT",
+      "sha256": "5a9f9c7d325ab69257f52e3ba2ddc57d07c0058c9de11b234344df86d64050ee"
+    },
+    {
+      "path": "upstream/affect-official/components/thinking-loader-clean.tsx.source.txt",
+      "source": "Affect official@37b91fa / MIT",
+      "sha256": "459869b68f0b163262cb183b5d1b1261d3fe621c3551826c06aae136e7047d76"
+    },
+    {
+      "path": "upstream/affect-official/motion/shimmer-loader.tsx.source.txt",
+      "source": "Affect official@37b91fa / MIT",
+      "sha256": "5020de3b09845d14492bf157a093edca0e8b2110eeaef5a5394f0306891172de"
+    },
+    {
+      "path": "upstream/affect-official/LICENSE",
+      "source": "Affect official@37b91fa / MIT",
+      "sha256": "3b02a57acfb985557a9a8244a0e84d8765c10ad4892ab6345c66fd688d998a14"
+    },
+    {
+      "path": "upstream/nick/AgentStepper.tsx.source.txt",
+      "source": "library independent video-reference reproduction",
+      "sha256": "d3f165598244abfde2beaf15436c0e8f6374ed4db86c37e3b87b4dd9a798fb86"
+    },
+    {
+      "path": "upstream/nick/agent-stepper.js.source.txt",
+      "source": "library independent video-reference reproduction",
+      "sha256": "66af7b6b74b508f14f94c0d06023f6107f9a7e135624dc046b3f434cafad36a2"
+    },
+    {
+      "path": "upstream/nick/agent-stepper.d.ts.source.txt",
+      "source": "library independent video-reference reproduction",
+      "sha256": "bb094767451af68ebb07975e93723a2988c9ecefa3d48e329aa48b32443b49f2"
+    },
+    {
+      "path": "upstream/nick/SOURCE.json.source.txt",
+      "source": "library independent video-reference reproduction",
+      "sha256": "ea8862483a656edc32f69ece81b3b0028c5b4d9d687f5fc328e3f79fe3688c43"
+    },
+    {
+      "path": "upstream/josh/review-approved.html.source.txt",
+      "source": "Josh tutorial actual adapted neutral approved version; no SPDX claim",
+      "sha256": "11ed2af51eaf6cdd78f4f880045517b0823898bc8cc363158f82f2db6a37cb7e"
+    },
+    {
+      "path": "upstream/josh/josh-original.html.source.txt",
+      "source": "Josh tutorial actual adapted neutral approved version; no SPDX claim",
+      "sha256": "338d47d45c87cdb75471da4f0262e71e1d5af2ff624a262b7a537752e9ce2479"
+    },
+    {
+      "path": "upstream/josh/MODIFICATIONS.md.source.txt",
+      "source": "Josh tutorial actual adapted neutral approved version; no SPDX claim",
+      "sha256": "46ee9c1616010b9c0bab3093f78e1a9eac4a6973c1b8aa69f7b89a987de2866d"
+    },
+    {
+      "path": "upstream/josh/SOURCE.json.source.txt",
+      "source": "Josh tutorial actual adapted neutral approved version; no SPDX claim",
+      "sha256": "1fc46d33fd14158fe2f36a568359ebe58a8fc4dc6a7e6e657fb80236c2ab4d12"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-b/motion.tsx.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "3f43c17d87c61ec1a3f513cd45ffc0fd61fc3c9836b547ca0e78cd7f508e3dab"
+    },
+    {
+      "path": "upstream/boardui-progress/overlay-SOURCES.md",
+      "source": "BoardUI official free registry snapshot 2026-11-01 / MIT; overlay SOURCES retained as provenance",
+      "sha256": "6ce9fa5d1cc20e39f64f6f037d504f8c144e9cf8aff324a6e48b2a647530f399"
+    },
+    {
+      "path": "upstream/boardui-progress/progress.registry.json",
+      "source": "BoardUI official free registry snapshot 2026-11-01 / MIT; overlay SOURCES retained as provenance",
+      "sha256": "ebca608fecd53d2ffe574f66dfe90483cb91bc990b5a812fe14783e905eea929"
+    },
+    {
+      "path": "upstream/boardui-progress/progress.tsx.source.txt",
+      "source": "BoardUI official free registry snapshot 2026-11-01 / MIT; overlay SOURCES retained as provenance",
+      "sha256": "ff4ade7942d51231568b750637f90a4e7230b92c5657346cc0673448e3c21c32"
+    },
+    {
+      "path": "upstream/sonner-2.0.8/LICENSE.md",
+      "source": "Sonner official 2.0.8 @8e4662b39255120b62138312058f5d77c0139a5e / MIT",
+      "sha256": "da9201378c36ffd81f51ad0b305f3f0981e90bc558789210ad65d1161eec3b7d"
+    },
+    {
+      "path": "upstream/sonner-2.0.8/package.json",
+      "source": "Sonner official 2.0.8 @8e4662b39255120b62138312058f5d77c0139a5e / MIT",
+      "sha256": "da53b9769476028581eb6d6b5f90ed1c3f70bfef238147a2613b56829831b3ee"
+    },
+    {
+      "path": "upstream/sonner-2.0.8/src/assets.tsx.source.txt",
+      "source": "Sonner official 2.0.8 @8e4662b39255120b62138312058f5d77c0139a5e / MIT",
+      "sha256": "5fa1ab681eb5198bba92b5fc94703a4698e54a40f4d8aa6a1d39ce73aec4ebc7"
+    },
+    {
+      "path": "upstream/sonner-2.0.8/src/hooks.tsx.source.txt",
+      "source": "Sonner official 2.0.8 @8e4662b39255120b62138312058f5d77c0139a5e / MIT",
+      "sha256": "b23d537b70618ae63072732607582f9ae88b3b5143e039339ca3dd0b75273626"
+    },
+    {
+      "path": "upstream/sonner-2.0.8/src/index.tsx.source.txt",
+      "source": "Sonner official 2.0.8 @8e4662b39255120b62138312058f5d77c0139a5e / MIT",
+      "sha256": "7b9c1a51f422899d823854d724a60d26a18374d4c67595262b4c619b24c03e8a"
+    },
+    {
+      "path": "upstream/sonner-2.0.8/src/state.ts.source.txt",
+      "source": "Sonner official 2.0.8 @8e4662b39255120b62138312058f5d77c0139a5e / MIT",
+      "sha256": "bba086163faaee1fc8936aba2ea818fd2e6f0d336837b6802b3ba1ab665aac91"
+    },
+    {
+      "path": "upstream/sonner-2.0.8/src/styles.css.source.txt",
+      "source": "Sonner official 2.0.8 @8e4662b39255120b62138312058f5d77c0139a5e / MIT",
+      "sha256": "8de8bfdfd239eacd5fbdbac152096735dc8e9dac32da5fcf7ddae6dd08e54a80"
+    },
+    {
+      "path": "upstream/sonner-2.0.8/src/types.ts.source.txt",
+      "source": "Sonner official 2.0.8 @8e4662b39255120b62138312058f5d77c0139a5e / MIT",
+      "sha256": "3ba0a8cfa967ec512fe93c8f1d252917e27208030a6c5479ce2a1fb13383590c"
+    }
+  ]
+}

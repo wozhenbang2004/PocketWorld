@@ -1,0 +1,124 @@
+/* Actual library styles, with neutral palette and bounded product host adaptations. */
+@import './library/adapted/affect-source.css';
+.pw-library{font-family:inherit;min-width:0;color:#252525;color-scheme:light}
+.afa.pw-library{min-height:0;padding:0;display:block;font-size:14px;--afa-accent:#444;--afa-soft:#777;--afa-text:#666;--afa-line:#e5e5e5;--afa-shadow:0 1px 2px #00000006,0 5px 14px #00000008}
+.cb-demo.pw-library{max-width:none;margin:0;font-family:inherit;font-size:14px;--cb-blue:#444;--cb-blue-bg:#efefef;--cb-ok:#444;--cb-ok-bg:#efefef;--cb-warn:#444;--cb-warn-bg:#efefef;--cb-red:#333;--cb-red-bg:#efefef;--cb-muted:#777;--cb-line:#e5e5e5}
+.pw-library :is(h1,h2,h3,h4,strong,b){font-weight:500!important}
+.pw-library button,.pw-message-actions button{min-height:44px;touch-action:manipulation}
+.pw-library :is(.afa-iconbtn,.cb-icon-button),.pw-message-actions button{min-width:44px}
+.pw-library :is(button,input,textarea):focus-visible{outline:2px solid #777;outline-offset:3px}
+.pw-library small{font-size:12px;line-height:18px}
+.pw-library .cb-card{max-width:none;animation:none}
+.pw-library :is(.afa-answer,.afa-composer,.afa-steering,.afa-handoff,.afa-findings){width:100%;max-width:none}
+.pw-agent-avatar{display:inline-flex;flex:none;align-items:center;justify-content:center;vertical-align:middle}
+.pw-agent-avatar canvas{display:block;max-width:100%;max-height:100%}
+/* PW-37 retains the approved shadow/base/edge/front/material stack and its JS press curve. */
+.pw-press{--press:0;--strain:0;--travel:3px;position:relative;appearance:none;-webkit-appearance:none;isolation:isolate;max-width:100%;min-height:44px;margin:0;border:0!important;border-radius:13px;padding:4px 3px 3px!important;background:transparent!important;color:#fff!important;font:inherit;text-align:center;outline-offset:4px;filter:none!important;transition:none;touch-action:manipulation;user-select:none;-webkit-tap-highlight-color:transparent;cursor:pointer}
+.pw-press>span{pointer-events:none}
+.pw-press-shadow{position:absolute;inset:5px 0 0;border-radius:12px;background:rgb(0 0 0/.2);filter:blur(3px);transform-origin:center bottom;transform:translateY(calc(3px - var(--press)*2px)) scaleY(calc(1 - var(--press)*.11));opacity:calc(.82 + var(--press)*.16)}
+.pw-press-base{position:absolute;inset:4px 0 0;border-radius:13px;background:#202020;box-shadow:inset 0 1px 0 #ffffff21,inset 0 -1px 0 #00000052}
+.pw-press-edge{position:absolute;inset:4px 3px 3px;border-radius:10px;background:#353535;box-shadow:inset 0 -2px 0 #00000045;filter:brightness(calc(1 - var(--press)*.14))}
+.pw-press-front{display:block;position:relative;padding:8px 14px;border-radius:10px;background:transparent;transform:translateY(calc(var(--travel)*-1 + var(--press)*var(--travel)));transition:none;min-height:34px}
+.pw-press-material{position:absolute;inset:0;border-radius:calc(10px + var(--strain)*1.5px);background:#404040;transform-origin:center bottom;transform:scaleX(calc(1 + var(--strain)*.02)) scaleY(calc(1 - var(--strain)*.04));box-shadow:inset 0 1px 0 #ffffff47,inset 1px 0 0 #ffffff17,inset 0 -1px 0 #0000002e,0 calc(2px - var(--press)*1px) calc(2px - var(--press)*1px) #00000024}
+.pw-press-label{position:relative;display:flex;align-items:center;justify-content:center;gap:7px;font-size:14px;line-height:20px;font-weight:500;white-space:nowrap}
+.pw-press-compact{--travel:2px;min-width:44px}
+.pw-press-compact .pw-press-front{padding:8px 10px}
+.pw-press:disabled{cursor:default;opacity:.45}
+.pw-press:focus-visible{outline:2px solid #777}
+/* The source composer uses one surface. Its default editor/tool rows remain compact. */
+.pw-composer-host .afa-composer>.afa-card{border:1px solid #dedede;border-radius:16px;box-shadow:0 1px 2px #0000000a,0 6px 18px #0000000f}
+.pw-composer-host .afa-composer textarea{height:32px;min-height:32px;max-height:120px;padding:4px 2px;border:0!important;border-radius:0;background:transparent!important;font-size:16px;line-height:24px;overflow-y:auto}
+.pw-composer-host .afa-composer>.afa-card{padding:10px 10px 6px}
+.pw-composer-host .afa-toolbar{gap:3px;padding:0;min-height:44px}
+.pw-composer-host .afa-toolbar .afa-btn{max-width:160px;box-shadow:none;background:transparent!important;border:0!important;padding-inline:6px;font-size:13px!important}
+.pw-model-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pw-composer-host .afa-composer .afa-filechips:empty{display:none}
+.pw-composer-host .afa-filechips{max-height:88px;overflow:auto;flex-wrap:wrap;margin-bottom:6px}
+.pw-composer-host .afa-filechips>span{max-width:100%;overflow-wrap:anywhere;white-space:normal}
+.pw-composer-host .afa-filechips button{min-width:32px;min-height:32px}
+.pw-composer-host .afa-stop{min-width:44px;min-height:44px;border:1px solid #dedede!important;border-radius:10px;background:#f4f4f4!important;color:#333}
+.pw-composer-host .afa-composerbottom{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px}
+.pw-composer-status{padding:4px 6px;font-size:12px}
+.pw-answer-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:25px}
+.pw-library .afa-answer{box-shadow:none;border:0;border-radius:0;background:transparent}
+.pw-library .afa-answerbody{font-size:15px;line-height:25px}
+.pw-library .cb-answer{font-size:15px;line-height:25px}
+.pw-library .cb-cited{border:0;box-shadow:none;background:transparent}
+.pw-library .cb-cited>.cb-body{padding:0}
+.pw-library .cb-source-passage blockquote{font-size:14px;line-height:23px;color:#555}
+.pw-library .cb-source-tabs>button{min-height:36px;font-size:12px}
+.pw-library .cb-cite{min-width:22px;min-height:24px;font-size:11px}
+.pw-library .cb-model2{width:100%;max-width:none}
+.pw-library .cb-model2-menu{position:relative;inset:auto;width:100%;max-width:none;margin:0;opacity:1;filter:none;transform:none;animation:none}
+.pw-library .cb-model2-options{max-height:min(56dvh,480px);overflow:auto}
+.pw-library .cb-model2-options>button{display:flex;min-height:60px;width:100%;grid-template-columns:none}
+.pw-library .cb-model2-labels{display:flex;font-size:14px}
+.pw-library .cb-model2-name{min-width:0;flex:1}
+.pw-library .cb-model2-name strong{font-size:14px}
+.pw-library .cb-model2-name small{font-size:12px;white-space:normal}
+.pw-library .cb-model-initial{background:#ededed;color:#555}
+.pw-library .cb-memory2-item p{font-size:14px;line-height:23px}
+.pw-library .cb-memory2-actions{opacity:1}
+.pw-library .cb-context-cells{grid-template-columns:repeat(25,minmax(0,1fr))}
+.pw-library .cb-agent-host{width:100%}
+.pw-library .cb-agent-node{max-width:100%;background:#fff;opacity:1;filter:none}
+.pw-library .cb-agent-node strong{font-size:14px}
+.pw-library .cb-agent-node p{font-size:13px;line-height:21px}
+.pw-library .cb-tree-summary{flex-wrap:wrap}
+.pw-library .cb-status{font-size:12px;border:0;background:#efefef;color:#444;padding:2px 6px;display:inline-flex;align-items:center;gap:5px}
+.pw-library .cb-measured-links{color:#a8a8a8}
+.pw-library .cb-measured-links [data-tone]{--cb-blue:#999;--cb-ok:#999;--cb-red:#777}
+.pw-library .afa-handoff{position:relative}
+.pw-library .pw-handoff-links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;overflow:visible}
+.pw-library .afa-handoffagents,.pw-library .afa-handoffroutes{position:relative;z-index:1}
+.pw-library .afa-handoffagents{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.pw-library .afa-handoffagents>.afa-card{height:auto;min-height:100px}
+.pw-library .afa-handoffroutes{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:28px}
+.pw-library .afa-handoffitem{min-height:64px}
+.pw-library .afa-payloadchips{padding:10px}
+.pw-library .afa-findingagents{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px}
+.pw-library .afa-findingrow{min-height:54px;display:flex;flex-wrap:wrap;align-items:center;gap:7px;font-size:14px}
+.pw-library .afa-findingdetail p{font-size:14px;line-height:23px}
+.pw-library .afa-steering header{font-size:14px}
+.pw-library .afa-steerinput{display:flex;gap:6px;align-items:center}
+.pw-library .afa-steerinput input{flex:1;min-width:0;font-size:15px}
+.pw-library .afa-queuednote{min-height:44px}
+.pw-library .afa-queuednote>span{flex:1;min-width:0;overflow-wrap:anywhere}
+.pw-tool-call .ui-tcc__head{min-height:52px}
+.pw-tool-call .ui-tcc__summary{font-size:13px}
+.pw-tool-call .ui-tcc__sections{font-size:13px}
+.pw-tool-call .ui-tcc__copy,.pw-tool-call .ui-tcc__more{min-height:36px}
+.pw-message-actions{color:#666}
+.pw-thinking-loader{max-width:100%;color:#666}
+.pw-crossfade{position:relative;overflow:hidden;transition:height 250ms cubic-bezier(.32,.72,.24,1)}
+.pw-crossfade>.bmx-crossfade-content{position:relative;padding:0}
+.pw-crossfade>.bmx-crossfade-out{position:absolute;inset:0}
+@keyframes bui-progress-sweep{from{translate:-100% 0}to{translate:250% 0}}
+@media(max-width:560px){.pw-library .afa-handoffagents,.pw-library .afa-handoffroutes{grid-template-columns:minmax(0,1fr)}.pw-library .cb-agent-node{width:100%;min-width:0}.pw-library .afa-findings header{flex-wrap:wrap;gap:6px}.pw-composer-host .afa-toolbar .afa-btn{max-width:130px}}
+@media(prefers-reduced-motion:reduce){.pw-library *,.pw-library *::before,.pw-library *::after,.pw-press *,.pw-crossfade *{animation:none!important;transition:none!important}.pw-crossfade>.bmx-crossfade-out{display:none}}
+
+/* Mature Markdown/GFM rendering inside the source answer surface. */
+.pw-markdown{font-size:15px;line-height:25px;overflow-wrap:anywhere;white-space:normal;min-width:0}
+.pw-markdown> :first-child{margin-top:0}.pw-markdown> :last-child{margin-bottom:0}
+.pw-markdown p,.pw-markdown ul,.pw-markdown ol,.pw-markdown blockquote{margin:0 0 12px}
+.pw-markdown :is(h1,h2,h3,h4,h5,h6){margin:18px 0 10px;font-size:16px;line-height:25px;font-weight:500}
+.pw-markdown h1,.pw-markdown h2{font-size:18px;line-height:28px}
+.pw-markdown ul,.pw-markdown ol{padding-inline-start:22px}.pw-markdown li{margin:4px 0}
+.pw-markdown a{color:#343434;text-decoration:underline;text-underline-offset:3px}
+.pw-markdown blockquote{border-inline-start:2px solid #d6d6d6;padding-inline-start:12px;color:#666}
+.pw-markdown code{font:13px/21px "JetBrains Mono",ui-monospace,monospace;background:#f1f1f1;padding:2px 4px;border-radius:4px}
+.pw-markdown-code{border:1px solid #e4e4e4;border-radius:9px;overflow:hidden;margin:12px 0;background:#f6f6f6}
+.pw-markdown-codebar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 10px;font-size:12px;color:#777;border-bottom:1px solid #e7e7e7;background:#fafafa}
+.pw-markdown-codebar button{display:inline-flex;align-items:center;gap:5px;border:0;background:transparent;color:#555;min-height:36px;font-size:12px}
+.pw-markdown .pw-markdown-code pre{margin:0!important;padding:12px!important;overflow:auto;white-space:pre;background:transparent;border:0;border-radius:0;max-width:100%}
+.pw-markdown pre code{white-space:pre;background:none;padding:0;border-radius:0;font:13px/22px "JetBrains Mono",ui-monospace,monospace}
+.pw-markdown-table{width:100%;overflow:auto;margin:12px 0;border:1px solid #e1e1e1;border-radius:8px}
+.pw-markdown-table table{width:100%;border-collapse:collapse;min-width:240px;font-size:13px;line-height:21px}
+.pw-markdown-table :is(th,td){border-bottom:1px solid #e4e4e4;padding:8px 10px;text-align:start;vertical-align:top}
+.pw-markdown-table th{font-weight:500;background:#f5f5f5}
+.pw-markdown hr{border:0;border-top:1px solid #e5e5e5;margin:18px 0}
+.pw-markdown .task-list-item{list-style:none}.pw-markdown .contains-task-list{padding-inline-start:0}
+.pw-markdown-checkbox{display:inline-flex;width:14px;height:14px;align-items:center;justify-content:center;border:1px solid #aaa;border-radius:3px;vertical-align:middle;margin-inline-end:6px;background:#f5f5f5}
+.pw-markdown-image{display:inline-flex;align-items:center;flex-wrap:wrap;gap:8px;padding:5px 8px;border:1px solid #e4e4e4;border-radius:6px;font-size:13px;color:#666}
+.pw-markdown-image button{border:0;background:transparent;text-decoration:underline;min-height:36px;font-size:12px}
+.pw-markdown img{max-width:100%;height:auto;border-radius:6px}.pw-markdown-cite{white-space:nowrap}

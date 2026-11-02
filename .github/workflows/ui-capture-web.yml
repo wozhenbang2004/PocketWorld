@@ -1,0 +1,193 @@
+name: Capture formal library Web UI
+run-name: Web UI capture · ${{ github.ref_name }} · ${{ github.run_number }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_run_id:
+        description: 'Successful original APK run for this exact commit; blank builds the full APK here'
+        required: false
+        default: ''
+        type: string
+  workflow_call:
+    inputs:
+      apk_run_id:
+        description: 'Original APK run for this exact commit; same-run reuse requires its apk job to have succeeded'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: web-ui-capture-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    if: ${{ github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out selected revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Set up Java 17 for a new full APK build
+        if: ${{ inputs.apk_run_id == '' }}
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Node 22 for the packaged Web UI
+        if: ${{ inputs.apk_run_id == '' }}
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.0'
+
+      - name: Prepare Android package verification tools
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts
+          : "${ANDROID_HOME:?Android SDK is required}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-user-home" >> "$GITHUB_ENV"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          "$SDKMANAGER" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Prepare pinned native toolchains for a new full APK build
+        if: ${{ inputs.apk_run_id == '' }}
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'ndk;28.2.13676358'
+          for tool in curl make patch ninja; do command -v "$tool"; done
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, tarfile
+          lock = json.loads(pathlib.Path('app/src/main/java/dev/pocketengine/features/local/runtime/native/source-lock.json').read_text())
+          cmake = lock['toolchain']['cmake']
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'pocketworld-web-cmake'
+          root.mkdir(parents=True, exist_ok=True)
+          archive = root / 'cmake.tar.gz'
+          subprocess.run(['curl', '--fail', '--location', '--proto', '=https', '--proto-redir', '=https', '--tlsv1.2', '--retry', '3', '--output', str(archive), cmake['url']], check=True)
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == cmake['sha256'], 'CMake source-lock mismatch'
+          with tarfile.open(archive) as bundle:
+              bundle.extractall(root, filter='data')
+          home = root / ('cmake-' + cmake['version'] + '-linux-x86_64')
+          subprocess.run([str(home / 'bin/cmake'), '--version'], check=True)
+          pathlib.Path('local.properties').write_text('sdk.dir=' + os.environ['ANDROID_HOME'] + '\ncmake.dir=' + str(home) + '\n')
+          with open(os.environ['GITHUB_PATH'], 'a') as path:
+              path.write(str(home / 'bin') + '\n')
+          PY
+
+      - name: Build the real packaged Web application
+        if: ${{ inputs.apk_run_id == '' }}
+        run: |
+          set -euo pipefail
+          npm ci --prefix web-ui 2>&1 | tee build-artifacts/web-install.log
+          npm run build --prefix web-ui 2>&1 | tee build-artifacts/web-build.log
+          test -s app/src/main/assets/pocket-ui/index.html
+
+      - name: Assemble the complete installable debug APK
+        if: ${{ inputs.apk_run_id == '' }}
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.vfs.watch=false :app:assembleDebug 2>&1 | tee build-artifacts/build.log
+          cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/app-debug.apk
+          cp app/build/generated/android-runtime/native-build-receipt.json build-artifacts/native-build-receipt.json
+
+      - name: Acquire the exact already-verified original APK
+        if: ${{ inputs.apk_run_id != '' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_APK_RUN_ID: ${{ inputs.apk_run_id }}
+        run: |
+          set -euo pipefail
+          python3 tools/ci/verify-web-ui.py acquire-apk --run-id "$SOURCE_APK_RUN_ID" --out build-artifacts
+
+      - name: Recheck package signature, native payloads and Web assets
+        run: |
+          set -euo pipefail
+          python3 tools/ci/verify-web-ui.py verify-apk --apk build-artifacts/app-debug.apk --out build-artifacts
+
+      - name: Retain this job's newly built full APK
+        if: ${{ inputs.apk_run_id == '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-web-debug-arm64-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            build-artifacts/app-debug.apk
+            build-artifacts/apk-identity.json
+            build-artifacts/SHA256SUMS
+            build-artifacts/native-build-receipt.json
+            build-artifacts/signature.txt
+            build-artifacts/alignment.txt
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Prepare an official ARM-compatible Android 11 emulator
+        run: |
+          set -euo pipefail
+          # Android's official API30 x86_64 images include ARM64 support.
+          # The script checks the actual guest ABI and installation before acceptance.
+          # https://developer.android.com/studio/releases/emulator#3000_february_19_2020
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-30;google_apis;x86_64'
+          test -c /dev/kvm
+          # Scoped to this ephemeral runner and this runner user, not world-writable.
+          sudo chown "$(id -u)" /dev/kvm
+          sudo chmod u+rw /dev/kvm
+
+      - name: Capture the installed formal Web UI and its real interactions
+        run: |
+          set -euo pipefail
+          bash tools/ci/capture-web-ui.sh build-artifacts/web-ui-captures build-artifacts/app-debug.apk \
+            2>&1 | tee build-artifacts/web-capture.log
+
+      - name: Retain private Web UI PNGs, screen recording and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-web-ui-captures-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            build-artifacts/web-ui-captures/
+            build-artifacts/web-capture.log
+            build-artifacts/apk-identity.json
+            build-artifacts/source-apk-identity.json
+            build-artifacts/source-apk-run.json
+            build-artifacts/signature.txt
+            build-artifacts/alignment.txt
+            build-artifacts/package.txt
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Retain failure and partial device evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-web-ui-failure-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            build-artifacts/*.log
+            build-artifacts/*.json
+            build-artifacts/*.txt
+            build-artifacts/web-ui-captures/
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 0

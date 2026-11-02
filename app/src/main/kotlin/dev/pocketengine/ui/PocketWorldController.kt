@@ -10,7 +10,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.pocketengine.EngineApplication
-import dev.pocketengine.MainActivity
 import dev.pocketengine.runtime.ModelGateway
 import java.util.UUID
 import java.io.File
@@ -123,6 +122,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private val composerSave = Runnable { persistOwnerComposer() }
     private var chatViewEpoch by mutableStateOf(0)
     val composerViewEpoch: Int get() = chatViewEpoch
+    internal fun webUiCanInteract(): Boolean = !closed && voiceForeground && !activity.isFinishing && !activity.isDestroyed
     private var attachmentComposerKey: String? = null
     private var attachmentComposerEpoch = -1
     private data class OriginalSourceStage(val key:String,val revision:Long,val viewEpoch:Int,val conversation:String)
@@ -1252,7 +1252,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun dismissError() { state = state.copy(error = null) }
     fun dismissNotice() { state = state.copy(notice = null) }
     fun openAdvanced(panel: String = "settings") {
-        activity.startActivity(Intent(activity, MainActivity::class.java).putExtra("openPanel", panel))
+        // A capability may request a destination, but never revive the retired business UI.
+        openConnection(panel.takeIf { it in setOf("settings", "devices", "models", "accounts", "remote", "ssh", "local", "memory", "memoryReview", "automation", "commitments", "channels", "skills", "learning", "plugins", "pluginCatalog", "mcp", "teams", "groups", "media", "realtime", "proxy") } ?: "settings")
     }
     var conversationReader by mutableStateOf<ConversationReadPage?>(null)
         private set
