@@ -53,7 +53,7 @@ internal fun AnswerSourcesSheet(anchor: JSONObject, read: (JSONObject, Int, (JSO
                 else {
                     Text(value.optString("title", "原来源范围"), style = MaterialTheme.typography.titleMedium)
                     if (value.optString("url").isNotBlank()) Text(value.getString("url"), style = MaterialTheme.typography.bodySmall)
-                    value.optJSONObject("sourceIdentity")?.let { source -> Text("来源 ${source.optString("sourceId")} · 观察 ${source.optString("observationId")} · 文档 ${source.optString("documentId")}", style = MaterialTheme.typography.labelSmall) }
+                    value.optJSONObject("sourceIdentity")?.let { source -> val identities = listOf("sourceId" to "来源", "observationId" to "观察", "documentId" to "文档").mapNotNull { (key, label) -> source.optString(key).takeIf(String::isNotBlank)?.let { "$label $it" } }; if (identities.isNotEmpty()) Text(identities.joinToString(" · "), style = MaterialTheme.typography.labelSmall) }
                     if (value.has("body")) SelectionContainer { Text(value.getString("body"), style = MaterialTheme.typography.bodyMedium) }
                     value.optJSONObject("structuredProjection")?.let { fields -> TextButton(onClick = { structuredOpen = !structuredOpen }) { Text(if (structuredOpen) "收起当时保存的结构化范围" else "查看当时保存的结构化范围") }; if (structuredOpen) SelectionContainer { Text(fields.toString(2), style = MaterialTheme.typography.bodySmall) } }
                     value.optJSONObject("range")?.let { range -> Text("UTF-16字符范围 ${range.optInt("offset")} + ${range.optInt("chars")} / ${range.optInt("totalChars")}", style = MaterialTheme.typography.labelSmall) }
