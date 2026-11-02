@@ -46,6 +46,7 @@ public final class AdaptivePhonePort implements PhonePort {
     private PhoneTreeCollection.State collection;
     private final java.util.concurrent.atomic.AtomicBoolean actionEffectInFlight=new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.Map<String,OcrTextTarget> textTargets=new java.util.LinkedHashMap<>();
+    private dev.pocketengine.phone.diagnostics.PhonePracticeEvidence practice;
 
     /** All arguments come from the native host, including verified model image support and its uptime clock. */
     public AdaptivePhonePort(PhonePort source, Scope scope, boolean sendScreenshots,
@@ -67,6 +68,46 @@ public final class AdaptivePhonePort implements PhonePort {
     @Override public boolean isConnected() { return source.isConnected(); }
     public boolean textTargetingAvailable(){return localCaptureAllowed&&localOcrAllowed&&source instanceof NativeOcrTapPort&&ocrAvailable();}
     public boolean matchesHostScope(String task,String run,int epoch){return scope.taskId.equals(task)&&scope.runId.equals(run)&&scope.epoch==epoch;}
+    public PhonePort physicalPort(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort?((dev.pocketengine.phone.access.GuardedPhonePort)source).physicalPort():source;}
+    /** All side effects enter from the existing CapabilityPort's original prepared operation. */
+    public JSONObject nativeExtension(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        PhoneExtensionTools.validate(tool,args);String blocked=authority(control);if(blocked!=null)return failure(blocked,"原手机任务控制已变化。");
+        boolean write=PhoneExtensionTools.writes(tool),opening=tool.equals("phone_launch_app_copy")||tool.equals("phone_practice_target"),listing=tool.equals("phone_list_app_copies");
+        synchronized(this){if(reconciliationRequired||safetyPause!=null)return failure(reconciliationRequired?"reconciliation_required":safetyPause,"先核对原操作和权限。");
+            if(tool.equals("phone_practice_result"))return practice==null?failure("practice_not_started","请先由主人启动本次自有测试页。"):practice.result();
+            if(!opening&&!listing&&!current(args.optString("observationId"),control))return failure("stale_observation","扩展工具需要当前原观察。");
+            if(tool.equals("phone_dialog"))return PhoneDialogEvidence.read(latest);
+            if(tool.equals("phone_gesture")&&(!imageCeiling||!ObservationReport.hasImage(latest)))return failure("coordinate_unverifiable","复杂手势需要已发送模型的当前真实图片。");
+        }
+        if(tool.equals("phone_event"))return waitNativeEvent(args,control);
+        if(write&&admission==null)return failure("host_authority_required","扩展动作需要原prepared操作准入。");
+        if(write&&!actionEffectInFlight.compareAndSet(false,true))return failure("original_action_in_flight","原手机动作仍在进行。");
+        try{
+            if(tool.equals("phone_set_wheel"))return wheelStep(args,control,admission);
+            JSONObject result;
+            if(tool.equals("phone_clear_text")){JSONObject text=new JSONObject().put("observationId",args.getString("observationId")).put("nodeId",args.getString("nodeId")).put("text","");admission.check();result=source.execute("phone_type",text,control);}
+            else if(source instanceof NativePhoneExtensions)result=((NativePhoneExtensions)source).extension(tool,args,control,admission);
+            else return failure("native_extension_unavailable","所选原生端口不支持该扩展，不切换执行后端。");
+            synchronized(this){if(tool.equals("phone_practice_target")&&Boolean.TRUE.equals(result.opt("accepted")))practice=new dev.pocketengine.phone.diagnostics.PhonePracticeEvidence(args.getString("packageName"),scope.displayId);
+                if(practice!=null){practice.action(tool,result);practice.nativeFacts(result);}if(write)clearReferences();if(result.has("accepted")&&result.isNull("accepted"))reconciliationRequired=true;}
+            if(write&&Boolean.TRUE.equals(result.opt("accepted"))){JSONObject fresh=readOnlyTree(control);result.put("freshObservationAvailable",fresh.optBoolean("ok"));if(fresh.optBoolean("ok"))result.put("afterObservationId",fresh.getString("observationId"));}
+            return result.put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false);
+        }finally{if(write)actionEffectInFlight.set(false);}
+    }
+    private JSONObject waitNativeEvent(JSONObject args,RunControl control)throws Exception {
+        dev.pocketengine.phone.PhoneUiSignals signals=source instanceof NativePhoneSignals?((NativePhoneSignals)source).uiSignals(control):null;if(signals==null)return failure("event_source_unavailable","原显示无可用界面事件源。");
+        java.util.Set<Integer> windows=new java.util.LinkedHashSet<>();synchronized(this){JSONArray rows=latest.optJSONArray("windows");if(rows!=null)for(int i=0;i<rows.length();i++)windows.add(rows.getJSONObject(i).getInt("windowId"));}
+        long revision=control.pauseRevision(),until=System.nanoTime()+args.getInt("timeoutMs")*1_000_000L;dev.pocketengine.phone.PhoneUiSignals.Stamp before=signals.snapshot(windows),after=before;
+        while(before.same(after)&&System.nanoTime()<until){control.check();if(control.isPaused()||control.pauseRevision()!=revision)throw new SecurityException("event_original_run_changed");signals.awaitChange(before,windows,Math.min(250,Math.max(1,(until-System.nanoTime())/1_000_000L)),control,revision);after=signals.snapshot(windows);if(after.closed)break;}
+        JSONObject result=new JSONObject().put("ok",true).put("eventObserved",!before.same(after)&&!after.closed).put("status",after.closed?"source_closed":before.same(after)?"timeout":"event_hint").put("containsNotificationText",false).put("eventProvesBusinessOutcome",false);
+        if(!before.same(after)&&!after.closed){JSONObject fresh=readOnlyTree(control);result.put("freshObservationAvailable",fresh.optBoolean("ok"));if(fresh.optBoolean("ok"))result.put("observationId",fresh.getString("observationId"));}return result;
+    }
+    private JSONObject wheelStep(JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        final JSONObject original; synchronized(this){original=PhoneTreeExtract.index(latest).get(args.getString("nodeId"));if(original==null||original.optBoolean("password")||!original.optBoolean("scrollable"))return failure("not_a_wheel","需要原树内可滚动的精确滚轮节点。");}
+        JSONObject scroll=new JSONObject().put("observationId",args.getString("observationId")).put("nodeId",args.getString("nodeId")).put("direction",args.getString("direction"));
+        JSONObject result=scrollNode(scroll,control,admission);String value=null;synchronized(this){if(latest!=null)for(JSONObject n:PhoneTreeExtract.index(latest).values())if(n.optInt("windowId",-1)==original.optInt("windowId",-2)&&n.optJSONArray("path")!=null&&n.getJSONArray("path").toString().equals(original.getJSONArray("path").toString())){value=n.optString("text");if(value.isEmpty())value=null;break;}}
+        boolean reached=value!=null&&value.equals(args.getString("value"));return result.put("target",args.getString("value")).put("actualValue",value==null?JSONObject.NULL:value).put("reached",reached).put("status",reached?"target_observed":value==null?"unreadable":"partial").put("stepsPerformed",Boolean.TRUE.equals(result.opt("accepted"))?1:0).put("verifiedBusinessSuccess",false);
+    }
     @Override public synchronized void clearReferences() {
         latest = null; latestBinding = null; textTargets.clear();source.clearReferences();
         // Clearing references cannot reconcile a possibly dispatched operation.
@@ -412,6 +453,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 .put("ocrReason", ocrAvailable() ? "mounted_local_engine" : "engine_not_installed")
                 .put("localCaptureAllowed",localCaptureAllowed).put("localOcrAllowed",localOcrAllowed).put("ocrTextMayBeSentToModel",true).put("uploadImageAllowed",imageCeiling).put("screenshotsAllowed", imageCeiling).put("automaticReplayAllowed", false));
         latest = new JSONObject(out.toString()); pendingNeed = Need.AUTOMATIC;
+        if(practice!=null)practice.observation(out);
         return out;
     }
     private boolean ocrAvailable() { return ocr != null && ocr.available(); }
