@@ -27,6 +27,7 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
     public interface ClaimAuthority {
         Claim claim(String leaseId,String bridgeRequestId,String requestDigest)throws Exception;
         void outcome(String leaseId,String bridgeRequestId,String claimId,boolean complete)throws Exception;
+        default void registered()throws Exception{}
         void reconcile()throws Exception;
         void close()throws Exception;
     }
@@ -42,6 +43,7 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
     private final Transport transport;
     private final ClaimAuthority claims;
     private final TaskStore.HarnessGatewayConfigurationOwner configurationOwner;
+    private volatile String failureClass="",failureLocation="";
     private final ModelConfig selection;
     private final RelayRouteBinding route;
     private final long selectionRevision,expiresAt;
@@ -68,7 +70,7 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
         this.tasks=java.util.Objects.requireNonNull(tasks);this.original=java.util.Objects.requireNonNull(original);
         this.configurations=java.util.Objects.requireNonNull(configurations);this.transport=java.util.Objects.requireNonNull(transport);
         RunControl.HostRunIdentity id=original.hostRunIdentity();if(id==null)throw new SecurityException("原任务控制器与持久执行代次必需；网关不创建手机任务");
-        long deadline=tasks.taskExecutionDeadline(id.taskId(),id.runId(),id.epoch());
+        long deadline=tasks.taskExecutionDeadline(id.taskId(),id.runId(),id.epoch());if(owner!=null)deadline=Math.min(deadline,owner.deadline());
         if(expiresAt<=System.currentTimeMillis()||expiresAt>deadline||expiresAt>System.currentTimeMillis()+600_000L)throw new SecurityException("网关期限必须包含在原执行期限内且首版不超过十分钟");
         this.expiresAt=expiresAt;this.environmentId=id(environmentId);this.environmentBinding=bounded(environmentBinding,256);this.bindingId=id(bindingId);
         if(profileDigest==null||!profileDigest.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("固定Profile摘要必需");this.profileDigest=profileDigest;
@@ -95,7 +97,7 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
         check();if(startupFence!=null)startupFence.check();if(registered)throw new IllegalStateException("原网关已登记，不能重启旧HTTP会话");
         byte[] random=new byte[32];new java.security.SecureRandom().nextBytes(random);String token=Base64.getUrlEncoder().withoutPadding().encodeToString(random);java.util.Arrays.fill(random,(byte)0);
         JSONObject descriptor=descriptor().put("accessToken",token).put("protocols",protocols());
-        try{registrationAttempted=true;registration=transport.request("/v1/gateway/leases",descriptor);validateLease(registration);if(startupFence!=null)startupFence.check();registered=true;startupFence=null;}
+        try{registrationAttempted=true;registration=transport.request("/v1/gateway/leases",descriptor);validateLease(registration);if(startupFence!=null)startupFence.check();claims.registered();registered=true;startupFence=null;}
         catch(Exception unknown){reconcile=true;throw unknown;}
         finally{descriptor.remove("accessToken");}
         worker=new Thread(this::poll,"pocket-harness-gateway");worker.setDaemon(true);worker.start();return snapshot();
@@ -106,7 +108,7 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
     public String leaseId(){return leaseId;}
     public RunControl originalControl(){return original;}
     public boolean running(){return registered&&!closed&&!reconcile&&System.currentTimeMillis()<expiresAt;}
-    public JSONObject snapshot()throws Exception {JSONObject result=new JSONObject().put("leaseId",leaseId).put("generation",generation).put("hostMode","GATEWAY_ONLY").put("state",reconcile?"UNKNOWN":closed?"REVOKED":System.currentTimeMillis()>=expiresAt?"EXPIRED":registered?"ACTIVE":"PREPARED").put("running",running()).put("requiresReconcile",reconcile).put("expiresAt",expiresAt).put("taskId",target.context.taskId).put("runId",target.context.runId).put("epoch",target.context.epoch).put("purpose","RELAY").put("audience","EXTERNAL_RELAY").put("phoneExecution",false).put("toolExecution",false).put("socketResume",false);if(configurationOwner!=null)result.put("configurationOwner",configurationOwner.view());return result;}
+    public JSONObject snapshot()throws Exception {JSONObject result=new JSONObject().put("leaseId",leaseId).put("generation",generation).put("hostMode","GATEWAY_ONLY").put("state",reconcile?"UNKNOWN":closed?"REVOKED":System.currentTimeMillis()>=expiresAt?"EXPIRED":registered?"ACTIVE":"PREPARED").put("running",running()).put("requiresReconcile",reconcile).put("expiresAt",expiresAt).put("taskId",target.context.taskId).put("runId",target.context.runId).put("epoch",target.context.epoch).put("purpose","RELAY").put("audience","EXTERNAL_RELAY").put("phoneExecution",false).put("toolExecution",false).put("socketResume",false);if(configurationOwner!=null)result.put("configurationOwner",configurationOwner.view());if(!failureClass.isEmpty())result.put("failureClass",failureClass).put("failureLocation",failureLocation);return result;}
     public TaskStore.HarnessGatewayConfiguration configurationFor(String child)throws Exception {if(configurationOwner==null||!child.equals(configurationOwner.view().getString("taskId")))throw new SecurityException("原租约未绑定此配置子任务");check();return configurationOwner.configuration(leaseId,selection.model);}
     public boolean matchesReview(String digest,long revision)throws Exception {return selectionRevision==revision&&dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(selection).equals(digest);}
     /** Original identifiers only. No claims, bodies, model requests, or automatic reconciliation. */
@@ -148,7 +150,7 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
             inferenceRunning=true;
             JSONObject result;try{result=ModelGateway.completeNative(selection,prepared.gateway,original,admitted,(call,seq)->check(),(event,data)->wire.event(((event.isEmpty()?"":"event: "+event+"\n")+"data: "+data+"\n\n").getBytes(StandardCharsets.UTF_8)));}finally{inferenceRunning=false;}
             if(!prepared.gateway.stream)wire.event(result.toString().getBytes(StandardCharsets.UTF_8));wire.eof();claims.outcome(leaseId,requestId,claim.claimId(),true);
-        }catch(Exception failed){reconcile=true;try{claims.outcome(leaseId,requestId,claim.claimId(),false);}catch(Exception storage){failed.addSuppressed(storage);}try{transport.request(path+"/failure",bound);}catch(Exception unavailable){failed.addSuppressed(unavailable);}throw failed;}
+        }catch(Exception failed){failureClass=failed.getClass().getSimpleName();for(StackTraceElement location:failed.getStackTrace())if(location.getClassName().startsWith("dev.pocketengine.")){failureLocation=location.getClassName()+"#"+location.getMethodName()+":"+location.getLineNumber();break;}reconcile=true;try{claims.outcome(leaseId,requestId,claim.claimId(),false);}catch(Exception storage){failed.addSuppressed(storage);}try{transport.request(path+"/failure",bound);}catch(Exception unavailable){failed.addSuppressed(unavailable);}throw failed;}
     }
     private final class Wire {
         final String path;final JSONObject binding;final boolean stream;final long deadlineAt;long sequence;

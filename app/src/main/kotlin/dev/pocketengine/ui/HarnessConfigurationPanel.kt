@@ -30,12 +30,13 @@ internal fun HarnessConfigurationPanel(taskId: String, snapshot: JSONObject, con
         catch (failure: Exception) { error = failure.message }
     }
     val gateway = snapshot.optJSONObject("harnessGateway")
+    LaunchedEffect(taskId, snapshot.optJSONObject("gatewayContinuation")?.optString("operationId")) { if (snapshot.optJSONObject("gatewayContinuation") != null) expanded = true }
     TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起 CLI 配置与模型网关" else "CLI 配置与模型网关") }
     val gatewayStatus = gateway?.optJSONObject("status")
     if (!expanded && gatewayStatus != null) Text(if (gatewayStatus.optBoolean("requiresReconcile")) "模型网关有未确认请求 · 展开只读核对" else if (gatewayStatus.optBoolean("running")) "模型网关运行中 · 展开查看期限或停止" else "原模型网关已停止 · 记录保留", style = MaterialTheme.typography.bodyMedium)
     if (!expanded) return
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        HarnessGatewayPanel(gateway, enabled, ::send)
+        HarnessGatewayPanel(gateway, enabled, ::send, snapshot)
         HorizontalDivider(Modifier.padding(vertical = 4.dp), color = Line)
         Text("只管理这个准确目标的配置", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         Text("预览不写文件。确认只替换逐项列出的配置，不批准 CLI 运行；文件读回也不是模型接管或 API 计费证明。外部修改会保留并阻止不安全恢复。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp)
@@ -79,6 +80,6 @@ internal fun HarnessConfigurationPanel(taskId: String, snapshot: JSONObject, con
             if (config.optString("operationId").isNotBlank()) TextButton(onClick = { send("queryHarnessConfig") }, enabled = enabled) { Text("只查询原操作回执") }
             receipt?.let { Text("原事务回执：${it.optString("state")} · 当次文件读回：${if (it.optBoolean("effectiveReadback")) "已核对" else "未确认"} · 模型运行：未验证。原回执不代表此刻文件没有外部变化。", fontSize = 12.sp, lineHeight = 20.sp) }
         }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
     }
 }

@@ -101,6 +101,39 @@ public final class TeamInferenceJournalTest {
             assertFalse(rig.run().getJSONArray("transcript").toString().contains("inference_receipt"));
         }
     }
+    @Test public void standaloneCoordinatorWithNativeBudgetPoolKeepsExternalEpochZeroAndSettlesRealCalls()throws Exception {
+        try(Rig rig=new Rig(true)){
+            FeatureContext context=new FeatureContext(RuntimeEnvironment.getApplication(),rig.settings,new SecretVault(RuntimeEnvironment.getApplication()),event->{});
+            var workspace=new dev.pocketengine.features.workspace.WorkspaceModule(context);
+            rig.module.setWriteHost(new TaskStoreTeamWriteHost(rig.tasks,new TeamWorkspaceAccess(workspace),changed->{}));
+            assertEquals(0,rig.nativeRuns());rig.start();JSONObject result=rig.done();JSONObject pool=rig.tasks.teamBudgetSnapshot(rig.operation);
+            System.out.println("STANDALONE_NATIVE_POOL "+new JSONObject().put("status",result.optString("status")).put("httpRequests",rig.requests.get()).put("hostRuns",rig.nativeRuns()).put("pool",pool).put("members",result.getJSONArray("members")));
+            assertEquals("completed",result.getString("status"));assertEquals(3,rig.requests.get());assertEquals(0,rig.nativeRuns());
+            JSONObject task=rig.tasks.get(rig.operation,false);assertFalse(task.has("executionScope"));assertEquals(rig.operation,task.getString("runId"));assertEquals(0,task.getInt("coordinatorEpoch"));
+            assertEquals(3,pool.getInt("modelRequestsReservedOrUsed"));assertEquals(0,pool.getInt("toolOperationsReservedOrUsed"));
+            JSONObject usage=rig.tasks.inferenceUsage(rig.operation);assertEquals(3,usage.getInt("attempts"));assertEquals(3,usage.getInt("completed"));
+            JSONArray receipts=usage.getJSONArray("receipts");for(int i=0;i<receipts.length();i++){JSONObject original=receipts.getJSONObject(i).getJSONObject("context");assertEquals("EXTERNAL_TASK_RUN",original.getString("bindingKind"));assertEquals(rig.operation,original.getString("taskId"));assertEquals(rig.operation,original.getString("runId"));assertEquals(0,original.getInt("epoch"));}
+            JSONArray reservations=task.getJSONObject("teamReservationPool").getJSONArray("reservations");assertEquals(3,reservations.length());for(int i=0;i<reservations.length();i++)assertEquals("settled",reservations.getJSONObject(i).getString("state"));
+        }
+    }
+    @Test public void persistentFixtureRootRequiresExplicitBaseMarkerAndNoSymlinks()throws Exception {
+        String oldBase=System.getProperty("a25.syntheticFixtureBase"),oldRoot=System.getProperty("a25.budgetUpgradeRoot");
+        java.nio.file.Path base=java.nio.file.Files.createTempDirectory("team-owned-base-"),owned=java.nio.file.Files.createDirectory(base.resolve("owned")),outside=java.nio.file.Files.createTempDirectory("team-outside-base-");
+        try{
+            System.setProperty("a25.budgetUpgradeRoot",owned.toString());System.clearProperty("a25.syntheticFixtureBase");assertThrows(IllegalStateException.class,TeamBudgetPersistentApplication::ownedRoot);
+            System.setProperty("a25.syntheticFixtureBase",base.toString());assertThrows(SecurityException.class,TeamBudgetPersistentApplication::ownedRoot);
+            java.nio.file.Files.writeString(owned.resolve("synthetic-fixture-owned.marker"),"test owned");assertEquals(owned,TeamBudgetPersistentApplication.ownedRoot());
+            java.nio.file.Files.writeString(outside.resolve("synthetic-fixture-owned.marker"),"not inside approved base");System.setProperty("a25.budgetUpgradeRoot",outside.toString());assertThrows(SecurityException.class,TeamBudgetPersistentApplication::ownedRoot);
+            java.nio.file.Files.writeString(base.resolve("synthetic-fixture-owned.marker"),"base is not an owned child");System.setProperty("a25.budgetUpgradeRoot",base.toString());assertThrows(SecurityException.class,TeamBudgetPersistentApplication::ownedRoot);
+            java.nio.file.Path alias=base.resolve("alias");java.nio.file.Files.createSymbolicLink(alias,owned);System.setProperty("a25.budgetUpgradeRoot",alias.toString());assertThrows(SecurityException.class,TeamBudgetPersistentApplication::ownedRoot);
+            java.nio.file.Files.delete(owned.resolve("synthetic-fixture-owned.marker"));java.nio.file.Files.createSymbolicLink(owned.resolve("synthetic-fixture-owned.marker"),outside.resolve("synthetic-fixture-owned.marker"));System.setProperty("a25.budgetUpgradeRoot",owned.toString());assertThrows(SecurityException.class,TeamBudgetPersistentApplication::ownedRoot);
+        }finally{
+            if(oldBase==null)System.clearProperty("a25.syntheticFixtureBase");else System.setProperty("a25.syntheticFixtureBase",oldBase);
+            if(oldRoot==null)System.clearProperty("a25.budgetUpgradeRoot");else System.setProperty("a25.budgetUpgradeRoot",oldRoot);
+            // Only the two exact directories created above; walk does not follow symlinks.
+            for(var root:java.util.List.of(base,outside))try(var paths=java.nio.file.Files.walk(root)){for(var path:paths.sorted(java.util.Comparator.reverseOrder()).toList())java.nio.file.Files.delete(path);}
+        }
+    }
     @Test public void filteredBufferedMemberToolsNeverReachPeersOrSynthesis()throws Exception{
         try(Rig rig=new Rig(true)){
             rig.invalidPeerCall=true;rig.start();JSONObject run=rig.done();assertEquals("failed",run.getString("status"));

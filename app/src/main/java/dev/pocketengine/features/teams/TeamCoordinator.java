@@ -404,6 +404,15 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
     }
     private void nativeBudget(Run run,JSONObject receipt)throws Exception {JSONObject pool=receipt.optJSONObject("parentBudget");if(pool==null)return;if(budgetHost!=null)pool=budgetHost.snapshot(run.json.getString("id"));run.json.put("parentBudget",JsonFiles.copy(pool)).put("callsUsed",budgetHost==null?Math.max(run.json.optInt("callsUsed"),pool.getInt("modelRequestsReservedOrUsed")):pool.getInt("modelRequestsReservedOrUsed")).put("toolCallsUsed",budgetHost==null?Math.max(run.json.optInt("toolCallsUsed"),pool.getInt("toolOperationsReservedOrUsed")):pool.getInt("toolOperationsReservedOrUsed"));if(run.json.optString("mode").equals("produce")&&pool.has("externalJobLimit"))run.json.put("externalTurnsUsed",Math.max(run.json.optInt("externalTurnsUsed"),pool.getInt("externalJobsReservedOrUsed"))).put("externalTurnLimit",Math.min(run.json.getInt("externalTurnLimit"),pool.getInt("externalJobLimit"))).put("externalJobUnit",pool.getString("externalJobUnit"));}
     public synchronized JSONObject recordIntegration(String id,JSONObject receipt)throws Exception {Run run=required(id);nativeBudget(run,receipt);save(run);return receipt;}
+    /** Idempotent metadata repair from the original SQL pool only. Never resumes or creates a Control. */
+    public synchronized JSONObject synchronizeIntegrationBudget(String id)throws Exception {
+        Run run=required(id);if(closed||budgetHost==null||!run.children.isEmpty()||assignmentFactory!=null&&assignmentFactory.hasActiveWork(id))throw new SecurityException("原团队仍有实际执行，不能同步预算展示");
+        JSONObject actual=budgetHost.snapshot(id),proof=actual.getJSONObject("budgetSource").optJSONObject("lastIntegrationBudgetReview");
+        if(proof==null||!id.equals(proof.optString("teamRunId"))||!TeamWorkFiles.hash(TeamWorkFiles.canonical(run.json.getJSONObject("productionScope"))).equals(proof.optString("scopeHash")))throw new SecurityException("没有当前原范围的已保存预算决定");
+        run.json.put("callLimit",actual.getInt("modelRequestLimit")).put("toolCallLimit",actual.getInt("toolOperationLimit")).put("callsUsed",actual.getInt("modelRequestsReservedOrUsed")).put("toolCallsUsed",actual.getInt("toolOperationsReservedOrUsed")).put("parentBudget",JsonFiles.copy(actual));
+        // Save even when memory already has these values: a prior post-commit save may have failed.
+        save(run);return JsonFiles.copy(run.json);
+    }
     public synchronized JSONObject adoptOutcomeContinuation(String id,TeamWriteScope nativeScope)throws Exception {
         Run run=required(id);JSONObject next=nativeScope.snapshot(),previous=run.json.getJSONObject("productionScope");
         for(String key:new String[]{"parentTaskId","parentRunId","targetProjectId","definitionHash","initialBudget"})if(!TeamWorkFiles.canonical(previous.get(key)).equals(TeamWorkFiles.canonical(next.get(key))))throw new SecurityException("原成果继续不能替换任务、项目、计划或预算");

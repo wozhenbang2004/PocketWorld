@@ -97,6 +97,7 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
     var reconnectNonce by remember(taskId) { mutableIntStateOf(0) }
     var prompt by remember(taskId) { mutableStateOf("") }
     val coldRecovery = dev.pocketengine.features.remote.RemoteColdRecovery.source(source)
+    var useTaskGateway by remember(taskId) { mutableStateOf(false) }
     var recoveryAccepted by remember(taskId,source.optString("jobOperationId"),source.optJSONObject("recoveryProof")?.optString("proofId")) { mutableStateOf(false) }
     var recoveryTimeout by remember(taskId) { mutableStateOf("300") }
     var localError by remember(taskId) { mutableStateOf<String?>(null) }
@@ -177,12 +178,16 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
                         OutlinedTextField(recoveryTimeout,{recoveryTimeout=it},label={Text("本次新执行时限（10–900秒）")},supportingText={Text("沿用原电脑、工作区和读写边界；超时会按原监督流程请求停止并核对。每流输出仍有界，内部模型次数、tokens和费用不可硬限；旧未知费用不清零。")},modifier=Modifier.fillMaxWidth())
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) { Checkbox(checked=recoveryAccepted,onCheckedChange={recoveryAccepted=it},enabled=!busy);Text("我明确授权这次新执行及所示时限，理解内部计费未知；不恢复任何旧批准。",fontSize=14.sp,lineHeight=21.sp,modifier=Modifier.weight(1f)) }
                     }
+                    if (!coldRecovery && !snapshot.optBoolean("teamRemoteWriter")) Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Checkbox(checked = useTaskGateway, onCheckedChange = { useTaskGateway = it }, enabled = !busy)
+                        Text("这轮使用手机原任务模型网关：先准备，配置后再明确确认执行。", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    }
                     Button(onClick = {
                         val input = JSONObject().put("prompt", prompt)
                         if(coldRecovery)input.put("timeoutSeconds",recoveryTimeout.toIntOrNull()).put("recoveryOwnerAcknowledged",recoveryAccepted)
                         selectedSnapshot?.let { input.put("snapshotId", it.getString("snapshotId")).put("snapshotVersion", it.getString("snapshotVersion")) }
-                        send("continue", input)
-                    }, enabled = !busy && submitted == null && prompt.isNotBlank() && prompt.length <= 12000 && (!coldRecovery || recoveryAccepted && (recoveryTimeout.toIntOrNull() ?: 0) in 10..900)) { Text(if (selectedSnapshot == null) "确认续接原会话" else "按所选快照同版本续接") }
+                        send(if (useTaskGateway && !coldRecovery) "gateway.prepareContinuation" else "continue", input)
+                    }, enabled = !busy && submitted == null && prompt.isNotBlank() && prompt.length <= 12000 && (!coldRecovery || recoveryAccepted && (recoveryTimeout.toIntOrNull() ?: 0) in 10..900)) { Text(if (useTaskGateway && !coldRecovery) "仅准备网关新轮，暂不执行" else if (selectedSnapshot == null) "确认续接原会话" else "按所选快照同版本续接") }
                     if (selectedSnapshot != null) Text("派发前和原电脑启动前均核对所选文件版本；漂移时拒绝旧续接，不把快照自动改绑新文件。此操作仍可能修改原工作区。", fontSize = 11.sp, lineHeight = 19.sp, color = SecondaryInk)
                 } else snapshot.optString("reason").takeIf { it.isNotBlank() }?.let { Text(it, color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp) }
                 source.optJSONArray("pendingApprovals").objects().forEach { approval ->

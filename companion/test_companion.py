@@ -537,7 +537,10 @@ class CompanionTests(unittest.TestCase):
         env = {**self.config["environments"][0], "workers": ["claude"], "writeAllowed": False}
         argv = self.manager._worker_argv({"worker": "claude", "prompt": "Review this project"}, env)
         self.assertIn("--safe-mode", argv)
-        self.assertEqual("Read,Glob,Grep", argv[argv.index("--tools") + 1])
+        self.assertEqual("Read,Glob,Grep,AskUserQuestion", argv[argv.index("--tools") + 1])
+        self.assertEqual("Read,Glob,Grep", argv[argv.index("--allowedTools") + 1])
+        self.assertEqual(["Edit", "Write", "Bash", "AskUserQuestion"],
+                         json.loads(argv[argv.index("--settings") + 1])["permissions"]["ask"])
         self.assertEqual("mcp__*", argv[argv.index("--disallowedTools") + 1])
         self.assertNotIn("Bash", argv[argv.index("--tools") + 1])
 

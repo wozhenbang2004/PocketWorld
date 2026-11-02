@@ -17,6 +17,13 @@ final class TeamProjectPort implements CapabilityPort {
     private final CapabilityPort files;private final Current current;private ProjectCapabilityPort project;private volatile boolean closed;
     TeamProjectPort(TaskStore tasks,LocalModule local,JSONObject binding,RunControl original,CapabilityPort files,Current current)throws Exception{this.tasks=tasks;this.local=local;this.binding=new JSONObject(binding.toString());this.original=original;this.files=files;this.current=current;}
     private void check(RunControl control)throws Exception{if(closed||control!=original)throw new SecurityException("原成员项目工具已关闭或控制改变");current.check();tasks.checkTeamAssignmentExecution(binding,original);}
+    private void checkRenewedSource(RunControl control)throws Exception {
+        check(control);JSONObject pin=tasks.teamIntegratorScopeExecutionFacts(binding,original);if(pin==null)return;
+        // Never hold Tasks across checkout IO. Original SQL scope/control is checked again
+        // after the exact source/runtime comparison and again by native command dispatch.
+        JSONObject source=dev.pocketengine.features.local.project.ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",pin.getString("checkoutId"))));JSONObject runtime=local.projectRuntimeForHost(pin.getString("runtimeId"));
+        if(!pin.getString("sourceDigest").equals(source.getString("sourceDigest"))||!pin.getString("runtimeIdentity").equals(runtime.getString("identity")))throw new SecurityException("原整合续审源码/运行环境已变化，停止派发，请重新审阅");tasks.teamIntegratorScopeExecutionFacts(binding,original);
+    }
     private boolean fileTool(String name){return name!=null&&name.matches("team_(prepare_draft|list_files|read_dependency|request_input|send_message|freeze_outputs|read_integration|integrate_file|prepare_integrated_project)");}
     private boolean projectTool(String name){return ProjectCapabilityPort.isTeamProjectRead(name)||name!=null&&name.matches("project_(execute|process_input|stop)");}
     @Override public void prepareTurnSurface(RunControl control)throws Exception {
@@ -37,8 +44,8 @@ final class TeamProjectPort implements CapabilityPort {
     @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl control)throws Exception{if(project==null)files.admitCapabilities(snapshot,control);else project.admitCapabilities(snapshot,control);}
     @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{prepareTurnSurface(control);JSONObject turn=project==null?files.prepareTurn(query,round,steps,control):project.prepareTurn(query,round,steps,control);JSONObject reference=turn.optJSONObject("reference");if(reference==null)reference=new JSONObject();reference.put("teamProject",contextSnapshot(query).getJSONObject("teamProject"));return turn.put("tools",tools()).put("reference",reference);}
     @Override public boolean responseCurrent(RunControl control)throws Exception{return project==null?files.responseCurrent(control):project.responseCurrent(control);}
-    @Override public void beforeModelRequest(String request,JSONArray messages,RunControl control)throws Exception{if(project==null)files.beforeModelRequest(request,messages,control);else project.beforeModelRequest(request,messages,control);}
-    @Override public JSONObject afterModelResponse(String request,String answer,RunControl control)throws Exception{return project==null?files.afterModelResponse(request,answer,control):project.afterModelResponse(request,answer,control);}
+    @Override public void beforeModelRequest(String request,JSONArray messages,RunControl control)throws Exception{checkRenewedSource(control);if(project==null)files.beforeModelRequest(request,messages,control);else project.beforeModelRequest(request,messages,control);}
+    @Override public JSONObject afterModelResponse(String request,String answer,RunControl control)throws Exception{checkRenewedSource(control);return project==null?files.afterModelResponse(request,answer,control):project.afterModelResponse(request,answer,control);}
     @Override public void modelRequestAbandoned(String request)throws Exception{if(project==null)files.modelRequestAbandoned(request);else project.modelRequestAbandoned(request);}
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{return project==null?files.beforeTool(name,args,control):project.beforeTool(name,args,control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{if(project==null)files.afterTool(name,args,receipt,control);else project.afterTool(name,args,receipt,control);}

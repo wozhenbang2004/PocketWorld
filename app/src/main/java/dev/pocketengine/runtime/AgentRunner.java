@@ -624,6 +624,12 @@ public final class AgentRunner {
         } catch (InterruptedException stopped) {
             unresolved(evidence, openOperation);
             return finishQuietly(taskId, "cancelled", "已停止后续操作；已经发生的操作不会自动撤销。", evidence, steps, config, sink);
+        } catch (RunJournal.NativeBudgetPaused paused) {
+            unresolved(evidence, openOperation);
+            try { evidence.put("nativeBudget",paused.diagnostics()); } catch (Exception ignored) { }
+            return finishQuietly(taskId,"awaiting_user",openOperation==null
+                    ?"本次调用次数已到上限，已完成内容保留。已在新请求发出前暂停；请在原任务入口核对已用次数和上限，明确追加后再继续。不会自动追加或重做已完成的操作。"
+                    :"原执行预算不足，已有登记操作仍须核对。没有清除未决效果、追加额度或自动重放。",evidence,steps,config,sink);
         } catch (RunContextBudget.Blocked blocked) {
             unresolved(evidence, openOperation);
             try { evidence.put("contextBudget", blocked.diagnostics); } catch (Exception ignored) { }

@@ -23,7 +23,7 @@ import org.json.JSONTokener;
 public final class TaskAuditStore {
     public static final int MAX_PAGE_ROWS=40, MAX_PAGE_BYTES=131072, MAX_CORE_BYTES=262144;
     private static final int MAX_HEADER_BYTES=32768, MAX_NATIVE_EVENT_BYTES=1048576;
-    private static final Set<String> HEADER_FIELDS=Set.of("id","goal","kind","executionMode","actorId","spaceId","status","summary","feature","command","conversationId","runId","coordinatorEpoch","createdAt","updatedAt","cancelRequested","groupStateRevision","channelStateRevision","voiceStateRevision","origin","developmentContext","sshSelection","teamAssignment","parentTaskId","parentRunId","nativeInference","ownerNotification");
+    private static final Set<String> HEADER_FIELDS=Set.of("id","goal","kind","executionMode","actorId","spaceId","status","summary","feature","command","conversationId","runId","coordinatorEpoch","createdAt","updatedAt","cancelRequested","groupStateRevision","channelStateRevision","voiceStateRevision","origin","developmentContext","sshSelection","teamAssignment","parentTaskId","parentRunId","nativeExecutionMode","nativeInference","ownerNotification");
     private TaskAuditStore(){}
 
     public static void createSchema(SQLiteDatabase db){

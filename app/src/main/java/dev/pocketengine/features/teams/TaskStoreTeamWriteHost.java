@@ -49,12 +49,26 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
     public final class WorkPlanPage implements AutoCloseable {
         private final TeamCoordinator coordinator;private final String run;private final TaskStore.TeamWorkWindow window;private final CurrentModel models;private volatile boolean alive=true;
         private TeamCoordinator.WorkPlanSource source;private TaskStore.TeamWorkReview pending;private TeamWorkItems.Plan projectPlan;
-        private TeamCoordinator.WorkMutationSource mutation;private TaskStore.TeamWorkRevisionReview pendingRevision;private JSONObject revisionOptions;private TeamWorkHandoff.Plan handoffPlan;
+        private TeamCoordinator.WorkMutationSource mutation;private TaskStore.TeamWorkRevisionReview pendingRevision;private JSONObject revisionOptions;private TeamWorkHandoff.Plan handoffPlan;private TaskStore.TeamIntegrationBudgetReview pendingIntegrationBudget;private TaskStore.TeamIntegratorScopeReview pendingIntegratorScope;private TeamProjectWorkspaces.IntegratorScopeCapture pendingIntegratorCapture;
         private WorkPlanPage(TeamCoordinator coordinator,String run,CurrentModel models)throws Exception{this.coordinator=coordinator;this.run=run;this.models=java.util.Objects.requireNonNull(models);window=tasks.openTeamWorkWindow(run);}
         public void setForeground(boolean foreground){window.setForeground(alive&&foreground);}
         private void require(){if(!alive)throw new SecurityException("原工作计划窗口已关闭");}
         public JSONObject snapshot()throws Exception{require();return tasks.teamWorkPlanSnapshot(run).put("executionTree",tasks.teamExecutionTreeForOwner(run,16));}
         public JSONObject parent()throws Exception{require();return tasks.teamWorkPlanParent(run);}
+        public synchronized JSONObject integrationBudgetStatus()throws Exception{require();return tasks.teamIntegrationBudgetStatus(window,coordinator.workMutationSource(run));}
+        public synchronized TaskStore.TeamIntegrationBudgetReview reviewIntegrationBudget(int newModelLimit)throws Exception{require();pendingIntegrationBudget=tasks.reviewTeamIntegrationBudget(window,coordinator.workMutationSource(run),newModelLimit);return pendingIntegrationBudget;}
+        public synchronized JSONObject approveIntegrationBudget(TaskStore.TeamIntegrationBudgetReview exact,String digest)throws Exception {
+            require();if(exact==null||pendingIntegrationBudget!=exact)throw new SecurityException("请先审阅本页原整合者准确pool预算");JSONObject saved=tasks.approveTeamIntegrationBudget(exact,digest);pendingIntegrationBudget=null;
+            try{coordinator.synchronizeIntegrationBudget(run);}catch(Exception failure){throw new IllegalStateException("原SQL预算已保存，尚未启动；协调快照同步失败。请只刷新原预算，不重复批准或执行。",failure);}changed.accept(run);return saved;
+        }
+        public synchronized JSONObject integratorScopeStatus()throws Exception{require();return tasks.teamIntegratorScopeSource(window,coordinator.workMutationSource(run)).view();}
+        public synchronized TaskStore.TeamIntegratorScopeReview reviewIntegratorScope(long deadlineAt)throws Exception {
+            require();if(projects==null)throw new SecurityException("原完整项目宿主尚未挂载");pendingIntegratorScope=null;TaskStore.TeamIntegratorScopeSource exact=tasks.teamIntegratorScopeSource(window,coordinator.workMutationSource(run));pendingIntegratorCapture=projects.captureIntegratorScope(exact);pendingIntegratorScope=tasks.prepareTeamIntegratorScope(exact,pendingIntegratorCapture,deadlineAt);return pendingIntegratorScope;
+        }
+        public synchronized JSONObject approveIntegratorScope(TaskStore.TeamIntegratorScopeReview exact,String digest)throws Exception {
+            require();if(exact==null||exact!=pendingIntegratorScope||pendingIntegratorCapture==null)throw new SecurityException("请先审阅本页准确整合者范围");pendingIntegratorCapture.checkCurrent();JSONObject saved=tasks.approveTeamIntegratorScope(exact,digest);pendingIntegratorScope=null;pendingIntegratorCapture=null;changed.accept(run);return saved;
+        }
+        public synchronized JSONObject synchronizeIntegrationBudget()throws Exception{require();tasks.teamIntegrationBudgetStatus(window,coordinator.workMutationSource(run));coordinator.synchronizeIntegrationBudget(run);return integrationBudgetStatus();}
         public synchronized TaskStore.TeamWorkReview review(JSONArray items)throws Exception{require();projectPlan=null;pendingRevision=null;mutation=null;source=coordinator.workPlanSource(run);TeamWorkItems.Plan captured=TeamWorkItems.capture(workspace,source,tasks.teamWorkPlanParent(run),items);pending=tasks.prepareTeamWorkPlan(window,captured);return pending;}
         public synchronized JSONObject approve(TaskStore.TeamWorkReview review,String digest)throws Exception{require();if(review==null||pending!=review||source==null)throw new SecurityException("请先审阅此窗口的精确工作项/文件/预算");if(projectPlan!=null)projects.checkSelectionCurrent(projectPlan.projectSelection());JSONObject continued=coordinator.startWorkItems(source,()->tasks.approveTeamWorkPlan(review,digest));pending=null;tasks.updateExternal(run,continued);changed.accept(run);return continued;}
         public synchronized JSONObject projectAvailability()throws Exception{require();return new JSONObject().put("available",projects!=null).put("parent",tasks.teamProjectParentSelectionFacts(run)).put("toolEngineeringLimit",TeamParentBudget.MAX_PROJECT_TOOL_OPERATIONS).put("sameUidExecutionRequired",true).put("osSandboxVerified",false);}

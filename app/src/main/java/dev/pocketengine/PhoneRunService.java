@@ -31,6 +31,9 @@ import org.json.JSONObject;
 public final class PhoneRunService extends Service {
     public static final String START="dev.pocketengine.START",STOP="dev.pocketengine.STOP",CONTINUE="dev.pocketengine.CONTINUE";
     public static final String START_GATEWAY="dev.pocketengine.START_GATEWAY",STOP_GATEWAY="dev.pocketengine.STOP_GATEWAY";
+    public static final String START_GATEWAY_PARENT="dev.pocketengine.START_GATEWAY_PARENT",STOP_GATEWAY_PARENT="dev.pocketengine.STOP_GATEWAY_PARENT";
+    private volatile EngineApplication.GatewayParentRun gatewayParent;
+    private volatile String lastGatewayProjection;
     private volatile dev.pocketengine.features.proxy.NativeHarnessGatewayBridge gatewayOnly;
     private static final String CHANNEL=PhoneReadiness.TASK_CHANNEL;
     private static final int NOTIFICATION=100;
@@ -67,8 +70,11 @@ public final class PhoneRunService extends Service {
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent==null){stopSelf(startId);return START_NOT_STICKY;}
         String id=intent.getStringExtra("taskId");
+        if(STOP_GATEWAY_PARENT.equals(intent.getAction())){var owner=gatewayParent;if(owner!=null&&owner.id().equals(intent.getStringExtra("gatewayParentResourceId")))stopGatewayParent(owner,startId);else if(runningId==null)stopSelfResult(startId);return START_NOT_STICKY;}
+        if(START_GATEWAY_PARENT.equals(intent.getAction())){startGatewayParent(intent,startId);return START_NOT_STICKY;}
         if(STOP_GATEWAY.equals(intent.getAction())){var bridge=gatewayOnly;if(bridge!=null&&bridge.leaseId().equals(intent.getStringExtra("gatewayLeaseId")))stopGatewayOnly(bridge,startId);else if(runningId==null)stopSelfResult(startId);return START_NOT_STICKY;}
         if(PhoneNotificationControls.handles(intent.getAction())){
+            if(gatewayParent!=null||gatewayOnly!=null)return START_NOT_STICKY;
             PhoneNotificationControls.dispatch(app,intent,runningId,runningRunId,runningEpoch,ownerControl);
             if(runningId==null)stopSelf(startId);return START_NOT_STICKY;
         }
@@ -101,20 +107,28 @@ public final class PhoneRunService extends Service {
         }catch(Exception ex){finish(id,new RunOutcome("failed",ex.getMessage()==null?"无法启动手机任务":ex.getMessage(),new JSONObject()),startId);}
         return START_NOT_STICKY;
     }
+    /** Native original-task recovery only; no AgentRunner, PhonePort or phone.local grant. */
+    private void startGatewayParent(Intent intent,int startId){
+        if(runningId!=null||gatewayParent!=null||gatewayOnly!=null)return;EngineApplication.GatewayParentRun owner=app.originalGatewayParentRun(intent.getStringExtra("gatewayParentResourceId"));if(owner==null){stopSelfResult(startId);return;}
+        try{gatewayParent=owner;runningId=owner.task();runningRunId=owner.run();runningEpoch=owner.epoch();ownerControl=owner.control();lastStartId=startId;startForeground(NOTIFICATION,notification(app.tasks.get(runningId,false)));owner.serviceRegistered();watchGatewayParent(owner,startId);}catch(Exception unavailable){gatewayParent=null;runningId=null;runningRunId=null;ownerControl=null;CLEANUP.execute(owner::close);stopForeground(STOP_FOREGROUND_REMOVE);stopSelfResult(startId);}
+    }
+    private void watchGatewayParent(EngineApplication.GatewayParentRun owner,int startId){if(destroyed||gatewayParent!=owner)return;try{owner.checkCurrent();JSONObject projection=owner.snapshot();String state=projection.optString("state")+":"+projection.optInt("nativeCallsInProgress")+":"+projection.optInt("remainingModels");if(!state.equals(lastGatewayProjection)){lastGatewayProjection=state;app.refreshGatewayParentProjection(owner.task());getSystemService(NotificationManager.class).notify(NOTIFICATION,notification(app.tasks.get(owner.task(),false)));}}catch(Exception stopped){stopGatewayParent(owner,startId);return;}main.postDelayed(()->watchGatewayParent(owner,startId),500);}
+    private void stopGatewayParent(EngineApplication.GatewayParentRun owner,int startId){if(gatewayParent!=owner)return;gatewayParent=null;gatewayOnly=null;runningId=null;runningRunId=null;ownerControl=null;lastGatewayProjection=null;CLEANUP.execute(owner::close);stopForeground(STOP_FOREGROUND_REMOVE);stopSelfResult(startId);}
     /** Service resource ownership is separate from task execution. This branch never creates a
      * PhonePort, AgentRunner, phone.local lease, or a replacement RunControl/grant. */
     private void startGatewayOnly(Intent intent,int startId){
-        if(runningId!=null||gatewayOnly!=null)return;
+        if(gatewayOnly!=null||runningId!=null&&gatewayParent==null)return;dev.pocketengine.features.proxy.NativeHarnessGatewayBridge candidate=null;
         try{
             Object module=app.features.module("proxy");if(!(module instanceof dev.pocketengine.features.proxy.ProxyModule))throw new SecurityException("原网关宿主不可用");
-            var bridge=((dev.pocketengine.features.proxy.ProxyModule)module).originalHarnessGateway(intent.getStringExtra("gatewayLeaseId"));
+            var bridge=((dev.pocketengine.features.proxy.ProxyModule)module).originalHarnessGateway(intent.getStringExtra("gatewayLeaseId"));candidate=bridge;
             if(bridge==null)throw new SecurityException("没有原生签发的当前任务网关租约");
             JSONObject state=bridge.snapshot();RunControl control=bridge.originalControl();String id=state.getString("taskId");
+            if(gatewayParent!=null&&(!gatewayParent.active()||!id.equals(gatewayParent.task())||!state.getString("runId").equals(gatewayParent.run())||control!=gatewayParent.control()))throw new SecurityException("不能把别的scope接到原网关服务");
             if(!app.ownsNativeTaskControl(id,control)||control.isCancelled()||control.isPaused())throw new SecurityException("原任务控制器已变化");
             gatewayOnly=bridge;runningId=id;runningRunId=state.getString("runId");runningEpoch=state.getInt("epoch");ownerControl=control;lastStartId=startId;
             startForeground(NOTIFICATION,notification(app.tasks.get(id,false)));
             worker.execute(()->{try{bridge.start();main.post(()->watchGatewayOnly(bridge,startId));}catch(Exception stopped){main.post(()->stopGatewayOnly(bridge,startId));}});
-        }catch(Exception unavailable){var bridge=gatewayOnly;gatewayOnly=null;if(bridge!=null)CLEANUP.execute(bridge::close);runningId=null;runningRunId=null;stopSelfResult(startId);}
+        }catch(Exception unavailable){var bridge=candidate;if(bridge!=null)CLEANUP.execute(bridge::close);gatewayOnly=null;if(gatewayParent==null){runningId=null;runningRunId=null;stopSelfResult(startId);}}
     }
     private void watchGatewayOnly(dev.pocketengine.features.proxy.NativeHarnessGatewayBridge bridge,int startId){
         if(destroyed||gatewayOnly!=bridge)return;
@@ -122,7 +136,7 @@ public final class PhoneRunService extends Service {
         main.postDelayed(()->watchGatewayOnly(bridge,startId),500);
     }
     private void stopGatewayOnly(dev.pocketengine.features.proxy.NativeHarnessGatewayBridge bridge,int startId){
-        if(gatewayOnly!=bridge)return;gatewayOnly=null;CLEANUP.execute(bridge::close);runningId=null;runningRunId=null;ownerControl=null;stopForeground(STOP_FOREGROUND_REMOVE);stopSelfResult(startId);
+        if(gatewayOnly!=bridge)return;if(gatewayParent!=null){stopGatewayParent(gatewayParent,startId);return;}gatewayOnly=null;CLEANUP.execute(bridge::close);runningId=null;runningRunId=null;ownerControl=null;stopForeground(STOP_FOREGROUND_REMOVE);stopSelfResult(startId);
     }
     private void run(String id,String runId,int epoch,String goal,ModelConfig config,RunControl control,int startId,boolean manualOnly){
 
@@ -210,8 +224,9 @@ public final class PhoneRunService extends Service {
         boolean identified=t!=null&&!id.isEmpty()&&!t.optString("runId").isEmpty()&&t.optInt("coordinatorEpoch")>0;
         try{if(identified)openIntent=PhoneNotificationControls.open(this,t);}catch(Exception invalid){identified=false;}
         PendingIntent open=PendingIntent.getActivity(this,0,openIntent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        String text=gatewayOnly!=null?"仅模型推理 · 不执行手机或工具 · 可随时停止":t==null?"正在准备":t.optString("summary");if(text.isEmpty())text="运行中 · 可随时停止";
-        Notification.Builder builder=new Notification.Builder(this,CHANNEL).setSmallIcon(R.drawable.ic_app).setContentTitle(gatewayOnly!=null?"远端模型网关":t==null?"手机任务":t.optString("goal","手机任务")).setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE);
+        boolean gatewayMode=gatewayParent!=null||gatewayOnly!=null;String text=gatewayParent!=null&&gatewayOnly==null?"原网关会话已登记，等待本轮配置与确认 · 不执行Agent或工具":gatewayOnly!=null?"仅模型推理 · 不执行手机或工具 · 可随时停止":t==null?"正在准备":t.optString("summary");if(gatewayParent!=null)try{String state=app.tasks.gatewayParentSessionForUi(gatewayParent.task()).optString("state");text=switch(state){case "REQUEST_IN_PROGRESS"->"正在处理原模型请求 · 不执行Agent或工具";case "REQUEST_CLAIMED"->"原模型请求已登记，等待确定回执";case "READY_WAITING","REQUEST_RECEIPT_RECORDED"->"网关会话已就绪，等待远端模型请求";case "PREPARING_SERVICE"->"正在登记前台服务，尚不可派发";case "WAITING_CONFIGURATION"->"等待本轮准确配置与主人确认";default->"本轮网关停止、到期或结果待核对";};}catch(Exception unknown){text="网关状态待核对，不推定正在执行";}if(text.isEmpty())text="运行中 · 可随时停止";
+        Notification.Builder builder=new Notification.Builder(this,CHANNEL).setSmallIcon(R.drawable.ic_app).setContentTitle(gatewayMode?"任务模型网关":t==null?"手机任务":t.optString("goal","手机任务")).setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE);
+        if(gatewayParent!=null){var owner=gatewayParent;Intent stopIntent=new Intent(this,PhoneRunService.class).setAction(STOP_GATEWAY_PARENT).setData(android.net.Uri.parse("pocketengine-gateway-parent://stop/"+owner.id())).putExtra("gatewayParentResourceId",owner.id());builder.addAction(new Notification.Action.Builder(null,"停止本轮网关",PendingIntent.getService(this,owner.id().hashCode(),stopIntent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE)).build());return builder.build();}
         if(gatewayOnly!=null){
             var bridge=gatewayOnly;Intent stopIntent=new Intent(this,PhoneRunService.class).setAction(STOP_GATEWAY).setData(android.net.Uri.parse("pocketengine-gateway://stop/"+bridge.leaseId())).putExtra("gatewayLeaseId",bridge.leaseId());
             PendingIntent stop=PendingIntent.getService(this,0,stopIntent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);builder.addAction(new Notification.Action.Builder(null,"停止模型网关",stop).build());return builder.build();
@@ -232,6 +247,6 @@ public final class PhoneRunService extends Service {
     }
     private static String safeMessage(Exception e){String m=e.getMessage();return m==null?"任务执行异常，请查看步骤后重试":m.length()>250?m.substring(0,250):m;}
     private synchronized void releaseWakeLock(){if(wakeLock!=null){if(wakeLock.isHeld())wakeLock.release();wakeLock=null;}}
-    @Override public void onDestroy(){if(gatewayOnly!=null){destroyed=true;var bridge=gatewayOnly;gatewayOnly=null;main.removeCallbacksAndMessages(null);CLEANUP.execute(bridge::close);runningId=null;runningRunId=null;app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();super.onDestroy();return;}destroyed=true;waitingForUser=false;ownerWaitGeneration++;main.removeCallbacksAndMessages(null);closeHeldAsync();if(runningId!=null){String id=runningId;RunControl owner=app.control(id);app.stop(id);try{if(runningRunId!=null&&!runningRunId.isEmpty())app.tasks.endAttempt(id,runningRunId,"cancelled","执行服务已结束，目标与上下文已保留，可核对后继续原任务",new JSONObject());else app.setStatus(id,"interrupted","执行服务已结束，请检查已有结果",owner);}catch(Exception failure){app.error("任务中断状态保存失败，请核对已有结果");}app.released(id,owner);}app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();releaseWakeLock();PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone!=null)phone.hideControls();super.onDestroy();}
+    @Override public void onDestroy(){if(gatewayParent!=null){destroyed=true;var owner=gatewayParent;gatewayParent=null;gatewayOnly=null;main.removeCallbacksAndMessages(null);CLEANUP.execute(owner::close);runningId=null;runningRunId=null;app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();super.onDestroy();return;}if(gatewayOnly!=null){destroyed=true;var bridge=gatewayOnly;gatewayOnly=null;main.removeCallbacksAndMessages(null);CLEANUP.execute(bridge::close);runningId=null;runningRunId=null;app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();super.onDestroy();return;}destroyed=true;waitingForUser=false;ownerWaitGeneration++;main.removeCallbacksAndMessages(null);closeHeldAsync();if(runningId!=null){String id=runningId;RunControl owner=app.control(id);app.stop(id);try{if(runningRunId!=null&&!runningRunId.isEmpty())app.tasks.endAttempt(id,runningRunId,"cancelled","执行服务已结束，目标与上下文已保留，可核对后继续原任务",new JSONObject());else app.setStatus(id,"interrupted","执行服务已结束，请检查已有结果",owner);}catch(Exception failure){app.error("任务中断状态保存失败，请核对已有结果");}app.released(id,owner);}app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();releaseWakeLock();PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone!=null)phone.hideControls();super.onDestroy();}
     @Override public IBinder onBind(Intent intent){return null;}
 }

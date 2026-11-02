@@ -16,7 +16,16 @@ public final class NativeHarnessGatewayOwner {
         void checkCurrent()throws Exception;
         JSONObject start(Approval approval)throws Exception;
     }
+    public interface ParentAccess {
+        JSONObject view()throws Exception;
+        void checkCurrent()throws Exception;
+        TaskStore.GatewayParentRunReview review();
+        default void ownerWindowLost(){}
+        JSONObject start(dev.pocketengine.features.RemoteOwnerWorkflows.GatewayParentRunApproval approval)throws Exception;
+    }
     public interface Host {
+        default void stopParent(String task,String run)throws Exception {throw new SecurityException("原App停止宿主未就绪");}
+        default ParentAccess parentResume(String child)throws Exception {throw new SecurityException("原App网关恢复宿主未就绪");}
         Access capture(String parentTask,String parentRun,String remoteTask)throws Exception;
         JSONObject existing(String parentTask,String parentRun)throws Exception;
         JSONObject query(String parentTask,String parentRun,String lease)throws Exception;
@@ -42,11 +51,16 @@ public final class NativeHarnessGatewayOwner {
     private final TaskStore tasks;private final Supplier<RemoteModule> remote;private final Host host;
     public NativeHarnessGatewayOwner(TaskStore tasks,Supplier<RemoteModule> remote,Host host){this.tasks=tasks;this.remote=remote;this.host=host;}
     public boolean windowCurrent(Page page){try{page.fence.check();return true;}catch(Exception stale){return false;}}
+    public ParentAccess parentResume(String child)throws Exception{return host.parentResume(child);}
+    public void stopContinuation(String child)throws Exception {JSONObject parent=tasks.gatewayParentTarget(child);host.stopParent(parent.getString("parentTaskId"),parent.getString("parentRunId"));}
+    /** Capture only the existing real parent control; this creates neither run nor gateway. */
+    public Access captureContinuation(String child)throws Exception {JSONObject parent=tasks.gatewayParentTarget(child);Access access=host.capture(parent.getString("parentTaskId"),parent.getString("parentRunId"),child);access.checkCurrent();JSONObject budget=access.view().getJSONObject("budget");if(!budget.optBoolean("scopePresent")||budget.optInt("modelCallsRemaining")<1)throw new SecurityException("请先在原任务执行范围确认真实模型额度；网关不补造预算");return access;}
     public Page page(String task,Fence fence){return new Page(task,fence);}
     public static boolean command(String command){return Set.of("gateway.inspect","gateway.review","gateway.enable","gateway.query","gateway.revoke","gateway.configure").contains(command);}
-    private JSONObject parent(Page page)throws Exception {return tasks.requirePrivateRemoteChild(page.task);}
+    private JSONObject parent(Page page)throws Exception {return tasks.gatewayParentTarget(page.task);}
     private void current(Page page)throws Exception {
         page.fence.check();if(page.source==null||page.parent==null||!TaskStore.capabilityFingerprint(page.parent).equals(TaskStore.capabilityFingerprint(parent(page)))||!sourceDigest(page.source).equals(sourceDigest(tasks.remoteOwnerTarget(page.task))))throw new SecurityException("原父子任务或电脑目标已改变，请重新核对；没有派发");
+        if(page.source.has("nativeGatewayProfileBinding")&&!page.profileBinding.equals(page.source.getString("nativeGatewayProfileBinding")))throw new SecurityException("本轮准备的原电脑配置代次已变化，不能改绑");
         if(!page.profileBinding.equals(remote.get().profileBindingHash(page.source.getString("profileId"))))throw new SecurityException("原电脑连接代次变化，请重新核对");
     }
     private static String sourceDigest(JSONObject source)throws Exception {JSONObject result=new JSONObject();for(String key:new String[]{"taskId","runId","coordinatorEpoch","profileId","serviceBase","jobOperationId","environmentId","worker"})result.put(key,source.get(key));return TaskStore.capabilityFingerprint(result);}
@@ -93,10 +107,10 @@ public final class NativeHarnessGatewayOwner {
     private static boolean forChild(JSONObject value,String child){return value!=null&&value.optJSONObject("configurationOwner")!=null&&child.equals(value.optJSONObject("configurationOwner").optString("taskId"));}
     public void observe(Page page)throws Exception {page.fence.check();page.parent=parent(page);page.source=tasks.remoteOwnerTarget(page.task);page.profileBinding=remote.get().profileBindingHash(page.source.getString("profileId"));}
     /** Local-only discovery for the original page. No capture, target fetch, service or review. */
-    public JSONObject summary(String child)throws Exception {JSONObject value=new JSONObject().put("automaticStart",false).put("phoneExecution",false).put("toolExecution",false);try{JSONObject relation=tasks.requirePrivateRemoteChild(child);value.put("parent",relation).put("records",tasks.originalHarnessGatewayRecords(relation.getString("parentTaskId"),relation.getString("parentRunId")));JSONObject live=host.existing(relation.getString("parentTaskId"),relation.getString("parentRunId"));if(forChild(live,child))value.put("status",live);}catch(Exception unavailable){value.put("blockedReason","这个远端任务没有可核对的私人原父执行；此入口不创建任务或授权");}return value;}
+    public JSONObject summary(String child)throws Exception {JSONObject value=new JSONObject().put("automaticStart",false).put("phoneExecution",false).put("toolExecution",false);try{JSONObject cause=tasks.requirePrivateRemoteChild(child);value.put("parentGatewaySession",tasks.gatewayParentSessionForUi(cause.getString("parentTaskId")));JSONObject relation=tasks.gatewayParentTarget(child);value.put("parent",relation).put("records",tasks.originalHarnessGatewayRecords(relation.getString("parentTaskId"),relation.getString("parentRunId")));JSONObject live=host.existing(relation.getString("parentTaskId"),relation.getString("parentRunId"));if(forChild(live,child))value.put("status",live);}catch(Exception unavailable){value.put("blockedReason","这个远端任务没有可核对的私人原父执行；此入口不创建任务或授权");}return value;}
     public JSONObject snapshot(Page page)throws Exception {
         JSONObject value=new JSONObject().put("scope","EXISTING_PRIVATE_PARENT_TASK_ONLY").put("phoneExecution",false).put("toolExecution",false).put("configurationApplied",false).put("automaticStart",false);
-        if(page.parent!=null){value.put("parent",page.parent).put("records",tasks.originalHarnessGatewayRecords(page.parent.getString("parentTaskId"),page.parent.getString("parentRunId")));JSONObject live=host.existing(page.parent.getString("parentTaskId"),page.parent.getString("parentRunId"));if(forChild(live,page.task)){if(page.status!=null&&page.status.has("originalRequests")&&live.optString("leaseId").equals(page.status.optString("leaseId")))live.put("observation",page.status);page.status=live;}}
+        if(page.parent!=null){value.put("parentGatewaySession",tasks.gatewayParentSessionForUi(page.parent.getString("parentTaskId"))).put("parent",page.parent).put("records",tasks.originalHarnessGatewayRecords(page.parent.getString("parentTaskId"),page.parent.getString("parentRunId")));JSONObject live=host.existing(page.parent.getString("parentTaskId"),page.parent.getString("parentRunId"));if(forChild(live,page.task)){if(page.status!=null&&page.status.has("originalRequests")&&live.optString("leaseId").equals(page.status.optString("leaseId")))live.put("observation",page.status);page.status=live;}}
         if(page.blockedReason!=null)value.put("blockedReason",page.blockedReason);
         if(page.status!=null)value.put("status",new JSONObject(page.status.toString()));JSONArray options=new JSONArray();for(var entry:page.targets.entrySet()){JSONObject target=entry.getValue();options.put(new JSONObject().put("optionRef",entry.getKey()).put("bindingId",target.getString("bindingId")).put("environmentId",target.getString("environmentId")).put("profileId",target.getString("profileId")));}value.put("targets",options);
         try{current(page);if(page.review!=null&&page.digest!=null&&System.currentTimeMillis()<page.reviewExpires){page.access.checkCurrent();value.put("review",new JSONObject(page.review.toString())).put("reviewDigest",page.digest).put("reviewExpiresAt",page.reviewExpires);}}catch(Exception stale){value.put("reviewInvalid",true);}

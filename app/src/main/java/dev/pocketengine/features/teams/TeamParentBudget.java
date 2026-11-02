@@ -9,6 +9,17 @@ import org.json.JSONObject;
 public final class TeamParentBudget {
     public static final int MAX_TEXT_TOOL_OPERATIONS=32,MAX_PROJECT_TOOL_OPERATIONS=128,MAX_MODEL_REQUESTS=64,MAX_PROJECT_MODEL_REQUESTS=128;
     private TeamParentBudget(){}
+    /** Visible planning allowance, not requests to dispatch or a guarantee of fitting history.
+     * Include each affected member and the integrator's command/package approval re-entries. */
+    public static int estimatedProjectSummaryRequests(int affectedMembers,int integratorCommands){
+        if(affectedMembers<1||affectedMembers>4||integratorCommands<0)throw new IllegalArgumentException("原完整项目摘要估算范围无效");
+        return Math.addExact(Math.addExact(affectedMembers,integratorCommands),1);
+    }
+    /** Issued only by the original value-level pre-reservation check, never after dispatch. */
+    public static final class Exhausted extends IllegalStateException {
+        public final String parentTaskId,parentRunId,dimension;public final int used,limit;
+        private Exhausted(JSONObject pool,String dimension)throws Exception{super("原父任务团队总预算已用尽，回答保留但未派发");this.parentTaskId=pool.getString("parentTaskId");this.parentRunId=pool.getString("parentRunId");this.dimension=dimension;used=used(pool,dimension);limit=pool.getInt(dimension.equals("modelRequests")?"modelRequestLimit":"toolOperationLimit");}
+    }
     public static JSONObject create(String parentTask,String parentRun,int modelLimit,int operationLimit,JSONObject nativeSource)throws Exception {
         boolean project=nativeSource.optBoolean("nativeProjectWorkPlan");
         if(modelLimit<0||modelLimit>(project?MAX_PROJECT_MODEL_REQUESTS:MAX_MODEL_REQUESTS)||operationLimit<0||operationLimit>(project?MAX_PROJECT_TOOL_OPERATIONS:MAX_TEXT_TOOL_OPERATIONS))throw new SecurityException("原父预算上限无效");
@@ -32,7 +43,8 @@ public final class TeamParentBudget {
                     ||row.optString("state").equals("released_unstarted"))throw new SecurityException("原父预留不可重用");
             return row;
         }
-        if(remaining(pool,"modelRequests")<model||remaining(pool,"toolOperations")<tool)throw new IllegalStateException("原父任务团队总预算已用尽，回答保留但未派发");
+        if(remaining(pool,"modelRequests")<model)throw new Exhausted(pool,"modelRequests");
+        if(remaining(pool,"toolOperations")<tool)throw new Exhausted(pool,"toolOperations");
         if(rows.length()>=reservationCeiling(pool))throw new IllegalStateException("原父预留记录已满，未丢弃未知或迟到用量");
         JSONObject row=new JSONObject(binding.toString()).put("reservationId",UUID.randomUUID().toString())
                 .put("parentTaskId",pool.getString("parentTaskId")).put("parentRunId",pool.getString("parentRunId"))

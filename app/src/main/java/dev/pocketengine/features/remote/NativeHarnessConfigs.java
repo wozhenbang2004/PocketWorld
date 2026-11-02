@@ -95,7 +95,7 @@ public final class NativeHarnessConfigs {
         long revision=window.revision;current(window,revision);if(window.gateway!=null)window.gateway.checkCurrent();
         if(window.operation!=null){query(window);return response(window);}
         JSONObject source=tasks.remoteOwnerTarget(window.task);window.source=source;
-        if(!source.optString("executorStatus").matches("completed|failed|cancelled"))throw new SecurityException("请先结算原电脑任务；本操作不会接管正在运行的CLI");
+        if(!source.optString("executorStatus").matches("completed|failed|cancelled")&&!(window.gateway!=null&&source.optString("executorStatus").equals("native_gateway_prepared")))throw new SecurityException("请先结算原电脑任务；本操作不会接管正在运行的CLI");
         window.profileBinding=remote().profileBindingHash(source.getString("profileId"));JSONObject input=transport(window);
         JSONObject environments=remote().handle("environments",new JSONObject(input.toString()));
         JSONObject env=RemoteTaskRequest.environment(environments,source.getString("environmentId"),source.getString("worker"));

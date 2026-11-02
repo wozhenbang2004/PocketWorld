@@ -43,6 +43,16 @@ import org.json.JSONObject
     var shown by remember(page) { mutableStateOf(JSONObject()) }
     var accepted by remember(pending, pendingRevision) { mutableStateOf(false) }
     var notice by remember(page) { mutableStateOf<String?>(null) }
+    var integrationBudget by remember(page) { mutableStateOf<JSONObject?>(null) }
+    var integrationBudgetReview by remember(page) { mutableStateOf<TaskStore.TeamIntegrationBudgetReview?>(null) }
+    var integrationBudgetShown by remember(page) { mutableStateOf(JSONObject()) }
+    var integrationModelLimit by rememberSaveable(runId) { mutableStateOf("") }
+    var integrationBudgetAccepted by remember(integrationBudgetReview) { mutableStateOf(false) }
+    var integratorScopeStatus by remember(page) { mutableStateOf<JSONObject?>(null) }
+    var integratorScopeReview by remember(page) { mutableStateOf<TaskStore.TeamIntegratorScopeReview?>(null) }
+    var integratorScopeShown by remember(page) { mutableStateOf(JSONObject()) }
+    var integratorMinutes by rememberSaveable(runId) { mutableStateOf("15") }
+    var integratorScopeAccepted by remember(integratorScopeReview) { mutableStateOf(false) }
     // Owner-authored drafts survive leaving this local section; they have no authority until native review/approval.
     var draftText by rememberSaveable(runId) { mutableStateOf("[]") }
     var fullProject by rememberSaveable(runId) { mutableStateOf(false) }
@@ -155,7 +165,7 @@ import org.json.JSONObject
                     TeamCaption("完整固定基线：${project.getJSONArray("sourceManifest").length()} 个源文件，身份 ${project.optString("snapshotIdentity").take(16)}；原父checkout ${project.optString("parentCheckoutId").take(12)}。独立目录不提供OS隔离。")
                     TeamProjectScopeSummary(project)
                     project.getJSONArray("templates").objects().forEach { template -> Text("${template.optString("id")} · ${if (template.optBoolean("requiredForFreeze")) "同版必要检查" else "可选命令"}\n${template.getJSONObject("request").toString()}", style = MaterialTheme.typography.bodySmall) }
-                    TeamCaption("计划工具步骤 ${planning.optInt("plannedToolOperations")} ＋ 可见余量 ${planning.optInt("toolRetryMargin")}；模型请求新增估计 ${planning.optInt("estimatedAdditionalModelRequests")}，${if (planning.optBoolean("modelEstimateCapped")) "受原模型工程上限约束，复杂多轮不保证足额" else "不是复杂任务足额保证"}。项目工具工程上限128不是默认授128；文字范围仍32。")
+                    TeamCaption("计划工具步骤 ${planning.optInt("plannedToolOperations")} ＋ 可见余量 ${planning.optInt("toolRetryMargin")}；模型请求新增估计 ${planning.optInt("estimatedAdditionalModelRequests")}（含单独计量的历史整理预计 ${planning.optInt("estimatedHistorySummaryRequests")}），${if (planning.optBoolean("modelEstimateCapped")) "受原模型工程上限约束，复杂多轮不保证足额" else "不是复杂任务足额保证"}。项目工具工程上限128不是默认授128；文字范围仍32。")
                     val parent = shown.getJSONObject("parent")
                     TeamCaption("原父真实grant剩余 ${parent.optInt("remainingOperations")}；累计上限 ${parent.optInt("stepCeiling")}，已耗 ${parent.optInt("spentOperations")}。原pool预留/实耗模型 ${budget.optInt("modelRequestsReservedOrUsed")}、工具 ${budget.optInt("toolOperationsReservedOrUsed")}；unknown单元 ${budget.optJSONObject("reservationStates")?.optJSONObject("unknown")?.toString() ?: "无"}，不退款或洗账。")
                     if (shown.optBoolean("parentBudgetIncreaseRequired")) TeamCaption("原父预算明确缺口 ${shown.optInt("parentOperationShortfall")}：仅预算建议剩余 → ${shown.optInt("proposedParentRemainingOperations")} / 累计上限 → ${shown.optInt("proposedParentStepCeiling")}。必须先明确批准；不延长期限、不扩大工具/文件/资源权限、不重启任务。")
@@ -190,12 +200,40 @@ import org.json.JSONObject
                 TeamCaption("从原准确完整成果包 ${selected.getJSONObject("previousDelivery").optString("packageArtifactId").take(12)} 继续；本次完整基线 ${selected.optString("snapshotIdentity").take(16)}。父活跃checkout不覆盖。")
                 selected.getJSONArray("templates").objects().forEach { template -> Text("${template.optString("id")} · ${template.getJSONObject("request")}", style = MaterialTheme.typography.bodySmall) }
             }
-            TeamCaption("本轮计划工具步骤 ${planning.optInt("plannedToolOperations")} + 明确重试余量 ${planning.optInt("toolRetryMargin")}；模型新增估计 ${planning.optInt("estimatedAdditionalModelRequests")}。工程上限模型 ${planning.optInt("modelEngineeringMaximum")} / 工具 ${planning.optInt("toolEngineeringMaximum")} 不是默认授权或复杂任务保证；已用/预留/unknown不清，token/费用未知。")
+            TeamCaption("本轮计划工具步骤 ${planning.optInt("plannedToolOperations")} + 明确重试余量 ${planning.optInt("toolRetryMargin")}；模型新增估计 ${planning.optInt("estimatedAdditionalModelRequests")}（含单独计量的历史整理预计 ${planning.optInt("estimatedHistorySummaryRequests")}，估计不保证）。工程上限模型 ${planning.optInt("modelEngineeringMaximum")} / 工具 ${planning.optInt("toolEngineeringMaximum")} 不是默认授权或复杂任务保证；已用/预留/unknown不清，token/费用未知。")
             if (shown.optBoolean("parentBudgetIncreaseRequired")) TeamCaption("真实父grant不足：本次明确增加 ${shown.optInt("parentOperationShortfall")}，剩余 → ${shown.optInt("proposedParentRemainingOperations")}，累计上限 → ${shown.optInt("proposedParentStepCeiling")}；不延长期限、不扩大工具/资源权限、不恢复旧控制。")
             Row { Checkbox(accepted, { accepted = it }, enabled = !busy); Text("我确认本次受影响工作项、原成果基线与可见累计预算") }
             if (shown.optBoolean("parentBudgetIncreaseRequired")) Button(onClick = { work({ page.approveRevisionParentBudget(exact, shown.getString("digest")) }) { pendingRevision = it; shown = it.view(); accepted = false; notice = "同run预算CAS已保存，请重新核对本轮完整基线/命令；尚未授权执行。" } }, enabled = accepted && !busy) { Text("仅批准本轮父预算缺口并重读范围") }
             Button(onClick = { work({ page.approveRevision(exact, shown.getString("digest")) }) { pendingRevision = null; result = JSONObject().put("workPlan", it.getJSONObject("workPlan")).put("parentBudget", it.optJSONObject("parentBudget")); notice = "原工作项新修订已排入；保留未变贡献，等待本版真实制作及新独审。" } }, enabled = accepted && !busy && !shown.optBoolean("parentBudgetIncreaseRequired")) { Text(if (busy) "正在保存…" else "批准并沿这些原工作项继续") }
             TextButton(onClick = { pendingRevision = null }, enabled = !busy) { Text("暂不修订，保留当前成果") }
+        }
+        if (plan != null && run.optJSONObject("productionScope")?.has("projectSelection") == true) {
+            TextButton(onClick = { work({ page.integratorScopeStatus() }) { integratorScopeStatus = it; integratorScopeReview = null } }, enabled = !busy) { Text("审阅唯一整合者的续接范围与期限") }
+            integratorScopeStatus?.let { status ->
+                TeamCaption("只续接原唯一整合者，不恢复作者写入权限。原费用、成果、审阅和操作保留。父任务已批期限：${java.util.Date(status.getLong("parentDeadlineAt"))}。")
+                OutlinedTextField(integratorMinutes, { integratorMinutes = it; integratorScopeReview = null }, label = { Text("明确本次续接有效分钟（不得超过父任务期限）") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                TextButton(onClick = { work({ val minutes = integratorMinutes.toLong(); require(minutes > 0); page.reviewIntegratorScope(Math.addExact(System.currentTimeMillis(), Math.multiplyExact(minutes, 60000L))) }) { integratorScopeReview = it; integratorScopeShown = it.view(); integratorScopeAccepted = false } }, enabled = !busy && integratorMinutes.toLongOrNull()?.let { it > 0 } == true) { Text("捕获当前完整源码并核对原命令范围") }
+                integratorScopeReview?.let { exact ->
+                    TeamCaption("原整合目标：${integratorScopeShown.optString("goal")}\n准确副本：${integratorScopeShown.getJSONObject("capturedSource").getString("checkoutId")}\n源码摘要：${integratorScopeShown.getJSONObject("capturedSource").getString("sourceDigest")}\n有效至：${java.util.Date(integratorScopeShown.getLong("deadlineAt"))}\n仍只允许原命令模板：${integratorScopeShown.getJSONArray("templates")}")
+                    Row { Checkbox(integratorScopeAccepted, { integratorScopeAccepted = it }, enabled = !busy); Text("我明确批准以上源码与期限；副本代码会执行，命令同应用UID，可能访问应用可访问的文件和网络，不是目录安全沙箱") }
+                    Button(onClick = { work({ page.approveIntegratorScope(exact, integratorScopeShown.getString("digest")) }) { integratorScopeReview = null; integratorScopeStatus = null; notice = "原唯一整合者续接范围已保存，尚未启动。请回原成果入口明确继续；作者过期写权和旧账不变。" } }, enabled = !busy && integratorScopeAccepted) { Text("仅保存原整合者续接范围（不启动）") }
+                }
+            }
+            TextButton(onClick = { work({ page.integrationBudgetStatus() }) { integrationBudget = it; integrationBudgetReview = null } }, enabled = !busy) { Text("为这次整合追加调用次数") }
+            integrationBudget?.let { current ->
+                val budget = current.getJSONObject("parentBudget")
+                TeamCaption("这次整合已占用调用（含预留/使用） ${budget.optInt("modelRequestsReservedOrUsed")} / ${budget.optInt("modelRequestLimit")}，工具 ${budget.optInt("toolOperationsReservedOrUsed")} / ${budget.optInt("toolOperationLimit")}。包含历史整理调用；已完成内容保留，已用和未确定用量不清零。")
+                current.optJSONObject("parentExecutionScope")?.takeIf { it.optBoolean("scopePresent") }?.let { scope -> TeamCaption("原父任务累计模型剩余 ${scope.optInt("modelCallsRemaining")}；本页不会扩大原任务的累计上限，不足时请先回任务面板核对。") }
+                OutlinedTextField(integrationModelLimit, { integrationModelLimit = it; integrationBudgetReview = null }, label = { Text("明确新的本次累计调用上限（最多 ${current.optInt("modelEngineeringMaximum")}）") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                TextButton(onClick = { work({ page.reviewIntegrationBudget(integrationModelLimit.toInt()) }) { integrationBudgetReview = it; integrationBudgetShown = it.view(); integrationBudgetAccepted = false } }, enabled = !busy && integrationModelLimit.toIntOrNull() != null) { Text("核对这次追加次数") }
+                integrationBudgetReview?.let { exact ->
+                    TeamCaption("本次调用上限 ${budget.optInt("modelRequestLimit")} → ${integrationBudgetShown.optInt("proposedModelRequestLimit")}。仅额度，不改变工具/文件/命令权限或期限，不会启动，也不重做已完成检查、命令或冻结包。")
+                    Row { Checkbox(integrationBudgetAccepted, { integrationBudgetAccepted = it }, enabled = !busy); Text("我明确同意以上追加次数，原已用次数保留") }
+                    Button(onClick = { work({ page.approveIntegrationBudget(exact, integrationBudgetShown.getString("digest")) }) { saved -> integrationBudgetReview = null; integrationBudget = JSONObject(current.toString()).put("parentBudget", saved.getJSONObject("parentBudget")); notice = "预算已保存，尚未启动。请回原已批准差异处明确继续唯一整合者；旧成果/费用保留。" } }, enabled = !busy && integrationBudgetAccepted) { Text("仅保存本次追加次数") }
+                }
+                TextButton(onClick = { onTask(current.getString("taskId")) }, enabled = !busy) { Text("查看原唯一整合任务") }
+                TextButton(onClick = { work({ page.synchronizeIntegrationBudget() }) { integrationBudget = it; integrationBudgetReview = null; notice = "已重新读取保存的调用次数；未启动执行。" } }, enabled = !busy) { Text("重新读取保存的调用次数（不启动）") }
+            }
         }
         notice?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }

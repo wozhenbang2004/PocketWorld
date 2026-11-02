@@ -28,9 +28,9 @@ final class TeamIntegrationCompaction {
 
     private static final class HistoryFence implements MemoryHostFence {
         private final TaskStore tasks;private final JSONObject binding;private final RunControl original;
-        private final long epoch,expiresAt;private Thread admittedThread;private long admittedPause;
+        private final long epoch,expiresAt;private final String integratorScopeHash;private Thread admittedThread;private long admittedPause;
         HistoryFence(TaskStore tasks,JSONObject binding,RunControl original)throws Exception {
-            this.tasks=tasks;this.binding=binding;this.original=original;JSONObject guard=tasks.teamIntegrationHistoryGuard(binding,original);epoch=guard.getLong("coordinatorEpoch");expiresAt=guard.getLong("expiresAt");
+            this.tasks=tasks;this.binding=binding;this.original=original;JSONObject guard=tasks.teamIntegrationHistoryGuard(binding,original);epoch=guard.getLong("coordinatorEpoch");expiresAt=guard.getLong("expiresAt");integratorScopeHash=guard.getString("integratorScopeHash");
         }
         private void localAuthority()throws Exception {
             if(original.isCancelled()||Thread.currentThread().isInterrupted()||System.currentTimeMillis()>=expiresAt
@@ -40,7 +40,7 @@ final class TeamIntegrationCompaction {
             localAuthority();if(original.isPaused())throw new SecurityException("原整合执行当前已暂停");
             if(admittedThread!=null&&original.pauseRevision()!=admittedPause)throw new SecurityException("短读取期间暂停代次已变化");
         }
-        private long fullAuthority()throws Exception {localAuthority();JSONObject guard=tasks.teamIntegrationHistoryGuard(binding,original);long current=guard.getLong("coordinatorEpoch");if(current!=epoch||guard.getLong("expiresAt")!=expiresAt)throw new SecurityException("原整合执行代次或期限已变化");return current;}
+        private long fullAuthority()throws Exception {localAuthority();JSONObject guard=tasks.teamIntegrationHistoryGuard(binding,original);long current=guard.getLong("coordinatorEpoch");if(current!=epoch||guard.getLong("expiresAt")!=expiresAt||!integratorScopeHash.equals(guard.getString("integratorScopeHash")))throw new SecurityException("原整合执行代次或期限已变化");return current;}
         private long full()throws Exception {localControl();return fullAuthority();}
         private boolean inside(){return admittedThread==Thread.currentThread()&&Thread.holdsLock(tasks);}
         void retained()throws Exception {
@@ -111,7 +111,13 @@ final class TeamIntegrationCompaction {
                 fence.check();
                 // Reserve immediately before each PHYSICAL call, not request projection: a SUMMARY
                 // must not race an already reserved MAIN for the original single unbound slot.
-                tasks.reserveTeamInference(binding,"integration","physical:"+purpose.name()+":"+UUID.randomUUID());
+                try{tasks.reserveTeamInference(binding,"integration","physical:"+purpose.name()+":"+UUID.randomUUID());}
+                catch(TeamParentBudget.Exhausted empty){
+                    if(!"modelRequests".equals(empty.dimension))throw empty;
+                    // This exact reserve precedes creation of the original inference target and
+                    // all Gateway/HTTP work. No post-dispatch failure is reclassified here.
+                    throw new RunJournal.NativeBudgetPaused(raw.taskId,raw.runId,raw.epoch,empty.parentTaskId,empty.parentRunId,purpose.name(),empty.used,empty.limit);
+                }
                 return originalJournal.inferenceTarget(purpose,member);
             }
         };

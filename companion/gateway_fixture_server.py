@@ -17,6 +17,12 @@ WIRE = r'''
 def infer():
     import urllib.request
     fixture=Path(os.environ['POCKETWORLD_GATEWAY_FIXTURE_ROOT']).resolve()
+    assert Path.cwd().resolve() == fixture/'workspace'
+    prior=fixture/'prior-no-model-once'
+    if prior.exists():
+        assert prior.read_text() == 'controlled prior CLI; no model; isolated root\n'
+        prior.unlink()
+        return 'controlled prior CLI result without model'
     if Path(sys.argv[0]).name == 'codex':
         assert Path(os.environ['CODEX_HOME']).resolve() == fixture/'codex-home'
         import tomllib
@@ -37,11 +43,14 @@ def infer():
     Path('gateway-wire-requests').open('a').write('1\n')
     # The expected native complete protocol sentinel must be present, not just a socket EOF.
     assert b'response.completed' in raw or b'message_stop' in raw
+    Path('gateway-model-result.sse').write_bytes(raw)
     return 'actual phone-gateway fixture inference'
 '''
 
 def main():
     root=Path(sys.argv[1]).resolve(); workspace=root/'workspace';workspace.mkdir(parents=True)
+    if sys.argv[2:] == ['--prepare-prior']:
+        (root/'prior-no-model-once').write_text('controlled prior CLI; no model; isolated root\n')
     executables=root/'bin';executables.mkdir()
     codex_home=root/'codex-home';codex_home.mkdir();(codex_home/'config.toml').write_text('# original controlled config\n')
     claude_home=root/'claude-home';claude_home.mkdir();(claude_home/'settings.json').write_text('{}\n')
