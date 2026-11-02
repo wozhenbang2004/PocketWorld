@@ -1393,7 +1393,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun resolveReviewedTask(task: UiTask, operationId: String, outcome: String) { native("resolveOperation", reviewedTaskInput(task).put("operationId", operationId).put("outcome", outcome)) }
     fun getTask(id: String) { native("getTask", JSONObject().put("taskId", id)) }
     fun focusTask(id: String) { closeConversationReader();getTask(id); state = state.copy(requestedTaskId = id, requestedTaskRevision = state.requestedTaskRevision + 1) }
-    fun openConnection(section: String) { taskMcpPreparation = null; state = state.copy(requestedConnectionSection = section, requestedConnectionRevision = state.requestedConnectionRevision + 1) }
+    internal fun prepareConnectionEntry() {
+        taskMcpPreparation = null
+    }
+
+    fun openConnection(section: String) {
+        prepareConnectionEntry()
+        state = state.copy(requestedConnectionSection = section, requestedConnectionRevision = state.requestedConnectionRevision + 1)
+    }
     fun usesChatGptPlan(phone: Boolean): Boolean {
         if (phone || !state.chatBusy) return state.modelRoute == "account"
         val binding = state.chatActiveTurn ?: return false

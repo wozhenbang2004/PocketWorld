@@ -450,7 +450,8 @@ internal class PocketWebBridge(
             "connections.enter" -> {
                 val next = requiredString(args, "section"); require(next in connectionSections) { "未知能力页面" }
                 leaveTask(); leaveConnection(); reviews.clear(); section = next
-                controller.openConnection(next)
+                // The Web page already owns its route. Prepare the host entry here.
+                controller.prepareConnectionEntry()
                 if (next in ownerDomains) controller.enterOwnerDomain(next) else controller.refresh()
                 if (next == "models") readModelSnapshot()
                 when (next) {
