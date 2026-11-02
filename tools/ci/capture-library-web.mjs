@@ -370,14 +370,67 @@ async function startServer() {
   return `http://127.0.0.1:${address.port}`;
 }
 
-async function settle(page, milliseconds = 420) {
+// Serialized into Chromium by locator.evaluate. Do not cancel/finish the source
+// animations: the raw video must retain them. Vaul's finite entry/exit is 500ms.
+// The independent deadline also bounds a background tab that stops producing RAF.
+function waitForStableGeometry(node, { timeoutMs = 1600 } = {}) {
+  return new Promise((resolve, reject) => {
+    const started = performance.now();
+    const ancestors = [];
+    for (let parent = node; parent; parent = parent.parentElement) ancestors.push(parent);
+    let frame = 0, frameCount = 0, stableFrames = 0, previous = null, bounds = null, active = [];
+    const observed = new Set();
+    const cleanup = () => { clearTimeout(deadline); if (frame) cancelAnimationFrame(frame); };
+    const fail = error => { cleanup(); reject(error); };
+    const deadline = setTimeout(() => fail(new Error(`Layout did not settle within ${timeoutMs}ms: ${JSON.stringify({ bounds, active })}`)), timeoutMs);
+    const tick = () => {
+      try {
+        if (!node.isConnected) throw new Error('Layout target detached while waiting for its source animation');
+        frameCount++;
+        const rect = node.getBoundingClientRect();
+        bounds = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        active = [];
+        for (const element of ancestors) for (const animation of element.getAnimations({ subtree: false })) {
+          const endTime = animation.effect?.getComputedTiming().endTime;
+          if (!Number.isFinite(endTime) || ['finished', 'idle'].includes(animation.playState)) continue;
+          observed.add(animation);
+          active.push({ name: animation.animationName || animation.transitionProperty || 'finite animation',
+            playState: animation.playState, pending: animation.pending, endTime });
+        }
+        const unchanged = previous && ['x', 'y', 'width', 'height'].every(key => Math.abs(bounds[key] - previous[key]) <= 0.1);
+        stableFrames = !active.length && unchanged ? stableFrames + 1 : 0;
+        previous = bounds;
+        if (stableFrames >= 2) {
+          cleanup();
+          resolve({ frames: frameCount, stableFrames, waitedMs: Math.round(performance.now() - started), finiteAnimationsObserved: observed.size });
+        } else if (performance.now() - started >= timeoutMs) {
+          fail(new Error(`Layout did not settle within ${timeoutMs}ms: ${JSON.stringify({ bounds, active })}`));
+        } else frame = requestAnimationFrame(tick);
+      } catch (error) { fail(error); }
+    };
+    // The first style/rect read above the next two stable samples observes a new
+    // CSS entry animation even when Playwright's visible condition passed early.
+    node.getBoundingClientRect();
+    frame = requestAnimationFrame(tick);
+  });
+}
+
+async function settle(page, milliseconds = 0, { motion = false } = {}) {
   await page.evaluate(async () => { await document.fonts.ready; await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+  if (!motion) {
+    // Scope this wait to the actual Vaul surfaces. Grok's intentional infinite
+    // animation and unrelated notifications must not hold a still capture open.
+    for (const surface of await page.locator('[data-vaul-drawer], [data-vaul-overlay]').all()) {
+      if (await surface.isVisible()) await surface.evaluate(waitForStableGeometry);
+    }
+  }
   if (milliseconds) await page.waitForTimeout(milliseconds);
 }
 
 async function reachable(locator, { minSize = 24 } = {}) {
   await locator.waitFor({ state: 'visible' });
   assert.equal(await locator.count(), 1, 'The main target is ambiguous');
+  await locator.evaluate(waitForStableGeometry);
   assert(await locator.isEnabled(), 'The main target is disabled');
   const geometry = await locator.evaluate(node => {
     const b = node.getBoundingClientRect();
@@ -395,7 +448,7 @@ async function reachable(locator, { minSize = 24 } = {}) {
 async function capture(page, viewport, name, selectors, options = {}) {
   stage = `${viewport.width}:${name}`;
   await page.evaluate(name => window.__POCKET_VISUAL_FIXTURE__.label(name), name);
-  await settle(page, options.motion ? 0 : 420);
+  await settle(page, 0, { motion: Boolean(options.motion) });
   const mounted = [];
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
