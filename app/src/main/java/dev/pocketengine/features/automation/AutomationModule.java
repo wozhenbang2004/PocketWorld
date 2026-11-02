@@ -100,6 +100,22 @@ public final class AutomationModule implements EngineModule {
         }
         schedule(context.android,book);context.emit(id(),new JSONObject().put("event","automation_changed").put("snapshot",snapshot()));return result;
     }
+    public JSONObject proposeScheduleForTask(JSONObject nativeOrigin,String operation,JSONObject draft)throws Exception{return book.proposeSchedule(nativeOrigin,operation,draft,System.currentTimeMillis());}
+    public JSONArray scheduleProposalsForTask(String task)throws Exception{return book.scheduleProposals(task);}
+    public JSONObject approveScheduleProposalForOwner(String id,String digest)throws Exception{JSONObject result=book.approveScheduleProposal(id,digest,System.currentTimeMillis());reschedule(context.android);return result;}
+    /** Native original host only; model/feature JSON cannot publish a condition verdict. */
+    public JSONArray pendingSemanticChecks(int limit)throws Exception{return book.pendingSemanticChecks(limit);}
+    public JSONArray pendingSemanticChecksForOriginalTask(String task)throws Exception{return book.pendingSemanticChecks(20,task);}
+    public JSONObject bindSemanticCheck(String occurrence,String task)throws Exception{return book.bindSemanticCheck(occurrence,task,System.currentTimeMillis());}
+    public JSONObject completeSemanticCheck(String occurrence,AutomationConditionOutcome outcome)throws Exception{
+        return completeSemanticCheck(occurrence,outcome,true);
+    }
+    public JSONObject completeSemanticCheck(String occurrence,AutomationConditionOutcome outcome,boolean notify)throws Exception{
+        long now=System.currentTimeMillis();JSONObject result=book.completeSemanticCheck(occurrence,outcome,now,!notify);
+        if(notify&&"dispatching".equals(result.optString("status")))result=book.dispatchReceipt(occurrence,receipt->postNotification(context.android,receipt),now);
+        reschedule(context.android);return result;
+    }
+    public JSONObject recordSemanticPlanAction(String occurrence,String task,boolean unknown)throws Exception{return book.recordSemanticPlanAction(occurrence,task,unknown,System.currentTimeMillis());}
     /** Native supervisor validates this exact occurrence before admitting its own persistent task. */
     public JSONObject taskRequest(String occurrenceId)throws Exception{return book.taskRequest(occurrenceId,System.currentTimeMillis());}
     /** Read-only original-task projection; it cannot start or authorize execution. */

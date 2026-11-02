@@ -3,6 +3,7 @@ package dev.pocketengine.features;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.automation.AutomationBook;
 import dev.pocketengine.features.automation.AutomationModule;
+import dev.pocketengine.features.automation.AutomationConditionOutcome;
 import dev.pocketengine.features.automation.PlanArtifactVerifier;
 import dev.pocketengine.features.automation.PlanExecutionPolicy;
 import dev.pocketengine.store.TaskStore;
@@ -25,6 +26,45 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
     private static final Set<String> COMMANDS=Set.of("createPlan","listPlans","getPlan","cancelPlan","getProactivityState",
             "createCommitment","updateCommitment","getCommitment","listCommitments","dueCommitments",
             "completeCommitment","cancelCommitment","snoozeCommitment","getFollowUpPolicy","evaluateFollowUp");
+    /** Native root adapter to the original TaskStore/Runner. ensure only persists or queries
+     * a read-only task; start runs after Book binding. No model/network work in this callback. */
+    public interface ConditionTaskPort {
+        String ensureOriginalReadOnlyTask(JSONObject occurrence)throws Exception;
+        void startOriginalReadOnlyTask(JSONObject occurrence)throws Exception;
+        AutomationConditionOutcome readOriginalOutcome(JSONObject occurrence)throws Exception;
+        /** True only when this condition belongs to an already owner-approved original plan. */
+        default boolean hasApprovedOriginalPlan(JSONObject occurrence)throws Exception{return false;}
+        /** Idempotent TaskStore lookup/admission by this same occurrence, never a fresh grant. */
+        default JSONObject admitApprovedOriginalPlan(JSONObject occurrence)throws Exception{throw new SecurityException("原条件未绑定已批准计划");}
+        default JSONObject reconcileApprovedOriginalPlan(JSONObject occurrence)throws Exception{return null;}
+    }
+    private volatile ConditionTaskPort conditionTasks;
+    public void installConditionTaskPort(ConditionTaskPort port){if(conditionTasks!=null)throw new IllegalStateException("原条件任务宿主已安装");conditionTasks=java.util.Objects.requireNonNull(port);}
+    private int processSemanticChecks(AutomationModule module,int limit)throws Exception{
+        ConditionTaskPort port=conditionTasks;if(port==null)return 0;JSONArray pending=module.pendingSemanticChecks(Math.min(20,Math.max(1,limit)));int prepared=0;
+        for(int i=0;i<pending.length()&&prepared<limit;i++){if(Thread.currentThread().isInterrupted())break;JSONObject occurrence=pending.getJSONObject(i);String state=occurrence.getString("status");
+            if(state.equals("condition_pending")){String originalTask=port.ensureOriginalReadOnlyTask(occurrence);occurrence=module.bindSemanticCheck(occurrence.getString("id"),originalTask);port.startOriginalReadOnlyTask(occurrence);prepared++;}
+            if(state.matches("condition_action_pending|condition_action_unknown")){admitConditionAction(module,port,occurrence);continue;}
+            completeOriginalConditionCheck(module,port,occurrence);
+        }return prepared;
+    }
+    private void completeOriginalConditionCheck(AutomationModule module,ConditionTaskPort port,JSONObject occurrence)throws Exception{
+        AutomationConditionOutcome outcome=port.readOriginalOutcome(occurrence);if(outcome==null)return;
+        boolean originalPlan=port.hasApprovedOriginalPlan(occurrence);JSONObject result=module.completeSemanticCheck(occurrence.getString("id"),outcome,!originalPlan);
+        if(originalPlan&&"condition_action_pending".equals(result.optString("status")))admitConditionAction(module,port,result);
+    }
+    /** Existing original-task event consumes a settled check even for an exhausted once rule.
+     * Query only: it never creates another check, controller or timer. */
+    public void onSemanticTaskChanged(AutomationModule module,String taskId)throws Exception{
+        ConditionTaskPort port=conditionTasks;if(port==null)return;JSONArray rows=module.pendingSemanticChecksForOriginalTask(taskId);
+        for(int i=0;i<rows.length();i++){JSONObject occurrence=rows.getJSONObject(i);if(taskId.equals(occurrence.optString("conditionTaskId"))&&occurrence.optString("status").matches("condition_checking|condition_check_unknown"))completeOriginalConditionCheck(module,port,occurrence);}
+    }
+    private void admitConditionAction(AutomationModule module,ConditionTaskPort port,JSONObject occurrence)throws Exception{
+        if(!port.hasApprovedOriginalPlan(occurrence))return;
+        try{JSONObject actual="condition_action_unknown".equals(occurrence.optString("status"))?port.reconcileApprovedOriginalPlan(occurrence):port.admitApprovedOriginalPlan(occurrence);
+            if(actual!=null&&!actual.optString("taskId").isEmpty())module.recordSemanticPlanAction(occurrence.getString("id"),actual.getString("taskId"),false);
+        }catch(Exception uncertain){module.recordSemanticPlanAction(occurrence.getString("id"),null,true);throw uncertain;}
+    }
     private final TaskStore tasks;
     private final CurrentControl controls;
     private final PlanArtifactVerifier artifactVerifier;
@@ -40,11 +80,27 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
     public static boolean handles(String command){return COMMANDS.contains(command);}
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
 
+    /** Runner-bound model route can only create an inert, source-bound proposal. */
+    public JSONObject proposeScheduleForTask(AutomationModule module,String task,String run,int epoch,String operation,JSONObject draft,RunControl original)throws Exception{
+        tasks.checkExtensionRun(task,run,epoch,original);JSONObject current=tasks.get(task,false);privateOwner(current);
+        if(current.optJSONObject("origin")!=null||current.optString("conversationId").isBlank())throw new SecurityException("仅本机原对话能提议私人计划");
+        JSONObject origin=new JSONObject().put("ownerId","owner").put("spaceId","private").put("taskId",task).put("conversationId",current.getString("conversationId"));
+        JSONObject proposal=module.proposeScheduleForTask(origin,operation,draft);tasks.checkExtensionRun(task,run,epoch,original);return new JSONObject().put("proposal",proposal).put("reviewRequired",true).put("scheduled",false).put("executionAuthorized",false);
+    }
+    public JSONObject scheduleProposalsForTask(AutomationModule module,String task,String run,int epoch,RunControl original)throws Exception{
+        tasks.checkExtensionRun(task,run,epoch,original);JSONObject current=tasks.get(task,false);privateOwner(current);if(current.optJSONObject("origin")!=null||current.optString("conversationId").isBlank())throw new SecurityException("计划查询必须来自本机原对话");return new JSONObject().put("proposals",module.scheduleProposalsForTask(task)).put("executionAuthorized",false);
+    }
     /** Native owner surface only; these operations are deliberately absent from handles/feature tools. */
     public JSONObject ownerCommand(AutomationModule module,String command,JSONObject input)throws Exception{
         JSONObject result=new JSONObject().put("command",command);String id=input.optString("id");
         switch(command){
             case "snapshot":break;
+            case "approveSchedule":{
+                JSONObject proposal=null;JSONArray proposals=module.scheduleProposalsForTask(null);for(int i=0;i<proposals.length();i++)if(id.equals(proposals.getJSONObject(i).getString("id")))proposal=proposals.getJSONObject(i);
+                if(proposal==null)throw new IllegalArgumentException("原计划草案不存在");JSONObject source=proposal.getJSONObject("origin"),original=tasks.get(source.getString("taskId"),false);
+                if(original==null||original.optJSONObject("origin")!=null||!source.getString("conversationId").equals(original.optString("conversationId")))throw new SecurityException("草案的原本机对话任务已变化");privateOwner(original);
+                result.put("schedule",module.approveScheduleProposalForOwner(id,input.getString("digest")));break;
+            }
             case "create":result.put("plan",handle(module,"createPlan",new JSONObject().put("plan",input.getJSONObject("plan")),true).getJSONObject("plan"));break;
             case "approve":{JSONObject plan=module.handle("getPlan",new JSONObject().put("scope",scope()).put("id",id)).getJSONObject("plan");validateRemoteWaitPlan(plan);validateBusinessWaitPlan(plan);result.put("plan",module.approvePlanExecution(scope(),id,input.getLong("revision"),input.getJSONObject("settings")));break;}
             case "start":result.put("plan",module.startPlanExecution(scope(),id,input.getLong("revision")));break;
@@ -72,7 +128,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         for(int i=0;i<plans.length();i++){JSONObject plan=executionView(module,plans.getJSONObject(i));plans.put(i,plan);plan.put("requirements",controls==null?new JSONObject().put("allowed",false).put("reason","native_host_unavailable"):controls.requirementsForPlan(plan));
             JSONObject next=plan.optJSONObject("nextStep");if(plan.optJSONObject("execution")!=null&&next!=null)plan.put("runtimeDecision",module.inspectPlanTask(scope(),plan.getString("id"),next.getString("id")));
         }
-        return new JSONObject().put("plans",plans).put("remoteWaitCandidates",tasks.automationRemoteWaitCandidates(20)).put("businessWaitCandidates",businessWaitCandidates()).put("businessWaitSourceAvailable",businessEvents!=null).put("conditions",module.conditionsSnapshot()).put("taskAuthority","TaskStore").put("workerState","not_inferred_from_plan_state").put("snapshotProcess",snapshotProcess).put("snapshotSequence",snapshotSequence.incrementAndGet());
+        return new JSONObject().put("plans",plans).put("scheduleProposals",module.scheduleProposalsForTask(null)).put("remoteWaitCandidates",tasks.automationRemoteWaitCandidates(20)).put("businessWaitCandidates",businessWaitCandidates()).put("businessWaitSourceAvailable",businessEvents!=null).put("conditions",module.conditionsSnapshot()).put("taskAuthority","TaskStore").put("workerState","not_inferred_from_plan_state").put("snapshotProcess",snapshotProcess).put("snapshotSequence",snapshotSequence.incrementAndGet());
     }
     private JSONObject executionView(AutomationModule module,JSONObject plan)throws Exception{
         if(plan.optJSONObject("execution")==null)return plan;JSONArray steps=plan.getJSONArray("steps");
@@ -90,7 +146,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
     }
     /** Same AlarmHost pass, bounded and query-first. No model/network work takes place here. */
     public int onDue(AutomationModule module,long now,int maxCandidates)throws Exception{
-        return onDue(module,now,maxCandidates,null);
+        int checks=maxCandidates>0?processSemanticChecks(module,Math.min(4,maxCandidates)):0;return checks+onDue(module,now,Math.max(0,maxCandidates-checks),null);
     }
     /** An owner action targets its selected plan; the ordinary alarm retains its global rotation. */
     private int onDue(AutomationModule module,long now,int maxCandidates,String selectedPlan)throws Exception{
@@ -169,7 +225,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
 
     /** Called after the original native task changes. Failures/stops never manufacture completion. */
     public void onTaskChanged(AutomationModule module,String taskId)throws Exception{
-        verifyArtifactResult(module,taskId);
+        onSemanticTaskChanged(module,taskId);verifyArtifactResult(module,taskId);
         JSONObject originalTask=tasks.get(taskId,false);JSONObject origin=originalTask==null?null:originalTask.optJSONObject("origin");
         if(originalTask!=null&&"remote".equals(originalTask.optString("feature")))module.remoteTaskChanged(scope(),taskId);
         if(origin!=null&&origin.optString("kind").equals("automation")&&!origin.optString("planId").isEmpty())module.refreshPlanTasks(scope(),origin.getString("planId"));

@@ -24,10 +24,11 @@ public final class AutomationBook {
     public AutomationBook(File file,GoalTaskResolver resolver)throws Exception {this(file,resolver,null);}
     public AutomationBook(File file,GoalTaskResolver resolver,AutomationConditions.Source conditions)throws Exception {this.file=file;goalTasks=resolver;this.conditions=conditions;lock=LOCKS.computeIfAbsent(file.getCanonicalPath(),key->new Object());}
 
-    public JSONObject save(JSONObject input,long now)throws Exception {
-        synchronized(lock){JSONObject state=read();JSONArray rules=state.getJSONArray("rules");String id=input.optString("id");int index=indexOf(rules,id);
+    public JSONObject save(JSONObject input,long now)throws Exception {return save(input,now,null,null);}
+    private JSONObject save(JSONObject input,long now,String forcedId,JSONObject nativeOrigin)throws Exception {
+        synchronized(lock){JSONObject state=read();JSONArray rules=state.getJSONArray("rules");String id=forcedId==null?input.optString("id"):forcedId;int index=indexOf(rules,id);
             JSONObject old=index<0?null:rules.getJSONObject(index);
-            if(!id.isEmpty()&&old==null)throw new IllegalArgumentException("规则不存在，请刷新后重试");
+            if(!id.isEmpty()&&old==null&&forcedId==null)throw new IllegalArgumentException("规则不存在，请刷新后重试");
             if(old==null&&rules.length()>=100)throw new IllegalStateException("最多保存100条规则");
             if(old!=null&&input.has("revision")&&input.optInt("revision",-1)!=old.getInt("revision"))throw new IllegalStateException("规则已被修改，请刷新后再保存");
             String title=text(input.optString("title"),1,200,"提醒名称");String kind=input.optString("kind",old==null?"reminder":old.optString("kind"));
@@ -35,21 +36,61 @@ public final class AutomationBook {
             String goal=kind.equals("phone_goal")?text(input.optString("goal",old==null?"":old.optString("goal")),1,4000,"手机目标"):"";
             JSONObject schedule=validateSchedule(input.getJSONObject("schedule"));boolean enabled=input.optBoolean("enabled",old==null||old.optBoolean("enabled"));
             JSONObject policy=AutomationPolicy.rule(input.has("policy")?input.getJSONObject("policy"):old==null?null:old.optJSONObject("policy"),schedule.optString("zone","UTC"));
-            JSONObject rule=new JSONObject().put("id",old==null?UUID.randomUUID().toString():id).put("title",title).put("kind",kind).put("goal",goal)
+            JSONObject rule=new JSONObject().put("id",old==null?(forcedId==null?UUID.randomUUID().toString():forcedId):id).put("title",title).put("kind",kind).put("goal",goal)
                     .put("schedule",schedule).put("enabled",enabled).put("revision",old==null?1:old.getInt("revision")+1)
                     .put("createdAt",old==null?now:old.getLong("createdAt")).put("updatedAt",now)
                     .put("policy",policy).put("claimedCount",old==null?0:claimedCount(state,old))
                     .put("taskRequestsRevoked",!enabled).put("executionPolicy","notify_then_user_start");
+            if(input.has("semanticCondition")&&!input.isNull("semanticCondition")&&input.optJSONObject("semanticCondition")==null)throw new IllegalArgumentException("语义条件必须是对象或明确null");
+            JSONObject semantic=AutomationConditionOutcome.definition(input.has("semanticCondition")?input.optJSONObject("semanticCondition"):old==null?null:old.optJSONObject("semanticCondition"));
+            if(semantic!=null)rule.put("semanticCondition",semantic);
+            if(nativeOrigin!=null)rule.put("nativeOrigin",copy(nativeOrigin));else if(old!=null&&old.optJSONObject("nativeOrigin")!=null)rule.put("nativeOrigin",copy(old.getJSONObject("nativeOrigin")));
             arm(rule,initialAt(schedule,now));
             if(index<0)rules.put(rule);else{rules.put(index,rule);cancelPending(state,id,"规则已修改，旧版本未投递的提醒已取消",now);}write(state);return copy(rule);
         }
     }
+    /** A conversation proposal is inert until native owner review. Stored in the original book. */
+    public JSONObject proposeSchedule(JSONObject nativeOrigin,String nativeOperation,JSONObject requested,long now)throws Exception {
+        if(nativeOrigin==null||nativeOrigin.length()!=4||!"owner".equals(nativeOrigin.optString("ownerId"))||!"private".equals(nativeOrigin.optString("spaceId"))||!nativeOrigin.optString("taskId").matches("[a-f0-9-]{36}")||nativeOrigin.optString("conversationId").isBlank()||nativeOrigin.optString("conversationId").length()>160||nativeOperation==null||!nativeOperation.matches("[a-f0-9-]{36}"))throw new SecurityException("计划草案缺原本机对话身份");
+        for(var keys=requested.keys();keys.hasNext();)if(!java.util.Set.of("title","kind","goal","schedule","semanticCondition").contains(keys.next()))throw new SecurityException("计划提议不能携带批准、权限或替代来源");
+        JSONObject draft=new JSONObject().put("title",text(requested.optString("title"),1,200,"提醒名称")).put("kind",requested.optString("kind","reminder"));
+        if(!java.util.Set.of("reminder","phone_goal").contains(draft.getString("kind")))throw new IllegalArgumentException("计划类型无效");
+        if(draft.getString("kind").equals("phone_goal"))draft.put("goal",text(requested.optString("goal"),1,4000,"手机目标"));
+        draft.put("schedule",validateSchedule(requested.getJSONObject("schedule")));if(requested.has("semanticCondition")){JSONObject condition=AutomationConditionOutcome.definition(requested.getJSONObject("semanticCondition"));draft.put("semanticCondition",condition);}
+        String digest=proposalDigest(nativeOrigin,draft),identity=nativeOrigin.getString("taskId")+":"+nativeOperation;
+        synchronized(lock){JSONObject state=read();JSONArray proposals=state.optJSONArray("proposals");if(proposals==null){proposals=new JSONArray();state.put("proposals",proposals);}
+            for(int i=0;i<proposals.length();i++){JSONObject prior=proposals.getJSONObject(i);if(identity.equals(prior.optString("identity"))){if(!digest.equals(prior.getString("digest")))throw new SecurityException("同一个计划提议操作不能更换内容或原对话");return copy(prior);}}
+            if(proposals.length()>=100)throw new IllegalStateException("待审及历史计划草案已达100项，请先在原管理入口核对");
+            JSONObject row=new JSONObject().put("id",UUID.randomUUID().toString()).put("identity",identity).put("origin",copy(nativeOrigin)).put("draft",draft).put("digest",digest).put("status","pending").put("createdAt",now).put("executionAuthorized",false);proposals.put(row);write(state);return copy(row);
+        }
+    }
+    public JSONArray scheduleProposals(String originalTask)throws Exception {
+        synchronized(lock){JSONArray rows=read().optJSONArray("proposals"),result=new JSONArray();for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(originalTask==null||originalTask.equals(row.getJSONObject("origin").optString("taskId")))result.put(copy(row));}return result;}
+    }
+    /** The exact displayed digest is approved by the existing native owner window only. */
+    public JSONObject approveScheduleProposal(String proposal,String digest,long now)throws Exception {
+        synchronized(lock){JSONObject state=read();JSONArray rows=state.optJSONArray("proposals");int at=rows==null?-1:indexOf(rows,proposal);if(at<0)throw new IllegalArgumentException("计划草案不存在");JSONObject row=rows.getJSONObject(at);
+            if(!digest.equals(row.getString("digest"))||!digest.equals(proposalDigest(row.getJSONObject("origin"),row.getJSONObject("draft"))))throw new SecurityException("显示的计划草案已变化");
+            if(!row.getString("status").matches("pending|approved"))throw new SecurityException("此草案不能批准");
+            JSONObject rule=null;JSONArray rules=state.getJSONArray("rules");int existing=indexOf(rules,proposal);
+            if(existing>=0){rule=rules.getJSONObject(existing);if(!canonicalObject(row.getJSONObject("origin")).equals(rule.optJSONObject("nativeOrigin")==null?"":canonicalObject(rule.getJSONObject("nativeOrigin"))))throw new SecurityException("原计划来源已变化");}
+            else{rule=save(row.getJSONObject("draft"),now,proposal,row.getJSONObject("origin"));state=read();rows=state.getJSONArray("proposals");at=indexOf(rows,proposal);row=rows.getJSONObject(at);}
+            row.put("status","approved").put("ruleId",rule.getString("id")).put("approvedAt",now);write(state);return new JSONObject().put("proposal",copy(row)).put("rule",copy(rule)).put("executionAuthorized",false);
+        }
+    }
+    private static String proposalDigest(JSONObject origin,JSONObject draft)throws Exception {
+        // Fixed field order is reconstructed from validated semantic data, independent of JSON map order.
+        String value=new JSONArray().put(origin.getString("ownerId")).put(origin.getString("spaceId")).put(origin.getString("taskId")).put(origin.getString("conversationId")).put(draft.getString("title")).put(draft.getString("kind")).put(draft.optString("goal")).put(canonicalObject(draft.getJSONObject("schedule"))).put(draft.optJSONObject("semanticCondition")==null?JSONObject.NULL:canonicalObject(draft.getJSONObject("semanticCondition"))).toString();
+        byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));StringBuilder text=new StringBuilder();for(byte b:hash)text.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return text.toString();
+    }
+    private static String canonicalObject(JSONObject value)throws Exception{java.util.List<String> keys=new java.util.ArrayList<>();value.keys().forEachRemaining(keys::add);keys.sort(String::compareTo);JSONArray result=new JSONArray();for(String key:keys)result.put(new JSONArray().put(key).put(value.get(key)));return result.toString();}
     public JSONObject setEnabled(String id,boolean enabled,long now)throws Exception {
         synchronized(lock){JSONObject state=read();JSONArray rules=state.getJSONArray("rules");int index=indexOf(rules,id);
             if(index<0)throw new IllegalArgumentException("规则不存在");JSONObject rule=rules.getJSONObject(index);
             // Once rules are disabled at claim time. An explicit pause must still cancel their
             // outstanding claim instead of returning early and delivering an obsolete goal.
             if(rule.getBoolean("enabled")==enabled){if(!enabled){boolean changed=cancelPending(state,id,"规则已暂停，尚未投递的提醒已取消",now);if(!rule.optBoolean("taskRequestsRevoked")){rule.put("taskRequestsRevoked",true).put("revision",rule.getInt("revision")+1).put("updatedAt",now);changed=true;}if(changed)write(state);}return copy(rule);}
+            rule.remove("lastKnownConditionMet");rule.remove("lastConditionOccurrenceAt");
             rule.put("enabled",enabled).put("taskRequestsRevoked",!enabled).put("revision",rule.getInt("revision")+1).put("updatedAt",now)
                     .put("claimedCount",claimedCount(state,rule));
             arm(rule,initialAt(rule.getJSONObject("schedule"),now));
@@ -136,7 +177,7 @@ public final class AutomationBook {
             return new JSONObject().put("occurrenceId",receipt.getString("id")).put("ruleId",rule.getString("id")).put("ruleRevision",rule.getInt("revision"))
                     .put("revision",rule.getInt("revision")).put("overlapPolicy",policy.getString("overlap")).put("validUntil",deadline)
                     .put("goal",receipt.getString("goal")).put("title",receipt.getString("title")).put("actorId","owner").put("spaceId","private")
-                    .put("origin",new JSONObject().put("kind","automation").put("occurrenceId",receipt.getString("id"))).put("requiresHostAdmission",true).put("executionAuthorized",false);
+                    .put("origin",new JSONObject().put("kind","automation").put("occurrenceId",receipt.getString("id")).put("originConversationId",receipt.optJSONObject("nativeOrigin")==null?"":receipt.getJSONObject("nativeOrigin").getString("conversationId")).put("originTaskId",receipt.optJSONObject("nativeOrigin")==null?"":receipt.getJSONObject("nativeOrigin").getString("taskId")).put("nativeOrigin",receipt.optJSONObject("nativeOrigin")==null?JSONObject.NULL:copy(receipt.getJSONObject("nativeOrigin")))).put("requiresHostAdmission",true).put("executionAuthorized",false);
         }
     }
     public long nextAt()throws Exception {
@@ -168,7 +209,7 @@ public final class AutomationBook {
     }
     private static boolean inFlight(JSONArray receipts,JSONObject rule,java.util.Map<String,JSONObject> facts){
         for(int i=0;i<receipts.length();i++){JSONObject row=receipts.optJSONObject(i);if(row==null||!rule.optString("id").equals(row.optString("ruleId"))||row.optInt("revision")!=rule.optInt("revision"))continue;
-            String status=row.optString("status");if(status.matches("dispatching|delivery_unknown|deferred"))return true;
+            String status=row.optString("status");if(status.matches("dispatching|delivery_unknown|deferred|condition_pending|condition_checking|condition_check_unknown|condition_action_pending|condition_action_unknown"))return true;
             if("phone_goal".equals(row.optString("kind"))&&status.matches("awaiting_user|blocked_notifications")){
                 JSONObject proof=facts.get(row.optString("id")),before=proof==null?null:proof.optJSONObject("receipt"),goal=proof==null?null:proof.optJSONObject("goal");
                 if(before==null||!before.toString().equals(row.toString())||goal==null||!goal.optString("state").matches("succeeded|cancelled"))return true;
@@ -200,6 +241,9 @@ public final class AutomationBook {
                     if(terminal==null&&!policy.isNull("maxOccurrences")&&count>=policy.getLong("maxOccurrences")){rule.put("nextAt",JSONObject.NULL).put("ruleState","budget_exhausted");stopped=true;next=-1;changed=true;break;}
                     if(terminal==null&&AutomationPolicy.quietEnd(policy,now)>now){rule.put("scheduledAt",occurrence).put("nextAt",Math.min(deadline,AutomationPolicy.quietEnd(policy,now))).put("ruleState","quiet_hours");held=true;stopped=true;changed=true;break;}
                     if(terminal==null){JSONObject condition=AutomationConditions.evaluate(policy,conditions,now);rule.put("conditionStatus",condition);if(!condition.getBoolean("allowed")){rule.put("scheduledAt",occurrence).put("nextAt",Math.min(deadline,condition.getLong("nextCheckAt"))).put("ruleState","conditions_blocked");held=true;stopped=true;changed=true;break;}}
+                    if(terminal==null&&rule.optJSONObject("semanticCondition")!=null&&inFlight(receipts,rule,facts)){
+                        rule.put("scheduledAt",occurrence).put("nextAt",AutomationConditions.later(now)).put("ruleState","condition_check_buffered");held=true;stopped=true;changed=true;break;
+                    }
                     if(terminal==null&&!overlap.equals("allow")&&inFlight(receipts,rule,facts)){
                         if(overlap.equals("skip"))terminal="overlap_skipped";
                         else{rule.put("scheduledAt",occurrence).put("nextAt",AutomationConditions.later(now)).put("ruleState","overlap_buffered");held=true;stopped=true;changed=true;break;}
@@ -208,9 +252,11 @@ public final class AutomationBook {
                     for(int k=0;k<receipts.length();k++)if(key.equals(receipts.getJSONObject(k).optString("instanceKey"))){exists=true;break;}
                     if(!exists){JSONObject receipt=new JSONObject().put("id",UUID.randomUUID().toString()).put("instanceKey",key).put("ruleId",rule.getString("id"))
                             .put("revision",rule.getInt("revision")).put("occurrenceAt",occurrence).put("claimedAt",now).put("updatedAt",now)
-                            .put("status",terminal==null?"dispatching":terminal).put("kind",rule.getString("kind")).put("title",rule.getString("title")).put("goal",rule.getString("goal"))
+                            .put("status",terminal==null?(rule.optJSONObject("semanticCondition")==null?"dispatching":"condition_pending"):terminal).put("kind",rule.getString("kind")).put("title",rule.getString("title")).put("goal",rule.getString("goal"))
                             .put("validUntil",deadline).put("occurrenceNumber",terminal==null?count+1:JSONObject.NULL).put("misfirePolicy",strategy).put("overlapPolicy",overlap)
                             .put("message",terminal==null?"提醒已领取，尚未确认通知投递":"此日历实例未投递或执行："+terminal);
+                        if(rule.optJSONObject("nativeOrigin")!=null)receipt.put("nativeOrigin",copy(rule.getJSONObject("nativeOrigin")));
+                        if(rule.optJSONObject("semanticCondition")!=null)receipt.put("semanticCondition",copy(rule.getJSONObject("semanticCondition"))).put("conditionRevision",rule.getInt("revision"));
                         JSONObject pending=rule.optJSONObject("coalescedPending");
                         if(strategy.equals("coalesce")){
                             if(omitted){if(pending==null)pending=new JSONObject().put("firstAt",occurrence).put("count",0);pending.put("lastAt",occurrence).put("count",pending.getLong("count")+1);rule.put("coalescedPending",pending);}
@@ -227,8 +273,48 @@ public final class AutomationBook {
                 if(next<0&&!stopped){rule.put("enabled",false).put("scheduledAt",JSONObject.NULL).put("nextAt",JSONObject.NULL).put("ruleState",schedule.getString("type").equals("once")?"awaiting_user":"schedule_exhausted");}
                 changed=true;
             }
-            while(receipts.length()>200){int removable=-1;for(int i=0;i<receipts.length();i++)if(receipts.getJSONObject(i).optString("status").matches("notified|cancelled|expired|missed_window|missed_schedule|coalesced|overlap_skipped")){removable=i;break;}if(removable<0)break;JSONObject gone=receipts.getJSONObject(removable);receipts.remove(removable);JSONObject retention=state.optJSONObject("receiptRetention");if(retention==null)retention=new JSONObject().put("prunedTerminalCount",0);retention.put("prunedTerminalCount",retention.getLong("prunedTerminalCount")+1).put("lastPrunedOccurrenceAt",gone.optLong("occurrenceAt")).put("terminalWindowLimit",200);state.put("receiptRetention",retention);}
+            while(receipts.length()>200){int removable=-1;for(int i=0;i<receipts.length();i++)if(receipts.getJSONObject(i).optString("status").matches("notified|cancelled|expired|missed_window|missed_schedule|coalesced|overlap_skipped|condition_not_met|condition_unchanged|condition_check_failed")){removable=i;break;}if(removable<0)break;JSONObject gone=receipts.getJSONObject(removable);receipts.remove(removable);JSONObject retention=state.optJSONObject("receiptRetention");if(retention==null)retention=new JSONObject().put("prunedTerminalCount",0);retention.put("prunedTerminalCount",retention.getLong("prunedTerminalCount")+1).put("lastPrunedOccurrenceAt",gone.optLong("occurrenceAt")).put("terminalWindowLimit",200);state.put("receiptRetention",retention);}
             if(changed)write(state);return claimed;
+        }
+    }
+    /** Native existing AlarmHost discovery. No task, model call or source read occurs here. */
+    public JSONArray pendingSemanticChecks(int limit)throws Exception{return pendingSemanticChecks(limit,null);}
+    public JSONArray pendingSemanticChecks(int limit,String originalTask)throws Exception {
+        if(limit<1||limit>20||originalTask!=null&&!originalTask.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("条件检查候选或原任务无效");synchronized(lock){JSONObject state=read();JSONArray result=new JSONArray(),receipts=state.getJSONArray("receipts");
+            for(int i=0;i<receipts.length()&&result.length()<limit;i++){JSONObject row=receipts.getJSONObject(i);if((originalTask==null||originalTask.equals(row.optString("conditionTaskId")))&&row.optString("status").matches("condition_pending|condition_checking|condition_check_unknown|condition_action_pending|condition_action_unknown"))result.put(copy(row));}return result;
+        }
+    }
+    /** Root binds the original TaskStore read-only task before any inference is admitted. */
+    public JSONObject bindSemanticCheck(String receiptId,String originalTask,long now)throws Exception {
+        if(originalTask==null||!originalTask.matches("[a-f0-9-]{36}"))throw new SecurityException("条件检查必须绑定原TaskStore任务");
+        synchronized(lock){JSONObject state=read();JSONArray rows=state.getJSONArray("receipts");int at=indexOf(rows,receiptId);if(at<0)throw new IllegalStateException("原条件实例不存在");JSONObject row=rows.getJSONObject(at);
+            if(row.has("conditionTaskId")){if(!originalTask.equals(row.getString("conditionTaskId")))throw new SecurityException("条件实例不能换到另一任务");return copy(row);}
+            if(!"condition_pending".equals(row.optString("status"))||receiptBlocked(state,row,now)!=null)throw new SecurityException("原条件实例已撤销或过期");
+            row.put("conditionTaskId",originalTask).put("status","condition_checking").put("updatedAt",now);write(state);return copy(row);
+        }
+    }
+    /** Native result only. Error never overwrites lastKnownMet. Repeated true never re-dispatches. */
+    public JSONObject completeSemanticCheck(String receiptId,AutomationConditionOutcome outcome,long now)throws Exception{return completeSemanticCheck(receiptId,outcome,now,false);}
+    public JSONObject completeSemanticCheck(String receiptId,AutomationConditionOutcome outcome,long now,boolean originalPlan)throws Exception {
+        java.util.Objects.requireNonNull(outcome);synchronized(lock){JSONObject state=read();JSONArray rows=state.getJSONArray("receipts"),rules=state.getJSONArray("rules");int at=indexOf(rows,receiptId);if(at<0)throw new IllegalStateException("原条件实例不存在");JSONObject row=rows.getJSONObject(at);
+            if(!outcome.taskId.equals(row.optString("conditionTaskId")))throw new SecurityException("检查结果不是原TaskStore任务");
+            if(!row.optString("status").matches("condition_checking|condition_check_unknown"))return copy(row);
+            int ruleAt=indexOf(rules,row.getString("ruleId"));if(ruleAt<0)throw new SecurityException("原规则已删除");JSONObject rule=rules.getJSONObject(ruleAt),definition=rule.optJSONObject("semanticCondition");
+            if(definition==null||rule.getInt("revision")!=row.getInt("revision")||!definition.getString("sourceKey").equals(outcome.sourceKey)||definition.getLong("sourceRevision")!=outcome.sourceRevision)throw new SecurityException("条件规则或来源版本已变化，旧结果未采用");
+            String blocked=receiptBlocked(state,row,now);if(blocked!=null){row.put("status",deferredBlock(blocked)?"condition_check_failed":blocked).put("updatedAt",now);write(state);return copy(row);}
+            row.put("conditionOutcome",outcome.json()).put("updatedAt",now);
+            if(!outcome.known)row.put("status","condition_check_failed");
+            else{boolean wasMet=Boolean.TRUE.equals(rule.opt("lastKnownConditionMet"));rule.put("lastKnownConditionMet",outcome.met).put("lastConditionOccurrenceAt",row.getLong("occurrenceAt"));row.put("status",!outcome.met?"condition_not_met":wasMet?"condition_unchanged":originalPlan?"condition_action_pending":"dispatching");}
+            write(state);return copy(row);
+        }
+    }
+    /** Root original-plan receipt only. Unknown admission has query-only recovery. */
+    public JSONObject recordSemanticPlanAction(String occurrence,String originalTask,boolean unknown,long now)throws Exception{
+        synchronized(lock){JSONObject state=read();JSONArray rows=state.getJSONArray("receipts");int at=indexOf(rows,occurrence);if(at<0)throw new SecurityException("原条件实例不存在");JSONObject row=rows.getJSONObject(at);
+            if(!row.optString("status").matches("condition_action_pending|condition_action_unknown|condition_action_registered"))throw new SecurityException("原条件没有上升沿计划准入");
+            if(unknown){if(!"condition_action_registered".equals(row.optString("status")))row.put("status","condition_action_unknown");}
+            else{if(originalTask==null||!originalTask.matches("[a-f0-9-]{36}")||row.has("conditionActionTaskId")&&!originalTask.equals(row.getString("conditionActionTaskId")))throw new SecurityException("上升沿不能更换原计划任务");row.put("conditionActionTaskId",originalTask).put("status","condition_action_registered");}
+            row.put("updatedAt",now);write(state);return copy(row);
         }
     }
     public JSONObject delivered(String receiptId,String status,String message,long now)throws Exception {
@@ -253,14 +339,16 @@ public final class AutomationBook {
     }
     public void recoverInterrupted(long now)throws Exception {
         synchronized(lock){JSONObject state=read();JSONArray receipts=state.getJSONArray("receipts");boolean changed=false;
-            for(int i=0;i<receipts.length();i++){JSONObject receipt=receipts.getJSONObject(i);if(receipt.optString("status").equals("dispatching")){receipt.put("status","delivery_unknown").put("message","进程在通知投递时结束，投递情况未知，未自动重发").put("updatedAt",now);changed=true;}}
+            for(int i=0;i<receipts.length();i++){JSONObject receipt=receipts.getJSONObject(i);if(receipt.optString("status").equals("condition_action_pending")){receipt.put("status","condition_action_unknown").put("updatedAt",now);changed=true;}
+                else if(receipt.optString("status").equals("condition_checking")){receipt.put("status","condition_check_unknown").put("updatedAt",now);changed=true;}
+                else if(receipt.optString("status").equals("dispatching")){receipt.put("status","delivery_unknown").put("message","进程在通知投递时结束，投递情况未知，未自动重发").put("updatedAt",now);changed=true;}}
             if(changed)write(state);
         }
     }
     private static boolean cancelPending(JSONObject state,String ruleId,String message,long now)throws Exception{
         boolean changed=false;JSONArray receipts=state.getJSONArray("receipts");
         for(int i=0;i<receipts.length();i++){JSONObject receipt=receipts.getJSONObject(i);
-            if(ruleId.equals(receipt.optString("ruleId"))&&receipt.optString("status").matches("dispatching|deferred")){receipt.put("status","cancelled").put("message",message).put("updatedAt",now);changed=true;}
+            if(ruleId.equals(receipt.optString("ruleId"))&&receipt.optString("status").matches("dispatching|deferred|condition_pending|condition_checking")){receipt.put("status","cancelled").put("message",message).put("updatedAt",now);changed=true;}
         }return changed;
     }
     private static boolean deferredBlock(String reason){return "quiet_hours".equals(reason)||"conditions_blocked".equals(reason)||"not_due".equals(reason);}
