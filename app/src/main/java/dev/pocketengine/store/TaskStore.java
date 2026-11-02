@@ -653,6 +653,72 @@ public final class TaskStore {
             ContentValues values=new ContentValues();values.put("run_id",run);values.put("task_id",id);values.put("epoch",1);values.put("status","running");values.put("checkpoint",new JSONObject().put("messages",new JSONArray()).put("steps",0).toString());values.put("grant_json",noTools.toString());values.put("created_at",now);values.put("updated_at",now);db.insertOrThrow("runs",null,values);write(task);original.bindHostRun(id,run,1);db.setTransactionSuccessful();return new NativeInferenceSession(id,run,1,kind,original,maximum);
         }finally{db.endTransaction();}
     }
+    /** The original question notice is consumed once in the same SQL transaction as its
+     * original ownerInputs row and USER message/source. Saving an answer grants nothing. */
+    public synchronized JSONObject consumeOwnerQuestionReply(String id,String run,int epoch,String requestId,long waitRevision,String noticeToken,String text)throws Exception {
+        db.beginTransaction();try{
+            JSONObject task=required(id);var accepted=dev.pocketengine.features.assistant.OwnerQuestionInputs.reply(task,id,run,epoch,requestId,waitRevision,noticeToken,text,System.currentTimeMillis());
+            if(accepted.duplicate()){db.setTransactionSuccessful();return accepted.result();}
+            try(Cursor attempt=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})){
+                if(!attempt.moveToFirst()||!"awaiting_user".equals(attempt.getString(0)))throw new SecurityException("原问题执行尚未结算或已变化，未接收旧通知");
+            }
+            JSONObject mailbox=ownerMailbox(task,run,epoch);if(mailbox.optBoolean("open")||!task.getString("conversationId").equals(mailbox.optString("conversationId")))throw new SecurityException("原问题邮箱未关闭或不属于原对话");
+            JSONObject row=accepted.row();OwnerInputQueue.accepted(row,false);JSONArray rows=task.optJSONArray("ownerInputs");if(rows==null)rows=new JSONArray();rows.put(row);task.put("ownerInputs",rows);
+            task.getJSONObject("evidence").getJSONObject("ownerQuestion").put("replyConsumed",true).put("replyMessageId",row.getString("messageId")).put("replyConsumedAt",row.getLong("acceptedAt"));
+            task.getJSONObject("ownerNotification").put("phase","answered").put("answeredAt",row.getLong("acceptedAt"));write(task);
+            conversationRepository.recordOwnerQuestionInput(this,accepted);
+            appendEvent(task,new JSONObject().put("type","owner_question_answer_saved").put("runId",run).put("coordinatorEpoch",epoch).put("requestId",requestId).put("waitRevision",waitRevision).put("messageId",row.getString("messageId")).put("executionAuthorized",false));
+            db.setTransactionSuccessful();return accepted.result();
+        }finally{db.endTransaction();}
+    }
+    /** Only this process's original settled controller may be retained. No JSON grant or
+     * restored process state can construct the private Waiting handle. */
+    public synchronized dev.pocketengine.features.assistant.OwnerQuestionInputs.Waiting retainOwnerQuestionOriginal(dev.pocketengine.features.assistant.OwnerQuestionInputs inputs,String id,RunControl original,dev.pocketengine.core.ModelConfig captured)throws Exception {
+        JSONObject task=required(id);dev.pocketengine.features.assistant.OwnerQuestionInputs.requirePrivateTask(task);
+        if(!"awaiting_user".equals(task.optString("status"))||original==null||!original.matchesHostRun(id,task.optString("runId"),task.optInt("coordinatorEpoch")))return null;
+        try(Cursor attempt=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,task.getString("runId"),Integer.toString(task.getInt("coordinatorEpoch"))})){
+            if(!attempt.moveToFirst()||!"awaiting_user".equals(attempt.getString(0)))return null;
+        }
+        return inputs.retain(task,grant(task.getString("runId")),original,captured);
+    }
+    /** Native same-run CAS. This method never creates an attempt, lease, grant, budget or
+     * epoch, and never renews an expired execution scope. All source barriers remain live. */
+    public synchronized JSONObject resumeOwnerQuestionRun(dev.pocketengine.features.assistant.OwnerQuestionInputs.Waiting original)throws Exception {
+        db.beginTransaction();try{
+            original.requireOriginal();String id=original.taskId(),run=original.runId();int epoch=original.epoch();JSONObject task=required(id),permission=grant(run);
+            JSONObject reply=dev.pocketengine.features.assistant.OwnerQuestionInputs.requireSavedContinuation(original,task,permission,checkpoint(run),System.currentTimeMillis());executionScopeCurrent(task,run,permission);
+            JSONObject scope=task.getJSONObject("executionScope");if(scope.getInt("modelCallLimit")-scope.getInt("modelCallsUsed")-deviceTasks.heldBudget(id,run,true)<1||scope.getInt("toolLimit")-scope.getInt("toolsUsed")-deviceTasks.heldBudget(id,run,false)<1)throw new SecurityException("原剩余预算已由子任务占用，回答不补额度");
+            try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{id})){if(active.moveToFirst())throw new SecurityException("原任务已有执行，未叠加第二执行器");}
+            if(hasUnresolved(id))throw new SecurityException("原操作尚未核对，回答不重放外效");
+            JSONArray approvals=task.optJSONArray("approvals");for(int i=0;approvals!=null&&i<approvals.length();i++)if("pending".equals(approvals.getJSONObject(i).optString("state")))throw new SecurityException("普通问题回答不代替具体操作授权");
+            JSONObject mailbox=ownerMailbox(task,run,epoch);if(mailbox.optBoolean("open")||!original.conversationId().equals(mailbox.optString("conversationId")))throw new SecurityException("原问题邮箱已被接手或改变");
+            conversationRepository.requireQueuedOwnerMessageCurrent(original.conversationId(),reply);
+            dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOutputContext(db,outputSources,id,run);
+            dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOwnerSourceContinuation(db,conversationRepository,id,run,original.conversationId());
+            ContentValues active=new ContentValues();active.put("status","running");active.put("updated_at",System.currentTimeMillis());
+            if(db.update("runs",active,"task_id=? AND run_id=? AND epoch=? AND status='awaiting_user'",new String[]{id,run,Integer.toString(epoch)})!=1)throw new SecurityException("原问题执行已被消费，未重复恢复");
+            reply.getJSONObject("ownerQuestionReply").put("phase","continuing").put("continuationClaimedAt",System.currentTimeMillis());mailbox.put("open",true);
+            task.put("ownerQuestionContinuation",new JSONObject().put("format","pocketworld.owner-question-continuation.v1").put("runId",run).put("epoch",epoch).put("requestId",original.requestId()).put("waitRevision",original.waitRevision()).put("messageId",reply.getString("messageId")).put("phase","claimed"))
+                .put("status","preparing").put("summary","回答已保存，正在沿原执行与剩余预算继续");
+            appendEvent(task,new JSONObject().put("type","owner_question_continuation_claimed").put("runId",run).put("coordinatorEpoch",epoch).put("requestId",original.requestId()).put("messageId",reply.getString("messageId")).put("newGrant",false));
+            db.setTransactionSuccessful();return copy(task,false);
+        }finally{db.endTransaction();}
+    }
+    /** Capability construction must not broaden/rewrite the old grant for this typed CAS. */
+    public synchronized boolean ownerQuestionContinuationActive(String id,String run,int epoch,RunControl original)throws Exception {
+        JSONObject task=required(id),marker=task.optJSONObject("ownerQuestionContinuation");
+        if(marker==null||!run.equals(marker.optString("runId"))||epoch!=marker.optInt("epoch"))return false;
+        if(!"pocketworld.owner-question-continuation.v1".equals(marker.optString("format"))||!"claimed".equals(marker.optString("phase"))||original==null||!original.matchesHostRun(id,run,epoch)||!task.optString("status").matches("preparing|running"))throw new SecurityException("原问题续接身份已改变");
+        return true;
+    }
+    /** Worker rejection/early failure is an observation, never an automatic retry. */
+    public synchronized void ownerQuestionContinuationUnavailable(dev.pocketengine.features.assistant.OwnerQuestionInputs.Waiting original)throws Exception {
+        JSONObject task=required(original.taskId()),marker=task.optJSONObject("ownerQuestionContinuation");
+        if(marker==null||!original.originalControl().matchesHostRun(original.taskId(),original.runId(),original.epoch())||!original.runId().equals(task.optString("runId"))||original.epoch()!=task.optInt("coordinatorEpoch")
+                ||!original.runId().equals(marker.optString("runId"))||original.epoch()!=marker.optInt("epoch")||!original.requestId().equals(marker.optString("requestId"))||!task.optString("status").matches("preparing|running"))return;
+        marker.put("phase","unavailable");write(task);endAttempt(original.taskId(),original.runId(),original.originalControl().isCancelled()?"cancelled":"awaiting_user","回答已保存，原执行未能继续，请回原任务处理；没有续权或重试",task.getJSONObject("evidence"));
+    }
+
     /** Short native notification claim. It opens only an original record, never executes an action. */
     public static final class OwnerTaskNotice {
         private final TaskStore issuer;private final String snapshot;

@@ -1747,6 +1747,28 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val captured = JSONObject(anchor.toString())
         io.execute { val result = runCatching { val original = app.tasks.readAnswerSource(captured, index); require(original.optBoolean("available")); val frame = original.optJSONObject("frame") ?: error("原观察未保留画面"); val store = app.answerSourceFrames ?: error("原观察帧存储不可用"); store.read(frame) }; main.post { if (!closed && privateWorkspaceView()) result.fold({ done(it, null) }, { done(null, message(it)) }) } }
     }
+    /** Typed native settings only; no feature request, model command or imported payload. */
+    internal fun readAutomaticUserLearningPolicy(done: (JSONObject?, String?) -> Unit) {
+        if (!privateWorkspaceView()) return
+        io.execute {
+            val actual = runCatching {
+                check(privateWorkspaceView()) { app.getString(dev.pocketengine.R.string.automatic_user_learning_private_only) }
+                app.automaticUserLearningPolicy()
+            }
+            main.post { if (!closed && privateWorkspaceView()) actual.fold({ done(it, null) }, { done(null, message(it)) }) }
+        }
+    }
+    internal fun saveAutomaticUserLearningPolicy(revision: Long, enabled: Boolean, maximum: Int, confirmedModelUse: Boolean, done: (JSONObject?, String?) -> Unit) {
+        if (!privateWorkspaceView()) return
+        io.execute {
+            val actual = runCatching {
+                check(privateWorkspaceView()) { app.getString(dev.pocketengine.R.string.automatic_user_learning_private_only) }
+                require(revision >= 0 && maximum in 1..5)
+                app.setAutomaticUserLearningPolicy(revision, enabled, maximum, confirmedModelUse)
+            }
+            main.post { if (!closed && privateWorkspaceView()) actual.fold({ done(it, null) }, { done(null, message(it)) }) }
+        }
+    }
     internal fun nativeDetailedTraces(): dev.pocketengine.runtime.usage.TaskDetailedTrace? = if (dev.pocketengine.BuildConfig.DEBUG && !closed && privateWorkspaceView()) app.detailedTraces else null
     internal var taskListNextCursor by mutableStateOf("")
         private set
@@ -1804,6 +1826,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         val task = result.optJSONObject("task") ?: if (result.has("id")) result else null
                         task?.let { mergeTask(it) }
                     }
+                    if (action == "answerOwnerQuestion" && result?.optBoolean("accepted") == true) { getTask(input.getString("taskId")); app.sendState() }
                     if (action in setOf("confirmResult", "resumeTask", "updateTask", "resolveOperation")) app.sendState()
                     if (action == "resolveOperation" && input.optString("taskId") == state.inspectionTaskId) observeInspection()
                     if (action == "reconcileExternalTask") { getTask(input.optString("taskId")); app.sendState(); state = state.copy(notice = "已记录你核对的结果，未重新执行外部操作") }

@@ -15,6 +15,7 @@ g++ -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
   -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
   "$sources/workspace_file_access.cpp" -o "$native_dir/unavailable/libpocketprocess.so"
 bash display-helper/test/run.sh
+./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain :app:buildDisplayHelper
 gradle_args=(--no-daemon --no-parallel --max-workers=1 --console=plain \
   -Pkotlin.compiler.execution.strategy=in-process -x buildAndroidRuntime -x buildDisplayHelper \
   :app:testDebugUnitTest)

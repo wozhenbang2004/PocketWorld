@@ -592,19 +592,22 @@ public final class LocalModule implements EngineModule,dev.pocketengine.features
         if(service==null||!service.operationId().equals(payload.getString("liveEditServiceExecutionId"))||!service.operationId().equals(binding.optString("liveEditServiceExecutionId"))||!service.projectId().equals(request.getString("projectId"))||!service.checkoutId().equals(request.getString("checkoutId")))throw new SecurityException("热改没有原本机服务引用，普通文件API不能借用运行租约");
         for(String key:new String[]{"liveEditServiceExecutionId","liveEditPolicyDigest"})link.put(key,binding.get(key));
         JSONObject result=new JSONObject().put("id",binding.getString("operationId")).put("operationId",binding.getString("operationId")).put("checkoutId",request.getString("checkoutId")).put("kind","local_edit").put("provider","app_private_checkout").put("projectExecution",link).put("sourceDigest",request.getString("sourceDigest")).put("sourceCheckStatus","native_checkout_verified").put("businessVerified",false).put("replayAllowed",false);
-        boolean commitAttempted=false;File pending=null;
+        boolean commitAttempted=false;
         try(var lease=ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID).beginLiveEdit(service,original)){
             JSONObject policy=lease.policy();if(!policy.getString("policyDigest").equals(binding.getString("liveEditPolicyDigest")))throw new SecurityException("热改原启动批准已变化");String path=payload.getString("path"),text=payload.getString("content");
             dev.pocketengine.features.local.project.ProjectLiveEditPolicy.requireEdit(policy,snapshot,path,payload.getString("expectedHash"),text);checkProjectControl(original,admission,binding,pauseRevision);lease.check();
-            File target=NativeCommandExecutor.within(content(request.getString("checkoutId")),path);if(!target.isFile()||Files.isSymbolicLink(target.toPath()))throw new SecurityException("原热改文件已失效，未创建新文件");
-            byte[] bytes=text.getBytes(StandardCharsets.UTF_8);pending=File.createTempFile("pending-",".tmp",target.getParentFile());try(FileOutputStream output=new FileOutputStream(pending)){output.write(bytes);output.getFD().sync();}
-            // Readers see a whole source file, never an editor's truncate/write interval.
-            checkProjectControl(original,admission,binding,pauseRevision);lease.check();if(!payload.getString("expectedHash").equals(hash(dev.pocketengine.features.local.runtime.WorkspaceFileAccess.read(content(request.getString("checkoutId")),path,ProjectSources.MAX_FILE_BYTES))))throw new SecurityException("提交前文件SHA已变化，请重新读取；草稿未覆盖");
-            commitAttempted=true;Files.move(pending.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);pending=null;
+            File workspace=content(request.getString("checkoutId"));
+            byte[] before=dev.pocketengine.features.local.runtime.WorkspaceFileAccess.read(workspace,path,dev.pocketengine.features.local.project.ProjectLiveEditPolicy.MAX_EDIT_BYTES),bytes=text.getBytes(StandardCharsets.UTF_8);
+            if(!payload.getString("expectedHash").equals(hash(before)))throw new SecurityException("提交前文件SHA已变化，请重新读取；草稿未覆盖");
+            // The existing native primitive compares these exact bytes and commits through its
+            // no-follow parent fd. The original service lease/grant/receipt remain authoritative.
+            checkProjectControl(original,admission,binding,pauseRevision);lease.check();commitAttempted=true;
+            dev.pocketengine.features.local.runtime.WorkspaceFileAccess.commit(workspace,path,before,bytes);
+            checkProjectControl(original,admission,binding,pauseRevision);lease.check();
+            if(!java.util.Arrays.equals(bytes,dev.pocketengine.features.local.runtime.WorkspaceFileAccess.read(workspace,path,dev.pocketengine.features.local.project.ProjectLiveEditPolicy.MAX_EDIT_BYTES)))throw new SecurityException("提交后没有读到本次原字节，保存结果须核对");
             JSONObject after=export(request.getString("checkoutId")),edit=lease.record(after,path,hash(bytes));
             return result.put("path",path).put("sha256",hash(bytes)).put("bytes",bytes.length).put("updatedSourceDigest",ProjectSources.describe(after).getString("sourceDigest")).put("liveEdit",edit).put("status","completed").put("receiptReceived",true).put("exitCode",0).put("message","原文件原子保存已回读；开发服务器将自行处理热更新，保存回执不等于浏览器已应用或业务成功");
         }catch(Exception failure){return result.put("status",commitAttempted?"unknown":"failed").put("receiptReceived",!commitAttempted).put("exitCode",commitAttempted?JSONObject.NULL:1).put("fileCommitAttempted",commitAttempted).put("errorType",failure.getClass().getName()).put("stderr",failure.getMessage()==null?"原热改未取得确定回执":failure.getMessage()).put("message",commitAttempted?"原文件提交结果待核，只读原文件，不自动重放；原服务必须核对排空":"本次热改尚未提交，原文件未覆盖；读取当前SHA并明确修正后可重新生成方案");}
-        finally{if(pending!=null)Files.deleteIfExists(pending.toPath());}
     }
     private static void checkProjectControl(RunControl original,ProjectAdmission admission,JSONObject binding,long pauseRevision)throws Exception {
         original.check();if(!original.hasHostRun()||!original.matchesHostRun(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"))||original.isPaused()||original.pauseRevision()!=pauseRevision)throw new SecurityException("原项目执行控制已停止或暂停");admission.check();original.check();
