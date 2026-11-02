@@ -44,6 +44,7 @@ public final class CapabilityDescriptor {
         for(java.util.Iterator<String> keys=args.keys();keys.hasNext();){String key=keys.next();if(key.startsWith("_")||key.matches("taskId|runId|epoch|principalId|spaceId|ownerId|scope|profileId|leaseId|grant|feature|operationId"))
             throw new SecurityException("能力参数不能提供宿主身份或路由");}
         PluginRules.validateArguments(args,schema);
+        if(name.equals("attachments_create_document"))new dev.pocketengine.features.attachments.creation.DocumentDraft(args);
         if(feature.equals("browser")){
             if(command.equals("navigate")){
                 URI uri=new URI(args.getString("url"));
@@ -104,9 +105,22 @@ public final class CapabilityDescriptor {
     static CapabilityDescriptor transformImage()throws Exception{return new CapabilityDescriptor("attachments_transform_image","attachments","transformImage",true,true,"对原任务明确选定id/SHA的静态原图执行裁剪、缩放、旋转和PNG/JPEG编码，生成独立新原件并保父版本。原图最多800万像素，输出400万/4096边；坐标是原方向原像素。JPEG白底去透明且有损，PNG无损。不是AI生图/任意shell，不覆盖或分享。",props("attachmentId",text(36),"expectedSha256",text(64),"left",integer(0,65536),"top",integer(0,65536),"right",integer(1,65536),"bottom",integer(1,65536),"width",integer(1,4096),"height",integer(1,4096),"rotation",new JSONObject().put("type","integer").put("enum",new JSONArray(new Integer[]{0,90,180,270})),"format",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"png","jpeg"})),"quality",integer(50,95)),Set.of(),"attachmentId","expectedSha256","width","height");}
     static CapabilityDescriptor trimMedia()throws Exception{return new CapabilityDescriptor("attachments_trim_media","attachments","trimMedia",true,true,"截取原任务已选id/SHA的真实MP4原件：H264/H265/AAC，最多2分钟片段/10分钟来源/20MiB。原生extractor+muxer重封装，不转码；起点向前对齐真实同步帧，回执保requested和actual时间，不能宣称帧精确剪辑。不丢弃不支持轨道，不覆盖/分享原件。",props("attachmentId",text(36),"expectedSha256",text(64),"startMillis",integer(0,600000),"endMillis",integer(1,600000)),Set.of(),"attachmentId","expectedSha256","startMillis","endMillis");}
     static CapabilityDescriptor createDocument()throws Exception {
-        return new CapabilityDescriptor("attachments_create_document","attachments","createDocument",true,true,"生成实际DOCX或PDF并保留固定可编辑源。正文支持段落、#标题与tab分隔简单表格；不是HTML、宏或任意模板执行。不自动导出/分享。继续旧文档须同时选择原parentArtifactId/parentSha256与它实际登记的editableSourceId/editableSourceSha256；每次精确审批。",
-            props("format",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"docx","pdf"})),"name",text(80),"title",text(200),"body",text(6000),"fontPoints",new JSONObject().put("type","integer").put("enum",new JSONArray(new Integer[]{10,11,12,14,16})),"parentArtifactId",text(36),"parentSha256",text(64),"editableSourceId",text(36),"editableSourceSha256",text(64)),Set.of("body","title","name"),"format","body");
+        return new CapabilityDescriptor("attachments_create_document","attachments","createDocument",true,true,"生成真实DOCX/PDF/XLSX/PPTX，保留固定可编辑源。DOCX/PDF必需body，支持#标题与tab表格；XLSX必需workbook结构，本工具每表最多100格，单元格text/number/boolean/formula四选一，仅有限算式与SUM/AVERAGE/MIN/MAX实算。未解析公式（含未知函数、外链、循环）导出为明确的普通文本，完整原式保留在可编辑源；需修改源并生成新版本重算，打开Office不会自动执行这些文本。PPTX必需presentation结构，支持可编辑文本对象与notes。图表、媒体、Morph/3D和Office布局渲染当前不支持；生成不等于渲染通过。不自动导出/分享。继续旧文档须同时选择parentArtifactId/parentSha256及其实际editableSourceId/editableSourceSha256，每次精确审批。",
+            props("format",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"docx","pdf","xlsx","pptx"})),"name",text(80),"title",text(200),"body",text(6000),"fontPoints",new JSONObject().put("type","integer").put("enum",new JSONArray(new Integer[]{10,11,12,14,16})),"workbook",workbook(),"presentation",presentation(),"parentArtifactId",text(36),"parentSha256",text(64),"editableSourceId",text(36),"editableSourceSha256",text(64)),Set.of("body","title","name","workbook","presentation"),"format");
     }
+    private static JSONObject workbook()throws Exception {
+        JSONObject cell=object(props("ref",text(10),"text",text(4096),"number",new JSONObject().put("type","number"),"boolean",new JSONObject().put("type","boolean"),"formula",text(512),"numberFormat",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"general","integer","decimal","percent"}))),"ref");
+        JSONObject sheet=object(props("name",text(31),"cells",array(cell,100)),"name","cells");
+        return object(props("version",integer(1,1),"sheets",array(sheet,16)),"version","sheets");
+    }
+    private static JSONObject presentation()throws Exception {
+        JSONObject shape=object(props("id",text(48),"text",text(4000),"x",number(0,13.333333),"y",number(0,7.5),"width",number(0,13.333333),"height",number(0,7.5)),"id","text","x","y","width","height");
+        JSONObject slide=object(props("id",text(48),"title",text(200),"paragraphs",array(text(2000),32),"notes",text(8000),"shapes",array(shape,32)),"id","title");
+        return object(props("version",integer(1,1),"slides",array(slide,32)),"version","slides");
+    }
+    private static JSONObject object(JSONObject properties,String... required)throws Exception{return new JSONObject().put("type","object").put("properties",properties).put("additionalProperties",false).put("required",new JSONArray(required));}
+    private static JSONObject array(JSONObject items,int max)throws Exception{return new JSONObject().put("type","array").put("items",items).put("maxItems",max);}
+    private static JSONObject number(double min,double max)throws Exception{return new JSONObject().put("type","number").put("minimum",min).put("maximum",max);}
     static CapabilityDescriptor document()throws Exception {return document(new JSONObject());}
     static CapabilityDescriptor document(JSONObject mounted)throws Exception {
         boolean ocr=mounted.optBoolean("imageOcr")||mounted.optBoolean("pdfOcr");JSONArray modes=new JSONArray(new String[]{"auto","text"});if(ocr)modes.put("ocr");
