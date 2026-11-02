@@ -1,0 +1,96 @@
+name: Mika source recovery and focused CI
+on:
+  push:
+    branches: [work/mika-53-ci-transfer-20261102]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mika-source-transfer
+  cancel-in-progress: false
+jobs:
+  import:
+    if: ${{ github.event.repository.private && github.ref == 'refs/heads/work/mika-53-ci-transfer-20261102' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      source: ${{ steps.import.outputs.source }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - name: Verify and fast-forward only the authorized work branch
+        id: import
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, json, pathlib
+          m=json.loads(pathlib.Path('transfer/manifest.json').read_text())
+          assert m['source_commit']=='18e175767d004b01d0de38567ddc7ec57000262c'
+          assert m['source_tree']=='20bbb9042cce42b22e83902d25f713fb87700ee1'
+          assert m['base']=='741992f2a8e579c44aed90cf9cd111eae86d4772'
+          assert m['target_branch']=='work/mika-53-capabilities-20261102'
+          assert len(m['parts'])==24
+          content=[]
+          for i,p in enumerate(m['parts']):
+              assert p['path']==f'transfer/part-{i:03d}.b64'
+              b=pathlib.Path(p['path']).read_bytes()
+              assert len(b)==p['size'] and hashlib.sha256(b).hexdigest()==p['sha256']
+              content.append(b)
+          bundle=base64.b64decode(b''.join(content), validate=True)
+          assert len(bundle)==565013
+          assert hashlib.sha256(bundle).hexdigest()=='6990a5d3f60db0c009f37d966477971c655573b50b44afc50eb43f073f6e6d5c'
+          pathlib.Path('/tmp/pocketworld-mika.bundle').write_bytes(bundle)
+          PY
+          source_commit=18e175767d004b01d0de38567ddc7ec57000262c
+          source_tree=20bbb9042cce42b22e83902d25f713fb87700ee1
+          expected_base=741992f2a8e579c44aed90cf9cd111eae86d4772
+          target_branch=work/mika-53-capabilities-20261102
+          git bundle verify /tmp/pocketworld-mika.bundle
+          git fetch /tmp/pocketworld-mika.bundle HEAD
+          test "$(git rev-parse FETCH_HEAD)" = "$source_commit"
+          test "$(git rev-parse "$source_commit^{tree}")" = "$source_tree"
+          git merge-base --is-ancestor "$expected_base" "$source_commit"
+          git diff --exit-code 63a8af6acdd6d9f70909cae43454416ca0a896dd "$source_commit" -- \
+            ':(glob)**/DeviceCapabilityPort.java' ':(glob)**/DeviceWorkspaceArtifacts.java' \
+            ':(glob)**/TaskStoreDeviceTasks.java' ':(glob)**/DeviceWorkspaceNativeOwner.java'
+          actual=$(git ls-remote origin "refs/heads/$target_branch" | cut -f1)
+          test "$actual" = "$expected_base"
+          git push origin "$source_commit:refs/heads/$target_branch"
+          echo "source=$source_commit" >> "$GITHUB_OUTPUT"
+          echo "Imported exact source commit: $source_commit; tree: $source_tree" >> "$GITHUB_STEP_SUMMARY"
+  targeted:
+    needs: import
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.import.outputs.source }}
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install the declared Android compilation platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+      - name: Test the exact imported capability source
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = '${{ needs.import.outputs.source }}'
+          bash tools/run-mika-focused.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mika-focused-test-results-${{ needs.import.outputs.source }}
+          path: |
+            app/build/reports/tests/testDebugUnitTest
+            app/build/test-results/testDebugUnitTest

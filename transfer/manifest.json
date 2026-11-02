@@ -1,0 +1,130 @@
+{
+  "target_branch": "work/mika-53-capabilities-20261102",
+  "base": "741992f2a8e579c44aed90cf9cd111eae86d4772",
+  "source_commit": "18e175767d004b01d0de38567ddc7ec57000262c",
+  "source_tree": "20bbb9042cce42b22e83902d25f713fb87700ee1",
+  "bundle_sha256": "6990a5d3f60db0c009f37d966477971c655573b50b44afc50eb43f073f6e6d5c",
+  "bundle_size": 565013,
+  "parts": [
+    {
+      "path": "transfer/part-000.b64",
+      "sha256": "0d4690d6066fadb4fbfe213d8ca74b6319956eb10d56d014076069e3f4336499",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-001.b64",
+      "sha256": "f477a634ebabc899145694ef81ae8ad87ae4502e957540bcbbb2b014a2271710",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-002.b64",
+      "sha256": "7622d7ae7e0b10735cc6e64e9217bf1ec730f7abed52e6a82d1c4dd9dc654f6d",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-003.b64",
+      "sha256": "475f674a1a546b6edfcfde5786abd2b4ddf487257929f9a9c3e446ad8fdcc20f",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-004.b64",
+      "sha256": "75cd7aa300d08f03f07a3c49b5f8eabae348bfee6244a23a2331e5b5ab35c309",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-005.b64",
+      "sha256": "eb8a7121aba4b710236dcfcbbc2b761c10e35e74ccbccd9b209b0588298b99ad",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-006.b64",
+      "sha256": "c73cf556516bd6cbb4ba356121e92359f586fa72fccea23880c2f40f588800ec",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-007.b64",
+      "sha256": "da8fa238be4686ad5c0ab21cc933e3abe7baf8e90bd733a81b6f20fbace8593e",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-008.b64",
+      "sha256": "7b5bdde0c21201bd674a21e9c62c9a824c2ac6c40337bb46e258c93f708f7823",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-009.b64",
+      "sha256": "01f65ad94bb00c5e5862c1256888dcd21b63dbe08091ed33a5a24e40ac8323a5",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-010.b64",
+      "sha256": "d03106094d5fec6a17a483c7b0edf74726d352fa0f03137976a9ba38e4823072",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-011.b64",
+      "sha256": "feb2cf53e74ecae72f81a8f92e290457ae2f435594c5c3df7ad06eeb2f6d067a",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-012.b64",
+      "sha256": "a39071ccc787fcc76d74df9a963242819ad36ca78a8841f7f3692d629a612ea5",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-013.b64",
+      "sha256": "67c897bd225a86c81cfce0d904114327ba329b25a6bd90bd164890f61b2da359",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-014.b64",
+      "sha256": "bc6abf02c6badf5cde1fc494b09785b83b81620e8876ae02804caab2e76eac47",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-015.b64",
+      "sha256": "1e29a41357d737cfb49ae81c733c15e0a5da2b031d5068c01dcee958010f8564",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-016.b64",
+      "sha256": "3e8ca913ec12389f692fcb0cf0cd6243f5f1681d829cdd7fb456437a9b5982ae",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-017.b64",
+      "sha256": "9556e868a78ee8d22d5b8a406530b855db363ab343e0e3b79640dfba0f881780",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-018.b64",
+      "sha256": "0363aabebfad7ae0563a77db13ece8a95ad7878290aa09278ece08d73bacee1b",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-019.b64",
+      "sha256": "0ad23dbe5c09e913c9eaf9b2247be2547600d6bd8490252287ecbc076a171d8a",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-020.b64",
+      "sha256": "61b6e9cb645ae7eb959301f189c92394609f6bf743d4b40e7635da75313fea22",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-021.b64",
+      "sha256": "8c25730dbd865875f72427decdc4484663eec11f96980afdca6e3c3ec9446cc2",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-022.b64",
+      "sha256": "942b1114b534a2d097e121217fb3d6f7a1c698c0fff399ac95baf60473864b05",
+      "size": 32000
+    },
+    {
+      "path": "transfer/part-023.b64",
+      "sha256": "1bcec7f844758d4e1add5604679737222a2333abbc35c820a97b8dee417aa9ef",
+      "size": 17352
+    }
+  ]
+}

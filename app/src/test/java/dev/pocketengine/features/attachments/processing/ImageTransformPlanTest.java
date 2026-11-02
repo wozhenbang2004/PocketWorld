@@ -1,8 +1,0 @@
-package dev.pocketengine.features.attachments.processing;
-import static org.junit.Assert.*;
-import org.json.JSONObject;
-import org.junit.Test;
-public final class ImageTransformPlanTest {
-    @Test public void exactOrientedCropDimensionsAndLossPolicyArePartOfNativePlanDigest()throws Exception{var a=new ImageTransformPlan("native-original","a".repeat(64),800,600,new JSONObject().put("left",100).put("top",50).put("right",700).put("bottom",550).put("width",300).put("height",250).put("rotation",90));assertEquals(250,a.finalWidth());assertEquals(300,a.finalHeight());assertEquals("oriented_original_pixels",a.json().getString("coordinateSpace"));var b=new ImageTransformPlan("native-original","b".repeat(64),800,600,new JSONObject().put("left",100).put("top",50).put("right",700).put("bottom",550).put("width",300).put("height",250).put("rotation",90));assertNotEquals(a.identity,b.identity);assertEquals("png",a.format);}
-    @Test public void outsideCropSilentSamplingOversizeAndArbitraryCodecInputsAreRejected()throws Exception{assertThrows(Exception.class,()->new ImageTransformPlan("native","a".repeat(64),100,100,new JSONObject().put("right",101)));assertThrows(Exception.class,()->new ImageTransformPlan("native","a".repeat(64),4096,4096,new JSONObject().put("width",10).put("height",10)));assertThrows(Exception.class,()->new ImageTransformPlan("native","a".repeat(64),100,100,new JSONObject().put("width",4096).put("height",4096)));assertThrows(Exception.class,()->new ImageTransformPlan("native","a".repeat(64),100,100,new JSONObject().put("shell","ffmpeg")));assertThrows(Exception.class,()->new ImageTransformPlan("native","a".repeat(64),100,100,new JSONObject().put("left",1.5)));}
-}
