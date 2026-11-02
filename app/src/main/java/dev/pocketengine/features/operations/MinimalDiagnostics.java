@@ -11,8 +11,8 @@ import org.json.JSONObject;
 
 /** Whitelisted support facts. Raw task logs, URLs, account values and file bodies are never copied. */
 public final class MinimalDiagnostics {
-    private static final Set<String> FLAGS=Set.of("enabled","available","installed","canExecute","nativeSupervisorAvailable","configured","connected","permissionGranted","listening","acceptingNewRequests","busy");
-    private static final Set<String> CATEGORIES=Set.of("status","state","runtimeId","lastErrorCategory","sourceCommit","versionName","versionCode","sdk","abi");
+    private static final Set<String> FLAGS=Set.of("enabled","available","installed","canExecute","nativeSupervisorAvailable","configured","connected","permissionGranted","listening","acceptingNewRequests","busy","sourceDirty");
+    private static final Set<String> CATEGORIES=Set.of("status","state","runtimeId","lastErrorCategory","sourceCommit","sourceTree","versionName","versionCode","sdk","abi");
     public static final class Snapshot {
         public final String text,sha256;
         Snapshot(String text)throws Exception{this.text=text;byte[] digest=MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));StringBuilder hex=new StringBuilder();for(byte b:digest)hex.append(String.format(java.util.Locale.ROOT,"%02x",b&255));sha256=hex.toString();}

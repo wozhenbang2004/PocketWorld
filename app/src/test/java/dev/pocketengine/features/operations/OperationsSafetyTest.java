@@ -31,4 +31,18 @@ public final class OperationsSafetyTest {
         var skipped=new CompatibilityCheckRunner.Check("next",100,original->{throw new AssertionError("cancelled checks must not start");});
         JSONObject result=CompatibilityCheckRunner.run(List.of(first,skipped),control,snapshot->{});assertTrue(released.get());assertTrue(result.getBoolean("resourcesReleased"));assertEquals("partial",result.getString("status"));assertEquals("skipped",result.getJSONArray("checks").getJSONObject(1).getString("status"));
     }
+    @Test public void generatedBuildIdentityIsBoundedAndDirtyBuildCannotClaimItsHead()throws Exception{
+        String commit="a".repeat(40),tree="b".repeat(40);JSONObject actual=new JSONObject().put("commit",commit).put("tree",tree).put("dirty",false);
+        JSONObject facts=OperationsEvidence.buildIdentity(new java.io.ByteArrayInputStream(actual.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));assertEquals(commit,facts.getString("sourceCommit"));assertFalse(facts.getBoolean("sourceDirty"));
+        var snapshot=MinimalDiagnostics.capture(Map.of("app",()->facts),123456);assertTrue(snapshot.text.contains(commit));assertTrue(snapshot.text.contains(tree));
+        actual.put("dirty",true);assertEquals("unavailable",OperationsEvidence.buildIdentity(new java.io.ByteArrayInputStream(actual.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))).getString("sourceCommit"));
+        assertThrows(SecurityException.class,()->OperationsEvidence.buildIdentity(new java.io.ByteArrayInputStream(new byte[4097])));
+    }
+    @Test public void originalPhonePracticeReadKeepsHistoricalScopeAndUnknownChecksWithoutBodies()throws Exception{
+        JSONObject nativeResult=new JSONObject().put("ok",true).put("resultScope","last_completed_original_phone_run").put("evidenceOrigin","original_run_native_observations")
+            .put("checks",new org.json.JSONArray().put(new JSONObject().put("id","click").put("state","passed").put("body","PRIVATE-FIXTURE-CONTENT"))).put("goal","PRIVATE-FIXTURE-GOAL");
+        JSONObject result=OperationsEvidence.phonePractice(new JSONObject().put("backgroundConnected",true),nativeResult);assertEquals("partial",result.getString("status"));assertEquals("last_completed_original_phone_run",result.getString("resultScope"));assertFalse(result.getBoolean("currentPracticeVerified"));assertFalse(result.getBoolean("phoneActionsVerified"));assertFalse(result.toString().contains("PRIVATE-FIXTURE"));assertEquals(12,result.getJSONArray("checks").length());
+        assertEquals("passed",result.getJSONArray("checks").getJSONObject(4).getString("state"));assertEquals("unknown",result.getJSONArray("checks").getJSONObject(0).getString("state"));
+        nativeResult.put("resultScope","another_task_model_claim");result=OperationsEvidence.phonePractice(new JSONObject(),nativeResult);for(int i=0;i<12;i++)assertEquals("unknown",result.getJSONArray("checks").getJSONObject(i).getString("state"));
+    }
 }
