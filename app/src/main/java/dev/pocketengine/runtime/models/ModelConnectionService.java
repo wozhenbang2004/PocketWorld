@@ -86,9 +86,9 @@ public final class ModelConnectionService {
         try(var usage=tasks.beginModelCapabilityProbe(java.util.UUID.randomUUID().toString(),control,image)){
             var nativeTarget=usage.target();
             dev.pocketengine.runtime.models.InferenceAudiencePolicy.require(captured,NativeInferenceScope.ownerApp("owner","private",nativeTarget.context.taskId,nativeTarget.context.runId,nativeTarget.context.epoch,control),control);
-            var target=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(nativeTarget,()->{control.check();synchronized(settings){requireProbeConfig(expected);if(settings.apiSelectionRevision()!=selection||!settings.matchesApiCatalogRoute(captured))throw new SecurityException("原模型配置已变化，探测已停止");}});
+            var target=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(nativeTarget,()->{control.check();synchronized(settings){if(settings.apiSelectionRevision()!=selection||!settings.matchesApiCatalogRoute(captured))throw new SecurityException("原模型配置已变化，探测已停止");requireProbeConfig(expected);}});
             try{JSONObject result=ModelCapabilityProbe.run(captured,image,control,target);control.check();
-                synchronized(settings){requireProbeConfig(expected);if(settings.apiSelectionRevision()!=selection||!settings.matchesApiCatalogRoute(captured))throw new SecurityException("原模型配置已变化，旧探测未用于当前模型");}
+                synchronized(settings){if(settings.apiSelectionRevision()!=selection||!settings.matchesApiCatalogRoute(captured))throw new SecurityException("原模型配置已变化，旧探测未用于当前模型");requireProbeConfig(expected);}
                 JSONObject ref=usage.reference();tasks.event(ref.getString("taskId"),ref.getString("runId"),ref.getInt("epoch"),new JSONObject().put("type","model_capability_probe").put("probe",result));
                 JSONObject retained=new JSONObject(result.toString()).put("inferenceReference",ref);synchronized(this){lastProbe=retained;}usage.finish("completed");return new JSONObject(retained.toString());
             }catch(Exception failure){usage.finish(control.isCancelled()||failure instanceof InterruptedException?"cancelled":"failed");throw failure;}
