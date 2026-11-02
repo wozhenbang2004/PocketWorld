@@ -23,6 +23,18 @@ g++ -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
 g++ -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
   -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
   "$sources/workspace_file_access.cpp" -o "$native_dir/unavailable/libpocketprocess.so"
+# Compile the changed production JNI sources with the declared Android ABI too.
+# Host behavior tests cannot compile the Android-specific branches or bionic headers.
+: "${ANDROID_HOME:?The declared Android SDK and NDK are required}"
+android_compile_status=0
+if cmake -S "$sources" -B "$native_dir/android-arm64" \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/28.2.13676358/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 -DANDROID_STL=c++_static \
+  -DCMAKE_BUILD_TYPE=Debug; then
+  cmake --build "$native_dir/android-arm64" --parallel 1 || android_compile_status=$?
+else
+  android_compile_status=$?
+fi
 bash display-helper/test/run.sh
 ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain :app:buildDisplayHelper
 gradle_args=(--no-daemon --no-parallel --max-workers=1 --console=plain \
@@ -62,5 +74,6 @@ if [[ "$main_status" != 0 ]]; then exit "$main_status"; fi
 if [[ "$main_evidence_status" != 0 ]]; then exit "$main_evidence_status"; fi
 if [[ "$python_status" != 0 ]]; then exit "$python_status"; fi
 if [[ "$node_status" != 0 ]]; then exit "$node_status"; fi
+if [[ "$android_compile_status" != 0 ]]; then exit "$android_compile_status"; fi
 if [[ "$negative_evidence_status" != 0 ]]; then exit "$negative_evidence_status"; fi
 exit "$unavailable_status"
