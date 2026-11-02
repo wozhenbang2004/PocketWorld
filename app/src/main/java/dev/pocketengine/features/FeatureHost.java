@@ -24,6 +24,12 @@ public final class FeatureHost implements AutoCloseable {
     /** Application-owned native execution bridge; feature/model JSON cannot register an executor. */
     public void setSkillExecutionHost(dev.pocketengine.features.skills.NativeSkillExecutionHost host){if(skillExecutionHost!=null)throw new IllegalStateException("脚本宿主已经注册");skillExecutionHost=java.util.Objects.requireNonNull(host);}
     public boolean hasSkillExecutionHost(){return skillExecutionHost!=null;}
+    /** Owner workbench data only. Not reachable through feature/model commands or channels. */
+    public JSONObject ownerConversationWorkbench(String command,JSONObject input)throws Exception {
+        EngineModule selected=module("assistant");
+        if(!(selected instanceof AssistantModule assistant))throw new IllegalStateException("原私人会话宿主不可用");
+        return assistant.ownerConversationWorkbench(command,input);
+    }
     public JSONObject executeSkillForTask(String task,String run,int epoch,JSONObject input,java.util.Set<String> capabilities,dev.pocketengine.core.RunControl control)throws Exception {
         var host=skillExecutionHost;if(host==null)throw new IllegalStateException("脚本执行宿主不可用");return host.execute(task,run,epoch,input,capabilities,control);
     }

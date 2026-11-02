@@ -63,7 +63,7 @@ public final class NativePluginHost implements AutoCloseable {
         },tasks);
     }
     /** App composition after the real SkillsModule is mounted. No package/model supplies an authority. */
-    public synchronized void mountFunctionalPacks(SkillsModule skills){open();if(functionalPacks!=null)throw new IllegalStateException("功能包原生authority已挂载");functionalPacks=new FunctionalPackHost(plugins,skills,executable,tasks,new File(privateDirectory,"functional-pack-catalog.json"),changedTask,extensions::invalidate);}
+    public synchronized void mountFunctionalPacks(SkillsModule skills){open();if(functionalPacks!=null)throw new IllegalStateException("功能包原生authority已挂载");if(plugins instanceof dev.pocketengine.features.plugins.PluginsModule nativeMcpSources)skills.mountMcpSources(nativeMcpSources);functionalPacks=new FunctionalPackHost(plugins,skills,executable,tasks,new File(privateDirectory,"functional-pack-catalog.json"),changedTask,extensions::invalidate);}
     public FunctionalPackHost.Page newFunctionalPackPage(){open();FunctionalPackHost host=functionalPacks;if(host==null)throw new IllegalStateException("功能包需当前真实SkillBook与原插件模块；尚未挂载，未替代执行");return host.newOwnerPage();}
     /** The same app-owned instance is also the sole sandbox available to native Skills backends. */
     public AndroidJavascriptSandboxRuntime sharedSandbox(){return sandbox;}
@@ -97,6 +97,12 @@ public final class NativePluginHost implements AutoCloseable {
         JSONObject state=new JSONObject().put("status",runtimeState).put("message",runtimeMessage).put("maxExtensionsPerRun",ExtensionRuntime.MAX_EXTENSIONS).put("callbackMaxMillis",200).put("prepared",runtimeState.equals("ready"));
         if(runtimeState.equals("ready"))try{state.put("identity",sandbox.describe().review());}catch(Exception changed){runtimeState="unavailable";runtimeMessage="本机WebView身份已变化，请停止旧任务并重新准备。";state.put("status",runtimeState).put("prepared",false).put("message",runtimeMessage);}
         return state;
+    }
+    /** Native composition metadata only. Reads the original catalog; never warms/evaluates JS or grants it. */
+    public JSONArray approvedExtensionReferences(RunControl observation)throws Exception {
+        open();observation.check();JSONArray refs=new JSONArray();
+        for(ExecutablePluginCatalog.ApprovedSource source:executable.approvedSources(observation))refs.put(TaskExtensionSelection.reference(source).put("enabled",true).put("approved",true));
+        observation.check();return refs;
     }
     public TaskSelection newTaskSelection(String taskId) {open();if(taskId==null||!taskId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("需要原任务身份");return new TaskSelection(taskId);}
     /** Native same-task page; JSON/model routes cannot manufacture a selection confirmation. */

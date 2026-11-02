@@ -13,7 +13,7 @@ on:
         description: 'Used only for target=host-tests; deliberately no full-suite option'
         type: choice
         default: device-receiver
-        options: [device-receiver, managed-runtime, gateway-continuation, memory-experience, browser-long-page, browser-expression, phone-observation-boundaries, phone-sensitive-owner, agent-preferences]
+        options: [project-file-operations, project-file-search, browser-expression, device-receiver, managed-runtime, gateway-continuation, memory-automatic, memory-learning-assertions, memory-experience, browser-long-page, phone-observation-boundaries, phone-sensitive-owner, agent-preferences, aion-core, aion-mcp-skills, aion-office, aion-conversations, remote-transport, aion-team-catalog, magpie-work-profile, native-operation-event, browser-document-download, browser-native-sequence, retained-development-admission]
   push:
     branches: [main]
     # Keep the production-input contract in tools/tests/test_apk_workflow_paths.py in sync.

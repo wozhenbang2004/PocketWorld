@@ -79,6 +79,7 @@ public final class BrowserTaskSpace {
         void select(Tab tab,Gate gate)throws Exception;
         void execute(Tab tab,String command,JSONObject arguments,Gate gate,CompletableFuture<JSONObject> result)throws Exception;
         JSONObject download(Tab tab,String url,String operationId,Gate gate)throws Exception;
+        default JSONObject downloadDocument(Tab tab,JSONObject args,String operationId,Gate gate)throws Exception {throw new UnsupportedOperationException("原文档文件读取宿主不可用");}
         default JSONObject downloadStatus(String id,Gate gate)throws Exception {throw new UnsupportedOperationException("下载状态端口不可用");}
         void adoptOwner(Tab tab,Gate gate)throws Exception;
         default JSONObject ownerMetadata(String tabId)throws Exception {throw new UnsupportedOperationException("主人页状态不可用");}
@@ -182,6 +183,7 @@ public final class BrowserTaskSpace {
         if(args.optJSONObject("target")!=null&&args.getJSONObject("target").has("frameRef"))pin.put("readFrame",driver.readFramePin(required(args.getString("tabId")),args.getJSONObject("target").getString("frameRef")));
         if(args.has("optionRef")||args.has("checked")){JSONObject target=pin.optJSONObject("targetPreview");if(target==null)throw new StalePage("表单操作需要当前已展示控件");BrowserFormControls.requireTarget(target,args);}
         if(retentionArgs(args)){JSONObject source=sourceFor(args),projection=source.optJSONObject("structuredProjection");int fields=0;if(projection!=null)for(int i=0;i<projection.getJSONArray("data").length();i++)fields+=projection.getString("mode").equals("list")?1:projection.getJSONArray("data").getJSONObject(i).getJSONArray("cells").length();pin.put("sourceRetentionPin",dev.pocketengine.store.TaskStore.capabilityFingerprint(source)).put("sourceRetentionPreview",new JSONObject().put("mode",projection==null?"text_excerpt":projection.getString("mode")).put("rows",projection==null?0:projection.getJSONArray("data").length()).put("fields",fields).put("partial",projection!=null&&projection.getBoolean("partial")).put("excerptPreview",unicodeClip(source.getString("excerpt"),400)));}
+        if(args.has("steps"))pin.put("sequenceTargets",BrowserToolSequence.pinTargets(args,observation(required(args.getString("tabId")),args.getString("observationId"))));
         pin.put("dataProvenance",new JSONObject().put("sourceScope","owner_private_profile").put("sourceKind","untrusted_rendered_page_or_model_context")
                 .put("declaredSinkCoverage","navigation_url_href_form_action_and_submitter_formaction_only").put("ajaxAndScriptSinksCovered",false));
         if(args.has("pageRecordId")){JSONObject record=recoveryPage(args.getString("pageRecordId"),args.getString("url"));pin.put("recoveryPage",record);}
@@ -204,6 +206,17 @@ public final class BrowserTaskSpace {
     }
     private static String origin(URI uri)throws Exception{return new URI(uri.getScheme(),null,uri.getHost(),uri.getPort(),null,null,null).toASCIIString();}
     public void requirePin(JSONObject pin,JSONObject args)throws Exception {if(!pin.toString().equals(pin(args).toString()))throw new StalePage("审批后页面、空间或观察已变化，尚未派发");}
+    public void requireSequencePage(JSONObject initial)throws Exception {
+        main();checkOriginal(originalControl);Tab tab=required(initial.getString("tabId"));JSONObject page=driver.metadata(tab),current=tab.identity();
+        for(String key:new String[]{"taskId","runId","epoch","profileId","profileRevision","browserSessionId","browserSpaceId","tabId","tabGeneration"})if(!String.valueOf(initial.get(key)).equals(String.valueOf(current.get(key))))throw new StalePage("组合原页面身份已变化");
+        if(page.getLong("navigation")!=initial.getLong("navigation")||!page.getString("documentId").equals(initial.getString("documentId"))||!page.getString("url").equals(initial.getString("pageUrl")))throw new StalePage("组合页面已导航，剩余步骤没有派发");
+    }
+    public JSONObject sequenceObservation(String tabId)throws Exception {main();checkOriginal(originalControl);Tab tab=required(tabId);JSONObject latest=observations.get(tab.tabId);return latest==null?null:copy(latest);}
+    public void finalSequenceObservation(JSONObject args,JSONObject delivered)throws Exception {
+        main();checkOriginal(originalControl);if(args.has("read")||delivered.optBoolean("semanticRead"))return;JSONObject captured=observations.get(args.getString("tabId"));if(captured==null)return;captured.put("runnerDelivered",false);
+        if(!delivered.optString("status").equals("observed")||!delivered.optBoolean("ok")||!captured.getString("observationId").equals(delivered.optString("observationId"))||delivered.optJSONArray("elements")==null)return;
+        presentedObservation(delivered);captured.put("runnerDelivered",true);
+    }
     public CompletableFuture<JSONObject> dispatch(String command,JSONObject args,String operationId,Gate gate)throws Exception {
         main();checkOriginal(originalControl);gate.check();CompletableFuture<JSONObject> result=new CompletableFuture<>();
         if(command.equals("open")){
@@ -222,6 +235,11 @@ public final class BrowserTaskSpace {
             case "select":driver.select(tab,gate);gate.check();revision++;recordCurrentPage(tab,"ready");publishManifest();result.complete(tab.identity().put("accepted",true).put("verified",false).put("status","selected"));break;
             case "close":gate.check();gate.entered();recordCurrentPage(tab,"closed");tab.invalidate();observations.remove(tab.tabId);clearReadObservations(tab.tabId);driver.closeOwned(tab);tabs.remove(tab.tabId);revision++;publishManifest();result.complete(tab.identity().put("accepted",true).put("verified",false).put("status","closed"));break;
             case "download":if(observation(tab,args.getString("observationId")).optBoolean("readOnlyEvidence"))throw new StalePage("语义读取证据不是下载动作引用，请重新普通observe");if(downloadRefs.size()>=100)throw new IllegalStateException("本浏览空间下载引用已达上限");JSONObject job=driver.download(tab,args.getString("url"),operationId,gate);String id=job.getString("id");uuid(id);downloadRefs.put(id,tab.identity());result.complete(job);break;
+            case "download_document":{
+                JSONObject captured=observation(tab,args.getString("observationId"));if(captured.optBoolean("readOnlyEvidence")||captured.optJSONObject("actionFrame")!=null)throw new StalePage("文档下载仅支持原主文档实际展示的链接");
+                JSONObject target=pin(args).getJSONObject("targetPreview");if(!target.optString("tag").equals("A")||!target.optString("href").matches("(?s)^(blob:|data:).+"))throw new SecurityException("请先观察原页面的blob/data下载链接");
+                if(downloadRefs.size()>=100)throw new IllegalStateException("本浏览空间下载引用已达上限");JSONObject documentJob=driver.downloadDocument(tab,copy(args).put("_nativeTargetPreview",target),operationId,gate);String documentId=documentJob.getString("id");uuid(documentId);downloadRefs.put(documentId,tab.identity());result.complete(documentJob);break;
+            }
             default:
                 JSONObject dispatchArgs=args;
                 if(command.matches("click|type|set_date|focus|press|select_option|set_checked|scroll")&&observation(tab,args.getString("observationId")).optBoolean("readOnlyEvidence"))throw new StalePage("语义区域/续读仅作证据，请用普通observe取得原动作ref");

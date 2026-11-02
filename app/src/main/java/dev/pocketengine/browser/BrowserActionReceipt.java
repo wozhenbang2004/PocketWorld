@@ -16,7 +16,7 @@ public final class BrowserActionReceipt {
         switch(command){case "click":mechanism="synthetic_dom_click";break;case "type":mechanism="dom_value_setter_and_synthetic_events";break;
             case "focus":mechanism="dom_focus";break;case "press":mechanism="synthetic_dom_keyboard";break;case "set_date":mechanism="dom_date_setter_and_synthetic_events";break;case "select_option":mechanism="dom_select_setter_and_synthetic_events";break;case "set_checked":mechanism="synthetic_dom_checked_target";break;
             case "scroll":mechanism="dom_scroll_by";break;case "open":case "navigate":mechanism="webview_navigation_request";break;
-            case "download":mechanism="native_download_request";break;case "read_public":mechanism="anonymous_public_http_get";break;case "observe":case "wait":mechanism="page_read";break;case "unknown":mechanism="unknown_original_mechanism";break;default:mechanism="native_page_lifecycle";}
+            case "download":mechanism="native_download_request";break;case "download_document":mechanism="original_document_blob_data_stream";break;case "read_public":mechanism="anonymous_public_http_get";break;case "observe":case "wait":mechanism="page_read";break;case "unknown":mechanism="unknown_original_mechanism";break;default:mechanism="native_page_lifecycle";}
         JSONArray signals=new JSONArray();
         if(dom!=null)for(String key:new String[]{"urlChanged","textChanged","scrollChanged","valueChanged","checkedChanged","selectedIndexChanged"})if(dom.opt(key) instanceof Boolean&&dom.getBoolean(key))signals.put(key);
         String effect="not_observed";
@@ -35,7 +35,7 @@ public final class BrowserActionReceipt {
                 .put("before",identity(before)).put("after",identity(after))
                 .put("navigation",new JSONObject().put("state",before==null||after==null?"unknown":before.optLong("navigation",-1)!=after.optLong("navigation",-1)?"navigation_epoch_changed":!before.optString("pageIdentityDigest").equals(after.optString("pageIdentityDigest"))?"same_document_url_changed":"same_navigation_epoch")
                         .put("domDocumentIdentity","unavailable"))
-                .put("newTab",new JSONObject().put("state","not_instrumented")).put("downloads",new JSONObject().put("state",command.equals("download")?"native_request_receipt_only":"not_instrumented"))
+                .put("newTab",new JSONObject().put("state","not_instrumented")).put("downloads",new JSONObject().put("state",command.matches("download|download_document")?"native_request_receipt_only":"not_instrumented"))
                 .put("freshObservationRequired",command.matches("click|type|set_date|focus|press|select_option|set_checked|scroll|open|navigate"))
                 .put("automaticReplayAllowed",false).put("verifiedBusinessSuccess",false);
         if(receipt.optString("message").isEmpty()){

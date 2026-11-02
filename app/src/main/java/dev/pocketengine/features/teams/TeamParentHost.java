@@ -41,7 +41,7 @@ public final class TeamParentHost {
         JSONObject task=tasks.teamParentAccess(source,id,false),run=coordinator.get(id),state=tasks.teamParentExecutionState(source,id),nativeState=coordinator.parentExecutorState(id);
         boolean released=state.getBoolean("resourcesReleased")&&nativeState.getBoolean("resourcesReleased");JSONObject result=new JSONObject().put("teamRunId",id).put("hostTaskId",task.getString("id")).put("parentTaskId",source.view().getString("parentTaskId")).put("status",state.getBoolean("hasUnresolvedEffects")?"blocked_unknown":run.optString("status")).put("coordinatorStatus",run.optString("status")).put("phase",run.optString("phase")).put("generation",run.getInt("generation")).put("teamRevision",run.getLong("revision")).put("eventCursor",run.getLong("revision")).put("resourcesReleased",released).put("activeNativeExecutors",nativeState.getBoolean("activeNativeExecutors")).put("hasUnresolvedEffects",state.getBoolean("hasUnresolvedEffects")).put("businessVerified",false);
         JSONObject scope=task.optJSONObject("teamWriteScope");if(scope!=null)result.put("parentBudget",tasks.teamBudgetSnapshot(id)).put("scopeExpiresAt",task.optJSONObject("teamWorkPlan")==null?0:task.getJSONObject("teamWorkPlan").getLong("expiresAt")).put("projectId",scope.getString("targetProjectId"));
-        JSONArray members=new JSONArray(),slots=run.getJSONArray("members");for(int i=0;i<slots.length();i++){JSONObject slot=slots.getJSONObject(i);members.put(new JSONObject().put("memberId",slot.getString("id")).put("name",slot.optString("name")).put("role",slot.optString("role")).put("generation",slot.getInt("generation")).put("status",slot.optString("status")).put("paused",slot.optBoolean("paused")));}result.put("members",members);
+        JSONArray members=new JSONArray(),slots=run.getJSONArray("members");for(int i=0;i<slots.length();i++){JSONObject slot=slots.getJSONObject(i);members.put(new JSONObject().put("memberId",slot.getString("id")).put("name",slot.optString("name")).put("role",slot.optString("role")).put("generation",slot.getInt("generation")).put("identityRevision",slot.optInt("identityRevision",1)).put("exited",slot.optBoolean("exited")).put("status",slot.optString("status")).put("paused",slot.optBoolean("paused")));}result.put("members",members);
         if(task.optJSONObject("teamWorkPlan")!=null){JSONObject current=tasks.teamWorkPlanSnapshot(id);JSONArray index=new JSONArray(),items=current.getJSONObject("workPlan").getJSONArray("items");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);JSONObject shown=TeamWorkItems.exactIdentity(item).put("title",item.getString("title")).put("status",item.optString("status")).put("blockedBy",item.getJSONArray("blockedBy")).put("artifacts",item.getJSONArray("artifacts"));JSONObject assignment=item.optJSONObject("assignmentTask");if(assignment!=null){shown.put("childRunId",assignment.optString("runId")).put("assignmentStatus",assignment.optString("status"));JSONArray questions=assignment.getJSONArray("questions"),small=new JSONArray();for(int q=Math.max(0,questions.length()-2);q<questions.length();q++){JSONObject question=questions.getJSONObject(q);small.put(new JSONObject().put("questionId",question.getString("questionId")).put("state",question.getString("state")).put("questionPreview",preview(question.optString("question"),160)).put("questionChars",question.optString("question").length()).put("previewComplete",question.optString("question").length()<=160).put("assignmentRevision",question.optInt("assignmentRevision",1)));}shown.put("questions",small).put("questionCount",questions.length()).put("questionsComplete",questions.length()<=2);}index.put(shown);}result.put("workItems",index);}
         result.put("children",state.getJSONArray("children")).put("activeChildAttempts",state.getInt("activeChildAttempts")).put("unknownChildCount",state.getInt("unknownChildCount"));
         if(TeamCoordinator.RESEARCH_FORMAT.equals(run.optString("researchExecutionFormat"))){
@@ -85,6 +85,7 @@ public final class TeamParentHost {
     }
     private JSONArray artifacts(TaskStore.TeamParentOrigin source,String id,RunControl original)throws Exception{tasks.teamParentAccess(source,id,false);JSONArray rows=tasks.teamAssignmentsForReview(id,original),refs=new JSONArray();for(int i=0;i<rows.length();i++){JSONArray artifacts=rows.getJSONObject(i).getJSONArray("artifacts");for(int a=0;a<artifacts.length();a++)refs.put(artifacts.getJSONObject(a));}return refs;}
     private JSONObject message(TaskStore.TeamParentOrigin source,JSONObject args)throws Exception {
+        if(args.has("recipients"))return broadcast(source,args);
         String id=args.getString("teamRunId");tasks.teamParentAccess(source,id,true);JSONObject nativeInput=envelope(args);coordinator.parentSnapshot(source,nativeInput);tasks.claimTeamParentAction(source,id);
         if(args.has("questionId")){
             if(!args.has("assignmentId")||!args.has("answerId")||!args.has("answer"))throw new IllegalArgumentException("回答必须明确原assignment/question/answer ID与答案");nativeInput.put("mode","reply").put("quoteMessageId","question:"+args.getString("questionId")).put("continueSafely",args.optString("delivery","queue").equals("continue"));
@@ -104,6 +105,17 @@ public final class TeamParentHost {
             sent.getJSONObject("messageReceipt").put("continuationState","queued").put("budgetIncreased",false);
         }
         changed.accept(id);return status(source,id).put("messageReceipt",sent.getJSONObject("messageReceipt")).put("delivery",args.optString("delivery","queue"));
+    }
+    private JSONObject broadcast(TaskStore.TeamParentOrigin source,JSONObject args)throws Exception {
+        TeamParentBroadcast.validate(args);String id=args.getString("teamRunId");tasks.teamParentAccess(source,id,true);
+        JSONArray operations=tasks.get(source.view().getString("parentTaskId"),false).getJSONArray("operations");
+        tasks.claimTeamParentAction(source,id);JSONObject receipt;
+        synchronized(coordinator){receipt=TeamParentBroadcast.deliver(source.view(),args,operations,new TeamParentBroadcast.Mailbox(){
+            public void checkCurrent()throws Exception{source.checkCurrent();tasks.teamParentAccess(source,id,true);}
+            public JSONObject snapshot()throws Exception{return coordinator.get(id);}
+            public JSONObject send(JSONObject input)throws Exception{return coordinator.sendParentMessage(source,input,next->tasks.queueTeamParentInput(source,next));}
+        });}
+        changed.accept(id);return receipt.put("broadcastReceipt",new JSONObject(receipt.toString()));
     }
     private JSONObject control(TaskStore.TeamParentOrigin source,JSONObject args,RunControl original)throws Exception {
         String id=args.getString("teamRunId"),action=args.getString("action");tasks.teamParentAccess(source,id,true);JSONObject input=envelope(args);coordinator.parentSnapshot(source,input);

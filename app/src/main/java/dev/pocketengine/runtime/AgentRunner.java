@@ -441,7 +441,7 @@ public final class AgentRunner {
                 }
                 if (calls.length() > 8) throw new ModelGateway.GatewayException("模型一次请求了过多手机动作，请更换模型或缩短目标。");
                 validateCalls(calls);
-                int preparedPlans=0;for(int i=0;i<calls.length();i++)if("phone_prepare_sequence".equals(calls.getJSONObject(i).getJSONObject("function").optString("name"))&&++preparedPlans>1)throw new ModelGateway.GatewayException("每批只能准备一个原生短序列；尚未执行本批动作。");
+                int preparedPlans=0;for(int i=0;i<calls.length();i++)if(java.util.Set.of("phone_prepare_sequence","browser_task_prepare_sequence").contains(calls.getJSONObject(i).getJSONObject("function").optString("name"))&&++preparedPlans>1)throw new ModelGateway.GatewayException("每批只能准备一个原生短序列；尚未执行本批动作。");
                 JSONObject assistant = new JSONObject().put("role", "assistant").put("tool_calls", safeArray(calls, config, false));
                 if(memoryDependency!=null)assistant.put("memoryContext",memoryDependency);if(memoryReference!=null)assistant.put("memoryReference",memoryReference);
                 if(response.optJSONObject("provider_data")!=null)assistant.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));
@@ -589,7 +589,7 @@ public final class AgentRunner {
                     String toolStatus=projectRunning?nativeRunning?"running":"awaiting_user":receipt.optBoolean("ok",false)?"completed":"failed";
                     String toolMessage=projectRunning?nativeRunning?"原开发服务已启动且仍归此原执行；这不是程序结束或服务就绪，后续仅允许原授权的只读核对。":"运行中回执未能与原生已启动服务及原操作核对，未继续模型请求或新工具。"
                             :receipt.optString("message",receipt.optBoolean("ok",false)?"操作回执已收到。":"操作未成功，请检查当前页面。");
-                    emit(taskId,"tool",toolStatus,toolMessage,name,receipt,config,sink);
+                    emit(taskId,"tool",toolStatus,toolMessage,name,receipt,config,sink,recordedOperation);
                     if(nativeOwnerRequired!=null){
                         evidence.put("nativeSensitiveStep",receipt).put("originalEffectsRetained",true).put("automaticReplayAllowed",false);
                         return finish(taskId,"awaiting_user",nativeOwnerRequired.getMessage(),evidence,steps,config,sink);
@@ -615,7 +615,8 @@ public final class AgentRunner {
                     if(capabilities!=null&&!control.isPaused()&&pauseSeen[0]==control.pauseRevision())capabilities.afterTool(name,safeJson(args,config,false),safeToolReceipt(name,receipt,config),control);
                     // A successful read can still time out with an unmet predicate. Only this
                     // native plan step uses matched as a prerequisite; standalone WAIT is unchanged.
-                    if(!receipt.optBoolean("ok",false)||activeStep!=null&&activeStep.tool==dev.pocketengine.core.NativeToolPlan.Tool.CONDITION_WAIT&&!Boolean.TRUE.equals(receipt.opt("matched")))sequenceMayContinue=false;
+                    String conditionKey=activeStep!=null&&activeStep.tool==dev.pocketengine.core.NativeToolPlan.Tool.BROWSER_WAIT?"conditionMet":"matched";
+                    if(!receipt.optBoolean("ok",false)||activeStep!=null&&activeStep.tool.requiresMatched()&&!Boolean.TRUE.equals(receipt.opt(conditionKey)))sequenceMayContinue=false;
                     if(capabilities!=null&&receipt.optBoolean("ok",false)&&!control.isPaused()&&!control.isCancelled()&&pauseSeen[0]==control.pauseRevision()){
                         String nativeOperation=recordedOperation==null?call.getString("id"):recordedOperation;
                         if(imageRequired){dev.pocketengine.core.NativeToolObservation observation=capabilities.takeToolObservation(name,nativeOperation,control);
@@ -709,7 +710,7 @@ public final class AgentRunner {
         } finally {
             for(var plan:nativePlans){
                 plan.close();JSONObject progress=nativeSequenceProgress.get(plan);
-                if(progress!=null)try{int entered=progress.getInt("dispatchEnteredSteps"),remaining=plan.size()-entered;if(remaining>0)emit(taskId,"native_sequence","not_dispatched","短序列剩余 "+remaining+" 步没有派发，请核对当前结果后再规划。","phone_prepare_sequence",new JSONObject(progress.toString()).put("remainingSteps",remaining).put("firstNotDispatchedStep",entered+1).put("automaticReplay",false).put("executionAuthorized",false),config,sink);}
+                if(progress!=null)try{int entered=progress.getInt("dispatchEnteredSteps"),remaining=plan.size()-entered;if(remaining>0)emit(taskId,"native_sequence","not_dispatched","短序列剩余 "+remaining+" 步没有派发，请核对当前结果后再规划。",plan.parentTool(),new JSONObject(progress.toString()).put("remainingSteps",remaining).put("firstNotDispatchedStep",entered+1).put("automaticReplay",false).put("executionAuthorized",false),config,sink);}
                 catch(Exception unavailable){/* Never replace an actual effect/unknown/cancellation with a progress failure. */}
             }
             for(var image:nativeImages)image.close();
@@ -1301,10 +1302,15 @@ public final class AgentRunner {
 
     private static void emit(String taskId, String type, String status, String message, String tool,
                              JSONObject receipt, ModelConfig config, EventSink sink) throws Exception {
+        emit(taskId,type,status,message,tool,receipt,config,sink,null);
+    }
+    private static void emit(String taskId,String type,String status,String message,String tool,
+                             JSONObject receipt,ModelConfig config,EventSink sink,String nativeOperationId)throws Exception {
         JSONObject event = new JSONObject().put("taskId", taskId).put("type", type).put("status", status)
                 .put("message", clean(message, config)).put("timestamp", System.currentTimeMillis());
         if (tool != null) event.put("tool", clean(tool, config));
         if (receipt != null) event.put("receipt", safeReceipt(receipt, config));
+        if(nativeOperationId!=null)event.put("nativeOperationId",nativeOperationId);
         sink.emit(event);
     }
 

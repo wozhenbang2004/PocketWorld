@@ -19,7 +19,7 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 
-/** Actual root TaskStore v8 SQLite migration/recovery, not a temporary version overlay.
+/** Actual root TaskStore device-v8 and organization-v9 SQLite migration/recovery, not a temporary version overlay.
  * The legacy layout is the original retained v7 schema, with all new device tables removed and
  * user_version=7. Seeds are controlled native fixtures, not real provider/device receipts. */
 @RunWith(RobolectricTestRunner.class)
@@ -34,11 +34,11 @@ public final class DeviceV8MigrationNativeTest {
     private String scalar(String query,String... args){try(Cursor row=sql.rawQuery(query,args)){assertTrue(query,row.moveToFirst());return row.getString(0);}}
     private void asVersion7(){
         List<String> added=new ArrayList<>();try(Cursor rows=sql.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'device_%'",null)){while(rows.moveToNext())added.add(rows.getString(0));}
-        assertEquals("exact final Trust6+Tasks3; candidate bootstrap is a later migration gate",9,added.size());for(String table:added)sql.execSQL("DROP TABLE "+table);
+        assertEquals("current Trust7+Tasks3; includes native pairing candidates",10,added.size());for(String table:added)sql.execSQL("DROP TABLE "+table);
         sql.setVersion(7);assertEquals(7,sql.getVersion());sql.close();
     }
     @Test public void version7To8RetainsOriginalTaskRunOperationGatewayAndInferenceIdentities()throws Exception{
-        TaskStore before=new TaskStore(RuntimeEnvironment.getApplication());sql=database(before);assertEquals(8,sql.getVersion());
+        TaskStore before=new TaskStore(RuntimeEnvironment.getApplication());sql=database(before);assertEquals(9,sql.getVersion());
         String id=before.createCapabilityTask("legacy durable original task","").getString("id");long deadline=System.currentTimeMillis()+300000;
         before.configureExecutionScope(id,0,deadline,8,8);JSONObject task=before.startAttempt(id,"capabilities",8);String run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");RunControl original=new RunControl();original.bindHostRun(id,run,epoch);
         before.authorizeTools(id,run,new JSONArray().put("fixture_effect"));before.status(id,"running","legacy native fixture");var journal=before.journal(id,run,epoch,original);
@@ -49,18 +49,18 @@ public final class DeviceV8MigrationNativeTest {
         String inference=UUID.randomUUID().toString();JSONObject route=new JSONObject().put("purpose","CHAT").put("maxRouteSwitches",0).put("orderedCandidates",new JSONArray());
         InferenceRequestStore.begin(sql,inference,id+":"+run,"c".repeat(64),new InferenceReceipt.Context(id,run,epoch,InferenceReceipt.Purpose.MAIN,""),route,id,deadline,1);
         String grant=scalar("SELECT grant_json FROM runs WHERE run_id=?",run),receipt=scalar("SELECT receipt FROM operations WHERE operation_id=?",settled),arguments=scalar("SELECT arguments FROM operations WHERE operation_id=?",pending);
-        asVersion7();TaskStore migrated=new TaskStore(RuntimeEnvironment.getApplication());sql=database(migrated);assertEquals(8,sql.getVersion());
+        asVersion7();TaskStore migrated=new TaskStore(RuntimeEnvironment.getApplication());sql=database(migrated);assertEquals(9,sql.getVersion());
         JSONObject recovered=migrated.get(id,false);assertEquals(run,recovered.getString("runId"));assertEquals(epoch,recovered.getInt("coordinatorEpoch"));assertEquals(2,recovered.getJSONObject("executionScope").getInt("toolsUsed"));assertFalse("pending effect cannot become success",recovered.optString("status").equals("completed"));
         assertEquals(grant,scalar("SELECT grant_json FROM runs WHERE run_id=?",run));assertEquals(receipt,scalar("SELECT receipt FROM operations WHERE operation_id=?",settled));assertEquals(arguments,scalar("SELECT arguments FROM operations WHERE operation_id=?",pending));assertEquals("unknown",scalar("SELECT state FROM operations WHERE operation_id=?",pending));assertEquals(2,count("operations"));
         assertEquals("UNKNOWN",scalar("SELECT state FROM harness_gateway_claims WHERE lease_id=? AND request_id=?",lease,request));assertEquals("b".repeat(64),scalar("SELECT request_digest FROM harness_gateway_claims WHERE lease_id=? AND request_id=?",lease,request));assertEquals("REQUIRES_RECONCILE",scalar("SELECT state FROM harness_gateway_leases WHERE lease_id=?",lease));
         assertEquals("UNKNOWN",scalar("SELECT state FROM inference_requests WHERE logical_request_id=?",inference));assertEquals("c".repeat(64),scalar("SELECT request_digest FROM inference_requests WHERE logical_request_id=?",inference));assertEquals(id,scalar("SELECT budget_owner_ref FROM inference_requests WHERE logical_request_id=?",inference));
-        for(String table:new String[]{"device_peers","device_grants","device_pairing_invites","device_revocation_acks","device_outgoing_grants","device_identity_rotations","device_inbound","device_child_budget","device_child_links"})assertEquals(table,0,count(table));
+        for(String table:new String[]{"device_peers","device_grants","device_pairing_invites","device_revocation_acks","device_outgoing_grants","device_identity_rotations","device_pairing_candidates","device_inbound","device_child_budget","device_child_links"})assertEquals(table,0,count(table));
         assertTrue(migrated.hasUnresolved(id));assertThrows(SecurityException.class,()->TaskStoreGatewayClaims.requireNoUnknown(sql,id,run,epoch));
         sql.close();TaskStore again=new TaskStore(RuntimeEnvironment.getApplication());sql=database(again);assertEquals(2,count("operations"));assertEquals("unknown",scalar("SELECT state FROM operations WHERE operation_id=?",pending));assertEquals(receipt,scalar("SELECT receipt FROM operations WHERE operation_id=?",settled));assertEquals(1,count("inference_requests"));assertEquals(1,count("harness_gateway_claims"));
     }
     @Test public void unsupportedDowngradeFailsClosedWithoutDeletingOriginalRows()throws Exception{
-        TaskStore before=new TaskStore(RuntimeEnvironment.getApplication());sql=database(before);String id=before.createCapabilityTask("retain unsupported future database","").getString("id");sql.setVersion(9);sql.close();
+        TaskStore before=new TaskStore(RuntimeEnvironment.getApplication());sql=database(before);String id=before.createCapabilityTask("retain unsupported future database","").getString("id");sql.setVersion(10);sql.close();
         assertThrows(android.database.sqlite.SQLiteException.class,()->new TaskStore(RuntimeEnvironment.getApplication()));
-        sql=SQLiteDatabase.openDatabase(RuntimeEnvironment.getApplication().getDatabasePath("pocket-world.db").getAbsolutePath(),null,SQLiteDatabase.OPEN_READWRITE);opened.add(sql);assertEquals(9,sql.getVersion());assertEquals(1,count("tasks"));assertEquals(id,scalar("SELECT task_id FROM tasks"));
+        sql=SQLiteDatabase.openDatabase(RuntimeEnvironment.getApplication().getDatabasePath("pocket-world.db").getAbsolutePath(),null,SQLiteDatabase.OPEN_READWRITE);opened.add(sql);assertEquals(10,sql.getVersion());assertEquals(1,count("tasks"));assertEquals(id,scalar("SELECT task_id FROM tasks"));
     }
 }

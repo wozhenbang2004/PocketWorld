@@ -8,7 +8,7 @@ import java.util.TreeMap;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Exact, preflighted edits. No fuzzy matching, whitespace repair, or cross-file atomicity claim. */
+/** Exact, preflighted edits and frozen-text copy/append. No alternate writer or cross-file atomicity. */
 public final class ProjectExactPatch {
     public static final int MAX_FILES=8,MAX_TEXT_BYTES=256*1024,MAX_HUNKS=24;
     private ProjectExactPatch() {}
@@ -17,27 +17,46 @@ public final class ProjectExactPatch {
         Map<String,String> text=ProjectSources.files(snapshot);Map<String,byte[]> all=ProjectSources.byteFiles(snapshot);Map<String,JSONObject> prepared=new TreeMap<>();
         for(int i=0;i<edits.length();i++){
             JSONObject edit=edits.getJSONObject(i);String path=VersionedWorkspace.path(edit.getString("path")),action=edit.optString("action","replace");
-            if(!ProjectSources.sourcePath(path)||!Set.of("replace","create","delete").contains(action)||prepared.containsKey(path))throw new IllegalArgumentException("补丁路径重复、不是源码路径或动作无效");
+            if(!ProjectSources.sourcePath(path)||!Set.of("replace","create","delete","copy","append").contains(action)||prepared.containsKey(path))throw new IllegalArgumentException("补丁路径重复、不是源码路径或动作无效");
             boolean exists=all.containsKey(path);if(exists&&!text.containsKey(path))throw new IllegalArgumentException("精确文字补丁不能改写二进制文件："+path);
             String before=text.getOrDefault(path,""),beforeHash=exists?ProjectSources.sha256(all.get(path)):"absent";
             if(!beforeHash.equals(edit.getString("expectedHash")))throw new SecurityException("补丁基准SHA已变化："+path);
-            if(action.equals("create")&&exists||!action.equals("create")&&!exists)throw new SecurityException("补丁动作与文件实际存在状态不同："+path);
+            if(!action.equals("copy")&&(action.equals("create")&&exists||!action.equals("create")&&!exists))throw new SecurityException("补丁动作与文件实际存在状态不同："+path);
             if(before.getBytes(StandardCharsets.UTF_8).length>MAX_TEXT_BYTES)throw new IllegalArgumentException("本次文字补丁只修改256KiB以内的UTF-8文件："+path);
-            String after;JSONArray changes=new JSONArray();
-            if(action.equals("delete")){after="";if(edit.has("content")||edit.has("replacements"))throw new IllegalArgumentException("删除操作不能同时传替换内容");}
+            String after;JSONArray changes=new JSONArray();JSONObject copiedFrom=null;
+            if(action.equals("copy")){
+                if(edit.has("content")||edit.has("replacements"))throw new IllegalArgumentException("复制只取固定原文件字节，不混合新的content/replacements");
+                String from=VersionedWorkspace.path(edit.getString("fromPath"));if(path.equals(from)||!ProjectSources.sourcePath(from)||!all.containsKey(from))throw new IllegalArgumentException("复制需同一已选副本内不同的实际源码文件");
+                if(!text.containsKey(from))throw new IllegalArgumentException("此精确文字复制不支持二进制源，不解码或截断原件");
+                byte[] source=all.get(from);if(source.length>MAX_TEXT_BYTES)throw new IllegalArgumentException("本次文字复制源超过256KiB："+from);String sourceHash=ProjectSources.sha256(source);
+                if(!sourceHash.equals(edit.getString("expectedSourceHash")))throw new SecurityException("复制源SHA已变化："+from);
+                after=text.get(from);copiedFrom=new JSONObject().put("path",from).put("sha256",sourceHash).put("bytes",source.length).put("source","original_frozen_snapshot");
+                changes.put(new JSONObject().put("kind","copy").put("fromPath",from).put("sourceHash",sourceHash).put("overwritesExistingTarget",exists));action=exists?"replace":"create";
+            }
+            else if(action.equals("append")){
+                if(edit.has("fromPath")||edit.has("expectedSourceHash")||edit.has("replacements"))throw new IllegalArgumentException("追加只接收目标旧SHA和明确content，不混合复制或替换上下文");
+                String suffix=edit.getString("content");if(suffix.isEmpty())throw new IllegalArgumentException("追加内容不能为空，不生成无变化文件操作");encode(suffix);after=before+suffix;
+                changes.put(new JSONObject().put("kind","append").put("offset",before.length()).put("offsetUnit","UTF16_code_units").put("text",suffix));action="replace";
+            }
+            else if(action.equals("delete")){after="";if(edit.has("content")||edit.has("replacements"))throw new IllegalArgumentException("删除操作不能同时传替换内容");}
             else if(action.equals("create")){if(edit.has("replacements"))throw new IllegalArgumentException("创建文件需明确content，不猜测补丁上下文");after=edit.getString("content");changes.put(new JSONObject().put("kind","create").put("text",after));}
             else {
                 if(edit.has("content"))throw new IllegalArgumentException("现有文件需明确精确replacements；整文件替换仍可用原edit");JSONArray hunks=edit.getJSONArray("replacements");if(hunks.length()<1||hunks.length()>MAX_HUNKS)throw new IllegalArgumentException("单文件需1至24个精确替换");after=before;
                 for(int h=0;h<hunks.length();h++){
-                    JSONObject hunk=hunks.getJSONObject(h);String old=hunk.getString("oldText"),value=hunk.getString("newText");if(old.isEmpty()||old.length()>6000||value.length()>6000||old.equals(value))throw new IllegalArgumentException("替换需1至6000字明确旧文字与不同的新文字，不支持空上下文或模糊匹配");
-                    int first=after.indexOf(old);if(first<0||after.indexOf(old,first+1)>=0)throw new SecurityException("旧文字未唯一命中，未猜测或部分应用："+path+" 第"+(h+1)+"处");
+                    JSONObject hunk=hunks.getJSONObject(h);String old=hunk.getString("oldText"),value=hunk.getString("newText");boolean positioned=hunk.has("startOffset");if(!positioned&&old.isEmpty()||old.length()>6000||value.length()>6000||old.equals(value))throw new IllegalArgumentException("替换需6000字以内明确旧/新文字；空旧文字只可在明确startOffset插入，不模糊猜测");
+                    int first;
+                    if(positioned){
+                        Object raw=hunk.opt("startOffset");if(!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<0||((Number)raw).longValue()>after.length())throw new IllegalArgumentException("startOffset需当前工作文字范围内的UTF16整数位置");first=((Number)raw).intValue();
+                        if(old.length()>after.length()-first||!after.regionMatches(first,old,0,old.length()))throw new SecurityException("精确范围旧文字不同，未移位搜索或部分应用："+path+" 第"+(h+1)+"处");
+                    }else{first=after.indexOf(old);if(first<0||after.indexOf(old,first+1)>=0)throw new SecurityException("旧文字未唯一命中，未猜测或部分应用："+path+" 第"+(h+1)+"处");}
+                    if(!ProjectEditorDocument.codePointBoundary(after,first)||!ProjectEditorDocument.codePointBoundary(after,first+old.length()))throw new IllegalArgumentException("精确补丁范围切断Unicode字符，未修改原文");
                     int line=1;for(int c=0;c<first;c++)if(after.charAt(c)=='\n')line++;
-                    changes.put(new JSONObject().put("line",line).put("oldText",old).put("newText",value));after=after.substring(0,first)+value+after.substring(first+old.length());
+                    changes.put(new JSONObject().put("line",line).put("oldText",old).put("newText",value).put("startOffset",first).put("endOffset",first+old.length()).put("offsetUnit","UTF16_code_units").put("offsetBasis","after_preceding_hunks"));after=after.substring(0,first)+value+after.substring(first+old.length());
                 }
             }
             byte[] bytes=encode(after);if(bytes.length>MAX_TEXT_BYTES)throw new IllegalArgumentException("补丁结果超过256KiB："+path);
             String afterHash=action.equals("delete")?"absent":ProjectSources.sha256(bytes);
-            prepared.put(path,new JSONObject().put("path",path).put("action",action).put("expectedHash",beforeHash).put("afterHash",afterHash).put("beforeContent",before).put("content",after).put("beforeBytes",before.getBytes(StandardCharsets.UTF_8).length).put("afterBytes",action.equals("delete")?0:bytes.length).put("changes",changes));
+            JSONObject file=new JSONObject().put("path",path).put("action",action).put("expectedHash",beforeHash).put("afterHash",afterHash).put("beforeContent",before).put("content",after).put("beforeBytes",before.getBytes(StandardCharsets.UTF_8).length).put("afterBytes",action.equals("delete")?0:bytes.length).put("changes",changes);if(copiedFrom!=null)file.put("copiedFrom",copiedFrom);prepared.put(path,file);
         }
         long total=0;int count=all.size();for(byte[] bytes:all.values())total+=bytes.length;
         for(JSONObject file:prepared.values()){String path=file.getString("path");boolean exists=all.containsKey(path);total-=exists?all.get(path).length:0;total+=file.getLong("afterBytes");if(file.getString("action").equals("delete"))count--;else if(!exists)count++;all.put(path,new byte[0]);}

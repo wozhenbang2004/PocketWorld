@@ -85,10 +85,13 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertEqual([group], HOST.select(REGISTRY, [group], []))
         self.assertEqual([group], HOST.select(REGISTRY, [], [primary]))
         self.assertEqual([group], HOST.select(REGISTRY, [group], [primary]))
-        # A helper has @Test bodies, but is compile-only, not another selected suite.
-        self.assertIn('dev.pocketengine.phone.observation.PhoneTreeSequenceTest', REGISTRY[group]['helpers'])
-        with self.assertRaises(HOST.PrerequisiteError):
-            HOST.select(REGISTRY, [], ['dev.pocketengine.phone.observation.PhoneTreeSequenceTest'])
+        # This class remains compile-only in the explicit sensitive group. It is now
+        # runnable in the separately selected browser-plan regression group.
+        helper = 'dev.pocketengine.phone.observation.PhoneTreeSequenceTest'
+        self.assertIn(helper, REGISTRY[group]['helpers'])
+        self.assertNotIn(helper, [REGISTRY[group]['class']] + REGISTRY[group]['additionalClasses'])
+        self.assertEqual(['browser-native-sequence'], HOST.select(REGISTRY, [], [helper]))
+        self.assertEqual([group], HOST.select(REGISTRY, [group], []))
 
     def test_phone_sensitive_owner_cli_keeps_only_its_fifty_xml_cases_and_original_task(self):
         # Explicit fake process/XML boundary only; no Gradle, JVM or App body is run here.

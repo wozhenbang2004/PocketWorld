@@ -102,6 +102,21 @@ public final class RemoteModule implements EngineModule {
             default:throw new IllegalArgumentException("未知电脑连接操作");
         }
     }
+    /** The existing AgentRunner read routes retain their original RunControl through network IO.
+     * This admits no owner write, new command, profile, task or approval. */
+    public JSONObject handleForTask(String command,JSONObject input,dev.pocketengine.core.RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(original).check();if(closed)throw new IllegalStateException("电脑连接模块已关闭");
+        switch(command){
+            case "environments":return request(input,"/v1/environments",null,15,original);
+            case "listJobs":return request(input,"/v1/jobs",null,15,original);
+            case "readFile":return request(input,workspacePath(input,"file")+"?path="+URLEncoder.encode(required(input,"path",2048),"UTF-8"),null,20,original);
+            case "getJob":{
+                JSONObject result=requestJob(input,"/v1/jobs/"+identifier(input,"jobId"),null,15,original);
+                original.check();result.put("profileId",required(input,"profileId",80));acceptReceipt(result);return result;
+            }
+            default:throw new SecurityException("此命令不是原任务已登记的只读电脑工具");
+        }
+    }
     /** Native owner opaque approval only. EngineModule.handle does not expose project execution/restore. */
     public JSONObject dispatchProjectAction(dev.pocketengine.features.RemoteOwnerWorkflows.ProjectApproval approval,AssignmentDispatch before)throws Exception {
         if(closed||approval==null||before==null)throw new SecurityException("原连接已关闭或没有本次原生项目操作批准");approval.checkCurrent();JSONObject scope=approval.view();String action=scope.getString("action"),profile=scope.getString("profileId"),operation=scope.getString("operationId");requireProfileBinding(profile,scope.getString("profileGeneration"));
@@ -377,8 +392,9 @@ public final class RemoteModule implements EngineModule {
     }
     private synchronized JSONObject profile(String id)throws Exception {JSONObject found=find(id);if(found==null)throw new IllegalArgumentException("电脑连接不存在");return new JSONObject(found.toString());}
     private JSONObject find(String id)throws Exception {for(int i=0;i<profiles.length();i++){JSONObject p=profiles.getJSONObject(i);if(id.equals(p.optString("id")))return p;}return null;}
-    private JSONObject request(JSONObject input,String path,JSONObject body,int timeout)throws Exception {
-        BoundRequest target;synchronized(this){String id=identifier(input,"profileId");if(input.has("_profileBinding"))requireProfileRevision(id,required(input,"_profileBinding",64));target=bind(id,null);}return send(target,path,body,timeout);
+    private JSONObject request(JSONObject input,String path,JSONObject body,int timeout)throws Exception {return request(input,path,body,timeout,null);}
+    private JSONObject request(JSONObject input,String path,JSONObject body,int timeout,dev.pocketengine.core.RunControl original)throws Exception {
+        BoundRequest target;synchronized(this){String id=identifier(input,"profileId");if(input.has("_profileBinding"))requireProfileRevision(id,required(input,"_profileBinding",64));target=bind(id,null);}return send(target,path,body,timeout,original);
     }
     /** Native owner workflow only: not exposed by handle/model tools. One persisted exact operation. */
     public JSONObject captureResultSnapshot(JSONObject input)throws Exception {return captureResultSnapshot(input,()->{});}
@@ -611,7 +627,7 @@ public final class RemoteModule implements EngineModule {
         String profile=identifier(input,"profileId"),operation=identifier(input,"operationId");JSONObject details=assignmentDetails(input).put("nativeAssignment",input.getJSONObject("nativeAssignment")).put("packageIdentity",input.getString("packageIdentity"));
         Reservation reserved=reserve(profile,operation,"assignment_project_prepare",body,details);if(reserved.known)return reconcileProjectAssignment(input);
         JSONObject actual;
-        try{actual=projectSend(input,reserved.target,"/v1/assignment-projects",body,()->{control.check();authority.beforeDispatch();control.check();});}
+        try{actual=projectSend(input,reserved.target,"/v1/assignment-projects",body,()->{control.check();authority.beforeDispatch();control.check();},control);}
         catch(java.io.IOException uncertain){actual=reconcileProjectAssignment(input);if(!actual.has("inputFiles"))return actual;}
         actual=acceptProjectPreparation(input,reserved.intent,actual);
         JSONArray files=input.getJSONObject("packageManifest").getJSONArray("files");
@@ -629,7 +645,7 @@ public final class RemoteModule implements EngineModule {
         }
         control.check();String finalize=UUID.nameUUIDFromBytes(("pocketworld/project-finalize/v1/"+operation).getBytes(StandardCharsets.UTF_8)).toString();
         boolean alreadyFinalizing;synchronized(this){JSONObject current=currentProjectIntent(reserved.intent);alreadyFinalizing=current.optBoolean("finalizeDispatched");if(!alreadyFinalizing){current.put("finalizeDispatched",true).put("finalizeOperationId",finalize);recordOperation(current);}}if(alreadyFinalizing)return reconcileProjectAssignment(input);
-        try{actual=projectSend(input,assignmentTarget(input),"/v1/assignment-projects/"+operation+"/finalize",new JSONObject().put("finalizeOperationId",finalize).put("packageIdentity",input.getString("packageIdentity")),control::check);}
+        try{actual=projectSend(input,assignmentTarget(input),"/v1/assignment-projects/"+operation+"/finalize",new JSONObject().put("finalizeOperationId",finalize).put("packageIdentity",input.getString("packageIdentity")),control::check,control);}
         catch(java.io.IOException uncertain){return reconcileProjectAssignment(input);}
         control.check();return acceptProjectPreparation(input,reserved.intent,actual);
     }
@@ -647,7 +663,8 @@ public final class RemoteModule implements EngineModule {
     private synchronized JSONObject projectUnknown(JSONObject intent,String message)throws Exception {intent=currentProjectIntent(intent);intent.put("status","unknown").put("message",message);recordOperation(intent);return new JSONObject(intent.toString()).put("resubmitted",false);}
     private JSONObject currentProjectIntent(JSONObject selected)throws Exception {JSONObject actual=operation(selected.getString("operationId"));if(actual==null||!actual.optString("kind").equals("assignment_project_prepare")||!actual.optString("fingerprint").equals(selected.optString("fingerprint")))throw new SecurityException("原项目准备本机记录已替换");return actual;}
     private static String projectEncode(String value)throws Exception{return URLEncoder.encode(value,"UTF-8");}
-    private JSONObject projectSend(JSONObject input,BoundRequest target,String path,JSONObject body,AssignmentDispatch authority)throws Exception {dispatchGate.beforeDispatch(path);assignmentTarget(input);authority.beforeDispatch();assignmentTarget(input);JSONObject actual=RemoteTransport.requestProject(target.base,target.token,path,body,30);assignmentTarget(input);return actual;}
+    private JSONObject projectSend(JSONObject input,BoundRequest target,String path,JSONObject body,AssignmentDispatch authority)throws Exception {return projectSend(input,target,path,body,authority,null);}
+    private JSONObject projectSend(JSONObject input,BoundRequest target,String path,JSONObject body,AssignmentDispatch authority,dev.pocketengine.core.RunControl original)throws Exception {dispatchGate.beforeDispatch(path);assignmentTarget(input);authority.beforeDispatch();assignmentTarget(input);JSONObject actual=RemoteTransport.requestProject(target.base,target.token,path,body,30,original);assignmentTarget(input);return actual;}
     public JSONObject cancelProjectPreparation(JSONObject input,AssignmentDispatch authority)throws Exception {
         JSONObject actual=projectSend(input,assignmentTarget(input),"/v1/assignment-projects/"+identifier(input,"operationId")+"/cancel",new JSONObject(),authority);
         return acceptProjectPreparation(input,operation(identifier(input,"operationId")),actual);
@@ -734,7 +751,8 @@ public final class RemoteModule implements EngineModule {
     private static JSONObject snapshotNotice(JSONObject input,String status,String message)throws Exception {
         JSONObject result=new JSONObject().put("status",status).put("message",message);for(String key:new String[]{"operationId","jobId","jobOperationId","profileId","serviceBase","environmentId","worker"})if(input.has(key))result.put(key,input.get(key));return result;
     }
-    private JSONObject requestJob(JSONObject input,String path,JSONObject body,int timeout)throws Exception {
+    private JSONObject requestJob(JSONObject input,String path,JSONObject body,int timeout)throws Exception {return requestJob(input,path,body,timeout,null);}
+    private JSONObject requestJob(JSONObject input,String path,JSONObject body,int timeout,dev.pocketengine.core.RunControl originalControl)throws Exception {
         BoundRequest target;String profileId=identifier(input,"profileId"),jobId=identifier(input,"jobId");
         String expectedOperation=input.has("jobOperationId")?identifier(input,"jobOperationId"):"";
         synchronized(this){
@@ -759,7 +777,7 @@ public final class RemoteModule implements EngineModule {
             }
             target=bind(profileId,origin);
         }
-        JSONObject result=send(target,path,body,timeout);
+        JSONObject result=send(target,path,body,timeout,originalControl);
         // Artifact payloads are bytes/path/hash, not a job receipt; keep their original-origin fence.
         if(!path.startsWith("/v1/jobs/"+jobId+"/artifact?")&&(!jobId.equals(result.optString("id"))||!expectedOperation.isEmpty()&&!expectedOperation.equals(result.optString("operationId"))))throw new SecurityException("电脑返回了另一任务或操作的回执");
         return result;
@@ -774,8 +792,9 @@ public final class RemoteModule implements EngineModule {
         if(expectedService!=null&&!endpoint(base).equals(expectedService))throw new IllegalStateException("电脑地址与原操作不一致；请恢复原连接核对，未向新地址发送");
         return new BoundRequest(profileId,base,credentials.get(profileId,base));
     }
-    private JSONObject send(BoundRequest target,String path,JSONObject body,int timeout)throws Exception {
-        dispatchGate.beforeDispatch(path);return target.request(path,body,timeout);
+    private JSONObject send(BoundRequest target,String path,JSONObject body,int timeout)throws Exception {return send(target,path,body,timeout,null);}
+    private JSONObject send(BoundRequest target,String path,JSONObject body,int timeout,dev.pocketengine.core.RunControl original)throws Exception {
+        if(original!=null)original.check();dispatchGate.beforeDispatch(path);return target.request(path,body,timeout,original);
     }
     private synchronized Reservation reserve(String profileId,String operationId,String kind,JSONObject body,JSONObject details)throws Exception {
         if(details.has("profileBinding"))requireProfileRevision(profileId,details.getString("profileBinding"));
@@ -830,7 +849,8 @@ public final class RemoteModule implements EngineModule {
     private static final class BoundRequest {
         final String profileId,base,token,serviceBase;
         BoundRequest(String profileId,String base,String token){this.profileId=profileId;this.base=base;this.token=token;serviceBase=endpoint(base);}
-        JSONObject request(String path,JSONObject body,int timeout)throws Exception{return RemoteTransport.request(base,token,path,body,timeout).put("serviceBase",serviceBase);}
+        JSONObject request(String path,JSONObject body,int timeout)throws Exception{return request(path,body,timeout,null);}
+        JSONObject request(String path,JSONObject body,int timeout,dev.pocketengine.core.RunControl original)throws Exception{return RemoteTransport.request(base,token,path,body,timeout,original).put("serviceBase",serviceBase);}
     }
     private static final class Reservation {
         final JSONObject intent;final BoundRequest target;final boolean known;

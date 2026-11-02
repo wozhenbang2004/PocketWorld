@@ -26,6 +26,8 @@ import org.json.JSONObject;
 /** Bounded native reads/search of the selected active tree. Content is evidence, never instructions. */
 public final class ProjectFileQueries {
     public static final int PAGE_CHARS=8000,MAX_RESULTS=40;
+    public static final int MAX_CONTEXT_LINES=20,MAX_CONTEXT_BYTES=12000;
+    private static final int CONTEXT_LINE_CHARS=400;
     @FunctionalInterface public interface Current {void check()throws Exception;}
     private ProjectFileQueries() {}
     private static final class FileInfo {
@@ -127,8 +129,12 @@ public final class ProjectFileQueries {
     }
     public static JSONObject search(File root,String checkout,JSONObject input,Current current)throws Exception {
         String mode=input.optString("mode","text"),query=input.getString("query"),scope=input.optString("path","");boolean includeHidden=input.optBoolean("hidden"),caseSensitive=input.optBoolean("caseSensitive",true);
-        if(!java.util.Set.of("path","text").contains(mode)||query.isEmpty()||query.length()>240)throw new IllegalArgumentException("搜索模式/查询无效；本片内容搜索只支持literal，不把Java回溯正则当受控执行");
-        if(mode.equals("text")&&(query.indexOf('\n')>=0||query.indexOf('\r')>=0||query.indexOf('\0')>=0))throw new IllegalArgumentException("正文literal搜索按行定位；查询不能包含换行或空字节");
+        if(!java.util.Set.of("path","text").contains(mode)||query.isEmpty()||query.length()>240)throw new IllegalArgumentException("搜索模式/查询无效");
+        String syntax=input.optString("syntax","literal");if(!java.util.Set.of("literal","regex").contains(syntax)||!mode.equals("text")&&syntax.equals("regex"))throw new IllegalArgumentException("syntax仅支持literal或正文regex；路径仍使用glob");
+        if(mode.equals("text")&&(query.indexOf('\n')>=0||query.indexOf('\r')>=0||query.indexOf('\0')>=0))throw new IllegalArgumentException("正文搜索按行定位；查询不能包含换行或空字节，不支持跨行正则");
+        current.check();ProjectSearchPattern expression=syntax.equals("regex")?new ProjectSearchPattern(query,caseSensitive):null;current.check();
+        int contextBefore=contextLines(input,"contextBefore"),contextAfter=contextLines(input,"contextAfter");boolean wantsContext=contextBefore>0||contextAfter>0;
+        if(wantsContext&&!mode.equals("text"))throw new IllegalArgumentException("前后文仅适用于正文搜索，不静默忽略路径搜索参数");
         if(!scope.isEmpty())VersionedWorkspace.path(scope);String include=input.optString("include","**");if(include.isEmpty())include="**";Glob filter=glob(include),pathQuery=mode.equals("path")?glob(query,caseSensitive):null;int limit=input.optInt("limit",20);if(limit<1||limit>MAX_RESULTS)throw new IllegalArgumentException("搜索页最多40项");
         Map<String,Path> paths=new TreeMap<>();JSONArray skipped=new JSONArray();long[] skippedCount={0};boolean[] enumerationComplete={true};
         Path base=scope.isEmpty()?root.toPath():NativeCommandExecutor.within(root,scope).toPath();if(!Files.exists(base,LinkOption.NOFOLLOW_LINKS))throw new IllegalArgumentException("搜索范围不存在");
@@ -141,18 +147,62 @@ public final class ProjectFileQueries {
         });
         List<FileInfo> facts=new ArrayList<>();JSONArray manifest=new JSONArray();long total=0;int binary=0;boolean byteBudget=true;
         for(String path:paths.keySet()){current.check();FileInfo info=describe(root,path,current);if(total+info.bytes>ProjectSources.MAX_TOTAL_BYTES){byteBudget=false;break;}total+=info.bytes;facts.add(info);manifest.put(new JSONObject().put("path",path).put("sha256",info.sha).put("bytes",info.bytes));if(info.binary)binary++;}
-        String manifestHash=ProjectSources.manifestDigest(manifest);JSONObject searchIdentity=new JSONObject().put("checkoutId",checkout).put("manifestHash",manifestHash).put("mode",mode).put("query",query).put("path",scope).put("include",include).put("hidden",includeHidden).put("caseSensitive",caseSensitive);String queryHash=ProjectSources.digest(searchIdentity);
+        String manifestHash=ProjectSources.manifestDigest(manifest);JSONObject searchIdentity=new JSONObject().put("checkoutId",checkout).put("manifestHash",manifestHash).put("mode",mode).put("query",query).put("syntax",syntax).put("path",scope).put("include",include).put("hidden",includeHidden).put("caseSensitive",caseSensitive).put("contextBefore",contextBefore).put("contextAfter",contextAfter);String queryHash=ProjectSources.digest(searchIdentity);
         JSONObject cursor=input.optJSONObject("cursor");String afterPath="";int afterLine=0;if(cursor!=null){if(!queryHash.equals(cursor.getString("queryHash"))||!manifestHash.equals(cursor.getString("manifestHash")))throw new SecurityException("搜索cursor所属查询或实际文件版本已变化，请重新搜索");afterPath=VersionedWorkspace.path(cursor.getString("path"));afterLine=cursor.getInt("line");if(afterLine<0)throw new SecurityException("搜索cursor无效");}
         JSONArray matches=new JSONArray();int resultBytes=0;boolean more=false;String lastPath="";int lastLine=0;String needle=query;
         search:for(FileInfo info:facts){if(!filter.matches(info.path,current)||info.path.compareTo(afterPath)<0)continue;
             if(mode.equals("path")){if(!pathQuery.matches(info.path,current)||info.path.equals(afterPath))continue;JSONObject match=info.json();int bytes=match.toString().getBytes(StandardCharsets.UTF_8).length;if(matches.length()==limit||resultBytes+bytes>12000){more=true;break;}matches.put(match);resultBytes+=bytes;lastPath=info.path;lastLine=0;continue;}
-            if(info.binary)continue;int line=0;try(BufferedReader source=reader(target(root,info.path))){String value;while((value=boundedLine(source,current))!=null){line++;if(info.path.equals(afterPath)&&line<=afterLine)continue;int column=findLiteral(value,needle,caseSensitive,current);if(column<0)continue;if(matches.length()==limit){more=true;break search;}int from=Math.max(0,column-100),to=Math.min(value.length(),column+query.length()+300);JSONObject match=new JSONObject().put("path",info.path).put("sha256",info.sha).put("bytes",info.bytes).put("line",line).put("column",column+1).put("columnUnit","UTF16_code_units").put("text",value.substring(from,to)).put("linePreviewOffset",from).put("linePreviewTruncated",from>0||to<value.length());int bytes=match.toString().getBytes(StandardCharsets.UTF_8).length;if(resultBytes+bytes>12000){more=true;break search;}matches.put(match);resultBytes+=bytes;lastPath=info.path;lastLine=line;}}
+            if(info.binary)continue;int line=0;try(BufferedReader source=reader(target(root,info.path))){String value;while((value=boundedLine(source,current))!=null){line++;if(info.path.equals(afterPath)&&line<=afterLine)continue;int[] located=expression==null?null:expression.find(value,current);int column=expression==null?findLiteral(value,needle,caseSensitive,current):located==null?-1:located[0];if(column<0)continue;int endColumn=expression==null?column+query.length():located[1];if(matches.length()==limit){more=true;break search;}int from=Math.max(0,column-100),to=Math.min(value.length(),column+Math.min(240,endColumn-column)+300);if(from>0&&Character.isLowSurrogate(value.charAt(from))&&Character.isHighSurrogate(value.charAt(from-1)))from--;if(to>from&&to<value.length()&&Character.isHighSurrogate(value.charAt(to-1))&&Character.isLowSurrogate(value.charAt(to)))to--;JSONObject match=new JSONObject().put("path",info.path).put("sha256",info.sha).put("bytes",info.bytes).put("line",line).put("column",column+1).put("endColumn",endColumn+1).put("columnUnit","UTF16_code_units").put("text",value.substring(from,to)).put("linePreviewOffset",from).put("linePreviewTruncated",from>0||to<value.length());int bytes=match.toString().getBytes(StandardCharsets.UTF_8).length;if(resultBytes+bytes>12000){more=true;break search;}matches.put(match);resultBytes+=bytes;lastPath=info.path;lastLine=line;}}
             unchanged(root,info,current);
         }
-        // Recheck every participating file, including a result page stopped in the middle of one file.
+        JSONObject contexts=wantsContext?searchContexts(root,facts,matches,contextBefore,contextAfter,current):null;
+        // Recheck every participating file, including additional context and a page stopped mid-file.
         for(FileInfo info:facts)unchanged(root,info,current);
         boolean coverage=enumerationComplete[0]&&byteBudget&&skippedCount[0]==0;
-        return new JSONObject().put("checkoutId",checkout).put("queryHash",queryHash).put("manifestHash",manifestHash).put("mode",mode).put("matches",matches).put("nextCursor",more?new JSONObject().put("queryHash",queryHash).put("manifestHash",manifestHash).put("path",lastPath).put("line",lastLine):JSONObject.NULL).put("hasMore",more).put("coverageComplete",coverage).put("enumerationComplete",enumerationComplete[0]).put("byteBudgetComplete",byteBudget).put("coverageScope","eligible_source_paths_or_UTF8_text_only").put("resultBytes",resultBytes).put("scannedFiles",facts.size()).put("scannedBytes",total).put("binaryFilesSkippedForText",mode.equals("text")?binary:0).put("skippedCount",skippedCount[0]).put("skipped",skipped).put("scope",scope).put("include",include).put("hidden",includeHidden).put("excluded",new JSONArray(new String[]{"dependency_caches","build_outputs","symlinks","special_files"})).put("pathGlobEngine","bounded_dynamic_programming").put("pathGlobUnicodeUnit","code_point").put("searchSyntax",mode.equals("path")?"glob_star_double_star_question":"literal").put("untrusted",true).put("atomicReadFence",false);
+        JSONObject result=new JSONObject().put("checkoutId",checkout).put("queryHash",queryHash).put("manifestHash",manifestHash).put("mode",mode).put("matches",matches).put("nextCursor",more?new JSONObject().put("queryHash",queryHash).put("manifestHash",manifestHash).put("path",lastPath).put("line",lastLine):JSONObject.NULL).put("hasMore",more).put("coverageComplete",coverage).put("enumerationComplete",enumerationComplete[0]).put("byteBudgetComplete",byteBudget).put("coverageScope","eligible_source_paths_or_UTF8_text_only").put("resultBytes",resultBytes).put("scannedFiles",facts.size()).put("scannedBytes",total).put("binaryFilesSkippedForText",mode.equals("text")?binary:0).put("skippedCount",skippedCount[0]).put("skipped",skipped).put("scope",scope).put("include",include).put("hidden",includeHidden).put("excluded",new JSONArray(new String[]{"dependency_caches","build_outputs","symlinks","special_files"})).put("pathGlobEngine","bounded_dynamic_programming").put("pathGlobUnicodeUnit","code_point").put("searchSyntax",mode.equals("path")?"glob_star_double_star_question":"literal").put("untrusted",true).put("atomicReadFence",false);
+        if(mode.equals("text"))result.put("matchSemantics","first_match_per_line");
+        if(expression!=null)result.put("searchSyntax","regex_re2j_line").put("regexEngine","RE2J_1.8").put("regexUnsupported",new JSONArray(new String[]{"backreferences","lookaround","cross_line_matches"})).put("regexMatchTimeBudgetMillis",3000).put("regexCharacterReadBudget",64L*1024*1024).put("regexConservativeCompileExpansionBudget",ProjectSearchPattern.MAX_COMPILE_EXPANSION);
+        if(contexts!=null)for(String key:contexts.keySet())result.put(key,contexts.get(key));return result;
+    }
+    private static int contextLines(JSONObject input,String key){
+        if(!input.has(key))return 0;Object value=input.opt(key);
+        if(!(value instanceof Integer||value instanceof Long)||((Number)value).longValue()<0||((Number)value).longValue()>MAX_CONTEXT_LINES)throw new IllegalArgumentException(key+"需0至20整数行");return ((Number)value).intValue();
+    }
+    private static final class ContextWindow {
+        final FileInfo file;final long start;long end;final JSONArray matchedLines=new JSONArray();final Map<Integer,Integer> columns=new TreeMap<>();
+        ContextWindow(FileInfo file,int line,int column,int before,int after){this.file=file;start=Math.max(1,line-before);end=Math.min(file.lines,(long)line+after);add(line,column,after);}
+        void add(int line,int column,int after){end=Math.min(file.lines,Math.max(end,(long)line+after));matchedLines.put(line);columns.put(line,column);}
+    }
+    /** Context is a projection of this page's real matches, not another search/model/execution path. */
+    private static JSONObject searchContexts(File root,List<FileInfo> facts,JSONArray matches,int before,int after,Current current)throws Exception {
+        Map<String,FileInfo> files=new TreeMap<>();for(FileInfo file:facts)files.put(file.path,file);List<ContextWindow> windows=new ArrayList<>();long requestedLines=0;
+        for(int i=0;i<matches.length();i++){
+            JSONObject match=matches.getJSONObject(i);FileInfo file=files.get(match.getString("path"));int line=match.getInt("line"),column=match.getInt("column")-1;ContextWindow last=windows.isEmpty()?null:windows.get(windows.size()-1);
+            if(last!=null&&last.file==file&&(long)line-before<=last.end+1)last.add(line,column,after);else windows.add(new ContextWindow(file,line,column,before,after));
+        }
+        for(ContextWindow window:windows)requestedLines+=window.end-window.start+1;
+        JSONArray blocks=new JSONArray();int returnedLines=0;boolean complete=true,budgetExhausted=false;
+        for(ContextWindow window:windows){
+            current.check();JSONArray lines=new JSONArray();JSONObject block=new JSONObject().put("path",window.file.path).put("sha256",window.file.sha).put("startLine",window.start).put("endLine",window.end).put("matchedLines",window.matchedLines).put("matchesScope","this_result_page").put("lines",lines).put("complete",true);boolean blockComplete=true;
+            // Reserve final completeness metadata; the exact serialized array never exceeds 12KiB.
+            int priorBytes=blocks.toString().getBytes(StandardCharsets.UTF_8).length;
+            if(priorBytes+block.toString().getBytes(StandardCharsets.UTF_8).length+256>MAX_CONTEXT_BYTES){complete=false;budgetExhausted=true;break;}
+            try(BufferedReader source=reader(target(root,window.file.path))){
+                long number=0;String value;while(number<window.end&&(value=boundedLine(source,current))!=null){number++;if(number<window.start)continue;current.check();
+                    int center=window.columns.getOrDefault((int)number,0),from=Math.max(0,center-100),to=Math.min(value.length(),from+CONTEXT_LINE_CHARS);
+                    if(from>0&&from<value.length()&&Character.isLowSurrogate(value.charAt(from))&&Character.isHighSurrogate(value.charAt(from-1)))from--;
+                    if(to>from&&to<value.length()&&Character.isHighSurrogate(value.charAt(to-1))&&Character.isLowSurrogate(value.charAt(to)))to--;
+                    boolean clipped=from>0||to<value.length();JSONObject row=new JSONObject().put("line",number).put("text",value.substring(from,to)).put("previewOffset",from).put("truncated",clipped);lines.put(row);
+                    if(priorBytes+block.toString().getBytes(StandardCharsets.UTF_8).length+256>MAX_CONTEXT_BYTES){lines.remove(lines.length()-1);blockComplete=false;budgetExhausted=true;break;}
+                    returnedLines++;if(clipped)blockComplete=false;
+                }
+            }
+            if(lines.length()!=window.end-window.start+1)blockComplete=false;
+            block.put("complete",blockComplete).put("returnedEndLine",lines.length()==0?JSONObject.NULL:lines.getJSONObject(lines.length()-1).getLong("line"));if(budgetExhausted)block.put("reason","result_budget");
+            blocks.put(block);complete&=blockComplete;if(budgetExhausted)break;
+        }
+        if(blocks.length()!=windows.size())complete=false;
+        return new JSONObject().put("contextBefore",before).put("contextAfter",after).put("contextBlocks",blocks).put("contextComplete",complete).put("contextTruncated",!complete).put("contextBudgetExhausted",budgetExhausted).put("contextWindowsRequested",windows.size()).put("contextWindowsReturned",blocks.length()).put("contextLinesRequested",requestedLines).put("contextLinesReturned",returnedLines).put("contextResultBytes",blocks.toString().getBytes(StandardCharsets.UTF_8).length).put("contextCoverage","selected_result_page_windows_only");
     }
     private static int findLiteral(String text,String query,boolean sensitive,Current current)throws Exception {
         if(sensitive)return text.indexOf(query);for(int i=0;i<=text.length()-query.length();i++){if((i&4095)==0)current.check();if(text.regionMatches(true,i,query,0,query.length()))return i;}return -1;

@@ -9,6 +9,7 @@ import org.json.JSONObject;
 public final class MemoryModule implements EngineModule {
     private final FeatureContext context;
     private final MemoryBook book;
+    private final AutomaticMemoryPolicy automaticLearning;
     private final boolean sourceVerification;
     public MemoryModule(FeatureContext context)throws Exception {this(context,null);}
     /** The resolver reads host-owned evidence; payload fields never authenticate a caller or source. */
@@ -17,11 +18,16 @@ public final class MemoryModule implements EngineModule {
     }
     /** Native root may inject SQLiteMemoryRetrievalBackend.create(); existing constructors keep compatibility. */
     public MemoryModule(FeatureContext context,SourceRef.Resolver sourceResolver,MemoryRetrievalBackend retrieval)throws Exception {
-        this.context=context;sourceVerification=sourceResolver!=null;
+        this.context=context;sourceVerification=sourceResolver!=null;automaticLearning=new AutomaticMemoryPolicy(new File(context.android.getFilesDir(),"memory/automatic-learning.json"));
         try{book=new MemoryBook(new File(context.android.getFilesDir(),"memory/records.json"),sourceResolver,retrieval,packageName->dev.pocketengine.phone.observation.InstalledAppEvidence.currentVersion(context.android,packageName));}
         catch(Exception invalidBook){retrieval.close();throw invalidBook;}
     }
     @Override public String id(){return "memory";}
+    /** Native owner settings only; intentionally absent from handle/model routes. */
+    public JSONObject automaticLearningPolicy()throws Exception{return automaticLearning.snapshot();}
+    public JSONObject setAutomaticLearningPolicyForOwner(long revision,boolean enabled,int maximum)throws Exception{return automaticLearning.setForOwner(revision,enabled,maximum);}
+    public AutomaticMemoryPolicy automaticLearningPolicyForHost(){return automaticLearning;}
+
     /** Native owner archive UI only; intentionally absent from handle/model command routes. */
     public JSONObject ownerExperienceBarriers(JSONObject scope)throws Exception{return book.ownerExperienceBarriers(scope);}
     public JSONObject ownerArchive(JSONObject scope)throws Exception{return book.ownerArchive(scope);}
@@ -32,7 +38,7 @@ public final class MemoryModule implements EngineModule {
     public MemoryBook.ProcedureSelection selectProcedureForNativeTask(JSONObject scope,String id,long revision)throws Exception{return book.selectProcedureForNativeTask(scope,id,revision);}
     @Override public JSONObject snapshot()throws Exception {
         JSONObject scope=new JSONObject().put("ownerId","owner").put("spaceId","private");
-        JSONArray records=book.list(scope);JSONObject layers=new JSONObject().put("fact",0).put("preference",0).put("episodic",0).put("procedural",0);
+        JSONObject automaticPolicy=automaticLearning.snapshot();JSONArray records=book.list(scope);JSONObject layers=new JSONObject().put("fact",0).put("preference",0).put("episodic",0).put("procedural",0);
         int coreSelected=0,coreActive=0;
         for(int i=0;i<records.length();i++){
             JSONObject record=records.getJSONObject(i);String layer=record.getString("layer");layers.put(layer,layers.optInt(layer)+1);
@@ -45,7 +51,7 @@ public final class MemoryModule implements EngineModule {
         return new JSONObject().put("available",true).put("cognitionRevision",book.cognitionRevision(scope)).put("recordCount",records.length()).put("layers",layers)
                 .put("memoryTiers",tiers).put("workingMemory","host_fenced_ephemeral_per_run").put("controlledConsolidation",true)
                 .put("consolidationAcceptance","existing_native_candidate_review").put("maxConsolidationSourceChars",MemoryBook.MAX_CONSOLIDATION_SOURCE_CHARS)
-                .put("scope",scope).put("retrieval",book.retrievalStatus().getString("backend")).put("retrievalBackend",book.retrievalStatus()).put("automaticLearning",false)
+                .put("scope",scope).put("retrieval",book.retrievalStatus().getString("backend")).put("retrievalBackend",book.retrievalStatus()).put("automaticLearning",automaticPolicy.getBoolean("enabled")).put("automaticLearningPolicy",automaticPolicy)
                 .put("explicitExpiry",true).put("coreSelection","explicit").put("coreSelectedCount",coreSelected).put("coreActiveCount",coreActive)
                 .put("maxCoreRecords",MemoryBook.MAX_CORE_RECORDS).put("maxContextRecords",MemoryBook.MAX_CONTEXT_RECORDS)
                 .put("maxContextChars",MemoryBook.MAX_CONTEXT_CHARS)

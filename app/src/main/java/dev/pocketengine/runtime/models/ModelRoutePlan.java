@@ -24,6 +24,7 @@ public final class ModelRoutePlan {
                 .put(m.requestTimeoutSeconds).put(m.reasoning.mode().name()).put(m.reasoning.level()).put(m.reasoning.budgetTokens())
                 .put(m.imageTokenReserve).put(m.catalogEnforced).put(m.supportsImageInput).put(m.sendScreenshots)
                 .put(m.localCaptureAllowed).put(m.localOcrAllowed);
+        if(m.compatibility!=null)options.put(m.compatibility.toJson());
         byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(options.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
         StringBuilder result=new StringBuilder();for(byte value:digest)result.append(String.format(java.util.Locale.ROOT,"%02x",value&255));return result.toString();
     }

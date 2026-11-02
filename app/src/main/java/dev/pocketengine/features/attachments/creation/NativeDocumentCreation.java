@@ -2,7 +2,6 @@ package dev.pocketengine.features.attachments.creation;
 
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.attachments.AttachmentBook;
-import dev.pocketengine.features.local.project.ProjectSources;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
@@ -22,7 +21,7 @@ public final class NativeDocumentCreation {
         byte[] sourceBytes=draft.sourceBytes();JSONObject origin=new JSONObject().put("kind","document_source").put("taskId",task).put("runId",run).put("operationId",operation).put("planDigest",draft.identity).put("documentFormat",draft.format);
         JSONObject editable=book.importNativeResult(new ByteArrayInputStream(sourceBytes),draft.name+".document.json","application/json",origin,operation,"document_source",task,run,draft.identity,control);
         byte[] bytes;JSONObject check;
-        try{if(draft.format.equals("docx")){bytes=WordDocumentWriter.write(draft,control);check=WordDocumentWriter.check(bytes,draft,control);}else{var generated=AndroidPdfDocumentWriter.write(draft,new File(cache,"document-creation-checks"),control);bytes=generated.bytes;check=generated.check;}checkParents(draft,control);control.check();}
+        try{if(draft.format.equals("docx")){bytes=WordDocumentWriter.write(draft,control);check=WordDocumentWriter.check(bytes,draft,control);}else if(draft.format.equals("xlsx")){bytes=SpreadsheetDocumentWriter.write(draft,control);check=SpreadsheetDocumentWriter.check(bytes,draft,control);}else if(draft.format.equals("pptx")){bytes=PresentationDocumentWriter.write(draft,control);check=PresentationDocumentWriter.check(bytes,draft,control);}else{var generated=AndroidPdfDocumentWriter.write(draft,new File(cache,"document-creation-checks"),control);bytes=generated.bytes;check=generated.check;}checkParents(draft,control);control.check();}
         catch(Exception preparationFailed){throw new NotPublished(preparationFailed,editable,operation);}
         JSONObject source=new JSONObject().put("kind","created_document").put("taskId",task).put("runId",run).put("operationId",operation).put("planDigest",draft.identity).put("documentFormat",draft.format).put("editableSource",reference(editable)).put("formatCheck",check);
         JSONObject input=draft.source();if(input.has("parentArtifactId"))source.put("parentArtifact",new JSONObject().put("id",input.getString("parentArtifactId")).put("sha256",input.getString("parentSha256")));

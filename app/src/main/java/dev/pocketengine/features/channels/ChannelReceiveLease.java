@@ -29,7 +29,7 @@ final class ChannelReceiveLease {
             String id=ChannelCore.identifier(new JSONObject().put("id",ids.get(i)),"id");if(!unique.add(id))throw new IllegalArgumentException("不能重复选择连接");
             JSONObject profile=core.profile(id);String provider=profile.getString("provider");if(!profile.optBoolean("enabled")||!provider.matches("qq|weixin"))throw new SecurityException("后台接收仅支持已启用的QQ官方机器人或微信iLink连接");
             if(provider.equals("qq"))qq++;else wx++;
-            selected.put(new JSONObject().put("id",id).put("provider",provider).put("profileVersion",profile.optLong("updatedAt")));
+            selected.put(ChannelReceiveProfileIdentity.capture(profile));
         }
         if(qq>3||wx>3)throw new IllegalArgumentException("QQ与微信分别最多同时接收3个连接");
         JSONObject next=new JSONObject().put("sessionId",UUID.randomUUID().toString()).put("status","starting").put("profiles",selected).put("startedAt",System.currentTimeMillis()).put("message","已请求前台接收服务，尚未确认服务或平台在线");
@@ -44,7 +44,7 @@ final class ChannelReceiveLease {
         if(!session.equals(state.optString("sessionId"))||!state.optString("status").equals("foreground"))throw new SecurityException("后台接收会话已结束");
         JSONArray profiles=state.getJSONArray("profiles");for(int i=0;i<profiles.length();i++){
             JSONObject selected=profiles.getJSONObject(i),current=core.profile(selected.getString("id"));
-            if(!current.optBoolean("enabled")||!selected.getString("provider").equals(current.optString("provider"))||selected.getLong("profileVersion")!=current.optLong("updatedAt"))throw new SecurityException("已选连接配置变化，请重新确认后台接收");
+            ChannelReceiveProfileIdentity.check(selected,current);
         }
     }
     synchronized boolean finish(String session,String status,String message)throws Exception {

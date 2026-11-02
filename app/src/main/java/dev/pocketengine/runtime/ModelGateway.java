@@ -328,6 +328,7 @@ public final class ModelGateway {
         JSONObject request=provider.request(config,messages,tools);
         if(stream!=null){request=ApiTurnStream.request(config.provider,request,config.maxOutputTokens);endpoint=ApiTurnStream.endpoint(config.provider,endpoint);}
         try{request=ModelRequestPolicy.apply(config,messages,tools,request);}catch(ModelRequestPolicy.Rejected refused){throw new GatewayException(refused.getMessage(),InferenceFailure.local(InferenceFailure.Kind.LOCAL_REFUSAL,System.currentTimeMillis()));}
+        capture.requestProjection(request);
         byte[] payload = request.toString().getBytes(StandardCharsets.UTF_8);
         if(payload.length>MAX_REQUEST_BYTES)throw new GatewayException("模型请求序列化后超过24MiB本地传输限制；尚未发送，请缩减图片或上下文。此限制不是模型上下文窗口。");
         if(stream!=null){JSONObject assistant=completeStreamingHttp(config,provider,endpoint,payload,tools,control,stream,capture);checkCapabilities(config,messages,tools,request);return assistant;}

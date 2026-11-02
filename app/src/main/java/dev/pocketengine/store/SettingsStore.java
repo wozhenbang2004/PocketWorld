@@ -9,6 +9,7 @@ import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.runtime.models.ModelBinding;
 import dev.pocketengine.runtime.models.ApiConnectionProfile;
 import dev.pocketengine.runtime.models.ModelTargetRef;
+import dev.pocketengine.features.controlplane.WorkProfile;
 import dev.pocketengine.runtime.models.ModelGroup;
 import dev.pocketengine.runtime.models.ModelRoutePlan;
 import org.json.JSONArray;
@@ -124,7 +125,7 @@ public final class SettingsStore {
         requireConfirmed();Profiles profiles=profiles();
         if(profiles!=null){
             ApiConnectionProfile row=captured.capabilityBinding==null?null:profiles.rows.get(captured.capabilityBinding.connectionId());
-            if(row==null||!row.enabled||!captured.capabilityBinding.equals(row.configuration.capabilityBinding)||captured.catalogEnforced!=row.configuration.catalogEnforced)return false;
+            if(row==null||!row.enabled||!captured.capabilityBinding.equals(row.configuration.capabilityBinding)||captured.catalogEnforced!=row.configuration.catalogEnforced||!sameCompatibility(captured.compatibility,captured.model.equals(row.configuration.model)?row.configuration.compatibility:null))return false;
             ModelConfig current=materialize(row,false);return captured.provider.equals(current.provider)&&captured.baseUrl.equals(current.baseUrl)&&captured.apiKey.equals(current.apiKey);
         }
         if(captured.capabilityBinding==null||!captured.capabilityBinding.equals(apiCatalogBinding())
@@ -135,7 +136,7 @@ public final class SettingsStore {
     public synchronized ModelConfig merged(JSONObject json) throws Exception {
         requireConfirmed();
         ModelConfig old;
-        if(json.has("nativeRef")||json.has("accountModel")||json.has("modelRoute")||json.has("capabilityBinding")||json.has("catalogEnforced")||json.has("reasoning")||json.has("imageTokenReserve"))throw new IllegalArgumentException("请在本机模型/账号页管理精确选择与推理参数；普通设置只配置API密钥连接");
+        if(json.has("compatibility")||json.has("nativeRef")||json.has("accountModel")||json.has("modelRoute")||json.has("capabilityBinding")||json.has("catalogEnforced")||json.has("reasoning")||json.has("imageTokenReserve"))throw new IllegalArgumentException("请在本机模型/账号页管理精确选择与推理参数；普通设置只配置API密钥连接");
         try{old=getApiKeyConfig();}catch(Exception unavailable){
             if(!json.optBoolean("clearApiKey",false)&&json.optString("apiKey").trim().isEmpty())throw new IllegalStateException("已保存的密钥无法读取，请重新填写或清除密钥");
             old=new ModelConfig(prefs.getString("baseUrl",""),"",prefs.getString("model",""),prefs.getBoolean("sendScreenshots",true),prefs.getInt("maxSteps",20),prefs.getInt("requestTimeoutSeconds",60),prefs.getString("provider",ModelConfig.DEFAULT_PROVIDER),prefs.getInt("maxOutputTokens",4096));
@@ -211,7 +212,7 @@ public final class SettingsStore {
         Profiles profiles=profiles();
         if(profiles!=null){
             ApiConnectionProfile row=selectedProfile(profiles);ModelConfig old=materialize(row,true);
-            ModelConfig selected=new ModelConfig(old.baseUrl,"",model,old.sendScreenshots,old.maxSteps,old.requestTimeoutSeconds,old.provider,output).withCleartextConsent(old.cleartextConsent).withNativeCatalog(expected,reasoning,imageTokenReserve);
+            ModelConfig selected=new ModelConfig(old.baseUrl,"",model,old.sendScreenshots,old.maxSteps,old.requestTimeoutSeconds,old.provider,output).withCleartextConsent(old.cleartextConsent).withNativeCatalog(expected,reasoning,imageTokenReserve).withProviderCompatibility(old.model.equals(model)?old.compatibility:null);
             profiles.rows.put(row.id(),new ApiConnectionProfile(row.name,Math.addExact(row.revision,1),row.enabled,row.secretSlot,selected));
             commitProfiles(profiles,Math.addExact(profiles.selectionRevision,1),true);return getApiKeyConfig();
         }
@@ -288,11 +289,15 @@ public final class SettingsStore {
             if(prior==null||!input.optBoolean("clearApiKey",false)&&input.optString("apiKey").trim().isEmpty())throw new IllegalStateException("原API凭据不可读取，请在此连接重新填写或明确清除；未借用其他连接密钥");
             previous=prior.configuration;unreadableCredential=true;
         }
-        ModelConfig next=mergeApi(previous,input);validate(next);
+        if(useApi&&input.has("compatibility"))throw new SecurityException("兼容档案只能通过本机原API连接的修订保存");
+        ModelConfig next=mergeApi(previous,input);
+        if(input.has("compatibility"))next=next.withProviderCompatibility(input.isNull("compatibility")?null:dev.pocketengine.runtime.providers.ProviderCompatProfile.reviewed(input.getJSONObject("compatibility"),next.provider,next.model,previous.compatibility));
+        validate(next);
         if(!next.apiKey.isEmpty()&&checkedName.contains(next.apiKey))throw new IllegalArgumentException("连接名称不能包含API密钥");
+        boolean projection=!sameCompatibility(previous.compatibility,next.compatibility);
         boolean route=prior==null||!previous.provider.equals(next.provider)||!previous.baseUrl.equals(next.baseUrl),credential=prior==null||unreadableCredential||!previous.apiKey.equals(next.apiKey);
         ModelBinding old=prior==null?null:prior.configuration.capabilityBinding;
-        ModelBinding identity=new ModelBinding(old==null?"api-"+java.util.UUID.randomUUID():old.connectionId(),next.provider,ModelCatalogRoutes.protocol(next.provider),route?ModelCatalogRoutes.defaultFormat(next.provider):old.format(),route?ModelCatalogRoutes.modelsEndpoint(next):old.modelsEndpoint(),old==null?"key-"+java.util.UUID.randomUUID():old.credentialId(),old==null?1:Math.addExact(old.credentialRevision(),credential?1:0),old==null?"connection-"+java.util.UUID.randomUUID():old.installationId(),old==null?1:Math.addExact(old.installationRevision(),route?1:0),!ModelConfig.cleartextConsentFor(next.provider,next.baseUrl).isEmpty());
+        ModelBinding identity=new ModelBinding(old==null?"api-"+java.util.UUID.randomUUID():old.connectionId(),next.provider,ModelCatalogRoutes.protocol(next.provider),route?ModelCatalogRoutes.defaultFormat(next.provider):old.format(),route?ModelCatalogRoutes.modelsEndpoint(next):old.modelsEndpoint(),old==null?"key-"+java.util.UUID.randomUUID():old.credentialId(),old==null?1:Math.addExact(old.credentialRevision(),credential?1:0),old==null?"connection-"+java.util.UUID.randomUUID():old.installationId(),old==null?1:Math.addExact(old.installationRevision(),route||projection?1:0),!ModelConfig.cleartextConsentFor(next.provider,next.baseUrl).isEmpty());
         String slot=prior==null?"":prior.secretSlot;
         if(credential)slot=next.apiKey.isEmpty()?"":profileSecretSlot(identity);
         ModelConfig stored=withoutSecret(next);
@@ -321,6 +326,45 @@ public final class SettingsStore {
         commitProfiles(state,Math.addExact(state.selectionRevision,1),false);return saved.publicJson();
     }
     /** Native owner definitions in the existing confirmed preferences transaction. Never stores keys. */
+    /** Reusable reference definitions only; saving/importing does not install, grant, select, or execute. */
+    public synchronized JSONObject workProfilesSnapshot()throws Exception {
+        requireConfirmed();return new JSONObject(workProfilesDocument().toString());
+    }
+    private JSONObject workProfilesDocument()throws Exception {
+        String raw=prefs.getString("workProfiles","");
+        JSONObject root=raw.isEmpty()?new JSONObject().put("format","pocketworld.work-profiles.v1").put("revision",0L).put("profiles",new JSONArray()):new JSONObject(raw);
+        if(!"pocketworld.work-profiles.v1".equals(root.getString("format"))||root.toString().getBytes(StandardCharsets.UTF_8).length>262144)throw new IllegalStateException("工作配置版本或大小不可读取，保留原记录");
+        Object revision=root.get("revision");if(!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<0)throw new IllegalStateException("工作配置存储版本无效");
+        JSONArray rows=root.getJSONArray("profiles");if(rows.length()>WorkProfile.MAX_PROFILES)throw new IllegalStateException("工作配置数量超过边界");
+        java.util.Set<String> ids=new java.util.HashSet<>();for(int i=0;i<rows.length();i++)if(!ids.add(WorkProfile.fromJson(rows.getJSONObject(i)).id))throw new IllegalStateException("工作配置身份重复");
+        return root;
+    }
+    public synchronized JSONObject saveWorkProfile(String id,long expectedRevision,String name,JSONObject definition)throws Exception {
+        requireConfirmed();JSONObject root=workProfilesDocument();JSONArray rows=root.getJSONArray("profiles");int found=-1;
+        for(int i=0;i<rows.length();i++)if(rows.getJSONObject(i).getString("profileId").equals(id))found=i;
+        if(found<0&&(id!=null&&!id.isEmpty()||expectedRevision!=0)||found>=0&&rows.getJSONObject(found).getLong("revision")!=expectedRevision)throw new SecurityException("工作配置已变化，请重新读取原版本");
+        if(found<0&&rows.length()>=WorkProfile.MAX_PROFILES)throw new IllegalStateException("最多保存32份工作配置");
+        String actual=found<0?"work-"+java.util.UUID.randomUUID():id;
+        WorkProfile validated=WorkProfile.fromJson(definition);
+        WorkProfile value=WorkProfile.fromJson(validated.toJson().put("profileId",actual).put("revision",Math.addExact(expectedRevision,1L)).put("name",name));
+        if(found<0)rows.put(value.toJson());else rows.put(found,value.toJson());
+        commitWorkProfiles(root);return value.toJson();
+    }
+    /** Removing a reusable definition never edits the frozen references of an existing task/run. */
+    public synchronized JSONObject removeWorkProfile(String id,long expectedRevision)throws Exception {
+        requireConfirmed();JSONObject root=workProfilesDocument();JSONArray rows=root.getJSONArray("profiles");int found=-1;
+        for(int i=0;i<rows.length();i++)if(rows.getJSONObject(i).getString("profileId").equals(id))found=i;
+        if(found<0||rows.getJSONObject(found).getLong("revision")!=expectedRevision)throw new SecurityException("工作配置已变化，请重新读取原版本");
+        rows.remove(found);commitWorkProfiles(root);return new JSONObject().put("removed",true).put("profileId",id).put("runsChanged",false).put("permissionsChanged",false);
+    }
+    private void commitWorkProfiles(JSONObject root)throws Exception {
+        root.put("revision",Math.addExact(root.getLong("revision"),1L));String raw=root.toString();if(raw.getBytes(StandardCharsets.UTF_8).length>262144)throw new IllegalArgumentException("工作配置保存范围超限");
+        commitConfirmed(prefs.edit().putString("workProfiles",raw));
+    }
+    /** An explicit Profile target is resolved against original settings, not a newly selected MAIN group. */
+    public synchronized ModelConfig captureWorkProfileModel(ModelTargetRef ref,String purpose,String audience)throws Exception {
+        requireConfirmed();if(ref==null)throw new IllegalArgumentException("工作配置必须引用准确模型");return captureModelTarget(ref,purpose,audience,getSelected());
+    }
     public synchronized JSONObject modelGroupsSnapshot()throws Exception {
         requireConfirmed();JSONObject root=modelGroupsDocument();return new JSONObject(root.toString());
     }
@@ -399,11 +443,12 @@ public final class SettingsStore {
     private ModelConfig materialize(ApiConnectionProfile row,boolean requireEnabled)throws Exception{
         if(requireEnabled&&!row.enabled)throw new IllegalStateException("当前API连接已停用；请明确选择其他已启用连接，没有自动换号");
         String key=row.secretSlot.isEmpty()?"":profileSecret(row.secretSlot);if(!row.secretSlot.isEmpty()&&key.isEmpty())throw new IllegalStateException("此API连接的原凭据不可读取，请在原连接重新填写；未改用其他密钥");
-        ModelConfig c=row.configuration,next=new ModelConfig(c.baseUrl,key,c.model,c.sendScreenshots,c.maxSteps,c.requestTimeoutSeconds,c.provider,c.maxOutputTokens).withCleartextConsent(c.cleartextConsent).withOwnerImageInput(c.supportsImageInput);
+        ModelConfig c=row.configuration,next=new ModelConfig(c.baseUrl,key,c.model,c.sendScreenshots,c.maxSteps,c.requestTimeoutSeconds,c.provider,c.maxOutputTokens).withCleartextConsent(c.cleartextConsent).withOwnerImageInput(c.supportsImageInput).withProviderCompatibility(c.compatibility);
         if(c.catalogEnforced){next=next.withOwnerImageInput(false).withNativeCatalog(c.capabilityBinding,c.reasoning,c.imageTokenReserve);if(imageCapabilities!=null&&requireEnabled)next=next.withOwnerImageInput(imageCapabilities.supported(next));}
         else next=next.withApiConnection(c.capabilityBinding);return next;
     }
-    private static ModelConfig withoutSecret(ModelConfig c){return new ModelConfig(c.baseUrl,"",c.model,c.sendScreenshots,c.maxSteps,c.requestTimeoutSeconds,c.provider,c.maxOutputTokens).withCleartextConsent(c.cleartextConsent).withOwnerImageInput(c.supportsImageInput);}
+    private static ModelConfig withoutSecret(ModelConfig c){return new ModelConfig(c.baseUrl,"",c.model,c.sendScreenshots,c.maxSteps,c.requestTimeoutSeconds,c.provider,c.maxOutputTokens).withCleartextConsent(c.cleartextConsent).withOwnerImageInput(c.supportsImageInput).withProviderCompatibility(c.compatibility);}
+    private static boolean sameCompatibility(dev.pocketengine.runtime.providers.ProviderCompatProfile a,dev.pocketengine.runtime.providers.ProviderCompatProfile b){return a==null?b==null:a.matches(b);}
     private ModelConfig mergeApi(ModelConfig old,JSONObject input)throws Exception{
         for(String key:new String[]{"nativeRef","accountModel","modelRoute","capabilityBinding","catalogEnforced","reasoning","imageTokenReserve","secretSlot","connectionId","credentialId","installationId"})if(input.has(key))throw new SecurityException("原生连接身份与目录策略不能由配置JSON替代");
         String provider=input.optString("provider",old.provider),base=input.optString("baseUrl",old.baseUrl).trim(),model=input.optString("model",old.model).trim();
@@ -411,7 +456,7 @@ public final class SettingsStore {
         String key=input.optBoolean("clearApiKey",false)?"":input.optString("apiKey").trim();if(key.isEmpty()&&!input.optBoolean("clearApiKey",false)&&old.provider.equals(provider)&&sameOrigin(old.baseUrl,base))key=old.apiKey;
         String consent=input.has("cleartextConsent")?input.optString("cleartextConsent"):old.provider.equals(provider)&&sameOrigin(old.baseUrl,base)?old.cleartextConsent:"";if(ModelConfig.cleartextConsentFor(provider,base).isEmpty())consent="";
         boolean image=input.has("supportsImageInput")?input.getBoolean("supportsImageInput"):old.provider.equals(provider)&&old.baseUrl.equals(base)&&old.model.equals(model)&&old.supportsImageInput;
-        return new ModelConfig(base,key,model,input.optBoolean("sendScreenshots",old.sendScreenshots),input.optInt("maxSteps",old.maxSteps),input.optInt("requestTimeoutSeconds",old.requestTimeoutSeconds),provider,input.optInt("maxOutputTokens",old.maxOutputTokens)).withCleartextConsent(consent).withOwnerImageInput(image);
+        return new ModelConfig(base,key,model,input.optBoolean("sendScreenshots",old.sendScreenshots),input.optInt("maxSteps",old.maxSteps),input.optInt("requestTimeoutSeconds",old.requestTimeoutSeconds),provider,input.optInt("maxOutputTokens",old.maxOutputTokens)).withCleartextConsent(consent).withOwnerImageInput(image).withProviderCompatibility(old.provider.equals(provider)&&old.baseUrl.equals(base)&&old.model.equals(model)&&old.apiKey.equals(key)?old.compatibility:null);
     }
     /** At most two native key versions per credential identity; never overwrite the currently referenced slot before commit. */
     private static String profileSecretSlot(ModelBinding binding)throws Exception{

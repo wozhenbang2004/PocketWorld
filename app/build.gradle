@@ -71,6 +71,8 @@ dependencies {
     // Native local QR encoding only. Never upload a login challenge to an encoder service.
     implementation('com.google.zxing:core:3.5.4') { version { strictly '3.5.4' } }
     implementation 'org.jsoup:jsoup:1.23.2'
+    // Bounded untrusted project regex; never fall back to java.util.regex backtracking.
+    implementation('com.google.re2j:re2j:1.8') { version { strictly '1.8' } }
     implementation 'androidx.javascriptengine:javascriptengine:1.1.1'
     implementation 'org.apache.commons:commons-compress:1.28.0'
     implementation 'org.tukaani:xz:1.10'

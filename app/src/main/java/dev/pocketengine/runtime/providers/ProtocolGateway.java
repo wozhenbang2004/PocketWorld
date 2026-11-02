@@ -34,6 +34,7 @@ public final class ProtocolGateway {
         if(commit==null)throw new SecurityException("semantic_commit_required");
         if(request.stream&&output==null)throw new IllegalArgumentException("stream_consumer_required");
         ModelConfig config=request.config;request.revalidate();control.check();config.requireTransportConsent(request.endpoint);
+        capture.requestProjection(request.wire);
         byte[] bytes=request.wire.toString().getBytes(StandardCharsets.UTF_8);if(bytes.length>ModelGateway.MAX_REQUEST_BYTES)throw new ProtocolCodec.Rejected("request_byte_limit");
         RequestBody body=new RequestBody(){public MediaType contentType(){return MediaType.get("application/json; charset=utf-8");}public long contentLength(){return bytes.length;}public boolean isOneShot(){return true;}public void writeTo(BufferedSink sink)throws IOException{sink.write(bytes);}};
         Request.Builder builder=new Request.Builder().url(request.endpoint).post(body).header("Accept",request.stream?"text/event-stream":"application/json").header("Accept-Encoding","identity");

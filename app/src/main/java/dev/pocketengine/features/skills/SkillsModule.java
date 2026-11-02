@@ -13,6 +13,7 @@ public final class SkillsModule implements EngineModule {
     private final FeatureContext context;
     private final SkillBook book;
     private final SkillGitClient gitClient;
+    private volatile dev.pocketengine.features.plugins.PluginsModule mcpSources;
     public SkillsModule(FeatureContext context)throws Exception{this(context,null);}
     public SkillsModule(FeatureContext context,ExperienceOrigin.ExperienceResolver resolver)throws Exception{this(context,new SkillBook(new File(context.android.getFilesDir(),"skills"),resolver),new SkillGitClient());}
     /** Same native module with a loopback protocol client for direct tests; no feature/model input. */
@@ -22,6 +23,7 @@ public final class SkillsModule implements EngineModule {
     @Override public JSONObject snapshot()throws Exception{return new JSONObject().put("available",true).put("skills",book.list(privateScope(),System.currentTimeMillis()))
             .put("progressiveReading",true).put("textResourcesOnly",true).put("grantsFromInstructions",false).put("scriptExecution",false).put("validationOnLoad",true)
             .put("nativeGitSourceReview",true).put("gitSourceProvider","github_public_https").put("nativeRetainedRevisionReview",true)
+            .put("nativeMcpSourceReview",mcpSources!=null).put("mcpSourceAutomaticSync",false)
             .put("nativePackageStreams",true).put("maxPackageArchiveBytes",SkillArchive.MAX_ARCHIVE_BYTES)
             .put("nativeDiscovery",true).put("discoveryMatching","lexical-v1")
             .put("nativeExecutionReview",true).put("executionRequiresNativeBackend",true)
@@ -89,6 +91,33 @@ public final class SkillsModule implements EngineModule {
         context.emit(id(),new JSONObject().put("event","skills_changed"));return new JSONObject().put("skill",skill);
     }
     public JSONObject exportPackage(JSONObject scope,String id,int revision,String expectedDigest,OutputStream output)throws Exception{return book.exportPackage(scope,id,revision,expectedDigest,output,System.currentTimeMillis());}
+    /** App composition once, using the already mounted original MCP installation authority. */
+    public synchronized void mountMcpSources(dev.pocketengine.features.plugins.PluginsModule plugins){
+        if(mcpSources!=null)throw new IllegalStateException("原MCP技能来源已挂载");
+        mcpSources=java.util.Objects.requireNonNull(plugins);book.mountMcpSourceValidation(plugins::assertMcpSkillSourceCurrent);
+    }
+    private synchronized dev.pocketengine.features.plugins.PluginsModule mcpSources(){
+        if(mcpSources==null)throw new IllegalStateException("原MCP技能来源尚未挂载，未读取任何远端资源");return mcpSources;
+    }
+    /** Owner source review data. No generic feature command, enabled flag or tool grant is added. */
+    public JSONObject listMcpSkillResources(String pluginId,String installationId,long stateRevision,dev.pocketengine.core.RunControl original)throws Exception {
+        return listMcpSkillResources(privateScope(),pluginId,installationId,stateRevision,original);
+    }
+    public JSONObject listMcpSkillResources(JSONObject authenticatedScope,String pluginId,String installationId,long stateRevision,dev.pocketengine.core.RunControl original)throws Exception {
+        Exception originalFailure=null;
+        try{return mcpSources().listMcpSkillResources(pluginId,installationId,stateRevision,original);}
+        catch(Exception failure){originalFailure=failure;throw failure;}
+        finally{try{reconcileMcpSources(authenticatedScope);}catch(Exception revokeFailure){if(originalFailure!=null)originalFailure.addSuppressed(revokeFailure);else throw revokeFailure;}}
+    }
+    public SkillBook.SourceReview inspectMcpSource(JSONObject scope,String targetId,String pluginId,String installationId,long stateRevision,String resourceURI,dev.pocketengine.core.RunControl original)throws Exception {
+        try{dev.pocketengine.features.plugins.McpSkillSource.Fetched fetched=mcpSources().readMcpSkillSource(pluginId,installationId,stateRevision,resourceURI,original);
+            original.check();return book.inspectMcpSource(scope,targetId,fetched,System.currentTimeMillis());}
+        catch(Exception failure){try{book.reconcileMcpSources(scope,System.currentTimeMillis());}catch(Exception cleanup){failure.addSuppressed(cleanup);}throw failure;}
+        finally{context.emit(id(),new JSONObject().put("event","skills_changed").put("reason","mcp_source_observed"));}
+    }
+    public JSONObject reconcileMcpSources(JSONObject scope)throws Exception {
+        JSONObject result=book.reconcileMcpSources(scope,System.currentTimeMillis());if(result.getInt("revoked")>0)context.emit(id(),new JSONObject().put("event","skills_changed").put("reason","mcp_source_revoked"));return result;
+    }
     /** Native owner UI only: neither source JSON nor model commands can create a reviewed import. */
     public SkillBook.SourceReview inspectGitSource(JSONObject scope,String targetId,SkillGitSource source,dev.pocketengine.core.RunControl original)throws Exception {
         return book.inspectGitSource(scope,targetId,source,gitClient,original,System.currentTimeMillis());

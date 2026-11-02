@@ -1,0 +1,244 @@
+{
+  "aion-core": {
+    "classes": [
+      {
+        "class": "dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest",
+        "methods": [
+          "captureRetainsTheReviewedEpochAndTheOriginalProfileVersion",
+          "aClockCollisionCannotKeepTheOldTransportAuthorized",
+          "aLegacySelectionWithoutAnEpochFailsClosed",
+          "aMissingOrInvalidCurrentEpochCannotReuseTheTimestamp",
+          "versionProviderAndEnabledChecksStillRejectChanges",
+          "quotaMetadataChangesDoNotRotateTheReviewedIdentity",
+          "captureContainsOnlyTheProfileIdentityAndNoCredentialOrMessageData"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest",
+        "methods": [
+          "reviewedReceiverPinsTransportEpochAlongsideTheOriginalProfileVersion",
+          "sameTimestampWithAChangedTransportEpochRejectsTheOldReceivingLease",
+          "anAbsentCurrentEpochCannotPassEvenWhenProviderAndTimestampStillMatch",
+          "legacyForegroundMetadataIsInterruptedAndOnlyExplicitNewReviewCanStartAgain"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.runtime.models.ProviderCompatProfileTest",
+        "methods": [
+          "nativeProfileRoundTripPreservesRevisionAndUnknownFieldsCannotBeSilentlyIgnored",
+          "repeatedDefinitionIsNoChangeAndChangedDefinitionAdvancesTheOriginalId",
+          "compatibilityCopiesStayOnExactModelAndNeverEnterGenericJson",
+          "profileChangeParticipatesInOriginalConfigurationDigest",
+          "defaultConfigurationKeepsTheC055DigestBytesForFrozenPlansAndRecovery",
+          "unsupportedProtocolCombinationsAndLimitsAreRejectedWithoutGuessingCapabilities"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.runtime.models.ProviderWireProjectionTest",
+        "methods": [
+          "projectionPreservesOriginalHistoryAndConstraintsAndIsDeterministic",
+          "unsupportedOrStrictSchemaCannotBeSilentlyWeakened",
+          "cachePreparationIsNotDeliveryOrUsageAndChangedSourceChangesPrefixHash",
+          "finalBytesAndToolCountAreCheckedWithoutModifyingInput"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.runtime.ProviderCompatibilityTest",
+        "methods": [
+          "exactWireIsReproducibleAndOriginalHistorySchemaAndOpaqueSignaturesStayIntact",
+          "actualStreamingGatewayUsesSelectedTokenFieldAndStreamUsageWithoutEditingTools",
+          "preparedCacheHintAndActualProviderUsageAreSeparateNativeReceiptFacts",
+          "unknownCacheSupportSendsNoHintAndMissingUsageNeverBecomesZeroOrAHit",
+          "unsupportedSchemasAndLocalLimitsRejectBeforeAnyHttpOrPhysicalReceipt",
+          "cancellingAtOriginalReceiptAdmissionNeverClaimsHintDeliveryAndMakesNoHttpRequest",
+          "rejectedProviderResponseIsSingleDispatchAndNeverRetriesWithCachingDisabled",
+          "profileVersionAndCopiesRemainNativeAndChangingItChangesOriginalConfigurationDigest"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.store.ProviderCompatibilityNativeTest",
+        "methods": [
+          "nativeOwnerProfilePersistsAndActualConnectionTestHasOneOriginalReceiptPair",
+          "profileCasUpdateInvalidatesOldRouteAndForgedProfileWithoutChangingSelectedModel",
+          "lateProbeAfterCompatibilityChangeRemainsOnOldBindingAndCannotReportNewConnectionSuccess",
+          "compatibilityEditKeepsExactCatalogUrlAndFormatAndUnknownOptionsLeaveBytesUntouched"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.teams.TeamParentBroadcastTest",
+        "methods": [
+          "independentlyQueuedTargetsRetainFrozenAudienceAndExactIdsAcrossReopen",
+          "expansionResumesOnlyMissingOriginalIdsAndNeverDuplicatesDurableEnqueue",
+          "uncertainEarlierOperationOnlyObservesOriginalIdsAndDoesNotRedispatch",
+          "aLostReceiptAfterPersistenceIsReconciledFromTheSameMailboxEntry",
+          "oneExitedOrChangedTargetDoesNotHideOtherOriginalDelivery",
+          "consumptionNeedsActualMatchingDeliveryProofAndIsPerRecipient",
+          "reusedMessageCannotChangeTargetsTextOrParentExecution",
+          "schemaAndNativeValidationKeepDirectRepliesSeparateFromBroadcast",
+          "staleCreationOrRevokedParentNeverQueuesAnyMessage",
+          "preexistingDirectMessageCannotImpersonateABroadcastChild"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.teams.TeamRoleCatalogTest",
+        "methods": [
+          "versionedRolesAndPinnedTemplateSurviveRealReopenWithoutTouchingExistingTeams",
+          "staleCasAndForgedAuthorityFailWithoutChangingTheOriginalDocument",
+          "unprobedCliRoleCanBeInspectedButNeverAutomaticallyApplied",
+          "roleUpdateDoesNotRewritePinnedTemplateOrExistingDefinitionProposal",
+          "archiveAndRemovalRetainExistingTeamsButPreventNewApplications"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.teams.TeamParentBroadcastHostJourneyTest",
+        "methods": [
+          "actualParentBroadcastPersistsAndIndependentlyConsumesTheOriginalMemberMessages"
+        ]
+      }
+    ],
+    "helpers": [
+      "dev.pocketengine.features.teams.TeamParentRunnerJourneyTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "testCount": 49
+  },
+  "aion-mcp-skills": {
+    "classes": [
+      {
+        "class": "dev.pocketengine.features.plugins.McpResourceSourceTest",
+        "methods": [
+          "pagedResourceDiscoveryAndExactUtf8ReadNeverInvokeTools",
+          "originalBookReviewsPersistBytesAndObservedChangeRevokesOldApproval",
+          "absentResourcesCrossUriMultipleBlocksAndCursorLoopsAreExplicitFailures",
+          "badFrontmatterAndRemoteHooksNeverBecomePackages",
+          "mixedBinaryOversizeAndCredentialReflectionAreRejectedWithoutDroppingBlocks",
+          "rejectedSourceCannotRestoreOldApprovalWhenIdenticalBytesReturn",
+          "escapedUnpairedUnicodeIsRejectedAtTheActualResourceWireBoundary",
+          "sourceDigestRejectsUnpairedCodeUnitsAndPreservesValidEmojiAndCombiningText"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.plugins.McpClientTest",
+        "methods": [
+          "currentDiscoveryAndCallUseRealWireMetadataAndKeepRemoteTextUntrusted",
+          "legacyRequiresInitializeThenInitializedAndSessionHeaders",
+          "fragmentedSseSupportsUtf8MultilineDataCommentsCrAndDefaultEvents",
+          "paginationIsFollowedButRepeatedCursorFails",
+          "unknownConstraintsArePreservedInPreviewAndCannotBeImported",
+          "changedDescriptorIsRejectedBeforeToolsCall",
+          "changedServerIdentityIsRejectedBeforeToolsCall",
+          "sessionExpiryDoesNotReinitializeOrReplayOldDescriptor",
+          "protocolVersionMismatchPreventsListing",
+          "wrongResponseIdMakesCallUnknownWithoutRetry",
+          "jsonRpcErrorIsPreservedAndNotClaimedSuccess",
+          "inputRequiredNeverPerformsServerRequestedActionsOrReplays",
+          "legacyUnsupportedServerRequestGetsMethodNotFoundNotFakeSuccess",
+          "currentRejectsIllegalServerRequestWithoutPostingResponse",
+          "cancellationInterruptsActualCallAndCurrentDoesNotSendLegacyNotification",
+          "redirectsDoNotLeakCredentialsAnd503DoesNotReplay",
+          "binaryAndOversizedResponsesCannotBlindlyEnterPrompt",
+          "headerAnnotationsRejectUnreachableDuplicatesAndUnsafeIntegers",
+          "legacyCancelUsesActualRequestIdAndNeverCancelsInitialize",
+          "interruptedSseCannotBeReplayedAndDeepJsonIsRejectedBeforeParsing",
+          "invalidEndpointAndReflectedCredentialNeverCreateImportedTools",
+          "modernProtocolErrorDoesNotDowngradeAndInvalidErrorIdDoesNotCountAsReceipt",
+          "androidLenientJsonCannotBypassNestingGuard",
+          "taskCreateQueryResultAndCancelUseExtensionAndExactRoutingWithoutLegacyMethods",
+          "serverMayCompleteSynchronouslyWithTasksButMissingSupportNeverDowngrades",
+          "taskInputRequestsAndFailureDataCannotCreateClientAuthority",
+          "taskRestartCanQueryKnownHandleWithoutReplayingToolAndDescriptorReplacementBlocksQuery",
+          "wrongTaskIdInvalidTtlAndDuplicateFieldsCannotBecomeReceipts"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.plugins.mcp.McpElicitationSchemaTest",
+        "methods": [
+          "scalarValuesSurviveWithTypesAndNoDefaultAnswers",
+          "missingUnknownWrongTypedAndOutOfRangeValuesCannotBeAccepted",
+          "urlComplexSchemasUnknownKeywordsAndAuthenticationAreExplicitlyUnsupported",
+          "formAndValuesAreImmutableAndDigestIgnoresObjectKeyOrder"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.plugins.McpResourceSkillJourneyTest",
+        "methods": [
+          "actualResourcesBecomeDisabledScopedReviewAndExactBytesWithoutToolAuthority",
+          "observedRemoteChangeRevokesApprovalAndOldReviewCannotInstallNewBytes",
+          "invalidRemoteHooksStillRevokeOldApprovalAndNeverExecute",
+          "installationRemovalBlocksSourceReadsButPreservesLocalEvidence",
+          "absentCapabilityPaginationLoopAndCrossUriAreBoundedWithoutReads",
+          "listingDeletionAndSameShaReturnAlwaysRequireNewApproval",
+          "listingFailureCannotPreserveApprovalForLaterSameShaRecovery"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.skills.SkillSourceUpdateTest",
+        "methods": [
+          "firstGitImportHasNativeCommitBaselineAndIsAlwaysDisabledAndOneShot",
+          "unchangedThenUpstreamChangedIncludesRealDeletionAndInvalidatesOldExecution",
+          "nativeLocalZipChangeAndBothChangedKeepBaseAndRequireExplicitDiscard",
+          "externalFileEditIsDetectedWithoutBlessingItAsAnApprovedPackage",
+          "addedLocalFileAndReadableDeletionAreNotSilentlyIgnored",
+          "unknownLocalBytesAndMissingBaseNeverBecomeFreelyOverwritable",
+          "fetchIsOutsideLockAndConcurrentTargetPolicyChangeRejectsTheCandidate",
+          "postPreviewFileChangeEnableDisableAndDeletionAllRejectOldApply",
+          "exactHistoricalContentAndSourceVersionBecomeNewDisabledRevisionWithCurrentPolicy",
+          "retainedHistoryIsPagedAndUnknownOldMetadataIsNotInventedOnReopen",
+          "reviewIsBoundToNativeBookScopeLifetimeAndNeverAcceptsJsonAuthority",
+          "experienceSourceCannotBeStrippedByGitOrRetainedRestore",
+          "candidateReadIsBoundedAndLowTrustWithoutGrowingUiHistory"
+        ]
+      }
+    ],
+    "helpers": [
+      "dev.pocketengine.features.plugins.McpFixture",
+      "dev.pocketengine.features.skills.SkillGitProtocolTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "testCount": 60
+  },
+  "aion-office": {
+    "classes": [
+      {
+        "class": "dev.pocketengine.features.attachments.creation.StructuredOfficeCreationTest",
+        "methods": [
+          "actualWorkbookRetainsFormulasAndRecalculatesCrossSheetDependenciesAfterInputChange",
+          "unsupportedExternalCircularBrokenAndNumericErrorsHaveNoFabricatedZeroCache",
+          "unsupportedFunctionsAndExternalFormulasAreLiteralTextInTheExportedWorkbook",
+          "presentationHasEditableObjectsNotesAndRealLayoutRelationships",
+          "malformedOrUnimplementedSourceIsRejectedBeforeAnyArtifactIsPublished",
+          "parentAndEditableSourceMustBothBePresentBeforeReviewForEveryFormat",
+          "wordHeadingsAreNamedEditableStyles",
+          "legacyDocumentCanonicalDigestRemainsCompatibleAndIndependentOfInputFieldOrder"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.attachments.creation.OfficeNativeOperationTest",
+        "methods": [
+          "nativeOperationPublishesActualOfficeRetainsEditableParentAndReplaysWithoutDuplicateArtifacts"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.attachments.creation.DocumentCreationTest",
+        "methods": [
+          "actualEditableWordPackageContainsUnicodeTablesAndNoMacroOrExternalPart",
+          "originalEditableSourceAndExactParentProduceIndependentVersionAndOldBytesRemain",
+          "incompleteTextOversizeAndForgedParentSourceFailBeforePublication"
+        ]
+      },
+      {
+        "class": "dev.pocketengine.features.capabilities.OfficeDocumentCapabilityTest",
+        "methods": [
+          "existingNativeDocumentToolAdmitsStructuredOfficeBeforeReviewWithCompleteBoundedTypes",
+          "schemaAndFormatSpecificGateRejectMalformedBodiesTypesAndHostIdentityBeforeApproval",
+          "originalToolRejectsPartialParentAndEditableReferencesBeforeApproval"
+        ]
+      }
+    ],
+    "helpers": [],
+    "robolectric": false,
+    "testCount": 15
+  }
+}

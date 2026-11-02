@@ -1,4 +1,24 @@
 {
+  "project-file-operations": {
+    "class": "dev.pocketengine.features.local.project.ProjectExactFileOperationsNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.project.ProjectExactFileOperationsTest",
+      "dev.pocketengine.features.local.project.ProjectExactPatchTest",
+      "dev.pocketengine.features.local.project.ProjectExactRangePatchTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original SQLite approval/planRef/CapabilityPort -> LocalModule CAS copy/append and per-file receipts, plus exact-patch/reversal regression; no Android device/SAF/SSH/binary-copy acceptance."
+  },
+  "project-file-search": {
+    "class": "dev.pocketengine.features.local.project.ProjectSearchContextTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.project.ProjectFileQueriesTest",
+      "dev.pocketengine.features.local.project.ProjectRegexSearchTest"
+    ],
+    "helpers": [],
+    "description": "Actual selected checkout reads, SHA-pinned native literal/glob search and bounded merged context windows; no Android filesystem/provider/SAF/SSH/device acceptance."
+  },
   "browser-expression": {
     "class": "dev.pocketengine.browser.BrowserPageProgramsTest",
     "additionalClasses": [
@@ -30,6 +50,31 @@
     "robolectric": true,
     "python": true,
     "description": "Original App/SQL/Service plus original Companion fixture on loopback; not a phone/WAN test."
+  },
+  "memory-automatic": {
+    "class": "dev.pocketengine.features.memory.AutomaticUserLearningHostNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.AutomaticMemoryPolicyTest",
+      "dev.pocketengine.features.KnowledgeLearningWorkflowTest",
+      "dev.pocketengine.features.assistant.AutomaticOwnerUtteranceNativeTest",
+      "dev.pocketengine.store.RetainedDevelopmentAdmissionTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
+    "robolectric": true,
+    "description": "Thirty exact original SQLite/USER-source/opt-in/draft, retained-service admission and Application/Runner loopback methods. Helpers compile only; no real provider, UI or device acceptance."
+  },
+  "memory-learning-assertions": {
+    "class": "dev.pocketengine.features.KnowledgeLearningAssertionWorkflowTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.LearningAssertionDraftTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Twelve exact typed source-draft and original workflow/Book/native-review checks; no semantic quality, automatic background learning or device acceptance."
   },
   "memory-experience": {
     "class": "dev.pocketengine.features.workspace.OwnerExperienceArchiveNativeTest",
@@ -105,5 +150,132 @@
     ],
     "robolectric": true,
     "description": "Original SettingsStore/TaskStore prepared-operation and CAS/withdrawal boundaries; actual AgentRunner loopback requests and seven direct phone-action pacing/cancel paths; native owner Controller/state flow, not model behavior, visual or physical-device acceptance."
+  },
+  "aion-core": {
+    "class": "dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest",
+      "dev.pocketengine.runtime.models.ProviderCompatProfileTest",
+      "dev.pocketengine.runtime.models.ProviderWireProjectionTest",
+      "dev.pocketengine.runtime.ProviderCompatibilityTest",
+      "dev.pocketengine.store.ProviderCompatibilityNativeTest",
+      "dev.pocketengine.features.teams.TeamParentBroadcastTest",
+      "dev.pocketengine.features.teams.TeamRoleCatalogTest",
+      "dev.pocketengine.features.teams.TeamParentBroadcastHostJourneyTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.teams.TeamParentRunnerJourneyTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original Aion channel identity, reviewed provider projections and original parent mailbox/SQLite budget journey: nine exact classes, 49 tests; synthetic loopback only, no full capability or device acceptance."
+  },
+  "aion-mcp-skills": {
+    "class": "dev.pocketengine.features.plugins.McpResourceSourceTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.plugins.McpClientTest",
+      "dev.pocketengine.features.plugins.mcp.McpElicitationSchemaTest",
+      "dev.pocketengine.features.plugins.McpResourceSkillJourneyTest",
+      "dev.pocketengine.features.skills.SkillSourceUpdateTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.plugins.McpFixture",
+      "dev.pocketengine.features.skills.SkillGitProtocolTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original MCP resource/source-generation/revocation and Skill source history: five exact classes, 60 tests; actual loopback fixtures, no native elicitation UI or all MCP transport acceptance."
+  },
+  "aion-office": {
+    "class": "dev.pocketengine.features.attachments.creation.StructuredOfficeCreationTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.creation.OfficeNativeOperationTest",
+      "dev.pocketengine.features.attachments.creation.DocumentCreationTest",
+      "dev.pocketengine.features.capabilities.OfficeDocumentCapabilityTest"
+    ],
+    "helpers": [],
+    "description": "Original immutable document creation, bounded OOXML and known formula source/readback: four exact classes, 15 tests; pure JVM files, not Office renderer or device acceptance."
+  },
+  "aion-conversations": {
+    "class": "dev.pocketengine.features.assistant.ConversationWorkbenchNativeJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.assistant.ConversationOrganizationTest",
+      "dev.pocketengine.features.assistant.ConversationTransferTest",
+      "dev.pocketengine.store.ConversationV9MigrationNativeTest",
+      "dev.pocketengine.store.DeviceV8MigrationNativeTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original owner conversation data facade and actual Android 35 SQLite versions 1-9 migration/rollback, fixed export, content-only import and history-derived prefix: five exact classes, 23 tests; no rendered UI, backend fork, multi-session execution or physical device acceptance."
+  },
+  "remote-transport": {
+    "class": "dev.pocketengine.features.remote.RemoteTransportTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.remote.RemoteTransportDeadlineTest",
+      "dev.pocketengine.features.remote.RemoteTransportBinaryTest",
+      "dev.pocketengine.features.remote.RemoteTaskTransportNativeTest",
+      "dev.pocketengine.features.remote.RemoteOriginBoundaryTest"
+    ],
+    "helpers": [],
+    "description": "Actual loopback HTTP JSON/binary deadlines, original RunControl cancellation, single-exchange POST, redirect and credential boundaries; not Android TLS/provider/WAN or remote execution acceptance.",
+    "robolectric": true
+  },
+  "aion-team-catalog": {
+    "class": "dev.pocketengine.features.teams.TeamRoleModuleNativeTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original TeamsModule catalog data mounting and actual file persistence through save/remove/savePlan/cold reopen: three exact tests; no template launch, model call, UI or runtime option application acceptance."
+  },
+  "magpie-work-profile": {
+    "class": "dev.pocketengine.store.SettingsWorkProfileTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.controlplane.WorkProfileTest",
+      "dev.pocketengine.store.WorkProfileNativeRunTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original SettingsStore CAS, opaque owner selection and original TaskStore SQL run-profile metadata/recovery over original SkillBook/Plugins/catalog sources; exact frozen references and live revocation. No Runner filtering/App/UI wiring, Harness configuration application, device or visual acceptance."
+  },
+  "native-operation-event": {
+    "class": "dev.pocketengine.runtime.NativeOperationEventTest",
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "description": "Four original Runner/Gateway loopback journal carrier assertions; no physical device or full trace UI acceptance."
+  },
+  "browser-document-download": {
+    "class": "dev.pocketengine.browser.BrowserDocumentDownloadSqlTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserDocumentProgramsTest",
+      "dev.pocketengine.browser.BrowserDownloadsTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserTaskActivityTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original download SQL and production script bytes with Node fixture; physical WebView and device unverified."
+  },
+  "browser-native-sequence": {
+    "class": "dev.pocketengine.browser.BrowserSequenceJourneySqlTest",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.BrowserSequenceRunnerTest",
+      "dev.pocketengine.browser.BrowserToolSequenceTest",
+      "dev.pocketengine.core.NativeToolPlanBoundaryTest",
+      "dev.pocketengine.phone.observation.PhoneTreeSequenceTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserTaskActivityTest",
+      "dev.pocketengine.phone.observation.PhoneCollectionFixtures",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Exact native page plan/Runner loopback, original SQL wait/currentness and retained phone plan contracts. Known prior-source wait failures are not waived."
+  },
+  "retained-development-admission": {
+    "class": "dev.pocketengine.store.RetainedDevelopmentAdmissionTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Three original SQL retained-service admission cases; absence is not tool authority and real candidates still require original grant."
   }
 }

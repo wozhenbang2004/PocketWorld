@@ -358,7 +358,7 @@ public final class HostToolSupervisor implements CapabilityPort {
                 control.onCancel(cancel);
                 try{control.check();result=module instanceof PluginsModule?((PluginsModule)module).invokeForHost(input,control,outputCapture,name):module.handle(tool.command,input);}
                 finally{control.removeCancelAction(cancel);}
-            }else result=module.handle(tool.command,input);
+            }else result=module instanceof dev.pocketengine.features.remote.RemoteModule?((dev.pocketengine.features.remote.RemoteModule)module).handleForTask(tool.command,input,control):module.handle(tool.command,input);
         }
         control.check();tasks.checkCapability(taskId,runId,epoch,name,control);if(result==null)throw new IllegalStateException("工具没有返回真实结果");return result;
     }

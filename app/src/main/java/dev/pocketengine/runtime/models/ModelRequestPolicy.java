@@ -36,7 +36,7 @@ public final class ModelRequestPolicy {
      * function history, not a declaration, execution grant or an added wire tool. */
     public static JSONObject applyNative(ModelConfig config,JSONArray messages,JSONArray tools,JSONObject wire,boolean nativeFunctionHistory)throws Exception {
         ModelCatalog.View view = resolve(config);
-        if (view == null) return wire; // Explicit pre-catalog API configuration keeps its existing contract.
+        if (view == null) return projectCompatibility(config,messages,tools,wire); // Identity-only profiles still enforce reviewed wire limits.
         ModelFacts facts = view.facts();
         boolean images = hasImages(messages), toolContext = nativeFunctionHistory || tools != null && tools.length() > 0 || hasToolHistory(messages);
         if (images) requireTrue(facts.imageInput(), "image_capability", "当前精确模型的图像输入能力未知或不支持；请在模型页核对。");
@@ -51,7 +51,12 @@ public final class ModelRequestPolicy {
             wire.put(field.value == ModelFacts.ChatOutputParameter.MAX_TOKENS ? "max_tokens" : "max_completion_tokens", config.maxOutputTokens);
         }
         applyReasoning(config, facts, wire);
-        return wire;
+        return projectCompatibility(config,messages,tools,wire);
+    }
+
+    private static JSONObject projectCompatibility(ModelConfig config,JSONArray messages,JSONArray tools,JSONObject wire)throws Exception {
+        try{return dev.pocketengine.runtime.providers.ProviderCompatibility.project(config,messages,tools,wire);}
+        catch(dev.pocketengine.runtime.providers.ProviderCompatibility.Rejected rejected){throw new Rejected(rejected.code,rejected.getMessage());}
     }
 
     /** Owner selection is checked before persisting, and again on each actual request boundary. */

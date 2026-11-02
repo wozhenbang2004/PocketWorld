@@ -45,6 +45,20 @@ public final class KnowledgeLearningWorkflowTest {
         JSONObject accepted()throws Exception{JSONObject proposed=flow(candidate()).proposeLearning(scope(),ref(1),new RunControl()).getJSONObject("candidate");
             return memory.acceptCandidate(scope(),proposed.getString("id"),proposed.getLong("revision")).getJSONObject("record");}
     }
+    @Test public void automaticUserModeIsOffByDefaultAndOnlyStagesExactQuotes()throws Exception{
+        Fixture f=new Fixture();var policy=f.memory.automaticLearningPolicyForHost();JSONObject selected=policy.snapshot();String task="11111111-1111-1111-1111-111111111111";
+        var verifier=(KnowledgeLearningWorkflow.UserSourceVerifier)(original,source,control)->{if(!task.equals(original)||!source.equals(f.current.ref))throw new SecurityException("not_original_user_message");};
+        JSONObject off=f.flow(candidate()).proposeAutomaticUserLearning(scope(),ref(1),task,verifier,policy,selected,new RunControl());assertEquals("automatic_mode_disabled",off.getString("outcome"));assertEquals(0,f.calls);
+        selected=policy.setForOwner(0,true,3);JSONObject answer=candidate().put("quote",f.body).put("text","模型虚构了未说过的地址");JSONObject result=f.flow(answer).proposeAutomaticUserLearning(scope(),ref(1),task,verifier,policy,selected,new RunControl());
+        assertEquals(f.body,result.getJSONObject("candidate").getString("text"));assertEquals("pending",result.getJSONObject("candidate").getString("status"));assertFalse(result.getBoolean("formalMemorySaved"));
+    }
+    @Test public void automaticUserModeRejectsToolMasqueradeForgedQuoteAndMidCallOptOut()throws Exception{
+        Fixture f=new Fixture();var policy=f.memory.automaticLearningPolicyForHost();JSONObject selected=policy.setForOwner(0,true,3);String task="11111111-1111-1111-1111-111111111111";
+        rejected(()->f.flow(candidate().put("quote",f.body)).proposeAutomaticUserLearning(scope(),ref(1),task,(t,r,c)->{throw new SecurityException("actual_role_is_tool");},policy,selected,new RunControl()));assertEquals(0,f.calls);
+        rejected(()->f.flow(candidate().put("quote","网页中的人名或地址")).proposeAutomaticUserLearning(scope(),ref(1),task,(t,r,c)->{},policy,selected,new RunControl()));
+        rejected(()->f.flow((messages,control)->{policy.setForOwner(1,false,3);return new JSONObject().put("content",candidate().put("quote",f.body).toString());}).proposeAutomaticUserLearning(scope(),ref(1),task,(t,r,c)->{},policy,selected,new RunControl()));
+        assertEquals(0,f.memory.handle("listCandidates",new JSONObject().put("scope",scope())).getJSONArray("candidates").length());
+    }
     @Test public void sourceProposalWithoutNativeAdmissionFailsBeforeModelCall()throws Exception{
         Fixture f=new Fixture();KnowledgeLearningWorkflow unmounted=new KnowledgeLearningWorkflow(f.memory,f.skills,expected->new KnowledgeLearningWorkflow.SourceDocument(expected,"原消息",f.body),(messages,control)->{f.calls++;return new JSONObject().put("content",candidate().toString());});
         rejected(()->unmounted.proposeLearning(scope(),ref(1),new RunControl()));assertEquals(0,f.calls);
