@@ -10,11 +10,16 @@ if (selected.isEmpty() || selected.any { !registry.containsKey(it) }) {
 def entries = selected.collect { registry[it] }
 def classes = entries.collect { it['class'] }
 def sources = (classes + entries.collectMany { it.helpers }).unique().collect { it.replace('.', '/') + '.java' }
-sources.each {
-    if (!file('src/hostTest/java/' + it).isFile()) throw new GradleException('Missing registered host-test source: ' + it)
+def sourceRoots = ['src/hostTest/java', 'src/test/java']
+sources.each { path ->
+    if (sourceRoots.count { file(it + '/' + path).isFile() } != 1) {
+        throw new GradleException('Expected one exact registered host-test source: ' + path)
+    }
 }
 // Do not compile the unrelated ordinary test matrix or all hostTest classes.
-android.sourceSets.test.java.setSrcDirs(['src/hostTest/java'])
+// The shared Android-compatible HTTP helper lives in src/test; exact includes
+// below still exclude every unrelated ordinary test (and helper tests do not run).
+android.sourceSets.test.java.setSrcDirs(sourceRoots)
 android.sourceSets.test.java.setIncludes(sources as Set)
 // Kotlin has its own conventional test roots; the registered host sources are Java.
 // Keep unrelated ordinary Compose/state test sources out of this selected compile.
@@ -51,7 +56,7 @@ tasks.withType(Test).configureEach {
         report.mkdirs()
         new File(report, 'classpath.txt').text = classpath.files.collect { it.absolutePath }.join(System.lineSeparator()) + System.lineSeparator()
         new File(report, 'gradle-selection.json').text = JsonOutput.prettyPrint(JsonOutput.toJson([
-            groups: selected, classes: classes, sources: sources,
+            groups: selected, classes: classes, sources: sources, sourceRoots: sourceRoots,
             dependencyLock: 'app/gradle.lockfile', testTask: path,
             assertions: true, deviceTest: false
         ])) + '\n'

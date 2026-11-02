@@ -26,9 +26,37 @@ class HostTestEntrypointTest(unittest.TestCase):
     def test_registered_real_sources_and_helpers_exist(self):
         for entry in REGISTRY.values():
             for name in [entry['class']] + entry['helpers']:
-                path = HOST.ROOT / 'app/src/hostTest/java' / (name.replace('.', '/') + '.java')
-                self.assertTrue(path.is_file(), path)
-                self.assertIn('@Test', path.read_text())
+                relative = name.replace('.', '/') + '.java'
+                found = [HOST.ROOT / root / relative for root in ('app/src/hostTest/java', 'app/src/test/java')
+                         if (HOST.ROOT / root / relative).is_file()]
+                self.assertEqual(1, len(found), 'expected one exact registered source for ' + name)
+                if name == entry['class']:
+                    self.assertIn('@Test', found[0].read_text())
+
+    def test_gateway_uses_exact_android_compatible_http_helper_and_byte_io(self):
+        entry = REGISTRY['gateway-continuation']
+        self.assertEqual(['dev.pocketengine.testutil.HttpServer'], entry['helpers'])
+        source = (HOST.ROOT / 'app/src/hostTest/java/dev/pocketengine/GatewayContinuationAppJourneyTest.java').read_text()
+        self.assertIn('import dev.pocketengine.testutil.HttpServer;', source)
+        self.assertNotIn('com.sun.net.httpserver', source)
+        self.assertNotIn('Files.writeString', source)
+        self.assertNotIn('Files.readString', source)
+        self.assertIn('"GatewayFixtureVault",1.0,', source)
+        self.assertIn('exchange.sendResponseHeaders(200,body.length)', source)
+        self.assertIn('exchange.getResponseBody().flush()', source)
+
+    def test_gateway_java_selection_is_only_the_original_class_and_shared_http_helper(self):
+        entry = REGISTRY['gateway-continuation']
+        includes = {name.replace('.', '/') + '.java' for name in [entry['class']] + entry['helpers']}
+        selected = []
+        for root in ('app/src/hostTest/java', 'app/src/test/java'):
+            base = HOST.ROOT / root
+            selected.extend(path.relative_to(HOST.ROOT).as_posix() for path in base.rglob('*.java')
+                            if path.relative_to(base).as_posix() in includes)
+        self.assertEqual([
+            'app/src/hostTest/java/dev/pocketengine/GatewayContinuationAppJourneyTest.java',
+            'app/src/test/java/dev/pocketengine/testutil/HttpServer.java'
+        ], sorted(selected))
 
     def test_bad_input_does_not_launch_gradle(self):
         with patch.object(HOST.subprocess, 'run') as launch, contextlib.redirect_stderr(io.StringIO()):
@@ -79,7 +107,8 @@ class HostTestEntrypointTest(unittest.TestCase):
 
     def test_opt_in_registration_excludes_unrelated_java_and_kotlin_test_roots(self):
         registration = (HOST.ROOT / 'tools/host-tests.gradle').read_text()
-        self.assertIn("android.sourceSets.test.java.setSrcDirs(['src/hostTest/java'])", registration)
+        self.assertIn("def sourceRoots = ['src/hostTest/java', 'src/test/java']", registration)
+        self.assertIn("android.sourceSets.test.java.setSrcDirs(sourceRoots)", registration)
         self.assertIn('android.sourceSets.test.java.setIncludes(sources as Set)', registration)
         self.assertIn("it.name in ['test', 'testDebug', 'testRelease']", registration)
         self.assertIn('kotlin.setSrcDirs([])', registration)

@@ -13,7 +13,7 @@
   },
   "gateway-continuation": {
     "class": "dev.pocketengine.GatewayContinuationAppJourneyTest",
-    "helpers": [],
+    "helpers": ["dev.pocketengine.testutil.HttpServer"],
     "robolectric": true,
     "python": true,
     "description": "Original App/SQL/Service plus original Companion fixture on loopback; not a phone/WAN test."
