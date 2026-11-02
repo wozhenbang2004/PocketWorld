@@ -113,6 +113,47 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn("it.name in ['test', 'testDebug', 'testRelease']", registration)
         self.assertIn('kotlin.setSrcDirs([])', registration)
 
+    def test_android_resource_paths_use_module_cwd_and_gateway_keeps_repository_root(self):
+        registration = (HOST.ROOT / 'tools/host-tests.gradle').read_text()
+        selected = re.findall(r'^\s*workingDir (project|rootProject)\.projectDir\s*$', registration, re.M)
+        self.assertEqual(['project'], selected, 'AGP test_config paths are relative to the app module')
+        self.assertIn("systemProperty 'pocket.gateway.source', rootProject.projectDir.absolutePath", registration)
+        # Model AGP's module-relative test_config paths; these are path fixtures,
+        # not APK contents or a substitute for running the real Robolectric tests.
+        with tempfile.TemporaryDirectory(prefix='host checkout ') as tmp:
+            repository = Path(tmp)
+            module = repository / 'app'
+            for relative in (
+                'build/intermediates/packaged_manifests/debug/processDebugManifestForPackage/AndroidManifest.xml',
+                'build/intermediates/apk_for_local_test/debugUnitTest/packageDebugUnitTestForUnitTest/apk-for-local-test.ap_',
+            ):
+                artifact = module / relative
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.touch()
+                cwd = module if selected == ['project'] else repository
+                self.assertEqual(artifact, cwd / relative)
+                self.assertTrue((cwd / relative).is_file())
+                self.assertFalse((repository / relative).exists())
+            companion = repository / 'companion/gateway_fixture_server.py'
+            companion.parent.mkdir()
+            companion.touch()
+            self.assertTrue((repository / 'companion/gateway_fixture_server.py').is_file())
+            self.assertFalse((module / 'companion/gateway_fixture_server.py').exists())
+
+    def test_registered_fixtures_do_not_require_repository_as_jvm_working_directory(self):
+        for entry in REGISTRY.values():
+            for name in [entry['class']] + entry['helpers']:
+                relative = name.replace('.', '/') + '.java'
+                source = next((HOST.ROOT / root / relative).read_text()
+                              for root in ('app/src/hostTest/java', 'app/src/test/java')
+                              if (HOST.ROOT / root / relative).is_file())
+                self.assertNotIn('System.getProperty("user.dir")', source, name)
+                for literal in re.findall(r'(?:new File|Path\.of|Paths\.get)\(\s*"([^"\n]*)"', source):
+                    self.assertTrue(Path(literal).is_absolute(), name + ': implicit cwd path ' + literal)
+        gateway = (HOST.ROOT / 'app/src/hostTest/java/dev/pocketengine/GatewayContinuationAppJourneyTest.java').read_text()
+        self.assertIn('System.getProperty("pocket.gateway.source")', gateway)
+        self.assertIn('source+"/companion/gateway_fixture_server.py"', gateway)
+
     def test_manual_workflow_group_choices_match_registry(self):
         workflow = (HOST.ROOT / '.github/workflows/build-apk.yml').read_text()
         options = re.search(r'(?s)      host_group:.*?        options: \[(.*?)\]', workflow)

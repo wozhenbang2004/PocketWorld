@@ -38,7 +38,9 @@ tasks.withType(Test).configureEach {
     maxHeapSize = '1024m'
     enableAssertions = true
     outputs.upToDateWhen { false }
-    workingDir rootProject.projectDir
+    // AGP's test_config.properties paths are app-module relative. A repository-root
+    // cwd makes Robolectric look for app resources/APK under the wrong build/ tree.
+    workingDir project.projectDir
     systemProperty 'pocket.gateway.source', rootProject.projectDir.absolutePath
     ['a25.python', 'a25.node', 'pocket.gateway.python', 'robolectric.dependency.dir'].each { key ->
         def value = providers.gradleProperty(key).orNull
@@ -58,6 +60,7 @@ tasks.withType(Test).configureEach {
         new File(report, 'gradle-selection.json').text = JsonOutput.prettyPrint(JsonOutput.toJson([
             groups: selected, classes: classes, sources: sources, sourceRoots: sourceRoots,
             dependencyLock: 'app/gradle.lockfile', testTask: path,
+            workingDirectory: workingDir.absolutePath, gatewaySource: systemProperties['pocket.gateway.source'],
             assertions: true, deviceTest: false
         ])) + '\n'
     }
