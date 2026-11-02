@@ -43,7 +43,7 @@ public final class PhoneSetupModule implements EngineModule {
             case "clipboard.restore":return new JSONObject().put("restored",AndroidClipboardRecovery.create(context.android).recover()).put("containsClipboardContent",false);
             case "clipboard.policy":AndroidClipboardRecovery.setOwnerAllowed(context.android,input.getBoolean("enabled"));return snapshot();
             case "audio.policy":AndroidPhoneAudioRecovery.setOwnerSilenceEnabled(context.android,input.getBoolean("enabled"));return snapshot();
-            case "audio.restore":if(display.snapshot().optBoolean("taskOwned"))throw new SecurityException("stop_phone_task_before_audio_recovery");return AndroidPhoneAudioRecovery.get(context.android,display).restoreAll();
+            case "audio.restore":if(display.snapshot().optBoolean("taskOwned"))throw new SecurityException("stop_phone_task_before_audio_recovery");return AndroidPhoneAudioRecovery.withCommands(display::audioRecovery,()->AndroidPhoneAudioRecovery.get(context.android).restoreAll());
             case "diagnostics.preview":return diagnostic();
             default:throw new IllegalArgumentException("phone_setup_command_unavailable");
         }

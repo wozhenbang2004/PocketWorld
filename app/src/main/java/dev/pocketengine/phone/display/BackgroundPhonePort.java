@@ -21,7 +21,7 @@ import org.json.JSONObject;
 
 /** A task is pinned to one separately created display; this class has no primary-screen actions. */
 public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.phone.observation.NativeOcrTapPort,dev.pocketengine.phone.observation.NativeTreeScrollPort,dev.pocketengine.phone.observation.NativePhoneSignals,dev.pocketengine.phone.observation.NativePhoneExtensions {
-    private final DisplayModule module;
+    private final BackgroundDisplaySession module;
     private final String sessionId;
     private final int displayId;
     private final Handler main=new Handler(Looper.getMainLooper());
@@ -35,7 +35,8 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     private dev.pocketengine.phone.access.PhoneAppResources appResources;private String resourceOwner;
     private dev.pocketengine.phone.setup.PhoneAudioRecovery audioRecovery;private android.content.Context lifecycleContext;
     private final dev.pocketengine.phone.setup.PhoneAfterTaskPlan afterTask=new dev.pocketengine.phone.setup.PhoneAfterTaskPlan();
-    public BackgroundPhonePort(DisplayModule module)throws Exception {
+    public BackgroundPhonePort(DisplayModule module)throws Exception {this(BackgroundDisplaySession.legacy(module));}
+    public BackgroundPhonePort(BackgroundDisplaySession module)throws Exception {
         this.module=module;JSONObject session=module.session();
         sessionId=session.optString("sessionId");displayId=session.optInt("displayId",-1);
         if(!module.hasSession()||sessionId.isEmpty()||displayId<=0)throw new IllegalStateException("请先连接后台助手并创建独立屏幕");
@@ -45,8 +46,8 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     public JSONObject executionIdentity()throws Exception{return new JSONObject().put("sessionId",sessionId).put("displayId",displayId);}
     /** Supplied by the original native supervisor, never a model argument. */
     public synchronized void bindAppResources(dev.pocketengine.phone.access.PhoneAppResources resources,String owner){if(appResources!=null&&(appResources!=resources||!java.util.Objects.equals(owner,resourceOwner)))throw new SecurityException("phone_resource_binding_changed");appResources=java.util.Objects.requireNonNull(resources);resourceOwner=java.util.Objects.requireNonNull(owner);}
-    public synchronized void bindLifecycle(android.content.Context context)throws Exception {lifecycleContext=context.getApplicationContext();audioRecovery=dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.get(lifecycleContext,module);}
-    public synchronized JSONObject restoreTaskAudio()throws Exception {if(audioRecovery==null)return new JSONObject().put("pending",0).put("status","audio_not_configured");if(!sameSession(module.session()))return audioRecovery.snapshot().put("status","original_session_changed_recovery_pending");return audioRecovery.restoreOwner(resourceOwner==null?sessionId:resourceOwner);}
+    public synchronized void bindLifecycle(android.content.Context context)throws Exception {lifecycleContext=context.getApplicationContext();audioRecovery=dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.get(lifecycleContext);}
+    public synchronized JSONObject restoreTaskAudio()throws Exception {if(audioRecovery==null)return new JSONObject().put("pending",0).put("status","audio_not_configured");if(!sameSession(module.session()))return audioRecovery.snapshot().put("status","original_session_changed_recovery_pending");return dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withCommands((command,payload)->module.request(command,payload,null),()->audioRecovery.restoreOwner(resourceOwner==null?sessionId:resourceOwner));}
     public synchronized JSONObject prepareAfterTask(RunControl control)throws Exception {return afterTask.prepare(landing(control,control.pauseRevision()),displayId);}
     private void beforeOpenAudio(String pkg,int user,RunControl control)throws Exception {if(audioRecovery!=null&&lifecycleContext!=null&&dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(lifecycleContext)){long revision=control.pauseRevision();JSONObject receipt=dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withCommands((command,payload)->module.requestAdmitted(command,payload,control,revision,sessionId,displayId,()->{guard(control,revision);if(!dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(lifecycleContext))throw new SecurityException("owner_audio_policy_revoked");}),()->audioRecovery.silence(resourceOwner==null?sessionId:resourceOwner,new dev.pocketengine.phone.access.AppCopyKey(pkg,user),true));if(!"silenced_verified".equals(receipt.optString("outcome")))throw new PhoneFailure("audio_policy_unconfirmed","主人选择了后台静音，但当前原App音频状态尚未证实；没有继续打开目标App，请核对声音与恢复记录。");}}
     public dev.pocketengine.phone.access.PhoneOwnerPackages ownerPackages(RunControl control)throws Exception {return dev.pocketengine.phone.access.PhoneOwnerPackages.fromOwnership(landing(control,control.pauseRevision()),"owned");}

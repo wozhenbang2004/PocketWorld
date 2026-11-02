@@ -29,7 +29,7 @@ final class DisplaySessionDirectory implements AutoCloseable {
         if("hello".equals(command)||"status".equals(command)){
             String owner=request.optString("ownerRunToken");return owner.isEmpty()?status():status(required(owner));
         }
-        if("primary_ownership".equals(command))return new DisplayEngine(context,main,ownerUid).handle(request);
+        if("primary_ownership".equals(command)||"audio_recovery.get".equals(command)||"audio_recovery.set".equals(command))return new DisplayEngine(context,main,ownerUid).handle(request);
         if("create".equals(command))return create(request);
         Entry entry=required(request.optString("ownerRunToken"));
         if("release_owner".equals(command)){
