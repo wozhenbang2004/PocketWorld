@@ -41,7 +41,7 @@ public final class ProviderUsageAnchor {
     private static long counter(JSONObject value){if(value==null||!"provider_reported".equals(value.optString("source"))||!"FINAL".equals(value.optString("stage")))return -1;Object n=value.opt("value");return n instanceof Integer||n instanceof Long?((Number)n).longValue():-1;}
     private static List<String> rows(JSONArray messages)throws Exception {List<String> rows=new ArrayList<>();for(int i=0;i<messages.length();i++)rows.add(messages.getJSONObject(i).toString());return rows;}
     private static String route(ModelConfig config)throws Exception {
-        JSONObject identity=new JSONObject().put("provider",config.provider).put("model",config.model).put("endpoint",config.baseUrl).put("credentialDigest",java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(config.apiKey.getBytes(StandardCharsets.UTF_8))));
+        JSONObject identity=new JSONObject().put("provider",config.provider).put("model",config.model).put("endpoint",config.baseUrl).put("reasoning",config.reasoning.toJson()).put("maxOutputTokens",config.maxOutputTokens).put("credentialDigest",java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(config.apiKey.getBytes(StandardCharsets.UTF_8))));
         if(config.capabilityBinding!=null)identity.put("binding",config.capabilityBinding.toJson());if(config.usesAccount())identity.put("account",config.accountModel.toJson());
         return identity.toString();
     }

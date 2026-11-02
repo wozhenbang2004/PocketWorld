@@ -132,12 +132,13 @@ public final class RunContextBudget {
             for(Map.Entry<Integer,String> row:observations.entrySet())newest.merge(row.getValue(),row.getKey(),Math::max);
             for(Map.Entry<Integer,String> row:observations.entrySet())
                 if(row.getKey()<newest.get(row.getValue()))optional.put(row.getKey(),ContextWindow.Eviction.STALE_OBSERVATION);
-            duplicateReadBatches(messages,optional);
+            if(boundary.equals("request"))duplicateReadBatches(messages,optional);
             ContextWindow.Plan plan = ContextWindow.plan(messages, tools, selected.limits,
                     new ContextWindow.Retention(optional, Set.of()),boundary.equals("request")?usage.charge(messages,tools,config):null);
+            boolean removedReadBatch=plan.removed.stream().anyMatch(row->row.reason()==ContextWindow.Eviction.COMPLETED_TOOL_BATCH);
             JSONObject diagnostics = plan.diagnostics().put("boundary", boundary).put("metadata", selected.diagnostics())
-                    .put("retentionPolicy", "host_proven_duplicate_observations_only")
-                    .put("toolResultsAutomaticallyEvicted", false).put("summariesGenerated", false);
+                    .put("retentionPolicy",removedReadBatch?"host_proven_duplicate_observations_and_read_batches_only":"host_proven_duplicate_observations_only")
+                    .put("toolResultsAutomaticallyEvicted", removedReadBatch).put("summariesGenerated", false);
             if (!plan.canSend()) throw new Blocked(plan.status, boundary, diagnostics);
             return new Projection(plan, diagnostics);
         } catch (Blocked blocked) { throw blocked; }
@@ -148,10 +149,10 @@ public final class RunContextBudget {
     /** Only byte-identical completed, explicitly read-only batches may be omitted as whole pairs.
      * The original SQL history is retained; unknown/failed/effect receipts never qualify. */
     private static void duplicateReadBatches(JSONArray messages,Map<Integer,ContextWindow.Eviction> optional)throws Exception {
-        Set<String> reads=Set.of("phone_observe","phone_query","phone_extract","browser_task_observe","browser_task_read_public","browser_task_read_page");
+        Set<String> reads=Set.of("phone_observe","phone_query","phone_extract","browser_task_observe","browser_task_read_public");
         Map<String,Integer> newest=new java.util.HashMap<>();
         for(int i=messages.length()-1;i>=0;i--){JSONObject assistant=messages.optJSONObject(i);if(assistant==null||!"assistant".equals(assistant.optString("role"))||!assistant.optString("content").isBlank()||assistant.has("provider_data")||assistant.has("memoryReference")||assistant.has("memoryContext"))continue;JSONArray calls=assistant.optJSONArray("tool_calls");if(calls==null||calls.length()<1||i+calls.length()>=messages.length())continue;
-            JSONArray normalized=new JSONArray();boolean eligible=true;for(int c=0;c<calls.length();c++){JSONObject call=calls.getJSONObject(c),function=call.getJSONObject("function"),result=messages.optJSONObject(i+c+1);if(!reads.contains(function.optString("name"))||result==null||!"tool".equals(result.optString("role"))||!call.getString("id").equals(result.optString("tool_call_id"))){eligible=false;break;}JSONObject receipt;try{receipt=new JSONObject(result.getString("content"));}catch(Exception invalid){eligible=false;break;}if(!Boolean.TRUE.equals(receipt.opt("ok"))||receipt.optBoolean("requiresReconciliation")||receipt.optString("code").matches(".*unknown.*|action_timeout|approval_required|needs_user")||receipt.has("accepted")&&!Boolean.TRUE.equals(receipt.opt("accepted"))){eligible=false;break;}normalized.put(new JSONObject().put("function",function).put("receipt",receipt));}
+            JSONArray normalized=new JSONArray();boolean eligible=true;for(int c=0;c<calls.length();c++){JSONObject call=calls.getJSONObject(c),function=call.getJSONObject("function"),result=messages.optJSONObject(i+c+1);if(!reads.contains(function.optString("name"))||result==null||!"tool".equals(result.optString("role"))||!call.getString("id").equals(result.optString("tool_call_id"))){eligible=false;break;}JSONObject receipt;try{receipt=new JSONObject(result.getString("content"));}catch(Exception invalid){eligible=false;break;}if(!Boolean.TRUE.equals(receipt.opt("ok"))||receipt.optBoolean("requiresReconciliation")||receipt.optBoolean("reconciliationRequired")||receipt.optBoolean("requiresPause")||receipt.optString("status").contains("unknown")||receipt.optString("state").contains("unknown")||"reconcile".equals(receipt.optString("nextObservationAction"))||receipt.optString("code").matches(".*unknown.*|action_timeout|approval_required|needs_user")||receipt.has("accepted")&&!Boolean.TRUE.equals(receipt.opt("accepted"))){eligible=false;break;}normalized.put(new JSONObject().put("function",function).put("receipt",receipt));}
             if(!eligible)continue;String key=normalized.toString();if(newest.putIfAbsent(key,i)!=null)optional.put(i,ContextWindow.Eviction.COMPLETED_TOOL_BATCH);
         }
     }
