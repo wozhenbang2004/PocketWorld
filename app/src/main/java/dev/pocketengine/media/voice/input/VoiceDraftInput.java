@@ -37,11 +37,13 @@ public final class VoiceDraftInput implements AutoCloseable {
     private Capture current;
     private String phase="idle",message="",draft="",staged="",submittedClient="";
     private boolean unknown,closed;
-    public VoiceDraftInput(Runnable changed){this.changed=java.util.Objects.requireNonNull(changed);}
+    private final java.util.function.Supplier<String> requestedLanguage;
+    public VoiceDraftInput(Runnable changed){this(changed,()->java.util.Locale.getDefault().toLanguageTag());}
+    public VoiceDraftInput(Runnable changed,java.util.function.Supplier<String> requestedLanguage){this.changed=java.util.Objects.requireNonNull(changed);this.requestedLanguage=java.util.Objects.requireNonNull(requestedLanguage); }
     public JSONObject snapshot()throws Exception{synchronized(gate){return new JSONObject().put("inputId",current==null?"":current.id).put("target",current==null?JSONObject.NULL:current.target.json())
         .put("phase",phase).put("message",message).put("active",current!=null&&!current.done).put("leaseHeld",unknown||current!=null&&current.leased).put("resourceReleaseUnknown",unknown)
         .put("finalText",draft).put("reviewAvailable",!draft.isEmpty()&&!unknown).put("staged",!staged.isEmpty()).put("submittedClientMessageId",current!=null&&current.target.phoneInput?"":submittedClient).put("submittedOwnerInputId",submittedClient)
-        .put("provider","android_system_default").put("networkUse","unknown").put("languageSupport","unknown").put("requestedLanguage","zh-CN").put("partialExecutes",false).put("automaticSend",false).put("automaticFallback",false);
+        .put("provider","android_system_default").put("networkUse","unknown").put("languageSupport","unknown").put("requestedLanguage",requestedLanguage.get()).put("partialExecutes",false).put("automaticSend",false).put("automaticFallback",false);
     }}
     public boolean active(){synchronized(gate){return current!=null&&!current.done;}}
     public boolean leaseHeld(){synchronized(gate){return unknown||current!=null&&current.leased;}}

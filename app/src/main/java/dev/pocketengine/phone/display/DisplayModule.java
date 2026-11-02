@@ -173,6 +173,13 @@ public final class DisplayModule implements EngineModule {
         }
         return new JSONObject().put("socketName",socket).put("token",secret).put("ownerUid",android.os.Process.myUid());
     }
+    /** Metadata only, using the original authenticated helper; never creates a display or task. */
+    public JSONObject primaryOwnership(RunControl original,boolean ownerPausedRead)throws Exception {
+        if(original==null||!original.hasHostRun())throw new SecurityException("original_phone_run_required");
+        if(!isConnected())throw new SecurityException("phone_owner_identity_unavailable");
+        JSONObject answer=client().call("primary_ownership",new JSONObject(),original,original.pauseRevision(),ownerPausedRead);
+        requireOk(answer);return answer.getJSONObject("ownership");
+    }
     public synchronized JSONObject connect(RunControl control)throws Exception {
         try{
             if("wireless_adb".equals(backend())&&(bootstrapBusy()||adb.snapshot().optBoolean("recoveryRequired")))throw new IllegalStateException("无线ADB启动尚未确认，请先在本机连接入口核对原助手");

@@ -55,6 +55,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     public RuntimeEnvironment environmentManager() {return environments;}
     /** Body-free owner storage view with the same original package/generation leases. */
     public RuntimeStorage ownerStorageForHost(){return new RuntimeStorage(this,androidRuntime,environments,jobs,home,tmp);}
+    public JSONObject runOwnerCompatibilityProbe(dev.pocketengine.core.RunControl original)throws Exception{return RuntimeOwnerSelfCheck.run(androidRuntime,tools,tmp,original);}
 
     /** Native Skill description from this same installed generation/tools. No
      * argv/executable/env is accepted from model or downloaded Skill metadata. */

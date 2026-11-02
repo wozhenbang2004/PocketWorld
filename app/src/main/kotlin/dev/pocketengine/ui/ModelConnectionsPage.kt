@@ -89,6 +89,7 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
         HorizontalDivider(color = Line)
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (openedModel == null) {
+                ModelDiagnosticsControls(service, snapshot, runOnWorker) { execute { service.snapshot() } }
                 ApiConnectionProfilesPanel(snapshot.optJSONObject("connections") ?: JSONObject(), busy, error,
                     { id, revision, name, values, saved -> execute(saved) { service.saveConnection(id, revision, name, values) } },
                     { id, revision -> execute { service.selectConnection(id, revision) } },

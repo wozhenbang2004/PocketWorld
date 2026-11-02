@@ -34,6 +34,8 @@ import java.util.concurrent.atomic.AtomicLong;
 final class DisplayEngine {
     private final Context context;
     private final Handler main;
+    private final int authenticatedOwnerUid;
+    private final DisplayGesturePaths paths;
     private VirtualDisplay display;
     private ImageReader reader;
     private volatile LeasePolicy lease;
@@ -63,7 +65,8 @@ final class DisplayEngine {
         TouchSequence(LeasePolicy lease,VirtualDisplay display,long downTime){this.lease=lease;this.display=display;this.downTime=downTime;}
     }
     private static final ThreadLocal<Long> DISPATCH_DEADLINE=new ThreadLocal<>();
-    DisplayEngine(Context context,Handler main){this.context=context;this.main=main;requirePrivilegedEnvironment();}
+    DisplayEngine(Context context,Handler main){this(context,main,-1);}
+    DisplayEngine(Context context,Handler main,int authenticatedOwnerUid){this.context=context;this.main=main;this.authenticatedOwnerUid=authenticatedOwnerUid;paths=new DisplayGesturePaths(main);requirePrivilegedEnvironment();}
 
     private void requirePrivilegedEnvironment(){
         int uid=android.os.Process.myUid();
@@ -76,21 +79,43 @@ final class DisplayEngine {
     JSONObject handle(JSONObject request) throws Exception {
         String cmd=request.optString("command");
         if("hello".equals(cmd)||"status".equals(cmd))return status();
+        if("primary_ownership".equals(cmd)){
+            requirePrivilegedEnvironment();android.app.KeyguardManager keyguard=context.getSystemService(android.app.KeyguardManager.class);
+            if(keyguard==null||keyguard.isDeviceLocked()||keyguard.isKeyguardLocked())throw new Failure("screen_locked","请先由机主解锁手机。",false);
+            return ok().put("ownership",DisplayAppOwnership.primary(taskDump()));
+        }
         if("create".equals(cmd))return create(request);
         LeasePolicy current=lease;
         if(current==null||!current.accepts(request.optString("sessionId"),request.optInt("displayId",-1),SystemClock.uptimeMillis()))
             throw new Failure("invalid_lease","后台显示会话已结束，请重新建立。",false);
         JSONObject result;
-        if("release".equals(cmd)){current.release();onMain(()->{if(lease==current)release();return null;});result=ok().put("released",true);}
+        if("release".equals(cmd)){onMain(()->{paths.cancelLease(current,event->injectPath(current,event,-1));return null;});current.release();onMain(()->{if(lease==current)release();return null;});result=ok().put("released",true);}
         else if("heartbeat".equals(cmd)){long lifetime=integer(request,"lifetimeMs",1,30_000,30_000);if(!current.renew(request.optString("sessionId"),request.optInt("displayId",-1),SystemClock.uptimeMillis(),lifetime))throw new Failure("invalid_lease","原后台显示不能续期。",false);result=ok().put("renewed",true).put("leaseExpiresAtUptimeMs",current.expiresAt());}
         else if("frame".equals(cmd))result=frame(current,request);
         else if("launch".equals(cmd))result=launch(current,request);
         else if("apps".equals(cmd))result=apps();
-        else if("ownership".equals(cmd)){valid(current);result=ok().put("ownership",DisplayOwnershipSnapshot.parse(taskDump(),current.display()));}
+        else if("ownership".equals(cmd)){valid(current);String dump=taskDump();result=ok().put("ownership",DisplayAppOwnership.attach(DisplayOwnershipSnapshot.parse(dump,current.display()),dump));}
+        else if("intent".equals(cmd))result=onMain(()->DisplayTypedIntent.dispatch(context,current.display(),request,typedGate(current)));
+        else if("launch_copy".equals(cmd))result=onMain(()->DisplayAppCopies.launch(context,current.display(),request,typedGate(current)));
+        else if("practice".equals(cmd))result=onMain(()->DisplayAppCopies.practice(context,current.display(),authenticatedOwnerUid,request,typedGate(current)));
+        else if("audio.get".equals(cmd)||"audio.set".equals(cmd)){valid(current);result=DisplayAudioCommands.handle(cmd,request);}
+        else if("gesture".equals(cmd))result=gesturePaths(current,request);
         else if("tap".equals(cmd)||"swipe".equals(cmd))result=gesture(current,request,"swipe".equals(cmd));
         else if("key".equals(cmd))result=key(current,request);
         else throw new Failure("unsupported_command","后台助手不支持该命令。",false);
         return result.put("sessionId",current.session()).put("displayId",current.display());
+    }
+    private DisplayTypedIntent.Gate typedGate(LeasePolicy expected){return new DisplayTypedIntent.Gate(){public void check()throws Exception{valid(expected);}public void requireAppFree(String pkg,int user)throws Exception{valid(expected);DisplayAppOwnership.requireAppFree(taskDump(),pkg,user,expected.display());valid(expected);}};}
+    private JSONObject gesturePaths(LeasePolicy expected,JSONObject request)throws Exception {
+        long frame=request.optLong("frameGeneration",-1);valid(expected);
+        if(framePending||frame<0||frame!=frameGeneration.get())throw new Failure("stale_observation","后台画面已变化，请重新观察。",false);
+        return paths.run(expected,request,width,height,()->{valid(expected);if(activeTouch!=null)throw new Failure("gesture_in_flight","原触摸尚未结束。",false);},event->injectPath(expected,event,event.getActionMasked()==MotionEvent.ACTION_DOWN?frame:-1));
+    }
+    private boolean injectPath(LeasePolicy expected,MotionEvent event,long expectedFrame)throws Exception {
+        valid(expected);if(expectedFrame>=0&&(framePending||expectedFrame!=frameGeneration.get()))throw new Failure("stale_observation","后台画面在派发前已变化。",false);
+        setDisplay.invoke(event,expected.display());dispatchDeadline();final Object result;
+        try{result=inject.invoke(inputManager,event,2);}catch(java.lang.reflect.InvocationTargetException unknown){throw new Failure("action_unknown","系统输入回执异常，请核对原操作。",true);}
+        if(!Boolean.TRUE.equals(result))throw new Failure("action_unknown","系统输入结果未确认，不会自动重发。",true);return true;
     }
     private JSONObject status()throws Exception {
         return onMain(()->{
@@ -260,7 +285,7 @@ final class DisplayEngine {
         long start=SystemClock.uptimeMillis();
         TouchSequence touch=onMain(()->{
             valid(expected);
-            if(activeTouch!=null)throw new Failure("gesture_in_flight","原触摸尚未结束，请核对或释放原副屏后再操作。",false);
+            if(activeTouch!=null||paths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，请核对或释放原副屏后再操作。",false);
             activeTouch=new TouchSequence(expected,display,start);return activeTouch;
         });
         try{
@@ -386,9 +411,11 @@ final class DisplayEngine {
                 &&(display.getDisplay().getFlags()&requiredDisplayFlags)==requiredDisplayFlags
                 &&destroysContentOnRemoval(display.getDisplay());
     }
+    boolean releaseConfirmed()throws Exception{return onMain(()->lease==null&&display==null&&reader==null&&activeTouch==null&&!paths.active());}
     void tick(){LeasePolicy current=lease;if(current!=null)try{onMain(()->{if(lease==current&&(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current)))release();return null;});}catch(Exception ignored){}}
     void close(){try{onMain(()->{release();return null;});}catch(Exception ignored){ /* Process teardown also revokes its display token. */ }}
     private void release(){
+        LeasePolicy closing=lease;if(closing!=null)paths.cancelLease(closing,event->injectPath(closing,event,-1));
         main.removeCallbacks(trailingFrame);scheduledFrameReader=null;framePending=false;lastFrameConsumed=0;
         LeasePolicy old=lease;lease=null;activeTouch=null;if(old!=null)old.release();latestPixels=null;frameAt=0;packageName="";requiredDisplayFlags=0;
         if(display!=null){display.release();display=null;}if(reader!=null){reader.close();reader=null;}

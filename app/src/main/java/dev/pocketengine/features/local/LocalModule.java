@@ -28,7 +28,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Local checkout files and executor receipts; the existing native supervisor remains task authority. */
-public final class LocalModule implements EngineModule {
+public final class LocalModule implements EngineModule,dev.pocketengine.features.operations.OperationsRuntime {
     private final FeatureContext context;
     private final EngineModule projects;
     private final File root;
@@ -49,13 +49,14 @@ public final class LocalModule implements EngineModule {
     }
     /** Native composition injects an approved managed environment; raw feature JSON cannot install one. */
     public LocalModule(FeatureContext context,EngineModule projects,ProjectRuntime nativeRuntime)throws Exception {
-        this.context=context;this.projects=projects;root=new File(context.android.getFilesDir(),"local-development");
+        this.context=context;this.projects=projects;root=new File(context.android.getFilesDir().getCanonicalFile(),"local-development");
         commands=new NativeCommandExecutor(new File(root,"command-receipts"),Arrays.asList(new File("/system/bin"),new File("/system/xbin")),job->context.emit(id(),json("kind","job","job",job)));
         termux=new TermuxBridge(context);
         projectRuntime=java.util.Objects.requireNonNull(nativeRuntime);String selected=projectRuntime.describe().getString("runtimeId");runtimes.put(selected,projectRuntime);runtimes.put("termux",new TermuxProjectRuntime(termux));for(String key:runtimes.keySet())runtimeGenerations.put(key,UUID.randomUUID().toString());
         development=new ProjectDevelopment(this);
     }
     @Override public String id(){return "local";}
+    @Override public JSONObject runOwnerCompatibilityProbe(RunControl original)throws Exception{if(!(projectRuntime instanceof ManagedProjectRuntime))return new JSONObject().put("status","partial").put("reason","managed_runtime_unavailable").put("resourcesReleased",true);return ((ManagedProjectRuntime)projectRuntime).runOwnerCompatibilityProbe(original);}
     @Override public synchronized JSONObject snapshot()throws Exception {
         JSONArray checkouts=new JSONArray();File[] entries=new File(root,"checkouts").listFiles();
         if(entries!=null)for(File entry:entries)if(entry.isDirectory()&&new File(entry,"checkout.json").isFile())checkouts.put(JsonFiles.read(new File(entry,"checkout.json")));
@@ -534,23 +535,22 @@ public final class LocalModule implements EngineModule {
                 checkProjectControl(original,admission,binding,pauseRevision);JSONObject file=files.getJSONObject(i);String path=VersionedWorkspace.path(file.getString("path")),action=file.getString("action");if(!unique.add(path)||!ProjectSources.sourcePath(path)||!java.util.Set.of("replace","create","delete").contains(action))throw new SecurityException("原补丁路径或动作不合法");
                 File target=NativeCommandExecutor.within(content(checkout),path);boolean exists=before.containsKey(path);String expected=exists?hash(before.get(path)):"absent";byte[] old=dev.pocketengine.features.local.project.ProjectExactPatch.encode(file.getString("beforeContent")),bytes=dev.pocketengine.features.local.project.ProjectExactPatch.encode(file.getString("content"));
                 if(!expected.equals(file.getString("expectedHash"))||exists&&!java.util.Arrays.equals(old,before.get(path))||!exists&&old.length!=0||action.equals("create")==exists||bytes.length>262144||old.length>262144||!(action.equals("delete")?"absent":hash(bytes)).equals(file.getString("afterHash"))||action.equals("delete")&&bytes.length!=0)throw new SecurityException("原补丁完整正文/前后SHA与真实文件不同："+path);
-                if(target.exists()&&!target.isFile())throw new SecurityException("补丁目标不是普通文件："+path);String disk=target.exists()?hash(Files.readAllBytes(target.toPath())):"absent";if(!expected.equals(disk))throw new SecurityException("补丁预检时文件SHA已变化："+path);
+                if(target.exists()&&!target.isFile())throw new SecurityException("补丁目标不是普通文件："+path);String disk=target.exists()?hash(dev.pocketengine.features.local.runtime.WorkspaceFileAccess.read(content(checkout),path,ProjectSources.MAX_FILE_BYTES)):"absent";if(!expected.equals(disk))throw new SecurityException("补丁预检时文件SHA已变化："+path);
                 total-=exists?before.get(path).length:0;total+=action.equals("delete")?0:bytes.length;if(action.equals("delete"))count--;else if(!exists)count++;
                 receipts.put(new JSONObject().put("path",path).put("action",action).put("beforeHash",expected).put("afterHash",file.getString("afterHash")).put("state","skipped").put("commitAttempted",false));
             }
             if(total>ProjectSources.MAX_TOTAL_BYTES||count>ProjectSources.MAX_FILES)throw new IllegalArgumentException("原补丁结果超过源码范围");
             for(int i=0;i<files.length();i++){
-                JSONObject file=files.getJSONObject(i),receipt=receipts.getJSONObject(i);String path=file.getString("path"),action=file.getString("action");File target=NativeCommandExecutor.within(content(checkout),path);File pending=null;
+                JSONObject file=files.getJSONObject(i),receipt=receipts.getJSONObject(i);String path=file.getString("path"),action=file.getString("action");File target=NativeCommandExecutor.within(content(checkout),path);
                 try {
-                    checkProjectControl(original,admission,binding,pauseRevision);String actual=target.exists()?hash(Files.readAllBytes(target.toPath())):"absent";if(!file.getString("expectedHash").equals(actual))throw new SecurityException("应用前文件SHA已变化："+path);
-                    if(!action.equals("delete")){if(!target.getParentFile().isDirectory()&&!target.getParentFile().mkdirs())throw new IllegalStateException("无法建立原补丁目标目录");pending=File.createTempFile("pending-",".tmp",target.getParentFile());try(FileOutputStream output=new FileOutputStream(pending)){output.write(dev.pocketengine.features.local.project.ProjectExactPatch.encode(file.getString("content")));output.getFD().sync();}}
-                    checkProjectControl(original,admission,binding,pauseRevision);actual=target.exists()?hash(Files.readAllBytes(target.toPath())):"absent";if(!file.getString("expectedHash").equals(actual))throw new SecurityException("提交前文件SHA已变化："+path);
+                    checkProjectControl(original,admission,binding,pauseRevision);
                     receipt.put("commitAttempted",true).put("state","unknown");
-                    if(action.equals("delete"))Files.delete(target.toPath());else{Files.move(pending.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);pending=null;}
-                    String after=Files.exists(target.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)?hash(Files.readAllBytes(NativeCommandExecutor.within(content(checkout),path).toPath())):"absent";if(!file.getString("afterHash").equals(after))throw new SecurityException("提交后未取得原补丁afterSHA："+path);
+                    dev.pocketengine.features.local.runtime.WorkspaceFileAccess.commit(content(checkout),path,
+                            action.equals("create")?null:dev.pocketengine.features.local.project.ProjectExactPatch.encode(file.getString("beforeContent")),
+                            action.equals("delete")?null:dev.pocketengine.features.local.project.ProjectExactPatch.encode(file.getString("content")));
+                    String after=Files.exists(target.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)?hash(dev.pocketengine.features.local.runtime.WorkspaceFileAccess.read(content(checkout),path,ProjectSources.MAX_FILE_BYTES)):"absent";if(!file.getString("afterHash").equals(after))throw new SecurityException("提交后未取得原补丁afterSHA："+path);
                     receipt.put("state","applied").put("actualAfterHash",after);applied++;
                 }catch(Exception failed){uncertain=receipt.optBoolean("commitAttempted")&&!receipt.optString("state").equals("applied");receipt.put("state",uncertain?"unknown":"failed").put("message",String.valueOf(failed.getMessage()));failure=String.valueOf(failed.getMessage());break;}
-                finally{if(pending!=null)Files.deleteIfExists(pending.toPath());}
             }
         }catch(Exception failed){failure=String.valueOf(failed.getMessage());}
         for(int i=receipts.length();i<files.length();i++)receipts.put(new JSONObject().put("path",files.getJSONObject(i).getString("path")).put("state","skipped").put("commitAttempted",false));
@@ -599,7 +599,7 @@ public final class LocalModule implements EngineModule {
             File target=NativeCommandExecutor.within(content(request.getString("checkoutId")),path);if(!target.isFile()||Files.isSymbolicLink(target.toPath()))throw new SecurityException("原热改文件已失效，未创建新文件");
             byte[] bytes=text.getBytes(StandardCharsets.UTF_8);pending=File.createTempFile("pending-",".tmp",target.getParentFile());try(FileOutputStream output=new FileOutputStream(pending)){output.write(bytes);output.getFD().sync();}
             // Readers see a whole source file, never an editor's truncate/write interval.
-            checkProjectControl(original,admission,binding,pauseRevision);lease.check();if(!payload.getString("expectedHash").equals(hash(Files.readAllBytes(target.toPath()))))throw new SecurityException("提交前文件SHA已变化，请重新读取；草稿未覆盖");
+            checkProjectControl(original,admission,binding,pauseRevision);lease.check();if(!payload.getString("expectedHash").equals(hash(dev.pocketengine.features.local.runtime.WorkspaceFileAccess.read(content(checkout),path,ProjectSources.MAX_FILE_BYTES))))throw new SecurityException("提交前文件SHA已变化，请重新读取；草稿未覆盖");
             commitAttempted=true;Files.move(pending.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);pending=null;
             JSONObject after=export(request.getString("checkoutId")),edit=lease.record(after,path,hash(bytes));
             return result.put("path",path).put("sha256",hash(bytes)).put("bytes",bytes.length).put("updatedSourceDigest",ProjectSources.describe(after).getString("sourceDigest")).put("liveEdit",edit).put("status","completed").put("receiptReceived",true).put("exitCode",0).put("message","原文件原子保存已回读；开发服务器将自行处理热更新，保存回执不等于浏览器已应用或业务成功");

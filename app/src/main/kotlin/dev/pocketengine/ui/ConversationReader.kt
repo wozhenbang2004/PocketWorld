@@ -53,6 +53,8 @@ internal fun ConversationReader(controller: PocketWorldController) {
     val scroll = remember(page.window) { LazyListState(page.index, page.offset) }
     var reference by remember(page.window) { mutableStateOf<JSONObject?>(null) }
     reference?.let { TaskMemoryWorkflowSheet(controller,it) { reference=null } }
+    var answerSourceAnchor by remember(page.window) { mutableStateOf<JSONObject?>(null) }
+    answerSourceAnchor?.let { AnswerSourcesSheet(it, controller::readAnswerSource, controller::readAnswerFrame, controller) { answerSourceAnchor = null } }
     var restored by remember(page.window) { mutableStateOf(false) }
     LaunchedEffect(page.window, page.initialized, page.messages.firstOrNull()?.id) {
         if (page.initialized && !restored) { scroll.scrollToItem(page.locate(), page.offset); restored = true }
@@ -81,7 +83,10 @@ internal fun ConversationReader(controller: PocketWorldController) {
                         RichConversationMessageBody(message.content)
                         message.attachments.forEach { file -> ConversationFileRow(file, controller.state, { controller.openReaderAttachment(page.window, message.id!!, file) }) }
                         if (message.attachmentCount > message.attachments.size) Text("另有 ${message.attachmentCount - message.attachments.size} 个原附件引用，当前元数据不可读。", style = MaterialTheme.typography.bodySmall)
-                        message.memoryReference?.let { native -> TextButton(onClick = { reference=JSONObject(native.toString()) }) { Text("这次答复的记忆来源") } }
+                        message.memoryReference?.let { native ->
+                            native.optJSONObject("answerSources")?.let { anchor -> TextButton(onClick = { answerSourceAnchor = JSONObject(anchor.toString()) }) { Text("回答保存的来源") } }
+                            if (native.optBoolean("memoryProvided", true)) TextButton(onClick = { reference=JSONObject(native.toString()) }) { Text("这次答复的记忆来源") }
+                        }
                         message.submission?.let { receipt -> Text(when (receipt.optString("status")) { "withdrawn" -> "已撤回排队消息 · 保留原文审计"; "consumed" -> "本条已有采用回执"; "queued", "accepted" -> "本条已有接收回执"; else -> "原接收状态待核" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
                 }

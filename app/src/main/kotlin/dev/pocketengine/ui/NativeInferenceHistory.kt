@@ -39,6 +39,7 @@ internal fun NativeInferenceHistory(controller: PocketWorldController) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).navigationBarsPadding().padding(horizontal = 22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth()) { TextButton(onClick = controller::closeNativeInferenceHistory) { Text("返回") }; Spacer(Modifier.weight(1f)); TextButton(onClick = { read(true) }, enabled = !loading) { Text("刷新") } }
             Text("独立模型调用记录", style = MaterialTheme.typography.titleLarge)
+            InferenceTrendsPanel(controller::readInferenceTrends)
             Text("连接测试、语音、本机服务与经验草稿的实际记录。有任务的调用仍归原任务；本页不产生执行权限。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }

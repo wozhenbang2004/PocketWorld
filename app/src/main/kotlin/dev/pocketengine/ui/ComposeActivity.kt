@@ -53,6 +53,7 @@ class ComposeActivity : ComponentActivity() {
         try { projectSourceTreePicker.launch(null) }
         catch (_: RuntimeException) { controller.projectPackages.importResult(null) }
     }
+    override fun attachBaseContext(base: android.content.Context) { super.attachBaseContext(dev.pocketengine.features.operations.AppLanguage.wrap(base)) }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

@@ -1690,7 +1690,10 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 if not isinstance(request, dict):
                     raise RequestError("Request JSON must be an object")
             manager = self.server.manager
-            if not post and parts == ["v1", "status"]:
+            if len(parts) >= 2 and parts[:2] == ["v1", "phone-tasks"]:
+                import phone_task_api
+                result = phone_task_api.route(manager, self, post, parts, request, RequestError)
+            elif not post and parts == ["v1", "status"]:
                 result = {"name": "Pocket World Companion", "protocolVersion": 1, "sshTransport": "system_openssh", "directPhoneSsh": False, "jobsPersistent": True, "processSandbox": False,
                           "localArtifactTransfer": os.name != "nt" and hasattr(os, "O_NOFOLLOW"), "sshArtifactTransfer": False,
                           "operationReconciliation": True, "perWorkspaceExecutionLease": True,

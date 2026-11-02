@@ -268,6 +268,8 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
     ChatAttachmentChooser(state,controller)
     var taskMemoryReference by remember { mutableStateOf<JSONObject?>(null) }
     taskMemoryReference?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
+    var answerSourceAnchor by remember { mutableStateOf<JSONObject?>(null) }
+    answerSourceAnchor?.let { AnswerSourcesSheet(it, controller::readAnswerSource, controller::readAnswerFrame, controller) { answerSourceAnchor = null } }
     val ownerDraft=controller.composerDraft
     val ownerKey=ownerDraft?.key.orEmpty();val ownerEpoch=controller.composerViewEpoch
     if(!phone&&ownerDraft!=null&&ownerDraft.voiceText.isNotEmpty()&&!controller.canReviewVoiceDraft(false))RecoveredComposerVoiceReview(ownerDraft,controller)
@@ -325,7 +327,10 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 message.submission?.let{ChatInputReceipt(it,controller)}
                 if(messageDetails) {
                     message.id?.let { id -> SourceMemoryControl("message", id, message.content, state, controller, compact = true) }
-                    message.memoryReference?.let { reference -> TextButton(onClick = { taskMemoryReference = JSONObject(reference.toString()) }) { Text("本次提供的记忆来源", fontSize = 11.sp) } }
+                    message.memoryReference?.let { reference ->
+                        reference.optJSONObject("answerSources")?.let { anchor -> TextButton(onClick = { answerSourceAnchor = JSONObject(anchor.toString()) }) { Text("回答保存的来源", fontSize = 11.sp) } }
+                        if (reference.optBoolean("memoryProvided", true)) TextButton(onClick = { taskMemoryReference = JSONObject(reference.toString()) }) { Text("本次提供的记忆来源", fontSize = 11.sp) }
+                    }
                 }
                 (message.taskId ?: message.submission?.optString("taskId"))?.takeIf { it.isNotBlank() }?.let { id ->
                     if (state.messages.lastOrNull { (it.taskId ?: it.submission?.optString("taskId")) == id }?.id == message.id) state.tasks.find { it.id == id }?.let { linked ->
@@ -462,6 +467,8 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
     val pairedTask = task.raw.optJSONObject("origin")?.optString("kind") == "paired_device"
     var taskMemoryReference by remember(task.id) { mutableStateOf<JSONObject?>(null) }
     taskMemoryReference?.takeUnless { pairedTask }?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
+    var answerSourceAnchor by remember(task.id) { mutableStateOf<JSONObject?>(null) }
+    answerSourceAnchor?.takeUnless { pairedTask }?.let { AnswerSourcesSheet(it, controller::readAnswerSource, controller::readAnswerFrame, controller) { answerSourceAnchor = null } }
     var feedback by rememberSaveable(task.id) { mutableStateOf("") }
     var resumeConsent by remember(task.id) { mutableStateOf(false) }
     var reconciliationNote by rememberSaveable(task.id) { mutableStateOf("") }
@@ -580,6 +587,8 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                     Column(Modifier.fillMaxWidth()) {
                     if (assistantTask && !groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optJSONObject("origin")?.optString("kind") != "channel" && teamRunReferences(task).isEmpty()) TextButton(onClick = { controller.openBrowserResearch(task.id) }, modifier = Modifier.testTag("task_browser_research")) { Text("网页与研究工作区") }
                     if (!pairedTask && !groupTask && task.raw.optString("spaceId", "private") == "private") TextButton(onClick = { taskMemoryReference = task.raw.optJSONObject("evidence")?.optJSONObject("memoryReference")?.let { JSONObject(it.toString()) } ?: JSONObject().put("taskId", task.id).put("runId", task.raw.optString("runId").ifBlank { "unavailable" }).put("requestId", "unavailable").put("answerId", "unavailable") }) { Text("这次请求的记忆来源与原证据", fontSize = 12.sp) }
+                    task.raw.optJSONObject("evidence")?.optJSONObject("memoryReference")?.optJSONObject("answerSources")?.let { anchor -> TextButton(onClick = { answerSourceAnchor = JSONObject(anchor.toString()) }) { Text("回答保存的来源", fontSize = 12.sp) } }
+                    controller.nativeDetailedTraces()?.let { TaskTraceControls(it, task.raw.optString("runId").takeIf(String::isNotBlank), controller::runModelConnectionWork) }
                     if (!groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") TextButton(onClick = { capabilityPreparation = true }) { Text("这项任务的技能与工具", fontSize = 12.sp) }
                     }
                 }
@@ -966,6 +975,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                 if (settingsSection == 2) SettingsSurface("更多能力", "沿用同一引擎与已有配置") {
                     NativeOwnerDataArchives(controller.ownerArchives)
                     NativeOwnerProjectStorage(controller.projectStorage)
+                    controller.nativeDetailedTraces()?.let { TaskTraceControls(it, null, controller::runModelConnectionWork) }
                     SettingEntry("连接与能力管理", "记忆与定时、消息渠道、电脑环境、插件和团队", connections)
                 }
                 Spacer(Modifier.height(12.dp))

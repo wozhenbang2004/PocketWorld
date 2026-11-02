@@ -16,7 +16,7 @@ android {
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = '17' }
-    buildFeatures { compose true }
+    buildFeatures { compose true; buildConfig true }
     buildTypes { release { minifyEnabled false } }
     testOptions { unitTests { includeAndroidResources = true } }
     lint { abortOnError true }
@@ -48,6 +48,25 @@ def helperTask = tasks.register('buildDisplayHelper', Exec) {
 }
 android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/display-helper-assets'))
 tasks.named('preBuild').configure { dependsOn helperTask }
+def phoneIdentity = tasks.register('generatePhoneBuildIdentity') {
+    def target = layout.buildDirectory.file('generated/phone-identity/phone-build-identity.json')
+    outputs.file(target)
+    outputs.upToDateWhen { false }
+    doLast {
+        def gitRead = { List<String> argv ->
+            def bytes = new ByteArrayOutputStream()
+            try { def result = project.exec { workingDir rootProject.projectDir; commandLine(['git'] + argv); standardOutput bytes; errorOutput new ByteArrayOutputStream(); ignoreExitValue true }; return result.exitValue == 0 ? bytes.toString('UTF-8').trim() : null } catch (Exception unavailable) { return null }
+        }
+        def dirty = gitRead(['status', '--porcelain'])
+        def clean = dirty != null && dirty.isEmpty()
+        def commit = clean ? gitRead(['rev-parse', 'HEAD']) : null
+        def tree = clean ? gitRead(['rev-parse', 'HEAD^{tree}']) : null
+        def file = target.get().asFile; file.parentFile.mkdirs()
+        file.text = groovy.json.JsonOutput.toJson([commit: commit, tree: tree, dirty: !clean])
+    }
+}
+android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/phone-identity'))
+tasks.named('preBuild').configure { dependsOn phoneIdentity }
 dependencies {
     implementation platform('androidx.compose:compose-bom:2025.02.00')
     implementation 'androidx.activity:activity-compose:1.10.1'
@@ -85,6 +104,7 @@ android.sourceSets.main.java.srcDir(rootProject.file('display-helper/src'))
 // Only the reviewed Java source/test directories: never draft docs or downloaded binaries.
 android.sourceSets.main.java.srcDir('src/pendingAdb/java')
 android.sourceSets.test.java.srcDir('src/pendingAdb/test')
+android.sourceSets.test.java.srcDir(rootProject.file('display-helper/test'))
 // Android JNI stays in the APK; host tests retain Robolectric's OpenJDK provider.
 configurations.matching { it.name.endsWith('UnitTestRuntimeClasspath') }.configureEach {
     exclude group: 'org.conscrypt', module: 'conscrypt-android'

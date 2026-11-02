@@ -46,6 +46,10 @@ public final class AttachmentViewSnapshots {
         try{if(!digest(bytes).equals(meta.getString("sha256")))throw new SecurityException("临时查看文件字节已变化");return blob;}finally{Arrays.fill(bytes,(byte)0);}
     }}
     /** Native failed preparation only; no URI grant has been handed to an external reader. */
+    public void discardUnsent(Uri uri)throws Exception {
+        if(uri==null||!"content".equals(uri.getScheme())||!context.getPackageName().concat(".attachments").equals(uri.getAuthority())||uri.getPathSegments().size()!=2||!"view".equals(uri.getPathSegments().get(0))||uri.getQuery()!=null||uri.getFragment()!=null)throw new SecurityException("不是原临时查看副本");
+        discard(uri.getLastPathSegment());
+    }
     void discard(String token)throws Exception {synchronized(disk){checkToken(token);Files.deleteIfExists(new File(root,token+".blob").toPath());Files.deleteIfExists(new File(root,token+".json").toPath());}}
     private void prune(){File[] files=root.listFiles((d,n)->n.endsWith(".json"));for(File file:files==null?new File[0]:files){boolean expired=true;try{expired=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8)).optLong("expiresAt")<System.currentTimeMillis();}catch(Exception ignored){}if(expired){new File(root,file.getName().replace(".json",".blob")).delete();file.delete();}}}
     private static void checkToken(String value){if(value==null||!value.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("临时查看引用无效");}

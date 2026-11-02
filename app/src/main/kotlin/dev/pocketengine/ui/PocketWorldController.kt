@@ -44,7 +44,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private val main = Handler(Looper.getMainLooper())
     private val voiceContextEpoch = java.util.concurrent.atomic.AtomicLong()
     @Volatile private var voiceForeground = false
-    private val voiceInput = dev.pocketengine.media.voice.input.VoiceDraftInput(::voiceInputChanged)
+    private val voiceInput = dev.pocketengine.media.voice.input.VoiceDraftInput(::voiceInputChanged) { dev.pocketengine.features.operations.AppLanguage.speechLocale(activity).toLanguageTag() }
     internal val projectPackages = ProjectPackageCoordinator(activity, app, io, main, ::privateWorkspaceView) { checkout ->
         closeProjectPreview()
         closeProjectLivePreview()
@@ -291,6 +291,19 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             if(closed)return@post
             if(error!=null){state=state.copy(error="草稿仍在本页，尚未保存；没有自动发送："+composerFailure(error));return@post}
             if(ownerComposer?.revision()==version)composerSaving=false
+        } }
+    }
+    internal fun applyApplicationLanguage(tag: String, done: (String?) -> Unit) {
+        val model = ownerComposer ?: run { done(activity.getString(dev.pocketengine.R.string.ops_language_loading_draft)); return }
+        if (closed || state.chatSubmitting) { done(activity.getString(dev.pocketengine.R.string.ops_language_submitting)); return }
+        val voice = voiceInput.snapshot()
+        if (voiceInput.active() || voiceInput.leaseHeld() || (voice.optString("finalText").isNotBlank() && !voice.optBoolean("staged"))) { done(activity.getString(dev.pocketengine.R.string.ops_language_voice_busy)); return }
+        main.removeCallbacks(composerSave); val revision = model.revision()
+        ownerComposerStore.save(model).whenComplete { _, failure -> main.post {
+            if (closed) return@post
+            if (failure != null || ownerComposer?.revision() != revision) { done(activity.getString(dev.pocketengine.R.string.ops_language_draft_changed)); return@post }
+            try { dev.pocketengine.features.operations.AppLanguage.select(activity, tag); done(null); if (android.os.Build.VERSION.SDK_INT < 33) activity.recreate() }
+            catch (error: Exception) { done(activity.getString(dev.pocketengine.R.string.ops_language_change_unknown)) }
         } }
     }
     fun editComposerText(key:String,viewEpoch:Int,text: String) {
@@ -1477,6 +1490,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         native("approveCapability", input.put("approvalId", approvalId).put("approved", approved))
     }
     fun display(command: String) { feature("display", command) }
+    fun phoneSetup(command: String, input: JSONObject = JSONObject()) { feature("phone_setup", command, input) }
+    fun startPhoneCompatibilityPractice(mode: String) {
+        startPhone(dev.pocketengine.phone.diagnostics.PhonePracticeRequests.goal(activity.packageName, dev.pocketengine.phone.setup.AndroidAppCopies.id(android.os.Process.myUserHandle())), mode)
+        if (state.phoneSubmitting) closeBackgroundSetup()
+    }
     fun openBackgroundSetup() { state = state.copy(backgroundSetupOpen = true); refreshBackgroundSetup() }
     fun startPhonePractice(packageName: String, field: String, mode: String) {
         if (!packageName.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")) || field.isBlank()) { state = state.copy(error = "请填写实际应用包名和一个可安全测试的普通输入框名称"); return }
@@ -1491,6 +1509,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun refreshBackgroundSetup() {
         io.execute { app.sendState() }
         native("getFeatures")
+        phoneSetup("status")
         if (state.activeTaskId == null && !state.feature("display").optBoolean("taskOwned") && state.feature("display").optJSONObject("adb") != null) display("adb.status")
     }
     fun openWirelessSettings() {
@@ -1700,6 +1719,21 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if(closed||!privateWorkspaceView())return
         io.execute{val result=runCatching{app.tasks.nativeInferenceUsagePage(cursor,40)};main.post{if(!closed&&nativeInferenceHistoryOpen&&privateWorkspaceView())result.fold({done(it,null)},{done(null,message(it))})}}
     }
+    internal fun readInferenceTrends(from: Long, until: Long, zone: String, cursor: String, done: (JSONObject?, String?) -> Unit) {
+        if (closed || !privateWorkspaceView()) return
+        io.execute { val result = runCatching { app.tasks.inferenceTrends(from, until, zone, cursor) }; main.post { if (!closed && privateWorkspaceView()) result.fold({ done(it, null) }, { done(null, message(it)) }) } }
+    }
+    internal fun readAnswerSource(anchor: JSONObject, index: Int, done: (JSONObject?, String?) -> Unit) {
+        if (closed || !privateWorkspaceView()) return
+        val captured = JSONObject(anchor.toString())
+        io.execute { val result = runCatching { app.tasks.readAnswerSource(captured, index) }; main.post { if (!closed && privateWorkspaceView()) result.fold({ done(it, null) }, { done(null, message(it)) }) } }
+    }
+    internal fun readAnswerFrame(anchor: JSONObject, index: Int, done: (JSONObject?, String?) -> Unit) {
+        if (closed || !privateWorkspaceView()) return
+        val captured = JSONObject(anchor.toString())
+        io.execute { val result = runCatching { val original = app.tasks.readAnswerSource(captured, index); require(original.optBoolean("available")); val frame = original.optJSONObject("frame") ?: error("原观察未保留画面"); val store = app.answerSourceFrames ?: error("原观察帧存储不可用"); store.read(frame) }; main.post { if (!closed && privateWorkspaceView()) result.fold({ done(it, null) }, { done(null, message(it)) }) } }
+    }
+    internal fun nativeDetailedTraces(): dev.pocketengine.runtime.usage.TaskDetailedTrace? = if (dev.pocketengine.BuildConfig.DEBUG && !closed && privateWorkspaceView()) app.detailedTraces else null
     internal var taskListNextCursor by mutableStateOf("")
         private set
     /** Alternate quote only. Original bounded native receipt read; no request, replay or setting write. */
@@ -1910,6 +1944,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             return
         }
         if (feature == "display" && result.has("helperConnected")) state = state.copy(features = JSONObject(state.features.toString()).put("display", JSONObject(result.toString())))
+        if (feature == "phone_setup" && result.has("pairing") && result.has("access")) state = state.copy(features = JSONObject(state.features.toString()).put("phone_setup", JSONObject(result.toString())))
+        if (feature == "phone_setup" && command !in setOf("status", "apps.list", "diagnostics.preview")) phoneSetup("status")
         if (feature == "workspace" && command == "prepareExport") {
             state = state.copy(exportPending = true)
             io.execute {
