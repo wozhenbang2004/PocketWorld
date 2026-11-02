@@ -1,4 +1,12 @@
 <resources>
+    <string name="ops_check_show_evidence">查看这项检查的记录</string>
+    <string name="ops_check_hide_evidence">收起检查记录</string>
+    <string name="ops_check_timeout_note">已到本项或本轮时间上限。请核对已取得的记录，不会自动重试。</string>
+    <string name="ops_check_cancelled_note">已取消后续检查，清理结果以本轮最终记录为准。</string>
+    <string name="ops_check_runtime_note">原本机运行环境尚未准备或当前不可用。可返回设置检查，不会自动安装环境。</string>
+    <string name="ops_check_phone_note">这里只读原任务演练记录，不代表当前手机已重新通过。需要新的动作证据时，请进入原手机演练。</string>
+    <string name="ops_check_permissions_note">通知权限或通知开关尚未就绪。可到系统通知设置核对；其他检查独立显示。</string>
+    <string name="ops_check_failed_note">这项检查未取得完整通过证据。可展开原检查记录核对失败或清理状态，不会自动重试。</string>
     <string name="ops_title">应用与诊断</string>
     <string name="ops_back">返回</string>
     <string name="ops_checks">兼容性自检</string>

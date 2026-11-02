@@ -1,4 +1,12 @@
 <resources>
+    <string name="ops_check_show_evidence">View this check record</string>
+    <string name="ops_check_hide_evidence">Hide check record</string>
+    <string name="ops_check_timeout_note">The step or total time limit was reached. Review the retained record; no automatic retry is made.</string>
+    <string name="ops_check_cancelled_note">Further checks were cancelled. Review the final record for cleanup status.</string>
+    <string name="ops_check_runtime_note">The original local runtime is not prepared or is unavailable. Review it in settings; no environment is installed automatically.</string>
+    <string name="ops_check_phone_note">These are read-only records from the original practice task. They do not prove the current phone passed again. Open the original phone practice for new action evidence.</string>
+    <string name="ops_check_permissions_note">Notifications or notification permission are not ready. Review system notification settings; other checks are shown independently.</string>
+    <string name="ops_check_failed_note">This check has no complete passing evidence. Expand its original record to review failure and cleanup status. No automatic retry is made.</string>
     <string name="ops_title">App and diagnostics</string>
     <string name="ops_back">Back</string>
     <string name="ops_checks">Compatibility check</string>

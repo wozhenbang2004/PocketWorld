@@ -44,6 +44,7 @@ internal fun OperationsPage(onLanguageApply: (String, (String?) -> Unit) -> Unit
     DisposableEffect(owner) { onDispose { alive[0] = false; owner.close() } }
     var running by remember { mutableStateOf(false) }
     var check by remember { mutableStateOf<JSONObject?>(null) }
+    var expandedChecks by remember { mutableStateOf(emptySet<String>()) }
     var diagnostic by remember { mutableStateOf<MinimalDiagnostics.Snapshot?>(null) }
     var update by remember { mutableStateOf(runCatching { updates?.state() }.getOrNull()) }
     var language by remember { mutableStateOf(AppLanguage.selected(app)) }
@@ -75,6 +76,31 @@ internal fun OperationsPage(onLanguageApply: (String, (String?) -> Unit) -> Unit
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(stringResource(when(row.optString("id")) { "device" -> R.string.ops_check_device; "permissions" -> R.string.ops_check_permissions; "phone" -> R.string.ops_check_phone; "browser" -> R.string.ops_check_browser; else -> R.string.ops_check_runtime }), fontSize = 13.sp)
                     Text(stringResource(when(row.optString("status")) { "passed" -> R.string.ops_status_passed; "partial" -> R.string.ops_status_partial; "failed" -> R.string.ops_status_failed; "skipped" -> R.string.ops_status_skipped; else -> R.string.ops_status_running }), fontSize = 13.sp)
+                }
+                val evidence = row.optJSONObject("evidence")
+                val reason = row.optString("reason").ifBlank { evidence?.optString("reason").orEmpty() }
+                val reasonText = when (reason) {
+                    "step_timeout", "total_timeout" -> R.string.ops_check_timeout_note
+                    "cancelled" -> R.string.ops_check_cancelled_note
+                    "runtime_not_prepared", "native_supervisor_unavailable" -> R.string.ops_check_runtime_note
+                    "historical_original_practice_read_only", "current_original_practice_read_only", "run_original_phone_practice_task_for_action_evidence" -> R.string.ops_check_phone_note
+                    "probe_error", "fixed_runtime_probe_failed", "generation_release_unconfirmed" -> R.string.ops_check_failed_note
+                    else -> when {
+                        row.optString("id") == "permissions" && row.optString("status") == "partial" -> R.string.ops_check_permissions_note
+                        row.optString("status") == "failed" -> R.string.ops_check_failed_note
+                        else -> null
+                    }
+                }
+                reasonText?.let { Text(stringResource(it), fontSize = 12.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (evidence != null || reason.isNotBlank()) {
+                    val id = row.optString("id")
+                    TextButton(onClick = { expandedChecks = if (id in expandedChecks) expandedChecks - id else expandedChecks + id }) {
+                        Text(stringResource(if (id in expandedChecks) R.string.ops_check_hide_evidence else R.string.ops_check_show_evidence))
+                    }
+                    if (id in expandedChecks) SelectionContainer {
+                        Text(row.toString(2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 16.sp,
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()))
+                    }
                 }
             }
             if (check?.optBoolean("ended") == true && check?.optBoolean("resourcesReleased") != true) Text(stringResource(R.string.ops_cleanup_unknown), color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
