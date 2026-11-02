@@ -555,10 +555,13 @@ public final class ChannelCore {
         return queueReplyExpected(eventId,text,expectedSpace,null);
     }
     public synchronized JSONObject queueReplyExpected(String eventId,String text,String expectedSpace,String expectedBindingEpoch)throws Exception {
+        return queueReplyExpected(eventId,text,expectedSpace,expectedBindingEpoch,null);
+    }
+    synchronized JSONObject queueReplyExpected(String eventId,String text,String expectedSpace,String expectedBindingEpoch,JSONObject memoryDependency)throws Exception {
         JSONObject event=event(eventId),profile=profile(event.getString("profileId")),authority=route(event);
         if(expectedSpace!=null&&!expectedSpace.equals(authority.getString("spaceId")))throw new SecurityException("账号权限已变化，回答未加入投递队列");
         if(expectedBindingEpoch!=null&&!expectedBindingEpoch.equals(authority.optString("bindingEpoch")))throw new SecurityException("主人绑定代次已变化，回答未加入投递队列");
-        JSONObject row=queueReplyRecord(event,text);save();return copy(row);
+        JSONObject row=queueReplyRecord(event,text);if(memoryDependency!=null)row.put("memoryDependency",copy(memoryDependency));save();return copy(row);
     }
     /** Original outbox receipt, not a second task/transfer store. Only the native module calls this. */
     synchronized JSONObject queueRemoteResult(JSONObject original,JSONObject scope,String text,String deliveryId)throws Exception {

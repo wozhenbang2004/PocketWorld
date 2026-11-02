@@ -78,6 +78,8 @@ public final class PhoneTextTargetCapabilityPort implements CapabilityPort {
     @Override public boolean responseCurrent(RunControl control)throws Exception{check(control);return existing.responseCurrent(control);}
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{if(own(name))check(control);return existing.beforeTool(name,args,control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{existing.afterTool(name,args,receipt,control);}
+    @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{check(control);return own(name)?dev.pocketengine.core.NativeToolObservation.Requirement.NONE:existing.observationRequirement(name,args,control);}
+    @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl control)throws Exception{check(control);return own(name)?null:existing.takeToolObservation(name,operation,control);}
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception{check(control);existing.beforeModelRequest(requestId,messages,control);}
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception{check(control);return existing.afterModelResponse(requestId,answerId,control);}
     @Override public void modelRequestAbandoned(String requestId)throws Exception{existing.modelRequestAbandoned(requestId);}

@@ -184,8 +184,18 @@ public final class DeviceCapabilityPort implements CapabilityPort {
         return new JSONObject(result.toString());
     }
     private void captureImage(NativeRoute route,Reply actual,String operation,String function,JSONObject receipt)throws Exception{
-        if(!visual.installed())return;JSONObject payload=receipt.getJSONObject("payload"),wire=devices.childAllocationForOperation(taskId,operation).getJSONObject("boundWire");String tool=wire.getJSONObject("arguments").getString("toolName");JSONObject observation=tool.equals("desktop.observe")?payload:tool.equals("desktop.act")?payload.optJSONObject("desktopReceipt")==null?null:payload.getJSONObject("desktopReceipt").optJSONObject("afterObservation"):tool.equals("phone_observe")?payload.optJSONObject("receipt"):null;if(observation==null||!observation.has(tool.startsWith("desktop.")?"capture":"imageArtifact"))return;
-        try{visual.capture(route.routeId(),function,devices.deviceImageEvidence(route.reservationApproval(),original,actual.peer(),operation));}catch(Exception invalid){visual.invalidate(route.routeId());payload.put("nativeImageInput",new JSONObject().put("available",false).put("imageProvidedToModel",false).put("reason","verified_image_unavailable_or_stale"));}
+        if(!visual.installed())return;
+        // Image enrichment is optional. An already authenticated accepted/terminal receipt must
+        // remain usable even if its image is absent, malformed, stale or cannot be downloaded.
+        JSONObject payload=receipt.getJSONObject("payload");
+        try{
+            JSONObject wire=devices.childAllocationForOperation(taskId,operation).getJSONObject("boundWire");
+            if(!"ToolInvocation".equals(wire.optString("messageType")))return;
+            String tool=wire.getJSONObject("arguments").getString("toolName");
+            JSONObject observation=tool.equals("desktop.observe")?payload:tool.equals("desktop.act")?payload.optJSONObject("desktopReceipt")==null?null:payload.getJSONObject("desktopReceipt").optJSONObject("afterObservation"):tool.equals("phone_observe")?payload.optJSONObject("receipt"):null;
+            if(observation==null||!observation.has(tool.startsWith("desktop.")?"capture":"imageArtifact"))return;
+            visual.capture(route.routeId(),function,devices.deviceImageEvidence(route.reservationApproval(),original,actual.peer(),operation));
+        }catch(Exception invalid){visual.invalidate(route.routeId());payload.put("nativeImageInput",new JSONObject().put("available",false).put("imageProvidedToModel",false).put("reason","verified_image_unavailable_or_stale"));}
     }
     @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{
         NativeRoute selected=route(args,control);String tool=args.optString("toolName");JSONObject nativeArguments=args.optJSONObject("arguments");if(name.equals("device_operation_get")){JSONObject wire=devices.childAllocationForOperation(taskId,args.getString("operationId")).getJSONObject("boundWire");tool=wire.getJSONObject("arguments").optString("toolName");nativeArguments=wire.getJSONObject("arguments").optJSONObject("arguments");}

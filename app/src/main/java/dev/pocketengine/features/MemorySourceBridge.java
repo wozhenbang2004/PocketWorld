@@ -95,6 +95,11 @@ public final class MemorySourceBridge {
         SourceRef.State current=resolve(scope,expected.kind,expected.sourceId);
         if(current==null||current.deleted||!expected.equals(current.ref))throw new SecurityException("原来源身份、版本或范围已变化");
     }
+    /** A pinned learning parent also requires source read eligibility, not only matching revision. */
+    public void requireLearningReference(SourceRef expected)throws Exception {
+        requireCurrentReference(expected);
+        if("message".equals(expected.kind)&&read(expected)==null)throw new SecurityException("原消息来源不可读"); // Also rejects retired/context-retired original messages.
+    }
     public KnowledgeLearningWorkflow.SourceDocument read(SourceRef ref)throws Exception{
         if("workspace_file".equals(ref.kind))return readWorkspace(ref);
         if("task_evidence".equals(ref.kind)&&dev.pocketengine.features.memory.TaskSavedEvidence.matches(ref.sourceId))return readSavedEvidence(ref);

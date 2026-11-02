@@ -31,6 +31,8 @@ public final class AssistantModule implements EngineModule {
         /** Native owner settings, never copied into provider messages or stored owner prose. */
         default JSONObject startScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{if(ownerScope!=null)throw new SecurityException("原宿主尚未支持明确任务范围，未丢弃主人选择或新建执行");return start(conversationId,goal,message,config,control);}
         JSONObject append(String conversationId,JSONObject message,String mode,JSONObject expected,RunControl control)throws Exception;
+        /** Native task hosts also persist cancellation and enqueue their original child stops. */
+        default void cancel(RunControl control)throws Exception{control.cancel();}
     }
     public interface CheckedAction {void run()throws Exception;}
     private static JSONObject nativeExecutionScope(JSONObject input)throws Exception {
@@ -47,6 +49,7 @@ public final class AssistantModule implements EngineModule {
     private final Object storage=new Object();
     private final TurnExecutor executor;
     private final AtomicReference<RunControl> active=new AtomicReference<>();
+    private final AtomicReference<RunControl> pendingCancellation=new AtomicReference<>();
     private volatile CheckedAction sourceSynchronizer;
     private volatile NativeInputHost nativeInputHost;
     private volatile AttachmentRequestProjection attachmentProjection;
@@ -167,12 +170,20 @@ public final class AssistantModule implements EngineModule {
             case "get":return durable()?historyRepository.read(()->historyRepository.window(input.getString("conversationId"),input.optString("cursor"),input.optInt("limit",80))):findConversation(input.getString("conversationId"));
             case "send":return nativeInputHost==null?send(input):sendNative(input);
             case "getSubmission":return submission(input.getString("clientMessageId"));
-            case "cancel":{RunControl control=active.get();if(control!=null)control.cancel();return new JSONObject().put("cancellationRequested",control!=null);}
+            case "cancel":{
+                RunControl control=active.get();if(control==null)control=pendingCancellation.get();
+                if(control!=null){cancelOriginal(control);pendingCancellation.compareAndSet(control,null);}
+                return new JSONObject().put("cancellationRequested",control!=null);
+            }
             case "delete":return deleteConversation(input.getString("conversationId"));
             case "editMessage":return editMessage(input);
             case "deleteMessage":return deleteMessage(input);
             default:throw new IllegalArgumentException("不支持的聊天操作");
         }
+    }
+    private void cancelOriginal(RunControl control)throws Exception{
+        try{NativeInputHost host=nativeInputHost;if(host==null)control.cancel();else host.cancel(control);}
+        catch(Exception notDelivered){pendingCancellation.set(control);throw notDelivered;}
     }
     private JSONObject send(JSONObject input)throws Exception{
         if(input.has("ownerSourceRefs")&&(input.optJSONArray("ownerSourceRefs")==null||input.getJSONArray("ownerSourceRefs").length()>0))throw new IllegalStateException("原文引用的真实原生任务投影未安装，未降级为普通文本发送");

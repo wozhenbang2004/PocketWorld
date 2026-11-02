@@ -721,7 +721,10 @@ public final class LocalModule implements EngineModule {
             if(now==null&&change.equals("unchanged"))continue;
             entries.put(new JSONObject().put("path",path).put("change",change).put("sha256",hash).put("bytes",now==null?0:now.getLong("bytes")).put("sourceVersion",before==null?0:before.optInt("sourceVersion")).put("binary",now!=null&&now.optBoolean("binary")));
         }
-        return new JSONObject().put("checkoutId",id).put("projectId",checkout.getString("projectId")).put("files",entries).put("changedCount",changed).put("fileCount",current.size());
+        JSONArray baseline=new JSONArray();for(String path:new TreeSet<>(original.keySet()))baseline.put(original.get(path));
+        return new JSONObject().put("checkoutId",id).put("projectId",checkout.getString("projectId")).put("files",entries).put("changedCount",changed).put("fileCount",current.size())
+                .put("sourceDigest",ProjectSources.manifestDigest(exported.getJSONArray("files")))
+                .put("baselineIdentity",ProjectSources.digest(new JSONObject().put("checkoutId",id).put("projectId",checkout.getString("projectId")).put("files",baseline)));
     }
     private JSONObject target(String project,String path)throws Exception {
         JSONArray history=projects.handle("history",new JSONObject().put("projectId",project).put("path",path)).getJSONArray("history");

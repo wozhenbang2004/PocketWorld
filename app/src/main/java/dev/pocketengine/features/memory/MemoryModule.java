@@ -120,6 +120,9 @@ public final class MemoryModule implements EngineModule {
         context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));return result;
     }
     /** Host must derive scope from its authenticated identity, and inject only as reference data. */
+    /** Native-only dependencies, not exposed as model commands. */
+    public JSONObject contextDependency(JSONObject snapshot)throws Exception{return book.contextDependency(snapshot);}
+    public void requireContextDependency(JSONObject dependency)throws Exception{book.requireContextDependency(dependency);}
     public JSONObject contextSnapshot(JSONObject scope,String query,int limit,int maxChars)throws Exception {
         return book.contextSnapshot(scope,query,limit,maxChars);
     }

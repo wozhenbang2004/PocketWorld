@@ -53,7 +53,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         if(runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID)){add("project_live_preview",props("executionId",text(80)),"executionId");add("project_wait_input",props("executionId",text(80),"maxSeconds",integer(1,15),"afterMessageId",text(80)),"executionId");}
         boolean collects=false;JSONArray phases=runtimeFacts.optJSONArray("phases");if(phases!=null)for(int i=0;i<phases.length();i++)collects|="COLLECT".equals(phases.optString(i));
         if(runtimeId.equals("termux")&&collects||runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID)&&runtimeFacts.optBoolean("managedOutputCollectionAvailable")){add("project_collect_plan",props("executionId",text(80),"path",text(240)),"executionId","path");add("project_generated_artifact",props("executionId",text(80)),"executionId");}
-        add("project_changes",props());add("project_review_file",props("path",text(240)),"path");
+        add("project_changes",props("changedOnly",new JSONObject().put("type","boolean"),"limit",integer(1,ProjectChanges.MAX_ENTRIES),"cursor",new JSONObject().put("type","object").put("properties",props("checkoutId",text(80),"projectId",text(80),"sourceDigest",text(64),"baselineIdentity",text(64),"changedOnly",new JSONObject().put("type","boolean"),"offset",integer(0,ProjectSources.MAX_FILES*2))).put("required",new JSONArray(new String[]{"checkoutId","projectId","sourceDigest","baselineIdentity","changedOnly","offset"})).put("additionalProperties",false)));add("project_review_file",props("path",text(240)),"path");
         add("project_preview",props("entryPath",text(240),"expectedSourceDigest",text(64)),"entryPath","expectedSourceDigest");add("project_preview_log",props());
         if(existing!=null)for(String name:schemas.keySet())if(existing.supports(name))throw new IllegalArgumentException("项目工具名称已注册："+name);
     }
@@ -79,7 +79,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         case "project_generated_artifact"->"读取原collect执行实际固定的产物与原build关联；managed返原附件ID/SHA/bytes，可由原成果页按同版查看/分享，不返回私有路径或重收当前文件。Termux保旧有界文本合同；这不是业务效果验证。";
         case "project_preview"->"从同一活跃项目树读取HTML及其CSS/JS/图片/字体等真实资源，生成可在原任务打开的多文件预览。返回资源摘要；不冒充构建成功。";
         case "project_preview_log"->"读取当前原任务预览实际产生的有界console/错误；无日志不代表预览已运行或没有错误。";
-        case "project_changes"->"读取项目副本相对原项目版本的实际文件变化；不导回或执行。";
+        case "project_changes"->"读取项目副本相对原项目版本的实际文件变化；默认changedOnly=true，false含未变文件。按nextCursor继续至complete=true，保持changedOnly；源码/基线变化须不带cursor重读。每页最多100项且字节有界；不导回或执行。";
         default->"核对此副本文件与正式项目版本的实际diff及CAS导回条件；不修改项目。";};}
     @Override public JSONArray tools()throws Exception {
         JSONArray result=new JSONArray();if(existing!=null){JSONArray prior=existing.tools();for(int i=0;i<prior.length();i++)result.put(prior.get(i));}
@@ -174,7 +174,10 @@ public final class ProjectCapabilityPort implements CapabilityPort {
                     result=ProjectGitResult.modelView(actual.getJSONObject("git"),args.optInt("entryOffset",0),args.optInt("maxEntries",10)).put("executionId",args.getString("executionId"));
                     result.put("status",result.optBoolean("publicationUnknown")?"unknown":result.optBoolean("ok")?"observed":"failed").put("accepted",result.optBoolean("publicationUnknown")?JSONObject.NULL:result.optBoolean("ok"));break;
                 }
-                case "project_changes":result=local.handle("changes",nativeInput);break;
+                case "project_changes":{
+                    JSONObject full=local.handle("changes",nativeInput);result=ProjectChanges.page(full,args);
+                    ProjectChanges.requireSame(full,local.handle("changes",nativeInput));break;
+                }
                 case "project_review_file":result=local.handle("reviewFile",nativeInput);break;
                 case "project_preview":result=local.handle("project.preview",nativeInput);tasks.recordDevelopmentPreview(binding.taskId,binding.runId,binding.epoch,original,result);break;
                 case "project_preview_log":result=tasks.developmentPreviewLog(binding.taskId);break;
@@ -330,6 +333,8 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         return existing==null?null:existing.beforeTool(name,args,control);
     }
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception {if(existing!=null)existing.afterTool(name,args,receipt,control);}
+    @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{check("project_inspect",control);return schemas.containsKey(name)||existing==null?dev.pocketengine.core.NativeToolObservation.Requirement.NONE:existing.observationRequirement(name,args,control);}
+    @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl control)throws Exception{check("project_inspect",control);return schemas.containsKey(name)||existing==null?null:existing.takeToolObservation(name,operation,control);}
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception{check("project_inspect",control);if(existing!=null)existing.beforeModelRequest(requestId,messages,control);}
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception{check("project_inspect",control);return existing==null?null:existing.afterModelResponse(requestId,answerId,control);}
     @Override public void modelRequestAbandoned(String requestId)throws Exception{if(existing!=null)existing.modelRequestAbandoned(requestId);}

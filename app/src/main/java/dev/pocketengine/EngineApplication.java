@@ -220,6 +220,8 @@ public final class EngineApplication extends Application implements dev.pocketen
         });
     }
 
+    // Keep only failed/not-yet-accepted stop deliveries; never a replacement execution control.
+    private final java.util.concurrent.ConcurrentHashMap<String,RunControl> pendingCapabilityStops=new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<String,RunControl> capabilityControls=new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<String,GatewayParentRun> gatewayParentRuns=new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<RunControl,dev.pocketengine.features.memory.TaskStoreMemoryReader.RawBinding> rawMemoryBindings=new java.util.concurrent.ConcurrentHashMap<>();
@@ -348,6 +350,7 @@ public final class EngineApplication extends Application implements dev.pocketen
                 public JSONObject start(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control)throws Exception{return startAssistantInput(conversation,goal,message,config,control);}
                 public JSONObject startScoped(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startAssistantInput(conversation,goal,message,config,control,ownerScope);}
                 public JSONObject append(String conversation,JSONObject message,String mode,JSONObject expected,RunControl control)throws Exception{return appendAssistantInput(conversation,message,mode,expected,control);}
+                public void cancel(RunControl control)throws Exception{cancelCapabilityAttempt(control);}
             });
         }
         addModule("media",()->new dev.pocketengine.media.MediaModule(context));
@@ -1219,6 +1222,29 @@ public final class EngineApplication extends Application implements dev.pocketen
         else if(same)same=captured.provider.equals(current.provider)&&captured.baseUrl.equals(current.baseUrl)&&captured.model.equals(current.model)&&captured.apiKey.equals(current.apiKey)&&captured.cleartextConsent.equals(current.cleartextConsent);
         if(!same)throw new IllegalStateException("模型选择或凭据已变化，本轮不会发送或朗读旧结果；请重新开始");
     }
+    /** Chat and task-detail stop share the original SQL/run/control and bounded child-stop queue. */
+    private void cancelCapabilityAttempt(RunControl control)throws Exception{
+        RunControl.HostRunIdentity run=control.hostRunIdentity();
+        if(run==null){control.cancel();return;}
+        String id=run.taskId();
+        synchronized(tasks){
+            boolean retry=pendingCapabilityStops.get(id)==control;
+            if(control.isCancelled()&&!retry)return;
+            JSONObject task=tasks.get(id,false);
+            if(!retry&&capabilityControls.get(id)!=control){control.cancel();return;}
+            if(task==null||!control.matchesHostRun(id,task.optString("runId"),task.optInt("coordinatorEpoch")))throw new SecurityException("原任务执行身份已变化，未取消其他执行");
+            // Save first under the same store lock used by runner settlement, so a fast
+            // cancelled runner cannot be overwritten back to stopping by this request.
+            pendingCapabilityStops.put(id,control);
+            try{if(!task.optBoolean("cancelRequested"))tasks.requestCancel(id,run.runId());}finally{control.cancel();}
+        }
+        try{
+            OriginalDeviceChildStops stops=originalDeviceChildStops;
+            if(stops==null)throw new IllegalStateException("下游止损宿主尚未就绪；不能视为远端已停止");
+            try{stops.enqueue(id,control);}catch(Exception notQueued){throw new IllegalStateException("下游止损尚未入队；原预留仍保留，不能视为远端已停止",notQueued);}
+            pendingCapabilityStops.remove(id,control);
+        }finally{features.cancelRelatedTasks(id);pushTask(id);}
+    }
     private JSONObject runCapabilityAttempt(String id,JSONArray initial,ModelConfig config,RunControl control)throws Exception{
         RunControl existing=capabilityControls.putIfAbsent(id,control);if(existing!=null&&existing!=control)throw new IllegalStateException("该任务仍在执行");
         JSONObject attempt=null;
@@ -1276,11 +1302,9 @@ public final class EngineApplication extends Application implements dev.pocketen
             }:null;
 
             RunOutcome result=new dev.pocketengine.runtime.AgentRunner(null,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),projection,inputs).run(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,event->recordRunEvent(id,admittedRun,admittedEpoch,control,event),journal);
-            JSONObject finalTask=tasks.get(id,false);boolean unreadReference=tasks.hasUnreadOwnerDocumentReference(id,admittedRun);
-            boolean effectRecorded=false;JSONArray operations=finalTask.getJSONArray("operations");for(int i=0;i<operations.length();i++)if(!dev.pocketengine.features.memory.TaskMemoryJournal.TOOL.equals(operations.getJSONObject(i).optString("tool")))effectRecorded=true;
-            String status=result.status;if(status.equals("needs_confirmation")&&(source==null||!source.optString("kind").equals("channel"))&&!effectRecorded&&!unreadReference)status="completed";
+            String status=result.status;
             if(status.equals("paused")&&control.conditionWait()!=null)tasks.endAutomationConditionWait(id,attempt.getString("runId"),control,result.summary,result.evidence);
-            else tasks.endAttempt(id,attempt.getString("runId"),status,result.summary,result.evidence);pushTask(id);
+            else tasks.finishCapabilityAttempt(id,admittedRun,admittedEpoch,control,result);pushTask(id);
             JSONObject settled=tasks.get(id,false);status=settled.getString("status");
             JSONObject response=json("content",status.matches("cancelled|reconciling")?settled.optString("summary"):result.evidence.optString("modelSummary",result.summary),"taskId",id,"status",status);
             if(lastOwnerReplyRecorded[0]!=null&&lastOwnerReplyRecorded[0].equals(response.optString("content")))response.put("nativeOwnerReplyRecorded",true);
@@ -1376,7 +1400,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         };
         try{
             memorySources.synchronize(json("ownerId","owner","spaceId","private"));
-            var workflow=new dev.pocketengine.features.memory.MemoryConsolidationWorkflow(memory,(messages,control)->dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,"")));
+            var workflow=new dev.pocketengine.features.memory.MemoryConsolidationWorkflow(memory,(messages,control)->dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),dev.pocketengine.features.memory.LearningInputAdmission.consolidation(memory,json("ownerId","owner","spaceId","private"),selected,new JSONObject(messages.getJSONObject(1).getString("content")),memorySources::requireLearningReference))));
             JSONObject result=workflow.propose(json("ownerId","owner","spaceId","private"),selected,original,fence);
             synchronized(this){
                 request.settled=true;JSONObject candidate=result.optJSONObject("candidate");String status=candidate==null?"none":candidate.optString("status");
@@ -1416,7 +1440,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         };
         try{
             memorySources.synchronize(json("ownerId","owner","spaceId","private"));
-            var workflow=new dev.pocketengine.features.KnowledgeLearningWorkflow(memory,skills,memorySources::read,(messages,control)->dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,"")),fence);
+            var workflow=new dev.pocketengine.features.KnowledgeLearningWorkflow(memory,skills,memorySources::read,(messages,control)->dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),dev.pocketengine.features.memory.LearningInputAdmission.source(memory,memorySources::read,json("ownerId","owner","spaceId","private"),expected,new JSONObject(messages.getJSONObject(1).getString("content"))))),fence);
             JSONObject result=workflow.proposeLearning(json("ownerId","owner","spaceId","private"),expected,original);
             synchronized(this){
                 request.settled=true;JSONObject candidate=result.optJSONObject("candidate");String status=candidate==null?"none":candidate.optString("status");
@@ -1585,7 +1609,7 @@ public final class EngineApplication extends Application implements dev.pocketen
                 if(channelTaskHost!=null)channelTaskHost.stop(id);
                 else synchronized(tasks){task=tasks.get(id,false);tasks.cancelChannelTask(id,source,task.optString("runId"),task.optInt("coordinatorEpoch"),capabilityControls.get(id));features.cancelRelatedTasks(id);pushTask(id);}
                 return null;
-            }if(automationPlanTask(task))return controlAutomationPlanTask(automationModule(),json("taskId",id,"runId",task.optString("runId"),"coordinatorEpoch",task.optInt("coordinatorEpoch"),"occurrenceId",source.getString("occurrenceId"),"commitmentId",source.getString("commitmentId")),"cancel");features.cancelRelatedTasks(id);RunControl capability=capabilityControls.get(id);if(capability!=null){capability.cancel();tasks.requestCancel(id,null);pushTask(id);OriginalDeviceChildStops stops=originalDeviceChildStops;if(stops!=null)stops.enqueue(id,capability);}else stop(id);return null;}
+            }if(automationPlanTask(task))return controlAutomationPlanTask(automationModule(),json("taskId",id,"runId",task.optString("runId"),"coordinatorEpoch",task.optInt("coordinatorEpoch"),"occurrenceId",source.getString("occurrenceId"),"commitmentId",source.getString("commitmentId")),"cancel");RunControl capability=capabilityControls.get(id);if(capability==null)capability=pendingCapabilityStops.get(id);if(capability!=null)cancelCapabilityAttempt(capability);else {features.cancelRelatedTasks(id);stop(id);}return null;}
             case "takeoverTask":return takeoverTask(input.getString("taskId"));
             case "observeTask":return observeTask(input.getString("taskId"));
             case "manualTaskAction":return manualTaskAction(input.getString("taskId"),input.getString("tool"),input.optJSONObject("args"),input.optString("observationId"));

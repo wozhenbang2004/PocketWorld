@@ -53,7 +53,7 @@ public final class RemoteAssignmentNativeJourneyTest {
         final Path root=Files.createTempDirectory("native-assignment-contribution-");final AtomicInteger stage=new AtomicInteger(),done=new AtomicInteger();final AtomicReference<Throwable> failure=new AtomicReference<>();
         Process server;BufferedReader output;String base,sourceTask,teamRun,parent,parentRun,assignment,prepareOp,submitOp,freezeOp,originalExecutionRun;Path originalWorkspace;
         TaskStore tasks;FeatureHost featureHost;RemoteModule module;RemoteOwnerWorkflows owner;RemoteAssignmentWorkspaces adapter;TeamCoordinator coordinator;ModelConfig model;
-        TeamWorkFiles.Workspace workspace;RemoteAssignmentWorkspaces.Execution execution;RemoteAssignmentWorkspaces.Contribution contribution;Host executionHost;JSONObject latestBinding;final boolean dropPrepare,deferSubmit;
+        RunControl parentControl;TeamWorkFiles.Workspace workspace;RemoteAssignmentWorkspaces.Execution execution;RemoteAssignmentWorkspaces.Contribution contribution;Host executionHost;JSONObject latestBinding;final boolean dropPrepare,deferSubmit;
         Fixture(boolean dropPrepare)throws Exception {this(dropPrepare,false);}
         Fixture(boolean dropPrepare,boolean deferSubmit)throws Exception {
             this.dropPrepare=dropPrepare;this.deferSubmit=deferSubmit;
@@ -64,7 +64,7 @@ public final class RemoteAssignmentNativeJourneyTest {
                 JSONObject actual=start.getJSONObject("source").put("profileId","computer").put("serviceBase",base);sourceTask=actual.getString("operationId");tasks.beginExternal("remote","submitJob",sourceTask,new JSONObject().put("profileId","computer").put("environmentId","workspace").put("worker","command"));tasks.updateExternal(sourceTask,actual);
                 JSONObject source=tasks.remoteOwnerTarget(sourceTask),capture=tasks.claimRemoteResultSnapshot(source,new JSONArray().put("proof.txt"));JSONObject snapshot=module.captureResultSnapshot(new JSONObject(source.toString()).put("paths",new JSONArray().put("proof.txt")).put("operationId",capture.getString("operationId")).put("_profileBinding",module.profileBindingHash("computer")));tasks.recordRemoteResultSnapshot(sourceTask,capture.getString("operationId"),snapshot);
                 VersionedWorkspace files=new VersionedWorkspace(root.resolve("native-project").toFile());String project=files.create("原项目").getString("id");files.write(project,"proof.txt","ORIGINAL SOURCE BYTES\n",0,false);files.write(project,"other.txt","other member",0,false);workspace=(command,args)->{switch(command){case "list":return new JSONObject().put("files",files.list(args.getString("projectId")));case "read":return files.read(args.getString("projectId"),args.getString("path"),args.optInt("version",0));case "history":return new JSONObject().put("history",files.history(args.getString("projectId"),args.getString("path")));case "create":return files.create(args.getString("name"));case "write":return files.write(args.getString("projectId"),args.getString("path"),args.getString("content"),args.getInt("expectedVersion"),false);default:throw new AssertionError("fixture never uses a substitute writer: "+command);}};
-                JSONObject admitted=tasks.startAttempt(tasks.createCapabilityTask("真实远端所选文件贡献","").getString("id"),"capabilities",40);parent=admitted.getString("id");parentRun=admitted.getString("runId");RunControl original=new RunControl();original.bindHostRun(parent,parentRun,admitted.getInt("coordinatorEpoch"));tasks.bindDevelopmentContext(parent,parentRun,admitted.getInt("coordinatorEpoch"),original,new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",id()).put("runtime","managed_process_v1").put("initialSourceDigest","a".repeat(64)).put("clientMessageId",id()));
+                JSONObject admitted=tasks.startAttempt(tasks.createCapabilityTask("真实远端所选文件贡献","").getString("id"),"capabilities",40);parent=admitted.getString("id");parentRun=admitted.getString("runId");RunControl original=new RunControl();original.bindHostRun(parent,parentRun,admitted.getInt("coordinatorEpoch"));parentControl=original;tasks.authorizeTools(parent,parentRun,new JSONArray().put("teams_get"));tasks.bindDevelopmentContext(parent,parentRun,admitted.getInt("coordinatorEpoch"),original,new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",id()).put("runtime","managed_process_v1").put("initialSourceDigest","a".repeat(64)).put("clientMessageId",id()));
                 model=new ModelConfig("https://example.invalid/v1","never-used-fixture-secret","phone-scheduler",false,24,10);teamRun=id();coordinator=new TeamCoordinator(root.resolve("native-team.json").toFile(),(m,h,c)->{throw new AssertionError("No model/provider is invoked by the native authority fixture");},event->{try{if(event.optJSONObject("run")!=null)tasks.updateExternal(teamRun,event.getJSONObject("run"));}catch(Exception error){failure.compareAndSet(null,error);}});coordinator.setAssignmentFactory(this::execute);
                 JSONObject team=new JSONObject().put("id",id()).put("name","原native call").put("mode","produce").put("members",new JSONArray().put(new JSONObject().put("id","writer").put("name","制作").put("role","修改原文件").put("runner","model").put("device","phone").put("writeFiles",new JSONArray().put("proof.txt"))).put(new JSONObject().put("id","other").put("name","其他").put("role","只保留原分工").put("runner","model").put("device","phone").put("writeFiles",new JSONArray().put("other.txt"))));
                 // Native callback fixture injects only the production captureSelection result. Not model JSON.
@@ -92,6 +92,41 @@ public final class RemoteAssignmentNativeJourneyTest {
         void resume(int phase)throws Exception {stage.set(phase);coordinator.resume(teamRun,"writer",model,null,null);awaitDone(phase+1);}
         JSONObject queryToTerminal()throws Exception {long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);JSONObject actual;do{actual=adapter.inspect(executionHost,execution);if(actual.optBoolean("dispatchFenceFinal")&&actual.optString("status").equals("completed"))return actual;Thread.sleep(10);}while(System.nanoTime()<until);throw new AssertionError(actual);}
         public void close()throws Exception {if(coordinator!=null)coordinator.close();if(module!=null)module.close();if(featureHost!=null)featureHost.close();if(server!=null){server.destroy();if(!server.waitFor(3,TimeUnit.SECONDS)){server.destroyForcibly();server.waitFor(2,TimeUnit.SECONDS);}}if(output!=null)output.close();}
+    }
+    private static JSONObject parentResources(Fixture f)throws Exception {
+        JSONObject parent=f.tasks.get(f.parent,false);RunControl read=f.parentControl;
+        TaskStore.TeamParentOrigin origin=f.tasks.teamParentOrigin(f.parent,f.parentRun,parent.getInt("coordinatorEpoch"),"teams_get","",new JSONObject().put("teamRunId",f.teamRun),read);
+        return f.tasks.teamParentExecutionState(origin,f.teamRun);
+    }
+    private static TeamRemoteProduction restoreStopHost(Fixture f,java.util.List<Runnable> pending)throws Exception {
+        f.coordinator.close();f.coordinator=new TeamCoordinator(f.root.resolve("native-team.json").toFile(),(m,h,c)->{throw new AssertionError("Stopping must not restart inference");},event->{if(event.optJSONObject("run")!=null)try{f.tasks.updateExternal(f.teamRun,event.getJSONObject("run"));}catch(Exception failure){throw new IllegalStateException(failure);}});
+        TeamRemoteProduction production=new TeamRemoteProduction(f.tasks,f.module,f.workspace,pending::add,id->{});
+        f.coordinator.setAssignmentFactory(new TeamCoordinator.AssignmentFactory(){
+            public JSONObject execute(TeamCoordinator.AssignmentCall call,ModelConfig model,RunControl control,java.util.function.Consumer<JSONObject> progress){throw new AssertionError("Stopping must not restart a member");}
+            public void stopAssignments(String team,String member)throws Exception{production.stop(team,member);}
+            public boolean hasActiveWork(String team){return production.hasActiveWork(team);}
+        });return production;
+    }
+    @Test public void coldTeamStopFindsOriginalRemoteChildBeyondGlobalRecentWindow()throws Exception {
+        try(Fixture f=new Fixture(false)){
+            f.approveScope();f.resume(1);String child=f.execution.view().getString("childTaskId");
+            for(int i=0;i<201;i++)f.tasks.createCapabilityTask("unrelated recent task "+i,"");
+            assertFalse(f.tasks.list().toString().contains(child));assertFalse(f.tasks.list().toString().contains(f.assignment));
+            java.util.List<Runnable> pending=new java.util.ArrayList<>();restoreStopHost(f,pending);
+            f.coordinator.pause(f.teamRun,"other");assertEquals("Other member must not stop writer's original job",0,pending.size());
+            f.coordinator.pause(f.teamRun,"writer");assertEquals("Original remote child must be enqueued outside the UI recent window",1,pending.size());
+            pending.remove(0).run();JSONObject actual=f.adapter.inspect(f.executionHost,f.execution);assertEquals("cancelled",actual.getString("status"));assertTrue(actual.getJSONObject("processCleanupProof").getBoolean("processGroupStoppedVerified"));assertEquals("1",Files.readString(f.root.resolve("submit-count")));assertEquals(1,f.tasks.teamBudgetSnapshot(f.teamRun).getInt("externalJobsReservedOrUsed"));
+        }
+    }
+    @Test public void coldResourcesStayHeldUntilOriginalJobHasPhysicalStopProof()throws Exception {
+        try(Fixture f=new Fixture(false)){
+            f.approveScope();f.resume(1);String child=f.execution.view().getString("childTaskId");java.util.List<Runnable> pending=new java.util.ArrayList<>();restoreStopHost(f,pending);
+            assertFalse("Empty native worker maps are not remote termination proof",parentResources(f).getBoolean("resourcesReleased"));
+            JSONObject actual=f.adapter.inspect(f.executionHost,f.execution);JSONObject unproved=new JSONObject(actual.toString()).put("status","cancelled").put("dispatchFenceFinal",true).put("processStarted",true);unproved.remove("processCleanupProof");f.tasks.updateExternal(child,unproved);
+            assertFalse("A terminal label without physical cleanup must remain retained",parentResources(f).getBoolean("resourcesReleased"));
+            f.coordinator.cancel(f.teamRun);assertEquals(1,pending.size());pending.remove(0).run();actual=f.adapter.inspect(f.executionHost,f.execution);assertTrue(actual.getJSONObject("processCleanupProof").getBoolean("processGroupStoppedVerified"));
+            assertTrue("Exact original physical stop proof releases resources",parentResources(f).getBoolean("resourcesReleased"));assertEquals(1,f.tasks.teamBudgetSnapshot(f.teamRun).getInt("externalJobsReservedOrUsed"));
+        }
     }
     @Test public void ownerScopeOriginalJobSingleFileApprovalActualContributionAndSafeNewAttemptStayOnOriginalSql()throws Exception {
         try(Fixture f=new Fixture(false)){

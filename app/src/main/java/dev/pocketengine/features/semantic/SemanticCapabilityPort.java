@@ -93,6 +93,8 @@ public final class SemanticCapabilityPort implements CapabilityPort {
     @Override public boolean responseCurrent(RunControl control) throws Exception {
         checkControl(control);return turnPauseRevision==control.pauseRevision()&&(existing==null||existing.responseCurrent(control));
     }
+    @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{checkControl(control);return own(name)||existing==null?dev.pocketengine.core.NativeToolObservation.Requirement.NONE:existing.observationRequirement(name,args,control);}
+    @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl control)throws Exception{checkControl(control);return own(name)||existing==null?null:existing.takeToolObservation(name,operation,control);}
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception{checkControl(control);if(existing!=null)existing.beforeModelRequest(requestId,messages,control);}
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception{checkControl(control);return existing==null?null:existing.afterModelResponse(requestId,answerId,control);}
     @Override public void modelRequestAbandoned(String requestId)throws Exception{if(existing!=null)existing.modelRequestAbandoned(requestId);}

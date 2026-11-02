@@ -1169,6 +1169,27 @@ public final class MemoryBook {
         }
     }
 
+    /** Native exact-selection proof for delayed delivery; contains references/digests, not memory text. */
+    public synchronized JSONObject contextDependency(JSONObject snapshot)throws Exception {
+        Scope scope=Scope.from(snapshot.getJSONObject("scope"));JSONArray selected=snapshot.getJSONArray("records"),refs=new JSONArray();
+        if(selected.length()>MAX_CONTEXT_RECORDS)throw new SecurityException("记忆选择超出范围");
+        for(int i=0;i<selected.length();i++){
+            JSONObject prior=selected.getJSONObject(i),reference=taskReference(scope,prior);
+            if(!prior.getString("text").equals(require(scope,prior.getString("id")).getString("text")))throw new SecurityException("记忆正文已变化");
+            refs.put(reference.put("textDigest",dev.pocketengine.runtime.usage.InferenceCapture.historyDigest(new JSONObject().put("text",prior.getString("text")))));
+        }
+        return new JSONObject().put("scope",new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId)).put("records",refs);
+    }
+    public synchronized void requireContextDependency(JSONObject dependency)throws Exception {
+        Scope scope=Scope.from(dependency.getJSONObject("scope"));JSONArray refs=dependency.getJSONArray("records");
+        if(refs.length()>MAX_CONTEXT_RECORDS)throw new SecurityException("记忆选择超出范围");
+        for(int i=0;i<refs.length();i++){
+            JSONObject ref=refs.getJSONObject(i),state=taskReferenceState(scope,ref);
+            if(!"current".equals(state.getString("status"))||!ref.getString("textDigest").equals(dev.pocketengine.runtime.usage.InferenceCapture.historyDigest(new JSONObject().put("text",state.getString("text")))))
+                throw new SecurityException("本回答所用记忆已换版、遗忘或失效，停止后续发送；已接受内容不能撤回");
+        }
+    }
+
     private void checkCoreCapacity(Scope scope){
         int count=0;for(JSONObject value:records.values())if(scope.matches(value)&&value.optBoolean("core",false))count++;
         if(count>=MAX_CORE_RECORDS)throw new IllegalStateException("每个空间最多选入16条核心记忆，请先取消部分选择");

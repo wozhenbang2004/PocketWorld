@@ -90,4 +90,37 @@ public final class ChannelInferenceAudienceJourneyTest {
             account(f.context,()->core(f.channels).unbindOwner(profile));String event=inbound(f.channels,profile,"late-owner-question","owner","Recheck the original binding before the physical model dispatch");await(f.channels,event,"cancelled");assertEquals(1,accountEntries.get());assertEquals(0,accountModelWrites.get());assertEquals(0,wire.size());assertEquals(0,f.modelCalls.get());assertEquals(0,f.tasks.list().length());
         }
     }
+    private static JSONObject memoryScope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
+    private static JSONObject privateMemory(dev.pocketengine.features.memory.MemoryModule memory)throws Exception {
+        JSONObject row=memory.handle("save",new JSONObject().put("scope",memoryScope()).put("record",new JSONObject().put("text","MEMORY SEND SENTINEL"))).getJSONObject("record");
+        memory.handle("setCore",new JSONObject().put("scope",memoryScope()).put("id",row.getString("id")).put("core",true).put("revision",row.getLong("revision")));return row;
+    }
+    @Test public void ownerAskAndAutoReplyRecheckMemoryAfterStartedBeforePhysicalAccountWrite()throws Exception {
+        for(boolean auto:new boolean[]{false,true})try(GroupTaskFlowsTest.Fixture f=new GroupTaskFlowsTest.Fixture()){
+            var memory=new dev.pocketengine.features.memory.MemoryModule(f.context);f.channels.setMemory(memory);JSONObject record=privateMemory(memory);
+            CopyOnWriteArrayList<JSONObject> wire=new CopyOnWriteArrayList<>();String profile=dm(f,false,wire),binding=inbound(f.channels,profile,"memory-bind-"+auto,"owner","Binding source only");
+            f.channels.handle("owner.bind",new JSONObject().put("profileId",profile).put("verifiedEventId",binding).put("confirmed",true));
+            f.channels.handle("profile.save",new JSONObject().put("id",profile).put("name","Memory owner").put("provider","webhook").put("replyUrl",f.base+"/dm-result").put("enabled",true).put("autoReply",auto));
+            account(f.context,null);
+            dev.pocketengine.runtime.usage.InferenceCapture.installPresentationObserver(new dev.pocketengine.runtime.usage.InferenceCapture.Sink(){
+                public void started(dev.pocketengine.runtime.usage.InferenceReceipt receipt)throws Exception{memory.handle("forget",new JSONObject().put("scope",memoryScope()).put("id",record.getString("id")));}
+                public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt){}
+            });
+            try{String event=inbound(f.channels,profile,"memory-question-"+auto,"owner","Recall the memory");if(!auto)f.channels.handle("ask",new JSONObject().put("eventId",event));await(f.channels,event,"failed");assertEquals(0,accountModelWrites.get());assertEquals(0,wire.size());assertEquals(0,f.modelCalls.get());}
+            finally{dev.pocketengine.runtime.usage.InferenceCapture.installPresentationObserver(new dev.pocketengine.runtime.usage.InferenceCapture.Sink(){public void started(dev.pocketengine.runtime.usage.InferenceReceipt r){}public void finished(dev.pocketengine.runtime.usage.InferenceReceipt r){}});}
+        }
+    }
+    @Test public void queuedMemoryReplyKeepsDependencyAcrossColdCoreAndCannotSendAfterForget()throws Exception {
+        try(GroupTaskFlowsTest.Fixture f=new GroupTaskFlowsTest.Fixture()){
+            var memory=new dev.pocketengine.features.memory.MemoryModule(f.context);f.channels.setMemory(memory);JSONObject record=privateMemory(memory);
+            CopyOnWriteArrayList<JSONObject> wire=new CopyOnWriteArrayList<>();String profile=dm(f,false,wire),binding=inbound(f.channels,profile,"outbox-memory-bind","owner","Binding source only");
+            f.channels.handle("owner.bind",new JSONObject().put("profileId",profile).put("verifiedEventId",binding).put("confirmed",true));account(f.context,null);
+            String event=inbound(f.channels,profile,"outbox-memory-question","owner","Recall the memory");f.channels.handle("ask",new JSONObject().put("eventId",event));await(f.channels,event,"answered");
+            JSONObject row=f.channels.snapshot().getJSONArray("outbox").getJSONObject(0);assertTrue(row.has("memoryDependency"));
+            ChannelCore cold=new ChannelCore(new java.io.File(f.android.getFilesDir(),"channels"));assertTrue(cold.snapshot().getJSONArray("outbox").getJSONObject(0).has("memoryDependency"));
+            memory.handle("forget",new JSONObject().put("scope",memoryScope()).put("id",record.getString("id")));
+            f.channels.handle("outbox.send",new JSONObject().put("id",row.getString("id")));assertEquals(0,wire.size());assertNotEquals("sent",f.channels.snapshot().getJSONArray("outbox").getJSONObject(0).getString("status"));
+        }
+    }
+
 }

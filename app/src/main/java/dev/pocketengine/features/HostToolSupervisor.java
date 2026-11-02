@@ -338,6 +338,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         control.check();tasks.checkCapability(taskId,runId,epoch,name,control);if(result==null)throw new IllegalStateException("工具没有返回真实结果");return result;
     }
+    @Override public JSONObject beforeTool(String name,JSONObject arguments,RunControl original)throws Exception{return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.beforeTool(name,arguments,original):null;}
     @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject arguments,RunControl original)throws Exception{return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.observationRequirement(name,arguments,original):dev.pocketengine.core.NativeToolObservation.Requirement.NONE;}
     @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl original)throws Exception{return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.takeToolObservation(name,operation,original):null;}
     /** Current pinned native routes plus stable plugin capability identities; this creates no grants. */

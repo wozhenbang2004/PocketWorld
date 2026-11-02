@@ -69,6 +69,45 @@ public final class TaskStoreProjectHostTest {
         String stdout=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8),stderr=new String(process.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);assertTrue(process.waitFor(10,java.util.concurrent.TimeUnit.SECONDS));
         PendingIntent pending=actual.getParcelableExtra("com.termux.RUN_COMMAND_PENDING_INTENT");Intent callback=new Intent(shadowOf(pending).getSavedIntent());Bundle output=new Bundle();output.putInt("err",-1);output.putInt("exitCode",process.exitValue());output.putString("stdout",stdout);output.putString("stderr",stderr);callback.putExtra("result",output);JSONObject decoded=TermuxBridge.receive(android,callback);assertNotNull(decoded);return decoded;
     }
+    @Test public void changesPagesCoverRealMediumAndMaximumTreesWithoutDroppingDiffs()throws Exception {
+        ModelCapabilityAdapters.Binding binding=new ModelCapabilityAdapters.Binding(taskId,runId,epoch,original,true,projectId);
+        ProjectCapabilityPort port=new ProjectCapabilityPort(binding,new TaskStoreCapabilityAuthority(tasks,binding,approvals::add),original,null,local,tasks,checkout);
+        tasks.authorizeTools(taskId,runId,new JSONArray().put("project_changes"));
+        java.lang.reflect.Method content=LocalModule.class.getDeclaredMethod("content",String.class);content.setAccessible(true);
+        Path root=((java.io.File)content.invoke(local,checkout)).toPath();Files.delete(root.resolve("Main.java"));
+        // Fixture installs a supported medium checkout baseline; all diff reads use real native files.
+        Path metadata=root.getParent().resolve("checkout.json");JSONObject row=new JSONObject(Files.readString(metadata));JSONArray baseline=new JSONArray();
+        for(int i=0;i<500;i++){String path=String.format(java.util.Locale.ROOT,"f%04d.txt",i);Files.writeString(root.resolve(path),"x");baseline.put(new JSONObject().put("path",path).put("sha256",ProjectSources.sha256(new byte[]{'x'})).put("sourceVersion",1));}
+        row.put("files",baseline);Files.writeString(metadata,row.toString());
+        JSONObject clean=port.execute("project_changes",new JSONObject(),original);assertEquals(0,clean.getInt("changedCount"));assertTrue(clean.getBoolean("complete"));assertEquals(500,local.handle("changes",new JSONObject().put("checkoutId",checkout)).getJSONArray("files").length());
+        for(int i=0;i<3;i++)Files.writeString(root.resolve(String.format(java.util.Locale.ROOT,"f%04d.txt",i)),"modified");
+        Files.delete(root.resolve("f0003.txt"));Files.write(root.resolve("new.bin"),new byte[]{0,1,2});
+        JSONObject changed=port.execute("project_changes",new JSONObject(),original);assertEquals(5,changed.getInt("changedCount"));assertEquals(5,changed.getJSONArray("files").length());assertTrue(changed.getBoolean("complete"));
+        java.util.Map<String,String> kinds=new java.util.HashMap<>();for(int i=0;i<5;i++){JSONObject f=changed.getJSONArray("files").getJSONObject(i);kinds.put(f.getString("path"),f.getString("change"));if(f.getString("path").equals("new.bin"))assertTrue(f.getBoolean("binary"));}
+        assertEquals("deleted",kinds.get("f0003.txt"));assertEquals("added",kinds.get("new.bin"));assertEquals("modified",kinds.get("f0002.txt"));
+        String prefix="中文".repeat(30)+"/"+"路径".repeat(30)+"/";Files.createDirectories(root.resolve(prefix));
+        for(int i=500;i<2000;i++)Files.writeString(root.resolve(prefix+String.format(java.util.Locale.ROOT,"f%04d.txt",i)),"x");
+        java.util.Set<String> seen=new java.util.HashSet<>();JSONObject cursor=null;int pages=0,maxBytes=0;
+        do {JSONObject args=new JSONObject().put("changedOnly",false).put("limit",100);if(cursor!=null)args.put("cursor",cursor);
+            JSONObject page=port.execute("project_changes",args,original);int bytes=page.toString().getBytes(StandardCharsets.UTF_8).length;assertTrue(bytes<=30000);maxBytes=Math.max(maxBytes,bytes);assertEquals(2000,page.getInt("fileCount"));assertEquals(2001,page.getInt("totalEntries"));
+            JSONArray files=page.getJSONArray("files");assertTrue(files.length()>0);for(int i=0;i<files.length();i++)assertTrue("duplicate",seen.add(files.getJSONObject(i).getString("path")));
+            assertEquals(page.getInt("totalEntries")-seen.size(),page.getInt("omittedCount"));cursor=page.optJSONObject("nextCursor");assertEquals(cursor==null,page.getBoolean("complete"));assertTrue(++pages<150);
+        }while(cursor!=null);
+        assertEquals(2001,seen.size());assertTrue(pages>20);assertTrue(seen.contains("f0003.txt"));assertTrue(seen.contains(prefix+"f1999.txt"));
+        System.out.println("CHANGES realFiles=2000 unionEntries="+seen.size()+" pages="+pages+" maxUtf8Bytes="+maxBytes);
+    }
+    @Test public void changesCursorRejectsSourceBaselineFilterAndAuthorityChanges()throws Exception {
+        ModelCapabilityAdapters.Binding binding=new ModelCapabilityAdapters.Binding(taskId,runId,epoch,original,true,projectId);
+        ProjectCapabilityPort port=new ProjectCapabilityPort(binding,new TaskStoreCapabilityAuthority(tasks,binding,approvals::add),original,null,local,tasks,checkout);
+        tasks.authorizeTools(taskId,runId,new JSONArray().put("project_changes"));
+        java.lang.reflect.Method content=LocalModule.class.getDeclaredMethod("content",String.class);content.setAccessible(true);Path root=((java.io.File)content.invoke(local,checkout)).toPath();Files.writeString(root.resolve("extra.txt"),"x");
+        JSONObject args=new JSONObject().put("changedOnly",false).put("limit",1);JSONObject cursor=port.execute("project_changes",args,original).getJSONObject("nextCursor");args.put("cursor",cursor);
+        assertThrows(SecurityException.class,()->port.execute("project_changes",new JSONObject(args.toString()).put("changedOnly",true),original));
+        Files.writeString(root.resolve("extra.txt"),"changed");assertThrows(SecurityException.class,()->port.execute("project_changes",args,original));Files.writeString(root.resolve("extra.txt"),"x");
+        Path metadata=root.getParent().resolve("checkout.json");JSONObject row=new JSONObject(Files.readString(metadata));row.getJSONArray("files").getJSONObject(0).put("sourceVersion",99);Files.writeString(metadata,row.toString());
+        assertThrows(SecurityException.class,()->port.execute("project_changes",args,original));
+        tasks.authorizeTools(taskId,runId,new JSONArray());assertThrows(SecurityException.class,()->port.execute("project_changes",new JSONObject(),original));
+    }
     @Test public void originalTaskActuallyStagesCompilesRunsAndKeepsPendingUntilReceipt()throws Exception {
         JSONObject prepare=plan("prepare"),staged=beginApproved(prepare,"prepare");String stageId=staged.getString("operationId");
         Intent stage=shadowOf((Application)android).getNextStartedService();assertNotNull(stage);local.handle("project.execute",staged.getJSONObject("input"));assertNull(shadowOf((Application)android).getNextStartedService());assertEquals("completed",executeCaptured(stage).getString("status"));

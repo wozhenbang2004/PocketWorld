@@ -3328,6 +3328,44 @@ public final class TaskStore {
             reservation.getJSONArray("operationIds").put(op);reservation.put("state","unknown");ContentValues row=new ContentValues();row.put("operation_id",op);row.put("task_id",source.task);row.put("run_id",source.run);row.put("tool",source.tool);row.put("arguments",arguments.toString());row.put("state","unknown");row.put("created_at",System.currentTimeMillis());db.insertOrThrow("operations",null,row);owner.put("teamReservationPool",pool);write(owner);db.setTransactionSuccessful();return binding.put("operationId",op).put("reservationId",reservation.getString("reservationId"));
         }finally{db.endTransaction();}
     }
+    /** Original bounded SQL parent/assignment links, never the global UI recent-task window. */
+    public synchronized JSONArray teamRemoteStopTasks(String teamRun,String memberId)throws Exception{
+        JSONObject team=teamWriteTask(teamRun);JSONArray links=team.optJSONArray("relatedTasks"),result=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
+        if(links!=null&&links.length()>32)throw new SecurityException("原团队child索引超出完整范围，停止结果待核对");
+        for(int i=0;links!=null&&i<links.length();i++){
+            JSONObject link=links.getJSONObject(i);if(!"team_assignment".equals(link.optString("feature")))continue;
+            JSONObject assignment=required(link.getString("taskId")),origin=assignment.getJSONObject("origin"),identity=assignment.getJSONObject("teamAssignment");
+            String id=assignment.getString("id");
+            if(!"team_assignment".equals(origin.optString("kind"))||!teamRun.equals(origin.optString("teamRunId"))||!teamRun.equals(identity.optString("teamRunId"))||!id.equals(link.optString("assignmentId"))||!id.equals(identity.optString("assignmentId"))||!origin.getString("memberId").equals(identity.getString("memberId")))throw new SecurityException("原团队assignment关系不完整，不能猜测停止对象");
+            if((memberId==null||memberId.isEmpty()||memberId.equals(identity.getString("memberId")))&&seen.add(id))result.put(get(id,false));
+            JSONArray remote=assignment.optJSONArray("relatedTasks");if(remote!=null&&remote.length()>100)throw new SecurityException("原assignment子执行索引超出完整范围，停止结果待核对");
+            for(int c=0;remote!=null&&c<remote.length();c++){
+                JSONObject ref=remote.getJSONObject(c);if(!"remote".equals(ref.optString("feature")))continue;
+                JSONObject child=required(ref.getString("taskId")),childOrigin=child.getJSONObject("origin"),nativeAssignment=childOrigin.getJSONObject("context").getJSONObject("nativeAssignment");
+                if(!"team_remote_assignment".equals(childOrigin.optString("kind"))||!id.equals(child.optString("parentTaskId"))||!id.equals(nativeAssignment.optString("assignmentId"))||!teamRun.equals(nativeAssignment.optString("teamRunId"))||!childOrigin.getJSONObject("binding").getString("memberId").equals(nativeAssignment.optString("memberId"))||!ref.getString("parentOperationId").equals(childOrigin.getString("preparedOperationId"))||!ref.getString("runId").equals(child.getString("runId")))throw new SecurityException("原远端child关系不完整，不能猜测停止对象");
+                if((memberId==null||memberId.isEmpty()||memberId.equals(nativeAssignment.getString("memberId")))&&seen.add(child.getString("id")))result.put(get(child.getString("id"),false));
+            }
+        }return result;
+    }
+    /** SQL receipts, not an empty in-memory worker map, prove remote execution has drained. */
+    private boolean teamRemoteResourcesUnreleased(String teamRun)throws Exception{
+        JSONArray tasks=teamRemoteStopTasks(teamRun,null);
+        for(int i=0;i<tasks.length();i++){
+            JSONObject task=tasks.getJSONObject(i);String id=task.getString("id"),kind=task.getJSONObject("origin").getString("kind");
+            if(hasUnresolved(id))return true;
+            if(kind.equals("team_remote_assignment")){
+                JSONObject actual=remoteOwnerTarget(id);actual.put("status",actual.optString("executorStatus"));
+                if(!dev.pocketengine.features.teams.TeamRemoteProduction.jobResourcesReleased(actual))return true;
+            }else{
+                JSONArray operations=task.getJSONArray("operations");for(int n=0;n<operations.length();n++){
+                    JSONObject receipt=operations.getJSONObject(n).optJSONObject("receipt"),record=receipt==null?null:receipt.optJSONObject("teamRemote");
+                    if(record==null||!"PREPARE".equals(record.optString("action"))||!dev.pocketengine.features.remote.RemoteProjectAssignments.full(record.getJSONObject("context")))continue;
+                    JSONObject actual=record.optJSONObject("actualReceipt");
+                    if(!record.optBoolean("preparationCancelled")&&(actual==null||!"completed".equals(record.optString("status"))||!"ready".equals(actual.optString("status"))))return true;
+                }
+            }
+        }return false;
+    }
     public synchronized JSONObject teamParentExecutionState(TeamParentOrigin source,String teamRun)throws Exception{
         JSONObject team=teamParentAccess(source,teamRun,false),plan=team.optJSONObject("teamWorkPlan");int running=0,unknown=0;JSONArray children=new JSONArray();if(plan!=null)for(int i=0;i<plan.getJSONArray("items").length();i++){
             JSONObject item=plan.getJSONArray("items").getJSONObject(i),child=read(item.getString("assignmentId"));if(child==null)continue;boolean active;try(Cursor row=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{child.getString("id")})){active=row.moveToFirst();}boolean unresolved=hasUnresolved(child.getString("id"));if(active)running++;if(unresolved)unknown++;children.put(dev.pocketengine.features.teams.TeamWorkItems.exactIdentity(item).put("status",unresolved?"blocked_unknown":child.optString("status")).put("activeAttempt",active).put("hasUnresolvedEffects",unresolved));
@@ -3337,7 +3375,7 @@ public final class TaskStore {
             if(identity==null||!team.getString("id").equals(child.optString("parentTaskId"))||!teamRun.equals(origin.optString("teamRunId"))||!teamRun.equals(identity.optString("teamRunId"))||!origin.getString("memberId").equals(identity.getString("memberId")))throw new SecurityException("原研究child父子来源冲突");
             boolean active;try(Cursor row=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{child.getString("id")})){active=row.moveToFirst();}boolean unresolved=hasUnresolved(child.getString("id"));if(active)running++;if(unresolved)unknown++;
             children.put(new JSONObject().put("taskId",child.getString("id")).put("memberId",identity.getString("memberId")).put("round",identity.getInt("round")).put("identityRevision",identity.getInt("identityRevision")).put("status",unresolved?"blocked_unknown":child.optString("status")).put("activeAttempt",active).put("hasUnresolvedEffects",unresolved));
-        }}return new JSONObject().put("children",children).put("activeChildAttempts",running).put("unknownChildCount",unknown).put("hasUnresolvedEffects",unknown>0).put("resourcesReleased",running==0).put("stopRequested",team.optBoolean("cancelRequested"));
+        }}return new JSONObject().put("children",children).put("activeChildAttempts",running).put("unknownChildCount",unknown).put("hasUnresolvedEffects",unknown>0).put("resourcesReleased",running==0&&unknown==0&&!teamRemoteResourcesUnreleased(teamRun)).put("stopRequested",team.optBoolean("cancelRequested"));
     }
     /** Body-free refs come only from this original parent's settled native read rows.
      * No caller task ID or serialized result creates authority; all refs are re-resolved by the coordinator. */
@@ -3664,11 +3702,17 @@ public final class TaskStore {
         JSONObject ref=task.getJSONObject("teamResearchOutputReference");if(!"pocketworld.team-research-original.v1".equals(ref.optString("format"))||!task.getString("id").equals(ref.optString("taskId"))||!task.getString("runId").equals(ref.optString("runId"))||task.getInt("coordinatorEpoch")!=ref.optInt("coordinatorEpoch"))throw new SecurityException("原研究长文定位不是当前真实child终态");
         JSONObject saved=checkpoint(ref.getString("runId"));JSONArray raw=saved.getJSONArray("messages");int index=ref.getInt("messageIndex");if(index<0||index>=raw.length())throw new SecurityException("原研究完整消息已缺失");JSONObject message=raw.getJSONObject(index);String text=message.getString("content");if(!"assistant".equals(message.optString("role"))||message.has("tool_calls")||text.length()!=ref.getInt("chars")||!dev.pocketengine.features.teams.TeamWorkFiles.hash(text).equals(ref.getString("sha256")))throw new SecurityException("原研究完整消息内容/长度/hash已变");return text;
     }
-    private JSONObject researchFinalAnswerProof(TeamResearchBinding binding,JSONObject evidence)throws Exception {
+    /** Shared native final-turn proof; display summaries and exhausted budgets are not completion. */
+    private String nativeFinalAnswerContent(String taskId,String runId,int epoch,JSONObject evidence)throws Exception {
         JSONObject proof=evidence.optJSONObject("nativeFinalAnswer");if(proof==null)return null;
-        if(!"pocketworld.runner-final-answer.v1".equals(proof.optString("format"))||!binding.taskId().equals(proof.optString("taskId"))||!binding.runId().equals(proof.optString("runId"))||binding.epoch()!=proof.optInt("coordinatorEpoch")||!Boolean.TRUE.equals(proof.opt("inputBoundaryEmpty")))throw new SecurityException("不是当前原Runner真实final-answer边界");
-        JSONObject saved=checkpoint(binding.runId()),observation=saved.getJSONObject("observation");if(!canonical(proof).equals(canonical(observation.optJSONObject("nativeFinalAnswer"))))throw new SecurityException("原final-answer证明未落当前SQL检查点");JSONArray raw=saved.getJSONArray("messages");int index=proof.getInt("messageIndex");if(index<0||index>=raw.length()||raw.length()!=proof.getInt("historyLength"))throw new SecurityException("原回答后的输入/执行历史已变化");JSONObject message=raw.getJSONObject(index);String full=message.getString("content");if(!"assistant".equals(message.optString("role"))||message.has("tool_calls")||!full.equals(evidence.optString("modelSummary"))||!dev.pocketengine.runtime.context.CompactionPlan.fingerprint(full).equals(proof.getString("answerFingerprint")))throw new SecurityException("原当前回答与真实SQL正文不一致");
+        if(!"pocketworld.runner-final-answer.v1".equals(proof.optString("format"))||!taskId.equals(proof.optString("taskId"))||!runId.equals(proof.optString("runId"))||epoch!=proof.optInt("coordinatorEpoch")||!Boolean.TRUE.equals(proof.opt("inputBoundaryEmpty")))throw new SecurityException("不是当前原Runner真实final-answer边界");
+        JSONObject saved=checkpoint(runId),observation=saved.getJSONObject("observation");if(!canonical(proof).equals(canonical(observation.optJSONObject("nativeFinalAnswer"))))throw new SecurityException("原final-answer证明未落当前SQL检查点");JSONArray raw=saved.getJSONArray("messages");int index=proof.getInt("messageIndex");if(index<0||index>=raw.length()||raw.length()!=proof.getInt("historyLength"))throw new SecurityException("原回答后的输入/执行历史已变化");JSONObject message=raw.getJSONObject(index);String full=message.getString("content");if(!"assistant".equals(message.optString("role"))||message.has("tool_calls")||!full.equals(evidence.optString("modelSummary"))||!dev.pocketengine.runtime.context.CompactionPlan.fingerprint(full).equals(proof.getString("answerFingerprint")))throw new SecurityException("原当前回答与真实SQL正文不一致");
         for(int i=index+1;i<raw.length();i++){JSONObject tail=raw.getJSONObject(i);if("assistant".equals(tail.optString("role"))||"tool".equals(tail.optString("role"))||tail.has("ownerMessageId")||tail.has("ownerRecallFeedback"))throw new SecurityException("原答案后还有新输入/工具，不冒最终完成");}
+        return full;
+    }
+    private JSONObject researchFinalAnswerProof(TeamResearchBinding binding,JSONObject evidence)throws Exception {
+        String full=nativeFinalAnswerContent(binding.taskId(),binding.runId(),binding.epoch(),evidence);if(full==null)return null;
+        JSONObject proof=evidence.getJSONObject("nativeFinalAnswer");int index=proof.getInt("messageIndex");
         return new JSONObject().put("format","pocketworld.team-research-original.v1").put("taskId",binding.taskId()).put("runId",binding.runId()).put("coordinatorEpoch",binding.epoch()).put("messageIndex",index).put("sha256",dev.pocketengine.features.teams.TeamWorkFiles.hash(full)).put("chars",full.length());
     }
     public synchronized void finishTeamResearch(TeamResearchBinding binding,dev.pocketengine.core.RunOutcome outcome,JSONObject terminal)throws Exception {
@@ -5956,6 +6000,18 @@ public final class TaskStore {
     }
     public static String capabilityFingerprint(JSONObject value)throws Exception{
         byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(canonical(value).getBytes(StandardCharsets.UTF_8));StringBuilder result=new StringBuilder();for(byte b:digest)result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();
+    }
+    /** Ordinary capability host settlement uses the same durable final-answer boundary as research. */
+    public synchronized void finishCapabilityAttempt(String id,String runId,int epoch,RunControl original,dev.pocketengine.core.RunOutcome outcome)throws Exception {
+        JSONObject task=required(id);
+        if(original==null||!original.matchesHostRun(id,runId,epoch)||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("完成回执不是当前原能力执行");
+        String status=outcome.status;
+        if("needs_confirmation".equals(status)){
+            JSONObject origin=task.optJSONObject("origin");boolean effectRecorded;
+            try(Cursor operations=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND tool<>? LIMIT 1",new String[]{id,dev.pocketengine.features.memory.TaskMemoryJournal.TOOL})){effectRecorded=operations.moveToFirst();}
+            if(!original.isCancelled()&&!task.optBoolean("cancelRequested")&&(origin==null||!"channel".equals(origin.optString("kind")))&&!effectRecorded&&!hasUnreadOwnerDocumentReference(id,runId)&&nativeFinalAnswerContent(id,runId,epoch,outcome.evidence)!=null)status="completed";
+        }
+        endAttempt(id,runId,status,outcome.summary,outcome.evidence);
     }
     public synchronized void endAttempt(String id,String runId,String status,String summary,JSONObject evidence)throws Exception{
         db.beginTransaction();try{JSONObject t=required(id);if(!runId.equals(t.optString("runId")))return;

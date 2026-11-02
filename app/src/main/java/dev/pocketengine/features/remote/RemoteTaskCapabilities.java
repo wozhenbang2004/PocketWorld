@@ -102,6 +102,8 @@ public final class RemoteTaskCapabilities implements CapabilityPort {
     @Override public boolean responseCurrent(RunControl control)throws Exception{current(READ,control);return existing.responseCurrent(control);}
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{current(READ,control);return own(name)?null:existing.beforeTool(name,args,control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject result,RunControl control)throws Exception{current(READ,control);existing.afterTool(name,args,result,control);}
+    @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{current(READ,control);return own(name)?dev.pocketengine.core.NativeToolObservation.Requirement.NONE:existing.observationRequirement(name,args,control);}
+    @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl control)throws Exception{current(READ,control);return own(name)?null:existing.takeToolObservation(name,operation,control);}
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception{current(READ,control);existing.beforeModelRequest(requestId,messages,control);}
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception{current(READ,control);return existing.afterModelResponse(requestId,answerId,control);}
     @Override public void modelRequestAbandoned(String requestId)throws Exception{existing.modelRequestAbandoned(requestId);}
