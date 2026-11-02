@@ -13,11 +13,12 @@ public final class NativeOfflineNetworkTest {
     @Test public void ipv4Ipv6AndChildSocketsAreDeniedWhileUnixIpcIsExplicitlyAllowed()throws Exception{
         var supervisor=new NativeProcessSupervisor();ByteArrayOutputStream ambient=new ByteArrayOutputStream();
         String unix="import socket\ntry:\n s=socket.socket(socket.AF_UNIX);s.close();print('UNIX:0')\nexcept OSError as e: print('UNIX:'+str(e.errno))";
-        var base=supervisor.execute(List.of("/usr/bin/python3","-c",unix),Map.of(),temp.getRoot(),5000,200,observer(ambient));assertEquals(0,base.exitCode);
+        String baseline=unix+"\nfor family in (socket.AF_INET,socket.AF_INET6):\n try:\n  s=socket.socket(family);s.close();print('AMBIENT_IP:'+str(family)+':0')\n except OSError as e: print('AMBIENT_IP:'+str(family)+':'+str(e.errno))";
+        var base=supervisor.execute(List.of("/usr/bin/python3","-c",baseline),Map.of(),temp.getRoot(),5000,200,observer(ambient));assertEquals(0,base.exitCode);
         ByteArrayOutputStream bytes=new ByteArrayOutputStream();String code="import errno,socket,subprocess,sys\nfor family in (socket.AF_INET,socket.AF_INET6):\n try:\n  socket.socket(family);sys.exit(9)\n except PermissionError as e: assert e.errno==errno.EACCES\n"+unix+"\nsubprocess.run([sys.executable,'-c',\"import errno,socket,sys\\ntry: socket.socket(socket.AF_INET);sys.exit(8)\\nexcept PermissionError as e: assert e.errno==errno.EACCES\"],check=True)\nprint('IPV4_IPV6_CHILD_DENIED')";
         var exit=supervisor.execute(List.of("/usr/bin/python3","-c",code),Map.of(),temp.getRoot(),5000,200,observer(bytes),true);
-        assertEquals(new String(bytes.toByteArray()),0,exit.exitCode);assertEquals(0,exit.launchErrno);assertTrue(exit.groupAbsent);assertTrue(new String(bytes.toByteArray()).contains("IPV4_IPV6_CHILD_DENIED"));assertTrue(new String(bytes.toByteArray()).contains(new String(ambient.toByteArray()).trim()));
-
+        assertEquals(new String(bytes.toByteArray()),0,exit.exitCode);assertEquals(0,exit.launchErrno);assertTrue(exit.groupAbsent);assertTrue(new String(bytes.toByteArray()).contains("IPV4_IPV6_CHILD_DENIED"));assertTrue(new String(bytes.toByteArray()).contains(new String(ambient.toByteArray()).split("\\n")[0]));
+        System.out.println("Ambient socket errno (no connects): "+new String(ambient.toByteArray()).trim().replace('\n',';')+"; offline IPv4/IPv6/child=EACCES(13); Unix inherits ambient restriction, no transport claim");
     }
     private static NativeProcessSupervisor.Observer observer(ByteArrayOutputStream bytes){return new NativeProcessSupervisor.Observer(){public boolean cancelled(){return false;}public boolean output(int stream,byte[] value){bytes.writeBytes(value);return true;}};}
 }
