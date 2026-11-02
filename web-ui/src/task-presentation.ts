@@ -48,6 +48,34 @@ export interface TaskProgress {
   partial: boolean;
 }
 
+export interface TaskEventRecord {
+  id: string;
+  position?: number;
+  runId: string;
+  isCurrentRun: boolean;
+  type: string;
+  status: string;
+  title: string;
+  detail: string;
+  stateLabel: string;
+  at?: number;
+  bodyAvailable: boolean;
+  readLimited: boolean;
+  partial: boolean;
+}
+
+export interface TaskEventHistory {
+  entries: TaskEventRecord[];
+  source: 'page' | 'snapshot' | 'none';
+  /** False alone does not establish complete history when no original page was read. */
+  hasMore: boolean;
+  readLimited: boolean;
+  coreReadLimited: boolean;
+  completeHistory: boolean;
+  partial: boolean;
+  unavailableReason?: 'foreign_page' | 'not_loaded';
+}
+
 const row = (value: unknown): Row | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Row : undefined;
 const text = (value: unknown): string => typeof value === 'string' ? value : '';
 const number = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
@@ -102,6 +130,49 @@ export function getTaskOperations(task: unknown): TaskOperation[] {
     result.push(value);
   }
   return result;
+}
+
+/** Original task events are an activity history, not generated execution steps. */
+export function getTaskEventHistory(task: unknown): TaskEventHistory {
+  const {raw, id, runId} = taskParts(task);
+  const declaredPage = row(raw.historyEventPage);
+  const page = pageFor(raw, 'historyEventPage', id, 'events');
+  const coreReadLimited = raw.taskCoreReadLimited === true;
+  if (declaredPage && !page) {
+    return {entries: [], source: 'none', hasMore: false, readLimited: false, coreReadLimited,
+      completeHistory: false, partial: true, unavailableReason: 'foreign_page'};
+  }
+  const source = page ? 'page' : Array.isArray(raw.events) ? 'snapshot' : 'none';
+  const titles: Record<string, string> = {model: '模型记录', tool: '工具调用', observation: '观察现场', verification: '结果核对', user_verification: '结果核对', run: '执行记录', result: '任务结果', owner_input: '收到补充', capability_changed: '能力变化', context_budget: '上下文整理', inference_receipt: '模型调用记录'};
+  const labels: Record<string, string> = {running: '执行记录', completed: '已有该记录', failed: '该记录返回错误', unknown: '结果未核实', awaiting_user: '需要你处理', paused: '已暂停', cancelled: '已停止', canceled: '已停止', stopped: '已停止'};
+  const entries: TaskEventRecord[] = [];
+  const originalRows = page ? rows(page.entries) : rows(raw.events);
+  originalRows.forEach((entry, index) => {
+    const position = page ? number(entry.position) : undefined;
+    // A limited row's embedded event is never read, even if a malformed snapshot includes one.
+    const readLimited = page ? entry.status === 'read_limited' : false;
+    const event = page ? entry.status === 'available' ? row(entry.event) : undefined : entry;
+    const bodyAvailable = event !== undefined;
+    if (!bodyAvailable && !text(entry.eventKey) && position === undefined) return;
+    const eventRun = event ? text(event.runId) : '';
+    const type = event ? text(event.type) || (page ? text(entry.type) : '') : text(entry.type);
+    const status = event ? text(event.status) : '';
+    const stateLabel = bodyAvailable ? labels[status] || '原记录' : '正文未载入';
+    const message = event ? text(event.message) : '';
+    // Snapshot fallback keys are only render keys and are never host event/action identities.
+    const key = page ? text(entry.eventKey) || `event:${id}:${position ?? index}` :
+      text(event?.eventKey) || text(event?.id) || `snapshot-event:${id}:${index}`;
+    entries.push({id: key, position, runId: eventRun, isCurrentRun: !!runId && eventRun === runId,
+      type, status, title: titles[type] || '任务记录',
+      detail: bodyAvailable ? excerpt(message, 360) || stateLabel : '此条记录正文尚未载入', stateLabel,
+      at: event ? number(event.at) ?? number(event.timestamp) : undefined,
+      bodyAvailable, readLimited, partial: !bodyAvailable || Array.from(message).length > 360});
+  });
+  const hasMore = page?.hasMore === true;
+  const readLimited = page?.readLimited === true || entries.some(entry => entry.readLimited || !entry.bodyAvailable);
+  const completeHistory = page?.completeHistory === true && !hasMore && !readLimited && !coreReadLimited;
+  return {entries, source, hasMore, readLimited, coreReadLimited, completeHistory,
+    partial: !completeHistory, ...(source === 'none' ? {unavailableReason: 'not_loaded' as const} : {})};
 }
 
 /** Same conservative precedence as the host's TaskExecutionPresentation.operation. */

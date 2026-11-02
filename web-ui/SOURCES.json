@@ -1871,7 +1871,7 @@
         }
       ],
       "rendered_usage": {
-        "status": "static JSX route mapping, not runtime evidence",
+        "status": "Historical static JSX snapshot only; not a current call count or runtime evidence",
         "path": "web-ui/src/Secondary.tsx",
         "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
         "symbol_occurrences": {
@@ -1879,6 +1879,18 @@
           "Accordion": 1,
           "AccordionItem": 1
         }
+      },
+      "current_consumer_usage": {
+        "paths": [
+          "web-ui/src/App.tsx",
+          "web-ui/src/Secondary.tsx"
+        ],
+        "usage": [
+          "Task process: read-only available event bodies in original window order, with limited-read and pagination boundaries",
+          "Model settings: advanced configuration disclosure and original settings review dialogs"
+        ],
+        "source_changes": "No change to the retained BoardUI Accordion implementation or animation",
+        "validation": "New task event-window expansion and mobile returning flow await current GitHub capture"
       }
     },
     {
@@ -2511,6 +2523,8 @@
       "src/task-presentation.ts"
     ],
     "acceptance": "Implementation pending integration build and current-rendered whole-journey review; not approved by source/component count",
-    "remaining": "Complete 21-domain action migration, PW09-14 real domain projections and Android runtime acceptance remain open"
+    "remaining": "Complete 21-domain action migration, PW09-14 real domain projections and Android runtime acceptance remain open",
+    "state_recovery_followup": "CI35 found detached-scroll cleanup resetting the source reading anchor and a stale task error toast obscuring the review footer; bounded fixes require a new current-rendered journey before acceptance",
+    "process_history_followup": "Execution process retains original read-only event and operation windows. Actual historyEventPage events use existing approved BoardUI Accordion; no inferred plan steps, completion percentage, duration or synthetic operation is introduced."
   }
 }

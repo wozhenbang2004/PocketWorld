@@ -145,3 +145,11 @@
 .pw-project-menu>button{width:100%;min-height:44px;justify-content:flex-start;gap:9px}
 .pw-project-menu>button>span{flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pw-project-menu>button>small{font-size:12px;color:#777}
+
+/* Read-only task event window uses the retained BoardUI Accordion disclosure. */
+.pw-task-history-heading{font-size:14px;line-height:22px;font-weight:500;margin:0 0 8px}
+.pw-task-history-limit{margin-bottom:8px}
+.pw-task-event-copy{font-size:14px;line-height:24px;white-space:pre-wrap;overflow-wrap:anywhere}
+.pw-task-event-copy+.pw-muted{margin-top:8px}
+.pw-task-operations{margin-top:24px}
+.pw-task-tool-empty{margin-top:20px}

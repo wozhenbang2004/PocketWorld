@@ -616,7 +616,29 @@ async function runViewport(origin, viewport) {
     await capture(page, viewport, '06-task-overview', ['.pw-task-drawer[data-task-layer="overview"]', '.pw-task-overview', '[data-testid="task-primary-action"]']);
     await drawer.getByRole('button', { name: '查看执行过程', exact: true }).click();
     await page.locator('.pw-task-drawer[data-task-layer="process"]').waitFor({ state: 'visible' });
-    await capture(page, viewport, '07-task-process', ['.pw-task-drawer[data-task-layer="process"]']);
+    const expectedEvents = populatedSnapshot().state.tasks[0].raw.historyEventPage.entries;
+    const eventSection = drawer.locator('.pw-task-events[aria-label="任务记录"]');
+    await eventSection.waitFor({ state: 'visible' });
+    const eventRows = eventSection.locator('.pw-task-event[data-event-position]');
+    assert.equal(await eventRows.count(), expectedEvents.length, 'An empty operation window hid the readable task events');
+    const eventPositions = await eventRows.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-event-position')));
+    assert.deepEqual(eventPositions, expectedEvents.map(row => String(row.position)), 'The process changed the original bounded event-window order');
+    assert.equal(await drawer.locator('.pw-task-tools .ui-tcc').count(), 0, 'An empty operation window fabricated tool cards');
+    for (const row of await eventRows.all()) await reachable(row.getByRole('button'), { minSize: 44 });
+    const firstEvent = expectedEvents[0];
+    const eventTrigger = eventSection.locator(`.pw-task-event[data-event-position="${firstEvent.position}"]`).getByRole('button');
+    await eventTrigger.click();
+    assert.equal(await eventTrigger.getAttribute('aria-expanded'), 'true', 'The original event Accordion did not expand');
+    const eventCopy = eventSection.locator(`.pw-task-event[data-event-position="${firstEvent.position}"] .pw-task-event-copy`);
+    await eventCopy.waitFor({ state: 'visible' });
+    await eventCopy.evaluate(waitForStableGeometry);
+    assert((await eventCopy.textContent()).includes(firstEvent.event.message), 'The expanded event lost its original readable message');
+    const eventWindowCheck = { taskId: 'visual-fixture-task-review', section: 'events', positions: eventPositions,
+      readableRecords: expectedEvents.length, expandedPosition: firstEvent.position, originalMessageVisible: true,
+      operations: 0, source: 'isolated fixture TaskStore historyEventPage, not execution proof' };
+    record.checks.push({ stage: 'task-process-event-window', ...eventWindowCheck });
+    await capture(page, viewport, '07-task-process', ['.pw-task-drawer[data-task-layer="process"]', '.pw-task-events',
+      `.pw-task-event[data-event-position="${firstEvent.position}"] .pw-task-event-copy`], { metadata: { eventWindowCheck } });
     await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
     await assertOverview();
     const reviewFailure = '这次任务暂时无法核对，请重试。';
@@ -642,6 +664,11 @@ async function runViewport(origin, viewport) {
       reviewErrorVisible: true, processErrorVisible: true, explicitRetryRecovered: true });
     await feedback.fill('分类方向合适，会议记录仍按日期保留。');
     assert.equal(await drawer.locator('.pw-scope-editor').count(), 0, 'Review opens the scope form before its explicit entry');
+    const reviewFooter = {
+      notReached: await reachable(drawer.getByRole('button', { name: '目标尚未达到', exact: true }), { minSize: 44 }),
+      reached: await reachable(drawer.getByRole('button', { name: '确认达到目标', exact: true }), { minSize: 44 }),
+    };
+    record.checks.push({ stage: 'review-footer-after-retry', ...reviewFooter, submitted: false });
     await capture(page, viewport, '08-task-review', ['.pw-task-drawer[data-task-layer="review"]', '.pw-protected-actions']);
     await drawer.getByRole('button', { name: '修订本次范围', exact: true }).click();
     await page.locator('.pw-task-drawer[data-task-layer="scope"]').waitFor({ state: 'visible' });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {getTaskOperations, presentOperation, getRecentTaskProgress} from '../src/task-presentation.ts';
+import {getTaskOperations, presentOperation, getRecentTaskProgress, getTaskEventHistory} from '../src/task-presentation.ts';
 
 const op = (extra: Record<string, unknown> = {}) => ({operationId: 'op-1', tool: 'project_list', state: 'receipt', runId: 'run-now', createdAt: 100, position: 8, arguments: {}, receipt: {ok: true}, ...extra});
 const task = (raw: Record<string, unknown> = {}) => ({id: 'task-1', goal: '整理项目资料', status: 'running', summary: '保留原目标', raw: {runId: 'run-now', ...raw}});
@@ -99,4 +99,48 @@ test('older runs, unread bodies and fixture-only trees cannot manufacture curren
   assert.equal(progress.title, '正在执行');
   assert.equal(progress.detail, '保留原目标');
   assert.equal(progress.partial, true);
+});
+
+test('event history preserves original page order and only parses available bodies', () => {
+  const input = task({historyEventPage: {taskId: 'task-1', section: 'events', completeHistory: false, hasMore: true, entries: [
+    {position: 3, eventKey: 'event-3', type: 'tool', status: 'available', event: {type: 'tool', status: 'completed', runId: 'run-now', at: 300, message: '原读取结果已返回'}},
+    {position: 2, eventKey: 'event-2', type: 'model', status: 'read_limited', event: {runId: 'run-now', at: 999, message: '不可读取的正文', receipt: {ok: true}}},
+    {position: 1, eventKey: 'event-1', type: 'run', status: 'available', event: {type: 'run', status: 'running', runId: 'run-old', at: 100, message: '早先执行记录'}},
+  ]}});
+  const before = JSON.stringify(input);
+  const history = getTaskEventHistory(input);
+  assert.deepEqual(history.entries.map(entry => entry.position), [3, 2, 1]);
+  assert.deepEqual(history.entries.map(entry => entry.id), ['event-3', 'event-2', 'event-1']);
+  assert.equal(history.entries[0].detail, '原读取结果已返回');
+  assert.equal(history.entries[0].isCurrentRun, true);
+  assert.equal(history.entries[1].detail, '此条记录正文尚未载入');
+  assert.equal(history.entries[1].runId, '');
+  assert.equal(history.entries[1].at, undefined);
+  assert.equal(history.entries[1].bodyAvailable, false);
+  assert.equal(history.entries[1].readLimited, true);
+  assert.equal(history.entries[2].runId, 'run-old');
+  assert.equal(history.entries[2].isCurrentRun, false);
+  assert.equal(history.hasMore, true);
+  assert.equal(history.partial, true);
+  assert.equal(history.readLimited, true);
+  assert.equal(history.completeHistory, false);
+  assert.equal(JSON.stringify(input), before);
+});
+
+test('event history rejects foreign windows and preserves empty, core and snapshot limits', () => {
+  const foreign = getTaskEventHistory(task({historyEventPage: {taskId: 'other', section: 'events', completeHistory: true, entries: [{position: 1, status: 'available', event: {runId: 'run-now', message: ' чужая запись '}}]}}));
+  assert.deepEqual(foreign.entries, []);
+  assert.equal(foreign.unavailableReason, 'foreign_page');
+  assert.equal(foreign.completeHistory, false);
+  const complete = {taskId: 'task-1', section: 'events', completeHistory: true, hasMore: false, readLimited: false, entries: []};
+  assert.equal(getTaskEventHistory(task({historyEventPage: complete})).partial, false);
+  const coreLimited = getTaskEventHistory(task({taskCoreReadLimited: true, historyEventPage: complete}));
+  assert.equal(coreLimited.coreReadLimited, true);
+  assert.equal(coreLimited.completeHistory, false);
+  const snapshot = getTaskEventHistory(task({events: [{runId: 'run-now', type: 'tool', status: 'completed', at: 5, message: '已读取的原记录'}]}));
+  assert.equal(snapshot.source, 'snapshot');
+  assert.equal(snapshot.entries[0].detail, '已读取的原记录');
+  assert.equal(snapshot.partial, true);
+  assert.equal(snapshot.completeHistory, false);
+  assert.equal(getTaskEventHistory(null).unavailableReason, 'not_loaded');
 });
