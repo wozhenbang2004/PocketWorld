@@ -1,0 +1,28 @@
+<resources>
+    <string name="w8_model_options_000" formatted="false">当前账号目录上下文：</string>
+    <string name="w8_model_options_001" formatted="false">上下文：目录未声明，保留本机字节安全上限</string>
+    <string name="w8_model_options_002" formatted="false">目录最大输出：</string>
+    <string name="w8_model_options_003" formatted="false">最大输出：未知，不按模型名称补值</string>
+    <string name="w8_model_options_004" formatted="false">目录输入：</string>
+    <string name="w8_model_options_005" formatted="false">；本应用只发送已接入且获准的类型</string>
+    <string name="w8_model_options_006" formatted="false">输入类型：目录未声明；图片仍需独立核对</string>
+    <string name="w8_model_options_007" formatted="false">推理设置：</string>
+    <string name="w8_model_options_008" formatted="false">服务默认（不额外发送）</string>
+    <string name="w8_model_options_009" formatted="false">本地输出预留 · 128–32768</string>
+    <string name="w8_model_options_010" formatted="false">这是输入准入的本地预留，不会发送 max_output_tokens，也不能限制服务端输出。目录有最大输出时，准入至少预留该容量。</string>
+    <string name="w8_model_options_011" formatted="false">每张图片本地预留 · 0表示未配置</string>
+    <string name="w8_model_options_012" formatted="false">图片预留不是服务商实际计量。已知上下文但预留为0时，不发送图片；文本仍可用。</string>
+    <string name="w8_model_options_013" formatted="false">这些事实只属于这个账号及授权版本。刷新、换号或模型移除后重新核对；模型选择不代表推理或工具权限。</string>
+    <string name="w8_model_options_014" formatted="false">账号或目录已变化，请关闭后重新读取。</string>
+    <string name="w8_model_options_015" formatted="false">选择未提交，请重新读取当前目录后再试。</string>
+    <string name="w8_model_options_016" formatted="false">选择此模型和选项</string>
+    <string name="w8_model_options_017" formatted="false">返回目录</string>
+    <string name="w8_update_policy_000" formatted="false">更新源必须是不含凭据、查询或片段的HTTPS地址</string>
+    <string name="w8_update_policy_001" formatted="false">更新包名或清单格式不符</string>
+    <string name="w8_update_policy_002" formatted="false">更新版本、大小或SHA-256无效</string>
+    <string name="w8_update_policy_003" formatted="false">下载地址不属于主人配置的同一私有更新源</string>
+    <string name="w8_update_policy_004" formatted="false">版本名称无效</string>
+    <string name="w8_update_policy_005" formatted="false">安装包名或版本不符</string>
+    <string name="w8_update_policy_006" formatted="false">安装包版本名称与清单不符</string>
+    <string name="w8_update_policy_007" formatted="false">安装包签名与已安装应用不同</string>
+</resources>

@@ -1,0 +1,28 @@
+<resources>
+    <string name="w8_model_options_000" formatted="false">"Account catalog context: "</string>
+    <string name="w8_model_options_001" formatted="false">Context: not declared by the catalog; the local byte safety limit remains.</string>
+    <string name="w8_model_options_002" formatted="false">"Catalog maximum output: "</string>
+    <string name="w8_model_options_003" formatted="false">Maximum output: unknown; no value is inferred from the model name.</string>
+    <string name="w8_model_options_004" formatted="false">"Catalog input: "</string>
+    <string name="w8_model_options_005" formatted="false">; this app sends only supported and authorized types.</string>
+    <string name="w8_model_options_006" formatted="false">Input types: not declared by the catalog; image support still needs separate verification.</string>
+    <string name="w8_model_options_007" formatted="false">"Reasoning setting: "</string>
+    <string name="w8_model_options_008" formatted="false">Provider default (no extra parameter)</string>
+    <string name="w8_model_options_009" formatted="false">Local output reserve · 128–32768</string>
+    <string name="w8_model_options_010" formatted="false">This local input-admission reserve does not send max_output_tokens or limit provider output. If the catalog declares a maximum output, admission reserves at least that capacity.</string>
+    <string name="w8_model_options_011" formatted="false">Local reserve per image · 0 means unconfigured</string>
+    <string name="w8_model_options_012" formatted="false">The image reserve is not provider usage metering. If context is known but the reserve is 0, images are not sent; text remains available.</string>
+    <string name="w8_model_options_013" formatted="false">These facts apply only to this account and authorization version. Recheck after refresh, an account change or model removal. Selecting a model does not grant inference or tool permission.</string>
+    <string name="w8_model_options_014" formatted="false">The account or catalog changed. Close this dialog and read it again.</string>
+    <string name="w8_model_options_015" formatted="false">The selection was not submitted. Read the current catalog before trying again.</string>
+    <string name="w8_model_options_016" formatted="false">Select this model and options</string>
+    <string name="w8_model_options_017" formatted="false">Back to catalog</string>
+    <string name="w8_update_policy_000" formatted="false">The update source must be an HTTPS URL without credentials, a query or a fragment.</string>
+    <string name="w8_update_policy_001" formatted="false">The update package name or manifest format does not match.</string>
+    <string name="w8_update_policy_002" formatted="false">The update version, size or SHA-256 is invalid.</string>
+    <string name="w8_update_policy_003" formatted="false">The download URL is not on the same private update source configured by the owner.</string>
+    <string name="w8_update_policy_004" formatted="false">The version name is invalid.</string>
+    <string name="w8_update_policy_005" formatted="false">The installation package name or version does not match.</string>
+    <string name="w8_update_policy_006" formatted="false">The installation package version name does not match the manifest.</string>
+    <string name="w8_update_policy_007" formatted="false">The installation package signer does not match the installed app.</string>
+</resources>
