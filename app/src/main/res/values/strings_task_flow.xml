@@ -268,9 +268,9 @@
     <string name="task_flow_9dd6fa403ec5" formatted="false">"主人已记录核对结论"</string>
     <string name="task_flow_fdc98749cdad" formatted="false">"已登记，等待结果"</string>
     <string name="task_flow_4162d937ef08" formatted="false">"调用已停止 · 详见原回执"</string>
-    <string name="task_flow_e14615fae0ca" formatted="false">"调用出错 · 请核对操作结果"</string>
+    <string name="task_flow_e14615fae0ca" formatted="false">"调用出错 · 不等于未执行，请核对操作结果"</string>
     <string name="task_flow_a7ab668ff8e1" formatted="false">"已返回部分结果"</string>
-    <string name="task_flow_1a5f51851c0c" formatted="false">"已返回 · 结果可展开查看"</string>
+    <string name="task_flow_1a5f51851c0c" formatted="false">"已返回 · 目标仍需核对，可展开查看原结果"</string>
     <string name="task_flow_8f41f9316107" formatted="false">"原状态："</string>
     <string name="task_flow_b4724185c9ed" formatted="false">"未报告"</string>
     <string name="task_flow_66ead1cdf09b" formatted="false">"原工具调用"</string>

@@ -63,6 +63,7 @@ public final class ModelDiagnosticsApplicationMountTest {
         try(Fixture f=new Fixture(true)){
             assertNotNull(f.app.modelConnections);assertNotNull(f.app.detailedTraces);assertNotNull(f.app.answerSourceFrames);
             assertFalse(f.app.detailedTraces.snapshot().getBoolean("enabled"));
+            assertNotNull(f.app.settings.apiConfigForCatalog().capabilityBinding);assertNull(f.app.settings.apiCatalogBinding());assertFalse(f.app.settings.apiConfigForCatalog().catalogEnforced);
             JSONObject probe=f.work(()->f.app.modelConnections.probe(f.app.settings.apiConfigForCatalog().capabilityBinding,false,new RunControl()));
             assertEquals("passed",probe.getString("text"));assertEquals("failed",probe.getString("tools"));assertEquals(2,f.posts.get());
             String accounting=probe.getJSONObject("inferenceReference").getString("taskId");assertEquals(2,f.app.tasks.inferenceUsage(accounting).getInt("attempts"));assertEquals(0,f.app.tasks.get(accounting,false).getJSONArray("operations").length());
