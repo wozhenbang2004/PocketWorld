@@ -18,10 +18,10 @@ public final class WorkspaceFileAccessTest {
         assertArrayEquals(value,WorkspaceFileAccess.read(root.toFile(),"src/a.txt",100));assertThrows(java.nio.charset.CharacterCodingException.class,()->WorkspaceFileAccess.read(root.toFile(),"bad\uD800",100));assertThrows(java.nio.charset.CharacterCodingException.class,()->WorkspaceFileAccess.commit(root.toFile(),"bad\uD800",null,new byte[0]));assertEquals(0,WorkspaceFileAccess.read(root.toFile(),"empty",100).length);
     }
     @Test public void linksFifoAndOversizeFailWithoutReadingTheirContents()throws Exception{
-        Path root=temp.newFolder("checkout").toPath(),outside=temp.newFolder("private").toPath();Files.writeString(outside.resolve("secret"),"PRIVATE_SECRET");Files.createSymbolicLink(root.resolve("link"),outside);Files.createLink(root.resolve("hard"),outside.resolve("secret"));
+        Path root=temp.newFolder("checkout").toPath(),outside=temp.newFolder("private").toPath();Files.write(outside.resolve("secret"),"PRIVATE_SECRET".getBytes(StandardCharsets.UTF_8));Files.createSymbolicLink(root.resolve("link"),outside);Files.createLink(root.resolve("hard"),outside.resolve("secret"));
         assertThrows(SecurityException.class,()->WorkspaceFileAccess.read(root.toFile(),"link/secret",100));assertThrows(SecurityException.class,()->WorkspaceFileAccess.read(root.toFile(),"hard",100));
         File fifo=root.resolve("pipe").toFile();assertEquals(0,new ProcessBuilder("mkfifo",fifo.getPath()).start().waitFor());long start=System.nanoTime();assertThrows(SecurityException.class,()->WorkspaceFileAccess.read(root.toFile(),"pipe",100));assertTrue(System.nanoTime()-start<2_000_000_000L);
-        Files.writeString(root.resolve("large"),"123456");assertThrows(SecurityException.class,()->WorkspaceFileAccess.read(root.toFile(),"large",5));
+        Files.write(root.resolve("large"),"123456".getBytes(StandardCharsets.UTF_8));assertThrows(SecurityException.class,()->WorkspaceFileAccess.read(root.toFile(),"large",5));
     }
     @Test public void exactNativePatchCreatesReplacesDeletesAndRejectsHardlinkBeforeAnyTruncate()throws Exception{
         Path root=temp.newFolder("patch").toPath(),outside=temp.newFolder("private-patch").toPath();byte[] first="中文 before".getBytes(StandardCharsets.UTF_8),second="中文 after".getBytes(StandardCharsets.UTF_8);
@@ -31,7 +31,7 @@ public final class WorkspaceFileAccessTest {
         Files.write(outside.resolve("secret"),first);Files.createLink(root.resolve("hard"),outside.resolve("secret"));assertThrows(SecurityException.class,()->WorkspaceFileAccess.commit(root.toFile(),"hard",first,second));assertArrayEquals(first,Files.readAllBytes(outside.resolve("secret")));
     }
     @Test public void concurrentParentReplacementNeverCapturesOutsideSecret()throws Exception{
-        Path root=temp.newFolder("checkout").toPath(),outside=temp.newFolder("private").toPath(),dir=root.resolve("dir"),held=root.resolve("held");Files.createDirectory(dir);Files.writeString(dir.resolve("file"),"SAFE");Files.writeString(outside.resolve("file"),"PRIVATE_SECRET");AtomicBoolean stop=new AtomicBoolean();AtomicReference<Throwable> failure=new AtomicReference<>();
+        Path root=temp.newFolder("checkout").toPath(),outside=temp.newFolder("private").toPath(),dir=root.resolve("dir"),held=root.resolve("held");Files.createDirectory(dir);Files.write(dir.resolve("file"),"SAFE".getBytes(StandardCharsets.UTF_8));Files.write(outside.resolve("file"),"PRIVATE_SECRET".getBytes(StandardCharsets.UTF_8));AtomicBoolean stop=new AtomicBoolean();AtomicReference<Throwable> failure=new AtomicReference<>();
         Thread swap=new Thread(()->{try{while(!stop.get()){Files.move(dir,held);Files.createSymbolicLink(dir,outside);Files.delete(dir);Files.move(held,dir);}}catch(Throwable e){failure.set(e);}});swap.start();
         try{for(int i=0;i<300;i++)try{assertEquals("SAFE",new String(WorkspaceFileAccess.read(root.toFile(),"dir/file",100),StandardCharsets.UTF_8));}catch(SecurityException expected){}}
         finally{stop.set(true);swap.join(2000);}assertFalse(swap.isAlive());if(failure.get()!=null)throw new AssertionError(failure.get());

@@ -30,7 +30,9 @@ public final class NativeScriptPeerTest {
             assertTrue(supervisor.isSameOwnedSession(owned[0][0],owned[0][1],owned[0][2],child.get()));
             assertFalse(supervisor.isSameOwnedSession(owned[0][0],owned[0][1],owned[0][2],owned[1][0]));
             assertFalse(supervisor.isSameOwnedSession(owned[0][0],owned[0][1]+1,owned[0][2],child.get()));
-            assertFalse(supervisor.isSameOwnedSession(owned[0][0],owned[0][1],owned[0][2],ProcessHandle.current().pid()));
+            // Linux procfs identifies this real host JVM; no Android/Robolectric process shadow.
+            long hostPid=Long.parseLong(java.nio.file.Files.readSymbolicLink(java.nio.file.Path.of("/proc/self")).getFileName().toString());assertTrue(hostPid>0);assertNotEquals(owned[0][0],hostPid);assertNotEquals(child.get(),hostPid);
+            assertFalse(supervisor.isSameOwnedSession(owned[0][0],owned[0][1],owned[0][2],hostPid));
         }finally{cancel.set(true);pool.shutdown();for(var run:runs)assertTrue(run.get(3,TimeUnit.SECONDS).groupAbsent);assertTrue(pool.awaitTermination(3,TimeUnit.SECONDS));}
         assertFalse(supervisor.isSameOwnedSession(owned[0][0],owned[0][1],owned[0][2],child.get()));
     }

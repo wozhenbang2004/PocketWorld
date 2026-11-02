@@ -11,7 +11,7 @@ public final class ProjectFileQueriesTest {
     private Path root;private static final String CHECKOUT="11111111-1111-1111-1111-111111111111";
     @Before public void create()throws Exception{root=Files.createTempDirectory("c2-native-file-query-");}
     @After public void close()throws Exception{try(var paths=Files.walk(root)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}
-    private void file(String path,String text)throws Exception{Path target=root.resolve(path);Files.createDirectories(target.getParent());Files.writeString(target,text);}
+    private void file(String path,String text)throws Exception{Path target=root.resolve(path);Files.createDirectories(target.getParent());Files.write(target,text.getBytes(StandardCharsets.UTF_8));}
     private JSONObject read(JSONObject input)throws Exception{return ProjectFileQueries.read(root.toFile(),CHECKOUT,input,()->{});}
     private JSONObject search(JSONObject input)throws Exception{return ProjectFileQueries.search(root.toFile(),CHECKOUT,input,()->{});}
     @Test public void rangedReadKeepsWholeFileShaWithoutLoadingWholeBodyIntoResult()throws Exception{
