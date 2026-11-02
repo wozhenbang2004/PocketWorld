@@ -9,6 +9,8 @@ import org.json.JSONObject;
 /** A text-free native ownership probe. Missing profile identity must not become the main profile. */
 public record PhoneOwnerPackages(Set<AppCopyKey> owners,boolean known) {
     public PhoneOwnerPackages {owners=java.util.Collections.unmodifiableSet(new LinkedHashSet<>(owners));}
+    /** Seeing the requested profile beside another copy is not proof of one unambiguous landing. */
+    public boolean provesCopy(AppCopyKey requested){if(!known||!owners.contains(requested))return false;for(AppCopyKey actual:owners)if(actual.packageName().equals(requested.packageName())&&!actual.equals(requested))return false;return true;}
     @FunctionalInterface public interface Probe {PhoneOwnerPackages read(RunControl control)throws Exception;}
     public static PhoneOwnerPackages fromOwnership(JSONObject actual,String rows)throws Exception {
         if(actual==null||!"observed".equals(actual.optString("status")))return new PhoneOwnerPackages(Set.of(),false);

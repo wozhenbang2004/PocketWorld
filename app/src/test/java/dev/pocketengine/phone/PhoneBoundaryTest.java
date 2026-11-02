@@ -27,7 +27,7 @@ public final class PhoneBoundaryTest {
     @Test public void missingUserNeverDefaultsToMainProfile()throws Exception {
         JSONObject ownership=new JSONObject().put("status","observed").put("owned",new JSONArray().put(new JSONObject().put("packageName","example.notes")));
         assertFalse(PhoneOwnerPackages.fromOwnership(ownership,"owned").known());
-        ownership.getJSONArray("owned").getJSONObject(0).put("userId",10);PhoneOwnerPackages actual=PhoneOwnerPackages.fromOwnership(ownership,"owned");assertTrue(actual.known());assertEquals(Set.of(work),actual.owners());
+        ownership.getJSONArray("owned").getJSONObject(0).put("userId",10);PhoneOwnerPackages actual=PhoneOwnerPackages.fromOwnership(ownership,"owned");assertTrue(actual.known());assertEquals(Set.of(work),actual.owners());assertTrue(actual.provesCopy(work));assertFalse(actual.provesCopy(main));ownership.getJSONArray("owned").put(new JSONObject().put("packageName","example.notes").put("userId",0));PhoneOwnerPackages mixed=PhoneOwnerPackages.fromOwnership(ownership,"owned");assertFalse(mixed.provesCopy(work));assertFalse(mixed.provesCopy(main));
     }
     @Test public void sameCopyCannotBeClaimedByTwoTasksAndStaleReleaseCannotFreeReplacement()throws Exception {
         PhoneAppResources resources=new PhoneAppResources();assertEquals(PhoneAppResources.Result.ACQUIRED,resources.reserve("a",main,(k,o)->true));assertEquals(PhoneAppResources.Result.BUSY,resources.reserve("b",main,(k,o)->true));assertEquals(PhoneAppResources.Result.ACQUIRED,resources.reserve("b",work,(k,o)->true));resources.releaseOwner("a");assertEquals(PhoneAppResources.Result.ACQUIRED,resources.reserve("c",main,(k,o)->true));resources.releaseOwner("a");assertEquals("c",resources.holder(main));

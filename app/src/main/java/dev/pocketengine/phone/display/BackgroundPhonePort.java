@@ -281,7 +281,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             // Bounded read-only settling, then retain the baseline for later observations too.
             Thread.sleep(350);JSONObject after=landing(control,revision);boolean primarySame=before.getJSONArray("primary").toString().equals(after.getJSONArray("primary").toString());
             boolean owned=after.getString("status").equals("observed");
-            int expectedUser=receipt.optInt("requestedUserId",receipt.optInt("userId",-1));if(expectedUser>=0){boolean matchingCopy=false;JSONArray landed=after.getJSONArray("owned");for(int i=0;i<landed.length();i++){JSONObject task=landed.getJSONObject(i);if(receipt.optString("packageName").equals(task.optString("packageName"))&&task.has("userId")&&task.getInt("userId")==expectedUser)matchingCopy=true;}owned&=matchingCopy;receipt.put("actualUserVerified",matchingCopy);}
+            int expectedUser=receipt.optInt("requestedUserId",receipt.optInt("userId",-1));if(expectedUser>=0){boolean matchingCopy=dev.pocketengine.phone.access.PhoneOwnerPackages.fromOwnership(after,"owned").provesCopy(new dev.pocketengine.phone.access.AppCopyKey(receipt.getString("packageName"),expectedUser));owned&=matchingCopy;receipt.put("actualUserVerified",matchingCopy);}
             evidence=new JSONObject().put("before",before).put("after",after).put("status",primarySame&&owned?"owned_display_observed":"unknown_requires_owner").put("taskMigrationPerformed",false).put("automaticReplayAllowed",false);
             if(!primarySame||!owned){control.pause();clearReferences();receipt.put("requiresUser",true).put("requiresPause",true).put("message","动作已请求，但跨应用落点、资料身份或主屏归属不能确认；已暂停原任务，不会移动或代点主屏应用。");}
             else landingBaseline=after;
