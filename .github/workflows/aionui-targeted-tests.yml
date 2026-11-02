@@ -4,6 +4,7 @@ run-name: AionUI host tests · ${{ github.ref_name }} · ${{ github.run_number }
 on:
   push:
     branches: ['work/aionui-absorption']
+    paths: ['.github/workflows/aionui-targeted-tests.yml']
 
 permissions:
   contents: read
@@ -13,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  channel-receiver-identity:
+  bounded-host-tests:
     if: ${{ github.event.repository.private }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -33,6 +34,57 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Freeze and verify the selected test whitelist
+        run: |
+          set -euo pipefail
+          mkdir -p host-test-artifacts
+          python3 - <<'PY'
+          import hashlib, json, pathlib, re, sys
+          classes = [
+              'dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest',
+              'dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest',
+              'dev.pocketengine.runtime.models.ProviderCompatProfileTest',
+              'dev.pocketengine.runtime.models.ProviderWireProjectionTest',
+              'dev.pocketengine.runtime.ProviderCompatibilityTest',
+              'dev.pocketengine.store.ProviderCompatibilityNativeTest',
+              'dev.pocketengine.features.teams.TeamParentBroadcastTest',
+              'dev.pocketengine.features.teams.TeamRoleCatalogTest',
+              'dev.pocketengine.features.teams.TeamParentBroadcastHostJourneyTest',
+              'dev.pocketengine.features.plugins.McpResourceSourceTest',
+              'dev.pocketengine.features.plugins.McpClientTest',
+              'dev.pocketengine.features.plugins.mcp.McpElicitationSchemaTest',
+              'dev.pocketengine.features.plugins.McpResourceSkillJourneyTest',
+              'dev.pocketengine.features.skills.SkillSourceUpdateTest',
+              'dev.pocketengine.features.attachments.creation.StructuredOfficeCreationTest',
+              'dev.pocketengine.features.attachments.creation.OfficeNativeOperationTest',
+              'dev.pocketengine.features.attachments.creation.DocumentCreationTest',
+              'dev.pocketengine.features.capabilities.OfficeDocumentCapabilityTest',
+          ]
+          assert len(classes) == len(set(classes)) == 18
+          data = ('\n'.join(classes) + '\n').encode('utf-8')
+          pathlib.Path('host-test-artifacts/selected-test-classes.txt').write_bytes(data)
+          rows = []
+          for name in classes:
+              source = pathlib.Path('app/src/test/java') / (name.replace('.', '/') + '.java')
+              row = {'class': name, 'source': str(source), 'source_set': 'debug host unit-test app/src/test/java'}
+              if not source.is_file():
+                  row['status'] = 'missing_source'
+              else:
+                  text = source.read_text(encoding='utf-8')
+                  package, simple = name.rsplit('.', 1)
+                  correct_package = re.search(r'^package\s+' + re.escape(package) + r'\s*;', text, re.M)
+                  public_class = re.search(r'public\s+(?:final\s+)?class\s+' + re.escape(simple) + r'\b', text)
+                  row.update(status='source_verified' if correct_package and public_class else 'class_or_package_mismatch',
+                             sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+                             source_test_annotations=len(re.findall(r'@Test\b', text)))
+              rows.append(row)
+          receipt = {'whitelist_sha256': hashlib.sha256(data).hexdigest(), 'classes': rows,
+                     'actual_compile': 'pending Gradle; source membership is not a compile result'}
+          pathlib.Path('host-test-artifacts/selected-test-sources.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          print(json.dumps(receipt, indent=2))
+          sys.exit(0 if all(row['status'] == 'source_verified' for row in rows) else 1)
+          PY
+
       - name: Prepare Android 35 for host unit tests
         run: |
           set -euo pipefail
@@ -49,33 +101,42 @@ jobs:
           "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0'
           java -version
           test -s "$ANDROID_HOME/platforms/android-35/android.jar"
-          # No native toolchain is installed for this host-only test job.
-          # If AGP still requires the declared NDK/CMake during configuration,
-          # retain the actual error; do not substitute another version or build an APK.
+          # Run 41434838199 showed AGP installs the declared NDK 28.2.13676358
+          # while configuring this project, even for a host-only dry run.
+          # Native build tasks remain forbidden; configuration is not device validation.
 
       - name: Check the selected host task graph
         run: |
           set -euo pipefail
+          mapfile -t selected_tests < host-test-artifacts/selected-test-classes.txt
+          test "${#selected_tests[@]}" -eq 18
+          test_args=()
+          for test_class in "${selected_tests[@]}"; do test_args+=(--tests "$test_class"); done
           ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.vfs.watch=false :app:testDebugUnitTest \
-            --tests dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest \
-            --tests dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest \
+            "${test_args[@]}" \
             -x :app:buildAndroidRuntime -x :app:buildDisplayHelper \
             --dry-run 2>&1 | tee host-test-artifacts/task-graph.log
-          if grep -E '^:app:(externalNativeBuild|configureCMake|buildCMake|generateJsonModel|assemble|bundle|publish|install)' host-test-artifacts/task-graph.log; then
+          # AGP's two class JAR tasks are required host-test compilation inputs,
+          # distinct from an APK/AAB bundle task. Permit only these exact JAR tasks.
+          if grep -E '^:app:(externalNativeBuild|configureCMake|buildCMake|generateJsonModel|assemble|bundle|publish|install)' host-test-artifacts/task-graph.log \
+            | grep -v -E '^:app:bundleDebugClassesTo(Runtime|Compile)Jar[[:space:]]'; then
             echo 'Unexpected native, packaging, installation or publishing task; host test scope is blocked.' >&2
             exit 1
           fi
 
-      - name: Run only the receiver identity JUnit classes
+      - name: Run only the selected absorption JUnit classes
         run: |
           set -euo pipefail
+          mapfile -t selected_tests < host-test-artifacts/selected-test-classes.txt
+          test "${#selected_tests[@]}" -eq 18
+          test_args=()
+          for test_class in "${selected_tests[@]}"; do test_args+=(--tests "$test_class"); done
           ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.vfs.watch=false :app:testDebugUnitTest \
-            --tests dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest \
-            --tests dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest \
+            "${test_args[@]}" \
             -x :app:buildAndroidRuntime -x :app:buildDisplayHelper \
             2>&1 | tee host-test-artifacts/gradle-tests.log
 
@@ -85,11 +146,12 @@ jobs:
           set -euo pipefail
           mkdir -p host-test-artifacts
           python3 - <<'PY'
-          import json, os, pathlib, subprocess, sys, xml.etree.ElementTree as ET
-          classes = [
-              'dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest',
-              'dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest',
-          ]
+          import hashlib, json, os, pathlib, shutil, subprocess, sys, xml.etree.ElementTree as ET
+          whitelist = pathlib.Path('host-test-artifacts/selected-test-classes.txt')
+          classes = whitelist.read_text(encoding='utf-8').splitlines() if whitelist.is_file() else []
+          whitelist_valid = len(classes) == len(set(classes)) == 18
+          selected_xml = pathlib.Path('host-test-artifacts/selected-junit-xml')
+          selected_xml.mkdir(exist_ok=True)
           rows = []
           for name in classes:
               path = pathlib.Path('app/build/test-results/testDebugUnitTest') / ('TEST-' + name + '.xml')
@@ -97,6 +159,7 @@ jobs:
               if not path.is_file():
                   row['status'] = 'not_run_or_no_report'
               else:
+                  shutil.copy2(path, selected_xml / path.name)
                   try:
                       suite = ET.parse(path).getroot()
                       for key in ('tests', 'failures', 'errors', 'skipped'):
@@ -113,9 +176,11 @@ jobs:
               'event_commit': os.environ.get('GITHUB_SHA'), 'branch': os.environ.get('GITHUB_REF_NAME'),
               'run_id': os.environ.get('GITHUB_RUN_ID'), 'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
               'scope': 'selected Android Gradle host JUnit classes; no device or native-runtime acceptance',
+              'whitelist_valid': whitelist_valid,
+              'whitelist_sha256': hashlib.sha256(whitelist.read_bytes()).hexdigest() if whitelist.is_file() else None,
               'selected_tests': rows, 'apk_assembled': False, 'device_runtime_tested': False,
               'skipped_tasks': [':app:buildAndroidRuntime', ':app:buildDisplayHelper'],
-              'passed': all(row['status'] == 'passed' for row in rows),
+              'passed': whitelist_valid and all(row['status'] == 'passed' for row in rows),
           }
           pathlib.Path('host-test-artifacts/test-identity.json').write_text(json.dumps(receipt, indent=2) + '\n')
           summary = '## AionUI targeted host unit tests\n\nCommit: `' + str(receipt['commit']) + '`\n\n'
@@ -132,10 +197,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: aionui-channel-host-tests-${{ github.run_number }}-${{ github.run_attempt }}
-          path: |
-            host-test-artifacts/
-            app/build/test-results/testDebugUnitTest/TEST-dev.pocketengine.features.channels.ChannelReceiveProfileIdentityTest.xml
-            app/build/test-results/testDebugUnitTest/TEST-dev.pocketengine.features.channels.ChannelReceiveEpochRecoveryTest.xml
+          name: aionui-targeted-host-tests-${{ github.run_number }}-${{ github.run_attempt }}
+          path: host-test-artifacts/
           if-no-files-found: warn
           retention-days: 7
