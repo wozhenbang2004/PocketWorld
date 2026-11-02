@@ -10,6 +10,7 @@ public final class RunOutcomeTools {
     private static final Set<String> KINDS=Set.of("popup","login","captcha","access_blocked","payment","missing_information","environment","other");
     private RunOutcomeTools(){}
     public static boolean supports(String tool){return OBSTACLE.equals(tool)||END.equals(tool)||ASK.equals(tool);}
+    public static boolean terminal(String tool){return END.equals(tool)||ASK.equals(tool);}
     public static JSONArray tools()throws Exception {
         JSONObject kind=new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"popup","login","captcha","access_blocked","payment","missing_information","environment","other"}));
         return new JSONArray().put(tool(OBSTACLE,"记录当前障碍类别并取得处理建议；此工具不消除障碍、不绕过验证码或权限，也不派发手机动作。",new JSONObject().put("kind",kind).put("detail",text(2000)),"kind","detail"))

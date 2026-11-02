@@ -27,7 +27,7 @@ public final class RecentScreenHistoryTest {
     }
     @Test public void ringIsBoundedAndSourceRevocationStopsReads()throws Exception {
         RunControl control=new RunControl();boolean[] live={true};try(RecentScreenHistory history=new RecentScreenHistory(control,()->{if(!live[0])throw new SecurityException("revoked");})){
-            String first="";for(int i=0;i<6;i++){JSONObject f=frame();history.retain(f,control);if(i==0)first=f.getString("historicalScreenId");}assertEquals(4,history.index(control).length());assertNull(history.recall(first,control));live[0]=false;assertThrows(SecurityException.class,()->history.index(control));
+            String first="";for(int i=0;i<6;i++){JSONObject f=frame();history.retain(f,control);if(i==0)first=f.getString("historicalScreenId");}assertEquals(4,history.index(control).length());assertNull(history.recall(first,control));live[0]=false;assertThrows(SecurityException.class,()->history.index(control));live[0]=true;assertEquals("A later renewed source cannot revive withdrawn old pixels",0,history.index(control).length());
         }
     }
 }

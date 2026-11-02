@@ -50,7 +50,7 @@ public final class KernelScriptPhoneRunnerTest {
     }
     private static RunControl control(){RunControl original=new RunControl();original.bindHostRun("task","run",1);return original;}
     private static AutoCloseable install(Skill skill,RunControl original)throws Exception {
-        return ScriptPhoneDispatch.installFactory((task,run,epoch,parent,current,actions)->{assertSame(original,current);assertEquals("native-op-1",parent);assertEquals("run",run);assertTrue(actions.allowedTools().contains("phone_observe"));assertFalse(actions.allowedTools().contains("skills_execute"));skill.callbacks=actions;return ()->{};});
+        return ScriptPhoneDispatch.installFactory((task,run,epoch,parent,current,actions)->{assertSame(original,current);assertEquals("native-op-1",parent);assertEquals("run",run);assertTrue(actions.allowedTools().contains("phone_observe"));assertFalse(actions.allowedTools().contains("skills_execute"));assertFalse(actions.allowedTools().contains("phone_list_apps"));assertFalse(actions.allowedTools().contains("phone_wait"));skill.callbacks=actions;return ()->{};});
     }
     private static RunOutcome run(KernelRunnerContractTest.Wire wire,Phone phone,Skill skill,Journal journal,RunControl original,AgentRunner.OwnerInputs inputs){phone.original=original;return new AgentRunner(phone,skill,selected->null,null,inputs).run("task","帮我点击搜索",wire.config(),original,event->{},journal);}
     @Test public void callbacksUseTheOriginalJournalAndControlAndStopAtParentExit()throws Exception {

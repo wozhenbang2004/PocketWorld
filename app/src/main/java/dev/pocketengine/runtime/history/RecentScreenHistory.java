@@ -25,7 +25,7 @@ public final class RecentScreenHistory implements AutoCloseable {
     }
     public RecentScreenHistory(RunControl original,RunControl.AuthorityCheck current){this(original,current,()->System.nanoTime()/1_000_000);}
     RecentScreenHistory(RunControl original,RunControl.AuthorityCheck current,LongSupplier clock){this.original=java.util.Objects.requireNonNull(original);this.current=java.util.Objects.requireNonNull(current);this.clock=clock;pause=original.pauseRevision();}
-    private void require(RunControl live)throws Exception {if(closed||live!=original)throw new SecurityException("历史画面不属于本次原运行");live.check();current.check();if(pause!=live.pauseRevision()){clear();pause=live.pauseRevision();}if(live.isPaused())throw new SecurityException("暂停期间不可读取历史画面");expire();live.check();}
+    private void require(RunControl live)throws Exception {if(closed||live!=original)throw new SecurityException("历史画面不属于本次原运行");try{live.check();current.check();if(pause!=live.pauseRevision()){clear();pause=live.pauseRevision();}if(live.isPaused())throw new SecurityException("暂停期间不可读取历史画面");expire();live.check();}catch(Exception withdrawn){clear();throw withdrawn;}}
     /** Called only by the native Runner with an actual current observation, never model JSON. */
     public synchronized void retain(JSONObject observed,RunControl live)throws Exception {
         require(live);if(observed==null||observed.optBoolean("historicalOnly")||observed.optBoolean("protected")||observed.optBoolean("secure")||Boolean.FALSE.equals(observed.opt("screenShareAllowed")))return;
