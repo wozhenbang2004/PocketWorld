@@ -93,10 +93,27 @@ public final class McpResourceSkillJourneyTest {
     }
     @Test public void installationRemovalBlocksSourceReadsButPreservesLocalEvidence()throws Exception {
         try(Journey j=new Journey()){
-            JSONObject first=j.first();j.approve(first);File bytes=new File(j.android.getFilesDir(),"skills/"+first.getString("id")+"/1/source-check/SKILL.md");String original=new String(Files.readAllBytes(bytes.toPath()),StandardCharsets.UTF_8);
+            JSONObject first=j.first();j.approve(first);
+            JSONObject approved=j.skills.handle("get",new JSONObject().put("id",first.getString("id"))).getJSONObject("skill");
+            long approvedGeneration=approved.getLong("executionGeneration");
+            assertTrue(approved.getBoolean("enabled"));assertEquals(first.getString("digest"),approved.getString("approvedDigest"));
+            File bytes=new File(j.android.getFilesDir(),"skills/"+first.getString("id")+"/1/source-check/SKILL.md");
+            File retained=new File(bytes.getParentFile().getParentFile(),"retained.json");
+            byte[] originalBytes=Files.readAllBytes(bytes.toPath()),retainedBytes=Files.readAllBytes(retained.toPath());
             j.plugins.handle("remove",new JSONObject().put("id","remote"));
             assertThrows(SecurityException.class,()->j.skills.readForHost(scope(),first.getString("id"),"SKILL.md",0,12000,1,first.getString("digest"),Set.of()));
-            assertEquals(1,j.skills.reconcileMcpSources(scope()).getInt("revoked"));assertEquals(original,new String(Files.readAllBytes(bytes.toPath()),StandardCharsets.UTF_8));assertTrue(new File(bytes.getParentFile().getParentFile(),"retained.json").isFile());
+            JSONObject revoked=j.skills.handle("get",new JSONObject().put("id",first.getString("id"))).getJSONObject("skill");
+            assertFalse(revoked.getBoolean("enabled"));assertEquals("",revoked.getString("approvedDigest"));
+            long revokedGeneration=revoked.getLong("executionGeneration");assertTrue(revokedGeneration>approvedGeneration);
+            assertEquals(0,j.skills.reconcileMcpSources(scope()).getInt("revoked"));
+            SkillsModule reopened=new SkillsModule(j.context);reopened.mountMcpSources(j.plugins);
+            JSONObject durable=reopened.handle("get",new JSONObject().put("id",first.getString("id"))).getJSONObject("skill");
+            assertFalse(durable.getBoolean("enabled"));assertEquals("",durable.getString("approvedDigest"));
+            assertEquals(revokedGeneration,durable.getLong("executionGeneration"));
+            assertThrows(SecurityException.class,()->reopened.readForHost(scope(),first.getString("id"),"SKILL.md",0,12000,1,first.getString("digest"),Set.of()));
+            assertEquals(0,reopened.reconcileMcpSources(scope()).getInt("revoked"));
+            assertArrayEquals(originalBytes,Files.readAllBytes(bytes.toPath()));assertTrue(retained.isFile());
+            assertArrayEquals(retainedBytes,Files.readAllBytes(retained.toPath()));assertEquals(0,j.server.count("tools/call"));
         }
     }
     @Test public void absentCapabilityPaginationLoopAndCrossUriAreBoundedWithoutReads()throws Exception {

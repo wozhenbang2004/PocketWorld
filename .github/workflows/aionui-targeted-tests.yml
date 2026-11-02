@@ -98,6 +98,7 @@ jobs:
           import groovy.json.JsonOutput
           import org.gradle.api.GradleException
           import org.gradle.api.tasks.compile.JavaCompile
+          import org.gradle.api.tasks.testing.Test
 
           // This invocation validates 18 selected Java host tests and their real Java fixtures.
           // Main Kotlin/Java tasks and the Android plugin's dependency classpaths stay intact.
@@ -149,6 +150,10 @@ jobs:
                               JsonOutput.prettyPrint(JsonOutput.toJson(receipt)) + '\n'
                       logger.lifecycle('Selected Java test source count: ' + actualSources.size())
                   }
+              }
+              // Keep Robolectric's provider choice consistent across the selected host test classes.
+              app.tasks.named('testDebugUnitTest', Test).configure { task ->
+                  task.systemProperty('robolectric.conscryptMode', 'OFF')
               }
               // This is a Java-only selected-test invocation. No Kotlin test is selected.
               // In particular, compileDebugKotlin is not disabled or reconfigured.
