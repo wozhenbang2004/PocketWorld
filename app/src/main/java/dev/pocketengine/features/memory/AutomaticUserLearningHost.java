@@ -72,6 +72,10 @@ public final class AutomaticUserLearningHost {
         JSONObject ready=readyOriginalJob(taskId,eventFence);
         if(!ready.optBoolean("ready"))return ready;eventFence.check();return Objects.requireNonNull(originalJobs.admit(ready.getString("taskId"),ready.getLong("revision")),"original_learning_admission_receipt_missing");
     }
+    /** Original Engine pickup boundary, under its same native admission monitor. */
+    public void requireUnstartedOriginalJob(String taskId,long expectedRevision,MemoryHostFence eventFence)throws Exception{
+        JSONObject ready=readyOriginalJob(taskId,eventFence);if(!ready.optBoolean("ready")||ready.getLong("revision")!=expectedRevision)throw new SecurityException("原自动原话批次已停止、开始或变化，排队唤醒不能重新授权");
+    }
     private JSONObject readyOriginalJob(String taskId,MemoryHostFence eventFence)throws Exception{
         Objects.requireNonNull(eventFence);return eventFence.admit(()->{
             JSONObject snapshot=tasks.sourceLearningJob(taskId),job=snapshot.getJSONObject("job"),binding=job.optJSONObject("automaticUserSource");
