@@ -64,6 +64,7 @@ class ComposeActivity : ComponentActivity() {
         controller.ownerArchives.restore(savedInstanceState)
         controller.projectStorage.restore(savedInstanceState)
         controller.projectGitImports.restore(savedInstanceState)
+        savedInstanceState?.getString("channelPhoneEventId")?.let { controller.prepareChannelPhone(it) }
         importTaskId = savedInstanceState?.getString("ownerImportTask")
         importProjectId = savedInstanceState?.getString("ownerImportProject")
         exportPath = savedInstanceState?.getString("ownerExportPath")
@@ -109,6 +110,12 @@ class ComposeActivity : ComponentActivity() {
         controller.refresh()
     }
     private fun deliverGoal(intent: Intent?) {
+        if (intent?.hasExtra("channelEventId") == true || intent?.data?.host == "owner-request") {
+            val eventId = intent?.getStringExtra("channelEventId")
+            intent?.removeExtra("channelEventId"); intent?.removeExtra("automationGoal")
+            if (!eventId.isNullOrBlank()) controller.prepareChannelPhone(eventId)
+            return
+        }
         val commitment = intent?.getStringExtra("commitmentId")?.takeIf { it.isNotBlank() }
         if (commitment != null) {
             val claim = intent.getStringExtra("followUpClaimId")?.takeIf { it.isNotBlank() }
@@ -155,6 +162,7 @@ class ComposeActivity : ComponentActivity() {
     }
     override fun onSaveInstanceState(outState: Bundle) {
         controller.persistOwnerComposer()
+        outState.putString("channelPhoneEventId", controller.channelPhoneEventId)
         outState.putString("ownerImportTask", importTaskId); outState.putString("ownerImportProject", importProjectId); outState.putString("ownerExportPath", exportPath)
         controller.attachmentOutcomes.save(outState)
         controller.projectPackages.save(outState)

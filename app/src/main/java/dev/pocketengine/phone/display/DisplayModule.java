@@ -18,6 +18,7 @@ import org.json.JSONObject;
 
 /** Owner-only setup of the separate display. Connection state is never inferred from setup alone. */
 public final class DisplayModule implements EngineModule {
+    void attachInstalledAppEvidence(JSONObject observation)throws Exception{dev.pocketengine.phone.observation.InstalledAppEvidence.attach(context.android,observation);}
     private final FeatureContext context;
     private final SharedPreferences prefs;
     private final ShizukuBootstrap shizuku;

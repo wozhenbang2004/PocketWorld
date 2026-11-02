@@ -297,7 +297,7 @@ public final class AdaptivePhonePort implements PhonePort {
         }finally{actionEffectInFlight.set(false);}
     }
     private static JSONObject effectSnapshot(JSONObject source)throws Exception {
-        if(source==null)return null;JSONObject out=new JSONObject();for(String key:new String[]{"ok","observationId","packageName","displayId","sessionId","pauseRevision","nodes","windows","truncated","treeCoverage","observationSources","treeFingerprint"})if(source.has(key))out.put(key,source.get(key));return new JSONObject(out.toString());
+        if(source==null)return null;JSONObject out=new JSONObject();for(String key:new String[]{"ok","observationId","packageName","installedApp","displayId","sessionId","pauseRevision","nodes","windows","truncated","treeCoverage","observationSources","treeFingerprint"})if(source.has(key))out.put(key,source.get(key));return new JSONObject(out.toString());
     }
     private JSONObject executeBound(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         String blocked = authority(control);

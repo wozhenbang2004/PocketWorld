@@ -18,7 +18,7 @@ public final class AppKnowledgeTrialTest {
  SkillQualityReceipt evidence(JSONObject record,String op,String outcome)throws Exception{
   JSONObject origin=new JSONObject().put("ref",new JSONObject().put("recordId",record.getString("id")).put("revision",record.getLong("revision")).put("ownerId","owner").put("spaceId","private"));
   JSONObject pack=new JSONObject().put("id","skill").put("revision",1).put("digest","digest").put("origin",origin);
-  JSONObject ref=new JSONObject().put("ownerId","owner").put("spaceId","private").put("taskId","task").put("runId","run").put("epoch",1).put("operationId",op).put("planDigest","plan");
+  JSONObject ref=new JSONObject().put("ownerId","owner").put("spaceId","private").put("taskId","task").put("runId",op.startsWith("same")?"same-run":"run-"+op).put("epoch",1).put("operationId",op).put("planDigest","plan");
   return SkillQualityReceipt.fromOriginal(new JSONObject().put("reference",ref).put("review",new JSONObject().put("package",pack)).put("receipt",new JSONObject(ref.toString()).put("backendReceiptId","native").put("status","completed")).put("claimedAt",1),outcome,"Owner inspected actual result",10);
  }
  JSONObject quality(JSONObject row,String op,String outcome)throws Exception{return book.recordAppQuality(scope(),evidence(row,op,outcome),11);}
@@ -70,6 +70,22 @@ public final class AppKnowledgeTrialTest {
   assertTrue(active(b));assertTrue(active(c));quality(a,"bad-a","skill_failed");
   book=reopen();assertFalse(active(a));assertFalse(active(b));assertFalse(active(c));
   assertThrows(Exception.class,()->book.reviewedProcedure(scope(),c.getString("id"),1));
+ }
+
+ @Test public void twoUsesInSameRunDoNotRollbackLesson()throws Exception {
+  JSONObject row=accept(propose(null,true,"- Trial lesson"));quality(row,"same-first","skill_failed");quality(row,"same-second","skill_failed");book=reopen();assertTrue(active(row));assertEquals(1,book.reviewedProcedure(scope(),row.getString("id"),1).getJSONObject("appKnowledge").getJSONArray("outcomes").length());
+ }
+
+ @Test public void actualInstalledVersionChangeMakesOldTrialUnavailableAfterRestart()throws Exception {
+  JSONObject trial=accept(propose(null,false,"- Version-specific route"));
+  MemoryBook current=new MemoryBook(file,(s,k,id)->new SourceRef.State(ref(),false),new LexicalMemoryRetrievalBackend(),pkg->"1");assertTrue(current.get(scope(),trial.getString("id")).getBoolean("active"));
+  MemoryBook updated=new MemoryBook(file,(s,k,id)->new SourceRef.State(ref(),false),new LexicalMemoryRetrievalBackend(),pkg->"2");assertFalse(updated.get(scope(),trial.getString("id")).getBoolean("active"));assertThrows(Exception.class,()->updated.reviewedProcedure(scope(),trial.getString("id"),1));
+ }
+
+ @Test public void revisionDerivedFromExactBaselineSurvivesItsIntentionalArchive()throws Exception {
+  JSONObject first=accept(propose(null,false,"- Original baseline"));quality(first,"first-good","verified");
+  JSONObject next=accept(book.proposeAppRevision(scope(),first.getString("id"),1,"com.example.app","1",first.getString("id"),1,false,draft("- Revised baseline"),5));quality(next,"next-good","verified");book=reopen();assertTrue(active(next));assertFalse(active(first));
+  book.forget(scope(),source.getString("id"));book=reopen();assertFalse(active(next));
  }
 
 }

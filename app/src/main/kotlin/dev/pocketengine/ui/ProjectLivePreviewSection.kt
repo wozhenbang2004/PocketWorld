@@ -25,7 +25,7 @@ internal fun ProjectLivePreviewSection(task: UiTask, checkoutId: String, control
         val envelope = row.optJSONObject("receipt")
         val actual = envelope?.optJSONObject("executionReceipt")
         val route = envelope?.optJSONObject("projectExecution")
-        route != null && actual != null && row.optString("state") == "project_running" && row.optString("runId") == task.raw.optString("runId") &&
+        task.status == "running" && route != null && actual != null && row.optString("state") == "project_running" && row.optString("runId") == task.raw.optString("runId") &&
             route.optInt("coordinatorEpoch") == task.raw.optInt("coordinatorEpoch") && route.optString("checkoutId") == checkoutId &&
             actual.optJSONObject("devWatch")?.optBoolean("nativeSessionCreated") == true && actual.optString("status") == "running" &&
             !actual.optBoolean("cancelRequested") && !actual.optBoolean("resourcesReleased")
@@ -37,11 +37,13 @@ internal fun ProjectLivePreviewSection(task: UiTask, checkoutId: String, control
     if (executionId != null) {
         val actual = operation?.optJSONObject("receipt")?.optJSONObject("executionReceipt")
         var details by remember(task.id, executionId) { mutableStateOf(false) }
-        Text("开发服务运行中", style = MaterialTheme.typography.titleSmall)
+        Text(if (task.raw.optJSONObject("developmentSession")?.optString("phase") == "owned_running") "开发服务保留中 · 可继续试用" else "开发服务运行中", style = MaterialTheme.typography.titleSmall)
         WorkbenchCaption("已批准的源码可在服务运行时修改；配置和依赖需要先停止服务。")
         TextButton(onClick = { details = !details }) { Text(if (details) "收起服务详情" else "服务详情") }
         if (details) {
-            WorkbenchCaption("任务结束会停止服务。仅启动时列明的既有源码可热改，源码代际 ${actual?.optLong("sourceGeneration") ?: 0}。配置、锁、工具脚本、环境和新文件不在热改范围。")
+            val session = task.raw.optJSONObject("developmentSession")
+            val retained = session?.optJSONArray("services")?.objects()?.firstOrNull { it.optString("executionId") == executionId }
+            WorkbenchCaption((if (retained != null) "本轮答复已结束；原服务保留至 ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(retained.optLong("expiresAt")))}，可继续发消息或编辑。" else "未保留的服务随模型轮次结束收尾。") + "任务停止、到期或撤销仍会停止服务。仅启动时列明的既有源码可热改，源码代际 ${actual?.optLong("sourceGeneration") ?: 0}。配置、锁、工具脚本、环境和新文件不在热改范围。")
             androidx.compose.foundation.text.selection.SelectionContainer { Text("execution $executionId\nrun ${task.raw.optString("runId")}\nepoch ${task.raw.optInt("coordinatorEpoch")}", style = MaterialTheme.typography.bodySmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace) }
         }
         OutlinedButton(onClick = { controller.openProjectLivePreview(task.id, checkoutId, executionId) }, enabled = !controller.projectLivePreviewChecking, modifier = Modifier.testTag("project_open_live_preview")) {

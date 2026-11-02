@@ -44,6 +44,12 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         taskScopeHost = new NativeDeviceTaskScopeHost(tasks, new NativeDeviceTaskScopeHost.NativeOptionSource() {
             public Iterable<PairingCoordinator.OutgoingGrant> originalOutgoingGrants() throws Exception { return nativeOutgoingGrants(); }
             public JSONObject authenticatedCapabilities(String id) throws Exception { return DeviceWorkspaceNativeOwner.this.authenticatedCapabilities(id); }
+            public dev.pocketengine.features.local.LocalModule localModule(){return app.features.module("local") instanceof dev.pocketengine.features.local.LocalModule local?local:null;}
+            public dev.pocketengine.features.attachments.AttachmentBook attachmentBook(){return dev.pocketengine.features.attachments.AttachmentRepository.get(app).book;}
+            public void sendSelectedFile(DeviceIdentity.AuthenticatedPeer peer,java.util.UUID transfer,long offset,byte[] bytes,long deadline,dev.pocketengine.features.devices.transport.DeviceArtifactTransfer.Current current)throws Exception{
+                network.prepareArtifactReceive(peer,deadline,current);
+                if(!network.queueArtifactChunk(peer.deviceId(),peer.certificateFingerprint(),transfer,offset,bytes,deadline,current))throw new java.io.IOException("原bulk队列尚未接受，未宣称送达");
+            }
             public boolean hasMoreOutgoingGrants() { return DeviceWorkspaceNativeOwner.this.hasMoreOutgoingGrants(); }
         }, originalTaskHost(), evidence -> { evidence.requireCurrent(); return artifactsForNativeWork().receive(evidence); }, evidence -> artifactsForNativeWork().receiveFile(evidence));
         app.setDeviceObservedImageSink(this::publishObservedImage);
@@ -319,9 +325,18 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                 public DeviceCapabilityPort.Reply readHistory(DeviceTaskEnvelope request, RunControl ioCancellation) throws Exception { return network.readOwnerHistory(request, ioCancellation); }
             });
             NativeDeviceTaskHistoryHost.Window nativeWindow = original.open(id, operation);
+            TaskStoreDeviceTasks.OwnerStopReview stopReview = tasks.deviceTasks().reviewOwnerStop(id, operation);
             return new NativeDeviceWorkspaceHost.HistoryAction() {
                 public JSONObject view() throws Exception { return nativeWindow.view(); }
                 public JSONObject query() throws Exception { JSONObject result = nativeWindow.query(); app.pushTask(id); changed(); return result; }
+                public JSONObject requestStop() throws Exception {
+                    nativeWindow.view();
+                    NativeDeviceChildStopHost stops = new NativeDeviceChildStopHost(tasks, local, new NativeDeviceChildStopHost.NativeStops() {
+                        public PairingCoordinator.OutgoingGrant currentManagementGrant(String target, String grant) throws Exception { return network.currentManagementGrant(target, grant); }
+                        public DeviceCapabilityPort.Reply sendManagement(DeviceTaskEnvelope request, TaskStoreDeviceTasks.OutboundSendTicket ticket, RunControl io) throws Exception { return network.once(request.targetDeviceId(), request, ticket, io); }
+                    });
+                    try { return stops.stopReviewedOperation(stopReview); } finally { app.pushTask(id); changed(); }
+                }
                 public void close() { nativeWindow.close(); }
             };
         }

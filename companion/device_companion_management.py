@@ -81,6 +81,8 @@ class OperationManagement:
                 result = self.manager.cancel(target_row[0])
                 proof = result.get("processCleanupProof", {})
                 stopped = proof.get("processGroupStoppedVerified") is True
+                if result.get("nativeInputStoppedBeforeReplacement") is True:
+                    stopped = result.get("status") == "cancelled"
                 if result.get("protocol") == "desktop-v1":
                     stopped = result.get("status") == "cancelled" and result.get("desktopDispatchAttempted") is False
                 self._record_cancellation(operation, target, requested, stopped)

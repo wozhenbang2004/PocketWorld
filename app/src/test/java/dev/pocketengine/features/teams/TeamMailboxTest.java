@@ -63,7 +63,7 @@ public class TeamMailboxTest {
 
     @Test public void unsupportedDependencyAndForeignRecipientCannotCreateFakeSuccess()throws Exception {
         AtomicInteger bCalls=new AtomicInteger();try(TeamCoordinator c=new TeamCoordinator(file(),(m,p,tools,t)->{if(m.model.equals("b"))bCalls.incrementAndGet();return new JSONObject().put("content","fixture");},e->{})){
-            JSONObject definition=team(true);definition.getJSONArray("members").getJSONObject(0).put("runner","claude");JSONObject failed=terminal(c,c.start(definition,"无可用前置",1,config()).getString("id"));assertEquals(0,bCalls.get());assertEquals("blocked_dependency",failed.getJSONArray("members").getJSONObject(1).getString("status"));assertNotEquals("completed",failed.getString("status"));
+            JSONObject definition=team(true);definition.getJSONArray("members").getJSONObject(0).put("runner","kimi");JSONObject failed=terminal(c,c.start(definition,"无可用前置",1,config()).getString("id"));assertEquals(0,bCalls.get());assertEquals("blocked_dependency",failed.getJSONArray("members").getJSONObject(1).getString("status"));assertNotEquals("completed",failed.getString("status"));
         }
         try(TeamCoordinator c=new TeamCoordinator(file(),(m,p,tools,t)->message("foreign-member"),e->{})){JSONObject failed=terminal(c,c.start(team(true),"外队身份",1,config()).getString("id"));assertEquals(0,failed.getJSONArray("mailbox").length());assertNotEquals("completed",failed.getString("status"));}
     }

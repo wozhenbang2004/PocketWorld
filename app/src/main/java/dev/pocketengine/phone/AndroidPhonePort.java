@@ -160,6 +160,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                     .put("truncated", after.incomplete).put("displayId", Display.DEFAULT_DISPLAY)
                     .put("sessionId", service.observationSessionId()).put("executionMode", "main")
                     .put("observedAtUptimeMs", snapshot.created).put("pauseRevision", revision);
+            dev.pocketengine.phone.observation.InstalledAppEvidence.attach(context,result);
             if (image != null) {
                 for (String key : new String[]{"imageBase64", "imageMimeType", "imageWidth", "imageHeight"})
                     result.put(key, image.json.get(key));

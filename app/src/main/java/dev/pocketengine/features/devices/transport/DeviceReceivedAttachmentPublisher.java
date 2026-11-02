@@ -20,6 +20,14 @@ public final class DeviceReceivedAttachmentPublisher {
     public JSONObject publish(DeviceArtifactTransfer.Reference exact, String originalLocalOperationId,
             String frozenReceivingTaskId, String frozenReceivingRunId, int frozenReceivingEpoch,
             RunControl original, DeviceArtifactTransfer.Current current) throws Exception {
+        return publishInternal(exact,originalLocalOperationId,frozenReceivingTaskId,frozenReceivingRunId,frozenReceivingEpoch,original,current,false);
+    }
+    /** Only the sealed original SQL workspace.project.export evidence admits a project archive.
+     * This publishes bytes to the original Book, NEVER staging/importing or restoring authority. */
+    public JSONObject publishProject(dev.pocketengine.store.TaskStoreDeviceTasks.DeviceFileEvidence evidence)throws Exception{
+        evidence.requireCurrent();var exact=DeviceArtifactTransfer.fromWireDescriptor(evidence.descriptor());if(!"project_bundle".equals(exact.json().getString("kind")))throw new SecurityException("不是原已验项目回流证据");return publishInternal(exact,evidence.operationId(),evidence.receivingTaskId(),evidence.frozenRunId(),evidence.frozenEpoch(),evidence.originalControl(),evidence::requireCurrent,true);
+    }
+    private JSONObject publishInternal(DeviceArtifactTransfer.Reference exact,String originalLocalOperationId,String frozenReceivingTaskId,String frozenReceivingRunId,int frozenReceivingEpoch,RunControl original,DeviceArtifactTransfer.Current current,boolean originalProjectEvidence)throws Exception{
         // These are the ORIGINAL receiving operation's native SQL fields, never the wire
         // source task or a newly resumed run. They freeze Book idempotency across restarts.
         DeviceProtocol.identifier(frozenReceivingTaskId, "frozenReceivingTaskId");
@@ -30,7 +38,7 @@ public final class DeviceReceivedAttachmentPublisher {
         if (!originalLocalOperationId.matches("[a-f0-9-]{36}")) throw new SecurityException("Original local publication operation required");
         JSONObject descriptor = exact.json(); String kind = descriptor.getString("kind");
         if (kind.equals("screenshot") && descriptor.getLong("expiresAt") <= System.currentTimeMillis()) throw new SecurityException("Observed image expired; capture again");
-        if (!kind.equals("file") && !kind.equals("screenshot")) throw new SecurityException("Project bundles require the original owner review/import path");
+        if (!kind.equals("file") && !kind.equals("screenshot") && !(kind.equals("project_bundle")&&originalProjectEvidence)) throw new SecurityException("Project bundles require the original owner review/import path");
         String role = "device_file_" + DeviceProtocol.sha256((exact.sourceDeviceId + "\0" + exact.artifactId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).substring(0, 24);
         String plan = DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(new JSONObject().put("reference", descriptor).put("receivingTaskId", frozenReceivingTaskId).put("receivingRunId", frozenReceivingRunId).put("receivingEpoch", frozenReceivingEpoch)));
         // The SQL authority also checks this RunControl. Suppress only this callback's
@@ -45,7 +53,7 @@ public final class DeviceReceivedAttachmentPublisher {
             JSONObject prior = book.findNativeResult(originalLocalOperationId, role, frozenReceivingTaskId, frozenReceivingRunId, plan, original);
             if (prior.getBoolean("found")) return receipt(exact, prior, true);
             cache.finish(exact, current); // Full disk/hash + atomic byte landing, not metadata.
-            JSONObject source = new JSONObject().put("kind", "device_received_file").put("sourceDeviceId", exact.sourceDeviceId)
+            JSONObject source = new JSONObject().put("kind", "device_received_file").put("artifactKind",kind).put("sourceDeviceId", exact.sourceDeviceId)
                 .put("artifactId", exact.artifactId).put("transferId", exact.transferId).put("versionId", exact.versionId).put("contentDigest", exact.sha256)
                 .put("taskId", frozenReceivingTaskId).put("receivingOriginalTaskId", frozenReceivingTaskId).put("receivingOriginalRunId", frozenReceivingRunId).put("receivingOriginalEpoch", frozenReceivingEpoch)
                 .put("sourceTaskId", exact.taskId).put("sourceRunId", exact.runId).put("sourceOperationId", exact.operationId).put("descriptorDigest", exact.contentIdentity());

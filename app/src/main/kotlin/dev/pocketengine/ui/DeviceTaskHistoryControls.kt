@@ -17,7 +17,7 @@ import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
 
-/** Original SQL child links and explicit native READ-only result queries. The source task may be
+/** Original SQL child links, read-only queries and explicit exact-operation stop management. The source task may be
  * paused/closed/narrowed; no model, scope restoration, manual effect resolution or resend occurs. */
 @Composable
 internal fun DeviceTaskHistoryControls(task: UiTask, host: NativeDeviceWorkspaceHost?,
@@ -78,14 +78,24 @@ internal fun DeviceTaskHistoryControls(task: UiTask, host: NativeDeviceWorkspace
         AlertDialog(onDismissRequest = ::close, containerColor = Color.White, title = { Text("设备执行结果") }, text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 DeviceFact("执行设备", "设备 ${safe.optString("targetDeviceId").takeLast(4)}")
+                DeviceFact("原操作", safe.optString("operationId").takeLast(12))
                 DeviceFact("执行范围", deviceResourceText(safe.optJSONObject("resourceBinding") ?: JSONObject()))
                 result?.let { actual ->
                     val receipt = actual.optJSONObject("operationReceipt") ?: JSONObject()
+                    if (actual.optBoolean("managementOnly")) Text(when {
+                        actual.optBoolean("stopped") -> "执行端报告已停止；请刷新核对原操作结果。"
+                        actual.optBoolean("requested") -> "执行端已接受停止请求，尚未确认停止。"
+                        else -> "停止结果尚未确认，请刷新原操作回执；不会重复提交。"
+                    }, style = MaterialTheme.typography.bodyMedium)
                     Text(if (actual.optBoolean("unknown")) "执行结果仍未确认" else "执行端已返回回执", style = MaterialTheme.typography.titleSmall)
                     if (receipt.optString("summary").isNotBlank()) Text(receipt.optString("summary"), style = MaterialTheme.typography.bodyMedium)
                     if (actual.optBoolean("unknown")) Text("不会重提任务，也不会释放未确认的已占用次数。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                     else Text("这是执行端的记录，不代表你已经核对业务成果。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                 } ?: Text("读取这次操作的最新回执，不会重新执行。", style = MaterialTheme.typography.bodyMedium)
+                TextButton(onClick = { work {
+                    val actual = native.requestStop(); main.post { if (alive.get() && selected === native) { result = actual; changed() } }
+                } }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp).testTag("device_task_history_stop")) { Text("请求停止这次原操作") }
+                Text("仅停止上面核对的设备与范围，不重提任务。请求后仍需刷新回执核对；未知结果不退还已占用次数。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                 error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = SecondaryInk, modifier = Modifier.testTag("device_task_history_error")) }
                 if (result != null) TextButton(onClick = { details = !details }, contentPadding = PaddingValues(0.dp), modifier = Modifier.heightIn(min = 48.dp)) { Text(if (details) "收起回执详情" else "查看回执详情") }
                 if (details) SelectionContainer { Text((result?.optJSONObject("operationReceipt") ?: JSONObject()).toString(2), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }

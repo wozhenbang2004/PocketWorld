@@ -82,6 +82,29 @@ public final class RemoteOwnerWorkflows {
         /** Pure lifecycle/expiry check, safe inside the original TaskStore transaction. */
         public void checkCurrent()throws Exception{if(window.closed||window.nativeOwner==null||host.foregroundOwner!=window.nativeOwner||window.lifecycleRevision!=lifecycle||!digest.equals(window.projectDigest)||System.currentTimeMillis()>expires)throw new SecurityException("本次项目版本/恢复/分支的原生单次审阅已失效");}
     }
+    /** Native current-member authority only; JSON/private-session callers cannot manufacture it. */
+    public static final class TeamMemberInteractionApproval {
+        private final RemoteOwnerWorkflows host;private final Window window;private final String source,member,requestId,requestHash,kind,binding;private final long lifecycle,expires;
+        private TeamMemberInteractionApproval(RemoteOwnerWorkflows host,Window window,String kind,String requestId,String requestHash)throws Exception {
+            this.host=host;this.window=window;this.kind=kind;this.requestId=requestId;this.requestHash=requestHash;source=window.source.toString();binding=window.profileBinding;lifecycle=window.lifecycleRevision;expires=System.currentTimeMillis()+30_000L;member=TaskStore.capabilityFingerprint(host.checkTeamMemberInteraction(window.source));
+        }
+        public boolean issuedBy(TaskStore store){return host.tasks==store;}
+        /** Called outside the SQL monitor; preserve Coordinator/RemoteModule → TaskStore lock order. */
+        public void checkCoordinatorCurrent()throws Exception {JSONObject captured=new JSONObject(source);if(!binding.equals(host.module().profileBindingHash(captured.getString("profileId"))))throw new SecurityException("原电脑连接代次已改变");host.checkTeamMemberInteraction(captured);}
+        public void checkCurrent(JSONObject expected,String expectedKind,String id,String hash)throws Exception {
+            if(!kind.equals(expectedKind)||!requestId.equals(id)||!requestHash.equals(hash)||window.closed||window.nativeOwner==null||host.foregroundOwner!=window.nativeOwner||window.lifecycleRevision!=lifecycle||System.currentTimeMillis()>=expires)throw new SecurityException("原成员单次询问/审批已关闭、过期或改变");
+            JSONObject captured=new JSONObject(source);for(String key:new String[]{"taskId","runId","coordinatorEpoch","profileId","serviceBase","jobId","jobOperationId","environmentId","worker","protocol","threadId","turnId","sessionId","promptRequestId"})if(!java.util.Objects.equals(captured.opt(key),expected.opt(key)))throw new SecurityException("不是原成员的原会话请求");
+            if(!member.equals(TaskStore.capabilityFingerprint(memberInteractionIdentity(host.tasks.requireTeamMemberInteraction(expected)))))throw new SecurityException("原成员/电脑/协调器代次已改变");
+        }
+    }
+    private static boolean isTeamMember(JSONObject task){JSONObject origin=task.optJSONObject("origin");return task.has("teamRunId")||task.has("memberId")||task.has("round")||task.has("generation")||origin!=null&&origin.optString("kind").startsWith("team");}
+    private JSONObject checkTeamMemberInteraction(JSONObject source)throws Exception {
+        JSONObject task=tasks.requireTeamMemberInteraction(source);EngineModule team=host.module("teams");
+        if(!(team instanceof TeamsModule)||!((TeamsModule)team).ownsMemberExecution(task.getString("teamRunId"),task.getString("memberId"),task.getInt("round"),task.getInt("generation"),task.getString("operationId")))throw new SecurityException("原成员执行已被停止、替换或换代");
+        return memberInteractionIdentity(task);
+    }
+    private static JSONObject memberInteractionIdentity(JSONObject task)throws Exception {JSONObject identity=new JSONObject();for(String key:new String[]{"id","runId","coordinatorEpoch","parentTaskId","parentRunId","teamRunId","memberId","round","generation","operationId","worker","readOnly","teamReadOnlyTools"})if(task.has(key))identity.put(key,task.get(key));return identity;
+    }
     private final FeatureHost host;private final TaskStore tasks;private final EventSink events;
     private final dev.pocketengine.features.remote.RemoteInputAttachments inputs;
     private final dev.pocketengine.features.remote.NativeHarnessConfigs harnessConfigs;
@@ -239,18 +262,18 @@ public final class RemoteOwnerWorkflows {
     }
     private JSONObject approve(Window window,JSONObject input)throws Exception{
         if(window.teamWindow!=null)return approveTeam(window,input);
-        JSONObject claim,source;String capturedBinding;String request=input.getString("requestId"),decision=input.getString("decision");
-        synchronized(this){checkReview(window,input.getString("reviewId"));source=new JSONObject(window.source.toString());capturedBinding=window.profileBinding;checkApprovalContext(source,request);window.fresh=false;window.review=null;claim=tasks.claimRemoteApproval(source,request,decision);}
+        JSONObject claim,source;String capturedBinding;TeamMemberInteractionApproval memberApproval;String request=input.getString("requestId"),decision=input.getString("decision");
+        synchronized(this){checkReview(window,input.getString("reviewId"));source=new JSONObject(window.source.toString());capturedBinding=window.profileBinding;checkApprovalContext(source,request);memberApproval=isTeamMember(tasks.get(window.task,false))?new TeamMemberInteractionApproval(this,window,"approval",request,TaskStore.capabilityFingerprint(pendingApproval(source,request))):null;window.fresh=false;window.review=null;claim=tasks.claimRemoteApproval(source,request,decision,memberApproval);}
         if(claim.optBoolean("knownDecision"))return refresh(window); // Original GET only; never send a second decision.
         JSONObject payload=new JSONObject().put("profileId",source.getString("profileId")).put("serviceBase",source.getString("serviceBase")).put("jobId",source.getString("jobId")).put("jobOperationId",source.getString("jobOperationId")).put("approvalRequestId",request).put("decision",decision).put("_profileBinding",capturedBinding);
-        try{JSONObject result=module().handle("approveJob",payload);tasks.recordRemoteApprovalResult(window.task,claim.getString("operationId"),result);}catch(Exception unknown){/* Durable sending/unknown claim is query-only, including after page exit/restart. */}
+        try{JSONObject result=memberApproval==null?module().handle("approveJob",payload):module().approveAssignmentJob(payload,()->{memberApproval.checkCoordinatorCurrent();tasks.beforeTeamMemberApprovalDispatch(window.task,claim.getString("operationId"),memberApproval);});tasks.recordRemoteApprovalResult(window.task,claim.getString("operationId"),result);}catch(Exception unknown){/* Durable sending/unknown claim is query-only, including after page exit/restart. */}
         emitTask(window.task);return responseIfOpen(window,tasks.remoteOwnerOperation(window.task,claim.getString("operationId")));
     }
     private JSONObject answerQuestion(Window window,JSONObject input)throws Exception {
-        JSONObject claim,source;String binding;long revision;
-        synchronized(this){checkReview(window,input.getString("reviewId"));if(window.nativeOwner==null||foregroundOwner!=window.nativeOwner||window.teamWindow!=null)throw new SecurityException("正常回答只允许此原生前台私人会话窗口；不能借私人入口继续团队");source=new JSONObject(window.source.toString());binding=window.profileBinding;revision=window.lifecycleRevision;claim=tasks.claimRemoteQuestionAnswer(source,input.getString("requestId"),input.getString("requestHash"),input.getJSONObject("answers"));window.fresh=false;window.review=null;}
+        JSONObject claim,source;String binding;long revision;TeamMemberInteractionApproval memberApproval;
+        synchronized(this){checkReview(window,input.getString("reviewId"));if(window.nativeOwner==null||foregroundOwner!=window.nativeOwner||window.teamWindow!=null)throw new SecurityException("正常回答须原生前台窗口；制作assignment不能借普通成员入口继续");source=new JSONObject(window.source.toString());binding=window.profileBinding;revision=window.lifecycleRevision;memberApproval=isTeamMember(tasks.get(window.task,false))?new TeamMemberInteractionApproval(this,window,"question",input.getString("requestId"),input.getString("requestHash")):null;claim=tasks.claimRemoteQuestionAnswer(source,input.getString("requestId"),input.getString("requestHash"),input.getJSONObject("answers"),memberApproval);window.fresh=false;window.review=null;}
         if(claim.optBoolean("knownAnswer"))return refresh(window);String operation=claim.getString("operationId");JSONObject payload=new JSONObject(source.toString());JSONObject body=claim.getJSONObject("request");for(java.util.Iterator<String> keys=body.keys();keys.hasNext();){String key=keys.next();payload.put(key,body.get(key));}payload.put("_profileBinding",binding);
-        try{JSONObject actual=module().answerQuestionJob(payload,()->{synchronized(RemoteOwnerWorkflows.this){if(windows.get(window.id)!=window||foregroundOwner!=window.nativeOwner||revision!=window.lifecycleRevision)throw new SecurityException("原正常问答窗口已关闭或切后台");tasks.beforeRemoteQuestionAnswerDispatch(window.task,operation);}});tasks.recordRemoteQuestionAnswerResult(window.task,operation,actual);}catch(Exception unconfirmed){tasks.remoteQuestionAnswerUnconfirmed(window.task,operation);}
+        try{JSONObject actual=module().answerQuestionJob(payload,()->{synchronized(RemoteOwnerWorkflows.this){if(windows.get(window.id)!=window||foregroundOwner!=window.nativeOwner||revision!=window.lifecycleRevision)throw new SecurityException("原正常问答窗口已关闭或切后台");if(memberApproval!=null)memberApproval.checkCoordinatorCurrent();tasks.beforeRemoteQuestionAnswerDispatch(window.task,operation,memberApproval);}});tasks.recordRemoteQuestionAnswerResult(window.task,operation,actual);}catch(Exception unconfirmed){tasks.remoteQuestionAnswerUnconfirmed(window.task,operation);}
         emitTask(window.task);return responseIfOpen(window,tasks.remoteOwnerOperation(window.task,operation));
     }
     private void prepareTeamReviews(Window window,JSONObject source)throws Exception {
@@ -378,6 +401,7 @@ public final class RemoteOwnerWorkflows {
         synchronized(this){window.conversationDigest=null;window.conversationSource=null;window.conversationResult=null;}
         return response(window,window.fresh,null);
     }
+    private static JSONObject pendingApproval(JSONObject source,String id)throws Exception {JSONArray pending=source.optJSONArray("pendingApprovals");for(int i=0;pending!=null&&i<pending.length();i++)if(id.equals(pending.getJSONObject(i).optString("requestId")))return pending.getJSONObject(i);throw new SecurityException("原审批请求已消失");}
     private void checkApprovalContext(JSONObject source,String request)throws Exception{
         JSONObject approval=null;JSONArray entries=source.optJSONArray("pendingApprovals");for(int i=0;entries!=null&&i<entries.length();i++)if(request.equals(entries.getJSONObject(i).optString("requestId")))approval=entries.getJSONObject(i);
         if(approval==null||!source.optBoolean("protocolVerified"))throw new SecurityException("未取得原协议的当前审批请求");
@@ -391,7 +415,7 @@ public final class RemoteOwnerWorkflows {
             JSONObject parent=tasks.get(task.getString("parentTaskId"),false);if(parent==null)throw new SecurityException("原父任务不存在");
             boolean teamChild="teams".equals(parent.optString("feature"));for(String key:new String[]{"teamRunId","memberId","round","generation"})teamChild|=task.has(key);
             if(teamChild){
-                EngineModule team=host.module("teams");if(!(team instanceof TeamsModule)||!task.optBoolean("readOnly")||!source.optString("protocol").equals("codex_app_server")||!source.optBoolean("readOnlyConfirmed")||!source.optBoolean("externalToolsDisabled")||!((TeamsModule)team).ownsMemberExecution(task.getString("teamRunId"),task.getString("memberId"),task.getInt("round"),task.getInt("generation"),task.getString("operationId")))throw new SecurityException("原团队成员执行已失效，不能绕过协调器授权");
+                checkTeamMemberInteraction(source);
             }else {tasks.requirePrivateRemoteChild(task.getString("id"));if(parent.optBoolean("cancelRequested"))throw new SecurityException("原私人父任务已停止，不能批准旧子任务");}
         }
     }
@@ -411,7 +435,9 @@ public final class RemoteOwnerWorkflows {
             snapshot.put("eventReadStatus",window.eventReadStatus);JSONObject committedEvents=tasks.originalRemoteEventRead(window.task);
             if(committedEvents!=null&&window.profileBinding!=null&&dev.pocketengine.features.remote.RemoteJobEvents.same(committedEvents.optJSONObject("scope"),dev.pocketengine.features.remote.RemoteJobEvents.scope(source,window.profileBinding)))snapshot.put("eventRead",committedEvents);
             JSONObject task=snapshot.getJSONObject("task"),origin=task.optJSONObject("origin");boolean teamQuestion=window.teamWindow!=null||task.has("teamRunId")||task.has("memberId")||origin!=null&&origin.optString("kind").startsWith("team");
-            snapshot.put("canAnswerQuestions",fresh&&window.nativeOwner!=null&&foregroundOwner==window.nativeOwner&&!teamQuestion&&!task.optBoolean("cancelRequested")&&!tasks.hasUnresolved(window.task)&&source.optJSONObject("controls")!=null&&source.getJSONObject("controls").optBoolean("answerQuestion")).put("questionAnswerReason",teamQuestion?"此入口不放宽原团队正常问答/执行权限，请回原协调器；已批准的fileChange仍走其原单次审批":"只向原问题发送一次正常回答，不授予文件/命令权限；未知只查询原job");
+            boolean memberQuestion=false;if(teamQuestion&&window.teamWindow==null)try{checkTeamMemberInteraction(source);memberQuestion=true;}catch(SecurityException stale){/* Visible original data is not current-member authority. */}
+            snapshot.put("canAnswerQuestions",fresh&&window.nativeOwner!=null&&foregroundOwner==window.nativeOwner&&(!teamQuestion||memberQuestion)&&!task.optBoolean("cancelRequested")&&!tasks.hasUnresolved(window.task)&&source.optJSONObject("controls")!=null&&source.getJSONObject("controls").optBoolean("answerQuestion")).put("questionAnswerScope",memberQuestion?"current_team_member":teamQuestion?"unavailable":"private_session_only").put("questionAnswerReason",teamQuestion&&!memberQuestion?"原成员代次/协调器已失效或属于制作assignment；不能借私人问答继续":"只回答此原成员/会话的原问题一次，不授予文件/命令权限；未知只查询原job");
+            if(teamQuestion&&window.teamWindow==null){JSONArray acceptIds=new JSONArray();JSONArray pending=source.optJSONArray("pendingApprovals");for(int i=0;memberQuestion&&pending!=null&&i<pending.length();i++){JSONObject request=pending.getJSONObject(i);if(source.optString("protocol").equals("claude_stream_json")&&request.optString("method").equals("claude/can_use_tool")&&request.optString("tool").matches("Read|Glob|Grep")&&request.optBoolean("canAccept"))acceptIds.put(request.getString("requestId"));}snapshot.put("teamMemberApprovalAcceptIds",acceptIds);}
             if(window.teamWindow!=null)snapshot.put("teamRemoteWriter",true).put("teamRemoteScope",tasks.originalTeamRemoteContext(window.task).view()).put("canContinue",false).put("reason","所选文件副本制作：不代表Git全项目或OS隔离。需要命令的完整build/test仍未闭合；继续模型/冻结贡献请回原团队宿主，不能从此私人会话页续接。");
             snapshot.put("canCaptureSnapshot",window.teamWindow==null&&fresh&&!source.optString("jobId").isEmpty()&&source.optString("executorStatus").matches("completed|failed|cancelled")&&!tasks.hasUnresolved(window.task));
             if(window.directory!=null)snapshot.put("resultDirectory",new JSONObject(window.directory.toString()));JSONArray selectedFiles=new JSONArray();for(JSONObject selected:window.selectedFiles.values())selectedFiles.put(new JSONObject(selected.toString()));snapshot.put("selectedResultFiles",selectedFiles).put("snapshotAttachments",tasks.remoteSnapshotAttachments(window.task));

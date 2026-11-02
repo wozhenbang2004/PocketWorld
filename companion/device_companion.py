@@ -27,7 +27,7 @@ from device_pairing import DeviceTrust, PairingCoordinator, Permission, HistoryP
 from device_companion_history import CompanionHistory, accepted_audience, native_operation_id, operation_receipt_for
 from device_companion_management import OperationManagement
 from device_operation_budget import NativeOperationBudget
-from device_artifacts import ArtifactTransferStore, ArtifactEndpoint
+from device_artifacts import ArtifactTransferStore, ArtifactEndpoint, ArtifactSession, ArtifactReceiver, WindowsArtifactReceiver, from_wire_descriptor
 from desktop_jobs import DesktopJobs
 from desktop_runtime import attach_desktop
 from platform_backend import PlatformError
@@ -36,7 +36,8 @@ _NATIVE_COMMAND = object()
 COMMAND_PROTOCOL = "native-device-command-v1"
 TOOL_PROTOCOL = "native-device-tool-v1"
 WORKSPACE_VERSION = "workspace-v1"
-WORKSPACE_TOOLS = {"workspace.list": "read", "workspace.read": "read", "workspace.export": "read", "workspace.write": "write", "workspace.location": "read"}
+WORKSPACE_TOOLS = {"workspace.list": "read", "workspace.read": "read", "workspace.export": "read", "workspace.write": "write", "workspace.receive": "write", "workspace.location": "read"}
+PROJECT_TOOLS = {"workspace.project.receive": "write", "workspace.project.confirm": "write", "workspace.project.export": "read"}
 _HISTORY_READ = ContextVar("companion_fixed_artifact_history", default=None)
 
 
@@ -165,6 +166,9 @@ class CompanionDeviceReceiver:
         self._exports = {}
         self._export_lock = threading.RLock()
         self._bulk_sender = bulk_sender
+        self._inputs = {}  # Ephemeral permissions only; original jobs/operations remain authority.
+        self._input_cache = None
+        self._input_session = None
         self.artifacts = NativeArtifactStore(self)
         if native_management_only:
             # Scope review must not create a GUI worker-generation record and
@@ -212,7 +216,8 @@ class CompanionDeviceReceiver:
         for key, environment in self.manager.environments.items():
             if environment.get("kind", "local") != "local":
                 continue
-            declarations = [{"toolName": tool, "effect": effect} for tool, effect in WORKSPACE_TOOLS.items()
+            native_tools = {**WORKSPACE_TOOLS, **(PROJECT_TOOLS if self.manager.platform.name == "windows" else {})}
+            declarations = [{"toolName": tool, "effect": effect} for tool, effect in native_tools.items()
                             if effect == "read" or environment.get("writeAllowed") is True]
             available_command = any(worker.get("id") == "command" and worker.get("available") is True
                                     for item in self.manager.list_environments()["environments"] if item["id"] == key for worker in item["workers"])
@@ -228,9 +233,12 @@ class CompanionDeviceReceiver:
                 "kind": "lightweight_companion", "modelRequired": False, "externalAgentRequired": False,
                 "goalAgent": False, "taskControl": False, "operationCancel": True, "legacyHttpAuthority": "separate_owner_token_not_a_device_permission",
                 "platform": self.manager.platform.capabilities(), "desktop": desktop,
-                "workspaceCapabilityVersion": WORKSPACE_VERSION, "toolNames": [*(["command.run"] if commands else []), *WORKSPACE_TOOLS, *({"desktop.observe", "desktop.act", "desktop.control"} if desktop.get("available") else set())],
+                "workspaceCapabilityVersion": WORKSPACE_VERSION, "toolNames": [*(["command.run"] if commands else []), *WORKSPACE_TOOLS, *(PROJECT_TOOLS if self.manager.platform.name == "windows" else {}), *({"desktop.observe", "desktop.act", "desktop.control"} if desktop.get("available") else set())],
                 "workspaceBindings": [workspace_binding(self.manager, key) for key, env in self.manager.environments.items() if env.get("kind", "local") == "local"],
                 "capabilities": workspace_capabilities,
+                "workspaceReceive": {"toolName": "workspace.receive", "maximumBytes": 262144, "kinds": ["file"], "projectImport": False},
+                "workspaceProjectReceive": {"available": self.manager.platform.name == "windows", "maximumBytes": 20971520,
+                    "maxExpandedBytes": 16777216, "maxFileBytes": 2097152, "maxFiles": 2000, "requiresImportReview": True, "newCopyOnly": True},
                 "budget": self.budget.describe(), "artifactTransport": "separate_current_mutual_tls_bulk_lane"}
 
     @staticmethod
@@ -374,8 +382,314 @@ class CompanionDeviceReceiver:
                 "taskId": envelope.get("localTaskId") or envelope.get("rootTaskId"), "requestRunId": envelope.get("runId"),
                 "requestExecutorEpoch": envelope.get("executorEpoch"), "operationId": native_operation_id(envelope)}
 
-    def _native_tool(self, envelope, permission):
+    def _input_current(self, descriptor, direction="receive"):
+        item = self._inputs.get(descriptor["transferId"])
+        if item is None or item[0] != descriptor:
+            raise PermissionError("Exact original input admission is unavailable")
+        _, permission, job = item
+        if direction == "remove":
+            # Native cache retirement only: exact locally registered transfer/job,
+            # never workspace/source I/O or a remote execution permission. Revocation
+            # must not retain failed private byte caches forever.
+            if self.manager.closed or self.closed:
+                raise PermissionError("Original native cache owner is unavailable")
+            return
+        self.require_workspace(permission.envelope, permission)
+        if job["status"] != "running" or job["id"] in self.manager.stopping:
+            raise PermissionError("Original input operation stopped; no bytes or replacement admitted")
+
+    def _input_manifest(self, envelope):
+        args = envelope.arguments["arguments"]
+        if envelope.arguments["effect"] != "write" or set(args) != {"path", "expectedVersion", "artifact"}:
+            raise PlatformError("workspace.receive requires exact path, expectedVersion and native artifact", 400)
+        self.manager.files.parts(args["path"])
+        if not isinstance(args["expectedVersion"], str) or not re.fullmatch(r"absent|sha256:[a-f0-9]{64}", args["expectedVersion"]):
+            raise PlatformError("Exact reviewed target version required", 400)
+        descriptor = from_wire_descriptor(args["artifact"])
+        # This first native file slice intentionally inherits the existing target CAS bound.
+        # Project archives require independent import review, not merely a file named .zip.
+        project = envelope.arguments["toolName"] == "workspace.project.receive"
+        if project:
+            if self.manager.platform.name != "windows" or not callable(getattr(self.manager.platform, "import_project_copy", None)):
+                raise PlatformError("Reviewed native project copy import requires the Windows directory backend", 409)
+            if args["expectedVersion"] != "absent" or descriptor["kind"] != "project_bundle" or not 22 <= descriptor["bytes"] <= 20971520:
+                raise PlatformError("Project import requires a new copy and an original package of at most 20MiB", 413)
+        elif descriptor["kind"] != "file" or descriptor["bytes"] > 262144:
+            raise PlatformError("workspace.receive supports ordinary files up to 262144 bytes; project import is separate", 413)
+        if (descriptor["sourceDeviceId"] != envelope.get("callerDeviceId")
+                or descriptor["taskId"] != (envelope.get("localTaskId") or envelope.get("rootTaskId"))
+                or descriptor["operationId"] != envelope.get("operationId")
+                or descriptor.get("requestRunId") != envelope.get("runId")
+                or descriptor.get("requestExecutorEpoch") != envelope.get("executorEpoch")):
+            raise PermissionError("Selected native input provenance differs from this original operation/run")
+        return descriptor
+
+    def _prepare_input(self, peer, envelope, permission, job):
+        descriptor = self._input_manifest(envelope)
+        transfer = descriptor["transferId"]
+        previous = self._inputs.get(transfer)
+        if previous is not None and (previous[0] != descriptor or previous[2]["id"] != job["id"]):
+            raise PermissionError("Original transfer belongs to another operation")
+        if previous is None and len(self._inputs) >= 4:
+            raise PlatformError("Native input cache full", 503)
+        self._inputs[transfer] = (descriptor, permission, job)
+        self._input_current(descriptor)
+        if self._input_cache is None:
+            # The original state root is provisioned privately by the native installer/manager.
+            # Windows uses ONLY safe handles; never a POSIX directory or pathlib fallback.
+            if self.manager.platform.name == "windows":
+                backend = self.manager.platform
+                backend.assert_private_directory(str(self.manager.state), backend.logon_context()["userSid"], require_protected=False)
+                self._input_cache = WindowsArtifactReceiver(str(self.manager.state), backend=self.manager.platform, current=self._input_current)
+            else:
+                root = self.manager.state / "device-input-cache"
+                root.mkdir(mode=0o700, exist_ok=True)
+                self._input_cache = ArtifactReceiver(str(root), current=self._input_current)
+            self._input_session = ArtifactSession(self._input_cache)
+        offset = self._input_session.prepare_incoming(peer, descriptor, lambda: self._input_current(descriptor))
+        result = {"status": "running", "phase": "awaiting_bytes", "transferId": transfer,
+                  "sha256": descriptor["sha256"], "bytes": descriptor["bytes"], "verifiedOffset": offset,
+                  "maximumBytes": 20971520 if descriptor["kind"] == "project_bundle" else 262144, "delivered": False}
+        job.update(nativeToolResult=result, nativeInput=copy.deepcopy(envelope.arguments["arguments"]), updatedAt=self.manager.now())
+        job.setdefault("_nativeInputChunks", {})
+        job.setdefault("_nativeInputPeer", {"deviceId": peer.device_id, "fingerprint": peer.certificate_fingerprint})
+        self.manager._save(job)
+        if offset == descriptor["bytes"]:
+            self._commit_input(peer, transfer)
+        return copy.deepcopy(job["nativeToolResult"])
+
+    def _commit_input(self, peer, transfer):
+        descriptor, permission, job = self._inputs[transfer]
+        self._input_current(descriptor)
+        self._input_session.finish(peer, transfer)
+        with self._input_cache.open_verified(descriptor) as stream:
+            pieces, total = [], 0
+            while True:
+                chunk=stream.read(262144)
+                if not chunk: break
+                total+=len(chunk)
+                if total>descriptor["bytes"]: raise PermissionError("Input exceeds reviewed byte count")
+                pieces.append(chunk)
+            raw=b"".join(pieces)
+        if len(raw) != descriptor["bytes"] or hashlib.sha256(raw).hexdigest() != descriptor["sha256"]:
+            raise PermissionError("Original verified input bytes changed")
+        args = permission.envelope.arguments["arguments"]
+        environment_id, environment = self.require_workspace(permission.envelope, permission)
+        if descriptor["kind"] == "project_bundle":
+            from device_project_packages import read, summary
+            manifest, _ = read(raw)
+            review=summary(manifest)
+            job["nativeToolResult"].update(phase="awaiting_import_review", path=args["path"], expectedVersion="absent",
+                                           manifestDigest=review["manifestDigest"], summary=review, delivered=False)
+            job.update(updatedAt=self.manager.now(), message="Verified package staged; original owner import review still required")
+            self.manager._save(job)
+            return
+        request = {"path": args["path"], "expectedVersion": args["expectedVersion"], "operationId": job["operationId"],
+                   "inputArtifact": copy.deepcopy(args["artifact"])}
+        try:
+            job["nativeInputDispatchStarted"] = True
+            self.manager._save(job)
+            result = self.manager.files._write_bytes(environment_id, environment, request, raw, current=lambda: self._input_current(descriptor))
+            # Cleanup is still gated by the original live admission, before settling it.
+            # A cleanup failure must not erase a factual target write receipt.
+            try:
+                self._input_cache.remove(descriptor)
+            except Exception:
+                result = {**result, "inputCacheCleanupPending": True}
+            self._input_session.release(transfer)
+            job.update(status=result.get("status", "unknown"), nativeToolResult={**result, "transferId": transfer,
+                       "sha256": descriptor["sha256"], "delivered": result.get("verified") is True}, updatedAt=self.manager.now())
+            self.manager._save(job)
+            self._inputs.pop(transfer, None)
+        except BaseException:
+            self._release_input(transfer)
+            job.update(status="unknown", nativeToolResult={"status": "unknown", "transferId": transfer, "delivered": False,
+                       "message": "Input replacement unconfirmed; query original operation, never replay"}, updatedAt=self.manager.now())
+            self.manager._save(job)
+            raise
+
+    def _confirm_project(self, envelope, permission, confirmation_job):
+        from device_project_packages import read, manifest_identity
+        args=envelope.arguments["arguments"]
+        if (envelope.arguments["effect"]!="write" or set(args)!={"receiveOperationId","manifestDigest","path","expectedVersion"}
+                or args["expectedVersion"]!="absent" or not isinstance(args["manifestDigest"],str)
+                or not re.fullmatch(r"[a-f0-9]{64}",args["manifestDigest"])):
+            raise PlatformError("Exact original project import review is required",400)
+        self.manager.files.parts(args["path"])
+        row=self.manager.ledger.execute("SELECT job_id FROM operations WHERE operation_id=?",(args["receiveOperationId"],)).fetchone()
+        source=self.manager.jobs.get(row[0]) if row else None
+        audience=source.get("nativeDeviceOperation",{}) if source else {}
+        if (source is None or audience.get("toolName")!="workspace.project.receive"
+                or any(envelope.get(key)!=audience.get(key) for key in ("originDeviceId","callerDeviceId","rootTaskId","parentTaskId","localTaskId","grantId","authorizationEpoch"))
+                or not protocol.resource_equal(envelope.get("resourceBinding"),audience.get("resourceBinding"))):
+            raise PermissionError("Project review is outside the original received owner/task/grant/workspace")
+        # Native owner review ends the original source attempt (awaiting_user).
+        # Its confirmation is a NEW original run/op of the SAME task/scope; never
+        # rewrite the receive operation's retained requestRunId/epoch as that run.
+        review=source.get("nativeToolResult",{})
+        if source.get("status")!="running" or source.get("nativeInputDispatchStarted") or review.get("phase")!="awaiting_import_review" or review.get("manifestDigest")!=args["manifestDigest"] or review.get("path")!=args["path"]:
+            raise PermissionError("Original project review changed or is no longer pending")
+        transfer=review["transferId"]
+        try:
+            item=self._inputs.get(transfer)
+            if item is None or item[2] is not source: raise PermissionError("Original verified project cache unavailable; do not replay")
+            descriptor=item[0]
+            def current():
+                self._input_current(descriptor)
+                self.require_workspace(envelope,permission)
+                if confirmation_job["status"]!="running" or confirmation_job["id"] in self.manager.stopping:
+                    raise PermissionError("Original project confirmation stopped")
+            current()
+            with self._input_cache.open_verified(descriptor) as stream:
+                pieces=[]
+                while True:
+                    raw=stream.read(262144)
+                    if not raw: break
+                    pieces.append(raw)
+                manifest,files=read(b"".join(pieces))
+            if manifest_identity(manifest)!=args["manifestDigest"]: raise PermissionError("Reviewed package manifest changed")
+            environment_id,environment=self.require_workspace(envelope,permission)
+            source["nativeInputDispatchStarted"]=True; self.manager._save(source)
+            def intent(value):
+                confirmation_job["nativeProjectImportIntent"]=value
+                self.manager._save(confirmation_job)
+            result=self.manager.platform.import_project_copy(environment["root"],args["path"],manifest,files,current,record_intent=intent)
+            result.update(sourceReceiveOperationId=args["receiveOperationId"],manifestDigest=args["manifestDigest"],path=args["path"])
+            try: self._input_cache.remove(descriptor)
+            except Exception: result["inputCacheCleanupPending"]=True
+            self._input_session.release(transfer); self._inputs.pop(transfer,None)
+            if result.get("verified") is True:
+                source["_nativeProjectManifest"] = manifest
+            source.update(status=result.get("status","unknown"),nativeToolResult=result,updatedAt=self.manager.now())
+            self.manager._save(source)
+            return result
+        except BaseException:
+            owned=self._inputs.get(transfer)
+            if owned is not None and owned[2] is source:
+                self._release_input(transfer)
+            status="unknown" if source.get("nativeInputDispatchStarted") else "failed"
+            retained=copy.deepcopy(source.get("nativeToolResult",{}))
+            retained.update(status=status, phase="import_unconfirmed" if status=="unknown" else "input_rejected",
+                            delivered=False, verified=False,
+                            message="Original project confirmation failed; inspect original operations without replay")
+            if confirmation_job.get("nativeProjectImportIntent") is not None:
+                retained["nativeProjectImport"]=copy.deepcopy(confirmation_job["nativeProjectImportIntent"])
+            if status=="failed": retained["publicationAttempted"]=False
+            source.update(status=status,nativeToolResult=retained,updatedAt=self.manager.now())
+            self.manager._save(source)
+            raise
+
+    def _export_project(self, envelope, permission):
+        from device_project_packages import write_modified
+        args=envelope.arguments["arguments"]
+        if envelope.arguments["effect"]!="read" or set(args)!={"receiveOperationId"}:
+            raise PlatformError("Export requires one original reviewed project reference",400)
+        row=self.manager.ledger.execute("SELECT job_id FROM operations WHERE operation_id=?",(args["receiveOperationId"],)).fetchone()
+        source=self.manager.jobs.get(row[0]) if row else None
+        audience=source.get("nativeDeviceOperation",{}) if source else {}
+        if (source is None or audience.get("toolName")!="workspace.project.receive" or source.get("status")!="completed"
+                or any(envelope.get(key)!=audience.get(key) for key in ("originDeviceId","callerDeviceId","rootTaskId","localTaskId"))
+                or not protocol.resource_equal(envelope.get("resourceBinding"),audience.get("resourceBinding"))):
+            raise PermissionError("Export is outside original owner-selected imported project")
+        manifest=source.get("_nativeProjectManifest")
+        imported=source.get("nativeToolResult",{})
+        if manifest is None or imported.get("verified") is not True or imported.get("projectImported") is not True:
+            raise PermissionError("Original imported project provenance unavailable")
+        _,environment=self.require_workspace(envelope,permission)
+        current=lambda:self.require_workspace(envelope,permission)
+        files=self.manager.platform.capture_project_copy(environment["root"],imported["path"],imported["directoryIdentity"],manifest,current)
+        raw=write_modified(manifest,files)
+        reference=self._file_reference(envelope,"modified-project.pocketworld.zip",len(raw),hashlib.sha256(raw).hexdigest())
+        reference.update(kind="project_bundle",mimeType="application/zip")
+        fixed=self.artifacts.register_stream(io.BytesIO(raw),reference)
+        return self.artifacts.wire_descriptor(fixed,instance_id=self.identity.instance_id,revision=1)
+
+    def _release_input(self, transfer):
+        item = self._inputs.get(transfer)
+        if item is None: return
+        descriptor, _, job = item
+        try:
+            if self._input_cache is not None: self._input_cache.remove(descriptor)
+        except Exception:
+            job["inputCacheCleanupPending"] = True  # Changed objects are retained, never deleted blindly.
+        if self._input_session is not None: self._input_session.release(transfer)
+        self._inputs.pop(transfer, None)
+
+    def discard_pending_input(self, job):
+        """Original owner cancellation before replacement; cache is not a business ledger."""
+        for transfer, (descriptor, _, owner) in list(self._inputs.items()):
+            if owner is not job:
+                continue
+            try:
+                self._input_cache.remove(descriptor)
+            except Exception:
+                job["inputCacheCleanupPending"] = True
+            self._input_session.release(transfer)
+            self._inputs.pop(transfer, None)
+
+    def _duplicate_input_chunk(self, peer, frame):
+        """An exact already-received chunk is a no-op, never another write/admission.
+
+        Queueing is not delivery: a source may query an old cursor while the first
+        frame is in flight. Receipts stay on the ORIGINAL job, including after its
+        byte cache has been retired. Unknown business effects are never replayed.
+        """
+        if not isinstance(peer, device_identity.AuthenticatedPeer) or self.manager.closed or self.closed:
+            raise PermissionError("Native bulk peer unavailable")
+        transfer=str(frame.transfer_id)
+        for job in self.manager.jobs.values():
+            artifact=job.get("nativeInput",{}).get("artifact",{})
+            if artifact.get("transferId")!=transfer: continue
+            prior=job.get("_nativeInputChunks",{}).get(str(frame.offset))
+            if prior is None: return False
+            audience=job.get("nativeDeviceOperation",{})
+            known=self.trust.peer(peer.device_id)
+            grant=self.trust.grant(audience.get("grantId"))
+            if (job.get("_nativeInputPeer")!={"deviceId":peer.device_id,"fingerprint":peer.certificate_fingerprint}
+                    or known is None or known["revoked"] or known["fingerprint"]!=peer.certificate_fingerprint
+                    or grant is None or grant["revoked"] or grant["expiresAt"]<=self.manager.now()
+                    or grant["authorizationEpoch"]!=audience.get("authorizationEpoch") or known["authorizationEpoch"]!=grant["authorizationEpoch"]):
+                raise PermissionError("Original duplicate input peer/grant is no longer current")
+            if prior!={"bytes":len(frame.data),"sha256":hashlib.sha256(frame.data).hexdigest()}:
+                raise PermissionError("Repeated chunk differs from the original verified byte receipt")
+            return True
+        return False
+
+    def receive_bulk(self, peer, frame):
+        with self.manager.lock:
+            if self._input_session is None or frame.control is not None or frame.transfer_id is None:
+                raise PermissionError("Unsolicited bytes lack original input admission")
+            transfer = str(frame.transfer_id)
+            if self._duplicate_input_chunk(peer,frame): return
+            item=self._inputs.get(transfer)
+            if item is None: raise PermissionError("Unsolicited transfer has no original admission")
+            descriptor, _, job = item
+            if (type(frame.offset) is not int or frame.offset<0 or frame.offset%262144
+                    or not isinstance(frame.data,bytes) or len(frame.data)!=min(262144,descriptor["bytes"]-frame.offset) or not frame.data):
+                raise PermissionError("Input chunk must match its original fixed 256KiB cursor")
+            offset = self._input_session.accept(peer, transfer, frame.offset, frame.data)
+            job["_nativeInputChunks"][str(frame.offset)]={"bytes":len(frame.data),"sha256":hashlib.sha256(frame.data).hexdigest()}
+            job["nativeToolResult"]["verifiedOffset"] = offset
+            self.manager._save(job)
+            if offset == descriptor["bytes"]:
+                try:
+                    self._commit_input(peer, transfer)
+                except BaseException:
+                    if not job.get("nativeInputDispatchStarted"):
+                        self._release_input(transfer)
+                        job.update(status="failed", nativeToolResult={"status": "failed", "phase": "input_rejected",
+                                   "transferId": transfer, "delivered": False, "replacementAttempted": False,
+                                   "message": "Received input did not verify; target replacement was not attempted"}, updatedAt=self.manager.now())
+                        self.manager._save(job)
+                    raise
+
+    def _native_tool(self, envelope, permission, peer=None):
         self.require_workspace(envelope, permission)
+        incoming = envelope.arguments["toolName"] in {"workspace.receive", "workspace.project.receive"}
+        if incoming:
+            if self.manager._environment(envelope.get("resourceBinding")["environmentId"]).get("writeAllowed") is not True:
+                raise PermissionError("Original workspace does not permit input writes")
+            self._input_manifest(envelope)  # Reject unsupported size/kind before original reservation.
         operation = native_operation_id(envelope)
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", operation):
             raise PlatformError("Original Companion operation identity exceeds its fixed bound", 400)
@@ -387,7 +701,18 @@ class CompanionDeviceReceiver:
                 if found[0] != fingerprint:
                     raise PlatformError("Operation ID already reserved for different native tool semantics", 409)
                 job = self.manager.jobs.get(found[1])
+                if incoming and job and job.get("status") == "running" and job.get("nativeToolResult", {}).get("phase") == "awaiting_bytes":
+                    return self._prepare_input(peer, envelope, permission, job)
                 return copy.deepcopy(job["nativeToolResult"]) if job and "nativeToolResult" in job else self.manager.operation(operation)
+            if incoming:
+                selected=self._input_manifest(envelope)
+                retained=self.manager.ledger.execute(
+                    "SELECT 1 FROM operations WHERE CASE WHEN json_valid(details) THEN json_extract(details,'$.inputTransferId') ELSE NULL END=? LIMIT 1",
+                    (selected["transferId"],)).fetchone()
+                if selected["transferId"] in self._inputs or retained:
+                    raise PlatformError("Transfer already belongs to another original operation; request was not reserved",409)
+                if len(self._inputs)>=4 or sum(item[0]["bytes"] for item in self._inputs.values())+selected["bytes"]>40*1024*1024:
+                    raise PlatformError("Native input cache full; request was not reserved",503)
             now, job_id = self.manager.now(), str(uuid.uuid4())
             job = {"id": job_id, "operationId": operation, "fingerprint": fingerprint, "worker": "device_tool", "status": "running",
                    "environmentId": envelope.get("resourceBinding")["environmentId"], "createdAt": now, "updatedAt": now, "output": "", "outputTruncated": False,
@@ -400,6 +725,7 @@ class CompanionDeviceReceiver:
                 job["budgetClaim"] = self.budget.claim(operation, envelope, permission, self.manager.ledger)
                 self.manager.ledger.execute("INSERT INTO operations(operation_id,fingerprint,job_id,last_status,updated_at,details) VALUES (?,?,?,?,?,?)",
                                             (operation, fingerprint, job_id, "running", now, json.dumps({"protocol": TOOL_PROTOCOL, "audience": _audience(envelope),
+                                                                                                      **({"inputTransferId": selected["transferId"]} if incoming else {}),
                                                                                                       "historyAudience": accepted_audience(envelope, permission, operation, now)})))
                 self.manager.ledger.execute("RELEASE SAVEPOINT " + savepoint)
             except BaseException:
@@ -413,16 +739,24 @@ class CompanionDeviceReceiver:
             # authority. Match the original HTTP handler's monitor discipline;
             # another thread must not commit our file receipt mid-transaction.
             with self.manager.lock:
-                result = self._workspace(envelope, permission)
+                if incoming:
+                    return self._prepare_input(peer, envelope, permission, job)
+                result = (self._confirm_project(envelope, permission, job) if envelope.arguments["toolName"] == "workspace.project.confirm"
+                          else self._export_project(envelope, permission) if envelope.arguments["toolName"] == "workspace.project.export"
+                          else self._workspace(envelope, permission))
             self._current(permission)
             with self.manager.lock:
-                status = result.get("status", "completed") if envelope.arguments["toolName"] == "workspace.write" else "completed"
+                status = result.get("status", "completed") if envelope.arguments["toolName"] in {"workspace.write", "workspace.project.confirm"} else "completed"
                 job.update(status=status, nativeToolResult=result, updatedAt=self.manager.now(), message="Original native tool receipt stored; user goal still requires verification")
                 self.manager._save(job)
             return result
         except BaseException:
             with self.manager.lock:
                 job.update(status="unknown" if envelope.side_effecting else "failed", updatedAt=self.manager.now(), message="Original native tool result unconfirmed; inspect this operation without replay")
+                if incoming:
+                    self._release_input(envelope.arguments["arguments"]["artifact"]["transferId"])
+                    job["nativeToolResult"] = {"status": "unknown", "delivered": False,
+                                               "message": "Input admission unconfirmed; inspect original operation without replay"}
                 self.manager._save(job)
             raise
 
@@ -443,7 +777,9 @@ class CompanionDeviceReceiver:
                 raise PermissionError("Original operation is outside the current grant/task/resource audience")
             self._current(permission)
             result = self.manager.operation(operation)
-            if audience.get("toolName") == "workspace.write":
+            if audience.get("toolName") in {"workspace.receive", "workspace.project.receive", "workspace.project.confirm"}:
+                result.update(copy.deepcopy(result.get("nativeToolResult", {})))
+            if audience.get("toolName") in {"workspace.write", "workspace.receive"}:
                 result["originalFileReceipt"] = self.manager.files.operation(operation)
             return result
 
@@ -482,14 +818,14 @@ class CompanionDeviceReceiver:
                                                      min(permission.deadline, now + 15000), result["capabilities"], result["grantReceipts"], metadata)
             elif envelope.method == "tool.invoke":
                 tool = envelope.arguments["toolName"]
-                if tool in {"desktop.observe", "desktop.act", "workspace.export"}:
+                if tool in {"desktop.observe", "desktop.act", "workspace.export", "workspace.project.export"}:
                     self._register_export_context(envelope, permission)
                 if tool.startswith("desktop."):
                     result = await asyncio.to_thread(self.desktop.invoke, envelope, permission)
                 elif tool == "command.run":
                     result = await asyncio.to_thread(self._command, envelope, permission)
-                elif tool in WORKSPACE_TOOLS:
-                    result = await asyncio.to_thread(self._native_tool, envelope, permission)
+                elif tool in WORKSPACE_TOOLS or tool in PROJECT_TOOLS:
+                    result = await asyncio.to_thread(self._native_tool, envelope, permission, peer)
                 else:
                     raise PlatformError("Unknown native PC tool; no goal/Agent/shell inference", 409)
             elif envelope.method == "operation.get":
@@ -541,6 +877,8 @@ class CompanionDeviceReceiver:
 
     def close(self):
         self.closed = True
+        if self._input_cache is not None:
+            self._input_cache.close()
         return self.desktop.close()
 
 
@@ -696,8 +1034,12 @@ class DeviceCompanionService:
             if current["fingerprint"] != peer.certificate_fingerprint:
                 await connection.close("revoked"); return
             if connection.lane != "control" or frame.control is None:
-                # No inbound file manifest is exposed until native import
-                # approval is wired. Never accept an unsolicited bulk upload.
+                if connection.lane == "bulk" and frame.control is None:
+                    try:
+                        await asyncio.to_thread(self.receiver.receive_bulk, peer, frame)
+                    except Exception:
+                        await connection.close("incompatible")
+                    return
                 await connection.close("incompatible"); return
             response = await self.receiver.receive(peer, frame.control)
             if not connection.send_control(response):

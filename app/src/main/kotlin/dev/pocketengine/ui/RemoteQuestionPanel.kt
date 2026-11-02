@@ -27,7 +27,7 @@ import org.json.JSONObject
         }
         val canAnswer=snapshot.optBoolean("canAnswerQuestions")&&request.optBoolean("canAnswer")&&!busy&&old==null
         HorizontalDivider()
-        Text("Agent 需要你回答",fontWeight=FontWeight.SemiBold,fontSize=16.sp)
+        Text(if(snapshot.optString("questionAnswerScope")=="current_team_member")"当前团队成员需要你回答"else"Agent 需要你回答",fontWeight=FontWeight.SemiBold,fontSize=16.sp)
         Text("这是当前原问题的正常回答，不会批准命令、文件修改或开启新任务。",fontSize=12.sp,color=SecondaryInk)
         if(request.optBoolean("previewOmitted")) Text("选项预览未显示；只展示原问题和选项文字，不运行HTML。",fontSize=11.sp,color=SecondaryInk)
         questions.forEach { q ->

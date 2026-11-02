@@ -50,6 +50,8 @@ public final class MemoryBook {
     private boolean appKnowledgeFormat;
     private boolean archiveFormat;
     private final SourceRef.Resolver sourceResolver;
+    public interface AppVersionResolver {String currentVersion(String packageName)throws Exception;}
+    private final AppVersionResolver appVersions;
     private boolean learningFormat;
     private boolean retentionFormat;
     private boolean hierarchicalFormat;
@@ -59,8 +61,9 @@ public final class MemoryBook {
 
     public MemoryBook(File file)throws Exception {this(file,null);}
     public MemoryBook(File file,SourceRef.Resolver sourceResolver)throws Exception {this(file,sourceResolver,new LexicalMemoryRetrievalBackend());}
-    public MemoryBook(File file,SourceRef.Resolver sourceResolver,MemoryRetrievalBackend retrieval)throws Exception {
-        this.file=file;this.sourceResolver=sourceResolver;this.retrieval=java.util.Objects.requireNonNull(retrieval);
+    public MemoryBook(File file,SourceRef.Resolver sourceResolver,MemoryRetrievalBackend retrieval)throws Exception {this(file,sourceResolver,retrieval,null);}
+    public MemoryBook(File file,SourceRef.Resolver sourceResolver,MemoryRetrievalBackend retrieval,AppVersionResolver appVersions)throws Exception {
+        this.appVersions=appVersions;this.file=file;this.sourceResolver=sourceResolver;this.retrieval=java.util.Objects.requireNonNull(retrieval);
         if(file.isFile()){
             if(file.length()>8_000_000)throw new IllegalStateException("记忆文件过大，请先导出检查");
             JSONObject stored=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8));
@@ -824,6 +827,22 @@ public final class MemoryBook {
         if(!task)throw new SecurityException("App 修订必须关联真实任务来源，不能仅凭模型说法");
         return proposeLearning(scope,content,now,app,refs.values().toArray(new SourceRef[0]));
     }
+    /** Baseline lookup for a host-observed package version; no metadata-only candidate becomes live. */
+    public synchronized JSONObject appBaseline(JSONObject scope,String packageName,String version,long now)throws Exception {
+        Scope owner=learningScope(scope);Set<String> live=activeIds(now);
+        for(JSONObject candidate:learningCandidates.values()){JSONObject app=candidate.optJSONObject("appKnowledge");if(owner.matches(candidate)&&"pending".equals(candidate.optString("status"))&&app!=null&&packageName.equals(app.optString("packageName"))&&version.equals(app.optString("appVersion")))throw new IllegalStateException("此App已有待审修订，不重复请求模型");}
+        for(JSONObject row:records.values()){JSONObject app=row.optJSONObject("appKnowledge");if(owner.matches(row)&&live.contains(row.getString("id"))&&app!=null&&packageName.equals(app.optString("packageName"))&&version.equals(app.optString("appVersion"))){if(!"verified".equals(app.optString("stage")))throw new IllegalStateException("此App当前仍在试用，不重复提炼");return copy(row);}}
+        return new JSONObject();
+    }
+    /** Host-signed original task event supplies context; the model supplies only checked draft fields. */
+    public synchronized JSONObject proposeAppRevisionFromSource(JSONObject scope,SourceRef source,JSONObject context,JSONObject draft,long now)throws Exception {
+        if(!"task_evidence".equals(source.kind)||!TaskSavedEvidence.matches(source.sourceId))throw new SecurityException("自动App修订缺少原事件来源");checkAppDraft(draft);
+        JSONObject app=new JSONObject().put("packageName",context.getString("packageName")).put("appVersion",context.getString("appVersion")).put("baseId",context.getString("baseId")).put("baseRevision",context.getLong("baseRevision")).put("sourceRecordId","").put("sourceRecordRevision",0).put("lesson",context.getBoolean("lesson")).put("stage","draft");
+        requireAppBase(learningScope(scope),app,now);Map<String,SourceRef> refs=new LinkedHashMap<>();refs.put(source.key(),source);
+        if(context.has("outcomeSourceRef")){SourceRef outcome=SourceRef.fromJson(context.getJSONObject("outcomeSourceRef"));refs.put(outcome.key(),outcome);}
+        if(!app.getString("baseId").isEmpty())collectEvidence(require(learningScope(scope),app.getString("baseId")),refs,new HashSet<>());
+        return proposeLearning(scope,draft,now,app,refs.values().toArray(new SourceRef[0]));
+    }
     private static void checkAppDraft(JSONObject content)throws Exception {
         String text=content.getString("text");
         if(!"procedural".equals(content.getString("layer"))||text.length()>1500||text.split("\\n").length>12)throw new IllegalArgumentException("App 修订须为最多12条、1500字的程序经验");
@@ -831,7 +850,7 @@ public final class MemoryBook {
         if(java.util.regex.Pattern.compile("(?i)(?:password|passwd|api[_ -]?key|access[_ -]?token|验证码|密码|令牌)\\s*[:=：是]\\s*[^\\s，。;；]{3,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|sk-[A-Za-z0-9]{16,}").matcher(all).find())throw new SecurityException("修订疑似包含凭据或验证码，未保存候选；请移除敏感值");
     }
     private void requireAppBase(Scope scope,JSONObject app,long now)throws Exception {
-        reviewedProcedure(new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId),app.getString("sourceRecordId"),app.getLong("sourceRecordRevision"));
+        if(!app.optString("sourceRecordId").isEmpty())reviewedProcedure(new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId),app.getString("sourceRecordId"),app.getLong("sourceRecordRevision"));
         String base=app.getString("baseId");long revision=app.getLong("baseRevision");
         if(base.isEmpty()&&revision!=0||!base.isEmpty()&&revision<1)throw new SecurityException("App 基线身份无效");
         Set<String> active=activeIds(now);
@@ -841,11 +860,12 @@ public final class MemoryBook {
         }
         for(JSONObject row:records.values()){JSONObject metadata=row.optJSONObject("appKnowledge");if(scope.matches(row)&&active.contains(row.optString("id"))&&metadata!=null&&app.getString("packageName").equals(metadata.optString("packageName"))&&app.getString("appVersion").equals(metadata.optString("appVersion"))&&!base.equals(row.getString("id")))throw new SecurityException("此 App 已有当前经验或试用修订，请刷新基线");}
     }
-    private boolean appRecordEligible(JSONObject record)throws Exception {
+    private boolean appRecordEligible(JSONObject record,Map<String,String> checkedAppVersions)throws Exception {
         JSONObject app=record.optJSONObject("appKnowledge");if(app==null)return true;
-        if(!Set.of("trial","verified").contains(app.optString("stage")))return false;
+        if(appVersions!=null){String packageName=app.getString("packageName");if(!checkedAppVersions.containsKey(packageName)){String current;try{current=appVersions.currentVersion(packageName);}catch(Exception unavailable){current=null;}checkedAppVersions.put(packageName,current);}if(!app.getString("appVersion").equals(checkedAppVersions.get(packageName)))return false;}
+        if(!Set.of("trial","verified","archived").contains(app.optString("stage")))return false;
         JSONObject source=records.get(app.optString("sourceRecordId"));
-        if(source==null||source.getLong("revision")!=app.getLong("sourceRecordRevision")||recordVersionForgotten(Scope.from(record),source.getString("id"),source.getLong("revision"))||!externalActive(source))return false;
+        if(!app.optString("sourceRecordId").isEmpty()&&(source==null||source.getLong("revision")!=app.getLong("sourceRecordRevision")||recordVersionForgotten(Scope.from(record),source.getString("id"),source.getLong("revision"))||!externalActive(source)))return false;
         String base=app.optString("baseId");if(!base.isEmpty()){
             JSONObject old=records.get(base);if(old==null||old.getLong("revision")!=app.getLong("baseRevision")||!externalActive(old))return false;
         }
@@ -853,12 +873,17 @@ public final class MemoryBook {
     }
     /** Original execution evidence pins the learned record; an unrelated task cannot retire a trial. */
     public synchronized JSONObject recordAppQuality(JSONObject scope,dev.pocketengine.features.skills.SkillQualityReceipt receipt,long now)throws Exception {
-        JSONObject fact=receipt.snapshot(),origin=fact.optJSONObject("originRef");if(origin==null)return new JSONObject().put("appKnowledgeUpdated",false);
+        return recordAppQualityFact(scope,receipt.snapshot(),now);
+    }
+    public synchronized JSONObject recordAppQuality(JSONObject scope,AppQualityReceipt receipt,long now)throws Exception{return recordAppQualityFact(scope,receipt.snapshot(),now);}
+    private JSONObject recordAppQualityFact(JSONObject scope,JSONObject fact,long now)throws Exception {
+        JSONObject origin=fact.optJSONObject("originRef");if(origin==null)return new JSONObject().put("appKnowledgeUpdated",false);
         Scope identity=learningScope(scope);JSONObject row=records.get(origin.getString("recordId"));
         if(row==null||!identity.matches(row)||row.getLong("revision")!=origin.getLong("revision"))throw new SecurityException("App 经验来源版本已变化");
         JSONObject oldApp=row.optJSONObject("appKnowledge");if(oldApp==null)return new JSONObject().put("appKnowledgeUpdated",false);
         JSONArray outcomes=oldApp.optJSONArray("outcomes");if(outcomes==null)outcomes=new JSONArray();
         for(int i=0;i<outcomes.length();i++){JSONObject prior=outcomes.getJSONObject(i);if(prior.getString("taskId").equals(fact.getString("taskId"))&&prior.getString("operationId").equals(fact.getString("operationId"))){if(!prior.getString("outcome").equals(fact.getString("outcome")))throw new SecurityException("App 归责已经保存");return new JSONObject().put("appKnowledgeUpdated",true).put("record",viewRecord(row));}}
+        for(int i=0;i<outcomes.length();i++){JSONObject prior=outcomes.getJSONObject(i);if(prior.getString("taskId").equals(fact.getString("taskId"))&&prior.getString("runId").equals(fact.getString("runId"))){if(!prior.getString("outcome").equals(fact.getString("outcome")))throw new SecurityException("同一轮App试用已有不同归责");return new JSONObject().put("appKnowledgeUpdated",true).put("record",viewRecord(row));}}
         if(!"trial".equals(oldApp.getString("stage")))return new JSONObject().put("appKnowledgeUpdated",false);
         if(!activeIds(now).contains(row.getString("id")))throw new SecurityException("试用经验来源已失效");
         String outcome=fact.getString("outcome");if(!Set.of("verified","skill_failed","verifier_rejected").contains(outcome))return new JSONObject().put("appKnowledgeUpdated",false);
@@ -1514,8 +1539,8 @@ public final class MemoryBook {
         removed.remove(root);for(String id:removed)records.remove(id);return removed.size();
     }
     private Set<String> activeIds(long now)throws Exception {
-        Set<String> active=new HashSet<>();
-        for(JSONObject record:records.values())if(appRecordEligible(record)&&!record.optBoolean("archiveOnly")&&record.optLong("expiresAt",Long.MAX_VALUE)>now&&externalActive(record))active.add(record.getString("id"));
+        Set<String> active=new HashSet<>();Map<String,String> checkedAppVersions=new LinkedHashMap<>();
+        for(JSONObject record:records.values())if(appRecordEligible(record,checkedAppVersions)&&!record.optBoolean("archiveOnly")&&record.optLong("expiresAt",Long.MAX_VALUE)>now&&externalActive(record))active.add(record.getString("id"));
         boolean changed;
         do{changed=false;for(JSONObject record:records.values()){
             String id=record.getString("id");if(!active.contains(id))continue;
@@ -1523,13 +1548,19 @@ public final class MemoryBook {
             // that its reviewed procedure remains eligible (rollback/expiry/ancestor retirement).
             JSONObject app=record.optJSONObject("appKnowledge");
             String appParent=app==null?"":app.optString("sourceRecordId");
-            if(!appParent.isEmpty()&&!active.contains(appParent)){active.remove(id);changed=true;continue;}
+            JSONObject appSource=appParent.isEmpty()?null:records.get(appParent),parentApp=appSource==null?null:appSource.optJSONObject("appKnowledge");
+            boolean exactRetainedBaseline=app!=null&&appParent.equals(app.optString("baseId"))&&appSource!=null&&appSource.getLong("revision")==app.optLong("baseRevision");
+            if(!appParent.isEmpty()&&(!active.contains(appParent)||parentApp!=null&&"archived".equals(parentApp.optString("stage"))&&!exactRetainedBaseline)){active.remove(id);changed=true;continue;}
+            if(app!=null&&!app.optString("baseId").isEmpty()&&!active.contains(app.getString("baseId"))){active.remove(id);changed=true;continue;}
             JSONArray sources=record.optJSONArray("sourceIds");if(sources==null)continue;
             for(int i=0;i<sources.length();i++){
                 String parent=sources.getString(i);JSONObject origin=records.get(parent);
-                if(!active.contains(parent)||origin==null||!record.optString("ownerId").equals(origin.optString("ownerId"))||!record.optString("spaceId").equals(origin.optString("spaceId"))){active.remove(id);changed=true;break;}
+                if(!active.contains(parent)||origin==null||origin.optJSONObject("appKnowledge")!=null&&"archived".equals(origin.getJSONObject("appKnowledge").optString("stage"))||!record.optString("ownerId").equals(origin.optString("ownerId"))||!record.optString("spaceId").equals(origin.optString("spaceId"))){active.remove(id);changed=true;break;}
             }
         }}while(changed);
+        // Archived baselines participate only in provenance validation, never recall. Their
+        // descendants may keep this exact superseded baseline, not arbitrary retired methods.
+        for(JSONObject record:records.values()){JSONObject app=record.optJSONObject("appKnowledge");if(app!=null&&"archived".equals(app.optString("stage")))active.remove(record.getString("id"));}
         Set<String> shadowed=new HashSet<>();for(JSONObject record:records.values())if(active.contains(record.optString("id"))){JSONObject app=record.optJSONObject("appKnowledge");if(app!=null&&"trial".equals(app.optString("stage"))&&!app.optString("baseId").isEmpty())shadowed.add(app.getString("baseId"));}
         active.removeAll(shadowed);return active;
     }

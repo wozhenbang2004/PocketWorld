@@ -92,7 +92,11 @@ public final class ChannelTaskCoordinatorTest {
                 int round=modelCalls.incrementAndGet();JSONObject request=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));
                 assertTrue(request.getJSONArray("tools").toString().contains("workspace_write"));assertFalse(request.getJSONArray("tools").toString().contains("phone_tap"));
                 JSONObject message=round<=2?new JSONObject().put("role","assistant").put("tool_calls",new JSONArray().put(new JSONObject().put("id","call-"+round).put("type","function").put("function",new JSONObject().put("name","workspace_write").put("arguments",write.toString())))):new JSONObject().put("role","assistant").put("content","文件已写入；请核对实际内容。");
-                byte[] bytes=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",message))).toString().getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();
+                // The current native gateway requests streaming; use the actual SSE contract rather than a legacy JSON body.
+                if(message.has("tool_calls"))message.getJSONArray("tool_calls").getJSONObject(0).put("index",0);
+                JSONObject delta=new JSONObject().put("id","fixture-"+round).put("object","chat.completion.chunk").put("choices",new JSONArray().put(new JSONObject().put("index",0).put("delta",message).put("finish_reason",JSONObject.NULL)));
+                JSONObject terminal=new JSONObject().put("id","fixture-"+round).put("object","chat.completion.chunk").put("choices",new JSONArray().put(new JSONObject().put("index",0).put("delta",new JSONObject()).put("finish_reason",message.has("tool_calls")?"tool_calls":"stop")));
+                byte[] bytes=("data: "+delta+"\n\ndata: "+terminal+"\n\ndata: [DONE]\n\n").getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","text/event-stream");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();
             });model.start();f.config=new ModelConfig("http://127.0.0.1:"+model.getAddress().getPort()+"/v1","","synthetic",false,8,10);
             f.install((id,initial,config,control)->{
                 // Mirrors the required shared runner hook; no alternate product planner is introduced.

@@ -33,6 +33,7 @@ public final class AssistantModule implements EngineModule {
         JSONObject append(String conversationId,JSONObject message,String mode,JSONObject expected,RunControl control)throws Exception;
         /** Native task hosts also persist cancellation and enqueue their original child stops. */
         default void cancel(RunControl control)throws Exception{control.cancel();}
+        default boolean retainsDevelopment(RunControl control){return false;}
     }
     public interface CheckedAction {void run()throws Exception;}
     private static JSONObject nativeExecutionScope(JSONObject input)throws Exception {
@@ -49,13 +50,19 @@ public final class AssistantModule implements EngineModule {
     private final Object storage=new Object();
     private final TurnExecutor executor;
     private final AtomicReference<RunControl> active=new AtomicReference<>();
-    private final AtomicReference<RunControl> pendingCancellation=new AtomicReference<>();
+    private record Cancellation(RunControl control,String conversation) { }
+    private final AtomicReference<Cancellation> pendingCancellation=new AtomicReference<>();
     private volatile CheckedAction sourceSynchronizer;
     private volatile NativeInputHost nativeInputHost;
     private volatile AttachmentRequestProjection attachmentProjection;
     private final Object admission=new Object();
     private JSONObject activeTurn;
     private ModelConfig activeModel;
+    private record DevelopmentTurn(JSONObject binding,ModelConfig config,RunControl control) { }
+    // Only live original host references. No persistence, replay or independent task status.
+    private final java.util.Map<String,DevelopmentTurn> developmentTurns=new java.util.HashMap<>();
+    public void releaseDevelopmentTurn(RunControl original){synchronized(admission){developmentTurns.entrySet().removeIf(entry->entry.getValue().control()==original);}}
+
     private final java.util.concurrent.ExecutorService turns=new java.util.concurrent.ThreadPoolExecutor(1,1,0,java.util.concurrent.TimeUnit.SECONDS,new java.util.concurrent.ArrayBlockingQueue<>(1));
     public void setNativeInputHost(NativeInputHost host){nativeInputHost=java.util.Objects.requireNonNull(host);}
     public void setAttachmentProjection(AttachmentRequestProjection projection){attachmentProjection=java.util.Objects.requireNonNull(projection);}
@@ -171,8 +178,16 @@ public final class AssistantModule implements EngineModule {
             case "send":return nativeInputHost==null?send(input):sendNative(input);
             case "getSubmission":return submission(input.getString("clientMessageId"));
             case "cancel":{
-                RunControl control=active.get();if(control==null)control=pendingCancellation.get();
-                if(control!=null){cancelOriginal(control);pendingCancellation.compareAndSet(control,null);}
+                String conversation=input.optString("conversationId");RunControl control;Cancellation pending;
+                synchronized(admission){
+                    pending=pendingCancellation.get();DevelopmentTurn held=developmentTurns.get(conversation);
+                    control=!conversation.isEmpty()&&held!=null?held.control():active.get();
+                    if(nativeInputHost!=null&&!conversation.isEmpty()&&(held==null)&&(activeTurn==null||!conversation.equals(activeTurn.optString("conversationId"))))control=null;
+                    if(control==null&&pending!=null&&(conversation.isEmpty()||conversation.equals(pending.conversation())))control=pending.control();
+                    if(conversation.isEmpty()&&control!=null&&activeTurn!=null&&active.get()==control)conversation=activeTurn.optString("conversationId");
+                    if(control!=null&&(input.has("taskId")||input.has("runId")||input.has("epoch"))&&!control.matchesHostRun(input.getString("taskId"),input.getString("runId"),input.getInt("epoch")))throw new SecurityException("原聊天停止代次已变化，请刷新后核对");
+                }
+                if(control!=null){cancelOriginal(control,conversation);Cancellation delivered=pendingCancellation.get();if(delivered!=null&&delivered.control()==control)pendingCancellation.compareAndSet(delivered,null);releaseDevelopmentTurn(control);}
                 return new JSONObject().put("cancellationRequested",control!=null);
             }
             case "delete":return deleteConversation(input.getString("conversationId"));
@@ -181,9 +196,9 @@ public final class AssistantModule implements EngineModule {
             default:throw new IllegalArgumentException("不支持的聊天操作");
         }
     }
-    private void cancelOriginal(RunControl control)throws Exception{
+    private void cancelOriginal(RunControl control,String conversation)throws Exception{
         try{NativeInputHost host=nativeInputHost;if(host==null)control.cancel();else host.cancel(control);}
-        catch(Exception notDelivered){pendingCancellation.set(control);throw notDelivered;}
+        catch(Exception notDelivered){pendingCancellation.set(new Cancellation(control,conversation));throw notDelivered;}
     }
     private JSONObject send(JSONObject input)throws Exception{
         if(input.has("ownerSourceRefs")&&(input.optJSONArray("ownerSourceRefs")==null||input.getJSONArray("ownerSourceRefs").length()>0))throw new IllegalStateException("原文引用的真实原生任务投影未安装，未降级为普通文本发送");
@@ -242,11 +257,14 @@ public final class AssistantModule implements EngineModule {
                 if(!fingerprint.equals(prior.getString("requestFingerprint"))||!requested.isEmpty()&&!requested.equals(prior.getString("conversationId")))throw new IllegalArgumentException("同一个clientMessageId不能提交不同内容");
                 return copy(prior.getJSONObject("ack")).put("duplicate",true);
             }
-            RunControl control=active.get();boolean starting=control==null;
-            final ModelConfig config=starting?context.model():activeModel;
+            RunControl control=active.get();DevelopmentTurn retained=control==null?developmentTurns.get(requested):null;
+            boolean resuming=retained!=null,starting=control==null&&!resuming;
+            if(resuming){control=retained.control();control.check();}
+            JSONObject expectedTurn=resuming?retained.binding():activeTurn;
+            final ModelConfig config=starting?context.model():resuming?retained.config():activeModel;
             if(config==null)throw new IllegalStateException("原任务模型绑定不可读取，请核对原任务");
             final String safe=redact(text,config);
-            if(!starting&&(activeTurn==null||requested.isEmpty()||!requested.equals(activeTurn.getString("conversationId"))))throw new IllegalStateException("助手正在原对话执行；请选择原对话排队，不会启动第二个任务");
+            if(!starting&&(expectedTurn==null||requested.isEmpty()||!requested.equals(expectedTurn.getString("conversationId"))))throw new IllegalStateException("助手正在原对话执行；请选择原对话排队，不会启动第二个任务");
             if(starting&&(input.has("taskId")||input.has("runId")||input.has("epoch")))throw new IllegalStateException("原执行已结束，请先核对任务，不会用旧绑定新建任务");
             if(starting)control=new RunControl();control.check();
             final JSONArray immutableSources=OwnerSourceRequestProjection.admit(this,selectedSources,control);
@@ -256,10 +274,11 @@ public final class AssistantModule implements EngineModule {
             final RunControl live=control;final JSONArray immutableRefs=refs;
             JSONObject expected=new JSONObject();
             if(!starting){
-                expected.put("taskId",input.getString("taskId")).put("runId",input.getString("runId")).put("epoch",input.getInt("epoch"));
-                if(!expected.getString("taskId").equals(activeTurn.getString("taskId"))||!expected.getString("runId").equals(activeTurn.getString("runId"))||expected.getInt("epoch")!=activeTurn.getInt("epoch"))throw new SecurityException("原任务执行代次已变化，请刷新后确认");
+                JSONObject submitted=resuming&&!input.has("taskId")&&!input.has("runId")&&!input.has("epoch")?retained.binding():input;
+                expected.put("taskId",submitted.getString("taskId")).put("runId",submitted.getString("runId")).put("epoch",submitted.getInt("epoch"));
+                if(!expected.getString("taskId").equals(expectedTurn.getString("taskId"))||!expected.getString("runId").equals(expectedTurn.getString("runId"))||expected.getInt("epoch")!=expectedTurn.getInt("epoch"))throw new SecurityException("原任务执行代次已变化，请刷新后确认");
             }
-            if(starting&&!active.compareAndSet(null,live))throw new IllegalStateException("原聊天仍在执行");
+            if((starting||resuming)&&!active.compareAndSet(null,live))throw new IllegalStateException("原聊天仍在执行");
             JSONObject saved;
             try{
                 saved=commit(()->{
@@ -274,22 +293,22 @@ public final class AssistantModule implements EngineModule {
                     return new JSONObject().put("conversationId",cid).put("message",copy(message));
                 });
                 synchronizeSources();
-            }catch(Exception failure){if(starting)active.compareAndSet(live,null);throw failure;}
+            }catch(Exception failure){if(starting||resuming)active.compareAndSet(live,null);throw failure;}
             String cid=saved.getString("conversationId");JSONObject message=saved.getJSONObject("message"),binding;
             try{
                 binding=starting?nativeInputHost.startScoped(cid,safe,copy(message),config,live,nativeExecutionScope(input)):nativeInputHost.append(cid,copy(message),mode,expected,live);
                 if(!live.matchesHostRun(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch")))throw new SecurityException("宿主未返回原任务控制绑定");
             }catch(Exception failure){
-                if(starting){live.cancel();active.compareAndSet(live,null);} // Never retry an uncertain task creation.
+                if(starting||resuming){live.cancel();active.compareAndSet(live,null);} // Never retry an uncertain task creation.
                 context.emit(id(),new JSONObject().put("phase","unconfirmed").put("conversationId",cid).put("messageId",message.getString("id")));
                 return copy(message.getJSONObject("submission"));
             }
             JSONObject ack=copy(binding).put("status",starting?"accepted":"queued").put("messageId",message.getString("id")).put("clientMessageId",client).put("conversationId",cid).put("mode",mode);
             try{commit(()->{findMessage(find(cid),message.getString("id")).put("submission",copy(ack));source(message.getString("id")).put("submission",copy(ack));return null;});}
-            catch(Exception failure){live.cancel();if(starting)active.compareAndSet(live,null);throw new IllegalStateException("主人输入已登记，但聊天回执保存未确认；请按clientMessageId核对原任务，不要重发",failure);}
+            catch(Exception failure){live.cancel();if(starting||resuming)active.compareAndSet(live,null);throw new IllegalStateException("主人输入已登记，但聊天回执保存未确认；请按clientMessageId核对原任务，不要重发",failure);}
             context.emit(id(),copy(ack).put("phase",starting?"accepted":"queued"));
-            if(starting){
-                activeTurn=copy(binding).put("conversationId",cid);activeModel=config;
+            if(starting||resuming){
+                developmentTurns.remove(cid);activeTurn=copy(binding).put("conversationId",cid);activeModel=config;
                 final JSONObject turn=copy(activeTurn);final JSONArray history=copy(findConversation(cid)).getJSONArray("messages");final String messageId=message.getString("id");
                 try{turns.execute(()->executeNativeTurn(turn,safe,history,config,live,messageId));}
                 catch(java.util.concurrent.RejectedExecutionException closed){live.cancel();active.compareAndSet(live,null);activeTurn=null;throw new IllegalStateException("原任务已登记但执行器关闭，请核对原任务，不能自动新建",closed);}
@@ -364,11 +383,11 @@ public final class AssistantModule implements EngineModule {
         return copy(saved);
     }
     private void executeNativeTurn(JSONObject turn,String goal,JSONArray history,ModelConfig config,RunControl control,String messageId){
-        String cid=turn.optString("conversationId");
+        String cid=turn.optString("conversationId");boolean retainedResult=false;
         try{
             JSONArray request=conversationRequest(history,messageId);
             JSONObject response=executor==null?ModelGateway.complete(config,attachmentProjection==null?request:attachmentProjection.project(request,config,control),null,control):executor.execute(cid,goal,request,config,control);
-            control.check();String answer=answer(response);if(blank(answer)||answer.length()>24000)throw new IllegalStateException("模型没有返回有界文字答复");
+            control.check();retainedResult=response.optBoolean("developmentRetained");String answer=answer(response);if(blank(answer)||answer.length()>24000)throw new IllegalStateException("模型没有返回有界文字答复");
             JSONObject reply=commit(()->{JSONObject conversation=find(cid);JSONArray messages=conversation.getJSONArray("messages");
                 for(int i=messages.length()-1;i>=0;i--){JSONObject recorded=messages.getJSONObject(i);if(turn.getString("runId").equals(recorded.optString("nativeRunId"))&&turn.getString("taskId").equals(recorded.optString("taskId"))&&redact(answer,config).equals(recorded.optString("content")))return copy(recorded);}
                 JSONObject row=newMessage(cid,"assistant",answer,config);if(response.has("taskId"))row.put("taskId",response.getString("taskId"));copyMemoryReference(response,row);messages.put(row);trimMessages(conversation);conversation.put("updatedAt",System.currentTimeMillis());return copy(row);});
@@ -377,8 +396,16 @@ public final class AssistantModule implements EngineModule {
         }catch(Exception failure){
             try{context.emit(id(),copy(turn).put("phase",control.isCancelled()?"cancelled":"failed").put("messageId",messageId).put("message",control.isCancelled()?"已停止后续执行；已有输入保留在原任务":"本轮未完成，请核对原任务；不会自动重发输入或动作"));}catch(Exception ignored){}
         }finally{
-            synchronized(admission){active.compareAndSet(control,null);if(activeTurn!=null&&turn.optString("runId").equals(activeTurn.optString("runId"))){activeTurn=null;activeModel=null;}}
+            synchronized(admission){if(retainedResult&&!control.isCancelled()&&nativeInputHost!=null&&nativeInputHost.retainsDevelopment(control))developmentTurns.put(cid,new DevelopmentTurn(turn,config,control));else developmentTurns.remove(cid);active.compareAndSet(control,null);if(activeTurn!=null&&turn.optString("runId").equals(activeTurn.optString("runId"))){activeTurn=null;activeModel=null;}}
             try{context.emit(id(),copy(turn).put("phase","idle").put("messageId",messageId));}catch(Exception ignored){}
+            // An owner input accepted between the final empty boundary and yield must not be stranded.
+            if(retainedResult)try{synchronized(admission){
+                DevelopmentTurn held=developmentTurns.get(cid);boolean pending=false;
+                if(held!=null&&held.control()==control&&active.get()==null&&historyTasks!=null&&nativeInputHost.retainsDevelopment(control)){
+                    JSONArray rows=historyTasks.queuedOwnerInputs(turn.getString("taskId"),cid).getJSONArray("items");for(int i=0;i<rows.length();i++)pending|="pending".equals(rows.getJSONObject(i).optString("queueState"));
+                    if(pending&&active.compareAndSet(null,control)){developmentTurns.remove(cid);activeTurn=copy(turn);activeModel=config;turns.execute(()->executeNativeTurn(turn,goal,history,config,control,messageId));}
+                }
+            }}catch(Exception unavailable){control.cancel();}
         }
     }
     private static JSONArray conversationRequest(JSONArray history,String admittedMessageId)throws Exception{
@@ -721,5 +748,5 @@ public final class AssistantModule implements EngineModule {
     private static JSONObject copy(JSONObject value)throws Exception{return new JSONObject(value.toString());}
     private static String redact(String text,ModelConfig config){return config.apiKey.isEmpty()?text:text.replace(config.apiKey,"[密钥已隐藏]");}
     private static String answer(JSONObject response){Object content=response.opt("content");if(content instanceof String)return (String)content;if(content instanceof JSONArray){StringBuilder result=new StringBuilder();JSONArray parts=(JSONArray)content;for(int i=0;i<parts.length();i++){JSONObject p=parts.optJSONObject(i);if(p!=null&&"text".equals(p.optString("type")))result.append(p.optString("text"));}return result.toString();}return "";}
-    @Override public void close(){RunControl control=active.get();if(control!=null)control.cancel();turns.shutdownNow();}
+    @Override public void close(){RunControl control=active.get();if(control!=null)control.cancel();java.util.List<RunControl> retained; synchronized(admission){retained=developmentTurns.values().stream().map(DevelopmentTurn::control).toList();developmentTurns.clear();}for(RunControl original:retained)original.cancel();turns.shutdownNow();}
 }

@@ -30,6 +30,7 @@ import org.robolectric.annotation.ConscryptMode;
 @Config(sdk=35,manifest=Config.NONE,application=Application.class)
 @ConscryptMode(ConscryptMode.Mode.OFF)
 public final class ProjectLiveRunnerJourneyTest {
+    private boolean retainedJourney,retainedAnswerSent;private long retainedTimeout=1800000;
     private ProjectManagedRunnerJourneyTest factory;private LocalModule local;private TaskStore tasks;private ManagedProjectRuntime runtime;private RunControl original;private JSONObject task;private String taskId,checkout,project,run;private int epoch;private Path active;private ProjectCapabilityPort port;private RuntimeExecutionRef serviceRef;private String startupAck,serviceId;private int delegatedPreparedChecks;private String originalBudget,originalTests;
     @SuppressWarnings("unchecked") private <T>T field(String name)throws Exception {Field field=ProjectManagedRunnerJourneyTest.class.getDeclaredField(name);field.setAccessible(true);return (T)field.get(factory);}
     private Object call(String name,Class<?>[] types,Object... values)throws Exception {Method method=ProjectManagedRunnerJourneyTest.class.getDeclaredMethod(name,types);method.setAccessible(true);try{return method.invoke(factory,values);}catch(InvocationTargetException failure){if(failure.getCause() instanceof Exception)throw (Exception)failure.getCause();throw (Error)failure.getCause();}}
@@ -77,6 +78,47 @@ public final class ProjectLiveRunnerJourneyTest {
             System.out.println("C13_ACTUAL originalRunner_SQL_nativeSupervisor=true; officialNpmCi_ViteRealBuild=true; oneOriginalNativeServiceRef=true; realHttpChallenge_WebSocket=true; approvedExistingSourceAtomicShaCasWhileSameJobLive=true; preparedEditStillBlocksInference=true; ordinaryWriteConfigurationForeignEpochUnknownDenied=true; actual500AndViteStderrInSameTaskNextModel=true; sameServiceBusiness40to45=true; realNonzeroTestThenFixtureDirectedRepair=true; explicitStopRealExitGroupLease=true; fixedFourResourceResult=true; Android_ARM_provider_browserDOM=false");
         }
     }
+    @Test public void ownerApprovedYieldKeepsRealHttpAndSameSqlJobThenResumesCasAndStopsWithoutReplay()throws Exception {
+        enableOwnerRetentionFixture();
+        try(Model model=new Model()){
+            RunJournal journal=tasks.journal(taskId,run,epoch,original);AgentRunner runner=new AgentRunner(null,port);runner.bindDevelopmentContinuation(()->tasks.retainedDevelopmentServices(taskId,original).length()>0);
+            EventSink events=event->{try{tasks.event(taskId,run,epoch,event);}catch(Exception failed){throw new IllegalStateException(failed);}};
+            RunOutcome first=runner.run(taskId,task.getString("goal"),model.config(),original,events,journal);
+            System.out.println("RETAIN_FIRST stage="+model.stage+" status="+first.status+" evidence="+first.evidence);if(model.failure!=null)throw new AssertionError(model.failure);assertEquals(first.summary,"owned_running",first.status);assertTrue(runner.developmentYielded());tasks.retainDevelopmentTurn(taskId,original,first.summary);
+            assertSameLiveService();assertEquals("owned_running",tasks.get(taskId,false).getJSONObject("developmentSession").getString("phase"));assertEquals("40.00",new JSONObject(get(page(),"api/budget?costs=20,20",200)).getString("total"));
+            JSONObject retained=tasks.retainedDevelopmentServices(taskId,original).getJSONObject(0);assertEquals(serviceId,retained.getString("executionId"));assertTrue(retained.getLong("expiresAt")>System.currentTimeMillis());
+            int steps=journal.restore().getInt("steps");tasks.resumeDevelopmentTurn(taskId,original);
+            RunOutcome last=runner.run(taskId,task.getString("goal"),model.config(),original,events,journal);
+            if(model.failure!=null)throw new AssertionError(model.failure);assertFalse(runner.developmentYielded());assertTrue(last.summary,model.finished);assertEquals(1,countLaunches());assertTrue(journal.restore().getInt("steps")>steps);assertEquals(run,tasks.get(taskId,false).getString("runId"));assertEquals(epoch,tasks.get(taskId,false).getInt("coordinatorEpoch"));assertTrue(serviceActual().getBoolean("resourcesReleased"));assertTrue(serviceActual().getBoolean("processGroupAbsent"));assertTrue(model.sawBusiness45);
+        }
+    }
+    private void enableOwnerRetentionFixture()throws Exception {
+        // Fixture-only conversation identity: no real owner content or second task/run is created.
+        Field store=TaskStore.class.getDeclaredField("db");store.setAccessible(true);var db=(android.database.sqlite.SQLiteDatabase)store.get(tasks);
+        try(var cursor=db.rawQuery("SELECT document FROM tasks WHERE task_id=?",new String[]{taskId})){assertTrue(cursor.moveToFirst());JSONObject body=new JSONObject(cursor.getString(0)).put("conversationId","native-retention-fixture");var values=new android.content.ContentValues();values.put("document",body.toString());db.update("tasks",values,"task_id=?",new String[]{taskId});}
+        retainedJourney=true;
+    }
+    @Test public void cancellingYieldedOriginalControlReallyExitsNativeGroupAndReleasesLease()throws Exception {
+        enableOwnerRetentionFixture();
+        try(Model model=new Model()){
+            RunJournal journal=tasks.journal(taskId,run,epoch,original);AgentRunner runner=new AgentRunner(null,port);runner.bindDevelopmentContinuation(()->tasks.retainedDevelopmentServices(taskId,original).length()>0);
+            RunOutcome held=runner.run(taskId,task.getString("goal"),model.config(),original,event->{try{tasks.event(taskId,run,epoch,event);}catch(Exception failure){throw new IllegalStateException(failure);}},journal);
+            assertEquals(held.summary,"owned_running",held.status);tasks.retainDevelopmentTurn(taskId,original,held.summary);assertSameLiveService();int modelCalls=model.calls;
+            original.cancel();RunOutcome stopped=runner.closeDevelopment(taskId,original,journal);
+            assertFalse(runner.developmentYielded());assertEquals("cancelled",stopped.status);assertEquals(modelCalls,model.calls);assertEquals(1,countLaunches());JSONObject actual=serviceActual();assertTrue(actual.toString(),actual.getBoolean("processExited"));assertTrue(actual.getBoolean("processGroupAbsent"));assertTrue(actual.getBoolean("resourcesReleased"));assertEquals(0,tasks.retainedDevelopmentServices(taskId,original).length());
+        }
+    }
+    @Test public void yieldedServiceStillExpiresAtItsExplicitNativeDeadlineWithoutModelReplay()throws Exception {
+        enableOwnerRetentionFixture();retainedTimeout=10000;
+        try(Model model=new Model()){
+            RunJournal journal=tasks.journal(taskId,run,epoch,original);AgentRunner runner=new AgentRunner(null,port);runner.bindDevelopmentContinuation(()->tasks.retainedDevelopmentServices(taskId,original).length()>0);
+            RunOutcome held=runner.run(taskId,task.getString("goal"),model.config(),original,event->{try{tasks.event(taskId,run,epoch,event);}catch(Exception failure){throw new IllegalStateException(failure);}},journal);
+            assertEquals(held.summary,"owned_running",held.status);tasks.retainDevelopmentTurn(taskId,original,held.summary);assertSameLiveService();int calls=model.calls;
+            long until=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(15);JSONObject actual;
+            do{actual=serviceActual();if(actual.optBoolean("resourcesReleased"))break;Thread.sleep(40);}while(System.nanoTime()<until);
+            assertTrue(actual.toString(),actual.getBoolean("timedOut"));assertTrue(actual.getBoolean("processExited"));assertTrue(actual.getBoolean("processGroupAbsent"));assertTrue(actual.getBoolean("resourcesReleased"));runner.closeDevelopment(taskId,original,journal);assertEquals(calls,model.calls);assertEquals(1,countLaunches());
+        }
+    }
     private final class Model implements AutoCloseable {
         final ServerSocket server=new ServerSocket();final Thread thread;volatile Throwable failure;int stage,calls;String emitted="";JSONObject inspection,plan,read,preview;boolean finished,sawActualDevError,sawNonzeroTests,sawRepairedTests,sawBusiness45;ProjectDevSession.Observed observed;
         Model()throws Exception {server.bind(new InetSocketAddress("127.0.0.1",0));thread=new Thread(this::serve,"c13-existing-loopback-model-fixture");thread.setDaemon(true);thread.start();}
@@ -112,12 +154,13 @@ public final class ProjectLiveRunnerJourneyTest {
                 if(stage==35){preview=result;assertEquals(4,result.getInt("resourceCount"));}
                 stage++;emitted="";
             }
+            if(retainedJourney&&stage==11&&!retainedAnswerSent){retainedAnswerSent=true;return new JSONObject().put("content","原开发页面已就绪，可继续试用与编辑。");}
             String name;JSONObject args=new JSONObject();switch(stage){
                 case 0,7,17,24,34:name="project_inspect";break;
                 case 1:name="project_plan";args=plan("dependencies");break;
                 case 3,25,30:name="project_plan";args=plan("test");break;
                 case 5,32:name="project_plan";args=plan("build");break;
-                case 8:name="project_plan";args=plan("run").put("runMode","owned_service").put("devWatch",true).put("liveEditPaths",new JSONArray().put("src/main.js").put("src/budget.js").put("src/style.css"));break;
+                case 8:name="project_plan";args=plan("run").put("runMode","owned_service").put("devWatch",true).put("liveEditPaths",new JSONArray().put("src/main.js").put("src/budget.js").put("src/style.css"));if(retainedJourney)args.put("retainAfterTurn",true).put("timeoutMillis",retainedTimeout);break;
                 case 2,4,6,9,13,19,26,29,31,33:name="project_execute";args.put("plan",plan).put("stepId",plan.getJSONArray("steps").getJSONObject(0).getString("id"));break;
                 case 10,20:name="project_live_preview";args.put("executionId",serviceId);break;
                 case 11,16:name="project_read_file";args.put("path","src/budget.js");break;

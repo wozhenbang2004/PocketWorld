@@ -11,6 +11,7 @@ public final class AgentSlot {
         String id=input.optString("id","member-"+index);if(!id.matches("[A-Za-z][A-Za-z0-9_-]{0,63}"))throw new IllegalArgumentException("成员ID无效");
         String runner=input.optString("runner","model");if(!runner.matches("model|codex_app_server|claude|kimi"))throw new IllegalArgumentException("成员runner未识别");
         JSONObject slot=new JSONObject().put("id",id).put("name",JsonFiles.text(input,"name",48)).put("role",JsonFiles.text(input,"role",1200)).put("runner",runner);
+        if(runner.equals("claude")){if(!Boolean.TRUE.equals(input.opt("externalExecutionRiskAcknowledged")))throw new SecurityException("Claude成员需明确确认工具限制不是OS沙箱、账号和内部费用待真实执行核验");slot.put("externalExecutionRiskAcknowledged",true);}
         if(input.has("model")&&!input.optString("model").isEmpty())slot.put("model",JsonFiles.text(input,"model",200));
         if(input.has("modelTarget"))slot.put("modelTarget",dev.pocketengine.runtime.models.ModelTargetRef.fromJson(input.getJSONObject("modelTarget")).toJson());
         slot.put("assignment",input.has("assignment")?JsonFiles.text(input,"assignment",2000):slot.getString("role"));
@@ -33,5 +34,5 @@ public final class AgentSlot {
         }
         return slot;
     }
-    public static String availability(JSONObject slot,boolean externalFactory){String runner=slot.optString("runner","model");if(runner.equals("model"))return "available";if(!runner.equals("codex_app_server"))return "unsupported";if(!(slot.opt("device") instanceof JSONObject))return "device_required";return externalFactory?"probe_required":"adapter_required";}
+    public static String availability(JSONObject slot,boolean externalFactory){String runner=slot.optString("runner","model");if(runner.equals("model"))return "available";if(!runner.matches("codex_app_server|claude"))return "unsupported";if(!(slot.opt("device") instanceof JSONObject))return "device_required";return externalFactory?"probe_required":"adapter_required";}
 }

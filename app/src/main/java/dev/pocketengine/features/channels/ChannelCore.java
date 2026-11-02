@@ -275,6 +275,35 @@ public final class ChannelCore {
                 .put("admission","admitting").put("createdAt",System.currentTimeMillis());
         array("taskRequests").put(request);save();return new JSONObject().put("known",false).put("request",taskMetadata(request));
     }
+    /** Native notification lookup: the event id locates evidence, never grants screen authority. */
+    public synchronized JSONObject preparePhoneTask(String eventId)throws Exception {
+        JSONObject event=event(eventId),authority=route(event);requireTaskRoute(event,authority);
+        String text=event.getString("text");if(!text.startsWith("/phone ")||text.substring(7).trim().isEmpty()||text.substring(7).trim().length()>4000)throw new SecurityException("不是原主人手机目标");
+        JSONObject existing=find("taskRequests","eventKey",hostEventKey(event));
+        if(existing!=null){checkHostTaskAuthority(existing.getString("requestId"));if(!"phone".equals(existing.optString("taskKind")))throw new SecurityException("原来源已经用于其他任务");return phoneMetadata(existing);}
+        long now=System.currentTimeMillis(),sent=event.getLong("sentAt");if(now-sent>3_600_000L||sent-now>300_000L)throw new SecurityException("手机请求已过期，请由原主人发送新消息");
+        if(array("taskRequests").length()>=500)throw new IllegalStateException("渠道任务来源账簿已满");
+        JSONObject request=new JSONObject().put("requestId",UUID.randomUUID().toString()).put("taskId",UUID.randomUUID().toString())
+                .put("eventKey",hostEventKey(event)).put("originEvent",event).put("goal",text.substring(7).trim()).put("taskKind","phone")
+                .put("bindingEpoch",authority.getString("bindingEpoch")).put("taskGrantEpoch",authority.getString("taskGrantEpoch"))
+                .put("admission","awaiting_owner").put("validUntil",sent+3_600_000L).put("createdAt",now);
+        array("taskRequests").put(request);save();return phoneMetadata(request);
+    }
+    private JSONObject phoneMetadata(JSONObject request)throws Exception{return taskMetadata(request).put("goal",request.getString("goal")).put("taskKind","phone").put("validUntil",request.getLong("validUntil"));}
+    /** Consumed durably before the host can acquire the one phone lease. Unknown admissions never replay. */
+    public synchronized HostTaskPort.Request claimPhoneTask(String requestId,String goal,boolean screenConsent)throws Exception {
+        checkHostTaskAuthority(requestId);JSONObject request=requiredTask(requestId);
+        if(!screenConsent||!"phone".equals(request.optString("taskKind"))||!request.getString("goal").equals(goal)||!"awaiting_owner".equals(request.optString("admission"))||System.currentTimeMillis()>request.getLong("validUntil"))throw new SecurityException("原手机请求已处理、过期或未获本机屏幕同意");
+        request.put("admission","admitting");save();return new HostTaskPort.Request(request,false,true);
+    }
+    public synchronized void checkPhoneAdmission(String requestId)throws Exception {
+        checkHostTaskAuthority(requestId);JSONObject request=requiredTask(requestId);
+        if(!"phone".equals(request.optString("taskKind"))||!"admitting".equals(request.optString("admission"))||request.has("cancellation"))throw new SecurityException("原手机准入已经停止或处理");
+    }
+    public synchronized void cancelPhoneTask(String requestId)throws Exception {
+        JSONObject request=requiredTask(requestId);if(!"phone".equals(request.optString("taskKind")))throw new SecurityException("不是手机确认请求");
+        if("awaiting_owner".equals(request.optString("admission"))){request.put("admission","cancelled");save();}
+    }
     public synchronized HostTaskPort.Request hostTaskRequest(String requestId)throws Exception {
         checkHostTaskAuthority(requestId);return new HostTaskPort.Request(requiredTask(requestId));
     }
@@ -321,6 +350,7 @@ public final class ChannelCore {
     }
     public synchronized HostTaskPort.Request prepareHostTaskCancellation(String requestId)throws Exception {
         checkHostTaskAuthority(requestId);JSONObject request=requiredTask(requestId);String run=request.optString("hostRunId","");int epoch=request.optInt("hostCoordinatorEpoch",0);
+        if("phone".equals(request.optString("taskKind"))&&"awaiting_owner".equals(request.optString("admission"))){request.put("admission","cancelled").put("cancellation","requested").put("cancellationRunId","").put("cancellationEpoch",0);save();return null;}
         if(request.has("cancellation")){
             if(run.equals(request.optString("cancellationRunId"))&&epoch==request.optInt("cancellationEpoch",0))return null;
             if(epoch<=request.optInt("cancellationEpoch",0))throw new SecurityException("没有取得新的宿主执行代次，不能再次发送取消");

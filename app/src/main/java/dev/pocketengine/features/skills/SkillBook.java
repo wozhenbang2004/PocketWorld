@@ -441,6 +441,20 @@ public final class SkillBook {
                     .put("executionGeneration",Math.addExact(record.optLong("executionGeneration",0),1));save(state);return present(record,now);
         }
     }
+    /** Opaque current reference selection; created only after native verified content read. */
+    public static final class ReferenceSelection {
+        private final SkillBook issuer;private final String scope,binding;private final Set<String> capabilities;
+        private ReferenceSelection(SkillBook issuer,JSONObject scope,JSONObject binding,Set<String> capabilities){this.issuer=issuer;this.scope=scope.toString();this.binding=binding.toString();this.capabilities=Set.copyOf(capabilities);}
+        public JSONObject metadata()throws Exception{return new JSONObject(binding);}
+        public void requireNoBookMonitorHeld(){if(Thread.holdsLock(issuer.lock))throw new SecurityException("不得从技能锁反向进入原任务");}
+        public void checkCurrent()throws Exception{JSONObject expected=metadata();synchronized(issuer.lock){JSONObject row=required(issuer.state().getJSONArray("skills"),scope(new JSONObject(scope)),expected.getString("id"));issuer.assertHostRead(row,expected.getString("digest"),capabilities,System.currentTimeMillis());if(row.getInt("revision")!=expected.getInt("revision")||row.optLong("executionGeneration",0)!=expected.getLong("executionGeneration"))throw new SecurityException("参考技能版本或批准已改变");}}
+    }
+    public ReferenceSelection selectReferenceForHost(JSONObject scope,String id,int revision,String digest,Set<String> capabilities,long now)throws Exception {
+        synchronized(lock){JSONObject row=required(state().getJSONArray("skills"),scope(scope),id);assertHostRead(row,digest,capabilities,now);if(row.getInt("revision")!=revision)throw new SecurityException("参考技能版本已改变");
+            JSONObject binding=new JSONObject().put("id",id).put("revision",revision).put("digest",digest).put("executionGeneration",row.optLong("executionGeneration",0));if(row.has("origin"))binding.put("origin",new JSONObject(row.getJSONObject("origin").toString()));
+            return new ReferenceSelection(this,scope,binding,capabilities);
+        }
+    }
     /** Native feedback only; exact package+approval generation fence and durable replay barrier. */
     public JSONObject recordQuality(JSONObject scope,SkillQualityReceipt evidence,long now)throws Exception {
         JSONObject fact=evidence.snapshot();String[] owner=scope(scope);
@@ -450,6 +464,11 @@ public final class SkillBook {
             JSONArray history=record.optJSONArray("qualityHistory");if(history==null)history=new JSONArray();
             for(int i=0;i<history.length();i++){JSONObject old=history.getJSONObject(i);if(old.getString("operationId").equals(fact.getString("operationId"))&&old.getString("taskId").equals(fact.getString("taskId"))){
                 if(!old.getString("outcome").equals(fact.getString("outcome"))||!old.getString("note").equals(fact.getString("note")))throw new SecurityException("原使用结果已审阅，不能重复改写归责");return present(record,now);}}
+            for(int i=0;i<history.length();i++){JSONObject prior=history.getJSONObject(i);
+                if(prior.getString("taskId").equals(fact.getString("taskId"))&&prior.getString("runId").equals(fact.getString("runId"))&&prior.getLong("executionGeneration")==fact.getLong("executionGeneration")&&java.util.Set.of("verified","skill_failed","verifier_rejected").contains(prior.getString("outcome"))&&java.util.Set.of("verified","skill_failed","verifier_rejected").contains(fact.getString("outcome"))){
+                    if(!prior.getString("outcome").equals(fact.getString("outcome")))throw new SecurityException("同一轮已有不同技能结果，请核对原归责");return present(record,now);
+                }
+            }
             if(record.optLong("executionGeneration",0)!=fact.getLong("executionGeneration")||!active(record,now))throw new SecurityException("技能已停用或重新批准，请勿将旧使用结果归给新试用");
             if(history.length()>=200)throw new IllegalStateException("此版本已保留200次审阅，请导入新版本后继续试用");
             history.put(fact);record.put("qualityHistory",history);

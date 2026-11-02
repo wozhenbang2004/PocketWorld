@@ -14,6 +14,7 @@ import org.json.JSONObject;
 public final class DeviceCapabilityPort implements CapabilityPort {
     public interface NativeRoute {
         String targetDeviceId();
+        default void acceptedTransfer(JSONObject originalWire,Reply actual,JSONObject receipt)throws Exception{ }
         default String routeId(){return targetDeviceId();}
         default String parentGoal(){return null;}
         default boolean supportsFunction(String function){return true;}
@@ -66,7 +67,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
     }
     @Override public JSONArray tools()throws Exception{
         JSONArray result=new JSONArray();for(String function:new String[]{"device_invoke_tool","device_delegate_goal","device_operation_get"}){
-            JSONArray targets=new JSONArray(),ids=new JSONArray(),ranges=new JSONArray();String goal=null;for(var entry:routes.entrySet()){NativeRoute route=entry.getValue();if(!route.supportsFunction(function))continue;route.requireCurrent(System.currentTimeMillis());ids.put(entry.getKey());if(!PairingCoordinator.contains(targets,route.targetDeviceId()))targets.put(route.targetDeviceId());JSONObject range=new JSONObject().put("routeId",entry.getKey()).put("targetDeviceId",route.targetDeviceId());try{range.put("approvedRange",route.reservationApproval().view());}catch(SecurityException notConfigured){throw notConfigured;}ranges.put(range);if(route.parentGoal()!=null)goal=route.parentGoal();}
+            JSONArray targets=new JSONArray(),ids=new JSONArray(),ranges=new JSONArray();String goal=null;for(var entry:routes.entrySet()){NativeRoute route=entry.getValue();if(!route.supportsFunction(function))continue;route.requireCurrent(System.currentTimeMillis());ids.put(entry.getKey());if(!PairingCoordinator.contains(targets,route.targetDeviceId()))targets.put(route.targetDeviceId());JSONObject range=new JSONObject().put("routeId",entry.getKey()).put("targetDeviceId",route.targetDeviceId());try{JSONObject approved=route.reservationApproval().view();JSONArray projects=approved.optJSONArray("projects");for(int p=0;projects!=null&&p<projects.length();p++)projects.getJSONObject(p).remove("manifest");range.put("approvedRange",approved);}catch(SecurityException notConfigured){throw notConfigured;}ranges.put(range);if(route.parentGoal()!=null)goal=route.parentGoal();}
             if(ids.length()==0)continue;JSONObject properties=new JSONObject().put("routeId",new JSONObject().put("type","string").put("enum",ids)).put("targetDeviceId",new JSONObject().put("type","string").put("enum",targets));String description="准确原native范围（不是可改参数）："+ranges.toString()+"。未知只查原operation，不换ID重发。";
             if(function.equals("device_invoke_tool")){
                 JSONArray names=new JSONArray(),exact=new JSONArray();StringBuilder contractNotes=new StringBuilder();java.util.Set<String> noted=new java.util.HashSet<>();
@@ -104,7 +105,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
     }
     @Override public JSONObject execute(String name,JSONObject input,RunControl control)throws Exception{JSONObject result=invoke(name,input,control);return "OperationReceipt".equals(result.optString("messageType"))?localAgentReceipt(result):result;}
     private static JSONObject localAgentReceipt(JSONObject typed)throws Exception{
-        JSONObject body=typed.getJSONObject("payload"),actual=body.optJSONObject("receipt");boolean ok=typed.optBoolean("accepted")&&"reported".equals(typed.optString("effectState"))&&(typed.optString("status").equals("succeeded")||actual!=null&&Boolean.TRUE.equals(actual.opt("ok"))||Boolean.TRUE.equals(body.opt("ok")));
+        JSONObject body=typed.getJSONObject("payload"),actual=body.optJSONObject("receipt");if("awaiting_import_review".equals(body.optString("phase")))return new JSONObject().put("ok",false).put("code","needs_user").put("message","项目包已暂存，尚未导入；请打开原任务的设备协作范围，核对原包清单和新目录后确认，再继续原任务。").put("deviceReceipt",typed).put("operationId",typed.get("operationId")).put("businessVerified",false);boolean ok=typed.optBoolean("accepted")&&"reported".equals(typed.optString("effectState"))&&(typed.optString("status").equals("succeeded")||actual!=null&&Boolean.TRUE.equals(actual.opt("ok"))||Boolean.TRUE.equals(body.opt("ok")));
         return new JSONObject().put("ok",ok).put("accepted",typed.getBoolean("accepted")).put("operationId",typed.get("operationId")).put("status",typed.getString("status")).put("code",ok?"device_operation_reported":typed.optBoolean("accepted")?"device_request_accepted_waiting_result":"device_original_not_found").put("message",ok?"已取得原目标准确操作回执；不等于业务目标已验证":"原请求接受/执行状态请查原ID，不换ID重提").put("deviceReceipt",typed).put("businessVerified",false);
     }
     private JSONObject invoke(String name, JSONObject input, RunControl control) throws Exception {
@@ -117,7 +118,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
             DeviceTaskEnvelope query = route.request("operation.get", new JSONObject().put("operationId", operation), operation, 0, 0, null, original);
             try {
                 Reply actual = route.exchange(query, original); JSONObject result = reply(route, actual,query);
-                if (Boolean.TRUE.equals(result.opt("accepted"))){recordAccepted(route, actual, result, operation, result.optString("argumentsDigest"));captureImage(route,actual,operation,name,result);receiveFile(route,actual,operation,result);}
+                if (Boolean.TRUE.equals(result.opt("accepted"))){recordAccepted(route, actual, result, operation, result.optString("argumentsDigest"));captureImage(route,actual,operation,name,result);receiveFile(route,actual,operation,result);sendFile(route,actual,operation,result);}
                 JSONObject payload=result.getJSONObject("payload");
                 if (Boolean.TRUE.equals(payload.opt("terminal")) && Boolean.TRUE.equals(payload.opt("stopped"))&&"GoalSubmission".equals(originalWire.optString("messageType"))&&result.has("localTaskId")&&result.has("runId")) {
                     JSONObject allocation = devices.childAllocationForOperation(taskId, operation);
@@ -150,7 +151,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
         try {
             Reply actual = route.exchange(request,ticket, original); JSONObject result = reply(route, actual,request);
             if (Boolean.TRUE.equals(result.opt("accepted"))) {
-                recordAccepted(route, actual, result, hostOperation, request.argumentsDigest());captureImage(route,actual,hostOperation,name,result);receiveFile(route,actual,hostOperation,result);
+                recordAccepted(route, actual, result, hostOperation, request.argumentsDigest());captureImage(route,actual,hostOperation,name,result);receiveFile(route,actual,hostOperation,result);sendFile(route,actual,hostOperation,result);
                 return parentView(result,new JSONObject().put("parentOperationId",hostOperation).put("budgetReserved",true).put("nextAction","device_operation_get"));
             }
             return parentView(result,new JSONObject().put("budgetReserved",true).put("operationId",hostOperation));
@@ -188,9 +189,13 @@ public final class DeviceCapabilityPort implements CapabilityPort {
         if(result.getBoolean("accepted")&&(result.optLong("acceptedAt")<1||!result.optString("argumentsDigest").matches("[a-f0-9]{64}")||!request.method().equals("operation.get")&&!request.argumentsDigest().equals(result.optString("argumentsDigest"))))throw new SecurityException("accepted缺少同原操作已SQL持久的完整绑定");
         return new JSONObject(result.toString());
     }
+    private void sendFile(NativeRoute route,Reply actual,String operation,JSONObject receipt)throws Exception{
+        try{route.acceptedTransfer(devices.childAllocationForOperation(taskId,operation).getJSONObject("boundWire"),actual,receipt);}
+        catch(Exception unavailable){receipt.getJSONObject("payload").put("nativeFileSend",new JSONObject().put("queued",false).put("delivered",false).put("operationId",operation).put("nextAction","device_operation_get").put("retrySubmitted",false));}
+    }
     private void receiveFile(NativeRoute route,Reply actual,String operation,JSONObject receipt)throws Exception{
         JSONObject wire=devices.childAllocationForOperation(taskId,operation).getJSONObject("boundWire");
-        if(!"ToolInvocation".equals(wire.optString("messageType"))||!"workspace.export".equals(wire.getJSONObject("arguments").optString("toolName")))return;
+        if(!"ToolInvocation".equals(wire.optString("messageType"))||!java.util.Set.of("workspace.export","workspace.project.export").contains(wire.getJSONObject("arguments").optString("toolName")))return;
         JSONObject payload=receipt.getJSONObject("payload");
         try{
             if(files==null)throw new SecurityException("原附件接收器未安装");

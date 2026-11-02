@@ -143,10 +143,17 @@ public final class NativeOwnerWorkflows {
     private KnowledgeLearningWorkflow learning(KnowledgeLearningWorkflow.ModelClient model)throws Exception{
         return new KnowledgeLearningWorkflow(memory(),skills(),this::learningSource,model);
     }
+    private JSONArray procedureApps(JSONObject scope,String record,long revision)throws Exception {
+        JSONObject procedure=memory().reviewedProcedure(scope,record,revision);JSONArray refs=procedure.getJSONArray("sourceRefs"),result=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
+        for(int i=0;i<refs.length();i++){SourceRef ref=SourceRef.fromJson(refs.getJSONObject(i));if(!"task_evidence".equals(ref.kind))continue;JSONArray apps=tasks.appIdentitiesForSource(ref);for(int j=0;j<apps.length();j++){JSONObject app=apps.getJSONObject(j);if(seen.add(app.getString("packageName")+":"+app.getString("appVersion")))result.put(app);}}
+        return result;
+    }
     private JSONObject draftExperience(JSONObject scope,JSONObject payload,dev.pocketengine.core.RunControl original,boolean appRevision)throws Exception{
         String record=payload.getString("recordId");long revision=positiveVersion(payload,"expectedRevision");
         // Check the original reviewed source before allocating an accounting-only record.
-        memory().reviewedProcedure(scope,record,revision);final dev.pocketengine.core.ModelConfig captured=context.model();
+        memory().reviewedProcedure(scope,record,revision);
+        if(appRevision){JSONArray identities=procedureApps(scope,record,revision);boolean found=false;for(int i=0;i<identities.length();i++){JSONObject app=identities.getJSONObject(i);if(payload.getString("packageName").equals(app.getString("packageName"))&&payload.getString("appVersion").equals(app.getString("appVersion")))found=true;}if(!found)throw new SecurityException("所选 App 版本没有原任务设备观察实证，未发送模型");}
+        final dev.pocketengine.core.ModelConfig captured=context.model();
         try(var usage=dev.pocketengine.runtime.usage.NativeInferenceWork.open(tasks,TaskStore.NativeInferenceKind.SKILL_DRAFT,java.util.UUID.randomUUID().toString(),original)){
             var target=usage.target();var audience=dev.pocketengine.runtime.models.NativeInferenceScope.ownerApp("owner","private",target.context.taskId,target.context.runId,target.context.epoch,original);
             var admitted=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(target,()->{
@@ -180,12 +187,17 @@ public final class NativeOwnerWorkflows {
             }
             case "proposeLearning":throw new SecurityException("来源候选必须经过本机原TaskStore提炼任务；不能绕过提交与停止门禁");
             case "draftExperience":return draftExperience(scope,payload,control,false);
+            case "procedureAppIdentities":return new JSONObject().put("apps",procedureApps(scope,payload.getString("recordId"),positiveVersion(payload,"expectedRevision")));
             case "draftAppRevision":return draftExperience(scope,payload,control,true);
             case "inspectExperience":return learning().inspectExperience(scope,payload.getString("recordId"),positiveVersion(payload,"expectedRevision"),payload.getJSONObject("draft"),payload.getJSONObject("options"));
             case "importExperience":return learning().importExperience(scope,payload.getString("recordId"),positiveVersion(payload,"expectedRevision"),payload.getJSONObject("draft"),payload.getJSONObject("options"));
             case "approveExperience":{
                 long revision=positiveVersion(payload,"revision");if(revision>Integer.MAX_VALUE)throw new IllegalArgumentException("技能版本无效");
                 return learning().approveExperience(scope,payload.getString("id"),(int)revision,payload.getString("digest"));
+            }
+            case "appQualityApplications":return tasks.learnedMethodApplications(payload.getString("recordId"),positiveVersion(payload,"revision"),payload.optString("cursor"),20);
+            case "reviewAppQuality":{
+                var receipt=tasks.reviewAppQuality(payload.getString("taskId"),payload.getString("operationId"),payload.getString("recordId"),positiveVersion(payload,"revision"),payload.getString("outcome"),payload.getString("note"));control.check();return memory().recordAppQuality(scope,receipt);
             }
             case "skillQualityApplications":return tasks.skillQualityApplications(payload.getString("id"),Math.toIntExact(positiveVersion(payload,"revision")),payload.getString("digest"));
             case "reviewSkillQuality":{

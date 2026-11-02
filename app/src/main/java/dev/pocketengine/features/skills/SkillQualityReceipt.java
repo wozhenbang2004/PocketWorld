@@ -7,6 +7,15 @@ public final class SkillQualityReceipt {
     private final String json;
     private SkillQualityReceipt(JSONObject value) { json=value.toString(); }
     public JSONObject snapshot() throws Exception { return new JSONObject(json); }
+    /** Only TaskStore's revalidated original reference decision may enter this native factory. */
+    public static SkillQualityReceipt fromReferenceDecision(JSONObject fact,String outcome,String note,long now)throws Exception {
+        if(!"pocketworld.skill-reference-use.v1".equals(fact.optString("format"))||fact.getJSONArray("stepRefs").length()<1)throw new SecurityException("缺少原步骤参考采用证明");
+        if(!java.util.Set.of("verified","skill_failed","verifier_rejected","environment","cancelled","model_error").contains(outcome)||note==null||note.isBlank()||note.length()>1000)throw new IllegalArgumentException("请选择结果并说明原任务核对依据");
+        JSONObject pack=fact.getJSONObject("package"),value=new JSONObject().put("taskId",fact.getString("taskId")).put("runId",fact.getString("runId")).put("operationId",fact.getString("operationId"))
+            .put("ownerId",fact.getString("ownerId")).put("spaceId",fact.getString("spaceId")).put("skillId",pack.getString("id")).put("revision",pack.getInt("revision")).put("digest",pack.getString("digest"))
+            .put("executionGeneration",pack.getLong("executionGeneration")).put("outcome",outcome).put("note",note.trim()).put("at",now).put("evidenceKind","owner_reviewed_original_reference_steps").put("automaticallyVerified",false).put("executionAuthorized",false);
+        if(pack.optJSONObject("origin")!=null)value.put("originRef",new JSONObject(pack.getJSONObject("origin").getJSONObject("ref").toString()));return new SkillQualityReceipt(value);
+    }
     /** Caller must read original from TaskStore, not a feature-command payload. */
     public static SkillQualityReceipt fromOriginal(JSONObject original,String outcome,String note,long now)throws Exception {
         if(!java.util.Set.of("verified","skill_failed","verifier_rejected","environment","cancelled","model_error").contains(outcome))throw new IllegalArgumentException("请选择可归责的使用结果");

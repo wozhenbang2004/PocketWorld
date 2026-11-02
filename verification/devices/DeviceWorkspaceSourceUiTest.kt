@@ -53,6 +53,7 @@ class DeviceWorkspaceSourceUiTest {
         var offerAbandoned = false; var grantsChanged = 0; var chosenGrantRevision: Host.GrantChoice? = null
         var showRecovery = false; var recoveryOpened = 0; var recoveryClosed = 0; var recoveryRead = 0
         var resultsConfirmed = 0; var pendingCancelled = 0; var historyQueries = 0; var historyClosed = 0
+        var historyStops = 0
         var chosenHistory: List<String> = emptyList()
         var pairState = "pending_owner_confirmation"; var readFailure = false
         val now get() = System.currentTimeMillis()
@@ -161,6 +162,7 @@ class DeviceWorkspaceSourceUiTest {
                     var closed = false
                     override fun view() = obj("taskId" to id, "operationId" to operationId, "targetDeviceId" to peerId, "resourceBinding" to obj("screenMode" to "capabilities"), "readOnly" to true, "newRun" to false)
                     override fun query(): JSONObject { check(!closed); historyQueries++; return obj("unknown" to true, "readOnly" to true, "newRun" to false, "retrySubmitted" to false, "unknownRefunded" to false, "operationReceipt" to obj("status" to "unknown", "accepted" to false, "syntheticDisplayOnly" to true)) }
+                    override fun requestStop(): JSONObject { check(!closed); historyStops++; return obj("unknown" to true, "managementOnly" to true, "stopped" to false, "retrySubmitted" to false) }
                     override fun close() { if (!closed) historyClosed++; closed = true }
                 } }
                 override fun pause(id: String) { throw AssertionError("No real execution") }
@@ -278,6 +280,7 @@ class DeviceWorkspaceSourceUiTest {
         activity.setContent { PocketWorldTheme { DeviceTaskHistoryControls(task, f.host, { it.run() }, 0L, {}) } }
         try {
             settle(root); clickTag(root, "device_task_history_open_fixture-original-op"); val dialog = awaitDialog(root); val d = dialog.window!!.decorView; settle(d)
+            assertEquals(0, f.historyStops); clickTag(d, "device_task_history_stop"); assertEquals(1, f.historyStops); assertTrue(texts(d).any { it.contains("停止结果尚未确认") })
             assertEquals(0, f.historyQueries); clickTag(d, "device_task_history_query"); assertEquals(1, f.historyQueries); assertTrue(texts(d).contains("执行结果仍未确认")); capture(d, "13-original-task-unknown-history")
             dialog.onBackPressed(); settle(root); assertEquals(1, f.historyClosed); assertEquals(0, f.stops)
             clickTag(root, "device_task_history_open_fixture-original-op"); settle(awaitDialog(root).window!!.decorView); assertEquals(1, f.historyQueries)
@@ -353,6 +356,8 @@ class DeviceWorkspaceSourceUiTest {
         val result = first.reviewResult("fixture-result"); try { second.confirmResult(result, true); fail("Cross-window result accepted") } catch (_: SecurityException) { }
         first.confirmResult(result, true); try { first.confirmResult(result, true); fail("Result review replay accepted") } catch (_: SecurityException) { }
         val history = first.openHistory("fixture-history", "fixture-original-op"); first.discardReview(); try { history.query(); fail("Closed read window queried") } catch (_: SecurityException) { }
+        try { history.requestStop(); fail("Closed original operation stop window used") } catch (_: SecurityException) { }
+        assertEquals(0, fixture.historyStops)
         assertEquals(1, fixture.resultsConfirmed); assertEquals(0, fixture.historyQueries); assertEquals(1, fixture.historyClosed)
         val goal = first.reviewGoal("fixture-goal"); first.close(); try { first.confirmGoal(goal, true); fail("Closed native goal review accepted") } catch (_: IllegalStateException) { }
         assertEquals(1, fixture.pairingConfirmed); assertEquals(0, fixture.goalsConfirmed); second.close()

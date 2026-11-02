@@ -30,7 +30,11 @@ public final class ChannelTaskCoordinator implements HostTaskPort {
         this.tasks=java.util.Objects.requireNonNull(tasks);this.features=java.util.Objects.requireNonNull(features);this.channels=java.util.Objects.requireNonNull(channels);
         this.workers=java.util.Objects.requireNonNull(workers);this.controls=java.util.Objects.requireNonNull(controls);this.configs=java.util.Objects.requireNonNull(configs);this.runner=java.util.Objects.requireNonNull(runner);this.changed=java.util.Objects.requireNonNull(changed);this.deliveryFailure=java.util.Objects.requireNonNull(deliveryFailure);
     }
+    private java.util.function.Function<String,RunControl> phoneControls=id->null;
+    public void setPhoneControls(java.util.function.Function<String,RunControl> lookup){phoneControls=java.util.Objects.requireNonNull(lookup);}
+    private RunControl originalControl(String id){RunControl control=controls.get(id);return control==null?phoneControls.apply(id):control;}
     @Override public TaskState admit(Request request,Authority authority)throws Exception{
+        if("phone".equals(request.origin().optString("taskKind")))throw new SecurityException("手机任务只从本机屏幕确认入口启动");
         authority.check();channels.checkHostTaskAuthority(request.requestId);ModelConfig config=configs.get();SettingsStore.validate(config);
         String goal=config.apiKey.isEmpty()?request.goal:request.goal.replace(config.apiKey,"[密钥已隐藏]");
         JSONObject task=tasks.registerChannelTask(request.taskId,goal,request.origin());
@@ -41,9 +45,9 @@ public final class ChannelTaskCoordinator implements HostTaskPort {
         authority.check();channels.checkHostTaskAuthority(request.requestId);JSONObject task=tasks.channelTask(request.taskId,request.origin());return task==null?null:state(task);
     }
     @Override public TaskState cancel(Request request,Authority authority)throws Exception{
-        authority.check();channels.checkHostTaskAuthority(request.requestId);JSONObject task;
+        authority.check();channels.checkHostTaskAuthority(request.requestId);JSONObject task;RunControl original=originalControl(request.taskId);
         synchronized(tasks){
-            task=tasks.cancelChannelTask(request.taskId,request.origin(),request.expectedRunId,request.expectedCoordinatorEpoch,controls.get(request.taskId));
+            task=tasks.cancelChannelTask(request.taskId,request.origin(),request.expectedRunId,request.expectedCoordinatorEpoch,original);
             // The same TaskStore monitor keeps a newer parent run from adding children while
             // the existing host's bounded cancellation routing captures the old children.
             features.cancelRelatedTasks(request.taskId);
@@ -52,9 +56,10 @@ public final class ChannelTaskCoordinator implements HostTaskPort {
     }
     /** Local-owner stop remains available even after the external account/grant was revoked. */
     public void stop(String id)throws Exception{
+        RunControl original=originalControl(id);
         synchronized(tasks){
             JSONObject task=tasks.get(id,false),source=origin(task);
-            tasks.cancelChannelTask(id,source,task.optString("runId"),task.optInt("coordinatorEpoch"),controls.get(id));
+            tasks.cancelChannelTask(id,source,task.optString("runId"),task.optInt("coordinatorEpoch"),original);
             features.cancelRelatedTasks(id);
         }
         changed.accept(id);publishTaskState(id);
@@ -69,7 +74,7 @@ public final class ChannelTaskCoordinator implements HostTaskPort {
     public boolean isChannelTask(String id)throws Exception{JSONObject task=tasks.get(id,false);return task!=null&&task.optJSONObject("origin")!=null&&task.getJSONObject("origin").optString("kind").equals("channel");}
     /** Native continuation, including approval resume, always rebuilds authority from durable origin. */
     public void resume(String id,String feedback)throws Exception{
-        JSONObject task=tasks.get(id,false);JSONObject origin=origin(task);channels.checkHostTaskAuthority(origin.getString("requestId"));tasks.channelTask(id,origin);
+        JSONObject task=tasks.get(id,false);if("phone".equals(task.optString("kind")))throw new SecurityException("请从原手机任务确认屏幕后继续");JSONObject origin=origin(task);channels.checkHostTaskAuthority(origin.getString("requestId"));tasks.channelTask(id,origin);
         if(task.optString("status").equals("completed"))throw new IllegalStateException("任务已完成");
         if(tasks.hasUnresolved(id))throw new IllegalStateException("请先核对未决操作");
         ModelConfig config=configs.get();SettingsStore.validate(config);if(feedback!=null&&!feedback.trim().isEmpty())tasks.feedback(id,feedback.trim());schedule(task,null,config,true);

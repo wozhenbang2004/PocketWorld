@@ -44,7 +44,7 @@ internal fun CapabilityApprovals(task: UiTask, controller: PocketWorldController
                 if (liveScope != null) {
                     Text("本次启动包含限定热改与后续源码执行", color = Danger, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                     val paths = liveScope.optJSONArray("editablePaths")
-                    Text("仅原项目本轮的既有文件：" + (0 until (paths?.length() ?: 0)).joinToString("、") { paths!!.optString(it) } + "。每次仍须当前SHA、原操作预算和真实服务写租约；配置、锁、工具脚本、环境和新文件不在此许可内。原任务结束必须停止并排空，最长5分钟，不是持久后台或公网服务。", fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 6.dp))
+                    Text("仅原项目本轮的既有文件：" + (0 until (paths?.length() ?: 0)).joinToString("、") { paths!!.optString(it) } + "。每次仍须当前SHA、原操作预算和真实服务写租约；配置、锁、工具脚本、环境和新文件不在此许可内。原任务停止、授权到期或撤销必须停止并排空。" + (if (liveScope.optBoolean("retainAfterTurn")) "本次明确保留：模型本轮答复后仍可试用和编辑，最多 ${liveScope.optLong("timeoutMillis") / 1000} 秒，原任务期限更早时优先停止。" else "未选择轮次后保留，最长5分钟，模型轮次结束即收尾。") + "不是冷重启持久后台或公网服务。", fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 6.dp))
                     Row(Modifier.fillMaxWidth()) {
                         Checkbox(checked = reviewedLiveScope, onCheckedChange = { reviewedLiveScope = it })
                         Text("我已核对以上原文件范围，并允许这些源码后续修改在本轮服务中执行", fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.weight(1f).padding(top = 10.dp))

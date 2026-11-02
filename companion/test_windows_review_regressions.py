@@ -140,6 +140,35 @@ class ReplacementRecoveryModels(unittest.TestCase):
         backend._replacement_fact = fact
         return backend, api
 
+    def test_revoked_during_snapshot_write_never_publishes_original_handle(self):
+        backend, api = self.backend(None)
+        publications = []
+        api.publish_handle = lambda *args: publications.append(args)
+        allow = [True]
+        original_write = api.write
+        def write(handle, raw):
+            original_write(handle, raw)
+            allow[0] = False
+        api.write = write
+        def current():
+            if not allow[0]: raise PermissionError("cancelled during snapshot write")
+        with self.assertRaises(PermissionError):
+            backend.create_private_snapshot("C:\\fixture", "input-cache", b"private bytes", current=current)
+        self.assertEqual([], publications)
+        self.assertEqual(1, len(api.deleted))
+
+    def test_revoked_during_intent_persistence_cannot_cross_native_replace_boundary(self):
+        backend, api = self.backend(None)
+        allow = [True]
+        def current():
+            if not allow[0]: raise PermissionError("revoked during original intent persistence")
+        def record(value): allow[0] = False
+        backend._delete_owned_bytes = lambda *args: None
+        with self.assertRaises(PermissionError):
+            backend.compare_and_swap("C:\\fixture", "config", b"old", b"new", current, record_intent=record)
+        self.assertEqual([], api.calls)
+        self.assertEqual(b"old", api.objects["C:\\fixture\\config"]["raw"])
+
     def test_documented_partial_failures_keep_all_material_and_persist_intent_before_dispatch(self):
         for error in (1175, 1176, 1177, 5):
             backend, api = self.backend(error); intents = []

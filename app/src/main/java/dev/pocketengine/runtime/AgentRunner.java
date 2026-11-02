@@ -63,6 +63,22 @@ public final class AgentRunner {
     }
     private final RequestProjection requestProjection;
     private final OwnerInputs ownerInputs;
+    /** Installed only by the native owner host retaining this exact Runner/port/control. */
+    public interface DevelopmentContinuation { boolean retainAfterTurn() throws Exception; }
+    private DevelopmentContinuation developmentContinuation;
+    private boolean developmentYielded,lifecycleBegun;
+    private int originalModelRounds;
+    private final java.util.List<String> retainedServiceOperations=new java.util.ArrayList<>();
+    public void bindDevelopmentContinuation(DevelopmentContinuation owner){if(developmentContinuation!=null||lifecycleBegun)throw new IllegalStateException("original continuation already bound");developmentContinuation=java.util.Objects.requireNonNull(owner);}
+    public boolean developmentYielded(){return developmentYielded;}
+    /** Native host terminal callback. No model request or operation replay. */
+    public RunOutcome closeDevelopment(String taskId,RunControl control,RunJournal journal){
+        developmentYielded=false;boolean pending=false;
+        if(!control.isCancelled()&&!control.isPaused())try{capabilities.endRun(control);}catch(Exception unavailable){pending=true;}
+        try{capabilities.close();}catch(RuntimeException unavailable){pending=true;}
+        JSONObject proof=nativeProjectServiceExits(taskId,control,journal,retainedServiceOperations);
+        try{return new RunOutcome(pending||proof==null?"awaiting_user":control.isCancelled()?"cancelled":"needs_confirmation",pending||proof==null?"原服务已请求停止，退出与资源释放仍待核对；不自动重启":"开发试用已结束，原服务已释放；可从原任务继续",new JSONObject().put("projectServiceDrainPending",pending||proof==null).put("projectServiceExitEvidence",proof==null?JSONObject.NULL:proof));}catch(Exception invalid){throw new IllegalStateException(invalid);}
+    }
 
     public AgentRunner(PhonePort phone) {
         this(phone,null);
@@ -89,7 +105,8 @@ public final class AgentRunner {
     public RunOutcome run(String taskId, String goal, ModelConfig config, RunControl control,
                           EventSink sink, RunJournal journal) {
         RunOutcome outcome=null;boolean endUnavailable=false,cleanupPending=false;
-        java.util.List<String> ownedServiceOperations=new java.util.ArrayList<>();
+        java.util.List<String> ownedServiceOperations=new java.util.ArrayList<>(retainedServiceOperations);
+        developmentYielded=false;
         dev.pocketengine.features.local.project.ProjectServiceDrainPending serviceDrainObserved=null;
         // TaskStore applies a result event's terminal status immediately. Keep that event behind
         // the live-authorized exit hook/cleanup; all observations/intents/receipts still flow now.
@@ -97,14 +114,15 @@ public final class AgentRunner {
         EventSink admitted=deferred?event->{if(!"result".equals(event.optString("type")))sink.emit(event);}:sink;
         try{
             outcome=runBound(taskId,goal,config,control,admitted,journal,ownedServiceOperations);
-            if(capabilities!=null&&control!=null&&!control.isCancelled()&&!control.isPaused())try{capabilities.endRun(control);}
+            if(!developmentYielded&&capabilities!=null&&control!=null&&!control.isCancelled()&&!control.isPaused())try{capabilities.endRun(control);}
                 catch(dev.pocketengine.features.local.project.ProjectServiceDrainPending pending){serviceDrainObserved=pending;}
                 catch(Exception unavailable){endUnavailable=true;}
         }finally{
-            if(capabilities!=null)try{capabilities.close();}
+            if(!developmentYielded&&capabilities!=null)try{capabilities.close();}
                 catch(dev.pocketengine.features.local.project.ProjectServiceDrainPending pending){serviceDrainObserved=pending;}
                 catch(RuntimeException unavailable){cleanupPending=true;}
         }
+        if(developmentYielded){retainedServiceOperations.clear();retainedServiceOperations.addAll(ownedServiceOperations);return outcome;}
         // A successful Java close is not a process/lease receipt. Even an earlier native
         // pending observation stays pending until the original journal proves every exit.
         boolean pendingScopeComplete=true;
@@ -205,13 +223,15 @@ public final class AgentRunner {
             if (!latest.optBoolean("ok", true)) return finish(taskId, "awaiting_user", latest.optString("message", "无法观察当前手机，请检查页面和操作权限后继续。"), evidence, steps, config, sink);
             appendObservation(history, latest, config, contextBudget);
             checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
-            if(capabilities!=null)capabilities.beginRun(clean(goal,config),control);
+            if(capabilities!=null&&!lifecycleBegun){capabilities.beginRun(clean(goal,config),control);lifecycleBegun=true;}
             String lastFeedback=saved.optString("feedback");
             String recallIntent=latestOwnerRecallQuery(history,lastFeedback.isEmpty()?goal:lastFeedback);
             String durableOwnerReturnNonce="";
 
             SafeModelRecovery modelRecovery=new SafeModelRecovery();
-            modelTurns: for (int round = 0; round <= executionStepCeiling(config,journal); round++) {
+            int firstRound=originalModelRounds;
+            modelTurns: for (int round = firstRound; round <= executionStepCeiling(config,journal); round++) {
+                originalModelRounds=round+1;
                 JSONObject resumed = afterPause(taskId, config, control, sink, pauseSeen);
                 if (resumed != null) { latest = resumed; evidence = resumed; appendObservation(history, resumed, config, contextBudget); }
                 control.check();
@@ -223,7 +243,7 @@ public final class AgentRunner {
                 }}
                 // Explicit restoration opens a new safe owner turn. Reclaim the existing batch
                 // before its first model request, not after answering once without accepted inputs.
-                boolean openingRestoredTurn=round==0&&storedMessages!=null&&storedMessages.length()>0;
+                boolean openingRestoredTurn=round==firstRound&&storedMessages!=null&&storedMessages.length()>0;
                 JSONArray acceptedInputs=pollOwnerInputs(history,openingRestoredTurn,false,control);appendOwnerInputs(history,acceptedInputs,config);
                 if(acceptedInputs.length()>0)recallIntent=latestOwnerRecallQuery(history,recallIntent);
                 // One final model response may summarize the last receipt; the dispatch budget below
@@ -397,13 +417,19 @@ public final class AgentRunner {
                     if(ownerInputs!=null&&!requestedOwnerIds.isEmpty())ownerInputs.completed(new OwnerReply(taskId,clean(answer,config),requestedOwnerIds,control,memoryReference,memoryDependency),control);
                     // Queue means next owner turn, not cancellation of the current tool batch.
                     // The final empty poll atomically closes admission in the same native store.
-                    JSONArray queued=pollOwnerInputs(history,true,true,control);
+                    boolean retain=developmentContinuation!=null&&developmentContinuation.retainAfterTurn();
+                    JSONArray queued=pollOwnerInputs(history,true,!retain,control);
                     if(queued.length()>0){
                         if(round>=executionStepCeiling(config,journal))return finish(taskId,"awaiting_user","当前模型调用预算已耗尽；排队消息保留在原任务，请核对后继续，不会新建任务。",evidence,steps,config,sink);
                         appendOwnerInputs(history,queued,config);
                         recallIntent=latestOwnerRecallQuery(history,recallIntent);
                         checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget);
                         continue;
+                    }
+                    if(retain){
+                        control.check();developmentYielded=true;
+                        emit(taskId,"development_session","running","模型本轮已结束；开发服务仍由原任务监督，可继续试用、编辑或停止。",null,null,config,sink);
+                        return new RunOutcome("owned_running",clean(answer,config),evidence);
                     }
                     // Only this actual final-answer / empty-input-boundary path certifies
                     // a current turn. Step/model ceilings may retain an earlier answer as
@@ -452,7 +478,7 @@ public final class AgentRunner {
                         validateCalls(calls);
                         for(int remaining=index;remaining<calls.length();remaining++)history.put(toolResult(calls.getJSONObject(remaining),failure("step_limit_not_dispatched","本批此调用尚未派发，已在本次操作步数上限前停止；原已完成回执保留，继续须依据当前范围重新规划。").put("accepted",false).put("effectStatus","not_dispatched"),config));
                         checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
-                        return finish(taskId, "needs_confirmation", "已达到本次操作步数上限，请检查当前结果后决定是否继续。", evidence, steps, config, sink);
+                        return finish(taskId, "needs_confirmation", "已达到本次操作步数上限，请检查当前结果后决定是否继续。", nativeStepLimitEvidence(evidence,control), steps, config, sink);
                     }
                     JSONObject call = calls.optJSONObject(index);
                     if (call == null || call.optString("id").isEmpty() || call.optJSONObject("function") == null) {
@@ -604,7 +630,7 @@ public final class AgentRunner {
                 if(!sequenceMayContinue){activePlan.close();break;}
                 try{activeStep=activePlan.next(control);}catch(Exception stale){control.check();activePlan.close();emit(taskId,"native_sequence","failed","短序列的下一步目标已变化或无法唯一核对；余下步骤没有派发。",null,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,sink);break;}
                 if(activeStep==null){activePlan.close();break;}
-                if(steps>=executionStepCeiling(config,journal)){activePlan.close();return finish(taskId,"needs_confirmation","已达到本次操作步数上限；短序列余下步骤未派发。",evidence,steps,config,sink);}
+                if(steps>=executionStepCeiling(config,journal)){activePlan.close();return finish(taskId,"needs_confirmation","已达到本次操作步数上限；短序列余下步骤未派发。",nativeStepLimitEvidence(evidence,control),steps,config,sink);}
                 JSONObject fresh=activeStep.observation();if(fresh!=null){latest=fresh;evidence=fresh;appendObservation(history,fresh,config,contextBudget);}
                 JSONObject nativeCall=new JSONObject().put("id","native_"+java.util.UUID.randomUUID()).put("type","function").put("function",new JSONObject().put("name",activeStep.tool.name).put("arguments",activeStep.arguments().toString()));
                 calls=new JSONArray().put(nativeCall);history.put(new JSONObject().put("role","assistant").put("tool_calls",new JSONArray(calls.toString())));
@@ -1288,6 +1314,10 @@ public final class AgentRunner {
                 .put("message", "").put("timestamp", System.currentTimeMillis()).put("stream", data));
     }
 
+    private static JSONObject nativeStepLimitEvidence(JSONObject evidence,RunControl control)throws Exception {
+        JSONObject result=new JSONObject(evidence.toString());RunControl.HostRunIdentity run=control.hostRunIdentity();
+        result.put("nativeStopReason","step_limit");if(run!=null)result.put("nativeStopRunId",run.runId()).put("nativeStopEpoch",run.epoch());return result;
+    }
     private static RunOutcome finish(String taskId, String status, String summary, JSONObject evidence, int steps,
                                      ModelConfig config, EventSink sink) throws Exception {
         JSONObject result = safeJson(evidence, config, true).put("steps", steps)

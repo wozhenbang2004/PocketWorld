@@ -173,6 +173,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
                     .put("requestedPackageName",frame.optString("requestedPackageName")).put("frameGeneration",observed.frame)
                     .put("frameMetadataOnly",!includeImage).put("framePending",frame.optBoolean("framePending")).put("frameEmpty",frame.optBoolean("empty")).put("nodes",after.nodes).put("coordinateSpace","0..1000").put("truncated",after.truncated);
             if(frame.optBoolean("empty"))out.put("screenState","display_has_no_frame").put("imageUnavailable",true);
+            module.attachInstalledAppEvidence(out);
             after.forest.attach(out);
             if(includeImage)out.put("imageBase64",frame.getString("imageBase64")).put("imageMimeType",frame.optString("imageMimeType","image/jpeg"))
                     .put("imageWidth",observed.width).put("imageHeight",observed.height);

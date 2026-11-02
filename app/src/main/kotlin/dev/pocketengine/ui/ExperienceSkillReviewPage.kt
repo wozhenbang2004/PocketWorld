@@ -89,11 +89,18 @@ internal fun ExperienceSkillReviewPage(
     onBack: () -> Unit,
     onOpenInferenceRecord: ((JSONObject) -> Unit)? = null
 ) {
+    var policyTask by remember { mutableStateOf("") }
+    var policyPackage by remember { mutableStateOf("") }
+    var policyReceipt by remember { mutableStateOf<JSONObject?>(null) }
+    var policyConfirmed by remember { mutableStateOf(false) }
+    var showLearningPolicy by remember { mutableStateOf(false) }
+    var appIdentities by remember { mutableStateOf<JSONArray?>(null) }
     var appPackage by remember { mutableStateOf("") }
     var appVersion by remember { mutableStateOf("") }
     var appBase by remember { mutableStateOf<JSONObject?>(null) }
     var appLesson by remember { mutableStateOf(false) }
     var showAppRevision by remember { mutableStateOf(false) }
+    var appApplications by remember { mutableStateOf<JSONArray?>(null) }
     var qualityApplications by remember { mutableStateOf<JSONArray?>(null) }
     var qualityNote by remember { mutableStateOf("") }
     var qualityOutcome by remember { mutableStateOf("verified") }
@@ -117,7 +124,7 @@ internal fun ExperienceSkillReviewPage(
     val skills = experienceRows(snapshot.optJSONArray("skills")).filter { it.optJSONObject("origin") != null }
     val currentProcedure = procedures.firstOrNull { it.optString("id") == procedure?.optString("id") }
     val currentSkill = skills.firstOrNull { it.optString("id") == selectedSkill?.optString("id") }
-    val busy = request != null || pendingCommands.any { it in setOf("draftExperience", "inspectExperience", "importExperience", "approveExperience", "readSkill", "skillQualityApplications", "reviewSkillQuality", "draftAppRevision") }
+    val busy = request != null || pendingCommands.any { it in setOf("draftExperience", "inspectExperience", "importExperience", "approveExperience", "readSkill", "skillQualityApplications", "reviewSkillQuality", "draftAppRevision", "procedureAppIdentities") }
     val procedureCurrent = ExperienceSkillReviewGuard.sameProcedure(procedure, currentProcedure)
     val skillCurrent = ExperienceSkillReviewGuard.sameSkill(selectedSkill, currentSkill)
     val scroll = rememberScrollState()
@@ -137,7 +144,7 @@ internal fun ExperienceSkillReviewPage(
         } catch (failure: Exception) { localError = failure.message ?: "停止请求未送达，请重试" }
     }
     fun resetDetail() {
-        qualityApplications = null; qualityNote = ""; showAppRevision = false; appBase = null
+        appApplications = null; qualityApplications = null; qualityNote = ""; showAppRevision = false; appBase = null; appIdentities = null; appPackage = ""; appVersion = ""
         procedure = null; selectedSkill = null; draft = null; reviewedDraft = null; inspection = null
         selectedPath = "SKILL.md"; readBody = ""; readReceipt = null; manifestReceipt = null; localError = null; message = null; inferenceReference = null
     }
@@ -157,6 +164,12 @@ internal fun ExperienceSkillReviewPage(
         val result = envelope.optJSONObject("result") ?: run { localError = "缺少原生操作回执，请刷新核对"; return@LaunchedEffect }
         try {
             when (active.command) {
+                "getAppLearningPolicy", "setAppLearningPolicy" -> {
+                    check(result.getString("taskId") == policyTask) { "原任务选择已改变，请重新读取" }
+                    policyReceipt = JSONObject(result.toString()); policyConfirmed = false
+                    message = if (result.getJSONObject("policy").optBoolean("enabled")) "已授权此任务限定 App 的终态提炼；只进入原待审候选，不自动采用。" else "自动提炼关闭；已有模型调用不能撤回，后续发送与候选保存会再次核对授权。"
+                }
+
                 "draftExperience" -> {
                     val source = procedure ?: kotlin.error("原程序记忆已关闭")
                     check(result.optString("recordId") == source.optString("id") && result.optLong("recordRevision") == source.optLong("revision")) { "返回的草稿不属于当前程序记忆" }
@@ -190,7 +203,10 @@ internal fun ExperienceSkillReviewPage(
                     check(ExperienceSkillReviewGuard.sameSkill(selectedSkill, approved) && approved.optBoolean("enabled") && approved.optString("approvedDigest") == approved.optString("digest")) { "启用回执与审阅版本不一致，请刷新核对" }
                     selectedSkill = JSONObject(approved.toString()); message = "已批准当前版本。只会作为相关任务的参考，仍需任务本身的工具授权。"
                 }
+                "procedureAppIdentities" -> { appIdentities = result.getJSONArray("apps"); showAppRevision = true }
                 "draftAppRevision" -> { message = if (result.optBoolean("proposed")) "App 修订已生成待审候选；请到学习候选审核，接受后才会试用替换。" else "没有可靠增量，保留当前经验。" }
+                "appQualityApplications" -> { appApplications = result.getJSONArray("applications"); message = if (!result.optBoolean("completeHistory")) "当前仅显示原应用记录的有界窗口，不代表完整历史。" else null }
+                "reviewAppQuality" -> { appApplications = null; qualityNote = ""; message = "已保存原方法采用的 App 结果归责；刷新可查看试用、转正或回滚。" }
                 "skillQualityApplications" -> { qualityApplications = result.getJSONArray("applications"); message = if (result.optBoolean("scanLimited")) "仅扫描最近200个执行记录，更早使用尚未加载。" else null }
                 "reviewSkillQuality" -> { selectedSkill = JSONObject(result.getJSONObject("skill").toString()); qualityApplications = null; qualityNote = ""; message = "已保存原任务结果归责；试用状态已更新，没有增加执行权限。" }
                 "snapshot" -> Unit
@@ -217,6 +233,28 @@ internal fun ExperienceSkillReviewPage(
                 inferenceReference?.takeIf { it.optString("taskId").matches(Regex("[a-fA-F0-9-]{36}")) && it.opt("executionAuthorized") == false }?.let { reference ->
                     onOpenInferenceRecord?.let { open -> TextButton(onClick = { open(JSONObject(reference.toString())) }) { Text("查看本次草稿的模型调用与用量") } }
                 }
+                if (procedure == null && selectedSkill == null) {
+                    TextButton(onClick = { showLearningPolicy = !showLearningPolicy }, enabled = !busy) { Text("任务结束后自动起草 App 经验") }
+                    if (showLearningPolicy) {
+                        ExperienceCaption("默认关闭。重新授权只恢复输入未变且从未开始的原提炼任务；已有或未知调用须在原记录审阅，不会自动重发。仅对你选择的原私人任务、一个 App 包名生效，每轮最多一次模型调用。实际安装版本与动作由设备原回执核对（顺利结果至少五步，教训至少三步）；主人确认未完成或原生步数上限可生成教训；模型错误、未知/取消不提炼，不宣称成功。")
+                        OutlinedTextField(value = policyTask, onValueChange = { policyTask = it.trim(); policyReceipt = null; policyConfirmed = false }, label = { Text("原任务 ID（任务详情可复制）") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                        TextButton(onClick = { submit("getAppLearningPolicy", JSONObject().put("taskId", policyTask)) }, enabled = !busy && policyTask.matches(Regex("[a-f0-9-]{36}"))) { Text("读取原任务授权") }
+                        policyReceipt?.let { saved ->
+                            val policy = saved.getJSONObject("policy")
+                            ExperienceCaption("当前：${if (policy.optBoolean("enabled")) "已开启" else "关闭"} · 授权版本 ${policy.optLong("revision")} · ${policy.optJSONArray("packages") ?: JSONArray()}")
+                            experienceRows(saved.optJSONArray("jobs")).forEach { job ->
+                                SelectionContainer { ExperienceCaption("原提炼任务 ${job.optString("taskId")} · ${job.optString("status")} · ${when (job.optString("authorizationStatus")) { "disabled" -> "授权已关闭"; "prior_call_requires_review" -> "已有调用，须核对原记录，不会自动重发"; "awaiting_exact_input_recheck" -> "等待重核原输入，仅未开始任务可恢复"; else -> "授权有效" }}（在逐批提炼页查看用量与待审结果）") }
+                            }
+                            OutlinedTextField(value = policyPackage, onValueChange = { policyPackage = it.trim(); policyConfirmed = false }, label = { Text("限定 App 包名（选择，不是安装证明）") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = policyConfirmed, onCheckedChange = { policyConfirmed = it }, enabled = !busy)
+                                Text("我同意任务终态后，将此 App 的原动作证据和当前经验发送给已配置模型，仅生成待审候选。", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                            }
+                            TextButton(onClick = { submit("setAppLearningPolicy", JSONObject().put("taskId", policyTask).put("expectedRevision", policy.getLong("revision")).put("enabled", true).put("packages", JSONArray().put(policyPackage)).put("maxCalls", 1).put("confirmed", policyConfirmed)) }, enabled = !busy && policyConfirmed && policyPackage.isNotBlank()) { Text("授权此任务的限定 App") }
+                            TextButton(onClick = { submit("setAppLearningPolicy", JSONObject().put("taskId", policyTask).put("expectedRevision", policy.getLong("revision")).put("enabled", false).put("packages", JSONArray()).put("maxCalls", 1).put("confirmed", false)) }, enabled = !busy && policy.optBoolean("enabled")) { Text("关闭后续自动提炼") }
+                        }
+                    }
+                }
                 when {
                     procedure != null -> {
                         val source = procedure!!
@@ -225,11 +263,30 @@ internal fun ExperienceSkillReviewPage(
                         ExperienceCaption("适用条件：${source.optString("applicability")}")
                         ExperienceCaption("记忆已被接受，不代表方法已验证。来源改变或被遗忘后，派生技能将失效。")
                         if (!procedureCurrent) Text("原程序记忆已变化或不可用，请返回并刷新。", color = Danger, fontSize = 13.sp)
-                        TextButton(onClick = { showAppRevision = !showAppRevision }, enabled = !busy && procedureCurrent) { Text("从此任务经验修订 App 知识") }
+                        if (source.optJSONObject("appKnowledge") != null) {
+                            TextButton(onClick = { submit("appQualityApplications", JSONObject().put("recordId", source.getString("id")).put("revision", source.getLong("revision"))) }, enabled = !busy) { Text("核对 App 经验原步骤的试用结果") }
+                            appApplications?.let { applications ->
+                                ExperienceCaption("模型说采用和动作成功都不是业务成功。请查看原任务后归责；环境失败、取消不计失败。")
+                                OutlinedTextField(value = qualityNote, onValueChange = { qualityNote = it }, label = { Text("实际结果与归责依据") }, modifier = Modifier.fillMaxWidth(), enabled = !busy)
+                                listOf("verified" to "已核对成功", "skill_failed" to "方法失败", "verifier_rejected" to "核验不通过", "environment" to "环境问题", "cancelled" to "已取消", "model_error" to "模型错误").forEach { (value, label) ->
+                                    TextButton(onClick = { qualityOutcome = value }, enabled = !busy) { Text((if (qualityOutcome == value) "✓ " else "") + label) }
+                                }
+                                experienceRows(applications).filter { it.optString("applicationState") == "model_apply_with_native_steps" }.forEach { application ->
+                                    val prior = application.optJSONObject("appQualityFeedback")
+                                    SelectionContainer { ExperienceCaption("原任务 ${application.optString("taskId")} · 原步骤 ${application.optJSONArray("stepRefs")?.length() ?: 0}") }
+                                    Button(onClick = { submit("reviewAppQuality", JSONObject().put("recordId", source.getString("id")).put("revision", source.getLong("revision")).put("taskId", application.getString("taskId")).put("operationId", application.getString("operationId")).put("outcome", prior?.getString("outcome") ?: qualityOutcome).put("note", prior?.getString("note") ?: qualityNote)) }, enabled = !busy && (prior != null || qualityNote.isNotBlank())) { Text(if (prior == null) "确认此 App 试用结果" else "核对并恢复状态同步") }
+                                }
+                            }
+                        }
+                        TextButton(onClick = { if (showAppRevision) showAppRevision = false else submit("procedureAppIdentities", JSONObject().put("recordId", source.getString("id")).put("expectedRevision", source.getLong("revision"))) }, enabled = !busy && procedureCurrent) { Text("从此任务经验修订 App 知识") }
                         if (showAppRevision) {
                             ExperienceCaption("指定真实使用的 App 版本。模型只起草候选；审核接受后暂时替换旧稿，失败按归责回退。不会新增权限。")
-                            OutlinedTextField(value = appPackage, onValueChange = { appPackage = it; appBase = null }, label = { Text("App 包名，例如 com.example.app") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
-                            OutlinedTextField(value = appVersion, onValueChange = { appVersion = it; appBase = null }, label = { Text("实际 App 版本") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                            val observedApps = appIdentities ?: JSONArray()
+                            if (observedApps.length() == 0) ExperienceCaption("原任务没有可核对的已安装 App 版本观察，不能用手填版本冒充证明。请在新任务中实际观察该 App 后再提炼。")
+                            for (i in 0 until observedApps.length()) {
+                                val observed = observedApps.getJSONObject(i)
+                                TextButton(onClick = { appPackage = observed.getString("packageName"); appVersion = observed.getString("appVersion"); appBase = null }, enabled = !busy) { Text((if (appPackage == observed.optString("packageName") && appVersion == observed.optString("appVersion")) "✓ " else "") + observed.optString("packageName") + " · " + observed.optString("versionName") + " / " + observed.optString("appVersion")) }
+                            }
                             val bases = procedures.filter { it.optJSONObject("appKnowledge")?.let { app -> app.optString("packageName") == appPackage && app.optString("appVersion") == appVersion && app.optString("stage") == "verified" } == true && it.optBoolean("active") }
                             TextButton(onClick = { appBase = null }, enabled = !busy) { Text(if (appBase == null) "✓ 首次建立（无旧稿）" else "首次建立（无旧稿）") }
                             bases.forEach { base -> TextButton(onClick = { appBase = base }, enabled = !busy) { Text((if (appBase?.optString("id") == base.optString("id")) "✓ " else "") + "修订：" + base.optString("text").take(60)) } }

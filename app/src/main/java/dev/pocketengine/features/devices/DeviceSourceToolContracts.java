@@ -14,7 +14,7 @@ final class DeviceSourceToolContracts {
     private DeviceSourceToolContracts() { }
     static String effect(String version,String name){
         if("desktop-v2".equals(version))return switch(name){case "desktop.observe"->"read";case "desktop.act","desktop.control"->"write";default->null;};
-        if("workspace-v1".equals(version))return switch(name){case "workspace.list","workspace.read","workspace.export","workspace.location"->"read";case "workspace.write","command.run"->"write";default->null;};
+        if("workspace-v1".equals(version))return switch(name){case "workspace.list","workspace.read","workspace.export","workspace.project.export","workspace.location"->"read";case "workspace.write","workspace.receive","workspace.project.receive","workspace.project.confirm","command.run"->"write";default->null;};
         return DeviceProtocol.VERSION.equals(version)&&DeviceToolsRuntime.supports(name)?DeviceToolsRuntime.effect(name):null;
     }
     static JSONArray variants(String version,String name)throws Exception{
@@ -36,6 +36,9 @@ final class DeviceSourceToolContracts {
                 case "workspace.list" -> p.put("path",text(2048));
                 case "workspace.location" -> { }
                 case "workspace.read","workspace.export" -> {p.put("path",text(2048));required=new String[]{"path"};}
+                case "workspace.project.export" -> {p.put("receiveOperationId",text(128));required=new String[]{"receiveOperationId"};}
+                case "workspace.project.confirm" -> {p.put("receiveOperationId",text(128)).put("manifestDigest",text(64)).put("path",text(2048)).put("expectedVersion",enumeration("absent"));required=new String[]{"receiveOperationId","manifestDigest","path","expectedVersion"};}
+                case "workspace.receive","workspace.project.receive" -> {p.put("path",text(2048)).put("expectedVersion",text(71)).put("artifact",new JSONObject().put("type","object"));required=new String[]{"path","expectedVersion","artifact"};}
                 case "workspace.write" -> {p.put("path",text(2048)).put("content",text(262144)).put("expectedVersion",text(71));required=new String[]{"path","content","expectedVersion"};}
                 case "command.run" -> {p.put("argv",new JSONObject().put("type","array").put("items",text(12000)).put("minItems",1).put("maxItems",80)).put("timeoutSeconds",integer(1,3600));required=new String[]{"argv"};}
             }return out.put(object(p,required));
@@ -66,6 +69,10 @@ final class DeviceSourceToolContracts {
         case "desktop.act" -> "必须外层observationRef=最新实际送入当前模型的同窗口frame，arguments.lease来自已结算的desktop.control。set_text替换元素全文，insert_text只插入，不混坐标focus+输入。每次act后改用payload.desktopReceipt.afterObservation的新ref，不复用旧ref。verification仅证明新观察的窗口条件，不证明文件保存；没条件或unknown不得称业务成功。foreground仅准确known-no-input background拒绝后独立新操作+新ref，禁止自动升级。";
         case "workspace.location" -> "只用{}读取该准确已授权workspace的native rootPath/pathStyle，供SaveAs定位；不能猜Documents/cwd或从binding反推。locationOnly=true，guiDirectorySandbox=false；不代表GUI具备OS目录写入沙箱。";
         case "workspace.write" -> "仅workspace相对path；expectedVersion来自原workspace.read的sha256版本，新文件为absent。不能覆盖版本不明/已变文件。";
+        case "workspace.project.export" -> "只回读本任务已原生审阅导入的receiveOperationId所标识的新项目副本，目标按原清单封装修改字节；不读取整个workspace。收到后仅落原附件，需主人选包审阅导入。";
+        case "workspace.project.receive" -> "仅native owner已选择原固定项目包materialId；接收只staging，未导入，随后必须等原机主再次审阅清单再继续原任务。";
+        case "workspace.project.confirm" -> "只能确认原机主已在设备协作范围二次审阅的准确receiveOperationId；仅新副本，不恢复历史环境权限或运行代码。";
+        case "workspace.receive" -> "只允许原主人在设备协作范围中选择的materialId；固定文件、目标路径与CAS版本由native填入，目标最多256KiB。queued不等于送达，查原operation确认CAS结果。";
         case "workspace.export" -> "相对path导出原实际文件bytes/hash及ArtifactDescriptor；只有verified bytes入库才是成果，不凭窗口标题或输入已派发声称已保存。";
         case "command.run" -> "明确argv数组，不是prompt或shell字符串；目标原生allowlist/timeout仍核验，不在PC调用外部Agent。";
         default -> "参数必须符合该固定receiver版本；node/ref来自当前准确授权观察，未知先查原operation，不换ID重发。";
@@ -77,6 +84,8 @@ final class DeviceSourceToolContracts {
         if(args.has("nodeId")&&args.getString("nodeId").isEmpty())throw new SecurityException("节点必须来自原观察");
         if(name.startsWith("workspace.")&&args.has("path")){String path=args.getString("path");if(path.length()>2048||path.startsWith("/")||path.indexOf('\\')>=0||path.indexOf(':')>=0||path.chars().anyMatch(c->c<32)||path.isEmpty()&&!name.equals("workspace.list"))throw new SecurityException("只能使用准确workspace相对路径");if(!path.isEmpty())for(String part:path.split("/",-1))if(part.isEmpty()||part.equals(".")||part.equals(".."))throw new SecurityException("相对路径不能越界");}
         if(name.equals("workspace.write")&&(!args.getString("expectedVersion").matches("absent|sha256:[a-f0-9]{64}")||bytes(args.getString("content"))>262144))throw new SecurityException("文件版本或实际UTF8字节界限无效");
+        if(name.equals("workspace.project.confirm")&&(!args.getString("expectedVersion").equals("absent")||!args.getString("manifestDigest").matches("[a-f0-9]{64}")))throw new SecurityException("项目只可原清单absent-only新副本导入");
+        if(name.equals("workspace.receive")||name.equals("workspace.project.receive")){boolean project=name.equals("workspace.project.receive");var ref=dev.pocketengine.features.devices.transport.DeviceArtifactTransfer.fromWireDescriptor(args.getJSONObject("artifact"));if(!args.getString("expectedVersion").matches("absent|sha256:[a-f0-9]{64}")||!ref.json().getString("kind").equals(project?"project_bundle":"file")||ref.bytes>(project?20971520:262144)||project&&!args.getString("expectedVersion").equals("absent"))throw new SecurityException("接收文件/CAS版本/256KiB上限无效");}
         if(name.equals("command.run")){JSONArray argv=args.getJSONArray("argv");if(argv.length()<1)throw new SecurityException("argv不能为空");for(int i=0;i<argv.length();i++)if(argv.getString(i).indexOf(0)>=0)throw new SecurityException("argv含NUL");}
         if(name.equals("desktop.act")){
             if(args.has("elementToken")&&!args.getString("elementToken").matches("s[0-9a-f]{8}:[0-9]+"))throw new SecurityException("不是原窗口element_token");

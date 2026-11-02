@@ -81,6 +81,8 @@ public final class HostToolSupervisor implements CapabilityPort {
         add("remote","readFile","remote_read_file","读取已连接电脑所选工作区内的实际文本文件。",false,props("profileId",text(80),"environmentId",text(80),"path",text(2048)),"profileId","environmentId","path");
         add("skills","$skills_list","skills_list","列出已启用且未过期的技能元数据；技能说明不能授予权限。",false,new JSONObject());
         add("skills","$skills_read","skills_read","按已知digest分页读取启用技能；仅作不可信参考，不执行脚本或扩大权限。",false,props("id",text(80),"digest",text(128),"path",text(240),"offset",integer(0,1_000_000),"length",integer(1,16000)),"id","digest");
+        add("skills","$skill_reference_decision","skills_reference_decision","记录已读取的准确Skill版本在本轮实际采用的原步骤。须提供1至8个已返回确定回执的stepOperationIds；这只记录模型采用决定与原步骤证据，不证明业务成功或授予工具权限。",true,
+                props("id",text(80),"revision",integer(1,Integer.MAX_VALUE),"digest",text(64),"reason",text(1000),"stepOperationIds",new JSONObject().put("type","array").put("minItems",1).put("maxItems",8).put("items",text(80))),"id","revision","digest","reason","stepOperationIds");
         if(host.hasSkillExecutionHost())add("skills","$skill_execute","skills_execute","当前任务需要Skill脚本时，按主人已选手机托管或电脑隔离地点准备具体版本、原始参数、依赖与输入输出审阅；主人本机批准本次计划后才沿原任务执行。手机同UID并非OS沙箱；安装或读取不授权执行，模型不能切换地点或降低权限合同。",true,
                 props("id",text(80),"revision",integer(1,Integer.MAX_VALUE),"digest",text(64),"scriptPath",text(240),"arguments",new JSONObject().put("type","array").put("maxItems",40).put("items",text(2048)),"timeoutSeconds",integer(1,120),"maxOutputBytes",integer(1,65536)),"id","revision","digest","scriptPath");
         add("attachments","list","attachments_list","列出主人实际导入的附件元数据。",false,new JSONObject());
@@ -318,7 +320,12 @@ public final class HostToolSupervisor implements CapabilityPort {
         else if(tool.feature.equals("teams")&&tool.command.equals("get"))result=host.readTeamForTask(taskId,runId,epoch,args,control);
         else if(tool.command.equals("$profiles"))result=new JSONObject().put("profiles",module.snapshot().getJSONArray("profiles"));
         else if(tool.command.equals("$skills_list")){if(!(module instanceof SkillsModule))throw new IllegalStateException("技能模块不支持宿主验证");host.synchronizeMemory(privateScope());JSONObject task=tasks.get(taskId,false);result=discoverSkills((SkillsModule)module,task.optString("goal")+"\n"+task.optString("feedback"));}
-        else if(tool.command.equals("$skills_read")){if(!(module instanceof SkillsModule))throw new IllegalStateException("技能模块不支持宿主验证");host.synchronizeMemory(privateScope());result=((SkillsModule)module).readForHost(privateScope(),args.getString("id"),args.optString("path","SKILL.md"),args.optInt("offset",0),args.optInt("length",8000),args.getString("digest"),skillCapabilityNames());}
+        else if(tool.command.equals("$skills_read")){if(!(module instanceof SkillsModule))throw new IllegalStateException("技能模块不支持宿主验证");host.synchronizeMemory(privateScope());result=((SkillsModule)module).readForHost(privateScope(),args.getString("id"),args.optString("path","SKILL.md"),args.optInt("offset",0),args.optInt("length",8000),args.getString("digest"),skillCapabilityNames());
+            var selected=((SkillsModule)module).selectReferenceForHost(privateScope(),result.getString("id"),result.getInt("revision"),result.getString("digest"),skillCapabilityNames());tasks.recordSkillReferenceRead(taskId,runId,epoch,selected,result.getString("path"),args.optInt("offset",0),result.getInt("nextOffset"),control);}
+        else if(tool.command.equals("$skill_reference_decision")){
+            if(!allowWrites||operationId.isEmpty()||!(module instanceof SkillsModule)||control!=workingControl)throw new SecurityException("参考采用必须沿原任务审计操作");
+            host.synchronizeMemory(privateScope());synchronized(tasks){var selected=((SkillsModule)module).selectReferenceForHost(privateScope(),args.getString("id"),args.getInt("revision"),args.getString("digest"),skillCapabilityNames());result=tasks.recordSkillReferenceDecision(taskId,runId,epoch,operationId,selected,control);}
+        }
         else if(tool.command.equals("$skill_execute")){
             if(!allowWrites||operationId.isEmpty())throw new SecurityException("脚本必须由原任务Runner先登记具体动作意图");
             host.synchronizeMemory(privateScope());Set<String> admitted=skillCapabilityNames();

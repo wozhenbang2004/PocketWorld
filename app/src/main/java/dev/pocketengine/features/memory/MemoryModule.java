@@ -18,7 +18,7 @@ public final class MemoryModule implements EngineModule {
     /** Native root may inject SQLiteMemoryRetrievalBackend.create(); existing constructors keep compatibility. */
     public MemoryModule(FeatureContext context,SourceRef.Resolver sourceResolver,MemoryRetrievalBackend retrieval)throws Exception {
         this.context=context;sourceVerification=sourceResolver!=null;
-        try{book=new MemoryBook(new File(context.android.getFilesDir(),"memory/records.json"),sourceResolver,retrieval);}
+        try{book=new MemoryBook(new File(context.android.getFilesDir(),"memory/records.json"),sourceResolver,retrieval,packageName->dev.pocketengine.phone.observation.InstalledAppEvidence.currentVersion(context.android,packageName));}
         catch(Exception invalidBook){retrieval.close();throw invalidBook;}
     }
     @Override public String id(){return "memory";}
@@ -169,10 +169,13 @@ public final class MemoryModule implements EngineModule {
         try{context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));}
         catch(Exception unavailable){result.put("notificationPending",true);}return result;
     }
+    public JSONObject appBaseline(JSONObject scope,String app,String version)throws Exception{return book.appBaseline(scope,app,version,System.currentTimeMillis());}
+    public JSONObject proposeAppRevisionFromSource(JSONObject scope,SourceRef source,JSONObject context,JSONObject draft)throws Exception{return new JSONObject().put("candidate",book.proposeAppRevisionFromSource(scope,source,context,draft,System.currentTimeMillis()));}
     public JSONObject proposeAppRevision(JSONObject scope,String source,long sourceRevision,String app,String version,String base,long baseRevision,boolean lesson,JSONObject draft)throws Exception {
         JSONObject result=new JSONObject().put("candidate",book.proposeAppRevision(scope,source,sourceRevision,app,version,base,baseRevision,lesson,draft,System.currentTimeMillis()));
         context.emit(id(),new JSONObject().put("event","memory_changed"));return result;
     }
+    public JSONObject recordAppQuality(JSONObject scope,AppQualityReceipt receipt)throws Exception{JSONObject result=book.recordAppQuality(scope,receipt,System.currentTimeMillis());context.emit(id(),new JSONObject().put("event","memory_changed"));return result;}
     public JSONObject recordAppQuality(JSONObject scope,dev.pocketengine.features.skills.SkillQualityReceipt receipt)throws Exception {
         JSONObject result=book.recordAppQuality(scope,receipt,System.currentTimeMillis());context.emit(id(),new JSONObject().put("event","memory_changed"));return result;
     }

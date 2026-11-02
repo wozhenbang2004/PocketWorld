@@ -445,6 +445,68 @@ public final class DeviceIngressNativeTest {
         long acceptedAt=System.currentTimeMillis();JSONObject audience=new JSONObject().put("kind","operation").put("objectId",stop.request().operationId()).put("originDeviceId",target).put("callerDeviceId",target).put("targetDeviceId",caller.deviceId()).put("instanceId","caller-fixture").put("rootTaskId",source.id).put("localTaskId","outgoing-session").put("grantId",source.grant.grantId()).put("authorizationEpoch",source.grant.authorizationEpoch()).put("resourceBinding",source.draft.getJSONObject("resourceBinding")).put("acceptedAt",acceptedAt).put("retainedUntil",deadline+60000);JSONObject cancellation=new JSONObject().put("targetOperationId",source.operation).put("targetArgumentsDigest",source.draft.getString("argumentsDigest")).put("requested",true).put("stopped",false);JSONObject receipt=DeviceProtocol.operationReceipt(caller.deviceId(),"caller-fixture",stop.request().operationId(),stop.request().argumentsDigest(),"cancel_requested",true,"reported",new JSONObject().put("managementOnly",true),new JSONObject().put("acceptedAt",acceptedAt).put("audience",audience).put("cancellation",cancellation));JSONObject response=new JSONObject().put("protocolVersion",DeviceProtocol.VERSION).put("protocolProfile",DeviceProtocol.PROFILE).put("messageType","DeviceResponse").put("method","operation.cancel").put("requestId",stop.request().requestId()).put("executorDeviceId",caller.deviceId()).put("instanceId","caller-fixture").put("result",receipt);JSONObject result=tasks.deviceTasks().recordOriginalStop(stop,new DeviceCapabilityPort.Reply(caller,response));assertTrue(result.getBoolean("requested"));assertFalse(result.getBoolean("stopped"));assertEquals("unknown",originalOperationState(source));assertEquals(4,tasks.deviceTasks().heldBudget(source.id,source.run,true));
     }
 
+    private TaskStore reopenColdStopStore()throws Exception{
+        sql.close();TaskStore reopened=new TaskStore(RuntimeEnvironment.getApplication());
+        var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);sql=(SQLiteDatabase)field.get(reopened);
+        pairing=new PairingCoordinator(new TaskStoreDeviceTrust(sql),target,"receiver-fixture");return reopened;
+    }
+    private PairingCoordinator.OutgoingGrant coldStopGrant(String grantId)throws Exception{
+        return pairing.acceptOutgoingGrant(caller,new TaskStoreDeviceTrust(sql).outgoingGrant(caller.deviceId(),grantId),System.currentTimeMillis());
+    }
+    @Test public void coldOwnerStopUsesDurableOriginalOperationWithoutRevivingRunOrRefundingUnknown()throws Exception{
+        Outbound source=outbound();var held=tasks.deviceTasks().reserveChildNative(source.id,source.run,source.epoch,source.control,source.operation,source.draft);
+        tasks.deviceTasks().bindReservedWire(held,DeviceProtocol.parseRequest(DeviceProtocol.canonicalBytes(source.draft)),source.grant).claimForWrite(caller);
+        long taskCount=count("tasks"),runCount=count("runs");
+        TaskStore reopened=reopenColdStopStore();var freshGrant=coldStopGrant(source.grant.grantId());
+        var original=reopened.deviceTasks();
+        refused(()->original.originalStopCandidates(source.id,null));
+        refused(()->original.reviewOwnerStop("another-task",source.operation));
+        refused(()->original.reviewOwnerStop(source.id,"another-operation"));
+        var review=original.reviewOwnerStop(source.id,source.operation);
+        var candidate=original.confirmOwnerStop(review);
+        refused(()->tasks.deviceTasks().confirmOwnerStop(review));
+        var dispatch=original.prepareOriginalStop(candidate,syntheticLocalIdentity(),freshGrant);
+        assertEquals("operation.cancel",dispatch.request().method());assertEquals(source.operation,dispatch.request().arguments().getString("operationId"));
+        assertFalse(dispatch.request().json().has("budget"));assertFalse(dispatch.request().json().has("runId"));
+        refused(()->dispatch.ticket().claimForWrite(tls().caller));
+        dispatch.ticket().claimForWrite(caller);
+        refused(()->dispatch.ticket().claimForWrite(caller));
+        String cancelId=dispatch.request().operationId();
+        // A second cold process owns no in-memory review, control or ticket from the first.
+        TaskStore again=reopenColdStopStore();var secondGrant=coldStopGrant(source.grant.grantId());
+        var second=again.deviceTasks().confirmOwnerStop(again.deviceTasks().reviewOwnerStop(source.id,source.operation));
+        var duplicate=again.deviceTasks().prepareOriginalStop(second,syntheticLocalIdentity(),secondGrant);
+        assertTrue(duplicate.knownOperation());assertEquals(cancelId,duplicate.request().operationId());refused(duplicate::ticket);
+        assertEquals(taskCount,count("tasks"));assertEquals(runCount,count("runs"));assertEquals("unknown",originalOperationState(source));assertEquals(4,again.deviceTasks().heldBudget(source.id,source.run,true));
+        refused(()->again.resolveOperation(source.id,source.operation,"not_occurred"));
+        JSONObject task=again.get(source.id,false);assertNotEquals("running",task.optString("status"));
+        JSONObject nextReceipt=new TaskStoreDeviceTrust(sql).outgoingGrant(caller.deviceId(),secondGrant.grantId());
+        nextReceipt.remove("signature");nextReceipt.getJSONObject("body").getJSONObject("grant").put("authorizationEpoch",2);
+        java.security.Signature signer=java.security.Signature.getInstance("SHA256withECDSA");signer.initSign(callerMaterial.keys.getPrivate());signer.update(DeviceProtocol.canonicalBytes(nextReceipt));nextReceipt.put("signature",java.util.Base64.getEncoder().encodeToString(signer.sign()));
+        var changedEpoch=pairing.acceptOutgoingGrant(caller,nextReceipt,System.currentTimeMillis());
+        refused(()->again.deviceTasks().prepareOriginalStop(second,syntheticLocalIdentity(),changedEpoch));
+        var stale=again.deviceTasks().reviewOwnerStop(source.id,source.operation);
+        try(Cursor row=sql.rawQuery("SELECT document FROM tasks WHERE task_id=?",new String[]{source.id})){
+            assertTrue(row.moveToFirst());JSONObject changed=new JSONObject(row.getString(0));changed.put("coordinatorEpoch",changed.optInt("coordinatorEpoch")+1);ContentValues update=new ContentValues();update.put("document",changed.toString());sql.update("tasks",update,"task_id=?",new String[]{source.id});
+        }
+        refused(()->again.deviceTasks().confirmOwnerStop(stale));refused(()->again.deviceTasks().prepareOriginalStop(second,syntheticLocalIdentity(),secondGrant));
+    }
+
+    @Test public void coldOwnerStopHostTimeoutStaysUnknownAndRepeatedOwnerClickNeverResubmits()throws Exception{
+        Outbound source=outbound();var held=tasks.deviceTasks().reserveChildNative(source.id,source.run,source.epoch,source.control,source.operation,source.draft);
+        tasks.deviceTasks().bindReservedWire(held,DeviceProtocol.parseRequest(DeviceProtocol.canonicalBytes(source.draft)),source.grant).claimForWrite(caller);
+        TaskStore reopened=reopenColdStopStore();var freshGrant=coldStopGrant(source.grant.grantId());AtomicInteger sends=new AtomicInteger();
+        NativeDeviceChildStopHost host=new NativeDeviceChildStopHost(reopened,syntheticLocalIdentity(),new NativeDeviceChildStopHost.NativeStops(){
+            public PairingCoordinator.OutgoingGrant currentManagementGrant(String peer,String grant)throws Exception{assertEquals(caller.deviceId(),peer);assertEquals(source.grant.grantId(),grant);return freshGrant;}
+            public DeviceCapabilityPort.Reply sendManagement(DeviceTaskEnvelope request,TaskStoreDeviceTasks.OutboundSendTicket ticket,RunControl io)throws Exception{
+                assertEquals("operation.cancel",request.method());assertEquals(source.operation,request.arguments().getString("operationId"));assertNull(io.hostRunIdentity());ticket.claimForWrite(caller);sends.incrementAndGet();throw new java.io.IOException("synthetic lost cancellation response");
+            }
+        });
+        var review=reopened.deviceTasks().reviewOwnerStop(source.id,source.operation);
+        JSONObject first=host.stopReviewedOperation(review),second=host.stopReviewedOperation(review);
+        assertTrue(first.getBoolean("unknown"));assertFalse(first.getBoolean("stopped"));assertTrue(second.getBoolean("knownOperation"));assertEquals(first.getString("operationId"),second.getString("operationId"));assertEquals(1,sends.get());assertEquals("unknown",originalOperationState(source));assertEquals(4,reopened.deviceTasks().heldBudget(source.id,source.run,true));
+    }
+
     private static final class FakePhone implements PhonePort {
         final AtomicInteger actions = new AtomicInteger(); int frames; boolean failAfterAction,foreignOverlay;
         public boolean isConnected() { return true; }

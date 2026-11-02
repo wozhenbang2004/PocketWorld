@@ -18,10 +18,13 @@ public interface HostTaskPort {
 
     final class Request {
         public final String requestId,taskId,goal,expectedRunId;
+        public final boolean phoneScreenClaim;
         public final int expectedCoordinatorEpoch;
         private final JSONObject origin;
         Request(JSONObject stored)throws Exception {this(stored,false);}
-        Request(JSONObject stored,boolean cancellation)throws Exception {
+        Request(JSONObject stored,boolean cancellation)throws Exception {this(stored,cancellation,false);}
+        Request(JSONObject stored,boolean cancellation,boolean phoneScreenClaim)throws Exception {
+            this.phoneScreenClaim=phoneScreenClaim;
             requestId=stored.getString("requestId");taskId=stored.getString("taskId");goal=stored.getString("goal");
             expectedRunId=stored.optString(cancellation?"cancellationRunId":"hostRunId","");
             expectedCoordinatorEpoch=stored.optInt(cancellation?"cancellationEpoch":"hostCoordinatorEpoch",0);
@@ -31,6 +34,7 @@ public interface HostTaskPort {
                     .put("senderId",event.getString("senderId")).put("authenticatedBy",event.getString("authenticatedBy"))
                     .put("bindingEpoch",stored.getString("bindingEpoch")).put("taskGrantEpoch",stored.getString("taskGrantEpoch"))
                     .put("ownerId","owner").put("spaceId","private");
+            if("phone".equals(stored.optString("taskKind")))origin.put("taskKind","phone");
             if(event.optString("conversationKind").startsWith("qq_guild_"))origin.put("conversationKind",event.getString("conversationKind")).put("qqGuildId",event.getString("qqGuildId")).put("transportEpoch",event.getString("transportEpoch"));
         }
         public JSONObject origin()throws Exception{return new JSONObject(origin.toString());}

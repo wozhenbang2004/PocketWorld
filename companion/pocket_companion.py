@@ -41,6 +41,7 @@ import input_files
 import harness_config
 import harness_gateway
 import job_events
+import team_member_scope
 from codex_driver import CodexAppServerDriver, DriverError
 from claude_driver import ClaudeStreamDriver, command as claude_command, inspect_cli as inspect_claude_cli, session_uuid
 
@@ -61,7 +62,7 @@ def worker_capabilities(worker):
             "conversationForkProtocol": "thread/fork" if native else "unavailable_without_verified_new_session_before_prompt", "forkCapabilityRequiresActualReceipt": True, "forkRestoresFiles": False,
             "operationReconciliation": True, "protocolVerified": False, "modelInferenceVerified": False,
             "structuredUserInput": native or claude, "questionCapability": "validated_when_original_runtime_emits_request",
-            "questionAnswerScope": "ordinary_private_session_only", "progressSnapshot": native or claude, "liveStreaming": False,
+            "questionAnswerScope": "original_job_native_owner_only", "progressSnapshot": native or claude, "liveStreaming": False,
             "originalJobEvents": job_events.capability(worker)}
 
 
@@ -552,6 +553,7 @@ class JobManager:
                 text(request[field], field, 200)
                 if request.get("worker") not in {"codex_app_server", "claude"}:
                     raise RequestError(field + " is unsupported by this worker", 409)
+        env = team_member_scope.environment(request, env, RequestError)
         prior = None
         fork_source = None
         if "forkSource" in request:
@@ -643,6 +645,7 @@ class JobManager:
             job = {"id": str(uuid.uuid4()), "operationId": operation, "fingerprint": fingerprint, "environmentId": eid,
                    "worker": request.get("worker", "command"), "resourceId": self.resource_id(env), "status": "queued", "createdAt": self.now(), "updatedAt": self.now(),
                    "output": "", "outputTruncated": False, "exitCode": None, "message": "Queued", "remoteEffectsVerified": False}
+            job.update(team_member_scope.receipt(request))
             job["workspaceIdentity"] = self.workspace_identity(env)
             if job["worker"] == "command":
                 job["outputEncoding"] = env.get("commandOutputEncoding", "utf-8")
@@ -745,7 +748,7 @@ class JobManager:
                 raise
 
     def _public(self, job):
-        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_harnessConfigRequest"}}
+        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_harnessConfigRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer"}}
         result.pop("_inputPersistenceUnconfirmed", None)
         if job.get("_inputPersistenceUnconfirmed"):
             result.pop("inputState", None)
@@ -914,6 +917,16 @@ class JobManager:
             job = self.jobs.get(identifier(jobid, "jobId"))
             if job is None:
                 raise RequestError("Job not found", 404)
+            if (job.get("nativeDeviceOperation", {}).get("toolName") in {"workspace.receive", "workspace.project.receive"}
+                    and job.get("status") not in TERMINAL and not job.get("nativeInputDispatchStarted")):
+                if self.device_companion is not None:
+                    self.device_companion.receiver.discard_pending_input(job)
+                self.stopping.add(jobid)
+                job.update(status="cancelled", nativeInputStoppedBeforeReplacement=True, updatedAt=self.now(),
+                           nativeToolResult={"status": "cancelled", "delivered": False, "replacementAttempted": False,
+                                             "message": "Original input cancelled before workspace replacement"})
+                self._save(job)
+                return self._public(job)
             if input_files.cancel_before_worker(self, job):
                 self.harness_configs.settle_job(job, job.get("notStartedConfirmed") is True)
                 return self._public(job)

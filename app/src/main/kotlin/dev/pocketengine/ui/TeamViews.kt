@@ -50,7 +50,7 @@ internal fun teamRunReferences(task: UiTask): List<String> {
     task.raw.optJSONArray("relatedTasks").objects().filter { it.optString("kind", it.optString("feature")) == "teams" }.forEach { result += it.optString("runId", it.optString("taskId")) }
     return result.filter { it.isNotBlank() }
 }
-internal fun teamRunnerLabel(id: String): String = when (id) { "model" -> "模型服务"; "codex_app_server" -> "Codex app-server"; "claude" -> "Claude（未接入）"; "kimi" -> "Kimi（未接入）"; else -> id }
+internal fun teamRunnerLabel(id: String): String = when (id) { "model" -> "模型服务"; "codex_app_server" -> "Codex app-server"; "claude" -> "Claude Code"; "kimi" -> "Kimi（未接入）"; else -> id }
 internal fun teamModeLabel(id: String): String = when(id){"produce"->"文件协作";"collaborate"->"共同分析";else->"取证与讨论"}
 internal fun teamMemberStatus(id: String): String = when (id) { "model", "running" -> "工作中"; "queued" -> "等待本轮"; "paused" -> "已暂停"; "completed" -> "本轮完成"; "failed" -> "未完成"; "unsupported" -> "执行器未接入"; "blocked" -> "环境未就绪"; "blocked_unknown" -> "结果待核对"; "waiting_dependency" -> "等待前置分工"; "blocked_dependency" -> "前置未完成，已阻断"; "partial" -> "部分分工未完成"; "awaiting_approval" -> "等待本机授权"; else -> taskStatus(id) }
 
@@ -69,7 +69,7 @@ internal fun TeamManagement(state: PocketUiState, controller: PocketWorldControl
         }
         HorizontalDivider(color = Line)
     }
-    state.moduleResults["teams.probeMember"]?.let { probe -> TeamCaption(if (probe.optBoolean("available")) "最近一次实际成员探测返回可用；每轮执行仍会重新核验环境。" else probe.optString("message", "最近一次成员环境尚未验证通过")) }
+    state.moduleResults["teams.probeMember"]?.let { probe -> TeamCaption(if (probe.optBoolean("available")) if(probe.optBoolean("protocolVerified")) "协议探测通过；实际会话与执行仍逐次核验。" else "仅CLI安装/参数检查通过；登录、握手和模型尚待真实会话核验。" else probe.optString("message", "最近一次成员环境尚未验证通过")) }
     Text("原团队任务", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 22.dp, bottom = 10.dp))
     val history = state.feature("teams").optJSONArray("history").objects()
     (state.teamRuns.values + history).distinctBy { it.optString("id") }.sortedByDescending { it.optLong("updatedAt", it.optLong("createdAt")) }.forEach { run ->
@@ -102,7 +102,7 @@ internal fun TeamLaunchSheet(state: PocketUiState, controller: PocketWorldContro
             if (teams.isEmpty()) { TeamCaption("尚未创建团队。可在连接与能力中配置角色、模型和真实执行位置。" ); TextButton(onClick = { controller.openConnection("teams"); close() }) { Text("配置团队") } }
             teams.forEach { team -> Row(Modifier.fillMaxWidth().clickable { selected = team.optString("id") }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected == team.optString("id"), { selected = team.optString("id") }); Column { Text(team.optString("name"), fontSize = 14.sp); TeamCaption(teamModeLabel(team.optString("mode")) + " · " + team.optJSONArray("members").objects().size + " 名成员") } } }
             val chosen = teams.find { it.optString("id") == selected }
-            chosen?.optJSONArray("members").objects().filter { it.optString("runner") == "codex_app_server" }.forEach { slot ->
+            chosen?.optJSONArray("members").objects().filter { it.optString("runner") in setOf("codex_app_server", "claude") }.forEach { slot ->
                 TextButton(onClick = { controller.requestFeature("teams", "probeMember", JSONObject().put("teamId", selected).put("memberId", slot.optString("id"))) }, enabled = "teams.probeMember" !in state.moduleBusy) { Text("实际探测 " + slot.optString("name"), fontSize = 12.sp) }
             }
             if(chosen?.optString("mode")=="produce")TeamCaption("文件协作请从已选项目的原任务交给此团队，项目与审批沿用原任务。")
@@ -190,9 +190,11 @@ internal fun TeamRunDetail(state: PocketUiState, controller: PocketWorldControll
                     }
                     member?.optJSONObject("external")?.let { external ->
                         val profileId = member.optJSONObject("device")?.optString("profileId").orEmpty()
-                        val jobId = external.optString("id", external.optString("jobId"))
+                        val original = external.optJSONObject("external") ?: external
+                        val jobId = original.optString("id", original.optString("jobId"))
                         if (profileId.isNotBlank() && jobId.isNotBlank()) RemoteApprovalBlock(profileId, jobId, external.optJSONArray("pendingApprovals").objects(), controller)
-                        external.optString("hostTaskId").takeIf { it.isNotBlank() && it != runId }?.let { id -> TextButton(onClick = { childTaskId = id; controller.getTask(id) }) { Text("查看成员的真实电脑任务") } }
+                        if (external.optJSONArray("pendingQuestions").objects().isNotEmpty()) TeamCaption("这名成员正在等待回答；请打开原电脑任务核对准确问题。回答不授工具或文件权限。")
+                        original.optString("childTaskId", original.optString("hostTaskId")).takeIf { it.isNotBlank() && it != runId }?.let { id -> TextButton(onClick = { childTaskId = id; controller.getTask(id) }) { Text("查看成员的真实电脑任务") } }
                     }
                     Spacer(Modifier.height(24.dp))
                 }

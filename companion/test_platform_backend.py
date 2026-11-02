@@ -156,6 +156,23 @@ class NativeWindowsBackendTests(unittest.TestCase):
         with self.assertRaises(OSError):
             self.backend.create_private_snapshot(str(self.root), "artifact.bin", b"cannot overwrite")
 
+    def test_native_reviewed_project_directory_copy_uses_absent_only_original_handle(self):
+        from test_device_project_packages import package
+        _, manifest, files = package(b"native Windows controlled source")
+        intents = []
+        result = self.backend.import_project_copy(str(self.root), "reviewed-project", manifest, files,
+                                                   lambda: None, record_intent=intents.append)
+        self.assertTrue(result["verified"], result)
+        self.assertEqual(files["src/main.txt"], (self.root / "reviewed-project" / "src" / "main.txt").read_bytes())
+        self.assertTrue((self.root / "reviewed-project" / "empty").is_dir())
+        self.assertEqual("dispatch_intent_persisted", intents[0]["phase"])
+        captured = self.backend.capture_project_copy(str(self.root), "reviewed-project", result["directoryIdentity"], manifest, lambda: None)
+        self.assertEqual(files, captured)
+        second = self.backend.import_project_copy(str(self.root), "reviewed-project", manifest, files,
+                                                   lambda: None, record_intent=lambda value: None)
+        self.assertFalse(second["verified"])
+        self.assertEqual(files["src/main.txt"], (self.root / "reviewed-project" / "src" / "main.txt").read_bytes())
+
     def test_native_hardlink_and_reparse_refusal(self):
         original = self.root / "original.txt"; original.write_bytes(b"original")
         os.link(original, self.root / "hard.txt")

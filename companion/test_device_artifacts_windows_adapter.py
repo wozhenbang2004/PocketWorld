@@ -38,11 +38,12 @@ class FixtureNativeBackend:
         if raw is None: raise FileNotFoundError("Fixture missing native object")
         yield Reader(raw)
 
-    def create_private_snapshot(self, root, relative, raw, maximum=20 * 1024 * 1024):
+    def create_private_snapshot(self, root, relative, raw, maximum=20 * 1024 * 1024, *, current=lambda: None):
         self.calls.append(("publish", relative)); self.snapshot_count += 1
         if self.fail_publication:
             return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}  # Metadata lie must not pass.
         if len(raw) > maximum: raise ArtifactError("Fixture native size bound")
+        current()
         with (Path(root) / relative).open("xb") as stream: stream.write(raw)
         return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
 

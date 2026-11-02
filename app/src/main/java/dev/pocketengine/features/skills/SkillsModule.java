@@ -65,6 +65,9 @@ public final class SkillsModule implements EngineModule {
         JSONObject result=new JSONObject().put("skill",book.approveExperience(authenticatedScope,id,revision,digest,System.currentTimeMillis()));
         context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
     }
+    public SkillBook.ReferenceSelection selectReferenceForHost(JSONObject scope,String id,int revision,String digest,Set<String> capabilities)throws Exception {
+        return book.selectReferenceForHost(scope,id,revision,digest,capabilities,System.currentTimeMillis());
+    }
     public JSONObject recordQuality(JSONObject scope,SkillQualityReceipt receipt)throws Exception {
         JSONObject result=new JSONObject().put("skill",book.recordQuality(scope,receipt,System.currentTimeMillis()));
         context.emit(id(),new JSONObject().put("event","skills_changed"));return result;

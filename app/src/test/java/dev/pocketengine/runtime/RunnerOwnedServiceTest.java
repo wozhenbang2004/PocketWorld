@@ -70,6 +70,33 @@ public final class RunnerOwnedServiceTest {
     private static JSONObject exits()throws Exception{return new JSONObject().put("format","pocketworld.project-service-exits.v1").put("taskId",TASK).put("runId",RUN).put("coordinatorEpoch",1).put("allReleased",true).put("executions",new JSONArray().put(new JSONObject().put("operationId","launch-1").put("executionId","launch-1").put("status","completed").put("exitCode",0).put("terminationSignal",0).put("cancelRequested",true).put("timedOut",false).put("processExited",true).put("processGroupAbsent",true).put("resourcesReleased",true)));}
     private static ProjectServiceDrainPending pending()throws Exception{return new ProjectServiceDrainPending(new JSONObject().put("taskId",TASK).put("runId",RUN).put("coordinatorEpoch",1).put("executionIds",new JSONArray().put("launch-1")).put("groupAbsent",false).put("leaseReleased",false).put("privateDetail",KEY));}
 
+    @Test public void explicitNativeRetentionYieldsWorkerAndResumesSameRunnerWithoutRelaunch()throws Exception {
+        RunControl control=control();Journal journal=new Journal();Port port=new Port(control,new ArrayList<>());journal.closed=()->port.closed;
+        var retain=new java.util.concurrent.atomic.AtomicBoolean(true);List<JSONObject> events=new ArrayList<>();
+        try(Wire wire=serviceWire()){
+            AgentRunner runner=new AgentRunner(null,port,budgets());runner.bindDevelopmentContinuation(retain::get);
+            RunOutcome held=runner.run(TASK,"keep original service",wire.config(),control,events::add,journal);
+            assertEquals("owned_running",held.status);assertTrue(runner.developmentYielded());assertFalse(port.closed);assertTrue(port.running);assertEquals(1,port.launches);assertFalse(events.stream().anyMatch(e->"result".equals(e.optString("type"))));
+            retain.set(false);RunOutcome ended=runner.run(TASK,"keep original service",wire.config(),control,events::add,journal);
+            assertEquals("needs_confirmation",ended.status);assertFalse(runner.developmentYielded());assertTrue(port.closed);assertEquals("original launch not replayed",1,port.launches);assertTrue(ended.evidence.getBoolean("projectServiceDrainConfirmedAtExit"));
+        }
+    }
+    @Test public void repeatedOwnedTurnsDoNotResetOriginalModelRoundCeiling()throws Exception {
+        RunControl control=control();Journal journal=new Journal();Port port=new Port(control,new ArrayList<>());journal.closed=()->port.closed;
+        try(Wire wire=serviceWire()){
+            AgentRunner runner=new AgentRunner(null,port,budgets());runner.bindDevelopmentContinuation(()->true);
+            RunOutcome result=null;for(int turn=0;turn<12;turn++){result=runner.run(TASK,"original bounded service",wire.config(),control,event->{},journal);if(!runner.developmentYielded())break;}
+            assertNotNull(result);assertFalse(runner.developmentYielded());assertEquals("needs_confirmation",result.status);assertTrue(result.summary.contains("模型调用上限"));assertEquals("same original model rounds, not a fresh ceiling per turn",9,wire.requests.size());assertEquals(1,port.launches);assertTrue(port.closed);
+        }
+    }
+    @Test public void twoRetainedServicesDoNotOccupyTheTwoModelWorkers()throws Exception {
+        var workers=java.util.concurrent.Executors.newFixedThreadPool(2);List<Port> ports=new ArrayList<>();List<Wire> wires=new ArrayList<>();
+        try{
+            List<java.util.concurrent.Future<RunOutcome>> results=new ArrayList<>();
+            for(int i=0;i<3;i++){Port port=new Port(control(),new ArrayList<>());ports.add(port);Wire wire=serviceWire();wires.add(wire);Journal journal=new Journal();journal.closed=()->port.closed;AgentRunner runner=new AgentRunner(null,port,budgets());if(i<2)runner.bindDevelopmentContinuation(()->true);results.add(workers.submit(()->runner.run(TASK,"original",wire.config(),port.original,event->{},journal)));}
+            assertEquals("owned_running",results.get(0).get(10,java.util.concurrent.TimeUnit.SECONDS).status);assertEquals("owned_running",results.get(1).get(10,java.util.concurrent.TimeUnit.SECONDS).status);assertEquals("needs_confirmation",results.get(2).get(10,java.util.concurrent.TimeUnit.SECONDS).status);assertFalse(ports.get(0).closed);assertFalse(ports.get(1).closed);assertTrue(ports.get(2).closed);
+        }finally{for(Port port:ports)port.close();for(Wire wire:wires)wire.close();workers.shutdownNow();}
+    }
     @Test public void nativeAckStaysNonterminalAndTheSameRunnerCanReadTheOriginalService()throws Exception {
         RunControl control=control();Journal journal=new Journal();List<JSONObject> events=new ArrayList<>();Port port=new Port(control,new ArrayList<>());
         try(Wire wire=serviceWire()){

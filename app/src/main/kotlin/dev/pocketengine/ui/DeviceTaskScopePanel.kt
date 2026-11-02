@@ -61,13 +61,19 @@ internal fun DeviceTaskScopeEntry(task: UiTask, host: NativeDeviceTaskScopeHost?
 
 private data class DeviceScopeSession(val window: NativeDeviceTaskScopeHost.Window, val view: JSONObject)
 private data class DeviceScopeDraft(val tools: String, val models: String, val deadline: Long,
-    val shares: Map<String, DeviceScopeShareDraft> = emptyMap(), val advanced: Boolean = false)
+    val shares: Map<String, DeviceScopeShareDraft> = emptyMap(), val advanced: Boolean = false,
+    val files: Map<String, DeviceScopeFileDraft> = emptyMap(),
+    val projects: Map<String, DeviceScopeProjectDraft> = emptyMap())
+private data class DeviceScopeProjectDraft(val sha256: String, val path: String = "")
+private data class DeviceScopeFileDraft(val sha256: String, val path: String = "", val expectedVersion: String = "absent")
 private data class DeviceScopeShareDraft(val tools: String = "", val models: String = "")
 
 @Composable
 private fun DeviceTaskScopeDialog(session: DeviceScopeSession, runOnWorker: (Runnable) -> Unit, changed: () -> Unit, close: () -> Unit) {
     val alive = remember(session) { AtomicBoolean(true) }
     val main = remember { Handler(Looper.getMainLooper()) }
+    var projectReview by remember(session) { mutableStateOf<TaskStoreDeviceTasks.ProjectImportReview?>(null) }
+    var projectView by remember(session) { mutableStateOf<JSONObject?>(null) }
     var review by remember(session) { mutableStateOf<TaskStoreDeviceTasks.SourceScopeReview?>(null) }
     var view by remember(session) { mutableStateOf<JSONObject?>(null) }
     var busy by remember(session) { mutableStateOf(false) }
@@ -86,12 +92,23 @@ private fun DeviceTaskScopeDialog(session: DeviceScopeSession, runOnWorker: (Run
         Surface(Modifier.fillMaxSize(), color = PageSurface) {
             Column(Modifier.fillMaxSize().testTag("device_task_scope")) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (review == null) "设备协作范围" else "确认这次设备范围", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    Text(if (projectReview != null) "确认项目包导入" else if (review == null) "设备协作范围" else "确认这次设备范围", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                     TextButton(onClick = close, modifier = Modifier.heightIn(min = 48.dp).testTag("device_task_scope_close")) { Text("关闭") }
                 }
                 HorizontalDivider(color = Line, thickness = .5.dp)
                 if (error != null) Text(error!!, Modifier.padding(horizontal = 20.dp, vertical = 12.dp).testTag("device_task_scope_error"), style = MaterialTheme.typography.bodyMedium)
-                if (review == null) DeviceScopeSelection(session.view, busy, Modifier.weight(1f)) { selection ->
+                if (projectReview != null) DeviceScopeProjectImportReview(projectView ?: JSONObject(), busy, Modifier.weight(1f), close) {
+                    val original = projectReview ?: return@DeviceScopeProjectImportReview
+                    execute {
+                        session.window.confirmProjectImport(original)
+                        main.post { if (alive.get()) { changed(); close() } }
+                    }
+                } else if (review == null) DeviceScopeSelection(session.view, busy, Modifier.weight(1f), { receiveOperationId ->
+                    execute {
+                        val native = session.window.reviewProjectImport(receiveOperationId); val safe = native.view()
+                        main.post { if (alive.get()) { projectReview = native; projectView = safe } }
+                    }
+                }) { selection ->
                     execute {
                         val native = session.window.review(selection); val safe = native.view()
                         main.post { if (alive.get()) { review = native; view = safe } }
@@ -108,11 +125,15 @@ private fun DeviceTaskScopeDialog(session: DeviceScopeSession, runOnWorker: (Run
     }
 }
 
-/** Only OptionIds and finite numeric choices cross back to the native host. This renderer never
- * parses resources, grants, model JSON or target strings into a permission/review. */
+/** Choices cross back to the native host; file identity and exact destination are untrusted input.
+ * This renderer never creates descriptors, grants or native approval proofs. */
 @Composable
 internal fun DeviceScopeSelection(nativeView: JSONObject, busy: Boolean, modifier: Modifier = Modifier,
-    review: (NativeDeviceTaskScopeHost.Selection) -> Unit) {
+    review: (NativeDeviceTaskScopeHost.Selection) -> Unit) = DeviceScopeSelection(nativeView, busy, modifier, {}, review)
+
+@Composable
+internal fun DeviceScopeSelection(nativeView: JSONObject, busy: Boolean, modifier: Modifier,
+    reviewProjectImport: (String) -> Unit, review: (NativeDeviceTaskScopeHost.Selection) -> Unit) {
     val options = nativeView.optJSONArray("options").objects()
     val selectedBefore = nativeView.optJSONObject("selected")?.optJSONArray("routes").objects()
     val toolsAvailable = nativeView.optInt("toolsAvailable").coerceAtLeast(0)
@@ -140,7 +161,7 @@ internal fun DeviceScopeSelection(nativeView: JSONObject, busy: Boolean, modifie
     val totalModels = drafts.values.sumOf { it.models.toIntOrNull()?.toLong() ?: 0 }
     val inputError = when {
         selectedOptions.size > 16 -> "一次最多选择 16 个设备范围。"
-        selectedOptions.any { option -> !scopeDraftValid(option, drafts.getValue(option.optString("optionId")), nativeView.optLong("deadlineMaximum")) } -> "请核对选中设备的次数、期限与下游份额。"
+        selectedOptions.any { option -> !scopeDraftValid(option, drafts.getValue(option.optString("optionId")), nativeView.optLong("deadlineMaximum")) } -> "请核对次数、期限、下游份额，以及文件目标路径与版本。"
         else -> null
     }
     Column(modifier.fillMaxWidth()) {
@@ -154,6 +175,16 @@ internal fun DeviceScopeSelection(nativeView: JSONObject, busy: Boolean, modifie
             val missing = selectedBefore.count { before -> options.none { it.optString("sourceKey") == before.optString("sourceKey") } }
             if (missing > 0) Text("有 $missing 个已确认范围暂不在候选中。修改范围不会返还未核对操作占用的次数。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
             if (nativeView.optBoolean("hasMoreOptions")) Text("当前只显示一部分设备范围。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+            val pendingImports = nativeView.optJSONArray("pendingProjectImports").objects()
+            if (pendingImports.isNotEmpty()) {
+                DeviceSectionTitle("待核对的项目包导入", "已接收只代表暂存，尚未导入目标工作区")
+                pendingImports.forEach { pending -> DeviceContentSurface { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(scopeTargetLabel(pending.optString("targetDeviceId")), style = MaterialTheme.typography.titleSmall)
+                    Text("目标：${pending.optString("path")} · ${pending.optLong("size")} 字节", style = MaterialTheme.typography.bodyMedium)
+                    Text("仅新建目录，不覆盖已有内容。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                    OutlinedButton(onClick = { reviewProjectImport(pending.getString("receiveOperationId")) }, enabled = !busy, modifier = Modifier.testTag("device_scope_project_import_${pending.optString("receiveOperationId")}")) { Text("核对清单与导入目标") }
+                } } }
+            }
             DeviceSectionTitle("选择设备与工作范围", "只列出已验证连接和授权的选项")
             if (options.isEmpty()) DeviceContentSurface { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("还没有可选的设备范围", style = MaterialTheme.typography.titleSmall)
@@ -180,7 +211,7 @@ internal fun DeviceScopeSelection(nativeView: JSONObject, busy: Boolean, modifie
                         Text("工具 ${draft.tools.ifBlank { "—" }} 次 · 模型 ${draft.models.ifBlank { "—" }} 次", style = MaterialTheme.typography.titleSmall)
                         Text("截至 ${deviceTime(draft.deadline)}", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { setDraft(id, newDraft(option).copy(shares = draft.shares, advanced = draft.advanced)) }, enabled = !busy) { Text("均衡分配") }
+                            OutlinedButton(onClick = { setDraft(id, newDraft(option).copy(shares = draft.shares, advanced = draft.advanced, files = draft.files, projects = draft.projects)) }, enabled = !busy) { Text("均衡分配") }
                             OutlinedButton(onClick = { setDraft(id, draft.copy(tools = minOf(option.optInt("toolBudgetMaximum"), (toolsAvailable - overhead).coerceAtLeast(0)).toString(), models = (if (option.optString("kind") == "goal") minOf(option.optInt("modelBudgetMaximum"), modelsAvailable) else 0).toString())) }, enabled = !busy) { Text("使用本次余量") }
                         }
                         TextButton(onClick = { setDraft(id, draft.copy(advanced = !draft.advanced)) }, modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(0.dp)) { Text(if (draft.advanced) "收起次数与期限" else "调整次数与期限") }
@@ -194,7 +225,53 @@ internal fun DeviceScopeSelection(nativeView: JSONObject, busy: Boolean, modifie
                             }
                         }
                         ScopeExactResource(option.optJSONObject("resourceBinding") ?: JSONObject(), option.optJSONArray("toolDeclarations").objects())
+                        if (option.optJSONArray("toolDeclarations").objects().any { it.optString("toolName") == "workspace.receive" }) {
+                            Text("发送到这个项目的文件（可选）", style = MaterialTheme.typography.titleSmall)
+                            Text("从私人 Book 逐项选择，每项最多 256 KiB（262144 字节），每个范围最多 4 项。不会自动发送。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                            val materials = nativeView.optJSONArray("materialOptions").objects()
+                            if (materials.isEmpty()) Text("没有可选文件。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                            materials.forEach { material ->
+                                val fileId = material.optString("id"); val file = draft.files[fileId]
+                                val available = material.optBoolean("available") && material.optLong("size", -1) in 0L..262144L
+                                Row(Modifier.fillMaxWidth().testTag("device_scope_file_${id}_$fileId").clickable(enabled = !busy && (file != null || available && draft.files.size < 4), role = Role.Checkbox) {
+                                    setDraft(id, draft.copy(files = draft.files.toMutableMap().apply { if (file == null) put(fileId, DeviceScopeFileDraft(material.optString("sha256"))) else remove(fileId) }))
+                                }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = file != null, onCheckedChange = null)
+                                    Column(Modifier.weight(1f)) {
+                                        Text(material.optString("name"), style = MaterialTheme.typography.bodyMedium)
+                                        Text("${material.optLong("size")} 字节 · ${material.optString("mimeType")}" + if (!available) " · 当前不可用或超过上限" else "", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                                    }
+                                }
+                                if (file != null) {
+                                    SelectionContainer { Text("SHA-256：${file.sha256}", style = MaterialTheme.typography.bodySmall) }
+                                    OutlinedTextField(file.path, { setDraft(id, draft.copy(files = draft.files + (fileId to file.copy(path = it)))) }, label = { Text("目标项目相对路径，例如 docs/brief.txt") }, enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("device_scope_file_path_${id}_$fileId"))
+                                    OutlinedTextField(file.expectedVersion, { setDraft(id, draft.copy(files = draft.files + (fileId to file.copy(expectedVersion = it)))) }, label = { Text("目标版本：absent 或现有文件 SHA-256") }, enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("device_scope_file_version_${id}_$fileId"))
+                                    Text("absent 仅允许新建；覆盖必须填写目标现有文件的完整 SHA-256。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                                }
+                            }
+                        }
                         if (option.optJSONObject("diagnostics")?.optBoolean("isolation", true) == false) Text("执行代码可能访问该系统用户可访问的资源。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                        if (option.optJSONArray("toolDeclarations").objects().any { it.optString("toolName") == "workspace.project.receive" }) {
+                            Text("发送到这个项目的固定项目包（可选）", style = MaterialTheme.typography.titleSmall)
+                            Text("每个范围最多 1 项，最多 20 MiB（20971520 字节）。先暂存，之后必须另行确认导入；不自动执行。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                            val projects = nativeView.optJSONArray("projectOptions").objects()
+                            if (projects.isEmpty()) Text("没有可选的原任务固定项目包。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                            projects.forEach { project ->
+                                val projectId = project.optString("id"); val selected = draft.projects[projectId]
+                                val available = project.optBoolean("available") && project.optLong("size", -1) in 0L..20971520L
+                                Row(Modifier.fillMaxWidth().testTag("device_scope_project_${id}_$projectId").clickable(enabled = !busy && (selected != null || available && draft.projects.isEmpty()), role = Role.Checkbox) {
+                                    setDraft(id, draft.copy(projects = if (selected == null) mapOf(projectId to DeviceScopeProjectDraft(project.optString("sha256"))) else emptyMap()))
+                                }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = selected != null, onCheckedChange = null)
+                                    Text("${project.optString("name")} · ${project.optLong("size")} 字节" + if (!available) " · 当前不可用或超过上限" else "", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                }
+                                if (selected != null) {
+                                    ScopeProjectFacts(project)
+                                    OutlinedTextField(selected.path, { setDraft(id, draft.copy(projects = mapOf(projectId to selected.copy(path = it)))) }, label = { Text("目标项目相对目录，例如 imports/demo") }, enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("device_scope_project_path_${id}_$projectId"))
+                                    Text("目标版本固定 absent：仅新建，不覆盖已有目录。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                                }
+                            }
+                        }
                         val children = option.optJSONArray("downstreamOptions").objects()
                         if (children.isNotEmpty() && option.optString("kind") == "goal") {
                             HorizontalDivider(color = Line, thickness = .5.dp)
@@ -216,7 +293,7 @@ internal fun DeviceScopeSelection(nativeView: JSONObject, busy: Boolean, modifie
                     }
                 }
             }
-            ScopeContextSummary()
+            ScopeContextSummary(drafts.values.sumOf { it.files.size }, drafts.values.sumOf { it.projects.size })
         }
         Surface(color = Color.White, shadowElevation = 8.dp) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -227,7 +304,9 @@ internal fun DeviceScopeSelection(nativeView: JSONObject, busy: Boolean, modifie
                         val draft = drafts.getValue(option.optString("optionId")); val tools = draft.tools.toInt(); val models = draft.models.toInt()
                         NativeDeviceTaskScopeHost.RouteChoice(option.optString("optionId"), tools, models, draft.deadline,
                             tools - draft.shares.values.sumOf { it.tools.toInt() }, models - draft.shares.values.sumOf { it.models.toInt() },
-                            draft.shares.map { (id, share) -> NativeDeviceTaskScopeHost.ShareChoice(id, share.tools.toInt(), share.models.toInt()) }, NativeDeviceTaskScopeHost.ContextChoice.GOAL_ONLY)
+                            draft.shares.map { (id, share) -> NativeDeviceTaskScopeHost.ShareChoice(id, share.tools.toInt(), share.models.toInt()) }, NativeDeviceTaskScopeHost.ContextChoice.GOAL_ONLY,
+                            draft.files.map { (id, file) -> NativeDeviceTaskScopeHost.FileChoice(id, file.sha256, file.path, file.expectedVersion) },
+                            draft.projects.map { (id, project) -> NativeDeviceTaskScopeHost.ProjectChoice(id, project.sha256, project.path) })
                     }))
                 }, enabled = !busy && inputError == null && (selectedOptions.isNotEmpty() || selectedBefore.isNotEmpty()), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("device_scope_review")) { Text(if (busy) "正在核对…" else if (selectedOptions.isEmpty()) "移除设备范围并核对" else "核对这次范围") }
             }
@@ -255,11 +334,27 @@ internal fun DeviceScopeReview(view: JSONObject, source: JSONObject, busy: Boole
                     Text("→ ${scopeTargetLabel(share.optString("targetDeviceId"))}：工具 ${share.optInt("toolBudget")} · 模型 ${share.optInt("modelBudget")}", style = MaterialTheme.typography.bodyMedium)
                     ScopeExactResource(share.optJSONObject("resourceBinding") ?: JSONObject(), emptyList())
                 }
+                route.optJSONArray("files").objects().forEach { file ->
+                    HorizontalDivider(color = Line, thickness = .5.dp)
+                    SelectionContainer { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("文件：${file.optString("name")} · ${file.optLong("size")} 字节", style = MaterialTheme.typography.bodyMedium)
+                        Text("SHA-256：${file.optString("sha256")}", style = MaterialTheme.typography.bodySmall)
+                        Text("目标相对路径：${file.optString("path")}", style = MaterialTheme.typography.bodyMedium)
+                        Text("目标版本：${file.optString("expectedVersion")}", style = MaterialTheme.typography.bodySmall)
+                    } }
+                }
+                route.optJSONArray("projects").objects().forEach { project ->
+                    HorizontalDivider(color = Line, thickness = .5.dp)
+                    Text("项目包：${project.optString("name")} · ${project.optLong("size")} 字节", style = MaterialTheme.typography.bodyMedium)
+                    ScopeProjectFacts(project)
+                    Text("暂存目标目录：${project.optString("path")} · 目标版本 absent（仅新建）", style = MaterialTheme.typography.bodyMedium)
+                    Text("本次仅允许接收暂存。导入目标工作区需要再次明确确认。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                }
                 Text("执行截至 ${deviceTime(route.optLong("deadline"))}", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                 val option = source.optJSONArray("options").objects().firstOrNull { it.optString("optionId") == route.optString("optionId") }
                 if (option?.optJSONObject("diagnostics")?.optBoolean("isolation", true) == false) Text("执行代码可能访问该系统用户可访问的资源。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
             } } }
-            ScopeContextSummary()
+            ScopeContextSummary(routes.sumOf { it.optJSONArray("files")?.length() ?: 0 }, routes.sumOf { it.optJSONArray("projects")?.length() ?: 0 })
             Text("同一范围内不再重复询问；新增设备、权限或次数时，需要再次确认。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
             Row(Modifier.fillMaxWidth().clickable(enabled = !busy, role = Role.Checkbox) { consent = !consent }.testTag("device_scope_consent").padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = consent, onCheckedChange = null); Text("允许这个任务按以上范围使用设备", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
@@ -273,9 +368,9 @@ internal fun DeviceScopeReview(view: JSONObject, source: JSONObject, busy: Boole
 }
 
 @Composable
-private fun ScopeContextSummary() { DeviceContentSurface { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun ScopeContextSummary(fileCount: Int, projectCount: Int) { DeviceContentSurface { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
     Text("共享内容", style = MaterialTheme.typography.titleSmall)
-    Text("仅这个任务的目标。未共享附件、私人记忆或整个工作区。", style = MaterialTheme.typography.bodyMedium, color = SecondaryInk)
+    Text(if (fileCount == 0 && projectCount == 0) "仅这个任务的目标。未共享附件、私人记忆或整个工作区。" else "这个任务的目标及以上明确选择的 $fileCount 项文件、$projectCount 项固定项目包。不共享其他附件、私人记忆或整个工作区。文件内容和目标版本会由本机再次核对。", style = MaterialTheme.typography.bodyMedium, color = SecondaryInk)
 } } }
 
 @Composable
@@ -296,6 +391,11 @@ private fun scopeTargetLabel(id: String) = "设备 ${id.takeLast(4)}"
 private fun scopeDraftValid(option: JSONObject, draft: DeviceScopeDraft, taskDeadline: Long): Boolean {
     val tools = draft.tools.toIntOrNull() ?: return false; val models = draft.models.toIntOrNull() ?: return false
     if (tools < (if (option.optString("kind") == "goal") 0 else 1) || tools > option.optInt("toolBudgetMaximum") || models < (if (option.optString("kind") == "goal") 1 else 0) || models > option.optInt("modelBudgetMaximum") || draft.deadline <= System.currentTimeMillis() || draft.deadline > minOf(taskDeadline, option.optLong("deadlineMaximum"))) return false
+    if (draft.projects.size > 1 || draft.projects.values.any { it.path.isBlank() }) return false
+    val paths = draft.files.values.map { it.path } + draft.projects.values.map { it.path }
+    if (paths.distinct().size != paths.size) return false
+    if (draft.files.size > 4 || draft.files.values.any { it.path.isBlank() || !(it.expectedVersion == "absent" || it.expectedVersion.matches(Regex("[0-9a-fA-F]{64}"))) }) return false
+    if (draft.files.values.map { it.path }.distinct().size != draft.files.size) return false
     var childTools = 0L; var childModels = 0L
     draft.shares.values.forEach { val t = it.tools.toIntOrNull() ?: return false; val m = it.models.toIntOrNull() ?: return false; if (t < 0 || m < 0 || t.toLong() + m < 1) return false; childTools += t; childModels += m }
     return childTools <= tools && childModels <= models && (draft.shares.isEmpty() || models - childModels >= 1 && tools - childTools >= 1)
@@ -320,5 +420,85 @@ private fun scopeCapabilityStatus(diagnostics: JSONObject?): String? {
             "permission_or_resource_unavailable" -> "设备权限或指定资源暂未就绪"
             else -> if (diagnostics.has("ready")) "执行条件仍需核对" else null
         }
+    }
+}
+
+/** Read-only original manifest. Pagination reveals every entry without granting new authority. */
+@Composable
+private fun ScopeProjectFacts(project: JSONObject) {
+    SelectionContainer { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("包 SHA-256：${project.optString("sha256")}", style = MaterialTheme.typography.bodySmall)
+        Text("清单 SHA-256：${project.optString("manifestDigest")}", style = MaterialTheme.typography.bodySmall)
+        Text("来源任务：${project.optString("sourceTaskId")}\n来源操作：${project.optString("sourceOperationId")}", style = MaterialTheme.typography.bodySmall)
+    } }
+    project.optJSONObject("manifest")?.let { ScopeProjectManifest(it, project.optString("manifestDigest")) }
+}
+
+@Composable
+private fun ScopeProjectManifest(manifest: JSONObject, digest: String) {
+    var expanded by remember(digest) { mutableStateOf(false) }
+    var section by remember(digest) { mutableStateOf("files") }
+    var page by remember(digest, section) { mutableStateOf(0) }
+    Text("清单：${manifest.optJSONArray("files")?.length() ?: 0} 文件 · ${manifest.optLong("bytes")} 展开字节 · ${manifest.optJSONArray("directories")?.length() ?: 0} 目录 · ${manifest.optJSONArray("omitted")?.length() ?: 0} 排除项", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+    TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(0.dp), modifier = Modifier.heightIn(min = 48.dp).testTag("device_scope_manifest_$digest")) { Text(if (expanded) "收起完整清单" else "查看完整清单") }
+    if (expanded) {
+        // Preserve the native manifest's metadata as well as all three lists, without elision.
+        val metadata = JSONObject(manifest.toString()).apply { remove("files"); remove("directories"); remove("omitted") }
+        SelectionContainer { Text(metadata.toString(2), style = MaterialTheme.typography.bodySmall) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("files" to "文件", "directories" to "目录", "omitted" to "排除项").forEach { (key, label) -> TextButton(onClick = { section = key }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text(label) } }
+        }
+        val rows = manifest.optJSONArray(section)
+        val count = rows?.length() ?: 0; val pages = maxOf(1, (count + 19) / 20)
+        SelectionContainer { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (count == 0) Text("没有条目。", style = MaterialTheme.typography.bodySmall)
+            for (i in (page * 20) until minOf(count, (page + 1) * 20)) {
+                val row = rows!!.opt(i)
+                if (row is JSONObject && row.has("path")) {
+                    Text(row.optString("path"), style = MaterialTheme.typography.bodyMedium)
+                    val details = JSONObject(row.toString()).apply { remove("path") }
+                    Text(details.toString(2).replace("\\/", "/"), style = MaterialTheme.typography.bodySmall)
+                } else Text(row.toString(), style = MaterialTheme.typography.bodySmall)
+            }
+        } }
+        if (pages > 1) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { page-- }, enabled = page > 0) { Text("上一页") }
+            Text("${page + 1}/$pages", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { page++ }, enabled = page + 1 < pages) { Text("下一页") }
+        }
+    }
+}
+
+@Composable
+internal fun DeviceScopeProjectImportReview(view: JSONObject, busy: Boolean, modifier: Modifier = Modifier, close: () -> Unit, confirm: () -> Unit) {
+    var consent by remember(view) { mutableStateOf(false) }
+    Column(modifier.fillMaxWidth()) {
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("允许原任务导入这个暂存项目包", style = MaterialTheme.typography.titleMedium)
+            Text("接收暂存不等于已导入。此次确认只保存导入许可；不会立即发送、解包或运行项目。继续原任务后才可执行。", style = MaterialTheme.typography.bodyMedium, color = SecondaryInk)
+            DeviceContentSurface { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(scopeTargetLabel(view.optString("targetDeviceId")), style = MaterialTheme.typography.titleMedium)
+                SelectionContainer { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("原接收操作：${view.optString("receiveOperationId")}", style = MaterialTheme.typography.bodySmall)
+                    Text("固定成果：${view.optString("artifactId")} · ${view.optLong("size")} 字节", style = MaterialTheme.typography.bodyMedium)
+                    Text("目标目录：${view.optString("path")}", style = MaterialTheme.typography.bodyMedium)
+                    Text("目标版本：${view.optString("expectedVersion")}（仅新建，不覆盖已有目录）", style = MaterialTheme.typography.bodySmall)
+                    Text("目标工作区：${view.optJSONObject("resourceBinding")?.toString(2).orEmpty()}", style = MaterialTheme.typography.bodySmall)
+                } }
+                ScopeProjectFacts(view)
+                view.optJSONObject("summary")?.let { summary ->
+                    Text("接收摘要（需与以上本地原清单核对）", style = MaterialTheme.typography.titleSmall)
+                    SelectionContainer { Text(summary.toString(2), style = MaterialTheme.typography.bodySmall) }
+                }
+            } }
+            Row(Modifier.fillMaxWidth().testTag("device_scope_project_import_consent").clickable(enabled = !busy, role = Role.Checkbox) { consent = !consent }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = consent, onCheckedChange = null)
+                Text("已核对原接收操作、完整清单与目标工作区，允许原任务仅按以上范围导入", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            }
+        }
+        Surface(color = Color.White, shadowElevation = 8.dp) { Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = close, modifier = Modifier.heightIn(min = 48.dp)) { Text("暂不允许") }
+            Button(onClick = confirm, enabled = consent && !busy, modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("device_scope_project_import_confirm")) { Text(if (busy) "正在核对…" else "允许原任务导入") }
+        } }
     }
 }

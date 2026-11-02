@@ -80,4 +80,15 @@ class TeamUiStateTest {
         assertNotEquals(taskStatus("completed"), teamRunStatus("completed"))
     }
 
+    @Test fun claudeSelectionKeepsRiskChoiceAndDoesNotBorrowCodexProbe() {
+        val selected = AgentSlotDraft("member-0", "Claude", "Review", "", "claude", "computer-a", "env-a", externalExecutionRiskAcknowledged = true).json()
+        assertTrue(selected.getBoolean("externalExecutionRiskAcknowledged"))
+        assertEquals("claude", selected.getString("runner"))
+        val receipt = JSONObject().put("slot", selected.toString()).put("receipt", JSONObject().put("available", true).put("cliFlagsVerified", true).put("protocolVerified", false))
+        val state = PocketUiState(baseUrl = "https://model.example/v1", modelName = "default", teamMemberProbes = mapOf("team-a:member-0" to receipt))
+        assertTrue(teamLaunchable(team(selected), state))
+        assertFalse(teamLaunchable(team(JSONObject(selected.toString()).put("runner", "codex_app_server")), state))
+        assertEquals("Claude Code", teamRunnerLabel("claude"))
+    }
+
 }

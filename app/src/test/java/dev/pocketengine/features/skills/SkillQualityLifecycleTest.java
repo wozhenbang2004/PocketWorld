@@ -18,7 +18,7 @@ public final class SkillQualityLifecycleTest {
  }
  SkillBook reopen()throws Exception{return new SkillBook(root,(owner,space,id)->new ExperienceOrigin.State(new ExperienceOrigin.Ref("method",1,"owner","private"),ExperienceOrigin.Status.ACTIVE,true));}
  SkillQualityReceipt evidence(String op,String outcome,String status)throws Exception {
-  JSONObject ref=new JSONObject().put("ownerId","owner").put("spaceId","private").put("taskId","task").put("runId","run").put("epoch",1).put("operationId",op).put("planDigest","plan");
+  JSONObject ref=new JSONObject().put("ownerId","owner").put("spaceId","private").put("taskId","task").put("runId",op.startsWith("same")?"same-run":"run-"+op).put("epoch",1).put("operationId",op).put("planDigest","plan");
   JSONObject receipt=new JSONObject(ref.toString()).put("backendReceiptId","native-"+op).put("status",status);
   return SkillQualityReceipt.fromOriginal(new JSONObject().put("reference",ref).put("review",new JSONObject().put("package",skill)).put("receipt",receipt).put("claimedAt",1),outcome,"Owner checked actual output",10);
  }
@@ -53,4 +53,9 @@ public final class SkillQualityLifecycleTest {
   assertThrows(SecurityException.class,()->evidence("x","skill_failed","cancelled"));
   assertEquals("trial",book.recordQuality(scope(),evidence("x","cancelled","cancelled"),20).getString("qualityState"));
  }
+ @Test public void repeatedUsesOfSameSkillInOneRunDoNotCountAsTwoFailures()throws Exception {
+  apply("good","verified");apply("same-first","skill_failed");JSONObject result=apply("same-second","skill_failed");assertEquals("active",result.getString("qualityState"));assertEquals(2,result.getJSONArray("qualityHistory").length());
+  assertThrows(SecurityException.class,()->apply("same-third","verified"));
+ }
+
 }

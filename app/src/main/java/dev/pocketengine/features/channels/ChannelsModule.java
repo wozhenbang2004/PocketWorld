@@ -414,6 +414,12 @@ public final class ChannelsModule implements EngineModule {
         catch(Exception uncertain){core.hostTaskCancellation(requestId,request.expectedRunId,request.expectedCoordinatorEpoch,false);throw new IllegalStateException("停止请求是否被宿主接收尚未确认；请查询原任务，不会自动再次发送",uncertain);}
         if(core.hostTask(requestId).optLong("hostReceiptRevision",0)<=receipt.revision)recordHostTaskUpdate(requestId,receipt,sendAfter);return core.hostTask(requestId).put("known",false);
     }
+    public JSONObject preparePhoneTask(String eventId)throws Exception {if(closed)throw new SecurityException("渠道宿主已关闭");return core.preparePhoneTask(eventId);}
+    public HostTaskPort.Request claimPhoneTask(String requestId,String goal,boolean consent)throws Exception {if(closed)throw new SecurityException("渠道宿主已关闭");return core.claimPhoneTask(requestId,goal,consent);}
+    public HostTaskPort.Request phoneTaskRequest(String requestId)throws Exception {checkHostTaskAuthority(requestId);return core.hostTaskRequest(requestId);}
+    public void cancelPhoneTask(String requestId)throws Exception {core.cancelPhoneTask(requestId);}
+    public void checkPhoneAdmission(String requestId)throws Exception {if(closed)throw new SecurityException("渠道宿主已关闭");core.checkPhoneAdmission(requestId);}
+    public void phoneAdmissionUnknown(String requestId)throws Exception {core.hostTaskAdmissionUnknown(requestId);}
     /** Native host completion/status hook. It cannot create a task, approve tools or change origin. */
     public JSONObject recordHostTaskUpdate(String requestId,HostTaskPort.TaskState receipt,boolean sendAfter)throws Exception {
         checkHostTaskAuthority(requestId);HostTaskPort.Request request=core.hostTaskRequest(requestId);

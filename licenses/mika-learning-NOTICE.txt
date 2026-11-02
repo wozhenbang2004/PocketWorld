@@ -8,3 +8,8 @@ MemoryBook and original TaskStore: trial promotion/suspension, app draft/trial/
 verified/archived/rollback. Thresholds reference upstream; authority differs:
 explicit owner review of exact original execution evidence, never model claims.
 No upstream Kotlin source is vendored. No tool grants derive from learning state.
+Additional source verification: app/.../task/RunLearning.kt and
+core/.../skills/SkillDrafter.kt (Eligibility.MIN_ACTIONS=5), read from the
+fixed upstream checkout. PocketWorld's explicit per-task consent, native package
+version evidence, original-method feedback and exact-source lifecycle are local
+adaptations, not assertions that model completion proves business success.

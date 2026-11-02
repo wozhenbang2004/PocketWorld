@@ -629,6 +629,11 @@ class ArtifactSession:
         with self._lock:
             return self.receiver.finish(self._require(peer, transfer_id))
 
+    def release(self, transfer_id):
+        """Forget a settled native admission; does not grant rights or delete cached bytes."""
+        with self._lock:
+            self._incoming.pop(str(transfer_id), None)
+
     def disconnected(self, peer):
         with self._lock:
             self._incoming = {key: value for key, value in self._incoming.items() if value[1] != (peer.device_id, peer.certificate_fingerprint)}
@@ -829,7 +834,7 @@ class WindowsArtifactReceiver:
             existing = self._read_fixed(name, len(raw), chunk_sha256, descriptor, allow_absent=True)
             if existing is None:
                 self.current(descriptor, "receive")
-                self.backend.create_private_snapshot(self.root, name, raw, maximum=CHUNK_BYTES)
+                self.backend.create_private_snapshot(self.root, name, raw, maximum=CHUNK_BYTES, current=lambda: self.current(descriptor, "receive"))
                 self._read_fixed(name, len(raw), chunk_sha256, descriptor)
             # If a preceding native write happened before its index ACK, reading the exact same
             # object establishes byte completion. No new name, overwrite or business side effect.
@@ -850,7 +855,7 @@ class WindowsArtifactReceiver:
             name = descriptor["transferId"] + ".artifact"
             existing = self._read_fixed(name, len(raw), descriptor["sha256"], descriptor, allow_absent=True)
             if existing is None:
-                self.current(descriptor, "receive"); self.backend.create_private_snapshot(self.root, name, raw, maximum=MAX_BYTES)
+                self.current(descriptor, "receive"); self.backend.create_private_snapshot(self.root, name, raw, maximum=MAX_BYTES, current=lambda: self.current(descriptor, "receive"))
             self._read_fixed(name, len(raw), descriptor["sha256"], descriptor)
             item["complete"] = True; self._save(index, old, descriptor)
             return {"reference": descriptor, "contentVerified": True, "savedBytes": len(raw), "sha256": descriptor["sha256"],

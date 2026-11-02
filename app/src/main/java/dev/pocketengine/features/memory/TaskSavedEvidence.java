@@ -51,6 +51,7 @@ public final class TaskSavedEvidence {
     public static void requireSupported(JSONObject event)throws Exception{
         if("attachment_document_read".equals(event.optString("type"))){documentRange(event);return;}
         if("browser_source_retained".equals(event.optString("type"))){dev.pocketengine.browser.BrowserTaskSpace.savedMemoryProjection(event);return;}
+        if("app_learning_evidence".equals(event.optString("type"))){appLearningText(event);return;}
         throw new IllegalStateException("这份原保存事件尚无可核对的安全正文交付定位，不扩大网页保存范围");
     }
     public static String browserText(JSONObject originalEvent)throws Exception{
@@ -58,6 +59,12 @@ public final class TaskSavedEvidence {
         Object excerpt=projection.get("excerpt");if(!(excerpt instanceof String))throw new SecurityException("原已保存网页摘录不是文本");String text=(String)excerpt;
         if(projection.has("structuredProjection"))text+="\n\n原已安全交付并批准保存的结构化范围：\n"+canonical(projection.getJSONObject("structuredProjection"));
         if(text.length()>100000)throw new IllegalStateException("原保存安全范围超出本次有界读取窗口");return text;
+    }
+    public static String appLearningText(JSONObject event)throws Exception {
+        if(!"pocketworld.app-learning-evidence.v1".equals(event.optString("format"))||event.optBoolean("businessVerified",true))throw new SecurityException("不是原生未核实App经过");
+        JSONObject context=event.getJSONObject("context"),evidence=event.getJSONObject("evidence"),app=evidence.getJSONObject("app");
+        if(!"android_package_manager".equals(app.optString("source"))||!context.getString("packageName").equals(app.getString("packageName"))||!context.getString("appVersion").equals(app.getString("appVersion"))||evidence.getJSONArray("steps").length()<3)throw new SecurityException("缺少原App安装或动作证明");
+        String text=canonical(new JSONObject().put("context",context).put("evidence",evidence));if(text.length()>24000)throw new SecurityException("原App证据超出有界窗口");return text;
     }
     private static String canonical(Object value)throws Exception{
         if(value instanceof JSONObject){JSONObject object=(JSONObject)value;java.util.List<String> keys=new java.util.ArrayList<>();object.keys().forEachRemaining(keys::add);java.util.Collections.sort(keys);StringBuilder out=new StringBuilder("{");for(String key:keys){if(out.length()>1)out.append(',');out.append(JSONObject.quote(key)).append(':').append(canonical(object.get(key)));}return out.append('}').toString();}
@@ -69,7 +76,15 @@ public final class TaskSavedEvidence {
         Address a=address(sourceId);if(!"owner".equals(scope.ownerId)||!"private".equals(scope.spaceId))return null;
         SourceRef ref=new SourceRef("task_evidence",sourceId,a.eventSeq,scope.ownerId,scope.spaceId);JSONObject task=task(db,a.taskId);if(task==null)return new SourceRef.State(ref,true);
         JSONObject original=event(db,a.taskId,a.runId,a.eventSeq);if(original==null||!a.eventSha256.equals(TaskStore.capabilityFingerprint(original)))return new SourceRef.State(ref,true);
-        requireSupported(original);return new SourceRef.State(ref,false);
+        requireSupported(original);
+        if("app_learning_evidence".equals(original.optString("type"))&&original.getJSONObject("context").has("outcomeSourceRef")){
+            SourceRef outcome=SourceRef.fromJson(original.getJSONObject("context").getJSONObject("outcomeSourceRef"));
+            if(!outcome.sourceId.equals("task:"+a.taskId+":verified_result"))throw new SecurityException("App结果来源不是原task");
+            try(Cursor verification=db.rawQuery("SELECT native_seq,completed FROM task_events WHERE task_id=? AND event_type='user_verification' ORDER BY event_order DESC LIMIT 1",new String[]{a.taskId})){
+                if(!verification.moveToFirst()||verification.getLong(0)!=outcome.revision||verification.getInt(1)!=1)return new SourceRef.State(ref,true);
+            }
+        }
+        return new SourceRef.State(ref,false);
     }
     public static JSONObject readEvent(SQLiteDatabase db,SourceRef expected)throws Exception{
         Address a=address(expected.sourceId);if(!"task_evidence".equals(expected.kind)||expected.revision!=a.eventSeq)throw new SecurityException("来源修订不是原事件本机投影版本");
@@ -84,11 +99,11 @@ public final class TaskSavedEvidence {
     public static JSONObject list(SQLiteDatabase db,String taskId,long before,int limit)throws Exception{
         if(taskId==null||!taskId.matches(UUID)||before<0||limit<1||limit>20)throw new IllegalArgumentException("请选择原task与最多20条保存来源");if(task(db,taskId)==null)throw new SecurityException("原私人task已不可读");
         JSONArray entries=new JSONArray();long next=before==0?Long.MAX_VALUE:before,used=0;boolean more=false;
-        try(Cursor rows=db.rawQuery("SELECT event_order,native_seq,event_type,body_bytes,CASE WHEN body_bytes>=0 AND body_bytes<=131072 THEN event_json END FROM task_events WHERE task_id=? AND event_order<? AND event_type IN ('attachment_document_read','browser_source_retained') ORDER BY event_order DESC LIMIT ?",new String[]{taskId,Long.toString(next),Integer.toString(limit+1)})){
+        try(Cursor rows=db.rawQuery("SELECT event_order,native_seq,event_type,body_bytes,CASE WHEN body_bytes>=0 AND body_bytes<=131072 THEN event_json END FROM task_events WHERE task_id=? AND event_order<? AND event_type IN ('attachment_document_read','browser_source_retained','app_learning_evidence') ORDER BY event_order DESC LIMIT ?",new String[]{taskId,Long.toString(next),Integer.toString(limit+1)})){
             while(rows.moveToNext()){
                 if(entries.length()==limit){more=true;break;}long seq=rows.getLong(1),bytes=rows.getLong(3);next=rows.getLong(0);JSONObject item=new JSONObject().put("eventSeq",seq).put("eventOrder",next).put("type",rows.getString(2)).put("originalBodyIncluded",false);
                 if(rows.isNull(4)||used+bytes>262144){entries.put(item.put("status","read_limited"));more=true;break;}used+=bytes;JSONObject original=new JSONObject(rows.getString(4));item.put("runId",original.optString("runId")).put("epoch",original.optInt("epoch"));
-                try{requireSupported(original);if(seq<1||seq!=next||!original.optString("runId").matches(UUID))throw new IllegalStateException("原事件不是可核native序号");item.put("status","available").put("coverage",original.optString("coverage")).put("title","attachment_document_read".equals(rows.getString(2))?"原已读取文档的准确范围":"原已批准保存的网页证据");}
+                try{requireSupported(original);if(seq<1||seq!=next||!original.optString("runId").matches(UUID))throw new IllegalStateException("原事件不是可核native序号");item.put("status","available").put("coverage",original.optString("coverage")).put("title","attachment_document_read".equals(rows.getString(2))?"原已读取文档的准确范围":"app_learning_evidence".equals(rows.getString(2))?"原限定App动作证据（仅候选）":"原已批准保存的网页证据");}
                 catch(Exception unavailable){item.put("status","source_unavailable").put("reason","native_exact_saved_delivery_pins_unavailable");}
                 entries.put(item);
             }

@@ -14,6 +14,18 @@ public final class NativeDeviceChildStopHost {
     }
     private final TaskStore tasks;private final DeviceIdentity.LocalIdentity local;private final NativeStops source;
     public NativeDeviceChildStopHost(TaskStore originalTasks,DeviceIdentity.LocalIdentity existingLocalIdentity,NativeStops source){tasks=java.util.Objects.requireNonNull(originalTasks);local=java.util.Objects.requireNonNull(existingLocalIdentity);this.source=java.util.Objects.requireNonNull(source);}
+    /** Explicit owner action after reopening the original operation; no old RunControl is fabricated. */
+    public JSONObject stopReviewedOperation(TaskStoreDeviceTasks.OwnerStopReview review)throws Exception{
+        var candidate=tasks.deviceTasks().confirmOwnerStop(review);
+        var grant=source.currentManagementGrant(candidate.targetDeviceId(),candidate.grantId());
+        var dispatch=tasks.deviceTasks().prepareOriginalStop(candidate,local,grant);
+        if(dispatch.knownOperation())return dispatch.view().put("managementOnly",true).put("unknown",true);
+        RunControl io=new RunControl();try{
+            var actual=source.sendManagement(dispatch.request(),dispatch.ticket(),io);
+            return tasks.deviceTasks().recordOriginalStop(dispatch,actual).put("unknown",true);
+        }catch(Exception unavailable){return dispatch.view().put("state","unknown").put("unknown",true).put("managementOnly",true);}
+        finally{io.cancel();}
+    }
     /** Invoke on the existing bounded IO worker, never the control/UI/App-lock thread. Caller only enqueues after native SQL cancellation. */
     public JSONObject stopOriginalChildren(String taskId,RunControl originalCancelled)throws Exception{
         JSONArray results=new JSONArray();int unknown=0;for(var candidate:tasks.deviceTasks().originalStopCandidates(taskId,originalCancelled)){

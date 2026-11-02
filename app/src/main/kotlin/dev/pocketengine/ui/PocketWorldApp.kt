@@ -86,7 +86,7 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
     val composerEpoch=controller.composerViewEpoch
     val phoneComposerVisible=phoneIntent
     val draft=if(phoneIntent)phoneDraft else privateDraft?.text.orEmpty()
-    val changeDraft: (String) -> Unit = { value -> if(phoneIntent==phoneComposerVisible){if(phoneComposerVisible){phoneDraft=value;controller.voiceDraftTextChanged(value)}else controller.editComposerText(composerKey,composerEpoch,value)} }
+    val changeDraft: (String) -> Unit = { value -> if(phoneIntent==phoneComposerVisible){if(phoneComposerVisible){phoneDraft=value;controller.phoneDraftEdited(value);controller.voiceDraftTextChanged(value)}else controller.editComposerText(composerKey,composerEpoch,value)} }
     val changePhoneIntent: (Boolean) -> Unit = { next ->
         if(phoneIntent!=next){
             if(next&&phoneDraft.isEmpty())phoneDraft=privateDraft?.text.orEmpty()
@@ -243,13 +243,14 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
         if (fileDialog) NameDialog("新建文件", "项目内路径", "例如：src/main.py", { fileDialog = false }) { name -> controller.newFile(name); fileDialog = false }
         if (state.filePath != null) FileEditor(state, controller)
         state.workspaceArtifactView?.let { WorkspaceArtifactSheet(it, state, controller) }
-        suggestedGoal?.let { goal -> AlertDialog(onDismissRequest = { suggestedGoal = null }, containerColor = Color.White, title = { Text("收到新的手机任务") }, text = { Text("当前还有未发送的草稿。是否用收到的任务替换？\n\n$goal") }, confirmButton = { Button(onClick = { phoneDraft = goal; changePhoneIntent(true); tab = 0; suggestedGoal = null }) { Text("填入新任务") } }, dismissButton = { TextButton(onClick = { suggestedGoal = null }) { Text("保留草稿") } }) }
-        consentGoal?.let { goal -> AlertDialog(onDismissRequest = { consentGoal = null }, containerColor = Color.White, title = { Text(if (executionMode == "background") "在后台独立屏执行" else "交给助手操作主屏") }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        suggestedGoal?.let { goal -> AlertDialog(onDismissRequest = { controller.cancelChannelPhone(); suggestedGoal = null }, containerColor = Color.White, title = { Text("收到新的手机任务") }, text = { Text("当前还有未发送的草稿。是否用收到的任务替换？\n\n$goal") }, confirmButton = { Button(onClick = { phoneDraft = goal; changePhoneIntent(true); tab = 0; suggestedGoal = null }) { Text("填入新任务") } }, dismissButton = { TextButton(onClick = { controller.cancelChannelPhone(); suggestedGoal = null }) { Text("保留草稿") } }) }
+        consentGoal?.let { goal -> AlertDialog(onDismissRequest = { controller.cancelChannelPhone(); consentGoal = null }, containerColor = Color.White, title = { Text(if (executionMode == "background") "在后台独立屏执行" else "交给助手操作主屏") }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(goal, fontWeight = FontWeight.Medium)
+            if (controller.hasChannelPhoneOrigin) Text("此目标来自已认证主人私聊；接收时与当前都须已开启原渠道主人任务授权。本次仍需单独确认屏幕使用，任务状态与结果摘要将返回原私聊。", color = SecondaryInk)
             Text(if (executionMode == "background") "需要已连接的后台助手。无法建立独立屏幕时会停止等待。" else "会切换手机应用并占用当前屏幕。暂停后再自行操作，停止不会撤回已发生的动作。", color = SecondaryInk)
             Text("任务中的可见文字会发给你配置的模型；启用视觉后也会发送截图。", color = SecondaryInk, fontSize = 12.sp)
             Text("原目标内累计 ${controller.newTaskToolBudget} 次工具、${controller.newTaskModelBudget} 次模型；" + if(controller.newTaskScopeMinutes==0) "持续至完成、主人停止或预算耗尽。" else "${controller.newTaskScopeMinutes}分钟后停止新派发。",color=SecondaryInk,fontSize=12.sp)
-        } }, confirmButton = { Button(onClick = { controller.startPhone(goal, executionMode); consentGoal = null }) { Text("开始任务") } }, dismissButton = { TextButton(onClick = { consentGoal = null }) { Text("取消") } }) }
+        } }, confirmButton = { Button(onClick = { controller.startPhone(goal, executionMode); consentGoal = null }) { Text("开始任务") } }, dismissButton = { TextButton(onClick = { controller.cancelChannelPhone(); consentGoal = null }) { Text("取消") } }) }
         BackHandler(enabled = !settings && !connections && !teamLaunch && state.teamRunId == null && state.inspectionTaskId == null && !state.backgroundSetupOpen && selectedTaskId == null && !conversationPicker && state.filePath == null && tab != 0) { tab = 0 }
         NativeInferenceHistory(controller)
         ConversationReader(controller)
@@ -337,6 +338,8 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
         state.chatReceipts.values.lastOrNull{it.optString("status")=="unconfirmed" && state.messages.none { row -> row.submission?.optString("clientMessageId") == it.optString("clientMessageId") }}?.let{Box(Modifier.padding(horizontal=22.dp)){ChatInputReceipt(it,controller)}}
         state.tasks.find { it.id == state.activeTaskId }?.let { active -> Column(Modifier.padding(horizontal = 18.dp).padding(bottom = 8.dp)) { CompactTask(active, { task(active) }); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { TextButton(onClick = { if (active.status == "paused") controller.continuePhone() else controller.pausePhone() }) { Text(if (active.status == "paused") "继续任务" else "暂停") }; TextButton(onClick = controller::stopPhone, colors = ButtonDefaults.textButtonColors(contentColor = Danger)) { Text("停止") } } } }
         state.modelDrafts.values.filter { draft -> state.tasks.any { it.id == draft.taskId && it.raw.optString("conversationId").isNotBlank() && it.raw.optString("conversationId") == state.conversationId } }.forEach { preview -> Box(Modifier.padding(horizontal = 22.dp)) { ModelStreamPreview(preview) } }
+        val retainedDevelopment = state.tasks.any { task -> val held = task.raw.optJSONObject("developmentSession"); task.status == "running" && !state.conversationId.isNullOrBlank() && task.raw.optString("conversationId") == state.conversationId && held?.optString("phase") == "owned_running" && held.optString("runId") == task.raw.optString("runId") && held.optInt("epoch") == task.raw.optInt("coordinatorEpoch") }
+        if (retainedDevelopment) Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) { Text("开发服务按原期限保留中", fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.weight(1f)); TextButton(onClick = controller::cancelChat, modifier = Modifier.testTag("conversation_stop_retained_development")) { Text("停止开发服务", fontSize = 12.sp) } }
         if (state.chatBusy) Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = Ink); Text("正在回复…", fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.weight(1f).padding(start = 9.dp)); TextButton(onClick = controller::cancelChat) { Text("停止回复", fontSize = 12.sp) } }
         Column(Modifier.fillMaxWidth().imePadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
             if (phone) Row(Modifier.fillMaxWidth().padding(top = 9.dp), verticalAlignment = Alignment.CenterVertically) {

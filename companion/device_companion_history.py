@@ -162,7 +162,9 @@ class CompanionHistory(NativeHistoryAudienceSource):
             row = self.manager.ledger.execute("SELECT details FROM operations WHERE operation_id=?", (operation,)).fetchone()
             detail = json.loads(row[0]) if row and row[0] else {}
             result = copy.deepcopy(self.manager.operation(operation))
-            if detail.get("audience", {}).get("toolName") == "workspace.write":
+            if detail.get("audience", {}).get("toolName") in {"workspace.receive", "workspace.project.receive", "workspace.project.confirm"}:
+                result.update(copy.deepcopy(result.get("nativeToolResult", {})))
+            if detail.get("audience", {}).get("toolName") in {"workspace.write", "workspace.receive"}:
                 result["originalFileReceipt"] = self.manager.files.operation(operation)
             if detail.get("protocol") == "desktop-v1" and result.get("archived"):
                 result["desktopReceipt"] = detail.get("desktopReceipt")

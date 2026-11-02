@@ -70,6 +70,7 @@ class Win32:
             "MoveFileExW": ([w.LPCWSTR, w.LPCWSTR, w.DWORD], w.BOOL),
             "ReplaceFileW": ([w.LPCWSTR, w.LPCWSTR, w.LPCWSTR, w.DWORD, ctypes.c_void_p, ctypes.c_void_p], w.BOOL),
             "DeleteFileW": ([w.LPCWSTR], w.BOOL),
+            "CreateDirectoryW": ([w.LPCWSTR, ctypes.c_void_p], w.BOOL),
             "GetDriveTypeW": ([w.LPCWSTR], w.UINT),
         }
         for name, (args, result) in signatures.items():
@@ -146,6 +147,25 @@ class Win32:
         function = self.k.SetFileInformationByHandle
         function.argtypes, function.restype = [self.w.HANDLE, ctypes.c_int, ctypes.c_void_p, self.w.DWORD], self.w.BOOL
         self.checked(function(handle, 3, buffer, len(buffer)))  # FileRenameInfo, ReplaceIfExists=FALSE
+
+    def create_private_directory(self, path, user_sid):
+        """Absent-only directory with owner/SYSTEM DACL supplied at creation, before bytes."""
+        if not re.fullmatch(r"S-1-[0-9-]+", user_sid):
+            raise PlatformError("Native current user SID required")
+        class SecurityAttributes(ctypes.Structure):
+            _fields_ = [("length", self.w.DWORD), ("descriptor", ctypes.c_void_p), ("inherit", self.w.BOOL)]
+        advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+        convert = advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW
+        convert.argtypes = [self.w.LPCWSTR, self.w.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(self.w.DWORD)]
+        convert.restype = self.w.BOOL
+        descriptor = ctypes.c_void_p()
+        self.checked(convert("O:" + user_sid + "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;" + user_sid + ")", 1, ctypes.byref(descriptor), None))
+        try:
+            attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
+            self.checked(self.k.CreateDirectoryW(path, ctypes.byref(attributes)))
+        finally:
+            self.k.LocalFree.argtypes, self.k.LocalFree.restype = [ctypes.c_void_p], ctypes.c_void_p
+            self.k.LocalFree(descriptor)
 
     def private_access(self, handle, user_sid, *, require_protected=False):
         """Read the ORIGINAL object's owner/DACL; never repair permissions on serve.
@@ -437,7 +457,7 @@ class WindowsBackend:
             finally:
                 self.api.k.CloseHandle(handle)
 
-    def create_private_snapshot(self, root, relative, raw, maximum=20 * 1024 * 1024):
+    def create_private_snapshot(self, root, relative, raw, maximum=20 * 1024 * 1024, *, current=lambda: None):
         """Publish an absent immutable cache object beneath an already-private root.
 
         State-root ACL provisioning is the installer's job, not inferred from
@@ -453,6 +473,7 @@ class WindowsBackend:
                 handle = self.api.open(temporary, create=True, write=True, delete=True)
                 self.api.write(handle, raw)
                 source_identity = self.api.identity(self.api.info(handle))
+                current()  # Final original grant/cancel gate at the native publication boundary.
                 attempted = True
                 # No name reopening for the source and no overwrite option.
                 self.api.publish_handle(handle, directory_handle, parts[-1])
@@ -611,6 +632,7 @@ class WindowsBackend:
                 current()
                 intent["phase"] = "dispatch_intent_persisted"
                 record_intent(dict(intent))  # Original file/harness receipt, before the only replacement.
+                current()  # Intent persistence may reenter native cancellation/revocation.
                 dispatched = True
                 # ReplaceFile preserves the existing DACL/attributes. Absent
                 # targets use non-replacing MoveFileEx, so a newly created file
@@ -646,6 +668,145 @@ class WindowsBackend:
                         self._delete_owned_bytes(path, temporary_name, hashlib.sha256(after).hexdigest(), len(after), lambda: None, temporary_identity)
                     except (OSError, PlatformError):
                         pass  # Keep uncertain material, never remove a substituted name.
+
+    def import_project_copy(self, root, relative, manifest, files, current, *, record_intent):
+        """Publish ONE reviewed new directory, never overwrite/merge a live project.
+
+        Original operation stores intent before native rename. Unknown publication retains
+        exact materials for inspection and is never repeated under a new name automatically.
+        """
+        from device_project_packages import MAX_FILE, MAX_TOTAL, manifest_identity
+        parts = relative_parts(relative)
+        if not isinstance(files, dict) or not files or len(files)>2000 or sum(len(raw) for raw in files.values())>MAX_TOTAL:
+            raise PlatformError("Reviewed project copy exceeds its explicit bound")
+        directories = set(manifest["directories"])
+        for name, raw in files.items():
+            relative_parts(name)
+            if not isinstance(raw,bytes) or len(raw)>MAX_FILE: raise PlatformError("Project file exceeds explicit bound")
+            pieces=name.split("/")
+            directories.update("/".join(pieces[:n]) for n in range(1,len(pieces)))
+        directories = sorted(directories, key=lambda name:(name.count("/"),name))
+        for name in directories: relative_parts(name)
+        sid = self.logon_context()["userSid"]
+        with self.directory(root, parts[:-1]) as (parent, parent_handle, parent_identity):
+            stage_name = ".pocketworld-project-" + uuid.uuid4().hex
+            stage = ntpath.join(parent,stage_name)
+            prefix = "/".join(parts[:-1])
+            stage_relative = prefix+"/"+stage_name if prefix else stage_name
+            handle, attempted, identity, created = None, False, None, False
+            created_files, created_dirs = [], []
+            intent = {"phase":"preparing", "target":relative,"temporary":stage_relative,
+                      "manifestDigest":manifest_identity(manifest),"expectedVersion":"absent",
+                      "parentIdentity":parent_identity,"recoveryPolicy":"inspect_original_objects_never_automatic_replay"}
+            try:
+                current()
+                self.api.create_private_directory(stage,sid)
+                created=True
+                handle=self.api.open(stage,directory=True)
+                info=self.api.info(handle)
+                if not info.attributes & 0x10 or info.attributes & 0x400 or self.api.final(handle).casefold() != ("\\\\?\\"+stage).casefold():
+                    raise PlatformError("New project staging directory identity invalid")
+                identity=self.api.identity(info); intent["temporaryIdentity"]=identity
+                self.api.private_access(handle,sid,require_protected=True)
+                # Keep the original root handle open; all descendant opens retain native
+                # non-reparse ancestors. No pathlib/open or POSIX assignment fallback.
+                for name in directories:
+                    current()
+                    pieces=relative_parts(name)
+                    with self.directory(stage,pieces[:-1]) as (directory,_,_):
+                        self.api.create_private_directory(ntpath.join(directory,pieces[-1]),sid)
+                    with self.directory(stage,pieces) as (_,_,bound): created_dirs.append((name,bound))
+                for name, raw in files.items():
+                    current()
+                    self.create_private_snapshot(stage,name,raw,maximum=MAX_FILE,current=current)
+                    created_files.append(name)
+                self._verify_project_copy(stage,manifest,files,current)
+                current(); intent["phase"]="dispatch_intent_persisted"; record_intent(dict(intent)); current()
+                self.api.k.CloseHandle(handle); handle=None
+                handle=self.api.open(stage,directory=True,delete=True)
+                info=self.api.info(handle)
+                if self.api.identity(info)!=identity or info.attributes & 0x400:
+                    raise PlatformError("Original staging directory was substituted before publish")
+                current()
+                attempted=True
+                self.api.publish_handle(handle,parent_handle,parts[-1])  # Absent-only original directory handle.
+                target=ntpath.join(parent,parts[-1])
+                if self.api.identity(self.api.info(handle))!=identity or self.api.final(handle).casefold()!=("\\\\?\\"+target).casefold():
+                    raise PlatformError("Published project handle readback differs")
+                self.api.k.CloseHandle(handle); handle=None
+                with self.directory(target) as (_,_,bound):
+                    if bound!=identity: raise PlatformError("Published project path changed identity")
+                    self._verify_project_copy(target,manifest,files,current)
+                intent["phase"]="readback_verified"
+                return {"status":"completed","verified":True,"projectImported":True,"delivered":True,
+                        "path":relative,"manifestDigest":intent["manifestDigest"],"directoryIdentity":identity,
+                        "publicationAttempted":True,"nativeProjectImport":intent,"executionStarted":False,
+                        "restoresHistory":False,"restoresEnvironment":False,"restoresExecutionAuthority":False}
+            except BaseException as failure:
+                if attempted:
+                    intent["phase"]="recovery_required"
+                    return {"status":"unknown","verified":False,"delivered":False,"publicationAttempted":True,
+                            "nativeProjectImport":intent,"recoveryMaterialsRetained":True,
+                            "message":"Project publication unconfirmed; inspect original source/target identities without replay"}
+                # Only known owned bytes/directories are removed. Any substitution, extra
+                # file or failed identity check retains material; never recursive rmtree.
+                cleanup = not created or identity is not None
+                if identity is not None:
+                    for name in reversed(created_files):
+                        try:
+                            raw=files[name]
+                            self.delete_private_snapshot(stage,name,hashlib.sha256(raw).hexdigest(),len(raw))
+                        except Exception: cleanup=False
+                    for name,bound in reversed(created_dirs):
+                        try:
+                            pieces=relative_parts(name)
+                            with self.directory(stage,pieces[:-1]) as (directory,_,_):
+                                child=self.api.open(ntpath.join(directory,pieces[-1]),directory=True,delete=True)
+                                try:
+                                    if self.api.identity(self.api.info(child))!=bound: raise PlatformError("Staging child changed")
+                                    self.api.disposition(child)
+                                finally: self.api.k.CloseHandle(child)
+                        except Exception: cleanup=False
+                    try:
+                        if handle is not None: self.api.k.CloseHandle(handle); handle=None
+                        handle=self.api.open(stage,directory=True,delete=True)
+                        if self.api.identity(self.api.info(handle))!=identity: raise PlatformError("Staging root changed")
+                        self.api.disposition(handle)
+                    except Exception: cleanup=False
+                intent["phase"]="not_published"
+                return {"status":"failed","verified":False,"delivered":False,"publicationAttempted":False,
+                        "nativeProjectImport":intent,"cleanupPending":not cleanup,"message":"Project not published: "+str(failure)[:200]}
+            finally:
+                if handle is not None: self.api.k.CloseHandle(handle)
+
+    def capture_project_copy(self, root, relative, original_identity, manifest, current):
+        """Capture only the original reviewed file set; added/missing paths require new review."""
+        parts=relative_parts(relative)
+        files={}
+        with self.directory(root,parts) as (physical,_,identity):
+            if identity!=original_identity: raise PlatformError("Original imported project directory changed")
+            for row in manifest["files"]:
+                current()
+                files[row["path"]]=self.read_bytes(physical,row["path"],2*1024*1024)
+            if sum(len(raw) for raw in files.values())>16*1024*1024:
+                raise PlatformError("Modified selected project exceeds 16MiB; nothing exported",413)
+            self._verify_project_copy(physical,manifest,files,current)
+        return files
+
+    def _verify_project_copy(self, root, manifest, files, current):
+        expected_dirs=set(manifest["directories"])
+        for name in files:
+            pieces=name.split("/"); expected_dirs.update("/".join(pieces[:n]) for n in range(1,len(pieces)))
+        for directory in [""]+sorted(expected_dirs):
+            current()
+            with self.directory(root,relative_parts(directory,empty=True)) as (physical,_,_):
+                prefix=directory+"/" if directory else ""
+                expected={name[len(prefix):].split("/")[0] for name in set(files)|expected_dirs if name.startswith(prefix) and name!=directory}
+                if set(os.listdir(physical))!=expected: raise PlatformError("Project tree contains missing/extra names")
+        for name,raw in files.items():
+            current()
+            if self.read_bytes(root,name,2*1024*1024)!=raw: raise PlatformError("Project tree bytes differ after native publication")
+        current()
 
     def workspace_files(self, state, database):
         from workspace_files_windows import WindowsWorkspaceFiles

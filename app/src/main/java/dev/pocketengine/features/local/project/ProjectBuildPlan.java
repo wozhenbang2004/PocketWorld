@@ -121,6 +121,12 @@ public final class ProjectBuildPlan {
         }
         boolean devWatch=input.optBoolean("devWatch");
         if(input.has("devWatch")&&!(input.opt("devWatch") instanceof Boolean)||devWatch&&(!intent.equals("run")||!runMode.equals("owned_service")||!ecosystem.equals("node")))throw new IllegalArgumentException("dev-watch需要本机 Node 的明确owned_service run方案");
+        boolean retainAfterTurn=input.optBoolean("retainAfterTurn");
+        if(input.has("retainAfterTurn")&&!(input.opt("retainAfterTurn") instanceof Boolean)||retainAfterTurn&&!devWatch)throw new IllegalArgumentException("仅明确的本机热改服务可申请模型轮次后保留");
+        long serviceTimeout=300000;
+        if(retainAfterTurn)serviceTimeout=ProjectCommandSpec.integer(input,"timeoutMillis",-1,1,86400000);
+        if(retainAfterTurn&&serviceTimeout<1)throw new IllegalArgumentException("保留开发服务必须明确选择期限；原任务授权更早到期时仍停止");
+        if(!retainAfterTurn&&input.has("timeoutMillis"))throw new IllegalArgumentException("普通run期限不变；较长试用需明确保留开发服务");
         JSONObject livePolicy=null;
         if(devWatch){
             JSONObject pkg=new JSONObject(files.getOrDefault("package.json","{}"));JSONObject dependencies=pkg.optJSONObject("devDependencies");
@@ -185,10 +191,11 @@ public final class ProjectBuildPlan {
                 }else throw new IllegalArgumentException("静态HTML无需编译；请使用明确的受限预览，不伪造构建成功");
                 if(!executable.isEmpty()){
                     JSONObject payload=ProjectSources.copy(base).put("executable",executable).put("argv",argv);
-                    if(runMode.equals("owned_service")){payload.put("runMode",runMode).put("timeoutMillis",300000);
-                        if(devWatch){ProjectLiveEditPolicy.putOnPayload(payload,livePolicy);warnings.put("本次明确批准原run内既有源码热改：所列文件的后续SHA-CAS修改会被正在运行的服务继续处理/执行；配置、锁、工具脚本、环境、新文件、第二执行不在该许可内。仍需真实HTTP/WS核对，原run结束必须停止并释放，不是持久或公网服务");}
+                    if(runMode.equals("owned_service")){payload.put("runMode",runMode).put("timeoutMillis",serviceTimeout);
+                        if(retainAfterTurn)payload.put("retainAfterTurn",true);
+                        if(devWatch){ProjectLiveEditPolicy.putOnPayload(payload,livePolicy);warnings.put("本次明确批准原run内既有源码热改：所列文件的后续SHA-CAS修改会被正在运行的服务继续处理/执行；配置、锁、工具脚本、环境、新文件、第二执行不在该许可内。仍需真实HTTP/WS核对；仅明确选择保留时模型轮次结束可继续试用，期限、原任务停止或授权撤销仍停止并释放，不是持久或公网服务");}
                         else warnings.put("本次启动受控开发服务：仅在原执行轮次内监督，启动确认不代表服务就绪或业务完成；本次批准包含明确停止此原job。服务存活时只能读取/分析/生成方案，不能同时改写此项目；本轮结束必须停止并核对资源释放，不承诺持久服务或公网访问");}
-                    steps.put(step(intent,"termux.run",payload,runMode.equals("owned_service")?"启动受控开发服务（本轮内可明确停止）":intent.equals("build")?"构建/检查此源码版本":intent.equals("test")?"运行实际项目测试":intent.equals("run")?"运行项目代码":"安装/解析项目依赖",network));
+                    steps.put(step(intent,"termux.run",payload,runMode.equals("owned_service")?(retainAfterTurn?"启动并按批准期限保留开发服务（可随时停止）":"启动受控开发服务（本轮内可明确停止）"):intent.equals("build")?"构建/检查此源码版本":intent.equals("test")?"运行实际项目测试":intent.equals("run")?"运行项目代码":"安装/解析项目依赖",network));
                 }
             }
         }

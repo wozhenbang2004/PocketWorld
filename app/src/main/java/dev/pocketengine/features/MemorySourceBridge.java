@@ -115,9 +115,10 @@ public final class MemorySourceBridge {
             JSONArray chunks=result.getJSONArray("chunks");if(chunks.length()>256)throw new SecurityException("原文档块超出准确读取范围");StringBuilder joined=new StringBuilder();for(int i=0;i<chunks.length();i++){Object value=chunks.getJSONObject(i).get("text");if(!(value instanceof String))throw new SecurityException("原文档块正文不是文本");if(i>0)joined.append('\n');joined.append((String)value);if(joined.length()>66000)throw new SecurityException("原文档读取超过已批准范围");}
             text=joined.toString();title="原已读取文档范围 · "+result.optString("coverage")+"（不是全文或独立成功证明）";
         }else if("browser_source_retained".equals(event.optString("type"))){text=dev.pocketengine.features.memory.TaskSavedEvidence.browserText(event);title="原已批准保存的网页安全证据范围（非当前网页或整页）";}
+        else if("app_learning_evidence".equals(event.optString("type"))){text=dev.pocketengine.features.memory.TaskSavedEvidence.appLearningText(event);title="原任务 App 动作经过（未独立核实成功，仅待审候选）";}
         else throw new IllegalStateException("这份保存来源尚无准确安全正文路由");
         String excerpt=dev.pocketengine.features.memory.TaskSavedEvidence.excerpt(expected,text);requireCurrentReference(expected);tasks.savedMemorySourceEvent(expected);
-        return new KnowledgeLearningWorkflow.SourceDocument(expected,title,excerpt);
+        return new KnowledgeLearningWorkflow.SourceDocument(expected,title,excerpt,"app_learning_evidence".equals(event.optString("type"))?event.getJSONObject("context"):null);
     }
     public synchronized void synchronize(JSONObject scope)throws Exception{
         if(assistant==null){EngineModule registered=host.module("assistant");if(registered instanceof AssistantModule)bindAssistant((AssistantModule)registered);}

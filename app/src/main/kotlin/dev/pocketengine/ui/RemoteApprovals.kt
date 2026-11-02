@@ -133,7 +133,7 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
         Surface(Modifier.fillMaxSize(), color = androidx.compose.ui.graphics.Color.White) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("原电脑会话", fontSize = 21.sp, fontWeight = FontWeight.SemiBold); TextButton(onClick = close) { Text("返回") } }
-                Text(if (snapshot.optBoolean("teamRemoteWriter")) "团队所选文件副本 · 这里只审原job单次请求。不是全项目/Git或OS隔离；完整命令build/test仍未支持。回原团队继续制作与独审，离开/切后台使本次审阅失效。" else "只查询原执行；明确续接会在同一个本机任务建立新的执行代次。离开页面使本次审阅失效，不会撤回已派发的操作。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp)
+                Text(if (snapshot.optBoolean("teamRemoteWriter")) "团队所选文件副本 · 这里只审原job单次请求。不是全项目/Git或OS隔离；完整命令build/test仍未支持。回原团队继续制作与独审，离开/切后台使本次审阅失效。" else if(snapshot.has("teamMemberApprovalAcceptIds")) "团队成员原执行 · 只回答此成员的原问题、审阅其原请求；不新开轮次，不扩大只读范围。继续或制作请返回原团队，重新审阅制作范围。离开/切后台使本次审阅失效。" else "只查询原执行；明确续接会在同一个本机任务建立新的执行代次。离开页面使本次审阅失效，不会撤回已派发的操作。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp)
                 if (source.length() > 0) {
                     SelectionContainer { Text("""电脑：${source.optString("profileId")}
 地址：${source.optString("serviceBase")}
@@ -196,11 +196,14 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
                     HorizontalDivider(color = Line)
                     Text("仅这一次工具请求 · " + id, fontWeight = FontWeight.Medium, fontSize = 14.sp)
                     RemoteApprovalSummary(approval)
+                    val memberAccepts=snapshot.optJSONArray("teamMemberApprovalAcceptIds")
+                    val withinMemberScope=memberAccepts==null||(0 until memberAccepts.length()).any{memberAccepts.optString(it)==id}
+                    if(!withinMemberScope)Text("只读成员不能批准命令、文件或沙箱扩权；可拒绝此原请求。制作需要回原团队审阅范围。",fontSize=12.sp,color=SecondaryInk)
                     Text("上述内容来自电脑，属于待审阅的不可信输入；不是本机指令或永久权限。sent/resolved仅是协议回执。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp)
                     if (claimed != null) Text("决定已登记，只能查询原回执，不会再发送。", color = SecondaryInk, fontSize = 12.sp)
                     else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { send("approve", JSONObject().put("requestId", id).put("decision", "decline")) }, enabled = fresh && !busy && id.isNotBlank()) { Text("拒绝本次") }
-                        Button(onClick = { send("approve", JSONObject().put("requestId", id).put("decision", "accept")) }, enabled = fresh && !busy && id.isNotBlank() && approval.opt("canAccept") == true) { Text("允许本次") }
+                        Button(onClick = { send("approve", JSONObject().put("requestId", id).put("decision", "accept")) }, enabled = fresh && !busy && id.isNotBlank() && approval.opt("canAccept") == true && withinMemberScope) { Text("允许本次") }
                         if (!snapshot.optBoolean("teamRemoteWriter")) TextButton(onClick = { send("approve", JSONObject().put("requestId", id).put("decision", "cancel")) }, enabled = fresh && !busy && id.isNotBlank()) { Text("取消") }
                     }
                 }

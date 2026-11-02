@@ -68,8 +68,9 @@ final class DeviceWorkspaceArtifacts implements AutoCloseable {
     }
     JSONObject receiveFile(TaskStoreDeviceTasks.DeviceFileEvidence original) throws Exception {
         original.requireCurrent(); receive(original);
-        return new DeviceReceivedAttachmentPublisher(cache, dev.pocketengine.features.attachments.AttachmentRepository.get(owner.app).book)
-            .publish(DeviceArtifactTransfer.fromWireDescriptor(original.descriptor()), original.operationId(), original.receivingTaskId(),
+        DeviceReceivedAttachmentPublisher publisher=new DeviceReceivedAttachmentPublisher(cache, dev.pocketengine.features.attachments.AttachmentRepository.get(owner.app).book);
+        if("project_bundle".equals(original.descriptor().getString("kind")))return publisher.publishProject(original);
+        return publisher.publish(DeviceArtifactTransfer.fromWireDescriptor(original.descriptor()), original.operationId(), original.receivingTaskId(),
                 original.frozenRunId(), original.frozenEpoch(), original.originalControl(), original::requireCurrent);
     }
     JSONObject freeze(String id, String run, int epoch, String operation, JSONObject observation, JSONObject actualImage) throws Exception {
