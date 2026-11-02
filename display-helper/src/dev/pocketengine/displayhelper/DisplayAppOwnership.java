@@ -7,6 +7,12 @@ import org.json.JSONObject;
 
 /** Adds all-display package/profile facts for resource admission; it does not move or close any task. */
 final class DisplayAppOwnership {
+    /** Called at the actual native launch fence; an empty process resource map is not proof of screen freedom. */
+    static void requireAppFree(String dump,String pkg,int user,int ownDisplay)throws Exception {
+        if(ownDisplay<=0||user<0||!pkg.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+"))throw new SecurityException("app_admission_identity_invalid");
+        JSONObject facts=attach(new JSONObject(),dump);if(!facts.optBoolean("allDisplayIdentitiesKnown"))throw new SecurityException("all_display_ownership_unknown");
+        JSONArray all=facts.getJSONArray("all");for(int i=0;i<all.length();i++){JSONObject row=all.getJSONObject(i);if(pkg.equals(row.getString("packageName"))&&user==row.getInt("userId")&&ownDisplay!=row.getInt("displayId"))throw new SecurityException("app_copy_in_use_on_another_display");}
+    }
     static JSONObject attach(JSONObject ownership,String dump)throws Exception {
         Pattern display=Pattern.compile("^Display #([0-9]+)(?:\\s.*)?$"),resumed=Pattern.compile("(?:mResumedActivity|topResumedActivity).*?\\bu([0-9]+)\\s+([A-Za-z][A-Za-z0-9_.]*)/[^ ]+.*?\\bt([0-9]+)\\b");
         JSONArray all=new JSONArray();int current=-1;boolean complete=true,seen=false;
