@@ -128,12 +128,16 @@ if (providers.gradleProperty('mikaFocusedTests').orNull == 'true') {
             throw new GradleException('Focused Java input is not an existing repository test source: ' + path)
         source
     }
-    tasks.withType(org.gradle.api.tasks.compile.JavaCompile).configureEach {
-        if (name == 'compileDebugUnitTestJavaWithJavac') {
+    // Android/Kotlin finish wiring variant sources during project evaluation.
+    // Apply the reviewed source collection after that wiring, then verify it at execution.
+    gradle.projectsEvaluated {
+        tasks.named('compileDebugUnitTestJavaWithJavac', org.gradle.api.tasks.compile.JavaCompile).configure {
             setSource(project.files(javaSources))
             doFirst {
-                if (getSource().files.collect { it.canonicalFile }.toSet() != javaSources.collect { it.canonicalFile }.toSet())
-                    throw new GradleException('Focused Java task sources no longer match the complete reviewed fixture closure')
+                def actual = getSource().files.collect { it.canonicalFile }.toSet()
+                def required = javaSources.collect { it.canonicalFile }.toSet()
+                if (actual != required)
+                    throw new GradleException('Focused Java task sources no longer match the complete reviewed fixture closure; missing=' + (required - actual) + '; extra=' + (actual - required))
                 logger.lifecycle('Mika focused Java sources: {} for {} declared test classes including the independent native negative', javaSources.size(), expected.size())
             }
         }
