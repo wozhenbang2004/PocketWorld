@@ -44,4 +44,9 @@ public final class ManagedSkillPolicyTest {
     @Test public void fixedNativeHelperHasDistinctIdentityAndNoGenericJsonEvalOrNewJobLoop()throws Exception {
         String helper=ManagedSkillProgram.source();assertEquals(SkillExecution.sha256(helper.getBytes(StandardCharsets.UTF_8)),ManagedSkillProgram.identity());assertTrue(helper.contains("subprocess.Popen(argv"));assertTrue(helper.contains("stdin=subprocess.DEVNULL"));assertFalse(helper.contains("shell=True"));assertTrue(helper.contains("'--require-hashes'"));assertTrue(helper.contains("'--only-binary=:all:'"));assertTrue(helper.contains("'--no-deps'"));assertTrue(helper.contains("resource.RLIMIT_FSIZE"));assertFalse(helper.contains("os.setsid("));assertFalse(helper.contains("requests.post("));
     }
+    @Test public void explicitKernelOfflineChangesNativeAuthorityAndKeepsHonestIsolationLimits()throws Exception{
+        JSONObject config=configuration().put("networkMode","kernel_offline");var selected=ManagedSkillPolicy.authority(config);var request=ManagedSkillPolicy.request(config,selected,"scripts/main.py",List.of(),10,4096);assertEquals("kernel_offline",request.json().getString("network"));assertEquals("required_before_target_exec",selected.risks().getString("networkEnforcement"));assertFalse(selected.risks().getBoolean("osSandbox"));assertTrue(selected.risks().getBoolean("localUnixIpcAllowed"));assertFalse(selected.risks().getBoolean("inheritedIpSocketsIsolated"));assertNotEquals(ManagedSkillPolicy.authority(configuration()).fingerprint,selected.fingerprint);
+        assertThrows(IllegalArgumentException.class,()->ManagedSkillPolicy.checked(configuration().put("networkMode",JSONObject.NULL)));
+    }
+
 }

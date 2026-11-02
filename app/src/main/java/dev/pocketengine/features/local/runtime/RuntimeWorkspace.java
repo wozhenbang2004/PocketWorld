@@ -44,7 +44,8 @@ public final class RuntimeWorkspace {
         for(int i=0;i<manifest.length();i++) {
             invocation.checkCurrent();JSONObject item=manifest.getJSONObject(i);
             File file=resolve(item.getString("path"),true);
-            if(file.length()!=item.getLong("bytes") || !RuntimeFiles.sha256(file).equals(item.getString("sha256")))
+            byte[] captured=WorkspaceFileAccess.read(root,item.getString("path"),ProjectSources.MAX_FILE_BYTES);
+            if(captured.length!=item.getLong("bytes") || !ProjectSources.sha256(captured).equals(item.getString("sha256")))
                 throw new SecurityException("runtime_active_source_changed");
         }
         invocation.checkCurrent();

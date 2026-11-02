@@ -25,6 +25,7 @@ public final class NativeLaunchObservationTest {
         JSONObject receipt=new JSONObject().put("nativeResultContract",NativeProcessSupervisor.EXIT_RESULT_CONTRACT).put("launchPhase","no_child_created").put("noChildCreated",true).put("processLaunched",false).put("processExited",false)
                 .put("exitCode",-1).put("terminationSignal",0).put("launchErrno",2).put("timedOut",false).put("processGroupAbsent",true).put("outputComplete",true);
         assertTrue("validation is not original-operation authority",NativeProcessSupervisor.validatesNoChildReceipt(receipt));
+        JSONObject exactPrevious=new JSONObject(receipt.toString()).put("nativeResultContract","pocketworld.posix-exit7-no-child-v1:cb2abfe8465e654402d1344d11345bb7f43047fecb3dd0220fed44e07ef0571f");assertTrue(NativeProcessSupervisor.validatesNoChildReceipt(exactPrevious));assertFalse(NativeProcessSupervisor.validatesPipeContract("pocketworld.posix-exit7-no-child-v1:unverified"));
         for(String key:new String[]{"nativeResultContract","launchPhase","noChildCreated","processLaunched","processExited","exitCode","terminationSignal","launchErrno","timedOut","processGroupAbsent","outputComplete"}){
             JSONObject missing=new JSONObject(receipt.toString());missing.remove(key);assertFalse(key,NativeProcessSupervisor.validatesNoChildReceipt(missing));
         }

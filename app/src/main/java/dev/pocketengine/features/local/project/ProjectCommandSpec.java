@@ -26,12 +26,15 @@ public final class ProjectCommandSpec {
         String mode=input.optString("runMode","foreground"),terminal=input.optString("terminal","pipes");
         if(!Set.of("foreground","owned_service").contains(mode)||!Set.of("pipes","pty").contains(terminal))throw new IllegalArgumentException("命令运行模式或终端类型无效");
         if(terminal.equals("pty")&&!mode.equals("owned_service"))throw new IllegalArgumentException("交互PTY必须明确选择本轮受控会话，才能继续读写同一个执行");
+        if(input.has("networkMode")&&!(input.opt("networkMode") instanceof String))throw new IllegalArgumentException("网络模式必须是明确文字");String network=input.optString("networkMode","possible_same_uid");if(!Set.of("possible_same_uid","kernel_offline").contains(network))throw new IllegalArgumentException("网络模式无效");
+        if(network.equals("kernel_offline")&&terminal.equals("pty"))throw new IllegalArgumentException("当前内核离线模式不支持PTY；未降级联网运行");
         long timeout=integer(input,"timeoutMillis",300000,1,MAX_TIMEOUT_MILLIS);
         JSONObject environment=new JSONObject();Object envValue=input.opt("env");if(envValue!=null&&!(envValue instanceof JSONObject))throw new IllegalArgumentException("env必须是普通非秘密环境参数对象");JSONObject requestedEnv=(JSONObject)envValue;
         if(requestedEnv!=null){if(requestedEnv.length()>MAX_ENV)throw new IllegalArgumentException("普通环境参数最多16项");int total=0;
             for(java.util.Iterator<String> keys=requestedEnv.keys();keys.hasNext();){String key=keys.next();if(!allowedEnvironmentKey(key))throw new IllegalArgumentException("此环境参数名称不在允许范围，加载器/路径/解释器注入及凭据变量不能覆盖");Object raw=requestedEnv.get(key);if(!(raw instanceof String))throw new IllegalArgumentException("环境参数值必须是普通文字");String value=(String)raw;byte[] bytes=encode(value);if(value.length()>2048||(total+=key.length()+bytes.length)>MAX_ENV_BYTES)throw new IllegalArgumentException("普通环境参数超出2048字符/合计8192字节范围");environment.put(key,value);}
         }
         JSONObject result=new JSONObject().put("executable",executable).put("argv",argv).put("workingDirectory",cwd).put("environment",environment).put("timeoutMillis",timeout).put("runMode",mode).put("terminalMode",terminal);
+        if(input.has("networkMode"))result.put("networkMode",network);
         if(terminal.equals("pty"))result.put("terminalColumns",integer(input,"columns",80,4,400)).put("terminalRows",integer(input,"rows",24,2,200)).put("inputByteLimit",integer(input,"inputByteLimit",65536,1,MAX_INPUT_BYTES)).put("interactiveInputExplicitlyIncluded",true).put("terminalOutputMerged",true);
         else for(String name:new String[]{"columns","rows","inputByteLimit"})if(input.has(name))throw new IllegalArgumentException("普通管道命令不能声明交互终端参数");
         return result;
@@ -39,6 +42,7 @@ public final class ProjectCommandSpec {
     /** Recheck the exact native payload at execution. No environment value is copied to receipts. */
     public static JSONObject fromPayload(JSONObject payload)throws Exception {
         JSONObject input=new JSONObject().put("executable",payload.getString("executable")).put("argv",payload.getJSONArray("argv")).put("cwd",payload.getString("workingDirectory")).put("env",payload.getJSONObject("environment")).put("timeoutMillis",payload.get("timeoutMillis")).put("runMode",payload.getString("runMode")).put("terminal",payload.getString("terminalMode"));
+        if(payload.has("networkMode"))input.put("networkMode",payload.getString("networkMode"));
         if(payload.getString("terminalMode").equals("pty")){
             if(!Boolean.TRUE.equals(payload.opt("interactiveInputExplicitlyIncluded"))||!Boolean.TRUE.equals(payload.opt("terminalOutputMerged")))throw new SecurityException("原交互输入批准范围不完整");
             input.put("columns",payload.get("terminalColumns")).put("rows",payload.get("terminalRows")).put("inputByteLimit",payload.get("inputByteLimit"));

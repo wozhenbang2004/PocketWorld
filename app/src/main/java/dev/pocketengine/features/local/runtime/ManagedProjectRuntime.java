@@ -207,6 +207,10 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     public RuntimeReceipt gitImportReceiptForHost(RuntimeExecutionRef ref)throws Exception {
         requireProvider(ref);if(!dev.pocketengine.features.local.project.ProjectGitImport.exact(ref.exact()))throw new SecurityException("runtime_not_original_git_import");return jobs.existing(ref);
     }
+    /** Native script transport only; requires a currently owned original pipe process session. */
+    public void requireManagedScriptPeer(RuntimeExecutionRef ref,dev.pocketengine.core.RunControl original,int peerPid)throws Exception{
+        requireProvider(ref);jobs.requireOwnedScriptPeer(ref,original,peerPid);
+    }
     @Override public RuntimeReceipt query(RuntimeExecutionRef ref) throws Exception {requireProvider(ref);return jobs.query(ref);}
     @Override public RuntimeReceipt requestCancel(RuntimeExecutionRef ref) throws Exception {requireProvider(ref);return jobs.requestCancel(ref);}
     @Override public JSONObject readLog(RuntimeExecutionRef ref,long afterSequence,int maxBytes) throws Exception {
