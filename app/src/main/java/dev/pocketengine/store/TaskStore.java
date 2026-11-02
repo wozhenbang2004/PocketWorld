@@ -3433,7 +3433,7 @@ public final class TaskStore {
         try(Cursor rows=db.rawQuery("SELECT operation_id,run_id,tool,state FROM operations WHERE task_id=? AND tool IN ('teams_plan','teams_start','teams_message','teams_control','teams_get','teams_wait') ORDER BY created_at,operation_id",new String[]{source.task})){
             while(rows.moveToNext()){
                 String op=rows.getString(0);if(parentOperationInPool(pool,op))continue;
-                JSONObject binding=new JSONObject().put("teamRunId",source.operation).put("childTaskId",source.task).put("childRunId",rows.getString(1)).put("memberId","@parent").put("assignmentId",source.task);
+                JSONObject binding=new JSONObject().put("teamRunId",source.operation).put("childTaskId",source.task).put("childRunId",rows.getString(1)).put("childEpoch",originalRunEpoch(source.task,rows.getString(1))).put("memberId","@parent").put("assignmentId",source.task);
                 JSONObject reserved=dev.pocketengine.features.teams.TeamParentBudget.reserve(pool,parentCoordinationBinding(pool,binding),"parent_coordination","operation:"+op,0,1);reserved.getJSONArray("operationIds").put(op);
                 boolean known="receipt".equals(rows.getString(3));reserved.put("state",known?"settled":"unknown");if(known)reserved.getJSONArray("actualReceiptRefs").put(op);
             }

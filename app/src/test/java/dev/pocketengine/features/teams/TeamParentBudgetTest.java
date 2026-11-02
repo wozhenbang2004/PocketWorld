@@ -26,6 +26,25 @@ public class TeamParentBudgetTest {
         JSONObject pool=pool(1,0),writer=binding("writer","w");JSONObject a=TeamParentBudget.reserve(pool,writer,"member","w:0",1,0),b=TeamParentBudget.reserve(pool,writer,"member","w:0",1,0);assertSame(a,b);assertEquals(1,pool.getJSONArray("reservations").length());
         assertThrows(SecurityException.class,()->TeamParentBudget.reserve(pool,binding("other","w"),"member","w:0",1,0));
     }
+    @Test public void parentAdoptionReplayRetainsExactRunEpochAndUnknownCharge()throws Exception {
+        JSONObject pool=pool(0,3),historical=binding("parent","prior-run"),current=binding("parent","parent-run").put("childEpoch",2);
+        historical.put("memberId","@parent");current.put("memberId","@parent");
+        JSONObject old=TeamParentBudget.reserve(pool,historical,"parent_coordination","operation:prior",0,1);
+        old.getJSONArray("operationIds").put("prior");old.put("state","settled");old.getJSONArray("actualReceiptRefs").put("prior");
+        JSONObject adopted=TeamParentBudget.reserve(pool,current,"parent_coordination","operation:current",0,1);
+        adopted.getJSONArray("operationIds").put("current");adopted.put("state","unknown");
+        JSONObject replay=TeamParentBudget.reserve(pool,new JSONObject(current.toString()),"parent_coordination","operation:current",0,1);
+        assertSame(adopted,replay);assertEquals(2,pool.getJSONArray("reservations").length());assertEquals(1,TeamParentBudget.remaining(pool,"toolOperations"));
+        assertEquals("unknown",replay.getString("state"));assertEquals(1,replay.getJSONArray("operationIds").length());assertEquals(0,replay.getJSONArray("actualReceiptRefs").length());
+        assertSame(old,TeamParentBudget.reserve(pool,new JSONObject(historical.toString()),"parent_coordination","operation:prior",0,1));
+        assertEquals(1,old.getInt("childEpoch"));assertEquals(2,replay.getInt("childEpoch"));
+        JSONObject missing=new JSONObject(current.toString());missing.remove("childEpoch");
+        assertThrows(SecurityException.class,()->TeamParentBudget.reserve(pool,missing,"parent_coordination","operation:current",0,1));
+        assertThrows(SecurityException.class,()->TeamParentBudget.reserve(pool,new JSONObject(current.toString()).put("childEpoch",3),"parent_coordination","operation:current",0,1));
+        assertThrows(SecurityException.class,()->TeamParentBudget.reserve(pool,new JSONObject(current.toString()).put("childRunId","other-run"),"parent_coordination","operation:current",0,1));
+        assertThrows(SecurityException.class,()->TeamParentBudget.reserve(pool,new JSONObject(historical.toString()).put("childEpoch",2),"parent_coordination","operation:prior",0,1));
+        assertEquals(1,TeamParentBudget.remaining(pool,"toolOperations"));assertEquals(2,pool.getJSONArray("reservations").length());
+    }
     @Test public void sharedTransactionContractAdmitsOnlyOneConcurrentLastUnit()throws Exception {
         JSONObject pool=pool(1,0);CountDownLatch ready=new CountDownLatch(2),go=new CountDownLatch(1);AtomicInteger admitted=new AtomicInteger();
         Runnable claim=()->{ready.countDown();try{go.await();synchronized(pool){TeamParentBudget.reserve(pool,binding(Thread.currentThread().getName(),"run"),"member",Thread.currentThread().getName(),1,0);admitted.incrementAndGet();}}catch(IllegalStateException exhausted){}catch(Exception failure){throw new RuntimeException(failure);}};

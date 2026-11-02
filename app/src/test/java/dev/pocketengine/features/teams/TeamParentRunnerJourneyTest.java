@@ -166,6 +166,38 @@ public final class TeamParentRunnerJourneyTest {
             releaseAuthor.countDown();ownerApproved.countDown();finishContinuedAuthor.countDown();features.close();for(String field:new String[]{"coordinator","members"}){var f=TeamCoordinator.class.getDeclaredField(field);f.setAccessible(true);assertTrue(((ExecutorService)f.get(coordinator)).awaitTermination(4,TimeUnit.SECONDS));}wire.stop(0);var db=TaskStore.class.getDeclaredField("db");db.setAccessible(true);((android.database.sqlite.SQLiteDatabase)db.get(tasks)).close();ContextBudgetPolicy.installHostSource(c->null);
         }
     }
+    @Test @ConscryptMode(ConscryptMode.Mode.OFF) public void parentStartAdoptsEachOriginalSqlRunEpochWithoutRechargingReplay()throws Exception {
+        try(Domain d=new Domain(true,false)){
+            assertEquals("awaiting_user",d.parentRun().status);JSONObject prior=d.tasks.get(d.parent,false);
+            String priorRun=prior.getString("runId");int priorEpoch=prior.getInt("coordinatorEpoch");d.approvePlan();
+            JSONObject attempt=d.tasks.startAttempt(d.parent,"capabilities",40);String run=attempt.getString("runId");int epoch=attempt.getInt("coordinatorEpoch");
+            RunControl original=new RunControl();original.bindHostRun(d.parent,run,epoch);
+            if(attempt.optJSONObject("developmentContext")==null)d.tasks.bindDevelopmentContext(d.parent,run,epoch,original,d.projectContext);
+            try(HostToolSupervisor port=new HostToolSupervisor(d.features,d.tasks,d.parent,run,epoch,true)){
+                JSONArray names=new JSONArray(),tools=port.tools();for(int i=0;i<tools.length();i++)names.put(tools.getJSONObject(i).getJSONObject("function").getString("name"));d.tasks.authorizeTools(d.parent,run,names);
+                JSONObject args=new JSONObject().put("planRef",d.planRef).put("planHash",d.planHash);port.validate("teams_start",args);
+                String operation=d.tasks.journal(d.parent,run,epoch,original).beginOperation("teams_start",args);
+                TaskStore.TeamParentOrigin source=d.tasks.teamParentOrigin(d.parent,run,epoch,"teams_start",operation,args,original);
+                TaskStore.TeamParentStart start=d.tasks.claimTeamParentStart(source,d.planRef,d.planHash);assertTrue(start.dispatch());
+                // Stop before dispatch: the original SQL/approval/journal path above, not a seeded pool.
+                assertEquals(0,d.teams.snapshot().getJSONArray("runs").length());
+                JSONObject stored=d.tasks.get(d.parent,false),pool=stored.getJSONObject("teamReservationPool");JSONArray reservations=pool.getJSONArray("reservations"),operations=stored.getJSONArray("operations");int oldCount=0,currentCount=0;
+                for(int i=0;i<operations.length();i++){
+                    JSONObject op=operations.getJSONObject(i);if(!op.getString("tool").matches("teams_plan|teams_start|teams_message|teams_control|teams_get|teams_wait"))continue;
+                    String opRun=op.getString("runId");int exactEpoch=opRun.equals(priorRun)?priorEpoch:epoch,count=0;assertTrue(opRun.equals(priorRun)||opRun.equals(run));
+                    for(int j=0;j<reservations.length();j++){
+                        JSONObject row=reservations.getJSONObject(j);JSONArray ids=row.getJSONArray("operationIds");
+                        for(int k=0;k<ids.length();k++)if(op.getString("operationId").equals(ids.getString(k))){count++;assertEquals(opRun,row.getString("childRunId"));assertEquals(exactEpoch,row.getInt("childEpoch"));assertEquals(op.getString("state").equals("receipt")?"settled":"unknown",row.getString("state"));}
+                    }
+                    assertEquals("one charge for each original SQL operation",1,count);if(opRun.equals(priorRun))oldCount++;else currentCount++;
+                }
+                assertTrue(oldCount>0);assertEquals(1,currentCount);assertNotEquals(priorEpoch,epoch);d.assertCommonActualBudget();
+                String before=TeamWorkFiles.canonical(pool);int http=d.modelBodies.size();
+                d.tasks.claimTeamParentAction(source,start.view().getString("teamRunId"));
+                assertEquals(before,TeamWorkFiles.canonical(d.tasks.get(d.parent,false).getJSONObject("teamReservationPool")));assertEquals(http,d.modelBodies.size());
+            }finally{original.cancel();}
+        }
+    }
     private static void deliverAndReadBack(boolean single)throws Exception {
         try(Domain d=new Domain(single,false)){
             assertEquals("awaiting_user",d.parentRun().status);assertEquals(0,d.teams.snapshot().getJSONArray("runs").length());d.approvePlan();
