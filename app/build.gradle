@@ -133,9 +133,12 @@ if (providers.gradleProperty('mikaFocusedTests').orNull == 'true') {
     gradle.projectsEvaluated {
         tasks.named('compileDebugUnitTestJavaWithJavac', org.gradle.api.tasks.compile.JavaCompile).configure {
             setSource(project.files(javaSources))
+            def requiredSources = javaSources.collect { it.canonicalFile }.toSet()
+            setIncludes([])
+            include { element -> element.directory || requiredSources.contains(element.file.canonicalFile) }
             doFirst {
                 def actual = getSource().files.collect { it.canonicalFile }.toSet()
-                def required = javaSources.collect { it.canonicalFile }.toSet()
+                def required = requiredSources
                 if (actual != required)
                     throw new GradleException('Focused Java task sources no longer match the complete reviewed fixture closure; missing=' + (required - actual) + '; extra=' + (actual - required))
                 logger.lifecycle('Mika focused Java sources: {} for {} declared test classes including the independent native negative', javaSources.size(), expected.size())
