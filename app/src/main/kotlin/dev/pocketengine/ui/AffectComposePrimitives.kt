@@ -2,13 +2,11 @@ package dev.pocketengine.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -30,6 +28,7 @@ internal fun AffectGlyph(name: String, modifier: Modifier = Modifier, color: Col
         "globe" -> "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M3 12h18M12 3c-4 4-4 14 0 18M12 3c4 4 4 14 0 18"
         "clock" -> "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"
         "plus" -> "M12 4v16M4 12h16"
+        "menu" -> "M4 6h16M4 12h16M4 18h16"
         "arrow" -> "m12 19 0-14m-6 6 6-6 6 6"
         "mic" -> "M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"
         "chevron" -> "m8 10 4 4 4-4"
@@ -73,29 +72,25 @@ internal fun AffectComposerFrame(
     toolbar: @Composable RowScope.() -> Unit,
     footer: @Composable RowScope.() -> Unit
 ) {
-    Column(modifier.fillMaxWidth().pocketDepth(PocketDepth.INPUT, 16.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xfff0f0f0))) {
-        Surface(shape = RoundedCornerShape(14.dp), color = Color.White,
-            border = BorderStroke(.5.dp, Color(0xffe7e7e7)), shadowElevation = 0.dp) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
-                editor()
-                Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, content = toolbar)
-            }
+    Surface(modifier = modifier.fillMaxWidth().pocketDepth(PocketDepth.INPUT, 20.dp),
+        shape = RoundedCornerShape(20.dp), color = Color.White,
+        border = BorderStroke(.5.dp, Color(0xffdedede)), tonalElevation = 0.dp, shadowElevation = 0.dp) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
+            editor()
+            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, content = toolbar)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, content = footer)
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp),
-            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, content = footer)
     }
 }
 
 @Composable
 internal fun AffectSendButton(label: String, onClick: () -> Unit, enabled: Boolean,
     submitting: Boolean = false, modifier: Modifier = Modifier) {
-    Box(Modifier.size(48.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
-        IconButton(onClick = onClick, enabled = enabled,
-            modifier = modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
-                .background(if(enabled) Ink else Color(0xffdedede))
-                .semantics { contentDescription = label }) {
-            if(submitting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp, color = SecondaryInk)
-            else AffectGlyph("arrow", color = if(enabled) Color.White else Color(0xff999999))
-        }
+    PocketPressIconButton(onClick = onClick, enabled = enabled,
+        modifier = modifier.size(48.dp).semantics { contentDescription = label }) {
+        if(submitting) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 1.5.dp,
+            color = if(enabled) Color.White else SecondaryInk)
+        else AffectGlyph("arrow", Modifier.size(18.dp), if(enabled) Color.White else SecondaryInk)
     }
 }

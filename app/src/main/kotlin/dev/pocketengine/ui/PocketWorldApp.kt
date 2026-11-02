@@ -5,6 +5,12 @@ import android.util.Base64
 import dev.pocketengine.ui.memory.TaskMemoryWorkflowSheet
 import dev.pocketengine.ui.memory.TaskMemorySearchSheet
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -58,6 +64,22 @@ import dev.pocketengine.features.conversation.ConversationHistory
 import dev.pocketengine.features.conversation.TaskPresentation
 
 
+@Composable
+private fun WorkNavigationRow(title: String, detail: String, selected: Boolean = false,
+    enabled: Boolean = true, open: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 60.dp)
+        .semantics { if (selected) stateDescription = "当前视角" }
+        .clickable(enabled = enabled, role = Role.Button, onClick = open)
+        .padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, fontSize = 15.sp, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                color = if (enabled) Ink else SecondaryInk)
+            Text(detail, fontSize = 12.sp, lineHeight = 18.sp, color = SecondaryInk)
+        }
+        AffectGlyph(if (selected) "check" else "chevron-right", Modifier.size(16.dp), SecondaryInk)
+    }
+}
+
 internal val Ink = Color(0xff181818)
 internal val SecondaryInk = Color(0xff666666)
 internal val Line = Color(0xffe4e4e4)
@@ -77,6 +99,7 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
     var selectedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     var taskMemorySearch by remember { mutableStateOf(false) }
     var conversationPicker by rememberSaveable { mutableStateOf(false) }
+    var workSwitcher by rememberSaveable { mutableStateOf(false) }
     var projectDialog by rememberSaveable { mutableStateOf(false) }
     var fileDialog by rememberSaveable { mutableStateOf(false) }
     var phoneDraft by rememberSaveable { mutableStateOf("") }
@@ -137,6 +160,12 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
     }
     fun closeTask() { selectedTaskId = null; tab = taskReturnTab; if (taskReturnConnection != null) { connectionSection = taskReturnConnection; connections = true } }
     val selectedTask = state.tasks.find { it.id == selectedTaskId }
+    val currentWorkTitle = when (tab) {
+        1 -> "全部任务"
+        2 -> state.projects.firstOrNull { it.id == state.projectId }?.name ?: "项目"
+        else -> state.conversations.firstOrNull { it.id == state.conversationId }?.title?.ifBlank { "当前工作" } ?: "PocketWorld"
+    }
+    val runningPhone = state.tasks.firstOrNull { it.id == state.activeTaskId && isPhoneTask(it) && it.status !in setOf("completed", "cancelled", "canceled", "failed", "interrupted", "stopped") }
     LaunchedEffect(state.requestedPhoneModeRevision) { if (state.requestedPhoneModeRevision > 0 && state.requestedPhoneMode == "main_screen") { executionMode = "main_screen"; changePhoneIntent(true); tab = 0; settings = false; connections = false; selectedTaskId = null } }
     LaunchedEffect(controller.phoneDraftAcceptedRevision) { if(phoneDraft.trim()==controller.phoneDraftAcceptedText)phoneDraft="" }
     LaunchedEffect(state.requestedTaskRevision) {
@@ -168,51 +197,52 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
             }
         }
     }
-    LaunchedEffect(tab, settings, connections, selectedTaskId, conversationPicker, teamLaunch) {
-        if(tab!=0||settings||connections||selectedTaskId!=null||conversationPicker||teamLaunch)controller.voiceInputModeChanged()
+    LaunchedEffect(tab, settings, connections, selectedTaskId, conversationPicker, teamLaunch, workSwitcher) {
+        if(tab!=0||settings||connections||selectedTaskId!=null||conversationPicker||teamLaunch||workSwitcher)controller.voiceInputModeChanged()
     }
     PocketWorldTheme {
         Scaffold(
             containerColor = PageSurface,
             topBar = {
-                Row(Modifier.fillMaxWidth().background(Color.White).statusBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 4.dp).heightIn(min = 48.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text("PocketWorld", fontSize = 17.sp, fontWeight = FontWeight.Medium, color = Ink)
-                    Text(" / ", fontSize = 14.sp, color = SecondaryInk)
-                    Text(listOf("对话", "任务", "项目")[tab], fontSize = 14.sp, color = SecondaryInk)
-                    Spacer(Modifier.weight(1f))
-                    if(tab == 0) IconButton(onClick = { conversationPicker = true },
-                        enabled = controller.composerDraft != null,
-                        modifier = Modifier.semantics { contentDescription = "历史对话" }) {
-                        AffectGlyph("clock", color = SecondaryInk)
-                    }
-                    IconButton(onClick = { settings = true }, modifier = Modifier.semantics { contentDescription = "设置与连接" }) { LineIcon(3) }
-                }
-            },
-            bottomBar = {
-                Column(Modifier.background(Color.White).navigationBarsPadding()) {
-                    HorizontalDivider(color = Line.copy(alpha = .65f), thickness = .5.dp)
-                    Row(Modifier.fillMaxWidth().selectableGroup().padding(horizontal = 12.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("对话", "任务", "项目").forEachIndexed { index, label ->
-                            Row(Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
-                                .background(if(tab == index) Soft else Color.Transparent)
-                                .selectable(selected = tab == index, role = Role.Tab, onClick = { tab = index })
-                                .padding(horizontal = 8.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center) {
-                                LineIcon(index)
-                                Spacer(Modifier.width(8.dp))
-                                Text(label, fontSize = 13.sp, fontWeight = if(tab == index) FontWeight.Medium else FontWeight.Normal,
-                                    color = if(tab == index) Ink else SecondaryInk)
+                Column(Modifier.fillMaxWidth().background(Color.White).statusBarsPadding()) {
+                    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 10.dp, top = 4.dp, bottom = 4.dp)
+                        .heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                            PocketScene(currentWorkTitle) {
+                                Text(currentWorkTitle, fontSize = 18.sp, lineHeight = 24.sp,
+                                    fontWeight = FontWeight.Medium, color = Ink,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
+                            Text(if (tab == 0) "主 Agent" else if (tab == 2) "这台手机 · 项目工作区" else "记录与待处理",
+                                fontSize = 12.sp, color = SecondaryInk)
+                        }
+                        TextButton(onClick = { workSwitcher = true }, modifier = Modifier.testTag("all_work")) {
+                            AffectGlyph("menu", Modifier.size(17.dp), SecondaryInk)
+                            Spacer(Modifier.width(6.dp))
+                            Text("全部工作", fontSize = 13.sp)
                         }
                     }
+                    AnimatedVisibility(visible = runningPhone != null || state.chatBusy,
+                        enter = expandVertically(tween(180)) + fadeIn(tween(140)),
+                        exit = shrinkVertically(tween(180)) + fadeOut(tween(100))) {
+                        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (runningPhone != null) "手机任务 · ${taskStatus(runningPhone.status)}" else "主 Agent 正在处理",
+                                modifier = Modifier.weight(1f), fontSize = 12.sp, color = SecondaryInk,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (runningPhone != null) TextButton(onClick = controller::stopPhone,
+                                enabled = runningPhone.status != "stopping", modifier = Modifier.testTag("work_stop_phone")) {
+                                Text(if (runningPhone.status == "stopping") "正在停止" else "停止手机任务", fontSize = 12.sp)
+                            }
+                            if (state.chatBusy) TextButton(onClick = controller::cancelChat,
+                                modifier = Modifier.testTag("work_stop_reply")) { Text("停止回复", fontSize = 12.sp) }
+                        }
+                    }
+                    HorizontalDivider(color = Line, thickness = .5.dp)
                 }
             }
         ) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding)) {
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
                 state.error?.let { text -> Notice(text, true, controller::dismissError) }
                 state.notice?.let { text -> Notice(text, false, controller::dismissNotice) }
                 when (tab) {
@@ -222,6 +252,29 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
                     1 -> TaskAuditList(state, controller, { openTask(it.id) }, { taskMemorySearch = true })
                     2 -> ProjectsScreen(state, controller, { projectDialog = true }, { fileDialog = true })
                 }
+            }
+        }
+        if (workSwitcher) ModalBottomSheet(onDismissRequest = { workSwitcher = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = Color.White, modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 24.dp)) {
+            Column(Modifier.fillMaxWidth().heightIn(max = 580.dp).verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp).navigationBarsPadding()) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("全部工作", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { workSwitcher = false }) { Text("关闭") }
+                }
+                WorkNavigationRow("继续当前工作", state.conversations.firstOrNull { it.id == state.conversationId }?.title ?: "与主 Agent 交流", tab == 0) {
+                    tab = 0; workSwitcher = false
+                }
+                WorkNavigationRow("全部任务", "进行中、待处理与已有结果", tab == 1) { tab = 1; workSwitcher = false }
+                WorkNavigationRow("项目与文件", state.projects.firstOrNull { it.id == state.projectId }?.name ?: "本机开发、运行与预览", tab == 2) { tab = 2; workSwitcher = false }
+                HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Line)
+                WorkNavigationRow("历史会话", "按原会话继续或查看记录") { workSwitcher = false; conversationPicker = true }
+                WorkNavigationRow("新工作", "保留原工作，交办新的目标", enabled = !state.chatBusy && !state.chatSubmitting && controller.composerDraft != null) {
+                    controller.newConversation(); tab = 0; workSwitcher = false
+                }
+                WorkNavigationRow("设置与连接", "模型、设备、工具与长期偏好") { workSwitcher = false; settings = true }
+                Spacer(Modifier.height(16.dp))
             }
         }
         if (settings) SettingsSheet(state, controller, { settings = false }) { settings = false; connectionSection = null; connections = true }
@@ -248,8 +301,8 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
             Text(if (executionMode == "background") "需要已连接的后台助手。无法建立独立屏幕时会停止等待。" else "会切换手机应用并占用当前屏幕。暂停后再自行操作，停止不会撤回已发生的动作。", color = SecondaryInk)
             Text("任务中的可见文字会发给你配置的模型；启用视觉后也会发送截图。", color = SecondaryInk, fontSize = 12.sp)
             Text("原目标内累计 ${controller.newTaskToolBudget} 次工具、${controller.newTaskModelBudget} 次模型；" + if(controller.newTaskScopeMinutes==0) "持续至完成、主人停止或预算耗尽。" else "${controller.newTaskScopeMinutes}分钟后停止新派发。",color=SecondaryInk,fontSize=12.sp)
-        } }, confirmButton = { Button(onClick = { controller.startPhone(goal, executionMode); consentGoal = null }) { Text("开始任务") } }, dismissButton = { TextButton(onClick = { consentGoal = null }) { Text("取消") } }) }
-        BackHandler(enabled = !settings && !connections && !teamLaunch && state.teamRunId == null && state.inspectionTaskId == null && !state.backgroundSetupOpen && selectedTaskId == null && !conversationPicker && state.filePath == null && tab != 0) { tab = 0 }
+        } }, confirmButton = { PocketPressButton(onClick = { controller.startPhone(goal, executionMode); consentGoal = null }) { Text("开始任务") } }, dismissButton = { TextButton(onClick = { consentGoal = null }) { Text("取消") } }) }
+        BackHandler(enabled = !workSwitcher && !settings && !connections && !teamLaunch && state.teamRunId == null && state.inspectionTaskId == null && !state.backgroundSetupOpen && selectedTaskId == null && !conversationPicker && state.filePath == null && tab != 0) { tab = 0 }
         NativeInferenceHistory(controller)
         ConversationReader(controller)
         QueuedOwnerInputsPanel(controller)
@@ -284,10 +337,10 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
         }
     }
     LaunchedEffect(showLatest) { if (showLatest > 0 && state.messages.isNotEmpty()) { scroll.animateScrollToItem(state.messages.lastIndex); setNewReplies(false) } }
-    Column(Modifier.fillMaxSize().background(Color.White)) {
+    Column(Modifier.fillMaxSize().background(PageSurface)) {
         if (state.messages.isEmpty()) Column(Modifier.weight(1f).fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.Center) {
-            Text("想聊聊，\n还是交给我办？", fontSize = 24.sp, lineHeight = 32.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-.8).sp)
-            Text("你的对话、任务和项目，都留在同一个口袋世界。", fontSize = 14.sp, lineHeight = 23.sp, color = SecondaryInk, modifier = Modifier.padding(top = 15.dp, bottom = 30.dp))
+            Text("想做什么？", fontSize = 22.sp, lineHeight = 30.sp, fontWeight = FontWeight.Medium)
+            Text("把目标交给我，在同一个工作里继续。", fontSize = 15.sp, lineHeight = 23.sp, color = SecondaryInk, modifier = Modifier.padding(top = 12.dp, bottom = 24.dp))
             Suggestion("聊个问题", "一起理清思路") { onPhone(false) }
             Suggestion("帮我操作手机", "在独立后台屏执行") { onPhone(true); onMode("background") }
         } else LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("conversation_messages"), state = scroll, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -300,7 +353,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                         .border(.5.dp, Line, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
                         AffectGlyph("spark", Modifier.size(14.dp))
                     }
-                    Text("口袋世界", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = ActionInk)
+                    Text("主 Agent", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = ActionInk)
                     Spacer(Modifier.weight(1f))
                     if (hasMessageActions) AffectToolButton("more", if(messageDetails) "收起消息操作与来源" else "消息操作与来源", { messageDetails = !messageDetails })
                 }
@@ -320,10 +373,12 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                     for(file in message.attachmentFiles)TextButton(onClick={controller.openAttachmentOutcome(file)},enabled=file.optString("availability")=="available",contentPadding=PaddingValues(0.dp)){Text(file.optString("name","原消息附件")+" · "+file.optString("mimeType"),fontSize=12.sp,maxLines=2)}
                 }
                 message.submission?.let{ChatInputReceipt(it,controller)}
-                if(messageDetails) {
+                AnimatedVisibility(visible = messageDetails,
+                    enter = expandVertically(tween(180)) + fadeIn(tween(140)),
+                    exit = shrinkVertically(tween(180)) + fadeOut(tween(100))) { Column {
                     message.id?.let { id -> SourceMemoryControl("message", id, message.content, state, controller, compact = true) }
                     message.memoryReference?.let { reference -> TextButton(onClick = { taskMemoryReference = JSONObject(reference.toString()) }) { Text("本次提供的记忆来源", fontSize = 11.sp) } }
-                }
+                } }
                 (message.taskId ?: message.submission?.optString("taskId"))?.takeIf { it.isNotBlank() }?.let { id ->
                     if (state.messages.lastOrNull { (it.taskId ?: it.submission?.optString("taskId")) == id }?.id == message.id) state.tasks.find { it.id == id }?.let { linked ->
                         ConversationTaskJournal(TaskPresentation.fromTaskStore(linked.raw), { if (teamRunReferences(linked).isNotEmpty()) controller.openTeam(teamRunReferences(linked).first()) else controller.focusTask(it) }, controller::getTask)
@@ -342,12 +397,26 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 TextButton(onClick = { onMode(if (mode == "background") "main_screen" else "background") }, contentPadding = PaddingValues(horizontal = 2.dp)) { Text(if (mode == "background") "后台独立屏 ▾" else "主屏操作 ▾", fontSize = 12.sp) }
                 Spacer(Modifier.weight(1f)); TextButton(onClick = { if (mode == "background") controller.openBackgroundSetup() else settings() }) { Text(if (mode == "background" && !state.feature("display").optBoolean("helperConnected")) "启用手机控制" else "执行设置", fontSize = 12.sp) }
             }
-            if(phone||!state.chatBusy)ExecutionScopeStartControls(phone,controller.newTaskToolBudget,controller.newTaskModelBudget,controller.newTaskScopeMinutes,controller::selectNewTaskDeadline)
-            if(!phone&&state.chatBusy)Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected=state.chatSendMode=="queue",onClick={controller.setChatSendMode("queue",ownerKey,ownerEpoch)},label={Text("本轮结束后处理",fontSize=11.sp)})
-                FilterChip(selected=state.chatSendMode=="steer",onClick={controller.setChatSendMode("steer",ownerKey,ownerEpoch)},label={Text("下个安全步骤加入",fontSize=11.sp)})
+            AnimatedVisibility(visible = composerDetails && (phone || !state.chatBusy),
+                enter = expandVertically(tween(180)) + fadeIn(tween(120)),
+                exit = shrinkVertically(tween(180)) + fadeOut(tween(90))) {
+                ExecutionScopeStartControls(phone,controller.newTaskToolBudget,controller.newTaskModelBudget,controller.newTaskScopeMinutes,controller::selectNewTaskDeadline)
             }
-            if(!phone&&state.chatBusy&&composerDetails)Text("连续输入仍是原任务；不撤销已派发动作，不增加预算或授予权限。",fontSize=10.sp,color=SecondaryInk)
+            if (!phone && state.chatBusy) {
+                TextButton(onClick = { composerDetails = !composerDetails }, contentPadding = PaddingValues(horizontal = 4.dp)) {
+                    Text(if (state.chatSendMode == "steer") "补充给当前工作 · 下个安全步骤加入" else "补充给当前工作 · 本轮结束后处理", fontSize = 12.sp, color = SecondaryInk)
+                    AffectGlyph("chevron", Modifier.size(12.dp), SecondaryInk)
+                }
+                AnimatedVisibility(visible = composerDetails) {
+                    Column {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = state.chatSendMode == "queue", onClick = { controller.setChatSendMode("queue", ownerKey, ownerEpoch) }, label = { Text("本轮结束后", fontSize = 12.sp) })
+                            FilterChip(selected = state.chatSendMode == "steer", onClick = { controller.setChatSendMode("steer", ownerKey, ownerEpoch) }, label = { Text("下个安全步骤", fontSize = 12.sp) })
+                        }
+                        Text("不撤销已派发动作，不增加预算或授权。", fontSize = 12.sp, color = SecondaryInk)
+                    }
+                }
+            }
             if (usesChatGptPlan && (composerDetails || planUsageLimited)) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) { Text("使用 ChatGPT 套餐", fontSize = 12.sp, color = SecondaryInk); if (planUsageLimited) Text("当前用量受限", fontSize = 11.sp, color = Danger) }
                 if (planUsageLimited) Button(onClick = controller::openChatGptUsage, modifier = Modifier.testTag("composer_chatgpt_usage")) { Text("查看用量", fontSize = 12.sp) }
@@ -396,15 +465,8 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                         onClick = { if (realtimeAudioActive) controller.openConnection("realtime") else if (state.voiceInput.optBoolean("active") || state.listening) controller.stopListening() else controller.startSystemVoiceInput(phone) },
                         enabled = realtimeAudioActive || state.voiceInput.optBoolean("active") || state.listening || state.speechAvailable && !state.voiceInput.optBoolean("reviewAvailable") && !state.voiceInput.optBoolean("staged") && !state.voiceInput.optBoolean("resourceReleaseUnknown"))
                     val canSend = ChatInputRules.canSend(state,phone,draft) && (phone || ownerDraft != null) && !state.voiceInput.optBoolean("active") && !planUsageLimited
-                    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                        IconButton(onClick = send, enabled = canSend,
-                            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
-                                .background(if(canSend) Ink else Color(0xffdedede))
-                                .semantics { contentDescription = if(phone) "开始办事" else if(state.chatSubmitting) "正在登记" else if(state.chatBusy) "加入原任务" else "发送" }) {
-                            if(state.chatSubmitting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp, color = SecondaryInk)
-                            else AffectGlyph("arrow", color = if(canSend) Color.White else Color(0xff999999))
-                        }
-                    }
+                    AffectSendButton(if (phone) "开始办事" else if (state.chatSubmitting) "正在登记" else if (state.chatBusy) "加入原任务" else "发送",
+                        onClick = send, enabled = canSend, submitting = state.chatSubmitting)
                 },
                 footer = {
                     Box {
@@ -465,6 +527,9 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
     var capabilityPreparation by remember(task.id) { mutableStateOf(false) }
     var auditDetails by rememberSaveable(task.id) { mutableStateOf(false) }
     var contextDetails by rememberSaveable(task.id) { mutableStateOf(false) }
+    var scopeDetails by rememberSaveable(task.id) { mutableStateOf(false) }
+    var fullGoal by rememberSaveable(task.id) { mutableStateOf(false) }
+    var goalClipped by remember(task.id) { mutableStateOf(false) }
     val host = controller.state
     LaunchedEffect(host.savedFeedbackRevision) { if (host.savedFeedbackTaskId == task.id && feedback.trim() == host.savedFeedback.trim()) feedback = "" }
     val phoneTask = isPhoneTask(task)
@@ -486,14 +551,45 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
     val resultAnchor = remember(task.id) { BringIntoViewRequester() }
     val feedbackAnchor = remember(task.id) { BringIntoViewRequester() }
     ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).navigationBarsPadding().imePadding()) {
-            TextButton(onClick = close, modifier = Modifier.testTag("task_return_source")) { Text(returnLabel, fontSize = 14.sp) }
-            Text("${taskStatus(task.status)} · ${executionLocation(task.executionMode)}", color = SecondaryInk, fontSize = 14.sp)
-            Text(task.goal, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, lineHeight = 28.sp, modifier = Modifier.padding(top = 10.dp, bottom = 12.dp))
+        Column(Modifier.fillMaxWidth().fillMaxHeight(.94f).navigationBarsPadding().imePadding()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = close, modifier = Modifier.testTag("task_return_source")) { Text(returnLabel, fontSize = 13.sp) }
+                Spacer(Modifier.weight(1f))
+                if (!pairedTask && active && phoneTask) TextButton(onClick = controller::stopPhone,
+                    enabled = task.status != "stopping", modifier = Modifier.testTag("task_fixed_stop_phone")) {
+                    Text(if (task.status == "stopping") "正在停止" else "停止后续操作", fontSize = 13.sp)
+                }
+                else if (!pairedTask && assistantExecuting) TextButton(onClick = { controller.stopReviewedTask(task) },
+                    enabled = task.status != "stopping", modifier = Modifier.testTag("task_fixed_stop_assistant")) {
+                    Text(if (task.status == "stopping") "正在停止" else "停止后续操作", fontSize = 13.sp)
+                }
+            }
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 14.dp)) {
+                Text(task.goal, fontSize = 18.sp, fontWeight = FontWeight.Medium, lineHeight = 26.sp,
+                    maxLines = 3, overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { if (goalClipped != it.hasVisualOverflow) goalClipped = it.hasVisualOverflow })
+                Text("${taskStatus(task.status)} · ${executionLocation(task.executionMode)}", color = SecondaryInk,
+                    fontSize = 12.sp, modifier = Modifier.padding(top = 5.dp))
+            }
+            HorizontalDivider(color = Line, thickness = .5.dp)
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
+            if (goalClipped || fullGoal) {
+                TextButton(onClick = { fullGoal = !fullGoal }) { Text(if (fullGoal) "收起完整目标" else "查看完整目标", fontSize = 12.sp) }
+                AnimatedVisibility(visible = fullGoal) { SelectionContainer { Text(task.goal, fontSize = 15.sp, lineHeight = 23.sp) } }
+            }
             DeviceTaskProvenance(task) { controller.openConnection("devices"); close() }
             if (pairedTask || task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") DeviceTaskHistoryControls(task, controller.nativeDeviceWorkspace(), controller::runDeviceWorkspaceWork, controller.deviceWorkspaceRevision, controller::deviceWorkspaceChanged)
             if (pairedTask) DevicePairedTaskControls(task, controller.nativeDeviceWorkspace(), controller::runDeviceWorkspaceWork, controller::runDeviceWorkspaceControlWork, controller.deviceWorkspaceRevision, controller::deviceWorkspaceChanged) { controller.openConnection("models"); close() }
-            if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask) ExecutionScopeControls(task,controller)
+            if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask) {
+                TextButton(onClick = { scopeDetails = !scopeDetails }, modifier = Modifier.testTag("task_scope_disclosure")
+                    .semantics { stateDescription = if (scopeDetails) "已展开" else "已收起" }) {
+                    AffectGlyph("tool", Modifier.size(16.dp), SecondaryInk)
+                    Spacer(Modifier.width(6.dp))
+                    Text("执行范围与用量", fontSize = 12.sp)
+                    AffectGlyph(if (scopeDetails) "chevron" else "chevron-right", Modifier.size(12.dp), SecondaryInk)
+                }
+                AnimatedVisibility(visible = scopeDetails) { ExecutionScopeControls(task,controller) }
+            }
             if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask && task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optString("kind") in setOf("phone", "assistant") && task.status !in setOf("completed", "cancelled", "failed", "interrupted", "reconciling")) DeviceTaskScopeEntry(task, controller.nativeDeviceTaskScope(), controller::runDeviceWorkspaceWork) { controller.deviceTaskWorkspaceChanged(task.id) }
             if (!groupTask && !mediaTask && !memoryConsolidationTask && (phoneTask || assistantTask) && teamRunReferences(task).isEmpty()) TaskExecutionProcess(task, controller) { target ->
                 val anchor = when (target) {
@@ -521,8 +617,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 TextButton(onClick = { controller.openConnection("groups"); close() }) { Text("查看群授权、成员与投递") }
             }
             if (taskOriginLabel(task) == "语音复核") Text("来自你核对的本机最终字幕；服务来源标记不是身份认证。保存只建立待执行任务，后续工具与外发仍需原任务授权。", fontSize = 12.sp, lineHeight = 19.sp, color = SecondaryInk, modifier = Modifier.padding(bottom = 10.dp))
-            if (!pairedTask && active) Row(Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedButton(onClick = { if (task.status == "paused") controller.continuePhone() else controller.pausePhone() }) { Text(if (task.status == "paused") "继续" else "暂停") }; TextButton(onClick = controller::stopPhone, colors = ButtonDefaults.textButtonColors(contentColor = Danger)) { Text("停止后续操作") } }
-            if (!pairedTask && assistantExecuting) TextButton(onClick = { controller.stopReviewedTask(task) }, colors = ButtonDefaults.textButtonColors(contentColor = Danger), modifier = Modifier.padding(top = 12.dp)) { Text("停止后续工具操作") }
+            if (!pairedTask && active && phoneTask) Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedButton(onClick = { if (task.status == "paused") controller.continuePhone() else controller.pausePhone() }) { Text(if (task.status == "paused") "继续任务" else "暂停手机任务") } }
             if (!pairedTask && !groupTask && task.raw.optJSONObject("origin")?.optString("kind") != "channel" && !mediaTask && !memoryConsolidationTask && (phoneTask || assistantTask) && task.status in setOf("preparing", "running", "pausing", "paused", "awaiting_user")) {
                 val mainScreenBusy = phoneTask && task.executionMode == "main_screen" && task.status !in setOf("paused", "awaiting_user")
                 TextButton(onClick = { controller.openQuickPanel(task) }, enabled = !mainScreenBusy, modifier = Modifier.testTag("task_quick_panel")) { Text("在其他 App 补充上下文") }
@@ -617,9 +712,10 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 TaskAuditPanel(task.id, controller)
             }
             Spacer(Modifier.height(24.dp))
+            }
         }
     }
-    if (!pairedTask && resumeConsent) AlertDialog(onDismissRequest = { resumeConsent = false }, containerColor = Color.White, title = { Text("继续原任务") }, text = { Text(if (groupTask) "保留原群目标、来源、受众和累计额度，只从原任务续接；群或成员授权已变化、媒体已生成或效果未知时会拒绝，不会创建替代任务。" else if (assistantTask) "保留原任务目标、上下文与补充要求，继续调用已授权的工具。新的写操作仍需宿主授权。" else if (task.executionMode == "background") "将使用后台独立屏，读取保留的上下文并重新观察当前现场；独立屏不可用时会等待。" else "将操作手机主屏并占用当前屏幕；任务会先重新观察，再根据保留的上下文继续。") }, confirmButton = { Button(onClick = { controller.resumeTask(task, if (groupTask) "" else feedback); resumeConsent = false }) { Text("继续执行") } }, dismissButton = { TextButton(onClick = { resumeConsent = false }) { Text("取消") } })
+    if (!pairedTask && resumeConsent) AlertDialog(onDismissRequest = { resumeConsent = false }, containerColor = Color.White, title = { Text("继续原任务") }, text = { Text(if (groupTask) "保留原群目标、来源、受众和累计额度，只从原任务续接；群或成员授权已变化、媒体已生成或效果未知时会拒绝，不会创建替代任务。" else if (assistantTask) "保留原任务目标、上下文与补充要求，继续调用已授权的工具。新的写操作仍需宿主授权。" else if (task.executionMode == "background") "将使用后台独立屏，读取保留的上下文并重新观察当前现场；独立屏不可用时会等待。" else "将操作手机主屏并占用当前屏幕；任务会先重新观察，再根据保留的上下文继续。") }, confirmButton = { PocketPressButton(onClick = { controller.resumeTask(task, if (groupTask) "" else feedback); resumeConsent = false }) { Text("继续执行") } }, dismissButton = { TextButton(onClick = { resumeConsent = false }) { Text("取消") } })
     if (!pairedTask && capabilityPreparation) TaskCapabilityPage(task.id, controller.skillExecutionHost(), controller::runPluginCatalogWork,
         { controller.taskCapabilitySnapshot(task.id) }, { operation, artifact, sha -> controller.readTaskSkillArtifact(task.id, operation, artifact, sha) },
         { plugin, tool -> capabilityPreparation = false; close(); controller.openTaskMcpPreparation(task.id, plugin, tool) }, { capabilityPreparation = false }, controller::runEcosystemControlWork, jsHost = controller.pluginExecutionHost())
@@ -659,10 +755,20 @@ private fun ProjectsScreen(state: PocketUiState, controller: PocketWorldControll
                 OutlinedButton(onClick = controller.projectPackages::openSourceImport, enabled = !controller.projectPackages.state.busy) { Text("导入项目") }
             }
                 if (state.projectId != null && active != null) {
-                    PocketSegmentedTabs(listOf("Agent", "文件", "运行", "预览"), view) { index ->
-                        controller.projectWorkbench.selectView(state.projectId!!, index)
+                    PocketSegmentedTabs(listOf("工作", "预览"), if (view == ProjectWorkbenchFacet.Preview.index) 1 else 0) { index ->
+                        controller.projectWorkbench.selectView(state.projectId!!,
+                            if (index == 1) ProjectWorkbenchFacet.Preview.index else ProjectWorkbenchFacet.Agent.index)
                     }
-                    Spacer(Modifier.height(16.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(onClick = { controller.projectWorkbench.selectView(state.projectId!!, ProjectWorkbenchFacet.Files.index) }) {
+                            AffectGlyph("file", Modifier.size(16.dp), SecondaryInk)
+                            Spacer(Modifier.width(5.dp)); Text("文件", fontSize = 12.sp)
+                        }
+                        TextButton(onClick = { controller.projectWorkbench.selectView(state.projectId!!, ProjectWorkbenchFacet.Run.index) }) {
+                            AffectGlyph("tool", Modifier.size(16.dp), SecondaryInk)
+                            Spacer(Modifier.width(5.dp)); Text("运行记录", fontSize = 12.sp)
+                        }
+                    }
                 }
             }
         }

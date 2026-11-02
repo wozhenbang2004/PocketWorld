@@ -1,6 +1,7 @@
 package dev.pocketengine.ui
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -15,13 +16,15 @@ internal fun NickTeamExecutionTree(tree: JSONObject?, teamRunId: String) {
     if (tree == null) return // Older snapshots remain readable through their existing work-item controls.
     val steps = nickTeamSteps(tree, teamRunId)
     if (steps == null) {
-        Text("执行过程暂不可用，原工作项仍可查看。", color = SecondaryInk, fontSize = 12.sp)
+        Text("执行过程暂不可用，原工作项仍可查看。", Modifier.fillMaxWidth(),
+            color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp)
         return
     }
-    Column {
+    Column(Modifier.fillMaxWidth()) {
         NickExecutionTree(steps)
         if (tree.optBoolean("partial")) Text("仅展示最近的工具记录，可打开工作项查看完整过程。",
-            Modifier.padding(top = 6.dp), color = SecondaryInk, fontSize = 12.sp)
+            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp)
     }
 }
 
