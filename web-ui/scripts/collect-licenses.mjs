@@ -11,6 +11,30 @@ const project = JSON.parse(packageBytes);
 const lock = JSON.parse(lockBytes);
 const explicitBuildPackages = process.argv.filter(value => value.startsWith('--include-build=')).flatMap(value => value.slice(16).split(',')).filter(Boolean);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const supplementRoot = path.join(root, 'licenses');
+const supplementBytes = await readFile(path.join(supplementRoot, 'upstream-supplements.json'));
+const supplements = JSON.parse(supplementBytes);
+
+async function exactSupplement(metadata) {
+  const matches = supplements.entries.filter(entry => entry.package === metadata.name && entry.version === metadata.version && entry.declared_license === metadata.license);
+  if (!matches.length) return null;
+  if (matches.length !== 1) throw new Error(`Ambiguous license supplement: ${metadata.name}@${metadata.version}`);
+  const entry = matches[0];
+  const safeFile = relative => {
+    const file = path.resolve(supplementRoot, relative);
+    if (!file.startsWith(`${supplementRoot}${path.sep}`)) throw new Error('License supplement path escapes its source directory');
+    return file;
+  };
+  const bytes = await readFile(safeFile(entry.file));
+  const blob = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+  if (bytes.length !== entry.bytes || hash(bytes) !== entry.sha256 || blob !== entry.git_blob_sha1) throw new Error(`Pinned license supplement identity mismatch: ${metadata.name}@${metadata.version}`);
+  if (entry.version_evidence) {
+    const proof = await readFile(safeFile(entry.version_evidence.file));
+    const version = JSON.parse(proof);
+    if (hash(proof) !== entry.version_evidence.sha256 || version.name !== metadata.name || version.version !== metadata.version || version.license !== metadata.license) throw new Error(`License supplement release evidence mismatch: ${metadata.name}@${metadata.version}`);
+  }
+  return { entry, bytes };
+}
 
 async function resolvePackage(from, name) {
   let directory = from;
@@ -82,6 +106,16 @@ while (queue.length) {
     fileRecords.push({ source: filename.split(path.sep).join('/'), file: path.relative(output, destination).split(path.sep).join('/'), bytes: bytes.length, sha256: hash(bytes) });
   }
   const declaredLicense = metadata.license || metadata.licenses || null;
+  // Only a missing npm legal body may use an exact, independently retained upstream source.
+  if (!fileRecords.length) {
+    const supplement = await exactSupplement(metadata);
+    if (supplement) {
+      const destination = path.join(output, 'packages', identifier, 'UPSTREAM-LICENSE.txt');
+      await mkdir(path.dirname(destination), { recursive: true });
+      await writeFile(destination, supplement.bytes);
+      fileRecords.push({ source: supplement.entry.file, origin: 'exact-version pinned upstream supplement; npm legal text absent', file: path.relative(output, destination).split(path.sep).join('/'), bytes: supplement.bytes.length, sha256: hash(supplement.bytes), source_url: supplement.entry.source_url, commit: supplement.entry.commit, copyright: supplement.entry.copyright, release_identity: supplement.entry.release_identity, version_evidence: supplement.entry.version_evidence || null });
+    }
+  }
   if (!declaredLicense) missing.push({ package: metadata.name || item.name, installation: relative, reason: 'package metadata has no declared license' });
   if (!fileRecords.length) missing.push({ package: metadata.name || item.name, installation: relative, reason: 'no LICENSE/COPYING/NOTICE/COPYRIGHT text found' });
   packages.push({
@@ -118,10 +152,12 @@ const manifest = {
   package_lock_sha256: hash(lockBytes), package_json_sha256: hash(packageBytes),
   scope: 'Installed production dependency closure, including installed peers and optional dependencies. Development dependencies are excluded except explicitly named build-source notices.',
   explicit_build_source_packages: explicitBuildPackages,
+  upstream_supplement_manifest: { file: 'upstream-supplements.json', sha256: hash(supplementBytes), policy: supplements.policy, unresolved_candidates: supplements.unresolved },
   selected_source_attribution: selectedSourceFiles,
   status: errors.length ? 'failed' : missing.length ? 'needs-license-review' : 'complete-in-scope',
   packages, missing, errors,
 };
+await writeFile(path.join(output, 'upstream-supplements.json'), supplementBytes);
 await writeFile(path.join(output, 'dependencies.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 await writeFile(path.join(output, 'README.txt'), [
   'PocketWorld Web UI third-party dependency notices',

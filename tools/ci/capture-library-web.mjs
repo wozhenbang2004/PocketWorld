@@ -496,9 +496,30 @@ async function runViewport(origin, viewport) {
     await feedback.fill('隔离夹具文字，不提交任何决定。');
     await feedback.scrollIntoViewIfNeeded();
     await capture(page, viewport, '10-task-review', ['.pw-protected-actions', 'textarea']);
-    const scope = review.getByRole('spinbutton', { name: '工具调用总上限', exact: true });
-    await scope.scrollIntoViewIfNeeded();
-    await capture(page, viewport, '11-scope-form', ['.pw-scope-editor', '[role="radiogroup"]']);
+    stage = `${viewport.width}:11-scope-form`;
+    const tools = review.getByRole('textbox', { name: '工具调用总上限', exact: true });
+    const models = review.getByRole('textbox', { name: '模型调用总上限', exact: true });
+    const confirmScope = review.getByRole('button', { name: '确认本次范围修订', exact: true });
+    for (const field of [tools, models]) {
+      assert.equal(await field.count(), 1, 'The labelled numeric text field is ambiguous');
+      assert.equal(await field.getAttribute('inputmode'), 'numeric', 'The actual source field lost numeric input intent');
+      assert.equal(await field.getAttribute('pattern'), '[0-9]*', 'The actual source field lost its numeric pattern');
+    }
+    assert.equal(await tools.inputValue(), '30', 'Reviewed tool limit did not populate the real field');
+    assert.equal(await models.inputValue(), '16', 'Reviewed model limit did not populate the real field');
+    await tools.fill('401');
+    assert(await confirmScope.isDisabled(), 'Out-of-range tool limit must block scope submission');
+    await tools.fill('36');
+    await models.fill('513');
+    assert(await confirmScope.isDisabled(), 'Out-of-range model limit must block scope submission');
+    await models.fill('20');
+    assert.equal(await tools.inputValue(), '36', 'Tool limit edit did not remain in the controlled field');
+    assert.equal(await models.inputValue(), '20', 'Model limit edit did not remain in the controlled field');
+    assert(await confirmScope.isEnabled(), 'Valid reviewed scope draft should enable its actual control');
+    const scopeDraft = { tools: '36', models: '20', invalidToolLimitBlocked: true, invalidModelLimitBlocked: true, submitted: false };
+    record.checks.push({ stage: '11-scope-form', scopeDraft });
+    await tools.scrollIntoViewIfNeeded();
+    await capture(page, viewport, '11-scope-form', ['.pw-scope-editor', '[role="radiogroup"]'], { metadata: { scopeDraft } });
     await drawer.getByRole('button', { name: '关闭任务详情', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });
     await navigate(page, '项目与文件');

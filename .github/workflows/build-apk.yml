@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: debug-apk-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/uiux/') }}
 
 jobs:
   apk:

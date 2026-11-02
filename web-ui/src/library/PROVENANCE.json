@@ -260,6 +260,11 @@
       "path": "upstream/sonner-2.0.8/src/types.ts.source.txt",
       "source": "Sonner official 2.0.8 @8e4662b39255120b62138312058f5d77c0139a5e / MIT",
       "sha256": "3ba0a8cfa967ec512fe93c8f1d252917e27208030a6c5479ce2a1fb13383590c"
+    },
+    {
+      "path": "upstream/affect-library/src/demos/components-b/fidelity.css.source.txt",
+      "source": "library reconstruction@0e69029; not official Pro source",
+      "sha256": "287a7b43dfa919fde2167706b49c340d103f8e0d50a48e9a26b733f83d0d8b7a"
     }
   ]
 }

@@ -1,4 +1,6 @@
 // Actual library v3 0e69029 layout connectors / FLIP. No demo state.
+// Product handoff routes retain measured endpoints; a narrow layout uses an
+// outside gutter so a connection never runs through another agent card.
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 
 export const motionEase='cubic-bezier(0.32, 0.72, 0.24, 1)';
@@ -24,7 +26,7 @@ export function useFlipLayout(root:RefObject<HTMLElement|null>,revision:string,d
   return capture;
 }
 
-export type Connector={id:string;from:string;to:string;kind?:'horizontal'|'tree'|'deep'|'flow'|'vertical';tone?:'muted'|'blue'|'green'|'red';active?:boolean;exiting?:boolean;delay?:number};
+export type Connector={id:string;from:string;to:string;kind?:'horizontal'|'tree'|'deep'|'flow'|'vertical'|'handoff';tone?:'muted'|'blue'|'green'|'red';active?:boolean;exiting?:boolean;delay?:number;lane?:number};
 type Drawn=Connector&{d:string};
 function roundedOrthogonal(a:{x:number;y:number},b:{x:number;y:number},vertical=false){
   const r=Math.min(8,Math.abs(b.x-a.x)/2,Math.abs(b.y-a.y)/2);
@@ -39,8 +41,25 @@ export function MeasuredConnectors({root,edges,revision,className=''}:{root:RefO
     const container=root.current;if(!container)return;
     let raf=0,until=performance.now()+760;let cancelled=false;
     const measure=()=>{if(cancelled)return;const base=container.getBoundingClientRect();const nodes=new Map<string,DOMRect>();container.querySelectorAll<HTMLElement>('[data-link-node]').forEach(n=>{if(n.dataset.linkNode)nodes.set(n.dataset.linkNode,n.getBoundingClientRect())});
+      const handoffs=currentEdges.current.filter(edge=>edge.kind==='handoff');
+      const spansRows=(ids:string[])=>{const tops=ids.map(id=>nodes.get(id)?.top).filter((top):top is number=>top!==undefined);return tops.length>1&&Math.max(...tops)-Math.min(...tops)>2};
+      const outsideHandoff=base.width<560||spansRows(handoffs.map(edge=>edge.from))||spansRows(handoffs.map(edge=>edge.to));
       const next:Drawn[]=[];for(const edge of currentEdges.current){const from=nodes.get(edge.from),to=nodes.get(edge.to);if(!from||!to||!from.width||!to.width)continue;const f={left:from.left-base.left,top:from.top-base.top,width:from.width,height:from.height},t={left:to.left-base.left,top:to.top-base.top,width:to.width,height:to.height};let d='';
-        if(edge.kind==='tree'&&base.width>=560){const a={x:f.left+f.width/2,y:f.top+f.height},b={x:t.left+t.width/2,y:t.top};d=roundedOrthogonal(a,b,true)}
+        if(edge.kind==='handoff'){
+          if(!outsideHandoff){
+            d=roundedOrthogonal({x:f.left+f.width/2,y:f.top+f.height},{x:t.left+t.width/2,y:t.top},true);
+          }else{
+            // Source wire bands become a measured outside rail when cards stack.
+            // The host reserves 24px beyond all source/route card edges.
+            const a={x:f.left+f.width,y:f.top+f.height/2};
+            const b={x:t.left+t.width,y:t.top+Math.min(22,t.height/2)};
+            const rail=base.width-4-Math.min(3,Math.max(0,edge.lane||0)%4)*4;
+            const sign=b.y>=a.y?1:-1;
+            const radius=Math.min(7,Math.max(0,(rail-Math.max(a.x,b.x))/2),Math.abs(b.y-a.y)/2);
+            d=`M${a.x} ${a.y}H${rail-radius}Q${rail} ${a.y} ${rail} ${a.y+sign*radius}V${b.y-sign*radius}Q${rail} ${b.y} ${rail-radius} ${b.y}H${b.x}`;
+          }
+        }
+        else if(edge.kind==='tree'&&base.width>=560){const a={x:f.left+f.width/2,y:f.top+f.height},b={x:t.left+t.width/2,y:t.top};d=roundedOrthogonal(a,b,true)}
         else if(edge.kind==='deep'||edge.kind==='tree'&&base.width<560){const a={x:f.left+21,y:f.top+f.height},b={x:t.left,y:t.top+20};const rail=Math.min(a.x,b.x-10);d=`M${a.x} ${a.y}V${b.y-7}Q${a.x} ${b.y} ${a.x+7} ${b.y}H${b.x}`;if(b.x<a.x)d=`M${a.x} ${a.y}H${rail+7}Q${rail} ${a.y} ${rail} ${a.y+7}V${b.y-7}Q${rail} ${b.y} ${rail+7} ${b.y}H${b.x}`}
         else if(edge.kind==='vertical'){d=roundedOrthogonal({x:f.left+f.width/2,y:f.top+f.height},{x:t.left,y:t.top+t.height/2},true)}
         else{const a={x:f.left+f.width,y:f.top+f.height/2},b={x:t.left,y:t.top+t.height/2};if(edge.kind==='flow'){const c=Math.max(16,(b.x-a.x)*.55);d=`M${a.x} ${a.y}C${a.x+c} ${a.y} ${b.x-c} ${b.y} ${b.x} ${b.y}`}else d=roundedOrthogonal(a,b)}

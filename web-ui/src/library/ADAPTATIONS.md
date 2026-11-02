@@ -43,7 +43,7 @@ records SHA-256 for each original. The following distinctions are deliberate:
 | 07 | `context.tsx::CitedAnswer` | Source tabs, numbered references, selected passage and source relation | Real source ID/version/excerpt; source opening is a host callback, not a sample link or current-page substitution |
 | 08 | `message.tsx` + `adapted/tool-call-card-clean.tsx` | Actual official disclosure, JSON highlighting, cap/show-all, copy, status motion | Returned/unknown/waiting/approval/stopped remain distinct. Running time requires an actual recorded start. Terminal duration requires a fact; real zero remains zero |
 | 09 | `execution-stepper.js` + `execution.tsx` | Existing Web Component's DOM builder, CSS disclosure and measured bent spine | Demo steps, play/seek clock and auto-completion removed. Status/duration/children are controlled; manual disclosure retained by ID; pass task/run `scope` to reset across owners |
-| 10 | `agents.tsx::AgentTree` + unchanged `adapted/agent-motion.tsx` | Actual source tree nodes, measured connectors and FLIP | Real roots/status; inactive branches initially fold on phone. No sample agents, accumulated pretend cost, fake approval or retry |
+| 10 | `agents.tsx::AgentTree` + `adapted/agent-motion.tsx` / `agent-layout.css` | Actual source tree nodes, measured connectors, complete fidelity link styling and FLIP | Real roots/status; inactive branches initially fold on phone. No sample agents, accumulated pretend cost, fake approval or retry |
 | 11 | `agents.tsx::AgentHandoff` | Source agent/material/route cards | Real agents, materials and reasons; measured route endpoints; no sample payload or ACK-to-complete shortcut |
 | 12 | `agents.tsx::AgentFindings` | Member filters, finding feed and expanded evidence | Counts/progress only from facts. Review is a host action and never toggles a fake reviewed state |
 | 13 | `context.tsx::MemoryPanel` | Source category/search/edit/detail structure | Records and revisions are host-owned. Save/create/forget/source are callbacks; no fixture mutation, fake save, fake delete or synthetic Undo |
@@ -67,10 +67,26 @@ GFM task boxes are read-only document content. Raw HTML is skipped. The default 
 is preserved and narrowed to HTTP(S) and fragments, with an optional host opening callback.
 Remote images do not fetch automatically; an explicit resolver may provide a trusted local asset.
 
-The source archive now contains 52 registered original files, including Sonner's six source
+The source archive now contains 53 registered original files, including Sonner's six source
 files, package and MIT notice, the exact BoardUI registry JSON, and the complete source FLIP helper.
-All 52 SHA-256 records matched at this handoff. Original files and adapted product leaves remain
+The complete library `components-b/fidelity.css` is also retained, SHA-256
+`287a7b43dfa919fde2167706b49c340d103f8e0d50a48e9a26b733f83d0d8b7a`.
+All 53 SHA-256 records matched at this handoff. Original files and adapted product leaves remain
 separate; changes to controlled behavior belong only in the latter.
+
+CI19 formal Web screenshots with isolated test fixtures (not Android/device evidence) exposed
+missing fidelity rules: the SVG occupied an in-flow 300×150 default box and its paths inherited
+the SVG default fill. `agent-layout.css` restores the source absolute positioning, no-fill strokes,
+draw/beam timing and closing choreography. Handoff keeps measured endpoints and uses a reserved
+24px outside rail when source or destination cards stack; single-row layouts retain the source
+rounded wire-band route. No SVG is hidden to disguise the defect.
+
+The same fixture review found an unknown-duration unit leaking because authored `.time` display
+overrode the HTML hidden state. The adapter now explicitly hides the entire time element when
+unknown. ToolCall's narrow header reserves a separate second line for factual status/time;
+expanding its existing disclosure reveals full tool/summary text rather than dropping metadata.
+These changes still require the next formal Web screenshot comparison; they do not establish
+Android or actual user-task acceptance.
 
 ## Verification boundaries
 

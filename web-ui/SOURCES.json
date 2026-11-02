@@ -2357,7 +2357,9 @@
   "dependency_licenses": {
     "collector": "scripts/collect-licenses.mjs",
     "manifest": "public/licenses/dependencies.json",
-    "status": "pending actual npm ci and collection"
+    "status": "CI19 needs-license-review: 10 legal bodies missing; 8 exact-version official upstream supplements prepared; client-only0.0.1 and react-remove-scroll-bar2.3.8 remain unresolved; actual collector rerun awaits CI20",
+    "upstream_supplement_map": "licenses/upstream-supplements.json",
+    "supplement_policy": "Only when no npm legal file was found and exact installed package/version/declared license and pinned original/evidence hashes all match; source receipt is retained in APK license manifest."
   },
   "supporting_runtime_sources": [
     {

@@ -370,7 +370,9 @@
     "Ovio aliases changed to local relative modules; minimal selected",
     "Tree selected item gains controlled prop; no drag mutations",
     "Source originals retained alongside adapters; no fixture data used",
-    "Vaul 1.1.2 React 19 compatibility only: RefObject<HTMLDivElement | null> in context/use-snap-points; browser-compatible ReturnType<typeof setTimeout> replaces NodeJS.Timeout. Upstream source remains byte-identical."
+    "Vaul 1.1.2 React 19 compatibility only: RefObject<HTMLDivElement | null> in context/use-snap-points; browser-compatible ReturnType<typeof setTimeout> replaces NodeJS.Timeout. Upstream source remains byte-identical.",
+    "CI19 visual correction: ReviewCenter queue retains real source objects; mobile queue cards stack full title/description/status beside a fixed arrow, horizontal object scrolling and one-column detail. No content hidden or fixture settlement introduced.",
+    "Vaul style.css adapter syntax correction: pointer:fine rule targets the existing data-vaul-handle-hitarea span, whose touch target is expanded to 44px by the preceding base rule; remove stray colon from attribute selector to restore intended fine-pointer width/height 100%. This is not a pseudo-element. Upstream 1.1.2 raw remains unchanged."
   ],
   "usage": [
     {

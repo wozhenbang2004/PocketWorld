@@ -146,10 +146,44 @@ jobs:
       - name: Prepare an official ARM-compatible Android 11 emulator
         run: |
           set -euo pipefail
+          mkdir -p build-artifacts/web-ui-captures
+          # Official Ubuntu 24.04 client library; do not substitute an emulator
+          # binary or alter the app ABI to work around a missing runner library.
+          # https://packages.ubuntu.com/noble/libpulse0
+          sudo apt-get update 2>&1 | tee build-artifacts/emulator-apt-update.log
+          sudo apt-get install --yes --no-install-recommends libpulse0 \
+            2>&1 | tee build-artifacts/emulator-apt-install.log
+          apt-cache policy libpulse0 > build-artifacts/web-ui-captures/emulator-libpulse0-policy.txt
+          dpkg-query -W -f '${binary:Package}\t${Version}\t${Architecture}\n' libpulse0 \
+            > build-artifacts/web-ui-captures/emulator-libpulse0-installed.txt
           # Android's official API30 x86_64 images include ARM64 support.
           # The script checks the actual guest ABI and installation before acceptance.
           # https://developer.android.com/studio/releases/emulator#3000_february_19_2020
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-30;google_apis;x86_64'
+          PW_EMULATOR_QEMU="$ANDROID_HOME/emulator/qemu/linux-x86_64/qemu-system-x86_64"
+          test -x "$PW_EMULATOR_QEMU"
+          # Account for the official SDK's bundled library directories when
+          # checking the underlying QEMU executable, as its launcher does.
+          PW_EMULATOR_LIBPATH="$ANDROID_HOME/emulator/lib64"
+          for PW_EMULATOR_LIBDIR in qt/lib gles_swiftshader gles_angle vulkan; do
+            if [ -d "$ANDROID_HOME/emulator/lib64/$PW_EMULATOR_LIBDIR" ]; then
+              PW_EMULATOR_LIBPATH="$PW_EMULATOR_LIBPATH:$ANDROID_HOME/emulator/lib64/$PW_EMULATOR_LIBDIR"
+            fi
+          done
+          PW_EMULATOR_LDD_EXIT=0
+          LD_LIBRARY_PATH="$PW_EMULATOR_LIBPATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ldd "$PW_EMULATOR_QEMU" > build-artifacts/web-ui-captures/emulator-ldd.txt 2>&1 \
+            || PW_EMULATOR_LDD_EXIT=$?
+          cat build-artifacts/web-ui-captures/emulator-ldd.txt
+          python3 - "$PW_EMULATOR_QEMU" "$PW_EMULATOR_LDD_EXIT" <<'PY'
+          import json, os, pathlib, sys
+          root = pathlib.Path('build-artifacts/web-ui-captures')
+          missing = [line.strip() for line in (root / 'emulator-ldd.txt').read_text().splitlines() if 'not found' in line]
+          receipt = {'stage': 'emulator-shared-libraries', 'commit': os.environ['GITHUB_SHA'],
+                     'binary': sys.argv[1], 'ldd_exit_code': int(sys.argv[2]), 'missing_libraries': missing}
+          (root / 'emulator-shared-libraries.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          assert receipt['ldd_exit_code'] == 0 and not missing, 'Emulator shared libraries unavailable: ' + '; '.join(missing)
+          PY
           test -c /dev/kvm
           # Scoped to this ephemeral runner and this runner user, not world-writable.
           sudo chown "$(id -u)" /dev/kvm

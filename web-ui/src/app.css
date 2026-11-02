@@ -25,3 +25,22 @@
 .pw-inline-status{display:inline-flex;align-items:center;gap:6px}.pw-loading-copy{width:min(260px,90%);display:flex;flex-direction:column;gap:11px;margin-top:12px}.pw-loading-file{display:flex;flex-direction:column;gap:14px;padding:8px 0 20px}.pw-file-save-progress{margin-bottom:15px}.pw-model-drawer{max-height:86dvh}.pw-model-drawer .pw-drawer-body{display:flex;flex-direction:column;gap:16px}.pw-model-drawer .cb-model2{width:100%;min-width:0}.pw-model-drawer .cb-model2-menu{max-width:none;width:100%;box-shadow:none;border:0;padding:0}.pw-model-drawer .cb-model2-options{max-height:320px;overflow:auto}.pw-model-drawer .cb-model2-options>button{min-height:56px}.pw-model-drawer .cb-model2-options>button:disabled{opacity:1;cursor:default}.pw-model-drawer .cb-model2-options>button[aria-selected=true]{background:#ececec}.pw-loading-models{display:flex;flex-direction:column;gap:17px}.pw-loading-models>div{display:flex;gap:12px;align-items:center}.pw-loading-models>div>span{display:flex;flex:1;flex-direction:column;gap:9px}[data-sonner-toast]{font-family:inherit;font-size:13px!important}
 
 .pw-pending-inputs{margin-top:10px;max-height:180px;overflow:auto;border-top:1px solid #e3e3e3}.pw-pending-input{padding:9px 2px;border-bottom:1px solid #e8e8e8}.pw-pending-input>small{font-size:10px;color:#777;display:block;margin:5px 0;overflow-wrap:anywhere}.pw-pending-input .pw-action-row{gap:3px}.pw-pending-input .pw-action-row button{font-size:11px;min-height:34px}.pw-model-drawer .pw-permission{margin-bottom:5px}
+
+/* CI19: focus belongs to the retained Composer surface, with a neutral visible ring. */
+.pw-composer-region .pw-composer-host .afa-composer textarea:focus,
+.pw-composer-region .pw-composer-host .afa-composer textarea:focus-visible{outline:none!important;box-shadow:none!important}
+.pw-composer-region .pw-composer-host .afa-composer>.afa-card:focus-within{border-color:#929292;box-shadow:0 0 0 2px #dcdcdc,0 1px 2px #0000000a,0 7px 20px #00000012}
+/* Keep the original ReviewCenter queue/detail relation readable at phone widths. */
+.pw-review-center .pw-review-queue-copy{display:block;min-width:0;white-space:normal;overflow-wrap:anywhere}
+.pw-review-center .pw-review-queue-copy>strong{display:block;font-size:13px;line-height:21px;font-weight:500}
+.pw-review-center .acc-review-queue .pw-review-queue-copy>small{display:block;font-size:11px;line-height:19px;margin-top:5px;white-space:normal;overflow-wrap:anywhere}
+.pw-review-center .acc-review-queue .pw-review-queue-status{display:block;font-size:11px;line-height:18px;white-space:nowrap;margin:0;color:#666}
+.pw-review-center .acc-review-queue>button{display:grid;grid-template-columns:minmax(0,1fr) 16px;gap:7px 10px}
+.pw-review-queue-copy{grid-column:1;grid-row:1}.pw-review-queue-status{grid-column:1;grid-row:2}.pw-review-queue-arrow{grid-column:2;grid-row:1/3;align-self:center}
+@media(max-width:719px){
+ .pw-task-drawer .pw-review-center>.acc-review-layout{display:flex;flex-direction:column;grid-template-columns:none;min-width:0;width:100%;min-height:0}
+ .pw-task-drawer .pw-review-center .acc-review-queue{display:flex;flex-flow:row nowrap;align-items:stretch;gap:9px;min-width:0;max-width:100%;max-height:none;padding:9px 1px 13px;border-right:0;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scroll-snap-type:x proximity}
+ .pw-task-drawer .pw-review-center .acc-review-queue>button{flex:0 0 calc(100% - 26px);width:calc(100% - 26px);min-width:0;max-width:none;margin:0;padding:12px;border:1px solid #e1e1e1;border-radius:10px;background:#f8f8f8;scroll-snap-align:start}
+ .pw-task-drawer .pw-review-center .acc-review-queue>button[aria-current=true]{background:#ededed;border-color:#cecece}
+ .pw-task-drawer .pw-review-center .acc-review-detail{width:100%;min-width:0;padding:16px 0 0;overflow:visible}
+}

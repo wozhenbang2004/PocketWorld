@@ -322,3 +322,9 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
+
+## Exact-version upstream legal supplements
+
+CI19 identified 10 installed packages with declared licenses but no collected legal text. Eight verified supplements are retained in `licenses/upstream-supplements.json`: seven Radix packages use the actual MIT text, copyright2022 WorkOS, from official release commit `46235ece78931b198e6908a2cec0b66798d55c79`; each retained package.json proves the corresponding installed version. `@remixicon/react@4.9.0` uses the actual **Remix Icon License v1.0**, copyright2017–2026 Remix Design, from official v4.9.0 commit `019480ec14b97959a1ad35c3de302a224714b068`. It is not relabeled MIT or Apache. Both legal originals match their official Git blob identities.
+
+The collector uses a supplement only for its exact installed package, version and declared license when npm legal text is absent, then verifies retained SHA-256/Git blob hashes and release evidence before copying the original body and source receipt into the packaged notices. `client-only@0.0.1` and `react-remove-scroll-bar@2.3.8` remain explicit missing legal-body items. These source additions do not establish a completed production collection; CI20 must rerun the collector.
