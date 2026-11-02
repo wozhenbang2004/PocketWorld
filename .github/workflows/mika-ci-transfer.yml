@@ -47,21 +47,24 @@ jobs:
           PY
           source_commit=18e175767d004b01d0de38567ddc7ec57000262c
           source_tree=20bbb9042cce42b22e83902d25f713fb87700ee1
-          expected_base=741992f2a8e579c44aed90cf9cd111eae86d4772
+          expected_base=0aa9058df3f835b5d08c77c21b5b5dce4eb41ee0
           target_branch=work/mika-53-capabilities-20261102
           git bundle verify /tmp/pocketworld-mika.bundle
           git fetch /tmp/pocketworld-mika.bundle HEAD
           test "$(git rev-parse FETCH_HEAD)" = "$source_commit"
           test "$(git rev-parse "$source_commit^{tree}")" = "$source_tree"
-          git merge-base --is-ancestor "$expected_base" "$source_commit"
+          git merge-base --is-ancestor 741992f2a8e579c44aed90cf9cd111eae86d4772 "$source_commit"
           git diff --exit-code 63a8af6acdd6d9f70909cae43454416ca0a896dd "$source_commit" -- \
             ':(glob)**/DeviceCapabilityPort.java' ':(glob)**/DeviceWorkspaceArtifacts.java' \
             ':(glob)**/TaskStoreDeviceTasks.java' ':(glob)**/DeviceWorkspaceNativeOwner.java'
           actual=$(git ls-remote origin "refs/heads/$target_branch" | cut -f1)
           test "$actual" = "$expected_base"
-          git push origin "$source_commit:refs/heads/$target_branch"
-          echo "source=$source_commit" >> "$GITHUB_OUTPUT"
-          echo "Imported exact source commit: $source_commit; tree: $source_tree" >> "$GITHUB_STEP_SUMMARY"
+          target_commit=$(printf '%s\n' 'Merge verified Mika capability source with the scoped CI definition' | git -c user.name='PocketWorld CI' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$source_tree" -p "$source_commit" -p "$expected_base")
+          git merge-base --is-ancestor "$expected_base" "$target_commit"
+          git diff --exit-code "$expected_base" "$target_commit" -- .github/workflows
+          git push origin "$target_commit:refs/heads/$target_branch"
+          echo "source=$target_commit" >> "$GITHUB_OUTPUT"
+          echo "Imported source commits through $source_commit; exact tree: $source_tree; merge: $target_commit" >> "$GITHUB_STEP_SUMMARY"
   targeted:
     needs: import
     runs-on: ubuntu-24.04
@@ -94,3 +97,4 @@ jobs:
           path: |
             app/build/reports/tests/testDebugUnitTest
             app/build/test-results/testDebugUnitTest
+
