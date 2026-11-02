@@ -217,6 +217,16 @@ final class GroupRegistry implements AutoCloseable {
         open();JSONObject row=request(state,requestId),group=group(state,row.getString("groupId"));sameRoute(group,event);activeMember(group,event.senderId);
         if(!visible(row,event.senderId))throw new SecurityException("此任务仅发起人可见");
     }
+    synchronized String contributor(String requestId,GroupIngressPort.Event event,String expectedEpoch,long now)throws Exception {
+        check(requestId,now,false);visible(requestId,event);JSONObject row=request(state,requestId),group=group(state,row.getString("groupId")),member=activeMember(group,event.senderId);
+        if(member.getString("role").equals("viewer")||expectedEpoch!=null&&!expectedEpoch.equals(member.getString("memberEpoch")))throw new SecurityException("原群补充成员权限或代次已失效");
+        if(expectedEpoch==null&&(now<event.receivedAt-30_000||now>event.replyUntil))throw new SecurityException("群补充消息已过有效窗口");
+        return member.getString("memberEpoch");
+    }
+    synchronized JSONObject outputDelivery(String requestId,String outputId)throws Exception {
+        String id=GroupJson.uuid("group-delivery:"+requestId+":"+outputId+":"+request(state,requestId).getString("audience"));JSONObject row=GroupJson.find(state.getJSONArray("deliveries"),"deliveryId",id);return row==null?null:GroupJson.copy(row);
+    }
+    synchronized GroupDeliveryPort.Delivery prepareQuestion(String requestId,GroupHostPort.Output output,GroupIngressPort.Event target,long now)throws Exception {return prepareDelivery(requestId,output,target,now,"question");}
     synchronized void cancellable(String requestId,GroupIngressPort.Event event) throws Exception {
         open();JSONObject row=request(state,requestId),group=group(state,row.getString("groupId"));sameRoute(group,event);activeMember(group,event.senderId);
         if(!row.getString("senderId").equals(event.senderId))throw new SecurityException("只能取消自己发起的群任务");

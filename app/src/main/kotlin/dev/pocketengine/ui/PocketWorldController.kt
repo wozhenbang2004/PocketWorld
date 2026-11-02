@@ -92,6 +92,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
 
     private fun openTeamAssignment(locator:JSONObject) { state=state.copy(teamRunId=locator.getString("teamRunId"),teamAssignmentFocus=JSONObject(locator.toString()));feature("teams","get",JSONObject().put("runId",locator.getString("teamRunId"))) }
+    fun openTeamChild(task: UiTask) {
+        // A locator opens the original team's reviewed controls; it never calls generic resume.
+        val locator = teamChildLocator(task) ?: run { state = state.copy(error = "原团队来源身份不完整，请从原团队记录核对；未继续任务"); return }
+        openTeamAssignment(locator)
+    }
     fun openTaskOutcomes(taskId:String) = attachmentOutcomes.openTask(taskId)
     fun openGroupArtifact(selection:dev.pocketengine.ui.groups.GroupArtifactSelection) = attachmentOutcomes.openGroup(selection)
     fun openGroupMediaOutcome(task:UiTask,operation:String) = attachmentOutcomes.openGroupOperation(task,operation)

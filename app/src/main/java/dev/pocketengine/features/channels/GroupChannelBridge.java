@@ -71,7 +71,8 @@ public final class GroupChannelBridge implements GroupIngressPort,GroupDeliveryP
                     String request=command.substring(command.indexOf(' ')+1).trim();JSONObject known=module.inspectTask(eventId,request);
                     JSONObject task=known.optJSONObject("task");if(task==null||task.optString("runId").isEmpty())throw new IllegalStateException("原任务执行身份尚未知，只能查询");
                     module.cancelTask(eventId,request,task.getString("runId"),task.getInt("coordinatorEpoch"));module.replyTaskStatus(eventId,request);
-                } else {
+                } else if(command.startsWith("/reply ")) {module.receiveInput(eventId);}
+                else {
                     JSONObject admitted=module.receiveTask(event.eventId,capability(command),"group",shared(command)?"members":"requester",requestedTokens(command));
                     module.acknowledgeTask(admitted.getJSONObject("reference").getString("requestId"));
                     if(admitted.optJSONObject("task")!=null&&admitted.getJSONObject("task").optString("status").equals("failed")&&controlFeedback!=null)controlFeedback.failed(eventId,"group_capability_failed");
@@ -147,14 +148,14 @@ public final class GroupChannelBridge implements GroupIngressPort,GroupDeliveryP
     }
     @Override public boolean supports(Event event,String audience,String mimeType)throws Exception {return supports(event.provider,event.accountId,audience,mimeType)&&(event.conversationKind.equals("group")||mimeType.equals("text/plain"));}
     @Override public Receipt send(Delivery delivery,GroupHostPort.Authority authority)throws Exception {
-        open();authority.check();check(delivery.event);verify(delivery);
+        open();authority.beforeDelivery();check(delivery.event);verify(delivery);
         if(!supports(delivery.event,delivery.audience,delivery.output.mimeType))throw new IllegalStateException("此原生渠道不支持该受众或媒体类型");
         JSONObject original=proof(delivery.event.eventId).getJSONObject("event");
         boolean media=!delivery.output.mimeType.equals("text/plain");
         JSONObject queued=media?core.queueGroupMedia(delivery.deliveryId,original,delivery.output,authority):delivery.kind.equals("feedback")?core.queueGroupFeedback(delivery.deliveryId,original,delivery.output.text,authority):core.queueGroupOutput(delivery.deliveryId,original,delivery.output.text,authority);
         if(queued.getBoolean("known"))return inspect(delivery,authority); // Including queued: lost ACK never authorizes another send.
         JSONObject row=core.prepareGroupSend(delivery.deliveryId,authority),profile=core.profile(delivery.event.accountId);RunControl control=new RunControl();
-        control.setAuthorityCheck(()->{authority.check();check(delivery.event);core.checkGroupSend(delivery.deliveryId,authority);});
+        control.setAuthorityCheck(()->{authority.beforeDelivery();check(delivery.event);core.checkGroupSend(delivery.deliveryId,authority);});
         ChannelHttp.DispatchGuard guard=control::check;ActiveDelivery active=new ActiveDelivery(delivery.event.accountId,control);if(sending.putIfAbsent(delivery.deliveryId,active)!=null)throw new SecurityException("原群投递仍在发送");
         try {
             JSONObject actual;
@@ -253,9 +254,9 @@ public final class GroupChannelBridge implements GroupIngressPort,GroupDeliveryP
     private void save(JSONObject next)throws Exception {byte[] bytes=next.toString().getBytes(StandardCharsets.UTF_8);if(bytes.length>8*1024*1024L)throw new IllegalStateException("群事件凭据容量已满");File pending=new File(proofFile.getParentFile(),proofFile.getName()+".pending");try(FileOutputStream out=new FileOutputStream(pending)){out.write(bytes);out.getFD().sync();}Files.move(pending.toPath(),proofFile.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}
     private static boolean statusCommand(String text){return text.startsWith("/task-status ")||text.startsWith("/status ");}
     private static boolean cancelCommand(String text){return text.startsWith("/task-cancel ")||text.startsWith("/cancel ");}
-    static boolean isCommand(String text){return text.matches("(?s)/(task|search|file|image|audio|video)( .*)?")||statusCommand(text)||cancelCommand(text);}
+    static boolean isCommand(String text){return text.startsWith("/reply ")||text.matches("(?s)/(task|search|file|image|audio|video)( .*)?")||statusCommand(text)||cancelCommand(text);}
     private static String capability(String command){if(command.startsWith("/search "))return "public.search";if(command.startsWith("/file "))return "group.files";if(command.startsWith("/image "))return "media.image";if(command.startsWith("/audio "))return "media.audio";if(command.startsWith("/video "))return "media.video";return "public.answer";}
-    private static String goal(String text){return options(text).goal;}
+    private static String goal(String text){return text.startsWith("/reply ")?text:options(text).goal;}
     private static boolean shared(String text){return options(text).shared;}
     private static final long MEDIA_FLOW_RESERVATION=32_000L;
     private static final class Options {final String goal;final boolean shared;final long tokens;Options(String goal,boolean shared,long tokens){this.goal=goal;this.shared=shared;this.tokens=tokens;}}

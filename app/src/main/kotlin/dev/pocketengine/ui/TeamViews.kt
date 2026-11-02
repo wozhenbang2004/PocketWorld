@@ -46,6 +46,7 @@ private fun teamBusyCommands(state: PocketUiState): Set<String> = state.moduleBu
 internal fun teamRunStatus(status: String): String = when (status) { "completed" -> "本轮已有产出，待核对"; "partial" -> "部分分工未完成，待核对"; "awaiting_review" -> "真实文件成果等待审查"; else -> taskStatus(status) }
 internal fun teamRunReferences(task: UiTask): List<String> {
     val result = linkedSetOf<String>()
+    teamChildLocator(task)?.let { result += it.getString("teamRunId") }
     if (task.raw.optString("feature") == "teams" || task.raw.optString("kind") == "teams") result += task.raw.optString("externalId").ifBlank { task.id }
     task.raw.optJSONArray("relatedTasks").objects().filter { it.optString("kind", it.optString("feature")) == "teams" }.forEach { result += it.optString("runId", it.optString("taskId")) }
     return result.filter { it.isNotBlank() }
@@ -126,7 +127,10 @@ internal fun TeamRunDetail(state: PocketUiState, controller: PocketWorldControll
     var tab by rememberSaveable(runId) { mutableIntStateOf(0) }
     var round by rememberSaveable(runId, memberId) { mutableIntStateOf(0) }
     var childTaskId by rememberSaveable(runId) { mutableStateOf<String?>(null) }
-    var collaborationOpen by rememberSaveable(runId) { mutableStateOf(true) }
+    var collaborationOpen by rememberSaveable(runId, assignmentFocus?.optString("assignmentId")) { mutableStateOf(assignmentFocus == null) }
+    LaunchedEffect(run?.optJSONObject("workPlan"), assignmentFocus?.optString("assignmentId")) {
+        if (assignmentFocus?.optString("workItemId")?.isNotBlank() == true) collaborationOpen = true
+    }
     val commands = teamCommands(state)
     val definition = state.feature("teams").optJSONArray("teams").objects().find { it.optString("id") == run?.optString("teamId") }
     val receipts = teamOwnerReceipts(state, runId, definition?.optString("id"))
@@ -157,6 +161,7 @@ internal fun TeamRunDetail(state: PocketUiState, controller: PocketWorldControll
                 })
                 else if (run == null) TeamCaption("正在读取真实团队任务…")
                 else Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 14.dp)) {
+                    assignmentFocus?.let { TeamCaption("来自原子任务 " + it.optString("assignmentId").take(8) + "；以下操作仍核对原团队当前版本与审批。") }
                     Text(run.optString("goal"), fontSize = 16.sp, lineHeight = 26.sp, fontWeight = FontWeight.Medium)
                     TeamCaption(teamRunStatus(run.optString("status")) + " · " + teamModeLabel(run.optString("mode")) + (if(run.optString("discussionFormat")==dev.pocketengine.features.teams.TeamEvidenceDiscussion.FORMAT)" · "+dev.pocketengine.features.teams.TeamEvidenceDiscussion.label(run.optInt("round")) else " · 第 " + run.optInt("round") + " / " + run.optInt("rounds") + " 轮"))
                     lastReceipt?.takeIf { !it.optBoolean("ok") }?.let { Text(it.optString("message"), color = Danger, fontSize = 12.sp, lineHeight = 20.sp) }

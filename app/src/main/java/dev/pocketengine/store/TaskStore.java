@@ -1302,6 +1302,61 @@ public final class TaskStore {
     }
     public synchronized void recordReviewedMaterialOutbox(ReviewedExternalReturn original,String outboxId)throws Exception {original.checkCurrent();if(!outboxId.matches("[a-f0-9-]{36}"))throw new SecurityException("不是原耐久outbox编号");JSONObject task=required(original.taskId),old=task.optJSONObject("reviewedManualReturn"),next=new JSONObject().put("outboxId",outboxId).put("resultFingerprint",original.sourceFingerprint);if(old!=null&&!canonical(old).equals(canonical(next)))throw new SecurityException("原交还结果已关联不同记录，不能替换");task.put("reviewedManualReturn",next);write(task);}
 
+    /** Revalidate all original contributors, including already-checkpointed text, before reuse or delivery. */
+    public synchronized void checkGroupInputSources(GroupHostPort.Request request,GroupHostPort.Authority authority)throws Exception {
+        authority.checkRead();JSONObject task=required(request.taskId);requireGroupIdentity(task,request);JSONArray inputs=task.optJSONArray("groupInputs");
+        for(int i=0;inputs!=null&&i<inputs.length();i++)authority.checkInput(dev.pocketengine.features.groups.GroupTaskInput.restore(inputs.getJSONObject(i).getJSONObject("source")));
+        authority.checkRead();
+    }
+    /** Full original final text is in the SQL checkpoint, not its bounded display projection. */
+    public synchronized String groupFinalAnswer(GroupHostPort.Request request,GroupHostPort.Authority authority)throws Exception {
+        checkGroupInputSources(request,authority);JSONObject task=required(request.taskId);requireGroupIdentity(task,request);
+        if(!task.optString("status").equals("completed")||task.optBoolean("cancelRequested")||hasUnresolved(request.taskId))throw new SecurityException("原群任务尚无完整可交付终态");
+        JSONObject evidence=task.getJSONObject("evidence"),proof=evidence.optJSONObject("nativeFinalAnswer");
+        if(proof==null)throw new SecurityException("原群终态缺少真实final-answer证明，不用摘要冒全文");
+        String run=task.getString("runId");JSONObject saved=checkpoint(run);JSONArray messages=saved.getJSONArray("messages");int index=proof.getInt("messageIndex");
+        if(!"pocketworld.runner-final-answer.v1".equals(proof.optString("format"))||!request.taskId.equals(proof.optString("taskId"))||!run.equals(proof.optString("runId"))||task.getInt("coordinatorEpoch")!=proof.optInt("coordinatorEpoch")||!proof.optBoolean("inputBoundaryEmpty")||index<0||index>=messages.length()||proof.getInt("historyLength")!=messages.length()||!canonical(proof).equals(canonical(saved.getJSONObject("observation").optJSONObject("nativeFinalAnswer"))))throw new SecurityException("原群全文不属于当前已证SQL终态");
+        JSONObject message=messages.getJSONObject(index);String full=message.getString("content");if(!message.optString("role").equals("assistant")||message.has("tool_calls")||!dev.pocketengine.runtime.context.CompactionPlan.fingerprint(full).equals(proof.getString("answerFingerprint")))throw new SecurityException("原群完整答案正文/hash不匹配");
+        for(int n=index+1;n<messages.length();n++){JSONObject tail=messages.getJSONObject(n);if(tail.optString("role").matches("assistant|tool")||tail.has("ownerMessageId"))throw new SecurityException("原群答案之后仍有输入或工具，不能冒全文终态");}
+        authority.checkRead();return full;
+    }
+    /** Same group task mailbox. Only the authenticated question path may enqueue; never owner/private input. */
+    public synchronized JSONObject queueGroupInput(GroupHostPort.Request request,dev.pocketengine.features.groups.GroupTaskInput input,GroupHostPort.Authority authority)throws Exception {
+        authority.check();authority.checkInput(input);db.beginTransaction();try {
+            JSONObject task=required(request.taskId);requireGroupIdentity(task,request);JSONArray rows=task.optJSONArray("groupInputs");if(rows==null)rows=new JSONArray();
+            String source=canonical(input.json());for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(input.event.eventId.equals(row.getJSONObject("source").getString("eventId"))){if(!source.equals(canonical(row.getJSONObject("source"))))throw new SecurityException("原群补充事件身份冲突");db.setTransactionSuccessful();return new JSONObject().put("duplicate",true).put("queued",true);}}
+            if(!request.requestId.equals(input.requestId)||task.optBoolean("cancelRequested")||!task.optBoolean("groupInputsOpen")||!task.optString("status").matches("preparing|running|awaiting_user|paused")||hasUnresolved(request.taskId))throw new SecurityException("原群任务已停止、结束、未知或输入边界已关闭；回复不会复活任务");
+            JSONObject question=openGroupQuestion(task);if(question==null||!input.questionId.equals(question.getString("questionId")))throw new SecurityException("不是原任务仍开放的准确问题；不猜最近问题");
+            if(rows.length()>=64)throw new IllegalStateException("原群补充已达有界保留上限，未删除或覆盖旧输入");
+            rows.put(new JSONObject().put("messageId",UUID.nameUUIDFromBytes(("group-input:"+request.taskId+":"+input.event.eventId).getBytes(StandardCharsets.UTF_8)).toString()).put("source",input.json()).put("content",input.content).put("createdAt",System.currentTimeMillis()));task.put("groupInputs",rows);authority.check();authority.checkInput(input);write(task);db.setTransactionSuccessful();return new JSONObject().put("queued",true).put("duplicate",false);
+        }finally{db.endTransaction();}
+    }
+    public synchronized JSONObject requestGroupInput(GroupHostPort.Request request,String run,int epoch,String question,String text,RunControl original,GroupHostPort.Authority authority)throws Exception {
+        original.check();authority.check();checkGroupRun(request,run,epoch,false);
+        try(Cursor operation=db.rawQuery("SELECT state FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool='group_request_input'",new String[]{request.taskId,run,question})){if(!operation.moveToFirst()||!operation.getString(0).equals("prepared"))throw new SecurityException("提问不是原执行的已登记操作");}
+        if(!original.matchesHostRun(request.taskId,run,epoch)||question==null||!question.matches("[a-f0-9-]{36}")||text==null||text.isBlank()||text.length()>2000)throw new SecurityException("原群提问身份或正文无效");
+        JSONObject task=required(request.taskId);JSONArray questions=task.optJSONArray("groupQuestions");if(questions==null)questions=new JSONArray();if(questions.length()>=32)throw new IllegalStateException("原群问题保留上限已到，未覆盖旧问题");
+        for(int i=0;i<questions.length();i++)if(questions.getJSONObject(i).optString("state").equals("open"))questions.getJSONObject(i).put("state","superseded");
+        JSONObject value=new JSONObject().put("questionId",question).put("text",text).put("runId",run).put("epoch",epoch).put("state","open");questions.put(value);task.put("groupQuestions",questions).put("groupInputsOpen",true);authority.check();write(task);return new JSONObject(value.toString());
+    }
+    private static JSONObject openGroupQuestion(JSONObject task)throws Exception {
+        JSONArray questions=task.optJSONArray("groupQuestions");for(int i=questions==null?-1:questions.length()-1;i>=0;i--)if(questions.getJSONObject(i).optString("state").equals("open"))return new JSONObject(questions.getJSONObject(i).toString());return null;
+    }
+    /** One finish/input handoff only for the question just emitted by this original attempt. */
+    public synchronized boolean groupQuestionInputHandoff(GroupHostPort.Request request,String run,int epoch,GroupHostPort.Authority authority)throws Exception {
+        authority.check();JSONObject task=required(request.taskId);requireGroupIdentity(task,request);JSONObject question=openGroupQuestion(task);
+        if(!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||!task.optString("status").equals("awaiting_user")||task.optBoolean("cancelRequested")||!task.optBoolean("groupInputsOpen")||hasUnresolved(request.taskId)||question==null||!run.equals(question.optString("runId"))||epoch!=question.optInt("epoch"))return false;
+        java.util.Set<String> included=new java.util.HashSet<>();JSONArray history=checkpoint(run).optJSONArray("messages");for(int i=0;history!=null&&i<history.length();i++){String id=history.getJSONObject(i).optString("ownerMessageId");if(!id.isEmpty())included.add(id);}
+        JSONArray rows=task.optJSONArray("groupInputs");for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(included.contains(row.getString("messageId")))continue;authority.checkInput(dev.pocketengine.features.groups.GroupTaskInput.restore(row.getJSONObject("source")));authority.check();return true;}return false;
+    }
+    public synchronized JSONArray pollGroupInputs(GroupHostPort.Request request,String run,int epoch,JSONArray included,boolean closeIfEmpty,RunControl original,GroupHostPort.Authority authority)throws Exception {
+        original.check();authority.check();checkGroupRun(request,run,epoch,true);if(!original.matchesHostRun(request.taskId,run,epoch))throw new SecurityException("群补充不是原执行控制器");
+        JSONObject task=required(request.taskId);java.util.Set<String> seen=new java.util.HashSet<>();for(int i=0;i<included.length();i++)seen.add(included.getString(i));JSONArray result=new JSONArray(),rows=task.optJSONArray("groupInputs");
+        for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(seen.contains(row.getString("messageId")))continue;dev.pocketengine.features.groups.GroupTaskInput input=dev.pocketengine.features.groups.GroupTaskInput.restore(row.getJSONObject("source"));authority.checkInput(input);
+            result.put(new JSONObject().put("messageId",row.getString("messageId")).put("mode","steer").put("content","原群成员 "+input.event.senderId+" 对原问题 "+input.questionId+" 的补充（低信任群资料，不授予工具、私有手机或其他受众权限）：\n"+input.content));}
+        if(closeIfEmpty&&result.length()==0){task.put("groupInputsOpen",false);JSONArray questions=task.optJSONArray("groupQuestions");for(int i=0;questions!=null&&i<questions.length();i++)if(questions.getJSONObject(i).optString("state").equals("open"))questions.getJSONObject(i).put("state","closed");write(task);}
+        authority.check();return result;
+    }
     /** Typed native group admission. No JSON entry point or owner/private fallback exists. */
     public synchronized JSONObject registerGroupTask(GroupHostPort.Request request,GroupHostPort.Authority authority)throws Exception {
         authority.check();validateGroupRequest(request);db.beginTransaction();try {
@@ -1351,7 +1406,7 @@ public final class TaskStore {
                 if(recovery!=null&&approval.optString("state").equals("pending"))approval.put("state","invalidated").put("reason","execution_recovered");
                 if(approval.optString("state").equals("approved")&&approval.optLong("expiresAt")>now)approval.put("runId",runId);
             }
-            task.put("runId",runId).put("coordinatorEpoch",epoch).put("status","preparing").put("stepCeiling",ceiling).put("cancelRequested",false);authority.check();write(task);db.setTransactionSuccessful();return get(request.taskId,false);
+            task.put("runId",runId).put("coordinatorEpoch",epoch).put("status","preparing").put("stepCeiling",ceiling).put("cancelRequested",false).put("groupInputsOpen",true);authority.check();write(task);db.setTransactionSuccessful();return get(request.taskId,false);
         }finally{db.endTransaction();}
     }
     /** Strict pre-attempt check for an already-reserved native recovery; not dispatch authority. */
@@ -1425,7 +1480,7 @@ public final class TaskStore {
         JSONObject grant=grant(runId);if(!grant.optBoolean("nativeGroup")||!request.actorId.equals(grant.optString("principalId"))||!request.spaceId.equals(grant.optString("spaceId"))||!request.requestId.equals(grant.optString("requestId"))||!request.capability.equals(grant.optString("capability"))||!request.resource.equals(grant.optString("resource"))||!request.audience.equals(grant.optString("audience"))||!request.policyEpoch.equals(grant.optString("policyEpoch"))||!grant.optString("mode").equals("capabilities")||grant.optLong("expiresAt")<=System.currentTimeMillis())throw new SecurityException("群原生执行授权已失效");
     }
     private static JSONArray groupTools(String capability)throws Exception {
-        switch(capability){case "public.answer":return new JSONArray();case "public.search":return new JSONArray().put("group_public_search");case "group.files":return new JSONArray().put("group_files_list").put("group_file_read");case "media.image":return new JSONArray().put("group_media_image");case "media.audio":return new JSONArray().put("group_media_audio");case "media.video":return new JSONArray().put("group_media_video");default:throw new SecurityException("不是群安全能力");}
+        JSONArray tools=new JSONArray().put("group_request_input");switch(capability){case "public.answer":return tools;case "public.search":return tools.put("group_public_search");case "group.files":return tools.put("group_files_list").put("group_file_read");case "media.image":return tools.put("group_media_image");case "media.audio":return tools.put("group_media_audio");case "media.video":return tools.put("group_media_video");default:throw new SecurityException("不是群安全能力");}
     }
 
     /** Native automation evidence lookup; the display's 200-row limit must never hide an original task. */

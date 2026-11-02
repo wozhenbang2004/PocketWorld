@@ -15,6 +15,10 @@ public interface GroupHostPort {
     default Progress inspectProgress(Request request,Authority authority)throws Exception {
         return new Progress(inspect(request,authority),"unreported",false);
     }
+    /** Revalidate original input dependencies at the physical output boundary. Never an execution grant. */
+    default void checkInputSources(Request request,Authority read)throws Exception {read.checkRead();}
+    /** Authenticated original group input, not a new task or a private owner message. */
+    default TaskReceipt input(Request request,GroupTaskInput input,Authority authority)throws Exception {throw new IllegalStateException("原群补充输入尚未挂载");}
     /** Explicit native continuation only; never read-only recovery or a second admission. */
     default TaskReceipt resume(Request request,Authority authority) throws Exception {throw new IllegalStateException("原群任务续接尚未挂载");}
     /**
@@ -36,14 +40,22 @@ public interface GroupHostPort {
         void check() throws Exception;
         /** Required for TaskStore inspection/output reads. Does not authorize execution. */
         default void checkRead() throws Exception {check();}
+        /** Verify retained contributor identity/role/epoch again immediately before consumption. */
+        default void checkInput(GroupTaskInput input)throws Exception {throw new SecurityException("原群输入来源核对尚未挂载");}
+        /** Physical delivery admission, invoked only outside channel/registry monitors. */
+        default void beforeDelivery()throws Exception {check();}
     }
 
     final class Progress {
         public final TaskReceipt task;
         public final String approvalState;
         public final boolean unresolved;
+        public final JSONObject question;
         public Progress(TaskReceipt task,String approvalState,boolean unresolved){
-            this.task=task;this.approvalState=GroupJson.one(approvalState,"审批状态","none","pending","approved","denied","expired","unreported");this.unresolved=unresolved;
+            this(task,approvalState,unresolved,null);
+        }
+        public Progress(TaskReceipt task,String approvalState,boolean unresolved,JSONObject question){
+            this.question=question;this.task=task;this.approvalState=GroupJson.one(approvalState,"审批状态","none","pending","approved","denied","expired","unreported");this.unresolved=unresolved;
         }
     }
 
@@ -99,7 +111,7 @@ public interface GroupHostPort {
                     "completed","failed","cancelled","interrupted","reconciling");
             if(summary==null||summary.length()>3000)throw new IllegalArgumentException("群任务摘要过长");
             this.taskId=taskId;this.runId=runId;this.coordinatorEpoch=coordinatorEpoch;this.revision=revision;this.summary=summary;
-            if(outputs!=null&&outputs.size()>8)throw new IllegalArgumentException("群产物数超限");
+            if(outputs!=null&&outputs.size()>72)throw new IllegalArgumentException("群产物数超限");
             this.outputs=Collections.unmodifiableList(outputs==null?new ArrayList<>():new ArrayList<>(outputs));
             java.util.HashSet<String> ids=new java.util.HashSet<>();for(Output output:this.outputs)if(output==null||!ids.add(output.outputId))throw new IllegalArgumentException("群产物身份重复");
         }

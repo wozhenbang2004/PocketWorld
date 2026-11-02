@@ -341,6 +341,11 @@ public final class ChannelsModule implements EngineModule {
                 try {GroupChannelBridge nativeGroups=groupBridge;if(nativeGroups==null||!nativeGroups.accepted(profile,id))throw new IllegalStateException("原生群任务尚未接入，未启动任务");}
                 catch(Exception blocked){core.eventStatus(id,"group_task_blocked",safe(blocked));changed("group_task_blocked",id);queueControlFeedback(id,"group_intake_unconfirmed");}return;
             }
+            if(text.startsWith("/more ")) {
+                try {String answerId=text.substring(6).trim();replies.execute(()->{try{sendAnswerPages(answerId,id,new RunControl());}catch(Exception unavailable){try{core.eventStatus(id,"answer_delivery_pending",safe(unavailable));changed("answer_delivery_pending",id);}catch(Exception ignored){}}});}
+                catch(Exception unavailable){core.eventStatus(id,"answer_delivery_pending",safe(unavailable));changed("answer_delivery_pending",id);}
+                return;
+            }
             if(text.equals("/task-status")||text.startsWith("/task-status ")) {
                 try{String requestId=text.length()>13?text.substring(13).trim():"";if(!requestId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("状态命令格式为 /task-status 来源编号");replyHostTaskStatus(id,requestId);}
                 catch(Exception blocked){core.eventStatus(id,"task_status_blocked",safe(blocked));changed("owner_task_status_blocked",id);queueControlFeedback(id,"owner_status_unavailable");}
@@ -488,18 +493,26 @@ public final class ChannelsModule implements EngineModule {
                     if(text.isEmpty()||response.optJSONArray("tool_calls")!=null)throw new IllegalStateException("模型未返回可投递的文字回答");
                     boolean remaining=ChannelMessageParts.hasUnprocessed(event.optJSONObject("messageParts"),imageProjection==null?0:imageProjection.count);
                     String inputNotice=imageProjection!=null?"处理范围：本次模型请求包含"+imageProjection.count+"张原消息的实际冻结图片；"+(remaining?"其他未支持项尚未处理。":"冻结/提供输入不代表已理解全部内容。")+"\n\n":event.optBoolean("partialInput")?"处理范围：本条文字已处理，引用仅按可用原文保留；图片、语音或其他未支持项尚未下载/解密，以下不代表已读取这些媒体。\n\n":"";
-                    if(text.length()>4000-inputNotice.length()){if(nativeStream!=null)throw new IllegalStateException("完整QQ回答超过范围；已展示片段不冒完成，未截断发送最终帧");text=text.substring(0,4000-inputNotice.length());}text=inputNotice+text;
+                    if(nativeStream!=null&&text.length()>4000-inputNotice.length())throw new IllegalStateException("完整QQ回答超过范围；已展示片段不冒完成，未截断发送最终帧");text=inputNotice+text;
                     if(!model.apiKey.isEmpty())text=text.replace(model.apiKey,"[密钥已隐藏]");
                     String credential=secret(event.getString("profileId"));if(!credential.isEmpty())text=text.replace(credential,"[凭据已隐藏]");
                     JSONObject current=core.route(event);
                     if(!current.getString("spaceId").equals(route.getString("spaceId")))throw new SecurityException("账号绑定发生变化，回答未投递");
-                    control.check();answerCurrent.check();if(nativeStream!=null){nativeStream.complete(text);core.eventStatus(eventId,"answered","QQ平台已接受同一消息的完整最终帧，不代表收件人已读");changed("stream_reply_completed",eventId);}else{JSONObject queued=core.queueReplyExpected(eventId,text,route.getString("spaceId"),route.optString("bindingEpoch"),memoryDependency);core.eventStatus(eventId,"answered","回答已保存在待发送列表");changed("reply_queued",queued.getString("id"));if(sendAfter){control.check();send(queued.getString("id"),control);}}
+                    control.check();answerCurrent.check();if(nativeStream!=null){nativeStream.complete(text);core.eventStatus(eventId,"answered","QQ平台已接受同一消息的完整最终帧，不代表收件人已读");changed("stream_reply_completed",eventId);}else{JSONObject queued=core.queueAnswerPagesExpected(eventId,text,route.getString("spaceId"),route.optString("bindingEpoch"),memoryDependency,imageProjection!=null);core.eventStatus(eventId,"answered","完整答复已保存在原待发送列表；平台受理逐段记录，不代表全文已送达。剩余续读："+queued.getString("continuation"));changed("reply_queued",queued.getString("answerId"));if(sendAfter){control.check();sendAnswerPages(queued.getString("answerId"),eventId,control);}}
                 }catch(InterruptedException cancelled){if(imageInput&&imagePrepared&&!imageResponse)try{core.ownerImageModelState(event,originalRoute,"model_result_unconfirmed");}catch(Exception ignored){}try{core.eventStatus(eventId,"cancelled","已停止生成后续回答");changed("answer_cancelled",eventId);}catch(Exception ignored){}}
                 catch(Exception failed){if(imageInput&&imagePrepared&&!imageResponse)try{core.ownerImageModelState(event,originalRoute,"model_result_unconfirmed");}catch(Exception ignored){}try{core.eventStatus(eventId,control.isCancelled()?"cancelled":"failed",safe(failed));changed("answer_failed",eventId);}catch(Exception ignored){}}
                 finally{if(nativeStream!=null)nativeStream.failed("原生成/发送流程未确认完整结束；保留同一消息回执，不补发普通消息");answering.remove(eventId,run);if(imageSelection!=null)try{imageSelection.close();}catch(Exception ignored){}try{consent.close();}catch(Exception ignored){}}
             });
         }catch(RuntimeException busy){answering.remove(eventId,run);try{consent.close();}catch(Exception ignored){}core.eventStatus(eventId,"awaiting_local","问答队列已满，请稍后重试");throw new IllegalStateException("问答队列已满，请稍后重试");}
         return new JSONObject().put("eventId",eventId).put("status","queued");
+    }
+    private void sendAnswerPages(String answerId,String eventId,RunControl control)throws Exception {
+        control.check();JSONArray pages=core.prepareAnswerPages(answerId,eventId);
+        for(int i=0;i<pages.length();i++) {
+            JSONObject page=pages.getJSONObject(i);control.check();checkMemoryDependency(page.optJSONObject("memoryDependency"));
+            send(page.getString("id"),control);if(!core.answerPartAccepted(page.getString("id")))break;
+        }
+        JSONObject progress=core.answerProgress(answerId);core.eventStatus(eventId,progress.getBoolean("completeDelivered")?"answered":"answer_delivery_pending",progress.getBoolean("completeDelivered")?"完整答复全部分段已取得投递回执或本机明确核对；不代表收件人已读":"已取得回执或本机核对 "+progress.getInt("sentParts")+"/"+progress.getInt("parts")+" 段；未确认的分段不重发。剩余续读："+progress.getString("continuation"));changed("answer_delivery_progress",answerId);
     }
     private static NativeInferenceScope answerAudience(JSONObject event,JSONObject route,RunControl control,RunControl.AuthorityCheck currentOrigin)throws Exception {
         currentOrigin.check();

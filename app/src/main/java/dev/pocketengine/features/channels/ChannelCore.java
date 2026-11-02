@@ -593,6 +593,65 @@ public final class ChannelCore {
         if(expectedBindingEpoch!=null&&!expectedBindingEpoch.equals(authority.optString("bindingEpoch")))throw new SecurityException("主人绑定代次已变化，回答未加入投递队列");
         JSONObject row=queueReplyRecord(event,text);if(memoryDependency!=null)row.put("memoryDependency",copy(memoryDependency));save();return copy(row);
     }
+    /** Freeze the full model answer in the original outbox with deterministic per-page identities. */
+    synchronized JSONObject queueAnswerPagesExpected(String eventId,String text,String expectedSpace,String expectedBindingEpoch,JSONObject memoryDependency)throws Exception {return queueAnswerPagesExpected(eventId,text,expectedSpace,expectedBindingEpoch,memoryDependency,false);}
+    synchronized JSONObject queueAnswerPagesExpected(String eventId,String text,String expectedSpace,String expectedBindingEpoch,JSONObject memoryDependency,boolean imageInput)throws Exception {
+        JSONObject event=event(eventId),route=route(event);checkAnswerOrigin(event,route);requireChat(route);
+        if(!expectedSpace.equals(route.getString("spaceId"))||!expectedBindingEpoch.equals(route.optString("bindingEpoch")))throw new SecurityException("原答复的空间或主人绑定已变化");
+        java.util.List<String> pages=ChannelTextPages.bodies(text);String hash=ChannelTextPages.sha256(text),answer=UUID.nameUUIDFromBytes(("channel-answer:"+eventId+":"+hash).getBytes(StandardCharsets.UTF_8)).toString();
+        JSONObject known=null;for(int i=0;i<array("outbox").length();i++){JSONObject row=array("outbox").getJSONObject(i);if(answer.equals(row.optJSONObject("nativeAnswer")==null?"":row.getJSONObject("nativeAnswer").optString("answerId"))){known=row;break;}}
+        if(known!=null)return answerProgress(answer);
+        if(array("outbox").length()+pages.size()>200)throw new IllegalStateException("原outbox保留空间不足；完整答复未截断或部分入队，请先核对旧投递");
+        JSONObject previous=state;state=copy(state);
+        try {
+            for(int i=0;i<pages.size();i++) {
+                String id=UUID.nameUUIDFromBytes((answer+":"+i).getBytes(StandardCharsets.UTF_8)).toString();
+                String body=ChannelTextPages.page(pages.get(i),i,pages.size(),hash,"/more "+answer);
+                JSONObject row=new JSONObject().put("id",id).put("eventId",eventId).put("profileId",event.getString("profileId")).put("text",body).put("route",copy(route)).put("sequence",0).put("status","queued").put("createdAt",System.currentTimeMillis())
+                    .put("nativeAnswerSource",copy(event)).put("nativeAnswer",new JSONObject().put("answerId",answer).put("index",i).put("count",pages.size()).put("sha256",hash).put("bodyChars",pages.get(i).length()).put("imageInput",imageInput));
+                if(memoryDependency!=null)row.put("memoryDependency",copy(memoryDependency));array("outbox").put(row);
+            }
+            save();
+        }catch(Exception failed){state=previous;throw failed;}
+        return answerProgress(answer);
+    }
+    private void checkAnswerPage(JSONObject row,JSONObject target)throws Exception {
+        if(!row.has("nativeAnswer"))return;
+        JSONObject source=row.getJSONObject("nativeAnswerSource"),originalRoute=row.getJSONObject("route");checkAnswerOrigin(source,originalRoute);if(row.getJSONObject("nativeAnswer").optBoolean("imageInput"))checkOwnerImageOrigin(source,originalRoute);
+
+        for(String key:new String[]{"profileId","kind","roomId","senderId","transportEpoch"})if(!source.getString(key).equals(target.getString(key)))throw new SecurityException("续读不能改变原答复的账号、群、发送人或连接代次");
+        if(profile(source.getString("profileId")).getString("provider").equals("qq")&&!QqConversation.same(source,target))throw new SecurityException("续读QQ场景或频道父身份不同");
+        JSONObject current=route(target);requireChat(current);
+        for(String key:new String[]{"spaceId","principalId","bindingEpoch"})if(!originalRoute.optString(key).equals(current.optString(key)))throw new SecurityException("原答复的受众或主人绑定已经失效");
+    }
+    /** A real same-route /more event renews only the passive target of never-sent pages. */
+    synchronized JSONArray prepareAnswerPages(String answerId,String targetEventId)throws Exception {
+        if(!answerId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("续读需为原答复编号");
+        JSONObject target=event(targetEventId),first=null;java.util.List<JSONObject> pages=new java.util.ArrayList<>();
+        for(int i=0;i<array("outbox").length();i++){JSONObject row=array("outbox").getJSONObject(i);if(row.optJSONObject("nativeAnswer")!=null&&answerId.equals(row.getJSONObject("nativeAnswer").optString("answerId"))){pages.add(row);if(first==null)first=row;}}
+        if(first==null)throw new SecurityException("原完整答复不存在，不能重新调用模型代替续读");
+        if(!targetEventId.equals(first.getJSONObject("nativeAnswerSource").getString("id"))&&!target.getString("text").trim().equals("/more "+answerId))throw new SecurityException("续读必须来自这条已认证的准确/more消息");
+        pages.sort(java.util.Comparator.comparingInt(row->row.optJSONObject("nativeAnswer").optInt("index")));
+        checkAnswerPage(first,target);int used=0;for(int i=0;i<array("outbox").length();i++){JSONObject row=array("outbox").getJSONObject(i);if(targetEventId.equals(row.optString("eventId"))&&row.optInt("sequence")>0)used++;}
+        int slots=profile(target.getString("profileId")).getString("provider").equals("qq")?(target.getString("kind").equals("group")?5:4)-used:4;
+        JSONArray result=new JSONArray();
+        for(JSONObject row:pages){String status=row.getString("status");if(status.equals("sent"))continue;if(!status.equals("queued"))break;if(slots--<=0)break;checkAnswerPage(row,target);row.put("eventId",targetEventId);result.put(copy(row));}
+        save();return result;
+    }
+    synchronized boolean answerPartAccepted(String id)throws Exception {JSONObject row=find("outbox","id",id);return row!=null&&row.has("nativeAnswer")&&row.optString("status").equals("sent");}
+    synchronized JSONObject answerProgress(String answer)throws Exception {
+        int count=0,sent=0,uncertain=0;String hash="";
+        for(int i=0;i<array("outbox").length();i++){JSONObject row=array("outbox").getJSONObject(i),part=row.optJSONObject("nativeAnswer");if(part==null||!answer.equals(part.optString("answerId")))continue;count++;hash=part.getString("sha256");if(row.optString("status").equals("sent"))sent++;else if(!row.optString("status").equals("queued"))uncertain++;}
+        if(count==0)throw new IllegalArgumentException("原答复不存在");return new JSONObject().put("answerId",answer).put("parts",count).put("sentParts",sent).put("unconfirmedParts",uncertain).put("remainingParts",count-sent).put("sha256",hash).put("completeDelivered",sent==count).put("continuation","/more "+answer);
+    }
+    private void numberAnswerPage(JSONObject row,JSONObject event)throws Exception {
+        if(!row.has("nativeAnswer"))return;checkAnswerPage(row,event);
+        JSONObject part=row.getJSONObject("nativeAnswer");for(int i=0;i<array("outbox").length();i++){JSONObject prior=array("outbox").getJSONObject(i),identity=prior.optJSONObject("nativeAnswer");if(identity!=null&&identity.getString("answerId").equals(part.getString("answerId"))&&identity.getInt("index")<part.getInt("index")&&!prior.optString("status").equals("sent"))throw new SecurityException("原答复前段尚未明确受理，只核对原分段，不跳过或重发");}
+        if(row.optInt("sequence")>0)return;
+        int used=0;for(int i=0;i<array("outbox").length();i++){JSONObject other=array("outbox").getJSONObject(i);if(event.getString("id").equals(other.optString("eventId"))&&other.optInt("sequence")>0)used++;}
+        if(profile(event.getString("profileId")).getString("provider").equals("qq")&&used>=(event.getString("kind").equals("group")?5:4))throw new IllegalStateException("原平台被动回复额度已满；剩余全文仍在原outbox，请发送 /more "+row.getJSONObject("nativeAnswer").getString("answerId"));
+        row.put("sequence",used+1);
+    }
     /** Original outbox receipt, not a second task/transfer store. Only the native module calls this. */
     synchronized JSONObject queueRemoteResult(JSONObject original,JSONObject scope,String text,String deliveryId)throws Exception {
         JSONObject event=event(original.getString("eventId")),route=route(event);checkRemoteInputOrigin(original,event,route);
@@ -692,7 +751,7 @@ public final class ChannelCore {
         JSONObject row=new JSONObject().put("id",UUID.randomUUID().toString()).put("eventId",eventId)
                 .put("profileId",event.getString("profileId")).put("text",text.trim()).put("route",authority)
                 .put("sequence",count+1).put("status","queued").put("createdAt",System.currentTimeMillis());
-        if(array("outbox").length()>=200){for(int i=0;i<array("outbox").length();i++){JSONObject old=array("outbox").getJSONObject(i);if(old.has("groupDeliveryId")||old.has("nativeControlCode")||old.has("nativeRemoteResult")||old.has("reviewedExternalReturn")||old.has("nativeCompletionResult"))throw new IllegalStateException("原确定性投递回执仍须保留，投递账簿已满");}}
+        if(array("outbox").length()>=200){for(int i=0;i<array("outbox").length();i++){JSONObject old=array("outbox").getJSONObject(i);if(old.has("groupDeliveryId")||old.has("nativeControlCode")||old.has("nativeRemoteResult")||old.has("reviewedExternalReturn")||old.has("nativeCompletionResult")||old.has("nativeAnswer"))throw new IllegalStateException("原确定性投递回执仍须保留，投递账簿已满");}}
         appendBounded("outbox",row,200);return row;
     }
     synchronized void queueQqStream(String id,JSONObject incoming,String epoch,String modelRequestId)throws Exception {
@@ -750,14 +809,14 @@ public final class ChannelCore {
         if(!authority.getString("spaceId").equals(row.getJSONObject("route").getString("spaceId")))throw new SecurityException("账号权限已经变化，请重新生成回复");
         checkReplyEpoch(row,authority);
         checkControlReply(row,event);
-        checkRemoteResultReply(row,event);checkCompletionReply(row);
+        checkRemoteResultReply(row,event);checkCompletionReply(row);checkAnswerPage(row,event);
         requireChat(authority);if(!profile.optBoolean("enabled"))throw new IllegalStateException("此连接已暂停");
         if(profile.getString("provider").equals("qq")) {
             long window=event.getString("kind").equals("group")?5*60*1000L:60*60*1000L;
             if(System.currentTimeMillis()-event.getLong("sentAt")>window)throw new IllegalStateException("平台被动回复窗口已过期，回复保留在本机");
         }
         if(row.has("ownerReplyMedia")&&!row.optString("mediaPhase").equals("prepared"))throw new SecurityException("原附件已开始上传/消息发送，不能重放body；只核对原编号");
-        row.put("status","sending");save();return copy(row);
+        numberAnswerPage(row,event);row.put("status","sending");save();return copy(row);
     }
     public synchronized void checkSendAuthority(String id)throws Exception {
         JSONObject row=find("outbox","id",id);if(row==null||!"sending".equals(row.optString("status")))throw new SecurityException("投递任务已结束或失效");
@@ -767,7 +826,7 @@ public final class ChannelCore {
         requireChat(authority);
         checkReplyEpoch(row,authority);
         checkControlReply(row,event);
-        checkRemoteResultReply(row,event);checkCompletionReply(row);
+        checkRemoteResultReply(row,event);checkCompletionReply(row);checkAnswerPage(row,event);
     }
     public synchronized JSONObject deliveryEvent(JSONObject row)throws Exception{if(row.has("nativeCompletionEvent"))return copy(row.getJSONObject("nativeCompletionEvent"));if(row.has("nativeQqStreamEvent"))return copy(row.getJSONObject("nativeQqStreamEvent"));if(row.has("nativeGroupEvent"))return copy(row.getJSONObject("nativeGroupEvent"));if(row.has("nativeControlEvent"))return copy(row.getJSONObject("nativeControlEvent"));if(row.has("nativeRemoteResultEvent"))return copy(row.getJSONObject("nativeRemoteResultEvent"));return row.has("taskRequestId")?copy(requiredTask(row.getString("taskRequestId")).getJSONObject("originEvent")):event(row.getString("eventId"));}
     private void checkReplyEpoch(JSONObject row,JSONObject authority)throws Exception {
@@ -794,6 +853,7 @@ public final class ChannelCore {
         JSONObject row=find("outbox","id",id);if(row==null)throw new IllegalArgumentException("待核对回复不存在");
         if(!row.optString("status").equals("unknown"))throw new IllegalStateException("只有投递结果未知的回复需要核对");
         if(row.has("nativeCompletionResult")&&outcome.equals("not_delivered"))throw new SecurityException("原完成文字可能已被平台接收，未见消息不能重放；只核对原编号，业务不重跑");
+        if(row.has("nativeAnswer")&&outcome.equals("not_delivered"))throw new SecurityException("原答复分段可能已经被平台接收，未见消息不证明未派发；只核对原分段，不重新排队或重放");
         if(row.has("nativeQqStream")&&outcome.equals("not_delivered"))throw new SecurityException("原QQ分片可能已显示，不能把未见最终回答当未派发后重开流");
         if(row.has("ownerReplyMedia")&&outcome.equals("not_delivered")&&!row.optString("mediaPhase").equals("prepared"))throw new SecurityException("附件上传/消息是否发生仍不明确，不能据未见消息就重传body；保留原编号核对");
         row.put("status",outcome.equals("delivered")?"sent":"queued")

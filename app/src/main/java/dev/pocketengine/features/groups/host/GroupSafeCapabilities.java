@@ -38,7 +38,7 @@ public final class GroupSafeCapabilities implements CapabilityPort {
     }
     @Override public JSONArray tools()throws Exception {authority.check();return new JSONArray(definitions.toString());}
     @Override public boolean supports(String name){for(int i=0;i<definitions.length();i++)if(name.equals(definitions.optJSONObject(i).optJSONObject("function").optString("name")))return true;return false;}
-    @Override public boolean sideEffecting(String name){return name.startsWith("group_media_");}
+    @Override public boolean sideEffecting(String name){return name.startsWith("group_media_")||name.equals("group_request_input");}
     @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl live)throws Exception {
         current(live);services.requireAvailable(request);JSONObject saved=journal.restore();JSONArray messages=saved.optJSONArray("messages");if(messages==null)throw new SecurityException("群任务缺少真实持久上下文");
         // Conservative resource reservations, not guessed provider billing: never reset on retries/runs.
@@ -51,14 +51,19 @@ public final class GroupSafeCapabilities implements CapabilityPort {
     @Override public boolean responseCurrent(RunControl live)throws Exception {current(live);return true;}
     @Override public void validate(String name,JSONObject args)throws Exception {
         if(!supports(name))throw new SecurityException("此群授权不包含该工具");if(args==null||args.toString().length()>16384)throw new IllegalArgumentException("群工具参数无效");
-        java.util.Set<String> allowed=name.equals("group_files_list")?java.util.Set.of():name.equals("group_file_read")?java.util.Set.of("artifactId"):name.equals("group_public_search")?java.util.Set.of("query"):java.util.Set.of("prompt");
+        java.util.Set<String> allowed=name.equals("group_files_list")?java.util.Set.of():name.equals("group_file_read")?java.util.Set.of("artifactId"):name.equals("group_public_search")?java.util.Set.of("query"):name.equals("group_request_input")?java.util.Set.of("question"):java.util.Set.of("prompt");
         java.util.Iterator<String> keys=args.keys();while(keys.hasNext())if(!allowed.contains(keys.next()))throw new SecurityException("群参数不能覆盖身份、配置、路径或执行路由");
-        if(!allowed.isEmpty()){String field=allowed.iterator().next();Object raw=args.opt(field);if(!(raw instanceof String)||((String)raw).trim().isEmpty()||((String)raw).length()>(field.equals("artifactId")?240:4000))throw new IllegalArgumentException("群工具参数缺失或过长");}
+        if(!allowed.isEmpty()){String field=allowed.iterator().next();Object raw=args.opt(field);if(!(raw instanceof String)||((String)raw).trim().isEmpty()||((String)raw).length()>(field.equals("artifactId")?240:field.equals("question")?2000:4000))throw new IllegalArgumentException("群工具参数缺失或过长");}
     }
     @Override public JSONObject execute(String name,JSONObject args,RunControl live)throws Exception {
         current(live);JSONObject clean=new JSONObject(args.toString());String operation=clean.optString("_hostOperationId");clean.remove("_hostOperationId");validate(name,clean);
         JSONObject result;
-        if(name.equals("group_public_search"))result=services.search.search(clean.getString("query"),live);
+        if(name.equals("group_request_input")) {
+            if(operation.isEmpty())throw new SecurityException("群提问必须先登记原TaskStore操作");
+            JSONObject question=tasks.requestGroupInput(request,run,epoch,operation,clean.getString("question"),live,authority);
+            result=new JSONObject().put("ok",true).put("code","needs_user").put("questionId",question.getString("questionId")).put("message","等待原群补充："+question.getString("text"));
+        }
+        else if(name.equals("group_public_search"))result=services.search.search(clean.getString("query"),live);
         else if(name.equals("group_files_list"))result=new JSONObject().put("artifacts",services.artifacts.inputs(request,authority));
         else if(name.equals("group_file_read"))result=services.artifacts.readInputText(request,clean.getString("artifactId"),authority);
         else {
@@ -80,10 +85,11 @@ public final class GroupSafeCapabilities implements CapabilityPort {
             case "media.audio":add(result,"group_media_audio","通过原生授权的媒体服务生成群音频；未知结果不重试。","prompt");break;
             case "media.video":add(result,"group_media_video","通过原生授权的媒体服务生成群视频；未接入时不可用。","prompt");break;
             default:throw new SecurityException("非群安全能力");}
+        add(result,"group_request_input","需要澄清时向原群提出一个公开问题并等待；回复只回原任务，不授予任何工具或私人权限。","question");
         return result;
     }
     private static void add(JSONArray tools,String name,String description,String field)throws Exception {
-        JSONObject properties=new JSONObject();JSONArray required=new JSONArray();if(!field.isEmpty()){properties.put(field,new JSONObject().put("type","string").put("maxLength",field.equals("artifactId")?240:4000));required.put(field);}
+        JSONObject properties=new JSONObject();JSONArray required=new JSONArray();if(!field.isEmpty()){properties.put(field,new JSONObject().put("type","string").put("maxLength",field.equals("artifactId")?240:field.equals("question")?2000:4000));required.put(field);}
         tools.put(new JSONObject().put("type","function").put("function",new JSONObject().put("name",name).put("description",description).put("parameters",new JSONObject().put("type","object").put("properties",properties).put("required",required).put("additionalProperties",false))));
     }
 }

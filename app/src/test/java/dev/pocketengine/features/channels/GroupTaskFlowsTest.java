@@ -79,6 +79,8 @@ public final class GroupTaskFlowsTest {
                 public TaskReceipt admit(Request request,Authority authority)throws Exception {TaskReceipt receipt=host.admit(request,authority);admittedRequest=request;admittedExecution=authority;return receipt;}
                 public TaskReceipt inspect(Request request,Authority authority)throws Exception{return host.inspect(request,authority);}
                 public Progress inspectProgress(Request request,Authority authority)throws Exception{return host.inspectProgress(request,authority);}
+                public void checkInputSources(Request request,Authority read)throws Exception {var core=ChannelsModule.class.getDeclaredField("core");core.setAccessible(true);assertFalse("ChannelCore monitor must never enter the original SQL source check",Thread.holdsLock(core.get(channels)));host.checkInputSources(request,read);}
+                public TaskReceipt input(Request request,dev.pocketengine.features.groups.GroupTaskInput input,Authority authority)throws Exception{return host.input(request,input,authority);}
                 public TaskReceipt resume(Request request,Authority authority)throws Exception{return host.resume(request,authority);}
                 public TaskReceipt recover(Request request,String run,int epoch,long revision,Authority authority)throws Exception{return host.recover(request,run,epoch,revision,authority);}
                 public TaskReceipt cancel(Request request,String run,int epoch,Authority authority)throws Exception{return host.cancel(request,run,epoch,authority);}

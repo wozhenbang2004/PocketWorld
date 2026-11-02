@@ -77,6 +77,18 @@ public final class GroupsModule implements EngineModule {
             if(receipt==null)registry.unknown(request.requestId);return registry.receipt(request.requestId,receipt);
         } catch(Exception failure) {registry.unknown(request.requestId);throw failure;}
     }
+    /** Exact question/request references are derived from the immutable authenticated message. */
+    public JSONObject receiveInput(String eventId)throws Exception {
+        open();requireHost();GroupIngressPort.Event event=authenticate(eventId);GroupTaskInput.Command command=GroupTaskInput.parse(event.text);
+        String epoch=registry.contributor(command.request,event,null,clock.getAsLong());GroupTaskInput input=new GroupTaskInput(event,epoch);GroupHostPort.Request request=registry.request(input.requestId);
+        GroupHostPort.Authority authority=executionAuthority(request);authority.checkInput(input);GroupHostPort.TaskReceipt receipt=host.input(request,input,authority);authority.checkRead();validate(request,receipt);return registry.receipt(request.requestId,receipt);
+    }
+    private void checkInput(GroupHostPort.Request request,GroupTaskInput input)throws Exception {
+        checkRequest(request,false);if(!request.requestId.equals(input.requestId))throw new SecurityException("补充不是此原群请求");
+        GroupIngressPort.Event event=authenticate(input.event.eventId);
+        if(!GroupJson.canonical(event.json()).equals(GroupJson.canonical(input.event.json())))throw new SecurityException("原群补充事件发生变化");
+        registry.contributor(request.requestId,event,input.memberEpoch,clock.getAsLong());
+    }
     /** Native authenticated ingress only. It returns original scope identity, never a task grant. */
     public JSONObject authenticatedScope(String eventId) throws Exception {
         GroupIngressPort.Event event=authenticate(eventId);JSONObject result=registry.authenticatedScope(event,clock.getAsLong());ingress.check(event);return result;
@@ -141,10 +153,22 @@ public final class GroupsModule implements EngineModule {
         String key=query?"query:"+target.eventId:feedbackKind(progress);
         if(query||!key.isEmpty())result.put("feedback",feedback(request,target,key,progressText(request,progress),query));
         JSONArray sent=new JSONArray();
+        if(actual.status.equals("awaiting_user")&&!progress.unresolved&&progress.question!=null&&request.audience.equals("group")) {
+            JSONObject question=progress.question;String questionId=question.getString("questionId");
+            String body=question.getString("text")+"\n补充此原问题：/reply "+requestId+" "+questionId+" 你的补充\n群回复不批准工具或私人手机权限。";
+            GroupHostPort.Output output=new GroupHostPort.Output(questionId,request.spaceId,request.audience,"text/plain","",body,body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+            GroupHostPort.Authority send=deliveryAuthority(request,target,true);send.check();
+            if(delivery!=null&&delivery.remainingReplies(target,send)>0)sent.put(deliver(request,registry.prepareQuestion(requestId,output,target,clock.getAsLong()),target));
+            else result.put("waitingNewReplyContext",true);
+        }
+
         if(actual.status.equals("completed")&&!progress.unresolved)for(GroupHostPort.Output output:actual.outputs){
+            JSONObject known=registry.outputDelivery(requestId,output.outputId);
+            if(known!=null){String state=known.optString("state");if(state.matches("accepted|delivered"))continue;if(!state.equals("prepared")){result.put("deliveryNeedsReconciliation",true);break;}}
             GroupHostPort.Authority budget=deliveryAuthority(request,target,false);budget.checkRead();
             if(delivery==null||clock.getAsLong()>target.replyUntil||delivery.remainingReplies(target,budget)<1){result.put("waitingNewReplyContext",true);break;}
-            sent.put(sendOutput(request,output.outputId,target,reader));
+            JSONObject part=sendOutput(request,output.outputId,target,reader);sent.put(part);
+            if(!part.optString("state").matches("accepted|delivered")){result.put("deliveryNeedsReconciliation",true);break;}
         }
         read.checkRead();return result.put("deliveries",sent);
     }
@@ -160,6 +184,7 @@ public final class GroupsModule implements EngineModule {
     }
     private static String feedbackKind(GroupHostPort.Progress value){
         if(value.unresolved)return "unknown";
+        if(value.question!=null&&value.task.status.equals("awaiting_user"))return "";
         if(value.task.status.equals("completed"))return "";
         if(value.task.status.matches("cancelled|failed"))return value.task.status;
         if(value.approvalState.equals("pending"))return "approval";
@@ -209,7 +234,7 @@ public final class GroupsModule implements EngineModule {
         if(!value.newlyPrepared||!registry.beginDelivery(value.deliveryId))return inspectDelivery(value.deliveryId);
         GroupHostPort.Authority send=deliveryAuthority(request,value.event,true,reader);
         try {
-            send.check();GroupDeliveryPort.Receipt result=delivery.send(value,send);send.check();
+            send.beforeDelivery();GroupDeliveryPort.Receipt result=delivery.send(value,send);send.check();
             if(result==null)registry.deliveryUnknown(value.deliveryId);return registry.deliveryReceipt(value.deliveryId,result);
         } catch(Exception failure) {registry.deliveryUnknown(value.deliveryId);throw failure;}
     }
@@ -311,6 +336,7 @@ public final class GroupsModule implements EngineModule {
         return new GroupHostPort.Authority() {
             @Override public void check() {throw new SecurityException("主人恢复查询不授权任何新任务执行");}
             @Override public void checkRead() throws Exception {ownerCheck();}
+            @Override public void checkInput(GroupTaskInput input)throws Exception {ownerCheck();} // Native audit only; check() still rejects every dispatch.
         };
     }
     private JSONObject cancel(String requestId,String runId,int epoch,GroupHostPort.Authority control) throws Exception {
@@ -346,12 +372,14 @@ public final class GroupsModule implements EngineModule {
         return new GroupHostPort.Authority() {
             @Override public void check() throws Exception {checkExecutionRequest(request,generation);}
             @Override public void checkRead() throws Exception {checkRequest(request,false);}
+            @Override public void checkInput(GroupTaskInput input)throws Exception {GroupsModule.this.checkInput(request,input);}
         };
     }
     private GroupHostPort.Authority readAuthority(GroupHostPort.Request request,GroupIngressPort.Event reader) {
         return new GroupHostPort.Authority() {
             @Override public void check() {throw new SecurityException("任务详情读取不授权任何新任务执行");}
             @Override public void checkRead() throws Exception {checkRequest(request,false);if(reader!=null)checkReader(request.requestId,reader);}
+            @Override public void checkInput(GroupTaskInput input)throws Exception {GroupsModule.this.checkInput(request,input);}
         };
     }
     private GroupHostPort.Authority deliveryAuthority(GroupHostPort.Request request,boolean sending) {
@@ -367,6 +395,11 @@ public final class GroupsModule implements EngineModule {
                 if(sending&&clock.getAsLong()>target.replyUntil)throw new SecurityException("平台回复窗口已过期，请在原群用新/status消息查询原任务");
             }
             @Override public void checkRead() throws Exception {check();}
+            @Override public void beforeDelivery()throws Exception {
+                // ChannelCore invokes check() while holding its monitor. The original
+                // SQL source check stays at the physical bridge boundary, outside it.
+                check();host.checkInputSources(request,readAuthority(request,reader));check();
+            }
         };
     }
     private void checkReader(String requestId,GroupIngressPort.Event event) throws Exception {

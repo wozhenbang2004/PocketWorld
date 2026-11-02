@@ -6,6 +6,7 @@ import org.json.JSONObject;
 public interface GroupDeliveryPort {
     boolean supports(String provider,String accountId,String audience,String mimeType) throws Exception;
     default boolean supports(GroupIngressPort.Event event,String audience,String mimeType)throws Exception{return supports(event.provider,event.accountId,audience,mimeType);}
+    /** Call authority.beforeDelivery at physical dispatch outside all channel/registry monitors. */
     Receipt send(Delivery delivery,GroupHostPort.Authority authority) throws Exception;
     /** Query only, including a null receipt. No automatic retransmit after an unknown send. */
     Receipt inspect(Delivery delivery,GroupHostPort.Authority authority) throws Exception;

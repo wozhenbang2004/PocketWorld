@@ -71,7 +71,18 @@ public final class GroupTaskHost implements GroupHostPort,AutoCloseable {
         }
         boolean unresolved=false;JSONArray operations=task.optJSONArray("operations");
         for(int i=0;operations!=null&&i<operations.length();i++)if(operations.getJSONObject(i).optString("state").matches("prepared|unknown|remote_job_prepared|remote_job_sending|remote_job_unknown|remote_approval_sending|remote_approval_unknown"))unresolved=true;
-        TaskReceipt actual=receipt(request,task,authority);authority.checkRead();return new Progress(actual,approval,unresolved);
+        TaskReceipt actual=receipt(request,task,authority);authority.checkRead();JSONObject question=null;JSONArray questions=task.optJSONArray("groupQuestions");for(int i=questions==null?-1:questions.length()-1;i>=0;i--)if(questions.getJSONObject(i).optString("state").equals("open")){question=new JSONObject(questions.getJSONObject(i).toString());break;}return new Progress(actual,approval,unresolved,question);
+    }
+    @Override public void checkInputSources(Request request,Authority read)throws Exception {open();tasks.checkGroupInputSources(request,read);}
+    @Override public synchronized TaskReceipt input(Request request,dev.pocketengine.features.groups.GroupTaskInput input,Authority authority)throws Exception {
+        open();authority.check();authority.checkInput(input);JSONObject queued=tasks.queueGroupInput(request,input,authority);changed.accept(request.taskId);
+        if(!queued.optBoolean("duplicate")&&!controls.containsKey(request.taskId)) {
+            JSONObject task=tasks.groupTask(request,authority);
+            // Only this original open question may continue an ordinary waiting task. Paused,
+            // cancelled, interrupted and unknown tasks remain owner-reviewed recovery paths.
+            if(task.optString("status").equals("awaiting_user"))resume(request,authority);
+        }
+        return inspect(request,authority);
     }
     @Override public TaskReceipt resume(Request request,Authority authority)throws Exception {
         open();authority.check();JSONObject existing=tasks.groupTask(request,authority);if(existing==null)throw new SecurityException("原群任务尚未知，只能查询，不能再次准入");
@@ -114,7 +125,7 @@ public final class GroupTaskHost implements GroupHostPort,AutoCloseable {
         schedule(request,authority,config,fresh,null);
     }
     private void schedule(Request request,Authority authority,ModelConfig config,boolean fresh,Recovery recovery)throws Exception {
-        RunControl control=new RunControl();control.bindTask(request.taskId);control.setAuthorityCheck(()->{open();authority.check();
+        RunControl control=new RunControl();control.bindTask(request.taskId);control.setAuthorityCheck(()->{open();authority.check();tasks.checkGroupInputSources(request,authority);
             if(recovery!=null&&!control.hasHostRun())tasks.checkGroupRecoveryAdmission(request,control,recovery.run,recovery.epoch,recovery.revision);
             else tasks.checkGroupTaskControl(request,control);
         });
@@ -149,7 +160,7 @@ public final class GroupTaskHost implements GroupHostPort,AutoCloseable {
                 projected.getJSONObject(0).put("content",initialMessages(request).getJSONObject(0).getString("content"));
                 live.check();return dev.pocketengine.features.channels.ChannelGroupInputs.project(request,services.artifacts,selected,projected,authority,live);
             };
-            RunOutcome outcome=new AgentRunner(null,safe,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),groupProjection,null).run(request.taskId,request.goal,config.withStepCeiling(attempt.getInt("stepCeiling")),control,
+            RunOutcome outcome=new AgentRunner(null,safe,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),groupProjection,(included,boundary,closeIfEmpty,original)->tasks.pollGroupInputs(request,run,epoch,included,closeIfEmpty,original,authority)).run(request.taskId,request.goal,config.withStepCeiling(attempt.getInt("stepCeiling")),control,
                     event->{try{tasks.event(request.taskId,run,epoch,event.put("runId",run).put("coordinatorEpoch",epoch));changed.accept(request.taskId);}catch(Exception failed){error.accept("群任务步骤未能持久保存");control.cancel();}},journal);
             String status=outcome.status;
             // Pure public answers/read-only queries have no external effect to ask the phone owner to verify.
@@ -157,7 +168,16 @@ public final class GroupTaskHost implements GroupHostPort,AutoCloseable {
             tasks.endAttempt(request.taskId,run,status,outcome.summary,outcome.evidence);
         } catch(Exception failed){settle(request,attempt,control);}
         finally {
-            controls.remove(request.taskId,control);active.remove(request.taskId);changed.accept(request.taskId);
+            synchronized(this){
+                controls.remove(request.taskId,control);active.remove(request.taskId);
+                // input() uses this same short lock. A reply accepted after the Runner's
+                // waiting event cannot fall between the last poll and controller removal.
+                // Only the just-emitted question can hand off; failed/paused/recovered or
+                // unknown attempts never enter an automatic recovery loop.
+                if(!closed)try{if(tasks.groupQuestionInputHandoff(request,run,epoch,authority))resume(request,authority);}
+                catch(Exception blocked){error.accept("原群补充仍保留；本次原问题续接未建立，请主人核对，未扩大权限或自动重试");}
+            }
+            changed.accept(request.taskId);
             try{TaskReceipt actual=inspect(request,authority);ResultSink sink=results;if(actual!=null&&sink!=null)sink.completed(request,actual);}
             catch(Exception unavailable){error.accept("群原任务结果已保留，投递或授权核对未完成；未重新执行");}
         }
@@ -170,17 +190,20 @@ public final class GroupTaskHost implements GroupHostPort,AutoCloseable {
     private TaskReceipt receipt(Request request,JSONObject task,Authority authority)throws Exception {
         if(task==null)throw new IllegalStateException("原群任务尚未知");authority.checkRead();List<Output> outputs=new ArrayList<>();
         if(task.getString("status").equals("completed")){
-            JSONObject evidence=task.optJSONObject("evidence");String answer=evidence==null?"":evidence.optString("modelSummary");if(answer.isEmpty())answer=task.optString("summary");
-            if(!answer.trim().isEmpty())outputs.add(new Output(uuid(request.taskId+":answer"),request.spaceId,request.audience,"text/plain","",bounded(answer,4000),bounded(answer,4000).getBytes(StandardCharsets.UTF_8).length));
+            String answer=tasks.groupFinalAnswer(request,authority);
+            if(!answer.trim().isEmpty()) {
+                java.util.List<String> parts=dev.pocketengine.features.channels.ChannelTextPages.bodies(answer);String hash=dev.pocketengine.features.channels.ChannelTextPages.sha256(answer);
+                for(int i=0;i<parts.size();i++){String text=dev.pocketengine.features.channels.ChannelTextPages.page(parts.get(i),i,parts.size(),hash,"/status "+request.requestId);outputs.add(new Output(uuid(parts.size()==1?request.taskId+":answer":request.taskId+":answer:"+hash+":"+i),request.spaceId,request.audience,"text/plain","",text,text.getBytes(StandardCharsets.UTF_8).length));}
+            }
         }
         // Actual scoped bytes remain inspectable while result verification is pending. A model
         // summary above is exposed only after completion; preview does not authorize delivery.
         {
             JSONArray operations=task.optJSONArray("operations");
-            for(int i=0;operations!=null&&i<operations.length()&&outputs.size()<8;i++){
+            int mediaCount=0;for(int i=0;operations!=null&&i<operations.length()&&mediaCount<8;i++){
                 JSONObject operation=operations.getJSONObject(i),real=operation.optJSONObject("receipt");if(!operation.optString("state").equals("receipt")||real==null)continue;
-                JSONArray refs=real.optJSONArray("groupArtifacts");for(int j=0;refs!=null&&j<refs.length()&&outputs.size()<8;j++){
-                    JSONObject ref=refs.getJSONObject(j);outputs.add(services.artifacts.output(request,ref.getString("artifactId"),authority));
+                JSONArray refs=real.optJSONArray("groupArtifacts");for(int j=0;refs!=null&&j<refs.length()&&mediaCount<8;j++){
+                    JSONObject ref=refs.getJSONObject(j);outputs.add(services.artifacts.output(request,ref.getString("artifactId"),authority));mediaCount++;
                 }
             }
         }
@@ -237,7 +260,7 @@ public final class GroupTaskHost implements GroupHostPort,AutoCloseable {
     }
 
     private static String uuid(String seed){return UUID.nameUUIDFromBytes(seed.getBytes(StandardCharsets.UTF_8)).toString();}
-    private static String bounded(String value,int max){return value.length()>max?value.substring(0,max):value;}
+    private static String bounded(String value,int max){if(value.length()<=max)return value;String notice="…（摘要；完整答复请按原编号分段查看）";int end=max-notice.length();if(end>0&&Character.isHighSurrogate(value.charAt(end-1))&&Character.isLowSurrogate(value.charAt(end)))end--;return value.substring(0,end)+notice;}
     private void open(){if(closed)throw new IllegalStateException("群任务宿主已关闭");}
     @Override public void close(){closed=true;bindings.clear();for(String id:active){RunControl control=controls.get(id);if(control!=null)control.cancel();}}
 }
