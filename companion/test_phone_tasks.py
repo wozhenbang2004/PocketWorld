@@ -77,7 +77,11 @@ class PhoneDispatchTests(unittest.IsolatedAsyncioTestCase):
             return True
         f = self.fixture
         now = self.manager.now()
-        if request.method == "task.get":
+        if request.method == "device.describe":
+            signed = f.coordinator.issue_grant_receipt(f.b,"grant-1",now)
+            payload = dict(protocolVersion=wire.VERSION,protocolProfile=wire.PROFILE,messageType="DeviceDescription",deviceId=f.b.device_id,
+                           instanceId=f.b.instance_id,capturedAt=now,validUntil=now+30000,capabilities=[{"id":"phone","version":"1.0"}],grantReceipts=[signed],metadata={"platform":"android"},executionAuthorized=False)
+        elif request.method == "task.get":
             payload = dict(protocolVersion=wire.VERSION,protocolProfile=wire.PROFILE,messageType="TaskSnapshot", taskId="actual-phone-task",executorDeviceId=f.b.device_id,
                            instanceId=f.b.instance_id,state="running",revision=2,eventCursor="0",updatedAt=now,runId="actual-phone-run",executorEpoch=2,result={"summary":"fixture result read, never cached"})
         else:
@@ -136,6 +140,14 @@ class PhoneDispatchTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PermissionError):
             await self.router.execute("run", dict(self.params, operationId="after-revocation"))
         self.assertEqual(1, sum(request.method == "task.submitGoal" for request in self.sent))
+
+    async def test_discovery_verifies_current_signed_receipts_without_task_execution(self):
+        self.db.execute("DELETE FROM device_outgoing_grants");self.db.commit()
+        result=await self.router.execute("doctor",{"peerDeviceId":self.fixture.b.device_id})
+        self.assertFalse(result["description"]["executionAuthorized"])
+        self.assertFalse(result["modelInferenceVerified"])
+        self.assertIsNotNone(self.service.receiver.trust.outgoing_grant(self.fixture.b.device_id,"grant-1"))
+        self.assertEqual(["device.describe"],[item.method for item in self.sent])
 
 
 class LocalSurfaceTests(unittest.TestCase):

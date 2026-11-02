@@ -226,6 +226,19 @@ class PhoneTaskRouter:
             response = await self._exchange(connection, peer, ticket, ticket.envelope)
             if response["messageType"] == "DeviceError":
                 raise PhoneTaskError("Selected paired phone denied discovery", 403)
+            description = response["result"]
+            if not description["capturedAt"] <= self.manager.now() < description["validUntil"]:
+                raise PhoneTaskError("Native paired description expired; no grant was imported", 403)
+            # Signed receiving-owner grants update the SAME native pairing cache.
+            # Description/connection metadata alone never becomes execution permission.
+            try:
+                for receipt in description["grantReceipts"]:
+                    if self.manager.now() < receipt["body"]["grant"]["expiresAt"]:
+                        self.service.receiver.pairing.accept_outgoing_grant(peer, receipt, self.manager.now())
+                    else:
+                        self.service.receiver.pairing.accept_history_grant_receipt(peer, receipt, self.manager.now())
+            except Exception:
+                raise PhoneTaskError("Receiving-owner signed grant receipt could not be verified", 403)
             return {"description": response["result"], "modelInferenceVerified": False, "phoneConfirmationLocalOnly": True,
                     "ordinaryAnswerAvailable": False, "steerAvailable": False}
         if action == "run":

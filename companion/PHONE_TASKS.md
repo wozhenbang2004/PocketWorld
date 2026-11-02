@@ -43,7 +43,10 @@ capability is a URL fragment removed by the page immediately. The browser never
 receives the Companion token or any phone credential. Host, Origin, bearer session
 capability, JSON bounds and fixed phone identity are checked on each action.
 The Desk retains a goal draft in the current page and displays original IDs before
-submitting. It makes no automatic mutation or polling retries.
+submitting. Check connection reads the selected phone's current signed scope
+receipts and lets the owner choose an exact existing scope; backend pairing and
+grant validation still run before submission. It makes no automatic mutation or
+polling retries.
 
 `mcp` runs a newline-framed stdio MCP server. The Desk also serves `/mcp` with an
 independent local session bearer, `Accept: application/json, text/event-stream`,

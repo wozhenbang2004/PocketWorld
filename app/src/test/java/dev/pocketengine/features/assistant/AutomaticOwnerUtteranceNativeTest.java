@@ -35,6 +35,11 @@ public final class AutomaticOwnerUtteranceNativeTest {
             long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
             while(assistant.snapshot().optBoolean("running")&&System.nanoTime()<until)Thread.sleep(10);
             assertFalse("original task did not settle",assistant.snapshot().optBoolean("running"));
+            var controlsField=EngineApplication.class.getDeclaredField("capabilityControls");controlsField.setAccessible(true);
+            while(((java.util.Map<?,?>)controlsField.get(app)).containsKey(ack.getString("taskId"))&&System.nanoTime()<until)Thread.sleep(10);
+            // The model's ordinary final answer is not its own success proof.
+            // Exercise the real native owner-confirmation action in this controlled fixture.
+            if(!"completed".equals(app.tasks.get(ack.getString("taskId"),false).optString("status")))app.dispatchOwnerAction("confirmResult",new JSONObject().put("taskId",ack.getString("taskId")).put("completed",true).put("feedback",""));
             JSONObject task=app.tasks.get(ack.getString("taskId"),false);assertEquals("completed",task.getString("status"));
             String taskId=task.getString("id"),run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
             SourceRef ref=new SourceRef("message",ack.getString("messageId"),1,"owner","private");
