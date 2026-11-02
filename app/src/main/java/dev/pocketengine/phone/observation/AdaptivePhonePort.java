@@ -72,7 +72,7 @@ public final class AdaptivePhonePort implements PhonePort {
     /** All side effects enter from the existing CapabilityPort's original prepared operation. */
     public JSONObject nativeExtension(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         PhoneExtensionTools.validate(tool,args);String blocked=authority(control);if(blocked!=null)return failure(blocked,"原手机任务控制已变化。");
-        boolean write=PhoneExtensionTools.writes(tool),opening=tool.equals("phone_launch_app_copy")||tool.equals("phone_practice_target"),listing=tool.equals("phone_list_app_copies");
+        boolean write=PhoneExtensionTools.writes(tool),opening=tool.equals("phone_launch_app_copy")||tool.equals("phone_practice_target")||tool.equals("phone_app_after_task"),listing=tool.equals("phone_list_app_copies");
         synchronized(this){if(reconciliationRequired||safetyPause!=null)return failure(reconciliationRequired?"reconciliation_required":safetyPause,"先核对原操作和权限。");
             if(tool.equals("phone_practice_result"))return practice==null?failure("practice_not_started","请先由主人启动本次自有测试页。"):practice.result();
             if(!opening&&!listing&&!current(args.optString("observationId"),control))return failure("stale_observation","扩展工具需要当前原观察。");
@@ -257,7 +257,7 @@ public final class AdaptivePhonePort implements PhonePort {
         latestBinding=scope.observation(observed.getString("observationId"),revision);
         observed.put("observationBinding",bindingJson(latestBinding)).put("observationDecision",new JSONObject()
                 .put("request","nodes").put("reason","read_only_condition").put("adequacy","not_asserted"));
-        latest=new JSONObject(observed.toString());return observed;
+        latest=new JSONObject(observed.toString());if(practice!=null)practice.observation(observed);return observed;
         }
     }
 
@@ -378,6 +378,7 @@ public final class AdaptivePhonePort implements PhonePort {
         }
         if (result == null) result = new JSONObject().put("ok", false).put("error", "action_unknown")
                 .put("accepted", JSONObject.NULL).put("verified", false).put("message", "操作没有确定回执，请由主人核对。");
+        if(practice!=null)practice.action(tool,result);
         if (!"phone_list_apps".equals(tool)) {
             clearReferences();
             String code = result.optString("error", result.optString("code"));

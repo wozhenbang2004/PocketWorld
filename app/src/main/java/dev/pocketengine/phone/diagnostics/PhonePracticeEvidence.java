@@ -12,7 +12,7 @@ public final class PhonePracticeEvidence {
     private final String packageName;private final int display;private final Map<String,String> checks=new LinkedHashMap<>();
     private Integer initialClicks,lastTick;private Set<String> initialRows;private boolean seenTarget,backRequested;private long initialTickAt;
     public PhonePracticeEvidence(String packageName,int display){this.packageName=packageName;this.display=display;for(String id:new String[]{"helper","display","tree","frame","click","ascii_input","chinese_input","scroll","back","live_updates","main_screen_isolation","ime_isolation"})checks.put(id,"unknown");}
-    public synchronized void action(String name,JSONObject receipt){if("phone_back".equals(name)&&Boolean.TRUE.equals(receipt.opt("accepted")))backRequested=true;}
+    public synchronized void action(String name,JSONObject receipt){if("phone_back".equals(name)&&Boolean.TRUE.equals(receipt.opt("accepted")))backRequested=true;JSONObject landing=receipt.optJSONObject("displayLanding");if(landing!=null&&"owned_display_observed".equals(landing.optString("status")))checks.put("main_screen_isolation","passed");}
     public synchronized void observation(JSONObject actual)throws Exception {
         if(actual==null||!actual.optBoolean("ok"))return;
         if(actual.optInt("displayId",-1)!=display)return;

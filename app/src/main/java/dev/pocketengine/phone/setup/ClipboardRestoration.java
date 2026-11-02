@@ -27,7 +27,7 @@ public final class ClipboardRestoration {
                 control.check();clipboard.install(replacement);entered=true;
                 if(!clipboard.fingerprint(replacement).equals(clipboard.fingerprint(clipboard.snapshot())))return refusal("clipboard_write_unverified");
                 control.check();if(control.isPaused())throw new SecurityException("clipboard_original_run_paused");accepted=action.run();
-            }finally{restored=recoverLocked();}
+            }finally{try{restored=recoverLocked();}catch(Exception unavailable){restored=false;}}
             return new JSONObject().put("ok",accepted).put("accepted",accepted).put("verified",false).put("clipboardRestored",restored)
                     .put("clipboardRecoveryPending",!restored).put("mechanism","owner_allowed_same_field_paste");
         }catch(InterruptedException stopped){throw stopped;}

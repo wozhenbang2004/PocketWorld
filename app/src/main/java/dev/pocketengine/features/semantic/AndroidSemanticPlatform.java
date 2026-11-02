@@ -95,6 +95,9 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
         } catch(PackageManager.NameNotFoundException|SecurityException unavailable) {return null;}
     }
     static Intent intent(SemanticRequest request) throws Exception {
+        if(request.kind.equals("share_text")){JSONObject p=request.parameters();return new Intent(Intent.ACTION_SEND).setType("text/plain").setPackage(p.getString("packageName")).putExtra(Intent.EXTRA_TEXT,p.getString("text"));}
+        if(request.kind.equals("show_alarms"))return new Intent(AlarmClock.ACTION_SHOW_ALARMS);
+        if(request.kind.equals("app_link"))return new Intent(Intent.ACTION_VIEW,Uri.parse(request.data)).setPackage(request.parameters().getString("packageName"));
         if(request.clock()) {
             JSONObject p=request.parameters();Intent intent=new Intent(request.kind.equals("alarm")?AlarmClock.ACTION_SET_ALARM:AlarmClock.ACTION_SET_TIMER)
                     .putExtra(AlarmClock.EXTRA_SKIP_UI,false);
@@ -136,7 +139,7 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
     }
     @Override public JSONObject resourceIdentity() throws Exception {
         if(service==null||PhoneAccessibilityService.get()!=service)throw new SecurityException("未绑定主屏手机服务");
-        return new JSONObject().put("executionMode","main_screen").put("displayId",Display.DEFAULT_DISPLAY).put("serviceSessionId",service.observationSessionId());
+        return new JSONObject().put("executionMode","main_screen").put("displayId",Display.DEFAULT_DISPLAY).put("serviceSessionId",service.observationSessionId()).put("appPolicyRevision",new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context).current().revision());
     }
     @Override public JSONObject dispatch(SemanticRequest request,Target target,RunControl control,Admission admission) throws Exception {
         if(Looper.myLooper()==Looper.getMainLooper())return notDispatched("worker_required",false);
@@ -155,9 +158,9 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
                     ActivityOptions options=ActivityOptions.makeBasic();options.setLaunchDisplayId(Display.DEFAULT_DISPLAY);
                     // This is the actual call boundary, after all queued work. The closure retains
                     // the original TaskStore operation, control, service identity and package snapshot.
-                    requireService(control);admission.check();invalidatePhoneReferences.run();requireService(control);
+                    requireService(control);admission.check();requireAppAccess(target);invalidatePhoneReferences.run();requireService(control);
                     control.dispatchAtPauseRevision(admittedPauseRevision,()->{
-                        requireClockContext(request,target);
+                        requireClockContext(request,target);requireAppAccess(target);
                         if(!gate.enter()) {receipt.set(notDispatched("semantic_queue_cancelled",false));return;}
                         service.startActivity(selected,options.toBundle());
                         receipt.set(new JSONObject().put("accepted",true).put("status","launch_requested"));
@@ -182,6 +185,7 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
         if(gate.cancelBeforeEntry())return notDispatched("semantic_queue_cancelled",true);
         JSONObject actual=receipt.get();return actual==null?new JSONObject().put("accepted",JSONObject.NULL).put("status","unknown"):actual;
     }
+    private void requireAppAccess(Target target)throws Exception {int user=dev.pocketengine.phone.setup.AndroidAppCopies.id(android.os.Process.myUserHandle());new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context).current().require(Set.of(new dev.pocketengine.phone.access.AppCopyKey(target.identity().getString("packageName"),user)),true,dev.pocketengine.phone.access.PhoneAccessPolicy.Use.AUTOMATION);}
     private static JSONObject notDispatched(String code,boolean pause) throws Exception {return new JSONObject().put("accepted",false).put("code",code).put("requiresPause",pause);}
     private static void setReceipt(AtomicReference<JSONObject> receipt,String code,boolean pause) {try{receipt.set(notDispatched(code,pause));}catch(Exception ignored){}}
     private static void setUnknown(AtomicReference<JSONObject> receipt) {try{receipt.set(new JSONObject().put("accepted",JSONObject.NULL).put("status","unknown"));}catch(Exception ignored){}}

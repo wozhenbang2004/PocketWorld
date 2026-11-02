@@ -7,13 +7,14 @@ import org.json.JSONObject;
 
 /** Closed argument contracts; no raw Intent, shell, clipboard read or arbitrary key event. */
 public final class PhoneExtensionTools {
-    public static final Set<String> NAMES=Set.of("phone_list_app_copies","phone_launch_app_copy","phone_clear_text","phone_paste_text","phone_gesture","phone_dialog","phone_event","phone_set_wheel","phone_practice_target","phone_practice_result");
+    public static final Set<String> NAMES=Set.of("phone_list_app_copies","phone_launch_app_copy","phone_clear_text","phone_paste_text","phone_gesture","phone_dialog","phone_event","phone_set_wheel","phone_practice_target","phone_practice_result","phone_app_after_task");
     private PhoneExtensionTools() { }
     public static boolean writes(String name){return !Set.of("phone_list_app_copies","phone_dialog","phone_event","phone_practice_result").contains(name);}
     public static void validate(String name,JSONObject p)throws Exception {
         if(!NAMES.contains(name))throw new IllegalArgumentException("phone_extension_unknown");
         switch(name){
             case "phone_list_app_copies","phone_practice_result":keys(p);break;
+            case "phone_app_after_task":keys(p,"packageName","userId","action");new dev.pocketengine.phone.access.AppCopyKey(text(p,"packageName",250),integer(p,"userId",0,99999));if(!Set.of("keep","close").contains(text(p,"action",10)))throw new IllegalArgumentException("after_task_action_invalid");break;
             case "phone_practice_target":keys(p,"packageName","userId");text(p,"packageName",250);integer(p,"userId",0,99999);break;
             case "phone_launch_app_copy":keys(p,"copyRef","packageName","userId");text(p,"copyRef",100);new dev.pocketengine.phone.access.AppCopyKey(text(p,"packageName",250),integer(p,"userId",0,99999));break;
             case "phone_clear_text":keys(p,"observationId","nodeId");reference(p);break;
@@ -36,7 +37,8 @@ public final class PhoneExtensionTools {
         JSONObject pair=new JSONObject().put("type","array").put("minItems",2).put("maxItems",2).put("items",number(0,1000));JSONObject path=new JSONObject().put("type","array").put("minItems",2).put("maxItems",24).put("items",pair);
         add(out,"phone_gesture","一至两指同步路径，只用当前真实图片的0..1000坐标。原display/帧/任务准入不变，取消会发送原触摸序列CANCEL。",new JSONObject().put("observationId",string(100)).put("paths",new JSONObject().put("type","array").put("minItems",1).put("maxItems",2).put("items",path)).put("durationMs",number(100,2000)),"observationId","paths","durationMs");
         add(out,"phone_practice_target","在本任务原显示打开PocketWorld自有演练页，不修改第三方数据；packageName/userId由原生主人入口固定。随后用原手机工具验证计数、中英文、滚动和返回。",new JSONObject().put("packageName",string(250)).put("userId",number(0,99999)),"packageName","userId");
-        add(out,"phone_practice_result","读取本原任务本次实际观察形成的逐项演练证据；未观察到的检查保持unknown，不把按钮返回true当业务完成。",new JSONObject());return out;
+        add(out,"phone_practice_result","读取本原任务本次实际观察形成的逐项演练证据；未观察到的检查保持unknown，不把按钮返回true当业务完成。",new JSONObject());
+        add(out,"phone_app_after_task","记录原任务结束后的App去向目标keep或close，当前不关闭或迁移。最终必须实际任务归属核验与cleanup回执，recorded不代表已保留播放或已关闭。",new JSONObject().put("packageName",string(250)).put("userId",number(0,99999)).put("action",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"keep","close"}))),"packageName","userId","action");return out;
     }
     private static void add(JSONArray out,String name,String description,JSONObject properties,String...required)throws Exception {out.put(new JSONObject().put("type","function").put("function",new JSONObject().put("name",name).put("description",description).put("parameters",new JSONObject().put("type","object").put("properties",properties).put("required",new JSONArray(required)).put("additionalProperties",false))));}
     private static JSONObject string(int max)throws Exception{return new JSONObject().put("type","string").put("maxLength",max);}

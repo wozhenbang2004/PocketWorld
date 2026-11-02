@@ -1,0 +1,27 @@
+package dev.pocketengine.phone;
+
+import dev.pocketengine.phone.access.AppCopyKey;
+import dev.pocketengine.phone.setup.*;
+import dev.pocketengine.features.semantic.SemanticRequest;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public final class PhoneSetupLifecycleTest {
+    @Test public void oldNotificationCannotConsumeOrCancelCurrentPairingSession()throws Exception {AtomicLong clock=new AtomicLong(100);PairingEntrySession session=new PairingEntrySession(clock::get);var old=session.begin("127.0.0.1",12345);var fresh=session.begin("127.0.0.1",23456);assertThrows(SecurityException.class,()->session.submit(old.id(),"123456"));assertTrue(session.snapshot().getBoolean("active"));JSONObject request=session.submit(fresh.id(),"482911");assertEquals(23456,request.getInt("pairingPort"));assertFalse(session.snapshot().getBoolean("active"));assertThrows(SecurityException.class,()->session.submit(fresh.id(),"482911"));assertFalse(session.snapshot().toString().contains("482911"));}
+    @Test public void pairingExpiryAndCancelNeverSubmitCode()throws Exception {AtomicLong clock=new AtomicLong(0);PairingEntrySession session=new PairingEntrySession(clock::get);var entry=session.begin("127.0.0.1",11111);String expired=entry.id();clock.set(120000);assertThrows(SecurityException.class,()->session.submit(expired,"123456"));var next=session.begin("127.0.0.1",22222);String id=next.id();session.cancel();assertThrows(SecurityException.class,()->session.submit(id,"123456"));}
+    private static final class AudioFixture implements PhoneAudioRecovery.Store,PhoneAudioRecovery.Audio {
+        String durable="";Map<AppCopyKey,String> modes=new HashMap<>();boolean failRestore,failSave;int writes;
+        public String read(){return durable;}public void write(String value){if(failSave)throw new IllegalStateException();durable=value;}
+        public String read(AppCopyKey app){return modes.getOrDefault(app,"allow");}public void write(AppCopyKey app,String mode){writes++;if(failRestore&&!mode.equals("ignore"))throw new IllegalStateException();modes.put(app,mode);}
+    }
+    @Test public void audioMutationRequiresOwnerPolicyAndDurableOriginal()throws Exception {AudioFixture io=new AudioFixture();AppCopyKey app=new AppCopyKey("example.music",0);PhoneAudioRecovery recovery=new PhoneAudioRecovery(io,io);recovery.silence("run",app,false);assertEquals(0,io.writes);io.failSave=true;assertThrows(IllegalStateException.class,()->recovery.silence("run",app,true));assertEquals(0,io.writes);}
+    @Test public void coldAudioRecoveryRetainsFailedRowsAndDoesNotTouchOtherProfiles()throws Exception {AudioFixture io=new AudioFixture();AppCopyKey main=new AppCopyKey("example.music",0),work=new AppCopyKey("example.music",10);PhoneAudioRecovery first=new PhoneAudioRecovery(io,io);first.silence("a",main,true);first.silence("b",work,true);io.failRestore=true;assertEquals(1,new PhoneAudioRecovery(io,io).restoreOwner("a").getInt("pending"));io.failRestore=false;PhoneAudioRecovery cold=new PhoneAudioRecovery(io,io);assertEquals(1,cold.restoreOwner("a").getInt("restored"));assertEquals("allow",io.read(main));assertEquals("ignore",io.read(work));}
+    @Test public void audioOwnerChangesAreNeverOverwrittenByRecoveryOrResilencing()throws Exception {AudioFixture io=new AudioFixture();AppCopyKey app=new AppCopyKey("example.music",0);PhoneAudioRecovery recovery=new PhoneAudioRecovery(io,io);recovery.silence("a",app,true);io.modes.put(app,"deny");int writes=io.writes;assertEquals("audio_changed_by_owner",recovery.silence("a",app,true).getString("outcome"));recovery.restoreOwner("a");assertEquals("deny",io.read(app));assertEquals(writes,io.writes);}
+    @Test public void afterTaskKeepIsAPlanNotAnAppliedClaim()throws Exception {PhoneAfterTaskPlan plan=new PhoneAfterTaskPlan();plan.mark(new AppCopyKey("example.music",10),"keep");JSONObject actual=new JSONObject().put("status","observed").put("owned",new JSONArray().put(new JSONObject().put("packageName","example.music").put("userId",10).put("displayId",7).put("taskId",42)));JSONObject prepared=plan.prepare(actual,7);assertFalse(prepared.getBoolean("applied"));assertEquals(42,prepared.getJSONArray("tasks").getJSONObject(0).getInt("taskId"));actual.getJSONArray("owned").getJSONObject(0).remove("userId");assertEquals("partial",plan.prepare(actual,7).getString("status"));assertEquals(0,plan.prepare(actual,7).getJSONArray("tasks").length());}
+    @Test public void typedLinksRejectRawIntentAndShareDoesNotClaimSent()throws Exception {for(String scheme:new String[]{"intent","file","content","javascript","data"}){JSONObject p=new JSONObject().put("kind","app_link").put("packageName","example.notes").put("url",scheme+":abc");assertThrows(IllegalArgumentException.class,()->SemanticRequest.parse(p));}SemanticRequest request=SemanticRequest.parse(new JSONObject().put("kind","share_text").put("packageName","example.notes").put("text","中文文本"));assertEquals("share_page_only_not_message_sent",request.followup());SemanticRequest.parse(new JSONObject().put("kind","show_alarms"));}
+}

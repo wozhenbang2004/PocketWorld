@@ -31,6 +31,16 @@ public final class SemanticRequest {
             case "map_search":
                 SemanticJson.keys(p,Set.of("kind","query"));String query=SemanticJson.text(p,"query",500,false);
                 action="android.intent.action.VIEW";data="geo:0,0?q="+encode(query);break;
+            case "app_link": {
+                SemanticJson.keys(p,Set.of("kind","url","packageName"));String url=SemanticJson.text(p,"url",2048,false),pkg=SemanticJson.text(p,"packageName",250,false);URI uri=new URI(url);String scheme=uri.getScheme();
+                if(!pkg.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")||scheme==null||!scheme.matches("[a-z][a-z0-9+.-]{0,40}")||Set.of("intent","file","content","javascript","data","android-app").contains(scheme)||uri.getRawUserInfo()!=null||url.matches("(?s).*[\\p{Cntrl}\\s\\\\].*"))throw new IllegalArgumentException("App链接需要明确包名与安全公开scheme，不接受任意Intent");
+                action="android.intent.action.VIEW";data=uri.toASCIIString();p.put("url",data);break;
+            }
+            case "share_text": {
+                SemanticJson.keys(p,Set.of("kind","packageName","text"));String pkg=SemanticJson.text(p,"packageName",250,false);if(!pkg.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+"))throw new IllegalArgumentException("分享需要准确包名");SemanticJson.text(p,"text",10000,false);action="android.intent.action.SEND";data="";break;
+            }
+            case "show_alarms":
+                SemanticJson.keys(p,Set.of("kind"));action="android.intent.action.SHOW_ALARMS";data="";break;
             case "dial":
                 SemanticJson.keys(p,Set.of("kind","number"));String number=SemanticJson.text(p,"number",32,false);
                 // No USSD/MMI, pause/wait, extension, fragment or automatic CALL entry point.
@@ -95,10 +105,11 @@ public final class SemanticRequest {
     public JSONObject parameters() throws Exception { return SemanticJson.copy(parameters); }
     public String digest() throws Exception { return SemanticJson.hash(parameters); }
     public String followup() {
-        return switch(kind) { case "web"->"phone_observe_or_authorized_browser_dom";case "dial","email_draft","calendar_draft"->"owner_completes_in_target_app";case "alarm","timer"->"owner_verifies_clock_in_target_app";default->"phone_observe"; };
+        return switch(kind) { case "web"->"phone_observe_or_authorized_browser_dom";case "share_text"->"share_page_only_not_message_sent";case "app_link"->"observe_actual_target_and_verify_effect";case "dial","email_draft","calendar_draft"->"owner_completes_in_target_app";case "alarm","timer"->"owner_verifies_clock_in_target_app";default->"phone_observe"; };
     }
     static JSONObject discoverySchema() throws Exception {
-        JSONObject p=new JSONObject().put("kind",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"web","map_search","dial","email_draft","calendar_draft","alarm","timer"})));
+        JSONObject p=new JSONObject().put("kind",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"web","app_link","share_text","show_alarms","map_search","dial","email_draft","calendar_draft","alarm","timer"})));
+        p.put("packageName",new JSONObject().put("type","string").put("maxLength",250)).put("text",new JSONObject().put("type","string").put("maxLength",10000));
         for(String key:new String[]{"url","query","number","to","subject","body"})
             p.put(key,new JSONObject().put("type","string").put("maxLength",key.equals("body")?4000:key.equals("url")?2048:key.equals("query")?500:key.equals("number")?32:key.equals("to")?254:200));
         for(String key:new String[]{"title","timeZone","location","description"})
