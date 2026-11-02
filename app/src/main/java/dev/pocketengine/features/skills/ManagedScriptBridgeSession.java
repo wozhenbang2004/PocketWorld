@@ -15,7 +15,7 @@ public final class ManagedScriptBridgeSession implements AutoCloseable {
     private final String token;private final Phone phone;private final Current current;private final Outputs outputs;private final Set<String> allowed;
     private final LinkedHashMap<String,String> answers=new LinkedHashMap<>(),requests=new LinkedHashMap<>();private boolean closed,unknown;private int phoneCalls;
     public ManagedScriptBridgeSession(String token,Phone phone,Current current,Outputs outputs){if(token==null||!token.matches("[A-Za-z0-9_-]{40,100}"))throw new IllegalArgumentException("bridge_token_invalid");this.token=token;this.phone=phone;this.current=java.util.Objects.requireNonNull(current);this.outputs=java.util.Objects.requireNonNull(outputs);allowed=phone==null?Set.of():Set.copyOf(phone.allowedTools());for(String tool:allowed)if(!tool.matches("phone_[a-z_]{1,60}"))throw new IllegalArgumentException("bridge_phone_tool_invalid");}
-    public JSONArray allowedTools(){return new JSONArray(allowed.stream().sorted().toList());}
+    public JSONArray allowedTools(){return new JSONArray(new java.util.TreeSet<>(allowed));}
     /** The synchronized section intentionally serializes every native phone request. */
     public synchronized JSONObject handle(String wire)throws Exception{
         if(closed)throw new SecurityException("bridge_closed");current.check();if(wire==null||wire.length()>16384)throw new SecurityException("bridge_request_too_large");
