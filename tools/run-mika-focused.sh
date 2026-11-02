@@ -5,6 +5,12 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 native_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pocketworld-mika-native.XXXXXX")"
 trap 'rm -rf -- "$native_dir"' EXIT
 mkdir -p "$native_dir/current" "$native_dir/unavailable"
+python3 -m venv "$native_dir/python"
+"$native_dir/python/bin/python" -m pip install --disable-pip-version-check -r companion/requirements-device-identity.txt
+(cd companion && "$native_dir/python/bin/python" -m unittest -v \
+  test_device_protocol.DeviceProtocolTests test_phone_tasks.PhoneDispatchTests \
+  test_phone_tasks.LocalSurfaceTests test_phone_tasks.UsbOwnershipTests)
+node --check companion/phone_task_desk.js
 sources=app/src/main/java/dev/pocketengine/features/local/runtime/native
 g++ -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
   -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
