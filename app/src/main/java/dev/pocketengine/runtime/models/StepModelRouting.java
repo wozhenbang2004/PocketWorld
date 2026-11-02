@@ -21,9 +21,13 @@ public final class StepModelRouting {
         private int successfulReads,mainTurns;private long pause;private String place="";private boolean usingLight;
         private Session(ModelConfig main,ModelConfig light,RunControl control){this.main=main;this.light=light;this.control=control;pause=control.pauseRevision();}
         public ModelConfig pick(int round,JSONObject latest,long pauseRevision){
+            return pick(round,latest,pauseRevision,true);
+        }
+        /** The original Runner may require MAIN at a native budget/terminal-only boundary. */
+        public ModelConfig pick(int round,JSONObject latest,long pauseRevision,boolean allowLight){
             String current=place(latest);boolean same=!current.isEmpty()&&current.equals(place);
             if(pauseRevision!=pause||!same){successfulReads=0;mainTurns=Math.max(mainTurns,1);}pause=pauseRevision;place=current;
-            usingLight=light!=null&&!control.isCancelled()&&round>0&&successfulReads>=2&&same&&mainTurns==0;
+            usingLight=allowLight&&light!=null&&!control.isCancelled()&&round>0&&successfulReads>=2&&same&&mainTurns==0;
             if(mainTurns>0)mainTurns--;return usingLight?light:main;
         }
         /** Called before an answer/tool enters history. A rejected light response has zero tool dispatch. */
