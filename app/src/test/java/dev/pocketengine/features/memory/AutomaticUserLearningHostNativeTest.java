@@ -13,6 +13,7 @@ import dev.pocketengine.runtime.usage.InferenceReceipt;
 import dev.pocketengine.store.SecretVault;
 import dev.pocketengine.store.SettingsStore;
 import dev.pocketengine.store.TaskStore;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONArray;
@@ -46,14 +47,13 @@ public final class AutomaticUserLearningHostNativeTest {
             android.deleteDatabase("pocket-world.db");tasks=new TaskStore(android);var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);db=(SQLiteDatabase)field.get(tasks);
             assistant=new AssistantModule(context,null,null,tasks);memory=new MemoryModule(context,(identity,kind,id)->assistant.resolveSource(identity,id));skills=new SkillsModule(context);
             source=new SourceRef("message",UUID.randomUUID().toString(),1,"owner","private");
-            tasks.conversationRepository().transaction(()->{tasks.conversationRepository().saveConversation(new JSONObject().put("conversationId",conversation).put("title","真实原话测试").put("messages",new JSONArray()));tasks.conversationRepository().saveSource(source.toJson().put("conversationId",conversation).put("role","user").put("deleted",false));tasks.conversationRepository().saveMessage(conversation,new JSONObject().put("id",source.sourceId).put("revision",source.revision).put("role","user").put("content",WORDS));return null;});
+            tasks.conversationRepository().transaction(()->{tasks.conversationRepository().saveConversation(new JSONObject().put("conversationId",conversation).put("title","真实原话测试").put("messages",new JSONArray()));return null;});JSONObject ownerMessage=nativeUserMessage(source,WORDS);
             sourceTask=tasks.createCapabilityTask(WORDS,conversation).getString("id");JSONObject attempt=tasks.startAttempt(sourceTask,"capabilities",4);sourceRun=attempt.getString("runId");sourceEpoch=attempt.getInt("coordinatorEpoch");RunControl sourceControl=new RunControl();sourceControl.bindHostRun(sourceTask,sourceRun,sourceEpoch);
             tasks.openOwnerInputMailbox(sourceTask,sourceRun,sourceEpoch,conversation,sourceControl);
-            tasks.appendOwnerGoalInput(sourceTask,sourceRun,sourceEpoch,conversation,new JSONObject().put("id",source.sourceId).put("clientMessageId",UUID.randomUUID().toString()).put("revision",source.revision).put("content",WORDS),"queue",sourceControl);
+            tasks.appendOwnerGoalInput(sourceTask,sourceRun,sourceEpoch,conversation,ownerMessage,"queue",sourceControl);
             JSONArray adopted=new JSONArray().put(new JSONObject().put("role","user").put("content",WORDS).put("ownerMessageId",source.sourceId).put("ownerMessageRevision",source.revision));
             for(int i=1;i<sourceCount;i++){SourceRef extra=new SourceRef("message",UUID.randomUUID().toString(),1,"owner","private");String words=WORDS+" 原话"+i;
-                tasks.conversationRepository().transaction(()->{tasks.conversationRepository().saveSource(extra.toJson().put("conversationId",conversation).put("role","user").put("deleted",false));tasks.conversationRepository().saveMessage(conversation,new JSONObject().put("id",extra.sourceId).put("revision",extra.revision).put("role","user").put("content",words));return null;});
-                tasks.appendOwnerInput(sourceTask,sourceRun,sourceEpoch,conversation,new JSONObject().put("id",extra.sourceId).put("clientMessageId",UUID.randomUUID().toString()).put("revision",extra.revision).put("content",words),"queue",sourceControl);
+                tasks.appendOwnerInput(sourceTask,sourceRun,sourceEpoch,conversation,nativeUserMessage(extra,words),"queue",sourceControl);
                 adopted.put(new JSONObject().put("role","user").put("content",words).put("ownerMessageId",extra.sourceId).put("ownerMessageRevision",extra.revision).put("ownerInputMode","queue"));
             }
             if(sourceCount>1)tasks.pollOwnerInputs(sourceTask,sourceRun,sourceEpoch,new JSONArray(),true,false,sourceControl);
@@ -61,6 +61,14 @@ public final class AutomaticUserLearningHostNativeTest {
             tasks.endAttempt(sourceTask,sourceRun,"completed","native owner confirmed fixture",new JSONObject());
             fence=new MemoryHostFence(){public void check(){}public JSONObject admit(Admission action)throws Exception{return action.run();}};
             host=new AutomaticUserLearningHost(tasks,memory,assistant,(id,revision)->{admissions++;learningTask=id;if(startOnAdmission){original=new RunControl();JSONObject job=tasks.sourceLearningJob(id).getJSONObject("job"),learningAttempt=tasks.startUnstartedAutomaticUserLearningJob(id,revision,original,job.getJSONArray("inputs").length());learningRun=learningAttempt.getString("runId");learningEpoch=learningAttempt.getInt("coordinatorEpoch");actuallyStarted.add(id);return new JSONObject().put("admitted",true).put("originalQueued",false);}return new JSONObject().put("admitted",false).put("originalQueued",true).put("reason","controlled_original_host_busy");});
+        }
+        /** Native fixture for sendNative's pre-ACK message/source rows. The ORIGINAL queue
+         * still verifies client/body/version/fingerprint/ACK and claims/materializes each row. */
+        JSONObject nativeUserMessage(SourceRef ref,String words)throws Exception{
+            String client=UUID.randomUUID().toString();byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest((words+'\0'+"queue").getBytes(StandardCharsets.UTF_8));StringBuilder fingerprint=new StringBuilder();for(byte value:digest)fingerprint.append(String.format(java.util.Locale.ROOT,"%02x",value&255));
+            JSONObject ack=new JSONObject().put("status","unconfirmed").put("messageId",ref.sourceId).put("clientMessageId",client).put("conversationId",conversation).put("mode","queue").put("reconciliationRequired",true);
+            JSONObject message=new JSONObject().put("id",ref.sourceId).put("revision",ref.revision).put("role","user").put("content",words).put("clientMessageId",client).put("requestFingerprint",fingerprint.toString()).put("inputMode","queue").put("attachments",new JSONArray()).put("submission",new JSONObject(ack.toString()));
+            tasks.conversationRepository().transaction(()->{tasks.conversationRepository().saveSource(ref.toJson().put("conversationId",conversation).put("role","user").put("deleted",false).put("clientMessageId",client).put("requestFingerprint",fingerprint.toString()).put("submission",ack));tasks.conversationRepository().saveMessage(conversation,message);return null;});return message;
         }
         void enable()throws Exception{memory.setAutomaticLearningPolicyForOwner(memory.automaticLearningPolicy().getLong("revision"),true,3);}
         void enable(int maximum)throws Exception{memory.setAutomaticLearningPolicyForOwner(memory.automaticLearningPolicy().getLong("revision"),true,maximum);}
@@ -81,9 +89,9 @@ public final class AutomaticUserLearningHostNativeTest {
         int jobCount()throws Exception{return tasks.listSourceLearningJobs("",20).getJSONArray("jobs").length();}
         String anotherSuccessfulTask()throws Exception{
             SourceRef extra=new SourceRef("message",UUID.randomUUID().toString(),1,"owner","private");String words=WORDS+" 另一个真实任务";
-            tasks.conversationRepository().transaction(()->{tasks.conversationRepository().saveSource(extra.toJson().put("conversationId",conversation).put("role","user").put("deleted",false));tasks.conversationRepository().saveMessage(conversation,new JSONObject().put("id",extra.sourceId).put("revision",extra.revision).put("role","user").put("content",words));return null;});
+            JSONObject message=nativeUserMessage(extra,words);
             String id=tasks.createCapabilityTask(words,conversation).getString("id");JSONObject attempt=tasks.startAttempt(id,"capabilities",3);String run=attempt.getString("runId");int epoch=attempt.getInt("coordinatorEpoch");RunControl nativeOwner=new RunControl();nativeOwner.bindHostRun(id,run,epoch);tasks.openOwnerInputMailbox(id,run,epoch,conversation,nativeOwner);
-            tasks.appendOwnerGoalInput(id,run,epoch,conversation,new JSONObject().put("id",extra.sourceId).put("clientMessageId",UUID.randomUUID().toString()).put("revision",1).put("content",words),"queue",nativeOwner);
+            tasks.appendOwnerGoalInput(id,run,epoch,conversation,message,"queue",nativeOwner);
             tasks.journal(id,run,epoch,nativeOwner).checkpoint(new JSONArray().put(new JSONObject().put("role","user").put("content",words).put("ownerMessageId",extra.sourceId).put("ownerMessageRevision",1)),0,new JSONObject());tasks.endAttempt(id,run,"completed","native owner confirmed second fixture",new JSONObject());return id;
         }
         /** Deterministic metadata order only; original task/run/source/grant documents are untouched. */
@@ -109,7 +117,7 @@ public final class AutomaticUserLearningHostNativeTest {
         // This is an explicit owner action, never the automatic admission callback.
         f.startOriginalJob();assertTrue(f.original.matchesHostRun(id,f.learningRun,f.learningEpoch));assertEquals("running",f.tasks.sourceLearningJob(id).getString("taskStatus"));assertEquals(0,f.modelSends);
     }}
-    @Test public void fiveActuallyAdoptedUserRowsFinishTheOwnerApprovedOriginalWindowWithoutAutomaticResume()throws Exception{try(Fixture f=new Fixture(5)){f.enable(5);JSONObject registered=f.register();assertEquals(5,registered.getInt("selectedUserSources"));f.startOriginalJob();assertEquals(5,f.tasks.sourceLearningJob(f.learningTask).getJSONObject("job").getInt("attemptMaxBatches"));assertEquals("all_batches_settled",f.runOriginalJob().getString("invocationOutcome"));assertEquals(5,f.modelSends);assertEquals(5,f.tasks.sourceLearningJob(f.learningTask).getJSONObject("job").getInt("nextIndex"));assertEquals(1,f.admissions);f.host.onOriginalIdle(f.fence);assertEquals(1,f.admissions);assertEquals(5,f.modelSends);assertEquals(0,f.memory.handle("list",new JSONObject().put("scope",scope())).getJSONArray("records").length());}}
+    @Test public void fiveActuallyAdoptedUserRowsFinishTheOwnerApprovedOriginalWindowWithoutAutomaticResume()throws Exception{try(Fixture f=new Fixture(5)){JSONArray adopted=f.tasks.get(f.sourceTask,false).getJSONArray("ownerInputs");assertEquals(5,adopted.length());for(int i=0;i<adopted.length();i++){JSONObject row=adopted.getJSONObject(i),state=f.tasks.conversationRepository().source(row.getString("messageId")),message=f.tasks.conversationRepository().message(f.conversation,row.getString("messageId"));assertEquals("materialized",row.getString("queueState"));assertEquals(row.getString("clientMessageId"),state.getString("clientMessageId"));assertEquals(row.getString("ownerRequestFingerprint"),state.getString("requestFingerprint"));assertEquals(row.getString("content"),message.getString("content"));}f.enable(5);JSONObject registered=f.register();assertEquals(5,registered.getInt("selectedUserSources"));f.startOriginalJob();assertEquals(5,f.tasks.sourceLearningJob(f.learningTask).getJSONObject("job").getInt("attemptMaxBatches"));assertEquals("all_batches_settled",f.runOriginalJob().getString("invocationOutcome"));assertEquals(5,f.modelSends);assertEquals(5,f.tasks.sourceLearningJob(f.learningTask).getJSONObject("job").getInt("nextIndex"));assertEquals(1,f.admissions);f.host.onOriginalIdle(f.fence);assertEquals(1,f.admissions);assertEquals(5,f.modelSends);assertEquals(0,f.memory.handle("list",new JSONObject().put("scope",scope())).getJSONArray("records").length());}}
     @Test public void originalMetadataPagesReachQueuedJobAfterMoreThanFortyStartedHistories()throws Exception{try(Fixture f=new Fixture()){f.enable();String queued=f.register().getString("taskId");f.metadataIndex(queued,1);f.addStartedHistory(44);f.startOnAdmission=true;f.host.beginOriginalIdleScan();int pages=0;JSONObject result;
         do{result=f.host.onOriginalIdle(f.fence);pages++;assertTrue("native metadata scan did not terminate",pages<=3);}while(result.optBoolean("hasMoreNativeMetadata"));
         assertEquals(3,pages);assertTrue(result.getBoolean("admitted"));assertTrue(result.getBoolean("originalMetadataPageRetained"));assertEquals(java.util.List.of(queued),f.actuallyStarted);assertEquals(0,f.modelSends);

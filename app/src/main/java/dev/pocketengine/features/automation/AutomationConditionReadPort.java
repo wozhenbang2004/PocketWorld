@@ -28,10 +28,18 @@ public final class AutomationConditionReadPort implements CapabilityPort {
     }
     @Override public boolean supports(String name){return !closed&&TOOL.equals(name);}
     @Override public boolean sideEffecting(String name){return false;}
+    @Override public boolean requiresOperation(String name){return supports(name);}
     @Override public void validate(String name,JSONObject args)throws Exception{if(!supports(name)||args==null||args.length()!=0)throw new SecurityException("条件读取不接受模型指定URL、身份、预算或参数");}
     @Override public boolean responseCurrent(RunControl supplied)throws Exception{current(supplied);return true;}
     @Override public JSONObject execute(String name,JSONObject args,RunControl supplied)throws Exception{
-        validate(name,args);current(supplied);synchronized(this){if(entered)throw new SecurityException("本次原条件已进入一次GET，不重试未知读取");entered=true;}
+        // validate() rejects this field in every model call. Only the original Runner adds it
+        // after its same grant/budget created the operation, which is verified before any GET.
+        validate(name,new JSONObject());current(supplied);
+        if(args==null||args.length()!=1||!(args.opt("_hostOperationId") instanceof String)||!args.getString("_hostOperationId").matches("[a-f0-9-]{36}"))throw new SecurityException("条件读取缺少原Runner已登记操作");
+        JSONArray operations=tasks.get(task,false).getJSONArray("operations");
+        if(operations.length()!=1)throw new SecurityException("条件读取不是原唯一已登记操作");JSONObject operation=operations.getJSONObject(0);
+        if(!args.getString("_hostOperationId").equals(operation.optString("operationId"))||!run.equals(operation.optString("runId"))||!TOOL.equals(operation.optString("tool"))||!"prepared".equals(operation.optString("state"))||operation.getJSONObject("arguments").length()!=0)throw new SecurityException("条件读取的原操作身份或状态已变化");
+        current(supplied);synchronized(this){if(entered)throw new SecurityException("本次原条件已进入一次GET，不重试未知读取");entered=true;}
         PublicConditionObservation actual=reader.read(new JSONObject(request).getJSONObject("readArguments"),original,()->current(original));
         current(original);tasks.recordAutomationConditionObservation(task,run,epoch,original,actual);return actual.receipt();
     }
