@@ -320,7 +320,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
             NativeProcessSupervisor.Exit exit=job.terminalInput==null?supervisor.execute(command,environment,directory,timeoutMillis,500,observer,offline):supervisor.executePty(command,environment,directory,timeoutMillis,500,terminal.getInt("terminalRows"),terminal.getInt("terminalColumns"),observer);
             groupAbsent=exit.groupAbsent&&(job.terminalInput==null||exit.sessionAbsent);finalStatus=!groupAbsent?"unknown":exit.exitCode==0&&exit.launchErrno==0&&!exit.cancelled&&!exit.timedOut?"completed":"failed";
             synchronized(job) {
-                job.receipt.put("networkMode",offline?"kernel_offline":"possible_same_uid").put("networkEnforcement",offline&&exit.launchErrno==0?"seccomp_inherited_ip_socket_deny":"not_confirmed").put("localUnixIpcAllowed",true).put("osSandbox",false).put("processLaunched",exit.launchErrno==0).put("processExited",exit.exitCode>=0||exit.signal>0)
+                job.receipt.put("networkMode",offline?"kernel_offline":"possible_same_uid").put("networkEnforcement",offline&&exit.launchErrno==0?"seccomp_inherited_ip_socket_deny":"not_confirmed").put("localUnixIpcAllowed",true).put("networkEnforcementScope","original_process_lineage_new_sockets_only").put("callbackDeviceNetworkIsolated",false).put("osSandbox",false).put("processLaunched",exit.launchErrno==0).put("processExited",exit.exitCode>=0||exit.signal>0)
                         .put("exitCode",exit.exitCode).put("terminationSignal",exit.signal)
                         .put("launchErrno",exit.launchErrno).put("cancelRequested",job.cancel||exit.cancelled)
                         .put("timedOut",exit.timedOut).put("processGroupAbsent",exit.groupAbsent)
