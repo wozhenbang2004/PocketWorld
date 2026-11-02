@@ -24,6 +24,7 @@ import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 import org.robolectric.annotation.LooperMode;
+import org.robolectric.shadows.ShadowApplication;
 import static org.junit.Assert.*;
 
 /** Local fictitious auth only. No browser login, user grant or inference. */
@@ -33,7 +34,7 @@ import static org.junit.Assert.*;
 public final class ChatGptSignInServiceTest {
     /** Keep the real final Application type without starting unrelated application resources. */
     @Implements(value=EngineApplication.class,isInAndroidSdk=false)
-    public static final class StartupShadow {
+    public static final class StartupShadow extends ShadowApplication {
         @Implementation public void onCreate(){}
     }
     private FeatureHost fixtureHost;
