@@ -20,7 +20,7 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
 public final class AutomaticOwnerUtteranceNativeTest {
-    @org.junit.Before public void nativeKeyFixture(){java.security.Security.addProvider(new java.security.Provider("AutomaticLearningFixtureKeys","1","Test-only AndroidKeyStore provider"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    @org.junit.Before public void nativeKeyFixture(){java.security.Security.addProvider(new java.security.Provider("AutomaticLearningFixtureKeys",1.0d,"Test-only AndroidKeyStore provider"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     @org.junit.After public void removeNativeKeyFixture(){java.security.Security.removeProvider("AutomaticLearningFixtureKeys");}
     @Test public void automaticReaderRequiresActuallyAdoptedCurrentUserRevision()throws Exception{
         EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();

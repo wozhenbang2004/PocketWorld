@@ -27,7 +27,7 @@ import static org.junit.Assert.*;
 @Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class OwnerQuestionRunnerNativeTest {
-    @org.junit.Before public void nativeKeyFixture(){java.security.Security.addProvider(new java.security.Provider("OwnerQuestionFixtureKeys","1","Test-only AndroidKeyStore provider"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    @org.junit.Before public void nativeKeyFixture(){java.security.Security.addProvider(new java.security.Provider("OwnerQuestionFixtureKeys",1.0d,"Test-only AndroidKeyStore provider"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     @org.junit.After public void removeNativeKeyFixture(){java.security.Security.removeProvider("OwnerQuestionFixtureKeys");}
     private static final class Fixture implements AutoCloseable {
         final EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();final AssistantModule assistant=(AssistantModule)app.features.module("assistant");
