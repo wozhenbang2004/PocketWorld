@@ -35,7 +35,10 @@ final class IsolatedWebProbe implements CompatibilityCheckRunner.Probe {
         try{return result.get(12000,TimeUnit.MILLISECONDS);}finally{close();}
     }
     public void close()throws Exception{
-        closed.set(true);CompletableFuture<Void> disposed=new CompletableFuture<>();Runnable release=()->{WebView owned=web;web=null;if(owned!=null){owned.stopLoading();owned.setWebViewClient(new WebViewClient());owned.removeAllViews();owned.destroy();}disposed.complete(null);};
+        closed.set(true);CompletableFuture<Void> disposed=new CompletableFuture<>();Runnable release=()->{WebView owned=web;web=null;
+            try{if(owned!=null)try{owned.stopLoading();}finally{try{owned.setWebViewClient(new WebViewClient());}finally{try{owned.removeAllViews();}finally{owned.destroy();}}}disposed.complete(null);}
+            catch(Exception cleanup){disposed.completeExceptionally(cleanup);}
+        };
         if(Looper.myLooper()==Looper.getMainLooper())release.run();else main.post(release);disposed.get(2000,TimeUnit.MILLISECONDS);
     }
 }
