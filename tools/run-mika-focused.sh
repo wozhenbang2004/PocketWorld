@@ -42,15 +42,25 @@ if ! compgen -G 'app/build/test-results/testDebugUnitTest/TEST-*.xml' >/dev/null
   printf '%s\n' 'Focused tests produced no XML evidence.' >&2
   exit 1
 fi
+main_evidence_status=0
+python3 tools/check-mika-test-evidence.py --phase main \
+  --results-dir app/build/test-results/testDebugUnitTest \
+  --output app/build/test-results/testDebugUnitTest/mika-evidence-main.json || main_evidence_status=$?
 cp -R app/build/reports/tests/testDebugUnitTest "$native_dir/main-reports"
 cp -R app/build/test-results/testDebugUnitTest "$native_dir/main-results"
 unavailable_status=0
 LD_LIBRARY_PATH="$native_dir/unavailable${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   ./gradlew "${gradle_args[@]}" --tests dev.pocketengine.features.local.runtime.NativeOfflineUnavailableTest || unavailable_status=$?
+negative_evidence_status=0
+python3 tools/check-mika-test-evidence.py --phase native-unavailable \
+  --results-dir app/build/test-results/testDebugUnitTest \
+  --output app/build/test-results/testDebugUnitTest/mika-evidence-native-unavailable.json || negative_evidence_status=$?
 mkdir -p app/build/reports/tests/testDebugUnitTest/main-capabilities app/build/test-results/testDebugUnitTest/main-capabilities
 cp -R "$native_dir/main-reports/." app/build/reports/tests/testDebugUnitTest/main-capabilities/
 cp -R "$native_dir/main-results/." app/build/test-results/testDebugUnitTest/main-capabilities/
 if [[ "$main_status" != 0 ]]; then exit "$main_status"; fi
+if [[ "$main_evidence_status" != 0 ]]; then exit "$main_evidence_status"; fi
 if [[ "$python_status" != 0 ]]; then exit "$python_status"; fi
 if [[ "$node_status" != 0 ]]; then exit "$node_status"; fi
+if [[ "$negative_evidence_status" != 0 ]]; then exit "$negative_evidence_status"; fi
 exit "$unavailable_status"
