@@ -67,7 +67,7 @@ public final class DeviceOwnerInputsNativeTest {
         final PairingCoordinator pairing;final DeviceExecutionAdmission admission;final RunControl original=new RunControl();
         final DeviceGoalSession session;volatile DeviceGoalSession current;final DeviceOwnerInputs inputs;final DeviceTaskCoordinator coordinator;
         final HttpServer http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);final AtomicInteger requests=new AtomicInteger(),continuations=new AtomicInteger();
-        final List<String> bodies=new CopyOnWriteArrayList<>();final ModelConfig model;final String task,run,allocation;final int epoch;
+        final List<String> bodies=new CopyOnWriteArrayList<>();final List<JSONObject> events=new CopyOnWriteArrayList<>();final ModelConfig model;final String task,run,allocation;final int epoch;
         final AgentRunner.OwnerInputs mailbox;boolean continueAutomatically=true;
         Fixture(int modelBudget)throws Exception {
             var context=RuntimeEnvironment.getApplication();context.deleteDatabase("pocket-world.db");tasks=new TaskStore(context);
@@ -130,9 +130,11 @@ public final class DeviceOwnerInputsNativeTest {
         RunOutcome runOriginal()throws Exception {
             NativeInferenceScope audience=NativeInferenceScope.pairedDeviceGoal(session.modelApproval(),original);
             DeviceGoalCapabilityPort guarded=new DeviceGoalCapabilityPort(NO_EFFECTS,admission,original,()->InferenceAudiencePolicy.require(model,audience,original));
-            session.runnerStarted();RunOutcome result=new AgentRunner(null,guarded,ContextBudgetPolicy.currentHostSource(),null,mailbox).run(task,tasks.get(task,false).getString("goal"),model,original,event->{try{tasks.event(task,run,epoch,event);}catch(Exception failure){throw new IllegalStateException(failure);}},tasks.journal(task,run,epoch,original));
+            session.runnerStarted();RunOutcome result=new AgentRunner(null,guarded,ContextBudgetPolicy.currentHostSource(),null,mailbox).run(task,tasks.get(task,false).getString("goal"),model,original,event->{try{JSONObject selected=new JSONObject();for(String key:List.of("type","status","tool","message","code"))if(event.has(key))selected.put(key,event.get(key));events.add(selected);tasks.event(task,run,epoch,event);}catch(Exception failure){throw new IllegalStateException(failure);}},tasks.journal(task,run,epoch,original));
+            if("failed".equals(result.status))System.err.println("Original paired Runner fixture: "+diagnostics(result));
             var finished=session.runnerFinished(result);if(result.status.equals("awaiting_user")){tasks.status(task,"awaiting_user",result.summary);original.pause();tasks.recordDeviceOrdinaryQuestionWait(finished);inputs.waiting(finished);}return result;
         }
+        String diagnostics(RunOutcome outcome){try{JSONArray recent=new JSONArray();for(int i=Math.max(0,events.size()-12);i<events.size();i++)recent.put(events.get(i));return new JSONObject().put("status",outcome.status).put("summary",outcome.summary).put("evidence",outcome.evidence).put("httpRequests",requests.get()).put("originalTask",task).put("originalRun",run).put("epoch",epoch).put("recentNativeEvents",recent).toString();}catch(Exception unavailable){return outcome.status+": "+outcome.summary;}}
         long count(String table)throws Exception{try(Cursor row=sql.rawQuery("SELECT COUNT(*) FROM "+table,null)){assertTrue(row.moveToFirst());return row.getLong(0);}}
         String grant()throws Exception{try(Cursor row=sql.rawQuery("SELECT grant_json FROM runs WHERE run_id=?",new String[]{run})){assertTrue(row.moveToFirst());return row.getString(0);}}
         public void close(){original.cancel();inputs.released(task,original);tasks.deviceTasks().release(run,original);http.stop(0);sql.close();}
@@ -140,18 +142,18 @@ public final class DeviceOwnerInputsNativeTest {
     @Test public void realQuestionAndSteeringReachOriginalRunnerWithSameRunGrantAndCumulativeBudget()throws Exception{try(Fixture f=new Fixture(4)){
         String lease=f.acquire("first-control",null).getString("leaseId"),grant=f.grant();
         JSONObject guidance=f.coordinator.ownerInput(f.permission(f.input("task.steer","original-guidance",lease,"FIXTURE-RUNNING-GUIDANCE")));assertTrue(guidance.getBoolean("inputSaved"));
-        RunOutcome waiting=f.runOriginal();assertEquals(waiting.summary,"awaiting_user",waiting.status);assertEquals(1,f.requests.get());assertTrue(f.bodies.get(0).contains("FIXTURE-RUNNING-GUIDANCE"));
+        RunOutcome waiting=f.runOriginal();assertEquals(f.diagnostics(waiting),"awaiting_user",waiting.status);assertEquals(1,f.requests.get());assertTrue(f.bodies.get(0).contains("FIXTURE-RUNNING-GUIDANCE"));
         JSONObject q=DeviceOwnerInputs.question(waiting.evidence,f.task,f.run,f.epoch);assertNotNull(q);assertTrue(q.getLong("waitRevision")>0);
         JSONObject write=f.input("task.answerQuestion","original-answer",lease,"FIXTURE-PAIRED-SECOND-SECTION");JSONObject saved=f.owner(write);assertTrue(saved.getBoolean("inputSaved"));assertTrue(saved.getBoolean("continuationRequested"));
         assertEquals(1,f.continuations.get());assertEquals(f.run,f.tasks.get(f.task,false).getString("runId"));assertEquals(f.epoch,f.tasks.get(f.task,false).getInt("coordinatorEpoch"));assertEquals(grant,f.grant());assertEquals(1,f.count("runs"));
         JSONObject repeated=f.owner(write);assertTrue(repeated.getBoolean("knownOperation"));assertEquals(saved.getString("messageId"),repeated.getString("messageId"));assertEquals(1,f.continuations.get());
         JSONObject changed=new JSONObject(write.toString());changed.getJSONObject("arguments").put("text","CHANGED-AFTER-NATIVE-RESUME");assertThrows(SecurityException.class,()->f.owner(changed));assertEquals(1,f.continuations.get());
-        RunOutcome completed=f.runOriginal();assertTrue(completed.summary,List.of("completed","needs_confirmation").contains(completed.status));assertEquals(2,f.requests.get());assertTrue(f.bodies.get(1).contains("FIXTURE-PAIRED-SECOND-SECTION"));
+        RunOutcome completed=f.runOriginal();assertTrue(f.diagnostics(completed),List.of("completed","needs_confirmation").contains(completed.status));assertEquals(2,f.requests.get());assertTrue(f.bodies.get(1).contains("FIXTURE-PAIRED-SECOND-SECTION"));
         JSONObject task=f.tasks.get(f.task,false);assertEquals(2,task.getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));assertNotEquals("owner",task.getString("actorId"));assertNotEquals("private",task.getString("spaceId"));assertTrue(task.optString("conversationId").isEmpty());
         assertEquals(2,task.getJSONArray("ownerInputs").length());for(int i=0;i<2;i++){JSONObject row=task.getJSONArray("ownerInputs").getJSONObject(i);assertEquals("native_paired_task_input",row.getString("sourceKind"));assertFalse(row.getBoolean("formalSourceRefAvailable"));assertFalse(row.has("userSourceRef"));}
     }}
     @Test public void originalLeaseQuestionAndDigestCannotBeReplacedAndDuplicateIsSingleNativeInput()throws Exception{try(Fixture f=new Fixture(4)){
-        assertEquals("awaiting_user",f.runOriginal().status);String old=f.acquire("control-old",null).getString("leaseId"),lease=f.acquire("control-new",old).getString("leaseId");f.continueAutomatically=false;
+        RunOutcome waiting=f.runOriginal();assertEquals(f.diagnostics(waiting),"awaiting_user",waiting.status);String old=f.acquire("control-old",null).getString("leaseId"),lease=f.acquire("control-new",old).getString("leaseId");f.continueAutomatically=false;
         assertThrows(SecurityException.class,()->f.coordinator.ownerInput(f.permission(f.input("task.answerQuestion","obsolete-lease",old,"first"))));
         JSONObject wrong=f.input("task.answerQuestion","obsolete-allocation",lease,"first");wrong.getJSONObject("arguments").put("allocationId","wrong-allocation");assertThrows(SecurityException.class,()->f.coordinator.ownerInput(f.permission(wrong)));
         JSONObject answer=f.input("task.answerQuestion","single-answer",lease,"FIRST-NATIVE-ANSWER");JSONObject saved=f.coordinator.ownerInput(f.permission(answer));assertTrue(saved.getBoolean("inputSaved"));assertFalse(saved.getBoolean("continuationRequested"));
@@ -161,7 +163,7 @@ public final class DeviceOwnerInputsNativeTest {
         assertEquals(1,f.tasks.get(f.task,false).getJSONArray("ownerInputs").length());assertEquals(1,f.requests.get());assertEquals(1,f.count("runs"));assertTrue(f.original.isPaused());
     }}
     @Test public void approvalSmugglingPendingApprovalAndMissingNativeSessionNeverAppendOrdinaryText()throws Exception{try(Fixture f=new Fixture(4)){
-        assertEquals("awaiting_user",f.runOriginal().status);String lease=f.acquire("control",null).getString("leaseId");
+        RunOutcome waiting=f.runOriginal();assertEquals(f.diagnostics(waiting),"awaiting_user",waiting.status);String lease=f.acquire("control",null).getString("leaseId");
         for(String field:new String[]{"approval","decision","takeover"}){JSONObject invalid=f.input("task.answerQuestion","smuggle-"+field,lease,"ANSWER");invalid.getJSONObject("arguments").put(field,true);assertThrows(DeviceProtocol.ProtocolException.class,()->f.permission(invalid));}
         JSONObject pending=f.tasks.requireCapabilityApproval(f.task,f.run,"fixture_approval_only",new JSONObject().put("exact",1),new JSONObject().put("fixture",true));
         assertThrows(SecurityException.class,()->f.coordinator.ownerInput(f.permission(f.input("task.answerQuestion","pending-approval",lease,"ANSWER"))));assertEquals(0,f.tasks.get(f.task,false).getJSONArray("ownerInputs").length());
@@ -169,7 +171,7 @@ public final class DeviceOwnerInputsNativeTest {
         assertThrows(SecurityException.class,()->f.coordinator.ownerInput(f.permission(f.input("task.answerQuestion","missing-session",lease,"ANSWER"))));assertEquals(1,f.requests.get());assertEquals(1,f.count("runs"));
     }}
     @Test public void exhaustedOriginalModelBudgetSavesAnswerWithoutGrantRunOrHttpRenewal()throws Exception{try(Fixture f=new Fixture(1)){
-        assertEquals("awaiting_user",f.runOriginal().status);String lease=f.acquire("control",null).getString("leaseId"),grant=f.grant();JSONObject saved=f.coordinator.ownerInput(f.permission(f.input("task.answerQuestion","saved-without-budget",lease,"SAVED-NATIVE-ANSWER")));
+        RunOutcome waiting=f.runOriginal();assertEquals(f.diagnostics(waiting),"awaiting_user",waiting.status);String lease=f.acquire("control",null).getString("leaseId"),grant=f.grant();JSONObject saved=f.coordinator.ownerInput(f.permission(f.input("task.answerQuestion","saved-without-budget",lease,"SAVED-NATIVE-ANSWER")));
         assertTrue(saved.getBoolean("inputSaved"));assertFalse(saved.getBoolean("continuationRequested"));assertEquals(0,f.continuations.get());assertEquals(1,f.requests.get());assertEquals(1,f.count("runs"));assertEquals(grant,f.grant());assertTrue(f.original.isPaused());
         assertEquals("awaiting_user",f.tasks.get(f.task,false).getString("status"));assertEquals(1,f.tasks.get(f.task,false).getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));
     }}
@@ -177,6 +179,17 @@ public final class DeviceOwnerInputsNativeTest {
         String lease=f.acquire("control",null).getString("leaseId"),text="🙂".repeat(4000),grant=f.grant();JSONObject saved=f.coordinator.ownerInput(f.permission(f.input("task.steer","supplementary-input",lease,text)));assertTrue(saved.getBoolean("inputSaved"));
         assertEquals(text,f.tasks.get(f.task,false).getJSONArray("ownerInputs").getJSONObject(0).getString("content"));assertEquals(0,f.requests.get());assertEquals(grant,f.grant());assertEquals(1,f.count("runs"));
         assertThrows(DeviceProtocol.ProtocolException.class,()->f.permission(f.input("task.steer","over-scalar-bound",lease,text+"🙂")));assertEquals(1,f.tasks.get(f.task,false).getJSONArray("ownerInputs").length());
+    }}
+    @Test public void kernelOutcomeHooksKeepNativeFenceWithoutGrantingDeviceTools()throws Exception{try(Fixture f=new Fixture(4)){
+        AtomicInteger modelFences=new AtomicInteger();long originalOperations=f.count("operations");NativeInferenceScope audience=NativeInferenceScope.pairedDeviceGoal(f.session.modelApproval(),f.original);
+        DeviceGoalCapabilityPort port=new DeviceGoalCapabilityPort(NO_EFFECTS,f.admission,f.original,()->{modelFences.incrementAndGet();InferenceAudiencePolicy.require(f.model,audience,f.original);});
+        for(String kernel:List.of("run_ask_user","run_end_not_done","run_handle_obstacle")){
+            assertFalse(port.supports(kernel));assertNull(port.beforeTool(kernel,new JSONObject(),f.original));port.afterTool(kernel,new JSONObject(),new JSONObject().put("ok",true),f.original);
+        }
+        assertEquals(6,modelFences.get());assertEquals(0,port.tools().length());assertEquals(0,f.requests.get());assertEquals(originalOperations,f.count("operations"));
+        assertThrows(SecurityException.class,()->port.beforeTool("ungranted_device_tool",new JSONObject(),f.original));
+        assertThrows(SecurityException.class,()->port.beforeTool("run_ask_user",new JSONObject(),new RunControl()));
+        f.original.pause();assertThrows(SecurityException.class,()->port.beforeTool("run_ask_user",new JSONObject(),f.original));assertThrows(SecurityException.class,()->port.afterTool("run_handle_obstacle",new JSONObject(),new JSONObject(),f.original));
     }}
     private record Material(KeyPair keys,X509Certificate cert){}
     private record Peers(DeviceIdentity.AuthenticatedPeer caller,String target){}

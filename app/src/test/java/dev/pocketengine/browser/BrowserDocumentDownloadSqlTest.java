@@ -1,9 +1,9 @@
 package dev.pocketengine.browser;
 
-import android.app.Application;
 import android.os.Looper;
 import android.webkit.WebView;
 import dev.pocketengine.BrowserActivity;
+import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.attachments.AttachmentRepository;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
@@ -22,7 +22,7 @@ import static org.junit.Assert.*;
 
 /** Original document stream/worker, Activity driver, journal, AttachmentBook and reopened bytes.
  * JS bridge replies are explicit interface fixtures; actual blob/data JS is tested separately. */
-@RunWith(RobolectricTestRunner.class) @Config(sdk=35,manifest=Config.NONE,application=Application.class)
+@RunWith(RobolectricTestRunner.class) @Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE) @LooperMode(LooperMode.Mode.PAUSED)
 public final class BrowserDocumentDownloadSqlTest {
     static JSONObject j(Object... values)throws Exception {JSONObject out=new JSONObject();for(int i=0;i<values.length;i+=2)out.put((String)values[i],values[i+1]);return out;}
@@ -45,7 +45,7 @@ public final class BrowserDocumentDownloadSqlTest {
     }
     void journey(boolean cancel)throws Exception {
         BrowserActivity.setOwnerPanelInstaller(null);BrowserTaskActivityTest original=new BrowserTaskActivityTest();try(BrowserTaskActivityTest.Fixture h=original.new Fixture()){
-            h.tasks.authorizeTools(h.taskId,h.current.binding.runId,BrowserTaskCapabilityPort.taskToolNames(true));String tab=h.open("document-export"),run=h.current.binding.runId;Bridge bridge=new Bridge(cancel);JSONObject observed=bridge.call(h,"observe",j("tabId",tab));JSONObject queued=bridge.call(h,"download_document",j("tabId",tab,"observationId",observed.getString("observationId"),"ref","n0","name","result.csv"));assertEquals("queued",queued.getString("status"));assertFalse(queued.has("attachment"));bridge.queuedDelivered=true;BrowserDownloads downloads=BrowserDownloads.get(h.browser);JSONObject done=queued;long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
+            h.tasks.authorizeTools(h.taskId,h.current.binding.runId,BrowserTaskCapabilityPort.taskToolNames(true));String tab=h.open("document-export"),run=h.current.binding.runId;assertTrue("document bridge must post to the attached original WebView",web(h.browser).isAttachedToWindow());Bridge bridge=new Bridge(cancel);JSONObject observed=bridge.call(h,"observe",j("tabId",tab));JSONObject queued=bridge.call(h,"download_document",j("tabId",tab,"observationId",observed.getString("observationId"),"ref","n0","name","result.csv"));assertEquals("queued",queued.getString("status"));assertFalse(queued.has("attachment"));bridge.queuedDelivered=true;BrowserDownloads downloads=BrowserDownloads.get(h.browser);JSONObject done=queued;long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
             while(done.getString("status").matches("queued|running|stopping")&&System.nanoTime()<deadline){bridge.pump(h);Thread.sleep(3);done=downloads.status(queued.getString("id"));}AttachmentRepository repository=AttachmentRepository.get(h.browser);
             assertEquals(h.taskId,done.getString("taskId"));assertEquals(run,done.getString("runId"));assertEquals(tab,done.getString("tabId"));assertEquals(queued.getString("operationId"),done.getString("operationId"));assertFalse(done.getBoolean("verified"));
             if(cancel){assertEquals(done.toString(),"cancelled",done.getString("status"));assertEquals(1,bridge.chunks);assertEquals(0,repository.book.list().length());assertFalse(done.has("attachment"));}

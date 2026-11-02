@@ -566,7 +566,7 @@ public final class AgentRunner {
                         control.sleep(args.getInt("ms"));
                         receipt = new JSONObject().put("ok", true).put("message", "等待结束。");
                     } else {
-                        if (journal != null && (sideEffecting(name)||capabilities!=null&&capabilities.sideEffecting(name))) {
+                        if (journal != null && (sideEffecting(name)||capabilities!=null&&capabilities.requiresOperation(name))) {
                             checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
                             long revision = control.pauseRevision();
                             openOperation = begin(journal, name, args, config);
@@ -611,7 +611,7 @@ public final class AgentRunner {
                     String toolStatus=projectRunning?nativeRunning?"running":"awaiting_user":receipt.optBoolean("ok",false)?"completed":"failed";
                     String toolMessage=projectRunning?nativeRunning?"原开发服务已启动且仍归此原执行；这不是程序结束或服务就绪，后续仅允许原授权的只读核对。":"运行中回执未能与原生已启动服务及原操作核对，未继续模型请求或新工具。"
                             :receipt.optString("message",receipt.optBoolean("ok",false)?"操作回执已收到。":"操作未成功，请检查当前页面。");
-                    emit(taskId,"tool",toolStatus,toolMessage,name,receipt,config,sink);
+                    emit(taskId,"tool",toolStatus,toolMessage,name,receipt,config,sink,recordedOperation);
                     if(projectRunning&&!nativeRunning){
                         evidence.put("requiresReconciliation",true).put("unverifiedProjectRunningAck",true);
                         return finish(taskId,"awaiting_user",toolMessage+"请核对原任务，不会凭JSON字段把未知效果改成已知运行。",evidence,steps,config,sink);
@@ -1385,10 +1385,15 @@ public final class AgentRunner {
 
     private static void emit(String taskId, String type, String status, String message, String tool,
                              JSONObject receipt, ModelConfig config, EventSink sink) throws Exception {
+        emit(taskId,type,status,message,tool,receipt,config,sink,null);
+    }
+    private static void emit(String taskId,String type,String status,String message,String tool,
+                             JSONObject receipt,ModelConfig config,EventSink sink,String nativeOperationId)throws Exception {
         JSONObject event = new JSONObject().put("taskId", taskId).put("type", type).put("status", status)
                 .put("message", clean(message, config)).put("timestamp", System.currentTimeMillis());
         if (tool != null) event.put("tool", clean(tool, config));
         if (receipt != null) event.put("receipt", safeReceipt(receipt, config));
+        if(nativeOperationId!=null)event.put("nativeOperationId",nativeOperationId);
         sink.emit(event);
     }
 

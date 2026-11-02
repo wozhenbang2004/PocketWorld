@@ -681,7 +681,7 @@ public final class TaskStore {
         };
     }
     /** Native accounting-only origin. These records have no tools, phone lease or restart entry. */
-    public enum NativeInferenceKind {CONNECTION_TEST,VOICE_TURN,REALTIME,RELAY,SKILL_DRAFT}
+    public enum NativeInferenceKind {CONNECTION_TEST,MODEL_CAPABILITY_PROBE,VOICE_TURN,REALTIME,RELAY,SKILL_DRAFT}
     public final class NativeInferenceSession implements AutoCloseable {
         public final String taskId,runId;public final int epoch;public final NativeInferenceKind kind;
         private final RunControl original;private final int maxCalls;private volatile boolean closed;
@@ -718,12 +718,12 @@ public final class TaskStore {
     }
     /** Explicit owner diagnostic only: text + function contract, and optionally one synthetic image. */
     public synchronized NativeInferenceSession beginModelCapabilityProbe(String nativeSourceId,RunControl original,boolean image)throws Exception{
-        return beginNativeInferenceBounded(NativeInferenceKind.CONNECTION_TEST,nativeSourceId,original,image?3:2);
+        return beginNativeInferenceBounded(NativeInferenceKind.MODEL_CAPABILITY_PROBE,nativeSourceId,original,image?3:2);
     }
     private NativeInferenceSession beginNativeInferenceBounded(NativeInferenceKind kind,String nativeSourceId,RunControl original,int maximum)throws Exception{
         Objects.requireNonNull(kind);Objects.requireNonNull(original);original.check();if(original.hasHostRun()||nativeSourceId==null||!nativeSourceId.matches("[A-Za-z0-9_.:-]{1,200}"))throw new SecurityException("用量会话需要新的原生来源控制器，不能借用已有任务授权");
         String id=UUID.randomUUID().toString(),run=UUID.randomUUID().toString();long now=System.currentTimeMillis(),expires=now+(kind==NativeInferenceKind.REALTIME?30*60_000L:10*60_000L);
-        String title=switch(kind){case CONNECTION_TEST->"模型连接测试";case VOICE_TURN->"语音文字对话";case REALTIME->"自然语音会话";case RELAY->"本机模型服务请求";case SKILL_DRAFT->"经验技能草稿整理";};
+        String title=switch(kind){case CONNECTION_TEST->"模型连接测试";case MODEL_CAPABILITY_PROBE->"模型能力诊断";case VOICE_TURN->"语音文字对话";case REALTIME->"自然语音会话";case RELAY->"本机模型服务请求";case SKILL_DRAFT->"经验技能草稿整理";};
         db.beginTransaction();try{
             JSONObject task=base(id,title,"inference","inference").put("runId",run).put("coordinatorEpoch",1).put("status","recording").put("approvalState","not_applicable")
                 .put("origin",new JSONObject().put("kind","native_inference").put("sourceKind",kind.name()).put("sourceId",nativeSourceId))

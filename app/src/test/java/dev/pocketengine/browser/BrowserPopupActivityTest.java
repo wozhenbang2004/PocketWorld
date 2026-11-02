@@ -1,7 +1,6 @@
 package dev.pocketengine.browser;
 
 import android.app.AlertDialog;
-import android.app.Application;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -9,6 +8,7 @@ import android.os.Message;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import dev.pocketengine.BrowserActivity;
+import dev.pocketengine.EngineApplication;
 import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -20,7 +20,7 @@ import org.robolectric.annotation.*;
 import static org.junit.Assert.*;
 
 /** Real Activity/native transport/dialog ownership. No renderer, OAuth service or device permission is claimed. */
-@RunWith(RobolectricTestRunner.class) @Config(sdk=35,manifest=Config.NONE,application=Application.class)
+@RunWith(RobolectricTestRunner.class) @Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE) @LooperMode(LooperMode.Mode.PAUSED)
 public final class BrowserPopupActivityTest {
     static Object field(BrowserActivity activity,String name)throws Exception {Field field=BrowserActivity.class.getDeclaredField(name);field.setAccessible(true);return field.get(activity);}

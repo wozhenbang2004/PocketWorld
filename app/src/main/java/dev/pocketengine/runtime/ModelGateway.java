@@ -152,9 +152,9 @@ public final class ModelGateway {
     /** Additional original-consumer budget, checked for every candidate and again before dispatch. */
     public static JSONObject completeWithAdmission(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,CandidateAdmission originalBudget)throws Exception {
         return executeLogical(config,messages,tools,control,target,"INTERNAL",null,(candidate,capture,commit)->{
-            JSONObject result=candidate.usesAccount()?completeAccount(candidate,messages,tools,control,null,capture):completeApi(candidate,messages,tools,control,null,capture);
+            JSONObject result=candidate.usesAccount()?completeAccount(candidate,messages,tools,control,null,capture):completeApi(candidate,messages,tools,control,null,capture,target);
             commit.beforeFlush(capture.callId,1);return result;
-        },candidate->{validate(candidate);if(!candidate.usesAccount())ModelRequestPolicy.apply(candidate,messages,tools,ProviderAdapters.selected(candidate.provider).request(candidate,messages,tools));originalBudget.check(candidate);});
+        },candidate->{validate(candidate);if(!candidate.usesAccount())applyRequestPolicy(candidate,messages,tools,ProviderAdapters.selected(candidate.provider).request(candidate,messages,tools),target,control);originalBudget.check(candidate);});
     }
     /** Resolve only the actual physical receipt against this native frozen plan, not a later default. */
     public static ModelConfig actualConfigForReceipt(ModelConfig captured,InferenceReceipt receipt)throws Exception {
@@ -212,7 +212,7 @@ public final class ModelGateway {
             public JSONObject run(ModelConfig candidate,InferenceCapture capture,SemanticCommit commit)throws Exception {
                 stream=new StreamSession(candidate,control,sink,capture.callId,commit);
                 stream.emit(StreamKind.STARTED,"","request_started",true);
-                return candidate.usesAccount()?completeAccount(candidate,messages,tools,control,stream,capture):completeApi(candidate,messages,tools,control,stream,capture);
+                return candidate.usesAccount()?completeAccount(candidate,messages,tools,control,stream,capture):completeApi(candidate,messages,tools,control,stream,capture,target);
             }
             public void afterPersist(InferenceCapture capture)throws Exception {stream.finish();}
             public void rejected(String logical,ModelConfig candidate)throws Exception {stream=new StreamSession(candidate,control,sink,logical,(call,sequence)->{throw new SecurityException("rejected_request_cannot_flush");});stream.failed(StreamKind.FAILED,"candidate_admission_failed");}
@@ -255,7 +255,7 @@ public final class ModelGateway {
     private static JSONObject executeLogical(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,String ingress,String nativeDigest,PhysicalAttempt physical)throws Exception {
         return executeLogical(config,messages,tools,control,target,ingress,nativeDigest,physical,candidate->{
             validate(candidate);
-            if(!candidate.usesAccount())ModelRequestPolicy.apply(candidate,messages,tools,ProviderAdapters.selected(candidate.provider).request(candidate,messages,tools));
+            if(!candidate.usesAccount())applyRequestPolicy(candidate,messages,tools,ProviderAdapters.selected(candidate.provider).request(candidate,messages,tools),target,control);
         });
     }
     private static JSONObject executeLogical(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,String ingress,String nativeDigest,PhysicalAttempt physical,CandidateAdmission preflight)throws Exception {
@@ -321,16 +321,16 @@ public final class ModelGateway {
     }
 
     private static JSONObject completeApi(ModelConfig config,JSONArray messages,JSONArray tools,
-                                          RunControl control,StreamSession stream,InferenceCapture capture)throws Exception {
+                                          RunControl control,StreamSession stream,InferenceCapture capture,InferenceCapture.Target target)throws Exception {
         ProviderAdapter provider=ProviderAdapters.selected(config.provider);
         URL endpoint=endpoint(config);
         control.check();
         JSONObject request=provider.request(config,messages,tools);
         if(stream!=null){request=ApiTurnStream.request(config.provider,request,config.maxOutputTokens);endpoint=ApiTurnStream.endpoint(config.provider,endpoint);}
-        try{request=ModelRequestPolicy.apply(config,messages,tools,request);}catch(ModelRequestPolicy.Rejected refused){throw new GatewayException(refused.getMessage(),InferenceFailure.local(InferenceFailure.Kind.LOCAL_REFUSAL,System.currentTimeMillis()));}
+        try{request=applyRequestPolicy(config,messages,tools,request,target,control);}catch(ModelRequestPolicy.Rejected refused){throw new GatewayException(refused.getMessage(),InferenceFailure.local(InferenceFailure.Kind.LOCAL_REFUSAL,System.currentTimeMillis()));}
         byte[] payload = request.toString().getBytes(StandardCharsets.UTF_8);
         if(payload.length>MAX_REQUEST_BYTES)throw new GatewayException("模型请求序列化后超过24MiB本地传输限制；尚未发送，请缩减图片或上下文。此限制不是模型上下文窗口。");
-        if(stream!=null){JSONObject assistant=completeStreamingHttp(config,provider,endpoint,payload,tools,control,stream,capture);checkCapabilities(config,messages,tools,request);return assistant;}
+        if(stream!=null){JSONObject assistant=completeStreamingHttp(config,provider,endpoint,payload,tools,control,stream,capture);checkCapabilities(config,messages,tools,request,target,control);return assistant;}
         HttpURLConnection connection = (HttpURLConnection) endpoint.openConnection();
         connection.setRequestMethod("POST");
         connection.setDoOutput(true);
@@ -391,7 +391,7 @@ public final class ModelGateway {
                 // HTTP success is not a provider terminal. Every buffered consumer (including
                 // SUMMARY and team inference) shares SSE's terminal/tool boundary on this body.
                 JSONObject assistant=ApiTurnStream.completeJson(config.provider,provider,body,tools,delta->{},capture.usage);
-                checkCapabilities(config,messages,tools,request);
+                checkCapabilities(config,messages,tools,request,target,control);
                 return assistant;
             } catch (GatewayException known) {
                 if(known.failure!=null)throw known;
@@ -421,8 +421,15 @@ public final class ModelGateway {
         }
     }
 
-    private static void checkCapabilities(ModelConfig config,JSONArray messages,JSONArray tools,JSONObject request)throws Exception {
-        try{ModelRequestPolicy.apply(config,messages,tools,request);}catch(ModelRequestPolicy.Rejected revoked){throw new GatewayException(revoked.getMessage());}
+    private static JSONObject applyRequestPolicy(ModelConfig config,JSONArray messages,JSONArray tools,JSONObject request,
+            InferenceCapture.Target target,RunControl original)throws Exception {
+        return target.context.purpose==InferenceReceipt.Purpose.MODEL_CAPABILITY_PROBE
+                ?ModelRequestPolicy.applyCapabilityProbe(config,messages,tools,request,target,original)
+                :ModelRequestPolicy.apply(config,messages,tools,request);
+    }
+
+    private static void checkCapabilities(ModelConfig config,JSONArray messages,JSONArray tools,JSONObject request,InferenceCapture.Target target,RunControl control)throws Exception {
+        try{applyRequestPolicy(config,messages,tools,request,target,control);}catch(ModelRequestPolicy.Rejected revoked){throw new GatewayException(revoked.getMessage());}
     }
 
     private static JSONObject completeStreamingHttp(ModelConfig config,ProviderAdapter provider,URL endpoint,

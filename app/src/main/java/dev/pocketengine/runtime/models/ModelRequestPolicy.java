@@ -54,6 +54,35 @@ public final class ModelRequestPolicy {
         return wire;
     }
 
+    /** Native accounting-only diagnostics ask about unknown capabilities without changing facts.
+     * Ordinary apply/applyNative remain strict; a JSON field cannot issue this native purpose. */
+    public static JSONObject applyCapabilityProbe(ModelConfig config,JSONArray messages,JSONArray tools,JSONObject wire,
+            dev.pocketengine.runtime.usage.InferenceCapture.Target target,dev.pocketengine.core.RunControl original)throws Exception {
+        dev.pocketengine.runtime.usage.InferenceCapture.requireOriginalContext(original,target);
+        if(target.context.purpose!=dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MODEL_CAPABILITY_PROBE
+                ||target.context.bindingKind!=dev.pocketengine.runtime.usage.InferenceReceipt.BindingKind.HOST_RUN
+                ||target.context.taskId.isEmpty()||target.logical==null||config.usesAccount()||config.capabilityBinding==null||config.routePlan!=null)
+            throw new SecurityException("native_model_capability_probe_session_required");
+        original.check();ModelCapabilityProbe.requireSyntheticRequest(messages,tools);
+        ModelCatalog.View view = resolve(config);
+        if (view == null) return wire; // Explicit pre-catalog API configuration keeps its existing contract.
+        ModelFacts facts = view.facts();
+        boolean images = hasImages(messages), toolContext = tools != null && tools.length() > 0 || hasToolHistory(messages);
+        if (images && facts.imageInput().known) requireTrue(facts.imageInput(), "image_capability", "当前精确模型的图像输入能力未知或不支持；请在模型页核对。");
+        if (toolContext && facts.toolCalls().known) requireTrue(facts.toolCalls(), "tool_capability", "当前精确模型的工具调用能力未知或不支持；请在模型页核对，历史工具结果不会被删除。");
+        validateOutput(config, facts);
+        checkContext(config, messages, tools, facts, images);
+        if (config.provider.equals("openai_chat")) {
+            wire.remove("max_tokens"); wire.remove("max_completion_tokens");
+            ModelFacts.Fact<ModelFacts.ChatOutputParameter> field = facts.chatOutputParameter();
+            if (!field.known || field.value == ModelFacts.ChatOutputParameter.NOT_APPLICABLE)
+                throw new Rejected("chat_output_parameter_unknown", "Chat 输出参数字段未知，请在模型页明确选择 max_tokens 或 max_completion_tokens；本次尚未发送。");
+            wire.put(field.value == ModelFacts.ChatOutputParameter.MAX_TOKENS ? "max_tokens" : "max_completion_tokens", config.maxOutputTokens);
+        }
+        applyReasoning(config, facts, wire);
+        return wire;
+    }
+
     /** Owner selection is checked before persisting, and again on each actual request boundary. */
     public static void validateOutput(ModelConfig config, ModelFacts facts) throws Rejected {
         if (facts.outputTokens().known && config.maxOutputTokens > facts.outputTokens().value)

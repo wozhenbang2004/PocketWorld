@@ -22,7 +22,12 @@ import static org.junit.Assert.*;
 public final class BrowserNativeInputNativeTest {
     static final class Receiver extends WebView {
         final List<Integer> events=new ArrayList<>();final AtomicBoolean owned;Runnable afterDown=()->{};boolean accepted=true;
-        Receiver(AtomicBoolean owned){super(RuntimeEnvironment.getApplication());this.owned=owned;layout(0,0,400,800);}
+        Receiver(AtomicBoolean owned){
+            super(RuntimeEnvironment.getApplication());this.owned=owned;
+            // ShadowWebView's provider does not apply setFrame; give this explicit input receiver actual View bounds.
+            setLeft(0);setTop(0);setRight(400);setBottom(800);
+            assertEquals("input receiver native width",400,getWidth());assertEquals("input receiver native height",800,getHeight());
+        }
         @Override public boolean dispatchTouchEvent(MotionEvent event){assertTrue("every event must be inside native host ownership",owned.get());events.add(event.getActionMasked());if(event.getActionMasked()==MotionEvent.ACTION_DOWN)afterDown.run();return accepted;}
     }
     static JSONObject geometry()throws Exception{return new JSONObject().put("status","geometry_observed").put("viewport",new JSONObject().put("width",400).put("height",800).put("offsetX",0).put("offsetY",0)).put("from",new JSONObject().put("x",40).put("y",80)).put("to",new JSONObject().put("x",200).put("y",500));}

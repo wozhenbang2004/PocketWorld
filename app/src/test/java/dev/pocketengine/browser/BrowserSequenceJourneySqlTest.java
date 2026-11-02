@@ -1,10 +1,10 @@
 package dev.pocketengine.browser;
 
-import android.app.Application;
 import android.os.Looper;
 import android.webkit.WebView;
 import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.BrowserActivity;
+import dev.pocketengine.EngineApplication;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunOutcome;
 import dev.pocketengine.runtime.AgentRunner;
@@ -25,7 +25,7 @@ import static org.junit.Assert.*;
 /** Original Activity, TaskStore journal/approvals, Runner and local model HTTP.
  * Explicit page callback fixtures test the native control flow, not browser rendering or JS behavior. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=Application.class)
+@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE) @LooperMode(LooperMode.Mode.PAUSED)
 public final class BrowserSequenceJourneySqlTest {
     enum Mode { FULL, WAIT_MET, WAIT_UNMET, REPLACED_NODE, CANCEL_AFTER_FIRST }
@@ -39,7 +39,7 @@ public final class BrowserSequenceJourneySqlTest {
     void journey(Mode mode)throws Exception {
         BrowserActivity.setOwnerPanelInstaller(null);BrowserTaskActivityTest original=new BrowserTaskActivityTest();
         try(BrowserTaskActivityTest.Fixture h=original.new Fixture()){
-            h.tasks.authorizeTools(h.taskId,h.current.binding.runId,BrowserTaskCapabilityPort.taskToolNames(true));String tab=h.open("bounded-original-sequence"),runId=h.current.binding.runId;var control=h.current.control;
+            h.tasks.authorizeTools(h.taskId,h.current.binding.runId,BrowserTaskCapabilityPort.taskToolNames(true));String tab=h.open("bounded-original-sequence"),runId=h.current.binding.runId;assertTrue("sequence must use the attached original WebView",web(h.browser).isAttachedToWindow());var control=h.current.control;
             AtomicInteger rounds=new AtomicInteger(),reads=new AtomicInteger(),writes=new AtomicInteger();AtomicReference<Throwable> failure=new AtomicReference<>();List<JSONObject> events=new CopyOnWriteArrayList<>();
             HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
             server.createContext("/",exchange->{try{
@@ -69,11 +69,11 @@ public final class BrowserSequenceJourneySqlTest {
                         }
                     }Thread.sleep(3);
                 }
-                RunOutcome outcome=run.get(2,TimeUnit.SECONDS);if(failure.get()!=null)throw new AssertionError("local model fixture",failure.get());assertSame(control,h.current.control);assertEquals(runId,h.current.binding.runId);assertEquals(1,h.tasks.list().length());
-                int expectedWrites=mode==Mode.FULL?2:mode==Mode.WAIT_MET||mode==Mode.CANCEL_AFTER_FIRST?1:0;assertEquals(expectedWrites,writes.get());if(mode==Mode.CANCEL_AFTER_FIRST)assertEquals("cancelled",outcome.status);
+                RunOutcome outcome=run.get(2,TimeUnit.SECONDS);if(failure.get()!=null)throw new AssertionError("local model fixture",failure.get());assertSame(control,h.current.control);assertEquals(runId,h.current.binding.runId);assertEquals(1,h.tasks.list().length());String trace="mode="+mode+" outcome="+outcome.status+" HTTP rounds="+rounds.get()+" reads="+reads.get()+" events="+events+" originalTask="+h.tasks.get(h.taskId,false);
+                int expectedWrites=mode==Mode.FULL?2:mode==Mode.WAIT_MET||mode==Mode.CANCEL_AFTER_FIRST?1:0;assertEquals(trace,expectedWrites,writes.get());if(mode==Mode.CANCEL_AFTER_FIRST)assertEquals("cancelled",outcome.status);
                 JSONObject task=h.tasks.get(h.taskId,false);JSONArray operations=task.getJSONArray("operations");Set<String> operationIds=new HashSet<>();int parents=0,clicks=0,waits=0;String parent="";
                 for(int i=0;i<operations.length();i++){JSONObject operation=operations.getJSONObject(i);assertTrue(operationIds.add(operation.getString("operationId")));assertEquals(runId,operation.getString("runId"));assertEquals("receipt",operation.getString("state"));String tool=operation.getString("tool");if(tool.equals(BrowserToolSequence.TOOL)){parents++;parent=operation.getString("operationId");assertEquals(0,operation.getJSONObject("receipt").getInt("dispatchEnteredSteps"));}if(tool.equals("browser_task_click"))clicks++;if(tool.equals("browser_task_wait")){waits++;assertEquals(mode==Mode.WAIT_MET,operation.getJSONObject("receipt").getBoolean("matched"));}}
-                assertEquals(1,parents);assertEquals(expectedWrites,clicks);assertEquals(mode==Mode.WAIT_MET||mode==Mode.WAIT_UNMET?1:0,waits);int approvedClicks=0;JSONArray approvals=task.getJSONArray("approvals");for(int i=0;i<approvals.length();i++){JSONObject approval=approvals.getJSONObject(i);assertEquals("consumed",approval.getString("state"));if(approval.getString("tool").equals("browser_task_click")){approvedClicks++;assertEquals("k1",approval.getJSONObject("capability").getJSONObject("targetPreview").getString("nodeKey"));}}assertEquals(expectedWrites,approvedClicks);
+                assertEquals(trace,1,parents);assertEquals(trace,expectedWrites,clicks);assertEquals(trace,mode==Mode.WAIT_MET||mode==Mode.WAIT_UNMET?1:0,waits);int approvedClicks=0;JSONArray approvals=task.getJSONArray("approvals");for(int i=0;i<approvals.length();i++){JSONObject approval=approvals.getJSONObject(i);assertEquals("consumed",approval.getString("state"));if(approval.getString("tool").equals("browser_task_click")){approvedClicks++;assertEquals("k1",approval.getJSONObject("capability").getJSONObject("targetPreview").getString("nodeKey"));}}assertEquals(trace,expectedWrites,approvedClicks);
                 if(mode==Mode.REPLACED_NODE||mode==Mode.WAIT_UNMET||mode==Mode.CANCEL_AFTER_FIRST){JSONObject remaining=null;for(JSONObject event:events)if("native_sequence".equals(event.optString("type"))&&"not_dispatched".equals(event.optString("status")))remaining=event.getJSONObject("receipt");assertNotNull("unexecuted plan steps must be explicit",remaining);assertEquals(parent,remaining.getString("parentOperationId"));assertTrue(remaining.getInt("remainingSteps")>0);assertFalse(remaining.getBoolean("automaticReplay"));}
             }finally{server.stop(0);}
         }

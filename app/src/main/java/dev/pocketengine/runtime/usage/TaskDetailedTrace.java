@@ -37,11 +37,22 @@ public final class TaskDetailedTrace {
     private static void id(String value){if(value==null||!value.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("native_trace_identity_required");}
     public final class Session implements AutoCloseable,InferenceCapture.Sink {
         private final String task,run;private final int epoch;private final long version,start=System.currentTimeMillis(),nano=System.nanoTime();
-        private final JSONArray spans=new JSONArray();private final Map<String,Long> openTools=new HashMap<>();private boolean closed,truncated,unavailable;
+        private record ToolTiming(long startedAt,long nano) { }
+        private final JSONArray spans=new JSONArray();private final Map<String,ToolTiming> openTools=new HashMap<>();private boolean closed,truncated,unavailable;
         private Session(String task,String run,int epoch,long version){this.task=task;this.run=run;this.epoch=epoch;this.version=version;}
         private boolean current(){return !closed&&enabled&&version==generation&&!unavailable;}
         private void span(String name,long at,long elapsed,String status,String correlation){synchronized(TaskDetailedTrace.this){if(!current())return;try{if(spans.length()>=1024){truncated=true;return;}JSONObject span=new JSONObject().put("name",name).put("startedAt",at).put("elapsedNanos",Math.max(0,elapsed)).put("status",status).put("correlation",correlation);if(span.toString().length()>1024){truncated=true;return;}spans.put(span);}catch(Exception failure){unavailable=true;}}}
-        public EventSink events(EventSink original){return event->{original.emit(event);try{String type=event.optString("type"),status=event.optString("status"),tool=event.optString("tool");if(!tool.matches("[A-Za-z0-9_.:-]{1,100}"))tool="tool";if(type.equals("tool")){synchronized(TaskDetailedTrace.this){if(!current())return;if(status.equals("running"))openTools.put(tool,System.nanoTime());else{Long at=openTools.remove(tool);span("tool."+tool,event.optLong("at",System.currentTimeMillis()),at==null?0:System.nanoTime()-at,status.matches("completed|failed|awaiting_user|running")?status:"unknown","");}}}else if(type.equals("run")&&status.equals("paused"))span("run.paused",System.currentTimeMillis(),0,"paused","");}catch(Exception failure){unavailable=true;}};}
+        public EventSink events(EventSink original){return event->{original.emit(event);try{
+            String type=event.optString("type"),status=event.optString("status"),tool=event.optString("tool");if(!tool.matches("[A-Za-z0-9_.:-]{1,100}"))tool="tool";
+            if(type.equals("tool")){synchronized(TaskDetailedTrace.this){if(!current())return;
+                // This separate carrier is emitted only after the original native journal commit.
+                // Receipt/model fields and provider tool-call ids are never operation authority.
+                Object nativeId=event.opt("nativeOperationId");String operation=nativeId instanceof String&&((String)nativeId).matches("[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}")?(String)nativeId:"";
+                long at=event.optLong("timestamp",System.currentTimeMillis());
+                if(status.equals("running")&&operation.isEmpty())openTools.put(tool,new ToolTiming(at,System.nanoTime()));
+                else{ToolTiming start=openTools.remove(tool);span("tool."+tool,start==null?at:start.startedAt(),start==null?0:System.nanoTime()-start.nano(),status.matches("completed|failed|awaiting_user|running")?status:"unknown",operation);}
+            }}else if(type.equals("run")&&status.equals("paused"))span("run.paused",System.currentTimeMillis(),0,"paused","");
+        }catch(Exception failure){unavailable=true;}};}
         public void started(InferenceReceipt receipt){/* Original sink already persisted dispatch; no content is observed. */}
         public void finished(InferenceReceipt receipt){if(!task.equals(receipt.context.taskId)||!run.equals(receipt.context.runId)||epoch!=receipt.context.epoch)return;span("model."+receipt.context.purpose.name(),receipt.startedAt,receipt.elapsedNanos,receipt.outcome.name(),receipt.callId);}
         @Override public void close(){synchronized(TaskDetailedTrace.this){if(closed)return;try{if(!unavailable){spans.put(new JSONObject().put("name","task.run").put("startedAt",start).put("elapsedNanos",System.nanoTime()-nano).put("status","ended").put("correlation",""));JSONObject archive=new JSONObject().put("format","pocketworld.content-free-trace.v1").put("taskId",task).put("runId",run).put("epoch",epoch).put("createdAt",start).put("spans",spans).put("truncated",truncated).put("bodyIncluded",false).put("executionAuthorized",false);String data=archive.toString();if(data.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=524288){write(directory.resolve(run+".json"),data);prune();}}}catch(Exception failure){unavailable=true;}finally{closed=true;sessions.remove(run);}}}
