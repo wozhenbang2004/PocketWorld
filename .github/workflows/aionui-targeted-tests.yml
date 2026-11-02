@@ -4,7 +4,7 @@ run-name: AionUI host tests · ${{ github.ref_name }} · ${{ github.run_number }
 on:
   push:
     branches: ['work/aionui-absorption']
-    paths: ['.github/workflows/aionui-targeted-tests.yml']
+    paths: ['.github/workflows/aionui-targeted-tests.yml', 'app/src/test/kotlin/dev/pocketengine/ui/ContinuousPlanMountedNativeTest.kt']
 
 permissions:
   contents: read
