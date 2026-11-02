@@ -63,7 +63,18 @@ public final class ProviderCompatibilityTest {
         try(Server server=new Server()){
             server.protocol="anthropic";List<InferenceReceipt> rows=new ArrayList<>();ModelConfig config=configured(server.base(),"anthropic",new JSONObject().put("cacheMode","EPHEMERAL"));
             ModelGateway.complete(config,messages(),tools(),new RunControl(),receipts(rows));assertEquals(1,server.calls.get());assertFalse(server.request.toString().contains("cache_control"));
-            JSONObject last=rows.get(1).toJson();assertFalse(last.getJSONObject("route").getJSONObject("providerProjection").getBoolean("hintPrepared"));assertFalse(last.getJSONObject("usage").getJSONObject("counters").has("CACHE_READ"));
+            JSONObject last=rows.get(1).toJson(),projection=last.getJSONObject("route").getJSONObject("providerProjection"),usage=last.getJSONObject("usage");
+            assertFalse("Unknown cache support prepares no hint",projection.getBoolean("hintPrepared"));
+            assertFalse("A hint or missing usage cannot prove a cache hit",projection.getBoolean("cacheHitKnown"));
+            assertEquals("not_requested",projection.getString("hintDelivery"));
+            assertFalse("The fixture omitted provider usage",usage.getBoolean("reported"));
+            for(String key:List.of("CACHE_READ","CACHE_WRITE")){
+                JSONObject counter=usage.getJSONObject("counters").getJSONObject(key);
+                assertTrue("Missing "+key+" retains the explicit unknown value field",counter.has("value"));
+                assertTrue("Missing "+key+" is unknown, not zero",counter.isNull("value"));
+                assertEquals("unknown",counter.getString("source"));
+                assertTrue(counter.isNull("sourcePath"));
+            }
         }
     }
     @Test public void unsupportedSchemasAndLocalLimitsRejectBeforeAnyHttpOrPhysicalReceipt()throws Exception {

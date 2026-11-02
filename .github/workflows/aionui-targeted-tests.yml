@@ -11,6 +11,7 @@ on:
       - 'app/src/test/java/dev/pocketengine/features/plugins/McpResourceSourceTest.java'
       - 'app/src/test/java/dev/pocketengine/features/plugins/McpResourceSkillJourneyTest.java'
       - 'app/src/test/java/dev/pocketengine/features/skills/SkillSourceUpdateTest.java'
+      - 'app/src/test/java/dev/pocketengine/runtime/ProviderCompatibilityTest.java'
 
 permissions:
   contents: read
