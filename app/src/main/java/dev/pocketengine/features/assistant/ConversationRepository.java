@@ -31,6 +31,20 @@ public final class ConversationRepository {
         public final boolean databaseAuthority;public final SourceRef.State state;
         private SourceMetadata(boolean authority,SourceRef.State value){databaseAuthority=authority;state=value;}
     }
+    /** Lock-free bounded original SQLite proof. An assistant message/document/summary cannot
+     * become a user utterance by copying the same words or assigning itself a source label. */
+    public void requireUserSaidSpan(SourceRef ref,int offset,int chars,String sha,String claimed)throws Exception {requireUserSaidSpan(ref,offset,chars,sha,claimed,null);}
+    public void requireUserSaidSpan(SourceRef ref,int offset,int chars,String sha,String claimed,Long assertedAt)throws Exception {
+        if(!healthy||!active()||!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||offset<0||chars<1||chars>24000)throw new SecurityException("原主人发言证明不可用");
+        CancellationSignal signal=new CancellationSignal();long started=System.nanoTime();var deadline=DEADLINES.schedule(signal::cancel,500,java.util.concurrent.TimeUnit.MILLISECONDS);
+        try(Cursor row=db.rawQuery("SELECT s.role,s.revision,s.deleted,s.retired_through,s.context_retired,coalesce(c.deleted,1),m.body,m.body_bytes,m.body_sha,m.revision,m.at_ms FROM assistant_sources s JOIN meta a ON a.key='assistant_history_generation' AND a.value=s.generation LEFT JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id LEFT JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id WHERE s.source_id=? AND m.body_bytes<=1048576 LIMIT 1",new String[]{ref.sourceId},signal)){
+            if(!row.moveToFirst()||!"user".equals(row.getString(0))||row.getLong(1)!=ref.revision||row.getInt(2)!=0||row.getLong(3)>=ref.revision||row.getInt(4)!=0||row.getInt(5)!=0||row.isNull(6)||row.getLong(9)!=ref.revision)throw new SecurityException("不是确切仍有效的原主人发言");
+            if(assertedAt!=null&&(row.isNull(10)||row.getLong(10)!=assertedAt))throw new SecurityException("陈述时间不是原消息实际时间，未知不能补为今天");
+            String text=row.getString(6);long end=(long)offset+chars;if(end>text.length()||offset>0&&Character.isLowSurrogate(text.charAt(offset))&&Character.isHighSurrogate(text.charAt(offset-1))||end<text.length()&&Character.isLowSurrogate(text.charAt((int)end))&&Character.isHighSurrogate(text.charAt((int)end-1)))throw new SecurityException("主人原话范围不完整");
+            byte[] bytes=text.getBytes(StandardCharsets.UTF_8);String span=text.substring(offset,(int)end);if(bytes.length!=row.getLong(7)||!("sha256:"+shaBytes(bytes)).equals(row.getString(8))||!shaBytes(span.getBytes(StandardCharsets.UTF_8)).equals(sha)||!span.equals(claimed))throw new SecurityException("主人原话、hash或声称文字不一致，不能把推断当明确原话");
+            if(!healthy||signal.isCanceled()||System.nanoTime()-started>500_000_000L)throw new SecurityException("原作者/原话证明超时，未采用模型自报标签");
+        }finally{deadline.cancel(false);}
+    }
     public SourceMetadata resolveMetadata(String sourceId)throws Exception{
         if(sourceId==null||sourceId.length()>240)throw new IllegalArgumentException("来源标识无效");
         if(!healthy)throw new IllegalStateException("原文权威状态不确定，未采用缓存来源");
@@ -138,6 +152,62 @@ public final class ConversationRepository {
         try(Cursor row=db.rawQuery("SELECT s.revision,s.conversation_id,s.role,s.deleted,s.unavailable_reason,s.retired_through,s.retirement_reason,s.context_retired,coalesce(c.deleted,1),coalesce(c.delete_reason,'unknown') FROM assistant_sources s LEFT JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE s.generation=? AND s.source_id=? LIMIT 1",new String[]{activeGeneration(),id})){
             if(!row.moveToFirst())return null;return new JSONObject().put("sourceId",id).put("revision",row.getLong(0)).put("conversationId",row.getString(1)).put("role",row.getString(2)).put("deleted",row.getInt(3)!=0||row.getInt(8)!=0).put("unavailableReason",row.getInt(3)!=0?row.getString(4):row.getInt(8)!=0?row.getString(9):"").put("memorySourceRetiredThrough",row.getLong(5)).put("retirementReason",row.getString(6)).put("memoryContextRetired",row.getInt(7)!=0);
         }
+    }
+    /** Explicit owner archive page. Native sources and import-assigned original fragments
+     * share this bounded capture, but imported records never become SourceRefs or author proof.
+     * Both original-table rowid high bounds and this generation are pinned before pagination. */
+    public JSONObject ownerExperiencePage(String cursor,dev.pocketengine.store.OwnerExperienceProjection.Gate gate,RunControl control)throws Exception {
+        return read(()->{
+            control.checkpoint();String gen=activeGeneration();JSONObject position=decode(cursor);String phase=position.optString("phase","native");
+            if(!Set.of("native","imported").contains(phase)||!cursor.isEmpty()&&!gen.equals(position.optString("generation")))throw new SecurityException("原聊天归档generation或分页类型已变化");
+            long importedUpper;if(cursor.isEmpty())try(Cursor row=db.rawQuery("SELECT coalesce(max(rowid),0) FROM assistant_import_records WHERE generation=?",new String[]{gen})){row.moveToFirst();importedUpper=row.getLong(0);}else importedUpper=integer(position,"importedUpperRow",0);
+            if(phase.equals("imported"))return ownerImportedExperiencePage(gen,position.optString("lastImported"),importedUpper,control);
+            String last=position.optString("last"),upper=position.optString("upper");
+            if(cursor.isEmpty())try(Cursor row=db.rawQuery("SELECT coalesce(max(source_id),'') FROM assistant_sources WHERE generation=?",new String[]{gen})){row.moveToFirst();upper=row.getString(0);}
+            JSONArray entries=new JSONArray(),gaps=new JSONArray();boolean nativeMore=false;String next=last;long upperRow=position.has("upperRow")?position.getLong("upperRow"):0;if(cursor.isEmpty())try(Cursor row=db.rawQuery("SELECT coalesce(max(rowid),0) FROM assistant_sources WHERE generation=?",new String[]{gen})){row.moveToFirst();upperRow=row.getLong(0);}
+            try(Cursor rows=db.rawQuery("SELECT s.source_id,s.revision,s.conversation_id,s.role,s.deleted,s.retired_through,s.context_retired,coalesce(c.deleted,1),m.body_sha,m.body_bytes,length(CAST(m.meta_json AS BLOB)) FROM assistant_sources s LEFT JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id LEFT JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id WHERE s.generation=? AND s.source_id>? AND s.source_id<=? AND s.rowid<=CAST(? AS INTEGER) ORDER BY s.source_id LIMIT 21",new String[]{gen,last,upper,Long.toString(upperRow)})){
+                while(rows.moveToNext()){
+                    control.checkpoint();if(entries.length()+gaps.length()>=20){nativeMore=true;break;}String id=rows.getString(0);next=id;SourceRef ref=new SourceRef("message",id,rows.getLong(1),"owner","private");
+                    if(rows.getInt(4)!=0||rows.getLong(5)>=ref.revision||rows.getInt(6)!=0||rows.getInt(7)!=0||gate.blocked(ref)||rows.isNull(8)||rows.getLong(9)+rows.getLong(10)>MAX_BYTES){gaps.put(new JSONObject().put("sourceRef",ref.toJson()).put("reason","deleted_retired_forgotten_missing_or_read_limited"));continue;}
+                    JSONObject actual=message(rows.getString(2),id);if(actual==null)throw new SecurityException("原消息归档期间正文不可读");String text=actual.getString("content"),hash=shaBytes(text.getBytes(StandardCharsets.UTF_8));if(!("sha256:"+hash).equals(rows.getString(8))||text.getBytes(StandardCharsets.UTF_8).length!=rows.getLong(9))throw new SecurityException("原消息hash或字节数损坏");
+                    JSONObject archived=new JSONObject().put("kind","message").put("ownerId","owner").put("spaceId","private").put("sourceRef",ref.toJson()).put("conversationId",rows.getString(2)).put("role",rows.getString(3)).put("text",text).put("sha256",hash).put("bytes",rows.getLong(9));
+                    for(String key:List.of("at","editedAt","attachments"))if(actual.has(key))archived.put(key,actual.get(key));entries.put(archived);
+                }
+            }
+            if(!nativeMore&&entries.length()+gaps.length()==0&&importedUpper>0)return ownerImportedExperiencePage(gen,"",importedUpper,control);
+            boolean more=nativeMore||importedUpper>0;JSONObject nextPosition=nativeMore?new JSONObject().put("phase","native").put("generation",gen).put("upper",upper).put("upperRow",upperRow).put("last",next).put("importedUpperRow",importedUpper):new JSONObject().put("phase","imported").put("generation",gen).put("lastImported","").put("importedUpperRow",importedUpper);
+            control.checkpoint();return new JSONObject().put("entries",entries).put("gaps",gaps).put("hasMore",more).put("nextCursor",more?encode(nextPosition):"").put("generation",gen).put("snapshotHighSourceId",upper).put("importedSnapshotUpperRow",importedUpper);
+        });
+    }
+    private JSONObject ownerImportedExperiencePage(String gen,String last,long upper,RunControl control)throws Exception {
+        JSONArray entries=new JSONArray(),gaps=new JSONArray();String next=last;boolean more=false;long used=0;
+        try(Cursor rows=db.rawQuery("SELECT r.record_id,r.record_version,r.conversation_id,r.historical_revision,r.at_ms,r.role,r.source_sha,r.byte_offset,r.byte_length,r.fragment_sha,r.deleted,coalesce(c.deleted,1),f.record_id,f.conversation_id,f.byte_length,length(f.data),d.source_bytes,d.source_format FROM assistant_import_records r LEFT JOIN assistant_conversations c ON c.generation=r.generation AND c.conversation_id=r.conversation_id LEFT JOIN assistant_import_fragments f ON f.generation=r.generation AND f.source_sha=r.source_sha AND f.byte_offset=r.byte_offset LEFT JOIN assistant_import_documents d ON d.generation=r.generation AND d.source_sha=r.source_sha WHERE r.generation=? AND r.record_id>? AND r.rowid<=CAST(? AS INTEGER) ORDER BY r.record_id LIMIT 21",new String[]{gen,last,Long.toString(upper)})){
+            while(rows.moveToNext()){
+                control.checkpoint();if(entries.length()+gaps.length()>=20){more=true;break;}
+                String id=rows.getString(0);long length=rows.getLong(8);JSONObject locator=new JSONObject().put("recordId",id).put("recordVersion",rows.getLong(1)).put("conversationId",rows.getString(2)).put("sourceSha256",rows.getString(6)).put("offset",rows.getLong(7)).put("length",length).put("fragmentSha256",rows.getString(9));
+                if(rows.getInt(10)!=0||rows.getInt(11)!=0){next=id;gaps.put(new JSONObject().put("importedLocator",locator).put("reason","imported_record_deleted").put("originalBodyIncluded",false));continue;}
+                if(length>MAX_BYTES){next=id;gaps.put(new JSONObject().put("importedLocator",locator).put("reason","imported_original_exceeds_archive_page_budget").put("originalBodyIncluded",false));continue;}
+                ImportedExperienceEvidence.checkedLocator(locator);
+                if(rows.isNull(12)||rows.isNull(15)||!id.equals(rows.getString(12))||!rows.getString(2).equals(rows.getString(13))||length!=rows.getLong(14)||length!=rows.getLong(15)||rows.isNull(16)||rows.getLong(7)>rows.getLong(16)-length||!"legacy_array".equals(rows.getString(17)))throw new SecurityException("旧导入原件段缺失或原记录定位不符，未生成空正文的成功归档");
+                if(length>MAX_BYTES-used){more=true;break;}byte[] bytes;try(Cursor fragment=db.rawQuery("SELECT data FROM assistant_import_fragments WHERE generation=? AND source_sha=? AND byte_offset=? AND record_id=? AND data IS NOT NULL LIMIT 1",new String[]{gen,rows.getString(6),Long.toString(rows.getLong(7)),id})){if(!fragment.moveToFirst())throw new SecurityException("旧导入原件段在读取期间缺失");bytes=fragment.getBlob(0);}
+                next=id;used+=bytes.length;
+                try{entries.put(ImportedExperienceEvidence.passiveRow(locator,bytes,rows.isNull(3)?null:rows.getLong(3),rows.isNull(4)?null:rows.getLong(4),rows.getString(5)));}
+                catch(ImportedExperienceEvidence.ProtectedFields protectedFields){gaps.put(new JSONObject().put("importedLocator",locator).put("reason","protected_imported_fields_excluded").put("originalBodyIncluded",false));}
+            }
+        }
+        control.checkpoint();return new JSONObject().put("entries",entries).put("gaps",gaps).put("hasMore",more).put("nextCursor",more?encode(new JSONObject().put("phase","imported").put("generation",gen).put("lastImported",next).put("importedUpperRow",upper)):"").put("generation",gen).put("importedSnapshotUpperRow",upper).put("importedIdentitiesAreNotSourceRefs",true).put("materializedOriginalFragmentBytes",used);
+    }
+    /** Any known original import deletion/version/hash change wins over an older ZIP. Unknown
+     * on a new instance remains explicitly archive-only, never a restored source permission. */
+    public boolean ownerImportedExperienceBlocked(JSONObject input)throws Exception {
+        if(!healthy)throw new SecurityException("原导入删除状态不确定，未回读旧档案正文");JSONObject pin=ImportedExperienceEvidence.checkedLocator(input);if(!active())return false;String gen=activeGeneration();
+        try(Cursor rows=db.rawQuery("SELECT r.record_version,r.conversation_id,r.source_sha,r.byte_offset,r.byte_length,r.fragment_sha,r.deleted,coalesce(c.deleted,1),length(f.data),CASE WHEN length(f.data)<=1048576 THEN f.data END FROM assistant_import_records r LEFT JOIN assistant_conversations c ON c.generation=r.generation AND c.conversation_id=r.conversation_id LEFT JOIN assistant_import_fragments f ON f.generation=r.generation AND f.source_sha=r.source_sha AND f.byte_offset=r.byte_offset WHERE r.generation=? AND r.record_id=? LIMIT 1",new String[]{gen,pin.getString("recordId")})){
+            while(rows.moveToNext()){if(rows.getLong(0)!=pin.getLong("recordVersion")||!rows.getString(1).equals(pin.getString("conversationId"))||!rows.getString(2).equals(pin.getString("sourceSha256"))||rows.getLong(3)!=pin.getLong("offset")||rows.getLong(4)!=pin.getLong("length")||!rows.getString(5).equals(pin.getString("fragmentSha256"))||rows.getInt(6)!=0||rows.getInt(7)!=0||rows.isNull(8)||rows.getLong(8)!=pin.getLong("length")||rows.isNull(9)||!shaBytes(rows.getBlob(9)).equals(pin.getString("fragmentSha256")))return true;}
+        }return false;
+    }
+    /** Local deletion/retirement is negative evidence even when an old ZIP still has the bytes. */
+    public boolean ownerExperienceBlocked(SourceRef ref)throws Exception {
+        if(!active())return false;JSONObject state=metadata(ref.sourceId);return state!=null&&(state.getBoolean("deleted")||state.optLong("memorySourceRetiredThrough")>=ref.revision||state.optBoolean("memoryContextRetired"));
     }
     public JSONObject source(String id)throws Exception{return source(activeGeneration(),id);}
     private JSONObject source(String gen,String id)throws Exception{

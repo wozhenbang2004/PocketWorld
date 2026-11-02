@@ -8,7 +8,7 @@ if (selected.isEmpty() || selected.any { !registry.containsKey(it) }) {
     throw new GradleException('Choose registered host-test groups using tools/host-tests.py --list')
 }
 def entries = selected.collect { registry[it] }
-def classes = entries.collect { it['class'] }
+def classes = entries.collectMany { [it['class']] + (it.additionalClasses ?: []) }.unique()
 def sources = (classes + entries.collectMany { it.helpers }).unique().collect { it.replace('.', '/') + '.java' }
 def sourceRoots = ['src/hostTest/java', 'src/test/java']
 sources.each { path ->
@@ -49,9 +49,6 @@ tasks.withType(Test).configureEach {
     if (providers.gradleProperty('robolectric.dependency.dir').isPresent()) systemProperty 'robolectric.offline', 'true'
     def library = providers.gradleProperty('pocketworldHostNativeDir').orNull
     if (library != null) systemProperty 'java.library.path', library
-    def hostReport = file(providers.gradleProperty('pocketworldHostReport').get())
-    reports.junitXml.required = true
-    reports.junitXml.outputLocation = new File(hostReport, 'junit')
     testLogging { events 'passed', 'skipped', 'failed'; exceptionFormat 'full'; showStandardStreams = true }
     doFirst {
         def report = file(providers.gradleProperty('pocketworldHostReport').get())
@@ -61,7 +58,21 @@ tasks.withType(Test).configureEach {
             groups: selected, classes: classes, sources: sources, sourceRoots: sourceRoots,
             dependencyLock: 'app/gradle.lockfile', testTask: path,
             workingDirectory: workingDir.absolutePath, gatewaySource: systemProperties['pocket.gateway.source'],
+            junitXmlDirectory: reports.junitXml.outputLocation.get().asFile.absolutePath,
+            junitXmlRequired: reports.junitXml.required.get(),
             assertions: true, deviceTest: false
         ])) + '\n'
     }
 }
+
+// AGP assigns its default report directory after tasks.withType(...).configureEach.
+// This official callback runs after that assignment, before task inputs are read.
+// Pin the fresh run directory rather than falling back to possibly stale default XML.
+android.testOptions.unitTests.all({ Test unitTest ->
+    if (unitTest.name != 'testDebugUnitTest') return
+    def hostReport = file(providers.gradleProperty('pocketworldHostReport').get())
+    def xml = unitTest.reports.junitXml
+    xml.required.set(true)
+    xml.outputLocation.set(new File(hostReport, 'junit'))
+    xml.outputLocation.disallowChanges()
+} as org.gradle.api.Action<Test>)

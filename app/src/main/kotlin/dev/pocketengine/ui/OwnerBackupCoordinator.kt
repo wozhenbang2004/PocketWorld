@@ -17,7 +17,7 @@ internal data class OwnerBackupState(
     val open: Boolean = false, val busy: Boolean = false, val inventory: JSONObject? = null,
     val selection: JSONObject? = null, val preview: JSONObject? = null, val review: JSONObject? = null,
     val originalAction: String? = null, val originalPhase: JSONObject? = null, val result: JSONObject? = null,
-    val projectAction: String? = null, val notice: String? = null, val error: String? = null
+    val experiencePage: JSONObject? = null, val projectAction: String? = null, val notice: String? = null, val error: String? = null
 )
 
 /** Native owner selection and read-side lifecycle. Original FeatureHost/TaskStore
@@ -29,6 +29,7 @@ internal class OwnerBackupCoordinator(
 ) {
     var state by mutableStateOf(OwnerBackupState()); private set
     private var generation = 0L
+    private var experienceRevision = 0L
     private var foreground = true
     private var closed = false
     private var observation: RunControl? = null
@@ -47,7 +48,7 @@ internal class OwnerBackupCoordinator(
         owner(); state = state.copy(open = true)
         if (state.busy || pending()) { state = state.copy(error = "请先核对原恢复动作；当前备份身份没有切换。"); return }
         clearReview()
-        work { c -> val actual = host().readLocalCacheForOwner(id, c); val metadata = actual.metadata(); val preview = host().preview(actual, c); { selected = actual; state = state.copy(selection = metadata, preview = preview, result = null, notice = "已核对原本机备份缓存；可以明确导出或仅移除此临时副本。") } }
+        work { c -> val actual = host().readLocalCacheForOwner(id, c); val metadata = actual.metadata(); val preview = host().preview(actual, c); { selected = actual; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, notice = "已核对原本机备份缓存；可以明确导出或仅移除此临时副本。") } }
     }
     fun refresh() = work { c ->
         val actual = host().inventory(c)
@@ -60,7 +61,15 @@ internal class OwnerBackupCoordinator(
     fun create(sections: Set<String>) {
         owner(); if (state.busy || pending()) return
         clearReview()
-        work { c -> val original = host().create(sections, c); val metadata = original.metadata(); val preview = host().preview(original, c); { selected = original; state = state.copy(selection = metadata, preview = preview, result = null, notice = "已生成这次范围的完整备份。请导出到你选择的位置；它未加密，用户内容可能含敏感信息。") } }
+        work { c -> val original = host().create(sections, c); val metadata = original.metadata(); val preview = host().preview(original, c); { selected = original; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, notice = "已生成这次范围的完整备份。请导出到你选择的位置；它未加密，用户内容可能含敏感信息。") } }
+    }
+    fun readExperiencePage(index: Int = 0) {
+        owner(); if (state.busy) return
+        val metadata = state.selection ?: return
+        val revision = ++experienceRevision
+        work { c -> val exact = host().reopen(metadata.getString("selectionId"), metadata.getString("archiveSha256"), c); val page = host().readExperiencePageForOwner(exact, index, c)
+            return@work { if (revision == experienceRevision) { selected = exact; state = state.copy(experiencePage = page, notice = "仅打开原经历快照；不激活旧来源、任务、授权或模型上下文。快照之后的删除状态可能未知。") } }
+        }
     }
     fun chooseImport() {
         owner(); if (state.busy || pending() || picker != null) return
@@ -86,13 +95,13 @@ internal class OwnerBackupCoordinator(
             val stop = Runnable { runCatching { input.close() } }; c.onCancel(stop)
             val actual = try { input.use { host().read(it, c) } } finally { c.removeCancelAction(stop) }
             val metadata = actual.metadata(); val preview = host().preview(actual, c)
-            return@work { selected = actual; state = state.copy(selection = metadata, preview = preview, result = null, projectAction = null, notice = "只核对了固定备份，没有恢复。下面各分区须分别审阅、明确确认；现有数据不会覆盖。") }
+            return@work { selected = actual; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, projectAction = null, notice = "只核对了固定备份，没有恢复。下面各分区须分别审阅、明确确认；现有数据不会覆盖。") }
         }
     }
     fun discardLocalCache() {
         owner(); if (state.busy) return
         val exact = selected ?: return
-        work { c -> app.features.discardOwnerArchiveCacheForOwner(exact, c); { selected = null; clearReview(); state = state.copy(selection = null, preview = null, review = null, notice = "仅移除了这份本机备份缓存。已导出的文件、项目、原件、成果及环境保留。") } }
+        work { c -> app.features.discardOwnerArchiveCacheForOwner(exact, c); { selected = null; clearReview(); state = state.copy(selection = null, preview = null, experiencePage = null, review = null, notice = "仅移除了这份本机备份缓存。已导出的文件、项目、原件、成果及环境保留。") } }
     }
     fun offerExport() {
         owner(); if (state.busy || picker != null) return
@@ -151,7 +160,7 @@ internal class OwnerBackupCoordinator(
     }
     fun readOriginal(id: String) {
         owner(); if (state.busy || pending()) return
-        work { c -> val phase = app.features.ownerArchivePhaseForOwner(id); val scope = phase.getJSONObject("scope"); val actual = host().reopen(scope.getString("selectionId"), scope.getString("archiveSha256"), c); val metadata = actual.metadata(); val preview = host().preview(actual, c); { selected = actual; state = state.copy(selection = metadata, preview = preview, originalAction = id, originalPhase = phase, review = null); queryOriginal() } }
+        work { c -> val phase = app.features.ownerArchivePhaseForOwner(id); val scope = phase.getJSONObject("scope"); val actual = host().reopen(scope.getString("selectionId"), scope.getString("archiveSha256"), c); val metadata = actual.metadata(); val preview = host().preview(actual, c); { selected = actual; state = state.copy(selection = metadata, preview = preview, experiencePage = null, originalAction = id, originalPhase = phase, review = null); queryOriginal() } }
     }
     fun openRestoredCheckout(value: JSONObject) {
         owner(); if (state.busy || value.optBoolean("found") != true) return
@@ -159,7 +168,8 @@ internal class OwnerBackupCoordinator(
         work { _ -> val actual = local.projectCheckoutForHost(value.getString("checkoutId")); check(actual.getString("projectId") == value.getString("projectId")); { closePage(); openCheckout(actual) } }
     }
     fun openRestoredAttachment(value: JSONObject) { owner(); if (!state.busy && value.optString("id").isNotEmpty()) { closePage(); openAttachment(value) } }
-    fun foreground(visible: Boolean) { foreground = visible; if (!visible) { cancelRead(); clearReview(); state = state.copy(busy = false, review = null) } else processPicker() }
+    fun invalidateExperienceReadings() { experienceRevision++; state = state.copy(experiencePage = null) }
+    fun foreground(visible: Boolean) { invalidateExperienceReadings(); foreground = visible; if (!visible) { cancelRead(); clearReview(); state = state.copy(busy = false, review = null) } else processPicker() }
     fun detach() { closed = true; cancelRead(); clearReview() }
     fun save(bundle: Bundle) {
         val pin = JSONObject().put("selectionId", state.selection?.optString("selectionId").orEmpty()).put("sha256", state.selection?.optString("archiveSha256").orEmpty()).put("actionId", state.originalAction.orEmpty()).put("projectActionId", state.projectAction.orEmpty())

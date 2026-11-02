@@ -1,5 +1,5 @@
 name: Build private debug APK
-run-name: Debug APK · ${{ github.ref_name }} · ${{ github.run_number }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
         description: 'Used only for target=host-tests; deliberately no full-suite option'
         type: choice
         default: device-receiver
-        options: [device-receiver, managed-runtime, gateway-continuation]
+        options: [device-receiver, managed-runtime, gateway-continuation, memory-experience]
   push:
     branches: [main]
     # Keep the production-input contract in tools/tests/test_apk_workflow_paths.py in sync.

@@ -34,6 +34,13 @@ public final class MemorySourceBridge {
     private dev.pocketengine.features.workspace.WorkspaceModule workspace(){
         var value=workspace;if(value==null)throw new IllegalStateException("原工作区来源宿主尚未绑定");return value;
     }
+    public SourceRef.AssertionResolver assertionResolver(){return new SourceRef.AssertionResolver(){
+        public SourceRef.State resolve(MemoryBook.Scope scope,String kind,String id)throws Exception{return MemorySourceBridge.this.resolve(scope,kind,id);}
+        public void requireUserSaid(JSONObject assertion,String exactText)throws Exception {
+            if(!exactText.equals(assertion.getString("object")))throw new SecurityException("user_said只能保留确切原句，摘要/推断必须另标类型");JSONArray spans=assertion.getJSONArray("evidenceSpans");if(spans.length()!=1)throw new SecurityException("主人原话须有唯一确切原消息span");JSONObject span=spans.getJSONObject(0);SourceRef ref=SourceRef.fromJson(span.getJSONObject("sourceRef"));if(!"message".equals(ref.kind))throw new SecurityException("文件、网页与任务摘要不是主人原发言");
+            tasks.conversationRepository().requireUserSaidSpan(ref,span.getInt("offset"),span.getInt("chars"),span.getString("sha256"),assertion.getString("object"),assertion.isNull("assertedAt")?null:assertion.getLong("assertedAt"));
+        }
+    };}
     public void prepareSourceHead(String kind,String sourceId,dev.pocketengine.core.RunControl control)throws Exception{
         if("task_evidence".equals(kind)&&dev.pocketengine.features.memory.TaskSavedEvidence.matches(sourceId)){
             if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("原已保存文档须在原生IO流程核对字节");
@@ -171,6 +178,21 @@ public final class MemorySourceBridge {
     public synchronized JSONObject supersedeReviewed(JSONObject scope,String keptId,long keptRevision,String replacedId,long replacedRevision)throws Exception{
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);return mutate(scope,memory,true,receipt->memory.supersedeReviewed(scope,keptId,keptRevision,replacedId,replacedRevision,receipt));
+    }
+    public synchronized JSONObject resolveAssertionConflictReviewed(JSONObject scope,JSONArray refs,String decision,String selected,String reason)throws Exception {
+        EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
+        reconcilePending(scope,memory);return mutate(scope,memory,false,"owner_correction",receipt->memory.resolveAssertionConflictReviewed(scope,refs,decision,selected,reason,receipt));
+    }
+    /** Actual original-span read; hashes/labels in an assertion are not proof of an utterance. */
+    public JSONObject readAssertionEvidence(JSONObject scope,SourceRef source,int offset,int chars,String sha)throws Exception {
+        MemoryBook.Scope identity=MemoryBook.Scope.from(scope);if(!source.ownerId.equals(identity.ownerId)||!source.spaceId.equals(identity.spaceId)||offset<0||chars<1||chars>24000||sha==null||!sha.matches("[a-f0-9]{64}"))throw new SecurityException("原证据范围无效");
+        EngineModule module=host.module("memory");if(!(module instanceof MemoryModule)||((MemoryModule)module).isSourceForgotten(scope,source))throw new SecurityException("原证据已遗忘，不能从旧alias重新回读");
+        prepareSourceHead(source.kind,source.sourceId,null);requireLearningReference(source);KnowledgeLearningWorkflow.SourceDocument original=read(source);
+        if(original==null||!source.equals(original.ref))throw new SecurityException("确切原来源不可读");String text=original.text;long end=(long)offset+chars;
+        if(end>text.length()||offset>0&&Character.isLowSurrogate(text.charAt(offset))&&Character.isHighSurrogate(text.charAt(offset-1))||end<text.length()&&Character.isLowSurrogate(text.charAt((int)end))&&Character.isHighSurrogate(text.charAt((int)end-1)))throw new SecurityException("原证据范围不在完整UTF-16字符边界");
+        String span=text.substring(offset,(int)end);String actual=dev.pocketengine.features.local.project.ProjectSources.sha256(span.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        if(!actual.equals(sha))throw new SecurityException("原证据hash不同，未用新正文代替旧原话");requireLearningReference(source);if(((MemoryModule)module).isSourceForgotten(scope,source))throw new SecurityException("原证据读取期间已遗忘");
+        return new JSONObject().put("sourceRef",source.toJson()).put("offset",offset).put("chars",chars).put("sha256",actual).put("text",span).put("verifiedOriginalSpan",true).put("assertionTruthVerified",false).put("authority","lower_priority_reference_data").put("executionAuthorized",false);
     }
     private interface Mutation{JSONObject apply(MemoryBook.BeforeForget receipt)throws Exception;}
     private JSONObject mutate(JSONObject scope,MemoryModule memory,boolean eraseSnapshots,Mutation mutation)throws Exception{

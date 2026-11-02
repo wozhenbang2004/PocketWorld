@@ -108,17 +108,20 @@ public final class NativeOwnerWorkflows {
                 JSONObject result=module.handle("get",new JSONObject().put("scope",scope).put("id",payload.getString("id")));
                 if(positiveVersion(payload,"revision")!=result.getJSONObject("record").getLong("revision"))throw new IllegalStateException("父记忆版本已变化，请重新读取当前候选来源");return result;
             }
+            case "resolveAssertionConflictReviewed":return sources.resolveAssertionConflictReviewed(scope,payload.getJSONArray("records"),payload.getString("decision"),payload.optString("selectedId"),payload.getString("reason"));
+            case "readAssertionEvidence":return sources.readAssertionEvidence(scope,SourceRef.fromJson(payload.getJSONObject("sourceRef")),Math.toIntExact(nativeOffset(payload,"offset")),Math.toIntExact(positiveVersion(payload,"chars")),payload.getString("sha256"));
             case "acceptCandidate":return module.acceptCandidate(scope,payload.getString("id"),positiveVersion(payload,"revision"));
             case "candidateCapacity":return module.candidateCapacity(scope);
             case "listCandidateHistory":return module.listCandidateHistory(scope);
             case "archiveCandidates":return module.archiveCandidates(scope,payload.getJSONArray("selections"));
             case "reconsiderRejected":return module.reconsiderRejected(scope,payload.getString("id"),positiveVersion(payload,"revision"),payload.getJSONObject("draft"));
             case "forgetReviewed":return sources.forgetReviewed(scope,payload.getString("id"),positiveVersion(payload,"expectedRevision"));
-            case "list":case "search":case "get":case "listCandidates":case "getCandidate":case "editCandidate":case "rejectCandidate":case "setCore":
+            case "cognitionProjection":case "list":case "search":case "get":case "listCandidates":case "getCandidate":case "editCandidate":case "rejectCandidate":case "setCore":
                 return module.handle(command,new JSONObject(payload.toString()).put("scope",scope));
             default:throw new IllegalArgumentException("此操作不属于原生记忆审核");
         }
     }
+    private static long nativeOffset(JSONObject value,String key){Object raw=value.opt(key);if(!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<0)throw new IllegalArgumentException("原范围起点须为非负整数");return ((Number)raw).longValue();}
     private dev.pocketengine.features.skills.SkillsModule skills()throws Exception{
         EngineModule module=host.module("skills");if(!(module instanceof dev.pocketengine.features.skills.SkillsModule))throw new IllegalStateException("技能模块暂不可用");return (dev.pocketengine.features.skills.SkillsModule)module;
     }

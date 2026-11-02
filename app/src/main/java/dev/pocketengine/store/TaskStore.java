@@ -7727,6 +7727,16 @@ public final class TaskStore {
         return get(taskId,false);
     }
     public synchronized JSONObject get(String id,boolean image)throws Exception{JSONObject t=read(id);if(t==null)return null;t.put("events",TaskAuditStore.events(db,id,null));JSONObject result=copy(t,image);JSONArray operations=new JSONArray();try(Cursor c=db.rawQuery("SELECT operation_id,tool,arguments,state,receipt,run_id FROM operations WHERE task_id=? ORDER BY created_at",new String[]{id})){while(c.moveToNext()){JSONObject op=new JSONObject().put("operationId",c.getString(0)).put("tool",c.getString(1)).put("arguments",new JSONObject(c.getString(2))).put("state",c.getString(3)).put("runId",c.getString(5));if(!c.isNull(4))op.put("receipt",new JSONObject(c.getString(4)));operations.put(op);}}return result.put("operations",operations);}
+    /** Owner archive read only, deliberately outside the Tasks monitor and never a model grant. */
+    public boolean ownerExperienceKnownAttachmentBlocked(JSONObject dependency)throws Exception {
+        var book=outputBook;if(book==null)return false;JSONObject meta;try{meta=book.get(dependency.getString("id"));}catch(java.io.FileNotFoundException|IllegalArgumentException missing){return false;}
+        return meta.optBoolean("outputSourceRetired")||!dependency.getString("sha256").equals(meta.optString("sha256"))||!"owner".equals(meta.optString("principalId"))||!"private".equals(meta.optString("spaceId"));
+    }
+    public synchronized boolean ownerExperienceHasTaskForOwner(String id){try(Cursor row=db.rawQuery("SELECT 1 FROM tasks WHERE task_id=? LIMIT 1",new String[]{id})){return row.moveToFirst();}}
+    /** Native owner backup only. These are bounded read views on the existing SQLite authority. */
+    public synchronized JSONObject ownerExperienceTasksForOwner(OwnerExperienceProjection.Gate gate,String cursor,RunControl control)throws Exception{return OwnerExperienceProjection.tasks(db,conversationRepository,gate,cursor,control);}
+    public synchronized JSONObject ownerExperienceAuditForOwner(OwnerExperienceProjection.Gate gate,String task,String section,String cursor,RunControl control)throws Exception{return OwnerExperienceProjection.audit(db,conversationRepository,gate,task,section,cursor,control);}
+    public synchronized JSONObject ownerExperienceOutputsForOwner(OwnerExperienceProjection.Gate gate,String task,String cursor,RunControl control)throws Exception{return OwnerExperienceProjection.outputs(db,conversationRepository,gate,task,cursor,control);}
     /** Owner presentation only. Native authorization/recovery continues to use get/hasUnresolved. */
     public synchronized JSONObject taskSummaryPage(String cursor,int limit)throws Exception{
         JSONObject page=TaskAuditStore.summaryPage(db,cursor,limit);JSONArray rows=page.getJSONArray("tasks"),visible=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if("inference".equals(row.optString("kind")))continue;row.put("hasUnresolvedOperations",hasUnresolved(row.getString("id"))).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(row.getString("id")));visible.put(row);}return page.put("tasks",visible).put("accountingRecordsExcluded",rows.length()-visible.length());

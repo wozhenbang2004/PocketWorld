@@ -714,7 +714,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (domain == "accounts" && (command in setOf("beginLogin", "cancelLogin", "logout") || command in setOf("setEnabled", "setAppLearningPolicy") && !payload.optBoolean("enabled"))) authorizationOpening = null
         ownerRequests[key]?.let { previous ->
             if (previous.payload.toString() == payload.toString()) return previous.id
-            if (command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "models", "openSource", "prepareLearningSource", "discoverMcp", "discoverMcpAuthorized", "searchTaskMemoryTasks", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "getLearningJob", "listLearningJobs", "searchOwnerOriginals", "readOwnerOriginalSearchHit", "selectOwnerOriginalReference")) throw IllegalStateException("这项操作仍在处理中，请等待真实回执")
+            if (command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "cognitionProjection", "readAssertionEvidence", "models", "openSource", "prepareLearningSource", "discoverMcp", "discoverMcpAuthorized", "searchTaskMemoryTasks", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "getLearningJob", "listLearningJobs", "searchOwnerOriginals", "readOwnerOriginalSearchHit", "selectOwnerOriginalReference")) throw IllegalStateException("这项操作仍在处理中，请等待真实回执")
             previous.control.cancel(); previous.call.cancel(); originalSourceStages.remove(previous.id)
             if (domain == "mcp" && command in setOf("discoverMcp", "discoverMcpAuthorized")) cleanOwnerResult(domain, "cancel", JSONObject().put("operationId", previous.payload.optString("_operationId")))
         }
@@ -766,7 +766,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
             } catch (error: Exception) { failure = error }
             if (failure == null && domain == "accounts" && command == "selectModel") app.sendState()
-            if (failure == null && domain != "accounts" && command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "openSource", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "discoverMcp", "discoverMcpAuthorized", "discardMcpPreview", "cancel")) {
+            if (failure == null && domain != "accounts" && command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "cognitionProjection", "readAssertionEvidence", "openSource", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "discoverMcp", "discoverMcpAuthorized", "discardMcpPreview", "cancel")) {
                 try { app.features.sendState() } catch (_: Exception) { /* The direct receipt remains authoritative. */ }
             }
             try {
@@ -1961,7 +1961,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             "feature_event" -> {
                 val payload = event.optJSONObject("payload") ?: return
                 if (event.optString("feature") == "notifications") ++notificationPreviewsSourceRevision
-                if (event.optString("feature") == "memory" && payload.optString("event") == "memory_changed") invalidateTaskMemoryReadings()
+                if (event.optString("feature") == "memory" && payload.optString("event") == "memory_changed") { invalidateTaskMemoryReadings(); invalidateCognitionReadings(); ownerArchives.invalidateExperienceReadings() }
+                if (event.optString("feature") in setOf("assistant", "attachments")) { ownerArchives.invalidateExperienceReadings(); invalidateCognitionReadings() }
                 if (event.optString("feature") == "assistant") {
                     val id = payload.optString("conversationId")
                     if (id.isNotBlank()) {
@@ -2019,6 +2020,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val metadata = JSONObject().put("_requestId", requestId)
         for (name in listOf("checkoutId", "expectedHash", "termux", "sessionId", "voiceTurnId", "turnId", "revision", "reviewId", "contentHash", "commitId", "taskId", "messageId", "profileId", "requestId", "jobId", "approvalRequestId", "decision", "projectId", "path", "artifactId", "attachmentId", "expectedSha256", "_profileBinding", "id", "offset", "length", "version", "query", "terminalId", "hostTaskId", "runId", "cursor", "cols", "rows", "expectedVersion", "expectedInstallationId", "targetInstallationId", "memberId", "teamId", "conversationId", "expectedRevision", "expectedGeneration", "expectedMemberGeneration", "assignmentId", "questionId", "answerId", "quoteMessageId", "recipientMemberId")) if (meta.second.has(name)) metadata.put(name, meta.second.get(name))
         var failure = if (!event.optBoolean("ok")) event.optString("message", "操作未完成") else null
+        if (failure == null && (feature == "assistant" && command in setOf("editMessage", "deleteMessage", "deleteConversation", "delete") || feature == "attachments" && command == "delete")) { ownerArchives.invalidateExperienceReadings(); invalidateCognitionReadings() }
         if (feature == "teams") {
             if (event.opt("ok") !is Boolean) failure = "团队操作未返回有效确认"
             if (failure == null && command in setOf("get", "pause", "resume", "feedback", "cancel", "continueMessages", "reviseAssignment", "continueOutcome", "sendMessage") && meta.second.optString("runId") != result.optString("id")) failure = "团队回执与原任务不匹配，请刷新后核对"
@@ -2138,6 +2140,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
             }
         }
+    }
+    private fun invalidateCognitionReadings() {
+        val reads = setOf("cognitionProjection", "readAssertionEvidence")
+        val abandoned = ownerRequests.filter { it.value.domain == "memoryReview" && it.value.command in reads }
+        abandoned.forEach { (key, request) -> request.control.cancel(); request.call.cancel(); ownerRequests.remove(key) }
+        val snapshot = state.ownerSnapshots["memoryReview"]?.let { JSONObject(it.toString()).put("cognitionRevision", "invalidated:${java.util.UUID.randomUUID()}") }
+        state = state.copy(ownerPending = state.ownerPending - abandoned.keys, ownerResponses = state.ownerResponses + ("memoryReview" to (state.ownerResponses("memoryReview") - reads)), ownerSnapshots = if (snapshot == null) state.ownerSnapshots else state.ownerSnapshots + ("memoryReview" to snapshot))
     }
     private fun invalidateTaskMemoryReadings() {
         val reads = setOf("readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications")

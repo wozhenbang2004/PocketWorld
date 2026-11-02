@@ -2,6 +2,7 @@ package dev.pocketengine.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,7 +26,7 @@ import org.json.JSONObject
     var details by remember { mutableStateOf(false) }
     var discard by remember { mutableStateOf(false) }
     var originalId by remember { mutableStateOf(state.originalAction.orEmpty()) }
-    val labels = linkedMapOf("projects" to "项目、保留版本与私人工作副本", "artifacts" to "固定成果与私人原件", "memory" to "记忆档案（恢复后不自动启用）", "remoteConnections" to "电脑连接配置（不含凭据）", "sshConnections" to "SSH 配置（不含密钥或信任）")
+    val labels = linkedMapOf("projects" to "项目、保留版本与私人工作副本", "artifacts" to "固定成果与私人原件", "memory" to "记忆档案（恢复后不自动启用）", "experiences" to "原聊天、任务事件与工具原回执（只读快照）", "remoteConnections" to "电脑连接配置（不含凭据）", "sshConnections" to "SSH 配置（不含密钥或信任）")
     LaunchedEffect(state.open, state.originalAction, state.originalPhase?.optString("status"), state.busy) {
         if (state.open && !state.busy && state.originalAction != null && state.originalPhase?.optString("status") in setOf("queued", "running")) { delay(700); flow.pollOriginal() }
     }
@@ -52,11 +53,27 @@ import org.json.JSONObject
                 val sections = state.preview?.optJSONObject("review")
                 labels.forEach { (key, label) -> sections?.optJSONObject(key)?.let { part ->
                     Text(label, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                    val summary = when (key) { "projects" -> "${part.optInt("projects")} 个项目 / ${part.optInt("checkouts")} 个活动副本"; "artifacts" -> "${part.optInt("workspaceFiles")} 个文件版本 / ${part.optInt("projectPackages")} 个项目包 / ${part.optInt("attachments")} 个原件"; "memory" -> "原记忆、删除屏障与候选历史保存为档案；不进入活动记忆或待审队列"; else -> "${part.optJSONArray("profiles")?.length() ?: 0} 项配置，恢复后仍须重新配置凭据或确认主机" }
+                    val summary = when (key) { "projects" -> "${part.optInt("projects")} 个项目 / ${part.optInt("checkouts")} 个活动副本"; "artifacts" -> "${part.optInt("workspaceFiles")} 个文件版本 / ${part.optInt("projectPackages")} 个项目包 / ${part.optInt("attachments")} 个原件"; "memory" -> "原记忆、删除屏障与候选历史保存为档案；不进入活动记忆或待审队列"; "experiences" -> "原经历按确切版本、时间和hash保存；缺失/撤回原件明确列为缺口，不恢复执行权"; else -> "${part.optJSONArray("profiles")?.length() ?: 0} 项配置，恢复后仍须重新配置凭据或确认主机" }
                     Caption(summary)
+                    if (key == "experiences") TextButton(onClick = { flow.readExperiencePage() }, enabled = !state.busy) { Text("打开只读原经历…") }
                     TextButton(onClick = { flow.reviewPhase(key) }, enabled = !state.busy && state.review == null, modifier = Modifier.testTag("owner_data_backup_review_$key")) { Text("审阅恢复这一分区") }
                 } }
                 if (details) Caption("固定 SHA：${archive.optString("archiveSha256")}\n本机临时定位：${archive.optString("selectionId")}")
+            }
+            state.experiencePage?.let { page ->
+                HorizontalDivider()
+                Text("原经历快照 · 第 ${page.optInt("pageIndex") + 1}/${page.optInt("pageCount")} 页", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Caption("快照时间：${page.optLong("snapshotAt")} · ${page.optString("kind")}。只核对归档字节，不证明内容真实或授权仍有效。附件字节须有同包原件分区，按hash核对。")
+                val data = page.optJSONObject("data") ?: JSONObject()
+                data.optJSONArray("entries")?.rows()?.forEach { row ->
+                    if (row.optString("status") == "blocked_by_known_source_barrier") Caption("此原经历已被本机已知的遗忘/删除/来源门阻止；不显示旧正文。")
+                    else SelectionContainer { Text(row.toString(2), fontSize = 12.sp, lineHeight = 20.sp) }
+                }
+                data.optJSONArray("gaps")?.takeIf { it.length() > 0 }?.let { Caption("原件缺口：" + it.toString()) }
+                Row {
+                    TextButton(onClick = { flow.readExperiencePage(page.optInt("pageIndex") - 1) }, enabled = !state.busy && page.optInt("pageIndex") > 0) { Text("上一页") }
+                    TextButton(onClick = { flow.readExperiencePage(page.optInt("pageIndex") + 1) }, enabled = !state.busy && page.optBoolean("hasMore")) { Text("下一页") }
+                }
             }
             state.review?.let { review ->
                 HorizontalDivider()

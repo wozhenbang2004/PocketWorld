@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 SPEC = importlib.util.spec_from_file_location('host_tests', Path(__file__).parents[1] / 'host-tests.py')
 HOST = importlib.util.module_from_spec(SPEC)
@@ -22,6 +23,14 @@ class HostTestEntrypointTest(unittest.TestCase):
         for groups, classes in [([], []), (['typo'], []), ([], ['*Test']), ([], ['missing.Test'])]:
             with self.subTest(groups=groups, classes=classes), self.assertRaises(HOST.PrerequisiteError):
                 HOST.select(REGISTRY, groups, classes)
+
+    def test_memory_batch_selects_both_exact_classes_without_a_suite_or_all_tests(self):
+        entry = REGISTRY['memory-experience']
+        self.assertEqual(['memory-experience'], HOST.select(REGISTRY, [], entry['additionalClasses']))
+        registration = (HOST.ROOT / 'tools/host-tests.gradle').read_text()
+        self.assertIn("(it.additionalClasses ?: [])", registration)
+        for name in [entry['class']] + entry['additionalClasses']:
+            self.assertTrue((HOST.ROOT / 'app/src/hostTest/java' / (name.replace('.', '/') + '.java')).is_file())
 
     def test_registered_real_sources_and_helpers_exist(self):
         for entry in REGISTRY.values():
@@ -90,6 +99,70 @@ class HostTestEntrypointTest(unittest.TestCase):
             root = Path(tmp)
             (root / 'TEST-example.Test.xml').write_text('<testsuite><testcase classname="example.Test" name="one"/><testcase classname="example.Test" name="two"/></testsuite>')
             self.assertEqual({'example.Test': 2}, HOST.junit_results(root, ['example.Test']))
+
+    def test_junit_destination_is_bound_after_agp_and_actual_location_is_recorded(self):
+        registration = (HOST.ROOT / 'tools/host-tests.gradle').read_text()
+        callback = registration.split('android.testOptions.unitTests.all(', 1)
+        self.assertEqual(2, len(callback), 'AGP overwrites early configureEach report destinations')
+        self.assertIn("xml.outputLocation.set(new File(hostReport, 'junit'))", callback[1])
+        self.assertIn('xml.outputLocation.disallowChanges()', callback[1])
+        self.assertIn('junitXmlDirectory: reports.junitXml.outputLocation.get().asFile.absolutePath', registration)
+        self.assertIn('junitXmlRequired: reports.junitXml.required.get()', registration)
+
+    def test_junit_location_handshake_rejects_missing_disabled_or_other_run_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / 'current-run'
+            report.mkdir()
+            with self.assertRaisesRegex(HOST.PrerequisiteError, 'report location'):
+                HOST.junit_directory(report)
+            other = Path(tmp) / 'old-run/junit'
+            other.mkdir(parents=True)
+            (other / 'TEST-example.Test.xml').write_text('<testsuite><testcase classname="example.Test" name="old"/></testsuite>')
+            for location, required in [(str(other), True), ('junit', True), (str(report / 'junit'), False)]:
+                (report / 'gradle-selection.json').write_text(json.dumps({'junitXmlDirectory': location, 'junitXmlRequired': required}))
+                with self.subTest(location=location, required=required), self.assertRaisesRegex(HOST.PrerequisiteError, 'JUnit XML'):
+                    HOST.junit_directory(report)
+
+    def test_current_run_location_still_requires_real_nonempty_successful_xml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp)
+            xml = report / 'junit'
+            xml.mkdir()
+            (report / 'gradle-selection.json').write_text(json.dumps({'junitXmlDirectory': str(xml), 'junitXmlRequired': True}))
+            self.assertEqual(xml, HOST.junit_directory(report))
+            with self.assertRaisesRegex(HOST.PrerequisiteError, 'No JUnit XML'):
+                HOST.junit_results(HOST.junit_directory(report), ['example.Test'])
+            result = xml / 'TEST-example.Test.xml'
+            result.write_text('<testsuite><testcase classname="example.Test" name="one"/><testcase classname="example.Test" name="two"/></testsuite>')
+            self.assertEqual({'example.Test': 2}, HOST.junit_results(HOST.junit_directory(report), ['example.Test']))
+            result.write_text('<testsuite><testcase classname="example.Test" name="failed"><failure/></testcase></testsuite>')
+            with self.assertRaisesRegex(HOST.PrerequisiteError, 'failed or skipped'):
+                HOST.junit_results(HOST.junit_directory(report), ['example.Test'])
+
+    def test_cli_gradle_success_without_xml_is_not_a_pass_and_real_xml_is_required(self):
+        # Process-boundary contract fixture only; this never executes App test bodies.
+        name = REGISTRY['gateway-continuation']['class']
+        for write_xml in (False, True):
+            with self.subTest(write_xml=write_xml), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp)
+
+                def gradle_result(command, **kwargs):
+                    report = Path(next(arg.split('=', 1)[1] for arg in command if arg.startswith('-PpocketworldHostReport=')))
+                    xml = report / 'junit'
+                    xml.mkdir()
+                    (report / 'gradle-selection.json').write_text(json.dumps({'junitXmlDirectory': str(xml), 'junitXmlRequired': True}))
+                    if write_xml:
+                        (xml / ('TEST-' + name + '.xml')).write_text('<testsuite><testcase classname="' + name + '" name="xml-contract"/></testsuite>')
+                    return SimpleNamespace(returncode=0)
+
+                with patch.object(HOST, 'preflight', return_value=(output / 'jdk', output / 'sdk', 'gradle', {})), \
+                        patch.object(HOST.subprocess, 'run', side_effect=gradle_result), \
+                        contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(0 if write_xml else 2, HOST.main(['--group', 'gateway-continuation', '--output', str(output)]))
+                results = list(output.glob('run-*/result.json'))
+                self.assertEqual(1 if write_xml else 0, len(results))
+                if write_xml:
+                    self.assertEqual({name: 1}, json.loads(results[0].read_text())['executed'])
 
     def test_missing_offline_wrapper_is_reported_before_gradle_can_download(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -164,6 +237,12 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn("inputs.target == 'host-tests'", host_job)
         self.assertNotIn('matrix:', host_job)
         self.assertIn('        default: apk', workflow)
+        title = next(line for line in workflow.splitlines() if line.startswith('run-name:'))
+        self.assertIn("inputs.target == 'host-tests'", title)
+        self.assertIn("format('Host tests · {0}', inputs.host_group)", title)
+        self.assertIn("|| 'Debug APK'", title)
+        self.assertIn('github.ref_name', title)
+        self.assertIn('github.run_number', title)
 
     def test_list_cannot_silently_discard_a_selector(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:

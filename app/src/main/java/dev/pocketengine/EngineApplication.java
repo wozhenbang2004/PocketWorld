@@ -312,7 +312,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             public TaskStore.HarnessGatewayConfiguration configuration(String task,String run,String child,String lease)throws Exception{return existingTaskHarnessGatewayBridge(task,run,lease).configurationFor(child);}
         });
         remoteAttentionNotifications=new dev.pocketengine.features.remote.RemoteAttentionNotifications(this,tasks,dev.pocketengine.ui.ComposeActivity.class);
-        EngineModule memory=addModule("memory",()->new dev.pocketengine.features.memory.MemoryModule(context,memorySources::resolve,dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackend.create()));
+        EngineModule memory=addModule("memory",()->new dev.pocketengine.features.memory.MemoryModule(context,memorySources.assertionResolver(),dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackend.create()));
         EngineModule assistant=addModule("assistant",()->new dev.pocketengine.features.assistant.AssistantModule(context,memory,this::runAssistantTurn,tasks));
         if(assistant instanceof dev.pocketengine.features.assistant.AssistantModule)memorySources.bindAssistant((dev.pocketengine.features.assistant.AssistantModule)assistant);
         if(assistant instanceof dev.pocketengine.features.assistant.AssistantModule)((dev.pocketengine.features.assistant.AssistantModule)assistant).setSourceSynchronizer(()->memorySources.synchronize(json("ownerId","owner","spaceId","private")));

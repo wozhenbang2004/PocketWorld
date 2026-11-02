@@ -41,7 +41,7 @@ public final class OwnerBackupArchive {
         void discardLocalCache(RunControl original)throws Exception{current(original);Files.delete(file.toPath());if(Files.exists(file.toPath(),LinkOption.NOFOLLOW_LINKS))throw new java.io.IOException("原备份缓存移除未确认");}
         public long export(OutputStream target,RunControl control)throws Exception{current(control);try(InputStream input=Files.newInputStream(file.toPath(),LinkOption.NOFOLLOW_LINKS)){copy(input,target,size,sha,control);}current(control);return size;}
     }
-    private static final Set<String> SECTIONS=Set.of("projects","artifacts","memory","remoteConnections","sshConnections");
+    private static final Set<String> SECTIONS=Set.of("projects","artifacts","memory","experiences","remoteConnections","sshConnections");
     private OwnerBackupArchive(){}
     public static Verified create(File newFile,Map<String,ObjectBytes> supplied,Map<String,String> sections,RunControl control)throws Exception{
         if(newFile.exists()||Files.isSymbolicLink(newFile.toPath()))throw new SecurityException("备份目标必须是新的本机临时文件，未覆盖");Map<String,ObjectBytes> objects=new TreeMap<>();long total=0;

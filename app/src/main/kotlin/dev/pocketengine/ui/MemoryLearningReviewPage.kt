@@ -484,6 +484,7 @@ internal fun MemoryLearningReviewPage(
                 }
                 (localError ?: error)?.let { Text(it, color = Danger, fontSize = 13.sp, lineHeight = 22.sp) }
                 message?.let { MemoryLearningCaption(it) }
+                if (selectedId == null && !choosing) MemoryCognitionPanel(responses, pendingCommands, snapshot.optString("cognitionRevision"), onRequest)
                 if (choosing && selectedId == null) {
                     Text(if (consolidationBusy) "归纳中，仍由你把关" else "先选择值得一起归纳的记忆", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                     MemoryLearningCaption("选择依据 → 模型归纳 → 由你审阅。只使用你明确选择的当前版本；不会覆盖原记忆、自动接受、选择核心记忆或生成可执行技能。")
@@ -565,6 +566,12 @@ internal fun MemoryLearningReviewPage(
                             }
                             Text(memoryLearningLayer(current.optString("layer")), fontSize = 12.sp, color = SecondaryInk)
                             SelectionContainer { Text(current.optString("text"), color = Ink, fontSize = 17.sp, lineHeight = 29.sp) }
+                            current.optJSONObject("assertion")?.let { assertion ->
+                                MemoryLearningCaption("主体：${assertion.optString("subjectLabel")} · ${assertion.optString("subjectId")} (${assertion.optString("subjectType")})；陈述类型：${assertion.optString("kind")}")
+                                MemoryLearningCaption("事实键：${assertion.optString("predicate")}；条件：${assertion.optString("condition").ifBlank { "未指定" }}；关系目标：${assertion.optString("objectId").ifBlank { "未知 / 未关联" }}")
+                                MemoryLearningCaption("发生 / 陈述 / 生效 / 结束：${assertion.opt("eventTime")} / ${assertion.opt("assertedAt")} / ${assertion.opt("validFrom")} / ${assertion.opt("validTo")}。null 表示未知；接受保存不证明事实为真，也不代表新授权。")
+                            }
+
                             TextButton(onClick = { showRationale = !showRationale }) { Text(if (showRationale) "收起依据与适用范围" else "依据与适用范围") }
                             if (showRationale) {
                                 MemoryLearningCaption("候选依据：" + current.optString("reason"))

@@ -25,6 +25,7 @@ import androidx.compose.ui.window.DialogProperties
 import java.text.DateFormat
 import java.util.Date
 import java.time.ZoneId
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Native administration over the existing feature contracts, without another engine or store. */
@@ -285,6 +286,7 @@ private fun NativeMemory(state: PocketUiState, controller: PocketWorldController
             SelectionContainer { Text(record.optString("text"), fontSize = 14.sp, lineHeight = 23.sp) }
             CenterCaption(memoryLayer(record.optString("layer")) + if (record.optBoolean("archiveOnly")) " · 档案原文（来源未核，不参与召回）" else if (!record.optBoolean("active", true)) " · 已失效" else "")
             CenterCaption("来源：" + record.optString("source"))
+            record.optJSONObject("assertion")?.let { a -> CenterCaption("主体：${a.optString("subjectLabel")} · ${a.optString("subjectId")} · ${a.optString("kind")} · ${record.optString("assertionStatus")}") }
             if (record.optString("layer") == "procedural") TextButton(onClick = { applications = JSONObject(record.toString()) }) { Text("查看真实方法应用回执", fontSize = 13.sp) }
             Row { TextButton(onClick = { editing = record }) { Text("编辑", fontSize = 12.sp) }; TextButton(onClick = { controller.requestFeature("memory", "setCore", JSONObject().put("id", record.optString("id")).put("revision", record.optInt("revision")).put("core", !record.optBoolean("core"))) }, enabled = !record.optBoolean("archiveOnly") && "memory.setCore" !in state.moduleBusy) { Text(if (record.optBoolean("core")) "取消核心" else "设为核心", fontSize = 12.sp) }; TextButton(onClick = { controller.openConnection("memoryReview") }) { Text("审核并遗忘…", fontSize = 12.sp, color = Danger) } }
         }
@@ -299,14 +301,56 @@ private fun NativeMemory(state: PocketUiState, controller: PocketWorldController
 private fun MemoryEditor(record: JSONObject, state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
     var text by remember { mutableStateOf(record.optString("text")) }
     var layer by remember { mutableStateOf(record.optString("layer", "fact")) }
+    val initial = record.optJSONObject("assertion")
+    var typed by remember { mutableStateOf(initial != null) }
+    var subjectType by remember { mutableStateOf(initial?.optString("subjectType") ?: "owner") }
+    var subjectId by remember { mutableStateOf(initial?.optString("subjectId") ?: "owner") }
+    var subjectLabel by remember { mutableStateOf(initial?.optString("subjectLabel") ?: "主人") }
+    var kind by remember { mutableStateOf(initial?.optString("kind") ?: "inferred") }
+    var predicate by remember { mutableStateOf(initial?.optString("predicate") ?: "") }
+    var condition by remember { mutableStateOf(initial?.optString("condition") ?: "") }
+    fun date(key: String): String = initial?.takeUnless { it.isNull(key) }?.optLong(key)?.let { java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString() } ?: ""
+    var eventDate by remember { mutableStateOf(date("eventTime")) }
+    var validFrom by remember { mutableStateOf(date("validFrom")) }
+    var validTo by remember { mutableStateOf(date("validTo")) }
+    var localError by remember { mutableStateOf<String?>(null) }
     var submitted by remember { mutableStateOf(false) }
     val busy = "memory.save" in state.moduleBusy
+    fun dateValue(key: String, value: String): Any = if (value.isBlank()) JSONObject.NULL else if (value == date(key)) initial!!.get(key) else java.time.LocalDate.parse(value).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
     LaunchedEffect(busy) { if (submitted && !busy && state.moduleErrors["memory.save"] == null) close() }
-    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text("私人记忆") }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text("私人记忆") }, text = { Column(Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         OutlinedTextField(text, { text = it }, label = { Text("希望记住什么") }, minLines = 3, maxLines = 7)
         listOf("fact", "preference", "episodic", "procedural").forEach { value -> Row(Modifier.fillMaxWidth().clickable { layer = value }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected = layer == value, onClick = { layer = value }); Text(memoryLayer(value), fontSize = 13.sp) } }
-        state.moduleErrors["memory.save"]?.let { Text(it, color = Danger, fontSize = 12.sp) }
-    } }, confirmButton = { Button(onClick = { submitted = true; val next = JSONObject(record.toString()).put("text", text.trim()).put("layer", layer).put("source", record.optString("source", "机主明确保存")); next.remove("active"); controller.requestFeature("memory", "save", JSONObject().put("record", next)) }, enabled = text.isNotBlank() && !busy) { Text(if (busy) "保存中" else "保存记忆") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
+        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(typed, { if (initial == null) typed = it }, enabled = initial == null); Text("明确主体、陈述类型与适用时间", fontSize = 13.sp) }
+        if (typed) {
+            CenterCaption("旧条目不按姓名猜主体；同名的人请用不同稳定身份。未标时间保持未知，不用今天覆盖历史。")
+            Row { listOf("owner" to "主人", "person" to "他人", "entity" to "对象").forEach { (value, label) -> TextButton(onClick = { subjectType = value; subjectId = if (value == "owner") "owner" else "$value:${java.util.UUID.randomUUID()}"; subjectLabel = if (value == "owner") "主人" else "" }) { Text(if (subjectType == value) "✓ $label" else label) } } }
+            if (subjectType != "owner") OutlinedTextField(subjectId, { subjectId = it }, label = { Text("稳定主体身份（不是名字匹配）") })
+            OutlinedTextField(subjectLabel, { subjectLabel = it }, label = { Text("主体显示名") })
+            Row { listOf("inferred" to "推断", "told" to "转述", "imagined" to "想象练习").forEach { (value, label) -> TextButton(onClick = { kind = value }) { Text(if (kind == value) "✓ $label" else label) } } }
+            if (kind == "user_said") CenterCaption("原主人发言：仅在原作者、版本和原句span真实核对后保留。改写会降为推断，不伪造新原话。")
+            OutlinedTextField(predicate, { predicate = it }, label = { Text("事实键，如 居住城市 / 喜欢饮品") })
+            OutlinedTextField(condition, { condition = it }, label = { Text("适用条件（可空）") })
+            OutlinedTextField(eventDate, { eventDate = it }, label = { Text("发生日期 YYYY-MM-DD（未知留空，UTC）") })
+            OutlinedTextField(validFrom, { validFrom = it }, label = { Text("从何时有效 YYYY-MM-DD（可空）") })
+            OutlinedTextField(validTo, { validTo = it }, label = { Text("何时结束有效 YYYY-MM-DD（不含当天，可空）") })
+        }
+        (localError ?: state.moduleErrors["memory.save"])?.let { Text(it, color = Danger, fontSize = 12.sp) }
+    } }, confirmButton = { Button(onClick = {
+        try {
+            val next = JSONObject(record.toString()).put("text", text.trim()).put("layer", layer).put("source", record.optString("source", "机主明确保存"))
+            for (key in listOf("active", "tier", "consolidationBlocked", "assertionStatus", "evidenceVerification", "assertionResolution", "assertionCorrectionAt")) next.remove(key)
+            if (typed) {
+                val assertion = if (initial == null) JSONObject().put("version", 1).put("assertedAt", JSONObject.NULL).put("reviewAfter", JSONObject.NULL).put("evidenceSpans", JSONArray()) else JSONObject(initial.toString())
+                val actualKind = if (kind == "user_said" && text.trim() != initial?.optString("object")) "inferred" else kind
+                assertion.put("kind", actualKind).put("subjectType", subjectType).put("subjectId", subjectId).put("subjectLabel", subjectLabel).put("predicate", predicate).put("object", text.trim()).put("condition", condition)
+                    .put("eventTime", dateValue("eventTime", eventDate)).put("validFrom", dateValue("validFrom", validFrom)).put("validTo", dateValue("validTo", validTo))
+                if (actualKind != "user_said" && kind == "user_said") assertion.put("evidenceSpans", JSONArray())
+                next.put("assertion", dev.pocketengine.features.memory.MemoryAssertion.checked(assertion))
+            }
+            localError = null; submitted = true; controller.requestFeature("memory", "save", JSONObject().put("record", next))
+        } catch (failed: Exception) { localError = failed.message ?: "主体或日期无效，请核对后保存" }
+    }, enabled = text.isNotBlank() && !busy) { Text(if (busy) "保存中" else "保存记忆") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
 }
 
 @Composable

@@ -23,6 +23,7 @@ public final class MemoryModule implements EngineModule {
     }
     @Override public String id(){return "memory";}
     /** Native owner archive UI only; intentionally absent from handle/model command routes. */
+    public JSONObject ownerExperienceBarriers(JSONObject scope)throws Exception{return book.ownerExperienceBarriers(scope);}
     public JSONObject ownerArchive(JSONObject scope)throws Exception{return book.ownerArchive(scope);}
     public JSONObject restoreOwnerArchive(JSONObject scope,JSONObject archive,String nativeImportId)throws Exception{return book.restoreOwnerArchive(scope,archive,nativeImportId);}
     public JSONObject ownerArchiveRestoration(JSONObject scope,String nativeImportId)throws Exception{return book.ownerArchiveRestoration(scope,nativeImportId);}
@@ -41,7 +42,7 @@ public final class MemoryModule implements EngineModule {
         for(int i=0;i<candidates.length();i++){String status=candidates.getJSONObject(i).getString("status");candidateCounts.put(status,candidateCounts.getInt(status)+1);}
         JSONObject tiers=new JSONObject().put("core",0).put("episodic",0).put("semantic",0).put("procedural",0);
         for(int i=0;i<records.length();i++){String tier=MemoryBook.tierOf(records.getJSONObject(i));tiers.put(tier,tiers.getInt(tier)+1);}
-        return new JSONObject().put("available",true).put("recordCount",records.length()).put("layers",layers)
+        return new JSONObject().put("available",true).put("cognitionRevision",book.cognitionRevision(scope)).put("recordCount",records.length()).put("layers",layers)
                 .put("memoryTiers",tiers).put("workingMemory","host_fenced_ephemeral_per_run").put("controlledConsolidation",true)
                 .put("consolidationAcceptance","existing_native_candidate_review").put("maxConsolidationSourceChars",MemoryBook.MAX_CONSOLIDATION_SOURCE_CHARS)
                 .put("scope",scope).put("retrieval",book.retrievalStatus().getString("backend")).put("retrievalBackend",book.retrievalStatus()).put("automaticLearning",false)
@@ -54,19 +55,20 @@ public final class MemoryModule implements EngineModule {
                 .put("maxLearningCandidates",MemoryBook.MAX_LEARNING_CANDIDATES).put("candidateAcceptance","trusted_host_native_only")
                 .put("candidateRetention","trusted_host_native_only").put("candidateCapacity",book.candidateCapacity(scope))
                 .put("learnedSkillExecution",false)
-                .put("commands",new JSONArray(new String[]{"list","search","get","save","delete","consolidate","recall","setCore","contextSnapshot","importFromSources","sourceUpdated","sourceDeleted","forget","listCandidates","getCandidate","editCandidate","rejectCandidate"}));
+                .put("commands",new JSONArray(new String[]{"cognitionProjection","list","search","get","save","delete","consolidate","recall","setCore","contextSnapshot","importFromSources","sourceUpdated","sourceDeleted","forget","listCandidates","getCandidate","editCandidate","rejectCandidate"}));
     }
     @Override public JSONObject handle(String command,JSONObject input)throws Exception {
         JSONObject scope=input.optJSONObject("scope");
         if(scope==null){
             // New contextual APIs never infer an owner/space from absent or malformed input.
-            if("contextSnapshot".equals(command)||"setCore".equals(command)||"importFromSources".equals(command)
+            if("cognitionProjection".equals(command)||"contextSnapshot".equals(command)||"setCore".equals(command)||"importFromSources".equals(command)
                     ||"sourceUpdated".equals(command)||"sourceDeleted".equals(command)||"forget".equals(command)
                     ||"listCandidates".equals(command)||"getCandidate".equals(command)||"editCandidate".equals(command)||"rejectCandidate".equals(command))throw new IllegalArgumentException("必须明确指定记忆空间");
             scope=new JSONObject().put("ownerId","owner").put("spaceId","private");
         }
         JSONObject result;
         switch(command){
+            case "cognitionProjection":return book.cognitionProjection(scope,input.getString("subjectId"),System.currentTimeMillis());
             case "list":return new JSONObject().put("records",book.list(scope));
             case "search":return new JSONObject().put("records",book.search(scope,input.optString("query"),Math.max(1,Math.min(100,input.optInt("limit",20)))));
             case "get":return new JSONObject().put("record",book.get(scope,input.getString("id")));
@@ -178,6 +180,9 @@ public final class MemoryModule implements EngineModule {
     public JSONObject recordAppQuality(JSONObject scope,AppQualityReceipt receipt)throws Exception{JSONObject result=book.recordAppQuality(scope,receipt,System.currentTimeMillis());context.emit(id(),new JSONObject().put("event","memory_changed"));return result;}
     public JSONObject recordAppQuality(JSONObject scope,dev.pocketengine.features.skills.SkillQualityReceipt receipt)throws Exception {
         JSONObject result=book.recordAppQuality(scope,receipt,System.currentTimeMillis());context.emit(id(),new JSONObject().put("event","memory_changed"));return result;
+    }
+    public JSONObject resolveAssertionConflictReviewed(JSONObject scope,JSONArray refs,String decision,String selected,String reason,MemoryBook.BeforeForget receipt)throws Exception {
+        JSONObject result=book.resolveAssertionConflictReviewed(scope,refs,decision,selected,reason,receipt,System.currentTimeMillis());context.emit(id(),new JSONObject().put("event","memory_changed"));return result;
     }
     /** Native owner-review action only: do not expose through a model, plugin or raw JSON dispatch. */
     public JSONObject acceptCandidate(JSONObject authenticatedScope,String id,long revision)throws Exception {

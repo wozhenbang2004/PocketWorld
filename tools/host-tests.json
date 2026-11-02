@@ -1,7 +1,9 @@
 {
   "device-receiver": {
     "class": "dev.pocketengine.features.devices.DeviceReceiverLifecycleTest",
-    "helpers": ["dev.pocketengine.features.devices.DeviceIngressNativeTest"],
+    "helpers": [
+      "dev.pocketengine.features.devices.DeviceIngressNativeTest"
+    ],
     "robolectric": true,
     "description": "Original Android Service/SQLite lifecycle on Robolectric, synthetic loopback TLS; not a device test."
   },
@@ -17,5 +19,16 @@
     "robolectric": true,
     "python": true,
     "description": "Original App/SQL/Service plus original Companion fixture on loopback; not a phone/WAN test."
+  },
+  "memory-experience": {
+    "class": "dev.pocketengine.features.workspace.OwnerExperienceArchiveNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.MemoryAssertionTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.memory.MemoryAssertionTest"
+    ],
+    "robolectric": true,
+    "description": "Original MemoryBook temporal/subject/source proof and original TaskStore/ConversationRepository portable read-only evidence; no model, device or background learning acceptance."
   }
 }

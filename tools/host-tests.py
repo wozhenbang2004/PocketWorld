@@ -34,7 +34,7 @@ def executable(value, label):
 def select(registry, groups, classes):
     chosen = list(dict.fromkeys(groups))
     for name in classes:
-        found = [group for group, entry in registry.items() if entry['class'] == name]
+        found = [group for group, entry in registry.items() if name in [entry['class']] + entry.get('additionalClasses', [])]
         if not found:
             raise PrerequisiteError('Unregistered exact host test class: ' + name + '; use --list')
         chosen.extend(found)
@@ -102,10 +102,26 @@ def preflight(args, registry, groups):
     return java_home, Path(sdk).resolve(), gradle, props
 
 
+def junit_directory(report):
+    """Accept only the real task's XML destination inside this fresh invocation."""
+    selection = report / 'gradle-selection.json'
+    try:
+        recorded = json.loads(selection.read_text())
+    except (OSError, ValueError) as error:
+        raise PrerequisiteError('Gradle did not record its actual JUnit XML report location: ' + str(selection)) from error
+    if not isinstance(recorded, dict) or recorded.get('junitXmlRequired') is not True:
+        raise PrerequisiteError('JUnit XML reporting was not enabled by the selected Gradle task')
+    location = recorded.get('junitXmlDirectory')
+    expected = (report / 'junit').resolve()
+    if not isinstance(location, str) or not Path(location).is_absolute() or Path(location).resolve() != expected:
+        raise PrerequisiteError('JUnit XML destination was not the current run: ' + str(location) + '; expected ' + str(expected))
+    return expected
+
+
 def junit_results(directory, selected):
     reports = sorted(directory.glob('TEST-*.xml'))
     if not reports:
-        raise PrerequisiteError('No JUnit XML was produced; zero tests is not success')
+        raise PrerequisiteError('No JUnit XML was produced in ' + str(directory) + '; zero tests is not success')
     counts = {}
     for report in reports:
         suite = ET.parse(report).getroot()
@@ -129,7 +145,7 @@ def run(args):
             print(group + '\t' + entry['class'] + '\n  ' + entry['description'])
         return 0
     groups = select(registry, args.group, args.test)
-    selected = [registry[group]['class'] for group in groups]
+    selected = list(dict.fromkeys(name for group in groups for name in [registry[group]['class']] + registry[group].get('additionalClasses', [])))
     print('Selected: ' + ', '.join(selected), flush=True)
     print('Scope: host integration only; Android packaging/device/WAN tests are not performed.', flush=True)
     java_home, sdk, gradle, props = preflight(args, registry, groups)
@@ -170,9 +186,9 @@ def run(args):
     if code:
         print('Host Gradle run failed (exit ' + str(code) + '). Offline runs require the existing locked dependencies in GRADLE_USER_HOME; no dependency or test was skipped.', file=sys.stderr)
         return code
-    xml = report / 'junit'
+    xml = junit_directory(report)
     counts = junit_results(xml, selected)
-    (report / 'result.json').write_text(json.dumps({'status': 'passed', 'executed': counts, 'skipped': [], 'deviceTest': False}, indent=2) + '\n')
+    (report / 'result.json').write_text(json.dumps({'status': 'passed', 'executed': counts, 'skipped': [], 'junitDirectory': str(xml), 'deviceTest': False}, indent=2) + '\n')
     print('Executed: ' + json.dumps(counts, sort_keys=True) + '; skipped: []; result: ' + str(report / 'result.json'))
     return 0
 

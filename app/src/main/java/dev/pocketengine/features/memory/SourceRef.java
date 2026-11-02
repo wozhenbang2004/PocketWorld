@@ -116,6 +116,9 @@ public final class SourceRef {
      * Scope comes from authenticated host identity; return null for missing/inaccessible evidence.
      * Revisions must increase for content changes/restoration, and IDs must not be reused.
      */
+    /** Native proof port for literal user_said annotations. Implementations must read the exact
+     * original author/revision/span without taking a TaskStore or source-admission monitor. */
+    public interface AssertionResolver extends Resolver {void requireUserSaid(JSONObject assertion,String exactRecordText)throws Exception;}
     public interface Resolver {
         State resolve(MemoryBook.Scope scope,String kind,String sourceId)throws Exception;
     }
