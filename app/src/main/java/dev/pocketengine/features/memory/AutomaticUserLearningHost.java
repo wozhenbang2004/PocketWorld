@@ -24,6 +24,7 @@ public final class AutomaticUserLearningHost {
     private final AutomaticMemoryPolicy policy;
     private final OriginalJobAdmission originalJobs;
     private String idleCursor="";
+    private boolean idleMayWrap;
     public AutomaticUserLearningHost(TaskStore tasks,MemoryModule memory,AssistantModule assistant,OriginalJobAdmission originalJobs){
         this.tasks=Objects.requireNonNull(tasks);this.memory=Objects.requireNonNull(memory);this.assistant=Objects.requireNonNull(assistant);
         this.policy=memory.automaticLearningPolicyForHost();this.originalJobs=Objects.requireNonNull(originalJobs);
@@ -68,23 +69,36 @@ public final class AutomaticUserLearningHost {
     /** Existing native idle/recovery can retry ONLY original unstarted queued admission.
      * Started, inflight, recorded-draft and unknown jobs are never automatically resumed here. */
     public JSONObject admitUnstartedOriginalJob(String taskId,MemoryHostFence eventFence)throws Exception{
-        Objects.requireNonNull(eventFence);JSONObject ready=eventFence.admit(()->{
+        JSONObject ready=readyOriginalJob(taskId,eventFence);
+        if(!ready.optBoolean("ready"))return ready;eventFence.check();return Objects.requireNonNull(originalJobs.admit(ready.getString("taskId"),ready.getLong("revision")),"original_learning_admission_receipt_missing");
+    }
+    private JSONObject readyOriginalJob(String taskId,MemoryHostFence eventFence)throws Exception{
+        Objects.requireNonNull(eventFence);return eventFence.admit(()->{
             JSONObject snapshot=tasks.sourceLearningJob(taskId),job=snapshot.getJSONObject("job"),binding=job.optJSONObject("automaticUserSource");
             if(binding==null||job.optBoolean("started")||job.optJSONObject("active")!=null||!"queued".equals(snapshot.optString("taskStatus")))return outcome("original_job_not_unstarted_queued");
             JSONObject selected=binding.getJSONObject("selectedPolicy");policy.requireCurrent(selected);SourceTask source=sourceBinding(binding);requireSources(source,job.getJSONArray("inputs"));
             return new JSONObject().put("taskId",taskId).put("revision",job.getLong("revision")).put("ready",true);
         });
-        if(!ready.optBoolean("ready"))return ready;eventFence.check();return Objects.requireNonNull(originalJobs.admit(ready.getString("taskId"),ready.getLong("revision")),"original_learning_admission_receipt_missing");
     }
+    /** Start a real native wake, retaining its selected page and permitting one wrap to newer rows. */
+    public synchronized void beginOriginalIdleScan(){idleMayWrap=!idleCursor.isEmpty();}
     /** One bounded read of the ORIGINAL TaskStore index on an existing Engine idle event.
      * No timer or retained execution queue; at most one original queued admission per event. */
     public JSONObject onOriginalIdle(MemoryHostFence eventFence)throws Exception{
         Objects.requireNonNull(eventFence);eventFence.check();if(!policy.snapshot().getBoolean("enabled"))return outcome("automatic_mode_disabled");String cursor;synchronized(this){cursor=idleCursor;}
-        JSONObject page=tasks.listSourceLearningJobs(cursor,20);synchronized(this){idleCursor=page.optBoolean("hasMore")?page.getString("nextCursor"):"";}
+        JSONObject page=tasks.listSourceLearningJobs(cursor,20);
         JSONArray jobs=page.getJSONArray("jobs");java.util.List<JSONObject> queued=new java.util.ArrayList<>();for(int i=0;i<jobs.length();i++){JSONObject snapshot=jobs.getJSONObject(i),job=snapshot.getJSONObject("job");if(job.optJSONObject("automaticUserSource")!=null&&!job.optBoolean("started")&&job.optJSONObject("active")==null&&"queued".equals(snapshot.optString("taskStatus")))queued.add(snapshot);}
         queued.sort(java.util.Comparator.comparingLong(value->value.optLong("createdAt")));
-        for(JSONObject snapshot:queued)try{return admitUnstartedOriginalJob(snapshot.getString("taskId"),eventFence);}catch(SecurityException|IllegalStateException noLongerCurrent){/* This exact old source/policy is not a fresh model permission. */}
-        return outcome("no_current_unstarted_automatic_job").put("hasMoreNativeMetadata",page.optBoolean("hasMore"));
+        for(JSONObject snapshot:queued){JSONObject ready;
+            try{ready=readyOriginalJob(snapshot.getString("taskId"),eventFence);}catch(SecurityException|IllegalStateException noLongerCurrent){continue;}
+            if(!ready.optBoolean("ready"))continue;
+            // Preserve this original page before native admission, including a busy/unknown ACK.
+            // Only an actual later idle/release may look for the other queued rows on this page.
+            eventFence.check();JSONObject admitted=Objects.requireNonNull(originalJobs.admit(ready.getString("taskId"),ready.getLong("revision")),"original_learning_admission_receipt_missing");
+            return admitted.put("hasMoreNativeMetadata",false).put("originalMetadataPageRetained",true);
+        }
+        boolean more=page.optBoolean("hasMore");synchronized(this){if(idleCursor.equals(cursor)){idleCursor=more?page.getString("nextCursor"):"";if(!more&&idleMayWrap){idleMayWrap=false;more=true;}}}
+        return outcome("no_current_unstarted_automatic_job").put("hasMoreNativeMetadata",more);
     }
     private SourceTask sourceBinding(JSONObject binding)throws Exception{
         JSONObject actual=tasks.get(binding.getString("taskId"),false);if(!eligible(actual))throw new SecurityException("自动提炼原任务不再有效");SourceTask source=new SourceTask(actual);
