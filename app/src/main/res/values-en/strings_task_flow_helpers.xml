@@ -1,0 +1,114 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="task_flow_helper_6417ad182c89" formatted="false">"Read project file"</string>
+    <string name="task_flow_helper_70f00151a265" formatted="false">"Edit project file"</string>
+    <string name="task_flow_helper_a4b667cf90e4" formatted="false">"Search project content"</string>
+    <string name="task_flow_helper_7d38fa6ade01" formatted="false">"Run project task"</string>
+    <string name="task_flow_helper_9aa8502f07f8" formatted="false">"View runtime status"</string>
+    <string name="task_flow_helper_61719b8faf64" formatted="false">"Stop project execution"</string>
+    <string name="task_flow_helper_2f983f303d90" formatted="false">"Browse project files"</string>
+    <string name="task_flow_helper_12a6bee20018" formatted="false">"Query remote task"</string>
+    <string name="task_flow_helper_dec449d6b8af" formatted="false">"Submit remote task"</string>
+    <string name="task_flow_helper_89c936008913" formatted="false">"Stop remote task"</string>
+    <string name="task_flow_helper_ba349e7d93be" formatted="false">"View phone screen"</string>
+    <string name="task_flow_helper_27fc31a0d60a" formatted="false">"View available apps"</string>
+    <string name="task_flow_helper_fca8d9704215" formatted="false">"Open phone app"</string>
+    <string name="task_flow_helper_6438a7eb77ad" formatted="false">"Tap an interface control"</string>
+    <string name="task_flow_helper_7159815dd39f" formatted="false">"Enter text"</string>
+    <string name="task_flow_helper_590ab92f1128" formatted="false">"Scroll phone screen"</string>
+    <string name="task_flow_helper_b6050ccef309" formatted="false">"Go back"</string>
+    <string name="task_flow_helper_b085faa05ba1" formatted="false">"Return to phone home"</string>
+    <string name="task_flow_helper_27a6dca15f9b" formatted="false">"Read web content"</string>
+    <string name="task_flow_helper_82d9ce3a5b37" formatted="false">"Open web page"</string>
+    <string name="task_flow_helper_09bbe4715fe3" formatted="false">"Click a web control"</string>
+    <string name="task_flow_helper_f478ead1b9ee" formatted="false">"Fill in web content"</string>
+    <string name="task_flow_helper_f3e6fb138f57" formatted="false">"Scroll web page"</string>
+    <string name="task_flow_helper_9380bea6eb37" formatted="false">"Wait for web update"</string>
+    <string name="task_flow_helper_4072b287a386" formatted="false">"Arrange team assignments"</string>
+    <string name="task_flow_helper_8701828a9bd8" formatted="false">"Start team collaboration"</string>
+    <string name="task_flow_helper_d36596ce1f5e" formatted="false">"View team progress"</string>
+    <string name="task_flow_helper_d92a22bb4f7b" formatted="false">"Communicate with team members"</string>
+    <string name="task_flow_helper_13c364bf77a9" formatted="false">"Adjust team tasks"</string>
+    <string name="task_flow_helper_7d3d81a5a74b" formatted="false">"Run selected skill"</string>
+    <string name="task_flow_helper_dc9591e56d50" formatted="false">"In progress"</string>
+    <string name="task_flow_helper_a8b0bd9c65f7" formatted="false">"Awaiting confirmation"</string>
+    <string name="task_flow_helper_33df16b4afab" formatted="false">"Needs review"</string>
+    <string name="task_flow_helper_292825b7f8c8" formatted="false">"Problem encountered"</string>
+    <string name="task_flow_helper_4be334f6b7c5" formatted="false">"Returned"</string>
+    <string name="task_flow_helper_f006455e3baf" formatted="false">"Stopped"</string>
+    <string name="task_flow_helper_9fad24e2c377" formatted="false">"Record"</string>
+    <string name="task_flow_helper_ea71b3101c7c" formatted="false">"Goal completed against its criteria"</string>
+    <string name="task_flow_helper_96dd93b9b380" formatted="false">"This run ended with failed steps"</string>
+    <string name="task_flow_helper_0297c9ec1ac7" formatted="false">"Plan paused"</string>
+    <string name="task_flow_helper_393d64e96681" formatted="false">"Plan cancelled"</string>
+    <string name="task_flow_helper_8de360349744" formatted="false">"Changes need review"</string>
+    <string name="task_flow_helper_111cab760871" formatted="false">"Waiting for you to start"</string>
+    <string name="task_flow_helper_a6847acc84d9" formatted="false">"Original task is running or awaiting review"</string>
+    <string name="task_flow_helper_d811bcc6a56f" formatted="false">"Waiting for planned time"</string>
+    <string name="task_flow_helper_47f1a559e503" formatted="false">"Waiting for operating conditions to be checked"</string>
+    <string name="task_flow_helper_a4f47f5921cb" formatted="false">"A blocker needs attention"</string>
+    <string name="task_flow_helper_2d37dc8480bc" formatted="false">"Execution not authorized yet"</string>
+    <string name="task_flow_helper_35ea09919477" formatted="false">"Later execution cancelled"</string>
+    <string name="task_flow_helper_8a5d7e0af9a9" formatted="false">"This goal will not trigger later tasks. Existing operations are not undone. Check in-flight original tasks using their actual states below."</string>
+    <string name="task_flow_helper_ac98edaeed79" formatted="false">"Original operation result needs review"</string>
+    <string name="task_flow_helper_d48c3795e88c" formatted="false">"Retains the same trigger and original task. Only queries original records; existing operations are not dispatched again. Open the original task to review unresolved results."</string>
+    <string name="task_flow_helper_de078a5a919e" formatted="false">"Original task needs approval for a specific operation"</string>
+    <string name="task_flow_helper_f0d738318a21" formatted="false">"Goal scope authorization is retained. Review and approve or reject these specific arguments in the original task. This view does not authorize them for you."</string>
+    <string name="task_flow_helper_a39536125d8c" formatted="false">"No consumable new event is available from the original authenticated source. Only the local original inbox window is checked. No model request or message is fabricated."</string>
+    <string name="task_flow_helper_81b62034b10a" formatted="false">"The original anchor or scan position is outside the retained window. No gap was skipped or read position advanced automatically. Pause, choose a verifiable source and review again."</string>
+    <string name="task_flow_helper_c925358c8f28" formatted="false">"The original event version already consumed by this trigger has changed. The same trigger identity is retained; another event is not substituted to trigger the goal again."</string>
+    <string name="task_flow_helper_79d9b4dcf698" formatted="false">"Explicitly confirm the selected source and this fixed goal on the native scope page."</string>
+    <string name="task_flow_helper_fab340d4fa50" formatted="false">"The original channel binding, source or local record cannot currently be verified. Revoked sources cannot cause new consumption or dispatch."</string>
+    <string name="task_flow_helper_09da9d09c045" formatted="false">"Waiting for an authenticated source event"</string>
+    <string name="task_flow_helper_f429d3763ab0" formatted="false">"Checks only that the event exists. Message bodies are not new instructions. A legitimately started goal remains subject to its separate original plan authorization, budget and cancellation controls."</string>
+    <string name="task_flow_helper_d1249f0b4cf0" formatted="false">"The original command Job has not returned a final process receipt with exit code 0. This step has not started."</string>
+    <string name="task_flow_helper_61e49b2d2328" formatted="false">"The original computer receipt still needs review. The original command is not resubmitted, and a lost connection is not treated as completion."</string>
+    <string name="task_flow_helper_f8b5157e7113">"Original process status: %1$s; exit code: %2$s. Successful exit is unconfirmed."</string>
+    <string name="task_flow_helper_f673593273f4" formatted="false">"This step already retains its original trigger identity; editing cannot switch its source. Review the original task, or cancel this goal and create a separately reviewed goal."</string>
+    <string name="task_flow_helper_ea32a3c28cc9" formatted="false">"Open the original computer task to handle this. To choose a different original task, pause, edit this step and review again."</string>
+    <string name="task_flow_helper_9aca96e5fdb7" formatted="false">"The original computer command was cancelled or requested to stop. Exit code 0 was not established. This view does not resume it."</string>
+    <string name="task_flow_helper_f7fc508dbac4" formatted="false">"The selected original task run, epoch, computer or job identity has changed. A new execution is not followed automatically. Pause, explicitly select again and review."</string>
+    <string name="task_flow_helper_d8c9423d1694" formatted="false">"The original process ended, but no valid integer exit code is available. It cannot be treated as 0."</string>
+    <string name="task_flow_helper_195cf1602b52" formatted="false">"The original task, process or local receipt cannot currently be verified. This step is not eligible to run."</string>
+    <string name="task_flow_helper_359ac1480cb4" formatted="false">"Computer prerequisite not satisfied"</string>
+    <string name="task_flow_helper_3fe799afdb76" formatted="false">"Original computer result needs review"</string>
+    <string name="task_flow_helper_b941d0d635ca" formatted="false">"Waiting for original computer task"</string>
+    <string name="task_flow_helper_d22806c5ed53" formatted="false">"Checks only original receipts saved locally. Open the original computer task below to query the computer again. A process exit code does not prove the command achieved its goal."</string>
+    <string name="task_flow_helper_e2a314bdf2c1" formatted="false">"Network state permission is missing. The device is not treated as connected."</string>
+    <string name="task_flow_helper_9cf7a5f14981" formatted="false">"System network state cannot currently be read. The device is not treated as connected."</string>
+    <string name="task_flow_helper_101a3f159b7d" formatted="false">"The system has not validated the network as usable. Validation also would not prove the model endpoint is reachable."</string>
+    <string name="task_flow_helper_fce87872643f" formatted="false">"Waiting for a system-validated network."</string>
+    <string name="task_flow_helper_98f6d26d76a5" formatted="false">"The system did not provide a usable charging state."</string>
+    <string name="task_flow_helper_70aae635e70e" formatted="false">"Waiting for charging."</string>
+    <string name="task_flow_helper_fe2d3f270460" formatted="false">"The system did not provide a valid battery level. It is not treated as 0% or full."</string>
+    <string name="task_flow_helper_4d8c1c5b4283" formatted="false">"Unknown"</string>
+    <string name="task_flow_helper_87e18d01a788">"Current battery: %1$s%%. At least %2$s%% is required."</string>
+    <string name="task_flow_helper_334430e29b28" formatted="false">"Operating conditions cannot currently be verified."</string>
+    <string name="task_flow_helper_43fd7f22ba0b" formatted="false">"This same trigger record is already retained. When conditions recover, the original task is checked again without recalculating task starts."</string>
+    <string name="task_flow_helper_559d2fbd6770" formatted="false">"Operating conditions temporarily unreadable"</string>
+    <string name="task_flow_helper_73bd13d7105f" formatted="false">"Waiting for operating conditions"</string>
+    <string name="task_flow_helper_1732738b125e" formatted="false">"Waiting for planned time or the end of quiet hours"</string>
+    <string name="task_flow_helper_47db97120191" formatted="false">"No permission to run early was granted. System timers may be delayed. A manual check also rechecks original timing, conditions and scope."</string>
+    <string name="task_flow_helper_38d56b8c50b9" formatted="false">"Earliest eligible time exceeds the original window"</string>
+    <string name="task_flow_helper_c88478bb76ce" formatted="false">"This execution window ended"</string>
+    <string name="task_flow_helper_73b3b6ffd861" formatted="false">"The original window ends before the earliest eligible time. No task was started."</string>
+    <string name="task_flow_helper_7096303e1b4f" formatted="false">"Expiration is not treated as completion, and old execution permission is not restored."</string>
+    <string name="task_flow_helper_651f660fe268" formatted="false">"Reviewing again does not extend the original trigger deadline. The original task and existing results remain available for review."</string>
+    <string name="task_flow_helper_18d51965a096" formatted="false">"If no original task exists yet, pause, edit future steps and review a valid window again."</string>
+    <string name="task_flow_helper_075f238d08b1" formatted="false">"Original trigger record needs review"</string>
+    <string name="task_flow_helper_2a890b38f57d" formatted="false">"This trigger identity is already saved. Query the original task first. Continuing after review uses the same record and does not create a second trigger."</string>
+    <string name="task_flow_helper_a9678a93eae0" formatted="false">"Original task registered; execution not started"</string>
+    <string name="task_flow_helper_323a9632499b" formatted="false">"Checks the original task for this same trigger first, then continues under current conditions and the original deadline. No second task is created."</string>
+    <string name="task_flow_helper_1f82b006a254" formatted="false">"Original task result needs review"</string>
+    <string name="task_flow_helper_eeadd22646f3" formatted="false">"Original task still needs attention"</string>
+    <string name="task_flow_helper_989d7d8101a8" formatted="false">"Original task is running"</string>
+    <string name="task_flow_helper_ce74fc2ad1f6" formatted="false">"The original task association is retained. Checking its state does not create or execute a task. View existing results in that same original task."</string>
+    <string name="task_flow_helper_112c5bee91a9" formatted="false">"Ready to check and continue this goal"</string>
+    <string name="task_flow_helper_c8929525157d" formatted="false">"Rechecks this goal\'s original tasks, timing, conditions and authorization before entering the existing execution path."</string>
+    <string name="task_flow_helper_9bd3718e8767" formatted="false">"Prerequisite or original task unverified"</string>
+    <string name="task_flow_helper_8b39a4f35c61" formatted="false">"Only original task state is checked. Missing receipts do not count as success, failure or permission to execute again."</string>
+    <string name="task_flow_helper_1639ca42c6cb" formatted="false">"Waiting for actual prerequisite results"</string>
+    <string name="task_flow_helper_0b01c1aa74a7" formatted="false">"Every prerequisite must meet its reviewed result condition. This later step has not started."</string>
+    <string name="task_flow_helper_cffa88e95f16" formatted="false">"Original task connection temporarily unavailable"</string>
+    <string name="task_flow_helper_4990761851c5" formatted="false">"No task was started or replaced. Refresh the original task connection later."</string>
+</resources>

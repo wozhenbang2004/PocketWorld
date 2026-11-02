@@ -1,5 +1,7 @@
 package dev.pocketengine.ui
 
+import dev.pocketengine.R
+
 import dev.pocketengine.features.automation.PlanArtifactVerifier
 import dev.pocketengine.features.automation.PlanBusinessWait
 import dev.pocketengine.features.automation.PlanRemoteWait
@@ -84,9 +86,9 @@ internal fun executionPlanDefinition(goal: String, steps: List<ExecutionStepDraf
 }
 
 internal fun executionPlanStateLabel(value: String): String = when (value) {
-    "completed" -> "目标已按标准完成"; "finished_with_failures" -> "本轮结束，有步骤失败"
-    "paused" -> "计划已暂停"; "cancelled" -> "计划已取消"; "review_required" -> "修改后待审阅"
-    "waiting_for_owner_start" -> "等你开始"; "waiting_for_original_task" -> "原任务正在处理或等待核对"
-    "scheduled" -> "等待计划时间"; "ready_for_host_check" -> "等待运行条件核对"; "blocked" -> "需要处理阻塞"
-    else -> "尚未授权执行"
+    "completed" -> taskFlowText(R.string.task_flow_helper_ea71b3101c7c, "目标已按标准完成"); "finished_with_failures" -> taskFlowText(R.string.task_flow_helper_96dd93b9b380, "本轮结束，有步骤失败")
+    "paused" -> taskFlowText(R.string.task_flow_helper_0297c9ec1ac7, "计划已暂停"); "cancelled" -> taskFlowText(R.string.task_flow_helper_393d64e96681, "计划已取消"); "review_required" -> taskFlowText(R.string.task_flow_helper_8de360349744, "修改后待审阅")
+    "waiting_for_owner_start" -> taskFlowText(R.string.task_flow_helper_111cab760871, "等你开始"); "waiting_for_original_task" -> taskFlowText(R.string.task_flow_helper_a6847acc84d9, "原任务正在处理或等待核对")
+    "scheduled" -> taskFlowText(R.string.task_flow_helper_d811bcc6a56f, "等待计划时间"); "ready_for_host_check" -> taskFlowText(R.string.task_flow_helper_47f1a559e503, "等待运行条件核对"); "blocked" -> taskFlowText(R.string.task_flow_helper_a4f47f5921cb, "需要处理阻塞")
+    else -> taskFlowText(R.string.task_flow_helper_2d37dc8480bc, "尚未授权执行")
 }
