@@ -109,6 +109,14 @@ android.sourceSets.test.java.srcDir(rootProject.file('display-helper/test'))
 // The explicit Mika CI command compiles every selected Java test and its fixture
 // closure. The default unit-test source set and full-suite entry remain unchanged.
 if (providers.gradleProperty('mikaFocusedTests').orNull == 'true') {
+    // Robolectric sandboxes and ordinary JUnit classes must not share one JVM's JNI owner.
+    // Keep every declared class and the independent unavailable-native phase unchanged.
+    tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+        forkEvery = 1
+        maxParallelForks = 1
+        // Host Conscrypt reads InetAddress identity; APK/native TLS checks are unchanged.
+        jvmArgs '--add-opens=java.base/java.net=ALL-UNNAMED'
+    }
     def manifestFile = rootProject.file('app/build/mika-focused-tests/sources.json')
     if (!manifestFile.isFile()) throw new GradleException('Run tools/prepare-mika-focused-sources.py before focused unit compilation')
     def manifest = new groovy.json.JsonSlurper().parse(manifestFile)
