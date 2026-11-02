@@ -30,6 +30,27 @@ SOURCE_URL = "https://pocketengine.local/assets/pocket-ui/index.html"
 MIN_WEBVIEW_MAJOR = 111
 CAPTURE_ANDROID_API = 35
 CAPTURE_SYSTEM_IMAGE = "system-images;android-35;google_apis;x86_64"
+WEB_ERROR_PATTERN = r"PocketWebUi.*(?:resource-error|console-error|renderer-exit|render-process-gone|main-frame-error)"
+SCENE_LABELS = {
+    "workroom": ("全部工作", "工作输入"),
+    "work-menu": ("关闭全部工作", "设置与连接"),
+    "settings": ("搜索设置", "模型与连接", "设备与执行"),
+    "model-purpose": ("模型与连接", "ChatGPT 账号"),
+    "model-list": ("当前模型", "API 连接", "添加 API 连接"),
+    "model-editor": ("返回模型与连接", "接口协议", "接口地址", "模型名称", "API 密钥", "高级设置"),
+    "model-advanced": ("返回模型与连接", "高级设置", "每次回复的输出上限"),
+}
+CAPTURE_SCENES = (
+    ("01-workroom.png", "entry.xml", "workroom"),
+    ("02-all-work.png", "all-work.xml", "work-menu"),
+    ("03-workroom-return.png", "return.xml", "workroom"),
+    ("05-settings.png", "settings.xml", "settings"),
+    ("06-model-purpose.png", "model-purpose.xml", "model-purpose"),
+    ("07-model-connections.png", "model-list.xml", "model-list"),
+    ("08-model-editor.png", "model-editor.xml", "model-editor"),
+    ("09-model-advanced.png", "model-advanced.xml", "model-advanced"),
+    ("10-workroom-final.png", "workroom-final.xml", "workroom"),
+)
 
 
 def sha256(path):
@@ -184,6 +205,7 @@ def verify_apk(args):
         with zipfile.ZipFile(io.BytesIO(bundle.read("assets/pocketengine-display-helper.jar"))) as helper:
             assert helper.testzip() is None and "classes.dex" in helper.namelist(), "Display helper DEX missing"
         web_files = sorted(name for name in names if name.startswith("assets/pocket-ui/"))
+        assert not any(b"__POCKET_VISUAL_FIXTURE__" in bundle.read(name) for name in web_files), "An isolated browser fixture was packaged as the real app"
         assert any(name.endswith(".js") for name in web_files), "Packaged Web application JavaScript is missing"
         assert any(name.endswith(".css") for name in web_files), "Packaged Web application styles are missing"
         web_identity = [{"path": name, "bytes": len(bundle.read(name)),
@@ -221,30 +243,71 @@ def parse_bounds(value):
     return left, top, right, bottom
 
 
+def accessible_values(node):
+    return [" ".join(node.get(key, "").split()) for key in ("text", "content-desc") if node.get(key)]
+
+
+def scene_identity(xml, scene):
+    root = ET.parse(xml).getroot()
+    assert root.tag == "hierarchy", "Not an Android accessibility hierarchy"
+    values = []
+    for node in root.iter("node"):
+        if node.get("package") != APP_ID:
+            continue
+        try:
+            parse_bounds(node.get("bounds"))
+        except ValueError:
+            continue
+        values.extend(accessible_values(node))
+    required = SCENE_LABELS[scene]
+    for label in required:
+        assert any(label in value for value in values), "Expected " + scene + " accessibility content: " + label
+    if scene in ("model-list", "model-purpose", "settings"):
+        assert not any("API 密钥" in value for value in values), "The model editor leaked into its parent directory"
+    if scene == "model-editor":
+        assert not any("每次回复的输出上限" in value for value in values), "Advanced settings were expanded before selection"
+    if scene == "model-purpose":
+        assert not any("当前模型" in value for value in values), "Expected the source settings group, not the model list"
+    return {"scene": scene, "method": "actual Android accessibility hierarchy", "required_labels": required}
+
+
+def verify_scene(args):
+    identity = scene_identity(args.xml, args.scene)
+    write_json(args.out, identity)
+
+
 def target(args):
     root = ET.parse(args.xml).getroot()
     parents = {child: parent for parent in root.iter() for child in parent}
-    candidates = []
-    for node in root.iter("node"):
-        if args.label not in (node.attrib.get("text"), node.attrib.get("content-desc")):
+    unique = {}
+    selected_label = args.label
+    for label in (args.label, args.fallback_label):
+        if not label:
             continue
-        button = node
-        while button is not None and button.attrib.get("clickable") != "true":
-            button = parents.get(button)
-        if button is None or button.attrib.get("enabled") != "true":
-            continue
-        try:
-            bounds = parse_bounds(button.attrib.get("bounds"))
-        except ValueError:
-            continue
-        if button.attrib.get("package") != APP_ID:
-            continue
-        candidates.append((button, bounds))
-    unique = {bounds: node for node, bounds in candidates}
-    assert len(unique) == 1, "Expected one accessible app control named " + args.label
+        candidates = []
+        for node in root.iter("node"):
+            values = accessible_values(node)
+            if not any(value == label or args.match == "prefix" and value.startswith(label) for value in values):
+                continue
+            button = node
+            while button is not None and button.attrib.get("clickable") != "true":
+                button = parents.get(button)
+            if button is None or button.attrib.get("enabled") != "true" or button.attrib.get("class") == "android.webkit.WebView":
+                continue
+            try:
+                bounds = parse_bounds(button.attrib.get("bounds"))
+            except ValueError:
+                continue
+            if button.attrib.get("package") == APP_ID:
+                candidates.append((button, bounds))
+        unique = {bounds: node for node, bounds in candidates}
+        if unique:
+            selected_label = label
+            break
+    assert len(unique) == 1, "Expected one accessible app control named " + selected_label
     bounds, node = next(iter(unique.items()))
     point = [(bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2]
-    write_json(args.out, {"label": args.label, "bounds": bounds, "point": point,
+    write_json(args.out, {"label": selected_label, "match": args.match, "bounds": bounds, "point": point,
                           "method": "Android accessibility bounds", "class": node.attrib.get("class")})
     print(*point)
 
@@ -363,20 +426,33 @@ def verify_capture(args):
     assert webview_provider_identity((root / "webview-provider-final.txt").read_text(errors="replace")) == provider, "Active WebView provider changed during capture"
     log = (root / "device-logcat.txt").read_text(errors="replace")
     assert re.search(r"PocketWebUi.*ready source=library-web", log), "Library Web UI ready signal is missing"
-    assert not re.search(r"PocketWebUi.*(?:resource-error|console-error|render-process-gone|main-frame-error)", log, re.I), "Web UI resource/runtime error recorded"
+    assert not re.search(WEB_ERROR_PATTERN, log, re.I), "Web UI resource/runtime error recorded"
     for match in re.finditer(r"FATAL EXCEPTION", log):
         assert APP_ID not in log[match.start():match.start() + 1200], "App crash recorded in logcat"
     files = []
     dimensions = set()
-    for name in ("01-workroom.png", "02-all-work.png", "03-workroom-return.png"):
+    scenes = []
+    for name, xml, scene in CAPTURE_SCENES:
         path = root / name
+        scenes.append({"xml": xml, **scene_identity(root / xml, scene)})
         width, height = png_dimensions(path)
         dimensions.add((width, height))
         files.append({"file": name, "bytes": path.stat().st_size, "sha256": sha256(path), "width": width, "height": height})
     assert len(dimensions) == 1, "Viewport changed during the captured journey"
-    for name in ("open-work-target.json", "close-work-target.json", "return-work-target.json"):
+    for xml, scene in (("model-list-return.xml", "model-list"), ("model-purpose-return.xml", "model-purpose"), ("settings-return.xml", "settings")):
+        scenes.append({"xml": xml, **scene_identity(root / xml, scene)})
+    target_labels = {
+        "open-work-target.json": ("全部工作",), "close-work-target.json": ("关闭全部工作",),
+        "return-work-target.json": ("全部工作",), "settings-work-target.json": ("全部工作",),
+        "settings-target.json": ("设置与连接",), "models-group-target.json": ("模型与连接",),
+        "models-list-target.json": ("模型与连接",),
+        "model-editor-target.json": ("编辑当前 API 连接", "添加 API 连接"),
+        "model-advanced-target.json": ("高级设置",),
+    }
+    for name, labels in target_labels.items():
         target_data = json.loads((root / name).read_text())
         assert target_data["method"] == "Android accessibility bounds", "Unverified coordinate fallback"
+        assert target_data["label"] in labels, "Unexpected business action in the navigation journey"
     mp4 = root / "04-interaction.mp4"
     content = mp4.read_bytes()
     assert len(content) > 10000 and content[4:8] == b"ftyp", "Screen recording is missing or invalid"
@@ -386,14 +462,15 @@ def verify_capture(args):
         "commit": current_commit(), "run_id": os.environ.get("GITHUB_RUN_ID"),
         "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"), "application_id": APP_ID,
         "source": "formal Android WebView application with transplanted library UI",
-        "device": device, "apk": identity, "captures": files,
-        "interaction_scope": "fresh app entry, actual work switcher open/close, return, short screen recording",
+        "device": device, "apk": identity, "captures": files, "scenes": scenes,
+        "non_mock": True,
+        "interaction_scope": "fresh app, work menu, settings group, actual model list, unsaved editor, advanced settings, Android back through original layers; no task or model save/test",
         "limitations": ["Android 15/API35 emulator capture, not a physical phone",
                        "Minimum supported Android 11/API30 runtime compatibility remains unverified by this capture", "No model or phone-execution task initiated by the capture script",
                        "Does not prove every business journey, touch performance, accessibility or visual acceptance"],
         "status": "capture integrity and startup checks passed; inspect PNG/MP4 for design acceptance",
     })
-    print("Verified three device PNGs and one app screen recording")
+    print("Verified nine device PNGs, actual navigation scenes and one app screen recording")
 
 
 def main():
@@ -410,8 +487,15 @@ def main():
     control = commands.add_parser("target")
     control.add_argument("--xml", required=True)
     control.add_argument("--label", required=True)
+    control.add_argument("--fallback-label")
+    control.add_argument("--match", choices=("exact", "prefix"), default="exact")
     control.add_argument("--out", required=True)
     control.set_defaults(function=target)
+    scene = commands.add_parser("scene")
+    scene.add_argument("--xml", required=True)
+    scene.add_argument("--scene", choices=tuple(SCENE_LABELS), required=True)
+    scene.add_argument("--out", required=True)
+    scene.set_defaults(function=verify_scene)
     provider = commands.add_parser("provider")
     provider.add_argument("--dump", required=True)
     provider.add_argument("--out", required=True)

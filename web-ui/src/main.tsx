@@ -14,16 +14,22 @@ function MountedApp() {
   useEffect(() => {
     let disposed = false;
     // This only opens the UI subscription; it never creates or resumes a user task.
+    console.info('PocketWebUi startup phase=fonts-requested');
     void Promise.all([
       document.fonts.load('400 16px "Inter"', 'PocketWorld'),
       document.fonts.load('400 16px "Noto Sans SC"', '工作预览与任务'),
       document.fonts.load('400 13px "JetBrains Mono"', 'const task = 1;'),
     ]).then(async faces => {
       if (faces.some(values => values.length === 0)) throw new Error('Bundled application fonts are missing');
+      if (!disposed) console.info('PocketWebUi startup phase=fonts-loaded');
       await document.fonts.ready;
+      if (!disposed) console.info('PocketWebUi startup phase=fonts-ready');
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       if (disposed) return;
+      console.info('PocketWebUi startup phase=frames-ready');
+      console.info('PocketWebUi startup phase=handshake-sent');
       await bridge.command('app.ready');
+      if (!disposed) console.info('PocketWebUi startup phase=handshake-accepted');
       if (!disposed) console.info('PocketWebUi ready source=library-web');
     }).catch(error => {
       if (!disposed) console.error('PocketWebUi startup-error', error instanceof Error ? error.message : 'unknown');

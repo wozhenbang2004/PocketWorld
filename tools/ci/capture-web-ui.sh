@@ -141,7 +141,7 @@ pw_adb shell am start -W -n dev.pocketengine/.ui.ComposeActivity > "$PW_CAPTURE_
 PW_READY=false
 PW_READY_DEADLINE=$((SECONDS + 90))
 while (( SECONDS < PW_READY_DEADLINE )); do
-    if grep -Eqi 'PocketWebUi.*(resource-error|console-error|render-process-gone|main-frame-error)' "$PW_CAPTURE_DIR/device-logcat.txt"; then
+    if grep -Eqi 'PocketWebUi.*(resource-error|console-error|renderer-exit|render-process-gone|main-frame-error)' "$PW_CAPTURE_DIR/device-logcat.txt"; then
         echo "Web UI failed during startup; see captured logcat" >&2
         exit 1
     fi
@@ -180,12 +180,33 @@ PY
     return 1
 }
 
+pw_scene() {
+    local name=$1 scene=$2
+    pw_dump_layout "$name.xml"
+    python3 tools/ci/verify-web-ui.py scene --xml "$PW_CAPTURE_DIR/$name.xml" \
+        --scene "$scene" --out "$PW_CAPTURE_DIR/$name-scene.json"
+}
+
+# All coordinates come from the exact current Android accessibility hierarchy.
+# Prefix mode is explicit for BoardUI buttons whose name also includes a subtitle.
+pw_tap() {
+    local name=$1 label=$2 receipt=$3
+    shift 3
+    local point x y
+    point=$(python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/$name.xml" \
+        --label "$label" --out "$PW_CAPTURE_DIR/$receipt.json" "$@")
+    read -r x y <<< "$point"
+    [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]]
+    pw_adb shell input tap "$x" "$y"
+    sleep 1
+}
+
 PW_STAGE=entry-capture
 sleep 1
-pw_dump_layout entry.xml
+pw_scene entry workroom
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/01-workroom.png"
 PW_STAGE=screen-recording
-timeout 35s "$PW_ADB" -s "$PW_SERIAL" shell screenrecord --time-limit 24 --bit-rate 4000000 \
+timeout 135s "$PW_ADB" -s "$PW_SERIAL" shell screenrecord --time-limit 120 --bit-rate 4000000 \
     --size 720x1480 /sdcard/pocketworld-web-interaction.mp4 \
     > "$PW_CAPTURE_DIR/screenrecord.txt" 2>&1 &
 PW_RECORD_PID=$!
@@ -198,7 +219,7 @@ read -r PW_X PW_Y <<< "$PW_POINT"
 [[ "$PW_X" =~ ^[0-9]+$ && "$PW_Y" =~ ^[0-9]+$ ]]
 pw_adb shell input tap "$PW_X" "$PW_Y"
 sleep 1
-pw_dump_layout all-work.xml
+pw_scene all-work work-menu
 PW_CLOSE_POINT=$(python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/all-work.xml" \
     --label '关闭全部工作' --out "$PW_CAPTURE_DIR/close-work-target.json")
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/02-all-work.png"
@@ -209,7 +230,7 @@ read -r PW_X PW_Y <<< "$PW_CLOSE_POINT"
 [[ "$PW_X" =~ ^[0-9]+$ && "$PW_Y" =~ ^[0-9]+$ ]]
 pw_adb shell input tap "$PW_X" "$PW_Y"
 sleep 1
-pw_dump_layout return.xml
+pw_scene return workroom
 python3 - "$PW_CAPTURE_DIR/return.xml" <<'PY'
 import sys, xml.etree.ElementTree as ET
 nodes = list(ET.parse(sys.argv[1]).getroot().iter('node'))
@@ -218,6 +239,57 @@ PY
 python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/return.xml" \
     --label '全部工作' --out "$PW_CAPTURE_DIR/return-work-target.json" > /dev/null
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/03-workroom-return.png"
+
+PW_STAGE=settings-root
+pw_tap return '全部工作' settings-work-target
+pw_scene settings-menu work-menu
+pw_tap settings-menu '设置与连接' settings-target
+pw_scene settings settings
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/05-settings.png"
+
+PW_STAGE=model-settings-purpose
+pw_tap settings '模型与连接' models-group-target --match prefix
+pw_scene model-purpose model-purpose
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/06-model-purpose.png"
+
+PW_STAGE=model-connections-list
+pw_tap model-purpose '模型与连接' models-list-target --match prefix
+pw_scene model-list model-list
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/07-model-connections.png"
+
+PW_STAGE=model-unsaved-editor
+# A fresh install normally has no API profile. Use the real add editor then;
+# never seed a connection merely to make an edit-only selector pass.
+pw_tap model-list '编辑当前 API 连接' model-editor-target --match prefix --fallback-label '添加 API 连接'
+pw_scene model-editor model-editor
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/08-model-editor.png"
+
+PW_STAGE=model-advanced
+pw_tap model-editor '高级设置' model-advanced-target --match prefix
+pw_scene model-advanced model-advanced
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/09-model-advanced.png"
+
+PW_STAGE=return-through-native-back
+# Exercise the real Android Back delivery; no JavaScript fixture/bridge injection.
+pw_adb shell input keyevent KEYCODE_BACK
+sleep 1
+pw_scene model-list-return model-list
+pw_adb shell input keyevent KEYCODE_BACK
+sleep 1
+pw_scene model-purpose-return model-purpose
+pw_adb shell input keyevent KEYCODE_BACK
+sleep 1
+pw_scene settings-return settings
+pw_adb shell input keyevent KEYCODE_BACK
+sleep 1
+pw_scene workroom-final workroom
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/10-workroom-final.png"
+
+PW_STAGE=finalize-recording
+# End this script-owned recording at the actual journey end, retaining MP4
+# finalization. The 120s native limit/135s timeout remain hard upper bounds.
+kill -0 "$PW_RECORD_PID" 2>/dev/null || { echo "Screen recording ended before the navigation journey completed" >&2; exit 1; }
+pw_adb shell pkill -INT screenrecord
 wait "$PW_RECORD_PID"
 PW_RECORD_PID=
 pw_adb pull /sdcard/pocketworld-web-interaction.mp4 "$PW_CAPTURE_DIR/04-interaction.mp4" \
