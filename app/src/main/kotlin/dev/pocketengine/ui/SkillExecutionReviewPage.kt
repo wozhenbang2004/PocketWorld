@@ -88,7 +88,14 @@ internal fun SkillExecutionReviewPage(
                     ExecutionReviewValue(if (phone) "声明的输出写入范围（非 OS 限制）" else "可写入的工作区路径", executionReviewLines(request.getJSONArray("writePaths")))
                     ExecutionReviewValue("输出目标", executionReviewLines(request.getJSONArray("outputPaths")))
                     Text("不以 / 结尾的范围仅包含该文件；以 / 结尾的范围包含该目录及子目录。", fontSize = 13.sp, lineHeight = 21.sp)
-                    ExecutionReviewValue("网络与输入", if (phone) "网络可能可达；标准输入关闭；使用独立最小环境。技能副本仅尝试设置只读权限，同 UID 进程可以自行改变该权限。" else "网络禁止；标准输入关闭。技能包只读挂载。")
+                    ExecutionReviewValue("网络与输入", if (phone && request.optString("network") == "kernel_offline") "本次脚本必须在执行前安装内核过滤，拒绝新建非Unix网络套接字并由子进程继承；不支持则拒执行。Unix IPC、已有FD、手机回调及其他App的网络不因此隔离。标准输入关闭，同UID文件也不是OS沙箱。" else if (phone) "网络可能可达；标准输入关闭；使用独立最小环境。技能副本仅尝试设置只读权限，同 UID 进程可以自行改变该权限。" else "网络禁止；标准输入关闭。技能包只读挂载。")
+                    if (phone) {
+                        val callbacks = backend.getJSONObject("managedInputSnapshot").optJSONObject("scriptCallbacks")
+                        val tools = callbacks?.optJSONArray("phoneTools") ?: JSONArray()
+                        ExecutionReviewValue("脚本回调", if (callbacks?.optBoolean("available") == true) "当前原生桥可用；权限仍以本次下列交集为限" else "当前进程身份核验或本机通信不可用；本次不启用回调，不能从脚本补授")
+                        ExecutionReviewValue("本次脚本可调用的手机工具", if (tools.length() == 0) "无；不会从脚本参数补授手机权限" else executionReviewLines(tools))
+                        Text("工具来自当前原任务已有权限的交集，逐次仍核当前权限、原步骤预算和真实回读，最多32次。暂停、取消、回执未知或无法核对原进程身份时拒绝继续。进度只回原任务；文件仅冻结已审阅输出，随原终态回执取回。", fontSize = 13.sp, lineHeight = 21.sp)
+                    }
                     ExecutionReviewValue("执行与输出上限", "${request.getInt("timeoutSeconds")} 秒；保留输出/成果 ${request.getInt("maxOutputBytes")} 字节；回执 ${request.getInt("maxResultChars")} 字符。")
                     if (phone) Text("原日志另按字节游标读取；日志有原缓存上限。单文件运行时上限 64MiB；临时目录按 256MiB/20000 条目观察停止，不是硬磁盘配额，也没有单独 RAM 沙箱。", fontSize = 13.sp, lineHeight = 21.sp)
                     ExecutionReviewValue("脚本 SHA-256", review.getString("scriptSha256"))
