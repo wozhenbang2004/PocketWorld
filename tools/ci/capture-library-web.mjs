@@ -724,6 +724,7 @@ async function runViewport(origin, viewport) {
     const treeViewOption = page.locator('label.pw-radio-option').filter({ has: page.getByRole('radio', { name: '目录层级', exact: true }) });
     await reachable(treeViewOption, { minSize: 44 });
     await treeViewOption.click();
+    await page.getByRole('dialog', { name: '文件显示方式', exact: true, includeHidden: true }).waitFor({ state: 'hidden' });
     await capture(page, viewport, '11-project-tree', ['.pw-file-tree', '[role="tree"]']);
 
     await navigate(page, '设置与连接');
