@@ -19,6 +19,7 @@ public final class InferenceRouteContinuity {
                 &&capturedInference.cleartextConsent.equals(selectedSettings.cleartextConsent)
                 &&Objects.equals(capturedInference.capabilityBinding,selectedSettings.capabilityBinding)
                 &&capturedInference.catalogEnforced==selectedSettings.catalogEnforced
+                &&(capturedInference.compatibility==null?selectedSettings.compatibility==null:capturedInference.compatibility.matches(selectedSettings.compatibility))
                 &&capturedInference.reasoning.equals(selectedSettings.reasoning)
                 &&capturedInference.maxOutputTokens==selectedSettings.maxOutputTokens
                 &&capturedInference.requestTimeoutSeconds==selectedSettings.requestTimeoutSeconds

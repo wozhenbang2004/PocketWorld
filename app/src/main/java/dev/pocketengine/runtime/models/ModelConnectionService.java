@@ -184,7 +184,7 @@ public final class ModelConnectionService {
         synchronized(settings){
             requireBinding(expected);ModelConfig current=settings.apiConfigForCatalog();
             ModelConfig selection=new ModelConfig(current.baseUrl,current.apiKey,model,current.sendScreenshots,current.maxSteps,current.requestTimeoutSeconds,current.provider,output)
-                    .withCleartextConsent(current.cleartextConsent).withNativeCatalog(expected,reasoning,imageTokenReserve);
+                    .withCleartextConsent(current.cleartextConsent).withNativeCatalog(expected,reasoning,imageTokenReserve).withProviderCompatibility(current.model.equals(model)?current.compatibility:null);
             ModelCatalog.View view=resolve(selection);ModelRequestPolicy.validateOutput(selection,view.facts());
             settings.selectCatalogModel(expected,model,output,reasoning,imageTokenReserve);
             return snapshot();

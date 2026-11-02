@@ -89,6 +89,13 @@ public final class InferenceCapture {
         if(started||attempt<1||attempt>3||!id.matches("[a-fA-F0-9-]{36}"))throw new SecurityException("invalid_logical_attempt");
         deadlineAt=deadline;route.put("logicalRequestId",id).put("attemptNo",attempt).put("candidateId",candidate).put("requestedAlias",alias).put("ingressProtocol",ingress).put("egressProtocol",route.getString("protocol")).put("retryReason",retryReason).put("deadlineAt",deadline);
     }
+    /** Final wire metadata only, captured before the original physical dispatch. No prompt/key bytes are retained. */
+    public void requestProjection(JSONObject finalWire)throws Exception {
+        if(started||finished)throw new SecurityException("request_projection_after_dispatch");
+        JSONObject diagnostics=dev.pocketengine.runtime.providers.ProviderCompatibility.diagnostics(pricingConfig,finalWire);
+        if(!secret.isEmpty()&&diagnostics.toString().contains(secret))diagnostics=new JSONObject().put("format","pocketworld.provider-projection.v1").put("identityRedacted",true).put("cacheHitKnown",false);
+        route.put("providerProjection",diagnostics);
+    }
     public void returnedHistory(JSONObject assistant)throws Exception {if(finished)throw new SecurityException("receipt_already_finished");JSONObject metadata=assistant.optJSONObject("provider_data");if(metadata!=null)route.put("historyDigest",historyDigest(metadata));}
     public static String historyDigest(JSONObject metadata)throws Exception {JSONObject copy=new JSONObject(metadata.toString());copy.remove("originCallId");byte[] bytes=java.security.MessageDigest.getInstance("SHA-256").digest(canonical(copy).getBytes(java.nio.charset.StandardCharsets.UTF_8));StringBuilder out=new StringBuilder();for(byte b:bytes)out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
     private static String canonical(Object value)throws Exception {if(value instanceof JSONObject j){java.util.List<String> keys=new java.util.ArrayList<>();j.keys().forEachRemaining(keys::add);java.util.Collections.sort(keys);StringBuilder out=new StringBuilder("{");for(String key:keys){if(out.length()>1)out.append(',');out.append(JSONObject.quote(key)).append(':').append(canonical(j.get(key)));}return out.append('}').toString();}if(value instanceof org.json.JSONArray a){StringBuilder out=new StringBuilder("[");for(int i=0;i<a.length();i++){if(i>0)out.append(',');out.append(canonical(a.get(i)));}return out.append(']').toString();}return value instanceof String?JSONObject.quote((String)value):String.valueOf(value);}
@@ -119,6 +126,7 @@ public final class InferenceCapture {
     public void dispatch()throws Exception{
         if(started)return;
         target.admission.check();
+        JSONObject projection=route.optJSONObject("providerProjection");if(projection!=null)projection.put("dispatchAttempted",true).put("hintDelivery",projection.optBoolean("hintPrepared")?"unknown":"not_requested");
         startedAt=System.currentTimeMillis();startNanos=System.nanoTime();
         frozenPrice=InferencePricing.freeze(pricingConfig,startedAt);
         InferenceReceipt receipt=receipt(InferenceReceipt.Outcome.STARTED);target.sink.started(receipt);started=true;observe(receipt,true);

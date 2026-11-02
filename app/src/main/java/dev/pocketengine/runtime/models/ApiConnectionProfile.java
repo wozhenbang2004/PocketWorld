@@ -36,6 +36,7 @@ public final class ApiConnectionProfile {
             .withCleartextConsent(c.getString("cleartextConsent")).withOwnerImageInput(c.getBoolean("supportsImageInput"));
         ModelBinding binding=ModelBinding.fromJson(c.getJSONObject("capabilityBinding"));ModelCatalogRoutes.requireSameOrigin(config,binding.modelsEndpoint());
         config=c.getBoolean("catalogEnforced")?config.withNativeCatalog(binding,ReasoningOptions.fromJson(c.getJSONObject("reasoning")),c.getInt("imageTokenReserve")):config.withApiConnection(binding);
+        if(c.has("compatibility"))config=config.withProviderCompatibility(dev.pocketengine.runtime.providers.ProviderCompatProfile.fromJson(c.getJSONObject("compatibility")));
         return new ApiConnectionProfile(row.getString("name"),((Number)revision).longValue(),row.getBoolean("enabled"),row.getString("secretSlot"),config);
     }
     public static String checkedName(String name){
