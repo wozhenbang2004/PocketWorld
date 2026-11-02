@@ -176,6 +176,8 @@ public final class AssistantModule implements EngineModule {
                 return new JSONObject().put("cancellationRequested",control!=null);
             }
             case "delete":return deleteConversation(input.getString("conversationId"));
+            case "rename":return updateConversationPresentation(input,false);
+            case "setPinned":return updateConversationPresentation(input,true);
             case "editMessage":return editMessage(input);
             case "deleteMessage":return deleteMessage(input);
             default:throw new IllegalArgumentException("不支持的聊天操作");
@@ -480,6 +482,18 @@ public final class AssistantModule implements EngineModule {
         migrationInvalidated=true;idle();if(historyTasks!=null)synchronized(historyTasks){deleteConversationSelected(id);}else deleteConversationSelected(id);
         synchronizeSources();return new JSONObject().put("deleted",true);
     }
+    private JSONObject updateConversationPresentation(JSONObject input,boolean pin)throws Exception{
+        String id=input.getString("conversationId");long expected=revision(input,"metadataRevision");
+        String title=pin?null:input.getString("title");Boolean pinned=pin?input.getBoolean("pinned"):null;
+        JSONObject result;
+        if(durable())result=historyRepository.updatePresentation(id,expected,title,pinned,System.currentTimeMillis());
+        else{
+            result=commit(()->{JSONObject current=find(id);JSONObject changed=dev.pocketengine.features.conversation.ConversationMetadata.changed(current,expected,title,pinned,System.currentTimeMillis());
+                for(String key:new String[]{"title","userTitle","pinnedAt","metadataRevision"})if(changed.has(key))current.put(key,changed.get(key));return copy(current);});
+            synchronizeSources();
+        }
+        return new JSONObject().put("conversationId",id).put("title",result.optString("title")).put("pinnedAt",result.optLong("pinnedAt")).put("metadataRevision",result.getLong("metadataRevision")).put("executionAuthorized",false);
+    }
     private void deleteConversationSelected(String id)throws Exception{
         if(durable()){historyRepository.transaction(()->{historyRepository.deleteConversation(id,"user_conversation_delete");return null;});sourceGeneration++;synchronizationPending=true;return;}
         commit(()->{idle();JSONObject conversation=find(id);retireConversation(conversation,"user_conversation_delete");JSONArray kept=new JSONArray();for(int i=0;i<conversations.length();i++){JSONObject row=conversations.getJSONObject(i);if(!id.equals(row.getString("conversationId")))kept.put(row);}conversations=kept;return null;});
@@ -634,7 +648,7 @@ public final class AssistantModule implements EngineModule {
     }
     private JSONArray list()throws Exception{
         if(durable())return historyRepository.read(()->historyRepository.list("",20).getJSONArray("conversations"));
-        synchronized(storage){healthy();JSONArray rows=new JSONArray();for(int i=0;i<conversations.length();i++){JSONObject c=conversations.getJSONObject(i);rows.put(new JSONObject().put("conversationId",c.getString("conversationId")).put("title",c.optString("title")).put("updatedAt",c.optLong("updatedAt",c.optLong("createdAt"))));}return rows;}
+        synchronized(storage){healthy();java.util.List<JSONObject> ordered=new java.util.ArrayList<>();for(int i=0;i<conversations.length();i++)ordered.add(conversations.getJSONObject(i));ordered.sort(java.util.Comparator.comparingLong((JSONObject c)->c.optLong("pinnedAt")).reversed().thenComparing(java.util.Comparator.comparingLong((JSONObject c)->c.optLong("updatedAt",c.optLong("createdAt"))).reversed()).thenComparing(c->c.optString("conversationId")));JSONArray rows=new JSONArray();for(JSONObject c:ordered)rows.put(new JSONObject().put("conversationId",c.getString("conversationId")).put("title",c.optString("userTitle",c.optString("title"))).put("pinnedAt",c.optLong("pinnedAt")).put("metadataRevision",dev.pocketengine.features.conversation.ConversationMetadata.revision(c)).put("updatedAt",c.optLong("updatedAt",c.optLong("createdAt"))));return rows;}
     }
     private JSONObject newMessage(String conversationId,String role,String text,ModelConfig config)throws Exception{
         String id;do{id=UUID.randomUUID().toString();}while(source(id)!=null);

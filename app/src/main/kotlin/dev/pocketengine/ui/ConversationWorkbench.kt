@@ -128,7 +128,8 @@ private fun ConversationTable(block: RichMessageDocument.Block, link: (String) -
 /** Source is an actual host TaskStore projection. Controls only open/refresh that same task. */
 @Composable
 internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask: (String) -> Unit,
-    onLoadDetails: (String) -> Unit, modifier: Modifier = Modifier) {
+    onLoadDetails: (String) -> Unit, modifier: Modifier = Modifier,
+    readAudit: ((String, (org.json.JSONObject?, String?) -> Unit) -> Unit)? = null) {
     var expanded by rememberSaveable(task.id, task.runId) {
         mutableStateOf(task.status in setOf("preparing", "running", "awaiting_user", "waiting_approval", "reconciling", "unknown", "failed"))
     }
@@ -183,6 +184,7 @@ internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask
                 if(task.totalOperations > task.operations.size) Text("这里只展示当前窗口；完整记录可在原任务中查看。",
                     fontSize = 13.sp, color = SecondaryInk)
                 visible.forEach { operation -> key(operation.id) { ConversationOperation(operation) } }
+                InterruptedAttemptJournal(task.id, task.interruptedAttempts, readAudit)
             }
         }
     }
@@ -205,8 +207,13 @@ private fun ConversationOperation(operation: TaskPresentation.Operation) {
 
 /** Uses the existing persisted list; search never changes a conversation or starts a task. */
 @Composable
-internal fun ConversationHistoryBrowser(loaded: List<ConversationHistory.Item>, activeId: String?, switchingBlocked: Boolean, onOpen: (String) -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier, allowReadWhenBlocked: Boolean = false) {
+internal fun ConversationHistoryBrowser(loaded: List<ConversationHistory.Item>, activeId: String?, switchingBlocked: Boolean, onOpen: (String) -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier, allowReadWhenBlocked: Boolean = false,
+    onRename: ((ConversationHistory.Item, String) -> Unit)? = null, onPin: ((ConversationHistory.Item, Boolean) -> Unit)? = null, onDelete: ((ConversationHistory.Item) -> Unit)? = null) {
     var query by rememberSaveable { mutableStateOf("") }
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    var renaming by remember { mutableStateOf<ConversationHistory.Item?>(null) }
+    var deleting by remember { mutableStateOf<ConversationHistory.Item?>(null) }
+    var name by rememberSaveable { mutableStateOf("") }
     val groups = remember(loaded, query) { ConversationHistory.organize(loaded, query, System.currentTimeMillis(), ZoneId.systemDefault()) }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -220,13 +227,29 @@ internal fun ConversationHistoryBrowser(loaded: List<ConversationHistory.Item>, 
             groups.forEach { group ->
                 item("group_" + group.label) { Text(group.label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)) }
                 items(group.items, key = { it.id }) { item ->
-                    Column(Modifier.fillMaxWidth().background(if (item.id == activeId) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent, RoundedCornerShape(10.dp))
+                    Row(Modifier.fillMaxWidth().background(if (item.id == activeId) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent, RoundedCornerShape(10.dp))
                         .clickable(enabled = !switchingBlocked || allowReadWhenBlocked) { onOpen(item.id) }.semantics { selected = item.id == activeId }.padding(horizontal = 10.dp, vertical = 14.dp)) {
-                        Text(item.title.ifBlank { "未命名对话" }, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
-                        if (item.updatedAt > 0) Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.updatedAt)), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(item.title.ifBlank { "未命名对话" }, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
+                            if (item.updatedAt > 0) Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.updatedAt)), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                        }
+                        if (onRename != null || onPin != null || onDelete != null) Box {
+                            TextButton(onClick = { menuFor = item.id }, modifier = Modifier.testTag("conversation_menu_" + item.id)) { Text("更多") }
+                            DropdownMenu(expanded = menuFor == item.id, onDismissRequest = { menuFor = null }) {
+                                if (onRename != null) DropdownMenuItem(text = { Text("改名") }, onClick = { menuFor = null; name = item.title; renaming = item })
+                                if (onPin != null) DropdownMenuItem(text = { Text(if (item.pinnedAt > 0) "取消置顶" else "置顶") }, onClick = { menuFor = null; onPin(item, item.pinnedAt == 0L) })
+                                if (onDelete != null) DropdownMenuItem(text = { Text("删除对话") }, enabled = !switchingBlocked, onClick = { menuFor = null; deleting = item })
+                            }
+                        }
                     }
                 }
             }
         }
     }
+    renaming?.let { item -> AlertDialog(onDismissRequest = { renaming = null }, title = { Text("对话名称") }, text = {
+        OutlinedTextField(name, { if (it.length <= 120) name = it }, label = { Text("名称") }, singleLine = true, modifier = Modifier.testTag("conversation_rename_input"))
+    }, confirmButton = { TextButton(onClick = { onRename?.invoke(item, name.trim()); renaming = null }, enabled = name.isNotBlank()) { Text("保存") } }, dismissButton = { TextButton(onClick = { renaming = null }) { Text("取消") } }) }
+    deleting?.let { item -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除这段对话？") }, text = {
+        Text("将删除对话记录，并撤回相应消息来源。活跃任务仍需先停止；已有任务与执行证据不会因这里的操作被重跑。")
+    }, confirmButton = { TextButton(onClick = { onDelete?.invoke(item); deleting = null }, enabled = !switchingBlocked) { Text("删除") } }, dismissButton = { TextButton(onClick = { deleting = null }) { Text("保留") } }) }
 }
