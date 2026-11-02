@@ -23,6 +23,7 @@ import org.json.JSONObject;
 /** Executor download receipts, not task scheduling. Credentials live only in the active request. */
 public final class BrowserDownloads {
     interface Cookies {String forUrl(String url)throws Exception;}
+    @FunctionalInterface public interface DocumentSource {BrowserDocumentInput open()throws Exception;}
     private static final Map<String,BrowserDownloads> INSTANCES=new LinkedHashMap<>();
     private final AttachmentRepository attachments;
     private final File receipts;
@@ -38,6 +39,30 @@ public final class BrowserDownloads {
     }
     public static synchronized BrowserDownloads get(Context context)throws Exception{String path=context.getFilesDir().getAbsolutePath();BrowserDownloads found=INSTANCES.get(path);if(found==null){found=new BrowserDownloads(context.getApplicationContext());INSTANCES.put(path,found);}return found;}
     public static synchronized void closeFor(Context context){BrowserDownloads found=INSTANCES.remove(context.getFilesDir().getAbsolutePath());if(found!=null)found.close();}
+    public synchronized JSONObject startDocument(String name,JSONObject identity,BrowserProfileRegistry.Session session,BrowserTransferFence fence,DocumentSource source,Consumer<JSONObject> updates)throws Exception {
+        java.util.Objects.requireNonNull(session);java.util.Objects.requireNonNull(fence);fence.check();if(!session.current()||cancellations.size()>=3)throw new SecurityException("原浏览器会话不可下载或已达3个排队上限");
+        BrowserTaskSpace.uuid(identity.getString("documentId"));BrowserTaskSpace.uuid(identity.getString("operationId"));if(identity.getLong("navigation")<0)throw new SecurityException("文档下载缺少原导航版本");
+        while(records.size()>=100){String oldest=null;for(String key:records.keySet())if(!cancellations.containsKey(key)){oldest=key;break;}if(oldest==null)throw new IllegalStateException("下载记录已满");records.remove(oldest);}
+        String id=UUID.randomUUID().toString();JSONObject record=new JSONObject(identity.toString()).put("id",id).put("kind","download").put("status","queued").put("name",AttachmentBook.displayName(name)).put("acquisitionMethod","original_document_blob_data_stream").put("createdAt",System.currentTimeMillis()).put("verified",false);
+        for(String key:new String[]{"profileId","profileRevision","browserSessionId"})record.put(key,session.identity().get(key));
+        AtomicBoolean cancelled=new AtomicBoolean();records.put(id,record);cancellations.put(id,cancelled);sessions.put(id,session);fences.put(id,fence);persist();
+        try{worker.execute(()->downloadDocument(id,source,cancelled,fence,updates));}catch(RuntimeException rejected){cancellations.remove(id);sessions.remove(id);fences.remove(id);update(id,"failed","文档下载线程不可用",null,updates);throw rejected;}return copy(record);
+    }
+    private void downloadDocument(String id,DocumentSource source,AtomicBoolean cancellation,BrowserTransferFence fence,Consumer<JSONObject> updates){
+        JSONObject committed=null;
+        try{
+            check(cancellation,fence);update(id,"running",null,null,updates);JSONObject record; synchronized(this){record=copy(required(id));}
+            try(BrowserDocumentInput document=source.open();InputStream guarded=new FilterInputStream(document){@Override public int read(byte[] bytes,int offset,int length)throws java.io.IOException{try{check(cancellation,fence);}catch(Exception stopped){throw new java.io.InterruptedIOException("原文档下载已停止");}return super.read(bytes,offset,length);}}){
+                JSONObject provenance=new JSONObject(record.toString()).put("kind","browser_document_download").put("untrustedPageContent",true);provenance.remove("name");
+                committed=attachments.book.importBytes(guarded,record.getString("name"),document.mimeType(),provenance);
+            }
+            check(cancellation,fence);JSONObject actual=attachments.book.get(committed.getString("id"));if(!actual.getString("sha256").equals(committed.getString("sha256"))||actual.getLong("size")!=committed.getLong("size"))throw new IllegalStateException("文档下载文件无法重新打开核对");
+            java.security.MessageDigest digest=java.security.MessageDigest.getInstance("SHA-256");long reopened=0;byte[] buffer=new byte[32768];try(InputStream input=Files.newInputStream(attachments.book.file(actual.getString("id")).toPath())){for(int n;(n=input.read(buffer))!=-1;){check(cancellation,fence);if(n==0)continue;reopened+=n;digest.update(buffer,0,n);}}finally{java.util.Arrays.fill(buffer,(byte)0);}StringBuilder sha=new StringBuilder();for(byte value:digest.digest())sha.append(String.format(java.util.Locale.ROOT,"%02x",value&255));if(reopened!=actual.getLong("size")||!sha.toString().equals(actual.getString("sha256")))throw new IllegalStateException("文档下载重新打开的真实字节hash不同");
+            update(id,"downloaded",null,committed,updates);
+        }catch(Exception failure){boolean stopped=cancellation.get()||!fence.current();if(committed!=null)try{attachments.remove(committed.getString("id"));committed=null;}catch(Exception cleanupUnknown){}
+            try{update(id,committed!=null?"unknown":stopped?"cancelled":"failed",committed!=null?"文件可能已保存，清理或回执待核对，未重新下载":stopped?"文档下载已停止":safe(failure),committed,updates);}catch(Exception ignored){}
+        }finally{synchronized(this){cancellations.remove(id);sessions.remove(id);fences.remove(id);}}
+    }
     private synchronized void close(){for(AtomicBoolean cancelled:cancellations.values())cancelled.set(true);for(HttpURLConnection connection:connections.values())connection.disconnect();worker.shutdownNow();}
     public synchronized JSONObject start(String url,String userAgent,String cookie,String name,String mime,JSONObject identity,Consumer<JSONObject> updates)throws Exception{
         return start(url,userAgent,target->target.equals(url)?cookie:null,name,mime,identity,null,updates);

@@ -36,7 +36,7 @@ const tick=()=>{if(++steps>4000||performance.now()-began>100)throw Error('expres
 const sensitive=n=>n&&n.nodeType===1&&(n.matches('input,textarea,select,script,style,noscript,template,[hidden]')||n.closest('[data-private=true],[hidden],input,textarea,select'));
 const list=v=>Array.isArray(v)?v:[],bounded=v=>{if(v.length>200)partial=true;return v.slice(0,200)};
 const scalar=v=>v===null||['string','number','boolean'].includes(typeof v);
-const visible=n=>{if(sensitive(n))return false;const s=getComputedStyle(n);return s.display!=='none'&&s.visibility!=='hidden'&&s.contentVisibility!=='hidden'};
+const visible=n=>{if(sensitive(n)||!n.getClientRects().length)return false;const s=getComputedStyle(n);return s.display!=='none'&&s.visibility!=='hidden'&&s.contentVisibility!=='hidden'};
 function text(n){if(!n||!n.nodeType||sensitive(n))return null;let out='',stack=[n];while(stack.length&&out.length<4000){tick();const e=stack.pop();if(e.nodeType===3){if(e.parentElement&&visible(e.parentElement))out+=String(e.nodeValue||'').slice(0,4000-out.length);continue}if(e.nodeType!==1||!visible(e))continue;const children=e.childNodes;for(let i=children.length-1;i>=0;i--){if(stack.length>=400){partial=true;break}stack.push(children[i])}}if(stack.length)partial=true;return out}
 function numeric(v){if(typeof v==='boolean'||v===null||Array.isArray(v)||v&&typeof v==='object')throw Error('expression_number_required');const n=Number(v);if(!Number.isFinite(n))throw Error('expression_number_invalid');return n}
 function go(x,item){tick();const a=()=>go(x.input,item),l=()=>go(x.left,item),r=()=>go(x.right,item);switch(x.op){

@@ -10,6 +10,7 @@ public final class BrowserUploadAttempt {
     public static JSONObject create(JSONObject identity,JSONArray attachments)throws Exception {
         JSONObject pin=new JSONObject();
         for(String key:new String[]{"taskId","runId","epoch","profileId","profileRevision","browserSessionId","browserSpaceId","tabId","tabGeneration","navigation","documentId","chooserId","destinationDigest","destinationUrl","destinationOrigin"})pin.put(key,identity.get(key));
+        if(identity.has("operationId")){BrowserTaskSpace.uuid(identity.getString("operationId"));pin.put("operationId",identity.getString("operationId"));JSONObject input=identity.getJSONObject("fileInput");if(input.length()!=3||!input.getString("ref").matches("n[0-9]{1,3}")||!input.getString("nodeKey").matches("k[1-9][0-9]{0,6}"))throw new SecurityException("上传的原file input身份无效");BrowserTaskSpace.uuid(input.getString("observationId"));pin.put("fileInput",new JSONObject(input.toString()));}
         for(String key:new String[]{"taskId","runId","browserSessionId","browserSpaceId","tabId","documentId","chooserId"})BrowserTaskSpace.uuid(pin.getString(key));
         if(pin.getInt("epoch")<1||pin.getLong("profileRevision")<1||pin.getLong("navigation")<0||!pin.getString("destinationDigest").matches("[a-f0-9]{64}"))throw new SecurityException("上传尝试身份无效");
         if(attachments.length()<1||attachments.length()>10)throw new SecurityException("需要原选择的有界附件版本");
