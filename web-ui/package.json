@@ -3,7 +3,9 @@
   "version": "0.4.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "node scripts/prepare-fonts.mjs && node scripts/collect-licenses.mjs --include-build=tailwindcss && tsc --noEmit && vite build && node scripts/write-build-receipt.mjs",
@@ -33,9 +35,9 @@
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@vitejs/plugin-react": "6.0.2",
+    "@vitejs/plugin-react": "5.1.0",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
-    "vite": "8.0.13"
+    "vite": "7.3.7"
   }
 }
