@@ -65,10 +65,19 @@ public final class PlatformTlsEngine implements AutoCloseable {
     /** Bounded polling allows control sends and cancellation between network reads. */
     public void poll(int timeoutMillis, Plaintext sink) throws Exception {
         requireOpen();
-        while (unwrap(sink)) { tasks(); if (!network.hasRemaining() && network.position() == 0) break; }
+        boolean[] delivered = {false};
+        Plaintext current = bytes -> { delivered[0] = true; sink.accept(bytes); };
+        while (unwrap(current) && !delivered[0]) { tasks(); if (!network.hasRemaining() && network.position() == 0) break; }
+        // Return each plaintext chunk before unwrapping a following record, including a legal
+        // close_notify in this SAME packet. Only the caller's frame decoder decides whether
+        // this is a complete receipt; a partial frame still fails on the next close/EOF poll.
         if (engine.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_WRAP) wrap(EMPTY.duplicate());
+        if (delivered[0]) return;
         readNetwork(timeoutMillis);
-        while (unwrap(sink)) { tasks(); }
+        while (unwrap(current) && !delivered[0]) { tasks(); }
+        // Preserve mandatory provider protocol traffic before the caller's next write, but
+        // never unwrap another record after delivering this chunk just to find close_notify.
+        if (engine.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_WRAP) wrap(EMPTY.duplicate());
     }
     private void readNetwork(int timeoutMillis) throws Exception {
         byte[] bytes = channel.receive(timeoutMillis); if (bytes == null) return;

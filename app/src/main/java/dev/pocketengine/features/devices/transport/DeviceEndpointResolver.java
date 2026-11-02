@@ -81,7 +81,7 @@ public final class DeviceEndpointResolver {
         }
         return new LocalReservation(address, actualControl, actualBulk, invitationExpiresAt);
     }
-    public static final class LocalReservation implements AutoCloseable {
+    public static final class LocalReservation implements DevicePairingEndpoint {
         private final InetAddress address;
         private final LanDeviceListener control, bulk;
         private final ServerSocket candidateSocket, completionSocket;

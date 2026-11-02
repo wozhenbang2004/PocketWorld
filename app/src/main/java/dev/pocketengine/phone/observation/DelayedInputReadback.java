@@ -11,11 +11,18 @@ public final class DelayedInputReadback {
     private final CompletableFuture<JSONObject> result=new CompletableFuture<>();
     private boolean scheduled;
     public void schedule(Handler handler,PhoneActionEffects.Reader reader,Runnable release) {
+        schedule(handler,Runnable::run,reader,release);
+    }
+    /** The UI timer only hands off; potentially blocking accessibility reads run in the port's bounded pool. */
+    public void schedule(Handler handler,java.util.concurrent.Executor worker,PhoneActionEffects.Reader reader,Runnable release) {
         scheduled=true;AtomicBoolean freed=new AtomicBoolean();
         Runnable sample=()->{try{result.complete(reader.read().put("phase","delayed_after_dispatch").put("minimumDelayMs",600));}
             catch(Exception unavailable){try{result.complete(PhoneActionEffects.unavailableReadback("original_native_node_unavailable"));}catch(Exception impossible){result.completeExceptionally(impossible);}}
             finally{if(freed.compareAndSet(false,true))release.run();}};
-        if(!handler.postDelayed(sample,600)){if(freed.compareAndSet(false,true))release.run();result.completeExceptionally(new IllegalStateException("main_handler_closed"));}
+        Runnable handoff=()->{try{worker.execute(sample);}catch(java.util.concurrent.RejectedExecutionException busy){
+            if(freed.compareAndSet(false,true))release.run();result.completeExceptionally(busy);
+        }};
+        if(!handler.postDelayed(handoff,600)){if(freed.compareAndSet(false,true))release.run();result.completeExceptionally(new IllegalStateException("main_handler_closed"));}
     }
     /** Called on the worker, never on the Android UI thread or under RunControl's monitor. */
     public JSONObject attach(JSONObject receipt)throws Exception {

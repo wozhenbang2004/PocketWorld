@@ -38,6 +38,7 @@ final class DisplayEngine {
     private ImageReader reader;
     private volatile LeasePolicy lease;
     private OwnerTaskTransfer ownerTransfer;
+    private final DisplayTaskTopology taskTopology=new DisplayTaskTopology();
     private int width,height,density;
     private int requiredDisplayFlags;
     private String packageName="";
@@ -89,7 +90,8 @@ final class DisplayEngine {
         else if("frame".equals(cmd))result=frame(current,request);
         else if("launch".equals(cmd))result=launch(current,request);
         else if("apps".equals(cmd))result=apps();
-        else if("ownership".equals(cmd)){valid(current);result=ok().put("ownership",DisplayOwnershipSnapshot.parse(taskDump(),current.display()));}
+        else if("ownership".equals(cmd)){valid(current);JSONObject facts=DisplayOwnershipSnapshot.parse(taskDump(),current.display());
+            facts.put("taskTopology",taskTopology.read());valid(current);result=ok().put("ownership",facts);}
         else if("tap".equals(cmd)||"swipe".equals(cmd))result=gesture(current,request,"swipe".equals(cmd));
         else if("key".equals(cmd))result=key(current,request);
         else throw new Failure("unsupported_command","后台助手不支持该命令。",false);
@@ -418,7 +420,7 @@ final class DisplayEngine {
     void tick(){LeasePolicy current=lease;if(current!=null)try{onMain(()->{if(lease==current&&(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current)))release();return null;});}catch(Exception ignored){}}
     void close(){try{onMain(()->{release();return null;});}catch(Exception ignored){ /* Process teardown also revokes its display token. */ }}
     private void release(){
-        ownerTransfer=null;
+        ownerTransfer=null;taskTopology.clear();
         main.removeCallbacks(trailingFrame);scheduledFrameReader=null;framePending=false;lastFrameConsumed=0;
         LeasePolicy old=lease;lease=null;activeTouch=null;if(old!=null)old.release();latestPixels=null;frameAt=0;packageName="";requiredDisplayFlags=0;
         if(display!=null){display.release();display=null;}if(reader!=null){reader.close();reader=null;}

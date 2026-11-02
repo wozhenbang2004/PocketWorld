@@ -33,6 +33,10 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         void setEnabled(boolean enabled) throws Exception;
     }
     public interface PairingOwner {
+        default org.json.JSONArray relayLeases() throws Exception { return new org.json.JSONArray(); }
+        default RelayLeaseAction reviewRelayLease(String raw) throws Exception { throw new SecurityException("本机中继配置尚未接线"); }
+        default void removeRelayLease(String serviceBase, String inviterDeviceId) throws Exception { throw new SecurityException("本机中继配置尚未接线"); }
+        default ConnectionReviewAction reviewRelayConnection(String peerId, String serviceBase) throws Exception { throw new SecurityException("本机中继连接尚未接线"); }
         Availability inviteAvailability();
         /** Explicit click only. Return the one-use short-lived invitation for display, not logs. */
         java.util.List<String> localAddresses() throws Exception;
@@ -135,6 +139,11 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         JSONObject view() throws Exception;
         void confirm() throws Exception;
     }
+    public interface RelayLeaseAction extends AutoCloseable {
+        JSONObject view() throws Exception;
+        void confirm() throws Exception;
+        void close();
+    }
     public interface GoalOwner {
         Availability reviewAvailability(String originalTaskId) throws Exception;
         /** Carry the original TaskStoreDeviceTasks.GoalModelReview object, never JSON approval. */
@@ -198,9 +207,10 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         private volatile boolean closed;
         private volatile HistoryWindow history;
         private volatile RecoveryEndpoint recoveryEndpoint;
+        private volatile RelayLeaseReview relayReview;
         private final java.util.concurrent.atomic.AtomicLong reviewGeneration = new java.util.concurrent.atomic.AtomicLong();
         private Window() {}
-        private long nextReview() { HistoryWindow old = history; history = null; if (old != null) old.close(); RecoveryEndpoint endpoint = recoveryEndpoint; recoveryEndpoint = null; if (endpoint != null) endpoint.close(); return reviewGeneration.incrementAndGet(); }
+        private long nextReview() { HistoryWindow old = history; history = null; if (old != null) old.close(); RecoveryEndpoint endpoint = recoveryEndpoint; recoveryEndpoint = null; if (endpoint != null) endpoint.close(); RelayLeaseReview relay = relayReview; relayReview = null; if (relay != null) relay.source.close(); return reviewGeneration.incrementAndGet(); }
         private void current() { if (closed || NativeDeviceWorkspaceHost.this.closed) throw new IllegalStateException("原设备页面已关闭，请重新打开并审阅"); }
         public JSONObject snapshot() throws Exception { return snapshot(new String[0]); }
         public JSONObject snapshot(String[] originalTaskIds) throws Exception {
@@ -221,7 +231,8 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             Availability invitationAction = pairing.inviteAvailability();
             JSONObject actions = new JSONObject().put("enable", availability(receiver.enableAvailability()))
                     .put("disable", availability(receiver.disableAvailability())).put("invite", availability(invitationAction))
-                    .put("join", availability(pairing.joinAvailability())).put("localAddresses", new org.json.JSONArray(invitationAction.available ? pairing.localAddresses() : java.util.Collections.emptyList()));
+                    .put("join", availability(pairing.joinAvailability())).put("localAddresses", new org.json.JSONArray(invitationAction.available ? pairing.localAddresses() : java.util.Collections.emptyList()))
+                    .put("relayLeases", pairing.relayLeases());
             JSONObject taskActions = new JSONObject();
             if (originalTaskIds != null) for (int i = 0; i < Math.min(40, originalTaskIds.length); i++) {
                 String id = originalTaskIds[i]; if (blank(id)) continue;
@@ -237,16 +248,29 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         public void setReceiverEnabled(boolean enabled) throws Exception { current(); receiverAvailability(enabled).require(); receiver.setEnabled(enabled); }
         public Availability inviteAvailability() { current(); return pairing.inviteAvailability(); }
         public Availability joinAvailability() { current(); return pairing.joinAvailability(); }
+        public RelayLeaseReview reviewRelayLease(String raw) throws Exception {
+            current(); if (raw == null || raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 4096) throw new IllegalArgumentException("中继租约为空或超过4 KiB");
+            RelayLeaseAction source = Objects.requireNonNull(pairing.reviewRelayLease(raw));
+            try { current(); JSONObject safe = source.view();
+                if (safe.has("routeToken") || safe.has("routeId") || !safe.optBoolean("memoryOnly") || safe.optBoolean("devicePermissionGranted") || safe.optLong("expiresAt") <= System.currentTimeMillis()) throw new SecurityException("中继配置必须为无设备权限的临时原生租约");
+                RelayLeaseReview review = new RelayLeaseReview(this, nextReview(), source, copy(safe)); relayReview = review; return review;
+            } catch (Exception rejected) { source.close(); throw rejected; }
+        }
+        public void confirmRelayLease(RelayLeaseReview review) throws Exception {
+            current(); if (review == null || review.window != this || review.generation != reviewGeneration.get() || relayReview != review) throw new SecurityException("中继配置审阅已关闭或被替换");
+            consume(review.generation); relayReview = null; try { review.source.confirm(); } finally { review.source.close(); }
+        }
+        public void removeRelayLease(String serviceBase, String inviterDeviceId) throws Exception { current(); nextReview(); pairing.removeRelayLease(serviceBase, inviterDeviceId); }
         public String createInvitation(String address) throws Exception { current(); inviteAvailability().require(); return Objects.requireNonNull(pairing.createInvitation(address)); }
         public void advancePairing(String id) throws Exception { current(); pairing.advancePairing(id); }
         public java.util.List<String> recoveryAddresses() throws Exception { current(); return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(pairing.recoveryAddresses())); }
         public RecoveryEndpoint openCommittedRecovery(String id, String address) throws Exception {
             current(); RecoveryEndpointAction source = Objects.requireNonNull(pairing.openCommittedRecovery(id, address));
-            try { current(); JSONObject safe = source.view(); if (!id.equals(safe.optString("inviteId")) || safe.optInt("port") < 1 || safe.optInt("port") > 65535 || safe.optLong("expiresAt") <= System.currentTimeMillis() || !safe.optBoolean("listening")) throw new SecurityException("原配对结果恢复端口尚未就绪");
+            try { current(); JSONObject safe = source.view(); boolean relay = "relay".equals(safe.optString("kind")); if (!id.equals(safe.optString("inviteId")) || (!relay && (safe.optInt("port") < 1 || safe.optInt("port") > 65535)) || relay && !safe.optString("serviceBase").matches("(?:wss|https)://[^\\s]+") || safe.optLong("expiresAt") <= System.currentTimeMillis() || !safe.optBoolean("listening")) throw new SecurityException("原配对结果恢复端口尚未就绪");
                 RecoveryEndpoint opened = new RecoveryEndpoint(this, nextReview(), source, copy(safe)); recoveryEndpoint = opened; return opened;
             } catch (Exception invalid) { source.close(); throw invalid; }
         }
-        public void recoverPairing(String id, String literalHost, int port) throws Exception { current(); if (blank(id) || blank(literalHost) || literalHost.length() > 64 || port < 1 || port > 65535) throw new IllegalArgumentException("请输入另一台设备显示的准确地址和恢复端口"); pairing.recoverPairing(id, literalHost, port); }
+        public void recoverPairing(String id, String literalHost, int port) throws Exception { current(); boolean relay = literalHost != null && literalHost.matches("(?:wss|https)://[^\\s]+"); if (blank(id) || blank(literalHost) || (relay ? literalHost.length() > 512 || port != 0 : literalHost.length() > 64 || port < 1 || port > 65535)) throw new IllegalArgumentException("请输入另一台设备显示的准确地址和恢复端口，或已配置中继服务"); pairing.recoverPairing(id, literalHost, port); }
         public AbandonReview reviewPairingAbandonment(String id) throws Exception {
             current(); AbandonAction source = Objects.requireNonNull(pairing.reviewPairingAbandonment(id)); JSONObject safe = source.view();
             if (!id.equals(safe.optString("inviteId")) || !safe.optBoolean("localOnly") || safe.optBoolean("remoteRevocationAcknowledged") || !safe.optString("candidateDigest").matches("[a-f0-9]{64}")) throw new SecurityException("没有这次本机待配对记录的准确来源");
@@ -299,7 +323,14 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         }
         public ConnectionReview reviewConnectionUpdate(String peerId, String raw) throws Exception {
             current(); if (raw == null || blank(raw) || raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 16_384) throw new IllegalArgumentException("请复制这台设备的有效邀请");
-            ConnectionReviewAction action = Objects.requireNonNull(pairing.reviewConnectionUpdate(peerId, raw)); JSONObject safe = action.view();
+            return connectionReview(peerId, pairing.reviewConnectionUpdate(peerId, raw));
+        }
+        public ConnectionReview reviewRelayConnection(String peerId, String serviceBase) throws Exception {
+            current(); if (blank(serviceBase) || serviceBase.length() > 512) throw new IllegalArgumentException("请选择主人已配置的准确中继服务");
+            return connectionReview(peerId, pairing.reviewRelayConnection(peerId, serviceBase));
+        }
+        private ConnectionReview connectionReview(String peerId, ConnectionReviewAction source) throws Exception {
+            ConnectionReviewAction action = Objects.requireNonNull(source); JSONObject safe = action.view();
             if (!peerId.equals(safe.optString("deviceId")) || !safe.optString("certificateFingerprint").matches("[a-f0-9]{64}")) throw new SecurityException("连接地址不属于原配对身份");
             return new ConnectionReview(this, nextReview(), action, copy(safe));
         }
@@ -369,6 +400,11 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
     public static final class ConnectionReview {
         private final Window window; private final long generation; private final ConnectionReviewAction source; private final JSONObject value;
         private ConnectionReview(Window window, long generation, ConnectionReviewAction source, JSONObject value) { this.window = window; this.generation = generation; this.source = source; this.value = value; }
+        public JSONObject view() throws Exception { return copy(value); }
+    }
+    public static final class RelayLeaseReview {
+        private final Window window; private final long generation; private final RelayLeaseAction source; private final JSONObject value;
+        private RelayLeaseReview(Window window, long generation, RelayLeaseAction source, JSONObject value) { this.window = window; this.generation = generation; this.source = source; this.value = value; }
         public JSONObject view() throws Exception { return copy(value); }
     }
     public static final class AbandonReview {

@@ -1,4 +1,12 @@
 {
+  "browser-expression": {
+    "class": "dev.pocketengine.browser.BrowserPageProgramsTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserPageProgramsChromiumTest"
+    ],
+    "helpers": [],
+    "description": "Bounded expression validation and actual temporary-profile Chromium DOM/privacy/finite-result tests; no Android WebView/provider/device acceptance."
+  },
   "device-receiver": {
     "class": "dev.pocketengine.features.devices.DeviceReceiverLifecycleTest",
     "helpers": [
@@ -15,7 +23,9 @@
   },
   "gateway-continuation": {
     "class": "dev.pocketengine.GatewayContinuationAppJourneyTest",
-    "helpers": ["dev.pocketengine.testutil.HttpServer"],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
     "robolectric": true,
     "python": true,
     "description": "Original App/SQL/Service plus original Companion fixture on loopback; not a phone/WAN test."
@@ -49,5 +59,24 @@
     ],
     "robolectric": true,
     "description": "Original native delivered-cursor/currentness/cancel gates and semantic/source/delta/settle regressions; explicit post-step runs emitted production programs on loopback Chromium, not Android WebView/provider/device acceptance."
+  },
+  "phone-observation-boundaries": {
+    "class": "dev.pocketengine.phone.display.PhoneObservationBoundariesNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.phone.observation.PhoneReadGateTest",
+      "dev.pocketengine.phone.display.DisplayLandingSafetyTest",
+      "dev.pocketengine.displayhelper.DisplayTaskTopologyNativeTest",
+      "dev.pocketengine.phone.observation.DelayedInputReadbackTest",
+      "dev.pocketengine.phone.observation.ObservationSafetyTest",
+      "dev.pocketengine.phone.observation.NativePhoneEntryTest",
+      "dev.pocketengine.phone.observation.PhoneUiSignalsTest",
+      "dev.pocketengine.phone.observation.PhoneActionEffectsTest",
+      "dev.pocketengine.phone.display.BackgroundOwnerHandoffTest",
+      "dev.pocketengine.displayhelper.DisplayOwnershipSnapshotTest",
+      "dev.pocketengine.displayhelper.OwnerTaskTransferTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original foreground/background phone ports with bounded real-thread Binder-block fixtures, exact target/occlusion, owned-task continuity and original PH020/native-entry regressions; explicit Android windows/helper transport, not physical Android/OEM acceptance."
   }
 }

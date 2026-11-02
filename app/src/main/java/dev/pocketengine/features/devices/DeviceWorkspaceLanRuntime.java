@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** App-native LAN lifecycle over retained transport primitives. No task store, Runner, account,
+/** App-native LAN/explicit WSS lifecycle over retained transport primitives. No task store, Runner, account,
  * alternate retry scheduler, trust-all context, automatic opt-in or business-payload replay. */
 public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTransportStatus.Provider {
     private final DeviceWorkspaceNativeOwner owner;
@@ -40,8 +40,13 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
     private final Map<String, JSONObject> capabilities = new ConcurrentHashMap<>();
     private final Map<String, PendingRead> descriptions = new ConcurrentHashMap<>();
     private final Map<String, PendingCall> pending = new ConcurrentHashMap<>();
-    private final Map<String, DeviceEndpointResolver.LocalReservation> invitations = new ConcurrentHashMap<>();
+    private final Map<String, DevicePairingEndpoint> invitations = new ConcurrentHashMap<>();
     private final Map<String, PairingCompletionListener> recoveries = new ConcurrentHashMap<>();
+    private final Map<String, RelayPairingEndpoint> relayRecoveries = new ConcurrentHashMap<>();
+    private final Map<String, DeviceRelayLease> relayLeases = new ConcurrentHashMap<>();
+    // Resource identity, not peer identity: an owner may replace a receiver-created client
+    // with a separately approved source client for the SAME peer before receiver opt-out.
+    private final Map<ReconnectingDeviceClient, ClientOwnership> clientOwners = new ConcurrentHashMap<>();
     private final Map<String, Outgoing> outgoing = new ConcurrentHashMap<>();
     // Opaque handles issued by the original PairingCoordinator, never reconstructed from UI JSON.
     private final Map<String, PairingCoordinator.OutgoingGrant> outgoingGrants = new ConcurrentHashMap<>();
@@ -57,6 +62,72 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
     }
     public boolean ownerEnabled() { DeviceReceiverServiceResource resource = receiver; return preferences.getBoolean("receiverEnabled", false) && resource != null && !resource.stopped(); }
     public boolean isListening() { return ownerEnabled() && control != null && control.isListening() && bulk != null && bulk.isListening(); }
+    private static String relayKey(String service, String inviter) { return service + "\n" + inviter; }
+    private DeviceIdentity.LocalIdentity requireRelayIdentity() throws Exception {
+        DeviceIdentity.LocalIdentity local = owner.existingIdentity(); if (local == null) throw new SecurityException("原设备身份不存在，请先启用设备功能"); return local;
+    }
+    private void currentRelay(DeviceRelayLease lease) throws Exception {
+        DeviceIdentity.LocalIdentity local = requireRelayIdentity(); lease.requireCurrent(local.deviceId(), local.instanceId(), System.currentTimeMillis());
+        if (relayLeases.get(relayKey(lease.serviceBase, lease.inviterDeviceId)) != lease) throw new SecurityException("原中继租约已替换");
+    }
+    public synchronized NativeDeviceWorkspaceHost.RelayLeaseAction reviewRelayLease(String raw) throws Exception {
+        DeviceIdentity.LocalIdentity local = requireRelayIdentity();
+        DeviceRelayLease reviewed = DeviceRelayLease.review(raw, local.deviceId(), local.instanceId(), System.currentTimeMillis());
+        String key = relayKey(reviewed.serviceBase, reviewed.inviterDeviceId); DeviceRelayLease expected = relayLeases.get(key);
+        return new NativeDeviceWorkspaceHost.RelayLeaseAction() {
+            private boolean installed, consumed;
+            public JSONObject view() throws Exception { reviewed.requireCurrent(local.deviceId(), local.instanceId(), System.currentTimeMillis()); return reviewed.view(); }
+            public void confirm() throws Exception {
+                synchronized (DeviceWorkspaceLanRuntime.this) {
+                    if (consumed || relayLeases.get(key) != expected) throw new SecurityException("中继配置已变化，请重新核对"); consumed = true;
+                    DeviceIdentity.LocalIdentity actual = requireRelayIdentity(); reviewed.requireCurrent(actual.deviceId(), actual.instanceId(), System.currentTimeMillis());
+                    relayLeases.entrySet().removeIf(row -> { if (row.getValue().current(actual.deviceId(), actual.instanceId(), System.currentTimeMillis())) return false; row.getValue().close(); return true; });
+                    if (!relayLeases.containsKey(key) && relayLeases.size() >= 4) throw new SecurityException("本机最多保留四份临时中继租约");
+                    if (expected != null) try { stopClientsForLease(expected); } finally { expected.close(); }
+                    relayLeases.put(key, reviewed); installed = true; owner.changed();
+                }
+            }
+            public void close() { if (!installed) reviewed.close(); }
+        };
+    }
+    public synchronized void removeRelayLease(String service, String inviter) throws Exception {
+        DeviceRelayLease old = relayLeases.remove(relayKey(service, inviter)); if (old == null) throw new SecurityException("原临时中继租约已不存在");
+        try { stopClientsForLease(old); } finally { old.close(); }
+        owner.changed();
+    }
+    public JSONArray relayLeases() throws Exception {
+        JSONArray views = new JSONArray(); DeviceIdentity.LocalIdentity local = owner.existingIdentity(); if (local == null) return views;
+        for (DeviceRelayLease lease : relayLeases.values()) if (lease.current(local.deviceId(), local.instanceId(), System.currentTimeMillis())) views.put(lease.view());
+        return views;
+    }
+    public List<String> relayInvitationAddresses() throws Exception {
+        List<String> services = new ArrayList<>(); DeviceIdentity.LocalIdentity local = owner.existingIdentity(); if (local == null) return services;
+        for (DeviceRelayLease lease : relayLeases.values()) if (lease.inviterDeviceId.equals(local.deviceId()) && lease.current(local.deviceId(), local.instanceId(), System.currentTimeMillis())) services.add(lease.serviceBase);
+        return services;
+    }
+    private Set<String> trustedRelays() throws Exception {
+        Set<String> services = new java.util.HashSet<>(); DeviceIdentity.LocalIdentity local = owner.existingIdentity(); if (local == null) return services;
+        for (DeviceRelayLease lease : relayLeases.values()) if (lease.current(local.deviceId(), local.instanceId(), System.currentTimeMillis())) services.add(lease.serviceBase);
+        return services;
+    }
+    private DeviceRelayLease invitationRelay(String service, String inviter) throws Exception {
+        DeviceRelayLease lease = relayLeases.get(relayKey(service, inviter)); if (lease == null) throw new SecurityException("此服务/邀请设备没有主人已配置的准确中继租约"); currentRelay(lease); return lease;
+    }
+    private DeviceRelayLease peerRelay(String service, String peer, boolean allowReviewedBinding) throws Exception {
+        DeviceRelayLease selected = null, bound = null; DeviceIdentity.LocalIdentity local = requireRelayIdentity();
+        for (DeviceRelayLease lease : relayLeases.values()) {
+            if (!lease.serviceBase.equals(service) || !lease.current(local.deviceId(), local.instanceId(), System.currentTimeMillis())) continue;
+            if (lease.boundTo(peer)) { if (bound != null) throw new SecurityException("此设备有多个已绑定中继槽位，请移除未使用的租约"); bound = lease; continue; }
+            if (allowReviewedBinding && lease.canBindPeer(peer)) {
+                if (selected != null) throw new SecurityException("中继路由有多个候选，请移除未使用的租约后重新核对"); selected = lease;
+            }
+        }
+        if (bound != null) return bound; if (selected == null) throw new SecurityException("此设备没有当前准确绑定的原生中继租约"); return selected;
+    }
+    private DeviceByteChannel openPairing(DeviceEndpointResolver.Resolved endpoint, String inviter, boolean completion) throws Exception {
+        if ("lan".equals(endpoint.kind)) return new SocketByteChannel(socket(completion ? endpoint.completionAddress() : endpoint.candidateAddress()));
+        DeviceRelayLease lease = invitationRelay(endpoint.serviceBase, inviter); return lease.open(completion ? "pairing-complete" : "pairing");
+    }
     private void persistEnabled(boolean enabled) throws IOException { if (!preferences.edit().putBoolean("receiverEnabled", enabled).commit()) throw new IOException("设备接收设置尚未保存，请重试"); }
     public synchronized void enable() throws Exception {
         if (ownerEnabled()) throw new IllegalStateException("设备接收已经启用");
@@ -93,20 +164,30 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         }
         if (result.isEmpty()) throw new SecurityException("当前没有可接受的已配对证书"); return result;
     }
+    private static final class ClientOwnership {
+        final String peerId, receiverToken; final DeviceRelayLease relay;
+        ClientOwnership(String peerId, DeviceRelayLease relay, String receiverToken) { this.peerId = peerId; this.relay = relay; this.receiverToken = receiverToken; }
+    }
     private static final class PeerChannel {
-        final DeviceConnection connection; final DeviceIdentity.AuthenticatedPeer peer;
-        PeerChannel(DeviceConnection connection, DeviceIdentity.AuthenticatedPeer peer) { this.connection = connection; this.peer = peer; }
+        final DeviceConnection connection; final DeviceIdentity.AuthenticatedPeer peer; final ClientOwnership ownership;
+        PeerChannel(DeviceConnection connection, DeviceIdentity.AuthenticatedPeer peer, ClientOwnership ownership) { this.connection = connection; this.peer = peer; this.ownership = ownership; }
     }
     private DeviceConnection.Listener listener(DeviceConnection.Lane lane, boolean sourceClient) {
+        return listener(lane, sourceClient, null);
+    }
+    private DeviceConnection.Listener listener(DeviceConnection.Lane lane, boolean sourceClient, ClientOwnership ownership) {
         return new DeviceConnection.Listener() {
             private PeerChannel retained;
             public void onConnection(DeviceConnection connection, DeviceIdentity.AuthenticatedPeer peer) throws Exception {
-                JSONObject trusted = owner.trust.peer(peer.deviceId());
-                if (trusted == null || trusted.optBoolean("revoked") || !peer.certificateFingerprint().equals(trusted.optString("fingerprint"))) throw new SecurityException("当前设备信任已变化");
-                retained = new PeerChannel(connection, peer);
-                (lane == DeviceConnection.Lane.CONTROL ? sourceClient ? outboundChannels : channels : sourceClient ? outboundBulkChannels : bulkChannels).put(peer.deviceId(), retained);
+                synchronized (DeviceWorkspaceLanRuntime.this) {
+                    JSONObject trusted = owner.trust.peer(peer.deviceId());
+                    if (trusted == null || trusted.optBoolean("revoked") || !peer.certificateFingerprint().equals(trusted.optString("fingerprint"))) throw new SecurityException("当前设备信任已变化");
+                    if (sourceClient && (ownership == null || !clientOwners.containsValue(ownership) || !ownership.peerId.equals(peer.deviceId()))) throw new SecurityException("原主动连接资源已替换");
+                    retained = new PeerChannel(connection, peer, ownership);
+                    (lane == DeviceConnection.Lane.CONTROL ? sourceClient ? outboundChannels : channels : sourceClient ? outboundBulkChannels : bulkChannels).put(peer.deviceId(), retained);
+                }
             }
-            public void onOnline(DeviceIdentity.AuthenticatedPeer peer) throws Exception { owner.changed(); if (lane == DeviceConnection.Lane.CONTROL) describe(retained); }
+            public void onOnline(DeviceIdentity.AuthenticatedPeer peer) throws Exception { if (sourceClient && (ownership == null || !clientOwners.containsValue(ownership))) throw new SecurityException("原主动连接资源已替换"); owner.changed(); if (lane == DeviceConnection.Lane.CONTROL) describe(retained); }
             public void onControl(DeviceIdentity.AuthenticatedPeer peer, byte[] bytes) throws Exception {
                 JSONObject header = DeviceProtocol.parseObject(bytes);
                 if (!DeviceProtocol.VERSION.equals(header.optString("protocolVersion"))) { retained.connection.close(DeviceConnection.State.INCOMPATIBLE); return; }
@@ -217,7 +298,7 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
     }
     @Override public DeviceTransportStatus.Snapshot current(String id) {
         PeerChannel channel = controlChannel(id);
-        return DeviceTransportStatus.current(id, clients.get(id), channel == null ? null : channel.connection, control, pending.values().stream().anyMatch(call -> call.target.equals(id) && call.ticket != null && call.ticket.isClaimed()));
+        return DeviceTransportStatus.current(id, selectedClient(id, clients), channel == null ? null : channel.connection, control, pending.values().stream().anyMatch(call -> call.target.equals(id) && call.ticket != null && call.ticket.isClaimed()));
     }
     public JSONObject capabilities(String id) throws Exception { JSONObject value = capabilities.get(id); return value == null ? null : new JSONObject(value.toString()); }
     /** Scope candidates use only fresh facts on the same currently authenticated channel. Even
@@ -245,14 +326,18 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         return java.util.Collections.unmodifiableList(result);
     }
     public boolean hasMoreOutgoingGrants() { return outgoingGrantLimitReached; }
-    public String createInvitation(DeviceIdentity.LocalIdentity local, String selectedAddress) throws Exception {
+    public synchronized String createInvitation(DeviceIdentity.LocalIdentity local, String selectedAddress) throws Exception {
         if (!isListening()) throw new IllegalStateException("请先开启设备接收");
         invitations.entrySet().removeIf(entry -> !entry.getValue().isCandidateListening());
         if (invitations.size() >= 4) throw new IllegalStateException("还有未到期的配对邀请，请稍后再创建");
         long now = System.currentTimeMillis(), expiresAt = now + 120000;
-        DeviceEndpointResolver.LocalReservation reservation = DeviceEndpointResolver.reserveLan(true, selectedAddress, control, bulk, expiresAt);
+        DeviceRelayLease relay = relayLeases.get(relayKey(selectedAddress, local.deviceId()));
+        if (relay != null) { currentRelay(relay); expiresAt = Math.min(expiresAt, relay.expiresAt); }
+        final long deadline = expiresAt;
+        DevicePairingEndpoint reservation = relay == null ? DeviceEndpointResolver.reserveLan(true, selectedAddress, control, bulk, deadline)
+                : new RelayPairingEndpoint(relay, deadline, () -> { currentRelay(relay); if (!ownerEnabled()) throw new SecurityException("原设备接收已关闭"); });
         try {
-            JSONObject invitation = owner.pairing().createInvitation(local, null, now, 120000); String id = invitation.getString("inviteId");
+            JSONObject invitation = owner.pairing().createInvitation(local, null, now, deadline - now); String id = invitation.getString("inviteId");
             reservation.startCandidate(DeviceTlsContexts.pairingCandidateServer(local), raw -> {
                 PairingCoordinator.Candidate candidate = owner.pairing().inspectCandidate(local, raw, System.currentTimeMillis()); owner.changed();
                 return DeviceProtocol.canonicalBytes(owner.pairing().candidateReceipt(candidate, System.currentTimeMillis()));
@@ -261,23 +346,37 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
             invitations.put(id, reservation); owner.changed(); return DeviceProtocol.canonical(invitation);
         } catch (Exception unavailable) { reservation.close(); throw unavailable; }
     }
-    void confirmCandidate(PairingCoordinator.Candidate candidate, JSONObject exactGrant) throws Exception {
-        DeviceEndpointResolver.LocalReservation reservation = invitations.get(candidate.inviteId());
+    synchronized void confirmCandidate(PairingCoordinator.Candidate candidate, JSONObject exactGrant) throws Exception {
+        DevicePairingEndpoint reservation = invitations.get(candidate.inviteId());
         if (reservation == null || !reservation.isCandidateListening()) throw new SecurityException("原邀请通道已关闭，请重新创建邀请");
         DeviceIdentity.LocalIdentity local = owner.existingIdentity();
+        final JSONObject confirmedHint = reservation.connectionHint();
+        final String receiverToken = networkOwnerToken;
         PairingCoordinator.PendingPairing proof = owner.pairing().confirmCandidateLocally(local, candidate, exactGrant, true, System.currentTimeMillis());
         if (!proof.reviewedGrantFingerprint().equals(DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(exactGrant)))) throw new SecurityException("准确授权摘要已变化");
         reservation.startCompletion(DeviceTlsContexts.forPeer(local, proof.peerCertificateDer()), proof, (peer, raw) -> {
-            JSONObject completion = owner.pairing().finalizeCandidatePairing(proof, peer, raw, exactGrant, System.currentTimeMillis()); owner.changed(); return DeviceProtocol.canonicalBytes(completion);
+            JSONObject completion = owner.pairing().finalizeCandidatePairing(proof, peer, raw, exactGrant, System.currentTimeMillis());
+            if ("relay".equals(confirmedHint.optString("kind"))) try {
+                DeviceRelayLease lease = invitationRelay(confirmedHint.getString("serviceBase"), local.deviceId()); lease.bindPeer(peer.deviceId());
+                connectCommittedReceiverRelay(local, peer, lease, receiverToken);
+            } catch (Exception routeUnavailable) { /* Original pairing is already committed. Return its receipt; never label connection readiness or replay it. */ }
+            owner.changed(); return DeviceProtocol.canonicalBytes(completion);
         }); owner.changed();
+    }
+    private synchronized void connectCommittedReceiverRelay(DeviceIdentity.LocalIdentity local, DeviceIdentity.AuthenticatedPeer peer, DeviceRelayLease lease, String receiverToken) throws Exception {
+        if (!receiverToken.equals(networkOwnerToken) || !ownerEnabled()) throw new SecurityException("原设备接收资源已关闭或替换");
+        // A late immutable pairing callback may not overwrite an intervening owner route choice.
+        if (preferences.contains(endpointKey(peer.deviceId()))) return;
+        saveRelayPeerEndpoint(peer.deviceId(), lease);
+        connectInviter(local, peer.deviceId(), peer.certificateDer(), DeviceEndpointResolver.resolveInvitation(new JSONObject().put("inviterDeviceId", peer.deviceId()).put("connectionHint", new JSONObject().put("kind", "relay").put("serviceBase", lease.serviceBase).put("inviterDeviceId", peer.deviceId())), trustedRelays()), receiverToken);
     }
     NativeDeviceWorkspaceHost.PairingReviewAction inspectInvitation(String raw) throws Exception {
         JSONObject invitation;
         try { invitation = DeviceProtocol.parseObject(raw.getBytes(StandardCharsets.UTF_8)); }
         catch (Exception invalid) { throw new IllegalArgumentException("邀请内容无法读取，请重新复制"); }
         invitation = PairingCoordinator.validateInvitationForPreview(invitation, System.currentTimeMillis());
-        DeviceEndpointResolver.Resolved endpoint = DeviceEndpointResolver.resolveInvitation(invitation, Set.of());
-        if (!"lan".equals(endpoint.kind)) throw new SecurityException("本机尚未配置可信中继服务，请使用局域网邀请");
+        DeviceEndpointResolver.Resolved endpoint = DeviceEndpointResolver.resolveInvitation(invitation, trustedRelays());
+        if ("relay".equals(endpoint.kind)) invitationRelay(endpoint.serviceBase, invitation.getString("inviterDeviceId"));
         DeviceIdentity.LocalIdentity local = owner.enableIdentity(); if (local.deviceId().equals(invitation.getString("inviterDeviceId"))) throw new SecurityException("不能与这台设备自己配对");
         if (owner.trust.peer(invitation.getString("inviterDeviceId")) != null) throw new SecurityException("这台设备已有配对记录，请在设备详情管理原授权");
         return new Outgoing(invitation, endpoint, null);
@@ -306,30 +405,47 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         void advance() throws Exception {
             if (System.currentTimeMillis() >= invitation.getLong("expiresAt")) throw new SecurityException("配对邀请已到期，请重新发起"); nativeGrantReview.requireCurrent();
             DeviceIdentity.LocalIdentity local = owner.existingIdentity(); byte[] der = Base64.getDecoder().decode(invitation.getString("certificateDer"));
-            try (Socket socket = socket(endpoint.candidateAddress())) {
-                byte[] response = PairingCandidateTransport.exchange(DeviceTlsContexts.pairingCandidateClient(der), der, new SocketByteChannel(socket), invitation.getLong("expiresAt"), verified -> {
+            try (DeviceByteChannel raw = openPairing(endpoint, invitation.getString("inviterDeviceId"), false)) {
+                byte[] response = PairingCandidateTransport.exchange(DeviceTlsContexts.pairingCandidateClient(der), der, raw, invitation.getLong("expiresAt"), verified -> {
                     if (offer == null) offer = owner.pairing().prepareCandidateOffer(local, invitation, verified, grant, true, System.currentTimeMillis());
                     return offer.wireBytes();
                 });
                 JSONObject receipt = PairingCoordinator.verifyCandidateReceipt(offer, response); state = receipt.getString("state");
             }
             if (!"confirmed_for_mtls".equals(state) && !"paired".equals(state)) { state = "waiting_remote_confirmation"; owner.changed(); return; }
-            try (Socket socket = socket(endpoint.completionAddress())) {
-                PairingCompletionTransport.exchange(DeviceTlsContexts.forPeer(local, der), der, new SocketByteChannel(socket), invitation.getLong("expiresAt"), new PairingCompletionTransport.Client() {
+            try (DeviceByteChannel raw = openPairing(endpoint, invitation.getString("inviterDeviceId"), true)) {
+                PairingCompletionTransport.exchange(DeviceTlsContexts.forPeer(local, der), der, raw, invitation.getLong("expiresAt"), new PairingCompletionTransport.Client() {
                     public byte[] request(DeviceIdentity.AuthenticatedPeer peer) throws Exception { return DeviceProtocol.canonicalBytes(PairingCoordinator.candidateFinalizeRequest(offer)); }
-                    public void accept(DeviceIdentity.AuthenticatedPeer peer, byte[] completion) throws Exception { retainOutgoingGrant(owner.pairing().acceptCandidateCompletion(offer, peer, completion, grant, System.currentTimeMillis())); saveBoundEndpoint(peer.deviceId(), invitation); }
+                    public void accept(DeviceIdentity.AuthenticatedPeer peer, byte[] completion) throws Exception { retainOutgoingGrant(owner.pairing().acceptCandidateCompletion(offer, peer, completion, grant, System.currentTimeMillis())); if ("relay".equals(endpoint.kind)) invitationRelay(endpoint.serviceBase, peer.deviceId()).bindPeer(peer.deviceId()); saveBoundEndpoint(peer.deviceId(), invitation); }
                 });
             }
             state = "paired"; connectInviter(local, invitation.getString("inviterDeviceId"), der, endpoint); outgoing.remove(invitation.getString("inviteId"), this); owner.changed();
         }
     }
     NativeDeviceWorkspaceHost.RecoveryEndpointAction openCommittedRecovery(String inviteId, String selectedAddress) throws Exception {
-        if (!DeviceEndpointResolver.localLanAddresses().contains(selectedAddress)) throw new SecurityException("请选择本机实际局域网地址");
         DeviceIdentity.LocalIdentity local = owner.existingIdentity(); if (local == null) throw new SecurityException("原设备身份不存在，不能建立恢复入口");
         JSONObject selected = null; long now = System.currentTimeMillis(); JSONArray choices = owner.pairing().committedPairingRecoveryCandidates(now, 8);
         for (int i = 0; i < choices.length(); i++) if (inviteId.equals(choices.getJSONObject(i).optString("inviteId"))) selected = choices.getJSONObject(i);
         if (selected == null || !"available".equals(selected.optString("recoveryState"))) throw new SecurityException("原配对已经撤销、改变或到期，不能恢复旧权限");
         PairingCoordinator.CommittedPairingRecovery original = owner.pairing().committedPairingRecovery(local, inviteId, selected.getString("candidateDigest"), now, 30000);
+        if (selectedAddress.startsWith("wss://") || selectedAddress.startsWith("https://")) {
+            DeviceRelayLease lease = peerRelay(selectedAddress, original.expectedDeviceId(), true); currentRelay(lease); lease.bindPeer(original.expectedDeviceId());
+            synchronized (relayRecoveries) {
+                relayRecoveries.entrySet().removeIf(row -> { if (row.getValue().isCompletionListening()) return false; row.getValue().close(); return true; });
+                if (relayRecoveries.size() >= 2 && !relayRecoveries.containsKey(inviteId)) throw new IOException("配对结果恢复窗口已满");
+                DevicePairingEndpoint invitation = invitations.remove(inviteId); if (invitation != null) invitation.close();
+                RelayPairingEndpoint old = relayRecoveries.remove(inviteId); if (old != null) old.close();
+                RelayPairingEndpoint relay = new RelayPairingEndpoint(lease, original.expiresAt(), () -> { currentRelay(lease); original.checkCurrent(System.currentTimeMillis()); });
+                relay.startRecovery(DeviceTlsContexts.forPeer(local, original.peerCertificateDer()), original,
+                        (actual, request) -> DeviceProtocol.canonicalBytes(owner.pairing().recoverCandidatePairing(original, actual, request, System.currentTimeMillis())));
+                relayRecoveries.put(inviteId, relay); final JSONObject expected = selected;
+                return new NativeDeviceWorkspaceHost.RecoveryEndpointAction() {
+                    public JSONObject view() throws Exception { original.checkCurrent(System.currentTimeMillis()); currentRelay(lease); return new JSONObject().put("inviteId", inviteId).put("kind", "relay").put("serviceBase", lease.serviceBase).put("listening", relay.isCompletionListening()).put("capturedAt", System.currentTimeMillis()).put("expiresAt", original.expiresAt()).put("peerDeviceId", original.expectedDeviceId()).put("peerFingerprint", expected.getString("peerFingerprint")).put("localFingerprint", local.certificateFingerprint()); }
+                    public void close() { relayRecoveries.remove(inviteId, relay); relay.close(); }
+                };
+            }
+        }
+        if (!DeviceEndpointResolver.localLanAddresses().contains(selectedAddress)) throw new SecurityException("请选择本机实际局域网地址或已配置的中继服务");
         synchronized (recoveries) {
             recoveries.entrySet().removeIf(row -> !row.getValue().isListening());
             if (recoveries.size() >= 2 && !recoveries.containsKey(inviteId)) throw new IOException("配对结果恢复窗口已满");
@@ -346,14 +462,22 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
     void recoverPairing(String inviteId, String literalHost, int port) throws Exception {
         // This is address input only. No DNS, caller identity, new invitation token or grant is
         // trusted from it; exact original B certificate and native offer bind the whole read.
-        if (!literalHost.matches("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}|[0-9A-Fa-f:]+") || literalHost.indexOf(':') < 0 && literalHost.indexOf('.') < 0 || port < 1 || port > 65535) throw new SecurityException("请输入另一台设备显示的局域网数字地址，不使用域名或中继");
-        java.net.InetAddress address = java.net.InetAddress.getByName(literalHost); if (address.isAnyLocalAddress() || address.isLoopbackAddress() || address.isMulticastAddress()) throw new SecurityException("不能使用回环、通配或组播地址恢复设备结果");
         DeviceIdentity.LocalIdentity local = owner.existingIdentity(); PairingCoordinator.RecoveryOffer original = owner.pairing().restorePairingOffer(local, inviteId, System.currentTimeMillis()); byte[] der = original.targetCertificateDer();
         long deadline = System.currentTimeMillis() + 20000;
-        try (Socket channel = socket(new InetSocketAddress(address, port))) {
-            PairingCompletionTransport.exchangeRecovery(DeviceTlsContexts.forPeer(local, der), der, new SocketByteChannel(channel), deadline, new PairingCompletionTransport.Client() {
+        final DeviceRelayLease relay;
+        final DeviceByteChannel channel;
+        if ((literalHost.startsWith("wss://") || literalHost.startsWith("https://")) && port == 0) {
+            relay = invitationRelay(literalHost, original.inviterDeviceId()); deadline = Math.min(deadline, relay.expiresAt); channel = relay.open("pairing-complete");
+        } else {
+            relay = null;
+            if (!literalHost.matches("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}|[0-9A-Fa-f:]+") || literalHost.indexOf(':') < 0 && literalHost.indexOf('.') < 0 || port < 1 || port > 65535) throw new SecurityException("请输入准确局域网数字地址，或已配置的原生中继服务");
+            java.net.InetAddress address = java.net.InetAddress.getByName(literalHost); if (address.isAnyLocalAddress() || address.isLoopbackAddress() || address.isMulticastAddress()) throw new SecurityException("不能使用回环、通配或组播地址恢复设备结果");
+            channel = new SocketByteChannel(socket(new InetSocketAddress(address, port)));
+        }
+        try (DeviceByteChannel raw = channel) {
+            PairingCompletionTransport.exchangeRecovery(DeviceTlsContexts.forPeer(local, der), der, raw, deadline, new PairingCompletionTransport.Client() {
                 public byte[] request(DeviceIdentity.AuthenticatedPeer actual) throws Exception { original.requireTargetPeer(actual, System.currentTimeMillis()); return DeviceProtocol.canonicalBytes(PairingCoordinator.candidateRecoveryRequest(original)); }
-                public void accept(DeviceIdentity.AuthenticatedPeer actual, byte[] receipt) throws Exception { retainOutgoingGrant(owner.pairing().acceptRecoveredCandidateCompletion(original, actual, receipt, System.currentTimeMillis())); }
+                public void accept(DeviceIdentity.AuthenticatedPeer actual, byte[] receipt) throws Exception { retainOutgoingGrant(owner.pairing().acceptRecoveredCandidateCompletion(original, actual, receipt, System.currentTimeMillis())); if (relay != null) { currentRelay(relay); relay.bindPeer(actual.deviceId()); saveRelayPeerEndpoint(actual.deviceId(), relay); } }
             });
         }
         owner.changed(); // Original trust may now exist; no business endpoint or online state is invented.
@@ -394,19 +518,25 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         JSONObject peer = currentPeer(id); DeviceIdentity.LocalIdentity local = owner.existingIdentity();
         if (!id.equals(uniqueInvitation.optString("inviterDeviceId")) || !peer.optString("instanceId").equals(uniqueInvitation.optString("instanceId"))
                 || !peer.optString("fingerprint").equals(uniqueInvitation.optString("certificateFingerprint"))) throw new SecurityException("新地址与原配对设备身份不一致");
-        DeviceEndpointResolver.Resolved resolved = DeviceEndpointResolver.resolveInvitation(uniqueInvitation, Set.of());
-        if (!"lan".equals(resolved.kind)) throw new SecurityException("本机尚未配置可信中继服务");
+        DeviceEndpointResolver.Resolved resolved = DeviceEndpointResolver.resolveInvitation(uniqueInvitation, trustedRelays());
+        if ("relay".equals(resolved.kind)) currentRelay(peerRelay(resolved.serviceBase, id, false));
         if (!preferences.contains(endpointKey(id)) && preferences.getAll().keySet().stream().filter(key -> key.startsWith("endpoint_")).count() >= 64)
             throw new IllegalStateException("已达到本机保存设备地址的上限");
         JSONObject config = new JSONObject().put("deviceId", id).put("instanceId", peer.getString("instanceId")).put("certificateFingerprint", peer.getString("fingerprint"))
                 .put("localDeviceId", local.deviceId()).put("localInstanceId", local.instanceId()).put("connectionHint", uniqueInvitation.getJSONObject("connectionHint"));
         if (!preferences.edit().putString(endpointKey(id), DeviceProtocol.canonical(config)).commit()) throw new IOException("配对已保存，但连接地址尚未保存，请重新更新地址");
     }
+    private void saveRelayPeerEndpoint(String id, DeviceRelayLease lease) throws Exception {
+        currentRelay(lease); if (!lease.boundTo(id)) throw new SecurityException("中继路由未绑定原配对设备"); JSONObject peer = currentPeer(id);
+        saveBoundEndpoint(id, new JSONObject().put("inviterDeviceId", id).put("instanceId", peer.getString("instanceId")).put("certificateFingerprint", peer.getString("fingerprint"))
+                .put("connectionHint", new JSONObject().put("kind", "relay").put("serviceBase", lease.serviceBase).put("inviterDeviceId", id)));
+    }
     public NativeDeviceWorkspaceHost.Availability connectAvailability(String id) throws Exception {
         try {
             currentPeer(id); if (channelOnline(controlChannel(id))) return NativeDeviceWorkspaceHost.Availability.blocked("设备已连接");
-            ReconnectingDeviceClient client = clients.get(id); if (client != null && client.isRunning()) return NativeDeviceWorkspaceHost.Availability.blocked("正在连接，请稍后核对");
-            if (boundEndpoint(id) == null) return NativeDeviceWorkspaceHost.Availability.blocked("还没有保存连接地址，请用这台设备的新邀请更新");
+            ReconnectingDeviceClient client = selectedClient(id, clients); if (client != null && client.isRunning()) return NativeDeviceWorkspaceHost.Availability.blocked("正在连接，请稍后核对");
+            JSONObject config = boundEndpoint(id); if (config == null) return NativeDeviceWorkspaceHost.Availability.blocked("还没有保存连接地址，请用这台设备的新邀请更新");
+            if ("relay".equals(config.getJSONObject("connectionHint").optString("kind"))) currentRelay(peerRelay(config.getJSONObject("connectionHint").getString("serviceBase"), id, false));
             return NativeDeviceWorkspaceHost.Availability.ready();
         } catch (SecurityException changed) { return NativeDeviceWorkspaceHost.Availability.blocked(changed.getMessage()); }
         catch (IllegalArgumentException | org.json.JSONException unreadable) { return NativeDeviceWorkspaceHost.Availability.blocked("保存的连接地址无法读取，请重新更新"); }
@@ -415,39 +545,68 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         try { currentPeer(id); return clients.containsKey(id) ? NativeDeviceWorkspaceHost.Availability.ready() : NativeDeviceWorkspaceHost.Availability.blocked("没有本机主动连接"); }
         catch (SecurityException changed) { return NativeDeviceWorkspaceHost.Availability.blocked(changed.getMessage()); }
     }
-    public void connectPeer(String id) throws Exception {
+    public synchronized void connectPeer(String id) throws Exception {
         connectAvailability(id).require(); JSONObject config = boundEndpoint(id), peer = currentPeer(id);
-        DeviceEndpointResolver.Resolved endpoint = DeviceEndpointResolver.resolveInvitation(new JSONObject().put("inviterDeviceId", id).put("connectionHint", config.getJSONObject("connectionHint")), Set.of());
+        DeviceEndpointResolver.Resolved endpoint = DeviceEndpointResolver.resolveInvitation(new JSONObject().put("inviterDeviceId", id).put("connectionHint", config.getJSONObject("connectionHint")), trustedRelays());
         connectInviter(owner.existingIdentity(), id, Base64.getDecoder().decode(peer.getString("certificateDer")), endpoint);
     }
-    public void disconnectPeer(String id) throws Exception {
-        disconnectAvailability(id).require(); closeBulkForPeer(id); ReconnectingDeviceClient client = clients.remove(id); if (client != null) client.close();
+    public synchronized void disconnectPeer(String id) throws Exception {
+        disconnectAvailability(id).require(); closeBulkForPeer(id); closeClientExact(clients.get(id));
         PeerChannel active = outboundChannels.remove(id); if (active != null) active.connection.close(); owner.changed();
     }
     public NativeDeviceWorkspaceHost.ConnectionReviewAction reviewConnectionUpdate(String id, String raw) throws Exception {
         currentPeer(id);
         JSONObject invitation = PairingCoordinator.validateInvitationForPreview(DeviceProtocol.parseObject(raw.getBytes(StandardCharsets.UTF_8)), System.currentTimeMillis());
-        JSONObject peer = currentPeer(id); DeviceEndpointResolver.Resolved endpoint = DeviceEndpointResolver.resolveInvitation(invitation, Set.of());
+        JSONObject peer = currentPeer(id); DeviceEndpointResolver.Resolved endpoint = DeviceEndpointResolver.resolveInvitation(invitation, trustedRelays());
         if (!id.equals(invitation.optString("inviterDeviceId")) || !peer.optString("instanceId").equals(invitation.optString("instanceId"))
-                || !peer.optString("fingerprint").equals(invitation.optString("certificateFingerprint")) || !"lan".equals(endpoint.kind)) throw new SecurityException("邀请与原配对设备身份不一致，未更新地址");
+                || !peer.optString("fingerprint").equals(invitation.optString("certificateFingerprint"))) throw new SecurityException("邀请与原配对设备身份不一致，未更新地址");
+        final DeviceRelayLease relay = "relay".equals(endpoint.kind) ? peerRelay(endpoint.serviceBase, id, true) : null;
         return new NativeDeviceWorkspaceHost.ConnectionReviewAction() {
             public JSONObject view() throws Exception { return new JSONObject().put("deviceId", id).put("instanceId", peer.getString("instanceId")).put("certificateFingerprint", peer.getString("fingerprint"))
-                    .put("host", endpoint.host).put("controlPort", endpoint.controlPort).put("bulkPort", endpoint.bulkPort).put("expiresAt", invitation.getLong("expiresAt")); }
+                    .put("kind", endpoint.kind).put("serviceBase", endpoint.serviceBase).put("host", endpoint.host).put("controlPort", endpoint.controlPort).put("bulkPort", endpoint.bulkPort).put("expiresAt", invitation.getLong("expiresAt")); }
             public void confirm() throws Exception {
-                PairingCoordinator.validateInvitationForPreview(invitation, System.currentTimeMillis()); saveBoundEndpoint(id, invitation);
-                disconnectPeerIfPresent(id); if (!channelOnline(controlChannel(id))) connectPeer(id); owner.changed();
+                PairingCoordinator.validateInvitationForPreview(invitation, System.currentTimeMillis()); currentPeer(id);
+                if (relay != null) { currentRelay(relay); relay.bindPeer(id); } saveBoundEndpoint(id, invitation);
+                stopOutboundPeer(id); if (!channelOnline(controlChannel(id))) connectPeer(id); owner.changed();
             }
         };
     }
-    private void disconnectPeerIfPresent(String id) throws Exception { if (clients.containsKey(id)) disconnectPeer(id); }
-    private void connectInviter(DeviceIdentity.LocalIdentity local, String id, byte[] der, DeviceEndpointResolver.Resolved endpoint) throws Exception {
+    /** Owner reselects transport for an ALREADY paired SQL identity. This is not a new pairing,
+     * grant or remote operation. In particular cold lease import never guesses a former peer. */
+    public NativeDeviceWorkspaceHost.ConnectionReviewAction reviewRelayConnection(String id, String service) throws Exception {
+        JSONObject expected = currentPeer(id); DeviceRelayLease lease = peerRelay(service, id, true); currentRelay(lease);
+        return new NativeDeviceWorkspaceHost.ConnectionReviewAction() {
+            public JSONObject view() throws Exception { currentRelay(lease); return new JSONObject().put("deviceId", id).put("instanceId", expected.getString("instanceId"))
+                    .put("certificateFingerprint", expected.getString("fingerprint")).put("kind", "relay").put("serviceBase", lease.serviceBase).put("expiresAt", lease.expiresAt); }
+            public void confirm() throws Exception {
+                JSONObject actual = currentPeer(id); currentRelay(lease);
+                for (String field : new String[]{"fingerprint", "instanceId", "authorizationEpoch"}) if (!expected.get(field).equals(actual.get(field))) throw new SecurityException("原配对身份或权限版本已变化，请重新核对");
+                synchronized (DeviceWorkspaceLanRuntime.this) { lease.bindPeer(id); saveRelayPeerEndpoint(id, lease); stopOutboundPeer(id); connectPeer(id); } owner.changed();
+            }
+        };
+    }
+    private void connectInviter(DeviceIdentity.LocalIdentity local, String id, byte[] der, DeviceEndpointResolver.Resolved endpoint) throws Exception { connectInviter(local, id, der, endpoint, null); }
+    private synchronized void connectInviter(DeviceIdentity.LocalIdentity local, String id, byte[] der, DeviceEndpointResolver.Resolved endpoint, String receiverToken) throws Exception {
         if (clients.size() >= 8 && !clients.containsKey(id)) throw new IllegalStateException("已达到本机设备连接上限，配对已保存但未开启更多连接");
-        ReconnectingDeviceClient old = clients.remove(id); if (old != null) old.close();
-        ReconnectingDeviceClient client = new ReconnectingDeviceClient(true, System.currentTimeMillis() + 30L * 86400_000, () -> {
+        DeviceRelayLease relay = "relay".equals(endpoint.kind) ? peerRelay(endpoint.serviceBase, id, false) : null;
+        if (relay != null) currentRelay(relay);
+        if (receiverToken != null && (!receiverToken.equals(networkOwnerToken) || !ownerEnabled())) throw new SecurityException("原设备接收资源已关闭或替换");
+        closeClientExact(clients.get(id));
+        ClientOwnership ownership = new ClientOwnership(id, relay, receiverToken);
+        ReconnectingDeviceClient client = new ReconnectingDeviceClient(true, relay == null ? System.currentTimeMillis() + 30L * 86400_000 : relay.expiresAt, () -> {
             JSONObject peer = owner.trust.peer(id); if (peer == null || peer.optBoolean("revoked")) throw new SecurityException("设备信任已撤销");
-            return new DeviceConnection(DeviceTlsContexts.forPeer(local, Base64.getDecoder().decode(peer.getString("certificateDer"))), true, DeviceConnection.Lane.CONTROL, new SocketByteChannel(socket(endpoint.controlAddress())), listener(DeviceConnection.Lane.CONTROL, true));
+            DeviceIdentity.LocalIdentity actual = owner.existingIdentity(); if (actual == null || !local.deviceId().equals(actual.deviceId()) || !local.instanceId().equals(actual.instanceId())) throw new SecurityException("原本机设备身份已变化");
+            if (relay != null) currentRelay(relay);
+            return new DeviceConnection(DeviceTlsContexts.forPeer(actual, Base64.getDecoder().decode(peer.getString("certificateDer"))), relay == null || actual.deviceId().compareTo(id) < 0, DeviceConnection.Lane.CONTROL,
+                    relay == null ? new SocketByteChannel(socket(endpoint.controlAddress())) : openOwnedRelay(relay, ownership, "control"), listener(DeviceConnection.Lane.CONTROL, true, ownership));
         });
-        clients.put(id, client); Thread worker = new Thread(client, "device-paired-channel"); worker.setDaemon(true); worker.start();
+        clients.put(id, client); clientOwners.put(client, ownership); Thread worker = new Thread(client, "device-paired-channel"); worker.setDaemon(true); worker.start();
+        // Both WSS peers dial out. The independent bulk lane cannot occupy CONTROL/cancel IO.
+        if (relay != null) startBulkClient(id, owner.trust.peer(id).getString("fingerprint"), endpoint, relay.expiresAt, receiverToken);
+    }
+    private synchronized DeviceByteChannel openOwnedRelay(DeviceRelayLease relay, ClientOwnership ownership, String lane) throws Exception {
+        if (!clientOwners.containsValue(ownership)) throw new SecurityException("原主动连接资源已替换");
+        currentRelay(relay); return relay.open(lane);
     }
     private static Socket socket(InetSocketAddress address) throws IOException { Socket socket = new Socket(); try { socket.connect(address, 10000); return socket; } catch (IOException unavailable) { socket.close(); throw unavailable; } }
     private static final class PendingCall {
@@ -513,30 +672,46 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
     private static boolean samePeer(DeviceIdentity.AuthenticatedPeer expected, DeviceIdentity.AuthenticatedPeer actual) {
         return expected != null && actual != null && expected.deviceId().equals(actual.deviceId()) && expected.certificateFingerprint().equals(actual.certificateFingerprint());
     }
-    private PeerChannel bulkChannel(String id) { PeerChannel out = outboundBulkChannels.get(id), in = bulkChannels.get(id); return channelOnline(out) ? out : in != null ? in : out; }
+    private PeerChannel bulkChannel(String id) { return selectedChannel(id, outboundBulkChannels, bulkChannels); }
     /** Only a privately issued SQL receive evidence calls this. A channel carries no authority
      * by itself; every chunk still needs exact registered content, caller certificate and Current. */
     void prepareArtifactReceive(DeviceIdentity.AuthenticatedPeer expected, long deadline, DeviceArtifactTransfer.Current originalReceive) throws Exception {
         originalReceive.require(); if (deadline <= System.currentTimeMillis()) throw new SecurityException("原图像接收期限已到");
-        synchronized (bulkClients) {
+        synchronized (this) {
             PeerChannel online = bulkChannel(expected.deviceId());
             if (channelOnline(online)) { if (!samePeer(expected, online.peer)) throw new SecurityException("成果通道身份已变化"); return; }
-            if (!bulkClients.containsKey(expected.deviceId()) || !bulkClients.get(expected.deviceId()).isRunning()) {
+            ReconnectingDeviceClient selected = selectedClient(expected.deviceId(), bulkClients);
+            if (selected == null || !selected.isRunning()) {
                 if (bulkClients.size() >= 8 && !bulkClients.containsKey(expected.deviceId())) throw new IOException("设备成果连接窗口已满");
                 JSONObject config = boundEndpoint(expected.deviceId()); if (config == null) throw new IOException("未保存这台设备的成果地址，请更新连接地址");
                 JSONObject known = currentPeer(expected.deviceId()); if (!expected.certificateFingerprint().equals(known.optString("fingerprint"))) throw new SecurityException("原成果目标身份已变化");
-                DeviceEndpointResolver.Resolved address = DeviceEndpointResolver.resolveInvitation(new JSONObject().put("inviterDeviceId", expected.deviceId()).put("connectionHint", config.getJSONObject("connectionHint")), Set.of());
-                DeviceIdentity.LocalIdentity local = owner.existingIdentity(); ReconnectingDeviceClient previous = bulkClients.remove(expected.deviceId()); if (previous != null) previous.close();
-                ReconnectingDeviceClient client = new ReconnectingDeviceClient(true, deadline, () -> {
-                    JSONObject current = currentPeer(expected.deviceId()); if (!expected.certificateFingerprint().equals(current.optString("fingerprint"))) throw new SecurityException("成果目标信任已变化");
-                    return new DeviceConnection(DeviceTlsContexts.forPeer(local, Base64.getDecoder().decode(current.getString("certificateDer"))), true, DeviceConnection.Lane.BULK, new SocketByteChannel(socket(address.bulkAddress())), listener(DeviceConnection.Lane.BULK, true));
-                });
-                bulkClients.put(expected.deviceId(), client); Thread worker = new Thread(client, "device-paired-bulk"); worker.setDaemon(true); worker.start();
+                DeviceEndpointResolver.Resolved address = DeviceEndpointResolver.resolveInvitation(new JSONObject().put("inviterDeviceId", expected.deviceId()).put("connectionHint", config.getJSONObject("connectionHint")), trustedRelays());
+                startBulkClient(expected.deviceId(), expected.certificateFingerprint(), address, deadline);
             }
         }
         long until = Math.min(deadline, System.currentTimeMillis() + 15000);
         while (System.currentTimeMillis() < until) { originalReceive.require(); PeerChannel exact = bulkChannel(expected.deviceId()); if (channelOnline(exact)) { if (!samePeer(expected, exact.peer)) throw new SecurityException("成果通道身份已变化"); return; } Thread.sleep(Math.min(50, Math.max(1, until - System.currentTimeMillis()))); }
         throw new IOException("成果通道尚未连接，未宣称图像已送达");
+    }
+    private void startBulkClient(String id, String fingerprint, DeviceEndpointResolver.Resolved address, long deadline) throws Exception { startBulkClient(id, fingerprint, address, deadline, null); }
+    private synchronized void startBulkClient(String id, String fingerprint, DeviceEndpointResolver.Resolved address, long deadline, String receiverToken) throws Exception {
+        ReconnectingDeviceClient selected = selectedClient(id, bulkClients);
+        ClientOwnership selectedOwnership = selected == null ? null : clientOwners.get(selected);
+        if (selectedOwnership != null && selected.isRunning() && java.util.Objects.equals(selectedOwnership.receiverToken, receiverToken)) return;
+        if (bulkClients.size() >= 8 && !bulkClients.containsKey(id)) throw new IOException("设备成果连接窗口已满");
+        DeviceIdentity.LocalIdentity local = requireRelayIdentity(); DeviceRelayLease relay = "relay".equals(address.kind) ? peerRelay(address.serviceBase, id, false) : null;
+        if (relay != null) { currentRelay(relay); deadline = Math.min(deadline, relay.expiresAt); }
+        if (receiverToken != null && (!receiverToken.equals(networkOwnerToken) || !ownerEnabled())) throw new SecurityException("原设备接收资源已关闭或替换");
+        closeClientExact(bulkClients.get(id));
+        ClientOwnership ownership = new ClientOwnership(id, relay, receiverToken);
+        ReconnectingDeviceClient client = new ReconnectingDeviceClient(true, deadline, () -> {
+            JSONObject peer = currentPeer(id); if (!fingerprint.equals(peer.optString("fingerprint"))) throw new SecurityException("成果目标信任已变化");
+            DeviceIdentity.LocalIdentity actual = requireRelayIdentity(); if (!local.deviceId().equals(actual.deviceId()) || !local.instanceId().equals(actual.instanceId())) throw new SecurityException("原本机设备身份已变化");
+            if (relay != null) currentRelay(relay);
+            return new DeviceConnection(DeviceTlsContexts.forPeer(actual, Base64.getDecoder().decode(peer.getString("certificateDer"))), relay == null || actual.deviceId().compareTo(id) < 0, DeviceConnection.Lane.BULK,
+                    relay == null ? new SocketByteChannel(socket(address.bulkAddress())) : openOwnedRelay(relay, ownership, "bulk"), listener(DeviceConnection.Lane.BULK, true, ownership));
+        });
+        bulkClients.put(id, client); clientOwners.put(client, ownership); Thread worker = new Thread(client, "device-paired-bulk"); worker.setDaemon(true); worker.start();
     }
     boolean queueArtifactChunk(String target, String fingerprint, UUID transfer, long offset, byte[] raw, long deadline, DeviceArtifactTransfer.Current originalRead) throws Exception {
         originalRead.require(); if (System.currentTimeMillis() >= deadline) throw new SecurityException("原成果读取期限已到");
@@ -546,35 +721,89 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
             if (System.currentTimeMillis() >= deadline || !samePeer(exact.peer, actualTlsTarget)) throw new SecurityException("原成果受众、期限或实际发送通道已变化");
         }); // QUEUED only. Full original SQL/TTL/scope gate runs again immediately before TLS write.
     }
-    void closeBulkForPeer(String id) {
-        ReconnectingDeviceClient client = bulkClients.remove(id); if (client != null) try { client.close(); } catch (IOException ignored) { }
+    synchronized void closeBulkForPeer(String id) {
+        try { closeClientExact(bulkClients.get(id)); } catch (IOException ignored) { }
         PeerChannel in = bulkChannels.remove(id), out = outboundBulkChannels.remove(id);
         if (in != null) try { in.connection.close(); } catch (IOException ignored) { }
         if (out != null) try { out.connection.close(); } catch (IOException ignored) { }
     }
     private PeerChannel controlChannel(String id) {
-        PeerChannel outbound = outboundChannels.get(id), incoming = channels.get(id);
+        return selectedChannel(id, outboundChannels, channels);
+    }
+    private PeerChannel selectedChannel(String id, Map<String, PeerChannel> outgoing, Map<String, PeerChannel> incomingChannels) {
+        PeerChannel outbound = outgoing.get(id), incoming = incomingChannels.get(id);
+        if (outbound != null && !matchesSelectedRoute(id, outbound.connection.path(), outbound.ownership)) outbound = null;
+        if (incoming != null && !matchesSelectedRoute(id, incoming.connection.path(), incoming.ownership)) incoming = null;
         if (channelOnline(outbound)) return outbound;
         return incoming != null ? incoming : outbound;
     }
+    private ReconnectingDeviceClient selectedClient(String id, Map<String, ReconnectingDeviceClient> candidates) {
+        ReconnectingDeviceClient client = candidates.get(id); ClientOwnership ownership = client == null ? null : clientOwners.get(client);
+        if (ownership == null) return null;
+        DeviceConnection active = client.active();
+        DeviceTransportStatus.Path path = active != null ? active.path() : ownership.relay == null ? DeviceTransportStatus.Path.DIRECT_TLS : DeviceTransportStatus.Path.RELAY_WSS;
+        return matchesSelectedRoute(id, path, ownership) ? client : null;
+    }
+    /** A saved explicit relay choice is not permission to silently use an old LAN channel.
+     * Filtering is reachability policy only; the original TLS/SQL gates remain authoritative. */
+    private boolean matchesSelectedRoute(String id, DeviceTransportStatus.Path actual, ClientOwnership ownership) {
+        if (ownership != null && (!id.equals(ownership.peerId) || !clientOwners.containsValue(ownership))) return false;
+        try {
+            String raw = preferences.getString(endpointKey(id), null);
+            if (raw == null) return actual == DeviceTransportStatus.Path.DIRECT_TLS;
+            JSONObject hint = DeviceProtocol.parseObject(raw.getBytes(StandardCharsets.UTF_8)).getJSONObject("connectionHint");
+            if ("lan".equals(hint.optString("kind"))) return actual == DeviceTransportStatus.Path.DIRECT_TLS;
+            if (!"relay".equals(hint.optString("kind")) || actual != DeviceTransportStatus.Path.RELAY_WSS || ownership == null || ownership.relay == null) return false;
+            DeviceRelayLease relay = ownership.relay;
+            return relay.serviceBase.equals(hint.optString("serviceBase")) && relay.boundTo(id)
+                    && relayLeases.get(relayKey(relay.serviceBase, relay.inviterDeviceId)) == relay
+                    && relay.current(relay.localDeviceId, relay.localInstanceId, System.currentTimeMillis());
+        } catch (Exception unreadable) { return false; }
+    }
+    private void closeClientExact(ReconnectingDeviceClient client) throws IOException {
+        if (client == null) return;
+        ClientOwnership ownership = clientOwners.remove(client);
+        clients.entrySet().removeIf(row -> row.getValue() == client); bulkClients.entrySet().removeIf(row -> row.getValue() == client);
+        IOException failure = null; try { client.close(); } catch (IOException unknown) { failure = unknown; }
+        if (ownership != null) for (Map<String, PeerChannel> lane : List.of(outboundChannels, outboundBulkChannels)) {
+            for (Map.Entry<String, PeerChannel> row : lane.entrySet()) if (row.getValue().ownership == ownership && lane.remove(row.getKey(), row.getValue()))
+                try { row.getValue().connection.close(); } catch (IOException unknown) { failure = unknown; }
+        }
+        if (failure != null) throw failure;
+    }
+    private synchronized void stopOutboundPeer(String id) throws IOException {
+        IOException failure = null;
+        for (ReconnectingDeviceClient client : new ReconnectingDeviceClient[]{clients.get(id), bulkClients.get(id)})
+            if (client != null) try { closeClientExact(client); } catch (IOException unknown) { failure = unknown; }
+        if (failure != null) throw failure;
+    }
+    private synchronized void stopClientsForLease(DeviceRelayLease exact) throws IOException {
+        IOException failure = null;
+        for (Map.Entry<ReconnectingDeviceClient, ClientOwnership> row : clientOwners.entrySet()) if (row.getValue().relay == exact)
+            try { closeClientExact(row.getKey()); } catch (IOException unknown) { failure = unknown; }
+        if (failure != null) throw failure;
+    }
     private static boolean channelOnline(PeerChannel channel) { return channel != null && (channel.connection.state() == DeviceConnection.State.ONLINE || channel.connection.state() == DeviceConnection.State.DEGRADED); }
-    public void revoke(String id) throws Exception {
+    public synchronized void revoke(String id) throws Exception {
         closeBulkForPeer(id);
-        ReconnectingDeviceClient client = clients.remove(id); if (client != null) client.close();
+        closeClientExact(clients.get(id));
         PeerChannel channel = channels.remove(id), outbound = outboundChannels.remove(id);
         if (channel != null) channel.connection.close(DeviceConnection.State.REVOKED);
         if (outbound != null) outbound.connection.close(DeviceConnection.State.REVOKED);
         capabilities.remove(id); capabilityChannels.remove(id);
         if (!preferences.edit().remove(endpointKey(id)).commit()) throw new IOException("信任已撤销，但旧连接地址清理尚未确认");
         outgoingGrants.entrySet().removeIf(row -> row.getValue().targetDeviceId().equals(id));
+        relayLeases.entrySet().removeIf(row -> { if (!row.getValue().boundTo(id)) return false; row.getValue().close(); return true; });
     }
     /** Receiver opt-out closes only the exact inbound resources it owns. It neither cancels an
      * accepted task nor borrows that switch to stop independently owner-approved source clients. */
     private synchronized void closeReceiverNetwork(String token) throws Exception {
         if (!token.equals(networkOwnerToken)) return;
         Exception failure = null;
-        for (DeviceEndpointResolver.LocalReservation invitation : invitations.values()) try { invitation.close(); } catch (Exception unknown) { failure = unknown; }
+        for (DevicePairingEndpoint invitation : invitations.values()) try { invitation.close(); } catch (Exception unknown) { failure = unknown; }
         invitations.clear();
+        for (Map.Entry<ReconnectingDeviceClient, ClientOwnership> row : clientOwners.entrySet()) if (token.equals(row.getValue().receiverToken))
+            try { closeClientExact(row.getKey()); } catch (Exception unknown) { failure = unknown; }
         if (control != null) try { control.close(); } catch (Exception unknown) { failure = unknown; } finally { control = null; }
         if (bulk != null) try { bulk.close(); } catch (Exception unknown) { failure = unknown; } finally { bulk = null; }
         owner.changed(); if (failure != null) throw failure;
@@ -582,16 +811,18 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
     @Override public synchronized void close() throws Exception {
         DeviceReceiverServiceResource owned = receiver; if (owned != null) owned.requestStop(); Exception failure = null;
         try { closeReceiverNetwork(networkOwnerToken); } catch (Exception unknown) { failure = unknown; }
-        for (ReconnectingDeviceClient client : clients.values()) try { client.close(); } catch (Exception unknown) { failure = unknown; }
+        for (ReconnectingDeviceClient client : new java.util.HashSet<>(clientOwners.keySet())) try { closeClientExact(client); } catch (Exception unknown) { failure = unknown; }
         clients.clear();
         for (PairingCompletionListener recovery : recoveries.values()) try { recovery.close(); } catch (IOException unknown) { failure = unknown; }
         recoveries.clear();
+        for (RelayPairingEndpoint recovery : relayRecoveries.values()) recovery.close(); relayRecoveries.clear();
         for (String id : new java.util.HashSet<>(bulkClients.keySet())) closeBulkForPeer(id);
         for (String id : new java.util.HashSet<>(bulkChannels.keySet())) closeBulkForPeer(id);
         outgoing.clear(); descriptions.clear();
         for (PeerChannel channel : channels.values()) try { channel.connection.close(); } catch (Exception unknown) { failure = unknown; }
         for (PeerChannel channel : outboundChannels.values()) try { channel.connection.close(); } catch (Exception unknown) { failure = unknown; }
         channels.clear(); outboundChannels.clear(); capabilities.clear(); capabilityChannels.clear(); outgoingGrants.clear(); outgoingGrantLimitReached = false;
+        for (DeviceRelayLease lease : relayLeases.values()) lease.close(); relayLeases.clear();
         owner.changed(); if (failure != null) throw failure;
     }
 }

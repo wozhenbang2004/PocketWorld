@@ -19,6 +19,14 @@ public class ObservationSafetyTest {
         assertEquals("stale_observation",ObservationSafety.frameFailure(42,720,1280,42,0,1280));
         assertEquals("stale_observation",ObservationSafety.frameFailure(-1,720,1280,-1,720,1280));
     }
+    @Test public void semanticInputIgnoresOnlyPixelGenerationNotFrameGeometryOrAvailability() {
+        assertNull(ObservationSafety.semanticFrameFailure(42,720,1280,99,720,1280));
+        assertEquals("stale_observation",ObservationSafety.semanticFrameFailure(42,720,1280,-1,720,1280));
+        assertEquals("stale_observation",ObservationSafety.semanticFrameFailure(42,720,1280,99,1280,720));
+        assertTrue(ObservationSafety.requiresPause("tree_read_timeout"));
+        assertTrue(ObservationSafety.requiresPause("tree_read_busy"));
+        assertTrue(ObservationSafety.requiresPause("display_ownership_unknown"));
+    }
     @Test public void exactLiveIsolatedSessionIsRequired() {
         assertNull(ObservationSafety.isolationFailure(5,"session",5,"session",true,true,true,true));
         assertEquals("wrong_display",ObservationSafety.isolationFailure(5,"session",0,"session",true,true,true,true));

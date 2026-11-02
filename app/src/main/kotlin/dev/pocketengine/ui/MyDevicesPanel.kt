@@ -69,6 +69,8 @@ internal fun MyDevicesPanel(
     var recoveryEndpointView by remember(window) { mutableStateOf<JSONObject?>(null) }
     val recoveryGeneration = remember(window) { java.util.concurrent.atomic.AtomicLong() }
     var addDevice by remember { mutableStateOf(false) }
+    var relayConfig by remember(window) { mutableStateOf(false) }
+    var relayReview by remember(window) { mutableStateOf<NativeDeviceWorkspaceHost.RelayLeaseReview?>(null) }
     // Invitations contain bearer credentials: no rememberSaveable, logging, task or clipboard write.
     var invitation by remember(window) { mutableStateOf<String?>(null) }
     var confirmDisable by remember { mutableStateOf(false) }
@@ -122,13 +124,14 @@ internal fun MyDevicesPanel(
             } }
         }) } catch (_: Exception) { stoppingTasks = stoppingTasks - id; error = "停止入口暂不可用，请使用任务通知中的停止按钮。" }
     }
-    fun dismissReview() { recoveryGeneration.incrementAndGet(); window.discardReview(); pairing = null; goal = null; connectionReview = null; grantRevision = null; recoveryChoice = null; abandonment = null; recoveryEndpoint = null; recoveryEndpointView = null }
+    fun dismissReview() { recoveryGeneration.incrementAndGet(); window.discardReview(); pairing = null; goal = null; connectionReview = null; grantRevision = null; recoveryChoice = null; abandonment = null; recoveryEndpoint = null; recoveryEndpointView = null; relayReview = null }
     fun goBack() { dismissReview(); if (selectedId != null) selectedId = null else back() }
     DisposableEffect(window) { onDispose { alive.set(false); window.close(); invitation = null } }
     LaunchedEffect(window, readTrigger, busy == null) { if (busy == null && lastReadTrigger != readTrigger) execute("读取设备") }
     BackHandler {
         when {
-            pairing != null || goal != null || connectionReview != null || grantRevision != null || abandonment != null || recoveryChoice != null || recoveryEndpoint != null -> dismissReview()
+            pairing != null || goal != null || connectionReview != null || grantRevision != null || abandonment != null || recoveryChoice != null || recoveryEndpoint != null || relayReview != null -> dismissReview()
+            relayConfig -> relayConfig = false
             connectionUpdateId != null -> connectionUpdateId = null
             invitation != null -> invitation = null
             addDevice -> addDevice = false
@@ -243,9 +246,21 @@ internal fun MyDevicesPanel(
     }
     if (addDevice) DeviceAddDialog(actions, busy != null,
         close = { addDevice = false },
+        relay = { addDevice = false; relayConfig = true },
         create = { address -> execute("创建短时邀请") { val value = window.createInvitation(address); main.post { if (alive.get()) { invitation = value; addDevice = false } } } },
         inspect = { raw -> execute("核对原设备邀请") { val review = window.inspectInvitation(raw); main.post { if (alive.get()) { pairing = review; addDevice = false } } } })
-    connectionUpdateId?.let { id -> DeviceConnectionInputDialog(busy != null, { connectionUpdateId = null }) { raw ->
+    if (relayConfig) DeviceRelayLeaseInput(local.optString("deviceId"), actions.optJSONArray("relayLeases") ?: JSONArray(), busy != null,
+        close = { relayConfig = false },
+        remove = { service, inviter -> execute("移除临时中继租约", "临时中继通道已关闭；已发送的操作仍需在原任务核对。") { window.removeRelayLease(service, inviter) } },
+        inspect = { raw -> execute("核对已有中继租约") { val native = window.reviewRelayLease(raw); main.post { if (alive.get()) { relayReview = native; relayConfig = false } } } })
+    relayReview?.let { native -> DeviceRelayLeaseConfirmation(native.view(), busy != null, ::dismissReview) {
+        execute("使用临时中继租约", "临时租约已接收，尚未证明双端连接；仍需原设备指纹与权限核对。") {
+            try { window.confirmRelayLease(native) } finally { main.post { if (alive.get()) relayReview = null } }
+        }
+    } }
+    connectionUpdateId?.let { id -> DeviceConnectionInputDialog(id, actions.optJSONArray("relayLeases") ?: JSONArray(), busy != null, { connectionUpdateId = null }, relay = { service ->
+        execute("核对原设备的中继连接") { val native = window.reviewRelayConnection(id, service); main.post { if (alive.get()) { connectionReview = native; connectionUpdateId = null } } }
+    }) { raw ->
         execute("核对连接地址") {
             val native = window.reviewConnectionUpdate(id, raw)
             main.post { if (alive.get()) { connectionReview = native; connectionUpdateId = null } }
@@ -343,29 +358,31 @@ private fun DeviceRecoveryLocator(original: JSONObject, addresses: List<String>,
     var host by remember(original) { mutableStateOf(if (providing && addresses.size == 1) addresses.single() else "") }
     var port by remember(original) { mutableStateOf("") }
     val value = port.toIntOrNull()
+    val relay = host.startsWith("wss://") || host.startsWith("https://")
     AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text(if (providing) "提供原配对结果" else "核对原配对结果") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (providing) {
-                Text("选择本机实际局域网地址。恢复端口只开放 30 秒，退出页面将关闭。", style = MaterialTheme.typography.bodyMedium)
-                if (addresses.isEmpty()) Text("当前没有可用局域网地址。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                Text("选择本机实际局域网地址或已配置中继。原结果只读窗口开放30秒，退出将关闭。", style = MaterialTheme.typography.bodyMedium)
+                if (addresses.isEmpty()) Text("当前没有可用局域网地址或中继租约。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                 addresses.forEach { address -> Row(Modifier.fillMaxWidth().clickable(enabled = !busy, role = Role.RadioButton) { host = address }, verticalAlignment = Alignment.CenterVertically) { RadioButton(host == address, null); Text(address, style = MaterialTheme.typography.bodyMedium) } }
                 DeviceFingerprint("接收结果的原设备", original.optString("peerFingerprint"))
             } else {
-                Text("先在另一台设备的‘配对结果恢复’中提供端口，再填写它显示的地址与端口。地址只用于寻找设备，身份仍按原完整指纹核对。", style = MaterialTheme.typography.bodyMedium)
-                OutlinedTextField(host, { if (it.length <= 64) host = it }, label = { Text("局域网数字地址") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth().testTag("device_pair_recovery_host"))
-                OutlinedTextField(port, { if (it.length <= 5 && it.all(Char::isDigit)) port = it }, label = { Text("恢复端口") }, singleLine = true, enabled = !busy, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.fillMaxWidth().testTag("device_pair_recovery_port"))
+                Text("先让原设备开启结果恢复窗口，再填写其数字地址与端口，或双方已配置的TLS中继服务地址。仍只核对原完整指纹和已提交结果，不重做配对。", style = MaterialTheme.typography.bodyMedium)
+                OutlinedTextField(host, { if (it.length <= 512) host = it }, label = { Text("数字地址或已配置中继服务") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth().testTag("device_pair_recovery_host"))
+                if (!relay) OutlinedTextField(port, { if (it.length <= 5 && it.all(Char::isDigit)) port = it }, label = { Text("恢复端口") }, singleLine = true, enabled = !busy, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.fillMaxWidth().testTag("device_pair_recovery_port"))
                 DeviceFingerprint("原设备完整指纹", original.optString("inviterFingerprint"))
             }
         }
-    }, confirmButton = { Button(onClick = { confirm(host, value ?: 0) }, enabled = !busy && host.isNotBlank() && (providing && host in addresses || !providing && value != null && value in 1..65535), modifier = Modifier.heightIn(min = 48.dp).testTag("device_pair_recovery_confirm")) { Text(if (providing) "开启恢复端口" else "读取已提交结果") } }, dismissButton = { TextButton(onClick = close, modifier = Modifier.heightIn(min = 48.dp)) { Text("取消") } })
+    }, confirmButton = { Button(onClick = { confirm(host, if (relay) 0 else value ?: 0) }, enabled = !busy && host.isNotBlank() && (providing && host in addresses || !providing && (relay || value != null && value in 1..65535)), modifier = Modifier.heightIn(min = 48.dp).testTag("device_pair_recovery_confirm")) { Text(if (providing) "开启只读恢复窗口" else "读取已提交结果") } }, dismissButton = { TextButton(onClick = close, modifier = Modifier.heightIn(min = 48.dp)) { Text("取消") } })
 }
 
 @Composable
 private fun DeviceRecoveryEndpoint(endpoint: JSONObject, close: () -> Unit) {
+    val relay = endpoint.optString("kind") == "relay"
     AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text("原配对结果恢复端口") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SelectionContainer { Text("${endpoint.optString("host")}  ·  ${endpoint.optInt("port")}", style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace) }
-            Text("请在原设备填写上述地址和端口。入口截至 ${deviceTime(endpoint.optLong("expiresAt"))}；到期后需要重新开启，不延长原权限。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+            SelectionContainer { Text(if (relay) endpoint.optString("serviceBase") else "${endpoint.optString("host")}  ·  ${endpoint.optInt("port")}", style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace) }
+            Text("请在原设备填写上述${if (relay) "已配置中继服务" else "地址和端口"}。入口截至 ${deviceTime(endpoint.optLong("expiresAt"))}；到期后需要重新开启，不延长原权限。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
             DeviceFingerprint("本机指纹", endpoint.optString("localFingerprint")); DeviceFingerprint("原配对设备", endpoint.optString("peerFingerprint"))
             Text("端口开放状态读取于 ${deviceTime(endpoint.optLong("capturedAt"))}，退出将关闭端口。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
         }
@@ -534,7 +551,7 @@ private fun DeviceGrantScope(scope: JSONObject) {
 }
 
 @Composable
-private fun DeviceAddDialog(actions: JSONObject, busy: Boolean, close: () -> Unit, create: (String) -> Unit, inspect: (String) -> Unit) {
+private fun DeviceAddDialog(actions: JSONObject, busy: Boolean, close: () -> Unit, relay: () -> Unit, create: (String) -> Unit, inspect: (String) -> Unit) {
     var raw by remember { mutableStateOf("") }
     val addresses = actions.optJSONArray("localAddresses")?.let { list -> (0 until list.length()).map { list.optString(it) } }.orEmpty()
     var selectedAddress by remember(addresses) { mutableStateOf(addresses.singleOrNull()) }
@@ -542,6 +559,7 @@ private fun DeviceAddDialog(actions: JSONObject, busy: Boolean, close: () -> Uni
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("已有另一台设备的邀请", style = MaterialTheme.typography.titleSmall)
             Text("从可信的另一台设备复制短时邀请。接着核对两台设备显示的完整指纹。", style = MaterialTheme.typography.bodyMedium, color = SecondaryInk)
+            TextButton(onClick = relay, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp).testTag("device_relay_settings")) { Text("异网连接：接收已有的临时中继租约") }
             OutlinedTextField(raw, { if (it.toByteArray(Charsets.UTF_8).size <= 16_384) raw = it }, label = { Text("粘贴原设备邀请") }, modifier = Modifier.fillMaxWidth().testTag("device_pair_invitation_input"), minLines = 3, maxLines = 5, enabled = !busy)
             Button(onClick = { inspect(raw) }, enabled = !busy && raw.isNotBlank() && actionAvailable(actions.optJSONObject("join")), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("device_pair_inspect")) { Text("核对邀请与身份") }
             DeviceBlockedReason(actions.optJSONObject("join"))
@@ -549,7 +567,7 @@ private fun DeviceAddDialog(actions: JSONObject, busy: Boolean, close: () -> Uni
             Text("让另一台设备来连接", style = MaterialTheme.typography.titleSmall)
             Text("在本机创建一次性邀请，交给你信任的另一台设备。到期后需要重新创建。", style = MaterialTheme.typography.bodyMedium, color = SecondaryInk)
             if (addresses.size > 1) {
-                Text("选择另一台设备可访问的本机地址", style = MaterialTheme.typography.bodySmall)
+                Text("选择局域网地址或主人已配置的出站中继", style = MaterialTheme.typography.bodySmall)
                 addresses.forEach { address -> Row(Modifier.fillMaxWidth().clickable(role = Role.RadioButton) { selectedAddress = address }, verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(selectedAddress == address, onClick = null); Text(address, style = MaterialTheme.typography.bodyMedium)
                 } }
@@ -560,12 +578,18 @@ private fun DeviceAddDialog(actions: JSONObject, busy: Boolean, close: () -> Uni
 }
 
 @Composable
-private fun DeviceConnectionInputDialog(busy: Boolean, close: () -> Unit, inspect: (String) -> Unit) {
+private fun DeviceConnectionInputDialog(peerId: String, leases: JSONArray, busy: Boolean, close: () -> Unit, relay: (String) -> Unit, inspect: (String) -> Unit) {
     var raw by remember { mutableStateOf("") }
     val bounded = raw.isNotBlank() && raw.toByteArray(Charsets.UTF_8).size <= 16_384
     AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text("更新设备连接地址") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("复制这台设备的新邀请。只更新地址，不改变设备权限。", style = MaterialTheme.typography.bodyMedium, color = SecondaryInk)
+            val relayChoices = leases.objects().filter { lease -> (lease.optString("inviterDeviceId") == peerId || lease.optString("inviterDeviceId") == lease.optString("localDeviceId")) && (!lease.optBoolean("peerBound") || lease.optString("peerDeviceId") == peerId) }
+            if (relayChoices.isNotEmpty()) {
+                Text("也可为此原配对设备选择主人已导入的短时中继。将再次核对完整指纹，不需要重配对，不改变权限。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                relayChoices.forEach { lease -> OutlinedButton(onClick = { relay(lease.getString("serviceBase")) }, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("使用 ${lease.optString("serviceBase")}") } }
+                HorizontalDivider(color = Line, thickness = .5.dp)
+            }
             OutlinedTextField(raw, { raw = it }, label = { Text("粘贴这台设备的邀请") }, enabled = !busy, minLines = 4, maxLines = 9, modifier = Modifier.fillMaxWidth().testTag("device_connection_invitation"))
             if (raw.toByteArray(Charsets.UTF_8).size > 16_384) Text("邀请超过 16 KiB，请重新复制。", style = MaterialTheme.typography.bodySmall)
         } }, confirmButton = { Button(onClick = { inspect(raw) }, enabled = !busy && bounded, modifier = Modifier.heightIn(min = 48.dp)) { Text("核对设备与地址") } },
@@ -578,8 +602,8 @@ private fun DeviceConnectionReviewDialog(view: JSONObject, busy: Boolean, close:
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("地址匹配已配对身份，连接时仍会验证这台设备。", style = MaterialTheme.typography.bodyMedium, color = SecondaryInk)
             DeviceFact("设备", "设备 ${view.optString("deviceId").takeLast(4)}")
-            DeviceFact("连接地址", view.optString("host"))
-            DeviceFact("控制 / 成果端口", "${view.optInt("controlPort")} / ${view.optInt("bulkPort")}")
+            if (view.optString("kind") == "relay") DeviceFact("出站中继", view.optString("serviceBase"))
+            else { DeviceFact("连接地址", view.optString("host")); DeviceFact("控制 / 成果端口", "${view.optInt("controlPort")} / ${view.optInt("bulkPort")}") }
             DeviceFingerprint("已配对设备指纹", view.optString("certificateFingerprint"))
         } }, confirmButton = { Button(onClick = confirm, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp).testTag("device_connection_update_confirm")) { Text("更新并连接") } },
         dismissButton = { TextButton(onClick = close, modifier = Modifier.heightIn(min = 48.dp)) { Text("取消") } })
@@ -939,10 +963,14 @@ internal fun deviceConnectionLabel(peer: JSONObject): String = when {
         else -> "实时连接尚未读取"
     }
 }
-private fun deviceConnectionDetail(peer: JSONObject): String {
+internal fun deviceConnectionDetail(peer: JSONObject): String {
     val connection = peer.optJSONObject("connection") ?: return "连接状态暂不可用。"
     return when (connection.optString("state")) {
-        "ONLINE", "DEGRADED" -> "已建立加密连接。任务仍按各自的授权范围执行。"
+        "ONLINE", "DEGRADED" -> when (connection.optString("path")) {
+            "RELAY_WSS" -> "当前通过出站 WSS 中继连接。任务仍按各自的授权范围执行。"
+            "DIRECT_TLS" -> "当前通过直连 TLS 通道连接。任务仍按各自的授权范围执行。"
+            else -> "已建立加密连接，传输路径尚未核对。任务仍按各自的授权范围执行。"
+        }
         "CONNECTING" -> "仍在连接或验证身份，尚未确认可以发出业务请求。"
         "INCOMPATIBLE" -> "原生传输报告协议不兼容，请核对两端版本后再连接。"
         "REVOKED" -> "原连接不再受信任，重新启用接收不会恢复旧授权。"

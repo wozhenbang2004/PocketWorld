@@ -212,12 +212,16 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         public void setEnabled(boolean enabled) throws Exception { if (enabled) network.enable(); else network.disable(); changed(); }
     }
     private final class Pairing implements NativeDeviceWorkspaceHost.PairingOwner {
+        public JSONArray relayLeases() throws Exception { return network.relayLeases(); }
+        public NativeDeviceWorkspaceHost.RelayLeaseAction reviewRelayLease(String raw) throws Exception { return network.reviewRelayLease(raw); }
+        public void removeRelayLease(String service, String inviter) throws Exception { network.removeRelayLease(service, inviter); }
+        public NativeDeviceWorkspaceHost.ConnectionReviewAction reviewRelayConnection(String peer, String service) throws Exception { return network.reviewRelayConnection(peer, service); }
         public NativeDeviceWorkspaceHost.Availability inviteAvailability() {
             if (!network.isListening()) return NativeDeviceWorkspaceHost.Availability.blocked("请先启用设备接收，再创建邀请");
-            try { return DeviceEndpointResolver.localLanAddresses().isEmpty() ? NativeDeviceWorkspaceHost.Availability.blocked("没有可用的本机网络地址，请连接局域网") : NativeDeviceWorkspaceHost.Availability.ready(); }
+            try { return localAddresses().isEmpty() ? NativeDeviceWorkspaceHost.Availability.blocked("没有可用的本机地址或主人已配置的中继租约") : NativeDeviceWorkspaceHost.Availability.ready(); }
             catch (Exception unavailable) { return NativeDeviceWorkspaceHost.Availability.blocked("本机网络地址暂不可用"); }
         }
-        public List<String> recoveryAddresses() throws Exception { return DeviceEndpointResolver.localLanAddresses(); }
+        public List<String> recoveryAddresses() throws Exception { return localAddresses(); }
         public NativeDeviceWorkspaceHost.RecoveryEndpointAction openCommittedRecovery(String id, String address) throws Exception { return network.openCommittedRecovery(id, address); }
         public void recoverPairing(String id, String host, int port) throws Exception { network.recoverPairing(id, host, port); changed(); }
         public NativeDeviceWorkspaceHost.AbandonAction reviewPairingAbandonment(String id) throws Exception {
@@ -230,7 +234,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                 public void confirm() throws Exception { pairing().abandonLocalPairingOffer(original, true, System.currentTimeMillis()); network.forgetPendingPairing(id); changed(); }
             };
         }
-        public List<String> localAddresses() throws Exception { return DeviceEndpointResolver.localLanAddresses(); }
+        public List<String> localAddresses() throws Exception { List<String> choices = new ArrayList<>(DeviceEndpointResolver.localLanAddresses()); choices.addAll(network.relayInvitationAddresses()); return choices; }
         public NativeDeviceWorkspaceHost.Availability joinAvailability() { return NativeDeviceWorkspaceHost.Availability.ready(); }
         public String createInvitation(String selectedAddress) throws Exception { return network.createInvitation(enableIdentity(), selectedAddress); }
         public NativeDeviceWorkspaceHost.PairingReviewAction inspectInvitation(String invitation) throws Exception { return network.inspectInvitation(invitation); }

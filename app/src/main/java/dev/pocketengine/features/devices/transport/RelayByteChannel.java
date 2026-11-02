@@ -52,9 +52,13 @@ public final class RelayByteChannel extends WebSocketListener implements DeviceB
     }
     @Override public byte[] receive(int timeoutMillis) throws IOException, InterruptedException {
         if (!paired && !closed) awaitReady(15_000);
-        if (closed) throw new EOFException("Relay disconnected; original operations require reconciliation");
+        // A peer may close immediately after flushing its final TLS receipt. Preserve already
+        // received bounded ciphertext before EOF; this is not an invocation replay or retry.
+        byte[] buffered = inbound.poll(); if (buffered != null) return buffered;
+        if (closed) { buffered = inbound.poll(); if (buffered != null) return buffered; throw new EOFException("Relay disconnected; original operations require reconciliation"); }
         byte[] value = inbound.poll(timeoutMillis, TimeUnit.MILLISECONDS);
-        if (closed) throw new EOFException("Relay disconnected"); return value;
+        if (value != null) return value;
+        if (closed) { buffered = inbound.poll(); if (buffered != null) return buffered; throw new EOFException("Relay disconnected"); } return null;
     }
     @Override public void send(byte[] encrypted) throws IOException, InterruptedException {
         if (!paired && !closed) awaitReady(15_000);
@@ -73,8 +77,10 @@ public final class RelayByteChannel extends WebSocketListener implements DeviceB
             Thread.sleep(5);
         }
     }
-    @Override public void onClosed(WebSocket webSocket, int code, String reason) { fail(); }
-    @Override public void onFailure(WebSocket webSocket, Throwable failure, Response response) { fail(); }
-    private void fail() { closed = true; ready.countDown(); if (socket != null) socket.cancel(); inbound.clear(); }
+    @Override public void onClosed(WebSocket webSocket, int code, String reason) { disconnected(); }
+    @Override public void onFailure(WebSocket webSocket, Throwable failure, Response response) { disconnected(); }
+    private void disconnected() { closed = true; ready.countDown(); if (socket != null) socket.cancel(); }
+    // Local cancellation/protocol violations deliberately discard queued data; no stale read.
+    private void fail() { disconnected(); inbound.clear(); }
     @Override public void close() { fail(); }
 }

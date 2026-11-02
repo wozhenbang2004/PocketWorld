@@ -26,10 +26,16 @@ public final class AccessibilityForest {
     public static final class Ref {
         public final int windowId;
         public final int[] path;
-        public final String identity;
+        public final String identity, nativeIdentity;
         public final boolean editable, focused;
-        private Ref(int windowId,int[] path,String identity,boolean editable,boolean focused){
-            this.windowId=windowId;this.path=path.clone();this.identity=identity;this.editable=editable;this.focused=focused;
+        private final Rect bounds;
+        private final boolean visible;
+        private final int drawingOrder;
+        private final List<String> ancestors;
+        private Ref(AccessibilityNodeInfo node,int windowId,int[] path,String identity,List<String> lineage){
+            this.windowId=windowId;this.path=path.clone();this.identity=identity;this.nativeIdentity=nativeIdentity(node);
+            editable=node.isEditable();focused=node.isFocused();visible=node.isVisibleToUser();drawingOrder=node.getDrawingOrder();
+            bounds=new Rect();node.getBoundsInScreen(bounds);ancestors=new ArrayList<>(lineage);
         }
     }
     public final JSONArray nodes=new JSONArray(), windows=new JSONArray();
@@ -41,25 +47,33 @@ public final class AccessibilityForest {
     private int visited, bodyChars, textTruncations, omittedWindows;
     private int primaryPriority=-1;
     private final MessageDigest digest;
+    private final Map<Integer,WindowIdentity> windowIdentities=new LinkedHashMap<>();
     private AccessibilityForest() throws Exception { digest=MessageDigest.getInstance("SHA-256"); }
 
     public static AccessibilityForest read(PhoneAccessibilityService service,int displayId,int width,int height,Check check)throws Exception {
-        AccessibilityForest out=new AccessibilityForest();
+        check.check();PhoneReadGate.checkCurrent();AccessibilityForest out=new AccessibilityForest();
         out.mark(service.observationSessionId());out.mark(displayId+":"+width+":"+height);
         SparseArray<List<AccessibilityWindowInfo>> all=service.getWindowsOnAllDisplays();
         try {
             List<AccessibilityWindowInfo> selected=new ArrayList<>();
             List<AccessibilityWindowInfo> candidates=all.get(displayId);
             if(candidates!=null)for(AccessibilityWindowInfo window:candidates)
-                if(window.getDisplayId()==displayId&&window.getType()!=AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY)selected.add(window);
+                if(window.getDisplayId()==displayId)selected.add(window);
             selected.sort(Comparator.comparingInt(AccessibilityWindowInfo::getLayer).reversed().thenComparingInt(AccessibilityWindowInfo::getId));
             for(AccessibilityWindowInfo window:selected){
                 check.check();
-                if(out.windows.length()>=MAX_WINDOWS){out.omittedWindows++;out.limit("window_limit");continue;}
+                if(out.windowIdentities.size()>=MAX_WINDOWS){out.omittedWindows++;out.limit("window_limit");continue;}
+                Rect windowBounds=new Rect();window.getBoundsInScreen(windowBounds);
                 JSONObject record=new JSONObject().put("windowId",window.getId()).put("displayId",displayId)
                         .put("type",window.getType()).put("layer",window.getLayer()).put("active",window.isActive()).put("focused",window.isFocused());
                 JSONArray roots=new JSONArray();Set<String> localReasons=new LinkedHashSet<>();int start=out.visited, textStart=out.textTruncations;
+                record.put("bounds",new JSONObject().put("left",normal(windowBounds.left,width)).put("top",normal(windowBounds.top,height))
+                        .put("right",normal(windowBounds.right,width)).put("bottom",normal(windowBounds.bottom,height)));
+                if(window.getType()==AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY){
+                    out.windowIdentities.put(window.getId(),new WindowIdentity(record.toString(),window.getLayer(),windowBounds,null));continue;
+                }
                 out.mark(record.toString());AccessibilityNodeInfo root=window.getRoot();
+                out.windowIdentities.put(window.getId(),new WindowIdentity(record.toString(),window.getLayer(),windowBounds,root==null?null:nativeIdentity(root)));
                 try {
                     record.put("rootAvailable",root!=null);
                     if(root==null){localReasons.add("no_accessible_root");out.mark("no_accessible_root");}
@@ -69,7 +83,7 @@ public final class AccessibilityForest {
                         record.put("packageName",pkg);
                         int priority=window.getType()==AccessibilityWindowInfo.TYPE_APPLICATION?(window.isFocused()?4:window.isActive()?3:2):1;
                         if(priority>out.primaryPriority){out.windowId=window.getId();out.packageName=pkg;out.primaryPriority=priority;}
-                        String id=out.walk(root,window.getId(),new int[0],null,0,width,height,start,new ArrayList<>(),localReasons,check);
+                        String id=out.walk(root,window.getId(),new int[0],null,0,width,height,start,new ArrayList<>(),new ArrayList<>(),localReasons,check);
                         if(id!=null)roots.put(id);
                     }
                 } finally { if(root!=null)root.recycle(); }
@@ -82,20 +96,21 @@ public final class AccessibilityForest {
         }
         out.mark(out.reasons.toString());
         StringBuilder hash=new StringBuilder();for(byte b:out.digest.digest())hash.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
-        out.signature=hash.toString();return out;
+        out.signature=hash.toString();check.check();PhoneReadGate.checkCurrent();return out;
     }
     private String walk(AccessibilityNodeInfo node,int window,int[] path,String parent,int depth,int width,int height,
-                        int windowStart,List<AccessibilityNodeInfo> ancestors,Set<String> local,Check check)throws Exception {
-        check.check();
+                        int windowStart,List<AccessibilityNodeInfo> ancestors,List<String> ancestorIdentities,Set<String> local,Check check)throws Exception {
+        check.check();PhoneReadGate.checkCurrent();
         if(visited>=MAX_NODES){limit("forest_node_limit",local);return null;}
         if(visited-windowStart>=MAX_WINDOW_NODES){limit("window_node_limit",local);return null;}
         if(depth>MAX_DEPTH){limit("depth_limit",local);return null;}
         // Equality here is Android source identity, not text/geometry/content equality. Repeated siblings survive.
         if(ancestors.contains(node)){limit("cycle",local);return null;}
-        ancestors.add(node);
+        ancestors.add(node);int ancestorCount=ancestorIdentities.size();
         try {
             String id="n"+visited++;String ownIdentity=identity(node);mark(window+":"+Arrays.toString(path));mark(ownIdentity);
-            refs.put(id,new Ref(window,path,ownIdentity,node.isEditable(),node.isFocused()));
+            Ref ref=new Ref(node,window,path,ownIdentity,ancestorIdentities);refs.put(id,ref);
+            ancestorIdentities.add(ref.nativeIdentity+":"+ownIdentity);
             boolean password=node.isPassword();JSONArray children=new JSONArray();Rect bounds=new Rect();node.getBoundsInScreen(bounds);
             JSONArray nodePath=new JSONArray();for(int index:path)nodePath.put(index);
             JSONObject record=new JSONObject().put("id",id).put("identityFingerprint",identityPart(ownIdentity)).put("path",nodePath).put("windowId",window).put("parentId",parent==null?JSONObject.NULL:parent)
@@ -115,11 +130,11 @@ public final class AccessibilityForest {
                 AccessibilityNodeInfo child=node.getChild(i);
                 if(child==null){limit("missing_child",local);mark("missing:"+i);continue;}
                 try{int[] next=Arrays.copyOf(path,path.length+1);next[path.length]=i;
-                    String childId=walk(child,window,next,id,depth+1,width,height,windowStart,ancestors,local,check);if(childId!=null)children.put(childId);
+                    String childId=walk(child,window,next,id,depth+1,width,height,windowStart,ancestors,ancestorIdentities,local,check);if(childId!=null)children.put(childId);
                 }finally{child.recycle();}
             }
             mark("end");return id;
-        } finally { ancestors.remove(ancestors.size()-1); }
+        } finally { ancestors.remove(ancestors.size()-1);while(ancestorIdentities.size()>ancestorCount)ancestorIdentities.remove(ancestorIdentities.size()-1); }
     }
     public JSONObject attach(JSONObject observation)throws Exception {
         return observation.put("treeSchemaVersion",1).put("treeFingerprint",signature).put("windows",windows).put("nodes",nodes).put("truncated",truncated)
@@ -128,13 +143,70 @@ public final class AccessibilityForest {
                         .put("truncated",truncated).put("bodyTruncated",textTruncations>0).put("truncationReasons",new JSONArray(reasons)));
     }
     /** Resolves only the exact saved display/window/path. No active-root or same-label fallback. */
-    public static AccessibilityNodeInfo resolve(PhoneAccessibilityService service,int displayId,Ref ref){
-        SparseArray<List<AccessibilityWindowInfo>> all=service.getWindowsOnAllDisplays();AccessibilityNodeInfo node=null;
-        try{List<AccessibilityWindowInfo> windows=all.get(displayId);if(windows!=null)for(AccessibilityWindowInfo window:windows)
+    public static AccessibilityNodeInfo resolve(PhoneAccessibilityService service,int displayId,Ref ref)throws Exception {
+        PhoneReadGate.checkCurrent();SparseArray<List<AccessibilityWindowInfo>> all=service.getWindowsOnAllDisplays();AccessibilityNodeInfo node=null;
+        try{PhoneReadGate.checkCurrent();List<AccessibilityWindowInfo> windows=all.get(displayId);if(windows!=null)for(AccessibilityWindowInfo window:windows)
             if(window.getDisplayId()==displayId&&window.getId()==ref.windowId&&window.getType()!=AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY){node=window.getRoot();break;}}
         finally{for(int i=0;i<all.size();i++)for(AccessibilityWindowInfo window:all.valueAt(i))window.recycle();}
-        for(int index:ref.path){if(node==null)return null;AccessibilityNodeInfo child;try{child=node.getChild(index);}finally{node.recycle();}node=child;}
-        return node;
+        try {
+            for(int index:ref.path){PhoneReadGate.checkCurrent();if(node==null)return null;AccessibilityNodeInfo parent=node;node=null;try{node=parent.getChild(index);}finally{parent.recycle();}}
+            PhoneReadGate.checkCurrent();return node;
+        }catch(Exception|Error stopped){if(node!=null)node.recycle();throw stopped;}
+    }
+    /**
+     * Exact saved path, source identity and relevant geometry only. No lookup by
+     * label and no permission from a changed full-frame generation. A sibling
+     * ticker outside the target is irrelevant; any changed overlapping node,
+     * ancestor, target window or potentially covering window invalidates the ref.
+     */
+    public boolean sameTarget(Ref expected,AccessibilityForest fresh) {
+        if(expected==null||fresh==null||truncated||fresh.truncated)return false;
+        Ref actual=null;
+        for(Ref candidate:fresh.refs.values())if(candidate.windowId==expected.windowId&&Arrays.equals(candidate.path,expected.path)){actual=candidate;break;}
+        if(actual==null||!expected.identity.equals(actual.identity)||!expected.nativeIdentity.equals(actual.nativeIdentity)
+                ||!expected.ancestors.equals(actual.ancestors))return false;
+        WindowIdentity before=windowIdentities.get(expected.windowId),after=fresh.windowIdentities.get(expected.windowId);
+        if(before==null||after==null||!before.same(after))return false;
+        // A higher window whose bounds cover this target is not proven safe,
+        // even if that window existed before or has an inaccessible/transparent root.
+        if(!coveringWindows(expected,before).isEmpty()||!fresh.coveringWindows(actual,after).isEmpty())return false;
+        return relevantNodes(expected).equals(fresh.relevantNodes(actual));
+    }
+    /** A refreshed native handle still has to be the saved source, not an identical replacement at that path. */
+    public static boolean matches(Ref ref,AccessibilityNodeInfo node) {
+        return ref!=null&&node!=null&&ref.nativeIdentity.equals(nativeIdentity(node))&&ref.identity.equals(identity(node));
+    }
+    private List<String> relevantNodes(Ref target) {
+        List<String> result=new ArrayList<>();
+        for(Ref node:refs.values()) {
+            if(node.windowId!=target.windowId||!node.visible||prefix(node.path,target.path)||!Rect.intersects(node.bounds,target.bounds))continue;
+            result.add(Arrays.toString(node.path)+":"+node.nativeIdentity+":"+node.drawingOrder+":"+node.identity);
+        }
+        return result;
+    }
+    private List<String> coveringWindows(Ref target,WindowIdentity own) {
+        List<String> result=new ArrayList<>();
+        for(Map.Entry<Integer,WindowIdentity> entry:windowIdentities.entrySet()) {
+            WindowIdentity other=entry.getValue();
+            if(entry.getKey()!=target.windowId&&other.layer>=own.layer&&(other.bounds.isEmpty()||Rect.intersects(other.bounds,target.bounds)))
+                result.add(entry.getKey()+":"+other.facts+":"+other.nativeRoot);
+        }
+        return result;
+    }
+    private static boolean prefix(int[] candidate,int[] path) {
+        if(candidate.length>path.length)return false;
+        for(int i=0;i<candidate.length;i++)if(candidate[i]!=path[i])return false;return true;
+    }
+    private static String nativeIdentity(AccessibilityNodeInfo node) {
+        // Android's source-based hash (window + source node id), strengthened by
+        // the platform's optional app-provided unique id on API 33+. No node is retained.
+        String unique=android.os.Build.VERSION.SDK_INT>=33?node.getUniqueId():null;
+        return node.getWindowId()+":"+node.hashCode()+":"+identityPart(unique);
+    }
+    private static final class WindowIdentity {
+        final String facts,nativeRoot;final int layer;final Rect bounds;
+        WindowIdentity(String facts,int layer,Rect bounds,String root){this.facts=facts;this.layer=layer;this.bounds=new Rect(bounds);nativeRoot=root;}
+        boolean same(WindowIdentity other){return facts.equals(other.facts)&&bounds.equals(other.bounds)&&java.util.Objects.equals(nativeRoot,other.nativeRoot);}
     }
     public static String identity(AccessibilityNodeInfo node){
         Rect r=new Rect();node.getBoundsInScreen(r);StringBuilder s=new StringBuilder();
