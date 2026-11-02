@@ -7291,6 +7291,58 @@ public final class TaskStore {
             boolean stopped=task.optBoolean("cancelRequested");task.put("status",stopped?"cancelled":"paused").put("summary",stopped?"原脚本操作已取得终态回执，原任务保持停止；已有结果保留":"原脚本操作已取得终态回执，请核对结果后明确继续原任务");write(task);
         }
     }
+    /** Same original skills_execute metadata. No Book call is made while this monitor is held. */
+    public final class ScriptArtifactPublication implements dev.pocketengine.features.skills.ManagedScriptArtifactPublisher.OriginalPublication {
+        private final TaskStore issuer=TaskStore.this;
+        private final dev.pocketengine.features.skills.SkillExecution.Plan plan;
+        private final dev.pocketengine.features.skills.SkillExecution.Grant grant;
+        private final RunControl original;
+        private final String path,sha,role,attachment,claim;
+        private final long size;
+        private final boolean mayImport;private boolean importAdmissionTaken;
+        private ScriptArtifactPublication(dev.pocketengine.features.skills.SkillExecution.Plan plan,dev.pocketengine.features.skills.SkillExecution.Grant grant,RunControl original,JSONObject slot,boolean fresh)throws Exception{
+            this.plan=plan;this.grant=grant;this.original=original;path=slot.getString("path");sha=slot.getString("sha256");role=slot.getString("role");attachment=slot.getString("attachmentId");claim=slot.getString("claimId");size=slot.getLong("bytes");mayImport=fresh;
+        }
+        public String taskId(){return grant.taskId;}public String runId(){return grant.runId;}public String operationId(){return grant.operationId;}public String planDigest(){return plan.digest;}
+        public String path(){return path;}public String sha256(){return sha;}public String role(){return role;}public String attachmentId(){return attachment;}public long bytes(){return size;}public boolean mayImport(){synchronized(TaskStore.this){boolean allowed=mayImport&&!importAdmissionTaken;importAdmissionTaken=true;return allowed;}}
+        public void checkCurrent()throws Exception{synchronized(TaskStore.this){scriptArtifactPublicationCurrent(this);}}
+        public JSONObject finish(dev.pocketengine.features.attachments.AttachmentBook.VerifiedMetadata actual)throws Exception{return finishScriptArtifactPublication(this,actual);}
+    }
+    private JSONObject scriptArtifactPublicationCurrent(ScriptArtifactPublication publication)throws Exception{
+        if(publication==null||publication.issuer!=this)throw new SecurityException("不是这个原任务库的成果发布");
+        checkSkillExecution(publication.plan,publication.grant,publication.original);JSONObject task=required(publication.taskId());if(task.has("origin"))throw new SecurityException("私人脚本成果不能转交其他受众");
+        JSONObject metadata=skillMetadata(skillOperation(publication.taskId(),publication.operationId()).getJSONObject("arguments"));if(metadata.has("nativeCacheRetirement"))throw new SecurityException("原脚本缓存已撤回，不能重建成果");
+        JSONObject slot=metadata.getJSONObject("scriptSharedArtifacts").getJSONObject(publication.role);
+        if(!publication.claim.equals(slot.optString("claimId"))||!publication.path.equals(slot.optString("path"))||!publication.sha.equals(slot.optString("sha256"))||publication.size!=slot.optLong("bytes",-1)||!publication.attachment.equals(slot.optString("attachmentId"))||!slot.optString("state").matches("publication_unknown|published"))throw new SecurityException("原成果发布身份或阶段已变化");return slot;
+    }
+    /** The caller retains the native plan/grant/control. A duplicate is query-only forever,
+     * including after a Book deletion, missing bytes, cancellation or an uncertain publication. */
+    public synchronized ScriptArtifactPublication claimScriptArtifactPublication(dev.pocketengine.features.skills.SkillExecution.Plan plan,dev.pocketengine.features.skills.SkillExecution.Grant grant,String path,String sha,long bytes,RunControl original)throws Exception{
+        checkSkillExecution(plan,grant,original);if(!dev.pocketengine.features.skills.SkillExecution.isManagedPhonePlan(plan)||required(grant.taskId).has("origin")||path==null||sha==null||!sha.matches("[a-f0-9]{64}"))throw new SecurityException("不是原私人手机脚本成果");
+        JSONObject request=plan.review().getJSONObject("request");JSONArray paths=request.getJSONArray("outputPaths");int index=-1;for(int i=0;i<paths.length();i++)if(path.equals(paths.getString(i)))index=i;
+        if(index<0||bytes<0||bytes>request.getLong("maxOutputBytes"))throw new SecurityException("成果不是准确批准路径或超过原输出预算");String role="script_output_"+index;
+        db.beginTransaction();try{JSONObject args=skillOperation(grant.taskId,grant.operationId).getJSONObject("arguments"),metadata=skillMetadata(args);if(metadata.has("nativeCacheRetirement")||!"claimed".equals(metadata.optString("dispatchState")))throw new SecurityException("原脚本未运行或缓存已撤回");
+            JSONObject slots=metadata.optJSONObject("scriptSharedArtifacts");if(slots==null)slots=new JSONObject();JSONObject slot=slots.optJSONObject(role);boolean fresh=slot==null;
+            if(fresh){long total=bytes;for(var keys=slots.keys();keys.hasNext();)total=Math.addExact(total,slots.getJSONObject(keys.next()).getLong("bytes"));if(total>request.getLong("maxOutputBytes")||slots.length()>=paths.length())throw new SecurityException("原脚本成果累计预算已耗尽");
+                slot=new JSONObject().put("role",role).put("path",path).put("sha256",sha).put("bytes",bytes).put("claimId",UUID.randomUUID().toString()).put("state","publication_unknown").put("claimedAt",System.currentTimeMillis())
+                    .put("attachmentId",dev.pocketengine.features.skills.ManagedScriptArtifactPublisher.attachmentId(grant.operationId,role,grant.taskId,grant.runId));slots.put(role,slot);metadata.put("scriptSharedArtifacts",slots);writeSkillArguments(grant.taskId,grant.operationId,args);
+                appendEvent(required(grant.taskId),new JSONObject().put("type","skill_script_share_claimed").put("operationId",grant.operationId).put("publication",new JSONObject(slot.toString())).put("replayAllowed",false));
+            }else if(!path.equals(slot.optString("path"))||!sha.equals(slot.optString("sha256"))||bytes!=slot.optLong("bytes",-1))throw new SecurityException("同一原成果路径不能替换字节或重建发布");
+            ScriptArtifactPublication result=new ScriptArtifactPublication(plan,grant,original,slot,fresh);scriptArtifactPublicationCurrent(result);db.setTransactionSuccessful();return result;
+        }finally{db.endTransaction();}
+    }
+    private synchronized JSONObject finishScriptArtifactPublication(ScriptArtifactPublication publication,dev.pocketengine.features.attachments.AttachmentBook.VerifiedMetadata actual)throws Exception{
+        JSONObject slot=scriptArtifactPublicationCurrent(publication);if(actual==null||!publication.attachment.equals(actual.id)||!publication.sha.equals(actual.sha256)||publication.size!=actual.size)throw new SecurityException("成果没有原Book完整固定字节回执");
+        if("published".equals(slot.getString("state")))return new JSONObject(slot.toString()).put("duplicate",true);
+        db.beginTransaction();try{JSONObject args=skillOperation(publication.taskId(),publication.operationId()).getJSONObject("arguments"),metadata=skillMetadata(args);slot=metadata.getJSONObject("scriptSharedArtifacts").getJSONObject(publication.role);
+            slot.put("state","published").put("publishedAt",System.currentTimeMillis()).put("attachment",new JSONObject().put("id",actual.id).put("sha256",actual.sha256).put("name",actual.name).put("mimeType",actual.mimeType).put("size",actual.size));writeSkillArguments(publication.taskId(),publication.operationId(),args);
+            appendEvent(required(publication.taskId()),new JSONObject().put("type","skill_script_shared").put("operationId",publication.operationId()).put("publication",new JSONObject(slot.toString())).put("externalTransmission",false));db.setTransactionSuccessful();return new JSONObject(slot.toString()).put("duplicate",false);
+        }finally{db.endTransaction();}
+    }
+    /** Native owner metadata lookup only, never a model read grant or a new import attempt. */
+    public synchronized JSONArray scriptArtifactPublicationsForOwner(String task,String operation)throws Exception{
+        requirePrivateOwner(required(task));JSONObject metadata=skillMetadata(skillOperation(task,operation).getJSONObject("arguments")),slots=metadata.optJSONObject("scriptSharedArtifacts");JSONArray result=new JSONArray();for(var keys=slots==null?new JSONObject().keys():slots.keys();keys.hasNext();)result.put(new JSONObject(slots.getJSONObject(keys.next()).toString()).put("availability","not_revalidated").put("replayAllowed",false));return result;
+    }
     public synchronized JSONArray saveSkillArtifacts(dev.pocketengine.features.skills.CompanionSkillBackend.ReceiptRef ref,dev.pocketengine.features.skills.CompanionSkillBackend.ArtifactInventory inventory)throws Exception {
         requirePrivateOwner(required(ref.taskId));JSONObject row=skillOperation(ref.taskId,ref.operationId);JSONObject metadata=skillMetadata(row.getJSONObject("arguments"));checkSkillRef(ref,metadata);if(metadata.has("nativeCacheRetirement"))throw new SecurityException("主人已撤回原执行缓存，不能从遗留字节重新回收成果");
         JSONObject receipt=row.optJSONObject("receipt");if(receipt==null||!receipt.optString("status").matches("completed|failed|timed_out"))throw new SecurityException("没有原脚本的终态成果回执");
