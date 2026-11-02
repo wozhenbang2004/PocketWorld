@@ -16,7 +16,8 @@ public final class BrowserToolSequence {
                 .put("properties",new JSONObject().put("action",text(12).put("enum",new JSONArray().put("observe").put("click").put("type").put("scroll").put("wait"))).put("ref",text(4)).put("text",text(4000))
                         .put("dy",new JSONObject().put("type","integer").put("minimum",-3000).put("maximum",3000)).put("condition",text(8).put("enum",new JSONArray().put("load").put("text"))).put("value",text(2048))
                         .put("timeoutMs",new JSONObject().put("type","integer").put("minimum",100).put("maximum",6000)));
-        return new JSONObject().put("type","array").put("minItems",1).put("maxItems",4).put("items",step);
+        // The original PluginRules schema subset supports maxItems; validate() enforces the nonempty floor.
+        return new JSONObject().put("type","array").put("maxItems",4).put("items",step);
     }
     public static void validate(JSONObject args)throws Exception {
         JSONArray steps=args.getJSONArray("steps");if(steps.length()<1||steps.length()>4)throw new IllegalArgumentException("浏览组合仅支持1至4个原工具步骤");boolean observed=false;

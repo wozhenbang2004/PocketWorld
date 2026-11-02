@@ -18,4 +18,18 @@ public final class BrowserToolSequenceTest {
         for(String action:new String[]{"script","navigate","upload","network"})assertThrows(Exception.class,()->BrowserToolSequence.validate(new JSONObject().put("steps",new JSONArray().put(new JSONObject().put("action",action)))));
         assertThrows(Exception.class,()->BrowserToolSequence.pinTargets(args(),observed("n0","k1").put("readOnlyEvidence",true)));
     }
+    @Test public void publishedSequenceUsesTheOriginalSchemaGateAndStillRejectsEmptyOrOverBudgetPlans()throws Exception {
+        JSONObject values=args().put("tabId",java.util.UUID.randomUUID().toString()).put("observationId",java.util.UUID.randomUUID().toString());
+        JSONObject id=new JSONObject().put("type","string").put("maxLength",36);
+        JSONObject schema=new JSONObject().put("type","object").put("additionalProperties",false)
+                .put("properties",new JSONObject().put("tabId",id).put("observationId",id).put("steps",BrowserToolSequence.schema()))
+                .put("required",new JSONArray().put("tabId").put("observationId").put("steps"));
+        dev.pocketengine.features.plugins.PluginRules.validateArguments(values,schema);BrowserToolSequence.validate(values);
+        JSONObject empty=new JSONObject(values.toString()).put("steps",new JSONArray());
+        assertThrows(IllegalArgumentException.class,()->BrowserToolSequence.validate(empty));
+        JSONArray five=new JSONArray();for(int i=0;i<5;i++)five.put(new JSONObject().put("action","observe"));
+        JSONObject over=new JSONObject(values.toString()).put("steps",five);
+        assertThrows(IllegalArgumentException.class,()->dev.pocketengine.features.plugins.PluginRules.validateArguments(over,schema));
+        assertThrows(IllegalArgumentException.class,()->BrowserToolSequence.validate(over));
+    }
 }
