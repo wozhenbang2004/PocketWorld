@@ -56,7 +56,7 @@ public final class StepModelRouting {
     private static String place(JSONObject observation){if(observation==null)return "";for(String key:new String[]{"packageName","package","appPackage","browserSpaceId"}){String value=observation.optString(key);if(!value.isEmpty()&&value.length()<300)return key+":"+value;}return "";}
     private static boolean safeTool(String name,JSONObject args){
         // Explicit closed set: arbitrary capabilities, scripts, writes and native batches remain MAIN.
-        return java.util.Set.of("phone_observe","phone_query","phone_condition_wait","phone_wait","browser_task_observe","browser_task_read_public","browser_task_read_page","browser_task_read_source").contains(name)
+        return java.util.Set.of("phone_observe","phone_query","phone_condition_wait","phone_wait","browser_task_observe","browser_task_read_public").contains(name)
                 &&args!=null&&!args.optBoolean("includeImage")&&!args.optBoolean("captureImage");
     }
 }
