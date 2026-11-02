@@ -56,6 +56,36 @@ import org.robolectric.shadows.ShadowDialog
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @LooperMode(LooperMode.Mode.PAUSED)
 class PocketWorkroomCaptureTest {
+    // Same isolated feature-secret mechanism as the repository's channel fixture.
+    // Public, static-nested and zero-argument so Provider can instantiate it reflectively.
+    class CaptureKeyStore : java.security.KeyStoreSpi() {
+        override fun engineGetKey(alias: String?, password: CharArray?): java.security.Key = KEY
+        override fun engineGetCertificateChain(alias: String?): Array<java.security.cert.Certificate>? = null
+        override fun engineGetCertificate(alias: String?): java.security.cert.Certificate? = null
+        override fun engineGetCreationDate(alias: String?): java.util.Date = java.util.Date(0)
+        override fun engineSetKeyEntry(alias: String?, key: java.security.Key?, password: CharArray?,
+            chain: Array<out java.security.cert.Certificate>?) { throw UnsupportedOperationException() }
+        override fun engineSetKeyEntry(alias: String?, key: ByteArray?,
+            chain: Array<out java.security.cert.Certificate>?) { throw UnsupportedOperationException() }
+        override fun engineSetCertificateEntry(alias: String?, cert: java.security.cert.Certificate?) {
+            throw UnsupportedOperationException()
+        }
+        override fun engineDeleteEntry(alias: String?) { throw UnsupportedOperationException() }
+        override fun engineAliases(): java.util.Enumeration<String> =
+            java.util.Collections.enumeration(java.util.Collections.singleton(ALIAS))
+        override fun engineContainsAlias(alias: String?): Boolean = alias == ALIAS
+        override fun engineSize(): Int = 1
+        override fun engineIsKeyEntry(alias: String?): Boolean = engineContainsAlias(alias)
+        override fun engineIsCertificateEntry(alias: String?): Boolean = false
+        override fun engineGetCertificateAlias(cert: java.security.cert.Certificate?): String? = null
+        override fun engineStore(stream: java.io.OutputStream?, password: CharArray?) {}
+        override fun engineLoad(stream: java.io.InputStream?, password: CharArray?) {}
+        private companion object {
+            const val ALIAS = "pocketengine.feature-secrets.v1"
+            val KEY: javax.crypto.SecretKey = javax.crypto.spec.SecretKeySpec(ByteArray(32), "AES")
+        }
+    }
+
     private val captures = JSONArray()
     private val output get() = File(System.getProperty("uiux.captureOutput", "build/uiux-captures"))
 
@@ -163,7 +193,7 @@ class PocketWorkroomCaptureTest {
         val provider = object : java.security.Provider("PocketWorkroomCaptureKeyStore", 1.0,
             "Explicit test-only AndroidKeyStore") {
             init { put("KeyStore.AndroidKeyStore",
-                dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore::class.java.name) }
+                CaptureKeyStore::class.java.name) }
         }
         java.security.Security.addProvider(provider)
         val app = RuntimeEnvironment.getApplication() as EngineApplication
