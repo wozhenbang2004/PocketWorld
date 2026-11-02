@@ -1,7 +1,7 @@
 package dev.pocketengine.runtime.context;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer.Exchange;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.PhonePort;

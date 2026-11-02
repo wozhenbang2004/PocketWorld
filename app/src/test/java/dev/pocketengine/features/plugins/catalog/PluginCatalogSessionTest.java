@@ -3,8 +3,8 @@ package dev.pocketengine.features.plugins.catalog;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.SharedPreferences;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer.Exchange;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
@@ -60,7 +60,7 @@ public final class PluginCatalogSessionTest {
             });
         }
     }
-    interface Reply { void respond(HttpExchange exchange) throws Exception; }
+    interface Reply { void respond(Exchange exchange) throws Exception; }
     public static final class Fixture implements AutoCloseable {
         public final File root = Files.createTempDirectory("catalog-session-").toFile();
         final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -89,7 +89,7 @@ public final class PluginCatalogSessionTest {
         }
         String url(String path) { return "http://127.0.0.1:" + server.getAddress().getPort() + path; }
         PluginCatalogSession session(PluginCatalog catalog, EngineModule plugins) { return new PluginCatalogSession(catalog, js, plugins, owner, UUID.randomUUID().toString(), () -> { if (!allowed.get()) throw new SecurityException("owner revoked"); }); }
-        static void response(HttpExchange exchange, byte[] bytes) throws Exception { if (bytes == null) { exchange.sendResponseHeaders(404, -1); exchange.close(); return; } exchange.sendResponseHeaders(200, bytes.length); try (java.io.OutputStream out = exchange.getResponseBody()) { out.write(bytes); } }
+        static void response(Exchange exchange, byte[] bytes) throws Exception { if (bytes == null) { exchange.sendResponseHeaders(404, -1); exchange.close(); return; } exchange.sendResponseHeaders(200, bytes.length); try (java.io.OutputStream out = exchange.getResponseBody()) { out.write(bytes); } }
         void setDeclaration(String version) throws Exception {
             JSONObject manifest = PluginRules.manifest(new JSONObject().put("id", "decl").put("name", "声明工具").put("version", version).put("tools", new JSONArray().put(new JSONObject().put("name", "show").put("kind", "echo"))));
             AndroidFiles authorContext = new AndroidFiles(new File(root, "author")); PluginsModule author = new PluginsModule(new FeatureContext(authorContext, null, new SecretVault(authorContext), event -> {}));

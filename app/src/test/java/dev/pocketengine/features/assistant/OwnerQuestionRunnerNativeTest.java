@@ -1,6 +1,6 @@
 package dev.pocketengine.features.assistant;
 
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.assistant.notifications.OwnerQuestionReply;
 import dev.pocketengine.store.TaskStore;

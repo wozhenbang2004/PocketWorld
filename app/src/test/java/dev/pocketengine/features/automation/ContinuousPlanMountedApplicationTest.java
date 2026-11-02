@@ -1,7 +1,7 @@
 package dev.pocketengine.features.automation;
 
 import android.os.Looper;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.HostAutomationCoordinator;
 import dev.pocketengine.features.workspace.WorkspaceModule;

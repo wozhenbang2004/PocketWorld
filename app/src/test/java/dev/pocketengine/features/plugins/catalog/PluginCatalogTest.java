@@ -3,8 +3,8 @@ package dev.pocketengine.features.plugins.catalog;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.SharedPreferences;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer.Exchange;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
@@ -59,7 +59,7 @@ public final class PluginCatalogTest {
             });
         }
     }
-    private interface Reply { void send(HttpExchange exchange) throws Exception; }
+    private interface Reply { void send(Exchange exchange) throws Exception; }
     private static final class Fixture implements AutoCloseable {
         final File root = Files.createTempDirectory("catalog-fixture-").toFile();
         final PluginsModule plugins;
@@ -132,7 +132,7 @@ public final class PluginCatalogTest {
         PluginCatalog.Review prepare(PluginCatalog.Snapshot snapshot, String version) throws Exception { return catalog.prepare(snapshot, "custom", version, new RunControl()); }
         @Override public void close() throws Exception { catalog.close(); plugins.close(); server.stop(0); workers.shutdownNow(); }
     }
-    private static void response(HttpExchange exchange, int status, byte[] bytes) throws java.io.IOException {
+    private static void response(Exchange exchange, int status, byte[] bytes) throws java.io.IOException {
         exchange.sendResponseHeaders(status, bytes.length == 0 ? -1 : bytes.length);
         try (java.io.OutputStream out = exchange.getResponseBody()) { out.write(bytes); }
     }

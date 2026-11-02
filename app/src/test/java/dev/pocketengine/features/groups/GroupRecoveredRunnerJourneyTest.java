@@ -3,7 +3,7 @@ package dev.pocketengine.features.groups;
 import static org.junit.Assert.*;
 
 import android.app.Application;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.groups.host.GroupArtifactStore;

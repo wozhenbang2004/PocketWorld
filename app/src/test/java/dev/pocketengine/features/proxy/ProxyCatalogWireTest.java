@@ -1,6 +1,6 @@
 package dev.pocketengine.features.proxy;
 
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.runtime.models.ModelBinding;
 import dev.pocketengine.runtime.models.ModelCatalog;

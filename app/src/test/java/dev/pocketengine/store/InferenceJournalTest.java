@@ -1,7 +1,7 @@
 package dev.pocketengine.store;
 
 import android.app.Application;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;

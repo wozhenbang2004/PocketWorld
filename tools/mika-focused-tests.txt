@@ -1,3 +1,4 @@
+dev.pocketengine.NativeModelStreamPresentationTest
 dev.pocketengine.browser.BrowserArtifactUploadNativeTest
 dev.pocketengine.browser.BrowserDocumentDownloadSqlTest
 dev.pocketengine.browser.BrowserNativeInputNativeTest
@@ -44,6 +45,7 @@ dev.pocketengine.features.operations.AppLanguageNativeTest
 dev.pocketengine.features.operations.IsolatedWebProbeCleanupTest
 dev.pocketengine.features.operations.LiteralUiTextNativeTest
 dev.pocketengine.features.operations.OperationsSafetyTest
+dev.pocketengine.features.proxy.accounts.ChatGptSignInServiceTest
 dev.pocketengine.features.proxy.accounts.OpenRouterOnboardingTest
 dev.pocketengine.features.skills.ManagedScriptBridgeSessionTest
 dev.pocketengine.features.skills.ManagedSkillPolicyTest
@@ -85,5 +87,7 @@ dev.pocketengine.store.ModelProbeNativeJourneyTest
 dev.pocketengine.store.TaskStorePhoneRoutesTest
 dev.pocketengine.store.TaskStoreScriptPhoneNativeAdmissionTest
 dev.pocketengine.store.TaskStoreScriptPhoneScopeTest
+dev.pocketengine.ui.ExecutionPlanDagDraftTest
 dev.pocketengine.ui.ResearchReadAccessDraftTest
 dev.pocketengine.ui.ScheduleProposalDisplayTest
+dev.pocketengine.ui.TaskExecutionPresentationTest

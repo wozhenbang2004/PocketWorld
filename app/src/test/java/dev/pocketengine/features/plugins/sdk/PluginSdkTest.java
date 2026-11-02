@@ -1,6 +1,6 @@
 package dev.pocketengine.features.plugins.sdk;
 
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.plugins.PluginRevisions;

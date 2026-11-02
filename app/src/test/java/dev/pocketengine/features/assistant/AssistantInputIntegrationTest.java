@@ -2,7 +2,7 @@ package dev.pocketengine.features.assistant;
 
 import android.app.Application;
 import android.content.Context;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.*;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.attachments.*;

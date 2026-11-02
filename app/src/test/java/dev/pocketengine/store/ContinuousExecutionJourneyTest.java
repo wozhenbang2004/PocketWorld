@@ -2,7 +2,7 @@ package dev.pocketengine.store;
 
 import android.app.Application;
 import android.database.sqlite.SQLiteDatabase;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.*;
 import dev.pocketengine.runtime.AgentRunner;
 import dev.pocketengine.runtime.ModelGateway;

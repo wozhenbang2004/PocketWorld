@@ -1,7 +1,7 @@
 package dev.pocketengine.features;
 
 import android.app.Application;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.features.teams.TeamsModule;
 import dev.pocketengine.store.SettingsStore;
 import dev.pocketengine.store.SecretVault;

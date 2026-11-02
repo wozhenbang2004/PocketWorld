@@ -1,7 +1,7 @@
 package dev.pocketengine.features.remote;
 
 import android.app.Application;
-import com.sun.net.httpserver.HttpExchange;
+import dev.pocketengine.testutil.HttpServer.Exchange;
 import dev.pocketengine.features.RemoteOwnerWorkflows;
 import dev.pocketengine.store.TaskStore;
 import java.nio.charset.StandardCharsets;
@@ -51,8 +51,8 @@ public final class NativeHarnessConfigsTest {
             }catch(Exception ex){throw new RuntimeException(ex);}});
             original.workflow.setForeground(owner,true);
         }
-        static JSONObject body(HttpExchange e)throws Exception{return new JSONObject(new String(e.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));}
-        static void send(HttpExchange e,JSONObject value)throws Exception{byte[] bytes=new JSONObject().put("ok",true).put("result",value).toString().getBytes(StandardCharsets.UTF_8);e.getResponseHeaders().set("Content-Type","application/json");e.sendResponseHeaders(200,bytes.length);e.getResponseBody().write(bytes);e.close();}
+        static JSONObject body(Exchange e)throws Exception{return new JSONObject(new String(e.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));}
+        static void send(Exchange e,JSONObject value)throws Exception{byte[] bytes=new JSONObject().put("ok",true).put("result",value).toString().getBytes(StandardCharsets.UTF_8);e.getResponseHeaders().set("Content-Type","application/json");e.sendResponseHeaders(200,bytes.length);e.getResponseBody().write(bytes);e.close();}
         JSONObject action()throws Exception{return new JSONObject().put("windowId",window).put("taskId",original.task);}
         JSONObject selection()throws Exception{return new JSONObject().put("bindingId","fixture-claude").put("model","fixture-model").put("profileDigest","a".repeat(64)).put("endpointLeaseRef","fixture-gateway-reference");}
         JSONObject open()throws Exception{return original.workflow.handle(owner,"openHarnessConfig",action().put("selection",selection())).getJSONObject("snapshot");}

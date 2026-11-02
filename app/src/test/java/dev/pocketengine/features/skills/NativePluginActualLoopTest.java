@@ -2,7 +2,7 @@ package dev.pocketengine.features.skills;
 import android.app.Application;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;

@@ -1,7 +1,7 @@
 package dev.pocketengine.runtime.models;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer.Exchange;
+import dev.pocketengine.testutil.HttpServer;
 import org.json.JSONObject;
 import org.junit.After;
 import org.junit.Before;
@@ -371,11 +371,11 @@ public class ModelCatalogTest {
     }
 
     private String router(String parameters) { return "{\"data\":[{\"id\":\"test\",\"context_length\":32000,\"top_provider\":{\"max_completion_tokens\":4096},\"architecture\":{\"input_modalities\":[\"text\",\"image\"]},\"supported_parameters\":[\"" + parameters + "\"]}]}"; }
-    private URI serve(com.sun.net.httpserver.HttpHandler handler) throws Exception {
+    private URI serve(dev.pocketengine.testutil.HttpServer.Handler handler) throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0); server.createContext("/v1/models", handler); server.start(); servers.add(server);
         return URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/models");
     }
-    private static void reply(HttpExchange exchange, int status, String body) throws java.io.IOException {
+    private static void reply(Exchange exchange, int status, String body) throws java.io.IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8); exchange.getResponseHeaders().set("Content-Type", "application/json");
         exchange.sendResponseHeaders(status, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
     }
