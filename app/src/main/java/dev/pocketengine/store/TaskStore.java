@@ -6473,6 +6473,12 @@ public final class TaskStore {
                 recovery.put("waitedMillis",used+waitMillis).put("retries",retries+1);calls.put(failedCall);task.put("modelRecoveryBudget",recovery);write(task);return true;
     }
     @FunctionalInterface public interface ScriptPhoneAction<T>{T run()throws Exception;}
+    /** Only TaskStore may append this reserved native bookkeeping object. Keep every
+     * original model-request field in the scope identity; do not weaken other hashes. */
+    private static String scriptPhoneRequestFingerprint(JSONObject arguments)throws Exception {
+        JSONObject request=new JSONObject(arguments.toString());request.remove("nativeSkill");
+        return capabilityFingerprint(request);
+    }
     /** An in-process child call of one original prepared local Skill operation. It is
      * deliberately neither serializable nor an execution grant. The original journal,
      * current grant, operation debit and phone driver remain authoritative. */
@@ -6488,7 +6494,7 @@ public final class TaskStore {
             original.check();if(original.isPaused())throw new SecurityException("原任务已暂停");
             JSONObject t=required(task);if(t.optJSONObject("origin")!=null||!"owner".equals(t.optString("actorId"))||!"private".equals(t.optString("spaceId"))||!run.equals(t.optString("runId"))||epoch!=t.optInt("coordinatorEpoch")||t.optBoolean("cancelRequested")||!t.optString("status").matches("running|preparing"))throw new SecurityException("脚本回调不属于当前私人任务");
             try(Cursor rows=db.rawQuery("SELECT run_id,tool,state,arguments FROM operations WHERE task_id=? AND operation_id=?",new String[]{task,parent})){
-                if(!rows.moveToFirst()||!run.equals(rows.getString(0))||!"skills_execute".equals(rows.getString(1))||!"prepared".equals(rows.getString(2))||!parentArguments.equals(capabilityFingerprint(new JSONObject(rows.getString(3)))))throw new SecurityException("原脚本父操作已结束、未知或身份改变");
+                if(!rows.moveToFirst()||!run.equals(rows.getString(0))||!"skills_execute".equals(rows.getString(1))||!"prepared".equals(rows.getString(2))||!parentArguments.equals(scriptPhoneRequestFingerprint(new JSONObject(rows.getString(3)))))throw new SecurityException("原脚本父操作已结束、未知或身份改变");
             }
             try(Cursor rows=db.rawQuery("SELECT operation_id,run_id,tool,state FROM operations WHERE task_id=? AND state IN ('prepared','unknown','project_running','project_stopping','remote_job_prepared','remote_job_sending','remote_job_unknown','remote_approval_sending','remote_approval_unknown','remote_question_prepared','remote_question_sending','remote_question_unknown')",new String[]{task})){
                 while(rows.moveToNext()){
@@ -6508,7 +6514,7 @@ public final class TaskStore {
         java.util.Objects.requireNonNull(original);java.util.Objects.requireNonNull(allowed);
         if(allowed.isEmpty()||allowed.size()>24||scriptPhoneScopes.containsKey(parent))throw new SecurityException("没有唯一脚本手机回调范围");
         for(String name:allowed)if(name==null||!name.matches("phone_(observe|list_apps|launch_app|click_node|tap|type|swipe|back|home|query|find|extract|collect|wait|dialog|gesture|press_key|set_wheel|share_text|open_link)"))throw new SecurityException("脚本只能请求已授权本机手机工具");
-        String args;try(Cursor row=db.rawQuery("SELECT arguments FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool='skills_execute' AND state='prepared'",new String[]{task,run,parent})){if(!row.moveToFirst())throw new SecurityException("没有原脚本prepared操作");args=capabilityFingerprint(new JSONObject(row.getString(0)));}
+        String args;try(Cursor row=db.rawQuery("SELECT arguments FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool='skills_execute' AND state='prepared'",new String[]{task,run,parent})){if(!row.moveToFirst())throw new SecurityException("没有原脚本prepared操作");JSONObject request=new JSONObject(row.getString(0));if(request.has("nativeSkill"))throw new SecurityException("脚本回调必须在本TaskStore登记原生执行元数据前安装");args=scriptPhoneRequestFingerprint(request);}
         ScriptPhoneScope scope=new ScriptPhoneScope(task,run,epoch,parent,original,allowed,args);scriptPhoneScopes.put(parent,scope);
         try{scope.current();for(String name:allowed)requireScriptPhonePermission(scope,name);return scope;}catch(Exception error){scope.close();throw error;}
     }

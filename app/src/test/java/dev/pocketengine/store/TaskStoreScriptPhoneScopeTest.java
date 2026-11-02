@@ -113,4 +113,72 @@ public final class TaskStoreScriptPhoneScopeTest {
             journal.finishOperation(parent,new JSONObject().put("ok",true));rejected(()->scope.invoke("phone_tap",()->"late"));
         }
     }
+
+    private JSONObject parentArguments()throws Exception {
+        try(Cursor row=db.rawQuery("SELECT arguments FROM operations WHERE task_id=? AND operation_id=?",new String[]{task,parent})){
+            assertTrue(row.moveToFirst());return new JSONObject(row.getString(0));
+        }
+    }
+    /** Storage-identity fixture only: real host reserve/decide/claim writes were traced
+     * separately. This does not assert owner review, process launch or device effects. */
+    private void replaceParentArguments(JSONObject arguments){
+        ContentValues values=new ContentValues();values.put("arguments",arguments.toString());
+        assertEquals(1,db.update("operations",values,"task_id=? AND operation_id=?",new String[]{task,parent}));
+    }
+    @Test public void nativeSkillMetadataEvolutionKeepsEveryOriginalRequestField()throws Exception {
+        JSONObject request=parentArguments();String exact=TaskStore.capabilityFingerprint(request);int before=remaining();
+        try(var scope=scope()){
+            JSONObject metadata=new JSONObject().put("format","pocketworld.native-skill-operation.v1").put("approvalState","pending").put("dispatchState","not_dispatched");
+            for(int stage=0;stage<5;stage++){
+                if(stage==1)metadata.put("approvalState","consumed").put("decidedAt",1L);
+                if(stage==2)metadata.put("dispatchState","claimed").put("claimedAt",2L);
+                if(stage==3)metadata.put("scriptSharedArtifacts",new JSONObject().put("script_output_0",new JSONObject().put("role","script_output_0").put("path","out.txt").put("sha256","a".repeat(64)).put("bytes",1).put("claimId",UUID.randomUUID().toString()).put("attachmentId",UUID.randomUUID().toString()).put("state","publication_unknown")));
+                if(stage==4)metadata.getJSONObject("scriptSharedArtifacts").getJSONObject("script_output_0").put("state","published").put("publishedAt",3L);
+                JSONObject updated=new JSONObject(request.toString()).put("nativeSkill",new JSONObject(metadata.toString()));
+                assertNotEquals(exact,TaskStore.capabilityFingerprint(updated));replaceParentArguments(updated);
+                scope.invoke("phone_tap",()->{String op=journal.beginOperation("phone_tap",args());tasks.requirePreparedCapability(task,run,epoch,op,"phone_tap",args());journal.finishOperation(op,new JSONObject().put("ok",true));return op;});
+            }
+        }
+        assertEquals(before-5,remaining());assertEquals(6,tasks.get(task,false).getJSONArray("operations").length());assertTrue(tasks.hasUnresolved(task));
+    }
+    @Test public void preexistingNativeSkillCannotBecomeModelSuppliedScopeAuthority()throws Exception {
+        replaceParentArguments(parentArguments().put("nativeSkill",new JSONObject().put("format","pocketworld.native-skill-operation.v1").put("approvalState","consumed").put("dispatchState","claimed")));
+        int before=remaining();rejected(()->scope());assertEquals(before,remaining());assertEquals(1,tasks.get(task,false).getJSONArray("operations").length());
+    }
+    @Test public void changingAnyNonNativeRequestFieldStillRejectsBeforeAnotherOperation()throws Exception {
+        JSONObject exact=parentArguments().put("id",UUID.randomUUID().toString()).put("revision",1).put("digest","a".repeat(64)).put("arguments",new JSONArray().put("literal")).put("timeoutSeconds",30).put("maxOutputBytes",4096);
+        replaceParentArguments(exact);int before=remaining();
+        try(var scope=scope()){
+            for(String key:new String[]{"scriptPath","id","revision","digest","arguments","timeoutSeconds","maxOutputBytes","unexpectedModelKey"}){
+                JSONObject changed=new JSONObject(exact.toString()).put("nativeSkill",new JSONObject().put("format","pocketworld.native-skill-operation.v1"));
+                switch(key){
+                    case "scriptPath":changed.put(key,"other.py");break;
+                    case "id":changed.put(key,UUID.randomUUID().toString());break;
+                    case "revision":changed.put(key,2);break;
+                    case "digest":changed.put(key,"b".repeat(64));break;
+                    case "arguments":changed.put(key,new JSONArray().put("changed"));break;
+                    case "timeoutSeconds":changed.put(key,31);break;
+                    case "maxOutputBytes":changed.put(key,8192);break;
+                    default:changed.put(key,true);
+                }
+                replaceParentArguments(changed);rejected(()->scope.invoke("phone_tap",()->journal.beginOperation("phone_tap",args())));assertEquals(before,remaining());assertEquals(1,tasks.get(task,false).getJSONArray("operations").length());
+            }
+            replaceParentArguments(new JSONObject(exact.toString()).put("nativeSkill",new JSONObject().put("format","pocketworld.native-skill-operation.v1")));
+            scope.invoke("phone_tap",()->{String op=journal.beginOperation("phone_tap",args());journal.finishOperation(op,new JSONObject().put("ok",true));return op;});
+        }
+        assertEquals(before-1,remaining());
+    }
+    @Test public void nativeMetadataNeverAdmitsUnknownParentOrUnknownSibling()throws Exception {
+        int before=remaining();
+        try(var scope=scope()){
+            replaceParentArguments(parentArguments().put("nativeSkill",new JSONObject().put("format","pocketworld.native-skill-operation.v1")));
+            ContentValues state=new ContentValues();state.put("state","unknown");assertEquals(1,db.update("operations",state,"operation_id=?",new String[]{parent}));
+            rejected(()->scope.invoke("phone_tap",()->journal.beginOperation("phone_tap",args())));assertEquals(before,remaining());
+            state.put("state","prepared");assertEquals(1,db.update("operations",state,"operation_id=?",new String[]{parent}));
+            String sibling=seed("unknown");rejected(()->scope.invoke("phone_tap",()->journal.beginOperation("phone_tap",args())));assertEquals(before,remaining());
+            db.delete("operations","operation_id=?",new String[]{sibling});
+            scope.invoke("phone_tap",()->{String op=journal.beginOperation("phone_tap",args());journal.finishOperation(op,new JSONObject().put("ok",true));return op;});
+        }
+        assertEquals(before-1,remaining());
+    }
 }
