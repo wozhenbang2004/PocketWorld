@@ -20,6 +20,7 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
     private final RunControl original;
     private final AdaptivePhonePort phone;
     private volatile boolean closed;
+    private volatile long turnAppPolicyRevision;
     private record PreparedSequence(String operation,NativeToolPlan plan) { }
     private final java.util.concurrent.atomic.AtomicReference<PreparedSequence> sequence=new java.util.concurrent.atomic.AtomicReference<>();
     private final java.util.Set<String> attemptedScrolls=java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -144,8 +145,8 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
     @Override public void beginRun(String goal,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);existing.beginRun(goal,control);}
     @Override public void prepareTurnSurface(RunControl control)throws Exception {check(PhoneTreeQuery.QUERY,control);existing.prepareTurnSurface(control);}
     @Override public void admitCapabilities(CapabilitySnapshot snapshot,RunControl control)throws Exception{existing.admitCapabilities(snapshot,control);}
-    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);JSONObject turn=existing.prepareTurn(query,round,steps,control);return turn.put("tools",PhoneExtensionTools.append(appendTools(turn.getJSONArray("tools"))));}
-    @Override public boolean responseCurrent(RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);return existing.responseCurrent(control);}
+    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);turnAppPolicyRevision=phone.appPolicyRevision();JSONObject turn=existing.prepareTurn(query,round,steps,control);return turn.put("tools",PhoneExtensionTools.append(appendTools(turn.getJSONArray("tools"))));}
+    @Override public boolean responseCurrent(RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);return turnAppPolicyRevision==phone.appPolicyRevision()&&existing.responseCurrent(control);}
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{if(owns(name))check(name,control);return existing.beforeTool(name,args,control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{existing.afterTool(name,args,receipt,control);}
     @Override public void beforeModelRequest(String id,JSONArray messages,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);existing.beforeModelRequest(id,messages,control);}

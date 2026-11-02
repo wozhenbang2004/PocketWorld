@@ -21,14 +21,15 @@ public final class AccessibilityPasteInput {
     public static JSONObject paste(Context context,PhoneAccessibilityService service,int display,AccessibilityForest.Ref ref,String text,RunControl control,long revision,
             NativePhoneEntry.Admission admission,NativePhoneEntry.Admission originalReference,Runnable invalidate)throws Exception {
         Handler main=new Handler(Looper.getMainLooper());AtomicReference<AccessibilityNodeInfo> retained=new AtomicReference<>();AtomicReference<JSONObject> readback=new AtomicReference<>();
+        if(!AndroidClipboardRecovery.allowed(context))return new JSONObject().put("ok",false).put("accepted",false).put("error","clipboard_owner_permission_required").put("automaticFallback",false);
         try{
-            JSONObject result=AndroidClipboardRecovery.create(context).paste(text,control,()->{
+            JSONObject result=AndroidClipboardRecovery.create(context,control,revision,()->{if(!AndroidClipboardRecovery.allowed(context))throw new SecurityException("clipboard_owner_permission_revoked");originalReference.check();admission.check();}).paste(text,control,()->{
                 boolean accepted=onMain(main,()->{
                     originalReference.check();AccessibilityNodeInfo node=AccessibilityForest.resolve(service,display,ref);if(node==null)throw new SecurityException("paste_node_unavailable");
                     try{
                         if(!node.refresh()||node.isPassword()||!node.isEditable()||!node.isEnabled()||!node.isVisibleToUser()||!ref.identity.equals(AccessibilityForest.identity(node)))throw new SecurityException("paste_original_field_changed");
                         retained.set(AccessibilityNodeInfo.obtain(node));String old=node.getText()==null?"":node.getText().toString();
-                        return NativePhoneEntry.call(control,revision,()->{originalReference.check();admission.check();},()->{
+                        return NativePhoneEntry.call(control,revision,()->{if(!AndroidClipboardRecovery.allowed(context))throw new SecurityException("clipboard_owner_permission_revoked");originalReference.check();admission.check();},()->{
                             invalidate.run();if(!node.performAction(AccessibilityNodeInfo.ACTION_FOCUS))return false;
                             Bundle range=new Bundle();range.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT,0);range.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT,old.length());
                             if(!old.isEmpty()&&!node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION,range))return false;

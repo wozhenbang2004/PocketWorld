@@ -71,7 +71,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             JSONObject exact=appCopies.require(args);reserveApp(exact.getString("packageName"),exact.getInt("userId"),control);beforeOpenAudio(exact.getString("packageName"),exact.getInt("userId"),control);clearReferences();result=module.requestAdmitted("launch_copy",exact,control,revision,sessionId,displayId,admission);
         }else if(tool.equals("phone_practice_target")){
             if(!service.getPackageName().equals(args.getString("packageName"))||dev.pocketengine.phone.setup.AndroidAppCopies.id(android.os.Process.myUserHandle())!=args.getInt("userId"))throw new SecurityException("practice_target_is_fixed");
-            clearReferences();result=module.requestAdmitted("practice",new JSONObject().put("packageName",service.getPackageName()).put("userId",args.getInt("userId")),control,revision,sessionId,displayId,admission);
+            clearReferences();result=module.requestAdmitted("practice",new JSONObject().put("packageName",service.getPackageName()).put("userId",args.getInt("userId")),control,revision,sessionId,displayId,admission);if(Boolean.TRUE.equals(result.opt("accepted")))result.put("helperAuthenticated",module.isConnected()).put("imeIsolation",module.session().optString("imeIsolation"));
         }else{
             Observation expected=current;if(expected==null||expected.control!=control||!expected.id.equals(args.optString("observationId"))||expected.revision!=revision||SystemClock.uptimeMillis()-expected.at>120000)return failure("stale_observation","扩展动作需要当前副屏观察。");
             JSONObject ime=imeUnavailable(control);if(ime!=null)return ime;
@@ -269,8 +269,9 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             // Bounded read-only settling, then retain the baseline for later observations too.
             Thread.sleep(350);JSONObject after=landing(control,revision);boolean primarySame=before.getJSONArray("primary").toString().equals(after.getJSONArray("primary").toString());
             boolean owned=after.getString("status").equals("observed");
+            int expectedUser=receipt.optInt("requestedUserId",receipt.optInt("userId",-1));if(expectedUser>=0){boolean matchingCopy=false;JSONArray landed=after.getJSONArray("owned");for(int i=0;i<landed.length();i++){JSONObject task=landed.getJSONObject(i);if(receipt.optString("packageName").equals(task.optString("packageName"))&&task.has("userId")&&task.getInt("userId")==expectedUser)matchingCopy=true;}owned&=matchingCopy;receipt.put("actualUserVerified",matchingCopy);}
             evidence=new JSONObject().put("before",before).put("after",after).put("status",primarySame&&owned?"owned_display_observed":"unknown_requires_owner").put("taskMigrationPerformed",false).put("automaticReplayAllowed",false);
-            if(!primarySame||!owned){control.pause();clearReferences();receipt.put("requiresUser",true).put("message","动作已请求，但跨应用落点或主屏归属不能确认；已暂停原任务，不会移动或代点主屏应用。");}
+            if(!primarySame||!owned){control.pause();clearReferences();receipt.put("requiresUser",true).put("requiresPause",true).put("message","动作已请求，但跨应用落点、资料身份或主屏归属不能确认；已暂停原任务，不会移动或代点主屏应用。");}
             else landingBaseline=after;
         }catch(InterruptedException cancelled){Thread.currentThread().interrupt();throw cancelled;}catch(Exception unavailable){control.pause();clearReferences();evidence=new JSONObject().put("status","unknown_requires_owner").put("reason","post_action_task_probe_unavailable").put("automaticReplayAllowed",false);receipt.put("requiresUser",true);}
         return receipt.put("displayLanding",evidence);

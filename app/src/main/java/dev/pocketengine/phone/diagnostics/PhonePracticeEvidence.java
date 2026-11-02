@@ -27,10 +27,12 @@ public final class PhonePracticeEvidence {
         checks.put("tree","passed");if(display>0&&actual.optString("sessionId").length()>0)checks.put("display","passed");
         if(count!=null){if(initialClicks==null)initialClicks=count;else if(count>initialClicks)checks.put("click","passed");}
         if(!rows.isEmpty()){if(initialRows==null)initialRows=rows;else if(!initialRows.equals(rows))checks.put("scroll","passed");}
-        if(tick!=null){long at=actual.optLong("observedAtUptimeMs",-1);if(lastTick==null){lastTick=tick;initialTickAt=at;}else if(at>initialTickAt&&tick>lastTick)checks.put("live_updates","passed");}
+        if(tick!=null){long at=actual.optLong("observedAtUptimeMs",-1);if(lastTick==null){lastTick=tick;initialTickAt=at;}else if(at>=initialTickAt+3000&&tick>=lastTick+3)checks.put("live_updates","passed");}
         JSONObject landing=actual.optJSONObject("displayLanding");if(landing!=null&&"owned_display_observed".equals(landing.optString("status")))checks.put("main_screen_isolation","passed");
     }
-    public synchronized void nativeFacts(JSONObject actual){if(actual==null)return;if(actual.optBoolean("helperAuthenticated"))checks.put("helper","passed");if("available".equals(actual.optString("imeIsolation")))checks.put("ime_isolation","passed");if(Boolean.FALSE.equals(actual.opt("captureAvailable")))checks.put("frame","failed");}
+    public synchronized void nativeFacts(JSONObject actual){if(actual==null)return;if(actual.optBoolean("helperAuthenticated"))checks.put("helper","passed");if("available".equals(actual.optString("imeIsolation")))checks.put("ime_isolation","passed");}
+    public synchronized void frame(JSONObject actual){String state=actual.optString("state");if(java.util.Set.of("passed","failed","unknown").contains(state))checks.put("frame",state);}
+    public synchronized boolean targetCurrent(JSONObject actual)throws Exception {if(actual==null||!actual.optBoolean("ok")||!packageName.equals(actual.optString("packageName")))return false;JSONArray nodes=actual.optJSONArray("nodes");if(nodes==null)return false;for(int i=0;i<nodes.length();i++)if(nodes.getJSONObject(i).optString("text").contains("PW_DIAG_TARGET_V1"))return true;return false;}
     public synchronized JSONObject result()throws Exception {JSONArray rows=new JSONArray();boolean all=true;for(var entry:checks.entrySet()){rows.put(new JSONObject().put("id",entry.getKey()).put("state",entry.getValue()));all&="passed".equals(entry.getValue());}return new JSONObject().put("ok",true).put("status",all?"passed":"partial").put("checks",rows).put("evidenceOrigin","original_run_native_observations").put("deviceVerified",false).put("containsPrivateContent",false);}
     private static Integer integer(String text,String prefix){try{return Integer.valueOf(text.substring(prefix.length()).trim());}catch(Exception invalid){return null;}}
 }

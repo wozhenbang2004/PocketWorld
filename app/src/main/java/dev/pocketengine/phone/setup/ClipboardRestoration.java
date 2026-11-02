@@ -9,7 +9,7 @@ import org.json.JSONObject;
 /** One private compatibility input, with a durable original and compare-before-restore. */
 public final class ClipboardRestoration {
     public interface Storage {String read()throws Exception;void write(String record)throws Exception;void clear()throws Exception;}
-    public interface Clipboard {String snapshot()throws Exception;String replacement(String text)throws Exception;void install(String encoded)throws Exception;default String fingerprint(String encoded)throws Exception{return hash(encoded);}}
+    public interface Clipboard {String snapshot()throws Exception;String replacement(String text)throws Exception;void install(String encoded)throws Exception;default void installTemporary(String encoded)throws Exception{install(encoded);}default String fingerprint(String encoded)throws Exception{return hash(encoded);}}
     @FunctionalInterface public interface Paste {boolean run()throws Exception;}
     private static final ReentrantLock CLIPBOARD=new ReentrantLock(true);
     private final Storage storage;private final Clipboard clipboard;
@@ -24,7 +24,7 @@ public final class ClipboardRestoration {
             if(original==null||replacement==null||original.length()>48000||replacement.length()>48000)return refusal("clipboard_unavailable");
             storage.write(new JSONObject().put("schema",1).put("original",original).put("replacementHash",clipboard.fingerprint(replacement)).toString());
             try{
-                control.check();clipboard.install(replacement);entered=true;
+                control.check();clipboard.installTemporary(replacement);entered=true;
                 if(!clipboard.fingerprint(replacement).equals(clipboard.fingerprint(clipboard.snapshot())))return refusal("clipboard_write_unverified");
                 control.check();if(control.isPaused())throw new SecurityException("clipboard_original_run_paused");accepted=action.run();
             }finally{try{restored=recoverLocked();}catch(Exception unavailable){restored=false;}}

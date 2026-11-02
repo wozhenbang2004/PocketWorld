@@ -69,15 +69,27 @@ public final class AdaptivePhonePort implements PhonePort {
     public boolean textTargetingAvailable(){return localCaptureAllowed&&localOcrAllowed&&source instanceof NativeOcrTapPort&&ocrAvailable();}
     public boolean matchesHostScope(String task,String run,int epoch){return scope.taskId.equals(task)&&scope.runId.equals(run)&&scope.epoch==epoch;}
     public PhonePort physicalPort(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort?((dev.pocketengine.phone.access.GuardedPhonePort)source).physicalPort():source;}
+    public long appPolicyRevision(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort?((dev.pocketengine.phone.access.GuardedPhonePort)source).policyRevision():0;}
+    /** Owner diagnostics may read only these booleans from the exact original run; no execution or content capture. */
+    public synchronized JSONObject ownerPracticeResult(String task,String run,int epoch)throws Exception {
+        if(!matchesHostScope(task,run,epoch))return failure("practice_run_mismatch","演练证据不属于当前原任务。");
+        return practice==null?failure("practice_not_started","本原任务尚未启动演练。"):practice.result();
+    }
     /** All side effects enter from the existing CapabilityPort's original prepared operation. */
     public JSONObject nativeExtension(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         PhoneExtensionTools.validate(tool,args);String blocked=authority(control);if(blocked!=null)return failure(blocked,"原手机任务控制已变化。");
         boolean write=PhoneExtensionTools.writes(tool),opening=tool.equals("phone_launch_app_copy")||tool.equals("phone_practice_target")||tool.equals("phone_app_after_task"),listing=tool.equals("phone_list_app_copies");
         synchronized(this){if(reconciliationRequired||safetyPause!=null)return failure(reconciliationRequired?"reconciliation_required":safetyPause,"先核对原操作和权限。");
             if(tool.equals("phone_practice_result"))return practice==null?failure("practice_not_started","请先由主人启动本次自有测试页。"):practice.result();
-            if(!opening&&!listing&&!current(args.optString("observationId"),control))return failure("stale_observation","扩展工具需要当前原观察。");
+            if(!opening&&!listing&&!tool.equals("phone_practice_frame_check")&&!current(args.optString("observationId"),control))return failure("stale_observation","扩展工具需要当前原观察。");
             if(tool.equals("phone_dialog"))return PhoneDialogEvidence.read(latest);
             if(tool.equals("phone_gesture")&&(!imageCeiling||!ObservationReport.hasImage(latest)))return failure("coordinate_unverifiable","复杂手势需要已发送模型的当前真实图片。");
+        }
+        if(tool.equals("phone_practice_frame_check")){
+            dev.pocketengine.phone.diagnostics.PhonePracticeEvidence captured;synchronized(this){captured=practice;if(captured==null||!localCaptureAllowed)return failure("practice_capture_not_authorized","需要本次自有演练与本地取图许可。");}
+            long revision=control.pauseRevision();JSONObject actual=source.observe(true,control);JSONObject frame=captured.targetCurrent(actual)?dev.pocketengine.phone.diagnostics.PhonePracticeFrame.inspect(actual,scope.displayId,scope.sessionId,revision):new JSONObject().put("state","unknown").put("reason","practice_target_not_current").put("localOnly",true).put("imageUploaded",false);
+            synchronized(this){if(captured!=practice)throw new SecurityException("practice_session_changed");captured.frame(frame);clearReferences();}
+            JSONObject fresh=readOnlyTree(control);if(fresh.optBoolean("ok"))frame.put("observationId",fresh.getString("observationId"));return frame.put("ok",true);
         }
         if(tool.equals("phone_event"))return waitNativeEvent(args,control);
         if(write&&admission==null)return failure("host_authority_required","扩展动作需要原prepared操作准入。");
@@ -524,6 +536,7 @@ public final class AdaptivePhonePort implements PhonePort {
         return new JSONObject().put("ok", true);
     }
     private String authority(RunControl control) throws Exception {
+        if(source instanceof dev.pocketengine.phone.access.GuardedPhonePort&&!((dev.pocketengine.phone.access.GuardedPhonePort)source).referencePolicyCurrent()){clearReferences();return "app_policy_changed";}
         Objects.requireNonNull(control).check();
         if (!control.hasHostRun() || !control.matchesHostRun(scope.taskId, scope.runId, scope.epoch)
                 || boundControl != null && boundControl != control) return "identity_mismatch";

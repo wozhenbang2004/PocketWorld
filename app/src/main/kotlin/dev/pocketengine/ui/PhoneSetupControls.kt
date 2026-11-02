@@ -56,6 +56,8 @@ internal fun PhoneSetupControls(snapshot: JSONObject, diagnostic: JSONObject?, a
         Text("只修改任务打开的 App 音频模式，并记录原值以便恢复；不会改系统音量。系统不支持时保留未恢复记录。", style = MaterialTheme.typography.bodySmall)
         OutlinedButton(onClick = { onCommand("audio.restore", JSONObject()) }) { Text("核对遗留的 App 音频恢复") }
         if (snapshot.optBoolean("clipboardRecoveryPending")) OutlinedButton(onClick = { onCommand("clipboard.restore", JSONObject()) }) { Text("恢复上次兼容输入的剪贴板") }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("允许普通输入框兼容粘贴"); Switch(snapshot.optBoolean("clipboardCompatibilityEnabled"), { onCommand("clipboard.policy", JSONObject().put("enabled", it)) }) }
+        Text("默认关闭。仅在原任务当前普通字段使用；原剪贴板会加密保存并恢复，助手无法读取其内容。Android拒绝读取原值时不会粘贴。", style = MaterialTheme.typography.bodySmall)
         HorizontalDivider()
         OutlinedButton(onClick = { onCommand("diagnostics.preview", JSONObject()) }) { Text("预览手机诊断报告") }
         if (diagnostic != null) {

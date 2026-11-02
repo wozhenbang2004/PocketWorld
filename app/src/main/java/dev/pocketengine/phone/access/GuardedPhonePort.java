@@ -14,6 +14,8 @@ public final class GuardedPhonePort implements PhonePort,NativeOcrTapPort,Native
     private final ThreadLocal<Boolean> probing=new ThreadLocal<>();
     public GuardedPhonePort(PhonePort inner,PhoneAccessPolicy policy,PhoneOwnerPackages.Probe owners,int nativeUser){this.inner=java.util.Objects.requireNonNull(inner);this.policy=java.util.Objects.requireNonNull(policy);this.owners=java.util.Objects.requireNonNull(owners);if(nativeUser<0||nativeUser>99999)throw new IllegalArgumentException("native_user_required");this.nativeUser=nativeUser;}
     public PhonePort physicalPort(){return inner;}
+    public long policyRevision(){return policy.current().revision();}
+    public boolean referencePolicyCurrent(){PhoneAccessPolicy.State current=policy.current();return current.available()&&(referenceRevision<0||referenceRevision==current.revision());}
     @Override public boolean isConnected(){return policy.current().available()&&inner.isConnected();}
     @Override public void clearReferences(){referenceRevision=-1;inner.clearReferences();}
     @FunctionalInterface private interface Body {JSONObject run(NativePhoneEntry.Admission live)throws Exception;}

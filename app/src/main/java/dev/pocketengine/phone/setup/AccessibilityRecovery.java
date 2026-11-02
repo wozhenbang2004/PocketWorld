@@ -27,14 +27,16 @@ public final class AccessibilityRecovery {
         if(context.checkSelfPermission(PERMISSION)!=PackageManager.PERMISSION_GRANTED)return outcome("secure_settings_permission_missing",false);
         if(PhoneAccessibilityService.get()!=null)return outcome("already_connected",true);
         String own=new ComponentName(context,PhoneAccessibilityService.class).flattenToString();
+        boolean removed=false;
         try{
             List<String> entries=read();boolean present=entries.removeIf(value->same(value,own));
-            if(present&&!write(entries))return outcome("remove_unconfirmed",false);
+            if(present){removed=true;if(!write(entries))return outcome("remove_unconfirmed",false);}
             // Read again after every write, preserving services added by Android or another owner.
             List<String> fresh=read();if(fresh.stream().noneMatch(value->same(value,own)))fresh.add(own);
             if(!write(fresh))return outcome("restore_unconfirmed",false);
             boolean registered=read().stream().anyMatch(value->same(value,own));return outcome(registered?"registered_waiting_for_binding":"restore_unconfirmed",registered);
         }catch(Exception unavailable){return outcome("platform_refused",false);}
+        finally{if(removed)try{List<String> current=read();if(current.stream().noneMatch(value->same(value,own))){current.add(own);write(current);}}catch(Exception pending){/* The stored failure remains visible; no other service entry is replaced. */}}
     }
     private List<String> read(){String encoded=Settings.Secure.getString(context.getContentResolver(),Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);List<String> out=new ArrayList<>();if(encoded!=null&&!encoded.isEmpty())for(String entry:encoded.split(":"))if(!entry.isEmpty())out.add(entry);return out;}
     private boolean write(List<String> entries){String encoded=String.join(":",entries);if(!Settings.Secure.putString(context.getContentResolver(),Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,encoded))return false;return Settings.Secure.putInt(context.getContentResolver(),Settings.Secure.ACCESSIBILITY_ENABLED,entries.isEmpty()?0:1);}

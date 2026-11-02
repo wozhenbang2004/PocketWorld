@@ -27,7 +27,7 @@ public final class PhoneSetupModule implements EngineModule {
     public PhoneSetupModule(FeatureContext context,DisplayModule display){this.context=context;this.display=display;access=new AndroidPhoneAccessStore(context.android);recovery=new AccessibilityRecovery(context.android);instance=this;}
     static PhoneSetupModule current(){return instance;}
     @Override public String id(){return "phone_setup";}
-    @Override public JSONObject snapshot()throws Exception {return new JSONObject().put("pairing",pairing.snapshot()).put("access",access.snapshot()).put("recovery",recovery.snapshot()).put("clipboardRecoveryPending",AndroidClipboardRecovery.create(context.android).pending()).put("audioSilenceEnabled",AndroidPhoneAudioRecovery.silenceEnabled(context.android)).put("modelCommandsAvailable",false);}
+    @Override public JSONObject snapshot()throws Exception {return new JSONObject().put("pairing",pairing.snapshot()).put("access",access.snapshot()).put("recovery",recovery.snapshot()).put("clipboardRecoveryPending",AndroidClipboardRecovery.create(context.android).pending()).put("clipboardCompatibilityEnabled",AndroidClipboardRecovery.allowed(context.android)).put("audioSilenceEnabled",AndroidPhoneAudioRecovery.silenceEnabled(context.android)).put("modelCommandsAvailable",false);}
     @Override public synchronized JSONObject handle(String command,JSONObject input)throws Exception {
         if(closed)throw new SecurityException("phone_setup_closed");if(input==null)input=new JSONObject();
         switch(command){
@@ -39,6 +39,7 @@ public final class PhoneSetupModule implements EngineModule {
             case "recovery.consent":return recovery.setConsent(input.getBoolean("enabled"),input.getLong("expectedRevision"));
             case "recovery.restore":return recovery.restore();
             case "clipboard.restore":return new JSONObject().put("restored",AndroidClipboardRecovery.create(context.android).recover()).put("containsClipboardContent",false);
+            case "clipboard.policy":AndroidClipboardRecovery.setOwnerAllowed(context.android,input.getBoolean("enabled"));return snapshot();
             case "audio.policy":AndroidPhoneAudioRecovery.setOwnerSilenceEnabled(context.android,input.getBoolean("enabled"));return snapshot();
             case "audio.restore":if(display.snapshot().optBoolean("taskOwned"))throw new SecurityException("stop_phone_task_before_audio_recovery");return AndroidPhoneAudioRecovery.get(context.android,display).restoreAll();
             case "diagnostics.preview":return diagnostic();
