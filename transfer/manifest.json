@@ -1,35 +1,25 @@
 {
   "target_branch": "work/mika-53-capabilities-20261102",
-  "base": "a0ec9a556764f0ea1bc3710bc622dfc608b20e4d",
-  "source_commit": "92fcf900c5a26609f6eaf4a856d269e0229c8a62",
-  "source_tree": "734cd8d635fd4e553ddc3544e10b3c844e4c56e0",
-  "bundle_sha256": "c957b87818c8b5de580ee9f7a00d9efbd0fda3a0f49db98de96faf2af3b16246",
-  "bundle_size": 105547,
+  "base": "05259613cdb9a16fd7aa4f72f61f27fb7a3285b7",
+  "source_commit": "b1e1134a4b7202a1e18d281c3429ae1cde60b741",
+  "source_tree": "2e545a5b7c912525169538345797c0727f760dc6",
+  "bundle_sha256": "fd857df36fba301a924fad39e27fd6120f4aa5b66c8a41d2fdefcb2292d4a95f",
+  "bundle_size": 51015,
   "parts": [
     {
       "path": "transfer/part-000.b64",
-      "sha256": "747b1b8437a465ef0d2a4025240665c268fe57bd2c78fb657092369da442d472",
+      "sha256": "d7a1bde4fe20b3d988451e820261c28a0c6ec4f651768b17aa5722dd6119ec96",
       "size": 32000
     },
     {
       "path": "transfer/part-001.b64",
-      "sha256": "4101a8c9d4ce6d4ccd48f44d27f001ec16cce2d461f403c5f4eabc18f0edec8d",
+      "sha256": "28981b29519700c1eb7d78c591dcc3301f43a7ad4a6c70b298f8cd72781c733e",
       "size": 32000
     },
     {
       "path": "transfer/part-002.b64",
-      "sha256": "9964251f5d56a452abcf87a94f25ed178e8bc66a681722e132024ffcf6d8c79c",
-      "size": 32000
-    },
-    {
-      "path": "transfer/part-003.b64",
-      "sha256": "b9a8fc70aeef21770708614173b8c2132b2d5d2018f78a475528ba91fca2346f",
-      "size": 32000
-    },
-    {
-      "path": "transfer/part-004.b64",
-      "sha256": "e20cc622ba8edfeec8ffc55c18d689055de624114559067209fd2842681e3a08",
-      "size": 12732
+      "sha256": "d5cfeead46c6994596425e46ca3f6da78ca96e83f5a9345d07e94ef1f48bd67a",
+      "size": 4020
     }
   ]
 }
