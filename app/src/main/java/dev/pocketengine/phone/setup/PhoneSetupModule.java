@@ -23,8 +23,10 @@ public final class PhoneSetupModule implements EngineModule {
     private static volatile PhoneSetupModule instance;
     private static final int NOTICE=42031;private static final String CHANNEL="phone_pairing_input";
     private final FeatureContext context;private final DisplayModule display;private final AndroidPhoneAccessStore access;private final AccessibilityRecovery recovery;private final PairingEntrySession pairing=new PairingEntrySession(android.os.SystemClock::elapsedRealtime);private final Handler main=new Handler(Looper.getMainLooper());
+    private final java.util.concurrent.Callable<JSONObject> originalPractice;
     private volatile boolean closed;
-    public PhoneSetupModule(FeatureContext context,DisplayModule display){this.context=context;this.display=display;access=new AndroidPhoneAccessStore(context.android);recovery=new AccessibilityRecovery(context.android);instance=this;}
+    public PhoneSetupModule(FeatureContext context,DisplayModule display){this(context,display,()->null);}
+    public PhoneSetupModule(FeatureContext context,DisplayModule display,java.util.concurrent.Callable<JSONObject> originalPractice){this.context=context;this.display=display;this.originalPractice=java.util.Objects.requireNonNull(originalPractice);access=new AndroidPhoneAccessStore(context.android);recovery=new AccessibilityRecovery(context.android);instance=this;}
     static PhoneSetupModule current(){return instance;}
     @Override public String id(){return "phone_setup";}
     @Override public JSONObject snapshot()throws Exception {return new JSONObject().put("pairing",pairing.snapshot()).put("access",access.snapshot()).put("recovery",recovery.snapshot()).put("clipboardRecoveryPending",AndroidClipboardRecovery.create(context.android).pending()).put("clipboardCompatibilityEnabled",AndroidClipboardRecovery.allowed(context.android)).put("audioSilenceEnabled",AndroidPhoneAudioRecovery.silenceEnabled(context.android)).put("modelCommandsAvailable",false);}
@@ -49,7 +51,8 @@ public final class PhoneSetupModule implements EngineModule {
     private JSONObject diagnostic()throws Exception {
         JSONObject version=new JSONObject();try(java.io.InputStream input=context.android.getAssets().open("phone-build-identity.json")){java.io.ByteArrayOutputStream buffer=new java.io.ByteArrayOutputStream();byte[] chunk=new byte[1024];int n;while((n=input.read(chunk))!=-1){if(buffer.size()+n>4096)throw new SecurityException("build_identity_too_large");buffer.write(chunk,0,n);}JSONObject identity=new JSONObject(new String(buffer.toByteArray(),java.nio.charset.StandardCharsets.UTF_8));version.put("commit",identity.optString("commit")).put("tree",identity.optString("tree"));}catch(Exception unknown){}
         try{version.put("versionCode",context.android.getPackageManager().getPackageInfo(context.android.getPackageName(),0).getLongVersionCode());}catch(Exception unknown){}
-        return PhoneDiagnosticReport.create(version,new JSONObject().put("sdkInt",android.os.Build.VERSION.SDK_INT).put("abi",android.os.Build.SUPPORTED_ABIS.length==0?"":android.os.Build.SUPPORTED_ABIS[0]),display.snapshot(),AndroidPhoneReadiness.snapshot(context.android,display),null);
+        JSONObject practice=null;try{practice=originalPractice.call();}catch(Exception unavailable){}
+        return PhoneDiagnosticReport.create(version,new JSONObject().put("sdkInt",android.os.Build.VERSION.SDK_INT).put("abi",android.os.Build.SUPPORTED_ABIS.length==0?"":android.os.Build.SUPPORTED_ABIS[0]),display.snapshot(),AndroidPhoneReadiness.snapshot(context.android,display),practice);
     }
     private synchronized void submitCode(String session,String code)throws Exception {if(closed)throw new SecurityException("phone_setup_closed");JSONObject request=pairing.submit(session,code);cancelNotice();try{display.handle("adb.pair",request);}finally{request.remove("pairingCode");}}
     void submitNotification(String session,String code){main.post(()->{try{submitCode(session,code);context.emit(id(),new JSONObject().put("event","pairing_code_submitted"));}catch(Exception refused){context.emit(id(),new JSONObject().put("event","pairing_entry_refused").put("message","输入窗口已失效、当前码无效或资源正在使用，请回手机设置重新开始。"));}});}

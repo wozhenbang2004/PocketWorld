@@ -57,8 +57,11 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     }
     private void reserveApp(String pkg,int user,RunControl control)throws Exception {
         if(appResources==null)return;dev.pocketengine.phone.access.AppCopyKey key=new dev.pocketengine.phone.access.AppCopyKey(pkg,user);
-        var result=appResources.reserve(resourceOwner,key,(actual,owner)->{JSONObject facts=landing(control,control.pauseRevision());if(!facts.optBoolean("allDisplayIdentitiesKnown"))return false;JSONArray all=facts.optJSONArray("all");if(all==null)return false;for(int i=0;i<all.length();i++){JSONObject row=all.getJSONObject(i);if(actual.packageName().equals(row.optString("packageName"))&&(!row.has("userId")||row.getInt("userId")==actual.userId())&&row.optInt("displayId",-1)!=displayId)return false;}return true;});
-        if(result!=dev.pocketengine.phone.access.PhoneAppResources.Result.ACQUIRED)throw new PhoneFailure("app_in_use_or_identity_unknown","目标App/资料正由其他任务或主屏使用，或实际归属不可核对；未抢占。");
+        long revision=control.pauseRevision();guard(control,revision);
+        var result=appResources.await(resourceOwner,key,15_000,control,(actual,owner)->{JSONObject facts=landing(control,revision);if(!facts.optBoolean("allDisplayIdentitiesKnown"))return false;JSONArray all=facts.optJSONArray("all");if(all==null)return false;for(int i=0;i<all.length();i++){JSONObject row=all.getJSONObject(i);if(actual.packageName().equals(row.optString("packageName"))&&(!row.has("userId")||row.getInt("userId")==actual.userId())&&row.optInt("displayId",-1)!=displayId)return false;}return true;});
+        guard(control,revision);
+        if(result==dev.pocketengine.phone.access.PhoneAppResources.Result.DEADLOCK)throw new PhoneFailure("app_resource_deadlock","原任务之间发生App/资料等待环路；已退出等待，没有抢占或重复派发。");
+        if(result!=dev.pocketengine.phone.access.PhoneAppResources.Result.ACQUIRED)throw new PhoneFailure("app_resource_wait_timeout","目标App/资料仍由其他任务或主屏使用，或实际归属不可核对；15秒有界等待已结束，没有抢占。");
     }
     @Override public synchronized JSONObject extension(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         worker();dev.pocketengine.phone.observation.PhoneExtensionTools.validate(tool,args);control.check();long revision=control.pauseRevision();refreshSession(control,revision);
