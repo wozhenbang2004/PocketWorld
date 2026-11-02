@@ -6431,14 +6431,21 @@ public final class TaskStore {
     public synchronized void finishCapabilityAttempt(String id,String runId,int epoch,RunControl original,dev.pocketengine.core.RunOutcome outcome)throws Exception {
         JSONObject task=required(id);
         if(original==null||!original.matchesHostRun(id,runId,epoch)||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("完成回执不是当前原能力执行");
-        String status=outcome.status;
+        String status=outcome.status,summary=outcome.summary;JSONObject evidence=outcome.evidence;
         if("needs_confirmation".equals(status)){
             JSONObject origin=task.optJSONObject("origin");boolean effectRecorded;
             try(Cursor operations=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND tool<>? LIMIT 1",new String[]{id,dev.pocketengine.features.memory.TaskMemoryJournal.TOOL})){effectRecorded=operations.moveToFirst();}
             if(!original.isCancelled()&&!task.optBoolean("cancelRequested")&&(origin==null||!"channel".equals(origin.optString("kind")))&&!effectRecorded&&!hasUnreadOwnerDocumentReference(id,runId)&&nativeFinalAnswerContent(id,runId,epoch,outcome.evidence)!=null)status="completed";
         }
-        if(task.has("automationCondition")&&"needs_confirmation".equals(outcome.status)){var opinion=originalConditionOpinion(task,outcome.evidence);status=opinion.known?"completed":"failed";}
-        endAttempt(id,runId,status,outcome.summary,outcome.evidence);
+        if(task.has("automationCondition")&&"needs_confirmation".equals(outcome.status)){
+            var opinion=originalConditionOpinion(task,outcome.evidence);status=opinion.known?"completed":"failed";
+            if(!opinion.known){
+                evidence=outcome.evidence==null?new JSONObject():new JSONObject(outcome.evidence.toString());
+                evidence.put("conditionCheck",new JSONObject().put("known",false).put("met",JSONObject.NULL).put("failure",opinion.failure).put("modelDeclaredStatus",outcome.status).put("modelDeclaredSummary",outcome.summary).put("factIndependentlyVerified",false).put("actionTriggered",false));
+                summary="条件未确定：没有取得当前原来源和已完成模型答复的完整见证；未当作条件不满足，未触发后续计划动作。原模型答复仅保留作审计。";
+            }
+        }
+        endAttempt(id,runId,status,summary,evidence);
     }
     public synchronized void endAttempt(String id,String runId,String status,String summary,JSONObject evidence)throws Exception{
         db.beginTransaction();try{JSONObject t=required(id);if(!runId.equals(t.optString("runId")))return;

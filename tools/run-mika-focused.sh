@@ -7,10 +7,12 @@ trap 'rm -rf -- "$native_dir"' EXIT
 mkdir -p "$native_dir/current" "$native_dir/unavailable"
 python3 -m venv "$native_dir/python"
 "$native_dir/python/bin/python" -m pip install --disable-pip-version-check -r companion/requirements-device-identity.txt
+python_status=0
 (cd companion && "$native_dir/python/bin/python" -m unittest -v \
   test_device_protocol.DeviceProtocolTests test_phone_tasks.PhoneDispatchTests \
-  test_phone_tasks.LocalSurfaceTests test_phone_tasks.UsbOwnershipTests)
-node --check companion/phone_task_desk.js
+  test_phone_tasks.LocalSurfaceTests test_phone_tasks.UsbOwnershipTests) || python_status=$?
+node_status=0
+node --check companion/phone_task_desk.js || node_status=$?
 sources=app/src/main/java/dev/pocketengine/features/local/runtime/native
 g++ -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
   -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
@@ -48,4 +50,6 @@ mkdir -p app/build/reports/tests/testDebugUnitTest/main-capabilities app/build/t
 cp -R "$native_dir/main-reports/." app/build/reports/tests/testDebugUnitTest/main-capabilities/
 cp -R "$native_dir/main-results/." app/build/test-results/testDebugUnitTest/main-capabilities/
 if [[ "$main_status" != 0 ]]; then exit "$main_status"; fi
+if [[ "$python_status" != 0 ]]; then exit "$python_status"; fi
+if [[ "$node_status" != 0 ]]; then exit "$node_status"; fi
 exit "$unavailable_status"
