@@ -143,7 +143,7 @@ public final class NativeOwnerWorkflows {
     private KnowledgeLearningWorkflow learning(KnowledgeLearningWorkflow.ModelClient model)throws Exception{
         return new KnowledgeLearningWorkflow(memory(),skills(),this::learningSource,model);
     }
-    private JSONObject draftExperience(JSONObject scope,JSONObject payload,dev.pocketengine.core.RunControl original)throws Exception{
+    private JSONObject draftExperience(JSONObject scope,JSONObject payload,dev.pocketengine.core.RunControl original,boolean appRevision)throws Exception{
         String record=payload.getString("recordId");long revision=positiveVersion(payload,"expectedRevision");
         // Check the original reviewed source before allocating an accounting-only record.
         memory().reviewedProcedure(scope,record,revision);final dev.pocketengine.core.ModelConfig captured=context.model();
@@ -155,10 +155,11 @@ public final class NativeOwnerWorkflows {
                 memory().reviewedProcedure(scope,record,revision);original.check();
             });
             try{
-                JSONObject result=learning((messages,control)->{
+                KnowledgeLearningWorkflow workflow=learning((messages,control)->{
                     if(control!=original)throw new SecurityException("技能草稿不能替换本次原生控制器");
                     return dev.pocketengine.runtime.ModelGateway.complete(captured,messages,null,original,admitted);
-                }).draftExperience(scope,record,revision,original);
+                });
+                JSONObject result=appRevision?workflow.draftAppRevision(scope,record,revision,payload.getString("packageName"),payload.getString("appVersion"),payload.optString("baseId"),payload.optLong("baseRevision",0),payload.optBoolean("lesson"),original):workflow.draftExperience(scope,record,revision,original);
                 usage.completed();return result.put("inferenceReference",usage.reference());
             }catch(Exception failure){try{usage.failed(failure);}catch(Exception storage){failure.addSuppressed(storage);}throw failure;}
         }
@@ -178,12 +179,18 @@ public final class NativeOwnerWorkflows {
                 return new JSONObject().put("sourceRef",document.ref.toJson()).put("title",document.title).put("text",document.text).put("modelCalled",false).put("status","current").put("learningAllowed",true);
             }
             case "proposeLearning":throw new SecurityException("来源候选必须经过本机原TaskStore提炼任务；不能绕过提交与停止门禁");
-            case "draftExperience":return draftExperience(scope,payload,control);
+            case "draftExperience":return draftExperience(scope,payload,control,false);
+            case "draftAppRevision":return draftExperience(scope,payload,control,true);
             case "inspectExperience":return learning().inspectExperience(scope,payload.getString("recordId"),positiveVersion(payload,"expectedRevision"),payload.getJSONObject("draft"),payload.getJSONObject("options"));
             case "importExperience":return learning().importExperience(scope,payload.getString("recordId"),positiveVersion(payload,"expectedRevision"),payload.getJSONObject("draft"),payload.getJSONObject("options"));
             case "approveExperience":{
                 long revision=positiveVersion(payload,"revision");if(revision>Integer.MAX_VALUE)throw new IllegalArgumentException("技能版本无效");
                 return learning().approveExperience(scope,payload.getString("id"),(int)revision,payload.getString("digest"));
+            }
+            case "skillQualityApplications":return tasks.skillQualityApplications(payload.getString("id"),Math.toIntExact(positiveVersion(payload,"revision")),payload.getString("digest"));
+            case "reviewSkillQuality":{
+                var evidence=tasks.reviewSkillQuality(payload.getString("taskId"),payload.getString("operationId"),payload.getString("id"),Math.toIntExact(positiveVersion(payload,"revision")),payload.getString("digest"),payload.getString("outcome"),payload.getString("note"));
+                control.check();JSONObject result=skills().recordQuality(scope,evidence);return result.put("appKnowledge",memory().recordAppQuality(scope,evidence));
             }
             case "getSkill":return skills().handle("get",new JSONObject().put("scope",scope).put("id",payload.getString("id")));
             case "readSkill":{

@@ -49,7 +49,7 @@ public final class TaskMemoryNativeWorkflowTest {
             }catch(Exception error){throw new IllegalStateException(error);}finally{exchange.close();}});server.start();
             app.getSharedPreferences("private_settings",0).edit().putString("baseUrl","http://127.0.0.1:"+server.getAddress().getPort()).putString("provider","openai_chat").putString("model","native-memory-flow").putInt("maxOutputTokens",1024).putInt("maxSteps",8).putBoolean("sendScreenshots",false).commit();
             sourceTask=app.tasks.createCapabilityTask("早期项目验收原任务证据","").getString("id");app.tasks.finish(sourceTask,"needs_confirmation","主人核对时的原结果 "+OLD,new JSONObject());
-            app.dispatchOwnerAction("confirmResult",j("taskId",sourceTask,"completed",true));source=app.tasks.resolveMemorySource(MemoryBook.Scope.from(scope()),"task_evidence","task:"+sourceTask+":verified_result").ref;
+            app.dispatchOwnerAction("confirmResult",j("taskId",sourceTask,"resultReviewDigest",app.tasks.get(sourceTask,false).getString("resultReviewDigest"),"completed",true));source=app.tasks.resolveMemorySource(MemoryBook.Scope.from(scope()),"task_evidence","task:"+sourceTask+":verified_result").ref;
             JSONObject saved=memory.importFromSources(scope(),j("text","项目约定 "+OLD,"sourceRefs",new JSONArray().put(source.toJson()),"source","主人核对的原任务来源")).getJSONObject("record");
             old=memory.handle("setCore",j("scope",scope(),"id",saved.getString("id"),"revision",saved.getLong("revision"),"core",true)).getJSONObject("record");
             controller.attach();controller.enterOwnerDomain("taskMemory");
@@ -128,7 +128,7 @@ public final class TaskMemoryNativeWorkflowTest {
     @Test public void revokedNativeTaskConfirmationInvalidatesOriginalReceiptAndLaterRequest()throws Exception{
         try(Fixture f=new Fixture()){
             JSONObject first=f.completed(f.send("读取原项目约定"));JSONObject original=f.command("readTaskMemoryReceipt",f.binding(first));assertEquals("current",row(original,f.old.getString("id")).getString("status"));
-            f.app.dispatchOwnerAction("confirmResult",j("taskId",f.sourceTask,"completed",false));
+            f.app.tasks.finish(f.sourceTask,"needs_confirmation","主人重新核对后要求修改",new JSONObject());f.app.dispatchOwnerAction("confirmResult",j("taskId",f.sourceTask,"resultReviewDigest",f.app.tasks.get(f.sourceTask,false).getString("resultReviewDigest"),"completed",false));
             JSONObject invalid=f.command("readTaskMemoryReceipt",f.binding(first));assertFalse(row(invalid,f.old.getString("id")).has("text"));assertNotEquals("current",row(invalid,f.old.getString("id")).getString("status"));
             assertThrows(IllegalStateException.class,()->f.app.tasks.readMemorySource(f.source));f.answer="原确认已经撤销，当前没有旧约定";
             f.completed(f.send("现在可核对的项目约定"));assertFalse(f.requests.get(1).toString().contains(OLD));

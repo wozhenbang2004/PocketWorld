@@ -60,14 +60,17 @@ internal fun mapFramePoint(x: Float, y: Float, viewportWidth: Int, viewportHeigh
 internal data class PhoneInspectionPresentation(val location: String, val frameFresh: Boolean, val manual: Boolean, val canTakeOver: Boolean, val message: String)
 internal fun phoneInspectionPresentation(task: UiTask?, observation: JSONObject?, allowed: Boolean, busy: Boolean, unresolved: Boolean, activeTaskId: String?, nowUptime: Long): PhoneInspectionPresentation {
     val background = task?.executionMode == "background"
-    val location = when (task?.executionMode) { "background" -> "后台独立屏"; "main_screen" -> "手机主屏"; else -> "执行位置待核对" }
+    val handoffState = observation?.optJSONObject("ownerHandoff")?.optString("state")
+    val location = when (handoffState) { "main" -> "主屏 · 主人接管（助手暂停）"; "unknown" -> "应用位置待核对"; else -> when (task?.executionMode) { "background" -> "后台独立屏"; "main_screen" -> "手机主屏"; else -> "执行位置待核对" } }
     val at = observation?.optLong("observedAtUptimeMs", -1) ?: -1
     val age = nowUptime - at
-    val bound = background && observation != null && observation.optBoolean("ok", true) && observation.optString("observationId").isNotBlank() && observation.optInt("displayId", -1) > 0 && observation.optString("sessionId").isNotBlank() && observation.optString("executionMode") == "background"
+    val bound = handoffState !in setOf("main", "unknown") && background && observation != null && observation.optBoolean("ok", true) && observation.optString("observationId").isNotBlank() && observation.optInt("displayId", -1) > 0 && observation.optString("sessionId").isNotBlank() && observation.optString("executionMode") == "background"
     val fresh = bound && at >= 0 && age in 0..120_000
     val manual = fresh && allowed && !busy && !unresolved && activeTaskId == task?.id && task?.status in setOf("paused", "awaiting_user")
-    val canTakeOver = background && !busy && !unresolved && (activeTaskId == null || activeTaskId == task?.id) && task?.status in setOf("preparing", "running", "pausing", "paused", "awaiting_user", "interrupted", "needs_confirmation")
+    val canTakeOver = handoffState !in setOf("main", "unknown") && background && !busy && !unresolved && (activeTaskId == null || activeTaskId == task?.id) && task?.status in setOf("preparing", "running", "pausing", "paused", "awaiting_user", "interrupted", "needs_confirmation")
     val message = when {
+        handoffState == "main" -> "应用由主人在主屏操作 · 助手未读取或控制主屏"
+        handoffState == "unknown" -> "移屏结果待核对 · 不重发，不继续助手"
         unresolved -> "动作结果待核对 · 先不要重复操作"
         busy -> "本次请求处理中 · 旧快照仅供查看"
         !background -> if (task?.executionMode == "main_screen") "此任务使用主屏，请直接在手机处理；未切到独立屏" else "请回原任务核对执行位置"
@@ -95,7 +98,11 @@ internal fun DeviceInspector(state: PocketUiState, controller: PocketWorldContro
         if (observedAt >= 0 && remaining in 1..120_001) { delay(remaining); now = SystemClock.uptimeMillis() }
     }
     val presentation = phoneInspectionPresentation(task, observation, state.inspectionManualAllowed, state.inspectionBusy, unresolved.isNotEmpty(), state.activeTaskId, now)
-    val manual = presentation.manual
+    val handoff = observation?.optJSONObject("ownerHandoff")
+    val handedOut = handoff?.optString("state") in setOf("main", "unknown")
+    val manual = presentation.manual && !handedOut
+    var handoffReview by remember(taskId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(handoff?.optString("handoffId")) { if (handoff?.optString("state") == "prepared" && !handoff.optBoolean("planRevoked")) handoffReview = "main" }
     var input by rememberSaveable(taskId) { mutableStateOf("") }
     var inputPanel by remember(taskId) { mutableStateOf(false) }
     var apps by remember(taskId) { mutableStateOf(false) }
@@ -152,7 +159,12 @@ internal fun DeviceInspector(state: PocketUiState, controller: PocketWorldContro
                 if (state.inspectionBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 ObservationFrame(observation, manual, presentation.location, Modifier.weight(1f).fillMaxWidth()) { tool, args -> controller.manualAction(tool, args) }
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    if (manual) {
+                    if (!handedOut && task?.executionMode == "background" && task.status in setOf("paused", "awaiting_user") && state.activeTaskId == taskId && unresolved.isEmpty()) OutlinedButton(onClick = { controller.ownerPhoneHandoff("prepare") }, enabled = !state.inspectionBusy, modifier = Modifier.fillMaxWidth()) { Text("在主屏亲自操作这个应用…") }
+                    if (handedOut) {
+                        Text(if (handoff?.optString("state") == "main") "原应用由主人在主屏接管，助手仍暂停；此处没有读取或控制主屏。" else "原应用位置尚未确认，助手保持暂停；请先只读核对，不重发移屏。", style = MaterialTheme.typography.bodySmall)
+                        OutlinedButton(onClick = { controller.ownerPhoneHandoff("status") }, enabled = !state.inspectionBusy, modifier = Modifier.fillMaxWidth()) { Text("核对原应用位置（不重发移屏）") }
+                        if (handoff?.optString("state") == "main" && unresolved.isEmpty()) Button(onClick = { handoffReview = "return" }, enabled = !state.inspectionBusy, modifier = Modifier.fillMaxWidth()) { Text("操作完成，将原应用交还副屏") }
+                    } else if (manual) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = { controller.manualAction("phone_back") }, modifier = Modifier.weight(1f)) { Text("返回键") }
                             OutlinedButton(onClick = { inputPanel = true; privateInput = ""; privateInputPanel = false }, modifier = Modifier.weight(1f)) { Text("文字输入") }
@@ -183,6 +195,13 @@ internal fun DeviceInspector(state: PocketUiState, controller: PocketWorldContro
         }
         BackHandler { controller.closeInspection() }
     }
+    if (handoffReview != null && handoff != null) AlertDialog(
+        onDismissRequest = { handoffReview = null },
+        title = { Text(if (handoffReview == "main") "将这一个应用移到主屏？" else "已不需要在主屏操作？") },
+        text = { Text("${handoff.optString("component")}\nAndroid任务 ${handoff.optInt("rootTaskId")} · 原副屏 ${handoff.optInt("originalDisplayId")}\n" + if (handoffReview == "main") "仅移动已核实的原任务，不会搬动主屏上同包名的其他任务。Android 14+ 和已授权后台助手须支持；助手保持暂停。操作后回到本页交还。" else "将同一实际应用任务移回原副屏，重新观察后再由你决定是否继续助手。位置或身份变化时不会搬动其他任务。") },
+        confirmButton = { TextButton(onClick = { val action = handoffReview ?: return@TextButton; handoffReview = null; controller.ownerPhoneHandoff(action) }) { Text("确认") } },
+        dismissButton = { TextButton(onClick = { handoffReview = null }) { Text("暂不") } }
+    )
     if (inputPanel && manual) AlertDialog(onDismissRequest = { inputPanel = false }, title = { Text("给原画面输入文字") }, text = {
         Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState()).imePadding()) {
             Text("会替换你选中的原输入框；提交后重新观察，不会自动继续助手。", style = MaterialTheme.typography.bodySmall)

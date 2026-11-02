@@ -44,7 +44,7 @@ public final class ChannelTaskApplicationTest {
             String approval=waiting.getJSONArray("approvals").getJSONObject(0).getString("id");app.dispatchOwnerAction("approveCapability",new JSONObject().put("taskId",task).put("approvalId",approval).put("approved",true));
             await(()->app.tasks.get(task,false).optString("status").equals("needs_confirmation")&&!active(app,task));await(()->deliveries.toString().contains("实际文件保存完毕"));
             JSONObject done=app.tasks.get(task,false);assertEquals(2,done.getInt("coordinatorEpoch"));assertEquals(3,calls.get());assertEquals(1,app.tasks.list().length());assertEquals("channel",done.getJSONObject("origin").getString("kind"));assertEquals("从认证私聊进入唯一宿主",workspace.handle("read",args).getString("content"));assertEquals(1,workspace.handle("history",args).getJSONArray("history").length());
-            app.dispatchOwnerAction("confirmResult",new JSONObject().put("taskId",task).put("completed",true));await(()->deliveries.toString().contains("已由主人确认完成"));assertEquals("completed",app.tasks.get(task,false).getString("status"));
+            app.dispatchOwnerAction("confirmResult",new JSONObject().put("taskId",task).put("resultReviewDigest",app.tasks.get(task,false).getString("resultReviewDigest")).put("completed",true));await(()->deliveries.toString().contains("已由主人确认完成"));assertEquals("completed",app.tasks.get(task,false).getString("status"));
             post(ingress,profile,secret,"read-only","/task 只读取并说明，仍由主人核对");
             JSONArray requests=channels.snapshot().getJSONArray("taskRequests");String readOnly=requests.getJSONObject(requests.length()-1).getString("taskId");
             await(()->!active(app,readOnly)&&app.tasks.get(readOnly,false).optString("status").equals("needs_confirmation"));

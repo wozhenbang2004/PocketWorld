@@ -100,6 +100,18 @@ internal fun NativeProjectPackageWorkbench(checkout: JSONObject?, projectId: Str
         TextButton(onClick = flow::refresh, enabled = !current.busy) { Text("读取已保存成果") }
         TextButton(onClick = flow::pickImport, enabled = !current.busy && current.pendingImport == null, modifier = Modifier.testTag("project_package_import_picker")) { Text("从系统文件导入项目包") }
     }
+    var choosingDevicePackage by remember { mutableStateOf(false) }
+    if (current.receivedDeviceFiles.isNotEmpty()) {
+        TextButton(onClick = { choosingDevicePackage = !choosingDevicePackage }, enabled = !current.busy && current.pendingImport == null, modifier = Modifier.testTag("project_device_package_picker")) { Text(if (choosingDevicePackage) "收起设备文件" else "从已接收设备文件选择项目包…") }
+        if (choosingDevicePackage) {
+            PackageCaption("只读取你明确选择的固定附件。普通ZIP不会自动成为项目；须通过完整清单校验，再审阅目标与导入方案。")
+            current.receivedDeviceFiles.forEach { item ->
+                TextButton(onClick = { flow.selectDevicePackage(item.getString("id"), item.getString("sha256")); choosingDevicePackage = false }, enabled = !current.busy && current.pendingImport == null, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth()) { Text(item.optString("name")); Text("${item.optLong("size")} 字节 · ${item.optString("sha256").take(12)} · 设备 ${item.optJSONObject("source")?.optString("sourceDeviceId")?.takeLast(8).orEmpty()}", fontSize = 11.sp, color = SecondaryInk) }
+                }
+            }
+        }
+    }
     if (current.artifacts.isEmpty()) PackageCaption("还没有固定项目包。普通文件版本与开发中的实际文件都未被删除。")
     current.artifacts.asReversed().forEach { item ->
         TextButton(onClick = { flow.open(item) }, enabled = !current.busy && item.optString("availability") != "retired", modifier = Modifier.fillMaxWidth()) {
@@ -147,6 +159,7 @@ internal fun NativeProjectPackageWorkbench(checkout: JSONObject?, projectId: Str
         current.stagedPackages.forEach { item -> TextButton(onClick = { flow.selectStaged(item) }, enabled = !current.busy && current.pendingImport == null) { Text(item.optJSONObject("manifest")?.optJSONObject("project")?.optString("name")?.takeIf { it.isNotBlank() } ?: "临时包 ${item.optString("selectionId").take(8)} · ${if (item.optBoolean("available")) "可核对" else "校验失败"}") } }
     }
     current.staged?.let { item ->
+        item.optJSONObject("deviceSource")?.let { source -> PackageCaption("原设备附件 ${source.optString("attachmentId").take(8)} · SHA-256 ${source.optString("attachmentSha256").take(16)}。来源或字节失效会拒绝导入；不会恢复远端任务或授权。") }
         item.optJSONObject("manifest")?.let { manifest ->
             item.optJSONObject("sourceEvidence")?.let { ProjectImportedSourceEvidence(it) }
             ProjectPackageManifest(manifest, item.getString("manifestIdentity"))

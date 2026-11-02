@@ -30,13 +30,14 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** The shell process owns every display it exposes. No command can address display zero. */
+/** The shell process owns every display it exposes. Only an explicit pinned owner transfer may move its own task to display zero; input never targets zero. */
 final class DisplayEngine {
     private final Context context;
     private final Handler main;
     private VirtualDisplay display;
     private ImageReader reader;
     private volatile LeasePolicy lease;
+    private OwnerTaskTransfer ownerTransfer;
     private int width,height,density;
     private int requiredDisplayFlags;
     private String packageName="";
@@ -81,7 +82,9 @@ final class DisplayEngine {
         if(current==null||!current.accepts(request.optString("sessionId"),request.optInt("displayId",-1),SystemClock.uptimeMillis()))
             throw new Failure("invalid_lease","后台显示会话已结束，请重新建立。",false);
         JSONObject result;
-        if("release".equals(cmd)){current.release();onMain(()->{if(lease==current)release();return null;});result=ok().put("released",true);}
+        if(ownerTransfer!=null&&ownerTransfer.blocksInput()&&cmd.matches("launch|tap|swipe|key"))throw new Failure("owner_handoff_active","应用由主人在主屏接管，未派发副屏输入。",false);
+        if(cmd.startsWith("owner_handoff_"))result=ownerHandoff(current,request,cmd);
+        else if("release".equals(cmd)){current.release();onMain(()->{if(lease==current)release();return null;});result=ok().put("released",true);}
         else if("heartbeat".equals(cmd)){long lifetime=integer(request,"lifetimeMs",1,30_000,30_000);if(!current.renew(request.optString("sessionId"),request.optInt("displayId",-1),SystemClock.uptimeMillis(),lifetime))throw new Failure("invalid_lease","原后台显示不能续期。",false);result=ok().put("renewed",true).put("leaseExpiresAtUptimeMs",current.expiresAt());}
         else if("frame".equals(cmd))result=frame(current,request);
         else if("launch".equals(cmd))result=launch(current,request);
@@ -91,6 +94,32 @@ final class DisplayEngine {
         else if("key".equals(cmd))result=key(current,request);
         else throw new Failure("unsupported_command","后台助手不支持该命令。",false);
         return result.put("sessionId",current.session()).put("displayId",current.display());
+    }
+    private JSONObject ownerHandoff(LeasePolicy current,JSONObject request,String command)throws Exception {
+        return onMain(()->{
+            valid(current);
+            if(ownerTransfer==null)ownerTransfer=new OwnerTaskTransfer(new OwnerTaskTransfer.Backend(){
+                private Object service()throws Exception{return Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null);}
+                public java.util.List<OwnerTaskTransfer.Task> tasks()throws Exception {
+                    Class<?> api=Class.forName("android.app.IActivityTaskManager");
+                    java.util.List<?> roots=(java.util.List<?>)api.getMethod("getAllRootTaskInfos").invoke(service());
+                    java.util.List<OwnerTaskTransfer.Task> result=new java.util.ArrayList<>();
+                    for(Object root:roots){Class<?> type=root.getClass();int at=type.getField("displayId").getInt(root);if(at!=0&&at!=current.display())continue;
+                        Object base=type.getField("baseActivity").get(root);Object token=type.getField("token").get(root);
+                        if(base==null||token==null)continue;
+                        int id=type.getField("taskId").getInt(root),user=type.getField("userId").getInt(root);
+                        result.add(new OwnerTaskTransfer.Task(id,at,user,((ComponentName)base).flattenToString(),token,(int[])type.getField("childTaskIds").get(root)));
+                    }return result;
+                }
+                public void move(int root,int target)throws Exception {valid(current);dispatchDeadline();Class.forName("android.app.IActivityTaskManager").getMethod("moveRootTaskToDisplay",int.class,int.class).invoke(service(),root,target);}
+            },current.display());
+            try{
+                if(command.equals("owner_handoff_prepare"))return ownerTransfer.prepare(SystemClock.uptimeMillis());
+                if(command.equals("owner_handoff_status"))return ownerTransfer.status();
+                if(command.equals("owner_handoff_main")||command.equals("owner_handoff_return"))return ownerTransfer.transfer(request.getString("handoffId"),command.equals("owner_handoff_return"),SystemClock.uptimeMillis());
+                throw new Failure("unsupported_command","不支持的接管操作。",false);
+            }catch(Failure known){throw known;}catch(Exception unavailable){throw new Failure("owner_handoff_unavailable","系统未确认原任务身份或不支持接管，请保留副屏并核对。",false);}
+        });
     }
     private JSONObject status()throws Exception {
         return onMain(()->{
@@ -389,6 +418,7 @@ final class DisplayEngine {
     void tick(){LeasePolicy current=lease;if(current!=null)try{onMain(()->{if(lease==current&&(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current)))release();return null;});}catch(Exception ignored){}}
     void close(){try{onMain(()->{release();return null;});}catch(Exception ignored){ /* Process teardown also revokes its display token. */ }}
     private void release(){
+        ownerTransfer=null;
         main.removeCallbacks(trailingFrame);scheduledFrameReader=null;framePending=false;lastFrameConsumed=0;
         LeasePolicy old=lease;lease=null;activeTouch=null;if(old!=null)old.release();latestPixels=null;frameAt=0;packageName="";requiredDisplayFlags=0;
         if(display!=null){display.release();display=null;}if(reader!=null){reader.close();reader=null;}

@@ -559,6 +559,10 @@ internal fun MemoryLearningReviewPage(
                         if (status == "archived") MemoryLearningCaption("此项已清理，仅保留去重标记。候选正文与拒绝原因没有保留，不能在这里假还原或直接重新考虑。")
                         else if (status == "invalidated") MemoryLearningCaption("来源已变化、删除或被遗忘，候选正文已移除。请勿按旧内容接受。原因：" + memoryLearningInvalidation(current.optString("invalidationReason")))
                         else {
+                            current.optJSONObject("appKnowledge")?.let { app ->
+                                MemoryLearningCaption("App ${app.optString("packageName")} · 版本 ${app.optString("appVersion")} · ${if (app.optString("baseId").isBlank()) "首次试用" else "试用替换旧稿 ${app.optString("baseId")} / v${app.optLong("baseRevision")}"}")
+                                MemoryLearningCaption("接受后只注入试用稿；旧稿保留。主人核对成功才转正式，${if (app.optBoolean("lesson")) "连续两次" else "一次"}明确归责失败回退。环境、取消和模型错误不算失败。")
+                            }
                             Text(memoryLearningLayer(current.optString("layer")), fontSize = 12.sp, color = SecondaryInk)
                             SelectionContainer { Text(current.optString("text"), color = Ink, fontSize = 17.sp, lineHeight = 29.sp) }
                             TextButton(onClick = { showRationale = !showRationale }) { Text(if (showRationale) "收起依据与适用范围" else "依据与适用范围") }
@@ -590,7 +594,7 @@ internal fun MemoryLearningReviewPage(
                         if (!MemoryLearningReviewGuard.hasReviewEvidence(current)) MemoryLearningCaption("缺少可核对的来源引用，不能凭空补出证据。")
                         if (detailStale) MemoryLearningCaption("详情已变化或操作结果待核对。请刷新后重新选择，不沿用旧确认。")
                         if (status == "pending") {
-                            Button(onClick = { action = MemoryLearningAction("acceptCandidate", JSONObject(current.toString())) }, enabled = canAct && MemoryLearningReviewGuard.hasReviewEvidence(current), shape = Rounded, modifier = Modifier.fillMaxWidth()) { Text("接受为普通记忆") }
+                            Button(onClick = { action = MemoryLearningAction("acceptCandidate", JSONObject(current.toString())) }, enabled = canAct && MemoryLearningReviewGuard.hasReviewEvidence(current), shape = Rounded, modifier = Modifier.fillMaxWidth()) { Text(if (current.has("appKnowledge")) "接受并试用 App 修订" else "接受为普通记忆") }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(onClick = { startEdit(current) }, enabled = canAct) { Text("先编辑") }
                                 TextButton(onClick = { rejection = ""; action = MemoryLearningAction("rejectCandidate", JSONObject(current.toString())) }, enabled = canAct) { Text("拒绝候选", color = Danger) }
@@ -686,6 +690,7 @@ internal fun MemoryLearningReviewPage(
         AlertDialog(onDismissRequest = { if (!busy) action = null }, containerColor = Color.White,
             title = { Text(label + "？", fontSize = 19.sp) }, text = {
                 Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (review.command == "acceptCandidate" && review.reviewed.has("appKnowledge")) Text("将此 App 修订作为试用参考，暂时替换所指旧稿但不删除。成功/失败须核对原任务结果；不授予任何权限。", fontSize = 14.sp, lineHeight = 24.sp)
                     Text(memoryLearningConsequence(review.command), fontSize = 14.sp, lineHeight = 24.sp)
                     if (review.reviewed.has("text")) SelectionContainer { Text(review.reviewed.optString("text"), fontSize = 13.sp, lineHeight = 22.sp, color = SecondaryInk) }
                     if (review.command == "rejectCandidate") OutlinedTextField(rejection, { rejection = it }, label = { Text("拒绝原因") }, minLines = 2, maxLines = 5, enabled = !busy, modifier = Modifier.fillMaxWidth())

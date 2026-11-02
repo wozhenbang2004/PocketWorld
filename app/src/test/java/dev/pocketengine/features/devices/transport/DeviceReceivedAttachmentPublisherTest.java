@@ -45,4 +45,34 @@ public final class DeviceReceivedAttachmentPublisherTest {
             assertTrue(checks[0] > 10);
         } finally { try (var files = Files.walk(root)) { for (var path : files.sorted(java.util.Comparator.reverseOrder()).toList()) Files.delete(path); } }
     }
+    @Test public void reentrantSqlStyleAuthorityStillRevokesAtBookCommitAndGuardIsReleased() throws Exception { commitBoundary(false); }
+    @Test public void cancellationAtBookCommitNeverPublishes() throws Exception { commitBoundary(true); }
+    private void commitBoundary(boolean cancel) throws Exception {
+        var root=Files.createTempDirectory("received-commit-revocation-");
+        try {
+            var cache=new DeviceArtifactTransfer(Files.createDirectory(root.resolve("cache")).toFile());
+            var book=new AttachmentBook(root.resolve("book").toFile());var publisher=new DeviceReceivedAttachmentPublisher(cache,book);
+            byte[] raw="binary-file-at-original-book-commit".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            var exact=new DeviceArtifactTransfer.Reference(new JSONObject().put("transferId",UUID.randomUUID().toString()).put("sourceDeviceId","pw1_"+"a".repeat(64)).put("artifactId","fixed-file").put("versionId","v1").put("taskId","remote-task").put("requestRunId","remote-request-run").put("requestExecutorEpoch",1).put("operationId","remote-operation").put("sha256",DeviceProtocol.sha256(raw)).put("bytes",raw.length).put("kind","file").put("mimeType","application/octet-stream").put("name","file.bin"));
+            cache.freeze(exact,out->out.write(raw),()->{});
+            String task=UUID.randomUUID().toString(),run=UUID.randomUUID().toString(),operation=UUID.randomUUID().toString();
+            RunControl original=new RunControl();original.bindHostRun(task,run,1);boolean[] atCommit={false};int[] calls={0};
+            DeviceArtifactTransfer.Current sqlStyle=()->{
+                calls[0]++;
+                boolean committing=java.util.Arrays.stream(Thread.currentThread().getStackTrace()).anyMatch(frame->frame.getClassName().equals(RunControl.class.getName())&&frame.getMethodName().equals("dispatchAtPauseState"));
+                if(committing){atCommit[0]=true;if(cancel)original.cancel();else throw new SecurityException("Exact native receive approval revoked before Book commit");}
+                original.check(); // Same reentrant shape as the production SQL evidence.
+            };
+            try {publisher.publish(exact,operation,task,run,1,original,sqlStyle);fail("Changed authority published bytes");}catch(InterruptedException|SecurityException expected){}
+            assertTrue("test must reach actual Book commit",atCommit[0]);assertTrue(calls[0]>2);assertEquals(0,book.list().length());
+            try(var paths=Files.list(root.resolve("book"))){assertEquals(0,paths.filter(path->path.toString().endsWith(".blob")||path.toString().endsWith(".part")).count());}
+            // The failed scope must remove its callback and thread guard. A NEW live native
+            // control may reconcile the same original publication; no id/version replacement.
+            RunControl resumed=new RunControl();resumed.bindHostRun(task,UUID.randomUUID().toString(),2);int[] checks={0};
+            JSONObject result=publisher.publish(exact,operation,task,run,1,resumed,()->{checks[0]++;resumed.check();});
+            assertTrue(checks[0]>2);assertTrue(result.getBoolean("attachmentPublished"));assertArrayEquals(raw,Files.readAllBytes(book.file(result.getJSONObject("attachment").getString("id")).toPath()));
+            resumed.check();assertEquals(1,book.list().length());
+        } finally {try(var files=Files.walk(root)){for(var path:files.sorted(java.util.Comparator.reverseOrder()).toList())Files.delete(path);}}
+    }
+
 }

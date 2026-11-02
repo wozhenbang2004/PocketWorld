@@ -49,6 +49,20 @@ public final class RunControl {
     public boolean hasHostRun(){return hostRun!=null;}
     public boolean matchesHostRun(String id,String runId,int epoch){HostRun run=hostRun;return id!=null&&id.equals(boundTask)&&(run==null?runId.isEmpty()&&epoch==0:run.runId.equals(runId)&&run.epoch==epoch);}
     private static final class HostRun {final String runId;final int epoch;HostRun(String runId,int epoch){this.runId=runId;this.epoch=epoch;}}
+    // Native execution surface fence, not a second task or durable state store.
+    private volatile String executionSurface="phone";
+    private final AtomicLong surfaceRevision=new AtomicLong();
+    public String executionSurface(){return executionSurface;}
+    public long surfaceRevision(){return surfaceRevision.get();}
+    public boolean phoneSurfaceActive(){return executionSurface.equals("phone");}
+    public void changeExecutionSurface(String expected,String next)throws Exception {
+        if(!next.matches("phone|browser|transition"))throw new IllegalArgumentException("Invalid surface");
+        long pause=pauseRevision();
+        dispatchAtPauseRevision(pause,()->{
+            if(!executionSurface.equals(expected))throw new SecurityException("执行表面已变化");
+            executionSurface=next;surfaceRevision.incrementAndGet();
+        });
+    }
     public boolean isCancelled() { return cancelled.get(); }
     public boolean isPaused() { return paused; }
     public ConditionWaitException conditionWait(){return cancelled.get()?null:conditionWait;}

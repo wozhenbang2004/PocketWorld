@@ -232,8 +232,8 @@ public final class AgentRunner {
                 JSONArray requestHistory=history;
                 JSONObject memoryDependency=null;
                 String nativeReference=recovery.referenceData();
-                JSONArray tools=phone==null?new JSONArray():tools();
-                if(phone instanceof AdaptivePhonePort)addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
+                JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
+                if(control.phoneSurfaceActive()&&phone instanceof AdaptivePhonePort)addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 if(capabilities!=null){
                     JSONObject prepared=capabilities.prepareTurn(clean(recallIntent,config),round,steps,control);
                     JSONArray extra=prepared.getJSONArray("tools");java.util.Set<String> names=new java.util.HashSet<>();for(int i=0;i<tools.length();i++)names.add(tools.getJSONObject(i).getJSONObject("function").getString("name"));
@@ -423,10 +423,16 @@ public final class AgentRunner {
                 history.put(assistant);
                 checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
                 boolean observed = false;
+                long batchSurfaceRevision=control.surfaceRevision();
                 dev.pocketengine.core.NativeToolPlan activePlan=null;dev.pocketengine.core.NativeToolPlan.Step activeStep=null;
                 do {
                 boolean sequenceMayContinue=true;
                 for (int index = 0; index < calls.length(); index++) {
+                    if(batchSurfaceRevision!=control.surfaceRevision()){
+                        sequenceMayContinue=false;
+                        for(int stale=index;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),failure("stale_surface","执行表面已切换；旧批次未派发，请读取新现场。"),config));
+                        break;
+                    }
                     resumed = afterPause(taskId, config, control, sink, pauseSeen);
                     if (resumed != null) {
                         latest=resumed;evidence=resumed;observed=true;sequenceMayContinue=false;
@@ -581,7 +587,7 @@ public final class AgentRunner {
                         dev.pocketengine.core.NativeToolPlan proposed=capabilities.takeToolPlan(name,nativeOperation,control);
                         if(proposed!=null){nativePlans.add(proposed);nativeSequenceProgress.put(proposed,new JSONObject().put("parentOperationId",nativeOperation).put("totalSteps",proposed.size()).put("dispatchEnteredSteps",0));if(activePlan!=null)throw new SecurityException("native_sequence_nested_plan_forbidden");try{proposed.consume(name,nativeOperation,control);activePlan=proposed;}catch(Exception stale){proposed.close();control.check();sequenceMayContinue=false;emit(taskId,"native_sequence","failed","短序列的现场已改变，未派发其中动作。",name,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,sink);}}
                     }
-                    if (phone!=null&&(changesScreen(name) || "phone_wait".equals(name))) {
+                    if (phone!=null&&control.phoneSurfaceActive()&&(changesScreen(name) || "phone_wait".equals(name))) {
                         control.checkpoint();
                         latest = observe(taskId, config, control, sink);
                         evidence = latest;
@@ -995,7 +1001,7 @@ public final class AgentRunner {
             if(phone!=null)phone.clearReferences();
             pauseSeen[0] = control.pauseRevision();
             emit(taskId, "run", "running", "已继续，正在重新观察当前页面。", null, null, config, sink);
-            if(phone!=null)return observe(taskId, config, control, sink);
+            if(phone!=null&&control.phoneSurfaceActive())return observe(taskId, config, control, sink);
             if(capabilities!=null&&capabilities.supports("browser_task_observe")){
                 // This native query returns data only for the exact owner-return nonce registered
                 // by BrowserTaskHost. Other pages and ordinary context queries cannot start a read.

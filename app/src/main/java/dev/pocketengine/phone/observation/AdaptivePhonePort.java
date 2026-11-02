@@ -486,6 +486,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 || boundControl != null && boundControl != control) return "identity_mismatch";
         if (boundControl == null) boundControl = control;
         if (control.isPaused()) return "task_paused";
+        if (!control.phoneSurfaceActive()) return "phone_surface_inactive";
         return null;
     }
     private boolean current(String id, RunControl control) {

@@ -31,6 +31,9 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     private volatile OwnerPermit ownerPermit;
     private volatile boolean lastIncludeImage;
     private JSONObject landingBaseline;
+    private volatile JSONObject ownerHandoff;
+    public boolean ownerHandoffActive(){JSONObject value=ownerHandoff;return value!=null&&value.optString("state").matches("main|unknown");}
+    public JSONObject ownerHandoffState()throws Exception{return ownerHandoff==null?null:new JSONObject(ownerHandoff.toString());}
     public BackgroundPhonePort(DisplayModule module)throws Exception {
         this.module=module;JSONObject session=module.session();
         sessionId=session.optString("sessionId");displayId=session.optInt("displayId",-1);
@@ -59,6 +62,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     /** Read-only view while the agent runs: no new frame, reference or model observation is made. */
     public synchronized JSONObject cachedObservationForOwner(String taskId)throws Exception {
         if(!module.ownedBy(taskId))throw new SecurityException("副屏不属于当前任务");
+        if(ownerHandoffActive())return handoffObservation(taskId);
         if(cached==null)return new JSONObject().put("ok",false).put("error","no_observation")
                 .put("message","任务尚未取得真实副屏画面").put("manualAllowed",false).put("referencesExpired",true);
         return new JSONObject(cached.toString()).put("manualAllowed",false).put("referencesExpired",true).put("taskId",taskId);
@@ -66,8 +70,24 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     /** The native supervisor validates and journals the current run before using these owner entry points. */
     public synchronized JSONObject observeForOwner(String taskId,RunControl control)throws Exception {
         beginOwner(taskId,control);
-        try{JSONObject observed=observe(true,control);return observed.put("manualAllowed",observed.optBoolean("ok")).put("referencesExpired",!observed.optBoolean("ok")).put("taskId",taskId);}
+        try{if(ownerHandoffActive())return handoffObservation(taskId);JSONObject observed=observe(true,control);if(ownerHandoff!=null)observed.put("ownerHandoff",ownerHandoffState());return observed.put("manualAllowed",observed.optBoolean("ok")).put("referencesExpired",!observed.optBoolean("ok")).put("taskId",taskId);}
         finally{ownerPermit=null;}
+    }
+    /** Called only by the native owner inspector after original-run admission/journaling. */
+    public synchronized JSONObject ownerHandoff(String taskId,String action,String handoffId,RunControl control)throws Exception {
+        if(!action.matches("prepare|status|main|return"))throw new SecurityException("未知接管操作");
+        JSONObject before=ownerHandoffState();boolean requestEntered=false;
+        try{
+            beginOwner(taskId,control);clearReferences();
+            if(action.equals("main")||action.equals("return")){if(ownerHandoff==null||!handoffId.equals(ownerHandoff.optString("handoffId")))throw new SecurityException("先核对原接管计划");ownerHandoff=new JSONObject(ownerHandoff.toString()).put("state","unknown");}
+            requestEntered=true;JSONObject result=module.request("owner_handoff_"+action,new JSONObject().put("handoffId",handoffId),control,ownerPermit.revision,true);
+            if(result.has("state"))ownerHandoff=new JSONObject(result.toString());
+            if(result.optString("state").equals("returned"))landingBaseline=null;
+            return result;
+        }catch(Exception failure){
+            if(action.matches("main|return")&&(!requestEntered||failure instanceof ShellBridgeClient.StaleRequestException||failure instanceof ShellBridgeClient.NotDispatchedException)){ownerHandoff=before;return new JSONObject().put("ok",false).put("accepted",false).put("notDispatched",true).put("code","owner_handoff_not_dispatched").put("message","原移屏请求在派发前被拒绝，未移动应用；请重新核对当前状态");}
+            throw failure;
+        }finally{ownerPermit=null;}
     }
     public synchronized JSONObject manualActionForOwner(String taskId,String tool,JSONObject args,RunControl control)throws Exception {
         if(tool==null||!tool.matches("phone_(launch_app|click_node|tap|type|swipe|back)"))throw new SecurityException("不支持的副屏人工操作");
@@ -93,6 +113,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         catch(Exception unknown){clearReferences();return failure("action_unknown","私密输入结果尚未确认，请由机主核对后继续。").put("accepted",JSONObject.NULL);}
         finally{ownerPermit=null;}
     }
+    private JSONObject handoffObservation(String taskId)throws Exception{return new JSONObject().put("ok",false).put("taskId",taskId).put("sessionId",sessionId).put("displayId",displayId).put("manualAllowed",false).put("referencesExpired",true).put("ownerHandoff",ownerHandoffState()).put("message","原应用已交由主人或位置待核对；没有读取主屏画面。请返回本页核对并交还原副屏。");}
     private void beginOwner(String taskId,RunControl control)throws Exception {
         if(control==null||!module.ownedBy(taskId))throw new SecurityException("副屏不属于当前任务");
         control.check();if(!control.isPaused())throw new SecurityException("先暂停并接管任务后才能操作副屏");
@@ -103,6 +124,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     @Override public dev.pocketengine.phone.PhoneUiSignals uiSignals(RunControl control)throws Exception {worker();guard(control,control.pauseRevision());PhoneAccessibilityService service=PhoneAccessibilityService.get();if(service==null)return null;return service.uiSignals();}
     @Override public synchronized JSONObject observe(boolean includeImage,RunControl control)throws Exception {
         worker();control.check();
+        if(ownerHandoffActive()){control.pause();clearReferences();return failure("owner_handoff_active","先由主人交还原应用，再观察原副屏");}
         if(landingBaseline!=null&&!isOwner(control)){
             try{JSONObject now=landing(control,control.pauseRevision());if(!"observed".equals(now.optString("status"))||!landingBaseline.getJSONArray("primary").toString().equals(now.getJSONArray("primary").toString())){control.pause();clearReferences();return failure("display_ownership_unknown","后台动作后的窗口归属发生变化，已暂停原任务，请主人核对；不会迁移主屏应用。").put("displayLanding",now);}}
             catch(Exception unknown){control.pause();clearReferences();return failure("display_ownership_unknown","后台窗口归属暂不可核对，已暂停原任务。");}
@@ -340,7 +362,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         guard(control,revision);
     }
     private boolean sameSession(JSONObject state){return displayId==state.optInt("displayId",-1)&&sessionId.equals(state.optString("sessionId"));}
-    private void guard(RunControl control,long revision)throws Exception {control.check();Long deadline=DISPATCH_DEADLINE.get();if(deadline!=null&&SystemClock.uptimeMillis()>=deadline)throw new java.util.concurrent.TimeoutException("Background dispatch expired");
+    private void guard(RunControl control,long revision)throws Exception {control.check();if(ownerHandoffActive())throw new SecurityException("原应用尚未交还，副屏输入已停用");Long deadline=DISPATCH_DEADLINE.get();if(deadline!=null&&SystemClock.uptimeMillis()>=deadline)throw new java.util.concurrent.TimeoutException("Background dispatch expired");
         boolean owner=isOwner(control);if(control.isPaused()!=owner||control.pauseRevision()!=revision)throw new PhoneFailure("paused_or_changed","执行控制已变化，请重新观察");
         if(owner){OwnerPermit permit=ownerPermit;if(permit==null||permit.revision!=revision||!module.ownedBy(permit.taskId))throw new SecurityException("人工接管授权已失效");}session();}
     private boolean isOwner(RunControl control){OwnerPermit permit=ownerPermit;return permit!=null&&permit.control==control;}

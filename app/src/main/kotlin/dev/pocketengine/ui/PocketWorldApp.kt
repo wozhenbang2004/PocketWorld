@@ -137,6 +137,7 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
     }
     fun closeTask() { selectedTaskId = null; tab = taskReturnTab; if (taskReturnConnection != null) { connectionSection = taskReturnConnection; connections = true } }
     val selectedTask = state.tasks.find { it.id == selectedTaskId }
+    LaunchedEffect(controller.compatibilityChatRevision) { if(controller.compatibilityChatRevision>0) { tab=0;settings=false;connections=false;selectedTaskId=null;if(phoneIntent){controller.voiceInputTypeChanged(false);phoneIntent=false} } }
     LaunchedEffect(state.requestedPhoneModeRevision) { if (state.requestedPhoneModeRevision > 0 && state.requestedPhoneMode == "main_screen") { executionMode = "main_screen"; changePhoneIntent(true); tab = 0; settings = false; connections = false; selectedTaskId = null } }
     LaunchedEffect(controller.phoneDraftAcceptedRevision) { if(phoneDraft.trim()==controller.phoneDraftAcceptedText)phoneDraft="" }
     LaunchedEffect(state.requestedTaskRevision) {
@@ -575,7 +576,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 }
                 androidx.compose.animation.AnimatedVisibility(visible = contextDetails) {
                     Column(Modifier.fillMaxWidth()) {
-                    if (assistantTask && !groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optJSONObject("origin")?.optString("kind") != "channel" && teamRunReferences(task).isEmpty()) TextButton(onClick = { controller.openBrowserResearch(task.id) }, modifier = Modifier.testTag("task_browser_research")) { Text("网页与研究工作区") }
+                    if ((assistantTask || task.raw.optString("kind") == "phone" && task.raw.optJSONObject("origin") == null) && !groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optJSONObject("origin")?.optString("kind") != "channel" && teamRunReferences(task).isEmpty()) TextButton(onClick = { controller.openBrowserResearch(task.id) }, modifier = Modifier.testTag("task_browser_research")) { Text("网页与研究工作区") }
                     if (!pairedTask && !groupTask && task.raw.optString("spaceId", "private") == "private") TextButton(onClick = { taskMemoryReference = task.raw.optJSONObject("evidence")?.optJSONObject("memoryReference")?.let { JSONObject(it.toString()) } ?: JSONObject().put("taskId", task.id).put("runId", task.raw.optString("runId").ifBlank { "unavailable" }).put("requestId", "unavailable").put("answerId", "unavailable") }) { Text("这次请求的记忆来源与原证据", fontSize = 12.sp) }
                     if (!groupTask && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") TextButton(onClick = { capabilityPreparation = true }) { Text("这项任务的技能与工具", fontSize = 12.sp) }
                     }

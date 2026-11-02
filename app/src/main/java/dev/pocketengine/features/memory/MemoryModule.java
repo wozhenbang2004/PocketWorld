@@ -169,6 +169,13 @@ public final class MemoryModule implements EngineModule {
         try{context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));}
         catch(Exception unavailable){result.put("notificationPending",true);}return result;
     }
+    public JSONObject proposeAppRevision(JSONObject scope,String source,long sourceRevision,String app,String version,String base,long baseRevision,boolean lesson,JSONObject draft)throws Exception {
+        JSONObject result=new JSONObject().put("candidate",book.proposeAppRevision(scope,source,sourceRevision,app,version,base,baseRevision,lesson,draft,System.currentTimeMillis()));
+        context.emit(id(),new JSONObject().put("event","memory_changed"));return result;
+    }
+    public JSONObject recordAppQuality(JSONObject scope,dev.pocketengine.features.skills.SkillQualityReceipt receipt)throws Exception {
+        JSONObject result=book.recordAppQuality(scope,receipt,System.currentTimeMillis());context.emit(id(),new JSONObject().put("event","memory_changed"));return result;
+    }
     /** Native owner-review action only: do not expose through a model, plugin or raw JSON dispatch. */
     public JSONObject acceptCandidate(JSONObject authenticatedScope,String id,long revision)throws Exception {
         JSONObject result=book.acceptCandidate(authenticatedScope,id,revision,System.currentTimeMillis());

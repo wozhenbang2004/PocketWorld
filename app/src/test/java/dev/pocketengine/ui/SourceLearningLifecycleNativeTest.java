@@ -56,7 +56,7 @@ public final class SourceLearningLifecycleNativeTest {
     @Test public void revokedConfirmationDuringTheCallCannotBecomeCandidateEvidence()throws Exception{
         try(TaskMemoryNativeWorkflowTest.Fixture f=new TaskMemoryNativeWorkflowTest.Fixture()){
             f.answer=draft().toString();f.blockCall=1;f.controller.enterOwnerDomain("learning");String id=f.controller.requestOwnerDomain("learning","proposeLearning",submit(f));assertTrue(f.blocked.await(4,TimeUnit.SECONDS));
-            f.app.dispatchOwnerAction("confirmResult",TaskMemoryNativeWorkflowTest.j("taskId",f.sourceTask,"completed",false));f.release.countDown();assertFalse(response(f,id).getBoolean("ok"));assertEquals(0,candidates(f).length());assertEquals(1,f.calls.get());
+            f.app.tasks.finish(f.sourceTask,"needs_confirmation","主人重新核对后要求修改",new JSONObject());f.app.dispatchOwnerAction("confirmResult",TaskMemoryNativeWorkflowTest.j("taskId",f.sourceTask,"resultReviewDigest",f.app.tasks.get(f.sourceTask,false).getString("resultReviewDigest"),"completed",false));f.release.countDown();assertFalse(response(f,id).getBoolean("ok"));assertEquals(0,candidates(f).length());assertEquals(1,f.calls.get());
         }
     }
 }

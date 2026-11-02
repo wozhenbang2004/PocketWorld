@@ -26,6 +26,8 @@ public final class ExecutionResources {
         return true;
     }
 
+    public synchronized boolean ownsPhone(String token){validate(token);return token.equals(phoneToken);}
+
     public synchronized void releasePhone(String token) {
         validate(token);
         if (token.equals(phoneToken)) phoneToken = null;

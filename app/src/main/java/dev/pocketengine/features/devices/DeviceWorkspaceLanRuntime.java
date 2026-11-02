@@ -504,7 +504,7 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         if (!Set.of("operation.get", "task.get", "task.events").contains(request.method()) || request.sideEffecting()) throw new SecurityException("历史窗口只读取原执行结果");
         return exchange(request.targetDeviceId(), request, null, originalReadCancellation::check, request.deadline());
     }
-    DeviceArtifactFetch.ReadReply readImageChunk(TaskStoreDeviceTasks.DeviceImageEvidence evidence, PairingCoordinator.HistoryQuery query,
+    DeviceArtifactFetch.ReadReply readImageChunk(TaskStoreDeviceTasks.DeviceReceiveEvidence evidence, PairingCoordinator.HistoryQuery query,
             DeviceIdentity.AuthenticatedPeer expected, long nativeDeadline) throws Exception {
         evidence.requireCurrent(); PeerChannel exact = controlChannel(expected.deviceId());
         if (!channelOnline(exact) || !samePeer(expected, exact.peer) || query.envelope().deadline() > nativeDeadline) throw new SecurityException("图像读取不是原证据的准确通道和期限");

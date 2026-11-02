@@ -225,9 +225,72 @@ public final class TaskStoreDeviceTasks {
         if(kind.equals("task")&&!dev.pocketengine.features.devices.DeviceProtocol.receiverTaskId(original).equals(object))throw new SecurityException("原目标Task绑定被替换");JSONObject accepted=new JSONObject().put("accepted",true).put("acceptedAt",typed.getLong("acceptedAt")).put("acceptedObjectKind",kind).put("objectId",object).put("targetOperationId",evidence.operation).put("instanceId",typed.getString("instanceId")).put("runId",typed.optString("runId")).put("parentTaskId",evidence.id).put("parentOperationId",allocation.getString("anchorOperationId")).put("sourceOperationId",evidence.operation).put("operationArgumentsDigest",typed.getString("argumentsDigest")).put("verifiedOperationReceipt",typed).put("argumentsDigest",allocation.getString("anchorArgumentsDigest")).put("executorDeviceId",actualPeer.deviceId());if(kind.equals("task"))accepted.put("localTaskId",object);if(kind.equals("job"))accepted.put("jobId",object);if(typed.has("executorEpoch"))accepted.put("executorEpoch",typed.getLong("executorEpoch"));recordChildAccepted(dev.pocketengine.features.devices.DeviceTaskCoordinator.authenticatedChildAcceptance(actualPeer,accepted));
     }
 
+    /** Opaque SQL-issued receive authority shared by the original bulk transport only. */
+    public sealed interface DeviceReceiveEvidence permits DeviceImageEvidence, DeviceFileEvidence {
+        dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer actualControlPeer();
+        JSONObject descriptor() throws Exception;
+        long deadline();
+        void requireCurrent() throws Exception;
+        dev.pocketengine.features.devices.PairingCoordinator.HistoryQuery historyQuery(dev.pocketengine.features.devices.DeviceIdentity.LocalIdentity local,long offset,int length,long now) throws Exception;
+    }
+    /** Fixed workspace.export result from the original persisted accepted operation. A model
+     * cannot select an arbitrary remote descriptor, local path or receiving task/run. */
+    public static final class DeviceFileEvidence implements DeviceReceiveEvidence {
+        private final TaskStoreDeviceTasks issuer; private final OwnerRouteApproval approval;
+        private final RunControl original; private final dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer peer;
+        private final String operation,wire,descriptor; private final long pauseRevision;
+        private DeviceFileEvidence(TaskStoreDeviceTasks issuer,OwnerRouteApproval approval,RunControl original,dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer peer,String operation,JSONObject wire,JSONObject descriptor){
+            this.issuer=issuer;this.approval=approval;this.original=original;this.peer=peer;this.operation=operation;
+            this.wire=dev.pocketengine.features.devices.DeviceProtocol.canonical(wire);this.descriptor=dev.pocketengine.features.devices.DeviceProtocol.canonical(descriptor);pauseRevision=original.pauseRevision();
+        }
+        public dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer actualControlPeer(){return peer;}
+        public JSONObject descriptor()throws Exception{return new JSONObject(descriptor);}
+        public long deadline(){return approval.deadline();}
+        public RunControl originalControl(){return original;}
+        public String operationId(){return operation;}
+        public String receivingTaskId(){return approval.id;}
+        public String frozenRunId()throws Exception{return new JSONObject(wire).getString("runId");}
+        public int frozenEpoch()throws Exception{return new JSONObject(wire).getInt("executorEpoch");}
+        public void requireCurrent()throws Exception{issuer.requireDeviceFile(this);}
+        public dev.pocketengine.features.devices.PairingCoordinator.HistoryQuery historyQuery(dev.pocketengine.features.devices.DeviceIdentity.LocalIdentity local,long offset,int length,long now)throws Exception{
+            requireCurrent();JSONObject fixed=descriptor();long size=fixed.getLong("size");if(offset<0||offset>=size||length<1||length>262144||length>size-offset)throw new SecurityException("文件分块超出原固定范围");long ttl=Math.min(5000,deadline()-now);if(ttl<1)throw new SecurityException("原文件读取期限已结束");
+            return approval.receivingGrant().historyQuery(local,"artifact.readChunk",fixed.getString("artifactId"),approval.resourceBinding(),now,ttl,new JSONObject().put("contentDigest",fixed.getString("contentDigest")).put("offset",offset).put("length",length));
+        }
+    }
+    public DeviceFileEvidence deviceFileEvidence(OwnerRouteApproval approval,RunControl original,dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer peer,String operation)throws Exception{
+        if(approval==null||approval.issuer!=this||approval.original!=original)throw new SecurityException("没有原任务的native文件接收范围");
+        approval.checkCurrent(original);approval.receivingGrant().requireTargetPeer(peer);
+        synchronized(owner){JSONObject wire=childAllocationForOperation(approval.id,operation).getJSONObject("boundWire");
+            JSONObject descriptor=fixedFileDescriptor(approval,peer,operation,wire);
+            DeviceFileEvidence proof=new DeviceFileEvidence(this,approval,original,peer,operation,wire,descriptor);requireDeviceFile(proof);return proof;}
+    }
+    private JSONObject fixedFileDescriptor(OwnerRouteApproval approval,dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer peer,String operation,JSONObject wire)throws Exception{
+        if(!"ToolInvocation".equals(wire.optString("messageType"))||!"workspace.export".equals(wire.getJSONObject("arguments").optString("toolName"))
+            ||!approval.receivingGrant().targetDeviceId().equals(wire.getString("targetDeviceId"))||!approval.receivingGrant().grantId().equals(wire.getString("grantId"))
+            ||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(wire.getJSONObject("resourceBinding"),approval.resourceBinding()))throw new SecurityException("不是原已选范围的明确文件导出");
+        JSONObject saved;try(Cursor row=db.rawQuery("SELECT receipt FROM operations WHERE task_id=? AND operation_id=? AND run_id=? AND state='receipt'",new String[]{approval.id,operation,wire.getString("runId")})){
+            if(!row.moveToFirst()||row.isNull(0))throw new SecurityException("没有原SQL已核文件操作");saved=new JSONObject(row.getString(0));}
+        JSONObject accepted=saved.getJSONObject("nativeDeviceAcceptedBinding"),send=saved.getJSONObject("nativeDeviceSend"),typed=accepted.getJSONObject("verifiedReceipt");
+        if(!"write_claimed".equals(send.optString("state"))||!operation.equals(accepted.getString("sourceOperationId"))||!wire.getString("argumentsDigest").equals(accepted.getString("operationArgumentsDigest"))
+            ||!peer.deviceId().equals(accepted.getString("executorDeviceId"))||!"reported".equals(typed.optString("effectState"))||!"succeeded".equals(typed.optString("status")))throw new SecurityException("文件缺少原已发送/已接受/成功结果证据");
+        JSONObject payload=typed.getJSONObject("payload"),descriptor=payload.optJSONObject("nativeToolResult");if(descriptor==null)descriptor=payload;
+        dev.pocketengine.features.devices.DeviceProtocol.validateMessage(descriptor);
+        if(!"ArtifactDescriptor".equals(descriptor.optString("messageType"))||!"file".equals(descriptor.optString("kind"))||!peer.deviceId().equals(descriptor.getString("executorDeviceId"))
+            ||!approval.receivingGrant().targetInstanceId().equals(descriptor.getString("instanceId"))||!operation.equals(descriptor.getString("operationId"))||!wire.getString("localTaskId").equals(descriptor.getString("taskId"))
+            ||!wire.getString("runId").equals(descriptor.getString("requestRunId"))||wire.getLong("executorEpoch")!=descriptor.getLong("requestExecutorEpoch")||descriptor.has("runId")||descriptor.has("executorEpoch")
+            ||descriptor.getLong("size")>dev.pocketengine.features.attachments.AttachmentBook.MAX_FILE_BYTES)throw new SecurityException("文件身份不是原目标/实例/操作/执行或超过原附件上限");
+        return new JSONObject(descriptor.toString());
+    }
+    private void requireDeviceFile(DeviceFileEvidence proof)throws Exception{
+        if(proof==null||proof.issuer!=this)throw new SecurityException("不是本TaskStore文件证据");proof.approval.checkCurrent(proof.original);proof.approval.receivingGrant().requireTargetPeer(proof.peer);
+        if(proof.original.pauseRevision()!=proof.pauseRevision||System.currentTimeMillis()>=proof.deadline())throw new SecurityException("原文件接收已暂停/过期");
+        synchronized(owner){JSONObject wire=childAllocationForOperation(proof.approval.id,proof.operation).getJSONObject("boundWire");if(!proof.wire.equals(dev.pocketengine.features.devices.DeviceProtocol.canonical(wire))
+            ||!proof.descriptor.equals(dev.pocketengine.features.devices.DeviceProtocol.canonical(fixedFileDescriptor(proof.approval,proof.peer,proof.operation,wire))))throw new SecurityException("原文件操作或固定内容已变化");}
+    }
+
     /** Original SQL image provenance. Never constructed from an artifact descriptor, model
      * arguments, a transport connection or a UI flag. All byte reads remain current-scope reads. */
-    public static final class DeviceImageEvidence {
+    public static final class DeviceImageEvidence implements DeviceReceiveEvidence {
         private final TaskStoreDeviceTasks issuer;private final OwnerRouteApproval approval;private final RunControl original;
         private final dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer peer;
         private final String operation,digest,descriptor,reference,binding,targetOperation,mime;private final int width,height;

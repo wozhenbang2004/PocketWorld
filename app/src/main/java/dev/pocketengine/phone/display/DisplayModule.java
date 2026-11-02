@@ -247,6 +247,7 @@ public final class DisplayModule implements EngineModule {
         return request("tap",pinned,control,expectedRevision,false,java.util.Objects.requireNonNull(admission));
     }
     private JSONObject request(String command,JSONObject payload,RunControl control,long expectedRevision,boolean ownerTakeover,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+        if(command.startsWith("owner_handoff_")&&(!ownerTakeover||control==null||!control.isPaused()))throw new SecurityException("应用移屏仅供原生主人接管");
         JSONObject current=session();String sessionId=current.optString("sessionId");int display=current.optInt("displayId",-1);
         if(!isConnected()||!current.optBoolean("sessionActive")||display<=0||sessionId.isEmpty())throw new IllegalStateException("后台屏未就绪，请先连接并建立独立屏幕");
         if(admission!=null&&(!sessionId.equals(payload.optString("sessionId"))||display!=payload.optInt("displayId",-1)))
@@ -256,6 +257,7 @@ public final class DisplayModule implements EngineModule {
         try{result=client().call(command,args,control,expectedRevision,ownerTakeover,admission);}catch(InterruptedException stopped){throw stopped;}
         catch(dev.pocketengine.phone.observation.NativePhoneEntry.Refused refused){throw refused;}
         catch(ShellBridgeClient.StaleRequestException stale){throw stale;}
+        catch(ShellBridgeClient.NotDispatchedException refused){throw refused;}
         catch(Exception unavailable){connected=false;message="后台连接中断，停止后续操作。";throw unavailable;}
         if(result.optBoolean("ok")&&(result.optInt("displayId",-1)!=display||!sessionId.equals(result.optString("sessionId"))))
             throw new SecurityException("后台显示或会话回执身份不匹配");

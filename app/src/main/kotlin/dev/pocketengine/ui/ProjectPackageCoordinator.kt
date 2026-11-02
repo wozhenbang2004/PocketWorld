@@ -17,6 +17,7 @@ import java.util.concurrent.Future
 
 internal data class ProjectPackageState(
     val checkoutId: String? = null, val projectId: String? = null, val busy: Boolean = false,
+    val receivedDeviceFiles: List<JSONObject> = emptyList(),
     val artifacts: List<JSONObject> = emptyList(), val selection: JSONObject? = null,
     val artifact: JSONObject? = null, val preview: ProjectPreviewBundle.Verified? = null,
     val stagedPackages: List<JSONObject> = emptyList(), val staged: JSONObject? = null, val importPlan: JSONObject? = null, val imported: JSONObject? = null,
@@ -70,7 +71,8 @@ internal class ProjectPackageCoordinator(
         work { _, _ ->
             val rows = app.features.module("workspace").handle("listArtifacts", JSONObject().put("projectId", project.orEmpty())).getJSONArray("artifacts").objects().filter { it.optString("kind") == "project_bundle" }
             val staged = local().listStagedProjectPackagesForOwner().objects()
-            return@work { state = state.copy(artifacts = rows, stagedPackages = staged) }
+            val received = dev.pocketengine.features.attachments.AttachmentRepository.get(app).book.list().objects().filter { it.optString("principalId") == "owner" && it.optString("spaceId") == "private" && !it.optBoolean("outputSourceRetired") && it.optJSONObject("source")?.optString("kind") == "device_received_file" }
+            return@work { state = state.copy(artifacts = rows, stagedPackages = staged, receivedDeviceFiles = received) }
         }
     }
     fun closeOwnerPanel() { state = state.copy(ownerPanelRequested = false, sourceImportRequested = false); closePreview() }
@@ -275,6 +277,15 @@ internal class ProjectPackageCoordinator(
                 else local().stageProjectPackageForOwner(checked, pin.getString("selectionId"))
             } } finally { c.removeCancelAction(cancel) }
             return@work { state = state.copy(staged = actual, importPlan = null, notice = if (actual.has("sourceEvidence")) "普通ZIP源码已完整读取。请核对实际范围，再明确创建新项目；未执行代码。" else "项目包已读取，请核对后明确导入；尚未运行。") }
+        }
+    }
+    /** IDs/digests come from the original Book list, never a remote path or model JSON. */
+    fun selectDevicePackage(attachmentId: String, sha256: String) {
+        requireOwner(); if (state.busy || state.pendingImport != null || state.pendingFreeze != null) return
+        val selected = state.receivedDeviceFiles.firstOrNull { it.optString("id") == attachmentId && it.optString("sha256") == sha256 } ?: error("原设备文件列表已变化，请重新读取")
+        work { c, _ ->
+            val actual = local().stageDeviceProjectAttachmentForOwner(selected.getString("id"), selected.getString("sha256"), c)
+            return@work { state = state.copy(staged = actual, importPlan = null, imported = null, notice = "已从原设备附件校验完整项目包；请审阅清单与目标副本，尚未导入或运行。") }
         }
     }
     fun planImport(name: String, sameProject: Boolean) {

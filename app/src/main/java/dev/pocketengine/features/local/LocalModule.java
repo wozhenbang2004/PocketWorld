@@ -204,13 +204,43 @@ public final class LocalModule implements EngineModule {
     private File packageImportRoot()throws Exception {File folder=new File(context.android.getCacheDir(),"project-package-imports-v1");if(Files.isSymbolicLink(folder.toPath())||!folder.isDirectory()&&!folder.mkdirs()||!folder.getAbsoluteFile().equals(folder.getCanonicalFile()))throw new IllegalStateException("项目包临时目录不可用");return folder;}
     private static String packageIdentity(String value){if(value==null||!value.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("原项目包动作身份无效");return value;}
     private static String packageHash(String value){if(value==null||!value.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("原项目包摘要无效");return value;}
+    /** Explicit private owner selection from the ORIGINAL received AttachmentBook. A ZIP
+     * suffix or remote descriptor is never a trusted package; the original codec validates it. */
+    public JSONObject stageDeviceProjectAttachmentForOwner(String attachmentId,String expectedSha256,RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(original).check();
+        var book=dev.pocketengine.features.attachments.AttachmentRepository.get(context.android).book;
+        JSONObject metadata=book.get(attachmentId),source=metadata.optJSONObject("source");
+        if(!"owner".equals(metadata.optString("principalId"))||!"private".equals(metadata.optString("spaceId"))||source==null||!"device_received_file".equals(source.optString("kind")))throw new SecurityException("请选择原私人附件中的已接收设备文件");
+        JSONObject origin=new JSONObject().put("attachmentId",attachmentId).put("attachmentSha256",packageHash(expectedSha256)).put("attachmentBytes",metadata.getLong("size")).put("deviceSource",new JSONObject(source.toString()));
+        requireDevicePackageSource(origin,original);byte[] bytes=book.readVerifiedSnapshot(attachmentId,expectedSha256,original);
+        String selection=UUID.nameUUIDFromBytes(("device-project-attachment:"+attachmentId+":"+expectedSha256).getBytes(StandardCharsets.UTF_8)).toString();
+        try(java.io.InputStream input=new java.io.FilterInputStream(new java.io.ByteArrayInputStream(bytes)){
+            @Override public int read(byte[] buffer,int offset,int length)throws java.io.IOException{try{original.check();}catch(InterruptedException stopped){throw new java.io.InterruptedIOException("原设备附件选择已取消");}return super.read(buffer,offset,length);}
+        }){
+            return stageProjectPackageForOwner(input,selection,origin,()->requireDevicePackageSource(origin,original));
+        }finally{Arrays.fill(bytes,(byte)0);}
+    }
+    private void requireDevicePackageSource(JSONObject origin,RunControl control)throws Exception {
+        control.check();var book=dev.pocketengine.features.attachments.AttachmentRepository.get(context.android).book;
+        String id=origin.getString("attachmentId"),sha=packageHash(origin.getString("attachmentSha256"));JSONObject current=book.get(id);
+        if(!"owner".equals(current.optString("principalId"))||!"private".equals(current.optString("spaceId"))||current.optBoolean("outputSourceRetired")||!sha.equals(current.optString("sha256"))||origin.getLong("attachmentBytes")!=current.getLong("size")
+            ||!"device_received_file".equals(origin.getJSONObject("deviceSource").optString("kind"))||!ProjectSources.canonical(origin.getJSONObject("deviceSource")).equals(ProjectSources.canonical(current.optJSONObject("source"))))throw new SecurityException("原设备附件已撤下或来源/版本改变，请重新选择");
+        book.readVerifiedMetadata(id,sha,control);control.check();
+    }
+    private JSONObject devicePackageSource(String selection,String sha,String manifest)throws Exception {
+        File sidecar=new File(packageImportRoot(),selection+".device.json");if(!Files.exists(sidecar.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))return null;
+        if(Files.isSymbolicLink(sidecar.toPath())||!sidecar.isFile()||sidecar.length()>32768)throw new SecurityException("原设备附件来源说明无法核对");JSONObject saved=JsonFiles.read(sidecar);
+        if(!"pocketworld.device-package-source.v1".equals(saved.optString("format"))||!sha.equals(saved.optString("archiveSha256"))||!manifest.equals(saved.optString("manifestIdentity")))throw new SecurityException("设备来源说明与原项目包不同");
+        JSONObject origin=saved.getJSONObject("origin");requireDevicePackageSource(origin,new RunControl());return new JSONObject(origin.toString());
+    }
     /** Only the native document picker passes its already granted stream; no URI/grant is serialized. */
-    public JSONObject stageProjectPackageForOwner(java.io.InputStream source,String ownerSelectionId)throws Exception {
+    public JSONObject stageProjectPackageForOwner(java.io.InputStream source,String ownerSelectionId)throws Exception {return stageProjectPackageForOwner(source,ownerSelectionId,null,()->{if(closed||Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException("项目包读取已取消");});}
+    private JSONObject stageProjectPackageForOwner(java.io.InputStream source,String ownerSelectionId,JSONObject deviceSource,dev.pocketengine.features.local.project.ProjectSourceImport.Current current)throws Exception {
         packageIdentity(ownerSelectionId);if(source==null||closed)throw new IllegalArgumentException("没有可读取的原项目包");
         // Provider IO never holds LocalModule's runtime/stop monitor.
         synchronized(projectPackageStaging){
             File directory=packageImportRoot(),target=new File(directory,ownerSelectionId+".zip");
-            if(target.isFile())return stagedProjectPackage(ownerSelectionId,null);
+            if(target.isFile()){JSONObject prior=stagedProjectPackage(ownerSelectionId,null);if(!ProjectSources.canonical(deviceSource).equals(ProjectSources.canonical(prior.optJSONObject("deviceSource"))))throw new SecurityException("原选择属于不同设备附件，未覆盖");return prior;}
             File[] staged=directory.listFiles(file->file.getName().matches("[a-f0-9-]{36}\\.zip"));if(staged==null||staged.length>=4)throw new IllegalStateException("已保留4份临时项目包，请明确导入或移除一份后再选择");
             File pending=File.createTempFile("project-import-",".pending",directory);
             try{
@@ -219,7 +249,9 @@ public final class LocalModule implements EngineModule {
                 }
                 var decoded=dev.pocketengine.features.local.project.ProjectPackageArchive.read(pending);
                 if(!decoded.manifest().getString("mode").equals("source_project"))throw new IllegalArgumentException("这是固定网页输出成果，不是可继续源码项目包；可打开或导出，不导成源码项目");
-                Files.move(pending.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE);
+                current.check();
+                if(deviceSource!=null)JsonFiles.write(new File(directory,ownerSelectionId+".device.json"),new JSONObject().put("format","pocketworld.device-package-source.v1").put("archiveSha256",packageFileHash(pending)).put("manifestIdentity",decoded.identity).put("origin",deviceSource));
+                current.check();Files.move(pending.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE);
                 return stagedProjectPackage(ownerSelectionId,null);
             }finally{Files.deleteIfExists(pending.toPath());}
         }
@@ -254,7 +286,7 @@ public final class LocalModule implements EngineModule {
         if(!"pocketworld.project-source-cache.v1".equals(retained.optString("format"))||!sha.equals(retained.optString("archiveSha256"))||!manifest.equals(retained.optString("manifestIdentity"))||!"pocketworld.project-source-selection.v1".equals(evidence.optString("format"))||!selection.equals(evidence.optString("selectionId"))||!manifest.equals(evidence.optString("manifestIdentity"))||!java.util.Set.of("saf_tree","external_zip","git_https").contains(evidence.optString("sourceKind"))||!Boolean.TRUE.equals(evidence.opt("completeSelection"))||!Boolean.FALSE.equals(evidence.opt("executionAuthorityRestored"))||!Boolean.FALSE.equals(evidence.opt("sourcePermissionPersisted")))throw new SecurityException("原来源选择与实际包字节不同，未导入");return new JSONObject(evidence.toString());
     }
     public JSONObject clearInterruptedSourceImportsForOwner()throws Exception {
-        if(closed)throw new IllegalStateException("原项目模块已关闭");synchronized(projectPackageStaging){File directory=packageImportRoot();File[] files=directory.listFiles();if(files==null)throw new IllegalStateException("无法列出来源读取缓存");int removed=0;for(File file:files){String name=file.getName();boolean ownIncomplete=name.matches("source-read-[A-Za-z0-9_-]+")||name.matches("source-(?:archive|package)-[A-Za-z0-9_-]+\\.pending")||name.matches("[a-f0-9-]{36}\\.source\\.json")&&!new File(directory,name.substring(0,36)+".zip").exists();if(!ownIncomplete)continue;if(Files.isSymbolicLink(file.toPath()))Files.delete(file.toPath());else if(file.isDirectory())deleteOwnPackageStaging(file);else Files.delete(file.toPath());removed++;}return new JSONObject().put("removedIncompleteCaches",removed).put("completeSelectionsRetained",true).put("projectsOrToolsDeleted",false);}
+        if(closed)throw new IllegalStateException("原项目模块已关闭");synchronized(projectPackageStaging){File directory=packageImportRoot();File[] files=directory.listFiles();if(files==null)throw new IllegalStateException("无法列出来源读取缓存");int removed=0;for(File file:files){String name=file.getName();boolean ownIncomplete=name.matches("source-read-[A-Za-z0-9_-]+")||name.matches("source-(?:archive|package)-[A-Za-z0-9_-]+\\.pending")||name.matches("[a-f0-9-]{36}\\.(?:source|device)\\.json")&&!new File(directory,name.substring(0,36)+".zip").exists();if(!ownIncomplete)continue;if(Files.isSymbolicLink(file.toPath()))Files.delete(file.toPath());else if(file.isDirectory())deleteOwnPackageStaging(file);else Files.delete(file.toPath());removed++;}return new JSONObject().put("removedIncompleteCaches",removed).put("completeSelectionsRetained",true).put("projectsOrToolsDeleted",false);}
     }
 
     private JSONObject stagedProjectPackage(String selection,String expectedSha)throws Exception {
@@ -262,13 +294,13 @@ public final class LocalModule implements EngineModule {
         if(Files.isSymbolicLink(target.toPath())||!target.isFile()||target.length()>dev.pocketengine.features.local.project.ProjectPackageArchive.MAX_ARCHIVE_BYTES)throw new IllegalStateException("原临时项目包已失效，请重新选择；未使用其他文件");
         String sha=packageFileHash(target);if(expectedSha!=null&&!packageHash(expectedSha).equals(sha))throw new SecurityException("所选项目包字节已变化，未导入");
         var frozen=dev.pocketengine.features.local.project.ProjectPackageArchive.read(target);if(!sha.equals(packageFileHash(target)))throw new SecurityException("读取期间原导入临时包变化，请重新核对");
-        JSONObject result=new JSONObject().put("format","pocketworld.project-package-import-source.v1").put("selectionId",selection).put("sha256",sha).put("sizeBytes",target.length()).put("manifestIdentity",frozen.identity).put("manifest",frozen.manifest()).put("complete",true).put("authorityRestored",false);JSONObject evidence=sourceSelectionEvidence(selection,sha,frozen.identity);if(evidence!=null)result.put("sourceEvidence",evidence);return result;
+        JSONObject result=new JSONObject().put("format","pocketworld.project-package-import-source.v1").put("selectionId",selection).put("sha256",sha).put("sizeBytes",target.length()).put("manifestIdentity",frozen.identity).put("manifest",frozen.manifest()).put("complete",true).put("authorityRestored",false);JSONObject evidence=sourceSelectionEvidence(selection,sha,frozen.identity);if(evidence!=null)result.put("sourceEvidence",evidence);JSONObject deviceSource=devicePackageSource(selection,sha,frozen.identity);if(deviceSource!=null)result.put("deviceSource",deviceSource);return result;
     }
     public JSONObject inspectStagedProjectPackageForOwner(String selection,String sha)throws Exception {if(closed)throw new IllegalStateException("原项目模块已关闭");synchronized(projectPackageStaging){return stagedProjectPackage(selection,sha);}}
     public JSONArray listStagedProjectPackagesForOwner()throws Exception {
         if(closed)throw new IllegalStateException("原项目模块已关闭");synchronized(projectPackageStaging){JSONArray result=new JSONArray();File[] files=packageImportRoot().listFiles(file->file.getName().matches("[a-f0-9-]{36}\\.zip"));if(files==null||files.length>4)throw new IllegalStateException("项目包临时目录超出范围，请核对原目录");java.util.Arrays.sort(files,java.util.Comparator.comparing(File::getName));for(File file:files){String selection=file.getName().substring(0,36);if(Files.isSymbolicLink(file.toPath()))throw new SecurityException("项目包临时目录含链接，未读取目标");String sha=packageFileHash(file);try{result.put(stagedProjectPackage(selection,sha).put("available",true));}catch(Exception invalid){result.put(new JSONObject().put("selectionId",selection).put("sha256",sha).put("sizeBytes",file.length()).put("available",false).put("message","原临时包无法完整校验；可明确移除此缓存，不影响原项目"));}}return result;}
     }
-    public void discardStagedProjectPackageForOwner(String selection,String sha)throws Exception {synchronized(projectPackageStaging){File file=new File(packageImportRoot(),packageIdentity(selection)+".zip");if(Files.isSymbolicLink(file.toPath())||!file.isFile()||!packageHash(sha).equals(packageFileHash(file)))throw new SecurityException("所选临时包已变化，未移除其他内容");Files.delete(file.toPath());Files.deleteIfExists(new File(packageImportRoot(),selection+".source.json").toPath());}}
+    public void discardStagedProjectPackageForOwner(String selection,String sha)throws Exception {synchronized(projectPackageStaging){File file=new File(packageImportRoot(),packageIdentity(selection)+".zip");if(Files.isSymbolicLink(file.toPath())||!file.isFile()||!packageHash(sha).equals(packageFileHash(file)))throw new SecurityException("所选临时包已变化，未移除其他内容");Files.delete(file.toPath());Files.deleteIfExists(new File(packageImportRoot(),selection+".source.json").toPath());Files.deleteIfExists(new File(packageImportRoot(),selection+".device.json").toPath());}}
     public JSONObject planProjectPackageImportForOwner(String selection,String sha,String projectName,String targetCheckout)throws Exception {return planProjectPackageImport(selection,sha,projectName,targetCheckout,null);}
     private JSONObject planProjectPackageImport(String selection,String sha,String projectName,String targetCheckout,dev.pocketengine.features.local.project.ProjectGitImport.Result nativeGit)throws Exception {
         JSONObject staged=inspectStagedProjectPackageForOwner(selection,sha);if(projectName==null||projectName.trim().isEmpty()||projectName.length()>80)throw new IllegalArgumentException("请输入1至80字项目名");
@@ -277,13 +309,15 @@ public final class LocalModule implements EngineModule {
         JSONObject sourceEvidence=staged.optJSONObject("sourceEvidence");if(sourceEvidence!=null&&"git_https".equals(sourceEvidence.optString("sourceKind"))&&nativeGit==null)throw new SecurityException("Git原读取需要在原Git入口审阅其固定历史与源码，不能作为普通ZIP绕过发布");if(sourceEvidence!=null){if(targetCheckout!=null&&!targetCheckout.isEmpty())throw new SecurityException("现有源码只能明确创建新项目，不覆盖或借用原项目权限");plan.put("sourceEvidenceSha256",ProjectSources.digest(sourceEvidence));}
         if(targetCheckout==null||targetCheckout.isEmpty())plan.put("mode","new_project");
         else synchronized(this){JSONObject actual=ProjectSources.describe(export(targetCheckout));plan.put("mode","same_project_new_checkout").put("targetCheckoutId",targetCheckout).put("projectId",actual.getString("projectId")).put("expectedTargetSourceDigest",actual.getString("sourceDigest"));}
+        if(staged.has("deviceSource"))plan.put("deviceSourceSha256",ProjectSources.digest(staged.getJSONObject("deviceSource")));
         plan.put("planDigest",ProjectSources.digest(plan));return new JSONObject().put("plan",plan).put("manifest",staged.getJSONObject("manifest")).put("message","导入会创建新的工作副本，不覆盖原目录、不恢复任务或运行授权。原项目选项也保留旧任务和旧副本；在新副本明确开始新的项目任务。");
     }
     private static JSONObject verifiedPackageImportPlan(JSONObject input)throws Exception {
         JSONObject plan=ProjectSources.copy(input);String digest=plan.getString("planDigest");plan.remove("planDigest");if(!digest.equals(ProjectSources.digest(plan))||!"pocketworld.project-package-import-plan.v1".equals(plan.optString("format")))throw new SecurityException("请重新核对原项目包导入方案");
         packageIdentity(plan.getString("selectionId"));packageIdentity(plan.getString("clientImportId"));packageHash(plan.getString("packageSha256"));packageHash(plan.getString("manifestIdentity"));
         if(!java.util.Set.of("new_project","same_project_new_checkout").contains(plan.getString("mode"))||plan.getString("projectName").codePoints().allMatch(Character::isWhitespace)||plan.getString("projectName").length()>80)throw new IllegalArgumentException("导入范围或项目名无效");
-        var allowed=new java.util.HashSet<>(java.util.Set.of("format","selectionId","packageSha256","manifestIdentity","projectName","clientImportId","mode","sourceEvidenceSha256"));
+        var allowed=new java.util.HashSet<>(java.util.Set.of("format","selectionId","packageSha256","manifestIdentity","projectName","clientImportId","mode","sourceEvidenceSha256","deviceSourceSha256"));
+        if(plan.has("deviceSourceSha256"))packageHash(plan.getString("deviceSourceSha256"));
         if(plan.has("sourceEvidenceSha256")){packageHash(plan.getString("sourceEvidenceSha256"));if(!"new_project".equals(plan.getString("mode")))throw new SecurityException("来源源码不采用原项目权限");}
         if(plan.getString("mode").equals("same_project_new_checkout")){allowed.addAll(java.util.Set.of("targetCheckoutId","projectId","expectedTargetSourceDigest"));packageIdentity(plan.getString("targetCheckoutId"));packageIdentity(plan.getString("projectId"));packageHash(plan.getString("expectedTargetSourceDigest"));}
         var keys=plan.keys();while(keys.hasNext())if(!allowed.contains(keys.next()))throw new SecurityException("项目包方案含未支持字段，未恢复授权");return plan;
@@ -294,6 +328,7 @@ public final class LocalModule implements EngineModule {
         JSONObject plan=verifiedPackageImportPlan(originalPlan);String client=plan.getString("clientImportId"),sha=plan.getString("packageSha256"),id=UUID.nameUUIDFromBytes(("project-package-checkout:"+client).getBytes(StandardCharsets.UTF_8)).toString();
         synchronized(this){JSONObject prior=existingPackageImport(id,client,sha,plan);if(prior!=null)return prior;}
         JSONObject staged=inspectStagedProjectPackageForOwner(plan.getString("selectionId"),sha);if(!plan.getString("manifestIdentity").equals(staged.getString("manifestIdentity")))throw new SecurityException("原项目包清单已变化");JSONObject sourceEvidence=staged.optJSONObject("sourceEvidence");if(sourceEvidence!=null&&"git_https".equals(sourceEvidence.optString("sourceKind"))){if(nativeGit==null||gitControl==null)throw new SecurityException("Git导入不能借普通项目包恢复其未审历史");nativeGit.requireCurrent(gitControl);JSONObject pins=nativeGit.metadata();pins.remove("files");if(!ProjectSources.digest(pins).equals(ProjectSources.digest(sourceEvidence.getJSONObject("original"))))throw new SecurityException("待发布Git版本与原来源选择不同");}else if(nativeGit!=null)throw new SecurityException("本次原来源不是Git读取");if(plan.has("sourceEvidenceSha256")!=(sourceEvidence!=null)||sourceEvidence!=null&&!plan.getString("sourceEvidenceSha256").equals(ProjectSources.digest(sourceEvidence)))throw new SecurityException("原来源选择说明在审阅后变化，未导入");
+        JSONObject deviceSource=staged.optJSONObject("deviceSource");if(plan.has("deviceSourceSha256")!=(deviceSource!=null)||deviceSource!=null&&!plan.getString("deviceSourceSha256").equals(ProjectSources.digest(deviceSource)))throw new SecurityException("设备附件来源在审阅后变化，未导入");
         dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen; synchronized(projectPackageStaging){File archive=new File(packageImportRoot(),plan.getString("selectionId")+".zip");frozen=dev.pocketengine.features.local.project.ProjectPackageArchive.read(archive);if(!sha.equals(packageFileHash(archive))||!frozen.identity.equals(plan.getString("manifestIdentity")))throw new SecurityException("原项目包字节或清单不一致");}
         String projectId=plan.getString("mode").equals("new_project")?UUID.nameUUIDFromBytes(("project-package-import:"+client).getBytes(StandardCharsets.UTF_8)).toString():plan.getString("projectId");
         File staging=new File(root,"package-checkout-staging");if(Files.isSymbolicLink(staging.toPath())||!staging.isDirectory()&&!staging.mkdirs()||!staging.getAbsoluteFile().equals(staging.getCanonicalFile()))throw new IllegalStateException("无法建立原项目导入暂存目录");File prepared=Files.createTempDirectory(staging.toPath(),"checkout-").toFile();
@@ -307,6 +342,7 @@ public final class LocalModule implements EngineModule {
             if(nativeGit!=null)nativeGit.copyGitMetadata(files,gitControl);
             JSONObject checkout=new JSONObject().put("id",id).put("projectId",projectId).put("name",plan.getString("projectName")).put("createdAt",System.currentTimeMillis()).put("files",baseline)
                 .put("sourceImport",new JSONObject().put("clientId",client).put("packageSha256",sha).put("manifestIdentity",frozen.identity).put("mode",plan.getString("mode")).put("executionAuthorityRestored",false));
+            if(deviceSource!=null)checkout.getJSONObject("sourceImport").put("deviceSource",deviceSource).put("deviceSourceSha256",plan.getString("deviceSourceSha256"));
             if(sourceEvidence!=null)checkout.getJSONObject("sourceImport").put("sourceKind",sourceEvidence.getString("sourceKind")).put("sourceEvidenceSha256",plan.getString("sourceEvidenceSha256"));
             if(nativeGit!=null){JSONObject pins=nativeGit.metadata();pins.remove("files");checkout.getJSONObject("sourceImport").put("gitOriginal",pins).put("gitHistoryCopied",true).put("credentialsRestored",false);}
 
@@ -314,6 +350,7 @@ public final class LocalModule implements EngineModule {
             synchronized(this){
                 if(closed||Thread.currentThread().isInterrupted())throw new IllegalStateException("原项目模块已关闭或导入等待已取消，未发布新工作副本");JSONObject prior=existingPackageImport(id,client,sha,plan);if(prior!=null)return prior;
                 File checkouts=new File(root,"checkouts");File[] saved=checkouts.listFiles();if(saved!=null&&saved.length>=40)throw new IllegalStateException("最多保留40个工作副本，原项目包仍保留");if(!checkouts.isDirectory()&&!checkouts.mkdirs())throw new IllegalStateException("无法建立工作副本目录");
+                if(deviceSource!=null)requireDevicePackageSource(deviceSource,new RunControl());
                 if(plan.getString("mode").equals("new_project")){JSONObject project=packageWorkspace().createImportedProject(plan.getString("projectName"),client,sha);if(!projectId.equals(project.getString("id")))throw new SecurityException("原项目导入身份不一致");}
                 else {JSONObject actual=ProjectSources.describe(export(plan.getString("targetCheckoutId")));if(!projectId.equals(actual.getString("projectId"))||!packageHash(plan.getString("expectedTargetSourceDigest")).equals(actual.getString("sourceDigest")))throw new SecurityException("原目标副本已变化，请重新读取并核对；没有覆盖原目录");}
                 File destination=new File(checkouts,id);if(Files.exists(destination.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))throw new SecurityException("目标副本目录已有未确认来源，未覆盖");Files.move(prepared.toPath(),destination.toPath(),StandardCopyOption.ATOMIC_MOVE);
@@ -325,6 +362,7 @@ public final class LocalModule implements EngineModule {
     private JSONObject existingPackageImport(String id,String client,String sha,JSONObject plan)throws Exception {
         File directory=new File(new File(root,"checkouts"),id),record=new File(directory,"checkout.json");if(!Files.exists(directory.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))return null;if(Files.isSymbolicLink(directory.toPath())||Files.isSymbolicLink(record.toPath())||!record.isFile())throw new SecurityException("原导入副本登记不是正常文件，未覆盖或重建");JSONObject value=JsonFiles.read(record),source=value.optJSONObject("sourceImport");
         if(!id.equals(value.optString("id"))||source==null||!client.equals(source.optString("clientId"))||!sha.equals(source.optString("packageSha256"))||!plan.getString("manifestIdentity").equals(source.optString("manifestIdentity"))||!plan.getString("projectName").equals(value.optString("name"))||!plan.getString("mode").equals(source.optString("mode"))||plan.getString("mode").equals("same_project_new_checkout")&&!plan.getString("projectId").equals(value.optString("projectId")))throw new SecurityException("原导入动作与已有副本不同，未重新导入或覆盖");
+        if(plan.has("deviceSourceSha256")!=source.has("deviceSourceSha256")||plan.has("deviceSourceSha256")&&!plan.getString("deviceSourceSha256").equals(source.getString("deviceSourceSha256")))throw new SecurityException("设备来源不是原导入动作");
         if(plan.has("sourceEvidenceSha256")!=source.has("sourceEvidenceSha256")||plan.has("sourceEvidenceSha256")&&!plan.getString("sourceEvidenceSha256").equals(source.getString("sourceEvidenceSha256")))throw new SecurityException("原导入来源说明与已有副本不同，未用改变的方案重放或查询");
         if(Files.isSymbolicLink(new File(directory,"files").toPath())||!new File(directory,"files").isDirectory()||!directory.getAbsoluteFile().equals(directory.getCanonicalFile()))throw new IllegalStateException("原导入副本文件目录已失效，未自动重建");return new JSONObject(value.toString()).put("imported",true).put("continuedExisting",true).put("originalCheckoutUnchanged",true).put("taskOrGrantRestored",false);
     }
@@ -523,6 +561,8 @@ public final class LocalModule implements EngineModule {
     /** One original journal operation; preflight all files, then report each real per-file effect. */
     private JSONObject applyProjectPatch(JSONObject request,JSONObject link,JSONObject payload,JSONObject snapshot,RunControl original,ProjectAdmission admission,JSONObject binding,long pauseRevision)throws Exception {
         String checkout=request.getString("checkoutId");JSONObject result=new JSONObject().put("id",binding.getString("operationId")).put("operationId",binding.getString("operationId")).put("checkoutId",checkout).put("kind","local_patch").put("provider","app_private_checkout").put("projectExecution",link).put("sourceDigest",request.getString("sourceDigest")).put("sourceCheckStatus","native_checkout_verified").put("crossFileAtomic",false).put("businessVerified",false).put("replayAllowed",false);
+        if(payload.has("revertsOperationId"))result.put("revertsOperationId",payload.getString("revertsOperationId"));
+        if(payload.has("reversalScope"))result.put("reversalScope",new JSONObject(payload.getJSONObject("reversalScope").toString()));
         JSONArray files=payload.getJSONArray("files"),receipts=new JSONArray();java.util.Map<String,byte[]> before=ProjectSources.byteFiles(snapshot);java.util.Set<String> unique=new java.util.HashSet<>();
         if(files.length()<1||files.length()>dev.pocketengine.features.local.project.ProjectExactPatch.MAX_FILES)throw new SecurityException("原补丁文件数无效");
         boolean uncertain=false;int applied=0;String failure="";

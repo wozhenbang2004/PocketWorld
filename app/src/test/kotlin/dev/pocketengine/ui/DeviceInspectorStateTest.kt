@@ -62,4 +62,11 @@ class DeviceInspectorStateTest {
         val value = phoneInspectionPresentation(phone("running"), frame(), true, false, false, "task", 2000)
         assertFalse(value.manual); assertTrue(value.canTakeOver); assertTrue(value.message.contains("仅查看")); assertTrue(value.message.contains("不是实时视频"))
     }
+    @Test fun handedOutOrUnknownTaskNeverOffersOldSnapshotInput() {
+        for (handoff in listOf("main", "unknown")) {
+            val value = phoneInspectionPresentation(phone(), frame().put("ownerHandoff", JSONObject().put("state", handoff)), true, false, false, "task", 2000)
+            assertFalse(value.manual); assertFalse(value.frameFresh); assertFalse(value.canTakeOver)
+            assertTrue(if (handoff == "main") value.location.contains("主人接管") else value.location.contains("待核对"))
+        }
+    }
 }

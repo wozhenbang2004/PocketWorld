@@ -481,9 +481,9 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                     OutlinedButton(onClick = { c.stop() }, enabled = !control.optBoolean("cancelRequested")) { Text("结束当前研究") }
                 }
             } else if (pendingTask.optString("id").isNotBlank()) {
-                Text("等待原助手下一轮接入网页", fontWeight = FontWeight.SemiBold)
+                Text(if (pendingTask.optString("kind") == "phone") "网页已授权，等待原手机任务切换" else "等待原助手下一轮接入网页", fontWeight = FontWeight.SemiBold)
                 Text(pendingTask.optString("goal"), maxLines = 3)
-                Text("沿用原任务与执行控制；当前模型请求结束后才取得本资料的任务页。", style = MaterialTheme.typography.bodySmall)
+                Text(if (pendingTask.optString("kind") == "phone") "沿用当前任务和执行。助手选择网页后，原 App 会保留但停止自动输入；切回时重新观察。" else "沿用原任务与执行控制；当前模型请求结束后才取得本资料的任务页。", style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = { c.stop() }) { Text("停止此任务的浏览请求") }
             } else {
                 if (state.child("model").optString("model").isNotBlank()) Text("模型：${state.child("model").optString("model")}", style = MaterialTheme.typography.bodySmall)
@@ -505,7 +505,7 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                     Button(onClick = { val pinned = JSONObject(state.toString()); val frameText = c.extraFrameOrigins; val goal = c.goal; val execution = c.executionChoice(); if (c.autoRead || c.autoActions) c.reviewReadScopeAndFrames { read, frames, actions -> readScopeReview = ReadScopeReview(read, "start", pinned, "", goal, profile?.optString("label").orEmpty(), frames, actions, executionChoice = execution) } else c.commandWithDraft({ c.host.startForOwner(goal, pinned, c.consent, BrowserReadScope.disabled(), BrowserFrameOrigins.forOwner(frameText), BrowserActionScope.disabled(), execution) }, { c.consumedGoal(); c.consent = false; c.resetReadConsent(); c.backToPage() }) }, enabled = !c.busy && c.consent && c.draftReady && c.goal.isNotBlank() && state.optBoolean("open")) { Text(if (c.contextTaskId.isEmpty()) "开始研究" else "另开一项研究") }
                     TextButton(onClick = { identities = true }, enabled = !c.busy) { Text("选择登录资料") }
                 }
-                if (state.array("currentAssistantTasks").length() > 0) TextButton(onClick = { existingTasks = true }, enabled = c.consent && !c.busy) { Text("为正在进行的助手任务启用网页") }
+                if (state.array("currentAssistantTasks").length() > 0) TextButton(onClick = { existingTasks = true }, enabled = c.consent && !c.busy) { Text("为正在进行的任务启用网页") }
             }
             }
             c.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }

@@ -1,0 +1,10 @@
+Learning lifecycle mechanism reference: Mika, wangzan101 and contributors.
+Upstream: https://github.com/wangzan101/Mika
+Version: v0.1.33, ebb0e44750d80aabb6b642c69908825d6b1a8107
+License: Apache License 2.0 (mika-Apache-2.0.txt).
+Read references: core/.../skills/SkillOutcomes.kt and core/.../knowledge/AppKnowledgeLearning.kt.
+PocketWorld implements these mechanisms independently in its existing SkillBook,
+MemoryBook and original TaskStore: trial promotion/suspension, app draft/trial/
+verified/archived/rollback. Thresholds reference upstream; authority differs:
+explicit owner review of exact original execution evidence, never model claims.
+No upstream Kotlin source is vendored. No tool grants derive from learning state.

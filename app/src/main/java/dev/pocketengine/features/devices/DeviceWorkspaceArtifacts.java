@@ -18,7 +18,7 @@ final class DeviceWorkspaceArtifacts implements AutoCloseable {
     private final DeviceArtifactSession session;
     private final DeviceArtifactEndpoint endpoint;
     private final DeviceArtifactFetch fetch;
-    private final ConcurrentHashMap<UUID, TaskStoreDeviceTasks.DeviceImageEvidence> receives = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, TaskStoreDeviceTasks.DeviceReceiveEvidence> receives = new ConcurrentHashMap<>();
     DeviceWorkspaceArtifacts(DeviceWorkspaceNativeOwner owner) throws Exception {
         this.owner = owner; DeviceIdentity.LocalIdentity local = owner.existingIdentity(); if (local == null) throw new SecurityException("没有原设备身份，未创建成果缓存");
         File directory = new File(owner.app.getFilesDir(), "native-device-artifact-bytes-v1").getAbsoluteFile();
@@ -46,7 +46,7 @@ final class DeviceWorkspaceArtifacts implements AutoCloseable {
                 public void unavailable(PairingCoordinator.HistoryPermission history) { owner.network.closeBulkForPeer(history.callerDeviceId()); }
             });
         fetch = new DeviceArtifactFetch(cache, session, (expected, exact, offset, length, deadline) -> {
-            TaskStoreDeviceTasks.DeviceImageEvidence original = receives.get(UUID.fromString(exact.transferId));
+            TaskStoreDeviceTasks.DeviceReceiveEvidence original = receives.get(UUID.fromString(exact.transferId));
             if (original == null) throw new SecurityException("没有这项原操作的native图像接收证据");
             original.requireCurrent();
             DeviceArtifactTransfer.Reference selected = DeviceArtifactTransfer.fromWireDescriptor(original.descriptor());
@@ -55,7 +55,7 @@ final class DeviceWorkspaceArtifacts implements AutoCloseable {
             return owner.network.readImageChunk(original, query, expected, deadline);
         });
     }
-    DeviceArtifactFetch.Verified receive(TaskStoreDeviceTasks.DeviceImageEvidence original) throws Exception {
+    DeviceArtifactFetch.Verified receive(TaskStoreDeviceTasks.DeviceReceiveEvidence original) throws Exception {
         java.util.Objects.requireNonNull(original).requireCurrent(); JSONObject descriptor = original.descriptor();
         DeviceArtifactTransfer.Reference exact = DeviceArtifactTransfer.fromWireDescriptor(descriptor); UUID transfer = UUID.fromString(exact.transferId);
         if (receives.size() >= DeviceArtifactTransfer.MAX_TRANSFERS || receives.putIfAbsent(transfer, original) != null) throw new IOException("原图像接收窗口已满或仍在进行");
@@ -65,6 +65,12 @@ final class DeviceWorkspaceArtifacts implements AutoCloseable {
             owner.network.prepareArtifactReceive(original.actualControlPeer(), original.deadline(), original::requireCurrent);
             return fetch.fetch(original.actualControlPeer(), descriptor, original.deadline(), original::requireCurrent);
         } finally { receives.remove(transfer, original); }
+    }
+    JSONObject receiveFile(TaskStoreDeviceTasks.DeviceFileEvidence original) throws Exception {
+        original.requireCurrent(); receive(original);
+        return new DeviceReceivedAttachmentPublisher(cache, dev.pocketengine.features.attachments.AttachmentRepository.get(owner.app).book)
+            .publish(DeviceArtifactTransfer.fromWireDescriptor(original.descriptor()), original.operationId(), original.receivingTaskId(),
+                original.frozenRunId(), original.frozenEpoch(), original.originalControl(), original::requireCurrent);
     }
     JSONObject freeze(String id, String run, int epoch, String operation, JSONObject observation, JSONObject actualImage) throws Exception {
         DeviceToolsSession original = owner.app.originalDeviceToolsSession(id);

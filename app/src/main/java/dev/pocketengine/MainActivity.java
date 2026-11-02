@@ -29,6 +29,7 @@ public final class MainActivity extends Activity {
     private MediaController media;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private boolean ready;
+    private final String compatibilityPageId=java.util.UUID.randomUUID().toString();
     private final EngineApplication.Observer observer=this::send;
     @Override public void onCreate(Bundle state){
         super.onCreate(state);app=(EngineApplication)getApplication();media=new MediaController(this,app::publish);
@@ -50,7 +51,7 @@ public final class MainActivity extends Activity {
         String action=m.optString("action");
         try{
             switch(action){
-                case "ready":ready=true;app.sendState();app.features.sendState();send(media.state().put("type","media_state"));deliverAutomationGoal();if(getIntent().hasExtra("openPanel")){send(EngineApplication.json("type","open_settings"));getIntent().removeExtra("openPanel");}break;
+                case "ready":ready=true;app.sendState();app.features.sendState();send(media.state().put("type","media_state"));deliverAutomationGoal();deliverAdvancedPanel();break;
                 case "getState":app.sendState();break;
                 case "getFeatures":app.features.sendState();break;
                 case "featureRequest":{
@@ -62,6 +63,7 @@ public final class MainActivity extends Activity {
                 case "speakText":media.speak(m.optString("text"));break;
                 case "stopSpeaking":media.stopSpeaking();break;
                 case "getMediaState":send(media.state().put("type","media_state"));break;
+                case "continueNativeChat":startActivity(dev.pocketengine.features.assistant.CompatibilityChatHandoff.open(app,compatibilityPageId,m));break;
                 case "openSettings":send(EngineApplication.json("type","open_settings"));break;
                 case "openAccessibility":startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));break;
                 case "requestNotifications":if(Build.VERSION.SDK_INT>=33)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},41);else startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,getPackageName()));break;
@@ -87,7 +89,20 @@ public final class MainActivity extends Activity {
             }
         }catch(Exception ex){app.error(safeMessage(ex));}
     }
-    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(ready)deliverAutomationGoal();}
+    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(ready){deliverAutomationGoal();deliverAdvancedPanel();}}
+    /** Navigation only: exact local routes never grant capabilities or carry settings secrets. */
+    public static Intent advancedPanelIntent(android.content.Context context,String panel){
+        requireAdvancedPanel(panel);return new Intent(context,MainActivity.class).putExtra("openPanel",panel);
+    }
+    private static void requireAdvancedPanel(String panel){
+        if(panel==null||!java.util.Set.of("settings","channels","plugins","proxy").contains(panel))throw new IllegalArgumentException("不支持的设置页面");
+    }
+    private void deliverAdvancedPanel(){
+        if(!getIntent().hasExtra("openPanel"))return;
+        String panel=getIntent().getStringExtra("openPanel");getIntent().removeExtra("openPanel");
+        try{requireAdvancedPanel(panel);send(panel.equals("settings")?EngineApplication.json("type","open_settings"):EngineApplication.json("type","open_features","feature",panel));}
+        catch(Exception invalid){send(EngineApplication.json("type","error","message","不支持的设置页面"));}
+    }
     private void deliverAutomationGoal(){String goal=getIntent().getStringExtra("automationGoal");if(goal!=null&&!goal.isEmpty()){send(EngineApplication.json("type","automation_goal","goal",goal,"ruleId",getIntent().getStringExtra("automationRuleId")));getIntent().removeExtra("automationGoal");}}
     private static String safeMessage(Exception e){String m=e.getMessage();return m==null?"操作失败，请重试":m.length()>250?m.substring(0,250):m;}
 }

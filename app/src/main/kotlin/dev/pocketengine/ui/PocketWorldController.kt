@@ -109,6 +109,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     @Volatile private var closed = false
     private val ownerComposerStore = OwnerComposerStore(app.filesDir)
     private var ownerComposer: OwnerComposerState? = null
+    private var compatibilityChat: dev.pocketengine.features.assistant.CompatibilityChatHandoff.Review? = null
+    var compatibilityChatRevision by mutableStateOf(0)
+        private set
+    private var compatibilityDialog = false
+    private var compatibilitySaving = false
     var composerDraft by mutableStateOf<OwnerComposerState.Draft?>(null)
         private set
     var composerPending by mutableStateOf<List<OwnerComposerState.Pending>>(emptyList())
@@ -276,6 +281,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             if(closed)return@post
             if(error!=null){state=state.copy(error="原私聊草稿暂不可读取，未清空或覆盖："+composerFailure(error));return@post}
             ownerComposer=restored;publishComposer(true)
+            applyCompatibilityChat()
             state.conversationId?.let{feature("assistant","get",JSONObject().put("conversationId",it))}
             // Recovery is query-only. No captured run/model/grant is used to send or resume anything.
             composerPending.forEach { item ->
@@ -1252,7 +1258,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun dismissError() { state = state.copy(error = null) }
     fun dismissNotice() { state = state.copy(notice = null) }
     fun openAdvanced(panel: String = "settings") {
-        activity.startActivity(Intent(activity, MainActivity::class.java).putExtra("openPanel", panel))
+        activity.startActivity(MainActivity.advancedPanelIntent(activity, panel))
     }
     var conversationReader by mutableStateOf<ConversationReadPage?>(null)
         private set
@@ -1292,12 +1298,74 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         openPrivateAttachment(reference){conversationReader?.let{canReadConversationWindow(it)&&it.window==window&&it.messages.any{row->row.id==message&&row.attachments.any{file->attachmentOpenKey(file)==attachmentOpenKey(reference)}}}==true}
     }
     fun newConversation() {
+        compatibilityChat=null
         if(state.chatBusy||state.chatSubmitting)return
         val model=ownerComposer ?: return
         try{voiceInputModeChanged();model.newConversation();chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null);voiceInputViewChanged();persistOwnerComposer()}
         catch(error:Exception){state=state.copy(error=message(error))}
     }
+    /** Navigation and draft staging only. The ordinary native send/cancel controls remain authoritative. */
+    fun continueCompatibilityChat(id:String) {
+        try {
+            if(!privateWorkspaceView())throw SecurityException("请先退出群或团队任务，再进入原私人对话；兼容草稿仍保留")
+            val review=dev.pocketengine.features.assistant.CompatibilityChatHandoff.read(app,id)
+            if(compatibilityChat!=null&&compatibilityChat!==review)throw IllegalStateException("请先处理上一份保留的兼容草稿")
+            compatibilityChat=review;compatibilityChatRevision++
+            if(review.taskId.isNotBlank())focusTask(review.taskId)
+            applyCompatibilityChat()
+        } catch(error:Exception){state=state.copy(error=message(error))}
+    }
+    private fun saveCompatibilityChat(review:dev.pocketengine.features.assistant.CompatibilityChatHandoff.Review,model:OwnerComposerState) {
+        compatibilitySaving=true
+        ownerComposerStore.save(model).whenComplete { _,error -> main.post {
+            compatibilitySaving=false
+            if(error!=null){if(!closed)state=state.copy(error="原草稿尚未保存；兼容原文仍保留："+composerFailure(error));return@post}
+            dev.pocketengine.features.assistant.CompatibilityChatHandoff.applied(review)
+            if(compatibilityChat===review)compatibilityChat=null
+        } }
+    }
+    private fun applyCompatibilityChat() {
+        val review=compatibilityChat ?: return;val model=ownerComposer ?: return
+        if(!privateWorkspaceView()||compatibilityDialog||compatibilitySaving||state.chatSubmitting)return
+        // A cold Activity may receive the handoff before its first features_state; inspect the original host, not stale UI busy flags.
+        try {
+            val assistant=app.features.module("assistant")?.snapshot() ?: throw IllegalStateException("原私聊宿主尚未准备")
+            val turn=assistant.optJSONObject("activeTurn") ?: state.chatActiveTurn?.takeIf { app.chatInputModel(it).optBoolean("available") }
+            val running=assistant.optBoolean("running") || turn!=null&&app.chatInputModel(turn).optBoolean("available")
+            state=state.copy(chatBusy=running,chatActiveTurn=turn)
+        } catch(error:Exception){state=state.copy(error=message(error));return}
+        if(state.chatBusy&&state.chatActiveTurn?.optString("conversationId")!=review.conversationId){
+            if(review.conversationId.isNotBlank())openConversationReader(review.conversationId)
+            state=state.copy(notice="原对话仍在执行；兼容草稿已保留，结束后在对应原对话继续。停止请使用原任务控制。")
+            return
+        }
+        try {
+            dev.pocketengine.features.assistant.CompatibilityChatHandoff.read(app,review.id)
+            voiceInputModeChanged();val draft=if(review.conversationId.isBlank())model.newConversation() else model.selectConversation(review.conversationId)
+            chatViewEpoch++;publishComposer(true);voiceInputViewChanged();closeConversationReader();state=state.copy(messages=emptyList(),chatActiveTurn=state.chatActiveTurn.takeIf { state.chatBusy })
+            if(review.conversationId.isNotBlank())feature("assistant","get",JSONObject().put("conversationId",review.conversationId))
+            if(review.applied()){compatibilityChat=null;return}
+            if(review.text.isEmpty()||review.text==draft.text){saveCompatibilityChat(review,model);return}
+            val accept: (String)->Unit = { text ->
+                try {
+                    if(!privateWorkspaceView()||compatibilityChat!==review||ownerComposer!==model||model.activeKey()!=draft.key||state.chatSubmitting||state.chatBusy&&state.chatActiveTurn?.optString("conversationId")!=review.conversationId)throw IllegalStateException("原草稿视图已变化，未覆盖新输入；兼容原文仍保留")
+                    model.edit(draft.key,draft.revision,text,draft.mode,draft.attachments());publishComposer();saveCompatibilityChat(review,model)
+                    state=state.copy(notice="已放入对应原生草稿，尚未发送；请核对后使用原生发送或原任务停止。")
+                } catch(error:Exception){state=state.copy(error=message(error))}
+            }
+            if(draft.text.isEmpty()&&draft.attachments().length()==0&&draft.sourceRefs().length()==0&&draft.voiceText.isEmpty())accept(review.text)
+            else {
+                compatibilityDialog=true
+                android.app.AlertDialog.Builder(activity).setTitle("保留两份原对话草稿")
+                    .setMessage("原生对话已有未发送内容。兼容页原文仍保留；是否将兼容草稿追加到这份原对话草稿？不会自动发送。")
+                    .setPositiveButton("追加并继续") { _,_ -> compatibilityDialog=false;accept(if(draft.text.isEmpty())review.text else draft.text+"\n\n"+review.text) }
+                    .setNegativeButton("保留原草稿") { _,_ -> compatibilityDialog=false;compatibilityChat=null;state=state.copy(notice="原生草稿未改；兼容页原文仍保留，可返回后再继续。") }
+                    .setOnCancelListener { compatibilityDialog=false;compatibilityChat=null }.show()
+            }
+        } catch(error:Exception){state=state.copy(error=message(error))}
+    }
     fun openConversation(id:String) {
+        compatibilityChat=null
         if(state.chatBusy||state.chatSubmitting){openConversationReader(id);return}
         val model=ownerComposer ?: return
         try{voiceInputModeChanged();model.selectConversation(id);chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null);voiceInputViewChanged();persistOwnerComposer();feature("assistant","get",JSONObject().put("conversationId",id))}
@@ -1388,7 +1456,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (task.raw.optJSONObject("origin")?.optString("kind") in setOf("group", "team_assignment", "team_integration", "team_review")) it.put("runId", task.raw.optString("runId")).put("epoch", task.raw.optInt("coordinatorEpoch"))
     }
     fun stopReviewedTask(task: UiTask) { native("stopTask", reviewedTaskInput(task)) }
-    fun confirmReviewedTask(task: UiTask, done: Boolean, feedback: String) { native("confirmResult", reviewedTaskInput(task).put("completed", done).put("feedback", feedback)) }
+    fun confirmReviewedTask(task: UiTask, done: Boolean, feedback: String) { native("confirmResult", reviewedTaskInput(task).put("resultReviewDigest", task.raw.optString("resultReviewDigest")).put("completed", done).put("feedback", feedback)) }
     fun resolveReviewedTask(task: UiTask, operationId: String, outcome: String) { native("resolveOperation", reviewedTaskInput(task).put("operationId", operationId).put("outcome", outcome)) }
     fun getTask(id: String) { native("getTask", JSONObject().put("taskId", id)) }
     fun focusTask(id: String) { closeConversationReader();getTask(id); state = state.copy(requestedTaskId = id, requestedTaskRevision = state.requestedTaskRevision + 1) }
@@ -1448,9 +1516,6 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 main.post { if (!closed) { if (operation.isBlank()) state = state.copy(notice = "未找到当前正在运行的媒体请求，请核对任务记录") else feature("media", "cancel", JSONObject().put("operationId", operation)) } }
             } catch (error: Exception) { main.post { if (!closed) state = state.copy(error = message(error)) } }
         }
-    }
-    fun confirmTask(id: String, done: Boolean, feedback: String) {
-        native("confirmResult", JSONObject().put("taskId", id).put("completed", done).put("feedback", feedback))
     }
     fun reconcileExternalTask(id: String, outcome: String, note: String) { native("reconcileExternalTask", JSONObject().put("taskId", id).put("outcome", outcome).put("note", note)) }
     fun updateTask(id: String, feedback: String) {
@@ -1545,6 +1610,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (state.inspectionBusy) return
         state = state.copy(inspectionBusy = true, inspectionManualAllowed = false, inspectionError = null)
         native("takeoverTask", JSONObject().put("taskId", taskId))
+    }
+    fun ownerPhoneHandoff(action: String) {
+        val taskId = state.inspectionTaskId ?: return
+        if (state.inspectionBusy) return
+        val handoff = state.inspectionObservation?.optJSONObject("ownerHandoff")
+        state = state.copy(inspectionBusy = true, inspectionManualAllowed = false, inspectionError = null)
+        native("ownerPhoneHandoff", JSONObject().put("taskId", taskId).put("handoffAction", action).put("handoffId", handoff?.optString("handoffId") ?: ""))
     }
     fun manualAction(tool: String, args: JSONObject = JSONObject()) {
         val taskId = state.inspectionTaskId ?: return
@@ -1749,7 +1821,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         if (action == "setFollowUpPolicy") { native("rescheduleAutomation"); state = state.copy(notice = "跟进设置已保存") }
                         if (action in setOf("saveTaskMemory", "resaveTaskMemory", "saveMessageMemory", "resaveMessageMemory")) { native("getFeatures"); state = state.copy(notice = "已按真实来源保存记忆") }
                     }
-                    if (action in setOf("observeTask", "takeoverTask", "manualTaskAction", "ownerSecretInput") && viewerEpoch == inspectionEpoch && input.optString("taskId") == state.inspectionTaskId) receiveInspection(action, result)
+                    if (action in setOf("observeTask", "takeoverTask", "ownerPhoneHandoff", "manualTaskAction", "ownerSecretInput") && viewerEpoch == inspectionEpoch && input.optString("taskId") == state.inspectionTaskId) receiveInspection(action, result)
                     if (action == "startRun") { phoneDraftAcceptedText=input.optString("goal");phoneDraftAcceptedRevision++;state = state.copy(phoneSubmitting = false, acceptedInputRevision = state.acceptedInputRevision + 1, acceptedInput = input.optString("goal")) }
                     if (action == "configureTaskExecutionScope" && result != null) { mergeTask(result); state = state.copy(notice = "原范围已更新，累计用量保留；没有自动继续或重放动作") }
                     if (action == "getTask" && result != null) {
@@ -1780,7 +1852,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                             state = state.copy(moduleResults = state.moduleResults - key, moduleResultInputs = state.moduleResultInputs + (key to metadata))
                         }
                         if (action == "approveCapability") state = state.copy(approvalRequests = state.approvalRequests - (input.optString("taskId") + ":" + input.optString("approvalId")))
-                        if (action in setOf("observeTask", "takeoverTask", "manualTaskAction", "ownerSecretInput") && viewerEpoch == inspectionEpoch && input.optString("taskId") == state.inspectionTaskId) state = state.copy(inspectionBusy = false, inspectionManualAllowed = false, inspectionError = message(error))
+                        if (action in setOf("observeTask", "takeoverTask", "ownerPhoneHandoff", "manualTaskAction", "ownerSecretInput") && viewerEpoch == inspectionEpoch && input.optString("taskId") == state.inspectionTaskId) state = state.copy(inspectionBusy = false, inspectionManualAllowed = false, inspectionError = message(error))
                         if (action == "featureRequest") {
                             featureResult(JSONObject().put("requestId", input.optString("requestId")).put("feature", input.optString("feature")).put("command", input.optString("command")).put("ok", false).put("message", message(error)))
                         }
@@ -1814,6 +1886,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 val running=active!=null&&(assistant.optBoolean("running")||try{app.chatInputModel(active).optBoolean("available")}catch(_:Exception){false}) || assistant.optBoolean("running")&&assistant.optJSONObject("activeTurn")==null
                 state = state.copy(features = features, conversations = parseConversations(assistant.optJSONArray("conversations")), chatBusy = running, chatActiveTurn = active, projects = features.optJSONObject("workspace")?.optJSONArray("projects").objects().map { UiProject(it.optString("id"), it.optString("name")) })
                 features.optJSONObject("teams")?.optJSONArray("runs").objects().forEach(::mergeTeamRun)
+                applyCompatibilityChat()
             }
             "feature_event" -> {
                 val payload = event.optJSONObject("payload") ?: return
@@ -1825,6 +1898,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         if(phase in setOf("completed","failed","cancelled","idle")&&run.isNotBlank()) {
                             closedChatRuns.add(run);while(closedChatRuns.size>128)closedChatRuns.remove(closedChatRuns.first())
                             if(state.chatActiveTurn?.optString("runId")==run)state=state.copy(chatActiveTurn=null,chatBusy=false)
+                            applyCompatibilityChat()
                         }
                         if(phase in setOf("accepted","queued","unconfirmed","consumed"))receiveChatAcknowledgement(payload,payload.optString("clientMessageId").takeIf{it.isNotBlank()})
                         else if(phase=="model"&&state.conversationId==id)state=state.copy(chatBusy=true)

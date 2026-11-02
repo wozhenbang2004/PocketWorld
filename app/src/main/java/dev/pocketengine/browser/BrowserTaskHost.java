@@ -25,6 +25,8 @@ public final class BrowserTaskHost {
         void launch(String existingTaskId)throws Exception;
         default void prepareOwnerExecutionScope(String taskId,JSONObject choice)throws Exception {if(choice!=null)throw new SecurityException("原宿主未支持明确任务范围，不能静默丢弃期限或预算");}
         RunControl currentControl(String taskId);
+        default void releasePhoneInput(String taskId,RunControl control)throws Exception {throw new SecurityException("手机表面切换尚未接线");}
+        default void acquirePhoneInput(String taskId,RunControl control)throws Exception {throw new SecurityException("手机表面切换尚未接线");}
         default JSONObject modelForOwner()throws Exception{return new JSONObject();}
         default JSONArray currentTasksForOwner()throws Exception{return new JSONArray();}
     }
@@ -39,7 +41,7 @@ public final class BrowserTaskHost {
     }
     private static final class Scope {
         final Plan plan;final ModelCapabilityAdapters.Binding binding;final RunControl control;final String token;
-        volatile BrowserTaskCapabilityPort port;volatile BrowserTaskApprovalPort approvals;volatile boolean closed;volatile String readScopeId="";
+        volatile BrowserTaskCapabilityPort port;volatile JSONObject closeReceipt;volatile BrowserTaskApprovalPort approvals;volatile boolean closed;volatile String readScopeId="";
         Scope(Plan plan,ModelCapabilityAdapters.Binding binding,RunControl control){this.plan=plan;this.binding=binding;this.control=control;token=binding.taskId+":"+binding.runId+":"+binding.epoch;}
     }
     private final BrowserModule browser;
@@ -71,6 +73,10 @@ public final class BrowserTaskHost {
     /** Actual App factory calls this after original task/run/control admission, before plugin wrapping. */
     public CapabilityPort wrapIfRequested(ModelCapabilityAdapters.Binding binding,RunControl original,CapabilityPort existing)throws Exception {return wrapIfRequested(binding,original,existing,null);}
     public CapabilityPort wrapIfRequested(ModelCapabilityAdapters.Binding binding,RunControl original,CapabilityPort existing,dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture)throws Exception {
+        return wrapIfRequested(binding,original,existing,outputCapture,null);
+    }
+    public CapabilityPort wrapIfRequested(ModelCapabilityAdapters.Binding binding,RunControl original,CapabilityPort existing,dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture,dev.pocketengine.core.PhonePort phone)throws Exception {
+        if(phone!=null){JSONObject task=tasks.get(binding.taskId,false);if(task!=null&&"phone".equals(task.optString("kind"))&&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))&&!task.has("origin"))return new PendingPort(binding,original,existing,outputCapture,phone);}
         if(!plans.containsKey(binding.taskId))return new PendingPort(binding,original,existing,outputCapture);
         return attachRequested(binding,original,existing,outputCapture);
     }
@@ -82,7 +88,7 @@ public final class BrowserTaskHost {
         Scope scope=new Scope(plan,binding,original);if(active.putIfAbsent(binding.taskId,scope)!=null)throw new SecurityException("原任务已有浏览空间");boolean attached=false;
         try{
             if(!resources.acquireBrowser(scope.token,tasks.taskExecutionDeadline(scope.binding.taskId,scope.binding.runId,scope.binding.epoch)))throw new SecurityException("手机或浏览器资源正在被其他执行占用");
-            JSONArray names=new JSONArray();if(existing!=null){JSONArray definitions=existing.tools();for(int i=0;i<definitions.length();i++)names.put(definitions.getJSONObject(i).getJSONObject("function").getString("name"));}JSONArray own=BrowserTaskCapabilityPort.taskToolNames(true);for(int i=0;i<own.length();i++)names.put(own.getString(i));tasks.authorizeTools(binding.taskId,binding.runId,names);
+            JSONArray names=new JSONArray();if(existing!=null){JSONArray definitions=existing.tools();for(int i=0;i<definitions.length();i++)names.put(definitions.getJSONObject(i).getJSONObject("function").getString("name"));}JSONArray own=BrowserTaskCapabilityPort.taskToolNames(true);for(int i=0;i<own.length();i++)names.put(own.getString(i));if("phone".equals(tasks.get(binding.taskId,false).optString("kind")))names.put("task_surface_switch");tasks.authorizeTools(binding.taskId,binding.runId,names);
             ModelCapabilityAdapters.ResourceCheck resource=()->{if(scope.closed||originals.currentControl(binding.taskId)!=original||!resources.ownsBrowser(scope.token))throw new SecurityException("原研究控制或浏览资源已失效");};
             TaskStoreCapabilityAuthority authority=new TaskStoreCapabilityAuthority(tasks,binding,events);scope.approvals=new BrowserTaskApprovalPort(tasks,binding,original,authority,resource,events);
             BrowserTaskSourcePort sources=new BrowserTaskSourcePort(tasks,binding,original,authority,resource,events,outputCapture);
@@ -128,10 +134,10 @@ public final class BrowserTaskHost {
     public JSONObject allowExistingForOwner(String taskId,JSONObject expectedProfile,boolean consent,BrowserReadScope.Consent readConsent,BrowserFrameOrigins.Consent frameOrigins)throws Exception {return allowExistingForOwner(taskId,expectedProfile,consent,readConsent,frameOrigins,BrowserActionScope.disabled());}
     public JSONObject allowExistingForOwner(String taskId,JSONObject expectedProfile,boolean consent,BrowserReadScope.Consent readConsent,BrowserFrameOrigins.Consent frameOrigins,BrowserActionScope.Consent actions)throws Exception {
         worker();BrowserTaskSpace.uuid(taskId);if(!consent)throw new SecurityException("请先确认将本任务网页观察交给原模型");RunControl current=originals.currentControl(taskId);if(current==null)throw new SecurityException("原助手任务已不在运行");current.check();if(current.isPaused())throw new SecurityException("请先处理原任务暂停状态");
-        synchronized(tasks){JSONObject task=tasks.get(taskId,false);JSONObject origin=task==null?null:task.optJSONObject("origin");if(task==null||!"assistant".equals(task.optString("kind"))||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||!"capabilities".equals(task.optString("executionMode"))||origin!=null&&origin.optString("kind").matches("channel|group")||!current.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch"))||originals.currentControl(taskId)!=current)throw new SecurityException("只能接入当前主人私人助手的原执行");if(tasks.hasUnresolved(taskId))throw new IllegalStateException("请等当前动作取得回执，先核对未知效果后再接入浏览");if(actions.enabled()&&!task.has("executionScope"))throw new SecurityException("此旧任务没有主人任务范围，请先在原任务明确配置；不会默默延长旧授权");}
+        synchronized(tasks){JSONObject task=tasks.get(taskId,false);JSONObject origin=task==null?null:task.optJSONObject("origin");if(task==null||!task.optString("kind").matches("assistant|phone")||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||!("capabilities".equals(task.optString("executionMode"))||"phone".equals(task.optString("kind"))&&origin==null)||origin!=null&&origin.optString("kind").matches("channel|group")||!current.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch"))||originals.currentControl(taskId)!=current)throw new SecurityException("只能接入当前主人私人助手的原执行");if(tasks.hasUnresolved(taskId))throw new IllegalStateException("请等当前动作取得回执，先核对未知效果后再接入浏览");if(actions.enabled()&&!task.has("executionScope"))throw new SecurityException("此旧任务没有主人任务范围，请先在原任务明确配置；不会默默延长旧授权");}
         JSONObject selected=onMain(()->{JSONObject state=browser.snapshot();requireProfile(state,expectedProfile);JSONObject space=browser.nativeTabs().optJSONObject("taskSpace");if(space!=null&&!space.optString("status").equals("ended"))throw new IllegalStateException("请先结束当前浏览空间");return profileIdentity(state);});
         if(!plans.isEmpty()||!active.isEmpty())throw new IllegalStateException("已有浏览请求，请先结束或核对");Plan plan=new Plan(taskId,selected,current,readConsent,frameOrigins,null,actions);if(plans.putIfAbsent(taskId,plan)!=null)throw new IllegalStateException("此原任务已有浏览请求");latestTask=taskId;
-        try{synchronized(tasks){JSONObject task=tasks.get(taskId,false),execution=task.optJSONObject("executionScope");if(execution!=null)tasks.extendExecutionToolsForOwner(taskId,task.getString("runId"),task.getInt("coordinatorEpoch"),execution.getLong("revision"),BrowserTaskCapabilityPort.taskToolNames(true));}}catch(Exception stale){plans.remove(taskId,plan);throw stale;}
+        try{synchronized(tasks){JSONObject task=tasks.get(taskId,false),execution=task.optJSONObject("executionScope");if(execution!=null)tasks.extendExecutionToolsForOwner(taskId,task.getString("runId"),task.getInt("coordinatorEpoch"),execution.getLong("revision"),BrowserTaskCapabilityPort.taskToolNames(true).put("task_surface_switch"));}}catch(Exception stale){plans.remove(taskId,plan);throw stale;}
         tasks.event(taskId,new JSONObject().put("type","browser_research_requested").put("profile",selected).put("extraFrameOrigins",frameOrigins.summary()).put("frameOriginPolicy","same_origin_plus_explicit_native_task_origins").put("phase","pending_original_turn").put("sameRun",true));return new JSONObject().put("taskId",taskId).put("status","pending_original_turn").put("message","已允许原任务在下一轮取得浏览页；未新建任务或替换执行控制");
     }
     public JSONArray currentTasksForOwner()throws Exception {return originals.currentTasksForOwner();}
@@ -266,7 +272,7 @@ public final class BrowserTaskHost {
         catch(Exception expired){scope.control.cancel();if(scope.port!=null)try{scope.port.endForOwner("task_scope_expired");}catch(Exception ignored){resources.releaseBrowser(scope.token);}}
     },1_000);}
     private void ownerControl(Scope scope,String type,String space,String tab){scope.control.pause();revokeScope(scope,"owner_pause_or_takeover");resources.releaseBrowser(scope.token);try{JSONObject event=new JSONObject().put("type",type).put("taskId",scope.binding.taskId).put("runId",scope.binding.runId).put("epoch",scope.binding.epoch).put("browserSpaceId",space).put("tabId",tab);tasks.event(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,event);emit(scope.binding.taskId,event);}catch(Exception unavailable){/* Original cancellation and resource fencing do not depend on an observer. */}}
-    private void closeScope(Scope scope,JSONObject receipt){synchronized(scope){if(scope.closed)return;scope.closed=true;}revokeScope(scope,"browser_scope_closed");if("profile_closed".equals(receipt.optString("reason")))scope.control.cancel();active.remove(scope.binding.taskId,scope);plans.remove(scope.binding.taskId,scope.plan);resources.releaseBrowser(scope.token);if(scope.approvals!=null)scope.approvals.close();try{JSONObject event=new JSONObject().put("type","browser_space_closed").put("taskId",scope.binding.taskId).put("runId",scope.binding.runId).put("epoch",scope.binding.epoch).put("cleanup",receipt);tasks.event(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,event);emit(scope.binding.taskId,event);}catch(Exception unavailable){/* Cleanup remains scoped even when persistence is unavailable. */}}
+    private void closeScope(Scope scope,JSONObject receipt){synchronized(scope){if(scope.closed)return;scope.closeReceipt=receipt;scope.closed=true;}revokeScope(scope,"browser_scope_closed");if("profile_closed".equals(receipt.optString("reason")))scope.control.cancel();active.remove(scope.binding.taskId,scope);plans.remove(scope.binding.taskId,scope.plan);resources.releaseBrowser(scope.token);if(scope.approvals!=null)scope.approvals.close();try{JSONObject event=new JSONObject().put("type","browser_space_closed").put("taskId",scope.binding.taskId).put("runId",scope.binding.runId).put("epoch",scope.binding.epoch).put("cleanup",receipt);tasks.event(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,event);emit(scope.binding.taskId,event);}catch(Exception unavailable){/* Cleanup remains scoped even when persistence is unavailable. */}}
     private void emit(String taskId,JSONObject event)throws Exception {events.emit(event);}
     private static JSONObject profileIdentity(JSONObject snapshot)throws Exception {JSONObject out=new JSONObject();for(String key:new String[]{"profileId","profileRevision","browserSessionId","profileIsolation"})out.put(key,snapshot.get(key));return out;}
     private static void requireProfile(JSONObject current,JSONObject expected)throws Exception {if(!current.optBoolean("open"))throw new IllegalStateException("请先打开浏览网页并选定登录资料");for(String key:new String[]{"profileId","profileRevision","browserSessionId"})if(!String.valueOf(current.opt(key)).equals(String.valueOf(expected.opt(key))))throw new SecurityException("主人确认的登录资料或浏览会话已变化，请刷新");}
@@ -276,14 +282,67 @@ public final class BrowserTaskHost {
     /** Turn-boundary adapter. Native opt-in never injects a new browser into a prepared old call. */
     private final class PendingPort implements CapabilityPort {
         private final ModelCapabilityAdapters.Binding binding;private final RunControl original;private final CapabilityPort base;private final dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture;private volatile CapabilityPort selected;private volatile boolean closed;
-        PendingPort(ModelCapabilityAdapters.Binding binding,RunControl original,CapabilityPort base,dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture){this.binding=binding;this.original=original;this.base=Objects.requireNonNull(base);this.outputCapture=outputCapture;selected=base;}
-        public JSONArray tools()throws Exception{return selected.tools();}public boolean supports(String name){return selected.supports(name);}public boolean sideEffecting(String name){return selected.sideEffecting(name);}public void validate(String name,JSONObject args)throws Exception{selected.validate(name,args);}
-        public JSONObject contextSnapshot(String query)throws Exception{return selected.contextSnapshot(query);}public JSONObject execute(String name,JSONObject args,RunControl supplied)throws Exception {if(supplied!=original||closed)throw new SecurityException("原助手浏览适配器已失效");return selected.execute(name,args,supplied);}
+        private final dev.pocketengine.core.PhonePort phone;
+        private Scope selectedScope;
+        private boolean phoneInputReleased;
+        PendingPort(ModelCapabilityAdapters.Binding binding,RunControl original,CapabilityPort base,dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture){this(binding,original,base,outputCapture,null);}
+        PendingPort(ModelCapabilityAdapters.Binding binding,RunControl original,CapabilityPort base,dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture,dev.pocketengine.core.PhonePort phone){this.binding=binding;this.original=original;this.base=Objects.requireNonNull(base);this.outputCapture=outputCapture;this.phone=phone;selected=base;}
+        private boolean surfaceTool(String name){return phone!=null&&"task_surface_switch".equals(name);}
+        private void checkSurface(RunControl supplied)throws Exception {if(supplied!=original||closed||originals.currentControl(binding.taskId)!=original||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("原任务表面控制已变化");original.check();if(original.isPaused())throw new SecurityException("请先交还原任务");}
+        private JSONObject switchSurface(JSONObject args,RunControl supplied)throws Exception {
+            checkSurface(supplied);validate("task_surface_switch",args);
+            TaskStoreCapabilityAuthority authority=new TaskStoreCapabilityAuthority(tasks,binding,events);
+            JSONObject exact=new JSONObject(args.toString());String operation=exact.getString("_hostOperationId");exact.remove("_hostOperationId");
+            authority.check("task_surface_switch",original);authority.requirePrepared(operation,"task_surface_switch",exact);
+            String target=args.getString("surface"),from=original.executionSurface();
+            if(target.equals(from))return surfaceReceipt(from,target,"unchanged");
+            if(!from.matches("phone|browser"))throw new SecurityException("上次表面释放未确认，请由主人核对");
+            if(target.equals("browser")&&!plans.containsKey(binding.taskId))return new JSONObject().put("ok",false).put("accepted",false).put("code","browser_owner_consent_required").put("message","请主人在此原任务的网页工作区选定登录资料并确认；没有新建任务或扩大授权。");
+            // Fence all old phone observations before relinquishing input. The retained display
+            // is only a parked App, not a second active executor; never silently use main display.
+            original.changeExecutionSurface(from,"transition");phone.clearReferences();
+            try{
+                tasks.event(binding.taskId,binding.runId,binding.epoch,surfaceReceipt(from,target,"releasing").put("type","task_surface_transition"));
+                if(target.equals("browser")){
+                    originals.releasePhoneInput(binding.taskId,original);phoneInputReleased=true;checkSurface(supplied);
+                    selected=attachRequested(binding,original,base,outputCapture);selectedScope=active.get(binding.taskId);
+                    if(selected==base)throw new SecurityException("浏览同意已撤销");
+                }else{
+                    Scope scope=selectedScope;if(scope==null||scope.port==null||scope.control!=original)throw new SecurityException("原浏览空间已变化");
+                    JSONObject release=scope.closed?scope.closeReceipt:scope.port.endForOwner("surface_return_to_phone");
+                    if(release==null||!"space_closed".equals(release.optString("status")))throw new SecurityException("网页释放尚未确认，请先处理原空间");
+                    selected=base;selectedScope=null;originals.acquirePhoneInput(binding.taskId,original);phoneInputReleased=false;
+                }
+                checkSurface(supplied);original.changeExecutionSurface("transition",target);phone.clearReferences();
+                JSONObject receipt=surfaceReceipt(from,target,"switched");
+                tasks.event(binding.taskId,binding.runId,binding.epoch,new JSONObject(receipt.toString()).put("type","task_surface_transition"));return receipt;
+            }catch(Exception failed){original.pause();try{tasks.event(binding.taskId,binding.runId,binding.epoch,surfaceReceipt(from,target,"needs_owner_check").put("type","task_surface_transition"));}catch(Exception unavailable){failed.addSuppressed(unavailable);}throw failed;}
+        }
+        private JSONObject surfaceReceipt(String from,String to,String status)throws Exception{return new JSONObject().put("ok",true).put("taskId",binding.taskId).put("runId",binding.runId).put("epoch",binding.epoch).put("fromSurface",from).put("surface",to).put("surfaceRevision",original.surfaceRevision()).put("status",status).put("sameRun",true).put("oldObservationRefsValid",false).put("freshObservationRequired",true).put("phoneDisplayRetained",phone!=null).put("phoneInputReleaseConfirmed",phoneInputReleased).put("inputLeaseTransferred",status.equals("switched")).put("newTaskCreated",false);}
+
+        public JSONArray tools()throws Exception {
+            JSONArray out=new JSONArray(),all=selected.tools();
+            for(int i=0;i<all.length();i++){
+                JSONObject tool=all.getJSONObject(i);
+                if(phone==null||original.phoneSurfaceActive()||!tool.getJSONObject("function").getString("name").startsWith("phone_"))out.put(tool);
+            }
+            if(phone!=null){
+                JSONObject parameters=new JSONObject().put("type","object").put("additionalProperties",false)
+                    .put("properties",new JSONObject().put("surface",new JSONObject().put("type","string").put("enum",new JSONArray().put("phone").put("browser"))))
+                    .put("required",new JSONArray().put("surface"));
+                out.put(new JSONObject().put("type","function").put("function",new JSONObject().put("name","task_surface_switch")
+                    .put("description","在同一任务/执行切换手机与专用网页。browser须主人先在原任务网页工作区确认登录资料；phone结束本次网页空间并回手机现场。后台App保留；主屏模式不自动恢复其他App。切换后旧观察全部失效，必须重新观察；不新建任务、不授权网页动作。")
+                    .put("parameters",parameters)));
+            }
+            return out;
+        }
+        public boolean supports(String name){return surfaceTool(name)||selected.supports(name);}public boolean sideEffecting(String name){return surfaceTool(name)||selected.sideEffecting(name);}public void validate(String name,JSONObject args)throws Exception{if(surfaceTool(name)){if(!args.getString("surface").matches("phone|browser"))throw new IllegalArgumentException("surface必须为phone或browser");for(var keys=args.keys();keys.hasNext();){String key=keys.next();if(!key.equals("surface")&&!key.equals("_hostOperationId"))throw new IllegalArgumentException("未知切换参数");}}else selected.validate(name,args);}
+        public JSONObject contextSnapshot(String query)throws Exception{return selected.contextSnapshot(query);}public JSONObject execute(String name,JSONObject args,RunControl supplied)throws Exception {if(supplied!=original||closed)throw new SecurityException("原助手浏览适配器已失效");return surfaceTool(name)?switchSurface(args,supplied):selected.execute(name,args,supplied);}
         public void beginRun(String goal,RunControl supplied)throws Exception {if(supplied!=original)throw new SecurityException("不能更换原助手控制器");selected.beginRun(goal,supplied);}
         public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl supplied)throws Exception {if(supplied!=original||closed)throw new SecurityException("原助手浏览适配器已失效");selected.admitCapabilities(snapshot,supplied);}
-        public void prepareTurnSurface(RunControl supplied)throws Exception {if(supplied!=original||closed)throw new SecurityException("原助手浏览适配器已失效");if(selected==base&&plans.containsKey(binding.taskId))selected=attachRequested(binding,original,base,outputCapture);selected.prepareTurnSurface(supplied);}
-        public JSONObject prepareTurn(String query,int round,int steps,RunControl supplied)throws Exception {if(supplied!=original||closed)throw new SecurityException("原助手浏览适配器已失效");return selected.prepareTurn(query,round,steps,supplied);}
-        public boolean responseCurrent(RunControl supplied)throws Exception{return supplied==original&&!closed&&selected.responseCurrent(supplied);}public JSONObject beforeTool(String name,JSONObject args,RunControl supplied)throws Exception{return selected.beforeTool(name,args,supplied);}public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl supplied)throws Exception{selected.afterTool(name,args,receipt,supplied);}public void endRun(RunControl supplied)throws Exception{selected.endRun(supplied);}
+        public void prepareTurnSurface(RunControl supplied)throws Exception {if(supplied!=original||closed)throw new SecurityException("原助手浏览适配器已失效");if(phone==null&&selected==base&&plans.containsKey(binding.taskId))selected=attachRequested(binding,original,base,outputCapture);selected.prepareTurnSurface(supplied);}
+        public JSONObject prepareTurn(String query,int round,int steps,RunControl supplied)throws Exception {if(supplied!=original||closed)throw new SecurityException("原助手浏览适配器已失效");return selected.prepareTurn(query,round,steps,supplied).put("tools",tools());}
+        public boolean responseCurrent(RunControl supplied)throws Exception{return supplied==original&&!closed&&selected.responseCurrent(supplied);}public JSONObject beforeTool(String name,JSONObject args,RunControl supplied)throws Exception{if(phone!=null&&name.startsWith("phone_")&&!original.phoneSurfaceActive())return new JSONObject().put("ok",false).put("accepted",false).put("code","phone_surface_inactive").put("message","当前是网页表面；先切回手机并重新观察。");if(surfaceTool(name)){checkSurface(supplied);if(tasks.hasUnresolved(binding.taskId))return new JSONObject().put("ok",false).put("accepted",false).put("code","unresolved_operation").put("message","先核对当前动作回执，不能切换表面。");return null;}return selected.beforeTool(name,args,supplied);}public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl supplied)throws Exception{selected.afterTool(name,args,receipt,supplied);}public void endRun(RunControl supplied)throws Exception{selected.endRun(supplied);}
         public void beforeModelRequest(String requestId,JSONArray messages,RunControl supplied)throws Exception{if(supplied!=original||closed)throw new SecurityException("原助手浏览请求已失效");selected.beforeModelRequest(requestId,messages,supplied);}
         public JSONObject afterModelResponse(String requestId,String answerId,RunControl supplied)throws Exception{if(supplied!=original||closed)throw new SecurityException("原助手浏览请求已失效");return selected.afterModelResponse(requestId,answerId,supplied);}
         public void modelRequestAbandoned(String requestId)throws Exception{selected.modelRequestAbandoned(requestId);}

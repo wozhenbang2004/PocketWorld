@@ -46,16 +46,30 @@ public final class ProjectExactPatch {
         for(String path:paths.keySet())for(int slash=path.indexOf('/');slash>=0;slash=path.indexOf('/',slash+1))if(paths.containsKey(path.substring(0,slash)))throw new IllegalArgumentException("补丁结果存在文件/目录冲突");
         JSONArray result=new JSONArray();for(JSONObject file:prepared.values())result.put(file);return result;
     }
+    /** A settled failure can contain confirmed effects. Never infer effects from an unknown operation. */
+    public static void requireSettledReceipt(JSONObject receipt)throws Exception {
+        if(!receipt.optBoolean("receiptReceived")||!Set.of("completed","failed").contains(receipt.optString("status")))throw new SecurityException("撤销需原确定文件回执；unknown保留原操作核对，不自动反向");
+    }
     public static JSONArray reverse(JSONObject snapshot,JSONArray original,JSONObject receipt,String originalOperation)throws Exception {
-        if(!receipt.optBoolean("receiptReceived")||!receipt.optString("status").equals("completed")||receipt.optInt("exitCode",1)!=0||!receipt.optBoolean("allFilesApplied"))throw new SecurityException("只能按原已全部应用的确定文件回执撤销；未知/部分不能自动推定反向效果");
-        JSONArray observed=receipt.getJSONArray("files");if(original.length()!=observed.length())throw new SecurityException("原文件回执不完整");Map<String,byte[]> current=ProjectSources.byteFiles(snapshot);JSONArray result=new JSONArray();
+        requireSettledReceipt(receipt);
+        JSONArray observed=receipt.getJSONArray("files");if(original.length()!=observed.length())throw new SecurityException("原文件回执不完整");Map<String,byte[]> current=ProjectSources.byteFiles(snapshot);JSONArray result=new JSONArray();Set<String> paths=new java.util.HashSet<>();
         for(int i=0;i<original.length();i++){
-            JSONObject file=original.getJSONObject(i),actual=observed.getJSONObject(i);String path=file.getString("path"),after=file.getString("afterHash");if(!path.equals(actual.getString("path"))||!after.equals(actual.getString("afterHash"))||!"applied".equals(actual.getString("state")))throw new SecurityException("原文件回执与完整方案不同");
+            JSONObject file=original.getJSONObject(i),actual=observed.getJSONObject(i);String path=file.getString("path"),after=file.getString("afterHash"),state=actual.getString("state");
+            if(!paths.add(path)||!path.equals(actual.getString("path"))||!Set.of("applied","failed","skipped").contains(state))throw new SecurityException("原文件回执不完整或仍有unknown；保留原操作核对");
+            if(!"applied".equals(state))continue;
+            if(!after.equals(actual.getString("afterHash"))||actual.has("actualAfterHash")&&!after.equals(actual.getString("actualAfterHash")))throw new SecurityException("原applied回执与完整方案不同");
             String currentHash=current.containsKey(path)?ProjectSources.sha256(current.get(path)):"absent";if(!after.equals(currentHash))throw new SecurityException("撤销冲突：后续修改尚在，不覆盖主人新内容："+path);
             String action=file.getString("action").equals("create")?"delete":file.getString("action").equals("delete")?"create":"replace",before=file.getString("beforeContent");byte[] bytes=encode(before);String target=file.getString("expectedHash");
             result.put(new JSONObject().put("path",path).put("action",action).put("expectedHash",after).put("afterHash",target).put("beforeContent",file.getString("content")).put("content",before).put("beforeBytes",file.getLong("afterBytes")).put("afterBytes",file.getLong("beforeBytes")).put("revertsOperationId",ProjectBuildPlan.identity(originalOperation)).put("changes",new JSONArray().put(new JSONObject().put("kind","restore_original_bytes").put("beforeHash",after).put("afterHash",target).put("restoredBytes",bytes.length))));
         }
+        if(result.length()==0)throw new SecurityException("原补丁没有确证applied文件，未生成或执行撤销");
         return result;
+    }
+    /** Kept in the immutable proposal and its receipt, so excluded files never look undone. */
+    public static JSONObject reversalScope(JSONObject receipt)throws Exception {
+        JSONArray selected=new JSONArray(),excluded=new JSONArray(),files=receipt.getJSONArray("files");
+        for(int i=0;i<files.length();i++){JSONObject file=files.getJSONObject(i);if("applied".equals(file.getString("state")))selected.put(file.getString("path"));else excluded.put(new JSONObject().put("path",file.getString("path")).put("originalState",file.getString("state")).put("reversalAttempted",false).put("reason","no_confirmed_original_effect"));}
+        return new JSONObject().put("selectedPaths",selected).put("excludedFiles",excluded).put("selection","confirmed_applied_only").put("originalStatus",receipt.getString("status"));
     }
     public static byte[] encode(String value)throws Exception {if(value.indexOf('\0')>=0)throw new IllegalArgumentException("文字补丁不能包含空字节");var encoded=StandardCharsets.UTF_8.newEncoder().encode(java.nio.CharBuffer.wrap(value));byte[] bytes=new byte[encoded.remaining()];encoded.get(bytes);return bytes;}
 }

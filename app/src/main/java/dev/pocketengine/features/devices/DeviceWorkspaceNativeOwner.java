@@ -45,7 +45,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             public Iterable<PairingCoordinator.OutgoingGrant> originalOutgoingGrants() throws Exception { return nativeOutgoingGrants(); }
             public JSONObject authenticatedCapabilities(String id) throws Exception { return DeviceWorkspaceNativeOwner.this.authenticatedCapabilities(id); }
             public boolean hasMoreOutgoingGrants() { return DeviceWorkspaceNativeOwner.this.hasMoreOutgoingGrants(); }
-        }, originalTaskHost(), evidence -> { evidence.requireCurrent(); return artifactsForNativeWork().receive(evidence); });
+        }, originalTaskHost(), evidence -> { evidence.requireCurrent(); return artifactsForNativeWork().receive(evidence); }, evidence -> artifactsForNativeWork().receiveFile(evidence));
         app.setDeviceObservedImageSink(this::publishObservedImage);
     }
     DeviceWorkspaceArtifacts existingArtifacts() { return artifacts; }

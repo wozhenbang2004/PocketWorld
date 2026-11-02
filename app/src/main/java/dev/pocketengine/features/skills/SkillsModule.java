@@ -65,6 +65,10 @@ public final class SkillsModule implements EngineModule {
         JSONObject result=new JSONObject().put("skill",book.approveExperience(authenticatedScope,id,revision,digest,System.currentTimeMillis()));
         context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
     }
+    public JSONObject recordQuality(JSONObject scope,SkillQualityReceipt receipt)throws Exception {
+        JSONObject result=new JSONObject().put("skill",book.recordQuality(scope,receipt,System.currentTimeMillis()));
+        context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
+    }
     /** Only a committed native source-delete/forget event; replay its existing host operation receipt. */
     public JSONObject removeExperienceSource(JSONObject authenticatedScope,ExperienceOrigin.Ref removed)throws Exception {
         try{return book.removeExperienceSource(authenticatedScope,removed);}

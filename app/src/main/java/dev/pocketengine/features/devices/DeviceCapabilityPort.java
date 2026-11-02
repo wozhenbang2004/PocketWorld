@@ -40,6 +40,8 @@ public final class DeviceCapabilityPort implements CapabilityPort {
         default Reply exchange(DeviceTaskEnvelope request,TaskStoreDeviceTasks.OutboundSendTicket ticket,RunControl original)throws Exception{throw new SecurityException("原传输未安装native发送票据通道，未派发");}
     }
     @FunctionalInterface public interface VerifiedImages { dev.pocketengine.features.devices.transport.DeviceArtifactFetch.Verified fetch(TaskStoreDeviceTasks.DeviceImageEvidence nativeEvidence)throws Exception; }
+    @FunctionalInterface public interface ReceivedFiles { JSONObject publish(TaskStoreDeviceTasks.DeviceFileEvidence nativeEvidence) throws Exception; }
+    private final ReceivedFiles files;
     public record Reply(DeviceIdentity.AuthenticatedPeer peer, JSONObject response) { }
     private final TaskStore tasks;
     private final TaskStoreDeviceTasks devices;
@@ -53,7 +55,10 @@ public final class DeviceCapabilityPort implements CapabilityPort {
         this(tasks,coordinator,original,selectedRoutes,null);
     }
     public DeviceCapabilityPort(TaskStore tasks,DeviceTaskCoordinator coordinator,RunControl original,Iterable<NativeRoute> selectedRoutes,VerifiedImages actualImages){
-        visual=new DeviceVisualFrames(actualImages,original);this.tasks = java.util.Objects.requireNonNull(tasks); devices = tasks.deviceTasks(); this.coordinator = java.util.Objects.requireNonNull(coordinator);
+        this(tasks,coordinator,original,selectedRoutes,actualImages,null);
+    }
+    public DeviceCapabilityPort(TaskStore tasks,DeviceTaskCoordinator coordinator,RunControl original,Iterable<NativeRoute> selectedRoutes,VerifiedImages actualImages,ReceivedFiles receivedFiles){
+        files=receivedFiles;visual=new DeviceVisualFrames(actualImages,original);this.tasks = java.util.Objects.requireNonNull(tasks); devices = tasks.deviceTasks(); this.coordinator = java.util.Objects.requireNonNull(coordinator);
         this.original = java.util.Objects.requireNonNull(original); RunControl.HostRunIdentity run = original.hostRunIdentity();
         if (run == null) throw new SecurityException("设备调用必须属于原TaskStore执行");
         taskId = run.taskId(); runId = run.runId(); epoch = run.epoch();
@@ -112,7 +117,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
             DeviceTaskEnvelope query = route.request("operation.get", new JSONObject().put("operationId", operation), operation, 0, 0, null, original);
             try {
                 Reply actual = route.exchange(query, original); JSONObject result = reply(route, actual,query);
-                if (Boolean.TRUE.equals(result.opt("accepted"))){recordAccepted(route, actual, result, operation, result.optString("argumentsDigest"));captureImage(route,actual,operation,name,result);}
+                if (Boolean.TRUE.equals(result.opt("accepted"))){recordAccepted(route, actual, result, operation, result.optString("argumentsDigest"));captureImage(route,actual,operation,name,result);receiveFile(route,actual,operation,result);}
                 JSONObject payload=result.getJSONObject("payload");
                 if (Boolean.TRUE.equals(payload.opt("terminal")) && Boolean.TRUE.equals(payload.opt("stopped"))&&"GoalSubmission".equals(originalWire.optString("messageType"))&&result.has("localTaskId")&&result.has("runId")) {
                     JSONObject allocation = devices.childAllocationForOperation(taskId, operation);
@@ -145,7 +150,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
         try {
             Reply actual = route.exchange(request,ticket, original); JSONObject result = reply(route, actual,request);
             if (Boolean.TRUE.equals(result.opt("accepted"))) {
-                recordAccepted(route, actual, result, hostOperation, request.argumentsDigest());captureImage(route,actual,hostOperation,name,result);
+                recordAccepted(route, actual, result, hostOperation, request.argumentsDigest());captureImage(route,actual,hostOperation,name,result);receiveFile(route,actual,hostOperation,result);
                 return parentView(result,new JSONObject().put("parentOperationId",hostOperation).put("budgetReserved",true).put("nextAction","device_operation_get"));
             }
             return parentView(result,new JSONObject().put("budgetReserved",true).put("operationId",hostOperation));
@@ -182,6 +187,21 @@ public final class DeviceCapabilityPort implements CapabilityPort {
         String operation=request.method().equals("operation.get")?request.arguments().getString("operationId"):request.operationId();if(!operation.equals(result.optString("operationId")))throw new SecurityException("回执不是该原operation");
         if(result.getBoolean("accepted")&&(result.optLong("acceptedAt")<1||!result.optString("argumentsDigest").matches("[a-f0-9]{64}")||!request.method().equals("operation.get")&&!request.argumentsDigest().equals(result.optString("argumentsDigest"))))throw new SecurityException("accepted缺少同原操作已SQL持久的完整绑定");
         return new JSONObject(result.toString());
+    }
+    private void receiveFile(NativeRoute route,Reply actual,String operation,JSONObject receipt)throws Exception{
+        JSONObject wire=devices.childAllocationForOperation(taskId,operation).getJSONObject("boundWire");
+        if(!"ToolInvocation".equals(wire.optString("messageType"))||!"workspace.export".equals(wire.getJSONObject("arguments").optString("toolName")))return;
+        JSONObject payload=receipt.getJSONObject("payload");
+        try{
+            if(files==null)throw new SecurityException("原附件接收器未安装");
+            JSONObject published=files.publish(devices.deviceFileEvidence(route.reservationApproval(),original,actual.peer(),operation));
+            payload.put("nativeFileDelivery",published);
+        }catch(Exception unavailable){
+            // Keep the authenticated operation outcome. Retry means read the SAME operation,
+            // resume its fixed bytes, and reuse the Book publication identity; never export again.
+            payload.put("nativeFileDelivery",new JSONObject().put("attachmentPublished",false).put("bytesVerified",false)
+                .put("operationId",operation).put("nextAction","device_operation_get").put("retrySubmitted",false).put("reason","original_file_receive_unavailable"));
+        }
     }
     private void captureImage(NativeRoute route,Reply actual,String operation,String function,JSONObject receipt)throws Exception{
         if(!visual.installed())return;

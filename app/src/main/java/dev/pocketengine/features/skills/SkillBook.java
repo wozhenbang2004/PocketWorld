@@ -127,7 +127,7 @@ public final class SkillBook {
             for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(!matches(record,owner))continue;
                 JSONObject current=inspectCurrent(record,capabilities,now);
                 if(current.getString("status").equals("invalid"))invalid++;
-                else{JSONObject match=match(record,terms,query);current.put("score",match.getInt("score")).put("matchReasons",match.getJSONArray("matchReasons"));
+                else{JSONObject match=match(record,terms,query);current.put("qualityState",record.optString("qualityState","unreviewed")).put("score",match.getInt("score")).put("matchReasons",match.getJSONArray("matchReasons"));
                     if(current.getString("status").equals("active")&&match.getInt("score")==0)current.put("status","noMatch");}
                 current.put("eligibleForDiscovery",current.getString("status").equals("active"));diagnostics.add(current);
             }
@@ -436,8 +436,33 @@ public final class SkillBook {
         synchronized(lock){JSONObject state=state(),record=required(state.getJSONArray("skills"),scope(scope),id);
             if(enabled&&record.has("origin")&&!nativeExperienceApproval)throw new SecurityException("来源型技能必须通过原生审阅入口批准");
             if(enabled){if(!confirmed||!record.getString("digest").equals(digest))throw new SecurityException("请先核对当前技能内容与来源，再确认启用");if(expired(record,now))throw new IllegalStateException("技能已过期，请重新导入更新");verify(record);}
+            if(record.has("origin")&&enabled){record.put("qualityState","trial").put("qualityWindow",new JSONArray());}
             record.put("enabled",enabled).put("approvedDigest",enabled?record.getString("digest"):"").put("updatedAt",now)
                     .put("executionGeneration",Math.addExact(record.optLong("executionGeneration",0),1));save(state);return present(record,now);
+        }
+    }
+    /** Native feedback only; exact package+approval generation fence and durable replay barrier. */
+    public JSONObject recordQuality(JSONObject scope,SkillQualityReceipt evidence,long now)throws Exception {
+        JSONObject fact=evidence.snapshot();String[] owner=scope(scope);
+        synchronized(lock){JSONObject state=state(),record=required(state.getJSONArray("skills"),owner,fact.getString("skillId"));
+            if(!owner[0].equals(fact.getString("ownerId"))||!owner[1].equals(fact.getString("spaceId"))||record.getInt("revision")!=fact.getInt("revision")||!record.getString("digest").equals(fact.getString("digest")))throw new SecurityException("使用结果属于其它技能或旧版本");
+            verify(record);
+            JSONArray history=record.optJSONArray("qualityHistory");if(history==null)history=new JSONArray();
+            for(int i=0;i<history.length();i++){JSONObject old=history.getJSONObject(i);if(old.getString("operationId").equals(fact.getString("operationId"))&&old.getString("taskId").equals(fact.getString("taskId"))){
+                if(!old.getString("outcome").equals(fact.getString("outcome"))||!old.getString("note").equals(fact.getString("note")))throw new SecurityException("原使用结果已审阅，不能重复改写归责");return present(record,now);}}
+            if(record.optLong("executionGeneration",0)!=fact.getLong("executionGeneration")||!active(record,now))throw new SecurityException("技能已停用或重新批准，请勿将旧使用结果归给新试用");
+            if(history.length()>=200)throw new IllegalStateException("此版本已保留200次审阅，请导入新版本后继续试用");
+            history.put(fact);record.put("qualityHistory",history);
+            String outcome=fact.getString("outcome"),quality=record.optString("qualityState","trial");
+            if(java.util.Set.of("verified","skill_failed","verifier_rejected").contains(outcome)){
+                JSONArray window=record.optJSONArray("qualityWindow");if(window==null)window=new JSONArray();window.put(outcome);while(window.length()>3)window.remove(0);
+                int bad=0;for(int i=0;i<window.length();i++)if(!window.getString(i).equals("verified"))bad++;
+                if(quality.equals("trial"))quality=outcome.equals("verified")?"active":"suspended";
+                else if(quality.equals("active")&&(outcome.equals("verifier_rejected")||bad>=2))quality="suspended";
+                record.put("qualityWindow",window).put("qualityState",quality);
+                if(quality.equals("suspended"))record.put("enabled",false).put("approvedDigest","").put("executionGeneration",Math.addExact(record.optLong("executionGeneration",0),1));
+            }
+            record.put("updatedAt",now);save(state);return present(record,now);
         }
     }
     public JSONObject read(JSONObject scope,String id,String path,int offset,int length,long now)throws Exception {
