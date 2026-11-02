@@ -33,17 +33,25 @@ public final class SkillBook {
     private final File root,index;
     private final Object lock;
     private final ExperienceOrigin.ExperienceResolver experienceResolver;
+    private dev.pocketengine.features.plugins.McpSkillSource.Validator mcpSourceValidator;
     public SkillBook(File root)throws Exception{this(root,null);}
     public SkillBook(File root,ExperienceOrigin.ExperienceResolver resolver)throws Exception{this.root=root;index=new File(root,"index.json");lock=LOCKS.computeIfAbsent(root.getCanonicalPath(),key->new Object());experienceResolver=resolver;}
     public boolean experienceResolverAvailable(){return experienceResolver!=null;}
+    /** Original app composition only; absent validation keeps imported remote sources unreadable. */
+    public void mountMcpSourceValidation(dev.pocketengine.features.plugins.McpSkillSource.Validator validator){
+        synchronized(lock){if(mcpSourceValidator!=null)throw new IllegalStateException("MCP技能来源校验已挂载");mcpSourceValidator=java.util.Objects.requireNonNull(validator);}
+    }
     public JSONObject install(JSONObject scope,JSONObject input,long now)throws Exception {
-        if(input.has("origin")||input.has("provenance")||input.has("experienceRef")||input.has("gitSource")||input.has("restoredFrom"))throw new SecurityException("经验来源只能由可信宿主提供");
+        if(input.has("origin")||input.has("provenance")||input.has("experienceRef")||input.has("gitSource")||input.has("mcpSource")||input.has("restoredFrom"))throw new SecurityException("经验来源只能由可信宿主提供");
         return install(scope,input,now,null);
     }
     private JSONObject install(JSONObject scope,JSONObject input,long now,ExperienceOrigin origin)throws Exception {
         return installRetained(scope,input,now,origin,null,null);
     }
     private JSONObject installRetained(JSONObject scope,JSONObject input,long now,ExperienceOrigin origin,JSONObject nativeGit,JSONObject restoredFrom)throws Exception {
+        return installRetained(scope,input,now,origin,nativeGit,restoredFrom,null);
+    }
+    private JSONObject installRetained(JSONObject scope,JSONObject input,long now,ExperienceOrigin origin,JSONObject nativeGit,JSONObject restoredFrom,JSONObject nativeMcp)throws Exception {
         synchronized(lock){String[] owner=scope(scope);JSONObject state=state();JSONArray records=state.getJSONArray("skills");String id=input.optString("id");JSONObject old=id.isEmpty()?null:required(records,owner,id);
             if(old!=null&&((origin==null&&old.has("origin"))||(origin!=null&&!old.has("origin"))))throw new SecurityException("普通技能和来源型技能不能互相覆盖，请登记为新技能");
             if(origin!=null){requireOrigin(owner,origin);if(old!=null&&!origin.ref.sameIdentity(ExperienceOrigin.fromJson(old.getJSONObject("origin")).ref))throw new SecurityException("更新不能改变经验身份");}
@@ -66,7 +74,9 @@ public final class SkillBook {
                         .put("enabled",false).put("approvedDigest","").put("createdAt",old==null?now:old.getLong("createdAt")).put("updatedAt",now).put("sizeBytes",bytes).put("resources",resourceNames(files));
                 if(origin!=null){requireOrigin(owner,origin);record.put("origin",origin.toJson());removeCleanup(state,stable,revision);}
                 else if(nativeGit!=null){JSONObject pinned=new JSONObject(nativeGit.toString());if(pinned.optBoolean("newBase")){pinned.remove("newBase");pinned.put("baseRevision",revision);}record.put("gitSource",pinned);}
+                else if(nativeMcp!=null){requireMcpSource(nativeMcp);record.put("mcpSource",new JSONObject(nativeMcp.toString()));}
                 else if(restoredFrom==null&&old!=null&&old.has("gitSource"))record.put("gitSource",new JSONObject(old.getJSONObject("gitSource").toString()));
+                else if(restoredFrom==null&&old!=null&&old.has("mcpSource"))record.put("mcpSource",new JSONObject(old.getJSONObject("mcpSource").toString()));
                 if(restoredFrom!=null)record.put("restoredFrom",new JSONObject(restoredFrom.toString()));
                 if(!record.has("origin"))retainRevision(record,now);
                 if(old!=null)remove(records,stable);records.put(record);save(state);return present(record,now);
@@ -152,7 +162,8 @@ public final class SkillBook {
             for(int i=0;i<required.length();i++)if(!capabilities.contains(required.getString(i)))absent.add(required.getString(i));
             absent.sort(Comparator.naturalOrder());missing=new JSONArray(absent);if(!absent.isEmpty())reasons.put("missingCapabilities");}
         boolean active=verified&&active(record,now);String status=!verified?"invalid":!active?"inactive":missing.length()>0?"missingCapabilities":"active";
-        return current.put("active",active).put("status",status).put("statusReasons",reasons).put("contentVerified",verified)
+        return current.put("enabled",record.optBoolean("enabled")).put("approvedDigest",record.optString("approvedDigest")).put("executionGeneration",record.optLong("executionGeneration",0))
+                .put("active",active).put("status",status).put("statusReasons",reasons).put("contentVerified",verified)
                 .put("capabilitiesChecked",capabilities!=null).put("missingCapabilities",missing).put("executable",false);
     }
 
@@ -312,6 +323,39 @@ public final class SkillBook {
     }
     private void requireRecordOrigin(JSONObject record)throws Exception {
         if(record.has("origin"))requireOrigin(new String[]{record.getString("ownerId"),record.getString("spaceId")},ExperienceOrigin.fromJson(record.getJSONObject("origin")));
+        if(record.has("mcpSource"))try{requireMcpSource(record.getJSONObject("mcpSource"));}
+        catch(Exception unavailable){try{revokeMcpApproval(record);}catch(Exception revokeFailure){unavailable.addSuppressed(revokeFailure);}throw unavailable;}
+    }
+    /** A known rejected source cannot regain the old approval when identical bytes reappear. */
+    private void revokeMcpApproval(JSONObject rejected)throws Exception {
+        if(!rejected.optBoolean("enabled")&&rejected.optString("approvedDigest").isEmpty())return;
+        synchronized(lock){JSONObject state=state();JSONArray records=state.getJSONArray("skills");
+            for(int i=0;i<records.length();i++){
+                JSONObject current=records.getJSONObject(i);if(!current.optString("id").equals(rejected.optString("id"))||!matches(current,new String[]{rejected.getString("ownerId"),rejected.getString("spaceId")}))continue;
+                if(current.getInt("revision")!=rejected.getInt("revision")||!current.getString("digest").equals(rejected.getString("digest"))||current.optJSONObject("mcpSource")==null||!current.getJSONObject("mcpSource").toString().equals(rejected.getJSONObject("mcpSource").toString()))return;
+                if(!current.optBoolean("enabled")&&current.optString("approvedDigest").isEmpty())return;
+                long generation=Math.addExact(current.optLong("executionGeneration",0),1);current.put("enabled",false).put("approvedDigest","").put("executionGeneration",generation).put("updatedAt",System.currentTimeMillis());save(state);
+                rejected.put("enabled",false).put("approvedDigest","").put("executionGeneration",generation).put("updatedAt",current.getLong("updatedAt"));return;
+            }
+        }
+    }
+    private void requireMcpSource(JSONObject source)throws Exception {
+        if(mcpSourceValidator==null)throw new SecurityException("原MCP来源宿主未挂载，不能沿用远端技能批准");
+        mcpSourceValidator.check(new JSONObject(source.toString()));
+    }
+    /** Revoke stale source approval without deleting locally edited or historical bytes. */
+    public JSONObject reconcileMcpSources(JSONObject scope,long now)throws Exception {
+        synchronized(lock){String[] owner=scope(scope);JSONObject state=state();JSONArray records=state.getJSONArray("skills");int revoked=0,unavailable=0;
+            for(int i=0;i<records.length();i++){
+                JSONObject record=records.getJSONObject(i);if(!matches(record,owner)||!record.has("mcpSource"))continue;
+                try{requireMcpSource(record.getJSONObject("mcpSource"));}catch(Exception stale){
+                    unavailable++;if(record.optBoolean("enabled")||!record.optString("approvedDigest").isEmpty()){
+                        record.put("enabled",false).put("approvedDigest","").put("executionGeneration",Math.addExact(record.optLong("executionGeneration",0),1)).put("updatedAt",now);revoked++;
+                    }
+                }
+            }
+            if(revoked>0)save(state);return new JSONObject().put("revoked",revoked).put("unavailableSources",unavailable).put("deleted",0).put("executionAuthorized",false);
+        }
     }
 
     /**
@@ -517,6 +561,7 @@ public final class SkillBook {
                 .put("requiredCapabilities",new JSONArray(record.getJSONArray("requiredCapabilities").toString()))
                 .put("expiresAt",record.optLong("expiresAt",0));
         if(record.has("origin"))binding.put("origin",ExperienceOrigin.fromJson(record.getJSONObject("origin")).toJson());
+        if(record.has("mcpSource"))binding.put("mcpSource",new JSONObject(record.getJSONObject("mcpSource").toString()));
         return new ExecutionSnapshot(binding,files);
     }
     static final class ExecutionSnapshot {
@@ -532,12 +577,16 @@ public final class SkillBook {
     /** Opaque reviewed content on this exact original book/scope/target. JSON is presentation only. */
     public static final class SourceReview {
         private final SkillBook issuer;
-        private final String owner,space,targetPin,files,git,restore,view;
+        private final String owner,space,targetPin,files,git,restore,mcp,view;
+        private final dev.pocketengine.features.plugins.McpSkillSource.Fetched mcpRead;
         private final long expiresAt;
         private volatile boolean applied;
         private SourceReview(SkillBook issuer,String[] scope,String targetPin,JSONObject files,JSONObject git,JSONObject restore,JSONObject view,long now)throws Exception {
+            this(issuer,scope,targetPin,files,git,restore,null,null,view,now);
+        }
+        private SourceReview(SkillBook issuer,String[] scope,String targetPin,JSONObject files,JSONObject git,JSONObject restore,JSONObject mcp,dev.pocketengine.features.plugins.McpSkillSource.Fetched mcpRead,JSONObject view,long now)throws Exception {
             this.issuer=issuer;owner=scope[0];space=scope[1];this.targetPin=targetPin;
-            this.files=files.toString();this.git=git==null?null:git.toString();this.restore=restore==null?null:restore.toString();this.view=view.toString();
+            this.files=files.toString();this.git=git==null?null:git.toString();this.restore=restore==null?null:restore.toString();this.mcp=mcp==null?null:mcp.toString();this.mcpRead=mcpRead;this.view=view.toString();
             expiresAt=Math.addExact(now,600_000L);
         }
         public JSONObject view()throws Exception { return new JSONObject(view); }
@@ -608,6 +657,7 @@ public final class SkillBook {
                 .put("requiredCapabilities",record.getJSONArray("requiredCapabilities").toString()).put("expiresAt",String.valueOf(record.opt("expiresAt")));
         JSONObject git=record.optJSONObject("gitSource");
         if(git!=null)for(String key:new String[]{"source","commit","baseDigest","baseRevision"})values.put("git:"+key,String.valueOf(git.get(key)));
+        if(record.has("mcpSource"))values.put("mcpSource",record.getJSONObject("mcpSource").toString());
         return digest(values);
     }
     private JSONObject inspectSourceFiles(String[] owner,JSONObject files,String id,LocalPackage current,long now)throws Exception {
@@ -652,6 +702,25 @@ public final class SkillBook {
             return new SourceReview(this,owner,pin,files,nativeGit,null,inspection,now);
         }
     }
+    /** A fetched native resource becomes the same reviewed, disabled package flow as other sources. */
+    public SourceReview inspectMcpSource(JSONObject scope,String id,dev.pocketengine.features.plugins.McpSkillSource.Fetched fetched,long now)throws Exception {
+        if(fetched==null)throw new IllegalArgumentException("必须先从原MCP安装读取技能资源");fetched.checkCurrent();String[] owner=scope(scope);
+        synchronized(lock){
+            requireMcpSource(fetched.binding());reconcileMcpSources(scope,now);LocalPackage local=localPackage(owner,id);
+            JSONObject files=new JSONObject().put("SKILL.md",fetched.text()),source=fetched.binding().put("baseDigest",digest(new JSONObject().put("SKILL.md",fetched.text())));
+            JSONObject inspection=inspectSourceFiles(owner,files,id,local,now),previous=local==null?null:local.record.optJSONObject("mcpSource");
+            boolean tracked=previous!=null&&previous.getString("installationId").equals(source.getString("installationId"))&&previous.getString("resourceURI").equals(source.getString("resourceURI"));
+            boolean upstream=tracked&&!previous.getString("contentDigest").equals(source.getString("contentDigest"));
+            boolean localChanged=tracked&&!local.digest.equals(previous.optString("baseDigest"));
+            String classification=local==null?"untracked":tracked?(localChanged?(upstream?"both_changed":"local_changed"):upstream?"upstream_changed":"current"):"source_changed";
+            JSONArray conflicts=new JSONArray();JSONArray records=state().getJSONArray("skills");String name=inspection.getJSONObject("package").getString("name");
+            for(int i=0;i<records.length();i++){JSONObject record=records.getJSONObject(i);if(matches(record,owner)&&name.equals(record.getString("name"))&&(id==null||!id.equals(record.getString("id"))))conflicts.put(new JSONObject().put("id",record.getString("id")).put("revision",record.getInt("revision")).put("source",record.getString("source")));}
+            inspection.put("kind","mcp_resource_update").put("targetId",id==null?"":id).put("source",source).put("classification",classification)
+                    .put("requiresDiscardConfirmation",local!=null&&(!tracked||localChanged)).put("nameConflicts",conflicts)
+                    .put("localRootAvailable",false).put("relativeResourceResolver",false).put("hooksAllowed",false).put("executionAuthorized",false);
+            return new SourceReview(this,owner,targetPin(local),files,null,null,source,fetched,inspection,now);
+        }
+    }
     /** Source text cannot set permissions. Fork preserves target restrictions, never its approval. */
     public JSONObject applySourceReview(JSONObject scope,SourceReview review,SourceChoice choice,boolean discardLocal,long now)throws Exception {
         String[] owner=scope(scope);
@@ -667,10 +736,11 @@ public final class SkillBook {
                 if(choice==SourceChoice.REPLACE)options.put("id",current.getString("id")).put("revision",current.getInt("revision"));
             }
             JSONObject git=review.git==null?null:new JSONObject(review.git),restored=review.restore==null?null:new JSONObject(review.restore);
-            options.put("source",restored==null?git.getJSONObject("source").getString("repository"):view.getString("historicalSource"))
-                    .put("sourceVersion",restored==null?git.getString("commit"):view.getString("historicalSourceVersion"));
+            JSONObject mcp=review.mcp==null?null:new JSONObject(review.mcp);if(mcp!=null){if(review.mcpRead!=null)review.mcpRead.checkCurrent();requireMcpSource(mcp);}
+            options.put("source",mcp!=null?"mcp:"+mcp.getString("pluginId"):restored==null?git.getJSONObject("source").getString("repository"):view.getString("historicalSource"))
+                    .put("sourceVersion",mcp!=null?mcp.getString("contentDigest"):restored==null?git.getString("commit"):view.getString("historicalSourceVersion"));
             options.put("manifest",files.getString("SKILL.md"));files.remove("SKILL.md");options.put("resources",files);
-            JSONObject installed=installRetained(scope,options,now,null,git,restored);review.applied=true;return installed;
+            JSONObject installed=installRetained(scope,options,now,null,git,restored,mcp);review.applied=true;return installed;
         }
     }
     private void requireReview(String[] owner,SourceReview review,long now)throws SourceUnavailable {
@@ -722,7 +792,7 @@ public final class SkillBook {
             JSONObject restored=new JSONObject().put("revision",revision).put("digest",retained.getString("digest"));
             inspection.put("kind","restore_revision").put("targetId",id).put("requiresDiscardConfirmation",true).put("historicalSource",retained.getString("source"))
                     .put("historicalSourceVersion",retained.getString("sourceVersion")).put("restoredFrom",restored).put("executionAuthorized",false);
-            return new SourceReview(this,owner,targetPin(local),files,retained.optJSONObject("gitSource"),restored,inspection,now);
+            return new SourceReview(this,owner,targetPin(local),files,retained.optJSONObject("gitSource"),restored,retained.optJSONObject("mcpSource"),null,inspection,now);
         }
     }
     public JSONObject readSourceReview(JSONObject scope,SourceReview review,String path,int offset,int length,long now)throws Exception {

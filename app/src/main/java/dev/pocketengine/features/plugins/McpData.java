@@ -22,13 +22,15 @@ final class McpData {
                 .put("annotationKeywords",new JSONArray(new String[]{"title","description","$comment","default","examples","deprecated","readOnly","writeOnly"})).put("headerKeyword","x-mcp-header")
                 .put("structuredContentSupport","object_only_not_output_schema_validated").put("maxImportedTools",12).put("maxDiscoveredTools",MAX_TOOLS).put("maxSchemaCharacters",16000)
                 .put("contentTypes",new JSONArray().put("text").put("structuredContent"))
+                .put("resources",new JSONObject().put("sourceImplemented",true).put("readOnly",true).put("skillImportRequiresReview",true)
+                        .put("maxPages",8).put("maxResources",96).put("maxSkillCharacters",64000).put("relativeResourceResolver",false))
                 .put("tasks",new JSONObject().put("protocolVersion",VERSION).put("extension","io.modelcontextprotocol/tasks")
                         .put("sourceImplemented",true).put("hostMountRequired",true).put("automaticReplay",false))
                 .put("oauth",new JSONObject().put("sourceImplemented",true).put("hostMountRequired",true).put("clientType","public_pkce_s256")
                         .put("registration","pre_registered_or_existing_cimd").put("automaticRefresh",false))
                 .put("unsupported",new JSONArray().put("stdio").put("legacy HTTP+SSE")
                         .put("SSE reconnect/resumption").put("GET subscriptions").put("legacy experimental tasks").put("sampling").put("elicitation")
-                        .put("roots").put("resources").put("prompts").put("tasks/update input").put("binary content"));
+                        .put("roots").put("resource subscriptions").put("prompts").put("tasks/update input").put("binary content"));
     }
 
     static JSONObject previewTool(JSONObject remote,String endpoint,String version,String serverDigest)throws Exception {

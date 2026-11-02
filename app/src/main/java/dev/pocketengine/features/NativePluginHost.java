@@ -63,7 +63,7 @@ public final class NativePluginHost implements AutoCloseable {
         },tasks);
     }
     /** App composition after the real SkillsModule is mounted. No package/model supplies an authority. */
-    public synchronized void mountFunctionalPacks(SkillsModule skills){open();if(functionalPacks!=null)throw new IllegalStateException("功能包原生authority已挂载");functionalPacks=new FunctionalPackHost(plugins,skills,executable,tasks,new File(privateDirectory,"functional-pack-catalog.json"),changedTask,extensions::invalidate);}
+    public synchronized void mountFunctionalPacks(SkillsModule skills){open();if(functionalPacks!=null)throw new IllegalStateException("功能包原生authority已挂载");if(plugins instanceof dev.pocketengine.features.plugins.PluginsModule nativeMcpSources)skills.mountMcpSources(nativeMcpSources);functionalPacks=new FunctionalPackHost(plugins,skills,executable,tasks,new File(privateDirectory,"functional-pack-catalog.json"),changedTask,extensions::invalidate);}
     public FunctionalPackHost.Page newFunctionalPackPage(){open();FunctionalPackHost host=functionalPacks;if(host==null)throw new IllegalStateException("功能包需当前真实SkillBook与原插件模块；尚未挂载，未替代执行");return host.newOwnerPage();}
     /** The same app-owned instance is also the sole sandbox available to native Skills backends. */
     public AndroidJavascriptSandboxRuntime sharedSandbox(){return sandbox;}

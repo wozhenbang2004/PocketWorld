@@ -225,7 +225,7 @@ public final class PluginsModule implements EngineModule {
                     output=McpResultCapture.open(outputFactory,nativeHostTool,operationId,invocation.control,provenance);
                 }
                 if(mcp.needsDiscovery())try{mcp.discover(invocation.control);}catch(Exception unavailable){throw new McpClient.CallFailure(false,true,"MCP重新发现失败，工具未发送，请检查配置后重新导入");}
-                result=output==null?mcp.call(tool,args,invocation.control):mcp.call(tool,args,invocation.control,output);
+                result=output==null?mcp.call(tool,args,invocation.control):mcp.call(tool,args,invocation.control,output::result);
             }else result=HttpToolClient.invoke(tool.getString("endpoint"),token,name,args,operationId,invocation.control);
             synchronized(this){invocation.control.check();return withOutputCapture(new JSONObject().put("operationId",operationId).put("status","response_received").put("verified",false).put("toolResult",result),output);}
         }catch(McpResultCapture.AdmissionRefused refused){
@@ -246,6 +246,110 @@ public final class PluginsModule implements EngineModule {
     }
     private static JSONObject withOutputCapture(JSONObject receipt,McpResultCapture output)throws Exception{
         if(output!=null)receipt.put("outputCapture",output.metadata());return receipt;
+    }
+    /** Native owner source browser only. A resource URI is data, never a tool alias or a file path. */
+    public JSONObject listMcpSkillResources(String id,String expectedInstallationId,long expectedStateRevision,RunControl original)throws Exception {
+        JSONObject attempted=null;
+        try(McpSourceConnection source=openMcpSource(id,expectedInstallationId,expectedStateRevision,original)){
+            attempted=source.binding;
+            source.discover();JSONArray resources=source.client.resources(original),skills=new JSONArray();
+            for(int i=0;i<resources.length();i++){
+                JSONObject resource=resources.getJSONObject(i);String uri=resource.getString("uri");
+                if(!uri.startsWith("skill://"))continue;McpSkillSource.validateUri(uri);skills.put(resource);
+            }
+            synchronized(this){
+                original.check();JSONObject current=currentMcpSourceInstallation(source.binding);JSONArray observed=current.optJSONArray("mcpSkillSources");boolean changed=false;
+                for(int i=0;observed!=null&&i<observed.length();i++){
+                    JSONObject known=observed.getJSONObject(i);boolean present=false;for(int j=0;j<skills.length();j++)if(known.getString("resourceURI").equals(skills.getJSONObject(j).getString("uri")))present=true;
+                    if(!present&&!"missing".equals(known.optString("availability"))){known.put("availability","missing").put("sourceGeneration",nextMcpSourceGeneration(known));changed=true;}
+                }
+                if(changed){JSONArray all=list();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))all.put(i,current);JsonFiles.write(file,new JSONObject().put("plugins",all));}
+            }
+            return new JSONObject().put("source",McpData.copy(source.binding)).put("resources",skills).put("untrustedReference",true)
+                    .put("metadataOnly",true).put("executionAuthorized",false).put("relativeResourceResolver",false);
+        }catch(Exception failure){
+            if(attempted!=null)try{markMcpSkillSourceUnavailable(attempted,null);}catch(Exception unavailable){failure.addSuppressed(unavailable);}throw failure;
+        }
+    }
+    /** Actual bytes and native source pin. The generic feature handler cannot manufacture this value. */
+    public McpSkillSource.Fetched readMcpSkillSource(String id,String expectedInstallationId,long expectedStateRevision,String resourceURI,RunControl original)throws Exception {
+        McpSkillSource.validateUri(resourceURI);JSONObject attempted=null;
+        try(McpSourceConnection source=openMcpSource(id,expectedInstallationId,expectedStateRevision,original)){
+            attempted=source.binding;
+            source.discover();String text=source.client.readSkillResource(resourceURI,original);long now=System.currentTimeMillis();boolean changed=false;
+            JSONObject binding=McpData.copy(source.binding).put("resourceURI",resourceURI).put("contentDigest",McpSkillSource.sha256(text))
+                    .put("retrievedAt",now).put("relativeResourcePolicy","unavailable_no_local_root").put("hooksAllowed",false);
+            synchronized(this){
+                original.check();JSONObject current=currentMcpSourceInstallation(binding);JSONArray observed=current.optJSONArray("mcpSkillSources");if(observed==null)observed=new JSONArray();
+                boolean found=false;for(int i=0;i<observed.length();i++)if(resourceURI.equals(observed.getJSONObject(i).optString("resourceURI"))){
+                    JSONObject previous=observed.getJSONObject(i);changed=!binding.getString("contentDigest").equals(previous.optString("contentDigest"));
+                    long generation=changed||!"available".equals(previous.optString("availability"))?nextMcpSourceGeneration(previous):Math.max(1,previous.optLong("sourceGeneration",0));
+                    binding.put("sourceGeneration",generation);observed.put(i,new JSONObject().put("resourceURI",resourceURI).put("contentDigest",binding.getString("contentDigest")).put("retrievedAt",now).put("availability","available").put("sourceGeneration",generation));found=true;break;
+                }
+                if(!found){if(observed.length()>=96)throw new IllegalStateException("此MCP安装已有96项技能来源记录，请先审阅来源范围");binding.put("sourceGeneration",1);observed.put(new JSONObject().put("resourceURI",resourceURI).put("contentDigest",binding.getString("contentDigest")).put("retrievedAt",now).put("availability","available").put("sourceGeneration",1));}
+                current.put("mcpSkillSources",observed);JSONArray all=list();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))all.put(i,current);
+                JsonFiles.write(file,new JSONObject().put("plugins",all));
+            }
+            if(changed)context.emit(id(),new JSONObject().put("event","mcp_skill_source_changed").put("pluginId",id).put("installationId",expectedInstallationId).put("resourceURI",resourceURI).put("contentDigest",binding.getString("contentDigest")));
+            return new McpSkillSource.Fetched(binding,text,this::assertMcpSkillSourceCurrent);
+        }catch(Exception failure){
+            if(attempted!=null)try{markMcpSkillSourceUnavailable(attempted,resourceURI);}catch(Exception unavailable){failure.addSuppressed(unavailable);}throw failure;
+        }
+    }
+    /** Current private installation + latest observed remote bytes. No network or credential is returned. */
+    public synchronized void assertMcpSkillSourceCurrent(JSONObject nativeBinding)throws Exception {
+        JSONObject current=currentMcpSourceInstallation(nativeBinding);String uri=nativeBinding.getString("resourceURI");McpSkillSource.validateUri(uri);
+        if(!(nativeBinding.opt("sourceGeneration") instanceof Number)||nativeBinding.getLong("sourceGeneration")<1)throw new SecurityException("MCP技能来源缺少当前不可复用代次，请重新读取并审阅");
+        JSONArray observed=current.optJSONArray("mcpSkillSources");for(int i=0;observed!=null&&i<observed.length();i++){
+            JSONObject row=observed.getJSONObject(i);if(uri.equals(row.optString("resourceURI"))&&"available".equals(row.optString("availability"))&&nativeBinding.getLong("sourceGeneration")==row.optLong("sourceGeneration",0)&&nativeBinding.getString("contentDigest").equals(row.optString("contentDigest")))return;
+        }
+        throw new SecurityException("MCP技能来源内容已变化或没有原生读取证据，请重新读取并审阅");
+    }
+    private synchronized void markMcpSkillSourceUnavailable(JSONObject binding,String uri)throws Exception {
+        JSONObject current=currentMcpSourceInstallation(binding);JSONArray observed=current.optJSONArray("mcpSkillSources");boolean changed=false;
+        for(int i=0;observed!=null&&i<observed.length();i++){
+            JSONObject row=observed.getJSONObject(i);if((uri==null||uri.equals(row.optString("resourceURI")))&&!"unknown".equals(row.optString("availability"))){row.put("availability","unknown").put("sourceGeneration",nextMcpSourceGeneration(row));changed=true;}
+        }
+        if(changed){JSONArray all=list();for(int i=0;i<all.length();i++)if(binding.getString("pluginId").equals(all.getJSONObject(i).getString("id")))all.put(i,current);JsonFiles.write(file,new JSONObject().put("plugins",all));}
+    }
+    private static long nextMcpSourceGeneration(JSONObject previous){long known=previous.optLong("sourceGeneration",0);if(known<0)throw new IllegalStateException("MCP技能来源代次损坏");return Math.addExact(known,1);}
+    private JSONObject currentMcpSourceInstallation(JSONObject binding)throws Exception {
+        if(closed)throw new IllegalStateException("原MCP插件宿主已关闭");JSONArray all=list();
+        for(int i=0;i<all.length();i++){
+            JSONObject plugin=all.getJSONObject(i);if(!binding.getString("pluginId").equals(plugin.getString("id")))continue;
+            if(!binding.getString("installationId").equals(installationId(plugin))||binding.getLong("stateRevision")!=PluginRevisions.stateRevision(plugin))throw new SecurityException("MCP安装或配置版本已变化，请重新读取来源");
+            JSONArray tools=plugin.getJSONObject("manifest").getJSONArray("tools");if(tools.length()==0)throw new SecurityException("MCP安装没有已审阅服务身份");
+            for(int j=0;j<tools.length();j++){
+                JSONObject tool=tools.getJSONObject(j);if(!"mcp".equals(tool.optString("kind"))||!binding.getString("endpointDigest").equals(McpData.digest(tool.getString("endpoint")))
+                        ||!binding.getString("protocolVersion").equals(tool.getString("protocolVersion"))||!binding.getString("serverDigest").equals(tool.getString("serverDigest")))throw new SecurityException("MCP技能来源不属于此安装的准确服务");
+            }
+            if(plugin.optJSONObject("mcpAuthorization")!=null)oauth().credential(plugin.getJSONObject("mcpAuthorization")).check(tools.getJSONObject(0).getString("endpoint"));
+            else if(!plugin.optString("credentialRef").isEmpty()&&!context.secrets.contains(plugin.getString("credentialRef")))throw new SecurityException("MCP技能来源凭据已撤销");
+            return plugin;
+        }
+        throw new SecurityException("MCP技能来源安装已移除");
+    }
+    private synchronized McpSourceConnection openMcpSource(String id,String installation,long stateRevision,RunControl control)throws Exception {
+        control.check();if(closed)throw new IllegalStateException("原MCP插件宿主已关闭");recoverMcpSecrets();
+        if(active.size()>=2)throw new IllegalStateException("已有两个工具或来源请求运行，请等待或停止后重试");
+        JSONArray all=list();for(int i=0;i<all.length();i++){
+            JSONObject plugin=all.getJSONObject(i);if(!id.equals(plugin.getString("id")))continue;
+            JSONArray tools=plugin.getJSONObject("manifest").getJSONArray("tools");if(tools.length()==0||!"mcp".equals(tools.getJSONObject(0).optString("kind")))throw new IllegalArgumentException("请选择原生登记的MCP安装");
+            JSONObject tool=tools.getJSONObject(0),binding=new JSONObject().put("pluginId",id).put("installationId",installation).put("stateRevision",stateRevision)
+                    .put("endpointDigest",McpData.digest(tool.getString("endpoint"))).put("protocolVersion",tool.getString("protocolVersion")).put("serverDigest",tool.getString("serverDigest"));
+            currentMcpSourceInstallation(binding);
+            dev.pocketengine.features.plugins.mcp.NativeMcpOAuthHost.Credential authorization=plugin.optJSONObject("mcpAuthorization")==null?null:oauth().credential(plugin.getJSONObject("mcpAuthorization"));
+            String ref=plugin.optString("credentialRef"),token=authorization!=null||ref.isEmpty()?"":context.secrets.get(ref);
+            McpClient client=authorization==null?mcpFactory.create(tool.getString("endpoint"),token,tool.getString("protocolVersion"),ignored->{}):authorization.client(tool.getString("protocolVersion"),control);
+            String operation=UUID.randomUUID().toString();active.put(operation,new Invocation(id,control));return new McpSourceConnection(operation,binding,client,control);
+        }
+        throw new IllegalArgumentException("MCP安装不存在");
+    }
+    private final class McpSourceConnection implements AutoCloseable {
+        final String operation;final JSONObject binding;final McpClient client;final RunControl control;
+        McpSourceConnection(String operation,JSONObject binding,McpClient client,RunControl control){this.operation=operation;this.binding=binding;this.client=client;this.control=control;}
+        void discover()throws Exception{client.discover(control);if(!binding.getString("serverDigest").equals(client.serverDigest()))throw new SecurityException("MCP服务身份已变化，请重新发现安装后读取来源");}
+        @Override public void close(){client.close();synchronized(PluginsModule.this){active.remove(operation);}}
     }
     private JSONObject discoverMcp(JSONObject input)throws Exception {return discoverMcp(input,null);}
     private JSONObject discoverMcp(JSONObject input,dev.pocketengine.features.plugins.mcp.NativeMcpOAuthHost.Credential authorization)throws Exception {

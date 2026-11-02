@@ -33,12 +33,13 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
             .callTimeout(20,TimeUnit.SECONDS).build();
     public interface AuthorizationCheck {void check(String exactEndpoint)throws Exception;}
     public interface NativeFactory {McpClient create(String endpoint,String token,String version,AuthorizationCheck check)throws Exception;}
+    @FunctionalInterface interface ResultCapture {JSONObject result(JSONObject matchedResult,String credential)throws Exception;}
     private final String endpoint,token,version;private final AuthorizationCheck authorization;private final OkHttpClient http;
     private final Set<Call> calls=ConcurrentHashMap.newKeySet();
     private volatile String session="";
     private volatile boolean initialized,valid=true,closed;
     private JSONObject serverInfo;
-    private volatile boolean taskSupport;
+    private volatile boolean taskSupport,resourceSupport;
 
     public McpClient(String endpoint,String token)throws Exception {this(endpoint,token,McpData.VERSION);}
     public McpClient(String endpoint,String token,String version)throws Exception {this(endpoint,token,version,ignored->{},HTTP);}
@@ -58,6 +59,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
     boolean usable(){return initialized&&valid&&!closed;}
     boolean needsDiscovery(){return !initialized&&valid&&!closed;}
     public boolean supportsTasks(){return usable()&&modern()&&taskSupport;}
+    public boolean supportsResources(){return usable()&&resourceSupport;}
     String endpoint(){return endpoint;}
     JSONObject serverInfo()throws Exception{return McpData.copy(serverInfo);}
 
@@ -99,10 +101,48 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
         throw refresh("MCP工具清单超过8页；请在服务端缩小范围");
     }
 
+    /** Read-only owner source discovery. Listing resources never invokes a tool or follows a URI. */
+    JSONArray resources(RunControl control)throws Exception {
+        checkUsable();if(!resourceSupport)throw new McpException("此MCP服务未声明resources能力");
+        JSONArray all=new JSONArray();Set<String> uris=new HashSet<>(),cursors=new HashSet<>();String cursor="";int bytes=0;
+        for(int page=0;page<8;page++){
+            JSONObject params=new JSONObject();if(!cursor.isEmpty())params.put("cursor",cursor);
+            JSONObject result=requiredResult(rpc("resources/list",params,control));JSONArray resources=result.getJSONArray("resources");
+            if(resources.length()+all.length()>96)throw new McpException("MCP资源清单超过96项，请缩小服务端范围");
+            for(int i=0;i<resources.length();i++){
+                JSONObject resource=resources.getJSONObject(i);Object value=resource.get("uri");
+                if(!(value instanceof String)||((String)value).isEmpty()||((String)value).length()>2048||!uris.add((String)value))throw new McpException("MCP资源URI为空、重复或过长");
+                if(McpData.containsSecret(resource,token,0))throw new McpException("MCP资源描述包含凭据，已拒绝读取");
+                bytes+=resource.toString().getBytes(StandardCharsets.UTF_8).length;if(bytes>MAX_BYTES)throw new McpException("MCP资源清单超过256KiB");
+                all.put(McpData.copy(resource));
+            }
+            if(!result.has("nextCursor"))return all;
+            Object next=result.get("nextCursor");if(!(next instanceof String)||((String)next).isEmpty()||((String)next).length()>4096||!cursors.add((String)next))throw new McpException("MCP资源分页游标无效或循环");
+            cursor=(String)next;
+        }
+        throw new McpException("MCP资源清单超过8页，请缩小服务端范围");
+    }
+
+    /** Exact advertised skill:// text only. There is no local-file or HTTP-link resolver here. */
+    String readSkillResource(String uri,RunControl control)throws Exception {
+        McpSkillSource.validateUri(uri);boolean advertised=false;
+        JSONArray resources=resources(control);for(int i=0;i<resources.length();i++)if(uri.equals(resources.getJSONObject(i).getString("uri")))advertised=true;
+        if(!advertised)throw new McpException("技能URI不在此MCP安装的当前资源清单内");
+        JSONObject result=requiredResult(rpc("resources/read",new JSONObject().put("uri",uri),control));JSONArray content=result.getJSONArray("contents");
+        if(content.length()!=1)throw new McpException("技能资源需要且仅能返回一份完整文本；未丢弃其他资源块");
+        JSONObject item=content.getJSONObject(0);
+        if(!uri.equals(item.optString("uri"))||!(item.opt("text") instanceof String)||item.has("blob"))throw new McpException("技能资源URI或文本类型不匹配");
+        String mime=item.optString("mimeType","text/plain");if(!mime.equals("text/plain")&&!mime.equals("text/markdown"))throw new McpException("技能资源只支持text/plain或text/markdown");
+        String text=item.getString("text");if(text.length()>64000||text.indexOf('\0')>=0)throw new McpException("技能资源超过64000字符或含无效字符");
+        try{McpSkillSource.sha256(text);}catch(java.nio.charset.CharacterCodingException invalid){throw new McpException("技能资源包含无效Unicode，未替换或导入原文字节");}
+        if(McpData.containsSecret(text,token,0))throw new McpException("技能资源包含当前凭据，已拒绝导入");
+        return text;
+    }
+
     JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control)throws CallFailure {
         return call(declaration,arguments,control,false);
     }
-    JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control,McpResultCapture capture)throws CallFailure {
+    JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control,ResultCapture capture)throws CallFailure {
         return call(declaration,arguments,control,false,capture);
     }
     @Override public JSONObject start(JSONObject declaration,JSONObject arguments,RunControl control)throws CallFailure {
@@ -111,7 +151,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
     private JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control,boolean tasks)throws CallFailure {
         return call(declaration,arguments,control,tasks,null);
     }
-    private JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control,boolean tasks,McpResultCapture capture)throws CallFailure {
+    private JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control,boolean tasks,ResultCapture capture)throws CallFailure {
         boolean dispatched=false;
         try {
             validateDeclaration(declaration,control);
@@ -215,6 +255,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
     private JSONObject identity(JSONObject result)throws Exception {
         JSONObject extensions=result.getJSONObject("capabilities").optJSONObject("extensions");
         taskSupport=modern()&&extensions!=null&&extensions.optJSONObject(dev.pocketengine.features.plugins.mcp.McpTaskCoordinator.EXTENSION)!=null;
+        resourceSupport=result.getJSONObject("capabilities").optJSONObject("resources")!=null;
         if(result.getJSONObject("capabilities").optJSONObject("tools")==null)throw refresh("MCP服务未声明tools能力");
         if(modern()){
             boolean supported=false;JSONArray versions=result.getJSONArray("supportedVersions");
