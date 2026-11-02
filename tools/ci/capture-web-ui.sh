@@ -22,7 +22,17 @@ PW_EMULATOR_PID=
 PW_LOGCAT_PID=
 PW_RECORD_PID=
 
-pw_adb() { timeout 30s "$PW_ADB" -s "$PW_SERIAL" "$@"; }
+pw_adb() {
+    local limit=30 remaining
+    # pw_scene's local deadline is visible to its nested calls. A blocked dump
+    # must not turn the 20s scene wait into five independent 30s adb waits.
+    if [[ -n "${PW_ADB_DEADLINE:-}" ]]; then
+        remaining=$((PW_ADB_DEADLINE - SECONDS))
+        (( remaining > 0 )) || return 124
+        (( remaining >= limit )) || limit=$remaining
+    fi
+    timeout "${limit}s" "$PW_ADB" -s "$PW_SERIAL" "$@"
+}
 
 pw_cleanup() {
     PW_EXIT_CODE=$?
@@ -159,11 +169,12 @@ python3 tools/ci/verify-web-ui.py foreground --dump "$PW_CAPTURE_DIR/activity-re
     --out "$PW_CAPTURE_DIR/foreground-ready.json"
 
 pw_dump_layout() {
-    local name=$1
+    local name=$1 attempt
     local remote=/sdcard/pocketworld-web-layout.xml
     for attempt in 1 2 3 4 5; do
-        if pw_adb shell uiautomator dump --compressed "$remote" >> "$PW_CAPTURE_DIR/uiautomator.txt" 2>&1; then
-            pw_adb exec-out cat "$remote" > "$PW_CAPTURE_DIR/$name.tmp"
+        if [[ -n "${PW_ADB_DEADLINE:-}" ]] && (( SECONDS >= PW_ADB_DEADLINE )); then break; fi
+        if pw_adb shell uiautomator dump --compressed "$remote" >> "$PW_CAPTURE_DIR/uiautomator.txt" 2>&1 &&
+            pw_adb exec-out cat "$remote" > "$PW_CAPTURE_DIR/$name.tmp"; then
             if python3 - "$PW_CAPTURE_DIR/$name.tmp" <<'PY'
 import sys, xml.etree.ElementTree as ET
 assert ET.parse(sys.argv[1]).getroot().tag == 'hierarchy'
@@ -173,6 +184,7 @@ PY
                 return 0
             fi
         fi
+        if [[ -n "${PW_ADB_DEADLINE:-}" ]] && (( SECONDS >= PW_ADB_DEADLINE )); then break; fi
         sleep 1
     done
     echo "Android accessibility hierarchy could not be read" >&2
@@ -180,10 +192,30 @@ PY
 }
 
 pw_scene() {
-    local name=$1 scene=$2
-    pw_dump_layout "$name.xml"
-    python3 tools/ci/verify-web-ui.py scene --xml "$PW_CAPTURE_DIR/$name.xml" \
-        --scene "$scene" --out "$PW_CAPTURE_DIR/$name-scene.json"
+    local name=$1 scene=$2 started=$SECONDS attempt=0
+    local PW_ADB_DEADLINE=$((SECONDS + 20))
+    local attempt_error="$PW_CAPTURE_DIR/$name-scene-attempt-error.tmp"
+    local last_error="$PW_CAPTURE_DIR/$name-scene-last-error.txt"
+    local wait_log="$PW_CAPTURE_DIR/$name-scene-wait.txt"
+    while (( SECONDS < PW_ADB_DEADLINE )); do
+        attempt=$((attempt + 1))
+        if pw_dump_layout "$name.xml" > "$attempt_error" 2>&1 &&
+            python3 tools/ci/verify-web-ui.py scene --xml "$PW_CAPTURE_DIR/$name.xml" \
+                --scene "$scene" --out "$PW_CAPTURE_DIR/$name-scene.json" > "$attempt_error" 2>&1; then
+            printf 'scene=%s attempt=%s elapsed=%ss result=accepted-by-original-scene-assertion\n' \
+                "$scene" "$attempt" "$((SECONDS - started))" >> "$wait_log"
+            rm -f "$attempt_error"
+            return 0
+        fi
+        mv "$attempt_error" "$last_error"
+        printf 'scene=%s attempt=%s elapsed=%ss result=not-ready\n' \
+            "$scene" "$attempt" "$((SECONDS - started))" >> "$wait_log"
+        (( SECONDS < PW_ADB_DEADLINE )) || break
+        sleep 1
+    done
+    echo "Android scene $scene did not satisfy its original assertions within 20 seconds; see $name.xml and $name-scene-last-error.txt" >&2
+    [[ ! -f "$last_error" ]] || cat "$last_error" >&2
+    return 1
 }
 
 # All coordinates come from the exact current Android accessibility hierarchy.
