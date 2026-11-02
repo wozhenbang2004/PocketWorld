@@ -728,6 +728,10 @@ async function runViewport(origin, viewport) {
     await capture(page, viewport, '11-project-tree', ['.pw-file-tree', '[role="tree"]']);
 
     await navigate(page, '设置与连接');
+    const settingsSearch = page.getByRole('searchbox', { name: '搜索设置', exact: true });
+    record.checks.push({ stage: 'settings-search-dom-semantics', role: 'searchbox', accessibleName: '搜索设置',
+      geometry: await reachable(settingsSearch),
+      limitation: 'Chromium DOM accessible-name evidence; native uiautomator hint export and TalkBack behavior are separate evidence' });
     await page.getByRole('button', { name: /^模型与连接/ }).click();
     await page.locator('.pw-secondary-header').getByRole('heading', { name: '模型与连接', exact: true }).waitFor();
     await page.getByRole('button', { name: /^模型与连接/ }).click();

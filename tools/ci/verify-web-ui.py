@@ -34,7 +34,7 @@ WEB_ERROR_PATTERN = r"PocketWebUi.*(?:resource-error|console-error|renderer-exit
 SCENE_LABELS = {
     "workroom": ("全部工作", "工作输入"),
     "work-menu": ("关闭全部工作", "设置与连接"),
-    "settings": ("搜索设置", "模型与连接", "设备与执行"),
+    "settings": ("设置", "模型与连接", "设备与执行"),
     "model-purpose": ("模型与连接", "ChatGPT 账号"),
     "model-list": ("当前模型", "API 连接", "添加 API 连接"),
     "model-editor": ("返回模型与连接", "接口协议", "接口地址", "模型名称", "API 密钥", "高级设置"),
@@ -266,6 +266,30 @@ def scene_identity(xml, scene):
         assert not any("正在恢复当前工作" in value for value in values), "The fresh workroom is still restoring; not a ready product scene"
     for label in required:
         assert any(label in value for value in values), "Expected " + scene + " accessibility content: " + label
+    search_input = None
+    if scene == "settings":
+        assert any(node.get("class") == "android.widget.TextView" and "设置" in accessible_values(node)
+                   for node in visible_nodes), "Expected the actual settings title"
+        inputs = [node for node in visible_nodes if node.get("class") == "android.widget.EditText"]
+        assert len(inputs) == 1, "Expected one actual app search input on the settings page"
+        node = inputs[0]
+        assert all(node.get(attribute) == "true" for attribute in ("enabled", "focusable", "clickable")), "Settings search input is not available for interaction"
+        assert node.get("password") != "true", "The settings search input must not be a password field"
+        bounds = parse_bounds(node.get("bounds"))
+        parents = {child: parent for parent in root.iter() for child in parent}
+        viewport = parents.get(node)
+        while viewport is not None and viewport.get("class") != "android.webkit.WebView":
+            viewport = parents.get(viewport)
+        assert viewport is not None and viewport.get("package") == APP_ID, "Settings search input is not within the actual app WebView"
+        viewport_bounds = parse_bounds(viewport.get("bounds"))
+        left, top, right, bottom = viewport_bounds
+        assert left <= bounds[0] < bounds[2] <= right and top <= bounds[1] < bounds[3] <= bottom, "Settings search input is clipped outside the observed WebView"
+        search_input = {"class": node.get("class"), "bounds": bounds, "viewport_bounds": viewport_bounds,
+                        "enabled": True, "focusable": True,
+                        "clickable": True, "observed_text": node.get("text", ""),
+                        "observed_content_description": node.get("content-desc", ""), "observed_hint": node.get("hint"),
+                        "accessible_name_verified_by_xml": False,
+                        "limitation": "Stock uiautomator XML does not establish the WebView input hint or DOM accessible name; no native name is inferred. The browser capture checks the real searchbox accessible name separately."}
     if scene in ("model-list", "model-purpose", "settings"):
         model_fields = {"接口地址", "模型名称", "API 密钥", "每次回复的输出上限"}
         for node in visible_nodes:
@@ -278,7 +302,10 @@ def scene_identity(xml, scene):
         assert not any("每次回复的输出上限" in value for value in values), "Advanced settings were expanded before selection"
     if scene == "model-purpose":
         assert not any("当前模型" in value for value in values), "Expected the source settings group, not the model list"
-    return {"scene": scene, "method": "actual Android accessibility hierarchy", "required_labels": required}
+    identity = {"scene": scene, "method": "actual Android accessibility hierarchy", "required_labels": required}
+    if search_input is not None:
+        identity["search_input"] = search_input
+    return identity
 
 
 def verify_scene(args):
