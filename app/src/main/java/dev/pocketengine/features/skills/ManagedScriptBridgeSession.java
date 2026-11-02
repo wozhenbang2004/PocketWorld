@@ -26,7 +26,7 @@ public final class ManagedScriptBridgeSession implements AutoCloseable {
         JSONObject clean=new JSONObject(request.toString());clean.remove("token");String fingerprint=canonical(clean);
         if(requests.containsKey(id)){if(!requests.get(id).equals(fingerprint))throw new SecurityException("bridge_request_id_changed");return new JSONObject(answers.get(id));}
         if(requests.size()>=64)throw new SecurityException("bridge_request_budget_exhausted");requests.put(id,fingerprint);
-        JSONObject answer;
+        JSONObject answer;boolean phoneEntered=false;
         try{current.check();switch(method){
             case "info":answer=new JSONObject().put("ok",true).put("phoneTools",allowedTools()).put("maxPhoneCalls",32).put("progress","original_task_only").put("share","approved_output_snapshot_deferred_until_original_receipt");break;
             case "progress":String text=request.getString("text");if(text.isBlank()||text.length()>500)throw new SecurityException("bridge_progress_invalid");outputs.progress(text);answer=new JSONObject().put("ok",true).put("recorded",true);break;
@@ -34,8 +34,8 @@ public final class ManagedScriptBridgeSession implements AutoCloseable {
             default:
                 String tool=request.getString("tool");if(unknown)throw new SecurityException("bridge_original_effect_unknown");if(phone==null||!allowed.contains(tool)||!allowed.equals(phone.allowedTools()))throw new SecurityException("bridge_phone_not_allowed");if(phoneCalls>=32)throw new SecurityException("bridge_phone_budget_exhausted");
                 JSONObject args=request.getJSONObject("args");if(args.toString().length()>8192)throw new SecurityException("bridge_phone_args_too_large");for(var keys=args.keys();keys.hasNext();){String key=keys.next();if(key.startsWith("_")||Set.of("taskId","runId","epoch","ownerId","spaceId","scope","control","grant").contains(key))throw new SecurityException("bridge_phone_identity_not_allowed");}
-                phoneCalls++;try{answer=phone.invoke(tool,new JSONObject(args.toString()));if(answer==null)throw new IllegalStateException("bridge_phone_receipt_missing");if("unknown".equals(answer.optString("status"))||answer.optBoolean("effectUnknown")){unknown=true;answer.put("ok",false).put("status","unknown").put("replayAllowed",false);}}catch(Exception uncertain){unknown=true;throw uncertain;}break;
-        }}catch(SecurityException refusal){answer=new JSONObject().put("ok",false).put("status","rejected").put("reason",refusal.getMessage()).put("replayAllowed",false);}
+                phoneCalls++;phoneEntered=true;try{answer=phone.invoke(tool,new JSONObject(args.toString()));if(answer==null)throw new IllegalStateException("bridge_phone_receipt_missing");if("unknown".equals(answer.optString("status"))||answer.optBoolean("effectUnknown")){unknown=true;answer.put("ok",false).put("status","unknown").put("replayAllowed",false);}}catch(Exception uncertain){unknown=true;throw uncertain;}break;
+        }}catch(SecurityException refusal){answer=new JSONObject().put("ok",false).put("status",phoneEntered?"unknown":"rejected").put("reason",refusal.getMessage()).put("replayAllowed",false);}
         catch(Exception uncertain){answer=new JSONObject().put("ok",false).put("status","unknown").put("replayAllowed",false);}
         if(answer.toString().length()>32000){unknown|=method.equals("phone");answer=new JSONObject().put("ok",false).put("status",method.equals("phone")?"unknown":"rejected").put("reason","bridge_result_budget_exceeded").put("replayAllowed",false);}
         answers.put(id,answer.toString());return new JSONObject(answer.toString());
