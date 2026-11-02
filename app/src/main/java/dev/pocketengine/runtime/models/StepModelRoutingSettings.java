@@ -27,8 +27,17 @@ final class StepModelRoutingSettings {
         if(main.routePlan!=null&&(!"MAIN".equals(main.routePlan.purpose)||!"APP_OWNER".equals(main.routePlan.audience)))return null;
         JSONObject choice=snapshot();if(!choice.optBoolean("enabled"))return null;
         ModelConfig selected=settings.captureModelTarget(ModelTargetRef.fromJson(choice.getJSONObject("target")),"MAIN","APP_OWNER",main);
-        if(main.routePlan!=null&&main.routePlan.groupRevision>0){boolean allowed=false;for(ModelRoutePlan.Candidate candidate:main.routePlan.candidates)if(candidate.config()!=null&&candidate.exclusion().isEmpty()&&candidate.config().model.equals(selected.model)&&java.util.Objects.equals(candidate.config().capabilityBinding,selected.capabilityBinding))allowed=true;if(!allowed)return null;}
+        ModelRoutePlan.Candidate member=null;
+        if(main.routePlan!=null&&main.routePlan.groupRevision>0){
+            for(ModelRoutePlan.Candidate candidate:main.routePlan.candidates)if(candidate.config()!=null&&candidate.exclusion().isEmpty()&&candidate.config().model.equals(selected.model)&&java.util.Objects.equals(candidate.config().capabilityBinding,selected.capabilityBinding)){member=candidate;break;}
+            if(member==null)return null;
+            selected=member.config().withRoutePlan(null).withLocalObservation(main.localCaptureAllowed,main.localOcrAllowed);
+        }
         ModelCatalog.View view=ModelRequestPolicy.resolve(selected);if(selected.usesAccount()||view==null||!view.facts().toolCalls().known||!view.facts().toolCalls().value)return null;
-        if(main.sendScreenshots&&(!view.facts().imageInput().known||!view.facts().imageInput().value))return null;return selected.withPurposePlans(main.purposePlans);
+        if(main.sendScreenshots&&(!view.facts().imageInput().known||!view.facts().imageInput().value))return null;
+        ModelConfig light=selected.withPurposePlans(main.purposePlans);
+        if(member!=null)light=light.withRoutePlan(new ModelRoutePlan(main.routePlan.requestedAlias,main.routePlan.groupRevision,main.routePlan.purpose,main.routePlan.audience,
+            java.util.List.of(new ModelRoutePlan.Candidate(member.candidateId(),light.withRoutePlan(null),"")),1,0));
+        return light;
     }
 }
