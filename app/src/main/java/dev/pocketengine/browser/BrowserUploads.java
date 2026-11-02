@@ -43,6 +43,23 @@ public final class BrowserUploads {
         public void close(){if(active.compareAndSet(true,false)){for(Runnable closer:closers)closer.run();closers.clear();}if(original!=null)original.removeCancelAction(stopped);try{if(profileWatch!=null)profileWatch.close();}catch(Exception ignored){}}
     }
     private BrowserUploads(){}
+    /** Metadata only on the native page lane; byte/hash verification happens on the original worker before staging. */
+    public static JSONObject artifactPin(Context context,String taskId,String id,String sha)throws Exception {
+        BrowserTaskSpace.uuid(id);if(!sha.matches("[a-f0-9]{64}"))throw new SecurityException("上传需要准确附件hash");JSONObject record=AttachmentRepository.get(context).book.get(id),source=record.getJSONObject("source");
+        String sourceTask=source.optString("taskId");if(sourceTask.isEmpty()&&source.optJSONObject("nativePublication")!=null)sourceTask=source.getJSONObject("nativePublication").optString("taskId");
+        if(!taskId.equals(sourceTask)||!"owner".equals(record.optString("principalId"))||!"private".equals(record.optString("spaceId"))||record.optBoolean("outputSourceRetired")||source.has("groupSpaceId")||source.optString("kind").startsWith("group_")||!sha.equals(record.getString("sha256")))throw new SecurityException("上传原件必须是本任务仍可用的准确私人附件版本");
+        return new JSONObject().put("id",id).put("sha256",sha).put("size",record.getLong("size")).put("name",record.getString("name")).put("mimeType",record.getString("mimeType")).put("createdAt",record.getLong("createdAt"));
+    }
+    public static android.net.Uri stageArtifact(Context context,String taskId,JSONObject pin,RunControl original)throws Exception {
+        if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("上传原件核验不能阻塞原生主线程");
+        JSONObject actual=artifactPin(context,taskId,pin.getString("id"),pin.getString("sha256"));if(!actual.toString().equals(pin.toString()))throw new SecurityException("上传原件版本已变化");
+        AttachmentRepository repository=AttachmentRepository.get(context);repository.privateOriginalForHost(pin.getString("id"),pin.getString("sha256"),original).requireCurrent(original);
+        return repository.verifiedViewIntent(pin.getString("id"),pin.getString("sha256"),original).getData();
+    }
+    public static String openArtifactInputScript(String pageKey,String url,String observation,JSONObject target)throws Exception {
+        String ref=target.getString("ref");if(!ref.matches("n[0-9]{1,3}")||!target.optString("tag").equals("INPUT")||!target.optString("type").equals("file")||!target.optString("nodeKey").matches("k[1-9][0-9]{0,6}"))throw new SecurityException("上传需要当前真实file input");
+        return "JSON.stringify((()=>{const s=window["+JSONObject.quote(pageKey)+"];if(location.href!=="+JSONObject.quote(url)+"||!s||s.id!=="+JSONObject.quote(observation)+"||s.dirty||s.observer.takeRecords().length)return {accepted:false,code:'upload_observation_changed'};const e=s.nodes["+Integer.parseInt(ref.substring(1))+"];if(!e||!e.isConnected||e.ownerDocument!==document||e.tagName!=='INPUT'||e.type!=='file'||!s.nodeKeys||s.nodeKeys.get(e)!=="+JSONObject.quote(target.getString("nodeKey"))+"||e.disabled||e.closest('[data-private=true]')||!e.getClientRects().length)return {accepted:false,code:'upload_input_changed'};e.click();return {accepted:true,status:'chooser_requested',siteConfirmed:false};})())";
+    }
     public static JSONObject destinationIdentity(String url)throws Exception {java.net.URI target=new java.net.URI(url);if(target.getHost()==null||target.getUserInfo()!=null||!java.util.Set.of("http","https").contains(target.getScheme()))throw new SecurityException("上传须来自有效网页");return new JSONObject().put("destinationDigest",destinationDigest(url)).put("destinationOrigin",new java.net.URI(target.getScheme(),null,target.getHost(),target.getPort(),null,null,null).toASCIIString()).put("destinationUrl",new java.net.URI(target.getScheme(),null,target.getHost(),target.getPort(),target.getPath(),null,null).toASCIIString());}
     private static String destinationDigest(String url)throws Exception {StringBuilder out=new StringBuilder();for(byte b:java.security.MessageDigest.getInstance("SHA-256").digest(url.getBytes(java.nio.charset.StandardCharsets.UTF_8)))out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
     public static JSONObject importPicked(Context context,Intent data,Destination destination)throws Exception {destination.check();return importPicked(context,data,destination.session,null,destination::current,destination);}

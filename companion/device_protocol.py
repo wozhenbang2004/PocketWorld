@@ -11,7 +11,7 @@ import json
 import re
 
 VERSION = "1.0"
-PROFILE = "pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb"
+PROFILE = "pwp1_65faa83c7e01af9537960858d1b1d93cfedb4d0e0e22210935d7f43cda888739"
 MAX_CONTROL_BYTES = 65_536
 MAX_PAIRING_BYTES = 16_384
 MAX_DEPTH = 16
@@ -31,6 +31,8 @@ METHODS = {
     "task.get": ("DeviceRequest", "read"),
     "task.events": ("DeviceRequest", "read"),
     "task.respond": ("DeviceRequest", "write"),
+    "task.answerQuestion": ("DeviceRequest", "write"),
+    "task.steer": ("DeviceRequest", "write"),
     "task.pause": ("DeviceRequest", "write"),
     "task.cancel": ("DeviceRequest", "write"),
     "task.acquireControl": ("DeviceRequest", "write"),
@@ -403,6 +405,10 @@ def parse_request(raw):
         optional = {"cursor", "limit"} if method == "task.events" else set()
         if method == "task.respond":
             required |= {"originalRequestId", "argumentsDigest", "runId", "executorEpoch", "controlLeaseId", "decision"}
+        elif method in ("task.answerQuestion", "task.steer"):
+            required |= {"runId", "executorEpoch", "controlLeaseId", "allocationId", "text"}
+            if method == "task.answerQuestion":
+                required |= {"originalRequestId", "waitRevision"}
         elif method in ("task.pause", "task.cancel"):
             required |= {"runId", "executorEpoch", "controlLeaseId"}
             optional = {"reason"}
@@ -410,7 +416,7 @@ def parse_request(raw):
             required |= {"runId", "executorEpoch", "ttlMs"}
             optional = {"previousLeaseId"}
         _keys(args, required, optional)
-        for name in ("taskId", "originalRequestId", "runId", "controlLeaseId", "previousLeaseId"):
+        for name in ("taskId", "originalRequestId", "runId", "controlLeaseId", "previousLeaseId", "allocationId"):
             if name in args:
                 identifier(args[name], name)
         if "executorEpoch" in args:
@@ -419,6 +425,12 @@ def parse_request(raw):
             _fail("invalid_request", "Invalid original argumentsDigest")
         if "limit" in args:
             integer(args["limit"], "limit", 1, 256)
+        if "waitRevision" in args:
+            integer(args["waitRevision"], "waitRevision", 1)
+        if "text" in args:
+            text(args["text"], "text", 4000)
+            if not args["text"].strip():
+                _fail("invalid_request", "Ordinary input cannot be blank")
         if "ttlMs" in args:
             integer(args["ttlMs"], "ttlMs", 1, 300000)
         for name in ("cursor", "reason", "decision"):
@@ -562,7 +574,7 @@ def validate_message(value):
             if result.get("messageType")!="DeviceDescription":_fail("invalid_request","Describe requires typed paired metadata")
             validate_message(result)
             if result["deviceId"]!=value["executorDeviceId"] or result["instanceId"]!=value["instanceId"]:_fail("wrong_audience","Description belongs to another native device instance")
-        elif method in ("tool.invoke","task.submitGoal","operation.get","operation.cancel","task.respond","task.pause","task.cancel","task.acquireControl"):
+        elif method in ("tool.invoke","task.submitGoal","operation.get","operation.cancel","task.respond","task.pause","task.cancel","task.acquireControl","task.answerQuestion","task.steer"):
             if result.get("messageType")!="OperationReceipt":_fail("invalid_request","Method requires an original typed operation receipt")
             validate_message(result)
             if result["executorDeviceId"]!=value["executorDeviceId"] or result["instanceId"]!=value["instanceId"]:_fail("wrong_audience","Receipt belongs to another native executor instance")

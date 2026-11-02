@@ -2,7 +2,7 @@ package dev.pocketengine.ui;
 
 import static org.junit.Assert.*;
 
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.channels.ChannelsModule;
 import java.net.HttpURLConnection;

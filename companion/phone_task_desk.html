@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pocket World · Phone tasks</title><link rel="stylesheet" href="/desk.css">
+<body><main><header><p class="eyebrow">Pocket World · local Task Desk</p><h1>Continue on your phone</h1><p id="selection">Unlocking this local session…</p><p class="muted">This window controls one selected phone. Closing it leaves phone tasks running.</p></header>
+<section aria-labelledby="current-title"><div class="row"><h2 id="current-title">Original operation</h2><button id="list">Recent operations</button><button id="doctor">Check connection</button></div>
+<label>Operation ID<input id="operation" autocomplete="off" spellcheck="false"></label>
+<div class="row"><button id="status">Read status</button><button id="wait">Wait up to 30 seconds</button><button id="events">Read events</button><button id="cancel" class="danger">Request cancellation</button></div>
+<p class="muted">A timeout means the result is unconfirmed. Read the same operation ID; do not submit it again.</p>
+<output id="notice" role="status" aria-live="polite"></output><pre id="result" tabindex="0" aria-label="Original phone result">No operation read yet.</pre></section>
+<section aria-labelledby="input-title"><h2 id="input-title">Continue the original task</h2><p id="input-scope" class="muted">Read the original task and check its current signed phone scope first.</p>
+<button id="acquire-control" disabled>Acquire original task control</button><p class="muted">Control stays bound to this task, run and allocation. This does not approve an effect or renew its execution budget.</p>
+<div id="ordinary-question" hidden><p id="question-text"></p><label>Your answer<textarea id="answer-text" rows="3" maxlength="4000"></textarea></label><button id="answer" class="primary" disabled>Answer this ordinary question</button></div>
+<div id="running-steer" hidden><label>Guidance for this active task<textarea id="steer-text" rows="3" maxlength="4000"></textarea></label><button id="steer" disabled>Send to original task</button></div>
+<label>Original control write ID<input id="control-operation" readonly spellcheck="false"></label><button id="control-status" disabled>Read this control write</button>
+<p class="muted">Native approval and takeover stay on the phone. Unknown writes keep their ID and draft; they are never resent.</p></section>
+<section aria-labelledby="new-title"><h2 id="new-title">New phone task</h2><form id="submit"><label>What should the phone do?<textarea id="goal" rows="4" maxlength="12000" required></textarea></label>
+<label>Paired phone scope<select id="scope-choice" required><option value="">Read the selected phone’s connection to load its scopes</option></select></label><details><summary>Limits and original scope details</summary><div class="fields"><label>Native grant ID<input id="grant" readonly autocomplete="off"></label><label>Capability version<input id="version" value="1.0" required></label><label>Tool calls<input id="tools" type="number" min="0" max="400" value="10" required></label><label>Model calls<input id="models" type="number" min="1" max="1000" value="10" required></label></div><label>Exact resource binding (JSON from the paired phone)<textarea id="binding" rows="3" readonly spellcheck="false"></textarea></label></details>
+<p class="muted">The phone checks its current grant, budget and model configuration. Native phone confirmations cannot be supplied as text here.</p><button type="submit" class="primary">Start on selected phone</button></form></section>
+<footer>Phone TaskStore owns task execution. Connection checks do not prove model inference.</footer></main><script src="/desk.js"></script></body></html>

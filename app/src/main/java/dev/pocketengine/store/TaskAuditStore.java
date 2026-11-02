@@ -129,6 +129,7 @@ public final class TaskAuditStore {
             else if(value instanceof JSONObject&&jsonBytes(value,8192,0)>=0)out.put(key,new JSONObject(value.toString()));
         }
         JSONObject learning=task.optJSONObject("sourceLearningJob");if(learning!=null){JSONObject small=new JSONObject().put("headerOnly",true).put("inputsIncluded",false).put("executionAuthorized",false);for(String field:new String[]{"format","revision","nextIndex","reservedModelAttempts"}){Object value=learning.opt(field);if(value instanceof Number||value instanceof Boolean||value instanceof String&&((String)value).length()<=160)small.put(field,value);}out.put("sourceLearningJob",small);}
+        JSONObject question=dev.pocketengine.features.assistant.OwnerQuestionInputs.pageQuestion(task);if(question!=null)out.put("ownerQuestionView",question);
         out.put("taskProjection","summary").put("auditBodyIncluded",false).put("events",new JSONArray());
         if(utf8(out.toString())>MAX_HEADER_BYTES-2048){for(String key:new String[]{"origin","developmentContext","sshSelection","teamAssignment"})out.remove(key);out.put("metadataLimited",true);}
         return out;

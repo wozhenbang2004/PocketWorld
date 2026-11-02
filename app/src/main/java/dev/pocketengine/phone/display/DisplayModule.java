@@ -173,6 +173,18 @@ public final class DisplayModule implements EngineModule {
         }
         return new JSONObject().put("socketName",socket).put("token",secret).put("ownerUid",android.os.Process.myUid());
     }
+    /** Explicit owner undo of the private audio ledger, even after the old display has gone. Not a model command. */
+    public synchronized JSONObject audioRecovery(String command,JSONObject payload)throws Exception {
+        if(!java.util.Set.of("audio.get","audio.set").contains(command)||!ownerTaskId.isEmpty()||bootstrapBusy()||!isConnected())throw new SecurityException("owner_audio_recovery_unavailable");
+        JSONObject answer=client().call("audio_recovery."+command.substring("audio.".length()),new JSONObject(payload.toString()),null);requireOk(answer);return answer;
+    }
+    /** Metadata only, using the original authenticated helper; never creates a display or task. */
+    public JSONObject primaryOwnership(RunControl original,boolean ownerPausedRead)throws Exception {
+        if(original==null||!original.hasHostRun())throw new SecurityException("original_phone_run_required");
+        if(!isConnected())throw new SecurityException("phone_owner_identity_unavailable");
+        JSONObject answer=client().call("primary_ownership",new JSONObject(),original,original.pauseRevision(),ownerPausedRead);
+        requireOk(answer);return answer.getJSONObject("ownership");
+    }
     public synchronized JSONObject connect(RunControl control)throws Exception {
         try{
             if("wireless_adb".equals(backend())&&(bootstrapBusy()||adb.snapshot().optBoolean("recoveryRequired")))throw new IllegalStateException("无线ADB启动尚未确认，请先在本机连接入口核对原助手");
@@ -245,6 +257,12 @@ public final class DisplayModule implements EngineModule {
             dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
         JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
         return request("tap",pinned,control,expectedRevision,false,java.util.Objects.requireNonNull(admission));
+    }
+    /** Typed extensions retain the original session and the original physical-write admission. */
+    JSONObject requestAdmitted(String command,JSONObject payload,RunControl control,long revision,String expectedSession,int expectedDisplay,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+        JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
+        return request(command,pinned,control,revision,false,java.util.Objects.requireNonNull(admission));
     }
     private JSONObject request(String command,JSONObject payload,RunControl control,long expectedRevision,boolean ownerTakeover,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
         JSONObject current=session();String sessionId=current.optString("sessionId");int display=current.optInt("displayId",-1);

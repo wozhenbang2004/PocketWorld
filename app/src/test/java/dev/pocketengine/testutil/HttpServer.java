@@ -24,11 +24,13 @@ public final class HttpServer {
     private final Map<String,Handler> contexts=new ConcurrentHashMap<>();
     private final java.util.Set<Socket> clients=ConcurrentHashMap.newKeySet();
     private final ExecutorService workers=Executors.newCachedThreadPool(r->{Thread t=new Thread(r,"loopback-http-fixture");t.setDaemon(true);return t;});
-    private HttpServer(InetSocketAddress address,int backlog)throws Exception{server=new ServerSocket();server.bind(address,backlog);}
-    public static HttpServer create(InetSocketAddress address,int backlog)throws Exception{return new HttpServer(address,backlog);}
+    private volatile java.util.concurrent.Executor exchangeExecutor=workers;
+    private HttpServer(InetSocketAddress address,int backlog)throws java.io.IOException{server=new ServerSocket();server.bind(address,backlog);}
+    public static HttpServer create(InetSocketAddress address,int backlog)throws java.io.IOException{return new HttpServer(address,backlog);}
     public InetSocketAddress getAddress(){return (InetSocketAddress)server.getLocalSocketAddress();}
     public void createContext(String path,Handler handler){contexts.put(path,handler);}
-    public void start(){workers.execute(()->{while(!server.isClosed())try{Socket client=server.accept();clients.add(client);workers.execute(()->serve(client));}catch(Exception closed){if(!server.isClosed())throw new IllegalStateException(closed);}});}
+    public void setExecutor(java.util.concurrent.Executor executor){exchangeExecutor=executor==null?workers:executor;}
+    public void start(){workers.execute(()->{while(!server.isClosed())try{Socket client=server.accept();clients.add(client);exchangeExecutor.execute(()->serve(client));}catch(Exception closed){if(!server.isClosed())throw new IllegalStateException(closed);}});}
     private void serve(Socket socket){try(Socket client=socket){
         client.setSoTimeout(5000);InputStream in=client.getInputStream();String[] request=line(in).split(" ",3);if(request.length!=3)throw new java.io.IOException("Invalid fixture request");
         Headers headers=new Headers();int total=0;String line;
@@ -44,15 +46,42 @@ public final class HttpServer {
     public static final class Headers extends TreeMap<String,List<String>>{
         Headers(){super(String.CASE_INSENSITIVE_ORDER);}
         public void add(String name,String value){computeIfAbsent(name,key->new ArrayList<>()).add(value);}
+        public void set(String name,String value){put(name,new ArrayList<>(java.util.List.of(value)));}
         public String getFirst(String name){List<String> values=get(name);return values==null||values.isEmpty()?null:values.get(0);}
     }
     public static final class Exchange {
         private final Socket socket;private final String method;private final URI uri;private final Headers request,response=new Headers();private final InputStream body;
+        private OutputStream output;
+        private final OutputStream responseBody=new OutputStream(){
+            @Override public void write(int value)throws java.io.IOException{requireOutput().write(value);}
+            @Override public void write(byte[] value,int offset,int length)throws java.io.IOException{requireOutput().write(value,offset,length);}
+            @Override public void flush()throws java.io.IOException{requireOutput().flush();}
+            @Override public void close()throws java.io.IOException{if(output!=null)output.close();else socket.close();}
+        };
         Exchange(Socket socket,String method,URI uri,Headers request,byte[] body){this.socket=socket;this.method=method;this.uri=uri;this.request=request;this.body=new ByteArrayInputStream(body);}
         public Headers getRequestHeaders(){return request;}public Headers getResponseHeaders(){return response;}
         public String getRequestMethod(){return method;}public URI getRequestURI(){return uri;}
-        public InputStream getRequestBody(){return body;}public OutputStream getResponseBody()throws Exception{return socket.getOutputStream();}
-        public void sendResponseHeaders(int status,long length)throws Exception{StringBuilder out=new StringBuilder("HTTP/1.1 ").append(status).append(" Fixture\r\nContent-Length: ").append(Math.max(0,length)).append("\r\nConnection: close\r\n");for(Map.Entry<String,List<String>> header:response.entrySet())for(String value:header.getValue())out.append(header.getKey()).append(": ").append(value).append("\r\n");out.append("\r\n");socket.getOutputStream().write(out.toString().getBytes(StandardCharsets.US_ASCII));}
-        public void close(){try{socket.close();}catch(Exception absent){}}
+        public InputStream getRequestBody(){return body;}public OutputStream getResponseBody(){return responseBody;}
+        private OutputStream requireOutput()throws java.io.IOException{if(output==null)throw new java.io.IOException("Response headers not sent");return output;}
+        public void sendResponseHeaders(int status,long length)throws java.io.IOException{
+            if(output!=null)throw new java.io.IOException("Response headers already sent");
+            boolean chunked=length==0&&status!=204&&status!=304;OutputStream raw=socket.getOutputStream();
+            StringBuilder out=new StringBuilder("HTTP/1.1 ").append(status).append(" Fixture\r\n");
+            if(chunked)out.append("Transfer-Encoding: chunked\r\n");else out.append("Content-Length: ").append(Math.max(0,length)).append("\r\n");
+            out.append("Connection: close\r\n");for(Map.Entry<String,List<String>> header:response.entrySet())for(String value:header.getValue())out.append(header.getKey()).append(": ").append(value).append("\r\n");out.append("\r\n");raw.write(out.toString().getBytes(StandardCharsets.US_ASCII));
+            output=chunked?new ChunkedOutput(raw):raw;
+        }
+        public void close(){try{responseBody.close();}catch(Exception absent){}finally{try{socket.close();}catch(Exception absent){}}}
+    }
+    private static final class ChunkedOutput extends OutputStream {
+        private final OutputStream raw;private boolean closed;
+        ChunkedOutput(OutputStream raw){this.raw=raw;}
+        @Override public void write(int value)throws java.io.IOException{write(new byte[]{(byte)value},0,1);}
+        @Override public synchronized void write(byte[] value,int offset,int length)throws java.io.IOException{
+            if(closed)throw new java.io.IOException("Fixture response closed");if(length==0)return;
+            raw.write((Integer.toHexString(length)+"\r\n").getBytes(StandardCharsets.US_ASCII));raw.write(value,offset,length);raw.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+        }
+        @Override public synchronized void flush()throws java.io.IOException{raw.flush();}
+        @Override public synchronized void close()throws java.io.IOException{if(closed)return;closed=true;raw.write("0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));raw.flush();raw.close();}
     }
 }

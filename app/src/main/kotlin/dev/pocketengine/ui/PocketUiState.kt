@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 internal data class UiMessage(val role: String, val content: String, val at: Long, val taskId: String? = null, val id: String? = null, val submission: JSONObject? = null, val attachmentCount: Int = 0, val attachments: List<UiChatAttachment> = emptyList(), val sourceRevision: Long = 1, val attachmentFiles: List<JSONObject> = emptyList(), val memoryReference: JSONObject? = null)
 internal data class UiAttachmentOpen(val checking: Boolean = false, val requested: Boolean = false, val error: String? = null)
-internal data class UiConversation(val id: String, val title: String, val updatedAt: Long)
+internal data class UiConversation(val id: String, val title: String, val updatedAt: Long, val pinnedAt: Long = 0, val metadataRevision: Long = 1)
 internal data class UiProject(val id: String, val name: String)
 internal data class UiFile(val path: String, val version: Int)
 internal data class UiFileRevision(val version: Int, val at: Long, val characters: Int, val deleted: Boolean)
@@ -26,6 +26,9 @@ internal data class PocketUiState(
     val screenshots: Boolean = true,
     val localCaptureAllowed: Boolean = true,
     val localOcrAllowed: Boolean = true,
+    val agentPreferences: JSONObject = JSONObject(),
+    val agentPreferencesSaving: Boolean = false,
+    val agentPreferencesError: String? = null,
     val supportsImageInput: Boolean = false,
     val modelProvider: String = "openai_chat",
     val modelRoute: String = "api_key",

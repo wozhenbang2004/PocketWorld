@@ -2,7 +2,7 @@ package dev.pocketengine.features.proxy;
 
 import android.app.Application;
 import android.database.sqlite.SQLiteDatabase;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.runtime.usage.NativeInferenceWork;
 import dev.pocketengine.store.TaskStore;

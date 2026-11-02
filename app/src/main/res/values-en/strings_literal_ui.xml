@@ -1,0 +1,734 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_lit_00351ed7156c" formatted="false">"Explicitly allow"</string>
+    <string name="ui_lit_00529eb907a9" formatted="false">"The page requests input"</string>
+    <string name="ui_lit_00621aa3279d" formatted="false">"Open local original task and follow-up receipts"</string>
+    <string name="ui_lit_008e66278f0d" formatted="false">"Clear history and bookmarks…"</string>
+    <string name="ui_lit_00a334451592" formatted="false">"Leave page"</string>
+    <string name="ui_lit_016496189a2e" formatted="false">"View source and delivery"</string>
+    <string name="ui_lit_01693a697c82" formatted="false">"The original TaskStore approval interface is required."</string>
+    <string name="ui_lit_019d8dfa9c7c" formatted="false">"The page\'s default input is too long and was not filled in automatically. Enter it yourself or cancel. This prompt does not record your input; check the page before returning control."</string>
+    <string name="ui_lit_0217d4b5b706" formatted="false">"Disconnected; waiting to restore the original session"</string>
+    <string name="ui_lit_028e5380f69f" formatted="false">"The original screenshot page closed, paused or was taken over."</string>
+    <string name="ui_lit_037dc325a358" formatted="false">" · Separate draft retained"</string>
+    <string name="ui_lit_03af30862635" formatted="false">"The browser profile or page closed. Select it again."</string>
+    <string name="ui_lit_03b11112dc97" formatted="false">"Endpoint"</string>
+    <string name="ui_lit_040b1c97f93a" formatted="false">"Phone development environment"</string>
+    <string name="ui_lit_04b5d86ac87c" formatted="false">"Importing attachment"</string>
+    <string name="ui_lit_050023e821ce" formatted="false">"The browser action timed out and execution stopped. Check whether it took effect first."</string>
+    <string name="ui_lit_051836569928" formatted="false">"Edit"</string>
+    <string name="ui_lit_0542b7f63404" formatted="false">"My devices"</string>
+    <string name="ui_lit_05b37ff2ba09" formatted="false">"The same host task was checked. Execution was not repeated."</string>
+    <string name="ui_lit_05e8d50740cc" formatted="false">"The script result cannot be verified. It will not be replayed."</string>
+    <string name="ui_lit_060dca4171af" formatted="false">"Original source"</string>
+    <string name="ui_lit_060f42e0d419" formatted="false">"Connect an account and choose an available model"</string>
+    <string name="ui_lit_062c2254ca36" formatted="false">"New file · Created when saved"</string>
+    <string name="ui_lit_06cda1af1dfe" formatted="false">"Save a memory"</string>
+    <string name="ui_lit_06db027aefd5" formatted="false">"Commitments and follow-up"</string>
+    <string name="ui_lit_0711cc459572" formatted="false">"Discard edits and close"</string>
+    <string name="ui_lit_072b14eafb62" formatted="false">"This is the final text retained in the original private conversation. Audio and old execution authorization are not restored. Review it again; adding it to the composer does not send it."</string>
+    <string name="ui_lit_0740bcd7df58" formatted="false">"The page or execution identity changed. Check the action outcome."</string>
+    <string name="ui_lit_076096460968" formatted="false">"Original message has "</string>
+    <string name="ui_lit_078f7dfc0a16" formatted="false">"Handle the original page\'s file selection or unresolved action before returning browsing control."</string>
+    <string name="ui_lit_08382755b68d" formatted="false">"Add to the goal or explain what you just handled…"</string>
+    <string name="ui_lit_08f3e016e4fa" formatted="false">"Merge missed occurrences into one"</string>
+    <string name="ui_lit_091f65763b21" formatted="false">"Voice conversation"</string>
+    <string name="ui_lit_0972b924eb64" formatted="false">"Unsaved edits will be replaced. The saved file version remains, and the next save creates a new version."</string>
+    <string name="ui_lit_09cca1616cfd" formatted="false">"System dictation is available. Recognized text fills the draft; you send it."</string>
+    <string name="ui_lit_0a2da93de430" formatted="false">"Confirm that you reviewed the source and current instructions. Capability calls still require host authorization."</string>
+    <string name="ui_lit_0a34445994ad" formatted="false">"This download needs your confirmation. Automatic execution is paused."</string>
+    <string name="ui_lit_0a5f990d9b0d" formatted="false">"Extract candidates from saved project files"</string>
+    <string name="ui_lit_0a67fa2d1fa3" formatted="false">"Recent reply deliveries"</string>
+    <string name="ui_lit_0a98a48eaaac" formatted="false">"Test connection"</string>
+    <string name="ui_lit_0ae84e721845" formatted="false">"Back to original entry"</string>
+    <string name="ui_lit_0af3e5aea7b7" formatted="false">"Temporary working memory stays only in the current task/run\'s memory. It closes when execution ends, is taken over or its sources are cleared. It does not automatically become long-term memory or permission. You still choose sources, review and adopt summarized candidates."</string>
+    <string name="ui_lit_0b8a4c1306e4" formatted="false">"Switches phone apps and uses your current screen. Pause before using it yourself. Stopping does not undo actions already taken."</string>
+    <string name="ui_lit_0c171e72b365" formatted="false">"Confirm complete"</string>
+    <string name="ui_lit_0ce047e24cc1" formatted="false">" team configurations"</string>
+    <string name="ui_lit_0d1d3846c933" formatted="false">"Allow owner private chat to create tasks"</string>
+    <string name="ui_lit_0db70ba840b7" formatted="false">"Enable this version"</string>
+    <string name="ui_lit_0dbd10ea693d" formatted="false">"Review local approval window again"</string>
+    <string name="ui_lit_0dd41fb645e8" formatted="false">" · Available on system"</string>
+    <string name="ui_lit_0e19bb3c24ea" formatted="false">"Clear this profile\'s history and bookmarks?"</string>
+    <string name="ui_lit_0e1a7040390f" formatted="false">"New project"</string>
+    <string name="ui_lit_0e769f2800e5" formatted="false">"Original authenticated group task · "</string>
+    <string name="ui_lit_0edb84e2e0f7" formatted="false">"Added to this profile\'s bookmarks."</string>
+    <string name="ui_lit_0f0b33214c43" formatted="false">"Reconcile host receipt"</string>
+    <string name="ui_lit_0f29e57b468f" formatted="false">"The task host is not ready. Private-chat tasks cannot be enabled or claimed to have started."</string>
+    <string name="ui_lit_0fff33fac2d5" formatted="false">"View team members, sessions and tasks"</string>
+    <string name="ui_lit_10ceb2ab6a28" formatted="false">"Collapse connection editor"</string>
+    <string name="ui_lit_1115a966f840" formatted="false">"Official gateway authenticated; receiving"</string>
+    <string name="ui_lit_111f07ab36a8" formatted="false">"Import attachment"</string>
+    <string name="ui_lit_124621f74cb1" formatted="false">"Waiting to read"</string>
+    <string name="ui_lit_1293bdf6afd8" formatted="false">"The original upload page is unavailable."</string>
+    <string name="ui_lit_13d61fea9f17" formatted="false">"Preview"</string>
+    <string name="ui_lit_13f41d1066f6" formatted="false">"Replying…"</string>
+    <string name="ui_lit_1488913a2bb9" formatted="false">"Your choice was sent to the page. Check the current page; returning control through the original task is still required to continue research."</string>
+    <string name="ui_lit_14fb42fe2737" formatted="false">"The profile session changed."</string>
+    <string name="ui_lit_15aada5a403a" formatted="false">"Maintenance and language"</string>
+    <string name="ui_lit_16228f7ff778" formatted="false">"Think it through together"</string>
+    <string name="ui_lit_16d6c3f848ab" formatted="false">"Memory sources provided for this request"</string>
+    <string name="ui_lit_1767379c1192" formatted="false">"Review the original computer session and this authorization above. Unknown outcomes are queried only; the task is not resubmitted."</string>
+    <string name="ui_lit_17eae381d6f4" formatted="false">"Path in project"</string>
+    <string name="ui_lit_180ab8aea818" formatted="false">"Control readback could not start. Check the original page; the action was not retried."</string>
+    <string name="ui_lit_1857be849360" formatted="false">"API connection"</string>
+    <string name="ui_lit_19b4ee247cd1" formatted="false">"Cancel this dictation"</string>
+    <string name="ui_lit_19e7f3ecfa63" formatted="false">"Web page"</string>
+    <string name="ui_lit_1a1281a5e5c4" formatted="false">"New window"</string>
+    <string name="ui_lit_1a132f86e8b5" formatted="false">"The eight-page limit was reached. Close unused pages first."</string>
+    <string name="ui_lit_1a806a0a74ff" formatted="false">"You opened a retained source. Automatic browsing is paused."</string>
+    <string name="ui_lit_1ab31639e24d" formatted="false">"View original media actions and artifacts"</string>
+    <string name="ui_lit_1afed6a81a25" formatted="false">"Select model"</string>
+    <string name="ui_lit_1bc620ef1574" formatted="false">"Stop the current execution before saving follow-up input and continuing the original task."</string>
+    <string name="ui_lit_1bf2babce37c" formatted="false">"Disable permission"</string>
+    <string name="ui_lit_1c160580e981" formatted="false">"Phone task goal"</string>
+    <string name="ui_lit_1c78f51016be" formatted="false">"This page\'s browsing record could not be saved. You can continue using the page."</string>
+    <string name="ui_lit_1c7aac614031" formatted="false">"Reads nodes first. Screenshots are sent only if nodes are insufficient and image input is configured. Visible text is also sent."</string>
+    <string name="ui_lit_1cc8d69b3611" formatted="false">"The task page lacks its original operation gate."</string>
+    <string name="ui_lit_1ccd762cc740" formatted="false">"Close file editor?"</string>
+    <string name="ui_lit_1cdd19404065" formatted="false">"Context and tools"</string>
+    <string name="ui_lit_1dcf32a35486" formatted="false">"ChatGPT account"</string>
+    <string name="ui_lit_1e3e234f2c01" formatted="false">"View original task goal"</string>
+    <string name="ui_lit_1e9236b1fe37" formatted="false">"Actual recall mode has not been read yet"</string>
+    <string name="ui_lit_1ef4c9950c0d" formatted="false">"The research workspace is unavailable. Check the original task; you can still browse manually."</string>
+    <string name="ui_lit_1ffe57ff5081" formatted="false">"Collapse usage and original records"</string>
+    <string name="ui_lit_203ba86a0911" formatted="false">"Keeps bookmarks, website login data and saved research sources."</string>
+    <string name="ui_lit_203dbb01c887" formatted="false">"The required page condition was not observed within the time limit."</string>
+    <string name="ui_lit_208e511d2a92" formatted="false">"Filter loaded file paths"</string>
+    <string name="ui_lit_2203dc909afe" formatted="false">"Edit content"</string>
+    <string name="ui_lit_223520ba6160" formatted="false">"This connection is managed by the foreground session above. Use that session\'s stop-reception action."</string>
+    <string name="ui_lit_22d9da51ec3a" formatted="false">"Export text repository"</string>
+    <string name="ui_lit_245564c59810" formatted="false">"Authorization and background task access"</string>
+    <string name="ui_lit_24b0ab4c7503" formatted="false">"Reading project file"</string>
+    <string name="ui_lit_24c06f9a65f6" formatted="false">"Endpoint, key and input capabilities"</string>
+    <string name="ui_lit_250cee2f68ec" formatted="false">"Closes these pages and ends this browsing session without cancelling the entire task. Saved sources, attachments and login profiles are retained. Completed actions cannot be undone; review unconfirmed results in the task."</string>
+    <string name="ui_lit_2521ef86db3a" formatted="false">"Save follow-up"</string>
+    <string name="ui_lit_25e594ef7432" formatted="false">"Matches saved version"</string>
+    <string name="ui_lit_2663f5aaab5c" formatted="false">"Save and switch API model"</string>
+    <string name="ui_lit_275f45f9aed2" formatted="false">"You switched or disabled the browser profile. Execution of the original session stopped."</string>
+    <string name="ui_lit_276cae470f59" formatted="false">"The system file picker is unavailable. Try again later."</string>
+    <string name="ui_lit_27fdc89a1ca8" formatted="false">"This process confirmed no dispatch; the original input is retained."</string>
+    <string name="ui_lit_280b014f8c90" formatted="false">"Optional local API-key service for other tools on this phone. It is not exposed to the public internet and grants no phone-operation permission."</string>
+    <string name="ui_lit_28ce788c1a8e" formatted="false">"Review and confirm this unencrypted connection"</string>
+    <string name="ui_lit_2989a551674c" formatted="false">"The original task entry is unavailable; this page is retained."</string>
+    <string name="ui_lit_29ff95b76a1d" formatted="false">"Tell me what to do on your phone…"</string>
+    <string name="ui_lit_2a4cd2543c07" formatted="false">"The browser main thread is unavailable."</string>
+    <string name="ui_lit_2a8cbd207892" formatted="false">"The original semantic read paused or was taken over."</string>
+    <string name="ui_lit_2a8f329ec723" formatted="false">"Discard this dictation"</string>
+    <string name="ui_lit_2ac3879a4420" formatted="false">"Your selected browser session changed."</string>
+    <string name="ui_lit_2b4c47234aaa" formatted="false">"Local text matching (compatibility mode)"</string>
+    <string name="ui_lit_2b4e90d1261b" formatted="false">"This window prohibits screenshots. System protection was not bypassed."</string>
+    <string name="ui_lit_2bf872942e4a" formatted="false">"You have taken over the browser"</string>
+    <string name="ui_lit_2c1202e6f209" formatted="false">"Collapse original project-source selection"</string>
+    <string name="ui_lit_2caf98d32943" formatted="false">"Connection enabled; platform online state needs separate verification"</string>
+    <string name="ui_lit_2cb18ccb1773" formatted="false">"Ask a question"</string>
+    <string name="ui_lit_2cd0f3be8738" formatted="false">"Cancel"</string>
+    <string name="ui_lit_2cd79953f5e6" formatted="false">"Add requirements"</string>
+    <string name="ui_lit_2ce836dc5273" formatted="false">"Connections and capabilities"</string>
+    <string name="ui_lit_2cf9441fee93" formatted="false">"The original web document\'s identity cannot be verified."</string>
+    <string name="ui_lit_2d63d504d65a" formatted="false">"Content sent only to this page"</string>
+    <string name="ui_lit_2d87ad319b2f" formatted="false">"The local catalog or storage could not initialize. Previous state was not reset. Check storage and reopen the app."</string>
+    <string name="ui_lit_2d927f65a116" formatted="false">"Media request running"</string>
+    <string name="ui_lit_2e07333c8c74" formatted="false">"Phone"</string>
+    <string name="ui_lit_2ea29ea0e756" formatted="false">"Response detail and ordinary action pace"</string>
+    <string name="ui_lit_2f1dc378361e" formatted="false">"The previous browser action has not returned. Check its outcome first."</string>
+    <string name="ui_lit_2f9daa828907" formatted="false">"Delete"</string>
+    <string name="ui_lit_2fd563e41602" formatted="false">"Receives only through the official QQ bot, not a personal QQ login. Reception runs with the app process and is not guaranteed after restart or force-stop. Stopping reception does not stop existing tasks."</string>
+    <string name="ui_lit_2fdc91e671fd" formatted="false">"Voice input"</string>
+    <string name="ui_lit_30dd9100f45c" formatted="false">"Continue this task"</string>
+    <string name="ui_lit_30ea5e08a510" formatted="false">"The original document could not be read back after the script."</string>
+    <string name="ui_lit_30f0efa5367f" formatted="false">"Original task awaiting local review"</string>
+    <string name="ui_lit_315df9162c29" formatted="false">"A task browser workspace already exists. End it and close its task pages first."</string>
+    <string name="ui_lit_31c752d98f58" formatted="false">"Choose a Web or Python template, or import existing source through the system file picker. Files stay on this phone; tool readiness is shown separately."</string>
+    <string name="ui_lit_321b3d650e5a" formatted="false">"No everyday browsing history yet. Research tasks and saved sources are in the research workspace. History excludes address query parameters, login state and form contents."</string>
+    <string name="ui_lit_3233477a32aa" formatted="false">"Use phone"</string>
+    <string name="ui_lit_326885b15298" formatted="false">"The download\'s page or profile changed. Confirm it again."</string>
+    <string name="ui_lit_3328125f8a4d" formatted="false">"Switch project"</string>
+    <string name="ui_lit_3370543a2e52" formatted="false">"Recognizes text locally first. Pixels stay on the device, but recognized text is sent as sourced context to the selected inference service."</string>
+    <string name="ui_lit_339f7ce82d86" formatted="false">"The web prompt\'s original task pause state changed."</string>
+    <string name="ui_lit_3486c21ef894" formatted="false">"The original host of the embedded page navigated."</string>
+    <string name="ui_lit_357cc080a97b" formatted="false">"The original source frame document changed."</string>
+    <string name="ui_lit_365bbf521555" formatted="false">"This is your capability configuration, not a verified performance result. Confirm again after changing protocol, address or model."</string>
+    <string name="ui_lit_369ca5e19c59" formatted="false">"Downloading…"</string>
+    <string name="ui_lit_36d27b9ec59f" formatted="false">"Initiator audience (requires channel support)"</string>
+    <string name="ui_lit_372d5fc29721" formatted="false">"View usage for this connection test"</string>
+    <string name="ui_lit_379c175f253b" formatted="false">"Only your own pages can be explicitly closed here."</string>
+    <string name="ui_lit_37abefd29019" formatted="false">"Usage and original records"</string>
+    <string name="ui_lit_380e45a769c5" formatted="false">"Further input stays in the original task. It does not undo dispatched actions, increase the budget or grant permission."</string>
+    <string name="ui_lit_38844b135cf7" formatted="false">"More"</string>
+    <string name="ui_lit_398040a2c478" formatted="false">"Browser tools accept valid HTTP(S) addresses only."</string>
+    <string name="ui_lit_39932f24fe11" formatted="false">"Files"</string>
+    <string name="ui_lit_39be5cf61df9" formatted="false">"Continue execution"</string>
+    <string name="ui_lit_3a3e8552fe49" formatted="false">"Bookmark this page"</string>
+    <string name="ui_lit_3a7e0e9891fb" formatted="false">"API model configuration"</string>
+    <string name="ui_lit_3a973064817d" formatted="false">"Return result to original group"</string>
+    <string name="ui_lit_3acc08ff43af" formatted="false">"Project files and runtimes are managed separately. Missing interpreters are not shown as available. Termux requires a real installation and user authorization."</string>
+    <string name="ui_lit_3aeab27ba12e" formatted="false">"Uses a separate login environment without sharing your system Chrome account"</string>
+    <string name="ui_lit_3afbfa53f39f" formatted="false">"The original frame-reading host is unavailable."</string>
+    <string name="ui_lit_3b3ab62e425d" formatted="false">"Import from Git…"</string>
+    <string name="ui_lit_3b8ae0dc32ad" formatted="false">"View configuration"</string>
+    <string name="ui_lit_3baa5c1a6aea" formatted="false">"Import and manage MCP tools"</string>
+    <string name="ui_lit_3bf20fe74c23" formatted="false">"Clears only this profile\'s history and bookmarks. Website login data and saved research sources are retained."</string>
+    <string name="ui_lit_3cf33a9c7e34" formatted="false">"You took over the task page."</string>
+    <string name="ui_lit_3dbd3ff5c2de" formatted="false">"Stop reading aloud; keep the task running"</string>
+    <string name="ui_lit_3e3f984bf08a" formatted="false">"Project tools"</string>
+    <string name="ui_lit_3e6eb46b824c" formatted="false">"The page changed. Check the original action receipt."</string>
+    <string name="ui_lit_3eeeb741d1fb" formatted="false">"Disabled; background phone tasks need this access"</string>
+    <string name="ui_lit_3f31e245e94b" formatted="false">"Select an available profile and a full web address first."</string>
+    <string name="ui_lit_3fd47edce45b" formatted="false">"Close"</string>
+    <string name="ui_lit_3fe5466fe64f" formatted="false">"New phone task received"</string>
+    <string name="ui_lit_40ae1784c16d" formatted="false">"Recent deliveries"</string>
+    <string name="ui_lit_40d131054025" formatted="false">"These are saved versions. Current editable files are in the project\'s Files view. Review differences before importing a version back."</string>
+    <string name="ui_lit_41acd6ac2bbb" formatted="false">"Companion address"</string>
+    <string name="ui_lit_41e204006162" formatted="false">"Task-page ownership or the profile session changed."</string>
+    <string name="ui_lit_41f6ef36b882" formatted="false">"Return to the original task or assistant, keeping this page without resuming automatically"</string>
+    <string name="ui_lit_423f51a28678" formatted="false">"Runtime"</string>
+    <string name="ui_lit_4240a2b3a352" formatted="false">"Save and send this original input again"</string>
+    <string name="ui_lit_425ae3116fb0" formatted="false">"Browser execution authorization expired. Check actions already dispatched."</string>
+    <string name="ui_lit_42c99cfdf2b4" formatted="false">"Web research workspace"</string>
+    <string name="ui_lit_42d6809d08de" formatted="false">"Built-in browser"</string>
+    <string name="ui_lit_43d7d2b51d75" formatted="false">"Create project"</string>
+    <string name="ui_lit_440cee7fc8cf" formatted="false">"Allow this protocol and address"</string>
+    <string name="ui_lit_44ce7ae909bb" formatted="false">"Search"</string>
+    <string name="ui_lit_45484d4bb683" formatted="false">"Project file artifacts"</string>
+    <string name="ui_lit_458748c7478e" formatted="false">"Testing"</string>
+    <string name="ui_lit_45a495a80347" formatted="false">"The page needs you to choose a file to upload. Automatic execution is paused."</string>
+    <string name="ui_lit_45a760187796" formatted="false">"Requires the connected background helper. If a separate display cannot be created, the task stops and waits."</string>
+    <string name="ui_lit_46272ce15a7c" formatted="false">"Browsing history or the login profile changed. Open history again."</string>
+    <string name="ui_lit_4661c6682fdf" formatted="false">"What should be remembered"</string>
+    <string name="ui_lit_4673a2306165" formatted="false">"Download"</string>
+    <string name="ui_lit_46b53b94c180" formatted="false">"The page structure changed during capture. The old image was not delivered."</string>
+    <string name="ui_lit_46f3b7e4077c" formatted="false">"Enter a goal or add context…"</string>
+    <string name="ui_lit_471bfdfd7f47" formatted="false">"Live audio and video"</string>
+    <string name="ui_lit_476843e8c89b" formatted="false">"Keeps the original task goal, context and follow-up input and continues with authorized tools. New writes still need host authorization."</string>
+    <string name="ui_lit_47fb9c959559" formatted="false">"For example: My small tool"</string>
+    <string name="ui_lit_4842f56c680d" formatted="false">"Add computer connection"</string>
+    <string name="ui_lit_4855bcf19a16" formatted="false">"Start task"</string>
+    <string name="ui_lit_4877be6f6ff0" formatted="false">"Choose the original repository project on the project page first. A live working-copy SHA is not treated as a fabricated file revision here."</string>
+    <string name="ui_lit_48905db38617" formatted="false">"Bound account: "</string>
+    <string name="ui_lit_49726f09c812" formatted="false">"Location"</string>
+    <string name="ui_lit_4a7ecd98cfdb" formatted="false">"State not yet read"</string>
+    <string name="ui_lit_4b2232f71f25" formatted="false">" · Current"</string>
+    <string name="ui_lit_4ba917d403e0" formatted="false">"Experience skills"</string>
+    <string name="ui_lit_4bba831e75af" formatted="false">"Replace editor content with this version?"</string>
+    <string name="ui_lit_4c1ff008d09c" formatted="false">"Collapse message actions and sources"</string>
+    <string name="ui_lit_4c6b7a87e39c" formatted="false">"Uses a separate background display, reads retained context and observes the current state again. Waits if that display is unavailable."</string>
+    <string name="ui_lit_4ca988032e6b" formatted="false">"Keep pages"</string>
+    <string name="ui_lit_4ce266d144fe" formatted="false">"Teamwork"</string>
+    <string name="ui_lit_4cea87d227eb" formatted="false">"Phone execution"</string>
+    <string name="ui_lit_4d93d3c0a1de" formatted="false">"Source cannot be verified yet"</string>
+    <string name="ui_lit_4e271ecdf4f8" formatted="false">"Draft saved on this device"</string>
+    <string name="ui_lit_4e3e89d92d3f" formatted="false">"Continue original task"</string>
+    <string name="ui_lit_4e6fd0e28c55" formatted="false">"Disable"</string>
+    <string name="ui_lit_4efba387e6eb" formatted="false">"This does not undo actions already taken on the computer. Check the original task first."</string>
+    <string name="ui_lit_4f0f0fd4891e" formatted="false">"Reconciliation notes"</string>
+    <string name="ui_lit_4f3bc1966b48" formatted="false">"The login profile changed. Other profiles\' records were not cleared."</string>
+    <string name="ui_lit_50452b5dc3e6" formatted="false">"The page observation expired. Observe it again."</string>
+    <string name="ui_lit_5073e9f5eddc" formatted="false">"View usage"</string>
+    <string name="ui_lit_508cdd8ae3db" formatted="false">"The original task page has no region-reading channel."</string>
+    <string name="ui_lit_514a2a273f9f" formatted="false">"Back to project"</string>
+    <string name="ui_lit_517d52c5cc31" formatted="false">"Back to connection center"</string>
+    <string name="ui_lit_51990e151954" formatted="false">"The selected API-key route stays fixed while the service runs. Stop it before changing the connection or model, then start explicitly. Billing identity never switches automatically."</string>
+    <string name="ui_lit_5253040db864" formatted="false">"Tasks"</string>
+    <string name="ui_lit_53b8b50d18eb" formatted="false">"Review learning candidates and sources"</string>
+    <string name="ui_lit_53cdc24275fa" formatted="false">" skills"</string>
+    <string name="ui_lit_53e36916d75e" formatted="false">"The frame\'s page changed."</string>
+    <string name="ui_lit_549203d446a3" formatted="false">"Image generation and audio files"</string>
+    <string name="ui_lit_54cce960bdc1" formatted="false">"Read this original reply aloud"</string>
+    <string name="ui_lit_54f13e1bda46" formatted="false">"This protocol and address were explicitly allowed"</string>
+    <string name="ui_lit_5521be0d991b" formatted="false">"Empty project"</string>
+    <string name="ui_lit_55f129730b7d" formatted="false">"Protected media"</string>
+    <string name="ui_lit_56023211c18d" formatted="false">"You took over the original task page. Automatic browsing is paused."</string>
+    <string name="ui_lit_56245fb1724f" formatted="false">"Delete reminder"</string>
+    <string name="ui_lit_564892e2d285" formatted="false">"Project attachments"</string>
+    <string name="ui_lit_5687bc6a9182" formatted="false">"Start working"</string>
+    <string name="ui_lit_569148281b2a" formatted="false">"The original frame host closed."</string>
+    <string name="ui_lit_56d9ea6fef49" formatted="false">"Browser profile could not be read. Check settings first."</string>
+    <string name="ui_lit_56e8e8eba3c3" formatted="false">"Remove this computer connection?"</string>
+    <string name="ui_lit_570e99640c04" formatted="false">"Not yet created"</string>
+    <string name="ui_lit_572cf45ba436" formatted="false">"Back"</string>
+    <string name="ui_lit_578a637caf2e" formatted="false">"Web and research workspace"</string>
+    <string name="ui_lit_579cd73b8416" formatted="false">"Import project"</string>
+    <string name="ui_lit_5857e5b72d49" formatted="false">"Read file again"</string>
+    <string name="ui_lit_58615513252f" formatted="false">"Allow screenshots when needed"</string>
+    <string name="ui_lit_586af3527522" formatted="false">"The eight-page limit was reached. Close pages you no longer need."</string>
+    <string name="ui_lit_5971df316e59" formatted="false">"The original working copy is unavailable. Its draft stays bound to that copy and is not moved to a newer one."</string>
+    <string name="ui_lit_59a6fa3fabc5" formatted="false">"Allow this unencrypted model connection?"</string>
+    <string name="ui_lit_59a907bcf415" formatted="false">"Open attachment"</string>
+    <string name="ui_lit_59bf3fcf73dc" formatted="false">"Prepare current project workspace"</string>
+    <string name="ui_lit_59cf700d64c9" formatted="false">"Skip the new occurrence"</string>
+    <string name="ui_lit_5abb3406155b" formatted="false">"Bookmark removed."</string>
+    <string name="ui_lit_5adb38fc0758" formatted="false">"The original page changed during capture."</string>
+    <string name="ui_lit_5b6b25363dd7" formatted="false">"The original takeover page or login profile changed."</string>
+    <string name="ui_lit_5b8f673101b8" formatted="false">"The web process exited and the original action stopped. Reopen the page you need."</string>
+    <string name="ui_lit_5b978cd6154d" formatted="false">"The official gateway is not integrated in this version. It will not be shown as online."</string>
+    <string name="ui_lit_5bac39e66437" formatted="false">"The original reading anchor is outside this window and remains unchanged. It updates only when you scroll or return to the latest message."</string>
+    <string name="ui_lit_5c13a7555228" formatted="false">"Site permissions"</string>
+    <string name="ui_lit_5c1e1de1bb85" formatted="false">"From this page: "</string>
+    <string name="ui_lit_5c4e6b726a7c" formatted="false">"Keep current edits"</string>
+    <string name="ui_lit_5cae0ea18389" formatted="false">"Create reminder"</string>
+    <string name="ui_lit_5d850f48cf24" formatted="false">"View explicit delegations, due candidates and completion receipts"</string>
+    <string name="ui_lit_5da39fa42bcb" formatted="false">"A key is saved for this protocol and service. Leave blank to keep using it."</string>
+    <string name="ui_lit_5e1b654092b2" formatted="false">" reminder rules"</string>
+    <string name="ui_lit_5e5971f6c344" formatted="false">"Enabled; pause or stop from a notification"</string>
+    <string name="ui_lit_5ef76e1e1f24" formatted="false">"Connecting; online state unconfirmed"</string>
+    <string name="ui_lit_5f5c92acb05a" formatted="false">"Keep one pending occurrence"</string>
+    <string name="ui_lit_5f600b307b4e" formatted="false">"API key"</string>
+    <string name="ui_lit_60536408c352" formatted="false">"Remote workspace"</string>
+    <string name="ui_lit_60636ba247a0" formatted="false">"Conversation history"</string>
+    <string name="ui_lit_60a53514eb92" formatted="false">"Bookmark"</string>
+    <string name="ui_lit_60b89512d92d" formatted="false">"Computers and servers"</string>
+    <string name="ui_lit_60d823aa465e" formatted="false">"A real multi-file Vite project. The first npm ci needs network access and actual platform dependencies. Editing while running needs explicit original-task approval for existing source scope; it does not start automatically."</string>
+    <string name="ui_lit_6113d2b22a57" formatted="false">"Stop reading aloud"</string>
+    <string name="ui_lit_612f283b36d2" formatted="false">"Screenshots are allowed when needed; the structure tree is read first."</string>
+    <string name="ui_lit_6135d4159e89" formatted="false">"Remove"</string>
+    <string name="ui_lit_615a6449bcd8" formatted="false">" configured connections"</string>
+    <string name="ui_lit_6181ed6f9734" formatted="false">"Source: "</string>
+    <string name="ui_lit_63453e24e5c5" formatted="false">"Browser execution stopped or was taken over."</string>
+    <string name="ui_lit_636d5b414777" formatted="false">"My plugin catalog · Installation and JavaScript source approval"</string>
+    <string name="ui_lit_6404a223a9c7" formatted="false">"Connections and capabilities"</string>
+    <string name="ui_lit_640fe46cdf48" formatted="false">"The host result still needs reconciliation. It was not resubmitted."</string>
+    <string name="ui_lit_648de25583ea" formatted="false">"History"</string>
+    <string name="ui_lit_6546658becd6" formatted="false">"Termux connection"</string>
+    <string name="ui_lit_66009c547bed" formatted="false">"Not started"</string>
+    <string name="ui_lit_6648f4ad9743" formatted="false">"Build skills from reviewed experience"</string>
+    <string name="ui_lit_665280c75f83" formatted="false">"Address or search"</string>
+    <string name="ui_lit_66759868e87c" formatted="false">"Probe response received. Review the remote capabilities."</string>
+    <string name="ui_lit_670ec25af841" formatted="false">"Keep"</string>
+    <string name="ui_lit_6789db6eb208" formatted="false">"Choose the output parameter and budget in the model catalog. Known capacity is checked before sending."</string>
+    <string name="ui_lit_67de19f08dd4" formatted="false">"The original web prompt lacks an operation gate."</string>
+    <string name="ui_lit_688a635d9b35" formatted="false">"Delete this reminder?"</string>
+    <string name="ui_lit_68a7913cef45" formatted="false">"I have reviewed it"</string>
+    <string name="ui_lit_68b73d23e4a1" formatted="false">"History for this profile"</string>
+    <string name="ui_lit_68d2db8b8307" formatted="false">"The system could not capture this actual page image. No substitute image was sent."</string>
+    <string name="ui_lit_692f3f0ead5b" formatted="false">"Private memory"</string>
+    <string name="ui_lit_693e3009482b" formatted="false">"Original task"</string>
+    <string name="ui_lit_69de6c821ea8" formatted="false">"Core memory: "</string>
+    <string name="ui_lit_6a38bbf56903" formatted="false">"Remind me to start a phone task"</string>
+    <string name="ui_lit_6a7f40073c1d" formatted="false">"Stop further tool actions"</string>
+    <string name="ui_lit_6b94f17a8663" formatted="false">"The upload attempt could not be reliably recorded. The file was not given to the page."</string>
+    <string name="ui_lit_6bf6d3f3d626" formatted="false">"Chat"</string>
+    <string name="ui_lit_6c7070ca15da" formatted="false">"Selected browsing history cleared."</string>
+    <string name="ui_lit_6c7f11ce0303" formatted="false">"The frame action lacks the original task execution gate."</string>
+    <string name="ui_lit_6d2ef7c5b8da" formatted="false">"Disable task permission for this channel?"</string>
+    <string name="ui_lit_6d54fe1482eb" formatted="false">"Import existing project"</string>
+    <string name="ui_lit_6dbefbbb6f54" formatted="false">"Unsaved edits will leave the current editor."</string>
+    <string name="ui_lit_6ddd1eaccab1" formatted="false">"New file"</string>
+    <string name="ui_lit_6e8f754d566c" formatted="false">"Capability unavailable"</string>
+    <string name="ui_lit_6e9857b2849c" formatted="false">"The page requests leaving this page"</string>
+    <string name="ui_lit_6ece0f4d89f7" formatted="false">"Discover tools, preview permissions and enable when needed"</string>
+    <string name="ui_lit_6ed4441e703a" formatted="false">"Enabled · Manage"</string>
+    <string name="ui_lit_6ed977b43258" formatted="false">"The service is not running. Configure a separate access token before starting."</string>
+    <string name="ui_lit_6fac07cf87c7" formatted="false">"Stop further actions"</string>
+    <string name="ui_lit_6fb30ea0487d" formatted="false">"Use as new task"</string>
+    <string name="ui_lit_6ff2860ad037" formatted="false">"Teamwork"</string>
+    <string name="ui_lit_6ffae9b686d1" formatted="false">"This file exceeds the 20 MiB attachment limit."</string>
+    <string name="ui_lit_7030a24dd8f9" formatted="false">". Core entries are preferred as references but still obey expiry and context-budget limits."</string>
+    <string name="ui_lit_705d18e1529b" formatted="false">"Result screenshot"</string>
+    <string name="ui_lit_707bfd4c29a0" formatted="false">"Back to page"</string>
+    <string name="ui_lit_70ee7b83d472" formatted="false">"The original screenshot\'s document or viewport changed."</string>
+    <string name="ui_lit_714cac30e2ff" formatted="false">"Microphone"</string>
+    <string name="ui_lit_7179f6d06466" formatted="false">" · Key saved"</string>
+    <string name="ui_lit_7189ecc7fa0b" formatted="false">"Confirm it did not occur"</string>
+    <string name="ui_lit_71cbc903c2e4" formatted="false">"Page content could not be read."</string>
+    <string name="ui_lit_71d58e9b511c" formatted="false">"Close the browser and end web execution?"</string>
+    <string name="ui_lit_72197b15f0f6" formatted="false">". Only the current file ranges you select are read. Preview them and explicitly confirm model use afterward."</string>
+    <string name="ui_lit_732323118294" formatted="false">"The original page or process handle is unavailable. The delivered upload cannot be stopped; other pages were not touched."</string>
+    <string name="ui_lit_732ac451f59f" formatted="false">"Experiences and results"</string>
+    <string name="ui_lit_748bcf9923b4" formatted="false">"Connection parameters, input capabilities and reply budget"</string>
+    <string name="ui_lit_74ebd29f9387" formatted="false">"Reading actions that need reconciliation. Wait or reopen this task."</string>
+    <string name="ui_lit_74ece5a25a31" formatted="false">"Files, sources and artifacts you can continue"</string>
+    <string name="ui_lit_7507cbd81f2b" formatted="false">"Only an owner page in the same profile can be explicitly handed over."</string>
+    <string name="ui_lit_7524fe6b8996" formatted="false">"View version history"</string>
+    <string name="ui_lit_75574f0af97a" formatted="false">"When the original task has not ended"</string>
+    <string name="ui_lit_757c4400a9c4" formatted="false">"Reminders use the phone system scheduler and may be delayed. Phone goals notify you to review and start; they do not operate the screen automatically."</string>
+    <string name="ui_lit_757e0fa27ea6" formatted="false">"Usage reflects the current record window. Continue paging to view the full records."</string>
+    <string name="ui_lit_75b269496f69" formatted="false">"Run"</string>
+    <string name="ui_lit_75cdea59dddd" formatted="false">"Results available"</string>
+    <string name="ui_lit_75ee4ec9494d" formatted="false">"Control readback stopped. Check the original page; the action was not retried."</string>
+    <string name="ui_lit_7621b9cbc080" formatted="false">"UI reading and main-screen control"</string>
+    <string name="ui_lit_77426c942008" formatted="false">"Version history"</string>
+    <string name="ui_lit_77709784cd63" formatted="false">"Message channels"</string>
+    <string name="ui_lit_77b512a44873" formatted="false">"Review memory learning"</string>
+    <string name="ui_lit_780832f3d9d1" formatted="false">"Review learning candidates, inspect sources and manage forgetting"</string>
+    <string name="ui_lit_787641aa0e3e" formatted="false">"The original screenshot is no longer current."</string>
+    <string name="ui_lit_79039199efa9" formatted="false">"Download queued. Check the attachment list."</string>
+    <string name="ui_lit_791e2a695ad9" formatted="false">"The selected browser profile is unavailable. Select a profile in native settings."</string>
+    <string name="ui_lit_795e7905dc0a" formatted="false">"Create and open"</string>
+    <string name="ui_lit_79f0e4511cb2" formatted="false">"Callback outcome unknown. Automatic retransmission is prohibited."</string>
+    <string name="ui_lit_79f326be4409" formatted="false">"Projects"</string>
+    <string name="ui_lit_7a0ff6db1798" formatted="false">"Webpages do not automatically receive camera, microphone, location or other device permissions. This version denies them by default; read-only research authorization does not change that. Continue other page actions or explain the need for manual handling in the original task."</string>
+    <string name="ui_lit_7aa0018439e0" formatted="false">"Reception not started"</string>
+    <string name="ui_lit_7b027192aea5" formatted="false">"Refresh service and call records"</string>
+    <string name="ui_lit_7b27deb3305c" formatted="false">" attachment references · Source unavailable"</string>
+    <string name="ui_lit_7b5e56539af3" formatted="false">"Pocket World"</string>
+    <string name="ui_lit_7bfea78668c3" formatted="false">"Sync original task"</string>
+    <string name="ui_lit_7c0968418369" formatted="false">"Replace editor content"</string>
+    <string name="ui_lit_7c1269cc2bb5" formatted="false">"The selected ChatGPT account is for your own active use in this app and cannot start a general proxy. Explicitly switch to your own API-key connection on the model page."</string>
+    <string name="ui_lit_7c9691192f1b" formatted="false">"Continue"</string>
+    <string name="ui_lit_7cc7aa9f4ec3" formatted="false">"Result screenshot saved by this task"</string>
+    <string name="ui_lit_7cff79a07239" formatted="false">"Reconcile external execution result"</string>
+    <string name="ui_lit_7e37ab22adc6" formatted="false">"Saving draft…"</string>
+    <string name="ui_lit_7e68d18eac88" formatted="false">"Trusted relay and legacy diagnostics"</string>
+    <string name="ui_lit_7ebf933e54af" formatted="false">"Control returned to the original task. Reading the current page again."</string>
+    <string name="ui_lit_7f4405d07770" formatted="false">"SSH connections"</string>
+    <string name="ui_lit_8014b9853f23" formatted="false">"Your input is sent only to this page and is not written to the task record by this prompt. Check the page before returning control."</string>
+    <string name="ui_lit_8060627a5899" formatted="false">"Enable phone control"</string>
+    <string name="ui_lit_8085d62bf069" formatted="false">"Account authorization and primary model selection"</string>
+    <string name="ui_lit_809cbedd3d99" formatted="false">"Profile state could not be read."</string>
+    <string name="ui_lit_80d212601177" formatted="false">"Reminders and proactive tasks"</string>
+    <string name="ui_lit_81123c56d5d8" formatted="false">"Access key"</string>
+    <string name="ui_lit_81c52c5bc7e4" formatted="false">"Accepts /task only from this authenticated account\'s private conversation. Messages cannot approve writes or outbound delivery and do not operate the phone\'s main screen."</string>
+    <string name="ui_lit_826da83ba066" formatted="false">"Recording submission"</string>
+    <string name="ui_lit_8290e1dcc6a1" formatted="false">"The page is still loading or has no readable host."</string>
+    <string name="ui_lit_82f2ebf1218e" formatted="false">"Review retained original dictation"</string>
+    <string name="ui_lit_83aec78a03f5" formatted="false">"The web process exited. Refresh to restore the page."</string>
+    <string name="ui_lit_84edeb2d84ca" formatted="false">"Download attachment"</string>
+    <string name="ui_lit_852652f7d3de" formatted="false">"Save as artifact"</string>
+    <string name="ui_lit_86532f16c26a" formatted="false">"You returned to your own page. Automatic browsing is paused."</string>
+    <string name="ui_lit_866b4b366a3d" formatted="false">"Browser and voice"</string>
+    <string name="ui_lit_867698fb7b0c" formatted="false">"Project name"</string>
+    <string name="ui_lit_86de460ec0f2" formatted="false">"No bookmarks yet. Bookmark this page from the More menu."</string>
+    <string name="ui_lit_86df7ec74304" formatted="false">"Service running"</string>
+    <string name="ui_lit_8716966e52ae" formatted="false">"Saved versions"</string>
+    <string name="ui_lit_87de9377f608" formatted="false">"Local service running"</string>
+    <string name="ui_lit_880510351955" formatted="false">"Collapse version history"</string>
+    <string name="ui_lit_880a0bd1d528" formatted="false">"The web prompt was handled. Check this page, then return it through the research task to continue."</string>
+    <string name="ui_lit_884ab50dcfbc" formatted="false">"Memory sources and original evidence for this request"</string>
+    <string name="ui_lit_887053537619" formatted="false">"Output limit per reply"</string>
+    <string name="ui_lit_88a3791453f2" formatted="false">"For example: src/main.py"</string>
+    <string name="ui_lit_894faacebdcf" formatted="false">"The process file-picker limit was reached. Reopen the app."</string>
+    <string name="ui_lit_89526effc536" formatted="false">"Separate from sending screenshots to the cloud. Disabling this prevents pixel capture for OCR. Changes apply to later runs."</string>
+    <string name="ui_lit_8975fb1499df" formatted="false">"Back to review"</string>
+    <string name="ui_lit_89bc0f9d4382" formatted="false">"Download complete. Attachment saved."</string>
+    <string name="ui_lit_89c17ab315a9" formatted="false">"Devices unavailable"</string>
+    <string name="ui_lit_89d84d92c8c0" formatted="false">"View the loaded original task page before requesting a screenshot."</string>
+    <string name="ui_lit_8a8542f69648" formatted="false">"Forward"</string>
+    <string name="ui_lit_8b7d5b829a73" formatted="false">"The original form action stopped."</string>
+    <string name="ui_lit_8c2b1d01709d" formatted="false">"No computer is connected. Add one and run a real probe; it will not appear connected before that succeeds."</string>
+    <string name="ui_lit_8caf92f641f3" formatted="false">"The original task\'s pause state changed."</string>
+    <string name="ui_lit_8cc6bc391dd6" formatted="false">"Accessibility service connected; can read nodes the system permits"</string>
+    <string name="ui_lit_8d0baf6fc81c" formatted="false">"Skill content is sourced reference material. Review the exact version before enabling. Importing does not execute scripts or automatically grant tool permissions."</string>
+    <string name="ui_lit_8d12fc0d4eb2" formatted="false">"Pause"</string>
+    <string name="ui_lit_8d4adaed48b4" formatted="false">"You reopened the browser."</string>
+    <string name="ui_lit_8d6fd092b028" formatted="false">"Creates a real multi-file project. Installed programming tools and versions are shown in the local environment panel."</string>
+    <string name="ui_lit_8e1bfc8263d3" formatted="false">"View the original page you want to return first."</string>
+    <string name="ui_lit_8eca575c999a" formatted="false">"Task notifications"</string>
+    <string name="ui_lit_8ee629f360da" formatted="false">"Saving explicitly switches to this API connection. Testing it does not change the current account model."</string>
+    <string name="ui_lit_8f17072d521b" formatted="false">"No authenticated owner private conversation is bound yet. Task permission is off by default."</string>
+    <string name="ui_lit_8f32c9c0d09d" formatted="false">"File delivery is unknown. Check the original page; the upload will not be repeated."</string>
+    <string name="ui_lit_90c4a5c86dda" formatted="false">"The original download page was taken over or navigated."</string>
+    <string name="ui_lit_93379135e8ea" formatted="false">"Receives text through the WeChat iLink bot only, not personal WeChat login or chat-history import. Enable the foreground session above explicitly for continuous reception."</string>
+    <string name="ui_lit_946eddd50244" formatted="false">"Search memory"</string>
+    <string name="ui_lit_94b8975ca710" formatted="false">"Bookmarks"</string>
+    <string name="ui_lit_94ce1321f741" formatted="false">" · Closed"</string>
+    <string name="ui_lit_94f1142252d7" formatted="false">"No original task workspace can be handed over, or file/web actions need reconciliation."</string>
+    <string name="ui_lit_958b351907f3" formatted="false">"Review capabilities and request parameters"</string>
+    <string name="ui_lit_9634bd43e1be" formatted="false">"Review and forget…"</string>
+    <string name="ui_lit_9639d7dcabf0" formatted="false">"Source revision "</string>
+    <string name="ui_lit_96b49e00a6fd" formatted="false">"Probing reads actual integration state only. It does not mean Python or Node is ready."</string>
+    <string name="ui_lit_96de5e0c0700" formatted="false">"The original task page being awaited closed or was handed over to you."</string>
+    <string name="ui_lit_972b65242a81" formatted="false">"Web confirmation prompt"</string>
+    <string name="ui_lit_974f348245fa" formatted="false">"Confirm it occurred"</string>
+    <string name="ui_lit_980a9a572d29" formatted="false">"Owner private-chat tasks"</string>
+    <string name="ui_lit_981ac302a786" formatted="false">"Allow parallel runs (each still needs its original task authorization)"</string>
+    <string name="ui_lit_982fc49103e1" formatted="false">"Close the keyboard, research panel or web prompt first so overlays are not mistaken for page content."</string>
+    <string name="ui_lit_9847e671fec6" formatted="false">"Review platform credentials and permissions"</string>
+    <string name="ui_lit_9868cec4010c" formatted="false">" · Expired"</string>
+    <string name="ui_lit_986aae124f14" formatted="false">"Back to original artifact"</string>
+    <string name="ui_lit_995c86186cf8" formatted="false">"Task tools cannot operate your existing pages."</string>
+    <string name="ui_lit_996efafc2d66" formatted="false">"Check file version when saving"</string>
+    <string name="ui_lit_99aea2f9131a" formatted="false">"Skills"</string>
+    <string name="ui_lit_99b163202c6b" formatted="false">"Stop QQ reception"</string>
+    <string name="ui_lit_99c9521fd0f2" formatted="false">"Web live reload"</string>
+    <string name="ui_lit_9b0bc56fcc4e" formatted="false">"Handle after this turn"</string>
+    <string name="ui_lit_9b1c88487a8c" formatted="false">"ChatGPT account and model catalog"</string>
+    <string name="ui_lit_9b25668ac1a2" formatted="false">"No owner confirmation of the site\'s result arrived within 30 seconds. The upload was not repeated."</string>
+    <string name="ui_lit_9ba177da472f" formatted="false">"The page is loading. Observe it again shortly."</string>
+    <string name="ui_lit_9cb758a6b6d5" formatted="false">"Help me use my phone"</string>
+    <string name="ui_lit_9dda405a7bef" formatted="false">"Request stop"</string>
+    <string name="ui_lit_9df97f51a0a6" formatted="false">"Message actions and sources"</string>
+    <string name="ui_lit_9e706869b42a" formatted="false">"Checking reception state"</string>
+    <string name="ui_lit_9f1828fce26b" formatted="false">"Mark as core"</string>
+    <string name="ui_lit_9f24062367f0" formatted="false">"Reopen"</string>
+    <string name="ui_lit_a04d8d3e71cb" formatted="false">"This model supports image input"</string>
+    <string name="ui_lit_a063ea7b2fdb" formatted="false">"Close settings and connections"</string>
+    <string name="ui_lit_a0b5931bbec1" formatted="false">"Close browser"</string>
+    <string name="ui_lit_a0dc05af29e5" formatted="false">"Local development-module state has not been read yet."</string>
+    <string name="ui_lit_a125838c3e7f" formatted="false">"Saved artifacts"</string>
+    <string name="ui_lit_a1a1720d3eb5" formatted="false">"Saving"</string>
+    <string name="ui_lit_a2060628d3c0" formatted="false">"Let the assistant use the main screen"</string>
+    <string name="ui_lit_a20a64ee4859" formatted="false">"File reading stopped. Select the file again."</string>
+    <string name="ui_lit_a24153b29f3a" formatted="false">"MCP tool import"</string>
+    <string name="ui_lit_a26a198a5456" formatted="false">"Cancel page request"</string>
+    <string name="ui_lit_a2cd2675fdde" formatted="false">"Web research"</string>
+    <string name="ui_lit_a3030bf8f16d" formatted="false">"Save"</string>
+    <string name="ui_lit_a333c4f03bcc" formatted="false">"History for this profile is unavailable. The profile was not switched."</string>
+    <string name="ui_lit_a345af0a9792" formatted="false">"The web prompt\'s response is unconfirmed. Check the original page; no automatic retry occurred."</string>
+    <string name="ui_lit_a3d17224902e" formatted="false">"Main screen ▾"</string>
+    <string name="ui_lit_a4bb0b667f00" formatted="false">"Probe"</string>
+    <string name="ui_lit_a4bf86ede3f2" formatted="false">"Configuration saved; service still needs verification"</string>
+    <string name="ui_lit_a4d512df8560" formatted="false">"The original WebView was asked to stop loading. The platform cannot confirm withdrawal of an already delivered file or site request."</string>
+    <string name="ui_lit_a5574109f020" formatted="false">"Connections"</string>
+    <string name="ui_lit_a5c205819975" formatted="false">"Stop local service"</string>
+    <string name="ui_lit_a61f7aafd0b8" formatted="false">"View pending input"</string>
+    <string name="ui_lit_a6686f06c820" formatted="false">"Compatibility checks, diagnostic preview, application language and updates"</string>
+    <string name="ui_lit_a670023a6438" formatted="false">"Model catalog unavailable"</string>
+    <string name="ui_lit_a67f2a564d42" formatted="false">"Connect your phone and computer; manage device tasks and permissions"</string>
+    <string name="ui_lit_a724e5b6f9d3" formatted="false">"The record changed. Other bookmarks were not modified."</string>
+    <string name="ui_lit_a75a02b593b4" formatted="false">"The frame observation returned no action target."</string>
+    <string name="ui_lit_a8f381d831c8" formatted="false">"Add context from another app"</string>
+    <string name="ui_lit_a9a3eb8a055b" formatted="false">"The current model does not accept pixels. If local capture and OCR are allowed, recognized text with source information may still be sent."</string>
+    <string name="ui_lit_a9f3d9462bcd" formatted="false">"Return to the previous original task"</string>
+    <string name="ui_lit_ab2f31f30acf" formatted="false">"Protocol"</string>
+    <string name="ui_lit_ab3c01bbfd40" formatted="false">"The original record or profile changed. The page was not opened."</string>
+    <string name="ui_lit_ab5d756da17d" formatted="false">"Web research, separate browsing and system speech"</string>
+    <string name="ui_lit_ab6f796990c1" formatted="false">"Start with a real project"</string>
+    <string name="ui_lit_aba797059958" formatted="false">"Clear history…"</string>
+    <string name="ui_lit_ad0196c88aaf" formatted="false">"Switching…"</string>
+    <string name="ui_lit_ad1d4cebfce5" formatted="false">"Back to original input"</string>
+    <string name="ui_lit_ad78311446ee" formatted="false">"Edit API connection"</string>
+    <string name="ui_lit_ad8f10fcd403" formatted="false">"Supports text and tool calls, but not screenshots, audio or video yet. Refreshing, disabling or signing out of the account may require selecting a catalog model again. Accounts are not switched, downgraded or used for automatic paid-request retries."</string>
+    <string name="ui_lit_ae1b99b88907" formatted="false">"The file was given to the page, which does not prove the site accepted it. Review acceptance or rejection in the research panel, or request a stop."</string>
+    <string name="ui_lit_aee887434131" formatted="false">"Refresh"</string>
+    <string name="ui_lit_af2165cac12e" formatted="false">"Close browser and end web execution…"</string>
+    <string name="ui_lit_af23c974c03a" formatted="false">"The original semantic-reading page or session changed."</string>
+    <string name="ui_lit_af3e25a830e8" formatted="false">"The script may have had effects, but completion is unknown. It will not be replayed."</string>
+    <string name="ui_lit_af829740ea9c" formatted="false">"Original repository: "</string>
+    <string name="ui_lit_b01928a3b8a0" formatted="false">"Cannot be verified yet"</string>
+    <string name="ui_lit_b07db3fa8792" formatted="false">"Uses the same engine and existing configuration"</string>
+    <string name="ui_lit_b0ad5f9df743" formatted="false">"Current conversation"</string>
+    <string name="ui_lit_b0deba83733b" formatted="false">"Review project again"</string>
+    <string name="ui_lit_b14c681070b3" formatted="false">"Facts and project knowledge"</string>
+    <string name="ui_lit_b194bf826aed" formatted="false">"Visible task text is sent to your configured model. Enabling vision also sends screenshots."</string>
+    <string name="ui_lit_b20854056282" formatted="false">"Collapse working copies"</string>
+    <string name="ui_lit_b24581b2c0e4" formatted="false">"The original frame delivery page changed."</string>
+    <string name="ui_lit_b29f3c6e5316" formatted="false">"Version "</string>
+    <string name="ui_lit_b2e2b3c46d51" formatted="false">"Phone · Background display"</string>
+    <string name="ui_lit_b39734214458" formatted="false">"Compatibility status: "</string>
+    <string name="ui_lit_b3ccf0f545b9" formatted="false">"Reminder content"</string>
+    <string name="ui_lit_b3f124e107c2" formatted="false">"Bookmarks for this profile"</string>
+    <string name="ui_lit_b4878531a9dc" formatted="false">"Add computer environment"</string>
+    <string name="ui_lit_b55a7057ac72" formatted="false">"Maximum catch-up occurrences this pass (1–20)"</string>
+    <string name="ui_lit_b567606d58e2" formatted="false">"Site permissions"</string>
+    <string name="ui_lit_b6061147a7cf" formatted="false">"https://your-computer-address"</string>
+    <string name="ui_lit_b607d81642be" formatted="false">"Run on a separate background display"</string>
+    <string name="ui_lit_b63625625243" formatted="false">"The original task entry is unavailable. This page is retained; try again later."</string>
+    <string name="ui_lit_b65e1153857d" formatted="false">"The task tool lacks its original workspace, page or epoch binding."</string>
+    <string name="ui_lit_b72e6741d86d" formatted="false">"API models and capabilities"</string>
+    <string name="ui_lit_b73431466eea" formatted="false">"Task browsing stopped. Check the effects on the original page."</string>
+    <string name="ui_lit_b7f2d657d437" formatted="false">"The original page is not fully visible. No other region was captured."</string>
+    <string name="ui_lit_b88cf91c482a" formatted="false">"Background display ▾"</string>
+    <string name="ui_lit_b8eabf48e188" formatted="false">"Unsaved changes"</string>
+    <string name="ui_lit_b95631bb26fb" formatted="false">"View commitments and ongoing follow-up"</string>
+    <string name="ui_lit_b9aa9685b03d" formatted="false">"MIDI devices"</string>
+    <string name="ui_lit_bacfadc1b0fe" formatted="false">"Settings and connections"</string>
+    <string name="ui_lit_bb589206ebbe" formatted="false">"No skills imported yet. Imported skills remain disabled initially."</string>
+    <string name="ui_lit_bb6da2293cc7" formatted="false">"Read further instructions"</string>
+    <string name="ui_lit_bce2377283c2" formatted="false">"Clear"</string>
+    <string name="ui_lit_bd6b27a294f8" formatted="false">"The page is loading. Read it again shortly."</string>
+    <string name="ui_lit_bd6d83b18e32" formatted="false">"The original screenshot page changed. The image was not delivered."</string>
+    <string name="ui_lit_be368ffdc97d" formatted="false">"This request comes from the webpage. Review it before deciding; the page may continue as a result. This does not authorize AI to resume automatically."</string>
+    <string name="ui_lit_bf12fc3f7c64" formatted="false">"My plugin catalog"</string>
+    <string name="ui_lit_c0365276d32f" formatted="false">"Choose a project"</string>
+    <string name="ui_lit_c081e766e32a" formatted="false">"Stay on page"</string>
+    <string name="ui_lit_c0eaae5613a4" formatted="false">"The original read-only projection page changed."</string>
+    <string name="ui_lit_c129d9d31b95" formatted="false">"Cancel pending reply"</string>
+    <string name="ui_lit_c1a63ea3e084" formatted="false">"Memory, schedules, message channels, computer environments, plugins and teams"</string>
+    <string name="ui_lit_c1a8d7734731" formatted="false">"Tool permissions and diagnostics"</string>
+    <string name="ui_lit_c221e651f997" formatted="false">"Visual context"</string>
+    <string name="ui_lit_c307b7565396" formatted="false">"The page or execution identity changed. Observe it again."</string>
+    <string name="ui_lit_c34fd772016d" formatted="false">"Uses the phone\'s main screen and occupies your current display. It observes again before continuing from retained context."</string>
+    <string name="ui_lit_c35bfbaa6694" formatted="false">"Edit computer connection"</string>
+    <string name="ui_lit_c38c20bcd132" formatted="false">"Minutes from now"</string>
+    <string name="ui_lit_c393a64b11a7" formatted="false">"Phone · Main screen"</string>
+    <string name="ui_lit_c3e41d659191" formatted="false">"Skill instructions"</string>
+    <string name="ui_lit_c428e973fa3f" formatted="false">"The page is waiting for you to handle its prompt. The original task will not confirm it for you."</string>
+    <string name="ui_lit_c49a7110a786" formatted="false">"Check the actual result in the relevant service or computer before recording your conclusion. Nothing is retried automatically here."</string>
+    <string name="ui_lit_c5066db3d0b0" formatted="false">"The web observation callback destination changed."</string>
+    <string name="ui_lit_c5f8d8643481" formatted="false">"Return to project files and web preview"</string>
+    <string name="ui_lit_c62cf427b2f4" formatted="false">"Protocol: "</string>
+    <string name="ui_lit_c6c5f43146dd" formatted="false">"Allow this owner private conversation to create tasks?"</string>
+    <string name="ui_lit_c7225dbf105e" formatted="false">"Attachments"</string>
+    <string name="ui_lit_c771248e511f" formatted="false">"Open"</string>
+    <string name="ui_lit_c7ccab6d414b" formatted="false">"This page\'s device-permission request was denied or cancelled. Open More for its source and details; other browsing can continue."</string>
+    <string name="ui_lit_c862a1ea2f19" formatted="false">"Read latest reply aloud"</string>
+    <string name="ui_lit_c8a47d001848" formatted="false">"Add attachment"</string>
+    <string name="ui_lit_c8aeb72e0b17" formatted="false">"Input options"</string>
+    <string name="ui_lit_c8d62d5bfece" formatted="false">"Collapse options"</string>
+    <string name="ui_lit_c90d49acb158" formatted="false">"ChatGPT plan"</string>
+    <string name="ui_lit_c92c1a2648bd" formatted="false">"Owner private conversation"</string>
+    <string name="ui_lit_c98e118e0a43" formatted="false">"Model"</string>
+    <string name="ui_lit_c9b9ae7a6144" formatted="false">"Back"</string>
+    <string name="ui_lit_c9d3fff41f9d" formatted="false">"Export saved version"</string>
+    <string name="ui_lit_c9ff798bc890" formatted="false">"Query original receipt"</string>
+    <string name="ui_lit_ca4d973c0b00" formatted="false">"Stop"</string>
+    <string name="ui_lit_ca5276e23a5d" formatted="false">" SSH configurations"</string>
+    <string name="ui_lit_caf2aadcfdb6" formatted="false">"Unsupported browser command"</string>
+    <string name="ui_lit_cb2f1709f983" formatted="false">"Model name"</string>
+    <string name="ui_lit_cb30b3202434" formatted="false">"For the same service, leave blank to keep the saved key. Enter a new key when changing services."</string>
+    <string name="ui_lit_cb727f4b85d4" formatted="false">"Review exact capabilities and owner overrides in the API model catalog."</string>
+    <string name="ui_lit_cc9422dc5314" formatted="false">" message accounts"</string>
+    <string name="ui_lit_cd06aaf08bc4" formatted="false">" · Unavailable"</string>
+    <string name="ui_lit_cd08af622966" formatted="false">"This page is unsuitable for screenshot sharing. Check passwords, verification codes and embedded pages manually first."</string>
+    <string name="ui_lit_cd1314c95875" formatted="false">"Bookmarked in the current login profile. Bookmarks exclude login state and address query parameters."</string>
+    <string name="ui_lit_cd846ecfef92" formatted="false">"Device state could not be read. Open this page again later."</string>
+    <string name="ui_lit_cd90cf0a9a10" formatted="false">"Keeps the original group goal, source, audience and cumulative limits, continuing only the original task. Changed group/member authorization, already-generated media or unknown effects block continuation; no replacement task is created."</string>
+    <string name="ui_lit_cdc1547fa18c" formatted="false">"Other device permissions"</string>
+    <string name="ui_lit_cdd3f0dc5043" formatted="false">"This page cannot be bookmarked. Check that its web address is available."</string>
+    <string name="ui_lit_cde2cd071d25" formatted="false">"Create"</string>
+    <string name="ui_lit_ce0dbdf554ec" formatted="false">" · No key saved"</string>
+    <string name="ui_lit_ce2b46361d54" formatted="false">"Restoring input…"</string>
+    <string name="ui_lit_cefdeb727e1b" formatted="false">"Access token and startup settings"</string>
+    <string name="ui_lit_cf2a34697d0f" formatted="false">"More work needed"</string>
+    <string name="ui_lit_cf5eddd28ffd" formatted="false">"One control action was handled, but its readback is unconfirmed. Check the original page without repeating the action."</string>
+    <string name="ui_lit_d01265ac3e96" formatted="false">"Your private memory: edit entries and inspect sources. To forget an entry, open review, read its current revision and confirm explicitly. Derived old skills and forgotten-source snapshots are cleaned together. Expired records are retained but excluded from recall."</string>
+    <string name="ui_lit_d09c24c6c202" formatted="false">"The original source document changed."</string>
+    <string name="ui_lit_d13808dccd1b" formatted="false">"Service not configured"</string>
+    <string name="ui_lit_d2015f964f61" formatted="false">"From an authenticated owner private conversation · "</string>
+    <string name="ui_lit_d2396bbcad19" formatted="false">"Skills and tools for this task"</string>
+    <string name="ui_lit_d2a8252e3486" formatted="false">"Browser pages must be operated on the native main thread."</string>
+    <string name="ui_lit_d2dd6c3de635" formatted="false">"Versions, attachments and delivery alongside your current workspace."</string>
+    <string name="ui_lit_d2ea16655f4f" formatted="false">"Collapse project list"</string>
+    <string name="ui_lit_d2fa3ffdacc9" formatted="false">"Finish the current file selection or download confirmation first."</string>
+    <string name="ui_lit_d301bc125833" formatted="false">"Close prompt"</string>
+    <string name="ui_lit_d331d4f5d62e" formatted="false">"View group authorization, members and delivery"</string>
+    <string name="ui_lit_d347a4e704e1" formatted="false">"Owner identity and group spaces are managed separately. Account keys, owner verification and platform callbacks still need real configuration."</string>
+    <string name="ui_lit_d3e1ce77208f" formatted="false">"API model catalog"</string>
+    <string name="ui_lit_d42bdf291c7c" formatted="false">"External clients must use this connection\'s protocol. The service does not convert protocols or run phone tools. Its access token is separate from the upstream API key."</string>
+    <string name="ui_lit_d42c8bea8256" formatted="false">"This input\'s registration needs reconciliation. It was not resent automatically."</string>
+    <string name="ui_lit_d44e9b3d3b31" formatted="false">"Name"</string>
+    <string name="ui_lit_d4a7bca8c367" formatted="false">"Pages are open; tap to browse manually"</string>
+    <string name="ui_lit_d4e1cd575085" formatted="false">"Only an explicit /task submits a goal; it grants no phone control. Writes and outbound actions still need local approval for the original parameters. Saying “agree” in private chat does not grant authorization."</string>
+    <string name="ui_lit_d51220338f0b" formatted="false">"The task page or address expired."</string>
+    <string name="ui_lit_d56b788f1658" formatted="false">"Web actions use a separate browser window. Return to the assistant to continue."</string>
+    <string name="ui_lit_d574f89a9c27" formatted="false">"The upload attachment could not be read. Select the file again."</string>
+    <string name="ui_lit_d5eb0c89ba28" formatted="false">"Inbound state: "</string>
+    <string name="ui_lit_d5f10e0b13d4" formatted="false">"Recall mode and temporary-memory boundaries"</string>
+    <string name="ui_lit_d64004ab4238" formatted="false">"Temporary attachments for the expired upload were not fully cleaned up. Check the original task\'s attachments."</string>
+    <string name="ui_lit_d64302bd2896" formatted="false">"Network witness is unavailable."</string>
+    <string name="ui_lit_d722aa9d9e18" formatted="false">"New reminder"</string>
+    <string name="ui_lit_d76b07d79f7a" formatted="false">"Connect a Companion environment you trust. Keys are stored only in encrypted phone storage. Ordinary SSH does not imply a recoverable computer task."</string>
+    <string name="ui_lit_d76daaf84e36" formatted="false">"Continue the original task under its original group grant"</string>
+    <string name="ui_lit_d7cf7fd3514a" formatted="false">"Load into editor"</string>
+    <string name="ui_lit_d8574817560e" formatted="false">"Current account model: "</string>
+    <string name="ui_lit_d8ab6bad865c" formatted="false">"Add to original task"</string>
+    <string name="ui_lit_d91a357a8a59" formatted="false">"You are using the page. Automatic execution stopped."</string>
+    <string name="ui_lit_da0e5adcca09" formatted="false">"Run on a separate background display"</string>
+    <string name="ui_lit_da674554c9e5" formatted="false">"The page-witness installation receipt is unknown."</string>
+    <string name="ui_lit_dac28c858e8e" formatted="false">"Paused or waiting to be enabled again"</string>
+    <string name="ui_lit_dacde177826c" formatted="false">"The web prompt expired. Check the original page; no automatic retry occurred."</string>
+    <string name="ui_lit_dacf07026026" formatted="false">"Camera"</string>
+    <string name="ui_lit_db8db0530432" formatted="false">"View"</string>
+    <string name="ui_lit_dca60869e7d2" formatted="false">"Remove bookmark"</string>
+    <string name="ui_lit_de6b8b999044" formatted="false">"Use a ChatGPT plan"</string>
+    <string name="ui_lit_df30bc904ac7" formatted="false">"Tasks under the old authorization will no longer call models or tools. Actions already taken cannot be undone; results remain on this device."</string>
+    <string name="ui_lit_df43255d8ed4" formatted="false">"Stop reply"</string>
+    <string name="ui_lit_df4e16fdc83a" formatted="false">"Choose working copy"</string>
+    <string name="ui_lit_df647b73b990" formatted="false">"Expanded"</string>
+    <string name="ui_lit_dfb802238b38" formatted="false">"Enabled"</string>
+    <string name="ui_lit_dfd56dfcd588" formatted="false">"The actual web image could not be captured. Keep this page for manual review."</string>
+    <string name="ui_lit_e009c0d3a0d9" formatted="false">"Enable this skill version?"</string>
+    <string name="ui_lit_e033a0c7b411" formatted="false">"Collapse recall and memory layers"</string>
+    <string name="ui_lit_e03c76f81572" formatted="false">"Group collaboration"</string>
+    <string name="ui_lit_e08a9527e840" formatted="false">"Confirm and enable"</string>
+    <string name="ui_lit_e0a2a7e3127a" formatted="false">"Return to the saved API-key model"</string>
+    <string name="ui_lit_e19850187381" formatted="false">"Enter the access key configured on the computer."</string>
+    <string name="ui_lit_e1a207d64f64" formatted="false">"Advanced browsing requires the original task\'s currently loaded page."</string>
+    <string name="ui_lit_e1ac1e80e0ab" formatted="false">"Start QQ reception"</string>
+    <string name="ui_lit_e1ffc0002e7a" formatted="false">"The original document changed after the script. Its effects cannot be checked."</string>
+    <string name="ui_lit_e21c65fe969d" formatted="false">"View actual method-application receipt"</string>
+    <string name="ui_lit_e22989209882" formatted="false">"Select one of your own browser pages. A task page requires an explicit takeover."</string>
+    <string name="ui_lit_e2451f7eb54e" formatted="false">"Open original task"</string>
+    <string name="ui_lit_e249705db203" formatted="false">"Explicitly saved by owner"</string>
+    <string name="ui_lit_e27996573913" formatted="false">"Continues until complete, you stop it, or its budget is exhausted."</string>
+    <string name="ui_lit_e285234d6598" formatted="false">"Screenshots are not allowed. Change this in model connections."</string>
+    <string name="ui_lit_e2a8dfa1eefb" formatted="false">"Skip older occurrences; handle only the latest"</string>
+    <string name="ui_lit_e326f272253f" formatted="false">"Your conversations, tasks and projects stay together in Pocket World."</string>
+    <string name="ui_lit_e368de414fd5" formatted="false">"Create experience from reviewed memory; enable separately after review"</string>
+    <string name="ui_lit_e38a88e44c06" formatted="false">"Personal preferences"</string>
+    <string name="ui_lit_e3f1a9f5ee55" formatted="false">"No memories match these criteria yet."</string>
+    <string name="ui_lit_e4690a1082bb" formatted="false">"Clear this profile\'s browsing history?"</string>
+    <string name="ui_lit_e4a68807c170" formatted="false">"The verified screenshot\'s original document changed."</string>
+    <string name="ui_lit_e4b8d86d2e43" formatted="false">"Pause the main-screen task before switching to the app whose content you want to capture."</string>
+    <string name="ui_lit_e4cfc69971ad" formatted="false">"The original page has not returned to the verified display area. No screenshot was sent."</string>
+    <string name="ui_lit_e4e4e0ad5de1" formatted="false">"Remove connection"</string>
+    <string name="ui_lit_e5227f62d806" formatted="false">"Next: "</string>
+    <string name="ui_lit_e53639a1eb69" formatted="false">"Download could not start. Check the address, profile and connection."</string>
+    <string name="ui_lit_e5379d0081e6" formatted="false">"This download address is unsupported. Only HTTP(S) file links are accepted."</string>
+    <string name="ui_lit_e6277b72a005" formatted="false">"Probe Termux"</string>
+    <string name="ui_lit_e64447db76a9" formatted="false">"Collapsed"</string>
+    <string name="ui_lit_e6b7a4d881a9" formatted="false">"The web prompt\'s original page, profile or document changed."</string>
+    <string name="ui_lit_e719af16fac8" formatted="false">"Original message attachments"</string>
+    <string name="ui_lit_e742ae2bff0c" formatted="false">"The target condition\'s original page, profile, document or pause revision changed."</string>
+    <string name="ui_lit_e7f73b5324f9" formatted="false">" private memories"</string>
+    <string name="ui_lit_e806fbbe8ec6" formatted="false">"Plugins"</string>
+    <string name="ui_lit_e8a116750820" formatted="false">"View separate display and takeover"</string>
+    <string name="ui_lit_e8a1efa6f25d" formatted="false">"Send to this page"</string>
+    <string name="ui_lit_e94b745fb983" formatted="false">"New reply · Go to latest"</string>
+    <string name="ui_lit_ea78ee63e089" formatted="false">"Disabled · Manage"</string>
+    <string name="ui_lit_eab581db6352" formatted="false">"Background node/text reading and main-screen control require accessibility permission."</string>
+    <string name="ui_lit_eb16cc317244" formatted="false">"Add to original composer without sending"</string>
+    <string name="ui_lit_eb247196d3b6" formatted="false">"Group goal, source and audience stay fixed. Private memory and private follow-up input are excluded. Approval and continuation apply only in the current local original-task review window."</string>
+    <string name="ui_lit_eb5981a4f7c5" formatted="false">" actual working files"</string>
+    <string name="ui_lit_ebbae8ed22d6" formatted="false">"Open original memory candidate review"</string>
+    <string name="ui_lit_ebf9ee44c3c4" formatted="false">"Reading memory…"</string>
+    <string name="ui_lit_ec0d96daf028" formatted="false">"The page associated with the screenshot changed. The old image was not sent."</string>
+    <string name="ui_lit_ec6198213502" formatted="false">"Opening original project workspace"</string>
+    <string name="ui_lit_ec863e83282e" formatted="false">"This page does not belong to the task."</string>
+    <string name="ui_lit_ecc4cf6c8e03" formatted="false">"New version file"</string>
+    <string name="ui_lit_ecd926c64cc7" formatted="false">"Task preferences"</string>
+    <string name="ui_lit_ed03cdf7e1aa" formatted="false">"Execution settings"</string>
+    <string name="ui_lit_ed107d01e638" formatted="false">"Allow local OCR"</string>
+    <string name="ui_lit_ede52e968ac2" formatted="false">" local workspaces"</string>
+    <string name="ui_lit_edecf0ae6e51" formatted="false">"Send"</string>
+    <string name="ui_lit_ee64d3b5de89" formatted="false">"The page associated with the web prompt changed."</string>
+    <string name="ui_lit_eeafd8094da0" formatted="false">"Enter a valid address or search."</string>
+    <string name="ui_lit_ef7dcf108f59" formatted="false">"Output limits for Chat-compatible protocols are configured by the service."</string>
+    <string name="ui_lit_ef865b2e2cfd" formatted="false">"Browsing history"</string>
+    <string name="ui_lit_f00c443e17a0" formatted="false">"Continue task"</string>
+    <string name="ui_lit_f03a745939b4" formatted="false">"More capabilities"</string>
+    <string name="ui_lit_f078f281ac64" formatted="false">"Web prompt"</string>
+    <string name="ui_lit_f0babe8593ef" formatted="false">"From final local captions you reviewed. A service source label is not identity authentication. Saving creates a pending task only; later tools and outbound actions still need original task authorization."</string>
+    <string name="ui_lit_f13e4a9355b9" formatted="false">"The previous request\'s outcome is unknown. Only the original task is checked; it is not resubmitted or executed again."</string>
+    <string name="ui_lit_f14c0ab4b16c" formatted="false">"Effective methods"</string>
+    <string name="ui_lit_f1a28dbdf7ec" formatted="false">"Delivery outcome unknown. Check the original platform; nothing is resent automatically."</string>
+    <string name="ui_lit_f1aacd57da85" formatted="false">"Add at the next safe step"</string>
+    <string name="ui_lit_f1f0276a210a" formatted="false">"Another original input needs reconciliation."</string>
+    <string name="ui_lit_f1f07e53ec86" formatted="false">"The web action receipt is unknown. Check its outcome before continuing."</string>
+    <string name="ui_lit_f233c2cd3697" formatted="false">"The original task and channel delivery are recorded separately. Writes and outbound delivery still need local approval. Closing or rebinding the channel invalidates its old authorization."</string>
+    <string name="ui_lit_f24abf379ff5" formatted="false">"Allow page to continue"</string>
+    <string name="ui_lit_f35c96197d25" formatted="false">"Local model services"</string>
+    <string name="ui_lit_f3eee35f8e40" formatted="false">"Voice review"</string>
+    <string name="ui_lit_f43a498d6ce7" formatted="false">"Back to original task"</string>
+    <string name="ui_lit_f4a5312c9e7d" formatted="false">"The handover target changed. Refresh and confirm again."</string>
+    <string name="ui_lit_f4fdd80a74f4" formatted="false">"Save memory"</string>
+    <string name="ui_lit_f5140c2a3dfc" formatted="false">"Keep draft"</string>
+    <string name="ui_lit_f549ee1bd218" formatted="false">"The original script page or document changed."</string>
+    <string name="ui_lit_f5704f0739e2" formatted="false">"This is a candidate-extraction record you explicitly requested. Completion means extraction ended, not that memory was adopted."</string>
+    <string name="ui_lit_f5c2506e70b1" formatted="false">"Save model"</string>
+    <string name="ui_lit_f5dede740ee0" formatted="false">"Save connection"</string>
+    <string name="ui_lit_f5e46115bae1" formatted="false">"Connection disabled"</string>
+    <string name="ui_lit_f5f76d6aeb4c" formatted="false">"Remote HTTP sends API credentials, screenshots and text without encryption. Third parties on the network may read or modify them."</string>
+    <string name="ui_lit_f6321c3d759d" formatted="false">"Remove from core"</string>
+    <string name="ui_lit_f63c5eeeb3b8" formatted="false">"Saved versions appear here."</string>
+    <string name="ui_lit_f722bf8c6d24" formatted="false">" permissions granted"</string>
+    <string name="ui_lit_f9131cdf8871" formatted="false">"Back to assistant"</string>
+    <string name="ui_lit_f95ea7f4c063" formatted="false">"Not enabled"</string>
+    <string name="ui_lit_f962abe0e137" formatted="false">" · Archived original (source unverified; excluded from recall)"</string>
+    <string name="ui_lit_f9eea62296ce" formatted="false">"Choose a login profile, compare pages, retain evidence and downloads, and take over anytime"</string>
+    <string name="ui_lit_fa3eedd3c220" formatted="false">"The page needs your confirmation"</string>
+    <string name="ui_lit_fa6028a40bc2" formatted="false">"The original task\'s embedded-source configuration is invalid."</string>
+    <string name="ui_lit_fa9e31898845" formatted="false">"Saving from webpages or granting an entire folder is not supported. Use a single-file download or upload."</string>
+    <string name="ui_lit_fbea0236b6fd" formatted="false">"Enabling is not authorization. Plugins can use only tool permissions you granted. Stopping does not undo remote effects already produced."</string>
+    <string name="ui_lit_fcf33e5d6610" formatted="false">"Allow local screenshots when needed"</string>
+    <string name="ui_lit_fd220765bfff" formatted="false">"System dictation is unavailable. Text input remains available."</string>
+    <string name="ui_lit_fd338b7e354e" formatted="false">"Current usage limited"</string>
+    <string name="ui_lit_fd4b9e3b6c68" formatted="false">"Keep editing"</string>
+    <string name="ui_lit_fde7e92a6728" formatted="false">"Reception stopped"</string>
+    <string name="ui_lit_fe25f95191f5" formatted="false">" plugins"</string>
+    <string name="ui_lit_ff803cbe5284" formatted="false">"The original frame action receipt is unknown. It will not be resent."</string>
+    <string name="ui_lit_ffb7cc2232ae" formatted="false">"You explicitly closed the browser. Check dispatched actions in the original task."</string>
+    <string name="ui_lit_ffb971674576" formatted="false">"Enter this protocol and service\'s key. Switching protocols does not reuse the old key."</string>
+    <string name="ui_lit_fffb8b984010" formatted="false">"Binding or permissions changed. Return to review the current identity."</string>
+</resources>

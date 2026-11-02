@@ -76,6 +76,10 @@ public final class BrowserTaskSpace {
         void select(Tab tab,Gate gate)throws Exception;
         void execute(Tab tab,String command,JSONObject arguments,Gate gate,CompletableFuture<JSONObject> result)throws Exception;
         JSONObject download(Tab tab,String url,String operationId,Gate gate)throws Exception;
+        default JSONObject downloadDocument(Tab tab,JSONObject args,String operationId,Gate gate)throws Exception {throw new UnsupportedOperationException("原文档文件读取宿主不可用");}
+        default JSONObject inputPin(Tab tab,JSONObject args)throws Exception {throw new UnsupportedOperationException("原生网页输入宿主不可用");}
+        default JSONObject attachmentPin(Tab tab,JSONObject args)throws Exception {throw new UnsupportedOperationException("任务附件上传宿主不可用");}
+        default void uploadAttachment(Tab tab,JSONObject args,String operationId,Gate gate,CompletableFuture<JSONObject> result)throws Exception {throw new UnsupportedOperationException("任务附件上传宿主不可用");}
         default JSONObject downloadStatus(String id,Gate gate)throws Exception {throw new UnsupportedOperationException("下载状态端口不可用");}
         void adoptOwner(Tab tab,Gate gate)throws Exception;
         default JSONObject ownerMetadata(String tabId)throws Exception {throw new UnsupportedOperationException("主人页状态不可用");}
@@ -178,6 +182,13 @@ public final class BrowserTaskSpace {
         if(args.optJSONObject("read")!=null&&args.getJSONObject("read").has("frameRef"))pin.put("readFrame",driver.readFramePin(required(args.getString("tabId")),args.getJSONObject("read").getString("frameRef")));
         if(args.optJSONObject("target")!=null&&args.getJSONObject("target").has("frameRef"))pin.put("readFrame",driver.readFramePin(required(args.getString("tabId")),args.getJSONObject("target").getString("frameRef")));
         if(args.has("optionRef")||args.has("checked")){JSONObject target=pin.optJSONObject("targetPreview");if(target==null)throw new StalePage("表单操作需要当前已展示控件");BrowserFormControls.requireTarget(target,args);}
+        if(args.has("steps"))pin.put("sequenceTargets",BrowserToolSequence.pinTargets(args,observation(required(args.getString("tabId")),args.getString("observationId"))));
+        if(args.has("attachmentId"))pin.put("attachment",driver.attachmentPin(required(args.getString("tabId")),args));
+        if(args.has("action")&&args.has("ref")){
+            Tab tab=required(args.getString("tabId"));JSONObject observed=observation(tab,args.getString("observationId"));if(observed.optBoolean("readOnlyEvidence")||observed.optJSONObject("actionFrame")!=null||!observed.has("nativeInputViewport"))throw new StalePage("原生输入需要刚取得的可见主文档和真实视口");
+            JSONObject actual=driver.inputPin(tab,args);if(!observed.getJSONObject("nativeInputViewport").toString().equals(actual.toString()))throw new StalePage("原生输入的滚动、缩放、视口或窗口已变化");pin.put("nativeInputViewport",actual);
+            if(args.has("toRef")){JSONObject destination=null;JSONArray targets=observed.getJSONArray("elementPreviews");for(int i=0;i<targets.length();i++)if(args.getString("toRef").equals(targets.getJSONObject(i).getString("ref")))destination=targets.getJSONObject(i);if(destination==null||destination.optBoolean("ownerRequired"))throw new StalePage("拖动终点未在当次观察中实际展示");pin.put("inputEndTarget",copy(destination));}
+        }
         if(retentionArgs(args)){JSONObject source=sourceFor(args),projection=source.optJSONObject("structuredProjection");int fields=0;if(projection!=null)for(int i=0;i<projection.getJSONArray("data").length();i++)fields+=projection.getString("mode").equals("list")?1:projection.getJSONArray("data").getJSONObject(i).getJSONArray("cells").length();pin.put("sourceRetentionPin",dev.pocketengine.store.TaskStore.capabilityFingerprint(source)).put("sourceRetentionPreview",new JSONObject().put("mode",projection==null?"text_excerpt":projection.getString("mode")).put("rows",projection==null?0:projection.getJSONArray("data").length()).put("fields",fields).put("partial",projection!=null&&projection.getBoolean("partial")).put("excerptPreview",unicodeClip(source.getString("excerpt"),400)));}
         pin.put("dataProvenance",new JSONObject().put("sourceScope","owner_private_profile").put("sourceKind","untrusted_rendered_page_or_model_context")
                 .put("declaredSinkCoverage","navigation_url_href_form_action_and_submitter_formaction_only").put("ajaxAndScriptSinksCovered",false));
@@ -201,6 +212,17 @@ public final class BrowserTaskSpace {
     }
     private static String origin(URI uri)throws Exception{return new URI(uri.getScheme(),null,uri.getHost(),uri.getPort(),null,null,null).toASCIIString();}
     public void requirePin(JSONObject pin,JSONObject args)throws Exception {if(!pin.toString().equals(pin(args).toString()))throw new StalePage("审批后页面、空间或观察已变化，尚未派发");}
+    public void requireSequencePage(JSONObject initial)throws Exception {
+        main();checkOriginal(originalControl);Tab tab=required(initial.getString("tabId"));JSONObject page=driver.metadata(tab),current=tab.identity();
+        for(String key:new String[]{"taskId","runId","epoch","profileId","profileRevision","browserSessionId","browserSpaceId","tabId","tabGeneration"})if(!String.valueOf(initial.get(key)).equals(String.valueOf(current.get(key))))throw new StalePage("组合原页面身份已变化");
+        if(page.getLong("navigation")!=initial.getLong("navigation")||!page.getString("documentId").equals(initial.getString("documentId"))||!page.getString("url").equals(initial.getString("pageUrl")))throw new StalePage("组合页面已导航，剩余步骤没有派发");
+    }
+    public JSONObject sequenceObservation(String tabId)throws Exception {main();checkOriginal(originalControl);Tab tab=required(tabId);JSONObject latest=observations.get(tab.tabId);return latest==null?null:copy(latest);}
+    public void finalSequenceObservation(JSONObject args,JSONObject delivered)throws Exception {
+        main();checkOriginal(originalControl);if(args.has("read")||delivered.optBoolean("semanticRead"))return;JSONObject captured=observations.get(args.getString("tabId"));if(captured==null)return;captured.put("runnerDelivered",false);
+        if(!delivered.optString("status").equals("observed")||!delivered.optBoolean("ok")||!captured.getString("observationId").equals(delivered.optString("observationId"))||delivered.optJSONArray("elements")==null)return;
+        presentedObservation(delivered);captured.put("runnerDelivered",true);
+    }
     public CompletableFuture<JSONObject> dispatch(String command,JSONObject args,String operationId,Gate gate)throws Exception {
         main();checkOriginal(originalControl);gate.check();CompletableFuture<JSONObject> result=new CompletableFuture<>();
         if(command.equals("open")){
@@ -218,26 +240,37 @@ public final class BrowserTaskSpace {
             case "select":driver.select(tab,gate);gate.check();revision++;recordCurrentPage(tab,"ready");publishManifest();result.complete(tab.identity().put("accepted",true).put("verified",false).put("status","selected"));break;
             case "close":gate.check();gate.entered();recordCurrentPage(tab,"closed");tab.invalidate();observations.remove(tab.tabId);clearReadObservations(tab.tabId);driver.closeOwned(tab);tabs.remove(tab.tabId);revision++;publishManifest();result.complete(tab.identity().put("accepted",true).put("verified",false).put("status","closed"));break;
             case "download":if(observation(tab,args.getString("observationId")).optBoolean("readOnlyEvidence"))throw new StalePage("语义读取证据不是下载动作引用，请重新普通observe");if(downloadRefs.size()>=100)throw new IllegalStateException("本浏览空间下载引用已达上限");JSONObject job=driver.download(tab,args.getString("url"),operationId,gate);String id=job.getString("id");uuid(id);downloadRefs.put(id,tab.identity());result.complete(job);break;
+            case "download_document":{
+                JSONObject captured=observation(tab,args.getString("observationId"));if(captured.optBoolean("readOnlyEvidence")||captured.optJSONObject("actionFrame")!=null)throw new StalePage("文档下载仅支持原主文档实际展示的链接");
+                JSONObject target=pin(args).getJSONObject("targetPreview");if(!target.optString("tag").equals("A")||!target.optString("href").matches("(?s)^(blob:|data:).+"))throw new SecurityException("请先观察原页面的blob/data下载链接");
+                if(downloadRefs.size()>=100)throw new IllegalStateException("本浏览空间下载引用已达上限");JSONObject documentJob=driver.downloadDocument(tab,copy(args).put("_nativeTargetPreview",target),operationId,gate);String documentId=documentJob.getString("id");uuid(documentId);downloadRefs.put(documentId,tab.identity());result.complete(documentJob);break;
+            }
+            case "upload_attachment":{
+                JSONObject captured=observation(tab,args.getString("observationId"));if(captured.optBoolean("readOnlyEvidence")||captured.optJSONObject("actionFrame")!=null)throw new StalePage("原件上传仅支持原主文档准确file input");JSONObject uploadPin=pin(args),target=uploadPin.getJSONObject("targetPreview");
+                if(!target.optString("tag").equals("INPUT")||!target.optString("type").equals("file"))throw new SecurityException("上传需要已实际展示的file input");
+                nativeCalls.put(operationId,tab);driver.uploadAttachment(tab,copy(args).put("_nativeTargetPreview",target).put("_nativeAttachmentPin",uploadPin.getJSONObject("attachment")),operationId,gate,result);result.whenComplete((value,error)->nativeCalls.remove(operationId,tab));break;
+            }
             default:
                 JSONObject dispatchArgs=args;
-                if(command.matches("click|type|set_date|focus|press|select_option|set_checked|scroll")&&observation(tab,args.getString("observationId")).optBoolean("readOnlyEvidence"))throw new StalePage("语义区域/续读仅作证据，请用普通observe取得原动作ref");
-                if(command.matches("click|type|set_date|focus|press|select_option|set_checked")){
+                if(command.matches("click|type|set_date|focus|press|select_option|set_checked|scroll|input")&&observation(tab,args.getString("observationId")).optBoolean("readOnlyEvidence"))throw new StalePage("语义区域/续读仅作证据，请用普通observe取得原动作ref");
+                if(command.matches("click|type|set_date|focus|press|select_option|set_checked|input")){
                     JSONObject observed=observation(tab,args.getString("observationId")),target=null;JSONArray previews=observed.getJSONArray("elementPreviews");
                     for(int i=0;i<previews.length();i++)if(args.getString("ref").equals(previews.getJSONObject(i).optString("ref")))target=previews.getJSONObject(i);
                     if(target==null)throw new StalePage("原审批目标已不在当次观察中");
                     if(BrowserFormControls.command(command))BrowserFormControls.requireTarget(target,args);
                     // Native-only copy of the exact approved observation target; never accepted from model args.
                     dispatchArgs=copy(args).put("_nativeTargetPreview",copy(target));if(observed.has("actionFrame"))dispatchArgs.put("_nativeActionFrame",copy(observed.getJSONObject("actionFrame")));
+                    if(command.equals("input")){JSONObject inputPin=pin(args);dispatchArgs.put("_nativeInputViewport",inputPin.getJSONObject("nativeInputViewport"));if(inputPin.has("inputEndTarget"))dispatchArgs.put("_nativeInputEndTarget",inputPin.getJSONObject("inputEndTarget"));}
                 }
                 if(command.equals("scroll")){JSONObject observed=observation(tab,args.getString("observationId"));if(observed.has("actionFrame"))dispatchArgs=copy(args).put("_nativeActionFrame",copy(observed.getJSONObject("actionFrame")));}
-                if(command.matches("click|type|set_date|focus|press|select_option|set_checked|scroll|navigate|script")){observations.remove(tab.tabId);clearReadObservations(tab.tabId);}
+                if(command.matches("click|type|set_date|focus|press|select_option|set_checked|scroll|navigate|script|input|site_mode")){observations.remove(tab.tabId);clearReadObservations(tab.tabId);}
                 nativeCalls.put(operationId,tab);
                 try{driver.execute(tab,command,copy(dispatchArgs).put("_nativeBrowserOperationId",operationId),gate,result);}
                 catch(Exception failed){nativeCalls.remove(operationId,tab);throw failed;}
                 result.whenComplete((value,error)->{if(!callDialogs.containsKey(operationId))nativeCalls.remove(operationId,tab);});
                 if(command.equals("observe"))result.thenAccept(value->{try{if(!ended&&tab.current()&&tabs.get(tab.tabId)==tab){JSONObject page=driver.metadata(tab);
                     if(value.optBoolean("semanticRead")){if(value.optString("status").equals("observed")&&value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("navigation")&&pageMatchesObservation(page,value)){JSONObject read=copy(value).put("tabId",tab.tabId).put("observedAt",System.currentTimeMillis()).put("elementPreviews",new JSONArray());BrowserSemanticRead.sourceFacts(read.getJSONObject("read"));readObservations.put(read.getString("observationId"),read);while(readObservations.size()>8)readObservations.remove(readObservations.keySet().iterator().next());}return;}
-if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("navigation"))observations.put(tab.tabId,new JSONObject().put("url",value.getString("url")).put("title",bounded(value.optString("title"),240)).put("text",bounded(value.getString("text"),12000)).put("elementPreviews",elementPreviews(value.getJSONArray("elements"))).put("observationId",value.getString("observationId")).put("navigation",value.getLong("navigation")).put("observedAt",System.currentTimeMillis()).put("tabId",tab.tabId).put("actionFrame",value.optJSONObject("actionFrame")));}}catch(Exception ignored){}});
+if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("navigation"))observations.put(tab.tabId,new JSONObject().put("url",value.getString("url")).put("title",bounded(value.optString("title"),240)).put("text",bounded(value.getString("text"),12000)).put("elementPreviews",elementPreviews(value.getJSONArray("elements"))).put("observationId",value.getString("observationId")).put("navigation",value.getLong("navigation")).put("observedAt",System.currentTimeMillis()).put("tabId",tab.tabId).put("actionFrame",value.optJSONObject("actionFrame")).put("nativeInputViewport",value.optJSONObject("nativeInputViewport")));}}catch(Exception ignored){}});
         }
         return result;
     }

@@ -15,8 +15,11 @@ public final class TaskNotificationState {
         String taskId=task.getString("id"),run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");if(!taskId.matches("[a-fA-F0-9-]{36}")||!run.matches("[a-fA-F0-9-]{36}")||epoch<1)return null;
         String anchor=status.equals("completed")||status.equals("needs_confirmation")?"result":status.equals("reconciling")?"reconciliation":status.matches("waiting_approval|awaiting_approval")?"approval":"decision";
         JSONObject value=new JSONObject().put("taskId",taskId).put("runId",run).put("epoch",epoch).put("status",status).put("anchor",anchor).put("conversationId",task.optString("conversationId"));
+        JSONObject question=OwnerQuestionReply.reference(task);if(question!=null)value.put("ownerQuestion",question);
         return value.put("token",TaskStore.capabilityFingerprint(value)).put("executionAuthorized",false).put("deliveryConfirmed",false);
     }
     public static String title(String status){return switch(status){case "completed"->"助手已有新结果";case "needs_confirmation"->"结果待你确认";case "reconciling"->"有一项操作待核对";case "waiting_approval","awaiting_approval"->"有一项操作待授权";default->"助手需要你处理";};}
+    public static String title(android.content.Context context,String status){return context.getString(switch(status){case "completed"->dev.pocketengine.R.string.w8_notice_result;case "needs_confirmation"->dev.pocketengine.R.string.w8_notice_confirmation;case "reconciling"->dev.pocketengine.R.string.w8_notice_reconcile;case "waiting_approval","awaiting_approval"->dev.pocketengine.R.string.w8_notice_approval;default->dev.pocketengine.R.string.w8_notice_input;});}
+    public static String summary(android.content.Context context,String status){return context.getString(switch(status){case "completed","needs_confirmation"->dev.pocketengine.R.string.w8_notice_open_result;case "reconciling"->dev.pocketengine.R.string.w8_notice_open_reconcile;default->dev.pocketengine.R.string.w8_notice_open_task;});}
     public static String summary(String status){return switch(status){case "completed","needs_confirmation"->"打开查看结果与执行记录";case "reconciling"->"先核对已有动作，再决定下一步";default->"打开查看原因和可选的下一步";};}
 }

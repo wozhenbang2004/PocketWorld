@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="w1_preferences_allow">Allow preference changes through chat</string>
+    <string name="w1_preferences_allow_description">New tasks may adjust response detail and the pace of ordinary actions through chat. Turning this off immediately stops further changes.</string>
+    <string name="w1_preferences_response_detail">Response detail</string>
+    <string name="w1_preferences_detail_concise">Concise</string>
+    <string name="w1_preferences_detail_standard">Standard</string>
+    <string name="w1_preferences_detail_detailed">Detailed</string>
+    <string name="w1_preferences_operation_pace">Ordinary action pace</string>
+    <string name="w1_preferences_pace_fast">Fast</string>
+    <string name="w1_preferences_pace_standard">Standard</string>
+    <string name="w1_preferences_pace_careful">Careful</string>
+    <string name="w1_preferences_pace_description">Careful adds a brief pause before ordinary phone actions. Preferences do not change permissions, facts, or completion criteria.</string>
+    <string name="w1_preferences_restore_standard">Restore standard</string>
+    <string name="w1_preferences_unavailable">Preferences have not loaded. Please reopen settings.</string>
+    <string name="w1_preferences_saving">Saving preferences…</string>
+    <string name="w1_research_error_site_list_length">The site list is too long</string>
+    <string name="w1_research_error_sites_unique">Choose up to four distinct public HTTPS sites</string>
+    <string name="w1_research_error_site_origin">Enter only a site address, such as https://example.org, without a page path</string>
+    <string name="w1_research_error_public_https">Only explicit public HTTPS sites without credentials are allowed</string>
+    <string name="w1_research_error_files_unique">Choose up to thirty-two distinct project files</string>
+    <string name="w1_research_error_project_choice">Choose files from the project list</string>
+    <string name="w1_research_error_relative_path">A project-relative path is required</string>
+    <string name="w1_research_error_path_scope">The path must stay within the selected project scope</string>
+    <string name="w1_research_title">Materials members may research</string>
+    <string name="w1_research_description">Access is off by default. Websites use anonymous public reading only. Projects allow only the text files explicitly selected here. Exact versions appear in the next review.</string>
+    <string name="w1_research_sites_label">Allowed public HTTPS sites, one per line, up to four</string>
+    <string name="w1_research_sites_placeholder">https://example.org</string>
+    <string name="w1_research_choose_project">Choose project files</string>
+    <string name="w1_research_no_projects">No projects are available to select yet.</string>
+    <string name="w1_research_no_files">This project has no text files available to share.</string>
+    <string name="w1_research_project_fallback">Project</string>
+    <string name="w1_research_file_metadata">Current version %1$d · %2$d bytes</string>
+    <string name="w1_research_selected_files">Files selected: %1$d. Switching projects does not automatically share other files.</string>
+    <string name="w1_research_remove_file">Remove</string>
+    <string name="w1_research_review_summary">Read-only research access. Anonymous public sites: %1$d; project files: %2$d. Accounts and sign-in state are not shared.</string>
+    <string name="w1_research_review_file_metadata">%1$s · version %2$d · content %3$s · %4$d bytes</string>
+</resources>

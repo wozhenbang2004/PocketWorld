@@ -1,5 +1,8 @@
 package dev.pocketengine.ui
 
+import dev.pocketengine.R
+import androidx.compose.ui.res.stringResource
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -64,15 +67,15 @@ internal fun RichConversationMessageBody(content: String, modifier: Modifier = M
                 else -> ConversationSpans(block.spans) { pendingLink = it }
             }
         }
-        if (linkFailure) Text("链接暂时无法打开。你可以复制地址后手动处理。", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        if (linkFailure) Text(stringResource(R.string.w8_cv_000), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
     }
     pendingLink?.let { address ->
-        AlertDialog(onDismissRequest = { pendingLink = null }, title = { Text("打开外部链接") }, text = {
-            Column { Text("链接来自会话内容。请先核对完整地址。"); SelectionContainer { Text(address, modifier = Modifier.padding(top = 12.dp)) } }
+        AlertDialog(onDismissRequest = { pendingLink = null }, title = { Text(stringResource(R.string.w8_cv_001)) }, text = {
+            Column { Text(stringResource(R.string.w8_cv_002)); SelectionContainer { Text(address, modifier = Modifier.padding(top = 12.dp)) } }
         }, confirmButton = { TextButton(onClick = {
             if (RichMessageDocument.safeUrl(address)) try { uriHandler.openUri(address); linkFailure = false } catch (_: Exception) { linkFailure = true }
             pendingLink = null
-        }) { Text("打开链接") } }, dismissButton = { TextButton(onClick = { pendingLink = null }) { Text("取消") } })
+        }) { Text(stringResource(R.string.w8_cv_003)) } }, dismissButton = { TextButton(onClick = { pendingLink = null }) { Text(stringResource(R.string.w8_cv_004)) } })
     }
 }
 
@@ -101,15 +104,15 @@ private fun ConversationCode(block: RichMessageDocument.Block) {
     var copied by remember(block.text) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(block.language.ifBlank { "代码" }, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-            TextButton(onClick = { clipboard.setText(AnnotatedString(block.text)); copied = true }, modifier = Modifier.testTag("conversation_copy_code")) { Text(if (copied) "已复制" else "复制代码", fontSize = 12.sp) }
+            Text(block.language.ifBlank { stringResource(R.string.w8_cv_005) }, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            TextButton(onClick = { clipboard.setText(AnnotatedString(block.text)); copied = true }, modifier = Modifier.testTag("conversation_copy_code")) { Text(if (copied) stringResource(R.string.w8_cv_006) else stringResource(R.string.w8_cv_007), fontSize = 12.sp) }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         SelectionContainer {
             Text(block.text, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)
                 .horizontalScroll(rememberScrollState()).verticalScroll(rememberScrollState()).padding(12.dp).testTag("conversation_code"))
         }
-        if (!block.closed) Text("代码段尚未闭合，按原文展示。", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+        if (!block.closed) Text(stringResource(R.string.w8_cv_008), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
     }
 }
 
@@ -128,7 +131,8 @@ private fun ConversationTable(block: RichMessageDocument.Block, link: (String) -
 /** Source is an actual host TaskStore projection. Controls only open/refresh that same task. */
 @Composable
 internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask: (String) -> Unit,
-    onLoadDetails: (String) -> Unit, modifier: Modifier = Modifier) {
+    onLoadDetails: (String) -> Unit, modifier: Modifier = Modifier,
+    readAudit: ((String, (org.json.JSONObject?, String?) -> Unit) -> Unit)? = null) {
     var expanded by rememberSaveable(task.id, task.runId) {
         mutableStateOf(task.status in setOf("preparing", "running", "awaiting_user", "waiting_approval", "reconciling", "unknown", "failed"))
     }
@@ -151,17 +155,17 @@ internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask
                     task.confirmedComplete -> "check"
                     else -> "clock"
                 }, Modifier.size(20.dp), Ink)
-                Text(if(task.detailsLoaded) "${task.label} · ${task.operations.size} 条调用记录" else "${task.label} · 执行过程",
+                Text(if(task.detailsLoaded) stringResource(R.string.w8_cv_call_count, conversationTaskLabel(task.status), task.operations.size) else stringResource(R.string.w8_cv_process, conversationTaskLabel(task.status)),
                     fontSize = 13.sp, lineHeight = 20.sp, color = Ink,
                     modifier = Modifier.weight(1f), maxLines = 2)
                 AffectGlyph("chevron", Modifier.size(12.dp), SecondaryInk)
             }
             TextButton(onClick = { onOpenTask(task.id) }, enabled = task.id.isNotBlank(),
                 modifier = Modifier.testTag("conversation_open_task"), contentPadding = PaddingValues(horizontal = 8.dp)) {
-                Text(if(task.confirmedComplete) "成果" else "任务", fontSize = 13.sp)
+                Text(if(task.confirmedComplete) stringResource(R.string.w8_cv_009) else stringResource(R.string.w8_cv_010), fontSize = 13.sp)
             }
         }
-        if (task.status != "completed" && task.next.isNotBlank()) Text(task.next,
+        if (task.status != "completed" && task.next.isNotBlank()) Text(conversationTaskNext(task.status),
             fontSize = 13.sp, lineHeight = 20.sp, color = SecondaryInk,
             modifier = Modifier.padding(bottom = 8.dp))
         androidx.compose.animation.AnimatedVisibility(visible = expanded,
@@ -173,16 +177,17 @@ internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask
                 if (task.summary.isNotBlank()) Text(task.summary, fontSize = 13.sp, lineHeight = 20.sp,
                     modifier = Modifier.padding(bottom = 8.dp))
                 if (!task.detailsLoaded) {
-                    Text("原任务记录尚未载入。", fontSize = 13.sp, color = SecondaryInk)
-                    TextButton(onClick = { onLoadDetails(task.id) }) { Text("读取记录") }
-                } else if (task.operations.isEmpty()) Text("原任务还没有工具调用记录。", fontSize = 13.sp, color = SecondaryInk)
+                    Text(stringResource(R.string.w8_cv_011), fontSize = 13.sp, color = SecondaryInk)
+                    TextButton(onClick = { onLoadDetails(task.id) }) { Text(stringResource(R.string.w8_cv_012)) }
+                } else if (task.operations.isEmpty()) Text(stringResource(R.string.w8_cv_013), fontSize = 13.sp, color = SecondaryInk)
                 val visible = if(showAll) task.operations else task.operations.takeLast(3)
                 if(task.operations.size > 3) TextButton(onClick = { showAll = !showAll }) {
-                    Text(if(showAll) "只看最近调用" else "展开其余 ${task.operations.size - 3} 条", fontSize = 13.sp)
+                    Text(if(showAll) stringResource(R.string.w8_cv_014) else stringResource(R.string.w8_cv_more_calls, task.operations.size - 3), fontSize = 13.sp)
                 }
-                if(task.totalOperations > task.operations.size) Text("这里只展示当前窗口；完整记录可在原任务中查看。",
+                if(task.totalOperations > task.operations.size) Text(stringResource(R.string.w8_cv_015),
                     fontSize = 13.sp, color = SecondaryInk)
                 visible.forEach { operation -> key(operation.id) { ConversationOperation(operation) } }
+                InterruptedAttemptJournal(task.id, task.interruptedAttempts, readAudit)
             }
         }
     }
@@ -198,35 +203,56 @@ private fun ConversationOperation(operation: TaskPresentation.Operation) {
         operation.state == "prepared" -> TaskExecutionPresentation.Tone.WAITING
         else -> TaskExecutionPresentation.Tone.NEUTRAL
     }
-    AffectToolCallCard(id = operation.id, name = operation.tool, statusLabel = operation.label, tone = tone,
+    AffectToolCallCard(id = operation.id, name = operation.tool, statusLabel = conversationOperationLabel(operation), tone = tone,
         output = operation.output, needsReview = operation.uncertain || operation.state == "failed",
         modifier = Modifier.padding(vertical = 4.dp).testTag("conversation_operation_" + operation.id))
 }
 
 /** Uses the existing persisted list; search never changes a conversation or starts a task. */
 @Composable
-internal fun ConversationHistoryBrowser(loaded: List<ConversationHistory.Item>, activeId: String?, switchingBlocked: Boolean, onOpen: (String) -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier, allowReadWhenBlocked: Boolean = false) {
+internal fun ConversationHistoryBrowser(loaded: List<ConversationHistory.Item>, activeId: String?, switchingBlocked: Boolean, onOpen: (String) -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier, allowReadWhenBlocked: Boolean = false,
+    onRename: ((ConversationHistory.Item, String) -> Unit)? = null, onPin: ((ConversationHistory.Item, Boolean) -> Unit)? = null, onDelete: ((ConversationHistory.Item) -> Unit)? = null) {
     var query by rememberSaveable { mutableStateOf("") }
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    var renaming by remember { mutableStateOf<ConversationHistory.Item?>(null) }
+    var deleting by remember { mutableStateOf<ConversationHistory.Item?>(null) }
+    var name by rememberSaveable { mutableStateOf("") }
     val groups = remember(loaded, query) { ConversationHistory.organize(loaded, query, System.currentTimeMillis(), ZoneId.systemDefault()) }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("你的对话", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            TextButton(onClick = onNew, enabled = !switchingBlocked) { Text("新对话") }
+            Text(stringResource(R.string.w8_cv_016), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            TextButton(onClick = onNew, enabled = !switchingBlocked) { Text(stringResource(R.string.w8_cv_017)) }
         }
-        OutlinedTextField(query, { if (it.length <= 200) query = it }, singleLine = true, label = { Text("按标题查找已保存对话") }, modifier = Modifier.fillMaxWidth().testTag("conversation_history_query"), trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("清除") } })
-        if (switchingBlocked) Text(if (allowReadWhenBlocked) "任务继续运行；现在只读查看历史，不改变当前输入位置。" else "原任务仍在处理或登记输入，结束后再切换对话。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (groups.isEmpty()) Text(if (loaded.isEmpty()) "开始聊天后，对话会保存在这里。" else "已加载的对话标题中没有匹配项。", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 20.dp))
+        OutlinedTextField(query, { if (it.length <= 200) query = it }, singleLine = true, label = { Text(stringResource(R.string.w8_cv_018)) }, modifier = Modifier.fillMaxWidth().testTag("conversation_history_query"), trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text(stringResource(R.string.w8_cv_019)) } })
+        if (switchingBlocked) Text(if (allowReadWhenBlocked) stringResource(R.string.w8_cv_020) else stringResource(R.string.w8_cv_021), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (groups.isEmpty()) Text(if (loaded.isEmpty()) stringResource(R.string.w8_cv_022) else stringResource(R.string.w8_cv_023), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 20.dp))
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
             groups.forEach { group ->
-                item("group_" + group.label) { Text(group.label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)) }
+                item("group_" + group.label) { Text(conversationDateLabel(group.label), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)) }
                 items(group.items, key = { it.id }) { item ->
-                    Column(Modifier.fillMaxWidth().background(if (item.id == activeId) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent, RoundedCornerShape(10.dp))
+                    Row(Modifier.fillMaxWidth().background(if (item.id == activeId) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent, RoundedCornerShape(10.dp))
                         .clickable(enabled = !switchingBlocked || allowReadWhenBlocked) { onOpen(item.id) }.semantics { selected = item.id == activeId }.padding(horizontal = 10.dp, vertical = 14.dp)) {
-                        Text(item.title.ifBlank { "未命名对话" }, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
-                        if (item.updatedAt > 0) Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.updatedAt)), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(item.title.ifBlank { stringResource(R.string.w8_cv_024) }, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
+                            if (item.updatedAt > 0) Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.updatedAt)), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                        }
+                        if (onRename != null || onPin != null || onDelete != null) Box {
+                            TextButton(onClick = { menuFor = item.id }, modifier = Modifier.testTag("conversation_menu_" + item.id)) { Text(stringResource(R.string.w8_cv_025)) }
+                            DropdownMenu(expanded = menuFor == item.id, onDismissRequest = { menuFor = null }) {
+                                if (onRename != null) DropdownMenuItem(text = { Text(stringResource(R.string.w8_cv_026)) }, onClick = { menuFor = null; name = item.title; renaming = item })
+                                if (onPin != null) DropdownMenuItem(text = { Text(if (item.pinnedAt > 0) stringResource(R.string.w8_cv_027) else stringResource(R.string.w8_cv_028)) }, onClick = { menuFor = null; onPin(item, item.pinnedAt == 0L) })
+                                if (onDelete != null) DropdownMenuItem(text = { Text(stringResource(R.string.w8_cv_029)) }, enabled = !switchingBlocked, onClick = { menuFor = null; deleting = item })
+                            }
+                        }
                     }
                 }
             }
         }
     }
+    renaming?.let { item -> AlertDialog(onDismissRequest = { renaming = null }, title = { Text(stringResource(R.string.w8_cv_030)) }, text = {
+        OutlinedTextField(name, { if (it.length <= 120) name = it }, label = { Text(stringResource(R.string.w8_cv_031)) }, singleLine = true, modifier = Modifier.testTag("conversation_rename_input"))
+    }, confirmButton = { TextButton(onClick = { onRename?.invoke(item, name.trim()); renaming = null }, enabled = name.isNotBlank()) { Text(stringResource(R.string.w8_cv_032)) } }, dismissButton = { TextButton(onClick = { renaming = null }) { Text(stringResource(R.string.w8_cv_004)) } }) }
+    deleting?.let { item -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text(stringResource(R.string.w8_cv_033)) }, text = {
+        Text(stringResource(R.string.w8_cv_034))
+    }, confirmButton = { TextButton(onClick = { onDelete?.invoke(item); deleting = null }, enabled = !switchingBlocked) { Text(stringResource(R.string.w8_cv_035)) } }, dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.w8_cv_036)) } }) }
 }

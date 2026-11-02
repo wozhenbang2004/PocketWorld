@@ -3,7 +3,7 @@ package dev.pocketengine.browser;
 import android.app.Application;
 import android.content.Context;
 import android.content.ContextWrapper;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunOutcome;
 import dev.pocketengine.features.attachments.AttachmentRepository;

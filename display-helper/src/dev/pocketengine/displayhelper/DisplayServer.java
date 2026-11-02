@@ -29,7 +29,7 @@ public final class DisplayServer implements AutoCloseable {
         String socket=setup.getString("socketName"),token=setup.getString("token");int owner=setup.getInt("ownerUid");
         if(!socket.matches("pocketengine\\.display\\.[a-f0-9]{32}")||!token.matches("[a-f0-9]{64}")||owner<10000||owner>=100000)
             throw new SecurityException("Invalid bootstrap");
-        this.handler=handler;engine=new DisplayEngine(context,handler);server=new LocalServerSocket(socket);
+        this.handler=handler;engine=new DisplayEngine(context,handler,owner);server=new LocalServerSocket(socket);
         Thread accept=new Thread(()->{
             while(!closed)try{
                 LocalSocket client=server.accept();

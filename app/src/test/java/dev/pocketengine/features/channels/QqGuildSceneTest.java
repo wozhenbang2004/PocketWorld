@@ -58,7 +58,7 @@ public final class QqGuildSceneTest {
     }
 
     @Test public void actualReplyHttpUsesOnlyTheOfficialEndpointAndBodyForEachNativeScene()throws Exception {
-        java.util.List<String> paths=new java.util.ArrayList<>();java.util.List<JSONObject> bodies=new java.util.ArrayList<>();com.sun.net.httpserver.HttpServer server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
+        java.util.List<String> paths=new java.util.ArrayList<>();java.util.List<JSONObject> bodies=new java.util.ArrayList<>();dev.pocketengine.testutil.HttpServer server=dev.pocketengine.testutil.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
         server.createContext("/",exchange->{try{String path=exchange.getRequestURI().getPath();JSONObject body=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));JSONObject response;
             if(path.equals("/app/getAppAccessToken"))response=new JSONObject().put("access_token","fixture-token").put("expires_in",7200);else{paths.add(path);bodies.add(body);assertEquals("QQBot fixture-token",exchange.getRequestHeaders().getFirst("Authorization"));response=new JSONObject().put("id","fixture-receipt-"+paths.size());}
             byte[] raw=response.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);exchange.sendResponseHeaders(200,raw.length);exchange.getResponseBody().write(raw);

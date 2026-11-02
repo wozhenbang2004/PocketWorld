@@ -32,6 +32,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
         final RuntimeInvocation invocation;final File directory;final AutoCloseable lease;final String id;
         JSONObject receipt;Thread thread;volatile boolean cancel;
         long sequence,storedBytes,receivedBytes;
+        volatile long pipeLeaderPid,pipeLeaderStartTicks,pipeSessionId;
         final java.util.concurrent.locks.ReentrantReadWriteLock sourceWrites=new java.util.concurrent.locks.ReentrantReadWriteLock();
         volatile ProjectDevSession devSession;
         final RuntimePtyInput terminalInput;
@@ -73,6 +74,17 @@ public final class ManagedProcessJobs implements AutoCloseable {
     public boolean available() {return supervisor.available();}
     /** Metadata-only accounting over the original logs/receipts; never a generic cache-delete entry. */
     public JSONObject ownerStorageUsage(dev.pocketengine.core.RunControl original)throws Exception{return dev.pocketengine.features.local.project.NativeStorageTree.measure(root,original);}
+    /** Peer credentials must belong to the live original pipe job. No stored receipt can
+     * restore this native ownership after a worker/process restart. */
+    public void requireOwnedScriptPeer(RuntimeExecutionRef ref,dev.pocketengine.core.RunControl original,int peerPid)throws Exception{
+        Job job;synchronized(this){job=live.get(ref.operationId());}
+        if(job==null||job.terminalInput!=null||job.invocation.originalControl()!=original||!dev.pocketengine.features.skills.ManagedSkillBackend.exact(job.invocation.exact()))throw new SecurityException("runtime_original_script_peer_unavailable");
+        ref.checkControl(original);if(!ProjectSources.digest(ref.executionLink()).equals(ProjectSources.digest(job.invocation.executionRef().executionLink())))throw new SecurityException("runtime_original_script_peer_changed");
+        long until=System.nanoTime()+500_000_000L;
+        while(job.pipeLeaderPid==0&&!job.cancel&&job.thread!=null&&job.thread.isAlive()&&System.nanoTime()<until){job.invocation.checkCurrent();Thread.sleep(10);}
+        job.invocation.checkCurrent();if(job.cancel||!supervisor.isSameOwnedSession(job.pipeLeaderPid,job.pipeLeaderStartTicks,job.pipeSessionId,peerPid))throw new SecurityException("runtime_peer_not_in_original_script_session");
+        job.invocation.checkCurrent();
+    }
     public boolean ptyAvailable(){return supervisor.ptyAvailable()&&inputSinkReady;}
     public void setProcessInputSink(java.util.function.Consumer<ProcessInputReceipt> nativeSink){inputSink=java.util.Objects.requireNonNull(nativeSink);inputSinkReady=true;}
     public void setReceiptSink(java.util.function.Consumer<JSONObject> nativeSink) {receiptSink=java.util.Objects.requireNonNull(nativeSink);}
@@ -283,6 +295,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 }
             }
             NativeProcessSupervisor.PtyObserver observer=new NativeProcessSupervisor.PtyObserver() {
+                        @Override public boolean processIdentity(long pid,long born,long session){if(pid<1||born<1||session!=pid)return false;job.pipeLeaderStartTicks=born;job.pipeSessionId=session;job.pipeLeaderPid=pid;return true;}
                         @Override public void ptyIdentity(long pid,long born,long session){synchronized(job){try{job.receipt.put("ptyLeaderPid",pid).put("ptyLeaderStartTicks",born).put("ptySessionId",session);}catch(Exception invalid){throw new IllegalStateException("runtime_pty_identity_record_failed");}}}
                         @Override public byte[] nextTerminalCommand(){return job.terminalInput==null?null:job.terminalInput.next();}
                         @Override public boolean terminalCommandCurrent(long sequence){try{job.invocation.checkCurrent();job.terminalInput.checkCurrent(sequence);return !job.cancel;}catch(Exception stale){job.cancel=true;return false;}}
@@ -302,10 +315,12 @@ public final class ManagedProcessJobs implements AutoCloseable {
                         }
                     };
             JSONObject terminal=job.invocation.exact().getJSONObject("payload");
-            NativeProcessSupervisor.Exit exit=job.terminalInput==null?supervisor.execute(command,environment,directory,timeoutMillis,500,observer):supervisor.executePty(command,environment,directory,timeoutMillis,500,terminal.getInt("terminalRows"),terminal.getInt("terminalColumns"),observer);
+            boolean offline="kernel_offline".equals(terminal.optString("networkMode","possible_same_uid"));
+            if(offline&&job.terminalInput!=null)throw new SecurityException("runtime_kernel_offline_pty_unavailable");
+            NativeProcessSupervisor.Exit exit=job.terminalInput==null?supervisor.execute(command,environment,directory,timeoutMillis,500,observer,offline):supervisor.executePty(command,environment,directory,timeoutMillis,500,terminal.getInt("terminalRows"),terminal.getInt("terminalColumns"),observer);
             groupAbsent=exit.groupAbsent&&(job.terminalInput==null||exit.sessionAbsent);finalStatus=!groupAbsent?"unknown":exit.exitCode==0&&exit.launchErrno==0&&!exit.cancelled&&!exit.timedOut?"completed":"failed";
             synchronized(job) {
-                job.receipt.put("processLaunched",exit.launchErrno==0).put("processExited",exit.exitCode>=0||exit.signal>0)
+                job.receipt.put("networkMode",offline?"kernel_offline":"possible_same_uid").put("networkEnforcement",offline&&exit.launchErrno==0?"seccomp_inherited_ip_socket_deny":"not_confirmed").put("localUnixIpcAllowed",true).put("networkEnforcementScope","original_process_lineage_new_sockets_only").put("callbackDeviceNetworkIsolated",false).put("osSandbox",false).put("processLaunched",exit.launchErrno==0).put("processExited",exit.exitCode>=0||exit.signal>0)
                         .put("exitCode",exit.exitCode).put("terminationSignal",exit.signal)
                         .put("launchErrno",exit.launchErrno).put("cancelRequested",job.cancel||exit.cancelled)
                         .put("timedOut",exit.timedOut).put("processGroupAbsent",exit.groupAbsent)

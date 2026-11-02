@@ -1,6 +1,6 @@
 package dev.pocketengine.runtime;
 
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.runtime.usage.InferenceCapture;

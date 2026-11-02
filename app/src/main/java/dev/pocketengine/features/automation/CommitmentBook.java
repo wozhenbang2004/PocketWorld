@@ -449,20 +449,47 @@ public final class CommitmentBook {
     /** Durable one-shot admission intent, not a task or permission to start a Runner. */
     public JSONObject preparePlanTask(JSONObject scope,String planId,long planRevision,String stepId,long now)throws Exception {
         JSONObject identity=scope(scope);privatePlanScope(identity);validNow(now);
-        synchronized(lock){JSONObject state=read(),plan=findPlan(state,identity,planId);expectPlanRevision(state,identity,plan,planRevision);JSONObject step=planStep(state,identity,plan,stepId);
-            if(step.has("taskAdmission"))return taskRequestView(plan,step).put("lookupOnly",true);
-            if(planInFlight(state,identity,plan))throw new IllegalStateException("计划仍有关联任务或未知准入，请核对原任务");
-            JSONObject decision=planTaskDecision(state,identity,plan,step,now);if(!decision.getBoolean("eligible"))return decision;
-            JSONObject execution=execution(plan),intent=new JSONObject().put("occurrenceId",UUID.randomUUID().toString()).put("ruleId",planId)
-                    .put("ruleRevision",execution.getLong("approvalSequence")).put("commitmentRevision",step.getLong("revision")).put("goal",step.getString("goal"))
-                    .put("executionMode",step.optString("executor","phone").equals("workspace")?"capabilities":execution.optString("phoneMode","background"))
-                    .put("validUntil",Math.min(expiryLimit(step),execution.getJSONObject("policy").isNull("expiresAt")?MAX_TIME:execution.getJSONObject("policy").getLong("expiresAt")))
-                    .put("createdAt",now).put("admissionNumber",Math.addExact(execution.getLong("admissions"),1)).put("state","task_creation_unknown");step.put("taskAdmission",intent);
-            if(decision.optJSONObject("remoteWaitStatus")!=null)intent.put("remoteWaitEvidence",copy(decision.getJSONObject("remoteWaitStatus").getJSONObject("evidence")));
-            if(decision.optJSONObject("businessWaitStatus")!=null){JSONObject observed=decision.getJSONObject("businessWaitStatus"),proof=observed.getJSONObject("evidence");intent.put("businessWaitEvidence",copy(proof));step.put("businessWaitConsumedEventId",proof.getString("eventId"));}
-            execution.put("admissions",Math.addExact(execution.getLong("admissions"),1));touchPlan(plan,now);write(state);
-            return taskRequestView(plan,step).put("lookupOnly",false).put("eligible",true);
+        synchronized(lock){JSONObject state=read(),plan=findPlan(state,identity,planId);expectPlanRevision(state,identity,plan,planRevision);JSONObject step=planStep(state,identity,plan,stepId);return preparePlanTaskLocked(state,identity,plan,step,now);}
+    }
+    private JSONObject preparePlanTaskLocked(JSONObject state,JSONObject identity,JSONObject plan,JSONObject step,long now)throws Exception {
+        if(step.has("taskAdmission"))return taskRequestView(plan,step).put("lookupOnly",true);
+        if(planInFlight(state,identity,plan))throw new IllegalStateException("计划仍有关联任务或未知准入，请核对原任务");
+        JSONObject decision=planTaskDecision(state,identity,plan,step,now);if(!decision.getBoolean("eligible"))return decision;
+        JSONObject execution=execution(plan),intent=new JSONObject().put("occurrenceId",UUID.randomUUID().toString()).put("ruleId",plan.getString("id"))
+                .put("ruleRevision",execution.getLong("approvalSequence")).put("commitmentRevision",step.getLong("revision")).put("goal",step.getString("goal"))
+                .put("executionMode",step.optString("executor","phone").equals("workspace")?"capabilities":execution.optString("phoneMode","background"))
+                .put("validUntil",Math.min(expiryLimit(step),execution.getJSONObject("policy").isNull("expiresAt")?MAX_TIME:execution.getJSONObject("policy").getLong("expiresAt")))
+                .put("createdAt",now).put("admissionNumber",Math.addExact(execution.getLong("admissions"),1)).put("state","task_creation_unknown");step.put("taskAdmission",intent);
+        if(decision.optJSONObject("remoteWaitStatus")!=null)intent.put("remoteWaitEvidence",copy(decision.getJSONObject("remoteWaitStatus").getJSONObject("evidence")));
+        if(decision.optJSONObject("businessWaitStatus")!=null){JSONObject proof=decision.getJSONObject("businessWaitStatus").getJSONObject("evidence");intent.put("businessWaitEvidence",copy(proof));step.put("businessWaitConsumedEventId",proof.getString("eventId"));}
+        execution.put("admissions",Math.addExact(execution.getLong("admissions"),1));touchPlan(plan,now);write(state);return taskRequestView(plan,step).put("lookupOnly",false).put("eligible",true);
+    }
+    /** Native owner selected an ALREADY approved exact step. This changes no grant or budget. */
+    public JSONObject bindSemanticPlanGate(JSONObject scope,String planId,long shownRevision,String stepId,JSONObject rule,long now)throws Exception{
+        JSONObject identity=scope(scope);privatePlanScope(identity);validNow(now);
+        synchronized(lock){JSONObject state=read(),plan=findPlan(state,identity,planId),step=planStep(state,identity,plan,stepId),execution=execution(plan),prior=step.optJSONObject("semanticConditionGate");
+            if(!executionApproved(state,identity,plan)||!execution.getString("state").equals("active")||!execution.optBoolean("modelObservationConsent")||terminal(step)||step.has("taskAdmission")||!step.optString("taskId").isEmpty())throw new SecurityException("条件只能绑定当前已批且尚未派发的原计划步骤");
+            JSONObject definition=rule.getJSONObject("semanticCondition");
+            if(prior!=null){if(prior.getLong("shownPlanRevision")!=shownRevision||!rule.getString("id").equals(prior.optString("ruleId"))||rule.getLong("revision")!=prior.optLong("ruleRevision")||!execution.getString("approvalKey").equals(prior.optString("approvalKey"))||execution.getLong("approvalSequence")!=prior.optLong("approvalSequence"))throw new SecurityException("原步骤已绑定不同条件或新审批，不能覆盖");}
+            else{expectPlanRevision(state,identity,plan,shownRevision);prior=new JSONObject().put("ruleId",rule.getString("id")).put("ruleRevision",rule.getLong("revision")).put("sourceKey",definition.getString("sourceKey")).put("sourceRevision",definition.getLong("sourceRevision")).put("approvalKey",execution.getString("approvalKey")).put("approvalSequence",execution.getLong("approvalSequence")).put("stepRevision",step.getLong("revision")).put("shownPlanRevision",shownRevision).put("status","waiting");step.put("semanticConditionGate",prior);touchPlan(plan,now);write(state);}
+            return new JSONObject(prior.toString()).put("planId",planId).put("stepId",stepId);
         }
+    }
+    /** Native rising edge releases the gate AND persists the original admission in one Book write. */
+    public JSONObject prepareSemanticPlanTask(JSONObject scope,JSONObject occurrence,JSONObject binding,long now)throws Exception{
+        JSONObject identity=scope(scope);privatePlanScope(identity);validNow(now);
+        synchronized(lock){JSONObject state=read(),plan=findPlan(state,identity,binding.getString("planId")),step=planStep(state,identity,plan,binding.getString("stepId")),gate=step.optJSONObject("semanticConditionGate"),execution=execution(plan);
+            if(gate==null||!occurrence.getString("ruleId").equals(gate.optString("ruleId"))||occurrence.getLong("revision")!=gate.optLong("ruleRevision")||!execution.getString("approvalKey").equals(gate.optString("approvalKey"))||execution.getLong("approvalSequence")!=gate.optLong("approvalSequence")||step.getLong("revision")!=gate.optLong("stepRevision")||!occurrence.optString("status").matches("condition_action_pending|condition_action_unknown|condition_action_registered"))throw new SecurityException("原条件步骤或批准已变化，未授新权限");
+            String selected=gate.optString("conditionOccurrenceId");if(!selected.isEmpty()&&!selected.equals(occurrence.getString("id")))throw new SecurityException("原计划步骤不能借另一次边沿重复执行");
+            if(step.has("taskAdmission")){if(selected.isEmpty())throw new SecurityException("原计划准入没有本条件边沿");return taskRequestView(plan,step).put("lookupOnly",true);}
+            if(!"condition_action_pending".equals(occurrence.optString("status")))return new JSONObject().put("eligible",false).put("reason","condition_unknown_query_only");
+            gate.put("status","released").put("conditionOccurrenceId",occurrence.getString("id")).put("conditionTaskId",occurrence.getString("conditionTaskId"));
+            return preparePlanTaskLocked(state,identity,plan,step,now);
+        }
+    }
+    /** Recovery is a query of that same original admission; it never creates a replacement. */
+    public JSONObject semanticPlanTaskRequest(JSONObject scope,JSONObject occurrence,JSONObject binding,long now)throws Exception{
+        JSONObject identity=scope(scope);privatePlanScope(identity);synchronized(lock){JSONObject state=read(),plan=findPlan(state,identity,binding.getString("planId")),step=planStep(state,identity,plan,binding.getString("stepId")),gate=step.optJSONObject("semanticConditionGate");if(gate==null||!occurrence.getString("id").equals(gate.optString("conditionOccurrenceId"))||!step.has("taskAdmission"))return null;return taskRequestView(plan,step).put("lookupOnly",true);}
     }
     /** Final native recheck under the host's existing admission lock, before create/start/resume. */
     public JSONObject planTaskRequest(JSONObject scope,String planId,String stepId,String occurrenceId,long now)throws Exception {
@@ -541,6 +568,8 @@ public final class CommitmentBook {
         if(!execution.getBoolean("started"))return result.put("reason","manual_start_required");
         if(!execution.optBoolean("modelObservationConsent"))return result.put("reason","model_consent_required");
         if(step.optJSONObject("businessWait")!=null&&!execution.optBoolean("businessEventConsent"))return result.put("reason","business_source_consent_required");
+        JSONObject semantic=step.optJSONObject("semanticConditionGate");if(semantic!=null){if(!execution.getString("approvalKey").equals(semantic.optString("approvalKey"))||execution.getLong("approvalSequence")!=semantic.optLong("approvalSequence")||step.getLong("revision")!=semantic.optLong("stepRevision"))return result.put("reason","semantic_condition_gate_stale");if(!"released".equals(semantic.optString("status")))return result.put("reason","semantic_condition_waiting");}
+
         if(terminal(step))return result.put("reason",step.getString("status"));if(expired(step,now))return result.put("reason","expired");
         String dependency=taskDependency(state,identity,step,now);if(dependency!=null)return result.put("reason",dependency);
         String liveDependency=liveFailureDependencies(state,identity,step);if(liveDependency!=null)return result.put("reason",liveDependency).put("nextAt",AutomationConditions.later(now));
@@ -599,6 +628,7 @@ public final class CommitmentBook {
                 .put("scheduledAt",step.getLong("dueAt")).put("runPolicy",copy(execution.getJSONObject("policy")))
                 .put("actorId","owner").put("spaceId","private").put("requiresHostAdmission",true).put("executionAuthorized",false)
                 .put("origin",new JSONObject().put("kind","automation").put("occurrenceId",intent.getString("occurrenceId")).put("planId",plan.getString("id")).put("commitmentId",step.getString("id")));
+        if(step.optJSONObject("semanticConditionGate")!=null)request.put("semanticConditionGate",copy(step.getJSONObject("semanticConditionGate")));
         if(step.optJSONObject("remoteWait")!=null)request.put("remoteWait",copy(step.getJSONObject("remoteWait")));
         if(step.optJSONObject("businessWait")!=null)request.put("businessWait",copy(step.getJSONObject("businessWait"))).put("businessWaitCursor",step.optString("businessWaitCursor")).put("businessWaitEvidence",copy(intent.getJSONObject("businessWaitEvidence"))).put("businessEventConsent",execution.optBoolean("businessEventConsent"));
         return request;

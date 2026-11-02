@@ -1,6 +1,6 @@
 package dev.pocketengine.ui;
 
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.assistant.AssistantModule;
 import java.net.InetSocketAddress;

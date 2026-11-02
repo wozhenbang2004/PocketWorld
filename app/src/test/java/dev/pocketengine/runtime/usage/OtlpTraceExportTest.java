@@ -1,5 +1,5 @@
 package dev.pocketengine.runtime.usage;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.RunControl;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;

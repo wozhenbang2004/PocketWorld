@@ -9,9 +9,9 @@ import org.json.JSONObject;
 /** Own process-group transport. This has no task, approval, retry or model authority. */
 public final class NativeProcessSupervisor {
     /** Bound to the bundled process_supervisor.cpp exit7 algorithm, not arbitrary legacy JSON.
-     * Source SHA256 cb2abfe8465e654402d1344d11345bb7f43047fecb3dd0220fed44e07ef0571f.
+     * Source+network_filter.h+process_identity.h concatenation SHA256 ec6aad13cce1c584a48a170ae636468ca93695bfb216a40493ae86af6e12518e.
      * In that implementation every pid>0 return observes an exit code or termination signal. */
-    public static final String EXIT_RESULT_CONTRACT="pocketworld.posix-exit7-no-child-v1:cb2abfe8465e654402d1344d11345bb7f43047fecb3dd0220fed44e07ef0571f";
+    public static final String EXIT_RESULT_CONTRACT="pocketworld.posix-exit7-script-session-v3:ec6aad13cce1c584a48a170ae636468ca93695bfb216a40493ae86af6e12518e";
     public static final String PTY_EXIT_RESULT_CONTRACT="pocketworld.posix-pty-exit8-v1:f9132cee828fcbafd4252e71a139cb7c21839b1336111e1a762fab0afe487524";
     public interface PtyObserver extends Observer {
         /** Native birth evidence is an observation, never a signal handle after process death. */
@@ -24,6 +24,8 @@ public final class NativeProcessSupervisor {
     public interface Observer {
         /** Native exec handshake of an owned leader, never HTTP/service readiness. */
         default boolean started(){return true;}
+        /** Actual owned leader observed at exec; never reconstructible from task JSON. */
+        default boolean processIdentity(long pid,long startTicks,long session){return true;}
         /** Raw bytes, in the observed pipe order; false asks the supervisor to stop and drain. */
         boolean output(int stream, byte[] bytes);
         boolean cancelled();
@@ -48,8 +50,9 @@ public final class NativeProcessSupervisor {
     }
     /** Validate a prior native proof; callers must separately verify its original host binding.
      * Missing/old/unknown receipts are not upgraded by inferring a new noChildCreated flag. */
+    public static boolean validatesPipeContract(String contract){return EXIT_RESULT_CONTRACT.equals(contract)||"pocketworld.posix-exit7-no-child-v1:cb2abfe8465e654402d1344d11345bb7f43047fecb3dd0220fed44e07ef0571f".equals(contract);}
     public static boolean validatesNoChildReceipt(JSONObject receipt) {
-        boolean knownPipe=EXIT_RESULT_CONTRACT.equals(receipt.optString("nativeResultContract"));
+        boolean knownPipe=validatesPipeContract(receipt.optString("nativeResultContract"));
         boolean knownPty=PTY_EXIT_RESULT_CONTRACT.equals(receipt.optString("nativeResultContract"))&&Boolean.TRUE.equals(receipt.opt("processSessionAbsent"));
         return (knownPipe||knownPty)&&"no_child_created".equals(receipt.optString("launchPhase"))
                 &&Boolean.TRUE.equals(receipt.opt("noChildCreated"))&&Boolean.FALSE.equals(receipt.opt("processLaunched"))&&Boolean.FALSE.equals(receipt.opt("processExited"))
@@ -82,6 +85,10 @@ public final class NativeProcessSupervisor {
     }
     public Exit execute(List<String> command, Map<String,String> environment, File directory,
             long timeoutMillis, long graceMillis, Observer observer) throws Exception {
+        return execute(command,environment,directory,timeoutMillis,graceMillis,observer,false);
+    }
+    /** No fallback is permitted when the requested kernel filter cannot be installed. */
+    public Exit execute(List<String> command,Map<String,String> environment,File directory,long timeoutMillis,long graceMillis,Observer observer,boolean kernelOffline)throws Exception {
         if (!available()) throw new IllegalStateException("runtime_native_supervisor_missing",Library.ERROR);
         if (command.isEmpty() || command.size()>256 || !new File(command.get(0)).isAbsolute())
             throw new IllegalArgumentException("runtime_absolute_executable_required");
@@ -94,9 +101,17 @@ public final class NativeProcessSupervisor {
             if(!entry.getKey().matches("[A-Za-z_][A-Za-z0-9_]*")) throw new IllegalArgumentException("runtime_environment_key_invalid");
             env[at++]=bytes(entry.getKey()+"="+entry.getValue());
         }
-        return new Exit(run(argv,env,bytes(directory.getCanonicalPath()),timeoutMillis,graceMillis,
-                java.util.Objects.requireNonNull(observer)));
+        java.util.Objects.requireNonNull(observer);
+        try{return new Exit(kernelOffline?runOffline(argv,env,bytes(directory.getCanonicalPath()),timeoutMillis,graceMillis,observer):run(argv,env,bytes(directory.getCanonicalPath()),timeoutMillis,graceMillis,observer));}
+        catch(UnsatisfiedLinkError unavailable){throw new IllegalStateException("runtime_kernel_offline_unavailable",unavailable);}
     }
+    public boolean currentProcessIdentityAvailable(){if(!available())return false;try{return currentIdentityAvailable();}catch(UnsatisfiedLinkError unavailable){return false;}}
+    private static native boolean currentIdentityAvailable();
+    public boolean isSameOwnedSession(long leader,long startTicks,long session,long peer){
+        if(!available()||leader<1||startTicks<1||session!=leader||peer<1)return false;
+        try{return sameOwnedSession(leader,startTicks,session,peer);}catch(UnsatisfiedLinkError unavailable){return false;}
+    }
+    private static native boolean sameOwnedSession(long leader,long startTicks,long session,long peer);
     private static byte[] bytes(String value) {
         if(value==null || value.indexOf('\0')>=0 || value.length()>1048576)
             throw new IllegalArgumentException("runtime_process_string_invalid");
@@ -104,6 +119,7 @@ public final class NativeProcessSupervisor {
     }
     private static native int ptyProtocol();
     private static native long[] runPty(byte[][] argv,byte[][] environment,byte[] directory,long timeoutMillis,long graceMillis,int rows,int columns,PtyObserver observer);
+    private static native long[] runOffline(byte[][] argv,byte[][] environment,byte[] directory,long timeoutMillis,long graceMillis,Observer observer);
     private static native long[] run(byte[][] argv,byte[][] environment,byte[] directory,
             long timeoutMillis,long graceMillis,Observer observer);
 }

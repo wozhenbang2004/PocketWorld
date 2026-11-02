@@ -12,7 +12,7 @@ import java.util.Objects;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Read-only tools in the existing native capability surface. No operation, grant or scheduler of its own. */
+/** Native phone tools in the existing capability surface. No operation, grant or scheduler of its own. */
 public final class PhoneTreeCapabilityPort implements CapabilityPort {
     private final CapabilityPort existing;
     private final TaskStore tasks;
@@ -20,6 +20,7 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
     private final RunControl original;
     private final AdaptivePhonePort phone;
     private volatile boolean closed;
+    private volatile long turnAppPolicyRevision;
     private record PreparedSequence(String operation,NativeToolPlan plan) { }
     private final java.util.concurrent.atomic.AtomicReference<PreparedSequence> sequence=new java.util.concurrent.atomic.AtomicReference<>();
     private final java.util.Set<String> attemptedScrolls=java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -76,19 +77,25 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
         out.put(new JSONObject().put("type","function").put("function",new JSONObject().put("name",name).put("description",description)
                 .put("parameters",new JSONObject().put("type","object").put("additionalProperties",false).put("properties",properties).put("required",required))));
     }
-    @Override public JSONArray tools()throws Exception{return appendTools(existing.tools());}
-    @Override public boolean supports(String name){return PhoneTreeQuery.supports(name)||existing.supports(name);}
-    @Override public boolean sideEffecting(String name){return NativeTreeScrollPort.TOOL.equals(name)||!PhoneTreeQuery.supports(name)&&existing.sideEffecting(name);}
-    @Override public void validate(String name,JSONObject args)throws Exception{if(PhoneTreeQuery.supports(name))PhoneTreeQuery.validate(name,args);else existing.validate(name,args);}
+    private static boolean owns(String name){return PhoneTreeQuery.supports(name)||PhoneExtensionTools.NAMES.contains(name);}
+    @Override public JSONArray tools()throws Exception{return PhoneExtensionTools.append(appendTools(existing.tools()));}
+    @Override public boolean supports(String name){return owns(name)||existing.supports(name);}
+    @Override public boolean sideEffecting(String name){return PhoneExtensionTools.NAMES.contains(name)?PhoneExtensionTools.writes(name):NativeTreeScrollPort.TOOL.equals(name)||!PhoneTreeQuery.supports(name)&&existing.sideEffecting(name);}
+    @Override public void validate(String name,JSONObject args)throws Exception{if(PhoneExtensionTools.NAMES.contains(name))PhoneExtensionTools.validate(name,args);else if(PhoneTreeQuery.supports(name))PhoneTreeQuery.validate(name,args);else existing.validate(name,args);}
     @Override public JSONObject execute(String name,JSONObject supplied,RunControl control)throws Exception {
-        if(!PhoneTreeQuery.supports(name))return existing.execute(name,supplied,control);
+        if(!owns(name))return existing.execute(name,supplied,control);
         JSONObject args=new JSONObject(Objects.requireNonNull(supplied).toString());String operation=null;
         if(PhoneTreeSequence.TOOL.equals(name)){Object raw=args.remove("_hostOperationId");if(!(raw instanceof String)||((String)raw).isEmpty()||((String)raw).length()>200)return PhoneTreeExtract.unavailable("original_parent_call_identity_required");operation=(String)raw;}
-        else if(NativeTreeScrollPort.TOOL.equals(name)){Object raw=args.remove("_hostOperationId");if(!(raw instanceof String)||!raw.toString().matches("[0-9a-f-]{36}"))return PhoneTreeExtract.unavailable("original_prepared_operation_required");operation=(String)raw;}
+        else if(NativeTreeScrollPort.TOOL.equals(name)||PhoneExtensionTools.NAMES.contains(name)&&PhoneExtensionTools.writes(name)){Object raw=args.remove("_hostOperationId");if(!(raw instanceof String)||!raw.toString().matches("[0-9a-f-]{36}"))return PhoneTreeExtract.unavailable("original_prepared_operation_required");operation=(String)raw;}
         validate(name,args);check(name,control);
         try(AutoCloseable retained=control.retainAuthorityCheck(()->tasks.checkCapabilityCurrent(binding.taskId,binding.runId,binding.epoch,name))){
             JSONObject result;
-            if(PhoneTreeSequence.TOOL.equals(name)){result=prepareSequence(args,operation,control);}
+            if(PhoneExtensionTools.NAMES.contains(name)){
+                if(PhoneExtensionTools.writes(name)){
+                    final String op=operation;authority.requirePrepared(op,name,args);if(!scrolling.compareAndSet(false,true))return PhoneTreeExtract.unavailable("original_phone_action_in_flight");
+                    try{if(attemptedScrolls.size()>=1000||!attemptedScrolls.add(op))return PhoneTreeExtract.unavailable("original_phone_action_already_attempted");result=phone.nativeExtension(name,args,control,()->{check(name,control);authority.requirePrepared(op,name,args);});result.put("operationId",op);}finally{scrolling.set(false);}
+                }else result=phone.nativeExtension(name,args,control,null);
+            }else if(PhoneTreeSequence.TOOL.equals(name)){result=prepareSequence(args,operation,control);}
             else if(NativeTreeScrollPort.TOOL.equals(name)){
                 final String op=operation;authority.requirePrepared(op,name,args);
                 if(!scrolling.compareAndSet(false,true))return PhoneTreeExtract.unavailable("original_scroll_in_flight");
@@ -102,7 +109,7 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
                 result=phone.collectTree(args,record,control);
             }else result=PhoneTreeQuery.QUERY.equals(name)?phone.queryTree(args,control):phone.conditionWait(args,control);
             check(name,control);return result;
-        }catch(SecurityException stale){if(NativeTreeScrollPort.TOOL.equals(name))throw stale;return PhoneTreeExtract.unavailable("original_tree_or_scroll_authority_changed");}
+        }catch(SecurityException stale){if(NativeTreeScrollPort.TOOL.equals(name)||PhoneExtensionTools.NAMES.contains(name)&&PhoneExtensionTools.writes(name))throw stale;return PhoneTreeExtract.unavailable("original_tree_or_scroll_authority_changed");}
     }
     private JSONObject prepareSequence(JSONObject args,String parentOperation,RunControl control)throws Exception {
         PhoneTreeSequence.State state=phone.prepareSequence(args,control);
@@ -138,9 +145,9 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
     @Override public void beginRun(String goal,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);existing.beginRun(goal,control);}
     @Override public void prepareTurnSurface(RunControl control)throws Exception {check(PhoneTreeQuery.QUERY,control);existing.prepareTurnSurface(control);}
     @Override public void admitCapabilities(CapabilitySnapshot snapshot,RunControl control)throws Exception{existing.admitCapabilities(snapshot,control);}
-    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);JSONObject turn=existing.prepareTurn(query,round,steps,control);return turn.put("tools",appendTools(turn.getJSONArray("tools")));}
-    @Override public boolean responseCurrent(RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);return existing.responseCurrent(control);}
-    @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{if(PhoneTreeQuery.supports(name))check(name,control);return existing.beforeTool(name,args,control);}
+    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);turnAppPolicyRevision=phone.appPolicyRevision();JSONObject turn=existing.prepareTurn(query,round,steps,control);return turn.put("tools",PhoneExtensionTools.append(appendTools(turn.getJSONArray("tools"))));}
+    @Override public boolean responseCurrent(RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);return turnAppPolicyRevision==phone.appPolicyRevision()&&existing.responseCurrent(control);}
+    @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{if(owns(name))check(name,control);return existing.beforeTool(name,args,control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{existing.afterTool(name,args,receipt,control);}
     @Override public void beforeModelRequest(String id,JSONArray messages,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);existing.beforeModelRequest(id,messages,control);}
     @Override public JSONObject afterModelResponse(String id,String answer,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);return existing.afterModelResponse(id,answer,control);}

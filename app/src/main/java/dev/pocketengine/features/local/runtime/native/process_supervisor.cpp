@@ -1,4 +1,6 @@
 #include <jni.h>
+#include "network_filter.h"
+#include "process_identity.h"
 #include <cerrno>
 #include <csignal>
 #include <cstring>
@@ -51,10 +53,9 @@ void child_error(int fd,int error) {
 }
 }
 
-extern "C" JNIEXPORT jlongArray JNICALL
-Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
-        JNIEnv* env,jclass,jobjectArray command,jobjectArray environment,jbyteArray directory,
-        jlong timeout_ms,jlong grace_ms,jobject observer) {
+static jlongArray supervise(
+        JNIEnv* env,jobjectArray command,jobjectArray environment,jbyteArray directory,
+        jlong timeout_ms,jlong grace_ms,jobject observer,bool offline) {
     auto argv=strings(env,command),env_values=strings(env,environment);
     auto argv_ptr=pointers(argv),env_ptr=pointers(env_values);
     const std::string cwd=bytes(env,directory);
@@ -63,6 +64,7 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
     jmethodID output=env->GetMethodID(observer_class,"output","(I[B)Z");
     jmethodID cancelled=env->GetMethodID(observer_class,"cancelled","()Z");
     jmethodID started=env->GetMethodID(observer_class,"started","()Z");
+    jmethodID identity=env->GetMethodID(observer_class,"processIdentity","(JJJ)Z");
     if(env->ExceptionCheck()) return nullptr;
     int pipes[3][2]={{-1,-1},{-1,-1},{-1,-1}};
     int launch_error=0;
@@ -88,6 +90,7 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
                     || dup2(pipes[1][1],STDERR_FILENO)<0) child_error(pipes[2][1],errno);
             close(input); close(pipes[0][1]); close(pipes[1][1]);
             if(chdir(cwd.c_str())<0) child_error(pipes[2][1],errno);
+            if(offline&&pocketworld_install_offline_filter()!=0)child_error(pipes[2][1],errno?errno:ENOTSUP);
             execve(argv_ptr[0],argv_ptr.data(),env_ptr.data());
             child_error(pipes[2][1],errno);
         }
@@ -138,7 +141,10 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
                         // process ownership/launch only, not a listening server or URL.
                         if(i==2&&!launch_error&&!leader_done&&!stopped&&!start_notified) {
                             start_notified=true;
-                            bool accepted=env->CallBooleanMethod(observer,started)==JNI_TRUE;
+                            PocketworldProcessIdentity owned{};bool accepted=true;
+                            if(pocketworld_process_identity(pid,owned)&&owned.session==pid)accepted=env->CallBooleanMethod(observer,identity,static_cast<jlong>(pid),static_cast<jlong>(owned.born),static_cast<jlong>(owned.session))==JNI_TRUE;
+                            if(env->ExceptionCheck()){env->ExceptionClear();accepted=false;}
+                            if(accepted)accepted=env->CallBooleanMethod(observer,started)==JNI_TRUE;
                             if(env->ExceptionCheck()) {env->ExceptionClear();accepted=false;}
                             if(!accepted) {io_complete=false;stopped=true;stop_at=now_ms();kill(-pid,SIGTERM);kill(pid,SIGTERM);}
                         }
@@ -185,3 +191,20 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
     env->DeleteLocalRef(observer_class);
     return array;
 }
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(JNIEnv* env,jclass,jobjectArray command,jobjectArray environment,jbyteArray directory,jlong timeout,jlong grace,jobject observer){
+    return supervise(env,command,environment,directory,timeout,grace,observer,false);
+}
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runOffline(JNIEnv* env,jclass,jobjectArray command,jobjectArray environment,jbyteArray directory,jlong timeout,jlong grace,jobject observer){
+    return supervise(env,command,environment,directory,timeout,grace,observer,true);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_sameOwnedSession(JNIEnv*,jclass,jlong leader,jlong born,jlong session,jlong peer){
+    return born>0&&pocketworld_same_owned_session(static_cast<long>(leader),static_cast<unsigned long long>(born),static_cast<long>(session),static_cast<long>(peer))?JNI_TRUE:JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_currentIdentityAvailable(JNIEnv*,jclass){PocketworldProcessIdentity current{};return pocketworld_process_identity(getpid(),current)?JNI_TRUE:JNI_FALSE;}

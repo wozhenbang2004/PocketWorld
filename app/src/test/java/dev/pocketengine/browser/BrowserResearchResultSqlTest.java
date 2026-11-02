@@ -6,7 +6,7 @@ import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.ProviderInfo;
 import android.os.Looper;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.ExecutionResources;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.FeatureContext;

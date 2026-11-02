@@ -3,7 +3,7 @@ package dev.pocketengine.browser;
 import android.os.Looper;
 import android.webkit.CookieManager;
 import android.webkit.WebView;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.BrowserActivity;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.attachments.AttachmentRepository;

@@ -20,8 +20,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** A task is pinned to one separately created display; this class has no primary-screen actions. */
-public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.phone.observation.NativeOcrTapPort,dev.pocketengine.phone.observation.NativeTreeScrollPort,dev.pocketengine.phone.observation.NativePhoneSignals {
-    private final DisplayModule module;
+public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.phone.observation.NativeOcrTapPort,dev.pocketengine.phone.observation.NativeTreeScrollPort,dev.pocketengine.phone.observation.NativePhoneSignals,dev.pocketengine.phone.observation.NativePhoneExtensions {
+    private final BackgroundDisplaySession module;
     private final String sessionId;
     private final int displayId;
     private final Handler main=new Handler(Looper.getMainLooper());
@@ -31,7 +31,12 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     private volatile OwnerPermit ownerPermit;
     private volatile boolean lastIncludeImage;
     private JSONObject landingBaseline;
-    public BackgroundPhonePort(DisplayModule module)throws Exception {
+    private dev.pocketengine.phone.setup.AndroidAppCopies appCopies;
+    private dev.pocketengine.phone.access.PhoneAppResources appResources;private String resourceOwner;
+    private dev.pocketengine.phone.setup.PhoneAudioRecovery audioRecovery;private android.content.Context lifecycleContext;
+    private final dev.pocketengine.phone.setup.PhoneAfterTaskPlan afterTask=new dev.pocketengine.phone.setup.PhoneAfterTaskPlan();
+    public BackgroundPhonePort(DisplayModule module)throws Exception {this(BackgroundDisplaySession.legacy(module));}
+    public BackgroundPhonePort(BackgroundDisplaySession module)throws Exception {
         this.module=module;JSONObject session=module.session();
         sessionId=session.optString("sessionId");displayId=session.optInt("displayId",-1);
         if(!module.hasSession()||sessionId.isEmpty()||displayId<=0)throw new IllegalStateException("请先连接后台助手并创建独立屏幕");
@@ -39,6 +44,57 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     @Override public boolean isConnected(){try{return module.hasSession()&&sameSession(module.session());}catch(Exception ignored){return false;}}
     /** Original port identity only. Reading it never captures a frame or replaces a session. */
     public JSONObject executionIdentity()throws Exception{return new JSONObject().put("sessionId",sessionId).put("displayId",displayId);}
+    /** Supplied by the original native supervisor, never a model argument. */
+    public synchronized void bindAppResources(dev.pocketengine.phone.access.PhoneAppResources resources,String owner){if(appResources!=null&&(appResources!=resources||!java.util.Objects.equals(owner,resourceOwner)))throw new SecurityException("phone_resource_binding_changed");appResources=java.util.Objects.requireNonNull(resources);resourceOwner=java.util.Objects.requireNonNull(owner);}
+    public synchronized void bindLifecycle(android.content.Context context)throws Exception {lifecycleContext=context.getApplicationContext();audioRecovery=dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.get(lifecycleContext);}
+    public synchronized JSONObject restoreTaskAudio()throws Exception {if(audioRecovery==null)return new JSONObject().put("pending",0).put("status","audio_not_configured");if(!sameSession(module.session()))return audioRecovery.snapshot().put("status","original_session_changed_recovery_pending");return dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withCommands((command,payload)->module.request(command,payload,null),()->audioRecovery.restoreOwner(resourceOwner==null?sessionId:resourceOwner));}
+    public synchronized JSONObject prepareAfterTask(RunControl control)throws Exception {return afterTask.prepare(landing(control,control.pauseRevision()),displayId);}
+    /** Read-only native cleanup probe, including after cancellation. It grants no movement, close, or business replay. */
+    public synchronized JSONObject prepareAfterTaskForCleanup(RunControl original)throws Exception {
+        var identity=original==null?null:original.hostRunIdentity();if(identity==null||!module.ownedBy(identity.taskId())||!sameSession(module.session())||!module.isConnected())throw new SecurityException("original_cleanup_display_required");
+        JSONObject response=module.request("ownership",new JSONObject(),null);
+        if(!response.optBoolean("ok")||response.optInt("displayId",-1)!=displayId||!sessionId.equals(response.optString("sessionId"))||!sameSession(module.session())||!module.ownedBy(identity.taskId()))throw new SecurityException("cleanup_ownership_unknown");
+        return afterTask.prepare(response.getJSONObject("ownership"),displayId).put("requiresOriginalReceiptCheck",true);
+    }
+    private void beforeOpenAudio(String pkg,int user,RunControl control)throws Exception {if(audioRecovery!=null&&lifecycleContext!=null&&dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(lifecycleContext)){long revision=control.pauseRevision();JSONObject receipt=dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withCommands((command,payload)->module.requestAdmitted(command,payload,control,revision,sessionId,displayId,()->{guard(control,revision);if(!dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(lifecycleContext))throw new SecurityException("owner_audio_policy_revoked");}),()->audioRecovery.silence(resourceOwner==null?sessionId:resourceOwner,new dev.pocketengine.phone.access.AppCopyKey(pkg,user),true));if(!"silenced_verified".equals(receipt.optString("outcome")))throw new PhoneFailure("audio_policy_unconfirmed","主人选择了后台静音，但当前原App音频状态尚未证实；没有继续打开目标App，请核对声音与恢复记录。");}}
+    public dev.pocketengine.phone.access.PhoneOwnerPackages ownerPackages(RunControl control)throws Exception {var identities=dev.pocketengine.phone.access.PhoneOwnerPackages.fromOwnership(landing(control,control.pauseRevision()),"owned");return dev.pocketengine.phone.access.PhoneWindowPackages.read(PhoneAccessibilityService.get(),displayId,identities,control::check);}
+    public synchronized JSONObject dispatchSemantic(JSONObject exact,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        worker();long revision=control.pauseRevision();refreshSession(control,revision);JSONObject target=exact.getJSONObject("target");reserveApp(target.getString("packageName"),exact.getInt("userId"),control);
+        JSONObject before=landing(control,revision);guard(control,revision);beforeOpenAudio(target.getString("packageName"),exact.getInt("userId"),control);clearReferences();JSONObject result=module.requestAdmitted("intent",exact,control,revision,sessionId,displayId,admission);
+        return Boolean.TRUE.equals(result.opt("accepted"))||result.has("accepted")&&result.isNull("accepted")?verifyLanding(result,before,control,revision):result;
+    }
+    private void reserveApp(String pkg,int user,RunControl control)throws Exception {
+        if(appResources==null)return;dev.pocketengine.phone.access.AppCopyKey key=new dev.pocketengine.phone.access.AppCopyKey(pkg,user);
+        long revision=control.pauseRevision();guard(control,revision);
+        var result=appResources.await(resourceOwner,key,15_000,control,(actual,owner)->{JSONObject facts=landing(control,revision);if(!facts.optBoolean("allDisplayIdentitiesKnown"))return false;JSONArray all=facts.optJSONArray("all");if(all==null)return false;for(int i=0;i<all.length();i++){JSONObject row=all.getJSONObject(i);if(actual.packageName().equals(row.optString("packageName"))&&(!row.has("userId")||row.getInt("userId")==actual.userId())&&row.optInt("displayId",-1)!=displayId)return false;}return true;});
+        guard(control,revision);
+        if(result==dev.pocketengine.phone.access.PhoneAppResources.Result.DEADLOCK)throw new PhoneFailure("app_resource_deadlock","原任务之间发生App/资料等待环路；已退出等待，没有抢占或重复派发。");
+        if(result!=dev.pocketengine.phone.access.PhoneAppResources.Result.ACQUIRED)throw new PhoneFailure("app_resource_wait_timeout","目标App/资料仍由其他任务或主屏使用，或实际归属不可核对；15秒有界等待已结束，没有抢占。");
+    }
+    @Override public synchronized JSONObject extension(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        worker();dev.pocketengine.phone.observation.PhoneExtensionTools.validate(tool,args);control.check();long revision=control.pauseRevision();refreshSession(control,revision);
+        PhoneAccessibilityService service=PhoneAccessibilityService.get();if(service==null)return failure("service_disconnected","原无障碍服务已断开。");
+        if(appCopies==null)appCopies=new dev.pocketengine.phone.setup.AndroidAppCopies(service);
+        if(tool.equals("phone_list_app_copies"))return appCopies.list(control);if(admission==null)throw new SecurityException("original_prepared_admission_required");
+        if(tool.equals("phone_app_after_task")){admission.check();JSONArray held=landing(control,revision).getJSONArray("owned");boolean found=false;for(int i=0;i<held.length();i++){JSONObject row=held.getJSONObject(i);if(args.getString("packageName").equals(row.optString("packageName"))&&row.has("userId")&&args.getInt("userId")==row.getInt("userId"))found=true;}if(!found)return failure("after_task_app_not_owned","该App资料不是原副屏已证实持有的任务。");return afterTask.mark(new dev.pocketengine.phone.access.AppCopyKey(args.getString("packageName"),args.getInt("userId")),args.getString("action"));}
+        JSONObject before=landing(control,revision),result;
+        if(tool.equals("phone_launch_app_copy")){
+            JSONObject exact=appCopies.require(args);reserveApp(exact.getString("packageName"),exact.getInt("userId"),control);beforeOpenAudio(exact.getString("packageName"),exact.getInt("userId"),control);clearReferences();result=module.requestAdmitted("launch_copy",exact,control,revision,sessionId,displayId,admission);
+        }else if(tool.equals("phone_practice_target")){
+            if(!service.getPackageName().equals(args.getString("packageName"))||dev.pocketengine.phone.setup.AndroidAppCopies.id(android.os.Process.myUserHandle())!=args.getInt("userId"))throw new SecurityException("practice_target_is_fixed");
+            clearReferences();result=module.requestAdmitted("practice",new JSONObject().put("packageName",service.getPackageName()).put("userId",args.getInt("userId")),control,revision,sessionId,displayId,admission);if(Boolean.TRUE.equals(result.opt("accepted")))result.put("helperAuthenticated",module.isConnected()).put("imeIsolation",module.session().optString("imeIsolation"));
+        }else{
+            Observation expected=current;if(expected==null||expected.control!=control||!expected.id.equals(args.optString("observationId"))||expected.revision!=revision||SystemClock.uptimeMillis()-expected.at>120000)return failure("stale_observation","扩展动作需要当前副屏观察。");
+            JSONObject ime=imeUnavailable(control);if(ime!=null)return ime;
+            if(tool.equals("phone_paste_text")){
+                AccessibilityForest.Ref ref=expected.tree.forest.refs.get(args.getString("nodeId"));if(ref==null)return failure("stale_node","原输入目标已变化。");
+                result=dev.pocketengine.phone.observation.AccessibilityPasteInput.paste(service,service,displayId,ref,args.getString("text"),control,revision,admission,()->{guard(control,revision);if(current!=expected||!tree().signature.equals(expected.tree.signature))throw new SecurityException("paste_original_tree_changed");},this::clearReferences);
+            }else if(tool.equals("phone_gesture")){
+                if(!expected.imageIncluded)return failure("coordinate_unverifiable","多指需要当前真实图片。");JSONObject payload=new JSONObject(args.toString()).put("frameGeneration",expected.frame);payload.remove("observationId");clearReferences();result=module.requestAdmitted("gesture",payload,control,revision,sessionId,displayId,admission);
+            }else return failure("native_extension_unavailable","当前副屏不支持该扩展。");
+        }
+        return Boolean.TRUE.equals(result.opt("accepted"))||result.has("accepted")&&result.isNull("accepted")?verifyLanding(result,before,control,revision):result;
+    }
     @Override public void clearReferences(){current=null;}
     @Override public synchronized JSONObject tapOcrText(dev.pocketengine.phone.observation.OcrTextTarget target,RunControl control,
             dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
@@ -99,7 +155,8 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         if(!isConnected())throw new SecurityException("后台会话已变更，请先由机主核对");
         ownerPermit=new OwnerPermit(taskId,control,control.pauseRevision());
     }
-    public JSONObject closeSession(){clearReferences();try{return module.releaseSession(sessionId,displayId);}catch(Exception unknown){try{return new JSONObject().put("ok",false).put("releaseConfirmed",false).put("error","cleanup_unknown").put("message","后台屏释放未确认，请重新连接核对。");}catch(Exception impossible){return new JSONObject();}}}
+    public JSONObject closeSession(){clearReferences();JSONObject audio;try{audio=restoreTaskAudio();}catch(Exception pending){audio=new JSONObject();try{audio.put("status","audio_recovery_pending").put("pending",true);}catch(Exception ignored){}}
+        try{JSONObject result=module.releaseSession(sessionId,displayId).put("audioRestore",audio);if(result.optBoolean("releaseConfirmed")&&appResources!=null)appResources.releaseOwner(resourceOwner);return result;}catch(Exception unknown){try{return new JSONObject().put("ok",false).put("releaseConfirmed",false).put("audioRestore",audio).put("error","cleanup_unknown").put("message","后台屏释放未确认，请重新连接核对。");}catch(Exception impossible){return new JSONObject();}}}
     @Override public dev.pocketengine.phone.PhoneUiSignals uiSignals(RunControl control)throws Exception {worker();guard(control,control.pauseRevision());PhoneAccessibilityService service=PhoneAccessibilityService.get();if(service==null)return null;return service.uiSignals();}
     @Override public synchronized JSONObject observe(boolean includeImage,RunControl control)throws Exception {
         worker();control.check();
@@ -182,6 +239,8 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             if("phone_list_apps".equals(tool))return request("apps",new JSONObject(),control,control.pauseRevision());
             if("phone_launch_app".equals(tool)){
                 String pkg=args.optString("packageName");if(!pkg.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+"))return failure("invalid_arguments","包名无效。");
+                reserveApp(pkg,dev.pocketengine.phone.setup.AndroidAppCopies.id(android.os.Process.myUserHandle()),control);
+                beforeOpenAudio(pkg,dev.pocketengine.phone.setup.AndroidAppCopies.id(android.os.Process.myUserHandle()),control);
                 long revision=control.pauseRevision();guard(control,revision);clearReferences();
                 return request("launch",new JSONObject().put("packageName",pkg),control,revision);
             }
@@ -222,8 +281,9 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             // Bounded read-only settling, then retain the baseline for later observations too.
             Thread.sleep(350);JSONObject after=landing(control,revision);boolean primarySame=before.getJSONArray("primary").toString().equals(after.getJSONArray("primary").toString());
             boolean owned=after.getString("status").equals("observed");
+            int expectedUser=receipt.optInt("requestedUserId",receipt.optInt("userId",-1));if(expectedUser>=0){boolean matchingCopy=dev.pocketengine.phone.access.PhoneOwnerPackages.fromOwnership(after,"owned").provesCopy(new dev.pocketengine.phone.access.AppCopyKey(receipt.getString("packageName"),expectedUser));owned&=matchingCopy;receipt.put("actualUserVerified",matchingCopy);}
             evidence=new JSONObject().put("before",before).put("after",after).put("status",primarySame&&owned?"owned_display_observed":"unknown_requires_owner").put("taskMigrationPerformed",false).put("automaticReplayAllowed",false);
-            if(!primarySame||!owned){control.pause();clearReferences();receipt.put("requiresUser",true).put("message","动作已请求，但跨应用落点或主屏归属不能确认；已暂停原任务，不会移动或代点主屏应用。");}
+            if(!primarySame||!owned){control.pause();clearReferences();receipt.put("requiresUser",true).put("requiresPause",true).put("message","动作已请求，但跨应用落点、资料身份或主屏归属不能确认；已暂停原任务，不会移动或代点主屏应用。");}
             else landingBaseline=after;
         }catch(InterruptedException cancelled){Thread.currentThread().interrupt();throw cancelled;}catch(Exception unavailable){control.pause();clearReferences();evidence=new JSONObject().put("status","unknown_requires_owner").put("reason","post_action_task_probe_unavailable").put("automaticReplayAllowed",false);receipt.put("requiresUser",true);}
         return receipt.put("displayLanding",evidence);

@@ -70,7 +70,7 @@ public final class SkillExecution {
         static Request managed(ManagedSkillPolicy.Authority nativeAuthority,String script,String runtime,String workspace,String cwd,List<String> arguments,List<String> reads,List<String> writes,List<String> outputs,int seconds,int bytes,int chars){Request request=new Request(script,runtime,workspace,cwd,arguments,reads,writes,outputs,seconds,bytes,chars);request.managedAuthority=java.util.Objects.requireNonNull(nativeAuthority);return request;}
         JSONObject json()throws Exception{JSONObject value=new JSONObject().put("scriptPath",scriptPath).put("runtimeId",runtimeId).put("workspaceId",workspaceId).put("workingDirectory",workingDirectory)
                 .put("arguments",new JSONArray(arguments)).put("readPaths",new JSONArray(readPaths)).put("writePaths",new JSONArray(writePaths)).put("outputPaths",new JSONArray(outputPaths))
-                .put("network",managedAuthority==null?"deny":"possible_same_uid").put("stdin","closed").put("environment",managedAuthority==null?"empty":"native_controlled_minimal").put("timeoutSeconds",timeoutSeconds).put("maxOutputBytes",maxOutputBytes).put("maxResultChars",maxResultChars);
+                .put("network",managedAuthority==null?"deny":managedAuthority.networkMode).put("stdin","closed").put("environment",managedAuthority==null?"empty":"native_controlled_minimal").put("timeoutSeconds",timeoutSeconds).put("maxOutputBytes",maxOutputBytes).put("maxResultChars",maxResultChars);
             if(managedAuthority!=null)value.put("nativeExecutionContract",managedAuthority.risks()).put("requestedPathRulesOsEnforced",false);return value;}
 
     }

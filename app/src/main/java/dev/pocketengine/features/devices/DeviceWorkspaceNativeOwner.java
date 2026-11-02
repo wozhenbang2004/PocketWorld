@@ -105,6 +105,8 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         public void acceptTools(String id, DeviceExecutionAdmission admission) throws Exception { app.acceptDeviceTools(id, admission); }
         public void acceptGoal(String id, DeviceExecutionAdmission admission) throws Exception { app.acceptDeviceGoal(id, admission); }
         public void controlRequested(String id, String action) throws Exception { app.deviceControlRequested(id, action); }
+        public DeviceOwnerInputs ordinaryInputs(){return app.deviceOwnerInputs();}
+        public void ordinaryInputAccepted(DeviceOwnerInputs.Scope original,JSONObject accepted)throws Exception{app.deviceOwnerInputAccepted(original,accepted);}
     }; }
     public DeviceNativeRoute.Exchange exchange() { return new DeviceNativeRoute.Exchange() {
         public DeviceCapabilityPort.Reply once(String target, DeviceTaskEnvelope request, RunControl original) throws Exception { return network.once(target, request, original); }
@@ -413,6 +415,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
     }
     private JSONObject option(String id, String label, JSONObject resource, JSONArray tools, boolean goal, long expiry) throws Exception {
         JSONArray capabilities = new JSONArray().put("device.describe").put("operation.get").put("task.get").put("task.events").put("task.acquireControl").put("task.pause").put("task.cancel").put("operation.cancel").put("task.respond").put(goal ? "task.submitGoal" : "tool.invoke");
+        if(goal)capabilities.put("task.answerQuestion").put("task.steer");
         return new JSONObject().put("optionId", id).put("label", label).put("capabilities", capabilities).put("toolNames", tools).put("resources", new JSONArray().put(resource))
                 .put("canGrantWholeDisplayCapture", "main_screen".equals(resource.optString("screenMode")) && canCaptureMain()).put("toolBudgetMin", goal ? 0 : 1).put("modelBudgetMin", goal ? 1 : 0).put("toolBudgetMax", 400).put("modelBudgetMax", goal ? 1000 : 0).put("expiresAtMax", expiry).put("allowDelegation", false).put("maxDelegationDepth", 0)
                 .put("historyReadExpiresAtMax", expiry).put("historyReadMethods", new JSONArray().put("operation.get").put("task.get").put("task.events"));

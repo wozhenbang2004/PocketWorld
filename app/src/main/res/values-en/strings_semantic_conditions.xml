@@ -1,0 +1,12 @@
+<resources>
+    <string name="semantic_condition_scope">Read only the server text at this fixed anonymous public URL. No login, private memory, phone or scripts. Each due occurrence allows one GET and up to three calls to the current model; calls may incur charges. Login, required JavaScript, incomplete reads and failures remain errors, not false conditions.</string>
+    <string name="semantic_condition_consent">Allow the current model to check this fixed source on the original schedule</string>
+    <string name="semantic_condition_approve_read">Approve this condition check</string>
+    <string name="semantic_condition_read_approved">The current source revision is approved for checks. The model gives a sourced opinion, not independently verified fact. Repeated true results do not trigger another action.</string>
+    <string name="semantic_condition_plan_note">Bind an approved original step that has not been dispatched. Approve the goal for manual start first, bind it here, then start it from the original goal. This step waits for the first true result or a false-to-true transition. Original authority, expiry and remaining budgets still apply.</string>
+    <string name="semantic_condition_choose_plan">Choose an approved original goal</string>
+    <string name="semantic_condition_choose_step">Choose a step to wait</string>
+    <string name="semantic_condition_bind">Make this original step wait</string>
+    <string name="semantic_condition_bound">Bound to the original step. Only a rising edge with an actual source witness can enter original plan admission. Unknown results query the original task without another dispatch.</string>
+    <string name="semantic_condition_no_plan">No approved step is available. Keep condition notifications, or create and review an original goal first.</string>
+</resources>

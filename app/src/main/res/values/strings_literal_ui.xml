@@ -1,0 +1,734 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_lit_00351ed7156c" formatted="false">"明确允许"</string>
+    <string name="ui_lit_00529eb907a9" formatted="false">"网页请求输入"</string>
+    <string name="ui_lit_00621aa3279d" formatted="false">"打开本机原任务与补充回执"</string>
+    <string name="ui_lit_008e66278f0d" formatted="false">"清空历史与书签…"</string>
+    <string name="ui_lit_00a334451592" formatted="false">"离开此页"</string>
+    <string name="ui_lit_016496189a2e" formatted="false">"查看来源与投递"</string>
+    <string name="ui_lit_01693a697c82" formatted="false">"需要原TaskStore审批端口"</string>
+    <string name="ui_lit_019d8dfa9c7c" formatted="false">"网页默认输入过长，未自动填入。请自行填写或取消；此提示框不记录输入；交还前请核对网页显示的内容。"</string>
+    <string name="ui_lit_0217d4b5b706" formatted="false">"连接中断，等待恢复原会话"</string>
+    <string name="ui_lit_028e5380f69f" formatted="false">"原截图页已关闭、暂停或接管"</string>
+    <string name="ui_lit_037dc325a358" formatted="false">" · 保留独立草稿"</string>
+    <string name="ui_lit_03af30862635" formatted="false">"浏览器资料或网页已关闭，请主人重新选择"</string>
+    <string name="ui_lit_03b11112dc97" formatted="false">"接口地址"</string>
+    <string name="ui_lit_040b1c97f93a" formatted="false">"手机开发环境"</string>
+    <string name="ui_lit_04b5d86ac87c" formatted="false">"正在导入附件"</string>
+    <string name="ui_lit_050023e821ce" formatted="false">"浏览器操作超时，执行已停止；请先核对是否发生"</string>
+    <string name="ui_lit_051836569928" formatted="false">"编辑"</string>
+    <string name="ui_lit_0542b7f63404" formatted="false">"我的设备"</string>
+    <string name="ui_lit_05b37ff2ba09" formatted="false">"已核对同一宿主任务，未重新执行。"</string>
+    <string name="ui_lit_05e8d50740cc" formatted="false">"脚本返回不可核对；不会重放"</string>
+    <string name="ui_lit_060dca4171af" formatted="false">"真实来源"</string>
+    <string name="ui_lit_060f42e0d419" formatted="false">"连接账号，选择可用模型"</string>
+    <string name="ui_lit_062c2254ca36" formatted="false">"新文件 · 保存后创建"</string>
+    <string name="ui_lit_06cda1af1dfe" formatted="false">"保存一条记忆"</string>
+    <string name="ui_lit_06db027aefd5" formatted="false">"承诺与跟进"</string>
+    <string name="ui_lit_0711cc459572" formatted="false">"放弃修改并关闭"</string>
+    <string name="ui_lit_072b14eafb62" formatted="false">"这是原私聊保留的最终文字，不会恢复录音或旧执行授权。请重新核对，放入本输入后仍需你发送。"</string>
+    <string name="ui_lit_0740bcd7df58" formatted="false">"网页或执行身份已变化，请核对动作结果"</string>
+    <string name="ui_lit_076096460968" formatted="false">"原消息有 "</string>
+    <string name="ui_lit_078f7dfc0a16" formatted="false">"请先处理原页面的文件选择或未决操作，再交还浏览"</string>
+    <string name="ui_lit_08382755b68d" formatted="false">"补充目标或说明你刚处理了什么…"</string>
+    <string name="ui_lit_08f3e016e4fa" formatted="false">"合并错过的实例为一次"</string>
+    <string name="ui_lit_091f65763b21" formatted="false">"语音会话"</string>
+    <string name="ui_lit_0972b924eb64" formatted="false">"当前未保存的修改将被替换。文件已保存的版本会保留，下一次保存会创建新版本。"</string>
+    <string name="ui_lit_09cca1616cfd" formatted="false">"系统听写可用，识别结果只填入草稿，由你发送。"</string>
+    <string name="ui_lit_0a2da93de430" formatted="false">"确认已核对来源和当前说明。能力调用仍受宿主授权约束。"</string>
+    <string name="ui_lit_0a34445994ad" formatted="false">"网页下载需要你确认，自动执行已暂停"</string>
+    <string name="ui_lit_0a5f990d9b0d" formatted="false">"从已保存项目文件提炼候选"</string>
+    <string name="ui_lit_0a67fa2d1fa3" formatted="false">"最近回复投递"</string>
+    <string name="ui_lit_0a98a48eaaac" formatted="false">"测试连接"</string>
+    <string name="ui_lit_0ae84e721845" formatted="false">"返回原入口"</string>
+    <string name="ui_lit_0af3e5aea7b7" formatted="false">"临时工作记忆只随当前任务/执行保存于内存；结束、接管或来源清理即关闭，不会自动变成长期记忆或权限。归纳候选仍必须由你选来源、审阅并采用。"</string>
+    <string name="ui_lit_0b8a4c1306e4" formatted="false">"会切换手机应用并占用当前屏幕。暂停后再自行操作，停止不会撤回已发生的动作。"</string>
+    <string name="ui_lit_0c171e72b365" formatted="false">"确认已完成"</string>
+    <string name="ui_lit_0ce047e24cc1" formatted="false">" 个团队配置"</string>
+    <string name="ui_lit_0d1d3846c933" formatted="false">"允许主人私聊创建任务"</string>
+    <string name="ui_lit_0db70ba840b7" formatted="false">"启用这个版本"</string>
+    <string name="ui_lit_0dbd10ea693d" formatted="false">"重新核对本机审核窗口"</string>
+    <string name="ui_lit_0dd41fb645e8" formatted="false">" · 系统可用"</string>
+    <string name="ui_lit_0e19bb3c24ea" formatted="false">"清空本资料历史与书签？"</string>
+    <string name="ui_lit_0e1a7040390f" formatted="false">"新建项目"</string>
+    <string name="ui_lit_0e769f2800e5" formatted="false">"认证群原任务 · "</string>
+    <string name="ui_lit_0edb84e2e0f7" formatted="false">"已加入本资料书签。"</string>
+    <string name="ui_lit_0f0b33214c43" formatted="false">"核对宿主回执"</string>
+    <string name="ui_lit_0f29e57b468f" formatted="false">"任务宿主尚未就绪，不能启用私聊任务；不会假装已经开始。"</string>
+    <string name="ui_lit_0fff33fac2d5" formatted="false">"查看团队成员、会话与任务"</string>
+    <string name="ui_lit_10ceb2ab6a28" formatted="false">"收起连接编辑"</string>
+    <string name="ui_lit_1115a966f840" formatted="false">"官方网关已认证，正在接收"</string>
+    <string name="ui_lit_111f07ab36a8" formatted="false">"导入附件"</string>
+    <string name="ui_lit_124621f74cb1" formatted="false">"等待读取"</string>
+    <string name="ui_lit_1293bdf6afd8" formatted="false">"上传原页面不可用"</string>
+    <string name="ui_lit_13d61fea9f17" formatted="false">"预览"</string>
+    <string name="ui_lit_13f41d1066f6" formatted="false">"正在回复…"</string>
+    <string name="ui_lit_1488913a2bb9" formatted="false">"已把本次选择交给网页。请核对当前页面；继续研究仍需原任务的交还操作。"</string>
+    <string name="ui_lit_14fb42fe2737" formatted="false">"资料会话已变化"</string>
+    <string name="ui_lit_15aada5a403a" formatted="false">"维护与语言"</string>
+    <string name="ui_lit_16228f7ff778" formatted="false">"一起理清思路"</string>
+    <string name="ui_lit_16d6c3f848ab" formatted="false">"本次提供的记忆来源"</string>
+    <string name="ui_lit_1767379c1192" formatted="false">"原电脑会话与本次授权可从上方入口核对；未知结果仅查询，不会重提任务。"</string>
+    <string name="ui_lit_17eae381d6f4" formatted="false">"项目内路径"</string>
+    <string name="ui_lit_180ab8aea818" formatted="false">"控件回查未能启动；请核对原页面，没有重试操作。"</string>
+    <string name="ui_lit_1857be849360" formatted="false">"API 连接"</string>
+    <string name="ui_lit_19b4ee247cd1" formatted="false">"取消本次听写"</string>
+    <string name="ui_lit_19e7f3ecfa63" formatted="false">"Web网页"</string>
+    <string name="ui_lit_1a1281a5e5c4" formatted="false">"新窗口"</string>
+    <string name="ui_lit_1a132f86e8b5" formatted="false">"浏览页已达8个，请先关闭不用的页"</string>
+    <string name="ui_lit_1a806a0a74ff" formatted="false">"主人已打开保留来源，自动浏览已暂停"</string>
+    <string name="ui_lit_1ab31639e24d" formatted="false">"查看原媒体操作与成果"</string>
+    <string name="ui_lit_1afed6a81a25" formatted="false">"选择模型"</string>
+    <string name="ui_lit_1bc620ef1574" formatted="false">"先停止当前执行，再将补充保存并继续原任务。"</string>
+    <string name="ui_lit_1bf2babce37c" formatted="false">"关闭权限"</string>
+    <string name="ui_lit_1c160580e981" formatted="false">"手机任务目标"</string>
+    <string name="ui_lit_1c78f51016be" formatted="false">"本页浏览记录暂未保存；网页仍可继续使用。"</string>
+    <string name="ui_lit_1c7aac614031" formatted="false">"优先读取节点，节点不足且已配置图像能力时才发送；可见文字也会发送。"</string>
+    <string name="ui_lit_1cc8d69b3611" formatted="false">"任务页面没有原操作门禁"</string>
+    <string name="ui_lit_1ccd762cc740" formatted="false">"关闭文件编辑？"</string>
+    <string name="ui_lit_1cdd19404065" formatted="false">"上下文与工具"</string>
+    <string name="ui_lit_1dcf32a35486" formatted="false">"ChatGPT 账号"</string>
+    <string name="ui_lit_1e3e234f2c01" formatted="false">"查看原任务目标"</string>
+    <string name="ui_lit_1e9236b1fe37" formatted="false">"尚未读取实际召回方式"</string>
+    <string name="ui_lit_1ef4c9950c0d" formatted="false">"研究工作区暂不可用，请核对原任务；浏览页面仍可手动操作。"</string>
+    <string name="ui_lit_1ffe57ff5081" formatted="false">"收起用量与原始记录"</string>
+    <string name="ui_lit_203ba86a0911" formatted="false">"保留书签，不删除网页登录数据或已保存的研究来源。"</string>
+    <string name="ui_lit_203dbb01c887" formatted="false">"限定时间内未观察到所需网页条件"</string>
+    <string name="ui_lit_208e511d2a92" formatted="false">"筛选已载入文件路径"</string>
+    <string name="ui_lit_2203dc909afe" formatted="false">"编辑内容"</string>
+    <string name="ui_lit_223520ba6160" formatted="false">"此连接由上方前台会话管理，请使用本次接收的停止入口。"</string>
+    <string name="ui_lit_22d9da51ec3a" formatted="false">"导出文字版本库"</string>
+    <string name="ui_lit_245564c59810" formatted="false">"授权与后台任务入口"</string>
+    <string name="ui_lit_24b0ab4c7503" formatted="false">"正在读取项目文件"</string>
+    <string name="ui_lit_24c06f9a65f6" formatted="false">"接口地址、密钥与输入能力"</string>
+    <string name="ui_lit_250cee2f68ec" formatted="false">"关闭这些网页并结束这次浏览，不会把整个任务标为取消。已保存的来源、附件与登录资料保留。已发生的操作不会撤回；有待确认的结果请回任务查看。"</string>
+    <string name="ui_lit_2521ef86db3a" formatted="false">"保存补充"</string>
+    <string name="ui_lit_25e594ef7432" formatted="false">"与已保存版本一致"</string>
+    <string name="ui_lit_2663f5aaab5c" formatted="false">"保存并切换 API 模型"</string>
+    <string name="ui_lit_275f45f9aed2" formatted="false">"主人已切换或停用浏览器资料，原会话执行已停止"</string>
+    <string name="ui_lit_276cae470f59" formatted="false">"系统文件选择器不可用，请稍后重试"</string>
+    <string name="ui_lit_27fdc89a1ca8" formatted="false">"本进程确认未派发，原输入仍保留"</string>
+    <string name="ui_lit_280b014f8c90" formatted="false">"可选的 API-key 本机服务，供这台手机的其他工具连接；不会开放到公网，也不授予手机操作权限。"</string>
+    <string name="ui_lit_28ce788c1a8e" formatted="false">"查看并确认这个明文连接"</string>
+    <string name="ui_lit_2989a551674c" formatted="false">"原任务应用入口不可用；当前网页仍保留"</string>
+    <string name="ui_lit_29ff95b76a1d" formatted="false">"告诉我，要在手机上做什么…"</string>
+    <string name="ui_lit_2a4cd2543c07" formatted="false">"浏览器主线程不可用"</string>
+    <string name="ui_lit_2a8cbd207892" formatted="false">"原语义读取已暂停或接管"</string>
+    <string name="ui_lit_2a8f329ec723" formatted="false">"丢弃这份听写"</string>
+    <string name="ui_lit_2ac3879a4420" formatted="false">"主人选择的浏览会话已变化"</string>
+    <string name="ui_lit_2b4c47234aaa" formatted="false">"本地文字匹配（兼容模式）"</string>
+    <string name="ui_lit_2b4e90d1261b" formatted="false">"此窗口禁止截屏，未绕过系统保护"</string>
+    <string name="ui_lit_2bf872942e4a" formatted="false">"主人已接管浏览器"</string>
+    <string name="ui_lit_2c1202e6f209" formatted="false">"收起项目原文选择"</string>
+    <string name="ui_lit_2caf98d32943" formatted="false">"连接已启用；平台在线状态需单独验证"</string>
+    <string name="ui_lit_2cb18ccb1773" formatted="false">"聊个问题"</string>
+    <string name="ui_lit_2cd0f3be8738" formatted="false">"取消"</string>
+    <string name="ui_lit_2cd79953f5e6" formatted="false">"补充要求"</string>
+    <string name="ui_lit_2ce836dc5273" formatted="false">"连接与能力管理"</string>
+    <string name="ui_lit_2cf9441fee93" formatted="false">"原网页文档身份不可核对"</string>
+    <string name="ui_lit_2d63d504d65a" formatted="false">"仅发送给此网页的内容"</string>
+    <string name="ui_lit_2d87ad319b2f" formatted="false">"本机目录或存储未能初始化，旧状态没有被重置。请检查存储后重新打开应用。"</string>
+    <string name="ui_lit_2d927f65a116" formatted="false">"媒体请求执行中"</string>
+    <string name="ui_lit_2e07333c8c74" formatted="false">"手机"</string>
+    <string name="ui_lit_2ea29ea0e756" formatted="false">"回复详略与普通操作节奏"</string>
+    <string name="ui_lit_2f1dc378361e" formatted="false">"上一浏览器操作尚未返回，请先核对结果"</string>
+    <string name="ui_lit_2f9daa828907" formatted="false">"删除"</string>
+    <string name="ui_lit_2fd563e41602" formatted="false">"仅QQ官方机器人接收；不是个人QQ登录。接收随应用进程运行，不保证重启或强停后继续；停止接收不停止已有任务。"</string>
+    <string name="ui_lit_2fdc91e671fd" formatted="false">"语音输入"</string>
+    <string name="ui_lit_30dd9100f45c" formatted="false">"继续此任务"</string>
+    <string name="ui_lit_30ea5e08a510" formatted="false">"脚本后原文档无法回查"</string>
+    <string name="ui_lit_30f0efa5367f" formatted="false">"原任务等待本机核对"</string>
+    <string name="ui_lit_315df9162c29" formatted="false">"已有任务浏览空间，请先结束并清理其任务页"</string>
+    <string name="ui_lit_31c752d98f58" formatted="false">"选择Web或Python模板，或从系统文件选择器导入已有源码。文件保存在这台手机，工具准备状态会单独显示。"</string>
+    <string name="ui_lit_321b3d650e5a" formatted="false">"还没有日常浏览记录。研究任务与已保存来源在研究工作区。历史不保存地址查询参数、登录状态或表单内容。"</string>
+    <string name="ui_lit_3233477a32aa" formatted="false">"操作手机"</string>
+    <string name="ui_lit_326885b15298" formatted="false">"下载所属网页或资料已变化，请重新确认"</string>
+    <string name="ui_lit_3328125f8a4d" formatted="false">"切换项目"</string>
+    <string name="ui_lit_3370543a2e52" formatted="false">"优先本地识字。像素不外发，但识别文字会作为有来源的上下文发送给所选推理服务。"</string>
+    <string name="ui_lit_339f7ce82d86" formatted="false">"网页提示的原任务暂停状态已变化"</string>
+    <string name="ui_lit_3486c21ef894" formatted="false">"嵌入网页的原宿主已跳转"</string>
+    <string name="ui_lit_357cc080a97b" formatted="false">"原来源frame文档已更换"</string>
+    <string name="ui_lit_365bbf521555" formatted="false">"这是你的能力配置，不代表已实测效果。更换协议、地址或模型需重新确认。"</string>
+    <string name="ui_lit_369ca5e19c59" formatted="false">"正在下载…"</string>
+    <string name="ui_lit_36d27b9ec59f" formatted="false">"发起人受众（须由通道支持）"</string>
+    <string name="ui_lit_372d5fc29721" formatted="false">"查看这次连接测试用量"</string>
+    <string name="ui_lit_379c175f253b" formatted="false">"只能明确关闭主人自己的页面"</string>
+    <string name="ui_lit_37abefd29019" formatted="false">"用量与原始记录"</string>
+    <string name="ui_lit_380e45a769c5" formatted="false">"连续输入仍是原任务；不撤销已派发动作，不增加预算或授予权限。"</string>
+    <string name="ui_lit_38844b135cf7" formatted="false">"更多"</string>
+    <string name="ui_lit_398040a2c478" formatted="false">"浏览器工具只接受有效的 http/https 地址"</string>
+    <string name="ui_lit_39932f24fe11" formatted="false">"文件"</string>
+    <string name="ui_lit_39be5cf61df9" formatted="false">"继续执行"</string>
+    <string name="ui_lit_3a3e8552fe49" formatted="false">"收藏当前页"</string>
+    <string name="ui_lit_3a7e0e9891fb" formatted="false">"API 模型配置"</string>
+    <string name="ui_lit_3a973064817d" formatted="false">"结果回到原群"</string>
+    <string name="ui_lit_3acc08ff43af" formatted="false">"项目文件与运行环境分别管理。系统没有的解释器不会显示为可用；Termux 需要实际安装和用户授权。"</string>
+    <string name="ui_lit_3aeab27ba12e" formatted="false">"使用独立登录环境，不共享系统 Chrome 账号"</string>
+    <string name="ui_lit_3afbfa53f39f" formatted="false">"原frame读取宿主不可用"</string>
+    <string name="ui_lit_3b3ab62e425d" formatted="false">"从 Git 导入…"</string>
+    <string name="ui_lit_3b8ae0dc32ad" formatted="false">"查看配置"</string>
+    <string name="ui_lit_3baa5c1a6aea" formatted="false">"导入与管理 MCP 工具"</string>
+    <string name="ui_lit_3bf20fe74c23" formatted="false">"只清除这份资料的浏览记录和书签；不会删除网页登录数据或已保存的研究来源。"</string>
+    <string name="ui_lit_3cf33a9c7e34" formatted="false">"主人已接管任务页"</string>
+    <string name="ui_lit_3dbd3ff5c2de" formatted="false">"停止朗读，任务继续"</string>
+    <string name="ui_lit_3e3f984bf08a" formatted="false">"项目工具"</string>
+    <string name="ui_lit_3e6eb46b824c" formatted="false">"已切换页面，原操作回执待核对"</string>
+    <string name="ui_lit_3eeeb741d1fb" formatted="false">"未开启，后台手机任务需要此入口"</string>
+    <string name="ui_lit_3f31e245e94b" formatted="false">"请先选定可用资料和完整网页地址"</string>
+    <string name="ui_lit_3fd47edce45b" formatted="false">"关闭"</string>
+    <string name="ui_lit_3fe5466fe64f" formatted="false">"收到新的手机任务"</string>
+    <string name="ui_lit_40ae1784c16d" formatted="false">"最近投递"</string>
+    <string name="ui_lit_40d131054025" formatted="false">"这里保存的是版本。正在编辑的文件位于项目的「文件」切面，导回前仍需审阅差异。"</string>
+    <string name="ui_lit_41acd6ac2bbb" formatted="false">"Companion 地址"</string>
+    <string name="ui_lit_41e204006162" formatted="false">"任务页归属或Profile会话已变化"</string>
+    <string name="ui_lit_41f6ef36b882" formatted="false">"回原任务或助手，保留当前网页，不自动继续执行"</string>
+    <string name="ui_lit_423f51a28678" formatted="false">"运行环境"</string>
+    <string name="ui_lit_4240a2b3a352" formatted="false">"重新保存并发送这条原输入"</string>
+    <string name="ui_lit_425ae3116fb0" formatted="false">"浏览器执行授权已到期，请先核对已派发的操作"</string>
+    <string name="ui_lit_42c99cfdf2b4" formatted="false">"网页研究工作区"</string>
+    <string name="ui_lit_42d6809d08de" formatted="false">"内置浏览器"</string>
+    <string name="ui_lit_43d7d2b51d75" formatted="false">"创建项目"</string>
+    <string name="ui_lit_440cee7fc8cf" formatted="false">"允许此协议与地址"</string>
+    <string name="ui_lit_44ce7ae909bb" formatted="false">"搜索"</string>
+    <string name="ui_lit_45484d4bb683" formatted="false">"项目文件成果"</string>
+    <string name="ui_lit_458748c7478e" formatted="false">"测试中"</string>
+    <string name="ui_lit_45a495a80347" formatted="false">"网页需要你选择上传文件，自动执行已暂停"</string>
+    <string name="ui_lit_45a760187796" formatted="false">"需要已连接的后台助手。无法建立独立屏幕时会停止等待。"</string>
+    <string name="ui_lit_46272ce15a7c" formatted="false">"浏览记录或登录资料已变化，请重新打开历史。"</string>
+    <string name="ui_lit_4661c6682fdf" formatted="false">"希望记住什么"</string>
+    <string name="ui_lit_4673a2306165" formatted="false">"下载"</string>
+    <string name="ui_lit_46b53b94c180" formatted="false">"截图期间页面结构已变化，未交付旧图"</string>
+    <string name="ui_lit_46f3b7e4077c" formatted="false">"输入目标，或补充上下文…"</string>
+    <string name="ui_lit_471bfdfd7f47" formatted="false">"实时音视频"</string>
+    <string name="ui_lit_476843e8c89b" formatted="false">"保留原任务目标、上下文与补充要求，继续调用已授权的工具。新的写操作仍需宿主授权。"</string>
+    <string name="ui_lit_47fb9c959559" formatted="false">"例如：我的小工具"</string>
+    <string name="ui_lit_4842f56c680d" formatted="false">"添加电脑连接"</string>
+    <string name="ui_lit_4855bcf19a16" formatted="false">"开始任务"</string>
+    <string name="ui_lit_4877be6f6ff0" formatted="false">"先在项目页选择原版本库项目；这里不把活工作副本SHA当虚构文件版本。"</string>
+    <string name="ui_lit_48905db38617" formatted="false">"已绑定账号："</string>
+    <string name="ui_lit_49726f09c812" formatted="false">"定位"</string>
+    <string name="ui_lit_4a7ecd98cfdb" formatted="false">"状态尚未读取"</string>
+    <string name="ui_lit_4b2232f71f25" formatted="false">" · 当前"</string>
+    <string name="ui_lit_4ba917d403e0" formatted="false">"经验技能"</string>
+    <string name="ui_lit_4bba831e75af" formatted="false">"用历史内容替换编辑区？"</string>
+    <string name="ui_lit_4c1ff008d09c" formatted="false">"收起消息操作与来源"</string>
+    <string name="ui_lit_4c6b7a87e39c" formatted="false">"将使用后台独立屏，读取保留的上下文并重新观察当前现场；独立屏不可用时会等待。"</string>
+    <string name="ui_lit_4ca988032e6b" formatted="false">"保留网页"</string>
+    <string name="ui_lit_4ce266d144fe" formatted="false">"团队协作"</string>
+    <string name="ui_lit_4cea87d227eb" formatted="false">"手机执行"</string>
+    <string name="ui_lit_4d93d3c0a1de" formatted="false">"来源暂不可核对"</string>
+    <string name="ui_lit_4e271ecdf4f8" formatted="false">"草稿已保存在本机"</string>
+    <string name="ui_lit_4e3e89d92d3f" formatted="false">"继续原任务"</string>
+    <string name="ui_lit_4e6fd0e28c55" formatted="false">"停用"</string>
+    <string name="ui_lit_4efba387e6eb" formatted="false">"不会撤回已经在电脑发生的操作，请先核对原任务。"</string>
+    <string name="ui_lit_4f0f0fd4891e" formatted="false">"核对说明"</string>
+    <string name="ui_lit_4f3bc1966b48" formatted="false">"登录资料已变化，未清除其他资料的记录。"</string>
+    <string name="ui_lit_50452b5dc3e6" formatted="false">"网页观察已过期，请重新观察"</string>
+    <string name="ui_lit_5073e9f5eddc" formatted="false">"查看用量"</string>
+    <string name="ui_lit_508cdd8ae3db" formatted="false">"原任务页没有区域读取通道"</string>
+    <string name="ui_lit_514a2a273f9f" formatted="false">"返回项目"</string>
+    <string name="ui_lit_517d52c5cc31" formatted="false">"返回连接中心"</string>
+    <string name="ui_lit_51990e151954" formatted="false">"服务启动后固定所选 API-key 路由；更换连接或模型前请先停止，再明确启动。不会自动切换计费身份。"</string>
+    <string name="ui_lit_5253040db864" formatted="false">"任务"</string>
+    <string name="ui_lit_53b8b50d18eb" formatted="false">"审核学习候选与来源"</string>
+    <string name="ui_lit_53cdc24275fa" formatted="false">" 个技能"</string>
+    <string name="ui_lit_53e36916d75e" formatted="false">"frame所在页已变化"</string>
+    <string name="ui_lit_549203d446a3" formatted="false">"生图与语音文件"</string>
+    <string name="ui_lit_54cce960bdc1" formatted="false">"朗读这条原回复"</string>
+    <string name="ui_lit_54f13e1bda46" formatted="false">"已明确允许当前协议与地址"</string>
+    <string name="ui_lit_5521be0d991b" formatted="false">"空项目"</string>
+    <string name="ui_lit_55f129730b7d" formatted="false">"受保护媒体"</string>
+    <string name="ui_lit_56023211c18d" formatted="false">"主人已接管原任务页，自动浏览暂停"</string>
+    <string name="ui_lit_56245fb1724f" formatted="false">"删除提醒"</string>
+    <string name="ui_lit_564892e2d285" formatted="false">"项目附件"</string>
+    <string name="ui_lit_5687bc6a9182" formatted="false">"开始办事"</string>
+    <string name="ui_lit_569148281b2a" formatted="false">"原frame宿主已关闭"</string>
+    <string name="ui_lit_56d9ea6fef49" formatted="false">"浏览器资料无法读取，请先核对设置"</string>
+    <string name="ui_lit_56e8e8eba3c3" formatted="false">"移除这个电脑连接？"</string>
+    <string name="ui_lit_570e99640c04" formatted="false">"尚未创建"</string>
+    <string name="ui_lit_572cf45ba436" formatted="false">"返回"</string>
+    <string name="ui_lit_578a637caf2e" formatted="false">"网页与研究工作区"</string>
+    <string name="ui_lit_579cd73b8416" formatted="false">"导入项目"</string>
+    <string name="ui_lit_5857e5b72d49" formatted="false">"重新读取文件"</string>
+    <string name="ui_lit_58615513252f" formatted="false">"允许按需发送截图"</string>
+    <string name="ui_lit_586af3527522" formatted="false">"浏览页数量已达8个，请主人关闭不再使用的页"</string>
+    <string name="ui_lit_5971df316e59" formatted="false">"原工作副本暂不可用。草稿仍绑定原副本，不会移到更新的副本。"</string>
+    <string name="ui_lit_59a6fa3fabc5" formatted="false">"允许这个明文模型连接？"</string>
+    <string name="ui_lit_59a907bcf415" formatted="false">"打开附件"</string>
+    <string name="ui_lit_59bf3fcf73dc" formatted="false">"准备当前项目工作区"</string>
+    <string name="ui_lit_59cf700d64c9" formatted="false">"跳过新实例"</string>
+    <string name="ui_lit_5abb3406155b" formatted="false">"已取消收藏。"</string>
+    <string name="ui_lit_5adb38fc0758" formatted="false">"截图期间原网页已变化"</string>
+    <string name="ui_lit_5b6b25363dd7" formatted="false">"原接管页或登录资料已变化"</string>
+    <string name="ui_lit_5b8f673101b8" formatted="false">"网页进程已退出，原操作已停止；请重新打开需要的页面"</string>
+    <string name="ui_lit_5b978cd6154d" formatted="false">"当前版本尚未接入官方网关，不会显示已在线。"</string>
+    <string name="ui_lit_5bac39e66437" formatted="false">"原阅读锚不在当前窗口，仍保留原位置；滚动或点击回到最新后才更新。"</string>
+    <string name="ui_lit_5c13a7555228" formatted="false">"站点权限说明"</string>
+    <string name="ui_lit_5c1e1de1bb85" formatted="false">"来自网页："</string>
+    <string name="ui_lit_5c4e6b726a7c" formatted="false">"保留当前修改"</string>
+    <string name="ui_lit_5cae0ea18389" formatted="false">"创建提醒"</string>
+    <string name="ui_lit_5d850f48cf24" formatted="false">"查看明确委托、到期候选与完成凭证"</string>
+    <string name="ui_lit_5da39fa42bcb" formatted="false">"此协议与服务已保存密钥，留空可继续使用。"</string>
+    <string name="ui_lit_5e1b654092b2" formatted="false">" 个提醒规则"</string>
+    <string name="ui_lit_5e5971f6c344" formatted="false">"已开启，可以从通知暂停或停止"</string>
+    <string name="ui_lit_5ef76e1e1f24" formatted="false">"正在连接，尚未确认在线"</string>
+    <string name="ui_lit_5f5c92acb05a" formatted="false">"保留一个待处理实例"</string>
+    <string name="ui_lit_5f600b307b4e" formatted="false">"API 密钥"</string>
+    <string name="ui_lit_60536408c352" formatted="false">"远端工作环境"</string>
+    <string name="ui_lit_60636ba247a0" formatted="false">"历史对话"</string>
+    <string name="ui_lit_60a53514eb92" formatted="false">"收藏"</string>
+    <string name="ui_lit_60b89512d92d" formatted="false">"电脑与服务器"</string>
+    <string name="ui_lit_60d823aa465e" formatted="false">"实际多文件Vite项目。首次npm ci需网络与真实平台依赖；边运行边改需在原任务明确批准既有源码范围，不自动启动。"</string>
+    <string name="ui_lit_6113d2b22a57" formatted="false">"停止朗读"</string>
+    <string name="ui_lit_612f283b36d2" formatted="false">"已允许按需发送截图，优先读取结构树"</string>
+    <string name="ui_lit_6135d4159e89" formatted="false">"移除"</string>
+    <string name="ui_lit_615a6449bcd8" formatted="false">" 个已配置连接"</string>
+    <string name="ui_lit_6181ed6f9734" formatted="false">"来源："</string>
+    <string name="ui_lit_63453e24e5c5" formatted="false">"浏览器执行已停止或接管"</string>
+    <string name="ui_lit_636d5b414777" formatted="false">"我的插件目录 · 安装与JS源码审批"</string>
+    <string name="ui_lit_6404a223a9c7" formatted="false">"连接与能力"</string>
+    <string name="ui_lit_640fe46cdf48" formatted="false">"宿主结果仍待核对，未重新提交。"</string>
+    <string name="ui_lit_648de25583ea" formatted="false">"浏览历史"</string>
+    <string name="ui_lit_6546658becd6" formatted="false">"Termux 连接"</string>
+    <string name="ui_lit_66009c547bed" formatted="false">"尚未启动"</string>
+    <string name="ui_lit_6648f4ad9743" formatted="false">"从已审经验整理技能"</string>
+    <string name="ui_lit_665280c75f83" formatted="false">"网址或搜索内容"</string>
+    <string name="ui_lit_66759868e87c" formatted="false">"探测请求已返回，请核对远端能力。"</string>
+    <string name="ui_lit_670ec25af841" formatted="false">"保留"</string>
+    <string name="ui_lit_6789db6eb208" formatted="false">"在模型目录页选择输出参数字段与预算；发送前会核对已知容量"</string>
+    <string name="ui_lit_67de19f08dd4" formatted="false">"原网页提示缺少操作门禁"</string>
+    <string name="ui_lit_688a635d9b35" formatted="false">"删除这个提醒？"</string>
+    <string name="ui_lit_68a7913cef45" formatted="false">"我已查看"</string>
+    <string name="ui_lit_68b73d23e4a1" formatted="false">"本资料的浏览历史"</string>
+    <string name="ui_lit_68d2db8b8307" formatted="false">"系统未能取得这次真实网页图像，未发送替代图片"</string>
+    <string name="ui_lit_692f3f0ead5b" formatted="false">"私人记忆"</string>
+    <string name="ui_lit_693e3009482b" formatted="false">"原任务"</string>
+    <string name="ui_lit_69de6c821ea8" formatted="false">"核心记忆："</string>
+    <string name="ui_lit_6a38bbf56903" formatted="false">"提醒我开始手机任务"</string>
+    <string name="ui_lit_6a7f40073c1d" formatted="false">"停止后续工具操作"</string>
+    <string name="ui_lit_6b94f17a8663" formatted="false">"上传尝试无法可靠登记，文件未交给网页。"</string>
+    <string name="ui_lit_6bf6d3f3d626" formatted="false">"对话"</string>
+    <string name="ui_lit_6c7070ca15da" formatted="false">"已清除所选浏览记录。"</string>
+    <string name="ui_lit_6c7f11ce0303" formatted="false">"frame动作没有原任务执行门禁"</string>
+    <string name="ui_lit_6d2ef7c5b8da" formatted="false">"关闭这个渠道的任务权限？"</string>
+    <string name="ui_lit_6d54fe1482eb" formatted="false">"导入已有项目"</string>
+    <string name="ui_lit_6dbefbbb6f54" formatted="false">"尚未保存的修改会离开当前编辑区。"</string>
+    <string name="ui_lit_6ddd1eaccab1" formatted="false">"新建文件"</string>
+    <string name="ui_lit_6e8f754d566c" formatted="false">"能力暂不可用"</string>
+    <string name="ui_lit_6e9857b2849c" formatted="false">"网页请求离开当前页面"</string>
+    <string name="ui_lit_6ece0f4d89f7" formatted="false">"发现工具、预览权限与按需启用"</string>
+    <string name="ui_lit_6ed4441e703a" formatted="false">"已启用 · 管理"</string>
+    <string name="ui_lit_6ed977b43258" formatted="false">"服务尚未运行。启动前需配置独立访问令牌。"</string>
+    <string name="ui_lit_6fac07cf87c7" formatted="false">"停止后续操作"</string>
+    <string name="ui_lit_6fb30ea0487d" formatted="false">"填入新任务"</string>
+    <string name="ui_lit_6ff2860ad037" formatted="false">"协作团队"</string>
+    <string name="ui_lit_6ffae9b686d1" formatted="false">"此文件超过20MiB附件上限"</string>
+    <string name="ui_lit_7030a24dd8f9" formatted="false">"。核心会优先作为参考，仍受有效期与上下文预算限制。"</string>
+    <string name="ui_lit_705d18e1529b" formatted="false">"结果截图"</string>
+    <string name="ui_lit_707bfd4c29a0" formatted="false">"返回网页"</string>
+    <string name="ui_lit_70ee7b83d472" formatted="false">"原截图的文档或viewport已变化"</string>
+    <string name="ui_lit_714cac30e2ff" formatted="false">"麦克风"</string>
+    <string name="ui_lit_7179f6d06466" formatted="false">" · 已保存密钥"</string>
+    <string name="ui_lit_7189ecc7fa0b" formatted="false">"确认未发生"</string>
+    <string name="ui_lit_71cbc903c2e4" formatted="false">"无法读取网页内容"</string>
+    <string name="ui_lit_71d58e9b511c" formatted="false">"关闭浏览器并结束网页执行？"</string>
+    <string name="ui_lit_72197b15f0f6" formatted="false">"。只读取你选择的当前文件范围，预览后仍需明确确认模型使用。"</string>
+    <string name="ui_lit_732323118294" formatted="false">"原页或进程句柄不可用；不能停止已交付上传，未操作其他页面。"</string>
+    <string name="ui_lit_732ac451f59f" formatted="false">"经历与结果"</string>
+    <string name="ui_lit_748bcf9923b4" formatted="false">"连接参数、输入能力与回复预算"</string>
+    <string name="ui_lit_74ebd29f9387" formatted="false">"正在读取待核对的动作，请稍候或重新打开此任务。"</string>
+    <string name="ui_lit_74ece5a25a31" formatted="false">"文件、来源与可继续成果"</string>
+    <string name="ui_lit_7507cbd81f2b" formatted="false">"只能明确移交同Profile的主人页"</string>
+    <string name="ui_lit_7524fe6b8996" formatted="false">"查看版本记录"</string>
+    <string name="ui_lit_75574f0af97a" formatted="false">"原任务仍未结束时"</string>
+    <string name="ui_lit_757c4400a9c4" formatted="false">"提醒按手机系统调度，可能延后。手机目标会通知你查看并开始，不会擅自操作屏幕。"</string>
+    <string name="ui_lit_757e0fa27ea6" formatted="false">"用量来自当前记录窗口；完整记录可继续按页查看。"</string>
+    <string name="ui_lit_75b269496f69" formatted="false">"运行"</string>
+    <string name="ui_lit_75cdea59dddd" formatted="false">"已有结果"</string>
+    <string name="ui_lit_75ee4ec9494d" formatted="false">"控件操作后的回查已停止；请核对原页面，没有重试操作。"</string>
+    <string name="ui_lit_7621b9cbc080" formatted="false">"界面读取与主屏控制"</string>
+    <string name="ui_lit_77426c942008" formatted="false">"版本记录"</string>
+    <string name="ui_lit_77709784cd63" formatted="false">"消息渠道"</string>
+    <string name="ui_lit_77b512a44873" formatted="false">"记忆学习审核"</string>
+    <string name="ui_lit_780832f3d9d1" formatted="false">"核对学习候选、查看来源与管理遗忘"</string>
+    <string name="ui_lit_787641aa0e3e" formatted="false">"原截图已不再当前"</string>
+    <string name="ui_lit_79039199efa9" formatted="false">"下载已排队；可回到附件列表查看"</string>
+    <string name="ui_lit_791e2a695ad9" formatted="false">"所选浏览器资料不可用，请主人从原生设置选择资料"</string>
+    <string name="ui_lit_795e7905dc0a" formatted="false">"创建并打开"</string>
+    <string name="ui_lit_79f0e4511cb2" formatted="false">"回调结果未知，禁止自动重传"</string>
+    <string name="ui_lit_79f326be4409" formatted="false">"项目"</string>
+    <string name="ui_lit_7a0ff6db1798" formatted="false">"网页不能自动获得相机、麦克风、定位或其他设备权限。当前版本默认拒绝；只读研究授权不会改变这一点。你可以回网页继续其他操作，或回原任务说明需要人工处理。"</string>
+    <string name="ui_lit_7aa0018439e0" formatted="false">"尚未开始接收"</string>
+    <string name="ui_lit_7b027192aea5" formatted="false">"刷新服务与调用记录"</string>
+    <string name="ui_lit_7b27deb3305c" formatted="false">" 个附件引用 · 来源暂不可读"</string>
+    <string name="ui_lit_7b5e56539af3" formatted="false">"口袋世界"</string>
+    <string name="ui_lit_7bfea78668c3" formatted="false">"同步原任务"</string>
+    <string name="ui_lit_7c0968418369" formatted="false">"替换编辑内容"</string>
+    <string name="ui_lit_7c1269cc2bb5" formatted="false">"当前选择的是 ChatGPT 账号，仅供本应用本人活动使用，不能启动通用反代。请在模型页明确切换到自己的 API-key 连接。"</string>
+    <string name="ui_lit_7c9691192f1b" formatted="false">"继续"</string>
+    <string name="ui_lit_7cc7aa9f4ec3" formatted="false">"本任务保存的结果截图"</string>
+    <string name="ui_lit_7cff79a07239" formatted="false">"核对外部执行结果"</string>
+    <string name="ui_lit_7e37ab22adc6" formatted="false">"正在保存草稿…"</string>
+    <string name="ui_lit_7e68d18eac88" formatted="false">"可信中继与旧版诊断"</string>
+    <string name="ui_lit_7ebf933e54af" formatted="false">"已交还原任务，正在重新读取当前网页"</string>
+    <string name="ui_lit_7f4405d07770" formatted="false">"SSH 连接"</string>
+    <string name="ui_lit_8014b9853f23" formatted="false">"输入只交给此网页；此提示框不把输入写入任务记录。交还前请核对网页显示的内容。"</string>
+    <string name="ui_lit_8060627a5899" formatted="false">"启用手机控制"</string>
+    <string name="ui_lit_8085d62bf069" formatted="false">"账号授权与主模型选择"</string>
+    <string name="ui_lit_809cbedd3d99" formatted="false">"资料状态无法读取"</string>
+    <string name="ui_lit_80d212601177" formatted="false">"提醒与主动任务"</string>
+    <string name="ui_lit_81123c56d5d8" formatted="false">"访问密钥"</string>
+    <string name="ui_lit_81c52c5bc7e4" formatted="false">"仅接受此已认证账号的私聊 /task。消息不会自动批准写入或外发，也不会操作手机主屏。"</string>
+    <string name="ui_lit_826da83ba066" formatted="false">"正在登记"</string>
+    <string name="ui_lit_8290e1dcc6a1" formatted="false">"网页仍在加载或没有可读宿主"</string>
+    <string name="ui_lit_82f2ebf1218e" formatted="false">"核对保留的原听写文字"</string>
+    <string name="ui_lit_83aec78a03f5" formatted="false">"网页进程已退出，请点击刷新恢复"</string>
+    <string name="ui_lit_84edeb2d84ca" formatted="false">"下载附件"</string>
+    <string name="ui_lit_852652f7d3de" formatted="false">"保存为成果"</string>
+    <string name="ui_lit_86532f16c26a" formatted="false">"主人已切回自己的页面，自动浏览已暂停"</string>
+    <string name="ui_lit_866b4b366a3d" formatted="false">"浏览器与语音"</string>
+    <string name="ui_lit_867698fb7b0c" formatted="false">"项目名称"</string>
+    <string name="ui_lit_86de460ec0f2" formatted="false">"还没有书签。可从更多菜单收藏当前页。"</string>
+    <string name="ui_lit_86df7ec74304" formatted="false">"服务运行中"</string>
+    <string name="ui_lit_8716966e52ae" formatted="false">"已保存版本"</string>
+    <string name="ui_lit_87de9377f608" formatted="false">"本机服务运行中"</string>
+    <string name="ui_lit_880510351955" formatted="false">"收起版本记录"</string>
+    <string name="ui_lit_880a0bd1d528" formatted="false">"网页提示已处理；请核对当前页面，再从研究任务交还并继续。"</string>
+    <string name="ui_lit_884ab50dcfbc" formatted="false">"这次请求的记忆来源与原证据"</string>
+    <string name="ui_lit_887053537619" formatted="false">"每次回复的输出上限"</string>
+    <string name="ui_lit_88a3791453f2" formatted="false">"例如：src/main.py"</string>
+    <string name="ui_lit_894faacebdcf" formatted="false">"文件选择次数已达进程上限，请重新打开应用"</string>
+    <string name="ui_lit_89526effc536" formatted="false">"独立于云截图发送；关闭后不会为 OCR 采集像素。更改用于后续运行。"</string>
+    <string name="ui_lit_8975fb1499df" formatted="false">"返回审核"</string>
+    <string name="ui_lit_89bc0f9d4382" formatted="false">"下载完成，附件已保存"</string>
+    <string name="ui_lit_89c17ab315a9" formatted="false">"设备暂不可用"</string>
+    <string name="ui_lit_89d84d92c8c0" formatted="false">"请先查看已载入的原任务页，再请求截图"</string>
+    <string name="ui_lit_8a8542f69648" formatted="false">"下一页"</string>
+    <string name="ui_lit_8b7d5b829a73" formatted="false">"原表单操作已停止"</string>
+    <string name="ui_lit_8c2b1d01709d" formatted="false">"还没有连接电脑。添加后进行真实探测，成功前不会显示已连接。"</string>
+    <string name="ui_lit_8caf92f641f3" formatted="false">"原任务暂停状态已变化"</string>
+    <string name="ui_lit_8cc6bc391dd6" formatted="false">"无障碍服务已连接，可读取系统允许访问的节点"</string>
+    <string name="ui_lit_8d0baf6fc81c" formatted="false">"技能内容是带来源的参考资料。启用前核对具体版本；导入不等于执行脚本或自动授予工具权限。"</string>
+    <string name="ui_lit_8d12fc0d4eb2" formatted="false">"暂停"</string>
+    <string name="ui_lit_8d4adaed48b4" formatted="false">"主人重新打开了浏览器"</string>
+    <string name="ui_lit_8d6fd092b028" formatted="false">"创建实际多文件项目。编程工具的安装与版本由本机环境面板显示。"</string>
+    <string name="ui_lit_8e1bfc8263d3" formatted="false">"请先查看要交还的原页面"</string>
+    <string name="ui_lit_8eca575c999a" formatted="false">"任务通知"</string>
+    <string name="ui_lit_8ee629f360da" formatted="false">"保存后会明确切换到这个 API 连接；测试连接不会改变当前账号模型。"</string>
+    <string name="ui_lit_8f17072d521b" formatted="false">"还未绑定已认证的主人私聊；任务权限默认关闭。"</string>
+    <string name="ui_lit_8f32c9c0d09d" formatted="false">"文件交付结果未知，请核对原网页；不会再次上传。"</string>
+    <string name="ui_lit_90c4a5c86dda" formatted="false">"下载原页已被接管或跳转"</string>
+    <string name="ui_lit_93379135e8ea" formatted="false">"仅微信iLink机器人文字接收，不是个人微信登录或聊天记录导入。持续接收需在上方明确开启前台会话。"</string>
+    <string name="ui_lit_946eddd50244" formatted="false">"搜索记忆"</string>
+    <string name="ui_lit_94b8975ca710" formatted="false">"书签"</string>
+    <string name="ui_lit_94ce1321f741" formatted="false">" · 已关闭"</string>
+    <string name="ui_lit_94f1142252d7" formatted="false">"没有可移交的原任务空间，或有文件/网页操作待核对"</string>
+    <string name="ui_lit_958b351907f3" formatted="false">"核对能力与请求参数"</string>
+    <string name="ui_lit_9634bd43e1be" formatted="false">"审核并遗忘…"</string>
+    <string name="ui_lit_9639d7dcabf0" formatted="false">"来源版本 "</string>
+    <string name="ui_lit_96b49e00a6fd" formatted="false">"探测仅查询真实接入状态，不代表已经准备好 Python 或 Node。"</string>
+    <string name="ui_lit_96de5e0c0700" formatted="false">"等待的原任务页已关闭或交给主人"</string>
+    <string name="ui_lit_972b65242a81" formatted="false">"网页确认提示"</string>
+    <string name="ui_lit_974f348245fa" formatted="false">"确认已发生"</string>
+    <string name="ui_lit_980a9a572d29" formatted="false">"主人私聊任务"</string>
+    <string name="ui_lit_981ac302a786" formatted="false">"允许并行（仍各自需要原任务授权）"</string>
+    <string name="ui_lit_982fc49103e1" formatted="false">"请先关闭键盘、研究面板或网页提示，避免把遮挡内容当作网页截图"</string>
+    <string name="ui_lit_9847e671fec6" formatted="false">"需要核对平台凭据与权限"</string>
+    <string name="ui_lit_9868cec4010c" formatted="false">" · 已失效"</string>
+    <string name="ui_lit_986aae124f14" formatted="false">"返回原成果"</string>
+    <string name="ui_lit_995c86186cf8" formatted="false">"任务工具不能操作主人已有页"</string>
+    <string name="ui_lit_996efafc2d66" formatted="false">"保存时核对文件版本"</string>
+    <string name="ui_lit_99aea2f9131a" formatted="false">"技能"</string>
+    <string name="ui_lit_99b163202c6b" formatted="false">"停止QQ接收"</string>
+    <string name="ui_lit_99c9521fd0f2" formatted="false">"Web热更新"</string>
+    <string name="ui_lit_9b0bc56fcc4e" formatted="false">"本轮结束后处理"</string>
+    <string name="ui_lit_9b1c88487a8c" formatted="false">"ChatGPT 账号与模型目录"</string>
+    <string name="ui_lit_9b25668ac1a2" formatted="false">"30秒内没有主人确认站点结果；没有再次上传"</string>
+    <string name="ui_lit_9ba177da472f" formatted="false">"网页正在加载，请稍后重新观察"</string>
+    <string name="ui_lit_9cb758a6b6d5" formatted="false">"帮我操作手机"</string>
+    <string name="ui_lit_9dda405a7bef" formatted="false">"请求停止"</string>
+    <string name="ui_lit_9df97f51a0a6" formatted="false">"消息操作与来源"</string>
+    <string name="ui_lit_9e706869b42a" formatted="false">"正在核对接收状态"</string>
+    <string name="ui_lit_9f1828fce26b" formatted="false">"设为核心"</string>
+    <string name="ui_lit_9f24062367f0" formatted="false">"重新打开"</string>
+    <string name="ui_lit_a04d8d3e71cb" formatted="false">"此模型支持图像输入"</string>
+    <string name="ui_lit_a063ea7b2fdb" formatted="false">"关闭设置与连接"</string>
+    <string name="ui_lit_a0b5931bbec1" formatted="false">"关闭浏览器"</string>
+    <string name="ui_lit_a0dc05af29e5" formatted="false">"本机开发模块状态尚未读取。"</string>
+    <string name="ui_lit_a125838c3e7f" formatted="false">"已保存成果"</string>
+    <string name="ui_lit_a1a1720d3eb5" formatted="false">"保存中"</string>
+    <string name="ui_lit_a2060628d3c0" formatted="false">"交给助手操作主屏"</string>
+    <string name="ui_lit_a20a64ee4859" formatted="false">"文件读取已停止，请重新选择"</string>
+    <string name="ui_lit_a24153b29f3a" formatted="false">"MCP 工具导入"</string>
+    <string name="ui_lit_a26a198a5456" formatted="false">"取消网页请求"</string>
+    <string name="ui_lit_a2cd2675fdde" formatted="false">"网页研究"</string>
+    <string name="ui_lit_a3030bf8f16d" formatted="false">"保存"</string>
+    <string name="ui_lit_a333c4f03bcc" formatted="false">"当前资料的浏览记录暂不可用；没有切换资料。"</string>
+    <string name="ui_lit_a345af0a9792" formatted="false">"网页提示的处理回执未确认，请查看原页；没有自动重试。"</string>
+    <string name="ui_lit_a3d17224902e" formatted="false">"主屏操作 ▾"</string>
+    <string name="ui_lit_a4bb0b667f00" formatted="false">"探测"</string>
+    <string name="ui_lit_a4bf86ede3f2" formatted="false">"已保存配置，服务尚需验证"</string>
+    <string name="ui_lit_a4d512df8560" formatted="false">"已请求原WebView停止加载，但平台不能确认撤回已交付文件或站点请求。"</string>
+    <string name="ui_lit_a5574109f020" formatted="false">"连接"</string>
+    <string name="ui_lit_a5c205819975" formatted="false">"停止本机服务"</string>
+    <string name="ui_lit_a61f7aafd0b8" formatted="false">"查看待处理输入"</string>
+    <string name="ui_lit_a6686f06c820" formatted="false">"兼容检查、诊断预览、应用语言与升级"</string>
+    <string name="ui_lit_a670023a6438" formatted="false">"模型目录暂不可用"</string>
+    <string name="ui_lit_a67f2a564d42" formatted="false">"连接你的手机与电脑，管理设备任务和权限"</string>
+    <string name="ui_lit_a724e5b6f9d3" formatted="false">"记录已变化，未修改其他书签。"</string>
+    <string name="ui_lit_a75a02b593b4" formatted="false">"frame观察未返回动作目标"</string>
+    <string name="ui_lit_a8f381d831c8" formatted="false">"在其他 App 补充上下文"</string>
+    <string name="ui_lit_a9a3eb8a055b" formatted="false">"当前模型不接收像素；如果允许本地取图和 OCR，仍可发送有来源的识别文字。"</string>
+    <string name="ui_lit_a9f3d9462bcd" formatted="false">"返回刚才的原任务"</string>
+    <string name="ui_lit_ab2f31f30acf" formatted="false">"协议"</string>
+    <string name="ui_lit_ab3c01bbfd40" formatted="false">"原记录或资料已变化，网页未打开。"</string>
+    <string name="ui_lit_ab5d756da17d" formatted="false">"网页研究、独立浏览与系统语音"</string>
+    <string name="ui_lit_ab6f796990c1" formatted="false">"从一个真实项目开始"</string>
+    <string name="ui_lit_aba797059958" formatted="false">"清除历史…"</string>
+    <string name="ui_lit_ad0196c88aaf" formatted="false">"切换中…"</string>
+    <string name="ui_lit_ad1d4cebfce5" formatted="false">"回原输入"</string>
+    <string name="ui_lit_ad78311446ee" formatted="false">"编辑 API 连接"</string>
+    <string name="ui_lit_ad8f10fcd403" formatted="false">"支持文字与工具调用，暂不支持截图、音频和视频。账号刷新、停用或退出后可能需要重新选择目录模型；不会自动换号、降级或重试付费请求。"</string>
+    <string name="ui_lit_ae1b99b88907" formatted="false">"文件已交给网页；这不证明站点接收。请在研究面板核对接收/拒绝结果，或尝试停止。"</string>
+    <string name="ui_lit_aee887434131" formatted="false">"刷新"</string>
+    <string name="ui_lit_af2165cac12e" formatted="false">"关闭浏览器并结束网页执行…"</string>
+    <string name="ui_lit_af23c974c03a" formatted="false">"原语义读取页面/会话已变化"</string>
+    <string name="ui_lit_af3e25a830e8" formatted="false">"脚本可能已产生效果，完成结果未知；不会重放"</string>
+    <string name="ui_lit_af829740ea9c" formatted="false">"原版本库："</string>
+    <string name="ui_lit_b01928a3b8a0" formatted="false">"暂不可核对"</string>
+    <string name="ui_lit_b07db3fa8792" formatted="false">"沿用同一引擎与已有配置"</string>
+    <string name="ui_lit_b0ad5f9df743" formatted="false">"当前对话"</string>
+    <string name="ui_lit_b0deba83733b" formatted="false">"重新核对项目"</string>
+    <string name="ui_lit_b14c681070b3" formatted="false">"事实与项目知识"</string>
+    <string name="ui_lit_b194bf826aed" formatted="false">"任务中的可见文字会发给你配置的模型；启用视觉后也会发送截图。"</string>
+    <string name="ui_lit_b20854056282" formatted="false">"收起工作副本"</string>
+    <string name="ui_lit_b24581b2c0e4" formatted="false">"原frame交付页已变化"</string>
+    <string name="ui_lit_b29f3c6e5316" formatted="false">"版本 "</string>
+    <string name="ui_lit_b2e2b3c46d51" formatted="false">"手机 · 后台独立屏"</string>
+    <string name="ui_lit_b39734214458" formatted="false">"兼容状态："</string>
+    <string name="ui_lit_b3ccf0f545b9" formatted="false">"提醒内容"</string>
+    <string name="ui_lit_b3f124e107c2" formatted="false">"本资料的书签"</string>
+    <string name="ui_lit_b4878531a9dc" formatted="false">"添加电脑环境"</string>
+    <string name="ui_lit_b55a7057ac72" formatted="false">"本轮最多补处理次数（1–20）"</string>
+    <string name="ui_lit_b567606d58e2" formatted="false">"站点权限"</string>
+    <string name="ui_lit_b6061147a7cf" formatted="false">"https://你的电脑地址"</string>
+    <string name="ui_lit_b607d81642be" formatted="false">"在独立后台屏执行"</string>
+    <string name="ui_lit_b63625625243" formatted="false">"原任务入口暂不可用；网页仍保留，请稍后重试。"</string>
+    <string name="ui_lit_b65e1153857d" formatted="false">"任务工具缺少原空间/页/epoch绑定"</string>
+    <string name="ui_lit_b72e6741d86d" formatted="false">"API 模型与能力"</string>
+    <string name="ui_lit_b73431466eea" formatted="false">"任务浏览已停止，请核对原页面效果"</string>
+    <string name="ui_lit_b7f2d657d437" formatted="false">"原网页尚未完整显示，未捕获其他区域"</string>
+    <string name="ui_lit_b88cf91c482a" formatted="false">"后台独立屏 ▾"</string>
+    <string name="ui_lit_b8eabf48e188" formatted="false">"未保存修改"</string>
+    <string name="ui_lit_b95631bb26fb" formatted="false">"查看承诺与持续跟进"</string>
+    <string name="ui_lit_b9aa9685b03d" formatted="false">"MIDI设备"</string>
+    <string name="ui_lit_bacfadc1b0fe" formatted="false">"设置与连接"</string>
+    <string name="ui_lit_bb589206ebbe" formatted="false">"尚未导入技能。导入后的技能会先保持停用。"</string>
+    <string name="ui_lit_bb6da2293cc7" formatted="false">"读取后续说明"</string>
+    <string name="ui_lit_bce2377283c2" formatted="false">"清除"</string>
+    <string name="ui_lit_bd6b27a294f8" formatted="false">"网页正在加载，请稍后重新读取"</string>
+    <string name="ui_lit_bd6d83b18e32" formatted="false">"原截图页已变化，图像未交付"</string>
+    <string name="ui_lit_be368ffdc97d" formatted="false">"以下请求由网页提出。请核对后决定，网页可能据此继续操作；这不会授权AI自动继续。"</string>
+    <string name="ui_lit_bf12fc3f7c64" formatted="false">"我的插件目录"</string>
+    <string name="ui_lit_c0365276d32f" formatted="false">"选择一个项目"</string>
+    <string name="ui_lit_c081e766e32a" formatted="false">"留在此页"</string>
+    <string name="ui_lit_c0eaae5613a4" formatted="false">"只读投影的原页面已改变"</string>
+    <string name="ui_lit_c129d9d31b95" formatted="false">"取消待发回复"</string>
+    <string name="ui_lit_c1a63ea3e084" formatted="false">"记忆与定时、消息渠道、电脑环境、插件和团队"</string>
+    <string name="ui_lit_c1a8d7734731" formatted="false">"工具授权与诊断"</string>
+    <string name="ui_lit_c221e651f997" formatted="false">"视觉补充"</string>
+    <string name="ui_lit_c307b7565396" formatted="false">"网页或执行身份已变化，请重新观察"</string>
+    <string name="ui_lit_c34fd772016d" formatted="false">"将操作手机主屏并占用当前屏幕；任务会先重新观察，再根据保留的上下文继续。"</string>
+    <string name="ui_lit_c35bfbaa6694" formatted="false">"编辑电脑连接"</string>
+    <string name="ui_lit_c38c20bcd132" formatted="false">"多少分钟后"</string>
+    <string name="ui_lit_c393a64b11a7" formatted="false">"手机 · 主屏"</string>
+    <string name="ui_lit_c3e41d659191" formatted="false">"技能说明"</string>
+    <string name="ui_lit_c428e973fa3f" formatted="false">"网页正在等你处理提示；原任务不会代你确认。"</string>
+    <string name="ui_lit_c49a7110a786" formatted="false">"先到对应服务或电脑检查实际结果，再记录核对结论。这里不会自动重试。"</string>
+    <string name="ui_lit_c5066db3d0b0" formatted="false">"网页观察回调的完整目的地已变化"</string>
+    <string name="ui_lit_c5f8d8643481" formatted="false">"回到项目文件与网页预览"</string>
+    <string name="ui_lit_c62cf427b2f4" formatted="false">"协议："</string>
+    <string name="ui_lit_c6c5f43146dd" formatted="false">"允许这个主人私聊创建任务？"</string>
+    <string name="ui_lit_c7225dbf105e" formatted="false">"附件"</string>
+    <string name="ui_lit_c771248e511f" formatted="false">"打开"</string>
+    <string name="ui_lit_c7ccab6d414b" formatted="false">"此页的设备权限请求已拒绝或取消；可从更多查看来源与说明，其他浏览操作仍可继续。"</string>
+    <string name="ui_lit_c862a1ea2f19" formatted="false">"朗读最近回复"</string>
+    <string name="ui_lit_c8a47d001848" formatted="false">"添加附件"</string>
+    <string name="ui_lit_c8aeb72e0b17" formatted="false">"输入选项"</string>
+    <string name="ui_lit_c8d62d5bfece" formatted="false">"收起选项"</string>
+    <string name="ui_lit_c90d49acb158" formatted="false">"ChatGPT 套餐"</string>
+    <string name="ui_lit_c92c1a2648bd" formatted="false">"主人私聊"</string>
+    <string name="ui_lit_c98e118e0a43" formatted="false">"模型"</string>
+    <string name="ui_lit_c9b9ae7a6144" formatted="false">"上一页"</string>
+    <string name="ui_lit_c9d3fff41f9d" formatted="false">"导出已保存版本"</string>
+    <string name="ui_lit_c9ff798bc890" formatted="false">"查询原回执"</string>
+    <string name="ui_lit_ca4d973c0b00" formatted="false">"停止"</string>
+    <string name="ui_lit_ca5276e23a5d" formatted="false">" 个 SSH 配置"</string>
+    <string name="ui_lit_caf2aadcfdb6" formatted="false">"不支持的浏览器命令"</string>
+    <string name="ui_lit_cb2f1709f983" formatted="false">"模型名称"</string>
+    <string name="ui_lit_cb30b3202434" formatted="false">"相同服务可留空保留已存密钥；更换服务需重新填写。"</string>
+    <string name="ui_lit_cb727f4b85d4" formatted="false">"请在 API 模型目录页核对精确能力与机主覆盖。"</string>
+    <string name="ui_lit_cc9422dc5314" formatted="false">" 个消息账号"</string>
+    <string name="ui_lit_cd06aaf08bc4" formatted="false">" · 尚不可用"</string>
+    <string name="ui_lit_cd08af622966" formatted="false">"当前网页不适合发送截图，请先人工检查密码、验证码或嵌入页"</string>
+    <string name="ui_lit_cd1314c95875" formatted="false">"已收藏到当前登录资料。书签不保存登录状态和地址查询参数。"</string>
+    <string name="ui_lit_cd846ecfef92" formatted="false">"暂未读取到设备状态，请稍后重新打开。"</string>
+    <string name="ui_lit_cd90cf0a9a10" formatted="false">"保留原群目标、来源、受众和累计额度，只从原任务续接；群或成员授权已变化、媒体已生成或效果未知时会拒绝，不会创建替代任务。"</string>
+    <string name="ui_lit_cdc1547fa18c" formatted="false">"其他设备权限"</string>
+    <string name="ui_lit_cdd3f0dc5043" formatted="false">"这页暂不能收藏，请确认是可用的网页地址。"</string>
+    <string name="ui_lit_cde2cd071d25" formatted="false">"创建"</string>
+    <string name="ui_lit_ce0dbdf554ec" formatted="false">" · 未保存密钥"</string>
+    <string name="ui_lit_ce2b46361d54" formatted="false">"正在恢复输入…"</string>
+    <string name="ui_lit_cefdeb727e1b" formatted="false">"访问令牌与启动设置"</string>
+    <string name="ui_lit_cf2a34697d0f" formatted="false">"还需处理"</string>
+    <string name="ui_lit_cf5eddd28ffd" formatted="false">"已处理一次控件操作，但原控件回查未确认；请查看原页，不要重复操作。"</string>
+    <string name="ui_lit_d01265ac3e96" formatted="false">"机主的私人记忆，可编辑、查看来源。遗忘需到审核页重新读取当前版本并明确确认，会同步清理旧派生技能与被遗忘的来源快照。过期记忆保留记录，不参与召回。"</string>
+    <string name="ui_lit_d09c24c6c202" formatted="false">"原来源文档已更换"</string>
+    <string name="ui_lit_d13808dccd1b" formatted="false">"尚未配置服务"</string>
+    <string name="ui_lit_d2015f964f61" formatted="false">"来自已认证主人私聊 · "</string>
+    <string name="ui_lit_d2396bbcad19" formatted="false">"这项任务的技能与工具"</string>
+    <string name="ui_lit_d2a8252e3486" formatted="false">"浏览页只能由原生主线程操作"</string>
+    <string name="ui_lit_d2dd6c3de635" formatted="false">"版本、附件与交付，不打断当前工作区。"</string>
+    <string name="ui_lit_d2ea16655f4f" formatted="false">"收起项目列表"</string>
+    <string name="ui_lit_d2fa3ffdacc9" formatted="false">"请先结束当前文件选择或下载确认"</string>
+    <string name="ui_lit_d301bc125833" formatted="false">"关闭提示"</string>
+    <string name="ui_lit_d331d4f5d62e" formatted="false">"查看群授权、成员与投递"</string>
+    <string name="ui_lit_d347a4e704e1" formatted="false">"绑定主人身份与群空间分别管理。账号密钥、主人验证和平台回调仍需完成真实配置。"</string>
+    <string name="ui_lit_d3e1ce77208f" formatted="false">"API 模型目录"</string>
+    <string name="ui_lit_d42bdf291c7c" formatted="false">"外部客户端协议必须与此连接一致；不转换协议、不执行手机工具。访问令牌与上游 API 密钥分开。"</string>
+    <string name="ui_lit_d42c8bea8256" formatted="false">"本输入登记待核对，未自动重发"</string>
+    <string name="ui_lit_d44e9b3d3b31" formatted="false">"名称"</string>
+    <string name="ui_lit_d4a7bca8c367" formatted="false">"有打开的页面，点击后进入人工浏览"</string>
+    <string name="ui_lit_d4e1cd575085" formatted="false">"仅 /task 明确提交目标；不授予手机控制。写入与外发仍须在本机按原参数审批，私聊里的“同意”不算授权。"</string>
+    <string name="ui_lit_d51220338f0b" formatted="false">"任务页或地址已失效"</string>
+    <string name="ui_lit_d56b788f1658" formatted="false">"网页操作使用独立浏览器窗口；可返回助手继续。"</string>
+    <string name="ui_lit_d574f89a9c27" formatted="false">"上传附件未能读取，请重新选择文件"</string>
+    <string name="ui_lit_d5eb0c89ba28" formatted="false">"入站状态："</string>
+    <string name="ui_lit_d5f10e0b13d4" formatted="false">"召回方式与临时记忆边界"</string>
+    <string name="ui_lit_d64004ab4238" formatted="false">"失效上传的临时附件清理未完成，请核对原任务附件"</string>
+    <string name="ui_lit_d64302bd2896" formatted="false">"网络witness不可用"</string>
+    <string name="ui_lit_d722aa9d9e18" formatted="false">"新建提醒"</string>
+    <string name="ui_lit_d76b07d79f7a" formatted="false">"连接你信任的 Companion 环境。密钥仅写入手机加密存储，普通 SSH 不等于可恢复的电脑任务。"</string>
+    <string name="ui_lit_d76daaf84e36" formatted="false">"按原群授权继续原任务"</string>
+    <string name="ui_lit_d7cf7fd3514a" formatted="false">"放入编辑区"</string>
+    <string name="ui_lit_d8574817560e" formatted="false">"当前账号模型："</string>
+    <string name="ui_lit_d8ab6bad865c" formatted="false">"加入原任务"</string>
+    <string name="ui_lit_d91a357a8a59" formatted="false">"主人正在操作网页，自动执行已停止"</string>
+    <string name="ui_lit_da0e5adcca09" formatted="false">"在后台独立屏执行"</string>
+    <string name="ui_lit_da674554c9e5" formatted="false">"页面witness安装回执未知"</string>
+    <string name="ui_lit_dac28c858e8e" formatted="false">"已暂停或等待下次启用"</string>
+    <string name="ui_lit_dacde177826c" formatted="false">"网页提示已失效，请查看原页；没有自动重试。"</string>
+    <string name="ui_lit_dacf07026026" formatted="false">"相机"</string>
+    <string name="ui_lit_db8db0530432" formatted="false">"查看"</string>
+    <string name="ui_lit_dca60869e7d2" formatted="false">"取消收藏"</string>
+    <string name="ui_lit_de6b8b999044" formatted="false">"使用 ChatGPT 套餐"</string>
+    <string name="ui_lit_df30bc904ac7" formatted="false">"旧授权下的任务将不能继续调用模型或工具；已发生的动作不会撤回，结果仍保留在本机。"</string>
+    <string name="ui_lit_df43255d8ed4" formatted="false">"停止回复"</string>
+    <string name="ui_lit_df4e16fdc83a" formatted="false">"选择工作副本"</string>
+    <string name="ui_lit_df647b73b990" formatted="false">"已展开"</string>
+    <string name="ui_lit_dfb802238b38" formatted="false">"已启用"</string>
+    <string name="ui_lit_dfd56dfcd588" formatted="false">"真实网页图像未能取得，请保留当前页面人工查看"</string>
+    <string name="ui_lit_e009c0d3a0d9" formatted="false">"启用这个技能版本？"</string>
+    <string name="ui_lit_e033a0c7b411" formatted="false">"收起召回与记忆层级"</string>
+    <string name="ui_lit_e03c76f81572" formatted="false">"群协作"</string>
+    <string name="ui_lit_e08a9527e840" formatted="false">"确认启用"</string>
+    <string name="ui_lit_e0a2a7e3127a" formatted="false">"切回已保存的 API 密钥模型"</string>
+    <string name="ui_lit_e19850187381" formatted="false">"填写电脑端配置的访问密钥。"</string>
+    <string name="ui_lit_e1a207d64f64" formatted="false">"高级浏览需要原任务当前已加载页面"</string>
+    <string name="ui_lit_e1ac1e80e0ab" formatted="false">"开始QQ接收"</string>
+    <string name="ui_lit_e1ffc0002e7a" formatted="false">"脚本后原文档已变化，不能核对其效果"</string>
+    <string name="ui_lit_e21c65fe969d" formatted="false">"查看真实方法应用回执"</string>
+    <string name="ui_lit_e22989209882" formatted="false">"请选择主人自己的浏览页；任务页须明确接管"</string>
+    <string name="ui_lit_e2451f7eb54e" formatted="false">"打开原任务"</string>
+    <string name="ui_lit_e249705db203" formatted="false">"机主明确保存"</string>
+    <string name="ui_lit_e27996573913" formatted="false">"持续至完成、主人停止或预算耗尽。"</string>
+    <string name="ui_lit_e285234d6598" formatted="false">"未允许发送截图，可在模型连接中调整"</string>
+    <string name="ui_lit_e2a8dfa1eefb" formatted="false">"跳过旧实例，只处理最新一次"</string>
+    <string name="ui_lit_e326f272253f" formatted="false">"你的对话、任务和项目，都留在同一个口袋世界。"</string>
+    <string name="ui_lit_e368de414fd5" formatted="false">"从已审记忆整理经验，审阅后另行启用"</string>
+    <string name="ui_lit_e38a88e44c06" formatted="false">"个人偏好"</string>
+    <string name="ui_lit_e3f1a9f5ee55" formatted="false">"这里还没有符合条件的记忆。"</string>
+    <string name="ui_lit_e4690a1082bb" formatted="false">"清除本资料浏览历史？"</string>
+    <string name="ui_lit_e4a68807c170" formatted="false">"已确认截图的原文档已变化"</string>
+    <string name="ui_lit_e4b8d86d2e43" formatted="false">"先暂停主屏任务，再切到需要的 App 捕获内容。"</string>
+    <string name="ui_lit_e4cfc69971ad" formatted="false">"原网页尚未回到已确认的显示区域，未发送截图"</string>
+    <string name="ui_lit_e4e4e0ad5de1" formatted="false">"移除连接"</string>
+    <string name="ui_lit_e5227f62d806" formatted="false">"下次："</string>
+    <string name="ui_lit_e53639a1eb69" formatted="false">"下载未能启动，请检查地址、资料与网络"</string>
+    <string name="ui_lit_e5379d0081e6" formatted="false">"此下载地址暂不支持；仅接受http/https文件链接"</string>
+    <string name="ui_lit_e6277b72a005" formatted="false">"探测 Termux"</string>
+    <string name="ui_lit_e64447db76a9" formatted="false">"已收起"</string>
+    <string name="ui_lit_e6b7a4d881a9" formatted="false">"网页提示的原页面/资料/文档已变化"</string>
+    <string name="ui_lit_e719af16fac8" formatted="false">"原消息附件"</string>
+    <string name="ui_lit_e742ae2bff0c" formatted="false">"目标条件的原页/资料/文档或暂停版本已变化"</string>
+    <string name="ui_lit_e7f73b5324f9" formatted="false">" 条私人记忆"</string>
+    <string name="ui_lit_e806fbbe8ec6" formatted="false">"插件"</string>
+    <string name="ui_lit_e8a116750820" formatted="false">"查看独立屏与接管"</string>
+    <string name="ui_lit_e8a1efa6f25d" formatted="false">"发送给此网页"</string>
+    <string name="ui_lit_e94b745fb983" formatted="false">"有新回复 · 回到最新"</string>
+    <string name="ui_lit_ea78ee63e089" formatted="false">"已停用 · 管理"</string>
+    <string name="ui_lit_eab581db6352" formatted="false">"后台节点和文字读取、主屏控制需要无障碍授权"</string>
+    <string name="ui_lit_eb16cc317244" formatted="false">"放入原输入，暂不发送"</string>
+    <string name="ui_lit_eb247196d3b6" formatted="false">"群目标、来源和受众保持不变；不会读私人记忆或导入私人补充。审批与继续只在当前本机原任务窗口生效。"</string>
+    <string name="ui_lit_eb5981a4f7c5" formatted="false">" 个实际工作文件"</string>
+    <string name="ui_lit_ebbae8ed22d6" formatted="false">"打开原记忆候选审阅"</string>
+    <string name="ui_lit_ebf9ee44c3c4" formatted="false">"正在读取记忆…"</string>
+    <string name="ui_lit_ec0d96daf028" formatted="false">"截图对应的页面已变化，未发送旧图"</string>
+    <string name="ui_lit_ec6198213502" formatted="false">"正在打开原项目工作区"</string>
+    <string name="ui_lit_ec863e83282e" formatted="false">"此页不属于任务"</string>
+    <string name="ui_lit_ecc4cf6c8e03" formatted="false">"新建版本文件"</string>
+    <string name="ui_lit_ecd926c64cc7" formatted="false">"任务偏好"</string>
+    <string name="ui_lit_ed03cdf7e1aa" formatted="false">"执行设置"</string>
+    <string name="ui_lit_ed107d01e638" formatted="false">"允许本地 OCR"</string>
+    <string name="ui_lit_ede52e968ac2" formatted="false">" 个本机工作区"</string>
+    <string name="ui_lit_edecf0ae6e51" formatted="false">"发送"</string>
+    <string name="ui_lit_ee64d3b5de89" formatted="false">"原网页提示页已变化"</string>
+    <string name="ui_lit_eeafd8094da0" formatted="false">"请输入有效的网址或搜索内容。"</string>
+    <string name="ui_lit_ef7dcf108f59" formatted="false">"兼容 Chat 协议的输出限制由服务端配置"</string>
+    <string name="ui_lit_ef865b2e2cfd" formatted="false">"浏览记录"</string>
+    <string name="ui_lit_f00c443e17a0" formatted="false">"继续任务"</string>
+    <string name="ui_lit_f03a745939b4" formatted="false">"更多能力"</string>
+    <string name="ui_lit_f078f281ac64" formatted="false">"网页提示"</string>
+    <string name="ui_lit_f0babe8593ef" formatted="false">"来自你核对的本机最终字幕；服务来源标记不是身份认证。保存只建立待执行任务，后续工具与外发仍需原任务授权。"</string>
+    <string name="ui_lit_f13e4a9355b9" formatted="false">"上次请求结果不明，只核对原任务，不会重新提交或执行。"</string>
+    <string name="ui_lit_f14c0ab4b16c" formatted="false">"有效做法"</string>
+    <string name="ui_lit_f1a28dbdf7ec" formatted="false">"投递结果不明，请到原平台核对；不会自动重发。"</string>
+    <string name="ui_lit_f1aacd57da85" formatted="false">"下个安全步骤加入"</string>
+    <string name="ui_lit_f1f0276a210a" formatted="false">"另有原输入待核对"</string>
+    <string name="ui_lit_f1f07e53ec86" formatted="false">"网页操作回执未知，请核对结果后继续"</string>
+    <string name="ui_lit_f233c2cd3697" formatted="false">"原任务与渠道投递分别记录。写入与外发仍需本机审批；关闭或重绑渠道后不能沿用旧授权继续。"</string>
+    <string name="ui_lit_f24abf379ff5" formatted="false">"同意网页继续"</string>
+    <string name="ui_lit_f35c96197d25" formatted="false">"本机模型服务"</string>
+    <string name="ui_lit_f3eee35f8e40" formatted="false">"语音复核"</string>
+    <string name="ui_lit_f43a498d6ce7" formatted="false">"回原任务"</string>
+    <string name="ui_lit_f4a5312c9e7d" formatted="false">"交还目标已变化，请刷新后确认"</string>
+    <string name="ui_lit_f4fdd80a74f4" formatted="false">"保存记忆"</string>
+    <string name="ui_lit_f5140c2a3dfc" formatted="false">"保留草稿"</string>
+    <string name="ui_lit_f549ee1bd218" formatted="false">"原脚本页面/文档已变化"</string>
+    <string name="ui_lit_f5704f0739e2" formatted="false">"这是你明确请求的候选提炼记录；完成只表示提炼处理结束，不代表已采用记忆。"</string>
+    <string name="ui_lit_f5c2506e70b1" formatted="false">"保存模型"</string>
+    <string name="ui_lit_f5dede740ee0" formatted="false">"保存连接"</string>
+    <string name="ui_lit_f5e46115bae1" formatted="false">"连接已停用"</string>
+    <string name="ui_lit_f5f76d6aeb4c" formatted="false">"远端 HTTP 会明文发送 API 凭据、屏幕截图和文本，网络中的第三方可能读取或篡改。"</string>
+    <string name="ui_lit_f6321c3d759d" formatted="false">"取消核心"</string>
+    <string name="ui_lit_f63c5eeeb3b8" formatted="false">"保存的版本会显示在这里。"</string>
+    <string name="ui_lit_f722bf8c6d24" formatted="false">" 项已授权限"</string>
+    <string name="ui_lit_f9131cdf8871" formatted="false">"回助手"</string>
+    <string name="ui_lit_f95ea7f4c063" formatted="false">"未启用"</string>
+    <string name="ui_lit_f962abe0e137" formatted="false">" · 档案原文（来源未核，不参与召回）"</string>
+    <string name="ui_lit_f9eea62296ce" formatted="false">"选择登录资料，多页比较、保留依据与下载，随时接管"</string>
+    <string name="ui_lit_fa3eedd3c220" formatted="false">"网页需要你确认"</string>
+    <string name="ui_lit_fa6028a40bc2" formatted="false">"原任务嵌入来源配置无效"</string>
+    <string name="ui_lit_fa9e31898845" formatted="false">"暂不支持网页保存或整文件夹授权，请使用单文件下载或上传"</string>
+    <string name="ui_lit_fbea0236b6fd" formatted="false">"启用不等于授权。插件只能使用你已授予的工具权限；停止不会撤回远端已发生的效果。"</string>
+    <string name="ui_lit_fcf33e5d6610" formatted="false">"允许本地按需取图"</string>
+    <string name="ui_lit_fd220765bfff" formatted="false">"系统听写服务不可用，可以继续使用文字。"</string>
+    <string name="ui_lit_fd338b7e354e" formatted="false">"当前用量受限"</string>
+    <string name="ui_lit_fd4b9e3b6c68" formatted="false">"继续编辑"</string>
+    <string name="ui_lit_fde7e92a6728" formatted="false">"接收已停止"</string>
+    <string name="ui_lit_fe25f95191f5" formatted="false">" 个插件"</string>
+    <string name="ui_lit_ff803cbe5284" formatted="false">"原frame动作回执未知，不会重发"</string>
+    <string name="ui_lit_ffb7cc2232ae" formatted="false">"主人明确关闭浏览器；已派发动作请在原任务核对"</string>
+    <string name="ui_lit_ffb971674576" formatted="false">"填写此协议与服务的密钥；更换协议不沿用旧密钥。"</string>
+    <string name="ui_lit_fffb8b984010" formatted="false">"绑定或权限已变化，请返回核对最新身份。"</string>
+</resources>

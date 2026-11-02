@@ -79,7 +79,7 @@ def execute(argv, cwd, env, phase):
         raise
 
 job = json.loads(raw_file(ROOT / '.native-skill.json', 65536).decode('utf-8', errors='strict'))
-if job.get('format') != 'pocketworld.managed-skill-job.v1' or job.get('network') != 'possible_same_uid' or job.get('osSandbox') is not False:
+if job.get('format') != 'pocketworld.managed-skill-job.v1' or job.get('network') not in ('possible_same_uid','kernel_offline') or job.get('osSandbox') is not False:
     raise ValueError('original_native_phone_contract_required')
 package = ROOT / 'skill-package';workspace = ROOT / 'workspace'
 if package.is_symlink() or workspace.is_symlink() or not package.is_dir() or not workspace.is_dir():
@@ -99,11 +99,15 @@ resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILE, MAX_FILE))
 environment = {'PATH':job['path'],'LANG':'C.UTF-8','HOME':str(ROOT / 'home'),'TMPDIR':str(ROOT / 'tmp'),
                'PYTHONNOUSERSITE':'1','PYTHONDONTWRITEBYTECODE':'1','PIP_CONFIG_FILE':'/dev/null',
                'PIP_NO_INPUT':'1','PIP_DISABLE_PIP_VERSION_CHECK':'1'}
+bridge = job.get('bridge')
+if bridge:
+    environment.update({'POCKETWORLD_BRIDGE_NAME':bridge['name'],'POCKETWORLD_BRIDGE_TOKEN':bridge['token'],'POCKETWORLD_BRIDGE_CLIENT':str(ROOT / 'native-bridge-client.py')})
 for name in ('home','tmp'): (ROOT / name).mkdir(exist_ok=True)
 cwd = workspace if request['workingDirectory'] == '.' else within(workspace, request['workingDirectory'])
 if not cwd.is_dir(): raise ValueError('original_skill_cwd_missing')
 deps = job['dependencies']
 if deps.get('packages'):
+    if job['network'] == 'kernel_offline': raise ValueError('offline_dependency_network_not_allowed')
     if job['runtimeId'] != 'python3' or not job['dependencyPreparationAllowed']:
         raise ValueError('original_pinned_dependency_approval_required')
     lock = within(package, 'scripts/requirements.lock')

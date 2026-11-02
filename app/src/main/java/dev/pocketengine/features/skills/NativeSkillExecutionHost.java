@@ -17,6 +17,22 @@ import org.json.JSONObject;
 /** One real AgentRunner call waits for its exact native review, then uses the canonical backend.
  * No second runner, detached script task, inferred owner grant, or resumable Plan JSON. */
 public final class NativeSkillExecutionHost implements AutoCloseable {
+    public interface ScriptPhoneActions extends ManagedScriptBridgeSession.Phone {}
+    private final ConcurrentHashMap<String,ScriptRegistration> scriptActions=new ConcurrentHashMap<>();
+    public final class ScriptRegistration implements AutoCloseable {
+        private final String task,run;private final int epoch;private final RunControl original;private final ScriptPhoneActions actions;private volatile boolean ended;
+        private ScriptRegistration(String task,String run,int epoch,RunControl original,ScriptPhoneActions actions){this.task=task;this.run=run;this.epoch=epoch;this.original=original;this.actions=actions;}
+        private void require()throws Exception{if(ended||scriptActions.get(task)!=this)throw new SecurityException("原脚本回调已解绑");live.check(task,run,epoch,original);original.check();if(original.isPaused())throw new SecurityException("原脚本回调已暂停");}
+        @Override public void close(){ended=true;synchronized(this){scriptActions.remove(task,this);}}
+    }
+    /** Original Runner alone installs its already journaled/grant-bound child-action capability. */
+    public ScriptRegistration installScriptPhoneActions(String task,String run,int epoch,RunControl original,ScriptPhoneActions actions)throws Exception{
+        open();live.check(task,run,epoch,original);java.util.Objects.requireNonNull(actions);ScriptRegistration registration=new ScriptRegistration(task,run,epoch,original,actions);if(scriptActions.putIfAbsent(task,registration)!=null)throw new SecurityException("原任务已有脚本回调，不能安装第二执行器");return registration;
+    }
+    private ManagedScriptBridgeSession.Phone scriptPhoneActions(String task,String run,int epoch,RunControl original)throws Exception{
+        ScriptRegistration registration=scriptActions.get(task);if(registration==null)return null;if(registration.original!=original||!registration.run.equals(run)||registration.epoch!=epoch)throw new SecurityException("脚本回调不是原控制器");registration.require();
+        return new ManagedScriptBridgeSession.Phone(){public Set<String> allowedTools(){return registration.ended?Set.of():Set.copyOf(registration.actions.allowedTools());}public JSONObject invoke(String tool,JSONObject args)throws Exception{synchronized(registration){registration.require();JSONObject result=registration.actions.invoke(tool,args);registration.require();return result;}}};
+    }
     @FunctionalInterface public interface LiveRun {void check(String task,String run,int epoch,RunControl original)throws Exception;}
     private final SkillsModule skills;
     private final Context android;
@@ -101,8 +117,8 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
         RunControl observation=new RunControl();ManagedSkillInputs.capture(local,q.getString("checkoutId"),ManagedSkillPolicy.strings(q.getJSONArray("readPaths")),observation);
     }
     private void checkSelectedConfiguration(JSONObject view)throws Exception {if("this_phone".equals(view.optString("executionLocation")))checkPhoneConfiguration(view);else checkProfile(view.getJSONObject("deployment"));}
-    private NativeSkillBackend backend(SkillExecutionConfiguration.Selection selected,String operation,RunControl original)throws Exception {
-        if(selected.phone()){if(local==null)throw new SkillExecution.Unavailable("原手机托管运行环境不可用");return new ManagedSkillBackend(android,local,tasks,selected.phoneDeployment,operation,original,false);}
+    private NativeSkillBackend backend(SkillExecutionConfiguration.Selection selected,String task,String run,int epoch,String operation,RunControl original)throws Exception {
+        if(selected.phone()){if(local==null)throw new SkillExecution.Unavailable("原手机托管运行环境不可用");return new ManagedSkillBackend(android,local,tasks,selected.phoneDeployment,operation,original,false,scriptPhoneActions(task,run,epoch,original));}
         return new CompanionSkillBackend(remote,selected.deployment,System::currentTimeMillis);
     }
     private NativeSkillBackend receiptBackend(JSONObject record,CompanionSkillBackend.ReceiptRef reference)throws Exception {
@@ -131,7 +147,7 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
         open();live.check(task,run,epoch,original);String operation=input.getString("_hostOperationId");
         SkillExecutionConfiguration.Selection selected;
         try{selected=configuration.current();}catch(SkillExecution.Unavailable missing){return rejected(operation,"needs_user","请选择手机托管执行或电脑隔离执行，并在原任务准备；没有运行脚本");}
-        NativeSkillBackend backend=backend(selected,operation,original);Review review=null;
+        NativeSkillBackend backend=backend(selected,task,run,epoch,operation,original);Review review=null;
         try {
             CompanionSkillHostPort port=new CompanionSkillHostPort(new CompanionSkillHostPort.Store(){
                 public void checkCurrent(SkillExecution.Plan plan,SkillExecution.Grant grant,RunControl control)throws Exception {open();configuration.check(selected);capabilityCurrent.check();live.check(task,run,epoch,control);tasks.checkSkillExecution(plan,grant,control);}
@@ -244,5 +260,5 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
     }
     private static JSONObject rejected(String operation,String code,String message)throws Exception {return new JSONObject().put("operationId",operation).put("status","rejected").put("ok",false).put("code",code).put("executed",false).put("businessVerified",false).put("replayAllowed",false).put("message",message);}
     private static List<String> strings(JSONArray value)throws Exception {List<String> result=new ArrayList<>();for(int i=0;value!=null&&i<value.length();i++)result.add(value.getString(i));return result;}
-    @Override public void close(){if(closed)return;invalidatePending();closed=true;}
+    @Override public void close(){if(closed)return;invalidatePending();for(ScriptRegistration registration:scriptActions.values())registration.close();closed=true;}
 }

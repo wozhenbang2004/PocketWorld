@@ -188,6 +188,31 @@ public final class BrowserFrameObserver implements AutoCloseable {
             @Override public void onError(JavaScriptExecutionException failure){if(!result.isDone())result.completeExceptionally(failure);}
         });
     }
+    public void waitBarrier(JSONObject barrier,int timeoutMs,String nativeEpoch,Check current,CompletableFuture<JSONObject> result)throws Exception {
+        current.check();if(timeoutMs<100||timeoutMs>6000)throw new IllegalArgumentException("网页屏障时限无效");
+        BrowserWaitBarrier.Tracker tracker=new BrowserWaitBarrier.Tracker(barrier);final long started=android.os.SystemClock.elapsedRealtime(),expected=revision;final String doc=document;
+        android.os.Handler main=new android.os.Handler(android.os.Looper.getMainLooper());
+        class Poll implements Runnable {
+            CompletableFuture<JSONObject> pending;JSONArray sample;
+            void check()throws Exception {current.check();if(closed||revision!=expected||!document.equals(doc))throw new BrowserTaskSpace.StalePage("等待屏障的原文档已变化");}
+            public void run(){if(result.isDone())return;try{check();sample=new JSONArray();probe(0);}catch(Exception failure){result.completeExceptionally(failure);}}
+            void probe(int index)throws Exception {
+                if(result.isDone())return;check();JSONArray targets=barrier.getJSONArray("targets");
+                if(index==targets.length()){
+                    long elapsed=android.os.SystemClock.elapsedRealtime()-started;boolean met=tracker.sample(sample,elapsed);
+                    if(met||elapsed>=timeoutMs||tracker.rounds>=BrowserWaitBarrier.MAX_ROUNDS){result.complete(tracker.receipt(met,elapsed,timeoutMs));return;}
+                    main.postDelayed(this,BrowserTargetCondition.POLL_MS);return;
+                }
+                pending=new CompletableFuture<>();pending.whenComplete((value,error)->{if(result.isDone())return;try{check();if(error!=null){result.completeExceptionally(error);return;}sample.put(value);
+                    if(!(value.opt("matched") instanceof Boolean)){result.complete(new JSONObject(value.toString()).put("condition","barrier").put("matched",JSONObject.NULL).put("conditionMet",false).put("automaticReplayAllowed",false));return;}
+                    probe(index+1);
+                }catch(Exception failure){result.completeExceptionally(failure);}});
+                condition(targets.getJSONObject(index),nativeEpoch,current,pending);
+            }
+        }
+        Poll poll=new Poll();Runnable timeout=()->{if(result.isDone())return;try{poll.check();result.complete(tracker.receipt(false,android.os.SystemClock.elapsedRealtime()-started,timeoutMs));}catch(Exception stopped){result.completeExceptionally(stopped);}};
+        result.whenComplete((value,error)->{main.removeCallbacks(poll);main.removeCallbacks(timeout);if(poll.pending!=null)poll.pending.cancel(false);});main.postDelayed(timeout,timeoutMs);poll.run();
+    }
     /** Explicit ordinary action observation/dispatch on the original registered frame. Read refs themselves grant no action. */
     public void evaluateAction(JSONObject pin,String code,Check current,android.webkit.ValueCallback<String> done,java.util.function.Consumer<Exception> failed)throws Exception {
         current.check();if(closed)throw new BrowserTaskSpace.StalePage("frame宿主已关闭");

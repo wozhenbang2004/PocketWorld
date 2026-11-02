@@ -570,6 +570,8 @@ class DeviceCompanionService:
             raise PlatformError("Existing native local identity required", 403)
         self.identity = local_identity
         self.receiver = CompanionDeviceReceiver(manager, local_identity, bulk_sender=self._send_bulk)
+        from phone_task_bridge import PhoneTaskRouter
+        self.phone_tasks = PhoneTaskRouter(self)
         self.loop = None
         self.thread = None
         self.ready = threading.Event()
@@ -682,6 +684,7 @@ class DeviceCompanionService:
             outgoing = self.receiver.pairing.accept_outgoing_grant(peer, receipt, self.manager.now())
             outgoing.require_target_peer(peer, self.manager.now())
         self.connections.add(connection)
+        self.phone_tasks.connection_opened(connection, peer)
         if connection.lane == "bulk":
             self.bulk_connections[(peer.device_id, peer.certificate_fingerprint)] = connection
         async def incoming(actual_peer, frame):
@@ -699,11 +702,14 @@ class DeviceCompanionService:
                 # No inbound file manifest is exposed until native import
                 # approval is wired. Never accept an unsolicited bulk upload.
                 await connection.close("incompatible"); return
+            if self.phone_tasks.receive(connection, peer, frame.control):
+                return
             response = await self.receiver.receive(peer, frame.control)
             if not connection.send_control(response):
                 await connection.close()
         async def disconnected(delivery_may_be_unknown, error):
             self.connections.discard(connection)
+            self.phone_tasks.connection_closed(connection)
             key = (peer.device_id, peer.certificate_fingerprint)
             if self.bulk_connections.get(key) is connection:
                 self.bulk_connections.pop(key, None)

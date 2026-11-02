@@ -101,6 +101,12 @@ public final class FeatureHost implements AutoCloseable {
     public dev.pocketengine.features.local.project.ProjectOwnerTerminal.Session openProjectTerminalForOwner(String task,String execution,dev.pocketengine.core.RunControl observation)throws Exception{
         var host=projectHost;if(host==null)throw new IllegalStateException("原项目宿主尚未挂载");return host.ownerTerminals().open(task,execution,observation);
     }
+    public JSONObject proposeScheduleForTask(String task,String run,int epoch,String operation,JSONObject draft,dev.pocketengine.core.RunControl original)throws Exception{
+        AutomationPlanHost plans=automationPlans;EngineModule selected=module("automation");if(plans==null||!(selected instanceof dev.pocketengine.features.automation.AutomationModule automation))throw new IllegalStateException("原计划宿主不可用");return plans.proposeScheduleForTask(automation,task,run,epoch,operation,draft,original);
+    }
+    public JSONObject scheduleProposalsForTask(String task,String run,int epoch,dev.pocketengine.core.RunControl original)throws Exception{
+        AutomationPlanHost plans=automationPlans;EngineModule selected=module("automation");if(plans==null||!(selected instanceof dev.pocketengine.features.automation.AutomationModule automation))throw new IllegalStateException("原计划宿主不可用");return plans.scheduleProposalsForTask(automation,task,run,epoch,original);
+    }
     public void setAutomationPlanHost(AutomationPlanHost plans){automationPlans=java.util.Objects.requireNonNull(plans);}
     public JSONObject mediaReadContinuationStatus()throws Exception{return mediaWorkflows==null?new JSONObject():mediaWorkflows.continuationSnapshot();}
     public dev.pocketengine.core.RunControl mediaControl(String taskId){return mediaWorkflows==null?null:mediaWorkflows.currentControl(taskId);}

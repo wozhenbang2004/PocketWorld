@@ -24,7 +24,13 @@ public final class AutomationSchedule {
         if(input==null)throw new IllegalArgumentException("必须提供日历规则");
         String type=string(input,"type");
         if(type.equals("once"))return new JSONObject().put("type",type).put("at",AutomationPolicy.integer(input,"at",1,AutomationPolicy.MAX_TIME));
-        if(!Set.of("daily","weekly","monthly").contains(type))throw new IllegalArgumentException("当前支持一次性、每日、每周或每月规则");
+        if(type.equals("interval")){
+            allowed(input,Set.of("type","anchorAt","intervalMillis"));
+            long anchor=AutomationPolicy.integer(input,"anchorAt",1,AutomationPolicy.MAX_TIME);
+            long every=AutomationPolicy.integer(input,"intervalMillis",60000,366L*24*60*60*1000);
+            return new JSONObject().put("type",type).put("anchorAt",anchor).put("intervalMillis",every);
+        }
+        if(!Set.of("daily","weekly","monthly").contains(type))throw new IllegalArgumentException("当前支持一次性、固定间隔、每日、每周或每月规则");
         String time=string(input,"time"),zone=string(input,"zone");
         if(!time.matches("(?:[01][0-9]|2[0-3]):[0-5][0-9]"))throw new IllegalArgumentException("重复时间使用HH:mm");
         try{ZoneId.of(zone);}catch(java.time.DateTimeException invalid){throw new IllegalArgumentException("重复规则时区无效");}
@@ -71,6 +77,14 @@ public final class AutomationSchedule {
         if(type.equals("once")){
             long at=schedule.getLong("at");if(at<=after)return null;ZonedDateTime utc=Instant.ofEpochMilli(at).atZone(ZoneOffset.UTC);
             return new Occurrence(at,utc.toLocalDateTime(),utc,"absolute");
+        }
+        if(type.equals("interval")){
+            long anchor=schedule.getLong("anchorAt"),every=schedule.getLong("intervalMillis");
+            long steps=after<anchor?0:Math.addExact(Math.floorDiv(after-anchor,every),1);
+            // Bound before multiplying: exhausted calendars return no occurrence, never wrap.
+            if(steps>(AutomationPolicy.MAX_TIME-anchor)/every)return null;
+            long at=anchor+steps*every;ZonedDateTime utc=Instant.ofEpochMilli(at).atZone(ZoneOffset.UTC);
+            return new Occurrence(at,utc.toLocalDateTime(),utc,"fixed_anchor_interval");
         }
         ZoneId zone=ZoneId.of(schedule.getString("zone"));LocalDate start=Instant.ofEpochMilli(after).atZone(zone).toLocalDate();LocalTime time=LocalTime.parse(schedule.getString("time"));
         // All supported recurrences have a matching date within this fixed bound, even if a

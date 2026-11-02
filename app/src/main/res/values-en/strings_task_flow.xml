@@ -268,9 +268,9 @@
     <string name="task_flow_9dd6fa403ec5" formatted="false">"Owner recorded a review conclusion"</string>
     <string name="task_flow_fdc98749cdad" formatted="false">"Registered; waiting for the result"</string>
     <string name="task_flow_4162d937ef08" formatted="false">"Call stopped · See original receipt"</string>
-    <string name="task_flow_e14615fae0ca" formatted="false">"Call error · Check the operation result"</string>
+    <string name="task_flow_e14615fae0ca" formatted="false">"Call error · Effects may already have occurred. Review the result."</string>
     <string name="task_flow_a7ab668ff8e1" formatted="false">"Partial result returned"</string>
-    <string name="task_flow_1a5f51851c0c" formatted="false">"Returned · Expand to view results"</string>
+    <string name="task_flow_1a5f51851c0c" formatted="false">"Returned · The goal still needs review. Expand the original result."</string>
     <string name="task_flow_8f41f9316107" formatted="false">"Original state: "</string>
     <string name="task_flow_b4724185c9ed" formatted="false">"Not reported"</string>
     <string name="task_flow_66ead1cdf09b" formatted="false">"Original tool call"</string>

@@ -16,7 +16,7 @@ public final class BrowserActionReceipt {
         switch(command){case "click":mechanism="synthetic_dom_click";break;case "type":mechanism="dom_value_setter_and_synthetic_events";break;
             case "focus":mechanism="dom_focus";break;case "press":mechanism="synthetic_dom_keyboard";break;case "set_date":mechanism="dom_date_setter_and_synthetic_events";break;case "select_option":mechanism="dom_select_setter_and_synthetic_events";break;case "set_checked":mechanism="synthetic_dom_checked_target";break;
             case "scroll":mechanism="dom_scroll_by";break;case "open":case "navigate":mechanism="webview_navigation_request";break;
-            case "download":mechanism="native_download_request";break;case "read_public":mechanism="anonymous_public_http_get";break;case "observe":case "wait":mechanism="page_read";break;case "unknown":mechanism="unknown_original_mechanism";break;default:mechanism="native_page_lifecycle";}
+            case "input":mechanism="native_webview_input_dispatch";break;case "download_document":mechanism="document_blob_data_download_request";break;case "upload_attachment":mechanism="native_exact_attachment_file_chooser";break;case "download":mechanism="native_download_request";break;case "read_public":mechanism="anonymous_public_http_get";break;case "observe":case "wait":mechanism="page_read";break;case "unknown":mechanism="unknown_original_mechanism";break;default:mechanism="native_page_lifecycle";}
         JSONArray signals=new JSONArray();
         if(dom!=null)for(String key:new String[]{"urlChanged","textChanged","scrollChanged","valueChanged","checkedChanged","selectedIndexChanged"})if(dom.opt(key) instanceof Boolean&&dom.getBoolean(key))signals.put(key);
         String effect="not_observed";
@@ -27,7 +27,7 @@ public final class BrowserActionReceipt {
                 &&dom.optString("postcondition").matches("met|unmet"))post=dom.getString("postcondition");
         JSONObject detail=new JSONObject().put("schemaVersion",1).put("mechanism",mechanism)
                 .put("dispatch",new JSONObject().put("state",dispatch).put("nativeEntryObserved",entered)
-                        .put("trustedInputEvent",false).put("inputReachability",mechanism.startsWith("synthetic")||command.equals("type")||BrowserFormControls.command(command)?"not_independently_verified":"not_applicable"))
+                        .put("trustedInputEvent",command.equals("input")?JSONObject.NULL:false).put("inputReachability",mechanism.startsWith("synthetic")||command.equals("type")||BrowserFormControls.command(command)?"not_independently_verified":"not_applicable"))
                 .put("effect",new JSONObject().put("state",effect).put("signals",signals).put("causality","not_established")
                         .put("coverage",dom==null?"unavailable":"immediate_top_level_url_first_12000_text_chars_scroll_target_value"))
                 .put("postcondition",new JSONObject().put("state",post).put("kind",expected==null?JSONObject.NULL:expected.optString("kind"))

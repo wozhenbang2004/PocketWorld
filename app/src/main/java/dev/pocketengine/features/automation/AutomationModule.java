@@ -70,7 +70,7 @@ public final class AutomationModule implements EngineModule {
                 .put("executionPlansSupported",true).put("executionPlanControl","native_owner_review_only").put("executionPlanTaskAuthority","existing_TaskStore")
                 .put("existingRemoteCommandWaitSupported",true).put("remoteWaitResultScope","exact_original_command_exit_zero_only")
                 .put("runConditionsSupported",true).put("conditionSnapshot","native_read_only").put("conditionRecheckMillis",AutomationConditions.RECHECK_MILLIS)
-                .put("scheduleTypes",new JSONArray(new String[]{"once","daily","weekly","monthly"})).put("schedulePreview","native_read_only")
+                .put("scheduleTypes",new JSONArray(new String[]{"once","interval","daily","weekly","monthly"})).put("schedulePreview","native_read_only")
                 .put("followUpDeliveryPolicySupported",true).put("followUpDeliveryDefault","disabled").put("followUpDeliveryDriver","host_only")
                 .put("commands",new JSONArray(new String[]{"list","save","setEnabled","delete","receipts","checkDue","prepareTask",
                         "createCommitment","listCommitments","getCommitment","updateCommitment","snoozeCommitment","cancelCommitment","completeCommitment","dueCommitments","getFollowUpPolicy","evaluateFollowUp",
@@ -100,6 +100,43 @@ public final class AutomationModule implements EngineModule {
         }
         schedule(context.android,book);context.emit(id(),new JSONObject().put("event","automation_changed").put("snapshot",snapshot()));return result;
     }
+    public JSONObject proposeScheduleForTask(JSONObject nativeOrigin,String operation,JSONObject draft)throws Exception{return book.proposeSchedule(nativeOrigin,operation,draft,System.currentTimeMillis());}
+    public JSONArray scheduleProposalsForTask(String task)throws Exception{return book.scheduleProposals(task);}
+    public JSONObject approveScheduleProposalForOwner(String id,String digest)throws Exception{JSONObject result=book.approveScheduleProposal(id,digest,System.currentTimeMillis());reschedule(context.android);return result;}
+    /** Native-only exact public-source consent and existing approved-plan binding. */
+    public JSONObject approveSemanticReadForOwner(String id,long revision,boolean explicitModelConsent)throws Exception{JSONObject result=book.approveSemanticReadForOwner(id,revision,explicitModelConsent,System.currentTimeMillis());reschedule(context.android);return result;}
+    public JSONObject semanticRuleForHost(String id)throws Exception{return book.semanticRuleForHost(id);}
+    public JSONObject semanticOccurrenceForHost(String occurrence)throws Exception{return book.semanticOccurrenceForHost(occurrence);}
+    public JSONObject semanticCheckRequest(String occurrence)throws Exception{return book.semanticCheckRequest(occurrence,System.currentTimeMillis());}
+    public void requireSemanticCheckCurrent(JSONObject expected)throws Exception{JSONObject actual=semanticCheckRequest(expected.getString("occurrenceId"));if(!dev.pocketengine.store.TaskStore.capabilityFingerprint(actual).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(expected)))throw new SecurityException("原只读条件范围、来源或用途已变化");}
+    public JSONObject bindSemanticPlanForOwner(String ruleId,long ruleRevision,String planId,long shownPlanRevision,String stepId)throws Exception{
+        JSONObject rule=book.semanticRuleForHost(ruleId);if(rule.getLong("revision")!=ruleRevision||rule.optJSONObject("semanticReadApproval")==null)throw new SecurityException("请先批准当前准确公共来源的模型用途");
+        JSONObject binding=commitments.bindSemanticPlanGate(new JSONObject().put("ownerId","owner").put("spaceId","private"),planId,shownPlanRevision,stepId,rule,System.currentTimeMillis());
+        JSONObject result=book.bindSemanticRulePlan(ruleId,ruleRevision,binding,System.currentTimeMillis());commitmentsChanged();return result;
+    }
+    public JSONObject prepareSemanticPlanTask(JSONObject scope,JSONObject occurrence)throws Exception{
+        JSONObject actual=book.semanticOccurrenceForHost(occurrence.getString("id")),rule=book.semanticRuleForHost(actual.getString("ruleId")),binding=rule.getJSONObject("semanticPlanBinding");
+        book.semanticCheckRequest(actual.getString("id"),System.currentTimeMillis());
+        JSONObject prepared=commitments.prepareSemanticPlanTask(scope,actual,binding,System.currentTimeMillis());if(prepared.has("occurrenceId"))book.requireSemanticPlanRequest(prepared);commitmentsChanged();return prepared;
+    }
+    public JSONObject semanticPlanTaskRequest(JSONObject scope,JSONObject occurrence)throws Exception{
+        JSONObject actual=book.semanticOccurrenceForHost(occurrence.getString("id")),rule=book.semanticRuleForHost(actual.getString("ruleId")),binding=rule.getJSONObject("semanticPlanBinding");
+        return commitments.semanticPlanTaskRequest(scope,actual,binding,System.currentTimeMillis());
+    }
+    /** Native original host only; model/feature JSON cannot publish a condition verdict. */
+    public JSONArray pendingSemanticChecks(int limit)throws Exception{return book.pendingSemanticChecks(limit);}
+    public JSONArray pendingSemanticChecksWindow(int limit,int offset)throws Exception{return book.pendingSemanticChecks(limit,offset);}
+    public JSONArray pendingSemanticChecksForOriginalTask(String task)throws Exception{return book.pendingSemanticChecks(20,task);}
+    public JSONObject bindSemanticCheck(String occurrence,String task)throws Exception{return book.bindSemanticCheck(occurrence,task,System.currentTimeMillis());}
+    public JSONObject completeSemanticCheck(String occurrence,AutomationConditionOutcome outcome)throws Exception{
+        return completeSemanticCheck(occurrence,outcome,true);
+    }
+    public JSONObject completeSemanticCheck(String occurrence,AutomationConditionOutcome outcome,boolean notify)throws Exception{
+        long now=System.currentTimeMillis();JSONObject result=book.completeSemanticCheck(occurrence,outcome,now,!notify);
+        if(notify&&"dispatching".equals(result.optString("status")))result=book.dispatchReceipt(occurrence,receipt->postNotification(context.android,receipt),now);
+        reschedule(context.android);return result;
+    }
+    public JSONObject recordSemanticPlanAction(String occurrence,String task,boolean unknown)throws Exception{return book.recordSemanticPlanAction(occurrence,task,unknown,System.currentTimeMillis());}
     /** Native supervisor validates this exact occurrence before admitting its own persistent task. */
     public JSONObject taskRequest(String occurrenceId)throws Exception{return book.taskRequest(occurrenceId,System.currentTimeMillis());}
     /** Read-only original-task projection; it cannot start or authorize execution. */
@@ -165,7 +202,7 @@ public final class AutomationModule implements EngineModule {
     public void authenticatedBusinessEventChanged(JSONObject scope)throws Exception{if(commitments.waitsForBusinessEvents(scope))commitmentsChanged();}
     public long nextPlanTaskAt(JSONObject scope,long now)throws Exception {return commitments.nextPlanTaskAt(scope,now);}
     public JSONObject preparePlanTask(JSONObject scope,String planId,long planRevision,String stepId)throws Exception {JSONObject result=commitments.preparePlanTask(scope,planId,planRevision,stepId,System.currentTimeMillis());commitmentsChanged();return result;}
-    public JSONObject planTaskRequest(JSONObject scope,String planId,String stepId,String occurrenceId)throws Exception {return commitments.planTaskRequest(scope,planId,stepId,occurrenceId,System.currentTimeMillis());}
+    public JSONObject planTaskRequest(JSONObject scope,String planId,String stepId,String occurrenceId)throws Exception {JSONObject request=commitments.planTaskRequest(scope,planId,stepId,occurrenceId,System.currentTimeMillis());book.requireSemanticPlanRequest(request);return request;}
     public JSONObject refreshPlanTasks(JSONObject scope,String planId)throws Exception {JSONObject result=commitments.refreshPlanTasks(scope,planId,System.currentTimeMillis());commitmentsChanged();return result;}
     public JSONObject bindPlanTask(JSONObject scope,String planId,String stepId,String occurrenceId)throws Exception {JSONObject result=commitments.bindPlanTask(scope,planId,stepId,occurrenceId,System.currentTimeMillis());commitmentsChanged();return result;}
     private JSONObject handleCommitment(String command,JSONObject input)throws Exception {

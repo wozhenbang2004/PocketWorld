@@ -66,6 +66,7 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
     var phoneOutputs by remember(taskId) { mutableStateOf("output/result.txt") }
     var phoneCwd by remember(taskId) { mutableStateOf(".") }
     var phoneDependencies by remember(taskId) { mutableStateOf(false) }
+    var phoneOffline by remember(taskId) { mutableStateOf(false) }
     var logOperation by remember(taskId) { mutableStateOf<String?>(null) }
     var logPage by remember(taskId) { mutableStateOf<JSONObject?>(null) }
     var logCursor by remember(taskId) { mutableLongStateOf(0) }
@@ -205,6 +206,7 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
                 val phone = value.optString("executionLocation") == "this_phone"
                 Text(if (phone) "这台手机 · 原托管运行环境" else "已有电脑连接：${deployment.getString("profileId")}\n${deployment.getString("serviceBase")}", fontSize = 14.sp, lineHeight = 22.sp)
                 Caption("${request.getString("runtimeId")} · ${request.getString("workspaceId")}\n" + if (phone) "原生入口只复制明确输入到单次副本，不自动写回原项目。同 UID 进程仍可能读写应用数据、联网或创建脱离后代；这不是 OS 沙箱。标准输入关闭，具体版本、依赖和预算在每次执行前审阅。" else "网络禁止；空环境；单进程。保存后仍需真实执行端探测，本页不会部署解释器。")
+                if (phone) Caption(if (request.optString("network") == "kernel_offline") "已选：执行前必须安装内核新IP套接字过滤；失败拒执行。Unix IPC、手机回调、已有FD与同UID文件不因此隔离。" else "已选：同UID通常网络模式；没有内核离线保证。")
                 SelectionContainer { Text("读取：${request.getJSONArray("readPaths")}\n写入：${request.getJSONArray("writePaths")}\n成果：${request.getJSONArray("outputPaths")}\n配置 SHA-256：${retained.digest}", fontSize = 12.sp, lineHeight = 20.sp) }
                 Row { Checkbox(configAcknowledged, { configAcknowledged = it }, enabled = !busy); Text(if (phone) "我了解同 UID / 网络可达风险；只选择手机执行地点，仍需逐次审阅具体 Skill" else "我信任所选连接与固定部署配置；保存配置不批准任何任务脚本", fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.weight(1f)) }
             }
@@ -221,13 +223,15 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
             OutlinedTextField(phoneCwd, { phoneCwd = it }, label = { Text("副本中的工作目录（默认 .）") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !busy)
             OutlinedTextField(phoneWrites, { phoneWrites = it }, label = { Text("声明写入范围：每行一项") }, modifier = Modifier.fillMaxWidth(), maxLines = 4, enabled = !busy)
             OutlinedTextField(phoneOutputs, { phoneOutputs = it }, label = { Text("取回成果：每行一个准确文件") }, modifier = Modifier.fillMaxWidth(), maxLines = 4, enabled = !busy)
-            if (phoneInterpreter == "python3") Row { Checkbox(phoneDependencies, { phoneDependencies = it }, enabled = !busy); Text("允许准备技能原包 requirements.lock 中精确版本+SHA-256的 PyPI wheel；不跑源码安装脚本。", fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.weight(1f)) }
+            Row { Checkbox(phoneOffline, { phoneOffline = it; if (it) phoneDependencies = false }, enabled = !busy); Text("本次脚本要求内核过滤新建IP套接字；不支持时拒绝执行", fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.weight(1f)) }
+            if (phoneOffline) Caption("仅限制原脚本及子进程的新套接字。Unix IPC、已有FD、手机回调与其他App仍可能联网，同UID文件不隔离；当前离线Skill不安装额外依赖包。")
+            if (phoneInterpreter == "python3") Row { Checkbox(phoneDependencies, { phoneDependencies = it }, enabled = !busy && !phoneOffline); Text("允许准备技能原包 requirements.lock 中精确版本+SHA-256的 PyPI wheel；不跑源码安装脚本。", fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.weight(1f)) }
             Caption("最多复制 200 文件/2MiB。执行上限 120 秒，具体请求可更短；保留输出/成果最多64KiB。手机环境尚未准备时不会开始执行或自动换地点。")
             if (!phone.optBoolean("available")) Text("请先在项目页准备原手机工具环境，再回此任务重新核对。", color = Danger, fontSize = 13.sp)
         }
     }, confirmButton = { Button(onClick = {
         fun paths(value: String) = org.json.JSONArray(value.lines().map { it.trim() }.filter { it.isNotEmpty() })
-        val selection = JSONObject().put("format", "pocketworld.skill-phone-configuration.v1").put("runtimeId", phoneInterpreter).put("checkoutId", phoneCheckout).put("workingDirectory", phoneCwd.trim()).put("readPaths", paths(phoneReads)).put("writePaths", paths(phoneWrites)).put("outputPaths", paths(phoneOutputs)).put("timeoutSeconds",120).put("maxOutputBytes",65536).put("maxResultChars",12000).put("preparePinnedDependencies",phoneDependencies)
+        val selection = JSONObject().put("format", "pocketworld.skill-phone-configuration.v1").put("runtimeId", phoneInterpreter).put("checkoutId", phoneCheckout).put("workingDirectory", phoneCwd.trim()).put("readPaths", paths(phoneReads)).put("writePaths", paths(phoneWrites)).put("outputPaths", paths(phoneOutputs)).put("timeoutSeconds",120).put("maxOutputBytes",65536).put("maxResultChars",12000).put("preparePinnedDependencies",phoneDependencies && !phoneOffline).put("networkMode",if (phoneOffline) "kernel_offline" else "possible_same_uid")
         work({ host.inspectPhoneConfiguration(taskId, selection) }) { configReview = it; showPhoneConfiguration = false }
     }, enabled = !busy && snapshot.optJSONObject("phoneExecution")?.optBoolean("available") == true) { Text("核对这份选择") } }, dismissButton = { TextButton(onClick = { showPhoneConfiguration = false }, enabled = !busy) { Text("取消") } })
     logOperation?.let { operation -> AlertDialog(onDismissRequest = { if (!busy) { logOperation = null; logPage = null } }, title = { Text("手机脚本日志") }, text = {

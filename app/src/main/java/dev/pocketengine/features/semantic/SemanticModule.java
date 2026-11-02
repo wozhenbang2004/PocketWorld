@@ -24,10 +24,10 @@ public final class SemanticModule implements EngineModule {
     @Override public String id() {return "semantic";}
     @Override public JSONObject snapshot() throws Exception {
         return new JSONObject().put("id",id()).put("commands",new JSONArray(new String[]{"status"})).put("intentDiscoveryImplemented",true)
-                .put("adapters",new JSONArray(new String[]{"web","map_search","dial","email_draft","calendar_draft","alarm","timer"}))
+                .put("adapters",new JSONArray(new String[]{"web","app_link","share_text","show_alarms","map_search","dial","email_draft","calendar_draft","alarm","timer"}))
                 .put("clock",new JSONObject().put("permissionGranted",context.android.checkSelfPermission(AndroidSemanticPlatform.CLOCK_PERMISSION)==PackageManager.PERMISSION_GRANTED)
                         .put("deviceTimeZone",java.util.TimeZone.getDefault().getID()).put("receiverMayApplyImmediately",true).put("actualClockStateVerified",false))
-                .put("dispatchScope","original_owner_phone_main_screen_only").put("backgroundIntentDispatch",false)
+                .put("dispatchScope","original_owner_phone_exact_display").put("backgroundIntentDispatch",true)
                 .put("automaticFallback",false).put("sdkInt",Build.VERSION.SDK_INT)
                 .put("appFunctions",new JSONObject().put("available",false).put("clientImplemented",false)
                         .put("executionPermissionGranted",context.android.checkSelfPermission("android.permission.EXECUTE_APP_FUNCTIONS")==PackageManager.PERMISSION_GRANTED)
@@ -49,7 +49,11 @@ public final class SemanticModule implements EngineModule {
         PhoneAccessibilityService service=PhoneAccessibilityService.get();
         boolean dispatch=binding.allowWrites&&"phone".equals(task.optString("kind"))&&"main_screen".equals(task.optString("executionMode"))
                 &&service!=null&&selectedPhone!=null&&selectedPhone.isConnected();
-        AndroidSemanticPlatform platform=new AndroidSemanticPlatform(context.android,dispatch?service:null,dispatch?selectedPhone::clearReferences:null);
+        PhonePort physical=selectedPhone instanceof dev.pocketengine.phone.observation.AdaptivePhonePort?((dev.pocketengine.phone.observation.AdaptivePhonePort)selectedPhone).physicalPort():selectedPhone;
+        if(physical instanceof dev.pocketengine.phone.access.GuardedPhonePort)physical=((dev.pocketengine.phone.access.GuardedPhonePort)physical).physicalPort();
+        boolean background=binding.allowWrites&&"phone".equals(task.optString("kind"))&&"background".equals(task.optString("executionMode"))&&physical instanceof dev.pocketengine.phone.display.BackgroundPhonePort&&selectedPhone.isConnected();
+        SemanticPlatform platform=background?new BackgroundSemanticPlatform(context.android,(dev.pocketengine.phone.display.BackgroundPhonePort)physical,new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context.android)):new AndroidSemanticPlatform(context.android,dispatch?service:null,dispatch?selectedPhone::clearReferences:null);
+        dispatch|=background;
         SemanticTaskAuthority authority=new SemanticTaskAuthority(tasks,binding,approvalEvents);
         if(!dispatch)return new SemanticCapabilityPort(existing,originalControl,authority,platform,false);
         return new SemanticCapabilityPort(existing,originalControl,authority,platform,true,retainRun(binding,originalControl));

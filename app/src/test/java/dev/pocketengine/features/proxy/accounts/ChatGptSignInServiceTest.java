@@ -21,15 +21,22 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
+import org.robolectric.annotation.Implementation;
+import org.robolectric.annotation.Implements;
 import org.robolectric.annotation.LooperMode;
+import org.robolectric.shadows.ShadowApplication;
 import static org.junit.Assert.*;
 
 /** Local fictitious auth only. No browser login, user grant or inference. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,application=ChatGptSignInServiceTest.App.class)
+@Config(sdk=35,application=EngineApplication.class,shadows=ChatGptSignInServiceTest.StartupShadow.class)
 @LooperMode(LooperMode.Mode.PAUSED)
 public final class ChatGptSignInServiceTest {
-    public static final class App extends EngineApplication {@Override public void onCreate(){}}
+    /** Keep the real final Application type without starting unrelated application resources. */
+    @Implements(value=EngineApplication.class,isInAndroidSdk=false)
+    public static final class StartupShadow extends ShadowApplication {
+        @Implementation public void onCreate(){}
+    }
     private FeatureHost fixtureHost;
     private NativeOwnerWorkflows workflows()throws Exception {
         EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();

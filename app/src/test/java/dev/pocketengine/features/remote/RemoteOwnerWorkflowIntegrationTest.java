@@ -1,7 +1,7 @@
 package dev.pocketengine.features.remote;
 
 import android.app.Application;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.EventSink;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.FeatureHost;

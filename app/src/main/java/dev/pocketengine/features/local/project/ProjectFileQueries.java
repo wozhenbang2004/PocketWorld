@@ -4,10 +4,7 @@ import dev.pocketengine.features.local.NativeCommandExecutor;
 import dev.pocketengine.features.workspace.VersionedWorkspace;
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
-import java.nio.channels.Channels;
-import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -29,33 +26,17 @@ public final class ProjectFileQueries {
     @FunctionalInterface public interface Current {void check()throws Exception;}
     private ProjectFileQueries() {}
     private static final class FileInfo {
-        final String path,sha;final long bytes,chars,lines;final boolean binary;
-        FileInfo(String path,String sha,long bytes,long chars,long lines,boolean binary){this.path=path;this.sha=sha;this.bytes=bytes;this.chars=chars;this.lines=lines;this.binary=binary;}
+        final String path,sha,text;final long bytes,chars,lines;final boolean binary;final byte[] captured;
+        FileInfo(String path,String sha,long bytes,long chars,long lines,boolean binary,byte[] captured,String text){this.path=path;this.sha=sha;this.bytes=bytes;this.chars=chars;this.lines=lines;this.binary=binary;this.captured=captured;this.text=text;}
         JSONObject json()throws Exception{return new JSONObject().put("path",path).put("sha256",sha).put("bytes",bytes).put("binary",binary).put("totalChars",binary?JSONObject.NULL:chars).put("lineCount",binary?JSONObject.NULL:lines);}
     }
-    private static SeekableByteChannel open(Path path)throws Exception {
-        return Files.newByteChannel(path,java.util.Set.of(StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS));
-    }
-    private static BufferedReader reader(Path path)throws Exception {
-        return new BufferedReader(new InputStreamReader(Channels.newInputStream(open(path)),StandardCharsets.UTF_8.newDecoder()),4096);
-    }
-    private static Path target(File root,String relative)throws Exception {
-        Path path=NativeCommandExecutor.within(root,VersionedWorkspace.path(relative)).toPath();
-        if(!Files.isRegularFile(path,LinkOption.NOFOLLOW_LINKS))throw new IllegalArgumentException("原项目文件不存在或不是普通文件");return path;
-    }
     private static FileInfo describe(File root,String relative,Current current)throws Exception {
-        Path path=target(root,relative);BasicFileAttributes before=Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
-        if(before.size()>ProjectSources.MAX_FILE_BYTES)throw new IllegalArgumentException("文件超过本次2MiB读取范围");
-        MessageDigest digest=MessageDigest.getInstance("SHA-256");long bytes=0;boolean nul=false;byte[] block=new byte[8192];
-        try(var input=Channels.newInputStream(open(path))){int n;while((n=input.read(block))>=0){current.check();bytes+=n;if(bytes>ProjectSources.MAX_FILE_BYTES)throw new IllegalArgumentException("文件在读取时超过2MiB");for(int i=0;i<n;i++)nul|=block[i]==0;digest.update(block,0,n);}}
-        boolean binary=nul;long chars=0,lines=0;boolean any=false,lastNewline=false;
-        if(!binary)try(BufferedReader input=reader(path)){char[] values=new char[4096];int n;while((n=input.read(values))>=0){current.check();chars+=n;for(int i=0;i<n;i++){any=true;lastNewline=values[i]=='\n';if(lastNewline)lines++;}}if(any&&!lastNewline)lines++;}
-        catch(CharacterCodingException invalid){binary=true;chars=0;lines=0;}
-        BasicFileAttributes after=Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
-        if(!same(before,after)||bytes!=after.size())throw new SecurityException("文件在读取时变化，请重新读取原路径");
-        return new FileInfo(relative,hex(digest.digest()),bytes,chars,lines,binary);
+        current.check();byte[] bytes=dev.pocketengine.features.local.runtime.WorkspaceFileAccess.read(root,VersionedWorkspace.path(relative),ProjectSources.MAX_FILE_BYTES);current.check();
+        String text=null;boolean binary=false;for(byte value:bytes)if(value==0){binary=true;break;}
+        if(!binary)try{text=StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString();}catch(CharacterCodingException invalid){binary=true;}
+        long lines=0;if(text!=null&&!text.isEmpty()){for(int i=0;i<text.length();i++)if(text.charAt(i)=='\n')lines++;if(!text.endsWith("\n"))lines++;}
+        return new FileInfo(relative,hex(MessageDigest.getInstance("SHA-256").digest(bytes)),bytes.length,text==null?0:text.length(),lines,binary,bytes,text);
     }
-    private static boolean same(BasicFileAttributes a,BasicFileAttributes b){return a.isRegularFile()&&b.isRegularFile()&&a.size()==b.size()&&a.lastModifiedTime().equals(b.lastModifiedTime())&&java.util.Objects.equals(a.fileKey(),b.fileKey());}
     private static String hex(byte[] bytes){StringBuilder out=new StringBuilder();for(byte b:bytes)out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
     private static void unchanged(File root,FileInfo info,Current current)throws Exception {
         FileInfo after=describe(root,info.path,current);if(!info.sha.equals(after.sha)||info.bytes!=after.bytes)throw new SecurityException("读取期间文件SHA变化，未返回跨版本内容");
@@ -63,19 +44,19 @@ public final class ProjectFileQueries {
     public static JSONObject read(File root,String checkout,JSONObject input,Current current)throws Exception {
         String relative=VersionedWorkspace.path(input.getString("path"));current.check();FileInfo info=describe(root,relative,current);
         if(input.has("expectedHash")&&!info.sha.equals(input.getString("expectedHash")))throw new SecurityException("文件SHA已变化，请明确重新读取当前版本");
-        JSONObject result=info.json().put("checkoutId",checkout).put("untrusted",true).put("source","active_checkout_bytes").put("atomicReadFence",false);
+        JSONObject result=info.json().put("checkoutId",checkout).put("untrusted",true).put("source","active_checkout_bytes").put("atomicReadFence",false).put("descriptorAnchored",true).put("singleLinkVerified",true);
         if(info.binary)return result.put("contentOmitted",true).put("reason","binary_not_utf8_text").put("complete",false).put("nextOffset",JSONObject.NULL);
         String mode=input.optString("rangeMode","chars");if(!java.util.Set.of("chars","lines","bytes").contains(mode))throw new IllegalArgumentException("读取范围模式无效");
         int limit=Math.min(PAGE_CHARS,input.optInt("maxChars",PAGE_CHARS));if(limit<1)throw new IllegalArgumentException("读取长度无效");long start=input.optLong("offset",0),end;StringBuilder text=new StringBuilder();
         if(mode.equals("bytes")){
             if(start<0||start>info.bytes)throw new IllegalArgumentException("字节范围越界");int requestedBytes=input.optInt("maxBytes",limit);if(requestedBytes<1)throw new IllegalArgumentException("字节长度至少为1");int count=(int)Math.min(Math.min(limit,requestedBytes),info.bytes-start);if(count<0)throw new IllegalArgumentException("字节长度无效");
-            ByteBuffer bytes=ByteBuffer.allocate(count);try(var channel=open(target(root,relative))){channel.position(start);while(bytes.hasRemaining()&&channel.read(bytes)>=0)current.check();}bytes.flip();
+            ByteBuffer bytes=ByteBuffer.wrap(info.captured,(int)start,count);current.check();
             try{text.append(StandardCharsets.UTF_8.newDecoder().decode(bytes));}catch(CharacterCodingException split){throw new IllegalArgumentException("字节范围切断UTF-8字符，请使用字符/行范围，或选择完整字符边界",split);}end=start+count;
             result.put("byteOffset",start).put("nextByteOffset",end<info.bytes?end:JSONObject.NULL).put("complete",end==info.bytes);
         }else{
             if(start<0||start>info.chars)throw new IllegalArgumentException("字符范围越界");int requestedLine=input.optInt("startLine",1),maxLines=input.optInt("maxLines",200);if(requestedLine<1||maxLines<1||maxLines>400)throw new IllegalArgumentException("行范围无效");
             long position=0,line=1;int seenLines=0,previous=-1;boolean collecting=!mode.equals("lines");
-            try(BufferedReader inputReader=reader(target(root,relative))){int value;while((value=inputReader.read())!=-1){if((position&4095)==0)current.check();
+            try(BufferedReader inputReader=new BufferedReader(new java.io.StringReader(info.text))){int value;while((value=inputReader.read())!=-1){if((position&4095)==0)current.check();
                 if(mode.equals("lines")&&!collecting&&line>=requestedLine){start=position;collecting=true;}
                 if(collecting&&position>=start){if(position==start&&Character.isLowSurrogate((char)value)&&previous>=0&&Character.isHighSurrogate((char)previous))throw new IllegalArgumentException("字符范围切断Unicode字符，请退回一个字符位置");
                     if(text.length()>=limit||mode.equals("lines")&&seenLines>=maxLines)break;text.append((char)value);if(value=='\n')seenLines++;}
@@ -146,13 +127,13 @@ public final class ProjectFileQueries {
         JSONArray matches=new JSONArray();int resultBytes=0;boolean more=false;String lastPath="";int lastLine=0;String needle=query;
         search:for(FileInfo info:facts){if(!filter.matches(info.path,current)||info.path.compareTo(afterPath)<0)continue;
             if(mode.equals("path")){if(!pathQuery.matches(info.path,current)||info.path.equals(afterPath))continue;JSONObject match=info.json();int bytes=match.toString().getBytes(StandardCharsets.UTF_8).length;if(matches.length()==limit||resultBytes+bytes>12000){more=true;break;}matches.put(match);resultBytes+=bytes;lastPath=info.path;lastLine=0;continue;}
-            if(info.binary)continue;int line=0;try(BufferedReader source=reader(target(root,info.path))){String value;while((value=boundedLine(source,current))!=null){line++;if(info.path.equals(afterPath)&&line<=afterLine)continue;int column=findLiteral(value,needle,caseSensitive,current);if(column<0)continue;if(matches.length()==limit){more=true;break search;}int from=Math.max(0,column-100),to=Math.min(value.length(),column+query.length()+300);JSONObject match=new JSONObject().put("path",info.path).put("sha256",info.sha).put("bytes",info.bytes).put("line",line).put("column",column+1).put("columnUnit","UTF16_code_units").put("text",value.substring(from,to)).put("linePreviewOffset",from).put("linePreviewTruncated",from>0||to<value.length());int bytes=match.toString().getBytes(StandardCharsets.UTF_8).length;if(resultBytes+bytes>12000){more=true;break search;}matches.put(match);resultBytes+=bytes;lastPath=info.path;lastLine=line;}}
+            if(info.binary)continue;int line=0;try(BufferedReader source=new BufferedReader(new java.io.StringReader(info.text))){String value;while((value=boundedLine(source,current))!=null){line++;if(info.path.equals(afterPath)&&line<=afterLine)continue;int column=findLiteral(value,needle,caseSensitive,current);if(column<0)continue;if(matches.length()==limit){more=true;break search;}int from=Math.max(0,column-100),to=Math.min(value.length(),column+query.length()+300);JSONObject match=new JSONObject().put("path",info.path).put("sha256",info.sha).put("bytes",info.bytes).put("line",line).put("column",column+1).put("columnUnit","UTF16_code_units").put("text",value.substring(from,to)).put("linePreviewOffset",from).put("linePreviewTruncated",from>0||to<value.length());int bytes=match.toString().getBytes(StandardCharsets.UTF_8).length;if(resultBytes+bytes>12000){more=true;break search;}matches.put(match);resultBytes+=bytes;lastPath=info.path;lastLine=line;}}
             unchanged(root,info,current);
         }
         // Recheck every participating file, including a result page stopped in the middle of one file.
         for(FileInfo info:facts)unchanged(root,info,current);
         boolean coverage=enumerationComplete[0]&&byteBudget&&skippedCount[0]==0;
-        return new JSONObject().put("checkoutId",checkout).put("queryHash",queryHash).put("manifestHash",manifestHash).put("mode",mode).put("matches",matches).put("nextCursor",more?new JSONObject().put("queryHash",queryHash).put("manifestHash",manifestHash).put("path",lastPath).put("line",lastLine):JSONObject.NULL).put("hasMore",more).put("coverageComplete",coverage).put("enumerationComplete",enumerationComplete[0]).put("byteBudgetComplete",byteBudget).put("coverageScope","eligible_source_paths_or_UTF8_text_only").put("resultBytes",resultBytes).put("scannedFiles",facts.size()).put("scannedBytes",total).put("binaryFilesSkippedForText",mode.equals("text")?binary:0).put("skippedCount",skippedCount[0]).put("skipped",skipped).put("scope",scope).put("include",include).put("hidden",includeHidden).put("excluded",new JSONArray(new String[]{"dependency_caches","build_outputs","symlinks","special_files"})).put("pathGlobEngine","bounded_dynamic_programming").put("pathGlobUnicodeUnit","code_point").put("searchSyntax",mode.equals("path")?"glob_star_double_star_question":"literal").put("untrusted",true).put("atomicReadFence",false);
+        return new JSONObject().put("checkoutId",checkout).put("queryHash",queryHash).put("manifestHash",manifestHash).put("mode",mode).put("matches",matches).put("nextCursor",more?new JSONObject().put("queryHash",queryHash).put("manifestHash",manifestHash).put("path",lastPath).put("line",lastLine):JSONObject.NULL).put("hasMore",more).put("coverageComplete",coverage).put("enumerationComplete",enumerationComplete[0]).put("byteBudgetComplete",byteBudget).put("coverageScope","eligible_source_paths_or_UTF8_text_only").put("resultBytes",resultBytes).put("scannedFiles",facts.size()).put("scannedBytes",total).put("binaryFilesSkippedForText",mode.equals("text")?binary:0).put("skippedCount",skippedCount[0]).put("skipped",skipped).put("scope",scope).put("include",include).put("hidden",includeHidden).put("excluded",new JSONArray(new String[]{"dependency_caches","build_outputs","symlinks","special_files"})).put("pathGlobEngine","bounded_dynamic_programming").put("pathGlobUnicodeUnit","code_point").put("searchSyntax",mode.equals("path")?"glob_star_double_star_question":"literal").put("untrusted",true).put("atomicReadFence",false).put("descriptorAnchored",true).put("singleLinkVerified",true);
     }
     private static int findLiteral(String text,String query,boolean sensitive,Current current)throws Exception {
         if(sensitive)return text.indexOf(query);for(int i=0;i<=text.length()-query.length();i++){if((i&4095)==0)current.check();if(text.regionMatches(true,i,query,0,query.length()))return i;}return -1;

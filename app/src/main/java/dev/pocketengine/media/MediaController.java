@@ -50,7 +50,7 @@ public final class MediaController implements AutoCloseable,VoiceCompanionTurn.A
     public JSONObject state(){JSONObject result=json("type","media_state","listening",listening,"speaking",speaking,"ttsReady",ttsReady,"audioFocusHeld",audioFocus.isHeld(),"realtimeOwnsAudio",realtimeAudioOwner!=null,"audioReleaseUnknown",audioReleaseUnknown);try{result.put("recognitionAvailable",!closed&&SpeechRecognizer.isRecognitionAvailable(activity)).put("systemSpeech",systemSpeechInfo());}catch(Exception unavailable){put(result,"recognitionAvailable",false);}return result;}
     /** Capability metadata only. Default system recognition is not evidence of offline or Chinese support. */
     public JSONObject systemSpeechInfo(){
-        JSONObject info=json("provider","android_system_default","recognitionNetworkUse","unknown","recognitionLanguageSupport","unknown","requestedLanguage","zh-CN","recognitionEngineIdentity","system_selected_unverified","microphoneGranted",activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED,"ttsStatus",closed?"closed":ttsStatus,"ttsVoiceNetworkUse","unknown","ttsEnginePackage","");
+        JSONObject info=json("provider","android_system_default","recognitionNetworkUse","unknown","recognitionLanguageSupport","unknown","requestedLanguage",dev.pocketengine.features.operations.AppLanguage.speechLocale(activity).toLanguageTag(),"recognitionEngineIdentity","system_selected_unverified","microphoneGranted",activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED,"ttsStatus",closed?"closed":ttsStatus,"ttsVoiceNetworkUse","unknown","ttsEnginePackage","");
         try{info.put("recognitionAvailable",!closed&&SpeechRecognizer.isRecognitionAvailable(activity));if(speech!=null){String engine=speech.getDefaultEngine();info.put("ttsEnginePackage",engine==null?"":engine);android.speech.tts.Voice selected=speech.getVoice();if(ttsReady&&selected!=null)info.put("ttsVoiceName",selected.getName()).put("ttsVoiceNetworkUse",selected.isNetworkConnectionRequired()?"requires_network":"declares_no_network_requirement");}}catch(RuntimeException unavailable){/* Unknown capability stays unknown; no replacement engine is selected. */}catch(org.json.JSONException impossible){throw new IllegalStateException(impossible);}return info;
     }
     /** Permission request only. A grant does not automatically start the new draft capture. */
@@ -77,7 +77,7 @@ public final class MediaController implements AutoCloseable,VoiceCompanionTurn.A
         if(!outputStopped||!inputStopped){speechFailure(result,"audio_release_unknown","系统语音资源释放未确认，请重启应用后重试。");return;}
         try{
             long epoch=++recognitionEpoch;recognitionOwner=owner;ownedRecognition=result;recognition=SpeechRecognizer.createSpeechRecognizer(activity);recognition.setRecognitionListener(new Listener(epoch,owner,result));
-            Intent request=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_LANGUAGE,"zh-CN").putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,false).putExtra(RecognizerIntent.EXTRA_MAX_RESULTS,1);
+            Intent request=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_LANGUAGE,dev.pocketengine.features.operations.AppLanguage.speechLocale(activity).toLanguageTag()).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,false).putExtra(RecognizerIntent.EXTRA_MAX_RESULTS,1);
             listening=true;recognition.startListening(request);emitState();
         }catch(RuntimeException unavailable){stopListeningInternal();speechFailure(result,"recognition_unavailable","语音识别暂时不可用，请检查系统语音服务。");emitState();}
     }
@@ -176,7 +176,7 @@ public final class MediaController implements AutoCloseable,VoiceCompanionTurn.A
         speech=new TextToSpeech(activity,status->main.post(()->{
             if(closed||epoch!=speechEpoch||speech==null)return;
             if(status!=TextToSpeech.SUCCESS){ttsReady=false;ttsStatus="unavailable";failPendingSpeech("speech_unavailable");TextToSpeech failed=speech;speech=null;failed.shutdown();error("系统朗读引擎初始化失败，可稍后重试。");emitState();return;}
-            int language=speech.setLanguage(Locale.SIMPLIFIED_CHINESE);
+            int language=speech.setLanguage(dev.pocketengine.features.operations.AppLanguage.speechLocale(activity));
             speech.setAudioAttributes(SpeechAudioFocus.ATTRIBUTES);
             ttsReady=language!=TextToSpeech.LANG_MISSING_DATA&&language!=TextToSpeech.LANG_NOT_SUPPORTED;
             ttsStatus=language==TextToSpeech.LANG_MISSING_DATA?"language_data_missing":language==TextToSpeech.LANG_NOT_SUPPORTED?"language_unsupported":"ready";

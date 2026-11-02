@@ -16,7 +16,7 @@ android {
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = '17' }
-    buildFeatures { compose true }
+    buildFeatures { compose true; buildConfig true }
     buildTypes { release { minifyEnabled false } }
     testOptions { unitTests { includeAndroidResources = true } }
     lint { abortOnError true }
@@ -48,6 +48,25 @@ def helperTask = tasks.register('buildDisplayHelper', Exec) {
 }
 android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/display-helper-assets'))
 tasks.named('preBuild').configure { dependsOn helperTask }
+def phoneIdentity = tasks.register('generatePhoneBuildIdentity') {
+    def target = layout.buildDirectory.file('generated/phone-identity/phone-build-identity.json')
+    outputs.file(target)
+    outputs.upToDateWhen { false }
+    doLast {
+        def gitRead = { List<String> argv ->
+            def bytes = new ByteArrayOutputStream()
+            try { def result = project.exec { workingDir rootProject.projectDir; commandLine(['git'] + argv); standardOutput bytes; errorOutput new ByteArrayOutputStream(); ignoreExitValue true }; return result.exitValue == 0 ? bytes.toString('UTF-8').trim() : null } catch (Exception unavailable) { return null }
+        }
+        def dirty = gitRead(['status', '--porcelain'])
+        def clean = dirty != null && dirty.isEmpty()
+        def commit = clean ? gitRead(['rev-parse', 'HEAD']) : null
+        def tree = clean ? gitRead(['rev-parse', 'HEAD^{tree}']) : null
+        def file = target.get().asFile; file.parentFile.mkdirs()
+        file.text = groovy.json.JsonOutput.toJson([commit: commit, tree: tree, dirty: !clean])
+    }
+}
+android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/phone-identity'))
+tasks.named('preBuild').configure { dependsOn phoneIdentity }
 dependencies {
     implementation platform('androidx.compose:compose-bom:2025.02.00')
     implementation 'androidx.activity:activity-compose:1.10.1'
@@ -85,6 +104,48 @@ android.sourceSets.main.java.srcDir(rootProject.file('display-helper/src'))
 // Only the reviewed Java source/test directories: never draft docs or downloaded binaries.
 android.sourceSets.main.java.srcDir('src/pendingAdb/java')
 android.sourceSets.test.java.srcDir('src/pendingAdb/test')
+android.sourceSets.test.java.srcDir(rootProject.file('display-helper/test'))
+
+// The explicit Mika CI command compiles every selected Java test and its fixture
+// closure. The default unit-test source set and full-suite entry remain unchanged.
+if (providers.gradleProperty('mikaFocusedTests').orNull == 'true') {
+    def manifestFile = rootProject.file('app/build/mika-focused-tests/sources.json')
+    if (!manifestFile.isFile()) throw new GradleException('Run tools/prepare-mika-focused-sources.py before focused unit compilation')
+    def manifest = new groovy.json.JsonSlurper().parse(manifestFile)
+    def expected = rootProject.file('tools/mika-focused-tests.txt').readLines('UTF-8')
+            .collect { it.trim() }.findAll { it && !it.startsWith('#') }.toSet()
+    expected.add('dev.pocketengine.features.local.runtime.NativeOfflineUnavailableTest')
+    if (!(manifest.selectedClasses instanceof List) || manifest.selectedClasses.toSet() != expected || !(manifest.javaSources instanceof List) || manifest.javaSources.isEmpty())
+        throw new GradleException('Focused source manifest must retain every declared test class and the native-unavailable negative case')
+    if (!(manifest.selectedClassSources instanceof Map) || manifest.selectedClassSources.keySet() != expected ||
+            !manifest.javaSources.containsAll(manifest.selectedClassSources.values().findAll { it.endsWith('.java') }))
+        throw new GradleException('A selected Java test source is missing from the focused compilation inputs')
+    def allowedRoots = ['app/src/test', 'app/src/pendingAdb/test', 'display-helper/test']
+            .collect { rootProject.file(it).canonicalPath + File.separator }
+    def javaSources = manifest.javaSources.collect { path ->
+        def source = rootProject.file(path)
+        if (!source.isFile() || !source.name.endsWith('.java') || !allowedRoots.any { source.canonicalPath.startsWith(it) })
+            throw new GradleException('Focused Java input is not an existing repository test source: ' + path)
+        source
+    }
+    // Android/Kotlin finish wiring variant sources during project evaluation.
+    // Apply the reviewed source collection after that wiring, then verify it at execution.
+    gradle.projectsEvaluated {
+        tasks.named('compileDebugUnitTestJavaWithJavac', org.gradle.api.tasks.compile.JavaCompile).configure {
+            setSource(project.files(javaSources))
+            def requiredSources = javaSources.collect { it.canonicalFile }.toSet()
+            setIncludes([])
+            include { element -> element.directory || requiredSources.contains(element.file.canonicalFile) }
+            doFirst {
+                def actual = getSource().files.collect { it.canonicalFile }.toSet()
+                def required = requiredSources
+                if (actual != required)
+                    throw new GradleException('Focused Java task sources no longer match the complete reviewed fixture closure; missing=' + (required - actual) + '; extra=' + (actual - required))
+                logger.lifecycle('Mika focused Java sources: {} for {} declared test classes including the independent native negative', javaSources.size(), expected.size())
+            }
+        }
+    }
+}
 // Android JNI stays in the APK; host tests retain Robolectric's OpenJDK provider.
 configurations.matching { it.name.endsWith('UnitTestRuntimeClasspath') }.configureEach {
     exclude group: 'org.conscrypt', module: 'conscrypt-android'

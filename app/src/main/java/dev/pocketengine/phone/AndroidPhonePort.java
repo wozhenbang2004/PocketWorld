@@ -48,7 +48,7 @@ import dev.pocketengine.phone.observation.OcrTextTarget;
 import dev.pocketengine.phone.observation.NativePhoneEntry;
 
 /** A single foreground-display executor. References are data, never retained Android nodes. */
-public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.pocketengine.phone.observation.NativeTreeScrollPort,dev.pocketengine.phone.observation.NativePhoneSignals {
+public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.pocketengine.phone.observation.NativeTreeScrollPort,dev.pocketengine.phone.observation.NativePhoneSignals,dev.pocketengine.phone.observation.NativePhoneExtensions {
     private static final int MAX_TEXT = 400;
     private static final long REFERENCE_LIFETIME_MS = 20_000;
     private static final long MAIN_WAIT_MS = 5_000;
@@ -58,11 +58,40 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     private final AtomicReference<Snapshot> reference = new AtomicReference<>();
     private volatile long lastScreenshotRequest;
     private volatile boolean lastIncludeImage;
+    private final dev.pocketengine.phone.setup.AndroidAppCopies appCopies;
 
-    public AndroidPhonePort(Context context) { this.context = context.getApplicationContext(); }
+    public AndroidPhonePort(Context context) { this.context = context.getApplicationContext();appCopies=new dev.pocketengine.phone.setup.AndroidAppCopies(this.context); }
     @Override public PhoneUiSignals uiSignals(RunControl control)throws Exception {control.check();if(control.isPaused())return null;PhoneAccessibilityService service=requireService();requireUnlocked(service);return service.uiSignals();}
     @Override public boolean isConnected() { return PhoneAccessibilityService.get() != null; }
     @Override public void clearReferences() { reference.set(null); }
+    @Override public synchronized JSONObject extension(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        workerOnly();dev.pocketengine.phone.observation.PhoneExtensionTools.validate(tool,args);control.check();if(control.isPaused())return failure("task_paused","原执行已暂停。");
+        if(tool.equals("phone_list_app_copies"))return appCopies.list(control);
+        if(admission==null)throw new SecurityException("original_prepared_admission_required");PhoneAccessibilityService service=requireService();long revision=control.pauseRevision();
+        if(tool.equals("phone_launch_app_copy"))return onMain(control,revision,()->{guard(service,control,revision);JSONObject receipt=appCopies.launch(args,Display.DEFAULT_DISPLAY,control,admission);clearReferences();return receipt;});
+        if(tool.equals("phone_practice_target")){
+            if(!context.getPackageName().equals(args.getString("packageName"))||dev.pocketengine.phone.setup.AndroidAppCopies.id(android.os.Process.myUserHandle())!=args.getInt("userId"))throw new SecurityException("practice_target_is_fixed");
+            return onMain(control,revision,()->NativePhoneEntry.call(control,revision,()->{guard(service,control,revision);admission.check();},()->{clearReferences();service.startActivity(new Intent(context,dev.pocketengine.phone.diagnostics.PhonePracticeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));return receipt(true,"practice_target_requested");}));
+        }
+        Snapshot expected=requireReference(args,control);
+        if(tool.equals("phone_paste_text")){
+            AccessibilityForest.Ref ref=expected.tree.forest.refs.get(args.getString("nodeId"));if(ref==null)return failure("stale_node","输入目标已变化。");
+            return dev.pocketengine.phone.observation.AccessibilityPasteInput.paste(context,service,Display.DEFAULT_DISPLAY,ref,args.getString("text"),control,expected.revision,admission,()->validate(service,expected,control),this::clearReferences);
+        }
+        if(tool.equals("phone_gesture"))return gesturePaths(service,expected,args,control,admission);
+        return failure("native_extension_unavailable","此原生端口不支持该扩展。");
+    }
+    private JSONObject gesturePaths(PhoneAccessibilityService service,Snapshot expected,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        if(expected.imageDigest==null)throw new PhoneFailure("coordinate_unverifiable","多指手势需要原真实图片。");CapturedImage image=capture(service,control,expected.revision);
+        if(!expected.imageDigest.equals(image.digest)||expected.tree.screen.width!=image.fullWidth||expected.tree.screen.height!=image.fullHeight)throw new PhoneFailure("stale_observation","图片已变化，未派发多指手势。");
+        int duration=args.getInt("durationMs");CompletableFuture<String> completion=new CompletableFuture<>();
+        boolean accepted=onMain(control,expected.revision,()->{
+            validate(service,expected,control,false);GestureDescription.Builder builder=new GestureDescription.Builder();JSONArray paths=args.getJSONArray("paths");
+            for(int i=0;i<paths.length();i++){JSONArray points=paths.getJSONArray(i);Path path=new Path();float previousX=0,previousY=0;for(int j=0;j<points.length();j++){JSONArray pair=points.getJSONArray(j);float x=pixel(pair.getInt(0),image.fullWidth),y=pixel(pair.getInt(1),image.fullHeight);if(j==0)path.moveTo(x,y);else{Rect swept=new Rect((int)Math.floor(Math.min(previousX,x)),(int)Math.floor(Math.min(previousY,y)),(int)Math.ceil(Math.max(previousX,x))+1,(int)Math.ceil(Math.max(previousY,y))+1);if(Rect.intersects(swept,service.controlsBounds()))throw new PhoneFailure("controls_overlap","手势经过原任务停止控件。");path.lineTo(x,y);}previousX=x;previousY=y;}builder.addStroke(new GestureDescription.StrokeDescription(path,0,duration));}
+            return NativePhoneEntry.call(control,expected.revision,()->{guard(service,control,expected.revision);admission.check();},()->{clearReferences();return service.dispatchGesture(builder.build(),new AccessibilityService.GestureResultCallback(){@Override public void onCompleted(GestureDescription gesture){completion.complete("completed");}@Override public void onCancelled(GestureDescription gesture){completion.complete("cancelled");}},main);});
+        });
+        if(!accepted)return receipt(false,"gesture_rejected");try{return receipt(true,"gesture_"+await(completion,control,duration+3500L)).put("requiresPostconditionCheck",true);}catch(TimeoutException unknown){return new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","gesture_completion_unknown").put("automaticReplayAllowed",false);}
+    }
 
     /** Read-only owner preview. It never installs action references or touches the task's physical port. */
     OwnerScreenContext.Captured captureForContext(boolean includeScreenshot, OwnerScreenContext.ReadCheck owner) throws Exception {

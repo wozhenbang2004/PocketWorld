@@ -14,8 +14,9 @@ import java.util.Locale;
 public final class ConversationHistory {
     public static final class Item {
         public final String id,title;
-        public final long updatedAt;
-        public Item(String id,String title,long updatedAt){this.id=id;this.title=title;this.updatedAt=updatedAt;}
+        public final long updatedAt,pinnedAt,metadataRevision;
+        public Item(String id,String title,long updatedAt){this(id,title,updatedAt,0,1);}
+        public Item(String id,String title,long updatedAt,long pinnedAt,long metadataRevision){this.id=id;this.title=title;this.updatedAt=updatedAt;this.pinnedAt=pinnedAt;this.metadataRevision=metadataRevision;}
     }
     public static final class Group {
         public final String label;
@@ -27,8 +28,8 @@ public final class ConversationHistory {
         String needle=query==null?"":query.strip().toLowerCase(Locale.ROOT);LinkedHashMap<String,Item> unique=new LinkedHashMap<>();
         for(Item item:loaded){if(item==null||item.id==null||item.id.isBlank()||item.title==null)continue;Item prior=unique.get(item.id);if(prior==null||item.updatedAt>prior.updatedAt)unique.put(item.id,item);}
         List<Item> visible=new ArrayList<>();for(Item item:unique.values())if(item.title.toLowerCase(Locale.ROOT).contains(needle))visible.add(item);
-        visible.sort(Comparator.comparingLong((Item item)->item.updatedAt).reversed().thenComparing(item->item.id));LocalDate today=Instant.ofEpochMilli(now).atZone(zone).toLocalDate();LinkedHashMap<String,List<Item>> grouped=new LinkedHashMap<>();
-        for(Item item:visible){String label="时间未记录";if(item.updatedAt>0){long age=ChronoUnit.DAYS.between(Instant.ofEpochMilli(item.updatedAt).atZone(zone).toLocalDate(),today);label=age==0?"今天":age>0&&age<=7?"最近七天":age<0?"其他日期":"更早";}grouped.computeIfAbsent(label,key->new ArrayList<>()).add(item);}
+        visible.sort(Comparator.comparingLong((Item item)->item.pinnedAt).reversed().thenComparing(Comparator.comparingLong((Item item)->item.updatedAt).reversed()).thenComparing(item->item.id));LocalDate today=Instant.ofEpochMilli(now).atZone(zone).toLocalDate();LinkedHashMap<String,List<Item>> grouped=new LinkedHashMap<>();
+        for(Item item:visible){String label="时间未记录";if(item.pinnedAt>0)label="置顶";else if(item.updatedAt>0){long age=ChronoUnit.DAYS.between(Instant.ofEpochMilli(item.updatedAt).atZone(zone).toLocalDate(),today);label=age==0?"今天":age>0&&age<=7?"最近七天":age<0?"其他日期":"更早";}grouped.computeIfAbsent(label,key->new ArrayList<>()).add(item);}
         List<Group> groups=new ArrayList<>();grouped.forEach((label,items)->groups.add(new Group(label,items)));return List.copyOf(groups);
     }
 }
