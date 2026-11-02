@@ -12,7 +12,7 @@ import java.util.Objects;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Read-only tools in the existing native capability surface. No operation, grant or scheduler of its own. */
+/** Native phone tools in the existing capability surface. No operation, grant or scheduler of its own. */
 public final class PhoneTreeCapabilityPort implements CapabilityPort {
     private final CapabilityPort existing;
     private final TaskStore tasks;
@@ -109,7 +109,7 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
                 result=phone.collectTree(args,record,control);
             }else result=PhoneTreeQuery.QUERY.equals(name)?phone.queryTree(args,control):phone.conditionWait(args,control);
             check(name,control);return result;
-        }catch(SecurityException stale){if(NativeTreeScrollPort.TOOL.equals(name))throw stale;return PhoneTreeExtract.unavailable("original_tree_or_scroll_authority_changed");}
+        }catch(SecurityException stale){if(NativeTreeScrollPort.TOOL.equals(name)||PhoneExtensionTools.NAMES.contains(name)&&PhoneExtensionTools.writes(name))throw stale;return PhoneTreeExtract.unavailable("original_tree_or_scroll_authority_changed");}
     }
     private JSONObject prepareSequence(JSONObject args,String parentOperation,RunControl control)throws Exception {
         PhoneTreeSequence.State state=phone.prepareSequence(args,control);
