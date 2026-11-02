@@ -724,10 +724,10 @@ public final class AssistantModule implements EngineModule {
     public JSONObject queryNativeTaskDelivery(String conversationId,String taskId,String deliveryId)throws Exception{
         if(historyTasks==null||!durable()||conversationId==null||conversationId.isBlank()||taskId==null||deliveryId==null||deliveryId.length()>240)throw new SecurityException("原计划投递索引尚不可核对");
         return sourceRead(()->{
-            JSONObject state=historyRepository.sourceByReply(deliveryId);if(state==null)return new JSONObject().put("found",false).put("available",false).put("bodyIncluded",false).put("executionAuthorized",false);
+            JSONObject state=historyRepository.sourceByReply(deliveryId);if(state==null)return new JSONObject().put("found",false).put("available",false).put("taskId",taskId).put("conversationId",conversationId).put("deliveryId",deliveryId).put("bodyIncluded",false).put("executionAuthorized",false);
             if(!conversationId.equals(state.optString("conversationId"))||!taskId.equals(state.optString("nativeTaskId"))||!"assistant".equals(state.optString("role"))||!deliveryId.equals(state.optString("nativeReplyId")))throw new SecurityException("原计划投递索引不属于指定任务和对话");
             return new JSONObject().put("found",true).put("available",!state.optBoolean("deleted")&&!state.optBoolean("memoryContextRetired")&&state.optLong("memorySourceRetiredThrough")<state.optLong("revision"))
-                    .put("messageId",state.getString("sourceId")).put("bodyIncluded",false).put("executionAuthorized",false);
+                    .put("messageId",state.getString("sourceId")).put("taskId",taskId).put("conversationId",conversationId).put("deliveryId",deliveryId).put("bodyIncluded",false).put("executionAuthorized",false);
         });
     }
     private JSONArray list()throws Exception{
