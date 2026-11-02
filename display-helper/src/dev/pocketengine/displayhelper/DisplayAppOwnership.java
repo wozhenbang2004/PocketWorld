@@ -23,7 +23,7 @@ final class DisplayAppOwnership {
             JSONObject fact=new JSONObject().put("displayId",current).put("userId",Integer.parseInt(row.group(1))).put("packageName",row.group(2)).put("taskId",Integer.parseInt(row.group(3)));
             boolean duplicate=false;for(int i=0;i<all.length();i++)if(all.getJSONObject(i).getInt("taskId")==fact.getInt("taskId")&&all.getJSONObject(i).getInt("userId")==fact.getInt("userId"))duplicate=true;if(!duplicate)all.put(fact);
         }
-        for(String key:new String[]{"primary","owned"}){JSONArray rows=ownership.optJSONArray(key);if(rows==null)continue;for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);for(int j=0;j<all.length();j++){JSONObject actual=all.getJSONObject(j);if(row.optInt("taskId",-1)==actual.getInt("taskId")&&row.optInt("displayId",-1)==actual.getInt("displayId"))row.put("userId",actual.getInt("userId"));}}}
+        for(String key:new String[]{"primary","owned"}){JSONArray rows=ownership.optJSONArray(key);if(rows==null)continue;for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);for(int j=0;j<all.length();j++){JSONObject actual=all.getJSONObject(j);if(row.optInt("taskId",-1)==actual.getInt("taskId")&&row.optInt("displayId",-1)==actual.getInt("displayId")&&row.optString("packageName").equals(actual.getString("packageName")))row.put("userId",actual.getInt("userId"));}}}
         return ownership.put("all",all).put("allDisplayIdentitiesKnown",seen&&complete).put("identityScope","resumed_tasks_only");
     }
 }
