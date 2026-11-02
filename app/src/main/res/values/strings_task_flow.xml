@@ -1,0 +1,296 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="task_flow_2d27e99881ad" formatted="false">"暂时无法更新，已有记录仍保留。"</string>
+    <string name="task_flow_a660c566e1fc" formatted="false">"执行动态"</string>
+    <string name="task_flow_7896444d5989">"最近 %1$s 项活动"</string>
+    <string name="task_flow_de462e8e4e7e" formatted="false">"收起活动记录"</string>
+    <string name="task_flow_27f91c9c5a7b" formatted="false">"查看全部活动"</string>
+    <string name="task_flow_5b29c13507ac" formatted="false">"工具活动"</string>
+    <string name="task_flow_faac150de4a2" formatted="false">"步骤记录"</string>
+    <string name="task_flow_ef377c0d85aa" formatted="false">"只读查看 · 最近记录在前"</string>
+    <string name="task_flow_f2780b1d976c" formatted="false">"本页暂无记录。"</string>
+    <string name="task_flow_3025ce2e310e" formatted="false">"正在更新记录…"</string>
+    <string name="task_flow_d33fb2b5ec1a">"本页 %1$s 条"</string>
+    <string name="task_flow_a7570a4bf53a" formatted="false">" · 部分较大内容未加载"</string>
+    <string name="task_flow_48eaf0a8517f" formatted="false">" · 当前读取窗口"</string>
+    <string name="task_flow_86a9d91b5a11" formatted="false">"刷新最新记录"</string>
+    <string name="task_flow_383f1d1e79cc" formatted="false">"查看更早记录"</string>
+    <string name="task_flow_2c351e315d0f" formatted="false">"已到本次记录窗口末尾。"</string>
+    <string name="task_flow_44a0320eebdf">"这条原记录有 %1$s 字节，本页未展开；原件仍保留。"</string>
+    <string name="task_flow_0f5ef2573534" formatted="false">"时间未报告"</string>
+    <string name="task_flow_b00e778db033">" · 此前执行 %1$s"</string>
+    <string name="task_flow_46ebf7bd985c" formatted="false">"来自此前执行 · "</string>
+    <string name="task_flow_80c9e039a946">"原正文 %1$s 字节，本页未读取。原件没有删除，也没有以本条标题替代。"</string>
+    <string name="task_flow_0ae7312510f4" formatted="false">"收起详情"</string>
+    <string name="task_flow_0845ea144d0e" formatted="false">"查看步骤详情"</string>
+    <string name="task_flow_89d60bdcb637" formatted="false">"查看参数与返回"</string>
+    <string name="task_flow_83781ae2b9f7" formatted="false">"本次参数"</string>
+    <string name="task_flow_41e1886371ff" formatted="false">"返回内容"</string>
+    <string name="task_flow_337450ce8a53" formatted="false">"尚未收到确定结果，请先核对。"</string>
+    <string name="task_flow_d40a2b3213eb" formatted="false">"操作编号："</string>
+    <string name="task_flow_b14f04a8e797" formatted="false">"详情已展开"</string>
+    <string name="task_flow_9a0b46ecf717" formatted="false">"详情已收起"</string>
+    <string name="task_flow_34089409c6c1" formatted="false">"持续目标"</string>
+    <string name="task_flow_aee887434131" formatted="false">"刷新"</string>
+    <string name="task_flow_04c1aa77e946" formatted="false">"审阅一次目标与范围，按依赖、时间和实际条件继续。成果以原任务的真实凭证推进。"</string>
+    <string name="task_flow_00caa38fdefb" formatted="false">"建立一个持续目标"</string>
+    <string name="task_flow_6aae319cd105" formatted="false">"从一个明确目标开始，安排成功路径和需要时的失败恢复。文件成果可按你指定的标准自动核验。"</string>
+    <string name="task_flow_4de8df6d4dac">" · %1$s/%2$s 步有凭证"</string>
+    <string name="task_flow_d01a7c4c0de9" formatted="false">"接下来 · "</string>
+    <string name="task_flow_04f95646640e" formatted="false">"返回目标列表"</string>
+    <string name="task_flow_6863aa57851b" formatted="false">" · 修改后待审阅"</string>
+    <string name="task_flow_3ac06423971e" formatted="false">"审阅目标与执行范围"</string>
+    <string name="task_flow_67fd64b79d30" formatted="false">"这是已保留的历史跟进计划，继续从原任务核对结果。它没有执行定义，不会被自动启用。"</string>
+    <string name="task_flow_8e4f2fe454a1" formatted="false">"取消跟进计划"</string>
+    <string name="task_flow_99a35b183cbe" formatted="false">"审阅失败与重试"</string>
+    <string name="task_flow_b8d128e7af06" formatted="false">"审阅修改后的目标"</string>
+    <string name="task_flow_afa33c9f6a4c" formatted="false">"继续同一目标"</string>
+    <string name="task_flow_624d662af230" formatted="false">"开始目标"</string>
+    <string name="task_flow_8d12fc0d4eb2" formatted="false">"暂停"</string>
+    <string name="task_flow_a53a4e7bcada" formatted="false">"取消目标"</string>
+    <string name="task_flow_90c8c6152c0f">"任务次数已用 %1$s / %2$s · "</string>
+    <string name="task_flow_a6fed1960395" formatted="false">"按计划自动推进"</string>
+    <string name="task_flow_11d966a4bb1c" formatted="false">"手动开始"</string>
+    <string name="task_flow_d036b270ba85" formatted="false">"后继已暂停；原任务仍在结束或等待核对，下面保留其真实状态。"</string>
+    <string name="task_flow_adcc467f647e">"本机观察 · %1$s"</string>
+    <string name="task_flow_967768aca65d">"计划再次核对 · %1$s；系统计时可能延后，原任务事件或手动核对可能更早。"</string>
+    <string name="task_flow_676bf5bc65da" formatted="false">"核对并继续此目标"</string>
+    <string name="task_flow_f5ed9fc55fd7" formatted="false">"继续同一原任务"</string>
+    <string name="task_flow_1a1b95791d36" formatted="false">"只核对原任务状态"</string>
+    <string name="task_flow_8516cc890464" formatted="false">"目标任务次数已用完，启动尚未确认的记录也保留占用。"</string>
+    <string name="task_flow_6bd21f65c559" formatted="false">"审阅目标窗口与预算"</string>
+    <string name="task_flow_c53f55eba206" formatted="false">" · 原任务："</string>
+    <string name="task_flow_7bc85e574c92" formatted="false">" · 最早 "</string>
+    <string name="task_flow_eb74dc3de56a">"电脑前置 · %1$s / %2$s · Job %3$s\n只核对已选原进程退出码 0，不推定命令业务成功。暂停或取消此目标不会停止这个独立电脑任务。"</string>
+    <string name="task_flow_dcee218ad0dc" formatted="false">"打开电脑原任务"</string>
+    <string name="task_flow_bb8d0959d65f" formatted="false">"收起先前电脑前置"</string>
+    <string name="task_flow_d6e9c8ebdf2a">"先前电脑前置 · %1$s 项"</string>
+    <string name="task_flow_4c3f818dd365">"原电脑 %1$s · Job %2$s"</string>
+    <string name="task_flow_2c7a67a900f5">"文件标准 · %1$s\n首行 %2$s · 至少 %3$s 字节。核验文件身份、可读性与标题，不推定内容质量。"</string>
+    <string name="task_flow_e6397a889ad8" formatted="false">"结果需要原任务中的明确核对，模型说完成不会自动推进。"</string>
+    <string name="task_flow_7a94cef51609">"已核验成果 · %1$s · %2$s B\nSHA %3$s…"</string>
+    <string name="task_flow_91e985ffa873" formatted="false">"打开原任务与成果"</string>
+    <string name="task_flow_ca1f4e70774e" formatted="false">"修改这一步"</string>
+    <string name="task_flow_eaa41bd4860b" formatted="false">"重新审阅重试"</string>
+    <string name="task_flow_68122b18710c" formatted="false">"收起先前原任务"</string>
+    <string name="task_flow_7f66e15d68f6">"先前原任务与结果 · %1$s 项"</string>
+    <string name="task_flow_0b4df131dd46">"第 %1$s 次原任务与结果"</string>
+    <string name="task_flow_f723bc1e195d">"保留时 · %1$s。打开查看该原任务的当前状态、已有结果与操作记录；这里不会重试它。"</string>
+    <string name="task_flow_e9a17f4b297d" formatted="false">"取消这个目标？"</string>
+    <string name="task_flow_833e6eb6ea9a" formatted="false">"保留已核验成果，停止后继准入，并请求停止本目标创建的原任务。在途操作和未知结果仍需核对。"</string>
+    <string name="task_flow_8d1becb06d39" formatted="false">" 独立电脑前置不会被此操作停止，需要停止时请打开电脑原任务。"</string>
+    <string name="task_flow_670ec25af841" formatted="false">"保留"</string>
+    <string name="task_flow_9e340a32a644" formatted="false">"建立持续目标"</string>
+    <string name="task_flow_a1a1720d3eb5" formatted="false">"保存中"</string>
+    <string name="task_flow_6e0d4b71eb75" formatted="false">"保存并审阅范围"</string>
+    <string name="task_flow_9d3b004018c2" formatted="false">"最终要得到什么结果"</string>
+    <string name="task_flow_75185840260a" formatted="false">"最早几分钟后开始，0 为现在"</string>
+    <string name="task_flow_4dcfba56ed80">"步骤 %1$s"</string>
+    <string name="task_flow_81a70f750f18" formatted="false">"移除末步"</string>
+    <string name="task_flow_08b31d125411" formatted="false">"添加后继步骤"</string>
+    <string name="task_flow_652c2f445f86" formatted="false">"添加失败恢复"</string>
+    <string name="task_flow_fe7b12a9fef8" formatted="false">"保存的是待审阅计划。下一步确认范围、运行条件和任务预算后，才可触发真实执行。"</string>
+    <string name="task_flow_9e14acfcd30e" formatted="false">"这一步的可交付目标"</string>
+    <string name="task_flow_aeaecc9a8106" formatted="false">"使用的能力"</string>
+    <string name="task_flow_d53274ee6c37" formatted="false">"所选项目的文件"</string>
+    <string name="task_flow_94d754ef67fc" formatted="false">"手机应用"</string>
+    <string name="task_flow_79f326be4409" formatted="false">"项目"</string>
+    <string name="task_flow_c36583aeeb9b" formatted="false">"选择已有项目"</string>
+    <string name="task_flow_cf295ca862ea" formatted="false">"先在项目工作台建立项目。这里使用同一个正式项目，不会创建第二工作区。"</string>
+    <string name="task_flow_9a65e3ccb4b0" formatted="false">"目标文件，如 reports/result.md"</string>
+    <string name="task_flow_9e10e977e473" formatted="false">"用于机器核验的完整首行"</string>
+    <string name="task_flow_940b6a8d2cc1" formatted="false">"最小 UTF-8 字节数"</string>
+    <string name="task_flow_682365af32b4" formatted="false">"等待认证来源下一条消息（可选）"</string>
+    <string name="task_flow_90e9a5c40aee" formatted="false">"认证来源前置 · 已选择"</string>
+    <string name="task_flow_478f51c36aed">"%1$s · %2$s · %3$s\n只观察这一个已认证来源的新事件；消息正文不作为目标指令，也不获得回复/群发送权限。"</string>
+    <string name="task_flow_edf011385315" formatted="false">"选择原认证入站来源"</string>
+    <string name="task_flow_2ed0d8953188" formatted="false">"保留当前条件"</string>
+    <string name="task_flow_99a5f08dfec2" formatted="false">"仅列当前原渠道inbox最近窗口内仍有效的来源metadata。没有账号或来源不可核对时保持不可选，不新增webhook或消息存储。"</string>
+    <string name="task_flow_3c5475152437" formatted="false">"不等待入站事件"</string>
+    <string name="task_flow_09a670953c8e" formatted="false">"当前没有可核对的原认证入站来源。请先在原渠道页完成连接与认证，再回来选择。"</string>
+    <string name="task_flow_dabd7d2654e5">"原消息 %1$s · 绑定 %2$s\n只等待该位置之后同来源的新事件，不把缺失窗口猜成已读。"</string>
+    <string name="task_flow_0c548e7a7d67" formatted="false">"等待已有电脑任务（可选）"</string>
+    <string name="task_flow_727a4cfb82c2">"电脑前置 · %1$s"</string>
+    <string name="task_flow_46060759addf">"电脑 %1$s · 环境 %2$s\n等待这个原进程退出码为 0；不会重新提交或停止它。"</string>
+    <string name="task_flow_c19ed676b054" formatted="false">"选择已存在的电脑任务"</string>
+    <string name="task_flow_c08a999353f4" formatted="false">"先等原命令结束，再做这一步"</string>
+    <string name="task_flow_63474d53e693" formatted="false">"只支持已存在的主人独立 command 任务。只核对原进程退出码 0，不核验命令业务成果或后台子进程。Coding Agent 说完成不能代替这个条件。"</string>
+    <string name="task_flow_7e952e5a025b" formatted="false">"不等待电脑任务"</string>
+    <string name="task_flow_5adea532b577" formatted="false">"还没有已登记的原 command Job。这里选择已经通过现有电脑能力提交的任务；连接或同步电脑不代表已经提交了命令。此处不提交或重试。"</string>
+    <string name="task_flow_fecb06f97186">"电脑 %1$s · 环境 %2$s\nJob %3$s · 只等待原进程退出码 0"</string>
+    <string name="task_flow_3b4c5e3ccd30" formatted="false">"原进程已返回退出码 0"</string>
+    <string name="task_flow_96aaaaf3be58">"原进程退出码 %1$s，此条件尚未满足"</string>
+    <string name="task_flow_e38fd0fb8c80" formatted="false">"原结果待核对，不会重提任务"</string>
+    <string name="task_flow_e172dd21a96b" formatted="false">"原进程仍在等待或执行"</string>
+    <string name="task_flow_3e5809e0907f" formatted="false">"原进程已请求停止或取消"</string>
+    <string name="task_flow_6434d02b68b6" formatted="false">"原退出回执暂不可核实"</string>
+    <string name="task_flow_2abfa187ee07">"前置条件 · %1$s 项"</string>
+    <string name="task_flow_c3d04bf1c485" formatted="false">"无需前置。到达计划时间并满足运行条件后可开始。"</string>
+    <string name="task_flow_8e459835c823" formatted="false">"全部满足后开始："</string>
+    <string name="task_flow_b0d3c9cfa0e1" formatted="false">"；"</string>
+    <string name="task_flow_a9d04a166b65">"步骤 %1$s · %2$s"</string>
+    <string name="task_flow_84eda9849876" formatted="false">"选择前置条件"</string>
+    <string name="task_flow_953d9a57d1c6">"保留 %1$s 项前置"</string>
+    <string name="task_flow_751897f5640f" formatted="false">"需要哪些前置结果"</string>
+    <string name="task_flow_206ba7c89dbe" formatted="false">"勾选多项时，每一项都需满足。成功、失败和取消以原任务核验为准；已结束也可包括没有执行的未采用分支。结果不匹配时，本步骤不会执行。"</string>
+    <string name="task_flow_9461b70d596c" formatted="false">"尚未填写目标"</string>
+    <string name="task_flow_1b3dd09b15ae">"当前 · %1$s"</string>
+    <string name="task_flow_49d25f83d775">"步骤 %1$s 的结果"</string>
+    <string name="task_flow_b6443854028a" formatted="false">"前置成功"</string>
+    <string name="task_flow_d3c1c95e43f8" formatted="false">"前置失败"</string>
+    <string name="task_flow_9cd7814817c1" formatted="false">"前置取消"</string>
+    <string name="task_flow_4f2db0e712c1" formatted="false">"前置已结束（含未采用）"</string>
+    <string name="task_flow_49dd661a2cf9" formatted="false">"步骤暂不能编辑"</string>
+    <string name="task_flow_59d44b0a709f" formatted="false">"返回后刷新目标"</string>
+    <string name="task_flow_88c58618160c" formatted="false">"前置条件暂不可核实，没有删除任何条件。"</string>
+    <string name="task_flow_1f502c930dbc" formatted="false">"修改未执行步骤"</string>
+    <string name="task_flow_0b28ffc213a9" formatted="false">"保存修改，重新审阅"</string>
+    <string name="task_flow_e29231e5ec62" formatted="false">"改为几分钟后可执行"</string>
+    <string name="task_flow_f6e4ba92106c">"当前最早时间 · %1$s。不修改时间字段会保留原时间。"</string>
+    <string name="task_flow_50ced4d35e94" formatted="false">"保留已发生的原任务、成果与未知操作。修改这一步后，整个目标需要再次审阅；不会借新版本重派当前任务。"</string>
+    <string name="task_flow_f554dc3d6782" formatted="false">"尚无修改，返回即可保留当前授权与前置条件。"</string>
+    <string name="task_flow_b150039cb6f4" formatted="false">"任务准入上限应为 1–1000 次"</string>
+    <string name="task_flow_18148fe9267a" formatted="false">"授权时长应为 1–8760 小时"</string>
+    <string name="task_flow_3f81c2d9155d" formatted="false">"最低电量应为 0–100%"</string>
+    <string name="task_flow_da6b06a68668" formatted="false">"有效期必须晚于计划开始时间"</string>
+    <string name="task_flow_dd93194d27ce" formatted="false">"安静时段需使用不同的 HH:mm 开始和结束时间"</string>
+    <string name="task_flow_7ced0b586ad3" formatted="false">"审阅这个目标的执行范围"</string>
+    <string name="task_flow_f968a57ea89c" formatted="false">"批准并按计划开始"</string>
+    <string name="task_flow_a84198f36de6" formatted="false">"保存授权，等我开始"</string>
+    <string name="task_flow_3502bf77e170" formatted="false">"项目 · "</string>
+    <string name="task_flow_e1b6088a91d7" formatted="false">"名称暂不可核实"</string>
+    <string name="task_flow_3478d23cb750">"项目 ID · %1$s"</string>
+    <string name="task_flow_5e10337e6008">"文件 · %1$s"</string>
+    <string name="task_flow_c5847c21040a">"完整首行 · %1$s"</string>
+    <string name="task_flow_98c8c353ae73">"最小大小 · %1$s UTF-8 字节"</string>
+    <string name="task_flow_2bbe82081089" formatted="false">"机器核验文件身份、可读性、首行和大小，不证明语义内容质量。"</string>
+    <string name="task_flow_45a73a9731c1" formatted="false">"手机应用中的原任务结果需明确核对。"</string>
+    <string name="task_flow_9181602cdfac" formatted="false">"先等待原电脑进程退出码 0"</string>
+    <string name="task_flow_73096397f1d8">"电脑 %1$s · %2$s\n环境 %3$s · Job %4$s"</string>
+    <string name="task_flow_08c35502140e" formatted="false">"收起原执行身份"</string>
+    <string name="task_flow_4ccc84402764" formatted="false">"查看原执行身份"</string>
+    <string name="task_flow_ed21bc41f980">"原任务 %1$s\nRun %2$s · 代次 %3$s\n原操作 %4$s"</string>
+    <string name="task_flow_f7296074c67a" formatted="false">"这里只等待这份已存在的原进程回执，不提交、重试或停止电脑任务，也不推定它的业务目标已成功。"</string>
+    <string name="task_flow_f3f6270154d5">"入站前置 · %1$s / %2$s / %3$s"</string>
+    <string name="task_flow_979b1f1e914b">"原来源消息 %1$s\n主体 %2$s · 绑定 %3$s\n只以同来源的一次新事件触发上面已写明的固定目标。消息正文不送入目标、不作为新指令，不自动回复或外发成果。来源已撤销、窗口缺失或版本变化会阻止新的消费/派发。"</string>
+    <string name="task_flow_0b4cd7ce54c5" formatted="false">"明确允许上述认证来源的新事件触发这个固定目标"</string>
+    <string name="task_flow_f438f95e5528" formatted="false">"项目列表尚不可核实，请返回刷新项目后再审阅；没有改换项目或批准执行。"</string>
+    <string name="task_flow_1ab01e1f3e08" formatted="false">"手机执行位置"</string>
+    <string name="task_flow_67b2031f086a" formatted="false">"独立后台屏"</string>
+    <string name="task_flow_f87dc24d25d5" formatted="false">"主屏兼容模式"</string>
+    <string name="task_flow_0bc6d99107a4" formatted="false">"同意将本目标需要的项目文件，或手机界面与可见文字，发送给我配置的云端模型。"</string>
+    <string name="task_flow_407a971666d5" formatted="false">"允许将指定文件冻结为本目标的私人成果"</string>
+    <string name="task_flow_a90ea982d54e" formatted="false">"按时间、依赖与条件自动推进"</string>
+    <string name="task_flow_a2c940709402">"最多启动 %1$s 次任务 · %2$s 小时后到期\n"</string>
+    <string name="task_flow_f1f479dfd840" formatted="false">"需要系统验证的网络"</string>
+    <string name="task_flow_ebf8eb3e8c7a" formatted="false">"未要求网络条件"</string>
+    <string name="task_flow_1eb35b7fe975" formatted="false">" · 仅充电时"</string>
+    <string name="task_flow_b90a233cbcee">" · 电量至少 %1$s%%"</string>
+    <string name="task_flow_61820d770de8">" · 安静时段 %1$s–%2$s"</string>
+    <string name="task_flow_17567b5d0d5d" formatted="false">"收起运行设置"</string>
+    <string name="task_flow_1c41fd996487" formatted="false">"运行条件、窗口与预算"</string>
+    <string name="task_flow_50e19e9eec36" formatted="false">"本目标最多启动多少次任务"</string>
+    <string name="task_flow_88e0a162036a">"已占用 %1$s 次；修改不清零，启动尚未确认时也保留占用。"</string>
+    <string name="task_flow_79646bef817b" formatted="false">"这次授权多少小时后到期"</string>
+    <string name="task_flow_04a91c162da6" formatted="false">"需要系统已验证的网络"</string>
+    <string name="task_flow_5d0e3728b82f" formatted="false">"仅在充电时运行"</string>
+    <string name="task_flow_708552eb9922" formatted="false">"最低电量百分比，0 为不限制"</string>
+    <string name="task_flow_35d468ff5a39" formatted="false">"使用安静时段"</string>
+    <string name="task_flow_f3a65b3e29c4" formatted="false">"开始 HH:mm"</string>
+    <string name="task_flow_763d3c3e0f5f" formatted="false">"结束 HH:mm"</string>
+    <string name="task_flow_0593633b44a9" formatted="false">"这份授权限定目标与能力范围。具体写入审批保留在原任务；文件满足已审标准后会自动推进，证据不足才等待核对。"</string>
+    <string name="task_flow_572cf45ba436" formatted="false">"返回"</string>
+    <string name="task_flow_09180eb35e6b" formatted="false">"无需前置步骤"</string>
+    <string name="task_flow_ad9464da161a" formatted="false">"，"</string>
+    <string name="task_flow_e45f39d76f11" formatted="false">"已按文件标准核验"</string>
+    <string name="task_flow_86d3c5fc8338" formatted="false">"真实结果已核对"</string>
+    <string name="task_flow_060175b54557" formatted="false">"已核实失败"</string>
+    <string name="task_flow_e199550b530e" formatted="false">"此结果分支未采用"</string>
+    <string name="task_flow_ba638bf8e534" formatted="false">"步骤已取消"</string>
+    <string name="task_flow_999a459c3f3f" formatted="false">"待处理"</string>
+    <string name="task_flow_d8844968bac5" formatted="false">"尚未创建或关联"</string>
+    <string name="task_flow_c7fd285a1ec3" formatted="false">"已登记，尚未开始"</string>
+    <string name="task_flow_d9e0c5d230bc" formatted="false">"结果待核验"</string>
+    <string name="task_flow_e4f7da2d1ff2" formatted="false">"已有操作待核对"</string>
+    <string name="task_flow_1597d6e5da79" formatted="false">"已请求撤销，仍需核对实际状态"</string>
+    <string name="task_flow_2093e658e3d1" formatted="false">"暂不可读"</string>
+    <string name="task_flow_583e86049945" formatted="false">"有操作结果待核对"</string>
+    <string name="task_flow_9d9c7d945a8b" formatted="false">"操作可能已经发生，请先核对结果，避免重复提交。"</string>
+    <string name="task_flow_c2ba0930ec46" formatted="false">"核对操作结果"</string>
+    <string name="task_flow_24dd9459596b" formatted="false">"服务收尾仍待确认"</string>
+    <string name="task_flow_adde5adec78d" formatted="false">"停止请求不等于进程结束或资源已释放。先查看原服务回执，不要重复启动。"</string>
+    <string name="task_flow_4136ad11a846" formatted="false">"查看收尾记录"</string>
+    <string name="task_flow_73a8103ceffe" formatted="false">"需要你的确认"</string>
+    <string name="task_flow_4862a8c1dbbe" formatted="false">"请核对操作对象与影响范围，再决定是否允许。"</string>
+    <string name="task_flow_f0979151f176" formatted="false">"查看并确认"</string>
+    <string name="task_flow_8a76a8b535cd" formatted="false">"部分操作的结果尚未确认，核对前不会自动重试。"</string>
+    <string name="task_flow_ccad8fb994c0" formatted="false">"正在停止，等待确认"</string>
+    <string name="task_flow_1e500b2b622e" formatted="false">"已请求停止后续派发。最后记录仍可查看，尚不能据此确认外部进程已经结束。"</string>
+    <string name="task_flow_48878756c825" formatted="false">"查看最后记录"</string>
+    <string name="task_flow_9cf8fc8fa9fb" formatted="false">"需要你的下一步"</string>
+    <string name="task_flow_aadfd6d7d657" formatted="false">"查看原问题或补充要求，再由原任务决定是否继续。"</string>
+    <string name="task_flow_f6690662aa98" formatted="false">"查看问题与补充"</string>
+    <string name="task_flow_4df7d0375c42" formatted="false">"已有结果，等待你确认"</string>
+    <string name="task_flow_e69a5de1f839" formatted="false">"先查看实际成果和未完成项；工具返回或文件已生成，不等于目标已验收。"</string>
+    <string name="task_flow_8e1b88046b2a" formatted="false">"核对已有成果"</string>
+    <string name="task_flow_6301c8b8e15b" formatted="false">"这次执行未完成"</string>
+    <string name="task_flow_a59a43d19ad7" formatted="false">"已完成的步骤与成果仍保留。先查看原失败记录，再从原任务补充或继续。"</string>
+    <string name="task_flow_f2db5c9997bb" formatted="false">"查看失败记录"</string>
+    <string name="task_flow_eb0c326b60ae" formatted="false">"已暂停"</string>
+    <string name="task_flow_3cd1e27e45c8" formatted="false">"执行已中断"</string>
+    <string name="task_flow_d56e60a77e94" formatted="false">"保留原目标与已有结果。继续前需重新核对当前状态，历史工具调用不会自动重放。"</string>
+    <string name="task_flow_a543870f8a19" formatted="false">"核对后继续原任务"</string>
+    <string name="task_flow_7915a0e1de89" formatted="false">"任务已停止"</string>
+    <string name="task_flow_b21eea825cfe" formatted="false">"已有结果和原调用记录仍可查看。此状态本身不证明远端服务已终止。"</string>
+    <string name="task_flow_2de22f3b60d7" formatted="false">"查看停止前记录"</string>
+    <string name="task_flow_e9a880e59521" formatted="false">"任务已完成"</string>
+    <string name="task_flow_baac208c1abf" formatted="false">"成果与执行记录已保留，可随时回看。"</string>
+    <string name="task_flow_34839f3cd3bc" formatted="false">"查看成果"</string>
+    <string name="task_flow_4f021f59121c" formatted="false">"等待执行"</string>
+    <string name="task_flow_a3450a0b64f1" formatted="false">"任务已加入队列，开始后会显示执行动态。"</string>
+    <string name="task_flow_3e9926887e18" formatted="false">"正在暂停，等待确认"</string>
+    <string name="task_flow_239f12742af4" formatted="false">"准备执行"</string>
+    <string name="task_flow_908761788dd3" formatted="false">"正在核对实际结果"</string>
+    <string name="task_flow_11c3d9ef4265" formatted="false">"正在决定下一步"</string>
+    <string name="task_flow_5a31e7fb4251" formatted="false">"等待工具返回"</string>
+    <string name="task_flow_8f38fd93b5a0" formatted="false">"正在执行"</string>
+    <string name="task_flow_37cdfa08a731" formatted="false">"正在处理你的目标，最新操作会显示在下方。"</string>
+    <string name="task_flow_5d14532c2875" formatted="false">"执行状态待核对"</string>
+    <string name="task_flow_81db49a2ce29" formatted="false">"暂时无法确认当前状态，请查看执行记录。"</string>
+    <string name="task_flow_a670a5b1f427" formatted="false">"查看原记录"</string>
+    <string name="task_flow_2bf28eb5dfaf" formatted="false">"原正文未在本页展开"</string>
+    <string name="task_flow_79989e841c63" formatted="false">"结果待核对"</string>
+    <string name="task_flow_577b67f06793" formatted="false">"服务已有启动回执 · 尚无终态回执"</string>
+    <string name="task_flow_d1b0fba50b94" formatted="false">"服务正在收尾 · 尚无资源释放确认"</string>
+    <string name="task_flow_007c0e6c61a3" formatted="false">"等待本次操作授权"</string>
+    <string name="task_flow_0c07d1b5923a" formatted="false">"主人已核对发生 · 非自动验证"</string>
+    <string name="task_flow_a9b4b81a62dd" formatted="false">"主人已核对未发生 · 不会自动重试"</string>
+    <string name="task_flow_9dd6fa403ec5" formatted="false">"主人已记录核对结论"</string>
+    <string name="task_flow_fdc98749cdad" formatted="false">"已登记，等待结果"</string>
+    <string name="task_flow_4162d937ef08" formatted="false">"调用已停止 · 详见原回执"</string>
+    <string name="task_flow_e14615fae0ca" formatted="false">"调用出错 · 请核对操作结果"</string>
+    <string name="task_flow_a7ab668ff8e1" formatted="false">"已返回部分结果"</string>
+    <string name="task_flow_1a5f51851c0c" formatted="false">"已返回 · 结果可展开查看"</string>
+    <string name="task_flow_8f41f9316107" formatted="false">"原状态："</string>
+    <string name="task_flow_b4724185c9ed" formatted="false">"未报告"</string>
+    <string name="task_flow_66ead1cdf09b" formatted="false">"原工具调用"</string>
+    <string name="task_flow_04387a596028" formatted="false">"模型决定下一步"</string>
+    <string name="task_flow_a8ca3c13eb75" formatted="false">"工具调用"</string>
+    <string name="task_flow_c5c1a141fb77" formatted="false">"观察现场"</string>
+    <string name="task_flow_2a7c9696d4f1" formatted="false">"结果核对"</string>
+    <string name="task_flow_1b7f6d458fc7" formatted="false">"执行状态"</string>
+    <string name="task_flow_40759665c9a1" formatted="false">"任务结果"</string>
+    <string name="task_flow_91feacb3e923" formatted="false">"收到主人补充"</string>
+    <string name="task_flow_96c6692ddf97" formatted="false">"能力状态更新"</string>
+    <string name="task_flow_858e61597c1f" formatted="false">"上下文整理"</string>
+    <string name="task_flow_df8ccaf4a281" formatted="false">"模型调用用量"</string>
+    <string name="task_flow_e63df6a5131a" formatted="false">"原步骤记录"</string>
+    <string name="task_flow_17337902d692" formatted="false">"执行记录"</string>
+    <string name="task_flow_f9a7455c8a34" formatted="false">"已有该步骤记录"</string>
+    <string name="task_flow_2f6cf572fd65" formatted="false">"该步骤返回错误"</string>
+    <string name="task_flow_c5e0e7d88ebd" formatted="false">"结果未核实"</string>
+    <string name="task_flow_f50a99897dd1" formatted="false">"需要你处理"</string>
+    <string name="task_flow_f006455e3baf" formatted="false">"已停止"</string>
+    <string name="task_flow_905461952888" formatted="false">"原记录"</string>
+    <string name="task_flow_59ae7d47e79e" formatted="false">"\n…此处仅展示部分，原记录未改写。"</string>
+</resources>

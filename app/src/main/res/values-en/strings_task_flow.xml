@@ -1,0 +1,296 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="task_flow_2d27e99881ad" formatted="false">"Updates are temporarily unavailable. Existing records are retained."</string>
+    <string name="task_flow_a660c566e1fc" formatted="false">"Execution activity"</string>
+    <string name="task_flow_7896444d5989">"Latest %1$s activities"</string>
+    <string name="task_flow_de462e8e4e7e" formatted="false">"Collapse activity records"</string>
+    <string name="task_flow_27f91c9c5a7b" formatted="false">"View all activity"</string>
+    <string name="task_flow_5b29c13507ac" formatted="false">"Tool activity"</string>
+    <string name="task_flow_faac150de4a2" formatted="false">"Step records"</string>
+    <string name="task_flow_ef377c0d85aa" formatted="false">"Read only · Newest records first"</string>
+    <string name="task_flow_f2780b1d976c" formatted="false">"No records on this page."</string>
+    <string name="task_flow_3025ce2e310e" formatted="false">"Updating records…"</string>
+    <string name="task_flow_d33fb2b5ec1a">"%1$s records on this page"</string>
+    <string name="task_flow_a7570a4bf53a" formatted="false">" · Some large content was not loaded"</string>
+    <string name="task_flow_48eaf0a8517f" formatted="false">" · Current read window"</string>
+    <string name="task_flow_86a9d91b5a11" formatted="false">"Refresh latest records"</string>
+    <string name="task_flow_383f1d1e79cc" formatted="false">"View earlier records"</string>
+    <string name="task_flow_2c351e315d0f" formatted="false">"End of this record window."</string>
+    <string name="task_flow_44a0320eebdf">"This original record contains %1$s bytes and is not expanded here. The original is retained."</string>
+    <string name="task_flow_0f5ef2573534" formatted="false">"Time not reported"</string>
+    <string name="task_flow_b00e778db033">" · Earlier run %1$s"</string>
+    <string name="task_flow_46ebf7bd985c" formatted="false">"From an earlier run · "</string>
+    <string name="task_flow_80c9e039a946">"The original body contains %1$s bytes and was not read on this page. It was not deleted or replaced by this title."</string>
+    <string name="task_flow_0ae7312510f4" formatted="false">"Collapse details"</string>
+    <string name="task_flow_0845ea144d0e" formatted="false">"View step details"</string>
+    <string name="task_flow_89d60bdcb637" formatted="false">"View arguments and response"</string>
+    <string name="task_flow_83781ae2b9f7" formatted="false">"Arguments for this call"</string>
+    <string name="task_flow_41e1886371ff" formatted="false">"Returned content"</string>
+    <string name="task_flow_337450ce8a53" formatted="false">"No confirmed result has arrived. Check the original record first."</string>
+    <string name="task_flow_d40a2b3213eb" formatted="false">"Operation ID: "</string>
+    <string name="task_flow_b14f04a8e797" formatted="false">"Details expanded"</string>
+    <string name="task_flow_9a0b46ecf717" formatted="false">"Details collapsed"</string>
+    <string name="task_flow_34089409c6c1" formatted="false">"Ongoing goals"</string>
+    <string name="task_flow_aee887434131" formatted="false">"Refresh"</string>
+    <string name="task_flow_04c1aa77e946" formatted="false">"Review the goal and scope once, then continue according to dependencies, timing and actual conditions. Progress uses evidence from the original tasks."</string>
+    <string name="task_flow_00caa38fdefb" formatted="false">"Create an ongoing goal"</string>
+    <string name="task_flow_6aae319cd105" formatted="false">"Start with a clear goal, a success path and failure recovery where needed. File results can be checked automatically against your chosen criteria."</string>
+    <string name="task_flow_4de8df6d4dac">" · %1$s/%2$s steps have evidence"</string>
+    <string name="task_flow_d01a7c4c0de9" formatted="false">"Up next · "</string>
+    <string name="task_flow_04f95646640e" formatted="false">"Back to goals"</string>
+    <string name="task_flow_6863aa57851b" formatted="false">" · Changes need review"</string>
+    <string name="task_flow_3ac06423971e" formatted="false">"Review goal and execution scope"</string>
+    <string name="task_flow_67fd64b79d30" formatted="false">"This is a retained historical follow-up plan. Check results in the original tasks. It has no execution definition and will not be enabled automatically."</string>
+    <string name="task_flow_8e4f2fe454a1" formatted="false">"Cancel follow-up plan"</string>
+    <string name="task_flow_99a35b183cbe" formatted="false">"Review failure and retry"</string>
+    <string name="task_flow_b8d128e7af06" formatted="false">"Review the changed goal"</string>
+    <string name="task_flow_afa33c9f6a4c" formatted="false">"Continue the same goal"</string>
+    <string name="task_flow_624d662af230" formatted="false">"Start goal"</string>
+    <string name="task_flow_8d12fc0d4eb2" formatted="false">"Pause"</string>
+    <string name="task_flow_a53a4e7bcada" formatted="false">"Cancel goal"</string>
+    <string name="task_flow_90c8c6152c0f">"Task starts used: %1$s / %2$s · "</string>
+    <string name="task_flow_a6fed1960395" formatted="false">"Advance automatically as planned"</string>
+    <string name="task_flow_11d966a4bb1c" formatted="false">"Start manually"</string>
+    <string name="task_flow_d036b270ba85" formatted="false">"Later work is paused. Original tasks are still ending or awaiting review; their actual states remain below."</string>
+    <string name="task_flow_adcc467f647e">"Local observation · %1$s"</string>
+    <string name="task_flow_967768aca65d">"Next planned check · %1$s. System timers may be delayed; an original task event or manual check may happen sooner."</string>
+    <string name="task_flow_676bf5bc65da" formatted="false">"Check and continue this goal"</string>
+    <string name="task_flow_f5ed9fc55fd7" formatted="false">"Continue the same original task"</string>
+    <string name="task_flow_1a1b95791d36" formatted="false">"Check original task state only"</string>
+    <string name="task_flow_8516cc890464" formatted="false">"This goal has used its task-start allowance. Starts with unconfirmed outcomes still count."</string>
+    <string name="task_flow_6bd21f65c559" formatted="false">"Review goal window and budget"</string>
+    <string name="task_flow_c53f55eba206" formatted="false">" · Original task: "</string>
+    <string name="task_flow_7bc85e574c92" formatted="false">" · Earliest: "</string>
+    <string name="task_flow_eb74dc3de56a">"Computer prerequisite · %1$s / %2$s · Job %3$s\nChecks only exit code 0 from the selected original process. It does not prove the command achieved its goal. Pausing or cancelling this goal does not stop that independent computer task."</string>
+    <string name="task_flow_dcee218ad0dc" formatted="false">"Open original computer task"</string>
+    <string name="task_flow_bb8d0959d65f" formatted="false">"Collapse earlier computer prerequisites"</string>
+    <string name="task_flow_d6e9c8ebdf2a">"Earlier computer prerequisites · %1$s"</string>
+    <string name="task_flow_4c3f818dd365">"Original computer %1$s · Job %2$s"</string>
+    <string name="task_flow_2c7a67a900f5">"File criteria · %1$s\nFirst line: %2$s · At least %3$s bytes. Checks file identity, readability and heading, not content quality."</string>
+    <string name="task_flow_e6397a889ad8" formatted="false">"The result needs explicit confirmation in the original task. A model claiming completion does not advance this goal automatically."</string>
+    <string name="task_flow_7a94cef51609">"Verified result · %1$s · %2$s B\nSHA %3$s…"</string>
+    <string name="task_flow_91e985ffa873" formatted="false">"Open original task and results"</string>
+    <string name="task_flow_ca1f4e70774e" formatted="false">"Edit this step"</string>
+    <string name="task_flow_eaa41bd4860b" formatted="false">"Review retry again"</string>
+    <string name="task_flow_68122b18710c" formatted="false">"Collapse earlier original tasks"</string>
+    <string name="task_flow_7f66e15d68f6">"Earlier original tasks and results · %1$s"</string>
+    <string name="task_flow_0b4df131dd46">"Original task and results · Attempt %1$s"</string>
+    <string name="task_flow_f723bc1e195d">"When retained · %1$s. Open the original task to see its current state, existing results and operation records. This does not retry it."</string>
+    <string name="task_flow_e9a17f4b297d" formatted="false">"Cancel this goal?"</string>
+    <string name="task_flow_833e6eb6ea9a" formatted="false">"Retain verified results, stop later task admission and request stopping the original tasks created by this goal. In-flight operations and unknown results still need review."</string>
+    <string name="task_flow_8d1becb06d39" formatted="false">" Independent computer prerequisites are not stopped by this action. Open the original computer task if you need to stop it."</string>
+    <string name="task_flow_670ec25af841" formatted="false">"Keep"</string>
+    <string name="task_flow_9e340a32a644" formatted="false">"Create ongoing goal"</string>
+    <string name="task_flow_a1a1720d3eb5" formatted="false">"Saving"</string>
+    <string name="task_flow_6e0d4b71eb75" formatted="false">"Save and review scope"</string>
+    <string name="task_flow_9d3b004018c2" formatted="false">"What final result do you want?"</string>
+    <string name="task_flow_75185840260a" formatted="false">"Earliest start in minutes; 0 means now"</string>
+    <string name="task_flow_4dcfba56ed80">"Step %1$s"</string>
+    <string name="task_flow_81a70f750f18" formatted="false">"Remove last step"</string>
+    <string name="task_flow_08b31d125411" formatted="false">"Add next step"</string>
+    <string name="task_flow_652c2f445f86" formatted="false">"Add failure recovery"</string>
+    <string name="task_flow_fe7b12a9fef8" formatted="false">"This saves a plan for review. Actual execution can start only after you confirm scope, operating conditions and task budget."</string>
+    <string name="task_flow_9e14acfcd30e" formatted="false">"Deliverable goal for this step"</string>
+    <string name="task_flow_aeaecc9a8106" formatted="false">"Capability to use"</string>
+    <string name="task_flow_d53274ee6c37" formatted="false">"Files in the selected project"</string>
+    <string name="task_flow_94d754ef67fc" formatted="false">"Phone apps"</string>
+    <string name="task_flow_79f326be4409" formatted="false">"Project"</string>
+    <string name="task_flow_c36583aeeb9b" formatted="false">"Choose an existing project"</string>
+    <string name="task_flow_cf295ca862ea" formatted="false">"Create a project in the project workspace first. This uses that same project and does not create another workspace."</string>
+    <string name="task_flow_9a65e3ccb4b0" formatted="false">"Target file, such as reports/result.md"</string>
+    <string name="task_flow_9e10e977e473" formatted="false">"Complete first line for automated verification"</string>
+    <string name="task_flow_940b6a8d2cc1" formatted="false">"Minimum UTF-8 byte count"</string>
+    <string name="task_flow_682365af32b4" formatted="false">"Wait for the next message from an authenticated source (optional)"</string>
+    <string name="task_flow_90e9a5c40aee" formatted="false">"Authenticated source prerequisite · Selected"</string>
+    <string name="task_flow_478f51c36aed">"%1$s · %2$s · %3$s\nObserves new events from this one authenticated source only. Message bodies do not become goal instructions or grant reply/group-send permission."</string>
+    <string name="task_flow_edf011385315" formatted="false">"Choose an original authenticated inbound source"</string>
+    <string name="task_flow_2ed0d8953188" formatted="false">"Keep current condition"</string>
+    <string name="task_flow_99a5f08dfec2" formatted="false">"Lists only source metadata that is still valid in the current original channel inbox window. Missing accounts or unverified sources remain unavailable. No webhook or message store is added."</string>
+    <string name="task_flow_3c5475152437" formatted="false">"Do not wait for an inbound event"</string>
+    <string name="task_flow_09a670953c8e" formatted="false">"No verifiable original authenticated inbound source is available. Connect and authenticate on the original channel page, then return to choose one."</string>
+    <string name="task_flow_dabd7d2654e5">"Original message %1$s · Binding %2$s\nWaits only for later events from the same source. Missing windows are not treated as read."</string>
+    <string name="task_flow_0c548e7a7d67" formatted="false">"Wait for an existing computer task (optional)"</string>
+    <string name="task_flow_727a4cfb82c2">"Computer prerequisite · %1$s"</string>
+    <string name="task_flow_46060759addf">"Computer %1$s · Environment %2$s\nWaits for this original process to exit with code 0. It does not resubmit or stop it."</string>
+    <string name="task_flow_c19ed676b054" formatted="false">"Choose an existing computer task"</string>
+    <string name="task_flow_c08a999353f4" formatted="false">"Wait for the original command, then run this step"</string>
+    <string name="task_flow_63474d53e693" formatted="false">"Supports existing independent owner command tasks only. Checks exit code 0 from the original process, not command results or background child processes. A Coding Agent claiming completion does not satisfy this condition."</string>
+    <string name="task_flow_7e952e5a025b" formatted="false">"Do not wait for a computer task"</string>
+    <string name="task_flow_5adea532b577" formatted="false">"No original command Job is registered yet. Choose a task already submitted through the existing computer capability. Connecting or synchronizing a computer does not mean a command was submitted. This view does not submit or retry."</string>
+    <string name="task_flow_fecb06f97186">"Computer %1$s · Environment %2$s\nJob %3$s · Waits only for exit code 0 from the original process"</string>
+    <string name="task_flow_3b4c5e3ccd30" formatted="false">"The original process returned exit code 0."</string>
+    <string name="task_flow_96aaaaf3be58">"The original process returned exit code %1$s. This condition is not satisfied."</string>
+    <string name="task_flow_e38fd0fb8c80" formatted="false">"The original result needs review. The task will not be resubmitted."</string>
+    <string name="task_flow_e172dd21a96b" formatted="false">"The original process is still waiting or running."</string>
+    <string name="task_flow_3e5809e0907f" formatted="false">"A stop or cancellation was requested for the original process."</string>
+    <string name="task_flow_6434d02b68b6" formatted="false">"The original exit receipt cannot currently be verified."</string>
+    <string name="task_flow_2abfa187ee07">"Prerequisites · %1$s"</string>
+    <string name="task_flow_c3d04bf1c485" formatted="false">"No prerequisites. Can start at the planned time when operating conditions are met."</string>
+    <string name="task_flow_8e459835c823" formatted="false">"Starts when all are satisfied: "</string>
+    <string name="task_flow_b0d3c9cfa0e1" formatted="false">"; "</string>
+    <string name="task_flow_a9d04a166b65">"Step %1$s · %2$s"</string>
+    <string name="task_flow_84eda9849876" formatted="false">"Choose prerequisites"</string>
+    <string name="task_flow_953d9a57d1c6">"Keep %1$s prerequisites"</string>
+    <string name="task_flow_751897f5640f" formatted="false">"Which prerequisite results are required?"</string>
+    <string name="task_flow_206ba7c89dbe" formatted="false">"Every selected item must be satisfied. Success, failure and cancellation use the original task verification. Settled can include an unused branch that never ran. This step does not run if results do not match."</string>
+    <string name="task_flow_9461b70d596c" formatted="false">"Goal not entered yet"</string>
+    <string name="task_flow_1b3dd09b15ae">"Current · %1$s"</string>
+    <string name="task_flow_49d25f83d775">"Result of step %1$s"</string>
+    <string name="task_flow_b6443854028a" formatted="false">"Prerequisite succeeded"</string>
+    <string name="task_flow_d3c1c95e43f8" formatted="false">"Prerequisite failed"</string>
+    <string name="task_flow_9cd7814817c1" formatted="false">"Prerequisite cancelled"</string>
+    <string name="task_flow_4f2db0e712c1" formatted="false">"Prerequisite settled (including unused)"</string>
+    <string name="task_flow_49dd661a2cf9" formatted="false">"This step cannot be edited yet"</string>
+    <string name="task_flow_59d44b0a709f" formatted="false">"Return and refresh the goal"</string>
+    <string name="task_flow_88c58618160c" formatted="false">"Prerequisites cannot currently be verified. No conditions were removed."</string>
+    <string name="task_flow_1f502c930dbc" formatted="false">"Edit an unexecuted step"</string>
+    <string name="task_flow_0b28ffc213a9" formatted="false">"Save changes and review again"</string>
+    <string name="task_flow_e29231e5ec62" formatted="false">"Make eligible in this many minutes"</string>
+    <string name="task_flow_f6e4ba92106c">"Current earliest time · %1$s. Leaving the time field unchanged preserves the original time."</string>
+    <string name="task_flow_50ced4d35e94" formatted="false">"Retains original tasks, results and unknown operations. Editing this step requires reviewing the whole goal again. A new version does not redispatch the current task."</string>
+    <string name="task_flow_f554dc3d6782" formatted="false">"No changes yet. Return to keep the current authorization and prerequisites."</string>
+    <string name="task_flow_b150039cb6f4" formatted="false">"The task admission limit must be 1–1000."</string>
+    <string name="task_flow_18148fe9267a" formatted="false">"Authorization must last 1–8760 hours."</string>
+    <string name="task_flow_3f81c2d9155d" formatted="false">"Minimum battery must be 0–100%."</string>
+    <string name="task_flow_da6b06a68668" formatted="false">"Authorization must expire after the planned start time."</string>
+    <string name="task_flow_dd93194d27ce" formatted="false">"Quiet hours need different HH:mm start and end times."</string>
+    <string name="task_flow_7ced0b586ad3" formatted="false">"Review this goal\'s execution scope"</string>
+    <string name="task_flow_f968a57ea89c" formatted="false">"Approve and start as planned"</string>
+    <string name="task_flow_a84198f36de6" formatted="false">"Save authorization; I will start it"</string>
+    <string name="task_flow_3502bf77e170" formatted="false">"Project · "</string>
+    <string name="task_flow_e1b6088a91d7" formatted="false">"Name cannot currently be verified"</string>
+    <string name="task_flow_3478d23cb750">"Project ID · %1$s"</string>
+    <string name="task_flow_5e10337e6008">"File · %1$s"</string>
+    <string name="task_flow_c5847c21040a">"Complete first line · %1$s"</string>
+    <string name="task_flow_98c8c353ae73">"Minimum size · %1$s UTF-8 bytes"</string>
+    <string name="task_flow_2bbe82081089" formatted="false">"Automated checks verify file identity, readability, first line and size. They do not prove semantic content quality."</string>
+    <string name="task_flow_45a73a9731c1" formatted="false">"Original task results in phone apps need explicit confirmation."</string>
+    <string name="task_flow_9181602cdfac" formatted="false">"First wait for the original computer process to exit with code 0"</string>
+    <string name="task_flow_73096397f1d8">"Computer %1$s · %2$s\nEnvironment %3$s · Job %4$s"</string>
+    <string name="task_flow_08c35502140e" formatted="false">"Collapse original execution identity"</string>
+    <string name="task_flow_4ccc84402764" formatted="false">"View original execution identity"</string>
+    <string name="task_flow_ed21bc41f980">"Original task %1$s\nRun %2$s · Epoch %3$s\nOriginal operation %4$s"</string>
+    <string name="task_flow_f7296074c67a" formatted="false">"Waits only for this existing original process receipt. It does not submit, retry or stop the computer task, or assume its goal succeeded."</string>
+    <string name="task_flow_f3f6270154d5">"Inbound prerequisite · %1$s / %2$s / %3$s"</string>
+    <string name="task_flow_979b1f1e914b">"Original source message %1$s\nPrincipal %2$s · Binding %3$s\nOnly one new event from the same source triggers the fixed goal above. Message bodies are not passed into the goal or treated as new instructions. No reply or result is sent automatically. Revoked sources, missing windows or changed versions block new consumption and dispatch."</string>
+    <string name="task_flow_0b4cd7ce54c5" formatted="false">"Explicitly allow new events from the authenticated source above to trigger this fixed goal"</string>
+    <string name="task_flow_f438f95e5528" formatted="false">"The project list cannot be verified yet. Return and refresh projects before reviewing. No project was switched and no execution was approved."</string>
+    <string name="task_flow_1ab01e1f3e08" formatted="false">"Phone execution location"</string>
+    <string name="task_flow_67b2031f086a" formatted="false">"Independent background screen"</string>
+    <string name="task_flow_f87dc24d25d5" formatted="false">"Main screen compatibility mode"</string>
+    <string name="task_flow_0bc6d99107a4" formatted="false">"I agree to send project files, or the phone interface and visible text, needed for this goal to my configured cloud model."</string>
+    <string name="task_flow_407a971666d5" formatted="false">"Allow the selected files to be frozen as private results for this goal"</string>
+    <string name="task_flow_a90ea982d54e" formatted="false">"Advance automatically by time, dependencies and conditions"</string>
+    <string name="task_flow_a2c940709402">"Start at most %1$s tasks · Expires in %2$s hours\n"</string>
+    <string name="task_flow_f1f479dfd840" formatted="false">"Requires a system-validated network"</string>
+    <string name="task_flow_ebf8eb3e8c7a" formatted="false">"No network condition required"</string>
+    <string name="task_flow_1eb35b7fe975" formatted="false">" · Only while charging"</string>
+    <string name="task_flow_b90a233cbcee">" · Battery at least %1$s%%"</string>
+    <string name="task_flow_61820d770de8">" · Quiet hours %1$s–%2$s"</string>
+    <string name="task_flow_17567b5d0d5d" formatted="false">"Collapse runtime settings"</string>
+    <string name="task_flow_1c41fd996487" formatted="false">"Operating conditions, window and budget"</string>
+    <string name="task_flow_50e19e9eec36" formatted="false">"Maximum task starts for this goal"</string>
+    <string name="task_flow_88e0a162036a">"%1$s starts already used. Editing does not reset the count; starts with unconfirmed outcomes still count."</string>
+    <string name="task_flow_79646bef817b" formatted="false">"Hours until this authorization expires"</string>
+    <string name="task_flow_04a91c162da6" formatted="false">"Require a system-validated network"</string>
+    <string name="task_flow_5d0e3728b82f" formatted="false">"Run only while charging"</string>
+    <string name="task_flow_708552eb9922" formatted="false">"Minimum battery percentage; 0 means no limit"</string>
+    <string name="task_flow_35d468ff5a39" formatted="false">"Use quiet hours"</string>
+    <string name="task_flow_f3a65b3e29c4" formatted="false">"Start HH:mm"</string>
+    <string name="task_flow_763d3c3e0f5f" formatted="false">"End HH:mm"</string>
+    <string name="task_flow_0593633b44a9" formatted="false">"This authorization limits the goal and capabilities. Specific write approvals remain in the original task. Files meeting the reviewed criteria advance automatically; insufficient evidence waits for review."</string>
+    <string name="task_flow_572cf45ba436" formatted="false">"Back"</string>
+    <string name="task_flow_09180eb35e6b" formatted="false">"No prerequisite steps"</string>
+    <string name="task_flow_ad9464da161a" formatted="false">", "</string>
+    <string name="task_flow_e45f39d76f11" formatted="false">"Verified against file criteria"</string>
+    <string name="task_flow_86d3c5fc8338" formatted="false">"Actual result confirmed"</string>
+    <string name="task_flow_060175b54557" formatted="false">"Failure verified"</string>
+    <string name="task_flow_e199550b530e" formatted="false">"This result branch was unused"</string>
+    <string name="task_flow_ba638bf8e534" formatted="false">"Step cancelled"</string>
+    <string name="task_flow_999a459c3f3f" formatted="false">"Pending"</string>
+    <string name="task_flow_d8844968bac5" formatted="false">"Not created or linked yet"</string>
+    <string name="task_flow_c7fd285a1ec3" formatted="false">"Registered, not started"</string>
+    <string name="task_flow_d9e0c5d230bc" formatted="false">"Result needs verification"</string>
+    <string name="task_flow_e4f7da2d1ff2" formatted="false">"Existing operations need review"</string>
+    <string name="task_flow_1597d6e5da79" formatted="false">"Revocation requested; actual state still needs review"</string>
+    <string name="task_flow_2093e658e3d1" formatted="false">"Temporarily unavailable"</string>
+    <string name="task_flow_583e86049945" formatted="false">"An operation result needs review"</string>
+    <string name="task_flow_9d9c7d945a8b" formatted="false">"The operation may already have happened. Check the result first to avoid submitting it twice."</string>
+    <string name="task_flow_c2ba0930ec46" formatted="false">"Review operation results"</string>
+    <string name="task_flow_24dd9459596b" formatted="false">"Service cleanup is unconfirmed"</string>
+    <string name="task_flow_adde5adec78d" formatted="false">"A stop request does not prove the process ended or resources were released. Check the original service receipt before starting it again."</string>
+    <string name="task_flow_4136ad11a846" formatted="false">"View cleanup records"</string>
+    <string name="task_flow_73a8103ceffe" formatted="false">"Your confirmation is needed"</string>
+    <string name="task_flow_4862a8c1dbbe" formatted="false">"Review the target and impact before deciding whether to allow the operation."</string>
+    <string name="task_flow_f0979151f176" formatted="false">"Review and confirm"</string>
+    <string name="task_flow_8a76a8b535cd" formatted="false">"Some operation results are unconfirmed. They will not be retried automatically before review."</string>
+    <string name="task_flow_ccad8fb994c0" formatted="false">"Stopping; waiting for confirmation"</string>
+    <string name="task_flow_1e500b2b622e" formatted="false">"Later dispatches were requested to stop. The last records remain available, but they do not yet confirm external processes ended."</string>
+    <string name="task_flow_48878756c825" formatted="false">"View last records"</string>
+    <string name="task_flow_9cf8fc8fa9fb" formatted="false">"Your next step is needed"</string>
+    <string name="task_flow_aadfd6d7d657" formatted="false">"Review the original question or add requirements. The original task then determines whether it can continue."</string>
+    <string name="task_flow_f6690662aa98" formatted="false">"View questions and add details"</string>
+    <string name="task_flow_4df7d0375c42" formatted="false">"A result is ready for your confirmation"</string>
+    <string name="task_flow_e69a5de1f839" formatted="false">"Check actual results and unfinished work first. A tool response or generated file does not mean the goal was accepted."</string>
+    <string name="task_flow_8e1b88046b2a" formatted="false">"Review existing results"</string>
+    <string name="task_flow_6301c8b8e15b" formatted="false">"This run did not finish"</string>
+    <string name="task_flow_a59a43d19ad7" formatted="false">"Finished steps and results are retained. Review the original failure record, then add details or continue the original task."</string>
+    <string name="task_flow_f2db5c9997bb" formatted="false">"View failure records"</string>
+    <string name="task_flow_eb0c326b60ae" formatted="false">"Paused"</string>
+    <string name="task_flow_3cd1e27e45c8" formatted="false">"Execution interrupted"</string>
+    <string name="task_flow_d56e60a77e94" formatted="false">"Retains the original goal and existing results. Review the current state before continuing. Historical tool calls are not replayed automatically."</string>
+    <string name="task_flow_a543870f8a19" formatted="false">"Review and continue original task"</string>
+    <string name="task_flow_7915a0e1de89" formatted="false">"Task stopped"</string>
+    <string name="task_flow_b21eea825cfe" formatted="false">"Existing results and original call records remain available. This state alone does not prove the remote service stopped."</string>
+    <string name="task_flow_2de22f3b60d7" formatted="false">"View records before stopping"</string>
+    <string name="task_flow_e9a880e59521" formatted="false">"Task completed"</string>
+    <string name="task_flow_baac208c1abf" formatted="false">"Results and execution records are retained for later review."</string>
+    <string name="task_flow_34839f3cd3bc" formatted="false">"View results"</string>
+    <string name="task_flow_4f021f59121c" formatted="false">"Queued for execution"</string>
+    <string name="task_flow_a3450a0b64f1" formatted="false">"The task is queued. Execution activity appears when it starts."</string>
+    <string name="task_flow_3e9926887e18" formatted="false">"Pausing; waiting for confirmation"</string>
+    <string name="task_flow_239f12742af4" formatted="false">"Preparing to execute"</string>
+    <string name="task_flow_908761788dd3" formatted="false">"Checking actual results"</string>
+    <string name="task_flow_11c3d9ef4265" formatted="false">"Deciding the next step"</string>
+    <string name="task_flow_5a31e7fb4251" formatted="false">"Waiting for a tool response"</string>
+    <string name="task_flow_8f38fd93b5a0" formatted="false">"Running"</string>
+    <string name="task_flow_37cdfa08a731" formatted="false">"Working on your goal. Latest operations appear below."</string>
+    <string name="task_flow_5d14532c2875" formatted="false">"Execution state needs review"</string>
+    <string name="task_flow_81db49a2ce29" formatted="false">"The current state cannot be confirmed. Check the execution records."</string>
+    <string name="task_flow_a670a5b1f427" formatted="false">"View original records"</string>
+    <string name="task_flow_2bf28eb5dfaf" formatted="false">"Original body not expanded on this page"</string>
+    <string name="task_flow_79989e841c63" formatted="false">"Result needs review"</string>
+    <string name="task_flow_577b67f06793" formatted="false">"Service start receipt available · No final receipt yet"</string>
+    <string name="task_flow_d1b0fba50b94" formatted="false">"Service cleanup in progress · Resource release unconfirmed"</string>
+    <string name="task_flow_007c0e6c61a3" formatted="false">"Waiting for authorization for this operation"</string>
+    <string name="task_flow_0c07d1b5923a" formatted="false">"Owner confirmed it occurred · Not automatically verified"</string>
+    <string name="task_flow_a9b4b81a62dd" formatted="false">"Owner confirmed it did not occur · No automatic retry"</string>
+    <string name="task_flow_9dd6fa403ec5" formatted="false">"Owner recorded a review conclusion"</string>
+    <string name="task_flow_fdc98749cdad" formatted="false">"Registered; waiting for the result"</string>
+    <string name="task_flow_4162d937ef08" formatted="false">"Call stopped · See original receipt"</string>
+    <string name="task_flow_e14615fae0ca" formatted="false">"Call error · Check the operation result"</string>
+    <string name="task_flow_a7ab668ff8e1" formatted="false">"Partial result returned"</string>
+    <string name="task_flow_1a5f51851c0c" formatted="false">"Returned · Expand to view results"</string>
+    <string name="task_flow_8f41f9316107" formatted="false">"Original state: "</string>
+    <string name="task_flow_b4724185c9ed" formatted="false">"Not reported"</string>
+    <string name="task_flow_66ead1cdf09b" formatted="false">"Original tool call"</string>
+    <string name="task_flow_04387a596028" formatted="false">"Model deciding the next step"</string>
+    <string name="task_flow_a8ca3c13eb75" formatted="false">"Tool call"</string>
+    <string name="task_flow_c5c1a141fb77" formatted="false">"Observe the current state"</string>
+    <string name="task_flow_2a7c9696d4f1" formatted="false">"Result review"</string>
+    <string name="task_flow_1b7f6d458fc7" formatted="false">"Execution state"</string>
+    <string name="task_flow_40759665c9a1" formatted="false">"Task result"</string>
+    <string name="task_flow_91feacb3e923" formatted="false">"Owner input received"</string>
+    <string name="task_flow_96c6692ddf97" formatted="false">"Capability state updated"</string>
+    <string name="task_flow_858e61597c1f" formatted="false">"Context maintenance"</string>
+    <string name="task_flow_df8ccaf4a281" formatted="false">"Model call usage"</string>
+    <string name="task_flow_e63df6a5131a" formatted="false">"Original step record"</string>
+    <string name="task_flow_17337902d692" formatted="false">"Execution record"</string>
+    <string name="task_flow_f9a7455c8a34" formatted="false">"This step has a record"</string>
+    <string name="task_flow_2f6cf572fd65" formatted="false">"This step returned an error"</string>
+    <string name="task_flow_c5e0e7d88ebd" formatted="false">"Result unverified"</string>
+    <string name="task_flow_f50a99897dd1" formatted="false">"Your action is needed"</string>
+    <string name="task_flow_f006455e3baf" formatted="false">"Stopped"</string>
+    <string name="task_flow_905461952888" formatted="false">"Original record"</string>
+    <string name="task_flow_59ae7d47e79e" formatted="false">"\n…Only part is shown here. The original record is unchanged."</string>
+</resources>
