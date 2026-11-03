@@ -12,7 +12,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
@@ -326,7 +325,7 @@ internal fun McpInstallPreviewPage(
     }
 
     BackHandler { back() }
-    Surface(Modifier.fillMaxSize(), color = Color.White) {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxSize().imePadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = ::back) { Text("返回") }
@@ -477,7 +476,7 @@ internal fun McpInstallPreviewPage(
         val nextEnabled = !frozen.optBoolean("enabled")
         val sourceOnly = frozen.optJSONObject("manifest")?.let { it.optJSONObject("mcpSource") != null && it.optJSONArray("tools")?.length() == 0 } == true
         val currentIdentity = McpInstallPreviewRules.installationId(snapshot, frozen.optString("id")) == frozen.optString("installationId")
-        AlertDialog(onDismissRequest = { enableConfirm = null }, containerColor = Color.White, title = { Text(if (nextEnabled) "启用这个安装版本？" else "停用这个安装版本？") }, text = {
+        AlertDialog(onDismissRequest = { enableConfirm = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (nextEnabled) "启用这个安装版本？" else "停用这个安装版本？") }, text = {
             Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(frozen.optJSONObject("manifest")?.optString("name").orEmpty())
                 McpInstallCaption("安装身份：${frozen.optString("installationId")}")
@@ -494,7 +493,7 @@ internal fun McpInstallPreviewPage(
             } catch (failure: Exception) { enableConfirm = null; localError = failure.message }
         }, enabled = currentIdentity && canManage && !writing && !loading && error == null) { Text(if (nextEnabled) "确认启用" else "确认停用") } }, dismissButton = { TextButton(onClick = { enableConfirm = null }) { Text("取消") } })
     }
-    if (exitConfirm) AlertDialog(onDismissRequest = { exitConfirm = false }, containerColor = Color.White, title = { Text("返回插件管理？") }, text = { Text("已提交的安装或启停请求不会因返回而撤销。请在插件管理中核对实际结果，避免重复安装。") }, confirmButton = { TextButton(onClick = { exitConfirm = false; leave() }) { Text("返回并稍后核对") } }, dismissButton = { TextButton(onClick = { exitConfirm = false }) { Text("继续等待") } })
+    if (exitConfirm) AlertDialog(onDismissRequest = { exitConfirm = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("返回插件管理？") }, text = { Text("已提交的安装或启停请求不会因返回而撤销。请在插件管理中核对实际结果，避免重复安装。") }, confirmButton = { TextButton(onClick = { exitConfirm = false; leave() }) { Text("返回并稍后核对") } }, dismissButton = { TextButton(onClick = { exitConfirm = false }) { Text("继续等待") } })
 }
 
 @Composable internal fun McpInstallCaption(text: String) { Text(text, color = SecondaryInk, fontSize = 13.sp, lineHeight = 22.sp) }

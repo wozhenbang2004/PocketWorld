@@ -9,7 +9,7 @@ import secrets
 import threading
 import re
 
-from phone_task_mcp import VERSION, rpc
+from phone_task_mcp import VERSION, rpc, modern_request, modern_http_error
 from phone_task_client import ClientError, MUTATIONS, strict_json, unknown_result
 
 TASK_ACTIONS = {"doctor", "list", "run", "status", "wait", "events", "cancel", "acquire_control", "answer", "steer", "resume"}
@@ -78,7 +78,7 @@ class Handler(BaseHTTPRequestHandler):
     def _guard(self, authenticated=False):
         if self.server.closed or not ipaddress.ip_address(self.client_address[0]).is_loopback:
             return False
-        for header in ("Host", "Origin", "Authorization", "Content-Length", "Content-Type", "MCP-Protocol-Version", "Sec-Fetch-Site"):
+        for header in ("Host", "Origin", "Authorization", "Content-Length", "Content-Type", "Sec-Fetch-Site"):
             if len(self.headers.get_all(header, [])) > 1:
                 return False
         if self.headers.get("Host") != self.server.origin.removeprefix("http://"):
@@ -126,6 +126,17 @@ class Handler(BaseHTTPRequestHandler):
                 accepted = {item.split(";", 1)[0].strip() for item in self.headers.get("Accept", "").split(",")}
                 if not {"application/json", "text/event-stream"} <= accepted:
                     self._send(406); return
+                if modern_request(message) or self.headers.get("MCP-Protocol-Version") not in (None, VERSION):
+                    if not isinstance(message, dict):
+                        self._send(400); return
+                    response = modern_http_error(message, self.headers)
+                    if response is None:
+                        response = rpc(self.server.client, message, fixed_peer=self.server.fixed_peer)
+                    code = response.get("error", {}).get("code") if isinstance(response, dict) else None
+                    self._send(202 if response is None else 404 if code == -32601 else 400 if code is not None else 200, response)
+                    return
+                if len(self.headers.get_all("MCP-Protocol-Version", [])) > 1:
+                    self._send(400); return
                 if isinstance(message, dict) and message.get("method") != "initialize" and self.headers.get("MCP-Protocol-Version") != VERSION:
                     self._send(400); return
                 method = message.get("method") if isinstance(message, dict) else None

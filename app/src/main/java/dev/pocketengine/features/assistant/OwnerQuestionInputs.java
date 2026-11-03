@@ -133,6 +133,7 @@ public final class OwnerQuestionInputs {
         JSONObject evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");if(question==null)return null;
         JSONObject identity=unconsumedIdentity(task,question);
         if(identity==null)return null;JSONObject view=new JSONObject().put("identity",identity).put("question",question.getString("question")).put("answered",Boolean.TRUE.equals(question.opt("replyConsumed"))).put("conversationId",task.getString("conversationId")).put("executionAuthorized",false);
+        if(question.has("options"))view.put("options",dev.pocketengine.runtime.policy.OwnerQuestionChoices.options(question));
         JSONObject state=task.optJSONObject("ownerQuestionReplyState");if(state!=null&&"pocketworld.owner-question-reply-state.v1".equals(state.optString("format"))&&task.getString("runId").equals(state.optString("runId"))&&task.getInt("coordinatorEpoch")==state.optInt("epoch")
                 &&question.getString("requestId").equals(state.optString("requestId"))&&question.optString("replyMessageId").equals(state.optString("messageId")))view.put("continuationState",state.getString("state")).put("ownerAction",state.getString("ownerAction"));return view;
     }

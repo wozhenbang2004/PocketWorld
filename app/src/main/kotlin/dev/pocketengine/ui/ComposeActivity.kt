@@ -31,7 +31,7 @@ class ComposeActivity : ComponentActivity() {
     }
     internal fun createOutcomeDocument(mime:String,name:String){outcomeExportPicker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime).putExtra(Intent.EXTRA_TITLE,name))}
     private val ownerArchiveImportPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> controller.ownerArchives.importResult(uri) }
-    private val ownerArchiveExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> controller.ownerArchives.exportResult(uri) }
+    private val ownerArchiveExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> controller.ownerArchives.exportResult(uri) }
     internal fun pickOwnerDataArchive() { try { ownerArchiveImportPicker.launch(arrayOf("application/zip", "application/octet-stream")) } catch (_: RuntimeException) { controller.ownerArchives.importResult(null) } }
     internal fun createOwnerDataArchive(name: String) { try { ownerArchiveExportPicker.launch(name) } catch (_: RuntimeException) { controller.ownerArchives.exportResult(null) } }
     private val projectPackageImportPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> controller.projectPackages.importResult(uri) }
@@ -68,6 +68,7 @@ class ComposeActivity : ComponentActivity() {
         catch (_: RuntimeException) { controller.projectPackages.importResult(null) }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(pocketWindowTheme(this))
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val engine = application as EngineApplication

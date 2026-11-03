@@ -71,7 +71,7 @@ internal fun WorkspaceArtifactHeader(state: PocketUiState, controller: PocketWor
 @Composable
 internal fun WorkspaceArtifactSheet(view: UiWorkspaceArtifactView, state: PocketUiState, controller: PocketWorldController) {
     val source = view.source
-    ModalBottomSheet(onDismissRequest = controller::closeWorkspaceArtifact, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = androidx.compose.ui.graphics.Color.White) {
+    ModalBottomSheet(onDismissRequest = controller::closeWorkspaceArtifact, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp).navigationBarsPadding()) {
             TextButton(onClick = controller::closeWorkspaceArtifact, modifier = Modifier.testTag("workspace_artifact_return")) { Text(if (state.filePath != null) "返回编辑区" else if (view.fromTaskId != null) "返回原任务" else "返回项目") }
             Text("已保存成果", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)

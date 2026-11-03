@@ -11,7 +11,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -96,7 +95,7 @@ internal fun TeamLaunchSheet(state: PocketUiState, controller: PocketWorldContro
     val teams = state.feature("teams").optJSONArray("teams").objects()
     val busy = "teams.start" in state.moduleBusy
     LaunchedEffect(state.moduleResults["teams.start"]) { if (submitted != null && state.moduleResultInputs["teams.start"]?.optString("_requestId") == submitted) close() }
-    ModalBottomSheet(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    ModalBottomSheet(onDismissRequest = { if (!busy) close() }, containerColor = MaterialTheme.colorScheme.surface, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp).navigationBarsPadding().imePadding()) {
             Text("交给团队协作", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             TeamCaption("选择现有团队后开始一次正式任务；成员会话和每轮证据都可回查。")
@@ -139,7 +138,7 @@ internal fun TeamRunDetail(state: PocketUiState, controller: PocketWorldControll
     val member = members.find { it.optString("id") == memberId }
     val detailTitle = member?.optString("name") ?: run?.optString("teamName") ?: "团队任务"
     Dialog(onDismissRequest = { controller.closeTeam() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize(), color = Color.White) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
                 if (!collaborationOpen) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) { TextButton(onClick = { if (collaborationOpen) collaborationOpen = false else if (memberId == null) controller.closeTeam() else memberId = null }) { Text("返回") }; Text(detailTitle, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); TextButton(onClick = { controller.requestFeature("teams", "get", JSONObject().put("runId", runId)) }) { Text("刷新", fontSize = 12.sp) } }
                 if (!collaborationOpen) HorizontalDivider(color = Line)
@@ -175,7 +174,7 @@ internal fun TeamRunDetail(state: PocketUiState, controller: PocketWorldControll
                         members.forEach { slot -> Column(Modifier.fillMaxWidth().clickable { memberId = slot.optString("id"); tab = 0 }.padding(vertical = 14.dp)) { Text(slot.optString("name") + if (slot.optString("id") == run.optString("leaderId")) " · Leader" else "", fontSize = 14.sp, fontWeight = FontWeight.Medium); TeamCaption(slot.optString("role")); Text(teamMemberStatus(slot.optString("status")) + " · " + teamRunnerLabel(slot.optString("runner", "model")) + " · " + slot.optString("model"), fontSize = 11.sp, color = SecondaryInk) }; HorizontalDivider(color = Line) }
                     }
                     if(run.optString("mode")=="produce")TeamWorkspaceArtifactLinks(run,memberId,controller::openTeamArtifact)
-                    ScrollableTabRow(selectedTabIndex = tab, containerColor = Color.White, edgePadding = 0.dp) { listOf("会话", "任务", "活动", "证据").forEachIndexed { index, title -> Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title, fontSize = 12.sp) }) } }
+                    ScrollableTabRow(selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.surface, edgePadding = 0.dp) { listOf("会话", "任务", "活动", "证据").forEachIndexed { index, title -> Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title, fontSize = 12.sp) }) } }
                     when (tab) {
                         0 -> {
                             Row { FilterChip(selected = round == 0, onClick = { round = 0 }, label = { Text("全部轮次") }); for (n in 1..run.optInt("rounds", 1)) FilterChip(selected = round == n, onClick = { round = n }, label = { Text("第 " + n + " 轮") }) }

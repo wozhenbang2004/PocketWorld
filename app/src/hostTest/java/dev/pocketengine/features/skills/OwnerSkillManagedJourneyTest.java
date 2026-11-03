@@ -86,7 +86,7 @@ public final class OwnerSkillManagedJourneyTest {
                 assertArrayEquals("45.00|$(owner literal) 中文".getBytes(StandardCharsets.UTF_8),f.saved());assertEquals("40.00",f.originalInput());
                 assertEquals(1,f.tasks.list().length());assertEquals(2,f.tasks.get(f.id(),false).getJSONArray("operations").length());assertTrue(f.record().getJSONObject("nativeManagedObservation").getBoolean("resourcesReleased"));
                 assertThrows(SecurityException.class,()->selected.checkBeforeStart(f.host));assertThrows(SecurityException.class,()->f.host.decide(f.window,review,review.plan.digest,true));
-                f.skills.handle("delete",new JSONObject().put("id",f.installed.getString("id")));f.reopenForReceiptOnly();
+                f.simulateMissingSkillForReceiptOnly();f.reopenForReceiptOnly();
                 JSONObject cold=f.host.reconcile(f.id(),operation,false);assertEquals("completed",cold.getJSONObject("receipt").getString("status"));assertFalse(cold.getJSONObject("receipt").getBoolean("replayAllowed"));
                 assertArrayEquals("45.00|$(owner literal) 中文".getBytes(StandardCharsets.UTF_8),f.saved());assertEquals(2,f.tasks.get(f.id(),false).getJSONArray("operations").length());assertNull(f.callbackFailure.get());
             }

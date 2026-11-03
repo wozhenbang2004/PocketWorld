@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="appearance_title">Appearance</string>
+    <string name="appearance_description">Choose a light or dark interface, or follow the system. Images, videos and original file content keep their own colors.</string>
+    <string name="appearance_system">Follow system</string>
+    <string name="appearance_light">Always light</string>
+    <string name="appearance_dark">Always dark</string>
+    <string name="appearance_save_unconfirmed">The display has changed, but saving the preference is not confirmed. Check storage and verify the selection after reopening the app.</string>
+</resources>

@@ -126,13 +126,15 @@ internal fun SkillSourceControls(state: PocketUiState, controller: PocketWorldCo
             }
         }
     }
-    OutlinedTextField(repository, { repository = it; clearPreview() }, label = { Text("仓库 https://github.com/owner/repo") }, enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(repository, { repository = it; clearPreview() }, label = { Text("GitHub 仓库、目录或 SKILL.md 链接") }, enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(ref, { ref = it; clearPreview() }, label = { Text("明确分支、标签或 commit") }, enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
     OutlinedTextField(subpath, { subpath = it; clearPreview() }, label = { Text("技能子目录（根目录可留空）") }, enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+    SourceCaption("可粘贴 tree、blob 或 raw 的 SKILL.md 链接。ref 仍需明确填写，含斜杠的分支请填写完整名称。文件链接只选择该技能所在目录，不会自动导入其他技能。")
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = {
             try {
-                val source = SkillGitSource(repository.trim(), ref.trim(), subpath.trim()); val id = targetId
+                val source = SkillGitSource.fromInput(repository.trim(), ref.trim(), subpath.trim()); val id = targetId
+                repository = source.repository; ref = source.ref; subpath = source.subpath
                 clearPreview()
                 work(true) { control -> review = withContext(Dispatchers.IO) { module.inspectGitSource(skillOwnerPrivateScope(), id, source, control) }; file = "SKILL.md" }
             } catch (failure: IllegalArgumentException) { error = failure.message }

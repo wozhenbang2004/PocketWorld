@@ -25,8 +25,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 internal data class SkillExportPin(val id: String, val revision: Int, val digest: String, val fileName: String)
-private data class SkillPickerTarget(val id: String?)
-private data class SkillArchivePreview(val uri: Uri, val targetId: String?, val inspection: JSONObject)
+private data class SkillPickerTarget(val id: String?, val singleDocument: Boolean = false)
+private data class SkillArchivePreview(val uri: Uri, val targetId: String?, val inspection: JSONObject, val singleDocument: Boolean = false)
 private val skillDigestPattern = Regex("[0-9a-f]{64}")
 
 /** The only scope offered by this native owner surface. Archive/model data never selects it. */
@@ -96,10 +96,10 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
             worker.launch {
                 try {
                     val inspection = withContext(Dispatchers.IO) {
-                        resolver.openInputStream(uri)?.use { module.inspectPackage(skillOwnerPrivateScope(), it, target.id) }
+                        resolver.openInputStream(uri)?.use { if (target.singleDocument) module.inspectDocument(skillOwnerPrivateScope(), it, target.id) else module.inspectPackage(skillOwnerPrivateScope(), it, target.id) }
                             ?: throw IllegalStateException("无法读取所选文件")
                     }
-                    preview = SkillArchivePreview(uri, target.id, JSONObject(inspection.toString()))
+                    preview = SkillArchivePreview(uri, target.id, JSONObject(inspection.toString()), target.singleDocument)
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) { error = failure.message ?: "技能包检查失败，请重新选择文件。" }
                 finally { busy = false }
@@ -132,7 +132,7 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
     error?.let { Text(it, color = Danger, fontSize = 12.sp, lineHeight = 21.sp) }
     if (!expanded) return
     if (module == null) { SkillArchiveCaption("技能文件模块暂不可用，请刷新连接中心。"); return }
-    SkillArchiveCaption("使用 ZIP 文件转移完整技能内容。选择现有技能可更新或恢复旧内容；导入后产生新的停用修订，需另行审阅和启用。")
+    SkillArchiveCaption("使用 ZIP 转移完整技能包，也可单独导入 SKILL.md。单文件只包含说明正文，不会读取旁边的脚本或资源。选择现有技能可更新或恢复旧内容；导入后产生新的停用修订，需另行审阅和启用。")
     Row {
         RadioButton(selected = targetId == null, onClick = { targetId = null; preview = null }, enabled = !busy && pendingImport == null && pendingExport == null)
         Text("登记为新技能", fontSize = 13.sp, modifier = Modifier.padding(top = 13.dp))
@@ -163,6 +163,13 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
             } catch (failure: Exception) { pendingExport = null; error = failure.message ?: "无法打开保存位置" }
         }, enabled = targetId != null && !busy && pendingImport == null && pendingExport == null) { Text("导出所选版本") }
     }
+    TextButton(onClick = {
+        if (busy || pendingImport != null || pendingExport != null) return@TextButton
+        preview = null; error = null; message = null; pendingImport = SkillPickerTarget(targetId, singleDocument = true)
+        try { importPicker.launch(arrayOf("text/markdown", "text/plain", "application/octet-stream")) }
+        catch (_: Exception) { pendingImport = null; error = "系统文件选择器不可用，请稍后重试。" }
+    }, enabled = !busy && pendingImport == null && pendingExport == null && (targetId == null || skills.any { it.optString("id") == targetId })) { Text("选择单个 SKILL.md 并检查") }
+    if (app != null && !busy && pendingImport == null && pendingExport == null) SkillRemovalControls(skills.find { it.optString("id") == targetId }, module, app, controller)
     if (busy) SkillArchiveCaption("正在处理真实文件。离开页面后请返回核对技能列表与保存位置，避免重复操作。")
     preview?.let { checked ->
         val inspection = checked.inspection
@@ -184,6 +191,7 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
                 if (paths != null && paths.length() > 0) SkillArchiveCaption(label + "：" + (0 until paths.length()).joinToString("、") { paths.getString(it) })
             }
         }
+        if (checked.singleDocument) SkillArchiveCaption("本次只导入 SKILL.md；更新现有技能会移除上方列出的旧脚本或资源。需要保留完整包时，请改选 ZIP。")
         SkillArchiveCaption("文件是未经信任的参考内容，不执行脚本。确认只导入内容，不恢复原授权；省略的旧文件将移除。")
         if (!isCurrent) Text("当前技能版本已变化，请重新选择文件并检查。", color = Danger, fontSize = 12.sp)
         Button(onClick = {
@@ -198,7 +206,7 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
                             ensureActive()
                             resolver.openInputStream(checked.uri)?.use { stream ->
                                 ensureActive()
-                                module.importPackage(skillOwnerPrivateScope(), stream, options)
+                                if (checked.singleDocument) module.importDocument(skillOwnerPrivateScope(), stream, options) else module.importPackage(skillOwnerPrivateScope(), stream, options)
                             } ?: throw IllegalStateException("无法重新读取文件，请重新选择并检查")
                         }
                         val skill = imported.getJSONObject("skill")

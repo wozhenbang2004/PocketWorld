@@ -2,6 +2,9 @@ package dev.pocketengine.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,6 +33,18 @@ import org.json.JSONObject
     LaunchedEffect(state.open, state.originalAction, state.originalPhase?.optString("status"), state.busy) {
         if (state.open && !state.busy && state.originalAction != null && state.originalPhase?.optString("status") in setOf("queued", "running")) { delay(700); flow.pollOriginal() }
     }
+    state.passwordPrompt?.let { kind ->
+        var password by remember(kind) { mutableStateOf("") }
+        var repeated by remember(kind) { mutableStateOf("") }
+        val exporting = kind == "export"
+        AlertDialog(onDismissRequest = flow::cancelPassword, title = { Text(if (exporting) "设置备份口令" else "解密所选备份") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("至少12个字符，建议使用独立长口令。口令不会保存；遗失后无法恢复。文件完整认证通过后仍须逐分区审阅。", fontSize = 13.sp)
+                OutlinedTextField(password, { if (it.length <= 1024) password = it }, label = { Text("备份口令") }, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), singleLine = true)
+                if (exporting) OutlinedTextField(repeated, { if (it.length <= 1024) repeated = it }, label = { Text("再次输入口令") }, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), singleLine = true)
+            }
+        }, confirmButton = { TextButton(onClick = { val exact = password.toCharArray(); password = ""; repeated = ""; flow.usePassword(exact) }, enabled = password.length >= 12 && (!exporting || password == repeated)) { Text(if (exporting) "加密并导出" else "解密并只读核对") } }, dismissButton = { TextButton(onClick = flow::cancelPassword) { Text("取消") } })
+    }
     if (discard) AlertDialog(onDismissRequest = { discard = false }, title = { Text("移除本机备份缓存？") }, text = { Text("只删除这份临时备份副本，不删除项目、原件、成果或已导出的文件。有原恢复未决时会拒绝移除。") }, confirmButton = { TextButton(onClick = { discard = false; flow.discardLocalCache() }) { Text("仅移除本机缓存") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("保留") } })
     ModalBottomSheet(onDismissRequest = flow::closePage, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp).navigationBarsPadding().imePadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -38,18 +53,20 @@ import org.json.JSONObject
             if (projectOnly) Caption("范围：${state.projectMemoryName}。仅此项目的保留版本、已停止私人副本及其记忆；不含主人全局或其它项目。恢复时须先明确恢复项目，再将记忆按原映射放为只读档案，不恢复读取同意。")
             else labels.forEach { (key, label) -> Row(Modifier.fillMaxWidth()) { Checkbox(key in selected, { yes -> selected = if (yes) selected + key else selected - key }, enabled = !state.busy && state.review == null); Text(label, Modifier.weight(1f).padding(top = 13.dp), fontSize = 13.sp) } }
             Button(onClick = { flow.create(selected) }, enabled = selected.isNotEmpty() && (!projectOnly || state.projectMemoryCurrent) && !state.busy && state.review == null, modifier = Modifier.fillMaxWidth().testTag("owner_data_backup_capture")) { Text(if (state.busy) "核对中…" else if (projectOnly) "生成此项目与其记忆的备份" else "生成所选范围的备份") }
-            OutlinedButton(onClick = flow::chooseImport, enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("owner_data_backup_read")) { Text("选择备份，只读核对…") }
+            OutlinedButton(onClick = flow::chooseImport, enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("owner_data_backup_read")) { Text("选择加密备份，解密并核对…") }
             TextButton(onClick = { details = !details }) { Text(if (details) "收起范围说明" else "包含什么，不包含什么") }
             if (details) {
                 Caption("项目保留当前版本库中的最近八版与删除标记，并复制可读、已停止的私人活动副本。活动副本按项目包规则排除工具环境、依赖缓存、Git 历史及已知账号配置，保留实际排除清单；版本库中的原文件按所选内容保存，仍可能包含敏感文本。未完成的团队活动副本不纳入。模块之间不是一次跨库事务，任何读取失败都不会发布半份备份。")
-                Caption("备份上限 1.5GiB，原件仍受原单件和总量限制。文件在磁盘中分段复制，不把整包装入内存；空间不足会明确失败。备份未加密，用户文本、图片或项目内容仍可能含敏感信息，请选择可信保存位置。登录凭据、密钥、SSH 信任、会话、执行授权、未决委派与未保存草稿不迁移。")
+                Caption("备份上限 1.5GiB，原件仍受原单件和总量限制。文件在磁盘中分段复制，不把整包装入内存；空间不足会明确失败。本机审阅缓存未加密；默认导出为口令加密的 .pwbackup 文件。口令不保存，丢失无法恢复。用户文本、图片或项目内容仍可能含敏感信息。登录凭据、密钥、SSH 信任、会话、执行授权、未决委派与未保存草稿不迁移。Skills/Plugins 安装、模型/API设置、设备配对、自动化规则及运行环境不在此六分区档案中；这不是整机或完整应用备份。")
+                TextButton(onClick = flow::choosePlainImport, enabled = !state.busy) { Text("读取旧版未加密 ZIP，只读核对…") }
                 state.inventory?.let { Caption("当前 ${it.optJSONArray("projects")?.length() ?: 0} 个项目，${it.optJSONArray("privateCheckouts")?.length() ?: 0} 个私人副本，${it.optJSONArray("workspaceArtifacts")?.length() ?: 0} 项固定成果，${it.optJSONArray("attachments")?.length() ?: 0} 个原件。实际可读取性会在生成时重核。") }
             }
             state.selection?.let { archive ->
                 HorizontalDivider()
                 Text("固定备份", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Caption("${archive.optLong("archiveBytes")} 字节 · ${archive.optInt("objectCount")} 个原对象")
-                OutlinedButton(onClick = flow::offerExport, enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("owner_data_backup_export")) { Text("导出这份备份…") }
+                OutlinedButton(onClick = flow::offerExport, enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("owner_data_backup_export")) { Text("设置口令并导出这份备份…") }
+                if (details) TextButton(onClick = flow::offerPlainExport, enabled = !state.busy) { Text("明确导出未加密 ZIP…") }
                 TextButton(onClick = { discard = true }, enabled = !state.busy) { Text("移除这份本机备份缓存…") }
                 val sections = state.preview?.optJSONObject("review")
                 labels.forEach { (key, label) -> sections?.optJSONObject(key)?.let { part ->

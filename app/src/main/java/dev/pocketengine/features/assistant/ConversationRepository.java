@@ -354,7 +354,7 @@ public final class ConversationRepository {
     public void saveMessage(String conversation,JSONObject message)throws Exception{saveMessage(activeGeneration(),conversation,message,-1);}
     private void saveMessage(String gen,String conversation,JSONObject message,long importedSequence)throws Exception{
         String id=message.getString("id");JSONObject state=source(gen,id);if(state==null||state.getBoolean("deleted")||!conversation.equals(state.getString("conversationId"))||integer(message,"revision",1)!=state.getLong("revision")||!message.getString("role").equals(state.getString("role")))throw new SecurityException("原消息/来源修订不一致，未保存副本");
-        JSONObject meta=new JSONObject(message.toString());String body=meta.getString("content");if(!StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).canEncode(body))throw new IllegalArgumentException("原文含不完整Unicode字符，未隐式替换后保存");byte[] bodyBytes=body.getBytes(StandardCharsets.UTF_8);meta.remove("content");long sequence=importedSequence;
+        JSONObject meta=new JSONObject(message.toString());String body=meta.getString("content");if(!StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).canEncode(body))throw new IllegalArgumentException("原文含不完整Unicode字符，未隐式替换后保存");byte[] bodyBytes=body.getBytes(StandardCharsets.UTF_8);meta.remove("content");meta.remove("ownerOriginalLocator");long sequence=importedSequence;
         try(Cursor row=db.rawQuery("SELECT sequence FROM assistant_messages WHERE generation=? AND source_id=? LIMIT 1",new String[]{gen,id})){if(row.moveToFirst())sequence=row.getLong(0);}
         if(sequence<0)try(Cursor row=db.rawQuery("SELECT max(n)+1 FROM (SELECT coalesce(max(sequence),0) n FROM assistant_messages WHERE generation=? AND conversation_id=? UNION ALL SELECT coalesce(max(sequence),0) n FROM assistant_import_records WHERE generation=? AND conversation_id=?)",new String[]{gen,conversation,gen,conversation})){row.moveToFirst();sequence=row.getLong(0);}
         ContentValues v=new ContentValues();v.put("generation",gen);v.put("source_id",id);v.put("conversation_id",conversation);v.put("sequence",sequence);v.put("revision",state.getLong("revision"));v.put("body",body);v.put("body_bytes",bodyBytes.length);v.put("body_sha","sha256:"+shaBytes(bodyBytes));v.put("meta_json",meta.toString());Object at=message.opt("at");if(at instanceof Byte||at instanceof Short||at instanceof Integer||at instanceof Long)v.put("at_ms",((Number)at).longValue());else v.putNull("at_ms");db.insertWithOnConflict("assistant_messages",null,v,SQLiteDatabase.CONFLICT_REPLACE);ConversationOrganization.changed(db,gen);
@@ -517,7 +517,15 @@ public final class ConversationRepository {
             while(rows.moveToNext()){
                 if(scanned>=limit){more=true;break;}long size=rows.getLong(2);if(size>MAX_BYTES){gaps.put(new JSONObject().put("recordId",rows.getString(0)).put("status","read_limited"));last=rows.getLong(1);scanned++;continue;}
                 if(size>MAX_BYTES-bytes){more=true;break;}
-                JSONObject message="legacy".equals(rows.getString(3))?importedMessage(conversation,rows.getString(0)):message(conversation,rows.getString(0));last=rows.getLong(1);scanned++;if(message!=null){reverse.put(message);bytes+=size;}
+                boolean imported="legacy".equals(rows.getString(3));JSONObject message=imported?importedMessage(conversation,rows.getString(0)):message(conversation,rows.getString(0));last=rows.getLong(1);scanned++;if(message!=null){
+                    // Owner page metadata only. Selection still reads this exact original again;
+                    // an imported identity never becomes a model-source reference.
+                    message.remove("ownerOriginalLocator");
+                    if(!imported)message.put("ownerOriginalLocator",new JSONObject().put("kind","owner_native_original").put("generation",gen)
+                            .put("conversationId",conversation).put("recordId",message.getString("id")).put("recordVersion",message.getLong("revision"))
+                            .put("fingerprint","sha256:"+shaBytes(message.getString("content").getBytes(StandardCharsets.UTF_8))));
+                    reverse.put(message);bytes+=size;
+                }
             }
         }
         JSONArray messages=new JSONArray();for(int i=reverse.length()-1;i>=0;i--)messages.put(reverse.getJSONObject(i));String next=more&&last>=0?encode(new JSONObject().put("before",last)):"";

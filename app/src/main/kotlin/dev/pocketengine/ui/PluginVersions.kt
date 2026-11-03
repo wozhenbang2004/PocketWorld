@@ -7,7 +7,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -168,7 +167,7 @@ internal fun PluginVersions(state: PocketUiState, controller: PocketWorldControl
         val restoreCurrent = current == target.expectedInstallationId && currentState == target.expectedStateRevision
         val reviewed = reviewedPluginRestorePreview(target, state.moduleResultInputs["plugins.previewRollback"], state.moduleResults["plugins.previewRollback"])
         var targetDeclarationOpen by remember(target.requestId) { mutableStateOf(false) }
-        AlertDialog(onDismissRequest = { if (!restoreBusy) { restore = null; restoreToken = "" } }, containerColor = Color.White, title = { Text("恢复版本 " + target.version + "？") }, text = {
+        AlertDialog(onDismissRequest = { if (!restoreBusy) { restore = null; restoreToken = "" } }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("恢复版本 " + target.version + "？") }, text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (restorePreviewBusy) Text("正在核对目标声明与当前版本的实际差异…", fontSize = 13.sp)
                 reviewed?.let {

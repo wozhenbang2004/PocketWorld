@@ -1,4 +1,71 @@
 {
+  "mika-skill-lifecycle": {
+    "class": "dev.pocketengine.features.skills.NativeSkillExecutionHostTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.skills.SkillBookTest",
+      "dev.pocketengine.features.skills.SkillDocumentTest",
+      "dev.pocketengine.features.skills.SkillRemovalHostTest",
+      "dev.pocketengine.features.skills.SkillRemovalPolicyTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Exact original-source targeted tests; no complete Android, physical device, external service or UI acceptance."
+  },
+  "mika-phone-evidence": {
+    "class": "dev.pocketengine.phone.PhoneResourceDispositionTest",
+    "additionalClasses": [
+      "dev.pocketengine.phone.diagnostics.PhonePracticeRotationTest",
+      "dev.pocketengine.phone.display.DisplayModuleTest",
+      "dev.pocketengine.phone.display.PhoneResourceReleaseJourneyTest",
+      "dev.pocketengine.phone.observation.PhoneObservationPreviewTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Exact original-source targeted tests; no complete Android, physical device, external service or UI acceptance."
+  },
+  "mika-ecosystem": {
+    "class": "dev.pocketengine.features.plugins.PluginRegistryAssemblyTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.skills.SkillGitInputTest",
+      "dev.pocketengine.features.skills.SkillGitProtocolTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Exact original-source targeted tests; no complete Android, physical device, external service or UI acceptance."
+  },
+  "mika-models": {
+    "class": "dev.pocketengine.runtime.models.ModelConnectionFailureTest",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.models.ModelConnectionServiceTest",
+      "dev.pocketengine.runtime.models.ModelEndpointSupportTest",
+      "dev.pocketengine.runtime.models.ModelMetadataSuggestionsTest",
+      "dev.pocketengine.runtime.models.ModelProbeDeadlineTest",
+      "dev.pocketengine.runtime.models.ModelSelectionPreferencesTest",
+      "dev.pocketengine.store.ModelPreferencesNativeJourneyTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Exact original-source targeted tests; no complete Android, physical device, external service or UI acceptance."
+  },
+  "mika-issue-integration": {
+    "class": "dev.pocketengine.features.assistant.OwnerSourceProjectionNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.usage.TaskInferencePresentationTest",
+      "dev.pocketengine.store.InferenceJournalTest",
+      "dev.pocketengine.features.teams.TeamOutputReadTest",
+      "dev.pocketengine.features.teams.TeamOutputTextTest",
+      "dev.pocketengine.phone.QuickPanelCoordinatorRaceTest",
+      "dev.pocketengine.phone.QuickPanelDraftStoreTest",
+      "dev.pocketengine.phone.QuickPanelSurfaceTest",
+      "dev.pocketengine.features.workspace.OwnerBackupEnvelopeTest",
+      "dev.pocketengine.features.workspace.OwnerBackupPendingFilesTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original source-bound quote, retained-run inference projection, team text, owner quick panel and private backup staging recovery tests. No Android device, SAF, full UI or production service acceptance."
+  },
   "mcp-local-discovery": {
     "class": "dev.pocketengine.features.plugins.McpLocalDiscoveryReviewTest",
     "additionalClasses": [
@@ -767,6 +834,7 @@
       "dev.pocketengine.runtime.context.CommittedReadBatchBudgetTest",
       "dev.pocketengine.runtime.CommittedReadBatchRunnerTest",
       "dev.pocketengine.runtime.StructuredRunOutcomeRunnerTest",
+      "dev.pocketengine.runtime.policy.OwnerQuestionChoicesTest",
       "dev.pocketengine.runtime.context.ProviderUsageCompatibilityTest"
     ],
     "helpers": [

@@ -260,14 +260,13 @@ public final class HostToolSupervisor implements CapabilityPort {
     /** Refresh only at request assembly. Calls from the admitted step retain old pinned presets. */
     private void refreshPluginRoutes()throws Exception {
         Map<String,Tool> next=new LinkedHashMap<>(nativeRoutes);if(workProfile!=null&&!workProfile.hasSkills())next.entrySet().removeIf(entry->entry.getValue().feature.equals("skills"));
-        if(available("plugins")){
-            JSONArray registry=host.module("plugins").handle("registry",new JSONObject()).getJSONArray("tools");
-            for(int i=0;i<registry.length();i++){
-                JSONObject entry=registry.getJSONObject(i);if(workProfile!=null&&!workProfile.includesPluginTool(entry))continue;boolean writes=!entry.optString("effect","write").equals("read");if(writes&&!allowWrites)continue;
-                String name=entry.getString("name");if(!name.matches("[A-Za-z][A-Za-z0-9_-]{0,63}")||next.containsKey(name))throw new IllegalArgumentException("插件工具名称无效或冲突");
-                JSONObject preset=new JSONObject().put("id",entry.getString("pluginId")).put("tool",entry.getString("tool")).put("expectedVersion",entry.getString("version")).put("expectedInstallationId",entry.getString("installationId")).put("expectedExecutionIdentity",TaskStore.capabilityFingerprint(entry.getJSONObject("executionBinding")));
-                JSONObject schema=new JSONObject(entry.getJSONObject("schema").toString());next.put(name,new Tool("plugins","invoke",writes,schema,definition(name,entry.getString("description"),schema),preset));
-            }
+        JSONArray registry=available("plugins")?host.module("plugins").handle("registry",new JSONObject()).getJSONArray("tools"):new JSONArray();
+        if(workProfile!=null)workProfile.requirePluginTools(registry);
+        for(int i=0;i<registry.length();i++){
+            JSONObject entry=registry.getJSONObject(i);if(workProfile!=null&&!workProfile.includesPluginTool(entry))continue;boolean writes=!entry.optString("effect","write").equals("read");if(writes&&!allowWrites)continue;
+            String name=entry.getString("name");if(!name.matches("[A-Za-z][A-Za-z0-9_-]{0,63}")||next.containsKey(name))throw new IllegalArgumentException("插件工具名称无效或冲突");
+            JSONObject preset=new JSONObject().put("id",entry.getString("pluginId")).put("tool",entry.getString("tool")).put("expectedVersion",entry.getString("version")).put("expectedInstallationId",entry.getString("installationId")).put("expectedExecutionIdentity",TaskStore.capabilityFingerprint(entry.getJSONObject("executionBinding")));
+            JSONObject schema=new JSONObject(entry.getJSONObject("schema").toString());next.put(name,new Tool("plugins","invoke",writes,schema,definition(name,entry.getString("description"),schema),preset));
         }
         routes.clear();routes.putAll(next);
     }

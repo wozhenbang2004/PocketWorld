@@ -12,7 +12,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -127,7 +126,7 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
             { _ -> review?.let { retained -> work({ host.readScript(retained).getString("content") }) { script = it; scriptDigest = retained.plan.digest } } },
             { _, digest -> review?.let { retained -> work({ host.decide(approvalWindow, retained, digest, true); readSnapshot() }) { snapshot = it; currentDigest = null; notice = "已批准这一次具体计划，执行和成果仍在原任务"; leaveReview() } } },
             ::cancelCurrentReview, ::leaveReview)
-        else Surface(Modifier.fillMaxSize(), color = Color.White) {
+        else Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             BackHandler { window.close(); approvalWindow.close(); onBack() }
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) { TextButton(onClick = { window.close(); onBack() }) { Text("返回原任务") }; Spacer(Modifier.weight(1f)); TextButton(onClick = ::refresh, enabled = !busy) { Text("刷新") } }
@@ -220,7 +219,7 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
     }
     configReview?.let { retained ->
         val value = retained.view(); val deployment = value.getJSONObject("deployment"); val request = value.getJSONObject("request")
-        AlertDialog(onDismissRequest = { if (!busy) configReview = null }, containerColor = Color.White, title = { Text("审阅固定执行配置") }, text = {
+        AlertDialog(onDismissRequest = { if (!busy) configReview = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("审阅固定执行配置") }, text = {
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 val phone = value.optString("executionLocation") == "this_phone"
                 val recovery = value.optJSONObject("configurationRecovery")
@@ -234,7 +233,7 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
             }
         }, confirmButton = { Button(onClick = { work({ host.installConfiguration(window, retained, retained.digest); readSnapshot() }) { snapshot = it; configReview = null; notice = "执行地点与范围已保存；实际脚本仍需本次具体审阅" } }, enabled = !busy && configAcknowledged) { Text("保存此配置") } }, dismissButton = { TextButton(onClick = { configReview = null }, enabled = !busy) { Text("取消") } })
     }
-    if (showPhoneConfiguration) AlertDialog(onDismissRequest = { if (!busy) showPhoneConfiguration = false }, containerColor = Color.White, title = { Text("选择手机执行范围") }, text = {
+    if (showPhoneConfiguration) AlertDialog(onDismissRequest = { if (!busy) showPhoneConfiguration = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("选择手机执行范围") }, text = {
         val phone = snapshot.optJSONObject("phoneExecution") ?: JSONObject()
         Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Caption("只保存本机地点与准确的输入/输出选择，不运行脚本。手机同 UID 不是 OS 沙箱，只执行你信任的技能。")
@@ -264,7 +263,7 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
             else if (page?.optBoolean("truncated") == true || page?.optBoolean("outputTruncated") == true) Caption("原日志已达缓存或本页范围上限；未将缺失字节当完整输出。")
         }
     }, confirmButton = { TextButton(onClick = { work({ host.readExecutionLog(taskId, operation, logCursor,16000) }) { logPage = it; logCursor = it.optLong("nextCursor",it.optLong("nextSequence",logCursor)) } }, enabled = !busy) { Text("读取下一页") } }, dismissButton = { TextButton(onClick = { logOperation = null; logPage = null }, enabled = !busy) { Text("关闭") } }) }
-    removeConfig?.let { observed -> AlertDialog(onDismissRequest = { removeConfig = null }, containerColor = Color.White, title = { Text("停用这个执行配置？") }, text = { Text("将使旧审阅失效，并请求停止仍在执行的原脚本。原任务和已有成果保留，已发生的效果不会撤回。\n所选配置 SHA-256：${observed.optString("digest")}") }, confirmButton = { TextButton(onClick = { work({ host.removeConfiguration(window, observed.getLong("revision"), observed.getString("stateFingerprint")); readSnapshot() }) { snapshot = it; removeConfig = null; notice = "配置已移除，原操作仍可按原收据核对" } }, enabled = !busy) { Text("停用并移除", color = Danger) } }, dismissButton = { TextButton(onClick = { removeConfig = null }) { Text("取消") } }) }
+    removeConfig?.let { observed -> AlertDialog(onDismissRequest = { removeConfig = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("停用这个执行配置？") }, text = { Text("将使旧审阅失效，并请求停止仍在执行的原脚本。原任务和已有成果保留，已发生的效果不会撤回。\n所选配置 SHA-256：${observed.optString("digest")}") }, confirmButton = { TextButton(onClick = { work({ host.removeConfiguration(window, observed.getLong("revision"), observed.getString("stateFingerprint")); readSnapshot() }) { snapshot = it; removeConfig = null; notice = "配置已移除，原操作仍可按原收据核对" } }, enabled = !busy) { Text("停用并移除", color = Danger) } }, dismissButton = { TextButton(onClick = { removeConfig = null }) { Text("取消") } }) }
 }
 
 @Composable private fun Caption(text: String) { Text(text, color = SecondaryInk, fontSize = 13.sp, lineHeight = 21.sp) }

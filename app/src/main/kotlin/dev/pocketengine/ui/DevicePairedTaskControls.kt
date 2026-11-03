@@ -137,7 +137,7 @@ internal fun DevicePairedTaskControls(task: UiTask, host: NativeDeviceWorkspaceH
 private fun DevicePairedResultReview(view: JSONObject, busy: Boolean, close: () -> Unit, confirm: (Boolean) -> Unit) {
     var checked by remember(view) { mutableStateOf(false) }
     var details by remember(view) { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = close, containerColor = androidx.compose.ui.graphics.Color.White, title = { Text("核对这次成果") }, text = {
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("核对这次成果") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(view.optString("summary").ifBlank { "执行已经结束，等待你核对成果。" }, style = MaterialTheme.typography.bodyLarge)
             Text("只记录这次执行的核对结果，不会重新执行。设备权限和已经发生的操作不会因此撤销。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
@@ -153,7 +153,7 @@ private fun DevicePairedResultReview(view: JSONObject, busy: Boolean, close: () 
 private fun DevicePairedOperationReview(view: JSONObject, busy: Boolean, close: () -> Unit, decide: (Boolean) -> Unit) {
     var details by remember(view) { mutableStateOf(false) }
     var checked by remember(view) { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = close, containerColor = androidx.compose.ui.graphics.Color.White, title = { Text("核对这次设备操作") }, text = {
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("核对这次设备操作") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(view.optString("message").ifBlank { when (view.optString("tool")) { "project_execute" -> "在指定项目执行这次代码"; "project_plan" -> "保存这次项目方案"; else -> view.optString("tool") } }, style = MaterialTheme.typography.titleSmall)
             if (view.optString("tool") == "project_execute") Text("执行代码可能访问该系统用户可访问的资源。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)

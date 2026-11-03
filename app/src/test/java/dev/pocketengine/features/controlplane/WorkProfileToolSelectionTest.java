@@ -65,4 +65,30 @@ public final class WorkProfileToolSelectionTest {
         assertThrows(SecurityException.class,()->new WorkProfileToolSelection(snapshot(refs),()->{}));
     }
 
+    @Test public void requiredProfilePluginCannotDisappearWithAnUnavailableModuleOrOptionalPluginFailure() throws Exception {
+        JSONObject binding = new JSONObject().put("id", "plugin-a").put("installationId", "install-a").put("stateRevision", 3).put("grantsDigest", "a".repeat(64)).put("tools", new JSONArray().put("read").put("list"));
+        var policy = new WorkProfileToolSelection(snapshot(new JSONArray().put(item("plugin", binding, true))), () -> {});
+        JSONObject read = new JSONObject().put("pluginId", "plugin-a").put("installationId", "install-a").put("tool", "read").put("executionBinding", new JSONObject().put("stateRevision", 3).put("grantsDigest", "a".repeat(64)));
+        JSONObject list = new JSONObject(read.toString()).put("tool", "list");
+        assertEquals("selected_profile_plugin_tool_unavailable", assertThrows(SecurityException.class, () -> policy.requirePluginTools(new JSONArray())).getMessage());
+        assertThrows(SecurityException.class, () -> policy.requirePluginTools(new JSONArray().put(read)));
+        policy.requirePluginTools(new JSONArray().put(read).put(list));
+        var omitted = new WorkProfileToolSelection(snapshot(new JSONArray().put(item("plugin", binding, false))), () -> {});
+        omitted.requirePluginTools(new JSONArray());
+        assertEquals(2, binding.getJSONArray("tools").length());
+    }
+    @Test public void requiredPluginRegistryRechecksInstallationRevisionGrantAndCurrentSelection() throws Exception {
+        JSONObject binding = new JSONObject().put("id", "plugin-a").put("installationId", "install-a").put("stateRevision", 3).put("grantsDigest", "a".repeat(64)).put("tools", new JSONArray().put("read"));
+        AtomicBoolean revoked = new AtomicBoolean();
+        var policy = new WorkProfileToolSelection(snapshot(new JSONArray().put(item("plugin", binding, true))), () -> { if (revoked.get()) throw new SecurityException("revoked"); });
+        JSONObject entry = new JSONObject().put("pluginId", "plugin-a").put("installationId", "install-a").put("tool", "read").put("executionBinding", new JSONObject().put("stateRevision", 3).put("grantsDigest", "a".repeat(64)));
+        policy.requirePluginTools(new JSONArray().put(entry));
+        assertThrows(SecurityException.class, () -> policy.requirePluginTools(new JSONArray().put(new JSONObject(entry.toString()).put("installationId", "replacement"))));
+        JSONObject revision = new JSONObject(entry.toString()); revision.getJSONObject("executionBinding").put("stateRevision", 4);
+        assertThrows(SecurityException.class, () -> policy.requirePluginTools(new JSONArray().put(revision)));
+        JSONObject grant = new JSONObject(entry.toString()); grant.getJSONObject("executionBinding").put("grantsDigest", "b".repeat(64));
+        assertThrows(SecurityException.class, () -> policy.requirePluginTools(new JSONArray().put(grant)));
+        revoked.set(true); assertEquals("revoked", assertThrows(SecurityException.class, () -> policy.requirePluginTools(new JSONArray().put(entry))).getMessage());
+    }
+
 }

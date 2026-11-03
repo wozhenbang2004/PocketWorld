@@ -28,8 +28,8 @@ internal fun InferenceRecordSheet(task: UiTask, controller: PocketWorldControlle
             Text(if (task.status == "recording") "正在记录本次模型调用" else "模型调用记录", style = MaterialTheme.typography.labelLarge)
             Text("这里只查看实际模型回执，没有工具执行或继续任务的权限。未收到的用量保持未知。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (task.summary.isNotBlank()) Text(task.summary, style = MaterialTheme.typography.bodyMedium)
-            if (task.raw.optJSONObject("historyEventPage")?.optBoolean("hasMore") == true) Text("以下用量来自当前记录页；较早调用可在执行记录中翻页核对。", style = MaterialTheme.typography.bodySmall)
-            TaskInferencePanel(task.raw, controller::reestimateInference, controller::openChatGptUsage)
+            if (task.raw.optJSONObject("historyEventPage")?.optBoolean("hasMore") == true) Text("展开模型调用后会核对原任务累计；逐条原始记录可继续翻页查看。", style = MaterialTheme.typography.bodySmall)
+            TaskInferencePanel(task.raw, controller::reestimateInference, controller::openChatGptUsage, readUsage = controller::readTaskInferenceUsage)
             TaskAuditPanel(task.id, controller)
             Spacer(Modifier.height(24.dp))
         }

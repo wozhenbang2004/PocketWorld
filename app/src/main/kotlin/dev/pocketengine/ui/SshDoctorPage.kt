@@ -8,7 +8,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -36,7 +35,7 @@ internal fun PrivateSshDoctorPage(profile: JSONObject, controller: PocketWorldCo
         lifecycle?.addObserver(observer)
         onDispose { alive = false; report = null; lifecycle?.removeObserver(observer); page.close() }
     }
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text("核对此连接的实际环境") }, text = {
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("核对此连接的实际环境") }, text = {
         Column(Modifier.heightIn(max = 530.dp).verticalScroll(rememberScrollState())) {
             Text(profile.optString("name"), fontSize = 15.sp)
             SshCaption(profile.optString("username") + "@" + profile.optString("host") + " · " + profile.optString("workspace"))

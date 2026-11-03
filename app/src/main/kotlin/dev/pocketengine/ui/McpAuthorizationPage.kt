@@ -22,7 +22,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
@@ -68,7 +67,7 @@ internal fun McpAuthorizationPage(
     val current = mcpAuthorizationCurrent(view, currentInstallationId, currentBindingFingerprint, now)
     val sameInstallation = view.installationId == currentInstallationId && view.bindingFingerprint == currentBindingFingerprint &&
         currentBindingFingerprint.matches(Regex("[a-f0-9]{64}"))
-    Surface(modifier = Modifier.fillMaxSize(), color = Color.White) {
+    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("连接 MCP 服务", style = MaterialTheme.typography.titleLarge)

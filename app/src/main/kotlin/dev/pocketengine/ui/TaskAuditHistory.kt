@@ -5,7 +5,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -89,7 +88,7 @@ internal fun TaskAuditList(state: PocketUiState, controller: PocketWorldControll
                 if (!taskOverviewMatches(task, "active")) {
                     Row(Modifier.fillMaxWidth().clickable { open(task) }.padding(vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Box(Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Color.White), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surface), contentAlignment = Alignment.Center) {
                             AffectGlyph(if(task.status == "completed") "check" else "file", Modifier.size(16.dp), SecondaryInk)
                         }
                         Column(Modifier.weight(1f)) {
@@ -102,7 +101,7 @@ internal fun TaskAuditList(state: PocketUiState, controller: PocketWorldControll
                     HorizontalDivider(color = Line.copy(alpha = .65f), thickness = .5.dp)
                 } else Surface(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
                     .pocketDepth(PocketDepth.CONTENT, 14.dp),
-                    color = Color.White, shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(14.dp),
                     border = BorderStroke(.5.dp, Line.copy(alpha = .65f))) {
                     Column(Modifier.clickable { open(task) }.padding(16.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

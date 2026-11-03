@@ -616,7 +616,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private var workspaceArtifactsRequest: String? = null
     private var historyRequestId: String? = null
     private var revisionRequestId: String? = null
-    private var inspectionEpoch = 0
+    @Volatile private var inspectionEpoch = 0
+    internal var phoneInlinePreview by mutableStateOf<dev.pocketengine.phone.observation.PhoneObservationPreview.Identity?>(null)
+        private set
+    @Volatile private var phoneInlineWindow: android.view.View? = null
     private var inspectionRefreshPending = false
     private val teamStartInputs = mutableMapOf<String, String>()
     private var teamReceiptSequence = 0L
@@ -1719,6 +1722,17 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun pausePhone() { native("pauseRun") }
     fun continuePhone() { state.tasks.find { it.id == state.activeTaskId }?.let { resumeTask(it, "") } }
     fun stopPhone() { native("stopRun") }
+    internal fun releaseHeldPhoneResources(task: UiTask, window: android.view.View) {
+        if (!privateWorkspaceView() || state.activeTaskId != task.id || task.raw.optString("actorId") != "owner"
+            || task.raw.optString("spaceId") != "private" || !phoneOwnerWindowCurrent(window)) return
+        try {
+            val resources = dev.pocketengine.phone.PhoneResourceDisposition.forTask(task.raw) ?: return
+            check(resources.optString("state") == "held_for_owner" && task.status in setOf("paused", "awaiting_user", "reconciling"))
+            // The existing native service rechecks the original task/run/epoch/control before app.stop.
+            activity.startService(dev.pocketengine.phone.PhoneNotificationControls.command(activity, dev.pocketengine.PhoneRunService.STOP, task.raw))
+            state = state.copy(notice = "已请求停止原任务并释放其独立屏；实际结果以原回执为准。")
+        } catch (_: Exception) { state = state.copy(notice = "原保留会话暂不可核对，请刷新原任务；未停止其他执行。") }
+    }
     fun stopTask(taskId: String) { val team=state.tasks.find { it.id==taskId && it.raw.optJSONObject("origin")?.optString("kind") in setOf("team_assignment","team_integration","team_review") };native("stopTask",team?.let(::reviewedTaskInput)?:JSONObject().put("taskId",taskId)) }
     private fun reviewedTaskInput(task: UiTask): JSONObject = JSONObject().put("taskId", task.id).also {
         if (task.raw.optJSONObject("origin")?.optString("kind") in setOf("group", "team_assignment", "team_integration", "team_review")) it.put("runId", task.raw.optString("runId")).put("epoch", task.raw.optInt("coordinatorEpoch"))
@@ -2133,12 +2147,44 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return feature(id, command, captured)
     }
     fun openInspection(taskId: String) {
+        phoneInlinePreview = null
+        phoneInlineWindow = null
         inspectionEpoch++
         inspectionRefreshPending = false
-        state = state.copy(inspectionTaskId = taskId, inspectionObservation = null, inspectionManualAllowed = false, inspectionError = null, inspectionMessage = null)
+        state = state.copy(inspectionTaskId = taskId, inspectionObservation = null, inspectionBusy = false, inspectionManualAllowed = false, inspectionError = null, inspectionMessage = null)
         observeInspection()
     }
+    internal fun openInlinePhonePreview(task: UiTask, window: android.view.View) {
+        if (!privateWorkspaceView() || state.activeTaskId != task.id || !isPhoneTask(task) || task.executionMode != "background"
+            || task.raw.optString("actorId") != "owner" || task.raw.optString("spaceId") != "private" || !phoneOwnerWindowCurrent(window)) return
+        try {
+            val identity = dev.pocketengine.phone.observation.PhoneObservationPreview.expected(JSONObject().put("taskId", task.id)
+                .put("expectedRunId", task.raw.opt("runId")).put("expectedEpoch", task.raw.opt("coordinatorEpoch")))
+                ?: return
+            closeInspection()
+            phoneInlinePreview = identity
+            phoneInlineWindow = window
+            state = state.copy(inspectionTaskId = task.id, inspectionError = null, inspectionMessage = null)
+            observeInspection()
+        } catch (_: Exception) { state = state.copy(notice = "原任务身份尚未就绪，请回到原任务刷新后再查看。") }
+    }
+    private fun inlinePhonePreviewCurrent(identity: dev.pocketengine.phone.observation.PhoneObservationPreview.Identity): Boolean =
+        phoneInlinePreview === identity && privateWorkspaceView() && state.inspectionTaskId == identity.taskId && state.activeTaskId == identity.taskId
+            && state.tasks.any { identity.matchesTask(it.raw) && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private" }
+            && phoneOwnerWindowCurrent(phoneInlineWindow)
+    private fun phoneOwnerWindowCurrent(window: android.view.View?): Boolean = window != null && window.isAttachedToWindow && window.hasWindowFocus()
+        && !activity.isFinishing && !activity.isDestroyed && activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        && generateSequence(window.context) { (it as? android.content.ContextWrapper)?.baseContext?.takeUnless { base -> base === it } }.any { it === activity }
+    internal fun expandInlinePhonePreview() {
+        val identity = phoneInlinePreview ?: return
+        if (!inlinePhonePreviewCurrent(identity)) { closeInspection(); return }
+        // Expand the exact observation already shown. Opening the larger view performs no new read.
+        phoneInlinePreview = null; phoneInlineWindow = null; inspectionEpoch++; inspectionRefreshPending = false
+        state = state.copy(inspectionBusy = false)
+    }
     fun closeInspection() {
+        phoneInlinePreview = null
+        phoneInlineWindow = null
         inspectionEpoch++
         inspectionRefreshPending = false
         state = state.copy(inspectionTaskId = null, inspectionObservation = null, inspectionBusy = false, inspectionManualAllowed = false)
@@ -2146,8 +2192,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun observeInspection() {
         val taskId = state.inspectionTaskId ?: return
         if (state.inspectionBusy) return
+        val inline = phoneInlinePreview
+        if (inline != null && !inlinePhonePreviewCurrent(inline)) { closeInspection(); return }
         state = state.copy(inspectionBusy = true, inspectionError = null)
-        native("observeTask", JSONObject().put("taskId", taskId))
+        native("observeTask", inline?.request() ?: JSONObject().put("taskId", taskId))
     }
     fun takeOverInspection() {
         val taskId = state.inspectionTaskId ?: return
@@ -2380,6 +2428,23 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal var taskListNextCursor by mutableStateOf("")
         private set
+    /** Original receipt query only; closing the panel cancels the read and never a task. */
+    internal fun readTaskInferenceUsage(task: JSONObject, done: (dev.pocketengine.runtime.usage.TaskInferencePresentation.Snapshot?, String?) -> Unit): () -> Unit {
+        val read = dev.pocketengine.core.RunControl()
+        if (closed || !privateWorkspaceView()) { done(null, "请在原私人任务中核对用量"); return { read.cancel() } }
+        val original = JSONObject(task.toString())
+        val taskId = original.optString("id")
+        try { io.execute {
+            val result = runCatching {
+                read.check()
+                val usage = app.tasks.ownerTaskInferenceUsage(taskId, read)
+                read.check()
+                dev.pocketengine.runtime.usage.TaskInferencePresentation.fromNativeUsage(original, usage).also { read.check() }
+            }
+            main.post { if (!closed && privateWorkspaceView() && !read.isCancelled) result.fold({ done(it, null) }, { done(null, message(it)) }) }
+        } } catch (failure: Exception) { done(null, message(failure)) }
+        return { read.cancel() }
+    }
     /** Alternate quote only. Original bounded native receipt read; no request, replay or setting write. */
     internal fun reestimateInference(taskId: String, callId: String, done: (JSONObject?, String?) -> Unit) {
         if (closed) return
@@ -2392,9 +2457,28 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal var conversationSourceRevision by mutableStateOf(0L)
         private set
-    internal fun answerOwnerQuestion(question: JSONObject, text: String) {
-        if (!closed && privateWorkspaceView() && text.isNotBlank() && text.length <= 4000)
-            native("answerOwnerQuestion", JSONObject().put("questionIdentity", JSONObject(question.toString())).put("text", text))
+    internal fun answerOwnerQuestion(question: JSONObject, text: String, done: (JSONObject?, String?) -> Unit) {
+        if (text.isBlank() || text.length > 4000) { done(null, "请填写不超过4000字的回答"); return }
+        submitOwnerQuestion("answerOwnerQuestion", question, JSONObject().put("text", text), done)
+    }
+    internal fun answerOwnerQuestionChoice(question: JSONObject, optionId: String, done: (JSONObject?, String?) -> Unit) {
+        if (!optionId.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,63}"))) { done(null, "原选项不可用，请刷新原任务"); return }
+        submitOwnerQuestion("answerOwnerQuestionChoice", question, JSONObject().put("optionId", optionId), done)
+    }
+    private fun submitOwnerQuestion(action: String, question: JSONObject, input: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        if (closed || !privateWorkspaceView()) { done(null, "请回到原私人任务核对问题"); return }
+        val exact = JSONObject(question.toString())
+        input.put("questionIdentity", exact)
+        try { io.execute {
+            val result = runCatching {
+                check(!closed && privateWorkspaceView()) { "原回答窗口已关闭" }
+                app.dispatchOwnerAction(action, input)
+            }
+            main.post { if (!closed && privateWorkspaceView()) {
+                result.fold({ done(it, null) }, { done(null, "回答回执未确认，请核对原任务；没有自动重发。" ) })
+                getTask(exact.optString("taskId"))
+            } }
+        } } catch (failure: Exception) { done(null, message(failure)) }
     }
     /** Source-bound original interrupted prefixes. Never the general raw audit route. */
     internal fun readConversationInterrupted(taskId: String, conversationId: String?, cursor: String, done: (JSONObject?, String?) -> Unit) {
@@ -2423,6 +2507,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     private fun native(action: String, input: JSONObject = JSONObject(), ownerRequestId: String? = null, projectMemoryRequest: ProjectStartMemoryRequest? = null) {
         val viewerEpoch = inspectionEpoch
+        val inlinePreview = phoneInlinePreview.takeIf { action == "observeTask" }
         val targetTask = input.optString("taskId")
         val taskAction = targetTask.takeIf { it.isNotBlank() && action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask", "configureTaskExecutionScope") }
         if (taskAction != null) state = state.copy(taskActionErrors = state.taskActionErrors - taskAction)
@@ -2432,6 +2517,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val urgent = action == "automationPlan" && input.optString("command") in setOf("pause", "resume", "cancel") || action in setOf("stopRun", "pauseRun", "resumeRun", "stopTask", "takeoverTask") || action == "featureRequest" && input.optString("command") in setOf("cancel", "release", "stop", "adb.cancel", "termux.cancel", "project.cancel", "project.stopService", "cancelJob", "steerJob", "getSteerMessage", "qq.stop", "weixin.stop", "weixin.login.cancel") || action == "featureRequest" && input.optString("feature") == "teams" && input.optString("command") in setOf("pause", "resume", "feedback", "continueMessages", "sendMessage", "answerAssignment")
         (if (urgent) controls else io).execute {
             try {
+                if (inlinePreview != null) check(viewerEpoch == inspectionEpoch && inlinePhonePreviewCurrent(inlinePreview)) { "原预览窗口或任务已变化，未读取替代画面" }
                 if (action == "startOwnedPhonePractice") check(privateWorkspaceView() && state.backgroundSetupOpen
                     && input.optLong("_ownerViewRevision", -1) == phoneSetupViewRevision.get()) { "原演练确认窗口已关闭，未创建任务" }
                 if (action == "featureRequest" && input.optString("feature") == "phone_setup" && input.optString("command") == "pairing.begin")
@@ -2450,7 +2536,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         if (action == "setFollowUpPolicy") { native("rescheduleAutomation"); state = state.copy(notice = "跟进设置已保存") }
                         if (action in setOf("saveTaskMemory", "resaveTaskMemory", "saveMessageMemory", "resaveMessageMemory")) { native("getFeatures"); state = state.copy(notice = "已按真实来源保存记忆") }
                     }
-                    if (action in setOf("observeTask", "takeoverTask", "ownerPhoneHandoff", "manualTaskAction", "ownerSecretInput") && viewerEpoch == inspectionEpoch && input.optString("taskId") == state.inspectionTaskId) receiveInspection(action, result)
+                    if (action in setOf("observeTask", "takeoverTask", "ownerPhoneHandoff", "manualTaskAction", "ownerSecretInput") && viewerEpoch == inspectionEpoch && input.optString("taskId") == state.inspectionTaskId) {
+                        if (inlinePreview != null && !inlinePhonePreviewCurrent(inlinePreview)) closeInspection() else receiveInspection(action, result)
+                    }
                     if (action == "startRun") { if (input.has("channelRequestId") && channelPhoneRequest?.optString("requestId") == input.optString("channelRequestId")) channelPhoneAccepted = true; phoneDraftAcceptedText=input.optString("goal");phoneDraftAcceptedRevision++;state = state.copy(phoneSubmitting = false, acceptedInputRevision = state.acceptedInputRevision + 1, acceptedInput = input.optString("goal")) }
                     if (action == "startOwnedPhonePractice") {
                         state = state.copy(phoneSubmitting = false, notice = "演练已进入原手机任务。实际结果与停止入口仍在原任务中。")
@@ -2583,7 +2671,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             "automation_goal" -> suggestInput(event.optString("goal"), true)
             "owner_takeover" -> if (event.optString("taskId") == state.inspectionTaskId) {
                 state = state.copy(inspectionManualAllowed = false, inspectionMessage = event.optString("message"))
-                if (!state.inspectionBusy) observeInspection() else inspectionRefreshPending = true
+                if (phoneInlinePreview == null) { if (!state.inspectionBusy) observeInspection() else inspectionRefreshPending = true }
             }
             "capability_approval" -> getTask(event.optString("taskId"))
             "error" -> state = state.copy(error = event.optString("message", "操作未完成"))
@@ -2689,7 +2777,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 "get" -> {
                     if(requestId!=latestChatGet)return
                     val id = result.optString("conversationId")
-                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference")) });resolveOriginalMessageAttachments(id)
+                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator")) });resolveOriginalMessageAttachments(id)
                 }
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
                 "getSubmission" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"),true);native("getFeatures") }
@@ -2773,6 +2861,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private fun receiveInspection(action: String, result: JSONObject?) {
         val value = result ?: JSONObject()
         val observation = value.optJSONObject("observation")
+        val inline = phoneInlinePreview
+        if (inline != null && observation != null && !inline.matchesObservation(observation)) {
+            state = state.copy(inspectionBusy = false, inspectionObservation = null, inspectionManualAllowed = false, inspectionError = "原任务画面身份已变化，请收起后重新核对。")
+            return
+        }
         val receipt = value.optJSONObject("receipt")
         val unknown = receipt != null && (receipt.has("accepted") && receipt.isNull("accepted") || receipt.optString("status") == "unknown" || receipt.optString("error").contains("unknown") || receipt.optString("code").contains("unknown"))
         val allowed = !unknown && value.optBoolean("manualAllowed", observation?.optBoolean("manualAllowed", false) ?: false) && (observation == null || !observation.has("ok") || observation.optBoolean("ok"))
