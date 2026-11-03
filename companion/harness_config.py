@@ -26,10 +26,13 @@ import harness_reference_assets as reference_assets
 
 ADAPTER = "pocketworld-config-1"
 SUPPORTED = {"codex": ("0.164.0-alpha.11", "codex-config-v1", "config.toml", "CODEX_HOME", "codex_app_server"),
-             "claude": ("2.1.259", "claude-settings-v1", "settings.json", "CLAUDE_CONFIG_DIR", "claude")}
+             "claude": ("2.1.259", "claude-settings-v1", "settings.json", "CLAUDE_CONFIG_DIR", "claude"),
+             "pi": ("1.4.0", "pi-settings-models-v1", "settings.json", "PI_CODING_AGENT_DIR", "pi")}
 ABSENT = {"absent": True}
 AUTH = {"codex": ("model_provider", "model_providers.pocketworld"),
-        "claude": ("env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN", "env.ANTHROPIC_API_KEY", "env.ANTHROPIC_MODEL")}
+        "claude": ("env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN", "env.ANTHROPIC_API_KEY", "env.ANTHROPIC_MODEL"),
+        "pi": ("settings.defaultProvider", "settings.defaultModel", "settings.enabledModels", "models.providers.pocketworld")}
+PI_FILES = ("settings.json", "models.json")
 LIMIT = 262144
 PROBE_TIMEOUT = 5
 
@@ -252,6 +255,50 @@ class BomFields:
         return "\ufeff" + self.editor.set(path, desired)
 
 
+class PiFields:
+    """Private two-file image, kept only in the original protected plan database.
+
+    Each actual document still uses the JSON span editor. This container is never
+    a target config file, a reference asset, or a second configuration authority.
+    Schema: earendil-works/pi 4a080252f06caf63a525d7873c5d94d3c23887e0,
+    packages/coding-agent/docs/{settings,models-configuration}.md.
+    """
+    def __init__(self, raw):
+        self.files = json.loads(raw) if raw is not None else dict.fromkeys(PI_FILES)
+        if not isinstance(self.files, dict) or set(self.files) != set(PI_FILES):
+            raise ConfigError("Pi requires the exact settings/models file pair")
+        for name in PI_FILES:
+            self.document(self.files[name])
+
+    @staticmethod
+    def document(raw):
+        if raw is not None and not isinstance(raw, str):
+            raise ConfigError("Invalid Pi configuration image")
+        return BomFields("pi", raw) if raw is not None and raw.startswith("\ufeff") else JsonFields(raw if raw is not None else "{}\n")
+
+    @staticmethod
+    def location(path):
+        prefix, separator, field = path.partition(".")
+        name = prefix + ".json"
+        if not separator or name not in PI_FILES or not field:
+            raise ConfigError("Unknown Pi configuration field")
+        return name, field
+
+    def get(self, path):
+        name, field = self.location(path)
+        return self.document(self.files[name]).get(field)
+
+    def set(self, path, desired):
+        name, field = self.location(path)
+        files = dict(self.files)
+        # Removing an absent field must not materialize a previously absent file.
+        if files[name] is not None or desired != ABSENT:
+            files[name] = self.document(files[name]).set(field, desired)
+            if len(files[name].encode("utf-8")) > LIMIT:
+                raise ConfigError("Complete Pi configuration file exceeds 256 KiB", 413)
+        return encoded(files)
+
+
 class HarnessConfigs:
     def __init__(self, manager):
         self.manager = manager
@@ -285,6 +332,8 @@ class HarnessConfigs:
         family = target.get("family")
         if family not in SUPPORTED:
             raise ConfigError("Unknown Harness family; configuration is read-only")
+        if family == "pi" and self.windows_storage is not None:
+            raise ConfigError("Pi settings/models configuration currently requires a POSIX target")
         if self.windows_storage is not None:
             try:
                 raw_root, root_identity = self.windows_storage.bind_root(bounded(target.get("configRoot"), 2048))
@@ -376,7 +425,7 @@ class HarnessConfigs:
         version = output.decode("utf-8", "strict").strip()
         family = target["family"]
         expected, schema, _, _, _ = SUPPORTED[family]
-        pattern = r"codex(?:-cli)? " if family == "codex" else ""
+        pattern = r"codex(?:-cli)? " if family == "codex" else r"(?:pi )?v?" if family == "pi" else ""
         known = bool(re.fullmatch(pattern + re.escape(expected) + (r" \(Claude Code\)" if family == "claude" else ""), version))
         return {"family": family, "executable": str(executable), "executableIdentity": stamp,
                 "version": version, "configSchemaVersion": schema if known else "UNKNOWN_SCHEMA", "adapterRevision": ADAPTER,
@@ -394,7 +443,11 @@ class HarnessConfigs:
         return copy.deepcopy(identity)
 
     def _read(self, target):
-        name = SUPPORTED[target["family"]][2]
+        if target["family"] == "pi":
+            return encoded({name: self._read_file(target, name) for name in PI_FILES})
+        return self._read_file(target, SUPPORTED[target["family"]][2])
+
+    def _read_file(self, target, name):
         try:
             raw = self.manager.files.raw({"root": target["root"], "kind": "local"}, name)
         except FileError as error:
@@ -406,6 +459,8 @@ class HarnessConfigs:
 
     @staticmethod
     def _editor(family, raw):
+        if family == "pi":
+            return PiFields(raw)
         if raw is not None and raw.startswith("\ufeff"):
             # Decode the document for its reviewed field parser, but retain the
             # exact UTF-8 BOM in EVERY edited/compensated original byte image.
@@ -415,7 +470,7 @@ class HarnessConfigs:
 
     def _overrides(self, env, target):
         family = target["family"]
-        variables = ("CODEX_PROFILE",) if family == "codex" else ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL", "CLAUDE_CODE_SETTINGS_PATH")
+        variables = ("CODEX_PROFILE",) if family == "codex" else () if family == "pi" else ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL", "CLAUDE_CODE_SETTINGS_PATH")
         if any(os.environ.get(key) for key in variables):
             raise ConfigError("Inherited configuration/auth override makes effective state unverified")
         if family == "claude":
@@ -434,6 +489,16 @@ class HarnessConfigs:
                     raise ConfigError("A managed/project settings override requires a separate reviewed schema")
         if family == "codex" and self.manager.files.raw({"root": target["root"], "kind": "local"}, "auth.json") is not None:
             raise ConfigError("API-only configuration root must not contain a ChatGPT/account auth file")
+        if family == "pi":
+            # Pi 1.4.0 overlays project settings after trust, and auth.json's
+            # provider credential takes precedence over models.json apiKey.
+            # Inspect only the collision; never resolve commands/interpolation,
+            # import another provider's secret, or rewrite its credential file.
+            auth = self._read_file(target, "auth.json")
+            if auth is not None and PiFields.document(auth).get("pocketworld") != ABSENT:
+                raise ConfigError("Pi auth.json overrides the managed provider; target remains read-only")
+            if os.path.lexists(Path(env["root"]) / ".pi") and self.manager.files.raw({"root": env["root"], "kind": "local"}, ".pi/settings.json") is not None:
+                raise ConfigError("Pi project settings override requires a separately reviewed configuration")
         if target.get("scope", "PROJECT_SESSION") == "USER_CONFIG" and target.get("sharedConsumersManaged") is not True:
             raise ConfigError("Unknown shared config consumers; target remains read-only")
 
@@ -470,8 +535,8 @@ class HarnessConfigs:
                     "configRoot": target["root"], "fileDigest": self._file_digest(raw), "reason": reason,
                     "capabilities": {"detected": True, "configReadable": readable, "configWritable": readable and known and bool(env.get("writeAllowed")),
                                      "protocolVerified": False, "modelInferenceVerified": False, "toolRoundTripVerified": False,
-                                     "runtimeDriverSupported": target["family"] in {"codex", "claude"}, "approvalBridgeVerified": False,
-                                     "resumeVerified": False, "cancelVerified": False, "assetProjection": readable and known and bool(env.get("writeAllowed")) and self.windows_storage is None,
+                                     "runtimeDriverSupported": target["family"] in {"codex", "claude", "pi"}, "approvalBridgeVerified": False,
+                                     "resumeVerified": False, "cancelVerified": False, "assetProjection": target["family"] != "pi" and readable and known and bool(env.get("writeAllowed")) and self.windows_storage is None,
                                      "assetProjectionMode": "reference_text_only_no_hooks_or_execution", "assetRuntimeVerified": False},
                     "writeConsistency": "OPTIMISTIC", "effectiveReadback": False, "runtimeVerified": False}
 
@@ -537,6 +602,8 @@ class HarnessConfigs:
                     raise ConfigError("Original operationId was already bound to another exact plan")
                 return self._public_plan(original)
             env, target = self._target(request)
+            if target["family"] == "pi" and "referenceAssets" in request:
+                raise ConfigError("Pi's reviewed adapter projects model configuration only; reference assets are not supported")
             if not env.get("writeAllowed"):
                 raise ConfigError("Harness configuration writes are not enabled", 403)
             identity = self._approved_identity(request, target)
@@ -563,6 +630,20 @@ class HarnessConfigs:
                 endpoint = lease["endpoint"].removesuffix("/v1") + "/v1"
                 changes = {"model_provider": {"value": "pocketworld"}, "model": {"value": model},
                            "model_providers.pocketworld": {"value": {"name": "PocketWorld", "base_url": endpoint, "wire_api": "responses", "experimental_bearer_token": lease["accessToken"]}}}
+            elif target["family"] == "pi":
+                if editor.get("models.providers.pocketworld") != ABSENT and previous is None:
+                    raise ConfigError("The pocketworld provider namespace already exists; ownership cannot be assumed")
+                # enabledModels accepts patterns and thinking suffixes; the native
+                # gateway alias here must be a literal, exact single model ID.
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,159}", model):
+                    raise ConfigError("Pi requires an exact literal gateway model alias", 400)
+                if not re.fullmatch(r"[A-Za-z0-9._~-]{32,512}", lease["accessToken"]):
+                    raise ConfigError("Pi gateway credential must be literal, without config interpolation", 403)
+                changes = {"settings.defaultProvider": {"value": "pocketworld"}, "settings.defaultModel": {"value": model},
+                           "settings.enabledModels": {"value": ["pocketworld/" + model]},
+                           "models.providers.pocketworld": {"value": {"name": "PocketWorld", "baseUrl": lease["endpoint"].removesuffix("/v1") + "/v1",
+                               "api": "openai-responses", "apiKey": lease["accessToken"], "authHeader": True,
+                               "models": [{"id": model, "name": model, "input": ["text"], "reasoning": False}]}}}
             else:
                 changes = {"env.ANTHROPIC_BASE_URL": {"value": lease["endpoint"].removesuffix("/v1")}, "env.ANTHROPIC_AUTH_TOKEN": {"value": lease["accessToken"]},
                            "env.ANTHROPIC_API_KEY": ABSENT, "env.ANTHROPIC_MODEL": ABSENT, "model": {"value": model}}
@@ -607,14 +688,25 @@ class HarnessConfigs:
         def masked(path, value):
             if value == ABSENT:
                 return ABSENT
-            if path in AUTH[plan["identity"]["family"]]:
+            family = plan["identity"]["family"]
+            if path in AUTH[family] and not (family == "pi" and path.startswith("settings.")):
                 return {"value": "[protected authentication tuple]"}
             return value
+        operations = [{"kind": "remove_field" if value == ABSENT else "set_field", "field": key,
+                       "before": masked(key, plan["before"][key]), "after": masked(key, value)}
+                      for key, value in sorted(plan["after"].items())]
+        if plan["identity"]["family"] == "pi":
+            before_files, after_files = PiFields(plan["beforeRaw"]).files, PiFields(plan["afterRaw"]).files
+            file_plans = [{"pathRef": name, "beforeDigest": self._file_digest(before_files[name]), "afterDigest": self._file_digest(after_files[name]),
+                           "operations": [{**operation, "field": PiFields.location(operation["field"])[1]}
+                                          for operation in operations if PiFields.location(operation["field"])[0] == name]}
+                          for name in PI_FILES]
+        else:
+            file_plans = [{"pathRef": SUPPORTED[plan["identity"]["family"]][2], "operations": operations}] + reference_assets.public_files(plan.get("referenceFiles", []))
         return {"planId": plan["planId"], "operationId": plan["operationId"], "planDigest": plan["planDigest"], "identity": plan["identity"],
                 "environmentId": plan["target"]["environmentId"], "bindingId": plan["target"]["bindingId"], "expectedFileDigest": self._file_digest(plan["beforeRaw"]),
                 "profileDigest": plan["request"]["profileDigest"], "endpointLeaseRef": plan["request"]["endpointLeaseRef"], "credentialRefType": "GATEWAY_ACCESS",
-                "filePlans": [{"pathRef": SUPPORTED[plan["identity"]["family"]][2], "operations": [{"kind": "remove_field" if value == ABSENT else "set_field", "field": key,
-                               "before": masked(key, plan["before"][key]), "after": masked(key, plan["after"][key])} for key in sorted(plan["after"]) for value in [plan["after"][key]]]}] + reference_assets.public_files(plan.get("referenceFiles", [])),
+                "filePlans": file_plans,
                 "scopeDelta": {"scope": plan["identity"]["scope"], "configRoot": plan["target"]["root"], "executionAuthorized": False},
                 "gatewayScope": plan["gatewayScope"],
                 **({"gatewayOwnerBinding": plan["request"]["gatewayOwnerBinding"]} if "gatewayOwnerBinding" in plan["request"] else {}),
@@ -639,16 +731,32 @@ class HarnessConfigs:
     def _receipt(self, plan, state, **values):
         # A later readback/SQLite exception must not erase a persisted native
         # replacement/delete intent or its exact recovery-material identities.
-        if "nativeStorage" not in values:
-            previous = self.db.execute("SELECT receipt FROM harness_receipts WHERE operation_id=?", (plan["operationId"],)).fetchone()
-            previous = json.loads(previous[0]) if previous else {}
-            if "nativeStorage" in previous:
-                values["nativeStorage"] = previous["nativeStorage"]
+        previous = self.db.execute("SELECT receipt FROM harness_receipts WHERE operation_id=?", (plan["operationId"],)).fetchone()
+        previous = json.loads(previous[0]) if previous else {}
+        for key in ("nativeStorage", "configurationWriteJournal"):
+            if key not in values and key in previous:
+                values[key] = previous[key]
         receipt = {"operationId": plan["operationId"], "planId": plan["planId"], "planDigest": plan["planDigest"], "state": state,
                    "restoreOf": plan["restoreOf"],
                    "environmentId": plan["target"]["environmentId"], "environmentBinding": plan["identity"]["environmentBinding"], "bindingId": plan["target"]["bindingId"],
                    "configApplied": False, "effectiveReadback": False, "runtimeVerified": False, "nextSessionRequired": True, "writeConsistency": "OPTIMISTIC",
                    "files": [{"pathRef": SUPPORTED[plan["identity"]["family"]][2], "state": state}], **values}
+        if plan["identity"]["family"] == "pi":
+            observed, complete = [], True
+            after_files = PiFields(plan["afterRaw"]).files
+            for name in PI_FILES:
+                try:
+                    actual = self._read_file(plan["target"], name)
+                    matched = actual == after_files[name]
+                    observed.append({"pathRef": name, "matchesPlan": matched, "actualDigest": self._file_digest(actual),
+                                     "state": "READBACK_VERIFIED" if matched else "UNCONFIRMED"})
+                    complete = complete and matched
+                except (OSError, ConfigError, FileError, UnicodeError):
+                    observed.append({"pathRef": name, "matchesPlan": False, "state": "UNCONFIRMED"})
+                    complete = False
+            receipt["files"] = observed
+            if state == "COMMITTED" and not complete:
+                receipt.update(state="RECOVERY_REQUIRED", configApplied=False, effectiveReadback=False, unknown=True)
         if "referenceAssetsDigest" in plan:
             observed, complete = [], True
             for item in plan["referenceFiles"]:
@@ -707,13 +815,18 @@ class HarnessConfigs:
                 other = self.db.execute("SELECT private_plan FROM harness_plans WHERE operation_id=?", (other_operation,)).fetchone()
                 other_lease = self.db.execute("SELECT state FROM harness_root_leases WHERE operation_id=?", (other_operation,)).fetchone()
                 if other and other_lease and other_lease[0] != "CONFIGURED" and json.loads(other[0])["target"]["physicalRootKey"] == target["physicalRootKey"]:
+                    if target["family"] == "pi" and other_operation == plan["restoreOf"] and plan.get("restoreResourceKey") != target["resourceKey"]:
+                        # _cold_restore_proof above verified this exact original
+                        # no-dispatch partial transaction before moving its lease.
+                        continue
                     raise ConfigError("CONFIG_ROOT_IN_USE: an environment alias owns this physical root")
             if self._read(target) != plan["beforeRaw"]:
                 return self._receipt(plan, "CONFLICT", drifted=True)
             if any(reference_assets.read(self, target, item["pathRef"]) != item["beforeRaw"] for item in plan.get("referenceFiles", [])):
                 return self._receipt(plan, "CONFLICT", drifted=True)
             if not held and plan["restoreOf"] and plan.get("restoreResourceKey") != target["resourceKey"]:
-                changed = self.db.execute("UPDATE harness_root_leases SET resource_key=?,state='HELD' WHERE resource_key=? AND operation_id=? AND job_id IS NULL AND state='CONFIGURED'", (target["resourceKey"], plan["restoreResourceKey"], plan["restoreOf"])).rowcount
+                states = "('CONFIGURED','HELD')" if target["family"] == "pi" else "('CONFIGURED')"
+                changed = self.db.execute("UPDATE harness_root_leases SET resource_key=?,state='HELD' WHERE resource_key=? AND operation_id=? AND job_id IS NULL AND state IN " + states, (target["resourceKey"], plan["restoreResourceKey"], plan["restoreOf"])).rowcount
                 if changed != 1:
                     raise ConfigError("Original settled configuration lease changed before cold restoration")
                 self.db.commit()
@@ -723,6 +836,16 @@ class HarnessConfigs:
                 self.db.commit()
             else:
                 self.db.execute("UPDATE harness_root_leases SET state='HELD' WHERE resource_key=?", (target["resourceKey"],))
+                self.db.commit()
+            if target["family"] == "pi":
+                # A durable mutation/no-dispatch proof is distinct from COMMITTED
+                # configuration and real process cleanup. The original root lease
+                # cannot dispatch a job while this two-file transaction is HELD.
+                proof = {"configurationOperationId": plan["restoreOf"] or plan["operationId"],
+                         "configurationMutationOperationId": plan["operationId"], "mutationPlanDigest": plan["planDigest"],
+                         "jobNeverBound": True, "notStartedConfirmed": True}
+                self.db.execute("UPDATE harness_root_leases SET operation_id=?,job_id=NULL,proof=? WHERE resource_key=?",
+                                (plan["restoreOf"] or plan["operationId"], encoded(proof), target["resourceKey"]))
                 self.db.commit()
             self._receipt(plan, "PREPARED")
             self._receipt(plan, "APPLYING")
@@ -740,7 +863,7 @@ class HarnessConfigs:
                         self._lease(plan["request"], target)
                 native_storage = None
                 if plan["beforeRaw"] != plan["afterRaw"]:
-                    native_storage = (self._replace(target, plan["beforeRaw"], plan["afterRaw"], plan=plan) if self.windows_storage is not None
+                    native_storage = (self._replace(target, plan["beforeRaw"], plan["afterRaw"], plan=plan) if self.windows_storage is not None or target["family"] == "pi"
                                       else self._replace(target, plan["beforeRaw"], plan["afterRaw"]))
                 native_facts = {"nativeStorage": native_storage} if native_storage is not None else {}
                 if native_storage is not None and native_storage.get("verified") is not True:
@@ -750,6 +873,8 @@ class HarnessConfigs:
                     return self._receipt(plan, "RECOVERY_REQUIRED", drifted=True, unknown=True, **native_facts)
                 if native_storage is not None and not self._same_identity_now(target, plan["identity"]):
                     return self._receipt(plan, "RECOVERY_REQUIRED", unknown=True, **native_facts)
+                if target["family"] == "pi":
+                    self._pi_current(plan, target, actual)
                 editor = self._editor(target["family"], actual)
                 if any(editor.get(key) != value for key, value in plan["after"].items()):
                     return self._receipt(plan, "RECOVERY_REQUIRED", unknown=True, **native_facts)
@@ -770,6 +895,11 @@ class HarnessConfigs:
                 return self._receipt(plan, "RECOVERY_REQUIRED", unknown=True)
 
     def _replace(self, target, before, after, *, plan=None):
+        if target["family"] == "pi":
+            if plan is None:
+                raise ConfigError("Original approved Pi transaction is required")
+            self._replace_pi(target, before, after, plan)
+            return None
         if self.windows_storage is not None:
             if plan is None:
                 raise ConfigError("Original approved Harness transaction is required")
@@ -817,24 +947,95 @@ class HarnessConfigs:
                 pass
             os.close(directory)
 
+    def _pi_current(self, plan, target, expected):
+        if self.manager.closed or self.manager.now() >= plan["expiresAt"] or not self._same_identity_now(target, plan["identity"]):
+            raise ConfigError("Original Pi identity/transaction deadline changed")
+        env, actual_target = self._target(plan["target"])
+        if actual_target != target:
+            raise ConfigError("Original Pi root/environment changed")
+        self._overrides(env, target)
+        if plan["restoreOf"] is None:
+            self._lease(plan["request"], target)
+        if self._read(target) != expected:
+            raise ConfigError("Pi file pair drifted before its next transaction boundary")
+
+    def _replace_pi(self, target, before, after, plan):
+        expected, desired = PiFields(before).files, PiFields(after).files
+        journal = []
+        # Install provider/credential before selecting it; compensation deselects
+        # it before removing that provider. A partial state never permits dispatch.
+        order = PI_FILES if plan["restoreOf"] else tuple(reversed(PI_FILES))
+        for name in order:
+            if expected[name] == desired[name]:
+                continue
+            self._pi_current(plan, target, encoded(expected))
+            item = {"pathRef": name, "beforeDigest": self._file_digest(expected[name]),
+                    "afterDigest": self._file_digest(desired[name]), "state": "WRITE_INTENT"}
+            journal.append(item)
+            self._receipt(plan, "APPLYING", configurationWriteJournal=journal)
+            self._replace_pi_file(target, name, expected[name], desired[name],
+                                  lambda: self._pi_current(plan, target, encoded(expected)))
+            if self._read_file(target, name) != desired[name]:
+                raise ConfigError("Pi file replacement could not be read back")
+            expected[name] = desired[name]
+            item["state"] = "READBACK_VERIFIED"
+            self._receipt(plan, "APPLYING", configurationWriteJournal=journal)
+        self._pi_current(plan, target, encoded(expected))
+
+    def _replace_pi_file(self, target, name, before, after, current):
+        if name not in PI_FILES:
+            raise ConfigError("Pi configuration transaction contains an unknown path")
+        directory = self.manager.files.directory({"root": target["root"], "kind": "local"}, [])
+        temporary = ".pocketworld-config-" + uuid.uuid4().hex
+        try:
+            if after is not None:
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(after.encode("utf-8"))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            current()
+            if self._read_file(target, name) != before:
+                raise ConfigError("Pi file drifted before replacement")
+            if after is None:
+                os.unlink(name, dir_fd=directory)
+            else:
+                os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+            os.fsync(directory)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+            os.close(directory)
+
     def restore_plan(self, operation, request):
         if set(request) != {"operationId", "environmentId", "environmentBinding", "bindingId", "identityDigest"}:
             raise ConfigError("Restore requires an exact new native operation and current target identity", 400)
         with self.manager.lock:
             row = self.db.execute("SELECT private_plan FROM harness_plans WHERE operation_id=?", (identifier(operation),)).fetchone()
-            if row is None or self.operation(operation)["state"] not in {"COMMITTED", "RECOVERY_REQUIRED", "APPLYING", "READBACK_VERIFIED"}:
+            if row is None:
                 raise ConfigError("No original apply receipt can be restored")
             original = json.loads(row[0])
+            states = {"COMMITTED", "RECOVERY_REQUIRED", "APPLYING", "READBACK_VERIFIED"}
+            if original["identity"]["family"] == "pi":
+                states.add("PREPARED")
+            if self.operation(operation)["state"] not in states:
+                raise ConfigError("No original apply receipt can be restored")
             env, target = self._target(request)
             identity = self._approved_identity(request, target)
             if digest(identity) != request["identityDigest"] or any(identity[k] != original["identity"][k] for k in ("family", "executable", "executableIdentity", "configSchemaVersion", "adapterRevision", "bindingId", "rootIdentity")):
                 raise ConfigError("Restoration target identity differs from the original apply")
+            restore_resource = original["target"]["resourceKey"]
             if target["environmentBinding"] != original["target"]["environmentBinding"]:
-                self._cold_restore_proof(original, target)
+                restore_resource = self._cold_restore_proof(original, target)
             self._overrides(env, target)
             raw = self._read(target)
             editor = self._editor(target["family"], raw)
             conflicts, changes, grouped = [], {}, set()
+            pi_recovery = self._pi_partial_recovery(original, target, raw) if target["family"] == "pi" else None
+            if pi_recovery:
+                restore_resource = pi_recovery["resourceKey"]
             # A partial reference write can fail before the config replacement. An
             # exact original before-image already on disk is a no-op, not revival
             # of an old authentication value or permission to replay the apply.
@@ -842,7 +1043,7 @@ class HarnessConfigs:
             for group in ([] if already_original else original["authGroups"]):
                 grouped.update(group)
                 block_drift = target["family"] == "codex" and editor.provider_block() != self._editor("codex", original["afterRaw"]).provider_block()
-                if block_drift or any(editor.get(key) != original["after"][key] for key in group):
+                if not pi_recovery and (block_drift or any(editor.get(key) != original["after"][key] for key in group)):
                     conflicts.append({"group": "effective_authentication", "fields": group, "reason": "authentication tuple drifted; no member restored"})
                 elif any(self._revoked_before(key, original.get("restoreBefore", original["before"])[key]) for key in group):
                     conflicts.append({"group": "effective_authentication", "fields": group, "reason": "restoration would revive a managed/expired credential"})
@@ -860,6 +1061,28 @@ class HarnessConfigs:
             if target["family"] == "claude" and self._editor("claude", original.get("restoreBeforeRaw", original["beforeRaw"])).get("env") == ABSENT and self._editor("claude", after).get("env") == {"value": {}}:
                 after = self._editor("claude", after).set("env", ABSENT)
                 changes["env"] = ABSENT
+            if target["family"] == "pi" and not conflicts:
+                baseline = PiFields(original.get("restoreBeforeRaw", original["beforeRaw"]))
+                desired = PiFields(after)
+                if baseline.get("models.providers") == ABSENT and desired.get("models.providers") == {"value": {}}:
+                    after = desired.set("models.providers", ABSENT)
+                    desired = PiFields(after)
+                current_files, applied_files = editor.files, PiFields(original["afterRaw"]).files
+                for name in PI_FILES:
+                    if (pi_recovery or current_files[name] == applied_files[name]) and PiFields.document(desired.files[name]).value == PiFields.document(baseline.files[name]).value:
+                        # Use original bytes only if no unrelated content from a
+                        # later reconfiguration/partial write would be discarded.
+                        desired.files[name] = baseline.files[name]
+                    elif baseline.files[name] is None and not PiFields.document(desired.files[name]).value:
+                        desired.files[name] = None
+                    # Otherwise retain unrelated outside additions byte-for-byte.
+                if pi_recovery and pi_recovery["restoreAfterRaw"] is not None:
+                    # Resume compensation through a new reviewed operation using
+                    # the exact previously approved compensation result. Its image
+                    # may include external additions absent from the first apply's
+                    # old baseline; never discard those by restoring that baseline.
+                    desired = PiFields(pi_recovery["restoreAfterRaw"])
+                after = encoded(desired.files)
             if original.get("restoreBeforeRaw", original["beforeRaw"]) is None:
                 # Delete our new file only if no outside addition occurred.
                 if raw == original["afterRaw"]:
@@ -868,14 +1091,56 @@ class HarnessConfigs:
                     conflicts.append({"field": "owned_file", "reason": "new user content retained; file must not be deleted"})
             plan = {**original, "planId": uuid.uuid4().hex, "operationId": identifier(request["operationId"]), "requestFingerprint": digest(request), "identity": identity,
                     "target": target, "beforeRaw": raw, "afterRaw": after, "before": {key: editor.get(key) for key in changes}, "after": changes,
-                    "expiresAt": self.manager.now() + 300000, "restoreOf": operation, "restoreResourceKey": original["target"]["resourceKey"], "conflicts": conflicts}
+                    "expiresAt": self.manager.now() + 300000, "restoreOf": operation, "restoreResourceKey": restore_resource, "conflicts": conflicts}
             if original.get("referenceFiles"):
                 plan["referenceFiles"], reference_conflicts = reference_assets.restoration(self, target, original)
                 plan["conflicts"].extend(reference_conflicts)
             plan.pop("planDigest", None)
             return self._save_plan(plan)
 
+    def _pi_partial_recovery(self, original, target, raw):
+        """Prove a known partial file effect; this never reissues an old operation.
+
+        Both images must be exact bytes from one immutable original mutation and
+        every changed-after file needs its durable pre-write intent. A HELD root
+        proves that mutation could not dispatch a job, including after restart.
+        A new reviewed compensation may then restore the original baseline.
+        """
+        if original["restoreOf"] is not None or target["physicalRootKey"] != original["target"]["physicalRootKey"]:
+            return None
+        rows = self.db.execute("SELECT resource_key,job_id,state,proof FROM harness_root_leases WHERE operation_id=?", (original["operationId"],)).fetchall()
+        if len(rows) != 1 or rows[0][1] is not None or rows[0][2] != "HELD":
+            return None
+        resource, _, _, proof = rows[0]
+        proof = json.loads(proof)
+        if proof.get("configurationOperationId") != original["operationId"] or proof.get("jobNeverBound") is not True or proof.get("notStartedConfirmed") is not True:
+            return None
+        row = self.db.execute("SELECT private_plan FROM harness_plans WHERE operation_id=?", (proof.get("configurationMutationOperationId"),)).fetchone()
+        if not row:
+            return None
+        mutation = json.loads(row[0])
+        if proof.get("mutationPlanDigest") != mutation["planDigest"] or mutation["target"]["physicalRootKey"] != target["physicalRootKey"]:
+            return None
+        if mutation["operationId"] != original["operationId"] and mutation["restoreOf"] != original["operationId"]:
+            return None
+        receipt = self.operation(mutation["operationId"])
+        if receipt.get("planDigest") != mutation["planDigest"] or receipt["state"] not in {"PREPARED", "APPLYING", "RECOVERY_REQUIRED", "READBACK_VERIFIED", "COMMITTED"}:
+            return None
+        current, before, after = PiFields(raw).files, PiFields(mutation["beforeRaw"]).files, PiFields(mutation["afterRaw"]).files
+        journal = receipt.get("configurationWriteJournal", [])
+        for name in PI_FILES:
+            if current[name] == before[name]:
+                continue
+            if current[name] != after[name] or not any(item.get("pathRef") == name and item.get("state") in {"WRITE_INTENT", "READBACK_VERIFIED"}
+                    and item.get("beforeDigest") == self._file_digest(before[name]) and item.get("afterDigest") == self._file_digest(after[name]) for item in journal):
+                return None
+        return {"resourceKey": resource, "restoreAfterRaw": mutation["afterRaw"] if mutation["restoreOf"] is not None else None}
+
     def _cold_restore_proof(self, original, target):
+        if target["family"] == "pi":
+            partial = self._pi_partial_recovery(original, target, self._read(target))
+            if partial:
+                return partial["resourceKey"]
         receipt = self.operation(original["operationId"])
         row = self.db.execute("SELECT operation_id,job_id,state,proof FROM harness_root_leases WHERE resource_key=?", (original["target"]["resourceKey"],)).fetchone()
         if receipt["state"] != "COMMITTED" or not row or row[0] != original["operationId"] or row[1] is not None or row[2] != "CONFIGURED" or target["physicalRootKey"] != original["target"]["physicalRootKey"]:
@@ -889,6 +1154,7 @@ class HarnessConfigs:
             raise ConfigError("Original process exit was not verified; missing PID does not release the root")
         # No endpoint is registered and no grant/token lifetime is extended here. Only
         # an explicitly reviewed compensation plan may move to the new generation.
+        return original["target"]["resourceKey"]
 
     def _revoked_before(self, key, value):
         # Original provider references may be restored, but never a prior managed token.
@@ -899,7 +1165,7 @@ class HarnessConfigs:
             if historical["restoreOf"] is not None:
                 continue
             for field, after in historical["after"].items():
-                if ("token" in field.lower() or field == "model_providers.pocketworld") and after != ABSENT and (value == after or isinstance(value.get("value"), str) and value["value"] in encoded(after)):
+                if ("token" in field.lower() or field in {"model_providers.pocketworld", "models.providers.pocketworld"}) and after != ABSENT and (value == after or isinstance(value.get("value"), str) and value["value"] in encoded(after)):
                     return True
         return False
 
@@ -941,6 +1207,10 @@ class HarnessConfigs:
         _, target = self._target(plan["request"])
         if receipt["state"] != "COMMITTED" or plan["restoreOf"] or job["environmentId"] != target["environmentId"] or job["worker"] != SUPPORTED[target["family"]][4]:
             raise ConfigError("Original job does not match the committed Harness configuration")
+        if target["family"] == "pi":
+            if job.get("model") != "pocketworld/" + plan["request"]["model"]:
+                raise ConfigError("Pi job must use the exact configured gateway provider/model", 403)
+            self._pi_worker_identity(env, plan)
         self._lease(plan["request"], target)
         if request.get("harnessOwnerBinding") != {key: plan["request"][key] for key in ("taskId", "runId", "epoch", "profileDigest", "endpointLeaseRef")}:
             raise ConfigError("Original job lacks the exact native configuration owner binding", 403)
@@ -962,6 +1232,47 @@ class HarnessConfigs:
         if callback is not None:
             callback(plan["request"]["endpointLeaseRef"], job, plan["request"])
         return {SUPPORTED[target["family"]][3]: target["root"]}
+
+    @staticmethod
+    def _pi_worker_identity(env, plan):
+        # The original Pi flag probe executes "pi" with this cwd/PATH. Bind its
+        # actual candidate to the approved config identity, without another probe
+        # process under the manager lock. Relative PATH entries resolve after chdir.
+        resolved = None
+        for directory in os.get_exec_path():
+            root = Path(directory or ".")
+            root = root if root.is_absolute() else Path(env["root"]) / root
+            candidate = root / "pi"
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                resolved = str(candidate.resolve())
+                break
+        if resolved != plan["identity"]["executable"]:
+            raise ConfigError("Pi worker PATH does not select the exact approved executable")
+
+    def job_command(self, job, argv):
+        """Pin only a configured Pi job to its original probed executable.
+
+        Original no-tools flags, native session and driver command remain intact.
+        This is a path/stat fence, not an executable-content/chain attestation.
+        """
+        operation = job.get("harnessConfigOperationId")
+        if not operation:
+            return argv
+        row = self.db.execute("SELECT private_plan FROM harness_plans WHERE operation_id=?", (operation,)).fetchone()
+        if not row:
+            raise ConfigError("Original config operation is missing")
+        plan = json.loads(row[0])
+        if plan["identity"]["family"] != "pi":
+            return argv
+        if not argv or job.get("worker") != "pi" or not self.job_live(job):
+            raise ConfigError("Pi configuration/executable binding changed before launch")
+        _, target = self._target(plan["request"])
+        held = self.db.execute("SELECT operation_id,job_id,state FROM harness_root_leases WHERE resource_key=?", (target["resourceKey"],)).fetchone()
+        if held != (operation, job["id"], "ACTIVE") or self.operation(operation)["state"] != "COMMITTED":
+            raise ConfigError("Original Pi job no longer owns its active configuration root")
+        if argv[0] != "pi" and str(Path(argv[0]).resolve()) != plan["identity"]["executable"]:
+            raise ConfigError("Pi launch command differs from the exact approved executable")
+        return [plan["identity"]["executable"], *argv[1:]]
 
     def settle_job(self, job, process_group_stopped):
         """Original supervisor finally hook, after its real cleanup proof, not PID absence."""
@@ -994,8 +1305,12 @@ class HarnessConfigs:
             return False
         plan = json.loads(row[0])
         try:
-            _, target = self._target(plan["request"])
+            env, target = self._target(plan["request"])
             self._lease(plan["request"], target)
+            if target["family"] == "pi":
+                if job.get("model") != "pocketworld/" + plan["request"]["model"] or not self._same_identity_now(target, plan["identity"]):
+                    return False
+                self._pi_worker_identity(env, plan)
             if self._read(target) != plan["afterRaw"] or not self._references_current(target, plan):
                 self._receipt(plan, "RECOVERY_REQUIRED", drifted=True)
                 return False
@@ -1004,6 +1319,12 @@ class HarnessConfigs:
             return False
 
     def _references_current(self, target, plan):
+        if target["family"] == "pi":
+            try:
+                self._overrides(self.manager._environment(target["environmentId"]), target)
+                return True
+            except (ConfigError, OSError, FileError, UnicodeError):
+                return False
         if not plan.get("referenceFiles"):
             return True
         try:

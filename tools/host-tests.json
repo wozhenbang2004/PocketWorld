@@ -118,7 +118,7 @@
     ],
     "robolectric": true,
     "python": true,
-    "description": "Original App/SQL/Service plus original Companion/drivers on loopback. Original script peer cases remain unchanged; exact Profile target cases use a real temporary ELF fixture entrypoint (requires CC/cc), with version/content/execution-chain verification still false. Exact current Book instruction/Skill revisions become reference-only native target files through the same config operation, complete diff/readback, live source fences and original driver/model request. Configuration SQL retains identities/hashes, not source bodies; reopened observation cannot mint a source approval. No target script/hooks/tool permission grants, installed production CLI discovery, real account, phone or WAN acceptance.",
+    "description": "Original App/SQL/Service plus original Companion/drivers on loopback. Original script peer cases remain unchanged; exact Profile target cases use a real temporary ELF fixture entrypoint (requires CC/cc), with version/content/execution-chain verification still false. Exact current Book instruction/Skill revisions become reference-only native target files through the same config operation, complete diff/readback, live source fences and original driver/model request. Configuration SQL retains identities/hashes, not source bodies; reopened observation cannot mint a source approval. Pi 1.4.0 uses the original same-task no-tools session, reviewed settings.json/models.json transaction and exact model selection; incomplete file receipts remain query-only before execution, and approved compensation restores the original pair. No target script/hooks/tool permission grants, installed production CLI discovery, real account, phone or WAN acceptance.",
     "nativeCompiler": true
   },
   "memory-automatic": {
@@ -459,7 +459,7 @@
       "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
-    "description": "Original RemoteModule and SshModule exact native bindings, cancellable loopback metadata probes, no-reprobe currentness and trust/credential withdrawal: three exact classes, fifteen tests; actual native adapter/resolver freezing and missing/malformed entrypoint identity and upgrade/downgrade invalidate old probes. Source facts only; no remote job, SSH connection, configuration application, model inference, UI or physical-device acceptance."
+    "description": "Original RemoteModule and SshModule exact native bindings, cancellable loopback metadata probes, no-reprobe currentness and trust/credential withdrawal: three exact classes; Pi source readiness requires the pinned no-tools RPC and unchanged original native entrypoint; actual native adapter/resolver freezing and missing/malformed entrypoint identity and upgrade/downgrade invalidate old probes. Source facts only; no remote job, SSH connection, configuration application, model inference, UI or physical-device acceptance."
   },
   "aion-worker-entrypoint": {
     "class": "dev.pocketengine.features.remote.WorkerEntrypointCompanionContractTest",
