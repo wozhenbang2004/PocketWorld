@@ -208,16 +208,53 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
     @Override public JSONObject queue(JSONObject input)throws Exception {JSONObject result=tasks.queueTeamAssignmentInput(input);changed.accept(input.getString("assignmentId"));return result;}
     @Override public JSONObject save(JSONObject input)throws Exception {return answer(input);}
     @Override public JSONObject claimContinuation(JSONObject input)throws Exception {return tasks.claimTeamAnswerContinuation(input);}
-    private void requireRevisionBaseReady(JSONObject input)throws Exception {JSONObject selected=tasks.get(input.getString("assignmentId"),false);if(selected!=null&&!selected.getJSONObject("teamAssignment").optString("workItemId").isEmpty())throw new IllegalStateException("动态工作项的新修订需要对该workItem及受影响依赖重新审阅准确文件基线；不能按成员最近任务修改整份scope。原交付/固定版本保留，此入口尚未接动态修订。");if(selected!=null&&selected.getJSONObject("teamAssignment").has("remoteSelection"))throw new IllegalStateException("远端新修订还需从原冻结贡献重新显选准确基线与独立job范围；此接缝尚未完成，原分工、成果和审批未改变。可继续查询或停止原job，不会复用旧快照重提交。");}
+    private JSONObject requireRevisionBaseReady(JSONObject input)throws Exception {
+        JSONObject selected=tasks.get(input.getString("assignmentId"),false),identity=selected==null?null:selected.optJSONObject("teamAssignment");
+        if(identity==null)throw new SecurityException("原assignment不存在或不是文件分工");
+        if(!identity.optString("workItemId").isEmpty())throw new IllegalStateException("动态工作项的新修订需要对该workItem及受影响依赖重新审阅准确文件基线；不能按成员最近任务修改整份scope。原交付/固定版本保留，此入口尚未接动态修订。");
+        if(identity.has("remoteSelection"))throw new IllegalStateException("远端新修订还需从原冻结贡献重新显选准确基线与独立job范围；此接缝尚未完成，原分工、成果和审批未改变。可继续查询或停止原job，不会复用旧快照重提交。");
+        if(identity.has("projectSelection"))throw new SecurityException("完整项目继续必须经原前台私构成果修订及新的命令/基线审阅，普通JSON不能升级旧授权");
+        return selected;
+    }
+    /** Read-only admission before feedback. The original SQL transaction still rechecks every write condition. */
+    public TeamWriteScope checkRevision(JSONObject input,boolean outcome)throws Exception {
+        synchronized(tasks){
+            String run=input.getString("runId"),assignment=input.getString("assignmentId"),member=input.getString("memberId"),request=input.getString("revisionRequestId"),text=input.getString("text");
+            if(!request.matches("[a-f0-9-]{36}")||text.codePoints().allMatch(Character::isWhitespace)||text.length()>4000)throw new SecurityException("修订要求无效");
+            String teamTask=tasks.requireReviewedTeamControl(input);JSONObject selected=requireRevisionBaseReady(input),identity=selected.getJSONObject("teamAssignment"),origin=selected.getJSONObject("origin"),team=tasks.get(teamTask,false);
+            if(!origin.optString("kind").equals("team_assignment")||!run.equals(origin.optString("teamRunId"))||!run.equals(identity.optString("teamRunId"))||!assignment.equals(identity.optString("assignmentId"))||!assignment.equals(origin.optString("assignmentId"))||!member.equals(identity.optString("memberId"))||!member.equals(origin.optString("memberId")))throw new SecurityException("修订不是原主人选择的assignment");
+            if(request.equals(identity.optString("revisionRequestId")))throw new IllegalStateException("本次原修订已保存，只能查询原assignment，不重送反馈");
+            boolean workingContinuation=team.optJSONObject("teamOutputReview")!=null&&identity.optString("outcomeContinuationReviewId").equals(team.getJSONObject("teamOutputReview").optString("reviewId"));
+            if(team.has("teamOutputReview")&&!outcome&&!workingContinuation||tasks.hasUnresolved(assignment)||!selected.optString("status").matches("completed|failed|awaiting_user|needs_confirmation|interrupted"))throw new SecurityException("原分工仍在运行、待核对或已批准整合，不能另开修订");
+            JSONArray questions=selected.optJSONArray("teamQuestions");for(int i=0;questions!=null&&i<questions.length();i++)if(questions.getJSONObject(i).optString("state").equals("pending"))throw new SecurityException("原分工仍有未回答问题，不能另开修订");
+            RunControl live=currentControl(assignment);if(live!=null)throw new SecurityException("原assignment执行尝试尚未结束");
+            if(identity.optInt("assignmentRevision",1)>=8)throw new IllegalStateException("原assignment已达8次修订上限，请完成并核对已有工作");
+            // This legacy entry admits only local frozen text assignments, never remote IMPORT or dynamic work items.
+            tasks.teamAssignmentReceipts(new JSONObject(identity.toString()).put("taskId",assignment),"team_freeze_outputs");
+            JSONArray operations=selected.getJSONArray("operations"),frozen=null;String frozenRun="";
+            for(int i=0;i<operations.length();i++){JSONObject operation=operations.getJSONObject(i),receipt=operation.optJSONObject("receipt");if(operation.optString("state").equals("receipt")&&operation.optString("tool").equals("team_freeze_outputs")&&receipt!=null&&receipt.optInt("assignmentRevision",1)==identity.optInt("assignmentRevision",1)&&receipt.optJSONArray("teamArtifacts")!=null){frozen=receipt.getJSONArray("teamArtifacts");frozenRun=operation.getString("runId");}}
+            if(frozen==null||!frozenRun.equals(input.getString("expectedFrozenRunId"))||!TeamWorkFiles.hash(TeamWorkFiles.canonical(new JSONObject().put("artifacts",frozen))).equals(input.getString("expectedArtifactsHash")))throw new SecurityException("原冻结成果已改变，请重新查看后请求修订");
+        }
+        return outcome?outcomeScope(input):null;
+    }
+    /** Readback only after a failed/previous request; a saved revision never authorizes feedback or execution replay. */
+    public JSONObject revisionState(JSONObject input)throws Exception {
+        JSONObject selected=tasks.get(input.getString("assignmentId"),false),identity=selected==null?null:selected.optJSONObject("teamAssignment");
+        if(identity==null||!input.getString("runId").equals(identity.optString("teamRunId"))||!input.getString("memberId").equals(identity.optString("memberId")))throw new SecurityException("原修订查询身份已改变");
+        boolean saved=input.getString("revisionRequestId").equals(identity.optString("revisionRequestId"));return new JSONObject().put("state",saved?"saved":"not_confirmed").put("assignmentId",input.getString("assignmentId")).put("assignmentRevision",identity.optInt("assignmentRevision",1)).put("revisedAssignment",saved?new JSONObject(identity.toString()):JSONObject.NULL);
+    }
     public JSONObject revise(JSONObject input)throws Exception {requireRevisionBaseReady(input);JSONObject result=tasks.reviseTeamAssignment(input);changed.accept(input.getString("assignmentId"));return result;}
     public static final class OutcomeContinuation {public final TeamWriteScope scope;public final JSONObject receipt;private OutcomeContinuation(TeamWriteScope scope,JSONObject receipt){this.scope=scope;this.receipt=receipt;}}
     public OutcomeContinuation continueOutcome(JSONObject input)throws Exception {
         requireRevisionBaseReady(input);
+        TeamWriteScope scope=outcomeScope(input);
+        JSONObject result=tasks.reviseTeamAssignmentFromOutcome(input,scope);changed.accept(input.getString("assignmentId"));return new OutcomeContinuation(scope,result);
+    }
+    private TeamWriteScope outcomeScope(JSONObject input)throws Exception {
         String run=input.getString("runId");RunControl read=new RunControl();JSONObject context=tasks.teamIntegrationContext(run,read);
         if(context==null||context.optBoolean("activeAttempt")||context.optBoolean("hasUnresolved")||!context.optString("status").equals("completed")||!input.getString("expectedIntegrationReviewId").equals(context.getString("reviewId"))||!input.getString("expectedIntegrationPlanHash").equals(context.getString("planHash")))throw new SecurityException("原成果整合尚未确定完成或版本已变化");
         if(!TeamIntegrationFiles.progress(workspace,context.getJSONObject("binding"),context.getJSONArray("receipts")).getBoolean("complete"))throw new SecurityException("当前成果已改变，请先重审真实差异，不会覆盖新内容");
-        TeamWriteScope scope=TeamWriteScope.afterIntegrated(workspace,tasks.teamWriteScopeForOwner(run,read),input.getString("memberId"),context.getString("reviewId"),context.getString("planHash"));
-        JSONObject result=tasks.reviseTeamAssignmentFromOutcome(input,scope);changed.accept(input.getString("assignmentId"));return new OutcomeContinuation(scope,result);
+        return TeamWriteScope.afterIntegrated(workspace,tasks.teamWriteScopeForOwner(run,read),input.getString("memberId"),context.getString("reviewId"),context.getString("planHash"));
     }
     public JSONObject approve(String run,String expectedHash,RunControl read)throws Exception {JSONObject result=tasks.approveTeamOutputs(run,review(run,read),expectedHash,read);changed.accept(run);return result;}
     /** A separate original child/run/context, never a producer impersonating its own reviewer. */
