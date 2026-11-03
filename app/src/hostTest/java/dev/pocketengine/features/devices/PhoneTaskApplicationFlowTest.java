@@ -276,8 +276,8 @@ public final class PhoneTaskApplicationFlowTest {
         assertEquals(2,modelRequests.get());assertEquals(1,count("runs"));signal("original-result-stable");
     }
     @Test public void externalHttpClientReachesOriginalPhoneApprovalRunnerAndSameTaskResult()throws Exception{
-        Scenario scenario=startScenario("happy");Started started=approve(scenario);JSONObject observed=phase("result_observed",60);
-        assertEquals("phone-api-native-submit",observed.getString("operationId"));assertEquals(scenario.taskId,observed.getString("taskId"));assertEquals(started.runId,observed.getString("runId"));assertEquals(started.epoch,observed.getInt("executorEpoch"));
+        Scenario scenario=startScenario("happy");Started started=approve(scenario);JSONObject resultObserved=phase("result_observed",60);
+        assertEquals("phone-api-native-submit",resultObserved.getString("operationId"));assertEquals(scenario.taskId,resultObserved.getString("taskId"));assertEquals(started.runId,resultObserved.getString("runId"));assertEquals(started.epoch,resultObserved.getInt("executorEpoch"));
         awaitStableOriginalNativeResult(scenario,started);JSONObject actual=completeReport();sameOriginal(scenario,started,actual);
         assertTrue(actual.getBoolean("nativeResultBarrierAcknowledged"));requireOriginalNativeResult(scenario,started);
         assertEquals(2,modelRequests.get());assertTrue(modelBodies.get(1).contains("NATIVE-PHONE-EXACT-ANSWER"));
