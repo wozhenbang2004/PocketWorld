@@ -40,6 +40,8 @@ public final class OwnerBackupArchive {
         public byte[] object(String hash,RunControl control)throws Exception{ByteArrayOutputStream out=new ByteArrayOutputStream();copyObject(hash,out,control);return out.toByteArray();}
         void discardLocalCache(RunControl original)throws Exception{current(original);Files.delete(file.toPath());if(Files.exists(file.toPath(),LinkOption.NOFOLLOW_LINKS))throw new java.io.IOException("原备份缓存移除未确认");}
         public long export(OutputStream target,RunControl control)throws Exception{current(control);try(InputStream input=Files.newInputStream(file.toPath(),LinkOption.NOFOLLOW_LINKS)){copy(input,target,size,sha,control);}current(control);return size;}
+        public long exportEncrypted(OutputStream target,char[] password,RunControl control)throws Exception{current(control);try(InputStream input=Files.newInputStream(file.toPath(),LinkOption.NOFOLLOW_LINKS)){long bytes=OwnerBackupEnvelope.encrypt(input,target,size,sha,password,control);current(control);return bytes;}}
+
     }
     private static final Set<String> SECTIONS=Set.of("projects","artifacts","memory","experiences","remoteConnections","sshConnections");
     private OwnerBackupArchive(){}

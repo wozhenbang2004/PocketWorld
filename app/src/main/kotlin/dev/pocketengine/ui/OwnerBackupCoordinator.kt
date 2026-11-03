@@ -17,7 +17,7 @@ internal data class OwnerBackupState(
     val open: Boolean = false, val busy: Boolean = false, val presentation: String = "settings", val projectMemoryName: String? = null, val projectMemoryCurrent: Boolean = false, val inventory: JSONObject? = null,
     val selection: JSONObject? = null, val preview: JSONObject? = null, val review: JSONObject? = null,
     val originalAction: String? = null, val originalPhase: JSONObject? = null, val result: JSONObject? = null,
-    val experiencePage: JSONObject? = null, val projectAction: String? = null, val notice: String? = null, val error: String? = null
+    val experiencePage: JSONObject? = null, val projectAction: String? = null, val passwordPrompt: String? = null, val notice: String? = null, val error: String? = null
 )
 
 /** Native owner selection and read-side lifecycle. Original FeatureHost/TaskStore
@@ -43,6 +43,8 @@ internal class OwnerBackupCoordinator(
     private var restoredPicker = false
     private var receivedPickerUri: Uri? = null
     private var receivedPicker = false
+    private var protectedPicker: Pair<Uri, JSONObject>? = null
+    @Volatile private var passwordInFlight: CharArray? = null
     private fun host() = app.features.ownerDataArchives(app)
     private fun owner() { check(!closed && foreground && privateOwner()) { "请在本机私人页面打开备份与迁移" } }
     fun open() { owner(); projectMemorySelection = null; state = state.copy(open = true, presentation = "settings", projectMemoryName = null, projectMemoryCurrent = false); refresh() }
@@ -66,7 +68,7 @@ internal class OwnerBackupCoordinator(
         val meta = reopened?.metadata(); val preview = reopened?.let { host().preview(it, c) }
         return@work { selected = reopened; state = state.copy(inventory = actual, selection = meta ?: pin, preview = preview ?: state.preview) }
     }
-    fun closePage() { cancelRead(); clearReview(); projectMemorySelection = null; state = state.copy(open = false, busy = false, projectMemoryName = null, projectMemoryCurrent = false) }
+    fun closePage() { cancelPassword(); cancelRead(); clearReview(); projectMemorySelection = null; state = state.copy(open = false, busy = false, projectMemoryName = null, projectMemoryCurrent = false) }
     fun create(sections: Set<String>) {
         owner(); if (!state.open) { state = state.copy(error = "原备份页面已关闭；没有生成其它范围的备份。"); return }; if (state.busy || pending()) return
         val project = projectMemorySelection
@@ -76,7 +78,7 @@ internal class OwnerBackupCoordinator(
         work(onFailure = { if (project != null) { projectMemorySelection = null; state = state.copy(projectMemoryCurrent = false) } }) { c ->
             val original = if (project != null) host().createProjectMemory(project, c) else host().create(sections, c)
             val metadata = original.metadata(); val preview = host().preview(original, c)
-            return@work { selected = original; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, originalAction = null, originalPhase = null, projectAction = null, notice = "已生成这次明确范围的完整备份。请导出到你选择的位置；它未加密，用户内容可能含敏感信息。") }
+            return@work { selected = original; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, originalAction = null, originalPhase = null, projectAction = null, notice = "已生成所选范围的固定备份。本机临时副本未加密；导出时可设置口令，且不会迁移旧授权。") }
         }
     }
     fun readExperiencePage(index: Int = 0) {
@@ -87,9 +89,11 @@ internal class OwnerBackupCoordinator(
             return@work { if (revision == experienceRevision) { selected = exact; state = state.copy(experiencePage = page, notice = "仅打开原经历快照；不激活旧来源、任务、授权或模型上下文。快照之后的删除状态可能未知。") } }
         }
     }
-    fun chooseImport() {
-        owner(); if (state.busy || pending() || picker != null) return
-        clearReview(); picker = JSONObject().put("kind", "import"); restoredPicker = false; activity.pickOwnerDataArchive()
+    fun chooseImport() = chooseImport(true)
+    fun choosePlainImport() = chooseImport(false)
+    private fun chooseImport(encrypted: Boolean) {
+        owner(); if (state.busy || pending() || picker != null || protectedPicker != null) return
+        clearReview(); picker = JSONObject().put("kind", "import").put("encrypted", encrypted); restoredPicker = false; activity.pickOwnerDataArchive()
     }
     fun importResult(uri: Uri?) { receivePicker(uri, "import") }
     private fun receivePicker(uri: Uri?, expectedKind: String) {
@@ -102,16 +106,32 @@ internal class OwnerBackupCoordinator(
         val uri = receivedPickerUri ?: return; val pin = picker ?: return
         receivedPickerUri = null; receivedPicker = false; picker = null
         if (!privateOwner()) { state = state.copy(error = "请回私人页面重新选择文件；没有读写或恢复。"); return }
+        if (pin.optBoolean("encrypted")) { protectedPicker = uri to pin; state = state.copy(passwordPrompt = pin.getString("kind")); return }
         if (pin.optString("kind") == "export") finishExport(uri, pin) else finishImport(uri)
     }
-    private fun finishImport(uri: Uri) {
+    fun cancelPassword() { protectedPicker = null; state = state.copy(passwordPrompt = null) }
+    fun usePassword(supplied: CharArray) {
+        var password: CharArray? = null
+        try {
+            owner(); if (state.busy) return
+            val exact = protectedPicker ?: return
+            dev.pocketengine.features.workspace.OwnerBackupEnvelope.requirePassword(supplied)
+            password = supplied.copyOf(); passwordInFlight = password; protectedPicker = null; state = state.copy(passwordPrompt = null)
+            if (exact.second.optString("kind") == "export") finishExport(exact.first, exact.second, password) else finishImport(exact.first, password)
+            password = null // The one I/O operation owns and clears its temporary array.
+        } catch (failure: Exception) { state = state.copy(error = failure.message ?: "口令未采用") }
+        finally { supplied.fill('\u0000'); clearPassword(password) }
+    }
+    private fun finishImport(uri: Uri, password: CharArray? = null) {
         work { c ->
-            requireContent(uri)
-            val input = app.contentResolver.openInputStream(uri) ?: error("所选备份无法读取")
-            val stop = Runnable { runCatching { input.close() } }; c.onCancel(stop)
-            val actual = try { input.use { host().read(it, c) } } finally { c.removeCancelAction(stop) }
-            val metadata = actual.metadata(); val preview = host().preview(actual, c)
-            return@work { selected = actual; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, projectAction = null, notice = "只核对了固定备份，没有恢复。下面各分区须分别审阅、明确确认；现有数据不会覆盖。") }
+            try {
+                requireContent(uri)
+                val input = app.contentResolver.openInputStream(uri) ?: error("所选备份无法读取")
+                val stop = Runnable { runCatching { input.close() } }; c.onCancel(stop)
+                val actual = try { input.use { if (password == null) host().read(it, c) else host().readEncrypted(it, password, c) } } finally { c.removeCancelAction(stop) }
+                val metadata = actual.metadata(); val preview = host().preview(actual, c)
+                return@work { selected = actual; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, projectAction = null, notice = "已完整核对固定备份，未恢复数据。本机审阅缓存为明文；各分区仍须分别审阅和明确确认，现有数据不会覆盖。") }
+            } finally { clearPassword(password) }
         }
     }
     fun discardLocalCache() {
@@ -119,21 +139,26 @@ internal class OwnerBackupCoordinator(
         val exact = selected ?: return
         work { c -> app.features.discardOwnerArchiveCacheForOwner(exact, c); { selected = null; clearReview(); state = state.copy(selection = null, preview = null, experiencePage = null, review = null, notice = "仅移除了这份本机备份缓存。已导出的文件、项目、原件、成果及环境保留。") } }
     }
-    fun offerExport() {
-        owner(); if (state.busy || picker != null) return
+    fun offerExport() = offerExport(true)
+    fun offerPlainExport() = offerExport(false)
+    private fun offerExport(encrypted: Boolean) {
+        owner(); if (state.busy || picker != null || protectedPicker != null) return
         val meta = state.selection ?: return
-        picker = JSONObject().put("kind", "export").put("selectionId", meta.getString("selectionId")).put("sha256", meta.getString("archiveSha256")); restoredPicker = false
-        activity.createOwnerDataArchive("PocketWorld-data-backup.zip")
+        picker = JSONObject().put("kind", "export").put("encrypted", encrypted).put("selectionId", meta.getString("selectionId")).put("sha256", meta.getString("archiveSha256")); restoredPicker = false
+        activity.createOwnerDataArchive(if (encrypted) "PocketWorld-data-backup.pwbackup" else "PocketWorld-data-backup.zip")
     }
     fun exportResult(uri: Uri?) { receivePicker(uri, "export") }
-    private fun finishExport(uri: Uri, pin: JSONObject) {
+    private fun finishExport(uri: Uri, pin: JSONObject, password: CharArray? = null) {
         work { c ->
-            requireContent(uri)
-            val exact = host().reopen(pin.getString("selectionId"), pin.getString("sha256"), c)
-            val output = app.contentResolver.openOutputStream(uri, "wt") ?: error("所选目标无法写入")
-            val stop = Runnable { runCatching { output.close() } }; c.onCancel(stop)
-            val bytes = try { output.use { host().export(exact, it, c) } } catch (failed: Exception) { throw IllegalStateException("导出未完整确认，目标可能已有部分内容；请核对原备份和目标。", failed) } finally { c.removeCancelAction(stop) }
-            return@work { state = state.copy(notice = "已导出固定备份（$bytes 字节）。没有上传、恢复权限或启动项目。") }
+            try {
+                requireContent(uri)
+                val exact = host().reopen(pin.getString("selectionId"), pin.getString("sha256"), c)
+                val output = app.contentResolver.openOutputStream(uri, "wt") ?: error("所选目标无法写入")
+                val stop = Runnable { runCatching { output.close() } }; c.onCancel(stop)
+                val bytes = try { output.use { if (password == null) host().export(exact, it, c) else host().exportEncrypted(exact, it, password, c) } } catch (failed: Exception) { throw IllegalStateException("导出未完整确认，目标可能已有部分内容；请核对原备份和目标。", failed) } finally { c.removeCancelAction(stop) }
+                val kind = if (password == null) "未加密 ZIP" else "口令加密备份"
+                return@work { state = state.copy(notice = "已导出$kind（$bytes 字节）。请独立妥善保管口令；本机缓存仍为明文。没有上传、恢复权限或启动项目。") }
+            } finally { clearPassword(password) }
         }
     }
     private fun pending(): Boolean = state.originalAction != null && state.originalPhase?.optString("status") !in setOf("completed", "failed")
@@ -185,8 +210,8 @@ internal class OwnerBackupCoordinator(
     }
     fun openRestoredAttachment(value: JSONObject) { owner(); if (!state.busy && value.optString("id").isNotEmpty()) { closePage(); openAttachment(value) } }
     fun invalidateExperienceReadings() { experienceRevision++; state = state.copy(experiencePage = null) }
-    fun foreground(visible: Boolean) { invalidateExperienceReadings(); foreground = visible; if (!visible) { cancelRead(); clearReview(); projectMemorySelection = null; state = state.copy(busy = false, review = null, projectMemoryCurrent = false, notice = if (state.projectMemoryName != null) "原项目记忆选择未在后台保留；生成新备份前请回原审核页重新显选。已有原包仍可只读核对。" else state.notice) } else processPicker() }
-    fun detach() { closed = true; cancelRead(); clearReview() }
+    fun foreground(visible: Boolean) { invalidateExperienceReadings(); foreground = visible; if (!visible) { cancelPassword(); cancelRead(); clearReview(); projectMemorySelection = null; state = state.copy(busy = false, review = null, projectMemoryCurrent = false, notice = if (state.projectMemoryName != null) "原项目记忆选择未在后台保留；生成新备份前请回原审核页重新显选。已有原包仍可只读核对。" else state.notice) } else processPicker() }
+    fun detach() { cancelPassword(); closed = true; cancelRead(); clearReview() }
     fun save(bundle: Bundle) {
         val pin = JSONObject().put("selectionId", state.selection?.optString("selectionId").orEmpty()).put("sha256", state.selection?.optString("archiveSha256").orEmpty()).put("actionId", state.originalAction.orEmpty()).put("projectActionId", state.projectAction.orEmpty())
         bundle.putString("ownerDataArchivePosition", pin.toString()); if (picker != null) bundle.putBoolean("ownerDataArchivePickerPending", true)
@@ -198,7 +223,8 @@ internal class OwnerBackupCoordinator(
         runCatching { val pin = JSONObject(raw); state = state.copy(selection = pin.optString("selectionId").takeIf { it.isNotEmpty() }?.let { JSONObject().put("selectionId", it).put("archiveSha256", pin.getString("sha256")) }, originalAction = pin.optString("actionId").takeIf { it.isNotEmpty() }, projectAction = pin.optString("projectActionId").takeIf { it.isNotEmpty() }, notice = "只恢复了原备份和动作定位；没有恢复确认、凭据或写权限。请先核对原结果。") }
     }
     private fun clearReview() { pendingReview = null; reviewControl?.cancel(); reviewControl = null }
-    private fun cancelRead() { generation++; observation?.cancel(); observation = null; future?.cancel(true); future = null }
+    private fun clearPassword(password: CharArray?) { password?.fill('\u0000'); if (passwordInFlight === password) passwordInFlight = null }
+    private fun cancelRead() { clearPassword(passwordInFlight); generation++; observation?.cancel(); observation = null; future?.cancel(true); future = null }
     private fun requireContent(uri: Uri) { check(uri.scheme == "content" && !uri.authority.isNullOrBlank()) { "系统未返回可用的文件引用，没有读写其他路径。" } }
     private fun work(onFailure: (() -> Unit)? = null, read: (RunControl) -> (() -> Unit)) {
         owner(); if (state.busy) return
