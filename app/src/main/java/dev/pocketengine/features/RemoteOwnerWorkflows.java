@@ -128,6 +128,15 @@ public final class RemoteOwnerWorkflows {
         if(value)try{module().requestReadRefresh();}catch(Exception unavailable){/* Read recovery only; explicit original query remains available. */}
     }
 
+    /** Native foreground local index only; not registered in the feature/JSON command dispatcher. */
+    public JSONObject managedSessions(Object nativeOwner)throws Exception {
+        checkManagedSessionsOwner(nativeOwner);JSONObject value=tasks.remoteManagedSessions();checkManagedSessionsOwner(nativeOwner);return value;
+    }
+    public String managedSessionTask(Object nativeOwner,String task,String identity)throws Exception {
+        checkManagedSessionsOwner(nativeOwner);String id=tasks.remoteManagedSessionTask(task,identity);checkManagedSessionsOwner(nativeOwner);return id;
+    }
+    private synchronized void checkManagedSessionsOwner(Object nativeOwner){if(nativeOwner==null||foregroundOwner!=nativeOwner)throw new SecurityException("请在原生前台私人电脑页读取原任务清单");}
+
     public RemoteOwnerWorkflows(FeatureHost host,TaskStore tasks,EventSink events){this.host=host;this.tasks=tasks;this.events=events;inputs=new dev.pocketengine.features.remote.RemoteInputAttachments(host,tasks,events);harnessConfigs=new dev.pocketengine.features.remote.NativeHarnessConfigs(host,tasks,events);}
     /** Original native GroupOwner resolver only; opaque source cannot be restored from JSON. */
     public JSONObject openGroupInputs(Object nativeOwner,String window,String task,JSONObject request,dev.pocketengine.features.groups.GroupsModule.RemoteInputSource source)throws Exception{return inputs.openGroup(nativeOwner,window,task,request,source);}

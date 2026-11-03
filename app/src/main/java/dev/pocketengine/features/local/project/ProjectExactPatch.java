@@ -71,7 +71,7 @@ public final class ProjectExactPatch {
         if(!receipt.optBoolean("receiptReceived")||!Set.of("completed","failed").contains(receipt.optString("status")))throw new SecurityException("撤销需原确定文件回执；unknown保留原操作核对，不自动反向");
     }
     public static JSONArray reverse(JSONObject snapshot,JSONArray original,JSONObject receipt,String originalOperation)throws Exception {
-        requireSettledReceipt(receipt);if(ProjectFileMove.any(original))return ProjectFileMove.reverse(snapshot,original,receipt,originalOperation);
+        requireSettledReceipt(receipt);if(ProjectDirectoryCreate.any(original))throw new SecurityException("目录创建不自动rmdir或按文件字节撤销；目录可能已被后续使用，请主人核对原createdPaths");if(ProjectFileMove.any(original))return ProjectFileMove.reverse(snapshot,original,receipt,originalOperation);
         JSONArray observed=receipt.getJSONArray("files");if(original.length()!=observed.length())throw new SecurityException("原文件回执不完整");Map<String,byte[]> current=ProjectSources.byteFiles(snapshot);JSONArray result=new JSONArray();Set<String> paths=new java.util.HashSet<>();
         for(int i=0;i<original.length();i++){
             JSONObject file=original.getJSONObject(i),actual=observed.getJSONObject(i);String path=file.getString("path"),after=file.getString("afterHash"),state=actual.getString("state");

@@ -2,7 +2,7 @@ package dev.pocketengine.store;
 
 import android.app.Application;
 import android.database.sqlite.SQLiteDatabase;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.FeatureHost;
@@ -62,7 +62,7 @@ public final class WorkProfileRelayNativeTest {
             byte[] response=new JSONObject().put("id","relay-fixture").put("object","chat.completion").put("created",1).put("model","profile-relay")
                 .put("choices",new JSONArray().put(new JSONObject().put("index",0).put("finish_reason","stop").put("message",new JSONObject().put("role","assistant").put("content","PROFILE_RELAY_ACTUAL_REPLY"))))
                 .put("usage",new JSONObject().put("prompt_tokens",1).put("completion_tokens",2).put("total_tokens",3)).toString().getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,response.length);exchange.getResponseBody().write(response);
+            exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,response.length);exchange.getResponseBody().write(response);
         }catch(Throwable failed){peerFailure.set(failed);}finally{exchange.close();}});peer.start();
         new ModelConnectionService(settings,Files.createTempDirectory("profile-relay-models").resolve("catalog"),Clock.systemUTC()).install();
         String endpoint="http://127.0.0.1:"+peer.getAddress().getPort();

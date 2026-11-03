@@ -2218,6 +2218,25 @@ public final class TaskStore {
         JSONObject staged=gatewayContinuationRow(id);if(staged!=null){JSONObject stage=staged.getJSONObject("arguments").getJSONObject("gatewayStage");source.put("nativeGatewayProfileBinding",stage.getString("profileBinding")).put("nativeGatewayPreparationExpiresAt",stage.getLong("expiresAt"));}
         return new JSONObject(source.toString());
     }
+    /** Bounded native metadata read, never audit bodies, live discovery or another session ledger. */
+    public synchronized JSONObject remoteManagedSessions()throws Exception {
+        JSONArray rows=new JSONArray();int scanned=0;boolean older=false;
+        try(Cursor cursor=db.rawQuery("SELECT document FROM tasks ORDER BY updated_at DESC,task_id DESC LIMIT 201",null)){
+            while(cursor.moveToNext()){
+                if(scanned==dev.pocketengine.features.remote.RemoteManagedSessions.LOCAL_TASK_WINDOW){older=true;break;}scanned++;
+                JSONObject task=new JSONObject(cursor.getString(0));if(!"remote".equals(task.optString("feature")))continue;
+                try{requireRemoteDraftOwner(task);}catch(SecurityException|IllegalArgumentException|org.json.JSONException excluded){continue;}
+                JSONObject row=dev.pocketengine.features.remote.RemoteManagedSessions.row(task);if(row!=null)rows.put(row);
+            }
+        }
+        return dev.pocketengine.features.remote.RemoteManagedSessions.snapshot(rows,older,scanned);
+    }
+    /** Read-only navigation check; this does not open a review, start a run, or grant control. */
+    public synchronized String remoteManagedSessionTask(String id,String expectedIdentity)throws Exception {
+        JSONObject task=required(id);requireRemoteDraftOwner(task);
+        JSONObject row=dev.pocketengine.features.remote.RemoteManagedSessions.row(task);
+        if(row==null||!row.getString("rowIdentity").equals(expectedIdentity))throw new SecurityException("原任务/会话身份已改变，请刷新清单后重新打开");return id;
+    }
     /** Native, process-local SQL authority. JSON views cannot reconstruct a dispatch. */
     public static final class RemoteDraftDispatch {
         private final TaskStore issuer;private final String task,draft,operation,mode,text,profileId,profileGeneration,serviceBase;private final long revision;

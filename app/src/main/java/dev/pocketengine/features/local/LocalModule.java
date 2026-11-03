@@ -611,6 +611,8 @@ public final class LocalModule implements EngineModule {
         original.check();if(!original.matchesHostRun(currentAdmission.taskId,currentAdmission.runId,currentAdmission.epoch)||!currentAdmission.taskId.equals(originalCollection.getJSONObject("binding").getString("taskId")))throw new SecurityException("生成文件读取不是原任务当前scope");JSONObject plan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(originalCollection.getJSONObject("plan")),step=dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,originalCollection.getString("stepId"));if(!"collectProjectOutput".equals(step.getString("localCommand")))throw new SecurityException("请选择原managed生成文件保存动作");
         development.handle("project.poll",ProjectSources.copy(originalCollection));JSONObject actual=queryManagedOutputReceipt(ProjectDevelopment.exact(plan,step),originalCollection.getJSONObject("binding"));if(!"completed".equals(actual.optString("status")))throw new IllegalStateException("原生成文件保存尚未确认，只核对原动作");original.check();return new JSONObject(actual.getJSONObject("attachment").toString()).put("ok",true).put("accepted",true).put("status","observed").put("code","project_generated_output_observed").put("generatedArtifact",true).put("buildReceiptIdentity",actual.getString("buildReceiptIdentity")).put("buildJobId",actual.getString("buildJobId")).put("collectionJobId",actual.getString("operationId")).put("originalPath",actual.getString("path")).put("buildOutputAttribution","selected_output_observed_after_build");
     }
+    /** Directory metadata is reviewed separately from the original regular-file source manifest. */
+    public synchronized JSONArray prepareProjectDirectoryForHost(String checkoutId,JSONObject edit)throws Exception {return dev.pocketengine.features.local.project.ProjectDirectoryCreate.prepare(content(checkoutId),edit,binaryImportCurrent()::check);}
     /** Typed native planning read only; actual rename remains in the original prepared patch. */
     public synchronized void verifyProjectMoveForHost(String checkoutId,JSONArray rows)throws Exception {dev.pocketengine.features.local.project.ProjectFileMove.preflight(content(checkoutId),checkoutId,rows,binaryImportCurrent());}
     /** One original journal operation; preflight all files, then report each real per-file effect. */
@@ -623,6 +625,9 @@ public final class LocalModule implements EngineModule {
         boolean uncertain=false;int applied=0;String failure="";
         try {
             requireIdle(checkout);requireCheckoutWritable(checkout);
+            if(dev.pocketengine.features.local.project.ProjectDirectoryCreate.any(files)){
+                JSONObject actual=dev.pocketengine.features.local.project.ProjectDirectoryCreate.execute(content(checkout),files,()->checkProjectControl(original,admission,binding,pauseRevision));for(var keys=actual.keys();keys.hasNext();){String key=keys.next();result.put(key,actual.get(key));}result.put("sourceCheckStatus","native_checkout_verified").put("cancelRequested",original.isCancelled());try{result.put("updatedSourceDigest",ProjectSources.describe(export(checkout)).getString("sourceDigest"));}catch(Exception unavailable){result.put("updatedSourceDigestUnavailable",true);}return result;
+            }
             // No file/parent mutation before every original byte/hash/target is checked.
             long total=0;for(byte[] value:before.values())total+=value.length;int count=before.size();
             for(int i=0;i<files.length();i++){
@@ -655,6 +660,12 @@ public final class LocalModule implements EngineModule {
         boolean complete=applied==files.length();result.put("files",receipts).put("appliedFiles",applied).put("allFilesApplied",complete).put("status",uncertain?"unknown":complete?"completed":"failed").put("receiptReceived",!uncertain).put("exitCode",uncertain?JSONObject.NULL:complete?0:1).put("stderr",failure).put("partialEffects",applied>0&&!complete).put("message",uncertain?"原文件提交效果待核；只读原路径/原操作，不自动重放补丁":complete?"逐文件原子保存并核对afterSHA完成；不是跨文件事务，也不是测试/业务成功":"原补丁未全部应用，按逐文件回执核对，未覆盖后续新SHA");
         try{result.put("updatedSourceDigest",ProjectSources.describe(export(checkout)).getString("sourceDigest"));}catch(Exception unavailable){result.put("updatedSourceDigestUnavailable",true);if(applied>0)result.put("status","unknown").put("receiptReceived",false).put("exitCode",JSONObject.NULL);}
         return result;
+    }
+    /** Direct directory metadata through the same selected checkout and original read authority. */
+    public JSONObject projectDirectoryQueryForHost(JSONObject input,RunControl original)throws Exception {
+        if(original==null)throw new SecurityException("缺少原项目目录读取控制");final String id=JsonFiles.text(input,"checkoutId",80);final File selected;synchronized(this){if(closed)throw new SecurityException("原Local已关闭");selected=content(id);}
+        dev.pocketengine.features.local.project.ProjectFileQueries.Current current=()->{original.check();if(closed||original.isPaused()||Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException("原目录读取已暂停、取消或关闭");};
+        return dev.pocketengine.features.local.project.ProjectDirectoryQuery.list(selected,id,input,current);
     }
     public synchronized JSONObject projectFileQueryForHost(JSONObject input,RunControl original,boolean search)throws Exception {
         if(closed||original==null)throw new SecurityException("缺少原项目只读控制");String id=JsonFiles.text(input,"checkoutId",80);dev.pocketengine.features.local.project.ProjectFileQueries.Current current=()->{original.check();if(original.isPaused())throw new SecurityException("原项目读取已暂停");};

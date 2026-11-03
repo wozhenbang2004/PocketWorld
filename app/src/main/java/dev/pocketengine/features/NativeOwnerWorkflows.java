@@ -117,6 +117,14 @@ public final class NativeOwnerWorkflows {
                 JSONObject result=module.handle("get",new JSONObject().put("scope",scope).put("id",payload.getString("id")));
                 if(positiveVersion(payload,"revision")!=result.getJSONObject("record").getLong("revision"))throw new IllegalStateException("父记忆版本已变化，请重新读取当前候选来源");return result;
             }
+            case "searchHistory":{
+                for(var keys=payload.keys();keys.hasNext();)if(!java.util.Set.of("query","cursor","limit").contains(keys.next()))throw new SecurityException("旧事查阅不能自报来源、空间或audience授权");
+                long limit=payload.has("limit")?positiveVersion(payload,"limit"):12;if(limit>20)throw new IllegalArgumentException("旧事每页最多20条");return module.searchHistoryForOwner(payload.optString("query",""),payload.optString("cursor",""),(int)limit);
+            }
+            case "readHistoryRecord":{
+                for(var keys=payload.keys();keys.hasNext();)if(!java.util.Set.of("id","revision").contains(keys.next()))throw new SecurityException("旧事回读只能选择原记录及确切版本");
+                return module.readHistoryRecordForOwner(payload.getString("id"),positiveVersion(payload,"revision"));
+            }
             case "resolveAssertionConflictReviewed":return sources.resolveAssertionConflictReviewed(scope,payload.getJSONArray("records"),payload.getString("decision"),payload.optString("selectedId"),payload.getString("reason"));
             case "readAssertionEvidence":return sources.readAssertionEvidence(scope,SourceRef.fromJson(payload.getJSONObject("sourceRef")),Math.toIntExact(nativeOffset(payload,"offset")),Math.toIntExact(positiveVersion(payload,"chars")),payload.getString("sha256"));
             case "acceptCandidate":return module.acceptCandidate(scope,payload.getString("id"),positiveVersion(payload,"revision"));

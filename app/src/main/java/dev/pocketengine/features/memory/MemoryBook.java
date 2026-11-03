@@ -1221,7 +1221,7 @@ public final class MemoryBook {
             if(current!=null&&scope.matches(current)&&active.contains(id)&&live.contains(id)&&prior.getLong("revision")==current.getLong("revision")&&retrievalSourcesLive(current,verified))result.put(viewRecord(current));
         }return result;
     }
-    private static MemoryRetrievalBackend.Document retrievalDocument(JSONObject row,MemoryEntityAliasProjection aliases)throws Exception {
+    static MemoryRetrievalBackend.Document retrievalDocument(JSONObject row,MemoryEntityAliasProjection aliases)throws Exception {
         StringBuilder searchable=new StringBuilder(row.getString("text"));JSONObject assertion=row.optJSONObject("assertion");
         // Reviewed semantics are a disposable lexical projection, never a second record body.
         // No model request, identity merge or raw source expansion; currentness/audience gates
@@ -1238,6 +1238,28 @@ public final class MemoryBook {
         for(JSONObject row:records.values())if(scope.matches(row)&&active.contains(row.getString("id"))
                 &&(audience==null||audience.permits(row.getString("id"),row.getLong("revision")))&&retrievalSourcesLive(row,verified))result.add(row.getString("id"));
         return result;
+    }
+    /** Native owner review only. Historical inspection never enters active recall or a task grant. */
+    synchronized JSONObject searchHistoryForOwner(String query,String cursor,int limit)throws Exception {
+        Scope scope=Scope.from(ownerScopeValue());long now=System.currentTimeMillis();Set<String> eligible=historyEligible(scope,now);Map<String,String> statuses=MemoryAssertion.statuses(records.values(),eligible,now,assertionFences);
+        List<JSONObject> rows=new ArrayList<>();int archives=0;for(JSONObject row:records.values())if(scope.matches(row)){if(row.optBoolean("archiveOnly"))archives++;if(eligible.contains(row.getString("id")))rows.add(row);}
+        JSONObject result=MemoryHistoryPage.search(rows,statuses,query,cursor,limit);Set<String> current=historyEligible(scope,System.currentTimeMillis());Map<String,String> actual=MemoryAssertion.statuses(records.values(),current,System.currentTimeMillis(),assertionFences);JSONArray matches=result.getJSONArray("matches");
+        for(int i=0;i<matches.length();i++){JSONObject hit=matches.getJSONObject(i),row=records.get(hit.getString("id"));if(row==null||!scope.matches(row)||!current.contains(hit.getString("id"))||row.getLong("revision")!=hit.getLong("revision")||!hit.getString("temporalStatus").equals(actual.getOrDefault(hit.getString("id"),"untyped_time_unknown")))throw new SecurityException("旧事来源或版本在读取期间已变化，请重新搜索");}
+        return result.put("scope",ownerScopeValue()).put("unverifiedArchiveRecords",archives).put("archiveOnlyActivated",false).put("sourceCurrentChecked",true);
+    }
+    synchronized JSONObject readHistoryRecordForOwner(String id,long revision)throws Exception {
+        Scope scope=Scope.from(ownerScopeValue());JSONObject row=require(scope,id);if(row.getLong("revision")!=revision)throw new IllegalStateException("旧事版本已变化，请重新搜索");
+        long now=System.currentTimeMillis();Set<String> eligible=historyEligible(scope,now);String status=MemoryAssertion.statuses(records.values(),eligible,now,assertionFences).getOrDefault(id,"untyped_time_unknown");
+        if(!eligible.contains(id)||!MemoryHistoryPage.inspectable(status))throw new SecurityException("旧事缺少当前可核原来源，未从旧摘要或归档恢复读取权");JSONObject result=viewRecord(row).put("temporalStatus",status).put("readOnlyHistory",true).put("memoryTextIsOriginalEvidence",false);
+        long checkedAt=System.currentTimeMillis();Set<String> current=historyEligible(scope,checkedAt);String actual=MemoryAssertion.statuses(records.values(),current,checkedAt,assertionFences).getOrDefault(id,"untyped_time_unknown");
+        if(records.get(id)!=row||!current.contains(id)||!status.equals(actual))throw new SecurityException("旧事来源或时间状态在读取期间已变化");
+        return new JSONObject().put("record",result).put("sourceCurrentChecked",true).put("originalEvidenceRead",false).put("activeRecall",false).put("executionAuthorized",false);
+    }
+    private static JSONObject ownerScopeValue()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
+    private Set<String> historyEligible(Scope scope,long now)throws Exception {
+        Set<String> eligible=new LinkedHashSet<>();Map<String,String> versions=new LinkedHashMap<>();Map<SourceRef,Boolean> verified=new LinkedHashMap<>();
+        for(JSONObject row:records.values())if(scope.matches(row)&&!row.optBoolean("archiveOnly")&&row.optLong("expiresAt",Long.MAX_VALUE)>now&&appRecordEligible(row,versions)&&externalActive(row)&&retrievalSourcesLive(row,verified))eligible.add(row.getString("id"));
+        boolean changed;do{changed=false;for(JSONObject row:records.values())if(eligible.contains(row.getString("id"))){JSONArray parents=row.optJSONArray("sourceIds");for(int i=0;parents!=null&&i<parents.length();i++){JSONObject parent=records.get(parents.getString(i));if(parent==null||!scope.matches(parent)||!eligible.contains(parents.getString(i))){eligible.remove(row.getString("id"));changed=true;break;}}}}while(changed);return eligible;
     }
     private boolean retrievalSourcesLive(JSONObject row,Map<SourceRef,Boolean> verified)throws Exception {
         try{requireAssertionSourceProof(row);}catch(Exception unavailable){return false;}

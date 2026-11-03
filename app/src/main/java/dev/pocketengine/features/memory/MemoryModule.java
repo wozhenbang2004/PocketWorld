@@ -190,6 +190,9 @@ public final class MemoryModule implements EngineModule {
         try{context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));}
         catch(Exception unavailable){result.put("notificationPending",true);}return result;
     }
+    /** Native owner workflow only; deliberately not an EngineModule command or model tool. */
+    public JSONObject searchHistoryForOwner(String query,String cursor,int limit)throws Exception{return book.searchHistoryForOwner(query,cursor,limit);}
+    public JSONObject readHistoryRecordForOwner(String id,long revision)throws Exception{return book.readHistoryRecordForOwner(id,revision);}
     public JSONObject appBaseline(JSONObject scope,String app,String version)throws Exception{return book.appBaseline(scope,app,version,System.currentTimeMillis());}
     public JSONObject proposeAppRevisionFromSource(JSONObject scope,SourceRef source,JSONObject context,JSONObject draft)throws Exception{return new JSONObject().put("candidate",book.proposeAppRevisionFromSource(scope,source,context,draft,System.currentTimeMillis()));}
     public JSONObject proposeAppRevision(JSONObject scope,String source,long sourceRevision,String app,String version,String base,long baseRevision,boolean lesson,JSONObject draft)throws Exception {

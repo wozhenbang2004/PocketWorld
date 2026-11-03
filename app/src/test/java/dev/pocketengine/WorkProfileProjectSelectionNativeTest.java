@@ -89,7 +89,7 @@ public final class WorkProfileProjectSelectionNativeTest {
         var field = LocalModule.class.getDeclaredField("root");
         field.setAccessible(true);
         var root = ((java.io.File) field.get(local)).toPath();
-        Files.writeString(root.resolve("checkouts").resolve(checkout.getString("id")).resolve("files/a.txt"), "EXTERNAL FIXTURE DRIFT");
+        Files.write(root.resolve("checkouts").resolve(checkout.getString("id")).resolve("files/a.txt"), "EXTERNAL FIXTURE DRIFT".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         RunControl control = new RunControl();
         JSONObject task = attempt(control);
         assertThrows(SecurityException.class, selected::checkCurrent);

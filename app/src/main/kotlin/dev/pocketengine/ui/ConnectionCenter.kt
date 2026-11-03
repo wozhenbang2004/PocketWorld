@@ -146,7 +146,7 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                         } else {
                             state.moduleErrors.filterKeys { it.startsWith(section + ".") }.values.distinct().forEach { Text(it, color = Danger, fontSize = 12.sp, modifier = Modifier.padding(bottom = 10.dp)) }
                             when (section) {
-                                "remote" -> RemoteConnections(state, controller)
+                                "remote" -> RemoteConnections(state, controller) { id -> if (onOpenTask != null) onOpenTask(id, "remote") else { controller.focusTask(id); close() } }
                                 "ssh" -> NativeSsh(state, controller)
                                 "local" -> NativeLocalWorkbench(state, controller)
                                 "memory" -> { TextButton(onClick = { section = "memoryReview" }) { Text("审核学习候选与来源") }; NativeMemory(state, controller) }
@@ -179,12 +179,16 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
 }
 
 @Composable
-private fun RemoteConnections(state: PocketUiState, controller: PocketWorldController) {
+private fun RemoteConnections(state: PocketUiState, controller: PocketWorldController, openTask: (String) -> Unit) {
     var editing by remember { mutableStateOf<JSONObject?>(null) }
     var deleting by remember { mutableStateOf<JSONObject?>(null) }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     val remote = state.feature("remote")
     val profiles = remote.optJSONArray("profiles").objects()
+    RemoteManagedSessionsPanel(controller::remoteManagedSessions, controller::runDeviceWorkspaceWork) { task, identity ->
+        openTask(controller.remoteManagedSessionTask(task, identity))
+    }
+    HorizontalDivider(color = Line, modifier = Modifier.padding(vertical = 12.dp))
     CenterCaption("连接你信任的 Companion 环境。密钥仅写入手机加密存储，普通 SSH 不等于可恢复的电脑任务。")
     OutlinedButton(onClick = { editing = JSONObject() }) { Text("添加电脑环境") }
     profiles.forEach { profile ->

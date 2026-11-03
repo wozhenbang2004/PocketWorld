@@ -964,6 +964,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         try { val file = nativeChannelModule().ownerMediaForViewing(channelMediaReview ?: throw SecurityException("请重新核对这份原件")); openAttachmentOutcome(file) }
         catch (error: Exception) { state = state.copy(error = message(error)) }
     }
+    /** Local stored metadata only; does not probe a CLI, query a remote job or select an authority. */
+    fun remoteManagedSessions(): JSONObject {
+        if (closed || !privateWorkspaceView()) throw SecurityException("请回到私人电脑页读取原任务清单")
+        return (app.remoteOwnerWorkflows ?: throw IllegalStateException("原电脑任务宿主未就绪")).managedSessions(activity)
+    }
+    fun remoteManagedSessionTask(task: String, identity: String): String {
+        if (closed || !privateWorkspaceView()) throw SecurityException("请回到私人电脑页打开原任务")
+        return (app.remoteOwnerWorkflows ?: throw IllegalStateException("原电脑任务宿主未就绪")).managedSessionTask(activity, task, identity)
+    }
     fun enterRemoteTask(taskId: String): String {
         ownerDomain?.let(::leaveOwnerDomain)
         ownerDomain = "remoteTask"; remoteOwnerWindow = UUID.randomUUID().toString(); remoteOwnerTask = taskId

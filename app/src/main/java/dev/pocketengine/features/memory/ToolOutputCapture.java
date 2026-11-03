@@ -19,7 +19,7 @@ public final class ToolOutputCapture {
     /** Only these original native read producers may omit a prepared side-effect operation.
      * This enum is not parsed from a model command, and is not a read or execution grant. */
     public enum ReadTool {
-        PROJECT_READ_FILE("project_read_file"),PROJECT_SEARCH("project_search");
+        PROJECT_READ_FILE("project_read_file"),PROJECT_SEARCH("project_search"),PROJECT_LIST_FILES("project_list_files");
         public final String tool;ReadTool(String tool){this.tool=tool;}
     }
     /** Native call identity issued from the existing live project binding, never caller JSON.

@@ -60,11 +60,12 @@
       "dev.pocketengine.features.local.project.ProjectByteCopyTest",
       "dev.pocketengine.features.local.project.ProjectFileMoveTest",
       "dev.pocketengine.features.local.project.ProjectBinaryImportNativeTest",
-      "dev.pocketengine.ui.LocalWorkbenchGuardTest"
+      "dev.pocketengine.ui.LocalWorkbenchGuardTest",
+      "dev.pocketengine.features.local.project.ProjectDirectoryCreateTest"
     ],
     "helpers": [],
     "robolectric": true,
-    "description": "Original SQLite approval/planRef/CapabilityPort -> LocalModule CAS copy/append and per-file receipts, plus exact-patch/reversal regression; no Android device/SAF/SSH acceptance. Original read-file route also captures exact binary hex windows through original ReadCall/Book9 without creating a write intent or process. Fixed-length source byte overwrite (1..2048 bytes, existing file <=256KiB) uses exact SHA/old-byte window, original planRef/approval/CAS and separately approved conditional reversal; full encoded bodies remain only in native plan records. No binary create/resize or execution grant. Exact source byte copy freezes actual manifest-bound bytes <=256KiB into an absent new target; original conditional undo only removes that same copied target. No model Base64 input, existing-target binary overwrite, recursive/cross-provider copy or process execution. Existing manual-owner review/import now has an explicit raw-byte branch using issued original Workspace FileSnapshot version/SHA/revision CAS, bounded metadata/64-byte hex, and no model body input or new task/grant. Matching formal bytes can explicitly repair only the original baseline without a duplicate version; legacy UTF8 path retained. Exact move pairs reuse the original prepared patch/approval/receipts and call one Files.move without REPLACE, not copy/delete: selected checkout source <=256KiB, absent target and existing parent. Collision after dispatch stays unknown/no replay; a separate approved reverse requires both original applied path receipts, unchanged afterSHA and absent old source. No cross-provider, directory/recursive move, permanent version-store write or atomic path-CAS claim."
+    "description": "Original SQLite approval/planRef/CapabilityPort -> LocalModule CAS copy/append and per-file receipts, plus exact-patch/reversal regression; no Android device/SAF/SSH acceptance. Original read-file route also captures exact binary hex windows through original ReadCall/Book9 without creating a write intent or process. Fixed-length source byte overwrite (1..2048 bytes, existing file <=256KiB) uses exact SHA/old-byte window, original planRef/approval/CAS and separately approved conditional reversal; full encoded bodies remain only in native plan records. No binary create/resize or execution grant. Exact source byte copy freezes actual manifest-bound bytes <=256KiB into an absent new target; original conditional undo only removes that same copied target. No model Base64 input, existing-target binary overwrite, recursive/cross-provider copy or process execution. Existing manual-owner review/import now has an explicit raw-byte branch using issued original Workspace FileSnapshot version/SHA/revision CAS, bounded metadata/64-byte hex, and no model body input or new task/grant. Matching formal bytes can explicitly repair only the original baseline without a duplicate version; legacy UTF8 path retained. Exact move pairs reuse the original prepared patch/approval/receipts and call one Files.move without REPLACE, not copy/delete: selected checkout source <=256KiB, absent target and existing parent. Collision after dispatch stays unknown/no replay; a separate approved reverse requires both original applied path receipts, unchanged afterSHA and absent old source. No cross-provider, directory/recursive move, permanent version-store write or atomic path-CAS claim. Explicit singleton mkdir plans use a separately sealed native directory-state pin, original concrete approval/debit/lease/receipts, and real Files.createDirectory (not an empty file). Missing parents require explicit createParents, <=40 levels; an unchanged existing directory is already_exists with no mkdir dispatch. Generic file-edit scopes do not implicitly grant structural changes. Post-entry failure/partial creation preserves unknown and observed createdPaths, no automatic rollback/replay/rmdir; original revert accurately rejects this directory-only leaf. No formal version-store directory write."
   },
   "project-file-search": {
     "class": "dev.pocketengine.features.local.project.ProjectSearchContextTest",
@@ -75,10 +76,11 @@
       "dev.pocketengine.features.local.project.ProjectHexReadTest",
       "dev.pocketengine.features.local.project.ProjectHexPatternTest",
       "dev.pocketengine.features.local.project.ProjectHexSearchTest",
-      "dev.pocketengine.features.local.project.ProjectSearchExcludeTest"
+      "dev.pocketengine.features.local.project.ProjectSearchExcludeTest",
+      "dev.pocketengine.features.local.project.ProjectDirectoryQueryTest"
     ],
     "helpers": [],
-    "description": "Actual selected checkout reads, SHA-pinned native literal/glob search and bounded merged context windows; no Android filesystem/provider/SAF/SSH/device acceptance. Explicit source-file hex/ASCII read windows keep byte offsets and whole-file SHA, at most2KiB per page; no binary write authority or decoder claim. Exact-source binary pattern search uses bounded streaming KMP, overlap-safe byte cursors and explicit scan/result budgets, not AST/text decoding or file writes. Explicit exclude glob filters relative file paths before content/hash read, consumes the original2000-entry enumeration bound and is cursor-bound; omitted/empty masks preserve legacy query identity. No hidden/cache/provider permission changes."
+    "description": "Actual selected checkout reads, SHA-pinned native literal/glob search and bounded merged context windows; no Android filesystem/provider/SAF/SSH/device acceptance. Explicit source-file hex/ASCII read windows keep byte offsets and whole-file SHA, at most2KiB per page; no binary write authority or decoder claim. Exact-source binary pattern search uses bounded streaming KMP, overlap-safe byte cursors and explicit scan/result budgets, not AST/text decoding or file writes. Explicit exclude glob filters relative file paths before content/hash read, consumes the original2000-entry enumeration bound and is cursor-bound; omitted/empty masks preserve legacy query identity. No hidden/cache/provider permission changes. Direct physical source directory metadata listing includes empty directories and ordinary files, no body/hash read or recursive walk. Two bounded <=2000-entry scans pin metadata digest/cursor, <=40 entries and12KiB/page; hidden/dependency/build exclusions spend enumeration budget, links/specials never followed and omissions explicit. No cross-provider or atomic content-version claim."
   },
   "browser-expression": {
     "class": "dev.pocketengine.browser.BrowserPageProgramsTest",
@@ -136,11 +138,12 @@
       "dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackendTest",
       "dev.pocketengine.features.memory.MemoryReadAudienceTest",
       "dev.pocketengine.features.memory.MemoryEntityAliasRetrievalNativeTest",
-      "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest"
+      "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest",
+      "dev.pocketengine.features.memory.OwnerMemoryHistoryNativeTest"
     ],
     "helpers": [],
     "robolectric": true,
-    "description": "Fifty-five exact typed-field native SQLite/lexical complementary-candidate fusion, code-symbol/substring recall, explicit typed-ID labels and original source/forget/audience admission methods. BM25 remains the native-channel/tie rank; final native+lexical reciprocal ranks are explicit, with the original 1000-document and request budgets. Historical/imagined/conflict and native project isolation/unsupported typed manual inputs stay fenced. No embeddings, extra model call, inferred identity merge, Compose visual or device acceptance."
+    "description": "Sixty-three exact typed-field/native SQLite/lexical fusion and native owner retained-history methods, including explicit typed-ID labels, read-only dated pages, exact original workspace span/hash, version/cursor/source/forget/cold and original audience boundaries. Default model recall remains current-only; unknown archiveOnly is counted, never activated. No new model call, inferred identity merge, member/group historical grant, Compose visual or device acceptance."
   },
   "memory-consolidation": {
     "class": "dev.pocketengine.features.memory.MemoryConsolidationConfidenceTest",
@@ -641,7 +644,10 @@
       "dev.pocketengine.ui.RemoteDraftDeliveryMountedTest",
       "dev.pocketengine.features.remote.RemoteDraftClipboardTest",
       "dev.pocketengine.features.remote.RemoteClipboardDraftOwnerJourneyTest",
-      "dev.pocketengine.features.remote.RemoteClipboardDraftMountedNativeTest"
+      "dev.pocketengine.features.remote.RemoteClipboardDraftMountedNativeTest",
+      "dev.pocketengine.features.remote.RemoteManagedSessionsTest",
+      "dev.pocketengine.features.remote.RemoteManagedSessionsOwnerJourneyTest",
+      "dev.pocketengine.features.remote.RemoteManagedSessionsMountedNativeTest"
     ],
     "helpers": [],
     "robolectric": true,

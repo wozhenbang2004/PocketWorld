@@ -297,8 +297,9 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
                     val encoded = file.optString("encoding") == "base64"
                     val copyDirection = if (encoded) file.optString("copyDirection") else ""
                     val moveRole = if (encoded) file.optString("moveRole") else ""
-                    val label = if (moveRole.isNotEmpty()) { if (moveRole == "source") "重命名源（移走此路径）" else "重命名目标（保留同一原字节）" } else if (encoded) when (copyDirection) { "forward" -> "复制原字节为新文件"; "revert" -> "删除原复制的新文件"; else -> "原字节覆盖（非文字）" } else when (file.optString("action")) { "create" -> "创建"; "delete" -> "删除"; else -> "精确修改" }
+                    val label = if (moveRole.isNotEmpty()) { if (moveRole == "source") "重命名源（移走此路径）" else "重命名目标（保留同一原字节）" } else if (encoded) when (copyDirection) { "forward" -> "复制原字节为新文件"; "revert" -> "删除原复制的新文件"; else -> "原字节覆盖（非文字）" } else when (file.optString("action")) { "mkdir" -> "创建目录（非空文件）"; "create" -> "创建"; "delete" -> "删除"; else -> "精确修改" }
                     WorkbenchCaption("$label ${file.optString("path")}")
+                    if (file.optString("action") == "mkdir") WorkbenchCaption("目录有独立元数据核对；只有明确createParents才建缺失父目录。已存在目录不重写；部分创建或未知不自动回滚、重试或rmdir。不自动回写正式版本库。")
                     if (moveRole == "source") WorkbenchCaption("这是当前副本内重命名，源路径会消失；目标须不存在，父目录须已有。不自动改正式版本库，也不宣称跨路径原子CAS；未知只核对原操作，不重放。")
                     if (encoded && moveRole.isEmpty()) WorkbenchCaption(when (copyDirection) {
                         "forward" -> "只复制原清单中固定源文件的完整字节，目标必须不存在；请核对copiedFrom路径、大小与原SHA。支持二进制，不转换原件；不含运行、导出或分享授权。"
@@ -306,7 +307,7 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
                         else -> "仅列明的等长hex范围，可能破坏文件格式；请展开核对旧/新字节、byteOffset和原SHA。不插入、扩展或截断；不是执行许可。"
                     })
                 }
-                if (step?.optString("localCommand") == "patchFiles") WorkbenchCaption("文件逐个保存；中途失败时，已保存的文件不会自动回滚。后续修改与撤销冲突时会保留新内容。")
+                if (step?.optString("localCommand") == "patchFiles" && payload.optJSONArray("files").objects().none { it.optString("action") == "mkdir" }) WorkbenchCaption("文件逐个保存；中途失败时，已保存的文件不会自动回滚。后续修改与撤销冲突时会保留新内容。")
                 if (payload.has("executable")) SelectionContainer { Text(payload.optString("executable") + " " + payload.optJSONArray("argv"), fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
                 TextButton(onClick = { reviewed = !reviewed }) { Text(if (reviewed) "收起具体内容" else "核对具体文件与参数") }
                 if (reviewed) {
