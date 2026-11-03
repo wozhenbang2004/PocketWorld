@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
@@ -47,8 +46,6 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,7 +54,6 @@ import java.util.Date
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import org.json.JSONObject
-import dev.pocketengine.core.ModelConfig
 import dev.pocketengine.features.conversation.ConversationHistory
 import dev.pocketengine.features.conversation.TaskPresentation
 
@@ -916,30 +912,11 @@ private fun FileEditor(state: PocketUiState, controller: PocketWorldController) 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsSheet(state: PocketUiState, controller: PocketWorldController, close: () -> Unit, connections: () -> Unit) {
-    var url by remember(state.baseUrl) { mutableStateOf(state.baseUrl) }
-    var model by remember(state.modelName) { mutableStateOf(if (state.modelRoute == "account") "" else state.modelName) }
-    var key by remember { mutableStateOf("") }
-    LaunchedEffect(state.modelSavedRevision) { if (state.modelSavedRevision > 0) key = "" }
-    var screenshots by remember(state.screenshots) { mutableStateOf(state.screenshots) }
-    var provider by remember(state.modelProvider) { mutableStateOf(if (state.modelRoute == "account") "openai_chat" else state.modelProvider) }
-    var supportsImageInput by remember(provider, url, model, state.modelProvider, state.baseUrl, state.modelName, state.supportsImageInput, state.modelRoute) { mutableStateOf(state.modelRoute != "account" && provider == state.modelProvider && url.trim() == state.baseUrl && model.trim() == state.modelName && state.supportsImageInput) }
-    var editApi by remember(state.modelRoute) { mutableStateOf(false) }
     var settingsSection by rememberSaveable { mutableIntStateOf(0) }
     val modelScroll = rememberScrollState()
     val phoneScroll = rememberScrollState()
     val connectionsScroll = rememberScrollState()
     val settingsScroll = when (settingsSection) { 1 -> phoneScroll; 2 -> connectionsScroll; else -> modelScroll }
-    var providerOptions by remember { mutableStateOf(false) }
-    var outputTokens by remember(state.maxOutputTokens) { mutableStateOf(state.maxOutputTokens.toString()) }
-    val configuredOutput = if (provider == "openai_chat") state.maxOutputTokens else outputTokens.toIntOrNull() ?: 0
-    val requiredCleartextConsent = remember(provider, url) { try { ModelConfig.cleartextConsentFor(provider, url) } catch (_: Exception) { null } }
-    var acceptedCleartextConsent by remember { mutableStateOf(state.cleartextConsent.takeIf { it == requiredCleartextConsent }.orEmpty()) }
-    var previousConsentTarget by remember { mutableStateOf(requiredCleartextConsent) }
-    var cleartextDialog by remember { mutableStateOf(false) }
-    LaunchedEffect(provider, requiredCleartextConsent) { if (previousConsentTarget != requiredCleartextConsent) { acceptedCleartextConsent = ""; previousConsentTarget = requiredCleartextConsent } }
-    val transportConfirmed = requiredCleartextConsent.isNullOrEmpty() || acceptedCleartextConsent == requiredCleartextConsent
-    val consentPayload = acceptedCleartextConsent.takeIf { !requiredCleartextConsent.isNullOrEmpty() && it == requiredCleartextConsent }.orEmpty()
-    val providers = mapOf("openai_chat" to "OpenAI Chat Completions", "openai_responses" to "OpenAI Responses", "anthropic" to "Anthropic Messages", "gemini" to "Gemini")
     ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = close,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = PageSurface) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.94f).navigationBarsPadding().imePadding()) {
@@ -956,9 +933,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                 if (settingsSection == 0) SettingsSurface(state.modelName.ifBlank { "选择模型" }, if (state.modelRoute == "account") "ChatGPT 套餐" else "API 连接") {
                     SettingEntry("ChatGPT 账号与模型目录", "连接账号，选择可用模型") { controller.openConnection("accounts") }
                     HorizontalDivider(color = Line)
-                    SettingEntry("API 模型目录", "核对能力与请求参数") { controller.openConnection("models") }
-                    HorizontalDivider(color = Line)
-                    SettingEntry(if (editApi) "收起连接编辑" else "编辑 API 连接", "接口地址、密钥与输入能力") { editApi = !editApi }
+                    SettingEntry("API 连接与模型目录", "按原连接编辑参数、截图发送与输入能力") { controller.openConnection("models") }
             if (state.modelRoute == "account") {
                 Text("当前账号模型：" + state.modelName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
                 Text("支持文字与工具调用，暂不支持截图、音频和视频。账号刷新、停用或退出后可能需要重新选择目录模型；不会自动换号、降级或重试付费请求。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp))
@@ -966,40 +941,6 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                 state.error?.let { Text(it, color = Danger, fontSize = 12.sp) }
             }
                 }
-            if (settingsSection == 0 && editApi) SettingsSurface("API 模型配置", "连接参数、输入能力与回复预算") {
-            if (state.modelRoute == "account") Text("保存后会明确切换到这个 API 连接；测试连接不会改变当前账号模型。", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
-
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Soft)
-                .clickable { providerOptions = !providerOptions }.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("协议", fontSize = 12.sp, color = SecondaryInk)
-                    Text(providers[provider].orEmpty(), fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
-                }
-                Text(if (providerOptions) "⌃" else "⌄", fontSize = 20.sp, color = SecondaryInk)
-            }
-            if (providerOptions) Column(Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp)).background(Soft)) {
-                providers.forEach { (id, title) -> Row(Modifier.fillMaxWidth().clickable { if (provider != id) acceptedCleartextConsent = ""; provider = id; providerOptions = false }.padding(end = 12.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(provider == id, { if (provider != id) acceptedCleartextConsent = ""; provider = id; providerOptions = false }); Text(title, fontSize = 14.sp) } }
-            }
-            OutlinedTextField(url, { nextUrl -> val nextConsent = try { ModelConfig.cleartextConsentFor(provider, nextUrl) } catch (_: Exception) { null }; if (nextConsent != requiredCleartextConsent) acceptedCleartextConsent = ""; url = nextUrl }, label = { Text("接口地址") }, modifier = Modifier.fillMaxWidth().padding(top = 14.dp), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), shape = RoundedCornerShape(12.dp), colors = settingsFieldColors())
-            if (!requiredCleartextConsent.isNullOrEmpty()) {
-                Text("远端 HTTP 会明文发送 API 凭据、屏幕截图和文本，网络中的第三方可能读取或篡改。", color = Danger, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 10.dp))
-                if (transportConfirmed) Text("已明确允许当前协议与地址", fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(top = 6.dp))
-                else OutlinedButton(onClick = { cleartextDialog = true }, modifier = Modifier.padding(top = 8.dp)) { Text("查看并确认这个明文连接", fontSize = 12.sp) }
-            }
-            OutlinedTextField(model, { model = it }, label = { Text("模型名称") }, modifier = Modifier.fillMaxWidth().padding(top = 13.dp), singleLine = true, shape = RoundedCornerShape(12.dp), colors = settingsFieldColors())
-            OutlinedTextField(key, { key = it }, label = { Text("API 密钥") }, modifier = Modifier.fillMaxWidth().padding(top = 13.dp), singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), shape = RoundedCornerShape(12.dp), colors = settingsFieldColors())
-            Text(if (state.hasApiKey && provider == state.modelProvider && sameOrigin(url, state.baseUrl)) "此协议与服务已保存密钥，留空可继续使用。" else "填写此协议与服务的密钥；更换协议不沿用旧密钥。", fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(top = 7.dp))
-            HorizontalDivider(Modifier.padding(top = 18.dp), color = Line)
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("此模型支持图像输入", fontSize = 14.sp); Text(if (state.modelCatalogEnabled || state.modelRoute == "account") "请在 API 模型目录页核对精确能力与机主覆盖。" else "这是你的能力配置，不代表已实测效果。更换协议、地址或模型需重新确认。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp) }; Checkbox(supportsImageInput, { supportsImageInput = it }, enabled = !state.modelCatalogEnabled && state.modelRoute != "account") }
-            HorizontalDivider(Modifier.padding(top = 18.dp), color = Line)
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许按需发送截图", fontSize = 14.sp); Text("优先读取节点，节点不足且已配置图像能力时才发送；可见文字也会发送。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp) }; Switch(screenshots, { screenshots = it }) }
-            if (!supportsImageInput) Text("当前模型不接收像素；如果允许本地取图和 OCR，仍可发送有来源的识别文字。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 7.dp))
-            OutlinedTextField(outputTokens, { outputTokens = it.filter(Char::isDigit).take(5) }, label = { Text("每次回复的输出上限") }, supportingText = { Text(if (state.modelCatalogEnabled) "在模型目录页选择输出参数字段与预算；发送前会核对已知容量" else if (provider == "openai_chat") "兼容 Chat 协议的输出限制由服务端配置" else "128–32768 tokens", fontSize = 12.sp) }, enabled = provider != "openai_chat", singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth().padding(top = 12.dp), shape = RoundedCornerShape(12.dp), colors = settingsFieldColors())
-            FlowRow(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { OutlinedButton(onClick = { controller.testModel(url, model, key, screenshots, provider, configuredOutput, consentPayload) }, enabled = !state.modelTesting && configuredOutput in 128..32768 && transportConfirmed) { Text(if (state.modelTesting) "测试中" else "测试连接") }; Button(onClick = { controller.saveModel(url, model, key, screenshots, provider, configuredOutput, consentPayload, supportsImageInput) }, enabled = !state.modelSaving && configuredOutput in 128..32768 && transportConfirmed) { Text(if (state.modelSaving) "保存中" else if (state.modelRoute == "account") "保存并切换 API 模型" else "保存模型") } }
-            state.modelTest?.let { Text(it, fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(top = 10.dp)) }
-            state.modelTestTaskId?.let { id -> TextButton(onClick = { controller.focusTask(id) }) { Text("查看这次连接测试用量") } }
-            state.error?.let { Text(it, fontSize = 12.sp, lineHeight = 20.sp, color = Danger, modifier = Modifier.padding(top = 10.dp)) }
-            }
                 if (settingsSection == 1) SettingsSurface("任务偏好", "回复详略与普通操作节奏") {
                     AgentPreferencesControls(state.agentPreferences, state.agentPreferencesSaving, state.agentPreferencesError, controller::saveAgentPreferences)
                 }
@@ -1010,7 +951,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地按需取图", fontSize = 14.sp); Text("独立于云截图发送；关闭后不会为 OCR 采集像素。更改用于后续运行。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localCaptureAllowed, { controller.saveLocalObservation(it, state.localOcrAllowed) }) }
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地 OCR", fontSize = 14.sp); Text("优先本地识字。像素不外发，但识别文字会作为有来源的上下文发送给所选推理服务。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localOcrAllowed, { controller.saveLocalObservation(state.localCaptureAllowed, it) }) }
                     BackgroundConnectionSummary(state, controller, compact = true)
-                    SettingEntry("视觉补充", if (state.screenshots) "已允许按需发送截图，优先读取结构树" else "未允许发送截图，可在模型连接中调整") { settingsSection = 0; editApi = true }
+                    SettingEntry("视觉补充", if (state.screenshots) "当前模型允许按需发送截图；在原 API 连接中调整" else "当前模型未允许发送截图；在原 API 连接中调整") { controller.openConnection("models") }
                     HorizontalDivider(color = Line)
                     SettingEntry("其他应用通知预览", "本机选择应用并复核；不会自动发送模型", { close(); controller.openNotificationPreviews() })
                     HorizontalDivider(color = Line)
@@ -1037,7 +978,6 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
             }
         }
     }
-    if (cleartextDialog && !requiredCleartextConsent.isNullOrEmpty()) AlertDialog(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), tonalElevation = 0.dp, onDismissRequest = { cleartextDialog = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("允许这个明文模型连接？") }, text = { Text("协议：" + providers[provider].orEmpty() + "\n地址：" + requiredCleartextConsent.substringAfter('|') + "\n\nAPI 凭据、屏幕截图和文本将通过 HTTP 明文传输。更换协议或地址后需要重新确认。") }, confirmButton = { Button(onClick = { acceptedCleartextConsent = requiredCleartextConsent; cleartextDialog = false }) { Text("允许此协议与地址") } }, dismissButton = { TextButton(onClick = { cleartextDialog = false }) { Text("取消") } })
 }
 
 // Layout adaptation of the retained Affect Integration Settings sections and action footer
@@ -1052,12 +992,6 @@ internal fun SettingsSurface(title: String, detail: String, content: @Composable
         content()
     }
 }
-
-@Composable
-private fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedBorderColor = Ink, unfocusedBorderColor = Line,
-    focusedContainerColor = MaterialTheme.colorScheme.surface, unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-    disabledContainerColor = Soft, disabledBorderColor = Line)
 
 @Composable
 private fun SettingEntry(title: String, detail: String, open: () -> Unit) {
@@ -1093,9 +1027,3 @@ private fun TaskImage(task: UiTask) { val url = task.raw.optJSONObject("evidence
 @Composable
 private fun LineIcon(kind: Int) { val ink = Ink; Canvas(Modifier.size(22.dp)) { val w = size.width; val h = size.height; val stroke = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round); when (kind) { 0 -> { val p = Path().apply { moveTo(w * .14f, h * .15f); lineTo(w * .86f, h * .15f); lineTo(w * .86f, h * .72f); lineTo(w * .43f, h * .72f); lineTo(w * .22f, h * .9f); lineTo(w * .22f, h * .72f); lineTo(w * .14f, h * .72f); close() }; drawPath(p, ink, style = stroke) }; 1 -> { drawRoundRect(ink, topLeft = androidx.compose.ui.geometry.Offset(w * .2f, h * .13f), size = androidx.compose.ui.geometry.Size(w * .6f, h * .75f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()), style = stroke); val p = Path().apply { moveTo(w * .34f, h * .5f); lineTo(w * .46f, h * .62f); lineTo(w * .68f, h * .37f) }; drawPath(p, ink, style = stroke) }; 2 -> { val p = Path().apply { moveTo(w * .12f, h * .3f); lineTo(w * .4f, h * .3f); lineTo(w * .48f, h * .2f); lineTo(w * .86f, h * .2f); lineTo(w * .86f, h * .82f); lineTo(w * .12f, h * .82f); close() }; drawPath(p, ink, style = stroke) }; else -> { for (y in listOf(.25f, .5f, .75f)) drawLine(ink, androidx.compose.ui.geometry.Offset(w * .15f, h * y), androidx.compose.ui.geometry.Offset(w * .85f, h * y), strokeWidth = 1.7.dp.toPx(), cap = StrokeCap.Round) } } } }
 private fun date(value: Long): String = if (value <= 0) "" else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(value))
-private fun sameOrigin(first: String, second: String): Boolean = try {
-    val a = java.net.URI(first)
-    val b = java.net.URI(second)
-    fun port(uri: java.net.URI): Int = if (uri.port >= 0) uri.port else if (uri.scheme.equals("https", true)) 443 else 80
-    a.host != null && b.host != null && a.scheme.equals(b.scheme, true) && a.host.equals(b.host, true) && port(a) == port(b)
-} catch (_: Exception) { false }

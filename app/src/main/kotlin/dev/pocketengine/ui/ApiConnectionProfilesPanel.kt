@@ -2,12 +2,14 @@ package dev.pocketengine.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.pocketengine.core.ModelConfig
 import org.json.JSONObject
@@ -46,8 +48,10 @@ internal fun ApiConnectionProfilesPanel(snapshot: JSONObject, busy: Boolean, ope
     TextButton(onClick = { adding = true }, enabled = !busy && (rows?.length() ?: 0) < snapshot.optInt("maximumConnections", 32)) { Text("新增 API 连接") }
     if (adding || editing != null) {
         val original = editing
-        ApiConnectionEditor(original, busy, operationError, { adding = false; editing = null }) { name, values ->
-            save(original?.optString("id").orEmpty(), original?.optLong("revision") ?: 0L, name, values) { adding = false; editing = null }
+        key(original?.optString("id"), original?.optLong("revision")) {
+            ApiConnectionEditor(original, busy, operationError, { adding = false; editing = null }) { name, values ->
+                save(original?.optString("id").orEmpty(), original?.optLong("revision") ?: 0L, name, values) { adding = false; editing = null }
+            }
         }
     }
 }
@@ -59,6 +63,12 @@ private fun ApiConnectionEditor(original: JSONObject?, busy: Boolean, operationE
     var provider by remember { mutableStateOf(config.optString("provider", ModelConfig.DEFAULT_PROVIDER)) }
     var url by remember { mutableStateOf(config.optString("baseUrl")) }
     var model by remember { mutableStateOf(config.optString("model")) }
+    var screenshots by remember { mutableStateOf(config.optBoolean("sendScreenshots", true)) }
+    val catalogEnabled = original?.optBoolean("catalogEnabled") == true
+    var supportsImageInput by remember(provider, url, model) { mutableStateOf(!catalogEnabled && provider == config.optString("provider", ModelConfig.DEFAULT_PROVIDER)
+        && url.trim() == config.optString("baseUrl") && model.trim() == config.optString("model") && config.optBoolean("supportsImageInput")) }
+    var outputTokens by remember { mutableStateOf(config.optInt("maxOutputTokens", 4096).toString()) }
+    val configuredOutput = if (provider == "openai_chat") config.optInt("maxOutputTokens", 4096) else outputTokens.toIntOrNull() ?: 0
     var key by remember { mutableStateOf("") }
     var clearKey by remember { mutableStateOf(false) }
     var cleartext by remember { mutableStateOf(false) }
@@ -77,14 +87,23 @@ private fun ApiConnectionEditor(original: JSONObject?, busy: Boolean, operationE
                 supportingText = { Text(if (original?.optBoolean("hasApiKey") == true) "留空仅保留同协议、同 origin 的原密钥；改 origin 不会迁移原密钥。" else "留空只适用于无需 key 的可信接口；不会从其他连接借用密钥。") })
             if (original?.optBoolean("hasApiKey") == true) Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(clearKey, { clearKey = it; if (it) key = "" }); Text("不再使用此连接的 API key（移除引用）") }
             if (remoteHttp.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(cleartext, { cleartext = it }); Text("我确认此 HTTP 目标会明文传输凭据与请求内容，建议改用 HTTPS。", style = MaterialTheme.typography.bodySmall) }
+            if (!catalogEnabled) Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(supportsImageInput, { supportsImageInput = it }); Text("手动声明此模型支持图像输入", style = MaterialTheme.typography.bodyMedium) }
+            Text(if (catalogEnabled) "请在原 API 模型目录核对精确能力与机主覆盖。" else "这是你的能力配置，不代表已实测效果。更换协议、地址或模型需重新确认。", style = MaterialTheme.typography.bodySmall)
+            Row(verticalAlignment = Alignment.CenterVertically) { Switch(screenshots, { screenshots = it }); Text("允许按需发送截图", style = MaterialTheme.typography.bodyMedium) }
+            Text("仅此连接：优先读取节点，节点不足且已配置图像能力时才发送；与本地取图和 OCR 授权分别保存，可见文字也会发送。", style = MaterialTheme.typography.bodySmall)
+            OutlinedTextField(outputTokens, { outputTokens = it.filter(Char::isDigit).take(5) }, label = { Text("每次回复的输出上限") },
+                supportingText = { Text(if (catalogEnabled) "在模型目录页选择输出参数字段与预算；发送前会核对已知容量" else if (provider == "openai_chat") "兼容 Chat 协议的输出限制由服务端配置" else "128–32768 tokens") },
+                enabled = provider != "openai_chat", singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             if (original?.optBoolean("catalogEnabled") == true) Text("保留严格目录核对。更改 key、协议或地址将使旧目录能力失效，需重新刷新，不会退回未经目录核对的模式。", style = MaterialTheme.typography.bodySmall)
             (problem ?: operationError)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
-    }, confirmButton = { TextButton(enabled = !busy, onClick = {
+    }, confirmButton = { TextButton(enabled = !busy && configuredOutput in 128..32768, onClick = {
         if (name.isBlank() || url.isBlank() || model.isBlank()) { problem = "请填写连接名称、接口地址与模型 ID。"; return@TextButton }
         if (remoteHttp.isNotEmpty() && !cleartext) { problem = "请明确确认此 HTTP 目标，或改用 HTTPS。"; return@TextButton }
         problem = null
-        save(name.trim(), JSONObject().put("provider", provider).put("baseUrl", url.trim()).put("model", model.trim()).put("apiKey", key).put("clearApiKey", clearKey)
-            .put("cleartextConsent", if (cleartext) remoteHttp else ""))
+        val values = JSONObject().put("provider", provider).put("baseUrl", url.trim()).put("model", model.trim()).put("apiKey", key).put("clearApiKey", clearKey)
+            .put("cleartextConsent", if (cleartext) remoteHttp else "").put("sendScreenshots", screenshots).put("maxOutputTokens", configuredOutput)
+        if (!catalogEnabled) values.put("supportsImageInput", supportsImageInput)
+        save(name.trim(), values)
     }) { Text("保存连接") } }, dismissButton = { TextButton(onClick = dismiss, enabled = !busy) { Text("保留原配置") } })
 }

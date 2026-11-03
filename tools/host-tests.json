@@ -55,6 +55,12 @@
     "robolectric": true,
     "description": "Original SettingsStore/SharedPreferences explicit MAIN replacements, preserved groups and other purposes, frozen API admission bindings, profile and legacy selection paths, single-commit service selection and before/after/throwing persistence-failure fences. No live provider, Android device or visual acceptance."
   },
+  "settings-profile-edit-target": {
+    "class": "dev.pocketengine.store.SettingsProfileEditTargetTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original exact profile editor service/settings transactions: retained A versus active MAIN B with the same model name, frozen id/revision, changed selection, CAS refusal, per-connection screenshot/image/output preferences, credential origin/protocol isolation and previous admission bindings. No mounted Compose, provider request, Android device or visual acceptance."
+  },
   "mika-issue-integration": {
     "class": "dev.pocketengine.features.assistant.OwnerSourceProjectionNativeTest",
     "additionalClasses": [
