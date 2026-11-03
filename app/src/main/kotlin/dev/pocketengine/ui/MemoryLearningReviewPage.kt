@@ -23,7 +23,7 @@ import org.json.JSONObject
 internal object MemoryLearningReviewGuard {
     private val draftFields = listOf("text", "layer", "reason", "applicability", "confidence")
     private val terminal = setOf("accepted", "rejected", "invalidated")
-    private val mutations = setOf("acceptCandidate", "editCandidate", "rejectCandidate", "archiveCandidates", "reconsiderRejected", "forgetReviewed", "proposeConsolidation")
+    private val mutations = setOf("acceptCandidate", "editCandidate", "reviewCandidateAssertion", "rejectCandidate", "archiveCandidates", "reconsiderRejected", "forgetReviewed", "proposeConsolidation")
 
     @JvmStatic fun canSubmit(activeRequestId: String?, pending: Set<String>): Boolean =
         activeRequestId == null && pending.none { it in mutations }
@@ -147,8 +147,13 @@ internal object MemoryLearningReviewGuard {
         return JSONObject().put("selections", refs)
     }
 
-    @JvmStatic fun validRecordRefs(refs: JSONArray?): Boolean {
-        if (refs == null || refs.length() !in 2..20) return false
+    @JvmStatic fun validRecordRefs(refs: JSONArray?): Boolean = validParents(refs, 2)
+
+    @JvmStatic fun validCandidateParents(candidate: JSONObject): Boolean =
+        validParents(candidate.optJSONArray("recordRefs"), if (candidate.optString("formation") == "assertion_review") 1 else 2)
+
+    private fun validParents(refs: JSONArray?, minimum: Int): Boolean {
+        if (refs == null || refs.length() !in minimum..20) return false
         val ids = mutableSetOf<String>()
         return (0 until refs.length()).all { index -> refs.optJSONObject(index)?.let {
             it.opt("id") is String && it.optString("id").isNotBlank() && revision(it) > 0 && ids.add(it.optString("id"))
@@ -156,7 +161,7 @@ internal object MemoryLearningReviewGuard {
     }
 
     @JvmStatic fun hasReviewEvidence(candidate: JSONObject): Boolean =
-        (candidate.optJSONArray("sourceRefs")?.length() ?: 0) > 0 || validRecordRefs(candidate.optJSONArray("recordRefs"))
+        (candidate.optJSONArray("sourceRefs")?.length() ?: 0) > 0 || validCandidateParents(candidate)
 
     @JvmStatic fun sameRecordRefs(expected: JSONArray?, actual: JSONArray?): Boolean {
         if (!validRecordRefs(expected) || !validRecordRefs(actual) || expected!!.length() != actual!!.length()) return false
@@ -179,7 +184,7 @@ internal object MemoryLearningReviewGuard {
     @JvmStatic fun parentRecord(requestId: String?, reviewedCandidate: JSONObject, currentCandidate: JSONObject?, reference: JSONObject, envelope: JSONObject?): JSONObject? {
         if (!sameReview(reviewedCandidate, currentCandidate)) return null
         val refs = reviewedCandidate.optJSONArray("recordRefs") ?: return null
-        if (!validRecordRefs(refs) || (0 until refs.length()).none { sameReview(reference, refs.optJSONObject(it)) }) return null
+        if (!validCandidateParents(reviewedCandidate) || (0 until refs.length()).none { sameReview(reference, refs.optJSONObject(it)) }) return null
         return record(requestId, reference.optString("id"), envelope)?.takeIf { revision(it) == revision(reference) }
     }
 
@@ -260,6 +265,7 @@ internal fun MemoryLearningReviewPage(
     var showCapacity by remember { mutableStateOf(false) }
     var showRationale by remember(selectedId) { mutableStateOf(false) }
     var action by remember { mutableStateOf<MemoryLearningAction?>(null) }
+    var assertionReview by remember { mutableStateOf<JSONObject?>(null) }
     var editing by remember { mutableStateOf<JSONObject?>(null) }
     var editorText by remember { mutableStateOf("") }
     var editorLayer by remember { mutableStateOf("fact") }
@@ -271,7 +277,7 @@ internal fun MemoryLearningReviewPage(
     var mutation by remember { mutableStateOf<MemoryLearningMutation?>(null) }
     var localError by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
-    val mutationCommands = setOf("acceptCandidate", "editCandidate", "rejectCandidate", "archiveCandidates", "reconsiderRejected", "forgetReviewed", "proposeConsolidation")
+    val mutationCommands = setOf("acceptCandidate", "editCandidate", "reviewCandidateAssertion", "rejectCandidate", "archiveCandidates", "reconsiderRejected", "forgetReviewed", "proposeConsolidation")
     val reviewBusy = mutation != null || pendingCommands.any { it in mutationCommands && it != "proposeConsolidation" }
     val consolidationBusy = consolidation != null || pendingCommands.any { it == "proposeConsolidation" || it == "cancelConsolidation" }
     val busy = reviewBusy || consolidationBusy
@@ -315,6 +321,7 @@ internal fun MemoryLearningReviewPage(
             consolidationBusy -> stopAndLeave = true
             parentContext != null -> { parentContext = null; parentRead = null; parentRecord = null }
             confirmConsolidation != null -> confirmConsolidation = null
+            assertionReview != null -> assertionReview = null
             action != null -> action = null
             editing != null -> discardEditor = true
             selectedId != null -> { onDismissSource(); selectedId = null; detail = null; formalRecord = null; detailRead = null; recordRead = null; localError = null }
@@ -596,10 +603,10 @@ internal fun MemoryLearningReviewPage(
                                 Text("${index + 1}. " + (when (ref.optString("kind")) { "task_evidence" -> "任务证据"; "workspace_file" -> "原工作区文件范围"; else -> "对话消息" }) + " · 版本 ${ref.optLong("revision")}\n" + ref.optString("sourceId"), modifier = Modifier.fillMaxWidth(), fontSize = 13.sp, lineHeight = 22.sp)
                             }
                         }
-                        val parentRefs = if (MemoryLearningReviewGuard.validRecordRefs(current.optJSONArray("recordRefs"))) memoryLearningObjects(current.optJSONArray("recordRefs")) else emptyList()
+                        val parentRefs = if (MemoryLearningReviewGuard.validCandidateParents(current)) memoryLearningObjects(current.optJSONArray("recordRefs")) else emptyList()
                         if (parentRefs.isNotEmpty()) {
-                            Text("归纳依据 · 父记忆的精确版本", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Ink)
-                            MemoryLearningCaption("父记忆是归纳依据，不是对话或任务来源的替身。点开核对正文与它自己的真实来源；不会用更新版本冒充这一版。")
+                            Text(if (current.optString("formation") == "assertion_review") "身份依据 · 父记忆的精确版本" else "归纳依据 · 父记忆的精确版本", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Ink)
+                            MemoryLearningCaption("点开核对所选依据的正文与它自己的真实来源。这里保留所选的确切版本；记忆正文不替代原对话或任务证据。")
                             parentRefs.forEachIndexed { index, reference ->
                                 TextButton(onClick = { openParent(current, reference) }, enabled = canAct, modifier = Modifier.fillMaxWidth()) {
                                     Text("${index + 1}. 父记忆 · 版本 ${MemoryLearningReviewGuard.revision(reference)}\n" + reference.optString("id"), modifier = Modifier.fillMaxWidth(), fontSize = 13.sp, lineHeight = 22.sp)
@@ -609,6 +616,7 @@ internal fun MemoryLearningReviewPage(
                         if (!MemoryLearningReviewGuard.hasReviewEvidence(current)) MemoryLearningCaption("缺少可核对的来源引用，不能凭空补出证据。")
                         if (detailStale) MemoryLearningCaption("详情已变化或操作结果待核对。请刷新后重新选择，不沿用旧确认。")
                         if (status == "pending") {
+                            if (!projectNamespace) OutlinedButton(onClick = { assertionReview = JSONObject(current.toString()) }, enabled = canAct && MemoryLearningReviewGuard.hasReviewEvidence(current), modifier = Modifier.fillMaxWidth()) { Text("核对主体与关系…") }
                             Button(onClick = { action = MemoryLearningAction("acceptCandidate", JSONObject(current.toString())) }, enabled = canAct && MemoryLearningReviewGuard.hasReviewEvidence(current), shape = Rounded, modifier = Modifier.fillMaxWidth()) { Text(if (current.has("appKnowledge")) "接受并试用 App 修订" else "接受为普通记忆") }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(onClick = { startEdit(current) }, enabled = canAct) { Text("先编辑") }
@@ -621,6 +629,7 @@ internal fun MemoryLearningReviewPage(
                             formalRecord?.let { record ->
                                 Text("当前正式记忆 · 版本 ${MemoryLearningReviewGuard.revision(record)}", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                                 SelectionContainer { Text(record.optString("text"), color = Ink, fontSize = 14.sp, lineHeight = 24.sp) }
+                                MemoryLearningRationaleContent(record)
                                 TextButton(onClick = { action = MemoryLearningAction("forgetReviewed", JSONObject(record.toString())) }, enabled = canAct && recordRead == null) { Text("遗忘这条正式记忆…", color = Danger) }
                             }
                         }
@@ -644,6 +653,14 @@ internal fun MemoryLearningReviewPage(
                     }
                 }
             }
+        }
+    }
+    assertionReview?.let { frozen ->
+        key(frozen.optString("id"), MemoryLearningReviewGuard.revision(frozen)) {
+            MemoryAssertionReviewDialog(frozen, detail, responses, pendingCommands,
+                !projectNamespace && !detailStale && selectedId == frozen.optString("id"), onRequest,
+                { assertionReview = null; refresh(); message = "主体与关系已保存到待审候选，请重新核对后再接受。" },
+                { assertionReview = null })
         }
     }
     confirmConsolidation?.let { frozen ->
@@ -680,6 +697,7 @@ internal fun MemoryLearningReviewPage(
                     if (matches) parentRecord?.let { record ->
                         MemoryLearningCaption(memoryLearningLayer(record.optString("layer")) + if (record.optBoolean("core")) " · 已选为核心记忆" else " · 普通记忆")
                         SelectionContainer { Text(record.optString("text"), color = Ink, fontSize = 16.sp, lineHeight = 27.sp) }
+                        MemoryLearningRationaleContent(record)
                         if (record.opt("active") != true) MemoryLearningCaption("这条父记忆目前已失效，不能把它当作有效的新依据。")
                         val sourceRefs = memoryLearningObjects(record.optJSONArray("sourceRefs"))
                         Text("这条父记忆的来源", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Ink)
@@ -737,6 +755,16 @@ private fun memoryLearningConsequence(command: String): String = when (command) 
     "reconsiderRejected" -> "只将这一条完整拒绝项重新放回待审阅。不会自动接受，也不解除其他拒绝项或来源遗忘屏障。"
     "archiveCandidates" -> "永久移除这条终态候选的正文和拒绝原因，释放完整候选容量。接受过的正式记忆不会删除；必要的去重标记仍保留。没有正文的归档不能直接恢复。"
     else -> "删除这条正式记忆、依赖它的记忆，以及使用同一被遗忘证据的相关记忆。旧来源版本会被阻止自动重新导入，相关候选会失效。此操作不可在此撤销；不会删除原始对话或任务证据。"
+}
+@Composable internal fun MemoryLearningRationaleContent(record: JSONObject) {
+    val rationale = record.optJSONObject("learningRationale") ?: return
+    var expanded by remember(record.optString("id"), record.optLong("revision")) { mutableStateOf(false) }
+    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起提炼说明" else "查看当时的提炼说明…", color = SecondaryInk) }
+    if (expanded) {
+        MemoryLearningCaption("这是当时审阅候选的说明，未独立核实；不是主人作决定的原因，也不是方法有效的证明。")
+        SelectionContainer { Text(rationale.optString("reason"), color = SecondaryInk, fontSize = 13.sp, lineHeight = 23.sp) }
+        MemoryLearningCaption("原候选版本 ${rationale.optLong("candidateRevision")} · 随这条记忆保留；内容纠正后不沿用旧说明。")
+    }
 }
 @Composable private fun MemoryLearningCaption(value: String) { Text(value, color = SecondaryInk, fontSize = 13.sp, lineHeight = 23.sp) }
 @Composable private fun MemoryLearningRow(value: JSONObject, enabled: Boolean, open: () -> Unit) {

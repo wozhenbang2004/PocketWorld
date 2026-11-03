@@ -21,6 +21,10 @@ public final class AutomationModule implements EngineModule {
     private static final Object RESTORE_LOCK=new Object();
     private static boolean restored;
     private static final AutomationHostGate HOST_GATE=new AutomationHostGate();
+    // Readback ordering only. Never persisted or consulted by scheduling/admission/authorization.
+    private static final Object READBACK_LOCK=new Object();
+    private static final String OBSERVATION_GENERATION=java.util.UUID.randomUUID().toString();
+    private static long observationSequence;
     private static final Object SCHEDULE_LOCK=new Object();
     private static long scheduleGeneration;
     private static long lastHostNext=-1;
@@ -60,9 +64,10 @@ public final class AutomationModule implements EngineModule {
     @Override public String id(){return "automation";}
     @Override public JSONObject snapshot()throws Exception {
         reconcileNativeScheduleSources();
+        JSONObject projection=ruleProjection();
         NotificationManager manager=context.android.getSystemService(NotificationManager.class);
         NotificationChannel channel=manager==null?null:manager.getNotificationChannel(CHANNEL);
-        return new JSONObject().put("available",true).put("rules",book.rules()).put("nextAt",book.nextAt())
+        return projection.put("available",true)
                 .put("notificationsEnabled",manager!=null&&manager.areNotificationsEnabled()&&(channel==null||channel.getImportance()!=NotificationManager.IMPORTANCE_NONE))
                 .put("timing","inexact_best_effort").put("autonomousPhoneExecution",false)
                 .put("commitmentsSupported",true).put("commitmentFollowUpMode","read_only_candidates")
@@ -72,11 +77,23 @@ public final class AutomationModule implements EngineModule {
                 .put("executionPlansSupported",true).put("executionPlanControl","native_owner_review_only").put("executionPlanTaskAuthority","existing_TaskStore")
                 .put("existingRemoteCommandWaitSupported",true).put("remoteWaitResultScope","exact_original_command_exit_zero_only")
                 .put("runConditionsSupported",true).put("conditionSnapshot","native_read_only").put("conditionRecheckMillis",AutomationConditions.RECHECK_MILLIS)
-                .put("scheduleTypes",new JSONArray(new String[]{"once","interval","daily","weekly","monthly"})).put("schedulePreview","native_read_only")
+                .put("scheduleTypes",new JSONArray(new String[]{"once","interval","daily","weekly","monthly","cron"})).put("schedulePreview","native_read_only")
+                .put("scheduleVersions",new JSONArray().put(AutomationSchedule.SCHEDULE_VERSION))
+                .put("cronSubset",new JSONObject().put("fields","minute hour day month weekday").put("sunday",0).put("localTimeResolution","minute")
+                        .put("operators",new JSONArray(new String[]{"*","number","ascending_range","comma_list","*/step","range/step"}))
+                        .put("dayAndWeekday","at_least_one_unrestricted").put("nextSearchYears",AutomationSchedule.CRON_LOOKAHEAD_YEARS))
                 .put("followUpDeliveryPolicySupported",true).put("followUpDeliveryDefault","disabled").put("followUpDeliveryDriver","host_only")
                 .put("commands",new JSONArray(new String[]{"list","save","setEnabled","delete","receipts","checkDue","prepareTask",
                         "createCommitment","listCommitments","getCommitment","updateCommitment","snoozeCommitment","cancelCommitment","completeCommitment","dueCommitments","getFollowUpPolicy","evaluateFollowUp",
                         "createPlan","listPlans","getPlan","cancelPlan","getProactivityState","getGoalState"}));
+    }
+    private JSONObject ruleProjection()throws Exception {
+        synchronized(READBACK_LOCK){
+            // No source resolver, host callback, notification or alarm API under this lock.
+            JSONArray rules=book.rules();long next=book.nextAt();
+            return new JSONObject().put("rules",rules).put("nextAt",next)
+                    .put("observationGeneration",OBSERVATION_GENERATION).put("observationSequence",++observationSequence);
+        }
     }
     @Override public JSONObject handle(String command,JSONObject input)throws Exception {
         if(command.equals("getFollowUpPolicy"))return new JSONObject().put("policy",getFollowUpPolicy(input.getJSONObject("scope")));
@@ -88,27 +105,65 @@ public final class AutomationModule implements EngineModule {
         if(command.matches("list|receipts|save|setEnabled|delete|checkDue"))reconcileNativeScheduleSources();
         JSONObject result;
         switch(command){
-            case "list":return new JSONObject().put("rules",book.rules());
+            case "list":return ruleProjection();
             case "receipts":return new JSONObject().put("receipts",book.receipts());
             case "prepareTask":return taskRequest(input.getString("occurrenceId"));
-            case "save":result=new JSONObject().put("rule",book.save(input.getJSONObject("rule"),System.currentTimeMillis()));break;
-            case "setEnabled":result=new JSONObject().put("rule",book.setEnabled(input.getString("id"),input.getBoolean("enabled"),System.currentTimeMillis()));break;
+            case "save":return savedRuleResult(book.save(input.getJSONObject("rule"),System.currentTimeMillis()));
+            case "setEnabled":result=new JSONObject().put("rule",book.setEnabled(input.getString("id"),input.getBoolean("enabled"),System.currentTimeMillis(),input.has("revision")?positiveInteger(input,"revision"):-1));break;
             case "delete":{
-                JSONArray removed=book.delete(input.getString("id"));NotificationManager manager=context.android.getSystemService(NotificationManager.class);
+                JSONArray removed=book.delete(input.getString("id"),input.has("revision")?positiveInteger(input,"revision"):-1);NotificationManager manager=context.android.getSystemService(NotificationManager.class);
                 if(manager!=null)for(int i=0;i<removed.length();i++)manager.cancel(notificationId(removed.getJSONObject(i).getString("id")));
                 result=new JSONObject().put("deleted",true);break;
             }
             case "checkDue":result=new JSONObject().put("receipts",deliver(context.android,book,this));break;
             default:throw new IllegalArgumentException("未知定时操作");
         }
-        schedule(context.android,book);context.emit(id(),new JSONObject().put("event","automation_changed").put("snapshot",snapshot()));return result;
+        schedule(context.android,book);emitScheduleChange(command,result.optJSONObject("rule"),input.optString("id"));return result;
+    }
+    private void emitScheduleChange(String command,JSONObject rule,String originalId)throws Exception {
+        context.emit(id(),scheduleChangeEvent(command,rule,originalId,snapshot()));
+    }
+    private static JSONObject scheduleChangeEvent(String command,JSONObject rule,String originalId,JSONObject snapshot)throws Exception {
+        JSONObject event=new JSONObject().put("event","automation_changed").put("command",command).put("snapshot",snapshot);
+        if(rule!=null)event.put("ruleId",rule.getString("id")).put("ruleRevision",rule.getInt("revision")).put("scheduleVersion",rule.getJSONObject("schedule").opt("scheduleVersion")==null?AutomationSchedule.SCHEDULE_VERSION:rule.getJSONObject("schedule").opt("scheduleVersion"));
+        else if(!originalId.isBlank())event.put("ruleId",originalId);
+        return event;
+    }
+    /** Book's atomic writer returned. A later alarm/readback/event failure must never turn
+     * that original save into permission to create another UUID. This is a receipt, not a ledger. */
+    private JSONObject savedRuleResult(JSONObject saved)throws Exception {
+        String originalId=saved.getString("id");int revision=saved.getInt("revision");
+        JSONObject receipt=new JSONObject().put("state","saved").put("ruleId",originalId).put("ruleRevision",revision)
+                .put("alarmReplan","unconfirmed").put("changePublication","not_emitted").put("ruleReadback","unconfirmed")
+                .put("sourceState",saved.optJSONObject("nativeOrigin")==null?"not_applicable":"unconfirmed").put("executionAuthorized",false);
+        JSONObject result=new JSONObject().put("saveReceipt",receipt);
+        try{if(schedule(context.android,book))receipt.put("alarmReplan","api_accepted");}catch(Exception unconfirmed){/* The saved identity survives; no save retry. */}
+        JSONObject snapshot=null,current=null;
+        try{snapshot=snapshot();}catch(Exception unconfirmed){/* Source or snapshot availability is not inferred from the old saved copy. */}
+        try{
+            JSONArray rules=snapshot==null?book.rules():snapshot.getJSONArray("rules");
+            for(int i=0;i<rules.length();i++)if(originalId.equals(rules.getJSONObject(i).optString("id"))){current=rules.getJSONObject(i);break;}
+            if(current==null)receipt.put("ruleReadback","not_found");
+            else{
+                receipt.put("ruleReadback",current.getInt("revision")==revision?"same_revision":"changed_revision").put("currentRuleRevision",current.getInt("revision"));
+                String source=current.optBoolean("sourceInvalidated")?"invalidated":current.optBoolean("sourceCheckPending")?"check_pending":current.optJSONObject("nativeOrigin")==null?"not_applicable":snapshot==null?"unconfirmed":"current";
+                receipt.put("sourceState",source);
+                // Never return stale source text just because the original write succeeded.
+                if(source.equals("current")||source.equals("not_applicable")||source.equals("invalidated"))result.put("rule",new JSONObject(current.toString()));
+            }
+        }catch(Exception unconfirmed){receipt.put("ruleReadback","unconfirmed");result.remove("rule");}
+        if(snapshot!=null){
+            try{context.emit(id(),scheduleChangeEvent("save",current,originalId,snapshot));receipt.put("changePublication","emitted");}
+            catch(Exception unconfirmed){receipt.put("changePublication","unconfirmed");}
+        }
+        return result;
     }
     /** Native private conversation/owner glue only, not exposed by generic module tools. */
     public JSONObject proposeScheduleForTask(JSONObject nativeOrigin,String operation,JSONObject draft)throws Exception{return book.proposeSchedule(nativeOrigin,operation,draft,System.currentTimeMillis());}
     public JSONArray scheduleProposalsForTask(String task)throws Exception{return book.scheduleProposals(task);}
     @FunctionalInterface public interface OriginalProposalSource {JSONObject call(java.util.concurrent.Callable<JSONObject> originalBookAction)throws Exception;}
     /** Source/Tasks scopes end before touching alarms or the native scheduling host. */
-    public JSONObject approveScheduleProposalForOwner(String id,String digest,OriginalProposalSource source)throws Exception{JSONObject result=java.util.Objects.requireNonNull(source).call(()->book.approveScheduleProposal(id,digest,System.currentTimeMillis()));reschedule(context.android);return result;}
+    public JSONObject approveScheduleProposalForOwner(String id,String digest,OriginalProposalSource source)throws Exception{JSONObject result=java.util.Objects.requireNonNull(source).call(()->book.approveScheduleProposal(id,digest,System.currentTimeMillis()));reschedule(context.android);if(!result.optBoolean("duplicate"))emitScheduleChange("approveSchedule",result.getJSONObject("rule"),id);return result;}
     /** Native supervisor validates this exact occurrence before admitting its own persistent task. */
     public JSONObject taskRequest(String occurrenceId)throws Exception {
         JSONObject origin=book.receiptNativeOrigin(occurrenceId);if(origin==null)return book.taskRequest(occurrenceId,System.currentTimeMillis());final Exception[] bookFailure={null};
@@ -261,8 +316,32 @@ public final class AutomationModule implements EngineModule {
             JSONArray claimed=book.claimDue(System.currentTimeMillis(),10);
             for(int i=0;i<claimed.length();i++){
                 String id=claimed.getJSONObject(i).getString("id");
-                JSONObject origin=book.receiptNativeOrigin(id);if(origin!=null){try{if(mounted==null)throw new ScheduleSourceState.Unavailable();mounted.withNativeScheduleSource(origin,()->new JSONObject());}catch(Exception unavailable){if(unavailable instanceof ScheduleSourceState.Invalidated)book.revokeNativeScheduleOrigin(origin,System.currentTimeMillis());else{book.nativeScheduleSourcePending(origin,true,System.currentTimeMillis());book.deferSourceUnavailableReceipt(id,System.currentTimeMillis());}clearSourceNotifications(app,book);continue;}}
-                book.dispatchReceipt(id,receipt->postNotification(app,receipt),System.currentTimeMillis());
+                JSONObject origin=book.receiptNativeOrigin(id);
+                if(origin==null)book.dispatchReceipt(id,receipt->postNotification(app,receipt),System.currentTimeMillis());
+                else{
+                    // Enter the existing source domain BEFORE the Book lock. The original
+                    // source/Tasks transaction covers the actual local notification, not
+                    // just an empty preflight which could outlive a completed deletion.
+                    final boolean[] callbackEntered={false},notificationEntered={false};
+                    try{
+                        if(mounted==null)throw new ScheduleSourceState.Unavailable();
+                        mounted.withNativeScheduleSource(origin,()->{
+                            callbackEntered[0]=true;
+                            return book.dispatchReceipt(id,receipt->{notificationEntered[0]=true;return postNotification(app,receipt);},System.currentTimeMillis());
+                        });
+                    }catch(Exception unavailable){
+                        if(callbackEntered[0]){
+                            // A postcheck or final Book write can fail AFTER notify. Never
+                            // defer that occurrence. Keep a saved native result, or retain
+                            // unknown; an unwriteable dispatching row cold-recovers unknown.
+                            if(notificationEntered[0])try{book.delivered(id,"delivery_unknown","原通知可能已提交；只核对本次原发生，未重新派发",System.currentTimeMillis());}catch(Exception unrecorded){unavailable.addSuppressed(unrecorded);}
+                            throw unavailable;
+                        }
+                        if(unavailable instanceof ScheduleSourceState.Invalidated)book.revokeNativeScheduleOrigin(origin,System.currentTimeMillis());
+                        else{book.nativeScheduleSourcePending(origin,true,System.currentTimeMillis());book.deferSourceUnavailableReceipt(id,System.currentTimeMillis());}
+                        clearSourceNotifications(app,book);continue;
+                    }
+                }
                 if(mounted!=null)mounted.reconcileNativeScheduleSources();
                 JSONArray retained=book.receipts();for(int j=0;j<retained.length();j++)if(id.equals(retained.getJSONObject(j).getString("id"))){results.put(retained.getJSONObject(j));break;}
             }
@@ -280,10 +359,10 @@ public final class AutomationModule implements EngineModule {
         Intent intent=new Intent(context,AutomationReceiver.class).setAction(ALARM_ACTION);
         return PendingIntent.getBroadcast(context,27031,intent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
     }
-    private static void schedule(Context context,AutomationBook book)throws Exception {schedule(context,book,true);}
-    private static void schedule(Context context,AutomationBook book,boolean queryHost)throws Exception {
-        if(HOST_GATE.onCallbackThread())return; // Never self-wait or recursively enter the host.
-        AlarmManager manager=context.getSystemService(AlarmManager.class);if(manager==null)return;
+    private static boolean schedule(Context context,AutomationBook book)throws Exception {return schedule(context,book,true);}
+    private static boolean schedule(Context context,AutomationBook book,boolean queryHost)throws Exception {
+        if(HOST_GATE.onCallbackThread())return false; // Never self-wait or recursively enter the host.
+        AlarmManager manager=context.getSystemService(AlarmManager.class);if(manager==null)return false;
         final long generation;
         synchronized(SCHEDULE_LOCK){generation=++scheduleGeneration;}
         long now=System.currentTimeMillis(),reminderNext=book.nextAt(),hostNext;
@@ -295,11 +374,12 @@ public final class AutomationModule implements EngineModule {
             if(hostNext>=0)hostNext=Math.max(now+MIN_HOST_WAKE_DELAY,hostNext);
         }else synchronized(SCHEDULE_LOCK){hostNext=lastHostNext;}
         synchronized(SCHEDULE_LOCK){
-            if(generation!=scheduleGeneration)return; // A newer policy/state replan owns the alarm.
+            if(generation!=scheduleGeneration)return false; // A newer policy/state replan owns the alarm.
             if(queryHost)lastHostNext=hostNext;
             long next=reminderNext<0?hostNext:hostNext<0?reminderNext:Math.min(reminderNext,hostNext);
             PendingIntent intent=alarmIntent(context);manager.cancel(intent);
             if(next>=0)manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,Math.max(System.currentTimeMillis()+1000,next),intent);
+            return true;
         }
     }
     private static void ensureChannel(Context context){

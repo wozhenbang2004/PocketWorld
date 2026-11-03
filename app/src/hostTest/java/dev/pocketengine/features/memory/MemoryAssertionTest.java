@@ -38,10 +38,10 @@ public final class MemoryAssertionTest {
         assertTrue(resolution.getBoolean("originalEvidenceRetained"));assertEquals(2,book.list(scope()).length());assertEquals("B城",city(book.cognitionProjection(scope(),"owner",100).getJSONArray("current")));assertEquals(1,book.cognitionProjection(scope(),"owner",100).getJSONArray("history").length());
         assertThrows(IllegalStateException.class,()->book.resolveAssertionConflictReviewed(scope(),refs,"coexist","","旧版本不能代表新审阅",gone->{},101));
     }
-    @Test public void coexistIsExplicitAndAddingAnotherConflictInvalidatesTheOldDecision()throws Exception {
+    @Test public void coexistIsExplicitAndLaterInferenceRequiresAnotherReviewWithoutOverridingIt()throws Exception {
         MemoryBook book=book();JSONObject a=book.save(scope(),row(assertion("owner","owner","inferred","A城",10L)),1),b=book.save(scope(),row(assertion("owner","owner","told","B城",10L)),2);JSONArray refs=new JSONArray().put(new JSONObject().put("id",a.getString("id")).put("revision",1)).put(new JSONObject().put("id",b.getString("id")).put("revision",1));
         book.resolveAssertionConflictReviewed(scope(),refs,"coexist","","同时保留不同证据，当前未确定唯一事实",gone->{},100);assertEquals(2,book.cognitionProjection(scope(),"owner",100).getJSONArray("current").length());
-        book.save(scope(),row(assertion("owner","owner","told","C城",10L)),101);assertEquals(0,book.cognitionProjection(scope(),"owner",102).getJSONArray("current").length());assertEquals(3,book.cognitionProjection(scope(),"owner",102).getJSONArray("pendingConflicts").length());
+        book.save(scope(),row(assertion("owner","owner","inferred","C城",101L)),101);assertEquals(2,book.cognitionProjection(scope(),"owner",102).getJSONArray("current").length());assertEquals(3,book.cognitionProjection(scope(),"owner",102).getJSONArray("pendingConflicts").length());assertEquals(0,book.search(scope(),"C城",10).length());
     }
     @Test public void forgettingCurrentFactDoesNotResurrectAnOldAliasEvenAfterRestart()throws Exception {
         File file=new File(temp.newFolder(),"records.json");MemoryBook book=new MemoryBook(file);book.save(scope(),row(assertion("owner","owner","inferred","A城",100L)),1);JSONObject b=book.save(scope(),row(assertion("owner","owner","inferred","B城",200L)),2);
@@ -51,6 +51,18 @@ public final class MemoryAssertionTest {
     @Test public void futureValidityDoesNotAdvanceCurrentFactBeforeItsEffectiveTime()throws Exception {
         MemoryBook book=book();book.save(scope(),row(assertion("owner","owner","inferred","A城",100L)),1);book.save(scope(),row(assertion("owner","owner","inferred","B城",200L).put("validFrom",1000L)),2);
         assertEquals("A城",city(book.cognitionProjection(scope(),"owner",500).getJSONArray("current")));assertEquals("B城",city(book.cognitionProjection(scope(),"owner",1001).getJSONArray("current")));
+    }
+    @Test public void futureEventWithoutValidityDoesNotBecomeCurrentOrAdvanceItsFenceEarly()throws Exception {
+        File file=new File(temp.newFolder(),"future.json");MemoryBook book=new MemoryBook(file);book.save(scope(),row(assertion("owner","owner","inferred","A城",100L)),1);JSONObject future=book.save(scope(),row(assertion("owner","owner","inferred","B城",1000L)),2);
+        assertEquals("A城",city(book.cognitionProjection(scope(),"owner",500).getJSONArray("current")));assertEquals("B城",city(book.cognitionProjection(scope(),"owner",1001).getJSONArray("current")));
+        book.forget(scope(),future.getString("id"));MemoryBook cold=new MemoryBook(file);assertEquals("A城",city(cold.cognitionProjection(scope(),"owner",500).getJSONArray("current")));assertEquals(0,cold.cognitionProjection(scope(),"owner",1001).getJSONArray("current").length());
+    }
+    @Test public void opaqueLegacyFloorIsPreservedAndOnlyNewNativeReviewCanOverrideIt()throws Exception {
+        File file=new File(temp.newFolder(),"legacy-floor.json");MemoryBook book=new MemoryBook(file);JSONObject old=book.save(scope(),row(assertion("owner","owner","inferred","A城",100L)),1);
+        JSONObject stored=new JSONObject(new String(Files.readAllBytes(file.toPath()),java.nio.charset.StandardCharsets.UTF_8));JSONObject fence=stored.getJSONArray("assertionFences").getJSONObject(0);JSONObject legacy=new JSONObject().put("keyDigest",fence.getString("keyDigest")).put("ownerId","owner").put("spaceId","private").put("versions",new JSONArray().put(new JSONObject().put("effectiveAt",0).put("eventOrder",1000)));
+        stored.put("assertionFences",new JSONArray().put(legacy));Files.write(file.toPath(),stored.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));MemoryBook migrated=new MemoryBook(file);assertEquals(0,migrated.cognitionProjection(scope(),"owner",500).getJSONArray("current").length());
+        migrated.correctReviewed(scope(),old.getString("id"),1,"主人重新核对C城",ignored->{},400);assertEquals("主人重新核对C城",city(migrated.cognitionProjection(scope(),"owner",500).getJSONArray("current")));
+        JSONObject persisted=new JSONObject(new String(Files.readAllBytes(file.toPath()),java.nio.charset.StandardCharsets.UTF_8)).getJSONArray("assertionFences").getJSONObject(0);assertEquals(legacy.getJSONArray("versions").toString(),persisted.getJSONArray("legacyVersions").toString());assertEquals("主人重新核对C城",city(new MemoryBook(file).cognitionProjection(scope(),"owner",500).getJSONArray("current")));
     }
     @Test public void correctionInvalidatesDerivedViewsAndKeepsTheOlderHistoryNonCurrent()throws Exception {
         MemoryBook book=book();JSONObject a=book.save(scope(),row(assertion("owner","owner","inferred","A城",100L)),1),b=book.save(scope(),row(assertion("owner","owner","inferred","B城",200L)),2);

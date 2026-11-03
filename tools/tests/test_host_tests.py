@@ -46,7 +46,12 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertTrue(entry['native'])
         self.assertTrue(entry['robolectric'])
         self.assertEqual('dev.pocketengine.features.skills.ManagedScriptCallbackNativeJourneyTest', entry['class'])
-        self.assertEqual(3, len(entry['additionalClasses']))
+        self.assertEqual([
+            'dev.pocketengine.features.skills.ManagedScriptCallbackNativeGateTest',
+            'dev.pocketengine.features.skills.ManagedScriptCallbackProtocolTest',
+            'dev.pocketengine.features.skills.ManagedScriptCallbackClientPeerTest',
+            'dev.pocketengine.features.skills.OwnerSkillManagedJourneyTest',
+        ], entry['additionalClasses'])
         self.assertIn('dev.pocketengine.features.skills.ManagedScriptCallbackClientPeerTest', entry['additionalClasses'])
         self.assertIn('dev.pocketengine.features.skills.ManagedScriptCallbackTestSupport', entry['helpers'])
         helper = (HOST.ROOT / 'app/src/test/java/dev/pocketengine/features/skills/ManagedScriptCallbackTestSupport.java').read_text()
@@ -393,7 +398,14 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIsNone(batch(branch='pro/mika-full-takeover-20261103', same_repo=False))
         self.assertIsNone(batch(same_repo=False))
         self.assertEqual('request-clock', batch(event='workflow_dispatch', manual='request-clock'))
-        self.assertNotIn('matrix:', host)
+        # MCP branches retain their own bounded compatibility matrices. The
+        # phone branch must still resolve to one selected job, not fan out.
+        matrix_selection = re.search(r"batch: \$\{\{ fromJSON\((.+)\) \}\}", host)
+        self.assertIsNotNone(matrix_selection)
+        for event in ('pull_request', 'workflow_dispatch'):
+            context = {'github': SimpleNamespace(event_name=event, head_ref='pro/workpack-02-phone-control')}
+            value = eval(matrix_selection.group(1).replace('&&', ' and ').replace('||', ' or '), {'__builtins__': {}}, context)
+            self.assertEqual(['selected'], json.loads(value))
         for field in ('testedCommit', 'prBaseCommit', 'prHeadCommit', 'deviceTestsPerformed', 'apkBuiltOrSigned'):
             self.assertIn("'" + field + "':", host)
         self.assertIn("['git', 'rev-parse', 'HEAD']", host)
@@ -561,11 +573,11 @@ class HostTestEntrypointTest(unittest.TestCase):
             'dev.pocketengine.features.teams.TeamResearchSelectionPageTest': 2,
             'dev.pocketengine.ui.ResearchReadAccessDraftTest': 3,
             'dev.pocketengine.ui.ResearchReadAccessMountedNativeTest': 5,
-            'dev.pocketengine.features.remote.RemotePiDraftOwnerJourneyTest': 4,
-            'dev.pocketengine.features.remote.RemoteInputDeliveryTest': 8,
-            'dev.pocketengine.features.remote.RemoteTaskDraftsTest': 3,
-            'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest': 8,
-            'dev.pocketengine.features.automation.AutomationIntervalTest': 4,
+            'dev.pocketengine.features.remote.RemotePiDraftOwnerJourneyTest': 6,
+            'dev.pocketengine.features.remote.RemoteInputDeliveryTest': 11,
+            'dev.pocketengine.features.remote.RemoteTaskDraftsTest': 4,
+            'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest': 10,
+            'dev.pocketengine.features.automation.AutomationIntervalTest': 13,
         }
         for name, count in expected.items():
             self.assertEqual(1, len(HOST.select(REGISTRY, [], [name])), name)
@@ -577,6 +589,19 @@ class HostTestEntrypointTest(unittest.TestCase):
             self.assertNotIn('@Ignore', source, name)
         self.assertTrue(REGISTRY['alma-pi-no-tools']['python'])
         self.assertTrue(REGISTRY['alma-pi-no-tools']['robolectric'])
+
+    def test_aion_office_mounted_keeps_original_full_class(self):
+        entry = REGISTRY['aion-office-mounted']
+        name = 'dev.pocketengine.ui.AttachmentOutcomeNativeControllerTest'
+        self.assertEqual(name, entry['class'])
+        self.assertTrue(entry['robolectric'])
+        self.assertEqual([], entry['helpers'])
+        self.assertEqual(['aion-office-mounted'], HOST.select(REGISTRY, [], [name]))
+        source = (HOST.ROOT / 'app/src/test/java/dev/pocketengine/ui/AttachmentOutcomeNativeControllerTest.java').read_text()
+        self.assertEqual(4, len(re.findall(r'@Test\b', source)))
+        self.assertNotIn('@Ignore', source)
+        self.assertIn('originalPresentationOwnerEditsSecondPageRestoresDraftAndExportsNewActualPptx', source)
+        self.assertIn('stoppedPresentationSaveRestoresOnlyOriginalUnknownQueryAndRechecksWithdrawnSource', source)
 
     def test_android_resource_paths_use_module_cwd_and_gateway_keeps_repository_root(self):
         registration = (HOST.ROOT / 'tools/host-tests.gradle').read_text()
@@ -627,7 +652,9 @@ class HostTestEntrypointTest(unittest.TestCase):
         host_job = workflow.split('  host-tests:\n', 1)[1]
         self.assertIn("github.event_name == 'workflow_dispatch'", host_job)
         self.assertIn("inputs.target == 'host-tests'", host_job)
-        self.assertNotIn('matrix:', host_job)
+        # Manual selection stays one job; the two explicit MCP PRs have bounded batches.
+        self.assertEqual(1, host_job.count('      matrix:'))
+        self.assertIn("batch: ${{ fromJSON(github.event_name == 'pull_request' && (github.head_ref == 'pro/operit-full-takeover-20261103' && '[\"ecosystem\",\"project-files\",\"runtime-compatibility\"]' || github.head_ref == 'pro/workpack-04-mcp-skills' && '[\"ecosystem\",\"model-compatibility\",\"runtime-compatibility\"]') || '[\"selected\"]') }}", host_job)
         self.assertIn('        default: apk', workflow)
         title = next(line for line in workflow.splitlines() if line.startswith('run-name:'))
         self.assertIn("inputs.target == 'host-tests'", title)

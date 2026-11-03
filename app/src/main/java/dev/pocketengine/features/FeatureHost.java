@@ -36,7 +36,10 @@ public final class FeatureHost implements AutoCloseable {
         var host=skillExecutionHost;if(host==null)throw new IllegalStateException("脚本执行宿主不可用");return host.execute(task,run,epoch,input,capabilities,control);
     }
     public JSONObject executeSkillForTask(String task,String run,int epoch,JSONObject input,java.util.Set<String> capabilities,dev.pocketengine.core.RunControl control,dev.pocketengine.core.CapabilitySnapshot.CurrentCheck current)throws Exception {
-        var host=skillExecutionHost;if(host==null)throw new IllegalStateException("脚本执行宿主不可用");return host.execute(task,run,epoch,input,capabilities,control,current);
+        return executeSkillForTask(task,run,epoch,input,capabilities,control,current,null);
+    }
+    public JSONObject executeSkillForTask(String task,String run,int epoch,JSONObject input,java.util.Set<String> capabilities,dev.pocketengine.core.RunControl control,dev.pocketengine.core.CapabilitySnapshot.CurrentCheck current,dev.pocketengine.features.controlplane.WorkProfileToolSelection.PreparedTool profile)throws Exception {
+        var host=skillExecutionHost;if(host==null)throw new IllegalStateException("脚本执行宿主不可用");return host.execute(task,run,epoch,input,capabilities,control,current,profile);
     }
     public void setMemorySynchronizer(MemorySynchronizer synchronizer){memorySynchronizer=synchronizer;}
     public void synchronizeMemory(JSONObject scope)throws Exception{MemorySynchronizer synchronizer=memorySynchronizer;if(synchronizer!=null)synchronizer.synchronize(scope);}
@@ -181,6 +184,11 @@ public final class FeatureHost implements AutoCloseable {
         return dev.pocketengine.features.plugins.McpLocalDiscoveryPipe.publicView(row).put("observation",row.optJSONObject("nativeJob")==null?"original_intent_without_runtime_ref":"original_runtime_ref_observed");
     }
     public boolean ownsMcpDiscoveryTask(String id)throws Exception{JSONObject task=tasks==null?null:tasks.get(id,false);return task!=null&&task.has("ownerMcpDiscovery");}
+    /** Explicit native owner log read, including stopped/cold original jobs; never dispatched again. */
+    public JSONObject localMcpDiagnosticForOwner(String taskId,long cursor,int maxBytes)throws Exception {
+        if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local)||local.managedRuntimeForOwner()==null)throw new SecurityException("原本机MCP日志宿主不可用");
+        return dev.pocketengine.features.plugins.McpLocalDiagnostics.readDiscovery(tasks,local.managedRuntimeForOwner(),taskId,cursor,maxBytes);
+    }
 
     /** Existing supervisor/Runner worker only, after its concrete original write approval. */
     public JSONObject invokeLocalMcpForTask(String task,String run,int epoch,String hostTool,String operation,JSONObject arguments,JSONObject nativeInput,JSONObject capability,String consumedApproval,dev.pocketengine.core.RunControl original,dev.pocketengine.features.memory.ToolOutputCapture.Factory output)throws Exception {
@@ -533,7 +541,8 @@ public final class FeatureHost implements AutoCloseable {
     }
     private JSONObject dispatchRemoteMessage(EngineModule module,String command,JSONObject binding,String text)throws Exception{return dispatchRemoteMessage(module,command,binding,text,null);}
     private JSONObject dispatchRemoteMessage(EngineModule module,String command,JSONObject binding,String text,String profileGeneration)throws Exception{
-        JSONObject target=new JSONObject();for(String key:new String[]{"profileId","jobId","jobOperationId","threadId","expectedTurnId","messageId"})target.put(key,binding.get(key));
+        JSONObject target=new JSONObject();for(String key:new String[]{"profileId","jobId","jobOperationId","threadId","messageId"})target.put(key,binding.get(key));
+        dev.pocketengine.features.remote.RemoteMessageTarget.copy(binding,target);
         if(text!=null)target.put("text",text);if(profileGeneration!=null)target.put("_profileBinding",profileGeneration).put("serviceBase",binding.getString("serviceBase"));
         JSONObject saved;
         try{saved=tasks.recordRemoteMessage(module.handle(command,target));}

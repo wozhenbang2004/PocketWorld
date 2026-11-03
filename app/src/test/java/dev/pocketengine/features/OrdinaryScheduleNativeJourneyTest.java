@@ -40,6 +40,8 @@ public final class OrdinaryScheduleNativeJourneyTest {
     private JSONObject nativeMessage;private SQLiteDatabase db;
     private final java.util.concurrent.atomic.AtomicInteger sourceChecks=new java.util.concurrent.atomic.AtomicInteger(),failSourceCheck=new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicReference<Exception> sourceReadFailure=new java.util.concurrent.atomic.AtomicReference<>();
+    private final java.util.concurrent.atomic.AtomicInteger pauseAfterSourceCheck=new java.util.concurrent.atomic.AtomicInteger(),failAfterSourceCheck=new java.util.concurrent.atomic.AtomicInteger();
+    private final CountDownLatch sourceCheckReturned=new CountDownLatch(1),releaseSourceReturn=new CountDownLatch(1);
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
     @Before public void prepare()throws Exception {
         app=RuntimeEnvironment.getApplication();tasks=new TaskStore(app);repo=tasks.conversationRepository();repo.initializeEmpty();
@@ -47,7 +49,14 @@ public final class OrdinaryScheduleNativeJourneyTest {
         features=new FeatureHost(event->{},tasks,()->false);sources=new MemorySourceBridge(features,tasks);
         FeatureContext context=new FeatureContext(app,new SettingsStore(app),new SecretVault(app),event->{});
         memory=new MemoryModule(context,sources::resolve);features.register(memory);features.register(new dev.pocketengine.features.skills.SkillsModule(context));var assistant=new dev.pocketengine.features.assistant.AssistantModule(context,memory,null,tasks);features.register(assistant);sources.bindAssistant(assistant);plans=new AutomationPlanHost(tasks);features.setAutomationPlanHost(plans);
-        plans.bindProposalSources((refs,action)->{if(sourceChecks.incrementAndGet()==failSourceCheck.get()){Exception fault=new android.database.sqlite.SQLiteDiskIOException("synthetic final pre-notification read");sourceReadFailure.set(fault);throw fault;}Exception fault=sourceReadFailure.get();if(fault!=null)throw fault;return sources.withCurrentUserSources(refs,action);});
+        plans.bindProposalSources((refs,action)->{
+            int check=sourceChecks.incrementAndGet();if(check==failSourceCheck.get()){Exception fault=new android.database.sqlite.SQLiteDiskIOException("synthetic final pre-notification read");sourceReadFailure.set(fault);throw fault;}
+            Exception fault=sourceReadFailure.get();if(fault!=null)throw fault;
+            JSONObject result=sources.withCurrentUserSources(refs,action);
+            if(check==pauseAfterSourceCheck.get()){sourceCheckReturned.countDown();if(!releaseSourceReturn.await(5,TimeUnit.SECONDS))throw new IllegalStateException("original source return was not released");}
+            if(check==failAfterSourceCheck.get())throw new android.database.sqlite.SQLiteDiskIOException("synthetic source postcheck after original callback");
+            return result;
+        });
         module=new AutomationModule(context,plans::resolveEvidence,plans);features.register(module);
         conversation=UUID.randomUUID().toString();message=UUID.randomUUID().toString();client=UUID.randomUUID().toString();
         nativeMessage=new JSONObject().put("id",message).put("clientMessageId",client).put("revision",1L).put("role","user")
@@ -81,6 +90,20 @@ public final class OrdinaryScheduleNativeJourneyTest {
         assertFalse(Shadows.shadowOf(app.getSystemService(AlarmManager.class)).getScheduledAlarms().isEmpty());
         assertTrue(approve(row).getBoolean("duplicate"));assertEquals(1,rules().length());assertEquals(1,tasks.list().length());
         assertEquals(1,tasks.get(id,false).getJSONArray("operations").length());assertFalse(plans.ownerSnapshot(module).getJSONArray("scheduleProposals").getJSONObject(0).getBoolean("executionAuthorized"));
+    }
+    @Test public void cronSchemaAndOriginalPreparedProposalRequireTheSameExplicitOwnerApproval()throws Exception {
+        JSONObject tool=null;JSONArray declared=port.tools();for(int i=0;i<declared.length();i++){JSONObject candidate=declared.getJSONObject(i).getJSONObject("function");if("schedule_propose".equals(candidate.optString("name")))tool=candidate;}
+        assertNotNull(tool);JSONObject properties=tool.getJSONObject("parameters").getJSONObject("properties").getJSONObject("schedule").getJSONObject("properties");
+        boolean cron=false;JSONArray types=properties.getJSONObject("type").getJSONArray("enum");for(int i=0;i<types.length();i++)cron|="cron".equals(types.getString(i));assertTrue(cron);assertEquals(512,properties.getJSONObject("expression").getInt("maxLength"));assertEquals(1,properties.getJSONObject("scheduleVersion").getInt("maximum"));
+        JSONObject requested=draft().put("schedule",new JSONObject().put("type","cron").put("scheduleVersion",1).put("expression","*/15 * * * *").put("zone","UTC"));port.validate("schedule_propose",requested);
+        JSONObject unknown=new JSONObject(requested.toString());unknown.getJSONObject("schedule").put("scheduleVersion",2);assertThrows(Exception.class,()->port.validate("schedule_propose",unknown));
+        JSONObject unsupported=new JSONObject(requested.toString());unsupported.getJSONObject("schedule").put("unexpected",true);assertThrows(Exception.class,()->port.validate("schedule_propose",unsupported));
+        JSONObject oversized=new JSONObject(requested.toString());oversized.getJSONObject("schedule").put("expression","x".repeat(513));assertThrows(Exception.class,()->port.validate("schedule_propose",oversized));
+        JSONObject proposal=propose(requested);assertEquals("pending",proposal.getString("status"));assertEquals("cron",proposal.getJSONObject("draft").getJSONObject("schedule").getString("type"));assertEquals(0,rules().length());assertFalse(proposal.getBoolean("executionAuthorized"));
+        JSONArray approvals=tasks.get(id,false).optJSONArray("approvals");assertTrue(approvals==null||approvals.length()==0);
+        assertThrows(SecurityException.class,()->plans.ownerCommand(module,"approveSchedule",new JSONObject().put("id",proposal.getString("id")).put("digest","0".repeat(64))));assertEquals(0,rules().length());
+        long before=System.currentTimeMillis();JSONObject approved=approve(proposal),rule=approved.getJSONObject("rule");assertEquals("cron",rule.getJSONObject("schedule").getString("type"));assertEquals(1,rule.getJSONObject("schedule").getInt("scheduleVersion"));assertEquals("UTC",rule.getJSONObject("schedule").getString("zone"));assertTrue(rule.getLong("nextAt")>before);assertEquals("notify_then_user_start",rule.getString("executionPolicy"));assertEquals(run,rule.getJSONObject("nativeOrigin").getString("runId"));assertFalse(approved.getBoolean("executionAuthorized"));
+        assertFalse(Shadows.shadowOf(app.getSystemService(AlarmManager.class)).getScheduledAlarms().isEmpty());assertTrue(approve(proposal).getBoolean("duplicate"));assertEquals(1,rules().length());assertEquals(1,tasks.list().length());assertEquals(1,tasks.get(id,false).getJSONArray("operations").length());
     }
     @Test public void forgedPreparedChangedArgumentsReadonlyAndUnsupportedConditionCannotCreateRules()throws Exception {
         JSONObject draft=draft();assertThrows(SecurityException.class,()->port.execute("schedule_propose",new JSONObject(draft.toString()).put("_hostOperationId",UUID.randomUUID().toString()),original));
@@ -188,5 +211,35 @@ public final class OrdinaryScheduleNativeJourneyTest {
             assertTrue(deleteEntered.await(5,TimeUnit.SECONDS));assertFalse(deletion.isDone());release.countDown();assertFalse(approval.get(5,TimeUnit.SECONDS).getBoolean("executionAuthorized"));deletion.get(5,TimeUnit.SECONDS);
             assertEquals(1,rules().length());assertThrows(SecurityException.class,()->approve(row));assertEquals(1,rules().length());assertFalse(plans.ownerSnapshot(module).getJSONArray("scheduleProposals").getJSONObject(0).getBoolean("sourceAvailable"));
         } finally {release.countDown();workers.shutdownNow();}
+    }
+    @Test public void originalNotificationIsInsideTheSourceGateBeforeAnUnindexedConversationDeletionCanFollowIt()throws Exception {
+        JSONObject proposal=propose(nearDraft());approve(proposal);advanceToOccurrence();
+        assertEquals(0,memory.handle("list",new JSONObject().put("scope",scope())).getJSONArray("records").length());
+        var assistant=(dev.pocketengine.features.assistant.AssistantModule)features.module("assistant");assistant.setSourceSynchronizer(()->sources.synchronize(scope()));
+        // Pause immediately AFTER the third real source transaction returns. Previously
+        // that transaction was an empty preflight and notify still lay beyond this pause.
+        pauseAfterSourceCheck.set(sourceChecks.get()+3);ExecutorService worker=Executors.newSingleThreadExecutor();
+        Future<JSONObject> delivery=worker.submit(()->module.handle("checkDue",new JSONObject()));
+        try{
+            assertTrue(sourceCheckReturned.await(5,TimeUnit.SECONDS));
+            var notifications=Shadows.shadowOf(app.getSystemService(android.app.NotificationManager.class));
+            assertEquals("The actual original notification must have occurred before its source gate returns",1,notifications.getAllNotifications().size());
+            android.app.PendingIntent old=notifications.getAllNotifications().get(0).contentIntent;
+            assistant.handle("delete",new JSONObject().put("conversationId",conversation));assertFalse(repo.exists(conversation));
+            assertTrue("The completed original deletion must clear its derived notification even without a formal memory row",notifications.getAllNotifications().isEmpty());assertTrue(Shadows.shadowOf(old).isCanceled());
+            releaseSourceReturn.countDown();delivery.get(5,TimeUnit.SECONDS);
+            assertTrue(notifications.getAllNotifications().isEmpty());assertTrue(rules().getJSONObject(0).getBoolean("sourceInvalidated"));
+            assertFalse(storedAutomation().contains("核对原账单"));assertEquals(0,module.handle("checkDue",new JSONObject()).getJSONArray("receipts").length());assertEquals(1,tasks.list().length());
+        }finally{releaseSourceReturn.countDown();worker.shutdown();if(!worker.awaitTermination(5,TimeUnit.SECONDS))worker.shutdownNow();}
+    }
+    @Test public void aPostcheckFailureAfterNativeNotificationCannotDeferOrReplayTheOriginalOccurrence()throws Exception {
+        JSONObject proposal=propose(nearDraft());approve(proposal);advanceToOccurrence();failAfterSourceCheck.set(sourceChecks.get()+3);
+        assertThrows(android.database.sqlite.SQLiteDiskIOException.class,()->module.handle("checkDue",new JSONObject()));
+        JSONArray rows=new JSONObject(storedAutomation()).getJSONArray("receipts");assertEquals(1,rows.length());JSONObject receipt=rows.getJSONObject(0);String occurrence=receipt.getString("id");
+        assertEquals("awaiting_user",receipt.getString("status"));assertFalse(receipt.optBoolean("sourceDispatchDeferred"));
+        var notifications=Shadows.shadowOf(app.getSystemService(android.app.NotificationManager.class));assertEquals(1,notifications.getAllNotifications().size());
+        assertEquals(0,module.handle("checkDue",new JSONObject()).getJSONArray("receipts").length());assertEquals(1,notifications.getAllNotifications().size());
+        FeatureContext coldContext=new FeatureContext(app,new SettingsStore(app),new SecretVault(app),event->{});AutomationModule cold=new AutomationModule(coldContext,plans::resolveEvidence,plans);
+        assertEquals(0,cold.handle("checkDue",new JSONObject()).getJSONArray("receipts").length());JSONArray retained=new JSONObject(storedAutomation()).getJSONArray("receipts");assertEquals(1,retained.length());assertEquals(occurrence,retained.getJSONObject(0).getString("id"));assertEquals("awaiting_user",retained.getJSONObject(0).getString("status"));assertEquals(1,notifications.getAllNotifications().size());assertEquals(1,tasks.list().length());
     }
 }

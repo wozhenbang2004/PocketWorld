@@ -19,10 +19,16 @@ public final class RemoteTaskDraftsTest {
         source.put("executorStatus","completed").put("nativeSettled",true).put("resourcesHeld",false).put("processCleanupProof",new JSONObject().put("processGroupStoppedVerified",true));
         assertTrue(RemoteTaskDrafts.same(scope,RemoteTaskDrafts.scope(source,GENERATION,"next_turn")));
     }
-    @Test public void piCannotUseLiveSteerOrUnconfirmedToolEnabledOrDifferentSession()throws Exception {
+    @Test public void piWithoutNativeQueueObservationCannotSteerAndCannotChangeNoToolsSession()throws Exception {
         assertThrows(SecurityException.class,()->RemoteTaskDrafts.scope(pi(),GENERATION,"steer"));
         for(JSONObject bad:new JSONObject[]{pi().put("noTools",false),pi().put("noTools","true"),pi().put("promptRequestId",JSONObject.NULL),pi().put("sessionId","another"),pi().put("threadId",1),pi().put("promptRequestId",""),pi().put("protocolVerified","true"),pi().put("worker","claude")})
             assertThrows(bad.toString(),SecurityException.class,()->RemoteTaskDrafts.scope(bad,GENERATION,"next_turn"));
+    }
+    @Test public void verifiedPiQueueDraftPinsPromptWithoutCreatingATurnOrDispatchGrant()throws Exception {
+        JSONObject source=pi().put("inputSteeringVerified",true),scope=RemoteTaskDrafts.scope(source,GENERATION,"steer");
+        assertEquals("prompt",scope.getString("expectedPromptRequestId"));assertEquals("session",scope.getString("sessionId"));assertTrue(scope.getBoolean("noTools"));assertFalse(scope.has("expectedTurnId"));assertFalse(scope.has("turnId"));assertFalse(scope.has("controls"));
+        source.put("promptRequestId","later-prompt");assertFalse(RemoteTaskDrafts.same(scope,RemoteTaskDrafts.scope(source,GENERATION,"steer")));
+        assertThrows(SecurityException.class,()->RemoteTaskDrafts.scope(pi().put("inputSteeringVerified",true).put("turnId","invented"),GENERATION,"steer"));
     }
     @Test public void originalTargetAndComputerGenerationRemainExactAndNoTextIssuesAuthority()throws Exception {
         JSONObject source=pi(),scope=RemoteTaskDrafts.scope(source,GENERATION,"next_turn");
