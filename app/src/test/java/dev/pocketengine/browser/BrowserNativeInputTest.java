@@ -20,6 +20,8 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
+import org.robolectric.shadow.api.Shadow;
+import org.robolectric.util.ReflectionHelpers.ClassParameter;
 import static org.junit.Assert.*;
 
 /** Android dispatch/cleanup tests. Robolectric does not prove a renderer's event.isTrusted. */
@@ -30,7 +32,10 @@ public final class BrowserNativeInputTest {
     private static JSONObject obj(Object... pairs)throws Exception {JSONObject out=new JSONObject();for(int i=0;i<pairs.length;i+=2)out.put((String)pairs[i],pairs[i+1]);return out;}
     static final class View extends WebView {
         final List<Integer> motions=new ArrayList<>(),sources=new ArrayList<>(),keys=new ArrayList<>();final List<Float> xs=new ArrayList<>(),ys=new ArrayList<>();boolean accept=true;Runnable down=()->{};
-        View(){super(RuntimeEnvironment.getApplication());layout(0,0,400,600);}
+        View(){super(RuntimeEnvironment.getApplication());measure(MeasureSpec.makeMeasureSpec(400,MeasureSpec.EXACTLY),MeasureSpec.makeMeasureSpec(600,MeasureSpec.EXACTLY));layout(0,0,400,600);assertEquals(400,getWidth());assertEquals(600,getHeight());}
+        // SDK 35 WebView delegates this hidden hook to its provider. Robolectric's provider is a
+        // deep proxy, so use the real framework View frame/layout path, not fabricated dimensions.
+        protected boolean setFrame(int left,int top,int right,int bottom){return Shadow.directlyOn(this,android.view.View.class,"setFrame",ClassParameter.from(int.class,left),ClassParameter.from(int.class,top),ClassParameter.from(int.class,right),ClassParameter.from(int.class,bottom));}
         @Override public boolean dispatchTouchEvent(MotionEvent event){motions.add(event.getActionMasked());sources.add(event.getSource());xs.add(event.getX());ys.add(event.getY());if(event.getActionMasked()==MotionEvent.ACTION_DOWN)down.run();return accept;}
         @Override public boolean dispatchGenericMotionEvent(MotionEvent event){motions.add(event.getActionMasked());sources.add(event.getSource());xs.add(event.getX());ys.add(event.getY());return accept;}
         @Override public boolean dispatchKeyEvent(KeyEvent event){keys.add(event.getAction());sources.add(event.getSource());if(event.getAction()==KeyEvent.ACTION_DOWN)down.run();return accept;}

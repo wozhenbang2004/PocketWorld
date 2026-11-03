@@ -288,7 +288,7 @@ public final class BrowserTaskSpace {
                 }
                 if(command.equals("scroll")){JSONObject observed=observation(tab,args.getString("observationId"));if(observed.has("actionFrame"))dispatchArgs=copy(args).put("_nativeActionFrame",copy(observed.getJSONObject("actionFrame")));}
                 if(command.equals("native_input")){JSONObject exact=pin(args);dispatchArgs=copy(args).put("_nativeTargetPreview",copy(exact.getJSONObject("targetPreview"))).put("_nativeInputViewport",copy(exact.getJSONObject("nativeInputViewport")));if(exact.has("toTargetPreview"))dispatchArgs.put("_nativeToTargetPreview",copy(exact.getJSONObject("toTargetPreview")));}
-                if(command.matches("back|forward|reload|upload_artifact")){JSONObject history=driver.metadata(tab).optJSONObject("navigationHistory");if(history==null)throw new UnsupportedOperationException("原网页宿主没有可核对的真实历史");dispatchArgs=copy(args).put("_nativeNavigationHistory",copy(history));}
+                if(command.matches("back|forward|reload")){JSONObject history=driver.metadata(tab).optJSONObject("navigationHistory");if(history==null)throw new UnsupportedOperationException("原网页宿主没有可核对的真实历史");dispatchArgs=copy(args).put("_nativeNavigationHistory",copy(history));}
                 if(command.matches("click|type|set_date|focus|press|select_option|set_checked|scroll|navigate|script|native_input|site_mode|resize|back|forward|reload|upload_artifact")){observations.remove(tab.tabId);clearReadObservations(tab.tabId);}
                 nativeCalls.put(operationId,tab);
                 try{driver.execute(tab,command,copy(dispatchArgs).put("_nativeBrowserOperationId",operationId),gate,result);}

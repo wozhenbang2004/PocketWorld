@@ -54,6 +54,18 @@ test('scroll, pinch zoom, layout, navigation and active input changes reject the
     const f = fixture(); change(f); assert.equal(f.run().accepted, false);
   }
 });
+test('missing or incomplete viewport stays unavailable evidence without breaking ordinary observation', () => {
+  const snapshot = productionMethod('observationStateScript', {VIEWPORT: viewport, FOCUS: focus, EDIT_STATE: editState});
+  for (const omit of [c => {delete c.visualViewport;}, c => {c.visualViewport = null;}, c => {delete c.visualViewport.width;}, c => {c.visualViewport.height = NaN;}, c => {c.visualViewport.scale = 0;}, c => {c.visualViewport.offsetLeft = Infinity;}, c => {delete c.visualViewport.offsetTop;}, ...['innerWidth', 'innerHeight', 'devicePixelRatio', 'scrollX', 'scrollY'].map(name => c => {delete c[name];})]) {
+    const f = fixture(); omit(f.context); f.context.state = f.state; f.context.nodes = f.state.nodes;
+    assert.doesNotThrow(() => vm.runInContext(snapshot, f.context));
+    assert.equal(f.state.inputViewport, null);
+    assert.equal(f.state.inputRects.length, 2);
+    assert.equal(f.run().accepted, false);
+    assert.equal(f.state.nativeInput, undefined);
+    assert.equal(f.firstNode.listeners.size, 0);
+  }
+});
 test('occluded, disabled, private, removed and replaced target never becomes a coordinate', () => {
   for (const change of [f => {f.document.elementFromPoint = () => f.lastNode;}, f => {f.firstNode.disabled = true;}, f => {f.firstNode.type = 'password';}, f => {f.firstNode.isConnected = false;}, f => {f.state.nodeKeys.set(f.firstNode, 'k99');}]) {
     const f = fixture(); change(f); assert.equal(f.run().accepted, false);

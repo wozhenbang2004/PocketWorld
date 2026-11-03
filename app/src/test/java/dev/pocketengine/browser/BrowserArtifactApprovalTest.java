@@ -77,7 +77,9 @@ public final class BrowserArtifactApprovalTest {
     }
     @Test public void registeredToolPinsExactSourceAndNativeInputForOriginalApproval()throws Exception {try(Fixture f=new Fixture()){
         assertTrue(f.port.supports("browser_task_upload_artifact"));JSONObject args=f.uploadArgs(),receipt=f.invoke("upload_artifact",args);
-        assertEquals("local_delivered",receipt.getString("status"));assertEquals(1,f.exactApprovals);assertEquals(1,f.driver.uploads);
+        assertTrue(receipt.toString(),receipt.getBoolean("accepted"));
+        assertEquals(receipt.toString(),1,f.exactApprovals);assertEquals(receipt.toString(),1,f.driver.uploads);
+        assertEquals(receipt.toString(),"local_delivered",receipt.getString("status"));
         JSONObject approved=f.approvedPin.getJSONObject("uploadArtifact");assertEquals(3,approved.getInt("sourceVersion"));
         assertEquals(f.driver.source.getString("sha256"),approved.getString("sha256"));assertEquals(f.binding.taskId,f.approvedPin.getString("taskId"));
         assertEquals("k1",f.driver.lastArgs.getJSONObject("_nativeTargetPreview").getString("nodeKey"));

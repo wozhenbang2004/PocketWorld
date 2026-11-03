@@ -1,6 +1,5 @@
 package dev.pocketengine.browser;
 
-import android.app.Application;
 import android.content.DialogInterface;
 import android.net.Uri;
 import android.os.Handler;
@@ -10,12 +9,14 @@ import android.webkit.PermissionRequest;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import dev.pocketengine.BrowserActivity;
+import dev.pocketengine.EngineApplication;
 import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.junit.After;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -28,9 +29,10 @@ import static org.junit.Assert.*;
 
 /** Real Activity callbacks, original TaskStore and RunControl; no physical WebView rendering claim. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,application=Application.class)
+@Config(sdk=35,application=EngineApplication.class)
 @LooperMode(LooperMode.Mode.PAUSED)
 public final class BrowserPopupNativeTest {
+    @After public void shutdownOriginalApplication()throws Exception {new BrowserTaskActivityTest().shutdownOriginalApplication();}
     private static WebView web(BrowserActivity activity)throws Exception {Field field=BrowserActivity.class.getDeclaredField("web");field.setAccessible(true);return (WebView)field.get(activity);}
     private static WebResourceRequest request(String url,String method,boolean gesture){return new WebResourceRequest(){public Uri getUrl(){return Uri.parse(url);}public boolean isForMainFrame(){return true;}public boolean isRedirect(){return false;}public boolean hasGesture(){return gesture;}public String getMethod(){return method;}public Map<String,String> getRequestHeaders(){return Map.of();}};}
     private static void choose(int button){android.app.AlertDialog dialog=ShadowAlertDialog.getLatestAlertDialog();assertNotNull(dialog);assertTrue(dialog.isShowing());dialog.getButton(button).performClick();}
