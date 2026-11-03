@@ -732,6 +732,7 @@
       "dev.pocketengine.runtime.context.CommittedReadBatchBudgetTest",
       "dev.pocketengine.runtime.CommittedReadBatchRunnerTest",
       "dev.pocketengine.runtime.StructuredRunOutcomeRunnerTest",
+      "dev.pocketengine.runtime.policy.OwnerQuestionChoicesTest",
       "dev.pocketengine.runtime.context.ProviderUsageCompatibilityTest"
     ],
     "helpers": [

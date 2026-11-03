@@ -636,7 +636,9 @@ public final class AgentRunner {
                         if(newer.length()>0){stepRouting.ownerBoundary();appendOwnerInputs(history,newer,config);recallIntent=latestOwnerRecallQuery(history,recallIntent);checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget);if(round>=executionStepCeiling(config,journal))return finish(taskId,"awaiting_user","主人新补充已保存到原任务；当前模型预算已用完，请核对后从原任务继续。",evidence,steps,config,sink);continue modelTurns;}
                         if(RunOutcomeTools.ASK.equals(name)){
                             RunControl.HostRunIdentity identity=control.hostRunIdentity();String question=clean(args.getString("question"),config);
-                            evidence.put("ownerQuestion",new JSONObject().put("format","pocketworld.owner-question.v1").put("question",question).put("requestId",java.util.UUID.randomUUID().toString()).put("waitRevision",history.length()).put("taskId",taskId).put("runId",identity==null?"":identity.runId()).put("coordinatorEpoch",identity==null?0:identity.epoch()).put("replyKind","answer").put("approval",false).put("takeover",false));
+                            JSONObject waiting=new JSONObject().put("format","pocketworld.owner-question.v1").put("question",question).put("requestId",java.util.UUID.randomUUID().toString()).put("waitRevision",history.length()).put("taskId",taskId).put("runId",identity==null?"":identity.runId()).put("coordinatorEpoch",identity==null?0:identity.epoch()).put("replyKind","answer").put("approval",false).put("takeover",false);
+                            if(args.has("options"))waiting.put("options",dev.pocketengine.runtime.policy.OwnerQuestionChoices.options(safeJson(args,config,false)));
+                            evidence.put("ownerQuestion",waiting);
                             return finish(taskId,"awaiting_user",question,evidence,steps,config,sink);
                         }
                         evidence.put("blocked",safeJson(RunOutcomeTools.declaration(args),config,false));return finish(taskId,args.getBoolean("recoverable")?"awaiting_user":"failed",clean(RunOutcomeTools.summary(args),config),evidence,steps,config,sink);

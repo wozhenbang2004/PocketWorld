@@ -43,6 +43,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -285,6 +287,9 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
     scroll: LazyListState, observedMessage: String, observeMessage: (String) -> Unit, newReplies: Boolean, setNewReplies: (Boolean) -> Unit, readingReady:Boolean, missingReadingAnchor:Boolean) {
     var chatTools by remember { mutableStateOf(false) }
     var composerDetails by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    var quoteMessage by remember(state.conversationId) { mutableStateOf<UiMessage?>(null) }
+    quoteMessage?.let { MessageQuoteSheet(it, controller) { quoteMessage = null } }
     ChatAttachmentChooser(state,controller)
     var taskMemoryReference by remember { mutableStateOf<JSONObject?>(null) }
     taskMemoryReference?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
@@ -319,7 +324,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
         } else LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("conversation_messages"), state = scroll, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             items(state.messages, key = { it.id ?: (it.role + it.at + it.content.hashCode()) }) { message -> Column(Modifier.fillMaxWidth(), horizontalAlignment = if (message.role == "user") Alignment.End else Alignment.Start) {
                 var messageDetails by remember(message.id, message.at) { mutableStateOf(false) }
-                val hasMessageActions = message.id != null || message == lastAssistant || message.memoryReference != null
+                val hasMessageActions = message.content.isNotEmpty() || message.id != null || message == lastAssistant || message.memoryReference != null
                 if (message.role != "user") Row(verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
                     Box(Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(Color.White)
@@ -347,6 +352,10 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 }
                 message.submission?.let{ChatInputReceipt(it,controller)}
                 if(messageDetails) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { clipboard.setText(AnnotatedString(message.content)) }, enabled = message.content.isNotEmpty(), modifier = Modifier.testTag("message_copy")) { Text("复制", fontSize = 12.sp) }
+                        if (!phone && message.ownerOriginalLocator != null) TextButton(onClick = { quoteMessage = message }, enabled = !state.chatSubmitting && ownerDraft != null && message.content.isNotEmpty(), modifier = Modifier.testTag("message_quote")) { Text("引用到草稿", fontSize = 12.sp) }
+                    }
                     message.id?.let { id -> SourceMemoryControl("message", id, message.content, state, controller, compact = true) }
                     finalAnswerSourceSelection(message)?.let { selection -> TextButton(onClick = { answerSources = selection; answerSourceMemory = message.memoryReference }, modifier = Modifier.testTag("final_answer_sources_open")) { Text("这次回答的来源", fontSize = 11.sp) } }
                     message.memoryReference?.let { reference -> TextButton(onClick = { taskMemoryReference = JSONObject(reference.toString()) }) { Text("本次提供的记忆来源", fontSize = 11.sp) } }
@@ -356,7 +365,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                         ConversationTaskJournal(TaskPresentation.fromTaskStore(linked.raw), { if (teamRunReferences(linked).isNotEmpty()) controller.openTeam(teamRunReferences(linked).first()) else controller.focusTask(it) }, controller::getTask,
                             interruptedSourceRevision = controller.conversationSourceRevision,
                             readInterrupted = if (linked.raw.optString("kind") == "assistant" && linked.raw.optJSONObject("origin") == null) { cursor, done -> controller.readConversationInterrupted(id, state.conversationId, cursor, done) } else null,
-                            answerQuestion = controller::answerOwnerQuestion)
+                            answerQuestion = controller::answerOwnerQuestion, chooseQuestion = controller::answerOwnerQuestionChoice)
                     }
                 }
             } }
@@ -568,7 +577,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             }
             host.taskActionErrors[task.id]?.let { Text(it, color = Danger, fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 8.dp)) }
             if (phoneTask) runCatching { dev.pocketengine.features.assistant.OwnerPhoneQuestions.pageQuestion(task.raw) }.getOrNull()?.let { question ->
-                key(task.id, question.toString()) { OwnerQuestionPanel(question, controller::answerOwnerQuestion) }
+                key(task.id, question.toString()) { OwnerQuestionPanel(question, controller::answerOwnerQuestion, controller::answerOwnerQuestionChoice) }
             }
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(approvalAnchor))
             if (!pairedTask && !mediaTask && (!groupTask || controller.groupTaskReady) && pendingCapabilityApprovals(task).isNotEmpty()) CapabilityApprovals(task, controller)

@@ -71,6 +71,15 @@ public final class StructuredRunOutcomeRunnerTest {
     @Test public void askWaitsForAnAnswerOnTheOriginalIdentityAndIsNotAnApprovalOrTakeover()throws Exception{
         try(Fixture fixture=new Fixture()){fixture.replies.add(calls(call("ask",RunOutcomeTools.ASK,new JSONObject().put("question","请问提醒在几点？"))));RunOutcome outcome=fixture.run();assertEquals("awaiting_user",outcome.status);JSONObject question=outcome.evidence.getJSONObject("ownerQuestion");assertEquals("original-task",question.getString("taskId"));assertEquals("original-run",question.getString("runId"));assertEquals(1,question.getInt("coordinatorEpoch"));assertEquals("answer",question.getString("replyKind"));assertFalse(question.getBoolean("approval"));assertFalse(question.getBoolean("takeover"));assertTrue(question.getString("requestId").matches("[a-f0-9-]{36}"));assertEquals(0,fixture.operations);assertEquals(1,fixture.requests.get());}
     }
+    @Test public void structuredQuestionPersistsChoicesOnOnlyItsOriginalWait()throws Exception{
+        try(Fixture fixture=new Fixture()){
+            JSONObject args=new JSONObject().put("question","先做哪一项？").put("options",new JSONArray().put(new JSONObject().put("id","read").put("label","先读取原资料")).put(new JSONObject().put("id","wait").put("label","稍后再做")));
+            fixture.replies.add(calls(call("ask",RunOutcomeTools.ASK,args)));RunOutcome outcome=fixture.run();
+            assertEquals("awaiting_user",outcome.status);JSONObject question=outcome.evidence.getJSONObject("ownerQuestion");
+            assertEquals("original-task",question.getString("taskId"));assertEquals("original-run",question.getString("runId"));assertEquals(2,question.getJSONArray("options").length());
+            assertEquals("read",question.getJSONArray("options").getJSONObject(0).getString("id"));assertFalse(question.getBoolean("approval"));assertFalse(question.getBoolean("takeover"));assertEquals(0,fixture.operations);assertEquals(1,fixture.requests.get());
+        }
+    }
     @Test public void aNativeQueuedAnswerContinuesTheOriginalTaskButStillCannotGrantAnEffect()throws Exception{
         try(Fixture fixture=new Fixture()){fixture.answerQueued=true;fixture.replies.add(calls(call("ask",RunOutcomeTools.ASK,new JSONObject().put("question","请补充条件"))));fixture.replies.add(calls(call("write","fixture_write",new JSONObject())));RunOutcome outcome=fixture.run();assertEquals(outcome.summary,"needs_confirmation",outcome.status);assertTrue(fixture.inputDelivered);assertEquals(3,fixture.requests.get());assertEquals(1,fixture.approvalChecks);assertEquals(0,fixture.effects);assertEquals(0,fixture.operations);assertTrue(fixture.raw.toString().contains("original_approval_required"));assertTrue(fixture.raw.toString().contains("30000000-0000-0000-0000-000000000003"));}
     }
