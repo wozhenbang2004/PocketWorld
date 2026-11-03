@@ -18,7 +18,8 @@ def capability(worker):
             "retainedEventBytes": 24576, "cursorPersistedByClient": True,
             "delivery": "bounded_cursor_get_not_sse", "completeProviderHistory": False,
             "childSourceProtocol": "claude_complete_child_v1" if worker == "claude" else "codex_public_child_v1" if worker == "codex_app_server" else None,
-            "childSourceDelivery": "received_complete_public_blocks_only" if worker == "claude" else "received_public_events_only_with_observed_native_parent_link" if worker == "codex_app_server" else "unsupported",
+            "childSourceDelivery": "received_complete_public_blocks_and_pinned_tool_progress" if worker == "claude" else "received_public_events_only_with_observed_native_parent_link" if worker == "codex_app_server" else "unsupported",
+            "childToolProgressVersion": "2.1.317" if worker == "claude" else None,
             "childTokenStreaming": False, "childSessionControl": False,
             "maxChildSources": 16 if worker == "codex_app_server" else None,
             "childNativeVersion": "0.166.0-alpha.1" if worker == "codex_app_server" else None}

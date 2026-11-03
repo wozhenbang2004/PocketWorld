@@ -19,7 +19,19 @@ public final class WorkProfileResolver {
         default ModelConfig globalDefault(RunControl observation) throws Exception { observation.check(); return null; }
         /** Existing source's public native facts, not content from a model or imported Profile. */
         JSONObject skill(String id, RunControl observation) throws Exception;
+        /** Native project/task adapters only. Imported Profile JSON cannot supply this scope. */
+        default Sources forProject(dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection selected,RunControl observation)throws Exception {
+            observation.check();if(selected!=null)throw new SecurityException("native_profile_project_source_not_mounted");return this;
+        }
+        default Sources forTask(dev.pocketengine.store.TaskStore tasks,String id,RunControl observation)throws Exception {
+            observation.check();JSONObject task=tasks.get(id,false);if(task!=null&&task.has("developmentContext"))throw new SecurityException("native_profile_task_scope_not_mounted");return this;
+        }
+        default JSONObject skillScope(RunControl observation)throws Exception {observation.check();return null;}
+        /** Compatibility for old native snapshots: global sources only, never a new project selection. */
+        default JSONObject legacyGlobalSkill(String id,RunControl observation)throws Exception {return skill(id,observation);}
         default JSONObject referencePackage(JSONObject exactReference,RunControl observation)throws Exception{throw new SecurityException("原技能文本投射读取未挂载，请保留编辑");}
+        /** Old native snapshots retain their global text sources inside a project task. */
+        default JSONObject legacyGlobalReferencePackage(JSONObject exactReference,RunControl observation)throws Exception{return referencePackage(exactReference,observation);}
         JSONObject plugin(String id, RunControl observation) throws Exception;
         JSONObject extension(String id, RunControl observation) throws Exception;
         JSONObject team(String id, RunControl observation) throws Exception;
@@ -49,6 +61,8 @@ public final class WorkProfileResolver {
                 public void checkModel(ModelConfig captured, String purpose, RunControl control) throws Exception { sources.checkModel(captured, purpose, control); }
                 public ModelConfig globalDefault(RunControl control) throws Exception { ModelConfig captured=models.get("_GLOBAL"); if(captured!=null)sources.checkModel(captured,"DEFAULT",control);return captured; }
                 public JSONObject skill(String id, RunControl control) throws Exception { return sources.skill(id, control); }
+                public JSONObject skillScope(RunControl control)throws Exception{return sources.skillScope(control);}
+                public JSONObject legacyGlobalSkill(String id,RunControl control)throws Exception{return sources.legacyGlobalSkill(id,control);}
                 public JSONObject plugin(String id, RunControl control) throws Exception { return sources.plugin(id, control); }
                 public JSONObject extension(String id, RunControl control) throws Exception { return sources.extension(id, control); }
                 public JSONObject team(String id, RunControl control) throws Exception { return sources.team(id, control); }
@@ -80,11 +94,13 @@ public final class WorkProfileResolver {
     /** Original SQL snapshots can rebuild a removal-only tool policy without recapturing models or probing CLIs.
      * Model request identity/authorization stays in the already captured config and original Gateway. */
     static void checkStoredAssetSourcesCurrent(JSONObject frozen, Sources sources, RunControl control) throws Exception {
+        requireStoredSkillScope(frozen,sources,control);
         JSONObject definition = frozen.getJSONObject("definition"); WorkProfile assets = WorkProfile.fromJson(new JSONObject(definition.toString()).put("modelPolicies", new JSONObject()));
         Sources originalAssets = new Sources() {
             public ModelConfig model(ModelTargetRef ref, String purpose, RunControl observation) { throw new SecurityException("tool_policy_cannot_recapture_models"); }
             public void checkModel(ModelConfig captured, String purpose, RunControl observation) { throw new SecurityException("tool_policy_cannot_recapture_models"); }
-            public JSONObject skill(String id, RunControl observation) throws Exception { return sources.skill(id, observation); }
+            public JSONObject skill(String id, RunControl observation) throws Exception { return frozen.has("skillScope")?sources.skill(id, observation):sources.legacyGlobalSkill(id,observation); }
+            public JSONObject skillScope(RunControl observation)throws Exception{return frozen.has("skillScope")?sources.skillScope(observation):null;}
             public JSONObject plugin(String id, RunControl observation) throws Exception { return sources.plugin(id, observation); }
             public JSONObject extension(String id, RunControl observation) throws Exception { return sources.extension(id, observation); }
             public JSONObject team(String id, RunControl observation) throws Exception { return sources.team(id, observation); }
@@ -94,7 +110,17 @@ public final class WorkProfileResolver {
         Resolution observed = resolve(assets, originalAssets, control, false); observed.requireReady(); JSONArray expected = new JSONArray(), actual = observed.view().getJSONArray("items"), original = frozen.getJSONArray("items");
         for (int i = 0; i < original.length(); i++) if (!"model".equals(original.getJSONObject(i).getString("kind"))) expected.put(original.getJSONObject(i));
         for (int i = 0; i < expected.length(); i++) { JSONObject item = expected.getJSONObject(i); if (item.getString("kind").startsWith("target:") && item.getBoolean("optional") && !item.getBoolean("included")) actual.put(i, new JSONObject(item.toString())); }
-        if (!WorkProfile.fingerprint(expected).equals(WorkProfile.fingerprint(actual))) throw new SecurityException("original_work_profile_asset_sources_changed"); control.check();
+        if (!WorkProfile.fingerprint(expected).equals(WorkProfile.fingerprint(actual))) throw new SecurityException("original_work_profile_asset_sources_changed");requireStoredSkillScope(frozen,sources,control);control.check();
+    }
+    /** The stored JSON only describes a previous native choice. A current native adapter
+     * must independently derive the same namespace before it can be used again. Old pins
+     * without scope are read through legacyGlobalSkill and cannot gain project sources. */
+    static void requireStoredSkillScope(JSONObject frozen,Sources sources,RunControl observation)throws Exception {
+        JSONObject current=sources.skillScope(observation);
+        if(frozen.has("skillScope")!=frozen.has("skillScopeFingerprint"))throw new SecurityException("original_work_profile_skill_scope_pin_incomplete");
+        if(!frozen.has("skillScope"))return;
+        String expected=dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(frozen.getJSONObject("skillScope"));
+        if(!expected.equals(frozen.getString("skillScopeFingerprint"))||current==null||!expected.equals(dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(current)))throw new SecurityException("original_work_profile_skill_scope_changed");
     }
     private interface Read { JSONObject get() throws Exception; }
     private interface Check { JSONObject verify(JSONObject actual) throws Exception; }
@@ -102,7 +128,7 @@ public final class WorkProfileResolver {
     public static Resolution resolve(WorkProfile profile, Sources sources, RunControl observation) throws Exception {return resolve(profile,sources,observation,true);}
     private static Resolution resolve(WorkProfile profile,Sources sources,RunControl observation,boolean captureDefault) throws Exception {
         java.util.Objects.requireNonNull(profile); java.util.Objects.requireNonNull(sources); observation.check();
-        JSONObject definition = profile.toJson(), capturedModels = new JSONObject(); JSONArray rows = new JSONArray();
+        JSONObject definition = profile.toJson(), capturedModels = new JSONObject(),skillScope=sources.skillScope(observation); JSONArray rows = new JSONArray();
         Set<String> availableCapabilities=sources.hostCapabilities();
         Set<String> selectedPluginCapabilities = new java.util.HashSet<>();JSONArray pluginRefs=definition.getJSONArray("pluginRefs");for(int i=0;i<pluginRefs.length();i++){JSONObject plugin=pluginRefs.getJSONObject(i);JSONArray tools=plugin.getJSONArray("tools");for(int n=0;n<tools.length();n++)selectedPluginCapabilities.add("plugin:"+plugin.getString("id")+":"+tools.getString(n));}
         Map<String, ModelConfig> models = new LinkedHashMap<>();
@@ -140,7 +166,7 @@ public final class WorkProfileResolver {
                             if (!actual.optBoolean("contentVerified") || !actual.optBoolean("active") || !"active".equals(actual.optString("status"))) throw new Missing("skill_not_active");
                             JSONArray required = actual.getJSONArray("requiredCapabilities");
                             for (int n = 0; n < required.length(); n++){String capability=required.getString(n);if(!availableCapabilities.contains(capability))throw new Missing("host_capability_missing");if(capability.startsWith("plugin:")&&!selectedPluginCapabilities.contains(capability))throw new Missing("required_plugin_not_selected");}
-                            return pick(actual, "id", "revision", "digest", "executionGeneration", "expiresAt");
+                            return pick(actual, "id", "revision", "digest", "executionGeneration", "expiresAt", "skillScopeFingerprint");
                         }));
             }
         }
@@ -200,6 +226,8 @@ public final class WorkProfileResolver {
         JSONObject result = new JSONObject().put("format", "pocketworld.resolved-work-profile.v1").put("profileId", profile.id).put("profileRevision", profile.revision)
                 .put("profileDigest", profile.digest()).put("items", rows).put("modelPolicies", capturedModels).put("resourcePreferences", definition.getJSONObject("resourcePreferences"))
                 .put("ready", ready).put("sourceChecksOnly", true).put("configurationApplied", false).put("runtimeVerified", false).put("optionalOmissions", omitted).put("executionAuthorized", false).put("permissionsChanged", false).put("executed", false);
+        if(skillScope!=null)result.put("skillScope",new JSONObject(skillScope.toString())).put("skillScopeFingerprint",dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(skillScope));
+        requireStoredSkillScope(result,sources,observation);
         return new Resolution(profile, sources, result, models);
     }
     private static JSONObject inspect(String kind, String id, JSONObject ref, RunControl observation, Read read, Check check) throws Exception {
@@ -243,6 +271,7 @@ public final class WorkProfileResolver {
     /** Original run recovery only: recapture credential-bearing configs from their native stores,
      * compare all public pins, and keep explicitly omitted targets omitted without probing them. */
     static Resolution resolveStored(JSONObject frozen,Sources original,RunControl observation)throws Exception {
+        requireStoredSkillScope(frozen,original,observation);
         Sources pinned=new Sources(){
             public ModelConfig model(ModelTargetRef ref,String purpose,RunControl control)throws Exception{ModelConfig captured=original.model(ref,purpose,control);requireStoredModelIdentity(frozen,purpose,captured);return captured;}
             public void checkModel(ModelConfig captured,String purpose,RunControl control)throws Exception{original.checkModel(captured,purpose,control);}
@@ -254,7 +283,9 @@ public final class WorkProfileResolver {
                 ModelConfig captured=original.model(ModelTargetRef.exact(connection,pin.getString("model")),"DEFAULT",control);
                 requireStoredModelIdentity(frozen,"_GLOBAL",captured);return captured;
             }
-            public JSONObject skill(String id,RunControl control)throws Exception{return original.skill(id,control);}
+            public JSONObject skill(String id,RunControl control)throws Exception{return frozen.has("skillScope")?original.skill(id,control):original.legacyGlobalSkill(id,control);}
+            public JSONObject skillScope(RunControl control)throws Exception{return frozen.has("skillScope")?original.skillScope(control):null;}
+            public JSONObject legacyGlobalSkill(String id,RunControl control)throws Exception{return original.legacyGlobalSkill(id,control);}
             public JSONObject plugin(String id,RunControl control)throws Exception{return original.plugin(id,control);}
             public JSONObject extension(String id,RunControl control)throws Exception{return original.extension(id,control);}
             public JSONObject team(String id,RunControl control)throws Exception{return original.team(id,control);}

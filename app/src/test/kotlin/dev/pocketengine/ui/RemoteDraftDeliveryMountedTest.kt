@@ -55,6 +55,7 @@ class RemoteDraftDeliveryMountedTest {
         .put("worker", worker).put("protocol", protocol).put("protocolVerified", true).put("cancelRequested", false).put("jobId", "job").put("jobOperationId", "operation")
         .put("threadId", "session").put("sessionId", "session").put("turnId", "turn").put("executorStatus", "running").put("controls", JSONObject().put("inputSteering", true).put("threadResume", false).put("cancel", true)).apply { if (worker == "claude") put("controlProtocolVerified", true).put("sessionIdentityConfirmed", true).put("promptRequestId", "prompt") }
     private fun pi(settled: Boolean) = source("pi", "pi_rpc_v1").put("noTools", true).put("promptRequestId", "prompt").apply {
+        remove("turnId")
         if (settled) { put("executorStatus", "completed").put("nativeSettled", true).put("resourcesHeld", false).put("processCleanupProof", JSONObject().put("processGroupStoppedVerified", true)); getJSONObject("controls").put("threadResume", true) }
     }
     private fun snapshot(source: JSONObject, canContinue: Boolean, queued: String? = null, savedSource: JSONObject = source): JSONObject {
@@ -76,7 +77,7 @@ class RemoteDraftDeliveryMountedTest {
     }
     @Test fun runningNoToolsPiShowsTheRealLimitationAndOnlyQueuesLocalIntent() {
         Fixture(snapshot(pi(false), false)).use { f ->
-            assertTrue(nodes().any { text(it).contains("不代表已具备Pi编程能力") }); assertTrue(nodes().any { text(it).contains("本机草稿尚未发送给模型") }); assertTrue(nodes().any { text(it).contains("不会回滚") })
+            assertTrue(nodes().any { text(it).contains("不代表已具备Pi编程能力") }); assertTrue(nodes().any { text(it).contains("保存和排队本身不发送") }); assertTrue(nodes().any { text(it).contains("不会回滚") })
             assertFalse(nodes().any { text(it).contains("当前Codex turn补充") }); assertTrue(f.sent.isEmpty())
             f.edit("one explicit local Pi draft"); f.click("保存并排队")
             assertEquals(1, f.sent.size); assertEquals("saveDraft", f.sent.single().first)
@@ -99,7 +100,32 @@ class RemoteDraftDeliveryMountedTest {
             f.selectQueued(); assertTrue(nodes().any { text(it).contains("接收回执不等于模型已经采用") }); f.click("明确发送这条到原turn"); assertEquals("sendDraft", f.sent.single().first); assertEquals(2, f.sent.single().second.length())
         }
         Fixture(snapshot(source("claude", "claude_stream_json"), false, "next_turn")).use { f ->
-            f.selectQueued(); assertFalse(nodes().any { text(it).contains("当前Codex turn补充") }); assertTrue(nodes().any { text(it).contains("本适配器未挂接Claude / Pi运行中补充") }); assertFalse(f.enabled("明确发送这条并继续原会话")); assertTrue(f.sent.isEmpty())
+            f.selectQueued(); assertFalse(nodes().any { text(it).contains("当前Codex turn补充") }); assertTrue(nodes().any { text(it).contains("本适配器未挂接Claude运行中补充") }); assertFalse(f.enabled("明确发送这条并继续原会话")); assertTrue(f.sent.isEmpty())
+        }
+    }
+    @Test fun verifiedPiQueueShowsUnknownConsumptionAndSendsOnlyTheExplicitSavedDraft() {
+        val source = pi(false).put("inputSteeringVerified", true)
+        val view = snapshot(source, false, "steer")
+        val id = view.getJSONArray("inputDrafts").getJSONObject(0).getString("id")
+        Fixture(view).use { f ->
+            assertTrue(nodes().any { text(it).contains("队列接收不证明模型已处理") })
+            assertFalse(nodes().any { text(it).contains("当前Codex turn补充") })
+            f.selectQueued(); assertTrue(f.sent.isEmpty()); f.click("明确追加这条到原Pi队列")
+            assertEquals("sendDraft", f.sent.single().first); assertEquals(2, f.sent.single().second.length())
+            assertEquals(id, f.sent.single().second.getString("draftId")); assertEquals(1, f.sent.single().second.getLong("draftRevision"))
+            assertFalse(f.sent.single().second.has("expectedTurnId")); assertFalse(f.sent.single().second.has("source"))
+        }
+    }
+    @Test fun stoppedOrUnknownPiQueueKeepsSavedInputButCannotDispatchIt() {
+        val saved = pi(false).put("inputSteeringVerified", true)
+        listOf(JSONObject(saved.toString()).put("cancelRequested", true), JSONObject(saved.toString()).put("steeringUnknown", true), JSONObject(saved.toString()).put("steeringUnknown", true).put("inputSteeringVerified", false)).forEach { stopped ->
+            Fixture(snapshot(stopped, false, "steer", saved)).use { f ->
+                f.selectQueued(); assertFalse(f.enabled("明确追加这条到原Pi队列")); assertTrue(f.sent.isEmpty())
+                if (!stopped.optBoolean("inputSteeringVerified")) {
+                    assertTrue(nodes().any { text(it).contains("既有操作请按原消息回执核对") })
+                    assertFalse(nodes().any { text(it).contains("尚未发送给模型") || text(it).contains("未挂接Claude / Pi") })
+                }
+            }
         }
     }
     @Test fun changedPiToolIdentityKeepsTheDraftVisibleButCannotInheritSaveOrSendCapability() {

@@ -11,7 +11,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -25,7 +25,7 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
 public final class MemoryNativeConsolidationControllerTest {
-    @Before public void keys(){java.security.Security.addProvider(new java.security.Provider("MemoryMountedKeyStore","1","Explicit test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    @Before public void keys(){java.security.Security.addProvider(new java.security.Provider("MemoryMountedKeyStore",1.0,"Explicit test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     interface Check{boolean done()throws Exception;}
     static void await(Check check)throws Exception{long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);while(!check.done()&&System.nanoTime()<until){Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();Thread.sleep(10);}Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertTrue("native memory condition missing",check.done());}
     static JSONObject j(Object... pairs)throws Exception{JSONObject value=new JSONObject();for(int i=0;i<pairs.length;i+=2)value.put((String)pairs[i],pairs[i+1]);return value;}

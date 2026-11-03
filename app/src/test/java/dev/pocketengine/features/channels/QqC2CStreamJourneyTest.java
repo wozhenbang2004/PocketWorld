@@ -21,14 +21,14 @@ import static org.junit.Assert.*;
 @Config(sdk=35,manifest=Config.NONE,application=Application.class)
 @ConscryptMode(ConscryptMode.Mode.OFF)
 public final class QqC2CStreamJourneyTest {
-    @Before public void vault(){java.security.Security.addProvider(new java.security.Provider("QqStreamFixtureVault","1","Synthetic owner-keystore"){{put("KeyStore.AndroidKeyStore",ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    @Before public void vault(){java.security.Security.addProvider(new java.security.Provider("QqStreamFixtureVault",1.0,"Synthetic owner-keystore"){{put("KeyStore.AndroidKeyStore",ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     @After public void release(){java.security.Security.removeProvider("QqStreamFixtureVault");}
     private static void accept(QqOwnerImageJourneyTest.Fixture f,JSONObject event)throws Exception {var method=ChannelsModule.class.getDeclaredMethod("handleAccepted",JSONObject.class,JSONObject.class);method.setAccessible(true);try{method.invoke(f.module,f.core.profile("bot"),new JSONObject().put("duplicate",false).put("event",event).put("route",event.getJSONObject("route")));}catch(java.lang.reflect.InvocationTargetException failure){throw(Exception)failure.getCause();}}
     private static final class Transport {
-        final CopyOnWriteArrayList<JSONObject> frames=new CopyOnWriteArrayList<>();final AtomicInteger modelCalls=new AtomicInteger();final AtomicReference<Throwable> failure=new AtomicReference<>();final java.util.concurrent.CountDownLatch firstFrameSeen=new java.util.concurrent.CountDownLatch(1);volatile boolean laterDeltaWritten,firstFrameBeforeLaterDelta;Runnable afterFirstAck;
+        final CopyOnWriteArrayList<JSONObject> frames=new CopyOnWriteArrayList<>();final AtomicInteger modelCalls=new AtomicInteger();final AtomicReference<Throwable> failure=new AtomicReference<>();final java.util.concurrent.CountDownLatch firstFrameSeen=new java.util.concurrent.CountDownLatch(1);volatile boolean laterDeltaWritten,firstFrameBeforeLaterDelta;Runnable beforeFirstAck,afterFirstAck;
         Transport(QqOwnerImageJourneyTest.Fixture f,boolean dropAck,boolean revoke)throws Exception {
             f.server.createContext("/v1/chat/completions",exchange->{try{JSONObject request=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));assertTrue(request.getBoolean("stream"));assertFalse(request.has("tools"));modelCalls.incrementAndGet();String[] parts={"Actual ","streamed ","answer"};java.util.ArrayList<byte[]> chunks=new java.util.ArrayList<>();int length=0;for(String part:parts){JSONObject chunk=new JSONObject().put("id","actual-model-stream").put("object","chat.completion.chunk").put("choices",new JSONArray().put(new JSONObject().put("index",0).put("delta",new JSONObject().put("content",part)).put("finish_reason",JSONObject.NULL)));byte[] bytes=("data: "+chunk+"\n\n").getBytes(StandardCharsets.UTF_8);chunks.add(bytes);length+=bytes.length;}JSONObject finish=new JSONObject().put("id","actual-model-stream").put("object","chat.completion.chunk").put("choices",new JSONArray().put(new JSONObject().put("index",0).put("delta",new JSONObject()).put("finish_reason","stop")));byte[] terminal=("data: "+finish+"\n\ndata: [DONE]\n\n").getBytes(StandardCharsets.UTF_8);length+=terminal.length;exchange.getResponseHeaders().add("Content-Type","text/event-stream");exchange.sendResponseHeaders(200,length);var output=exchange.getResponseBody();for(int n=0;n<chunks.size();n++){output.write(chunks.get(n));output.flush();if(n==0)assertTrue("Original first QQ frame must arrive before later provider deltas are released",firstFrameSeen.await(3,java.util.concurrent.TimeUnit.SECONDS));if(n==0&&afterFirstAck!=null){long until=System.nanoTime()+3_000_000_000L;while(true){JSONArray rows=f.module.snapshot().getJSONArray("outbox");if(rows.length()>0&&rows.getJSONObject(0).getJSONObject("nativeQqStream").optInt("lastAckIndex",-1)==0)break;if(System.nanoTime()>until)throw new AssertionError("first frame not acknowledged");Thread.sleep(5);}afterFirstAck.run();}if(n<chunks.size()-1){Thread.sleep(550);laterDeltaWritten=true;}}output.write(terminal);output.flush();}catch(java.io.IOException expectedWhenOriginalCancelled){}catch(Throwable problem){failure.compareAndSet(null,problem);}finally{exchange.close();}});
-            f.server.createContext("/v2/users/owner/stream_messages",exchange->{try{JSONObject frame=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));frames.add(frame);if(frames.size()==1){firstFrameBeforeLaterDelta=!laterDeltaWritten;firstFrameSeen.countDown();}assertEquals("QQBot fixture-qq-token",exchange.getRequestHeaders().getFirst("Authorization"));if(revoke)f.module.handle("owner.unbind",new JSONObject().put("profileId","bot"));if(!dropAck){byte[] response="{\"id\":\"same-provider-stream\"}".getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(200,response.length);exchange.getResponseBody().write(response);}}catch(java.io.IOException expectedAfterOwnerRevoked){if(!revoke)failure.compareAndSet(null,expectedAfterOwnerRevoked);}catch(Throwable problem){failure.compareAndSet(null,problem);}finally{exchange.close();}});
+            f.server.createContext("/v2/users/owner/stream_messages",exchange->{try{JSONObject frame=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));frames.add(frame);if(frames.size()==1){firstFrameBeforeLaterDelta=!laterDeltaWritten;firstFrameSeen.countDown();}assertEquals("QQBot fixture-qq-token",exchange.getRequestHeaders().getFirst("Authorization"));if(revoke)f.module.handle("owner.unbind",new JSONObject().put("profileId","bot"));if(frames.size()==1&&beforeFirstAck!=null)beforeFirstAck.run();if(!dropAck){byte[] response="{\"id\":\"same-provider-stream\"}".getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(200,response.length);exchange.getResponseBody().write(response);}}catch(java.io.IOException expectedAfterOwnerRevoked){if(!revoke)failure.compareAndSet(null,expectedAfterOwnerRevoked);}catch(Throwable problem){failure.compareAndSet(null,problem);}finally{exchange.close();}});
         }
         void check(){if(failure.get()!=null)throw new AssertionError(failure.get());}
     }
@@ -45,6 +45,7 @@ public final class QqC2CStreamJourneyTest {
     @Test public void lostFrameAckOrRevocationStopsSameStreamWithoutSecondPostDoneOrOrdinaryMessageFallback()throws Exception {
         for(boolean revoke:new boolean[]{false,true})try(var f=new QqOwnerImageJourneyTest.Fixture()){
             Transport transport=new Transport(f,!revoke,revoke);JSONObject event=start(f);f.await(event,revoke?"cancelled":"failed");transport.check();assertEquals(1,transport.frames.size());assertEquals(1,transport.frames.get(0).getInt("input_state"));assertEquals(0,f.sent.get());JSONObject out=f.module.snapshot().getJSONArray("outbox").getJSONObject(0);assertEquals("unknown",out.getString("status"));assertFalse(out.getJSONObject("nativeQqStream").getBoolean("complete"));assertTrue(out.getJSONObject("nativeQqStream").getBoolean("partialMayBeVisible"));assertThrows(IllegalStateException.class,()->f.module.handle("outbox.send",new JSONObject().put("id",out.getString("id"))));assertEquals(1,transport.modelCalls.get());
+            assertEquals(-1,out.getJSONObject("nativeQqStream").getInt("lastAckIndex"));assertFalse(out.getJSONObject("nativeQqStream").has("streamMessageId"));
             ChannelCore cold=new ChannelCore(new java.io.File(f.android.getFilesDir(),"channels"));assertEquals("unknown",cold.snapshot().getJSONArray("outbox").getJSONObject(0).getString("status"));assertThrows(IllegalStateException.class,()->cold.prepareSend(out.getString("id")));assertEquals(1,transport.frames.size());
         }
     }
@@ -62,6 +63,41 @@ public final class QqC2CStreamJourneyTest {
             Transport transport=new Transport(f,false,false);transport.afterFirstAck=()->{try{memory.handle("forget",new JSONObject().put("scope",scope).put("id",record.getString("id")));}catch(Exception failure){throw new RuntimeException(failure);}};
             JSONObject event=start(f);f.await(event,"failed");transport.check();assertEquals(1,transport.frames.size());assertEquals(1,transport.frames.get(0).getInt("input_state"));assertEquals(0,f.sent.get());
             JSONObject stream=f.module.snapshot().getJSONArray("outbox").getJSONObject(0).getJSONObject("nativeQqStream");assertEquals("same-provider-stream",stream.getString("streamMessageId"));assertEquals(0,stream.getInt("lastAckIndex"));assertFalse(stream.getBoolean("complete"));assertTrue(stream.getBoolean("partialMayBeVisible"));
+        }
+    }
+
+    @Test public void memoryForgetWhileAcceptedFrameAckReturnsRetainsThatAckAndStopsNextSend()throws Exception {
+        try(var f=new QqOwnerImageJourneyTest.Fixture()){
+            var memory=new dev.pocketengine.features.memory.MemoryModule(f.context);f.module.setMemory(memory);
+            JSONObject scope=new JSONObject().put("ownerId","owner").put("spaceId","private");
+            JSONObject record=memory.handle("save",new JSONObject().put("scope",scope).put("record",new JSONObject().put("text","remembered stream source"))).getJSONObject("record");
+            memory.handle("setCore",new JSONObject().put("scope",scope).put("id",record.getString("id")).put("revision",record.getLong("revision")).put("core",true));
+            Transport transport=new Transport(f,false,false);
+            transport.beforeFirstAck=()->{try{memory.handle("forget",new JSONObject().put("scope",scope).put("id",record.getString("id")));}catch(Exception failure){throw new RuntimeException(failure);}};
+            JSONObject event=start(f);f.await(event,"failed");transport.check();
+            assertEquals(1,transport.frames.size());assertEquals(1,transport.modelCalls.get());assertEquals(0,f.sent.get());
+            JSONObject row=f.module.snapshot().getJSONArray("outbox").getJSONObject(0),stream=row.getJSONObject("nativeQqStream");
+            assertEquals("unknown",row.getString("status"));assertEquals("same-provider-stream",stream.getString("streamMessageId"));
+            assertEquals(0,stream.getInt("lastAckIndex"));assertFalse(stream.getBoolean("complete"));assertTrue(stream.getBoolean("partialMayBeVisible"));
+            assertFalse(stream.has("pendingFrameHash"));assertEquals("stopped_unconfirmed",stream.getString("phase"));
+            ChannelCore cold=new ChannelCore(new java.io.File(f.android.getFilesDir(),"channels"));
+            assertEquals("same-provider-stream",cold.snapshot().getJSONArray("outbox").getJSONObject(0).getJSONObject("nativeQqStream").getString("streamMessageId"));
+            assertThrows(IllegalStateException.class,()->cold.prepareSend(row.getString("id")));
+            assertThrows(SecurityException.class,()->cold.ackQqStreamFrame(row.getString("id"),transport.frames.get(0),new JSONObject().put("id","old-late-callback")));
+        }
+    }
+
+    @Test public void ownerCancelAfterAcceptedFrameRetainsOriginalAckAndRejectsOldFrameCallback()throws Exception {
+        try(var f=new QqOwnerImageJourneyTest.Fixture()){
+            Transport transport=new Transport(f,false,false);
+            transport.afterFirstAck=()->{try{String eventId=f.module.snapshot().getJSONArray("outbox").getJSONObject(0).getString("eventId");assertTrue(f.module.handle("ask.cancel",new JSONObject().put("eventId",eventId)).getBoolean("requested"));}catch(Exception failure){throw new RuntimeException(failure);}};
+            JSONObject event=start(f);f.await(event,"cancelled");transport.check();
+            assertEquals(1,transport.frames.size());assertEquals(1,transport.modelCalls.get());assertEquals(0,f.sent.get());
+            JSONObject row=f.module.snapshot().getJSONArray("outbox").getJSONObject(0),stream=row.getJSONObject("nativeQqStream");
+            assertEquals("unknown",row.getString("status"));assertEquals("same-provider-stream",stream.getString("streamMessageId"));assertEquals(0,stream.getInt("lastAckIndex"));assertFalse(stream.getBoolean("complete"));
+            assertThrows(SecurityException.class,()->f.core.ackQqStreamFrame(row.getString("id"),transport.frames.get(0),new JSONObject().put("id","old-late-callback")));
+            assertThrows(IllegalStateException.class,()->f.module.handle("outbox.send",new JSONObject().put("id",row.getString("id"))));
+            assertEquals("same-provider-stream",f.module.snapshot().getJSONArray("outbox").getJSONObject(0).getJSONObject("nativeQqStream").getString("streamMessageId"));
         }
     }
 

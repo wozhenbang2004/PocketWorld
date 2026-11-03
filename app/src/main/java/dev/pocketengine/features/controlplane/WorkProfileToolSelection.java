@@ -11,6 +11,7 @@ import org.json.JSONObject;
 public final class WorkProfileToolSelection {
     private final Map<String, String> skills = new LinkedHashMap<>(), instructions = new LinkedHashMap<>(), plugins = new LinkedHashMap<>();
     private final String extensionRefs;
+    private final String skillScope;
     private final CapabilitySnapshot.CurrentCheck current, bindingCurrent, sourcesCurrent;
     @FunctionalInterface public interface PreparedCheck { void check(String tool,String operation,JSONObject args,RunControl original)throws Exception; }
     private final PreparedCheck preparedCurrent;
@@ -32,6 +33,9 @@ public final class WorkProfileToolSelection {
     }
     WorkProfileToolSelection(JSONObject snapshot,CapabilitySnapshot.CurrentCheck current,CapabilitySnapshot.CurrentCheck bindingCurrent,CapabilitySnapshot.CurrentCheck sourcesCurrent,PreparedCheck prepared)throws Exception {
         if (!snapshot.getBoolean("ready")) throw new SecurityException("profile_selection_not_ready"); this.current = java.util.Objects.requireNonNull(current); this.bindingCurrent = java.util.Objects.requireNonNull(bindingCurrent); this.sourcesCurrent=java.util.Objects.requireNonNull(sourcesCurrent);this.preparedCurrent=prepared;
+        if(snapshot.has("skillScope")!=snapshot.has("skillScopeFingerprint"))throw new SecurityException("original_profile_skill_scope_pin_incomplete");
+        skillScope=snapshot.has("skillScope")?snapshot.getJSONObject("skillScope").toString():null;
+        if(skillScope!=null&&!dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(new JSONObject(skillScope)).equals(snapshot.getString("skillScopeFingerprint")))throw new SecurityException("original_profile_skill_scope_pin_changed");
         JSONArray selected = snapshot.getJSONArray("items"), extensions = new JSONArray();
         for (int i = 0; i < selected.length(); i++) {
             JSONObject item = selected.getJSONObject(i); if (!item.getBoolean("included")) continue;
@@ -49,6 +53,13 @@ public final class WorkProfileToolSelection {
         extensionRefs = extensions.toString();
     }
     public void checkCurrent() throws Exception { current.check(); }
+    /** Native task scope is still checked by its original host. Pre-scope Profiles can only
+     * keep their selected global assets; they do not gain a same-named project source. */
+    public JSONObject skillScopeForHost(JSONObject actualNativeScope)throws Exception {checkCurrent();return assetScope(actualNativeScope);}
+    private JSONObject assetScope(JSONObject actualNativeScope)throws Exception {
+        if(skillScope!=null){JSONObject expected=new JSONObject(skillScope);if(!dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(expected).equals(dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(actualNativeScope)))throw new SecurityException("original_profile_skill_scope_changed");return expected;}
+        return new JSONObject().put("ownerId",actualNativeScope.getString("ownerId")).put("spaceId",actualNativeScope.getString("spaceId"));
+    }
     /** The exact original journal op already exists; no read-side no-pending redispatch fence. */
     public void checkPrepared(String tool,JSONObject dispatched,RunControl original)throws Exception {
         String operation=dispatched==null?"":dispatched.optString("_hostOperationId");
@@ -59,8 +70,28 @@ public final class WorkProfileToolSelection {
     /** An opaque same-call recheck, not permission or a reusable operation/start token. */
     public final class PreparedTool {
         private final String tool,dispatched;private final RunControl original;
+        private boolean nativeSkillAdmitted;private String skillTask,skillRun;private int skillEpoch;
         private PreparedTool(String tool,JSONObject dispatched,RunControl original)throws Exception {this.tool=tool;this.dispatched=dispatched==null?"{}":dispatched.toString();this.original=original;}
         public void checkCurrent()throws Exception {checkPrepared(tool,new JSONObject(dispatched),original);}
+        public JSONObject skillScopeForHost(JSONObject actualNativeScope)throws Exception {
+            boolean handedOff;synchronized(this){handedOff=nativeSkillAdmitted;}
+            if(handedOff)checkSkillExecutionCurrent();else checkCurrent();return assetScope(actualNativeScope);
+        }
+        /** One transition on the existing prepared-operation handle. After TaskStore adds
+         * nativeSkill receipt/approval fields, that exact original operation is governed by
+         * its existing Plan/Grant checks rather than comparing its old unaugmented JSON. */
+        public void requireSkillExecution(String task,String run,int epoch,JSONObject input,RunControl supplied)throws Exception {
+            if(!"skills_execute".equals(tool)||supplied!=original||!original.matchesHostRun(task,run,epoch)||input==null||input.optString("_hostOperationId").isEmpty()||!WorkProfile.fingerprint(new JSONObject(dispatched)).equals(WorkProfile.fingerprint(input)))throw new SecurityException("original_profile_skill_operation_required");
+            synchronized(this){if(nativeSkillAdmitted)throw new SecurityException("original_profile_skill_operation_already_handed_off");}
+            checkCurrent();requireSkillReference(input);
+            synchronized(this){if(nativeSkillAdmitted)throw new SecurityException("original_profile_skill_operation_already_handed_off");skillTask=task;skillRun=run;skillEpoch=epoch;nativeSkillAdmitted=true;}
+            checkSkillExecutionCurrent();
+        }
+        public void checkSkillExecutionCurrent()throws Exception {
+            final String task,run;final int epoch;synchronized(this){if(!nativeSkillAdmitted)throw new SecurityException("original_profile_skill_operation_not_handed_off");task=skillTask;run=skillRun;epoch=skillEpoch;}
+            original.check();if(!original.matchesHostRun(task,run,epoch))throw new SecurityException("original_profile_skill_run_changed");
+            bindingCurrent.check();sourcesCurrent.check();original.check();
+        }
         private void require(WorkProfileToolSelection expected)throws Exception {if(expected!=WorkProfileToolSelection.this)throw new SecurityException("original_profile_tool_check_required");checkCurrent();}
     }
     public PreparedTool forTool(String tool,JSONObject dispatched,RunControl original)throws Exception {
@@ -85,7 +116,9 @@ public final class WorkProfileToolSelection {
         return includesSkill(metadata)||instruction!=null&&matches(new JSONObject(instruction),metadata);
     }
     private static boolean matches(JSONObject ref,JSONObject actual)throws Exception {
-        return ref.getInt("revision")==actual.optInt("revision",-1)&&ref.getString("digest").equals(actual.optString("digest"));
+        if(ref.getInt("revision")!=actual.optInt("revision",-1)||!ref.getString("digest").equals(actual.optString("digest")))return false;
+        if(ref.has("executionGeneration")&&(!actual.has("executionGeneration")||ref.getLong("executionGeneration")!=actual.getLong("executionGeneration")))return false;
+        return !ref.has("skillScopeFingerprint")||ref.getString("skillScopeFingerprint").equals(actual.optString("skillScopeFingerprint"));
     }
     public void requireSkillRequest(JSONObject args) throws Exception {
         checkCurrent();requireSkillReference(args);
@@ -131,6 +164,7 @@ public final class WorkProfileToolSelection {
             JSONObject metadata = new JSONObject().put("id", row.getString("id")).put("revision", row.getInt("revision")).put("digest", row.getString("digest"))
                     .put("name", row.getString("name")).put("description", row.optString("description")).put("entryPath", "SKILL.md")
                     .put("matchReasons", new JSONArray().put("native_work_profile_selection")).put("selectionSource", "native_work_profile");
+            for(String identity:new String[]{"executionGeneration","skillScopeFingerprint"})if(row.has(identity))metadata.put(identity,row.get(identity));
             if (retained.length() >= 8 || result.toString().length() + metadata.toString().length() + 120 > 6000) { omitted++; continue; }
             retained.put(metadata); included.add(row.getString("id")); added++;
         }

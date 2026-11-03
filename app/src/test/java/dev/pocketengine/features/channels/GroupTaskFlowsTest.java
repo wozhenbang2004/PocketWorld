@@ -41,7 +41,7 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35,manifest=Config.NONE,application=Application.class)
 public final class GroupTaskFlowsTest {
-    @Before public void keyFixture(){java.security.Security.addProvider(new java.security.Provider("GroupFlowKeyStore","1","Local protocol fixture"){{put("KeyStore.AndroidKeyStore",ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    @Before public void keyFixture(){java.security.Security.addProvider(new java.security.Provider("GroupFlowKeyStore",1.0,"Local protocol fixture"){{put("KeyStore.AndroidKeyStore",ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     @After public void removeFixture(){java.security.Security.removeProvider("GroupFlowKeyStore");}
     interface ModelReply {JSONObject answer(JSONObject request)throws Exception;}
     static final class Fixture implements AutoCloseable {

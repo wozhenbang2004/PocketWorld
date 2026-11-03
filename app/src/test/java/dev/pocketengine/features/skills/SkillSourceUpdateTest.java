@@ -86,8 +86,10 @@ public final class SkillSourceUpdateTest {
     }
     @Test public void fetchIsOutsideLockAndConcurrentTargetPolicyChangeRejectsTheCandidate()throws Exception {
         try(Fixture f=new Fixture()) {
-            JSONObject first=f.first();f.server.beforeTree=()->{try{f.book.setEnabled(scope(),first.getString("id"),false,"",false,2100);}catch(Exception failure){throw new RuntimeException(failure);}};
-            assertEquals("stale_target",assertThrows(SkillBook.SourceUnavailable.class,()->f.check(first.getString("id"))).code);assertEquals(1,f.current(first).getInt("revision"));
+            JSONObject first=f.first();f.book.setEnabled(scope(),first.getString("id"),true,first.getString("digest"),true,2000);
+            long generation=f.current(first).getLong("executionGeneration");
+            f.server.beforeTree=()->{try{f.book.setEnabled(scope(),first.getString("id"),false,"",false,2100);}catch(Exception failure){throw new RuntimeException(failure);}};
+            assertEquals("stale_target",assertThrows(SkillBook.SourceUnavailable.class,()->f.check(first.getString("id"))).code);JSONObject current=f.current(first);assertEquals(1,current.getInt("revision"));assertFalse(current.getBoolean("enabled"));assertTrue(current.getLong("executionGeneration")>generation);
         }
     }
     @Test public void postPreviewFileChangeEnableDisableAndDeletionAllRejectOldApply()throws Exception {
