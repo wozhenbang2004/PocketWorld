@@ -48,7 +48,8 @@ public final class McpStdioClient implements AutoCloseable {
         }catch(Exception failure){valid=false;invalidateChannel();throw failure;}
     }
     public synchronized JSONArray tools()throws Exception {
-        if(!usable())throw new IllegalStateException("MCP stdio session is not initialized");JSONArray found=new JSONArray();Set<String> names=new HashSet<>(),cursors=new HashSet<>();String cursor=null;int bytes=0;
+        if(!usable())throw new IllegalStateException("MCP stdio session is not initialized");
+        try{JSONArray found=new JSONArray();Set<String> names=new HashSet<>(),cursors=new HashSet<>();String cursor=null;int bytes=0;
         for(int page=0;page<8;page++){
             JSONObject params=new JSONObject();if(cursor!=null)params.put("cursor",cursor);JSONObject result=rpc("tools/list",params);JSONArray tools=result.getJSONArray("tools");
             bytes+=result.toString().getBytes(StandardCharsets.UTF_8).length;if(bytes>262144)throw invalidate("MCP stdio tool catalogue exceeds 256KiB");
@@ -56,6 +57,7 @@ public final class McpStdioClient implements AutoCloseable {
             if(!result.has("nextCursor"))return found;Object next=result.get("nextCursor");if(!(next instanceof String)||((String)next).length()>4096||!cursors.add((String)next))throw invalidate("MCP stdio tool cursor is invalid");cursor=(String)next;
         }
         throw invalidate("MCP stdio tool catalogue exceeds 8 pages");
+        }catch(Exception failure){valid=false;invalidateChannel();throw failure;}
     }
     public synchronized JSONObject call(JSONObject reviewedTool,JSONObject supplied)throws Exception{return call(reviewedTool,supplied,null);}
     synchronized JSONObject call(JSONObject reviewedTool,JSONObject supplied,McpClient.ResultCapture capture)throws Exception {

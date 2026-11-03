@@ -81,4 +81,19 @@ internal object McpLocalDiscoveryRules {
         return JSONObject().put("reviewId", body.getString("reviewId")).put("planDigest", body.getString("planDigest"))
     }
     fun operation(requestId: String?, envelope: JSONObject?, task: String): JSONObject? = result(requestId, envelope)?.takeIf { it.optString("taskId") == task && it.optJSONObject("scope")?.optString("actionId") == task && it.opt("replayAllowed") == false && it.opt("agentRunnerCreated") == false }
+    fun diagnostic(requestId: String?, envelope: JSONObject?, task: String, cursor: Long): JSONObject? = result(requestId, envelope)?.takeIf {
+        it.optString("format") == "pocketworld.native-mcp-diagnostic.v1" && it.optString("taskId") == task && it.optString("operationId") == task &&
+            integer(it.opt("cursor")) == cursor && (integer(it.opt("nextCursor")) ?: -1) >= cursor && it.opt("queryOnly") == true && it.opt("replayAllowed") == false && it.opt("modelDelivery") == false
+    }
+    /** Only presentation of original stderr bytes; protocol stdout and statuses are untouched. */
+    fun diagnosticText(page: JSONObject): String {
+        if (!page.optBoolean("logAvailable")) return page.optString("message", "原日志暂不可用")
+        val chunks = page.getJSONArray("chunks"); val stderr = java.io.ByteArrayOutputStream(); var total = 0
+        for (index in 0 until chunks.length()) {
+            val chunk = chunks.getJSONObject(index); val data = java.util.Base64.getDecoder().decode(chunk.getString("dataBase64"))
+            require(data.size == chunk.getInt("bytes") && total + data.size <= 65536 && chunk.getInt("stream") in 1..2) { "原日志页字节范围无法核对" }
+            total += data.size; if (chunk.getInt("stream") == 2) stderr.write(data)
+        }
+        return if (stderr.size() == 0) "本页没有新增 stderr 诊断。" else stderr.toString("UTF-8").filter { !it.isISOControl() || it == '\n' || it == '\r' || it == '\t' }
+    }
 }

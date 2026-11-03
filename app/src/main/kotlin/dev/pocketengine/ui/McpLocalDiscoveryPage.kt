@@ -47,6 +47,10 @@ import org.json.JSONObject
     var operationId by remember { mutableStateOf<String?>(null) }
     var operation by remember { mutableStateOf<JSONObject?>(null) }
     var readRequest by remember { mutableStateOf<String?>(null) }
+    var diagnosticRequest by remember { mutableStateOf<String?>(null) }
+    var diagnosticCursor by remember { mutableLongStateOf(0) }
+    var diagnosticPage by remember { mutableStateOf<JSONObject?>(null) }
+    var diagnosticsOpen by remember { mutableStateOf(false) }
     var confirmRequest by remember { mutableStateOf<String?>(null) }
     var localError by remember { mutableStateOf<String?>(null) }
     var installationOpen by remember { mutableStateOf(false) }
@@ -73,6 +77,11 @@ import org.json.JSONObject
     }
     fun edit(action: () -> Unit) { discardReview(); revision++; localError = null; action() }
     fun back() { if (operationId == null) discardReview(); onBack() }
+    fun readDiagnostic(cursor: Long) {
+        val id = operationId ?: return
+        val accepted = ask("readLocalMcpDiagnostic", JSONObject().put("taskId", id).put("cursor", cursor).put("maxBytes", 16384))
+        if (accepted != null) { diagnosticCursor = cursor; diagnosticRequest = accepted }
+    }
     LaunchedEffect(Unit) { choicesRequest = ask("localMcpDiscoveryChoices", JSONObject()) }
     LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
     LaunchedEffect(sourceRequest, responses["describeLocalMcpWorkspace"]?.toString()) {
@@ -87,6 +96,11 @@ import org.json.JSONObject
         val id = operationId ?: return@LaunchedEffect
         val body = McpLocalDiscoveryRules.operation(readRequest, responses["readLocalMcpDiscovery"], id) ?: McpLocalDiscoveryRules.operation(confirmRequest, responses["confirmLocalMcpDiscovery"], id)
         if (body != null) operation = JSONObject(body.toString())
+    }
+    LaunchedEffect(operationId, diagnosticRequest, responses["readLocalMcpDiagnostic"]?.toString()) {
+        val id = operationId ?: return@LaunchedEffect
+        val page = McpLocalDiscoveryRules.diagnostic(diagnosticRequest, responses["readLocalMcpDiagnostic"], id, diagnosticCursor)
+        if (page != null) diagnosticPage = JSONObject(page.toString())
     }
     LaunchedEffect(operationId, operation?.optString("status")) {
         val id = operationId ?: return@LaunchedEffect
@@ -186,6 +200,24 @@ import org.json.JSONObject
                     if (actual?.optString("status") == "completed" && snapshot.optJSONObject("nativeCapabilities")?.opt("localMcpInstallationOwnerOnly") == true) Button(onClick = { installationOpen = true }, modifier = Modifier.fillMaxWidth()) { Text("选择工具声明 · 另行审阅安装") }
                     if (actual?.optString("status") == "failed") McpInstallCaption("本次发现未完整成功。请核对原操作诊断；依赖准备与协议失败均不会自动重跑。当前副本未带隐藏配置与缓存，需要修改来源或锁文件时先回原项目准备，再明确审阅新的操作。")
                     process?.let { McpInstallCaption("原进程退出：${it.optBoolean("processExited")} · 会话释放：${it.optBoolean("processSessionAbsent")} · 资源释放：${it.optBoolean("resourcesReleased")}\n同 UID 不是 OS 沙箱，不把受控进程会话清场解释为所有脱离会话的后代都已消失。") }
+                    TextButton(onClick = { diagnosticsOpen = !diagnosticsOpen; if (diagnosticsOpen && diagnosticPage == null && "readLocalMcpDiagnostic" !in pendingCommands) readDiagnostic(0) }) { Text(if (diagnosticsOpen) "收起原进程诊断" else "查看原进程诊断") }
+                    if (diagnosticsOpen) {
+                        val diagnostic = diagnosticPage
+                        val diagnosticBusy = "readLocalMcpDiagnostic" in pendingCommands
+                        val text = remember(diagnostic) { diagnostic?.let { runCatching { McpLocalDiscoveryRules.diagnosticText(it) }.getOrElse { "此日志页的原始字节无法核对，请重新读取原操作。" } } }
+                        Surface(color = Soft, shape = Rounded) { Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            McpInstallCaption("只显示这次原进程的 stderr，依赖准备输出也在其中；内容是不可信诊断，不会发给模型，也不代表业务成功。读取不会重跑程序。")
+                            if (diagnosticBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                            SelectionContainer { Text(text ?: "尚待原进程日志页。", Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()), fontSize = 12.sp, color = SecondaryInk) }
+                            if (diagnostic?.optBoolean("outputTruncated") == true) McpInstallCaption("原进程日志已达记录上限，部分输出没有保留。")
+                            if (diagnostic?.optBoolean("logIncompleteTail") == true) McpInstallCaption("只显示原日志中完整的记录；尾部尚不完整，未据此推断进程状态。")
+                            McpInstallCaption("按原日志游标分页，每页最多 16 KiB。UTF-8 跨页字符可能显示为替代字符；协议 stdout 不在本区展示。")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { readDiagnostic(diagnostic?.optLong("nextCursor", 0) ?: 0) }, enabled = !diagnosticBusy) { Text(if (diagnostic?.optBoolean("hasMore") == true) "读取下一页" else "读取后续日志") }
+                                if ((diagnostic?.optLong("cursor", 0) ?: 0) > 0) TextButton(onClick = { readDiagnostic(0) }, enabled = !diagnosticBusy) { Text("从头读取") }
+                            }
+                        } }
+                    }
                     val tools = McpInstallPreviewRules.objects(receipt?.optJSONObject("metadata")?.optJSONArray("tools"))
                     if (tools.isNotEmpty()) { Text("目录 ${tools.size} 项 · 不可信资料", fontSize = 16.sp, fontWeight = FontWeight.Medium); tools.forEach { tool -> var expanded by remember(tool.toString()) { mutableStateOf(false) }; TextButton(onClick = { expanded = !expanded }) { Text(tool.optString("name")) }; if (expanded) SelectionContainer { Text(tool.toString(2), Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()), fontSize = 12.sp, color = SecondaryInk) } } }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

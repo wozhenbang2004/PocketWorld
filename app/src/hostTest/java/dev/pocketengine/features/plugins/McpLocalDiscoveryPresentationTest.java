@@ -53,4 +53,12 @@ public final class McpLocalDiscoveryPresentationTest {
             owner.mcp("approveLocalMcpPreparation",new JSONObject().put("reviewId",body.getString("reviewId")).put("preparationDigest",body.getString("preparationDigest")));assertEquals(0,f.base.tasks.list().length());
         }
     }
+    @Test public void diagnosticPagesRejectOldRequestsTasksAndCursorsAndRenderOnlyStderrBytes()throws Exception {
+        try(View v=new View()){
+            McpLocalDiscovery.Confirmed confirmed=v.nativeOwner.f.confirmed();RunControl original=new RunControl();v.nativeOwner.f.tasks.beginOwnerMcpDiscoveryForOwner(confirmed,original);String task=confirmed.actionId(),request=UUID.randomUUID().toString();
+            JSONObject page=McpLocalDiagnostics.readDiscovery(v.nativeOwner.f.tasks,v.nativeOwner.f.runtime,task,0,16384);assertFalse(page.getBoolean("logAvailable"));assertNotNull(RULES.diagnostic(request,envelope(request,page),task,0));assertNull(RULES.diagnostic("old",envelope(request,page),task,0));assertNull(RULES.diagnostic(request,envelope(request,page),"other",0));assertNull(RULES.diagnostic(request,envelope(request,page),task,1));assertNull(RULES.diagnostic(request,envelope(request,new JSONObject(page.toString()).put("nextCursor",0.5)),task,0));assertNull(RULES.diagnostic(request,envelope(request,new JSONObject(page.toString()).put("replayAllowed",true)),task,0));
+            byte[] stdout="protocol stdout must stay out of this view".getBytes(java.nio.charset.StandardCharsets.UTF_8),stderr="stderr diagnostic\n\u001b[31m".getBytes(java.nio.charset.StandardCharsets.UTF_8);JSONArray chunks=new JSONArray().put(new JSONObject().put("sequence",1).put("stream",1).put("bytes",stdout.length).put("dataBase64",java.util.Base64.getEncoder().encodeToString(stdout))).put(new JSONObject().put("sequence",2).put("stream",2).put("bytes",stderr.length).put("dataBase64",java.util.Base64.getEncoder().encodeToString(stderr)));
+            JSONObject raw=new JSONObject(page.toString()).put("logAvailable",true).put("chunks",chunks).put("nextCursor",2);String text=RULES.diagnosticText(raw);assertTrue(text.contains("stderr diagnostic"));assertFalse(text.contains("protocol stdout"));assertFalse(text.contains("\u001b"));chunks.getJSONObject(1).put("bytes",stderr.length+1);assertThrows(IllegalArgumentException.class,()->RULES.diagnosticText(raw));assertEquals(1,v.nativeOwner.f.tasks.list().length());assertNull(v.nativeOwner.f.tasks.ownerMcpDiscoveryForOwner(task).optJSONObject("nativeJob"));
+        }
+    }
 }

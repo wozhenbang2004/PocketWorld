@@ -46,7 +46,12 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertTrue(entry['native'])
         self.assertTrue(entry['robolectric'])
         self.assertEqual('dev.pocketengine.features.skills.ManagedScriptCallbackNativeJourneyTest', entry['class'])
-        self.assertEqual(3, len(entry['additionalClasses']))
+        self.assertEqual([
+            'dev.pocketengine.features.skills.ManagedScriptCallbackNativeGateTest',
+            'dev.pocketengine.features.skills.ManagedScriptCallbackProtocolTest',
+            'dev.pocketengine.features.skills.ManagedScriptCallbackClientPeerTest',
+            'dev.pocketengine.features.skills.OwnerSkillManagedJourneyTest',
+        ], entry['additionalClasses'])
         self.assertIn('dev.pocketengine.features.skills.ManagedScriptCallbackClientPeerTest', entry['additionalClasses'])
         self.assertIn('dev.pocketengine.features.skills.ManagedScriptCallbackTestSupport', entry['helpers'])
         helper = (HOST.ROOT / 'app/src/test/java/dev/pocketengine/features/skills/ManagedScriptCallbackTestSupport.java').read_text()
@@ -137,7 +142,7 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertTrue(entry['robolectric'])
         self.assertTrue(entry['native'])
         names = [entry['class']] + entry['additionalClasses']
-        self.assertEqual(7, len(names))
+        self.assertEqual(8, len(names))
         # The original LocalWorkbench guard also belongs to file operations.
         self.assertEqual(['legacy-command-receipt-recovery', 'project-file-operations'], HOST.select(REGISTRY, [], names))
         methods = 0
@@ -145,7 +150,7 @@ class HostTestEntrypointTest(unittest.TestCase):
             source = (HOST.ROOT / 'app/src/test/java' / (name.replace('.', '/') + '.java')).read_text()
             methods += len(re.findall(r'@Test(?:\([^)]*\))?\s+public\s+void\s+\w+\s*\(', source))
             self.assertNotIn('@Ignore', source)
-        self.assertEqual(24, methods)
+        self.assertEqual(29, methods)
         source = (HOST.ROOT / 'app/src/main/java/dev/pocketengine/features/local/NativeCommandExecutor.java').read_text()
         loader = source[source.index('File[] saved='):source.index('private static JSONObject readOriginal')]
         self.assertNotIn('JsonFiles.write', loader)
@@ -159,6 +164,10 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertNotIn('Process process=', source)
         self.assertIn('&&supervised&&!originalInventoryUnconfirmed', source)
         self.assertIn('dev.pocketengine.features.local.NativeCommandUnavailableProbe', entry['helpers'])
+        self.assertIn('compactOriginal(job)', source)
+        self.assertIn('new String(tail.toCharArray())', source)
+        self.assertNotIn('public synchronized JSONObject get(', source)
+        self.assertIn('Do not hold the supervisor/cancel monitor during filesystem IO.', source)
         ui = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/LocalWorkbench.kt').read_text()
         self.assertIn('local.optJSONObject("legacyReceiptRecovery")', ui)
         self.assertIn('!LocalWorkbenchGuard.pollable(', ui)

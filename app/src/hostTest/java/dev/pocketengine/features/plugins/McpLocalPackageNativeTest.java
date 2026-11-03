@@ -64,6 +64,20 @@ public final class McpLocalPackageNativeTest {
             JSONObject result=f.run();assertEquals(result.toString(),"failed",result.getString("status"));assertFalse(result.getJSONObject("receipt").getBoolean("metadataAvailable"));assertEquals(0,f.base.plugins.snapshot().getJSONArray("plugins").length());assertEquals(1,f.base.tasks.list().length());assertEquals(0,f.base.runtime.environmentManager().describe(f.base.pack).getInt("activeLeases"));
         }
     }
+    @Test public void failedPreparationDiagnosticsReadOnlyTheOriginalPagedLogAfterSourceChanges()throws Exception {
+        try(Fixture f=new Fixture(19,false);dev.pocketengine.features.FeatureHost host=new dev.pocketengine.features.FeatureHost(e->{},f.base.tasks,()->false)){
+            Files.writeString(f.manager,Files.readString(f.manager).replace(" sys.exit(19)"," print('DIAGNOSTIC_START:'+('x'*20000)+':DIAGNOSTIC_END',file=sys.stderr,flush=True)\n sys.exit(19)"));
+            host.register(f.base.workspace);host.register(f.base.local);host.register(f.base.plugins);var owner=new dev.pocketengine.features.NativeOwnerWorkflows(host,f.base.context,f.base.tasks,new dev.pocketengine.features.memory.MemorySourceBridge(host,f.base.tasks));
+            JSONObject result=f.run();String task=result.getString("taskId");assertEquals("failed",result.getString("status"));assertFalse(result.toString().contains("DIAGNOSTIC_START"));String original=ProjectSources.digest(f.base.tasks.ownerMcpDiscoveryForOwner(task));
+            Files.writeString(f.source.resolve("server.cjs"),"throw Error('a different source revision');");
+            JSONObject request=new JSONObject().put("taskId",task).put("cursor",0).put("maxBytes",16384),page=owner.mcp("readLocalMcpDiagnostic",request);assertTrue(page.getBoolean("queryOnly"));assertFalse(page.getBoolean("replayAllowed"));assertFalse(page.getBoolean("modelDelivery"));assertTrue(page.getBoolean("hasMore"));assertEquals(original,ProjectSources.digest(f.base.tasks.ownerMcpDiscoveryForOwner(task)));
+            JSONObject repeated=owner.mcp("readLocalMcpDiagnostic",request);assertEquals(ProjectSources.digest(page),ProjectSources.digest(repeated));StringBuilder text=new StringBuilder();int pages=0;
+            while(true){text.append(dev.pocketengine.ui.McpLocalDiscoveryRules.INSTANCE.diagnosticText(page));pages++;if(!page.getBoolean("hasMore"))break;assertTrue(pages<8);page=owner.mcp("readLocalMcpDiagnostic",new JSONObject().put("taskId",task).put("cursor",page.getLong("nextCursor")).put("maxBytes",16384));}
+            assertTrue(text.toString().contains("PACKAGE_NON_PROTOCOL_STDOUT"));assertTrue(text.toString().contains("ARGS:"));assertTrue(text.toString().contains("DIAGNOSTIC_START:"));assertTrue(text.toString().contains(":DIAGNOSTIC_END"));assertEquals(original,ProjectSources.digest(f.base.tasks.ownerMcpDiscoveryForOwner(task)));assertEquals(1,f.base.tasks.list().length());assertEquals(1,f.base.tasks.get(task,false).getJSONArray("operations").length());assertEquals(0,f.base.runtime.environmentManager().describe(f.base.pack).getInt("activeLeases"));
+            assertThrows(IllegalArgumentException.class,()->owner.mcp("readLocalMcpDiagnostic",new JSONObject().put("taskId",task).put("cursor",0.5)));assertThrows(IllegalArgumentException.class,()->owner.mcp("readLocalMcpDiagnostic",new JSONObject().put("taskId",task).put("maxBytes",65537)));
+            String ordinary=f.base.tasks.createCapabilityTask("An ordinary task has no owner MCP log authority","").getString("id");assertThrows(SecurityException.class,()->owner.mcp("readLocalMcpDiagnostic",new JSONObject().put("taskId",ordinary)));
+        }
+    }
     @Test public void changedLockCannotReuseTheIndependentlyApprovedPreparation()throws Exception {
         try(Fixture f=new Fixture(0,false);McpLocalDiscovery.Review review=f.base.review()){
             JSONObject view=review.metadata();review.approvePreparation(view.getString("preparationDigest"));Files.writeString(f.source.resolve("package-lock.json"),"{}");assertThrows(Exception.class,()->review.confirm(view.getString("planDigest")));assertEquals(0,f.base.tasks.list().length());

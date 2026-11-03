@@ -73,5 +73,11 @@ public final class McpStdioClientTest {
         Pipe p=new Pipe();p.handler=(q,pipe)->{if("tools/list".equals(q.optString("method"))){if(q.getJSONObject("params").has("cursor")){assertEquals("",q.getJSONObject("params").getString("cursor"));p.reply(q,new JSONObject().put("tools",p.definitions));}else p.reply(q,new JSONObject().put("tools",new JSONArray()).put("nextCursor",""));}else p.standard(q,p);};McpStdioClient c=p.connected();assertTrue(c.usable());assertEquals(2,p.count("tools/list"));c.close();
         Pipe nullCursor=new Pipe();nullCursor.handler=(q,pipe)->{if("tools/list".equals(q.optString("method")))nullCursor.reply(q,new JSONObject().put("tools",nullCursor.definitions).put("nextCursor",JSONObject.NULL));else nullCursor.standard(q,nullCursor);};assertThrows(Exception.class,()->new McpStdioClient(nullCursor,nullCursor.original).discover());assertTrue(nullCursor.invalid);assertEquals(1,nullCursor.count("tools/list"));
     }
+    @Test public void aMalformedRevalidationCatalogueInvalidatesThePreviouslyInitializedSession()throws Exception {
+        for(JSONObject malformed:new JSONObject[]{new JSONObject().put("tools","not an array"),new JSONObject().put("tools",new JSONArray().put(7)),new JSONObject().put("tools",new JSONArray().put(new JSONObject().put("name",7).put("inputSchema",new JSONObject())))}){
+            Pipe p=new Pipe();McpStdioClient c=p.connected();JSONObject reviewed=p.tool(c);p.handler=(q,pipe)->{if("tools/list".equals(q.optString("method")))p.reply(q,malformed);else p.standard(q,p);};
+            assertThrows(Exception.class,c::tools);assertTrue(p.invalid);assertFalse(c.usable());assertFalse(assertThrows(McpClient.CallFailure.class,()->c.call(reviewed,new JSONObject().put("query","x"))).dispatched);assertThrows(Exception.class,c::tools);assertEquals(2,p.count("tools/list"));assertEquals(0,p.count("tools/call"));assertEquals(1,p.count("initialize"));
+        }
+    }
 
 }

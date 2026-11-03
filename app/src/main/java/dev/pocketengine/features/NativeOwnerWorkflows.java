@@ -263,6 +263,11 @@ public final class NativeOwnerWorkflows {
                 dev.pocketengine.features.plugins.McpLocalDiscovery.Review review;synchronized(localMcpReviews){review=localMcpReviews.remove(payload.getString("reviewId"));}if(review!=null)review.close();return new JSONObject().put("discarded",review!=null).put("programStarted",false).put("taskCancelled",false);
             }
             case "readLocalMcpDiscovery":return host.observeMcpDiscoveryForOwner(payload.getString("taskId"),false);
+            case "readLocalMcpDiagnostic":{
+                long cursor=dev.pocketengine.features.local.project.ProjectCommandSpec.integer(payload,"cursor",0,0,Long.MAX_VALUE);
+                int maxBytes=(int)dev.pocketengine.features.local.project.ProjectCommandSpec.integer(payload,"maxBytes",16384,8192,65536);
+                JSONObject page=host.localMcpDiagnosticForOwner(payload.getString("taskId"),cursor,maxBytes);observation.check();return page;
+            }
             case "cancelLocalMcpDiscovery":return host.observeMcpDiscoveryForOwner(payload.getString("taskId"),true);
             case "readLocalMcpInstallCatalogue":return dev.pocketengine.features.plugins.McpLocalInstallation.catalogueForOwner(tasks,tasks.completedOwnerMcpDiscoveryForInstallForOwner(payload.getString("taskId")));
             case "prepareLocalMcpInstall":{

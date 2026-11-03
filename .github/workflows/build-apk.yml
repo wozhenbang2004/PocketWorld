@@ -263,8 +263,9 @@ jobs:
       - name: Check lightweight build and host CLI contracts
         run: |
           set -euo pipefail
-          python3 -B -m unittest discover -s tools/tests -p test_apk_workflow_paths.py -v
-          python3 -B -m unittest discover -s tools/tests -p test_host_tests.py -v
+          mkdir -p build-artifacts/host-tests
+          python3 -B -m unittest discover -s tools/tests -p test_apk_workflow_paths.py -v 2>&1 | tee build-artifacts/host-tests/workflow-contracts.log
+          python3 -B -m unittest discover -s tools/tests -p test_host_tests.py -v 2>&1 | tee build-artifacts/host-tests/cli-contracts.log
           if [[ "$HOST_TEST_GROUP" == browser-long-page ]]; then
             python3 -B -m unittest discover -s tools/tests -p test_browser_long_page_entrypoint.py -v
           fi
@@ -375,7 +376,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pocketworld-host-${{ inputs.host_groups != '' && 'batch' || inputs.host_group }}-${{ github.run_number }}-${{ github.run_attempt }}
+          name: pocketworld-host-${{ env.HOST_TEST_GROUPS != '' && 'batch' || env.HOST_TEST_GROUP }}-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             build-artifacts/host-tests/
             app/build/reports/tests/testDebugUnitTest/
