@@ -84,8 +84,25 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
     }
     private static String id(String value){if(value==null||!value.matches("[A-Za-z0-9_-]{1,80}"))throw new IllegalArgumentException("准确原生引用必需");return value;}
     private static String bounded(String value,int maximum){if(value==null||value.isEmpty()||value.length()>maximum)throw new IllegalArgumentException("有界引用必需");return value;}
-    private void check()throws Exception {
-        original.check();if(configurationOwner!=null)configurationOwner.checkCurrent();if(closed||reconcile||original.isPaused()||System.currentTimeMillis()>=expiresAt)throw new InterruptedException("原网关租约已结束或等待核对");
+    private void check()throws Exception {check(false);}
+    private void checkContinuous()throws Exception {check(true);}
+    private void check(boolean awaitNativeApproval)throws Exception {
+        while(true){
+            checkOriginalAndSource();
+            try{if(configurationOwner!=null)configurationOwner.checkCurrent();return;}
+            catch(TaskStore.GatewayOwnerApprovalPending settling){
+                // Only the same typed, already-entered CLI approval may wait. No SQL/owner
+                // monitor, new model claim or retry is held/created here. Unknown stays fatal.
+                if(!awaitNativeApproval||Thread.holdsLock(this)||Thread.holdsLock(tasks))throw settling;
+                checkOriginalAndSource();
+                long remaining=expiresAt-System.currentTimeMillis();
+                if(remaining<=0)throw new InterruptedException("原审批未在原网关期限内结算；保留未知，仅核对原编号");
+                Thread.sleep(Math.min(50L,remaining));
+            }
+        }
+    }
+    private void checkOriginalAndSource()throws Exception {
+        original.check();if(closed||reconcile||original.isPaused()||System.currentTimeMillis()>=expiresAt)throw new InterruptedException("原网关租约已结束或等待核对");
         var id=original.hostRunIdentity();if(id==null||!target.context.taskId.equals(id.taskId())||!target.context.runId.equals(id.runId())||target.context.epoch!=id.epoch())throw new SecurityException("网关所属原执行已变化");
         tasks.taskExecutionDeadline(id.taskId(),id.runId(),id.epoch());
         ModelConfig current=configurations.get();InferenceAudiencePolicy.require(current,NativeInferenceScope.externalRelay(),original);
@@ -119,15 +136,15 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
         return result.put("originalRequests",requests).put("observationLimit",1).put("bodyRecovery",false).put("socketResume",false);
     }
     private void poll(){
-        try{while(true){check();JSONObject page=transport.request("/v1/gateway/leases/"+leaseId+"/requests?generation="+generation+"&waitMs=10000",null);check();if(!leaseId.equals(page.optString("leaseId"))||!generation.equals(page.optString("generation")))throw new SecurityException("另一网关poll返回");JSONArray requests=page.getJSONArray("requests");if(requests.length()>1)throw new SecurityException("目标推理并发超界");for(int i=0;i<requests.length();i++)serve(requests.getJSONObject(i));}}
-        catch(Exception stopped){if(!closed){reconcile=true;try{JSONObject state=transport.request("/v1/gateway/leases/"+leaseId+"?generation="+generation,null);if(leaseId.equals(state.optString("leaseId"))&&generation.equals(state.optString("generation"))&&Set.of("REVOKED","EXPIRED").contains(state.optString("state")))reconcile=false;}catch(Exception unavailable){/* Unknown remains conservative; never a replay. */}}}
+        try{while(true){checkContinuous();JSONObject page=transport.request("/v1/gateway/leases/"+leaseId+"/requests?generation="+generation+"&waitMs=10000",null);checkContinuous();if(!leaseId.equals(page.optString("leaseId"))||!generation.equals(page.optString("generation")))throw new SecurityException("另一网关poll返回");JSONArray requests=page.getJSONArray("requests");if(requests.length()>1)throw new SecurityException("目标推理并发超界");for(int i=0;i<requests.length();i++)serve(requests.getJSONObject(i));}}
+        catch(Exception stopped){failureClass=stopped.getClass().getSimpleName();for(StackTraceElement location:stopped.getStackTrace())if(location.getClassName().startsWith("dev.pocketengine.")){failureLocation=location.getClassName()+"#"+location.getMethodName()+":"+location.getLineNumber();break;}if(!closed){reconcile=true;try{JSONObject state=transport.request("/v1/gateway/leases/"+leaseId+"?generation="+generation,null);if(leaseId.equals(state.optString("leaseId"))&&generation.equals(state.optString("generation"))&&Set.of("REVOKED","EXPIRED").contains(state.optString("state")))reconcile=false;}catch(Exception unavailable){/* Unknown remains conservative; never a replay. */}}}
         finally{cancelRemote();closed=true;try{if(reconcile)claims.reconcile();claims.close();}catch(Exception storage){reconcile=true;}}
     }
     private JSONObject binding(JSONObject request)throws Exception {return new JSONObject().put("leaseId",leaseId).put("generation",generation).put("requestDigest",request.getString("requestDigest"));}
     private String query(JSONObject body)throws Exception {return "leaseId="+leaseId+"&generation="+generation+"&requestDigest="+body.getString("requestDigest");}
     private void validateRequest(JSONObject request)throws Exception {if(!leaseId.equals(request.optString("leaseId"))||!generation.equals(request.optString("generation"))||!clientBinding.equals(request.optString("clientBindingId"))||!request.optString("requestDigest").matches("[a-f0-9]{64}")||request.optInt("bodyBytes")<1||request.optInt("bodyBytes")>2*1024*1024)throw new SecurityException("不是原lease的有界请求");id(request.getString("bridgeRequestId"));}
     private void serve(JSONObject request)throws Exception {
-        check();validateRequest(request);String requestId=request.getString("bridgeRequestId");
+        checkContinuous();validateRequest(request);String requestId=request.getString("bridgeRequestId");
         if(!observed.add(requestId))throw new SecurityException("原请求已观察；只查询原状态不重新推理");
         if(observed.size()>128)throw new SecurityException("原bridge观察上限已到");
         if(!INFERENCE_SLOTS.tryAcquire())throw new IOException("全局两路原生桥接推理已占用；没有新增派发");
@@ -141,12 +158,12 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
             try{claimed=transport.request(path+"/claim",bound);}catch(IOException unknown){claimed=transport.request(path+"?"+query(bound),null);}
             validateRequest(claimed);if(!"CLAIMED".equals(claimed.optString("state"))||!claim.claimId().equals(claimed.optString("claimId"))||!claimed.optBoolean("clientAlive"))throw new SecurityException("原claim与等待客户端未确认；没有模型发送");
             ByteArrayOutputStream body=new ByteArrayOutputStream();
-            while(body.size()<request.getInt("bodyBytes")){check();JSONObject fragment=transport.request(path+"/body?"+query(bound)+"&offset="+body.size(),null);validateRequest(fragment);if(fragment.getInt("offset")!=body.size())throw new SecurityException("原body偏移不连续");byte[] raw=Base64.getDecoder().decode(fragment.getString("body"));if(raw.length<1||raw.length>16384||body.size()+raw.length>request.getInt("bodyBytes"))throw new SecurityException("原body片段超界");body.write(raw);}
+            while(body.size()<request.getInt("bodyBytes")){checkContinuous();JSONObject fragment=transport.request(path+"/body?"+query(bound)+"&offset="+body.size(),null);validateRequest(fragment);if(fragment.getInt("offset")!=body.size())throw new SecurityException("原body偏移不连续");byte[] raw=Base64.getDecoder().decode(fragment.getString("body"));if(raw.length<1||raw.length>16384||body.size()+raw.length>request.getInt("bodyBytes"))throw new SecurityException("原body片段超界");body.write(raw);}
             byte[] raw=body.toByteArray();String digest=dev.pocketengine.features.local.project.ProjectSources.sha256(raw);if(!digest.equals(request.getString("requestDigest")))throw new SecurityException("原请求字节digest不同");
             String json=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(raw)).toString();
             var prepared=NativeRelayPolicy.prepare(selection,request.getString("path"),ChatCompletionStream.parseObject(json));
-            Wire wire=new Wire(path,bound,prepared.gateway.stream);check();
-            var admitted=InferenceCapture.withAdmission(target,()->{check();JSONObject current=transport.request(path+"?"+query(bound),null);validateRequest(current);if(!"CLAIMED".equals(current.optString("state"))||!claim.claimId().equals(current.optString("claimId"))||!current.optBoolean("clientAlive"))throw new SecurityException("原客户端/claim已停止，未新增派发");});
+            Wire wire=new Wire(path,bound,prepared.gateway.stream);checkContinuous();
+            var admitted=InferenceCapture.withAdmission(target,()->{checkContinuous();JSONObject current=transport.request(path+"?"+query(bound),null);validateRequest(current);if(!"CLAIMED".equals(current.optString("state"))||!claim.claimId().equals(current.optString("claimId"))||!current.optBoolean("clientAlive"))throw new SecurityException("原客户端/claim已停止，未新增派发");});
             inferenceRunning=true;
             JSONObject result;try{result=ModelGateway.completeNative(selection,prepared.gateway,original,admitted,(call,seq)->check(),(event,data)->wire.event(((event.isEmpty()?"":"event: "+event+"\n")+"data: "+data+"\n\n").getBytes(StandardCharsets.UTF_8)));}finally{inferenceRunning=false;}
             if(!prepared.gateway.stream)wire.event(result.toString().getBytes(StandardCharsets.UTF_8));wire.eof();claims.outcome(leaseId,requestId,claim.claimId(),true);
@@ -155,7 +172,7 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
     private final class Wire {
         final String path;final JSONObject binding;final boolean stream;final long deadlineAt;long sequence;
         Wire(String path,JSONObject binding,boolean stream)throws Exception {this.path=path;this.binding=new JSONObject(binding.toString());this.stream=stream;deadlineAt=Math.min(expiresAt,System.currentTimeMillis()+selection.requestTimeoutSeconds*1000L);}
-        private void current()throws Exception {check();if(System.currentTimeMillis()>=deadlineAt)throw new java.net.SocketTimeoutException("原推理绝对期限已到；反压与ACK重读没有重置期限");}
+        private void current()throws Exception {checkContinuous();if(System.currentTimeMillis()>=deadlineAt)throw new java.net.SocketTimeoutException("原推理绝对期限已到；反压与ACK重读没有重置期限");}
         void event(byte[] bytes)throws Exception {long seq=++sequence;if(bytes.length>8*1024*1024)throw new IOException("单事件超过有界重组限制");for(int offset=0;offset<bytes.length;offset+=16384){int end=Math.min(bytes.length,offset+16384);send(seq,offset,java.util.Arrays.copyOfRange(bytes,offset,end),end==bytes.length,false);}}
         void eof()throws Exception {send(++sequence,0,new byte[0],true,true);}
         void send(long seq,int offset,byte[] bytes,boolean last,boolean eof)throws Exception {

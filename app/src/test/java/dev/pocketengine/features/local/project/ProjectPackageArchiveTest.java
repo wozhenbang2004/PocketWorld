@@ -16,6 +16,7 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public final class ProjectPackageArchiveTest {
+    private static boolean hasDirectory(org.json.JSONArray paths,String expected)throws Exception{for(int i=0;i<paths.length();i++)if(expected.equals(paths.getString(i)))return true;return false;}
     private static final byte[] PNG=java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1kAAAAASUVORK5CYII=");
     @Test public void actualBinaryNestedSourceEmptyDirectoriesAndOwnerExecutableRoundTripWithoutEnvironmentOrSecrets() throws Exception {
         File root=Files.createTempDirectory("package-source-").toFile();
@@ -23,7 +24,7 @@ public final class ProjectPackageArchiveTest {
             text(root,"index.html","<link rel=stylesheet href=style.css><script src=src/build/app.js></script><img src=pixel.png>");text(root,"style.css","body{color:#222}");text(root,"src/build/app.js","globalThis.total=40.00");text(root,"src/dist/input.txt","real nested source");bytes(root,"pixel.png",PNG);text(root,"bin/tool.sh","#!/bin/sh\nexit 0\n");assertTrue(new File(root,"bin/tool.sh").setExecutable(true,true));assertTrue(new File(root,"empty/sub").mkdirs());
             for(String denied:new String[]{"node_modules/pkg/index.js",".venv/bin/python",".git/config",".env",".npmrc","config/accounts.json","config/id_ed25519","build/old.js","dist/old.html"})text(root,denied,"not exported");
             var captured=ProjectPackageArchive.capture(root,original(),"source_project","",false);var manifest=captured.manifest();
-            assertArrayEquals(PNG,captured.file("pixel.png"));assertTrue(captured.files().containsKey("src/build/app.js"));assertTrue(captured.files().containsKey("src/dist/input.txt"));assertTrue(ProjectSources.sourcePath("src/build/app.js"));assertFalse(ProjectSources.sourcePath("build/old.js"));assertEquals(6,captured.files().size());assertTrue(manifest.getJSONArray("directories").toString().contains("empty/sub"));assertTrue(manifest.getJSONArray("omitted").length()>=9);assertFalse(manifest.getBoolean("includesToolEnvironment"));
+            assertArrayEquals(PNG,captured.file("pixel.png"));assertTrue(captured.files().containsKey("src/build/app.js"));assertTrue(captured.files().containsKey("src/dist/input.txt"));assertTrue(ProjectSources.sourcePath("src/build/app.js"));assertFalse(ProjectSources.sourcePath("build/old.js"));assertEquals(6,captured.files().size());assertTrue(hasDirectory(manifest.getJSONArray("directories"),"empty/sub"));assertTrue(manifest.getJSONArray("omitted").length()>=9);assertFalse(manifest.getBoolean("includesToolEnvironment"));
             File archive=write(root,captured);var cold=ProjectPackageArchive.read(archive);assertEquals(captured.identity,cold.identity);assertArrayEquals(PNG,cold.file("pixel.png"));
             assertTrue(file(cold,"bin/tool.sh").getBoolean("executable"));assertEquals("binary",file(cold,"pixel.png").getString("kind"));
             byte[] detached=cold.file("pixel.png");detached[0]=0;assertArrayEquals(PNG,cold.file("pixel.png"));

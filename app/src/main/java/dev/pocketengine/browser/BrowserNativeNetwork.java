@@ -84,11 +84,16 @@ public final class BrowserNativeNetwork implements AutoCloseable {
     }
     private final class Candidate {
         final Map<Integer,JSONObject> contexts=new ConcurrentHashMap<>();volatile boolean selected,invalid;String context="",frame="",loader="";int contextId;
-        synchronized boolean select(String frame,String loader,String context,int contextId){if(invalid||closed)return false;this.frame=frame;this.loader=loader;this.context=context;this.contextId=contextId;selected=true;contexts.clear();return true;}
+        synchronized boolean select(String frame,String loader,String context,int contextId){JSONObject exact=contexts.get(contextId);if(invalid||closed||exact==null||!context.equals(exact.optString("uniqueId")))return false;this.frame=frame;this.loader=loader;this.context=context;this.contextId=contextId;selected=true;contexts.clear();return true;}
         synchronized void event(JSONObject message){
             if(closed||invalid)return;try{String name=message.getString("method");JSONObject p=message.optJSONObject("params");if(p==null)return;
                 if(name.equals("Runtime.executionContextCreated")){if(selected)return;if(contexts.size()>=64)throw new SecurityException("native_context_limit");JSONObject c=p.getJSONObject("context");contexts.put(c.getInt("id"),c);return;}
-                if(!selected)return;
+                if(!selected){
+                    if(name.equals("Runtime.executionContextsCleared"))contexts.clear();
+                    else if(name.equals("Inspector.detached")){invalid=true;contexts.clear();}
+                    else if(name.equals("Runtime.executionContextDestroyed")){String unique=p.optString("executionContextUniqueId");if(unique.isEmpty())contexts.remove(p.optInt("executionContextId",-1));else contexts.entrySet().removeIf(entry->unique.equals(entry.getValue().optString("uniqueId")));}
+                    return;
+                }
                 if(name.equals("Runtime.executionContextsCleared")||name.equals("Inspector.detached")||name.equals("Runtime.executionContextDestroyed")&&(context.equals(p.optString("executionContextUniqueId"))||contextId==p.optInt("executionContextId",-1))||name.equals("Page.frameNavigated")&&frame.equals(p.getJSONObject("frame").optString("id"))&&!loader.equals(p.getJSONObject("frame").optString("loaderId"))){invalidate("native_document_replaced");return;}
                 if(!name.matches("Network\\.(requestWillBeSent|responseReceived|loadingFinished|loadingFailed)"))return;
                 // At most one event is queued to the UI: this waits for its bounded native guard.

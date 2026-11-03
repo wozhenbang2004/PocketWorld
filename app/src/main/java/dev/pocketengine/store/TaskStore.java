@@ -645,6 +645,7 @@ public final class TaskStore {
     public static final class HarnessGatewayConfigurationOwner {
         private final TaskStore store;private final RunControl original;private final String child,value;private String lease,configurationOperation,configurationSelectionDigest,configurationPlanDigest;private HarnessConfigClaim configurationClaim;private GatewayContinuationDispatch executionClaim;
         private HarnessGatewayConfigurationOwner(TaskStore store,RunControl original,String child,JSONObject value){this.store=store;this.original=original;this.child=child;this.value=value.toString();}
+        public boolean issuedBy(TaskStore actual){return actual==store;}
         public JSONObject view()throws Exception{return new JSONObject(value);}
         public long deadline()throws Exception{synchronized(store){checkCurrent();JSONObject identity=view();long deadline=store.taskExecutionDeadline(identity.getString("parentTaskId"),identity.getString("parentRunId"),identity.getInt("parentEpoch"));JSONObject staged=store.gatewayStagedOwnerRow(child);return staged==null?deadline:Math.min(deadline,staged.getJSONObject("arguments").getJSONObject("gatewayStage").getLong("expiresAt"));}}
         public void checkCurrent()throws Exception {synchronized(store){JSONObject expected=view();original.check();if(original.isPaused()||!original.matchesHostRun(expected.getString("parentTaskId"),expected.getString("parentRunId"),expected.getInt("parentEpoch")))throw new SecurityException("原父任务控制已变化");store.taskExecutionDeadline(expected.getString("parentTaskId"),expected.getString("parentRunId"),expected.getInt("parentEpoch"));if(!capabilityFingerprint(expected).equals(capabilityFingerprint(store.gatewayConfigurationOwnerValue(original,child))))throw new SecurityException("原父子任务配置归属已变化");store.checkGatewayConfigurationPending(this);}}
@@ -656,13 +657,72 @@ public final class TaskStore {
         public JSONObject view()throws Exception{return new JSONObject(value);}
         public void checkCurrent()throws Exception {synchronized(owner.store){owner.checkCurrent();JSONObject descriptor=owner.store.gatewayConfigurationDescriptor(owner.child,lease);if(!capabilityFingerprint(view()).equals(capabilityFingerprint(owner.store.gatewayConfigurationSelection(descriptor,model))))throw new SecurityException("原lease配置绑定已改变");}}
     }
+    /** Not authority or a retry permit: only the entered original CLI's native approval POST
+     * is still settling. Callers other than its continuous bridge must keep refusing dispatch. */
+    public static final class GatewayOwnerApprovalPending extends Exception {
+        private GatewayOwnerApprovalPending(){super("原本轮电脑审批正在结算；等待同一原编号，不重发");}
+    }
     /** Continuous fence: exclude only this typed owner's exact original T04 operation. */
     private void checkGatewayConfigurationPending(HarnessGatewayConfigurationOwner owner)throws Exception {
-        JSONObject staged=gatewayStagedOwnerRow(owner.child);
-        if(staged==null){if(hasUnresolvedExcept(owner.child,owner.configurationOperation))throw new SecurityException("另一原子任务动作仍未决；不继续网关派发");}
-        else {String execution=staged.getJSONObject("arguments").getString("runId");try(Cursor pending=db.rawQuery("SELECT operation_id,tool,state FROM operations WHERE task_id=? AND state IN ('prepared','unknown','project_running','project_stopping','remote_job_prepared','remote_job_sending','remote_job_unknown','remote_approval_sending','remote_approval_unknown','remote_question_prepared','remote_question_sending','remote_question_unknown')",new String[]{owner.child})){while(pending.moveToNext()){String op=pending.getString(0);if(op.equals(owner.configurationOperation))continue;if(op.equals(execution)&&pending.getString(1).equals("remote_job")){if(pending.getString(2).equals("remote_job_prepared"))continue;GatewayContinuationDispatch claim=owner.executionClaim;if(claim!=null&&claim.active&&claim.gatewayOwner==owner&&claim.scope.getString("operationId").equals(execution)&&claim.scope.getString("leaseId").equals(owner.lease)&&claim.scope.getString("configurationOperationId").equals(owner.configurationOperation)&&claim.scope.getString("configurationPlanDigest").equals(owner.configurationPlanDigest)&&staged.getJSONObject("arguments").getJSONObject("gatewayStage").optString("finalReviewDigest").equals(capabilityFingerprint(claim.scope)))continue;}throw new SecurityException("本轮有另一未决动作或尚未确认的执行claim；只查询原编号");}}}
-
+        JSONObject staged=gatewayStagedOwnerRow(owner.child),continuation=staged==null?gatewayContinuationRow(owner.child):staged;
+        boolean approvalPending=false;
+        if(continuation==null){if(hasUnresolvedExcept(owner.child,owner.configurationOperation))throw new SecurityException("另一原子任务动作仍未决；不继续网关派发");}
+        else {
+            String execution=continuation.getJSONObject("arguments").getString("runId");
+            try(Cursor pending=db.rawQuery("SELECT operation_id,tool,state,arguments,run_id FROM operations WHERE task_id=? AND state IN ('prepared','unknown','project_running','project_stopping','remote_job_prepared','remote_job_sending','remote_job_unknown','remote_approval_sending','remote_approval_unknown','remote_question_prepared','remote_question_sending','remote_question_unknown')",new String[]{owner.child})){
+                while(pending.moveToNext()){
+                    String op=pending.getString(0),tool=pending.getString(1),state=pending.getString(2);
+                    if(op.equals(owner.configurationOperation))continue;
+                    GatewayContinuationDispatch claim=owner.executionClaim;
+                    if(op.equals(execution)&&tool.equals("remote_job")){
+                        if(staged!=null&&state.equals("remote_job_prepared"))continue;
+                        if(claim!=null&&claim.active&&sameGatewayContinuationClaim(owner,continuation,claim))continue;
+                    }
+                    if(tool.equals("remote_approval")&&state.equals("remote_approval_sending")&&execution.equals(pending.getString(4))
+                            &&sameGatewayNativeApproval(owner,continuation,new JSONObject(pending.getString(3)))){
+                        approvalPending=true;continue;
+                    }
+                    throw new SecurityException("本轮有另一未决动作或尚未确认的执行claim；只查询原编号");
+                }
+            }
+        }
+        // Scan every row before the temporary signal: an unrelated/unknown effect wins.
         try(Cursor pending=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND tool='remote_message' AND state!='message_receipt' LIMIT 1",new String[]{owner.child})){if(pending.moveToFirst())throw new SecurityException("原会话消息仍未决；只查询原编号");}
+        checkGatewayConfigurationOperation(owner);
+        if(approvalPending)throw new GatewayOwnerApprovalPending();
+    }
+    private boolean sameGatewayContinuationClaim(HarnessGatewayConfigurationOwner owner,JSONObject continuation,GatewayContinuationDispatch claim)throws Exception {
+        JSONObject args=continuation.getJSONObject("arguments"),stage=args.getJSONObject("gatewayStage");
+        return claim.issuer==this&&claim.gatewayOwner==owner&&owner.executionClaim==claim
+            &&claim.scope.getString("taskId").equals(owner.child)&&claim.scope.getString("operationId").equals(args.getString("runId"))
+            &&claim.scope.getInt("epoch")==args.getInt("coordinatorEpoch")&&claim.scope.getString("leaseId").equals(owner.lease)
+            &&claim.scope.getString("configurationOperationId").equals(owner.configurationOperation)
+            &&claim.scope.getString("configurationPlanDigest").equals(owner.configurationPlanDigest)
+            &&stage.optString("finalReviewDigest").equals(capabilityFingerprint(claim.scope));
+    }
+    private boolean sameGatewayNativeApproval(HarnessGatewayConfigurationOwner owner,JSONObject continuation,JSONObject args)throws Exception {
+        GatewayContinuationDispatch claim=owner.executionClaim;
+        if(claim==null||!claim.entered||!sameGatewayContinuationClaim(owner,continuation,claim))return false;
+        JSONObject source=args.getJSONObject("source"),current=remoteOwnerTarget(owner.child),scope=claim.scope;
+        if(!owner.child.equals(args.optString("taskId"))||!owner.child.equals(source.optString("taskId"))
+                ||!scope.getString("runId").equals(source.optString("runId"))||scope.getInt("epoch")!=source.optInt("coordinatorEpoch")
+                ||!scope.getString("operationId").equals(source.optString("jobOperationId")))return false;
+        for(String key:new String[]{"profileId","serviceBase","environmentId","worker","threadId"})if(!scope.get(key).equals(source.opt(key)))return false;
+        // Status/pendingApprovals can settle during the HTTP response; immutable native source
+        // identity cannot. Never use the mutable whole observation fingerprint as a recovery key.
+        for(String key:new String[]{"taskId","runId","coordinatorEpoch","profileId","serviceBase","jobId","jobOperationId","environmentId","worker","threadId","sessionId","promptRequestId","turnId","protocol"})
+            if(source.has(key)!=current.has(key)||source.has(key)&&!source.get(key).equals(current.get(key)))return false;
+        String request=args.getString("requestId");JSONObject approval=args.getJSONObject("approval");
+        if(request.isEmpty()||!request.equals(approval.optString("requestId"))||!args.optString("decision").matches("accept|decline|cancel")
+                ||args.optString("decision").equals("accept")&&!Boolean.TRUE.equals(approval.opt("canAccept")))return false;
+        String identity=capabilityFingerprint(new JSONObject().put("taskId",owner.child).put("runId",source.getString("runId")).put("jobOperationId",source.getString("jobOperationId")).put("requestId",request));
+        if(!identity.equals(args.optString("approvalIdentity")))return false;
+        JSONObject config=harnessConfigOperation(owner.child,owner.configurationOperation),receipt=config.optJSONObject("receipt");
+        return config.getString("state").equals("receipt")&&receipt!=null&&receipt.optString("state").equals("COMMITTED")
+            &&receipt.optBoolean("configApplied")&&receipt.optBoolean("effectiveReadback")&&config.optJSONObject("plan")!=null
+            &&owner.configurationPlanDigest.equals(config.getJSONObject("plan").optString("planDigest"));
+    }
+    private void checkGatewayConfigurationOperation(HarnessGatewayConfigurationOwner owner)throws Exception {
         if(owner.configurationOperation==null)return;
         JSONObject row=harnessConfigOperation(owner.child,owner.configurationOperation);if(!row.getString("state").matches("prepared|unknown"))return;
         JSONObject request=row.getJSONObject("request");if(owner.lease==null||!owner.lease.equals(request.optString("endpointLeaseRef"))||!gatewaySelectionDigest(request).equals(owner.configurationSelectionDigest))throw new SecurityException("本次T04未决动作不是同lease的准确原配置");requireGatewayConfigurationRequest(owner.child,request);
@@ -2350,6 +2410,8 @@ public final class TaskStore {
             JSONObject current=remoteOwnerTarget(id),scope=page.scope(),task=required(id);
             for(String key:new String[]{"taskId","runId","coordinatorEpoch","profileId","serviceBase","jobId","jobOperationId","environmentId","worker"})if(!current.get(key).equals(scope.get(key)))throw new SecurityException("事件读取不属于原task/run/job，不确认游标");
             for(String key:new String[]{"nativeProtocol","threadId","sessionId","promptRequestId"})if(scope.has(key)&&!scope.get(key).equals(current.opt(key.equals("nativeProtocol")?"protocol":key)))throw new SecurityException("事件native会话已改变，不能确认旧游标");
+            JSONObject currentEventScope=dev.pocketengine.features.remote.RemoteJobEvents.scope(current,scope.getString("profileBindingHash"));
+            for(String key:new String[]{"turnId","nativeRuntimeVersion"})if(scope.has(key)&&!scope.get(key).equals(currentEventScope.opt(key)))throw new SecurityException("事件原turn或native runtime已变化，不能确认旧来源游标");
             JSONObject next=dev.pocketengine.features.remote.RemoteJobEvents.merge(task.optJSONObject("remoteEventRead"),page);
             task.put("remoteEventRead",next);write(task);db.setTransactionSuccessful();return new JSONObject(next.toString());
         }finally{db.endTransaction();}

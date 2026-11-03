@@ -240,6 +240,8 @@ class Progress:
             # Same text/tool IDs in two original children are not the same observation.
             # This is a read-only deduplication key, never a child session or permission.
             key += ":" + fingerprint({k: row.get(k) for k in ("parentSessionId", "parentPromptRequestId", "parentToolUseId")})
+        if row.get("childSourceProtocol") == "codex_public_child_v1":
+            key += ":" + fingerprint({k: row.get(k) for k in ("nativeParentThreadId", "nativeParentTurnId", "nativeChildThreadId", "nativeChildTurnId")})
         digest = fingerprint(row)
         if self.last.get(key) == digest:
             return

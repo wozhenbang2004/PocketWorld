@@ -293,15 +293,18 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
             if (nativeReview != null) WorkbenchCaption("只执行本次列出的步骤。请展开核对文件内容与参数后批准。")
             step?.optJSONObject("payload")?.let { payload ->
                 if (payload.has("path")) WorkbenchCaption(payload.optString("path"))
+                payload.optJSONArray("includePaths")?.let { selected -> WorkbenchCaption("仅选定 ${selected.length()} 个源码文件/目录，不是完整项目；请展开核对includePaths与实际清单。保持原私有/依赖排除策略，不自动导出或分享。") }
                 payload.optJSONArray("files").objects().forEach { file ->
                     val encoded = file.optString("encoding") == "base64"
                     val copyDirection = if (encoded) file.optString("copyDirection") else ""
                     val moveRole = if (encoded) file.optString("moveRole") else ""
-                    val label = if (moveRole.isNotEmpty()) { if (moveRole == "source") "重命名源（移走此路径）" else "重命名目标（保留同一原字节）" } else if (encoded) when (copyDirection) { "forward" -> "复制原字节为新文件"; "revert" -> "删除原复制的新文件"; else -> "原字节覆盖（非文字）" } else when (file.optString("action")) { "mkdir" -> "创建目录（非空文件）"; "create" -> "创建"; "delete" -> "删除"; else -> "精确修改" }
+                    val deleteDirection = if (encoded) file.optString("deleteDirection") else ""
+                    val label = if (deleteDirection.isNotEmpty()) { if (deleteDirection == "restore") "恢复原确定删除的完整字节" else "删除完整原字节（非文字差异）" } else if (moveRole.isNotEmpty()) { if (moveRole == "source") "重命名源（移走此路径）" else "重命名目标（保留同一原字节）" } else if (encoded) when (copyDirection) { "forward" -> "复制原字节为新文件"; "revert" -> "删除原复制的新文件"; else -> "原字节覆盖（非文字）" } else when (file.optString("action")) { "mkdir" -> "创建目录（非空文件）"; "create" -> "创建"; "delete" -> "删除"; else -> "精确修改" }
                     WorkbenchCaption("$label ${file.optString("path")}")
                     if (file.optString("action") == "mkdir") WorkbenchCaption("目录有独立元数据核对；只有明确createParents才建缺失父目录。已存在目录不重写；部分创建或未知不自动回滚、重试或rmdir。不自动回写正式版本库。")
                     if (moveRole == "source") WorkbenchCaption("这是当前副本内重命名，源路径会消失；目标须不存在，父目录须已有。不自动改正式版本库，也不宣称跨路径原子CAS；未知只核对原操作，不重放。")
-                    if (encoded && moveRole.isEmpty()) WorkbenchCaption(when (copyDirection) {
+                    if (deleteDirection.isNotEmpty()) WorkbenchCaption(if (deleteDirection == "restore") "仅原操作确证删除的私有before字节，当前路径须仍不存在；沿原授权重新恢复，不覆盖后来新文件。不递归撤销恢复。" else "删除此副本中列出的完整原件，请核对路径、原SHA和大小；不是只删hex窗口。原件保留在原TaskStore私有计划供条件恢复，不写正式版本库；unknown不自动重试或恢复。")
+                    if (encoded && moveRole.isEmpty() && deleteDirection.isEmpty()) WorkbenchCaption(when (copyDirection) {
                         "forward" -> "只复制原清单中固定源文件的完整字节，目标必须不存在；请核对copiedFrom路径、大小与原SHA。支持二进制，不转换原件；不含运行、导出或分享授权。"
                         "revert" -> "只删除这次原操作新复制且afterSHA仍未变化的目标，源文件保留；后续变化时拒绝，不自动撤销或恢复其它文件。"
                         else -> "仅列明的等长hex范围，可能破坏文件格式；请展开核对旧/新字节、byteOffset和原SHA。不插入、扩展或截断；不是执行许可。"

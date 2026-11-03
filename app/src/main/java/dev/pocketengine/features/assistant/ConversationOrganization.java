@@ -45,9 +45,9 @@ final class ConversationOrganization {
     static long catalogRevision(SQLiteDatabase db,String generation){try(Cursor row=db.rawQuery("SELECT value FROM meta WHERE key=?",new String[]{revisionKey(generation)})){return row.moveToFirst()?Long.parseLong(row.getString(0)):0;}}
     static long changed(SQLiteDatabase db,String generation){long next=Math.addExact(catalogRevision(db,generation),1);ContentValues value=new ContentValues();value.put("key",revisionKey(generation));value.put("value",Long.toString(next));db.insertWithOnConflict("meta",null,value,SQLiteDatabase.CONFLICT_REPLACE);return next;}
     static JSONObject get(SQLiteDatabase db,String generation,String conversation)throws Exception{
-        JSONObject header=header(db,generation,conversation);try(Cursor row=db.rawQuery("SELECT organization_revision,pin_order,archived_at,manual_unread,read_watermark,group_id FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0",new String[]{generation,conversation})){
+        JSONObject header=header(db,generation,conversation);try(Cursor row=db.rawQuery("SELECT organization_revision,pin_order,archived_at,manual_unread,read_watermark,group_id,updated_at FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0",new String[]{generation,conversation})){
             if(!row.moveToFirst())throw new IllegalArgumentException("原会话不存在");long watermark=row.getLong(4);JSONObject result=new JSONObject().put("conversationId",conversation).put("title",header.optString("title"))
-                    .put("organizationRevision",row.getLong(0)).put("pinOrder",row.getLong(1)).put("archivedAt",row.getLong(2)).put("archived",row.getLong(2)>0)
+                    .put("updatedAt",row.getLong(6)).put("organizationRevision",row.getLong(0)).put("pinOrder",row.getLong(1)).put("archivedAt",row.getLong(2)).put("archived",row.getLong(2)>0)
                     .put("manualUnread",row.getInt(3)!=0).put("readWatermark",watermark).put("groupId",row.getString(5));
             long unread=0,latest=0;
             try(Cursor counts=db.rawQuery("SELECT coalesce(max(n),0),coalesce(sum(CASE WHEN n>? AND role='assistant' THEN 1 ELSE 0 END),0) FROM (SELECT m.sequence n,s.role role FROM assistant_messages m JOIN assistant_sources s ON s.generation=m.generation AND s.source_id=m.source_id WHERE m.generation=? AND m.conversation_id=? AND m.body IS NOT NULL AND s.deleted=0 UNION ALL SELECT sequence n,role FROM assistant_import_records WHERE generation=? AND conversation_id=? AND deleted=0)",new String[]{Long.toString(watermark),generation,conversation,generation,conversation})){counts.moveToFirst();latest=counts.getLong(0);unread=counts.getLong(1);}
@@ -61,7 +61,7 @@ final class ConversationOrganization {
         JSONObject changes=input.getJSONObject("changes");fields(changes,"title","pinOrder","archived","manualUnread","readWatermark","groupId");if(changes.length()==0)throw new IllegalArgumentException("会话变更不能为空");
         JSONObject old=get(db,generation,conversation);if(expected!=old.getLong("organizationRevision"))throw new IllegalStateException("会话组织已变化，请刷新后重试");
         ContentValues values=new ContentValues();values.put("organization_revision",expected+1);
-        if(changes.has("title")){JSONObject header=header(db,generation,conversation);header.put("title",title(changes));values.put("header_json",header.toString());}
+        if(changes.has("title")){JSONObject header=header(db,generation,conversation);String title=title(changes);header.put("title",title).put("nativeUserTitle",title);values.put("header_json",header.toString());}
         if(changes.has("pinOrder"))values.put("pin_order",integer(changes,"pinOrder",0,1_000_000_000));
         if(changes.has("archived")){boolean archived=bool(changes,"archived");values.put("archived_at",archived?(old.getLong("archivedAt")>0?old.getLong("archivedAt"):System.currentTimeMillis()):0);}
         if(changes.has("manualUnread"))values.put("manual_unread",bool(changes,"manualUnread")?1:0);

@@ -528,7 +528,7 @@ public final class BrowserActivity extends ComponentActivity {
             if(tracker.exhausted()){result.complete(tracker.receipt(false,false,elapsed).put("navigation",version).put("documentId",document));return;}
             gate.entered();CompletableFuture<JSONObject> probe=new CompletableFuture<>();sampling.set(probe);
             probe.whenComplete((domEvidence,error)->{if(result.isDone())return;try{
-                current.check();if(error!=null){result.completeExceptionally(error);return;}JSONObject network=null;
+                current.check();if(android.os.SystemClock.elapsedRealtime()-started>=timeout){expired.run();return;}if(error!=null){result.completeExceptionally(error);return;}JSONObject network=null;
                 if(tracker.needsNetwork())try{if(page.nativeNetwork==null)throw new IllegalStateException("native_capture_unavailable");network=page.nativeNetwork.quiet(tracker.captureId);}catch(Exception unavailable){current.check();network=json("available",false);}
                 boolean met=tracker.accept(domEvidence,network);long duration=android.os.SystemClock.elapsedRealtime()-started;
                 if(met||tracker.unavailable()||tracker.exhausted()){result.complete(tracker.receipt(met,false,duration).put("navigation",version).put("documentId",document));return;}
