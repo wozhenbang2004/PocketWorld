@@ -67,7 +67,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         projectWorkbench.selectView(checkout.getString("projectId"), 1)
         selectProject(checkout.getString("projectId")); developmentCheckoutId = checkout.getString("id"); developmentNavigationRevision++
     }
-    internal val projectGit = ProjectGitCoordinator(app, io, main, ::privateWorkspaceView)
+    internal val projectGit = ProjectGitCoordinator(app, io, main, ::privateWorkspaceView) { checkout ->
+        closeProjectPreview(); closeProjectLivePreview()
+        projectWorkbench.selectCheckout(checkout.getString("projectId"), checkout.getString("id"), replace = true)
+        projectWorkbench.selectView(checkout.getString("projectId"), 0)
+        selectProject(checkout.getString("projectId")); developmentCheckoutId = checkout.getString("id"); developmentNavigationRevision++
+        refresh()
+    }
     internal val attachmentOutcomes = AttachmentOutcomeCoordinator(activity,app,io,main,::outcomeOwnerWindow,::focusTask,::releaseOutcomeWindow).also { flow -> app.teamWorkspaceOutcomes?.let { flow.bindTeamOutcomes(it,::openTeamAssignment) } }
     fun openTeamArtifact(selected:dev.pocketengine.features.attachments.TeamWorkspaceOutcomeHost.Selection) = attachmentOutcomes.openTeamArtifact(selected)
     fun openTeamProjectPackage(runId: String) {
@@ -2339,6 +2345,24 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             } catch (error: Exception) { main.post { if (!closed) done(null, message(error)) } }
         }
     }
+    internal var conversationSourceRevision by mutableStateOf(0L)
+        private set
+    internal fun answerOwnerQuestion(question: JSONObject, text: String) {
+        if (!closed && privateWorkspaceView() && text.isNotBlank() && text.length <= 4000)
+            native("answerOwnerQuestion", JSONObject().put("questionIdentity", JSONObject(question.toString())).put("text", text))
+    }
+    /** Source-bound original interrupted prefixes. Never the general raw audit route. */
+    internal fun readConversationInterrupted(taskId: String, conversationId: String?, cursor: String, done: (JSONObject?, String?) -> Unit) {
+        if (closed || !privateWorkspaceView() || conversationId.isNullOrBlank() || conversationId != state.conversationId) return
+        val revision = conversationSourceRevision
+        io.execute {
+            val result = runCatching { app.readConversationInterrupted(taskId, conversationId, cursor) }
+            main.post {
+                if (!closed && privateWorkspaceView() && conversationId == state.conversationId && revision == conversationSourceRevision)
+                    result.fold({ done(it, null) }, { done(null, "原片段来源已变化或暂不可核对；没有重发模型请求。") })
+            }
+        }
+    }
     /** Bounded original audit reads only. No feature dispatch, resume, grant or retry is created. */
     internal fun readTaskAudit(taskId: String?, section: String, cursor: String, done: (JSONObject?, String?) -> Unit) {
         if (closed) return
@@ -2457,6 +2481,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
             "feature_event" -> {
                 val payload = event.optJSONObject("payload") ?: return
+                if (event.optString("feature") in setOf("memory", "assistant", "attachments")) ++conversationSourceRevision
                 if (event.optString("feature") == "notifications") ++notificationPreviewsSourceRevision
                 if (event.optString("feature") == "memory" && payload.optString("event") == "memory_changed") { invalidateTaskMemoryReadings(); invalidateCognitionReadings(); ownerArchives.invalidateExperienceReadings() }
                 if (event.optString("feature") in setOf("assistant", "attachments")) { ownerArchives.invalidateExperienceReadings(); invalidateCognitionReadings() }
@@ -2517,7 +2542,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val metadata = JSONObject().put("_requestId", requestId)
         for (name in listOf("checkoutId", "expectedHash", "termux", "sessionId", "voiceTurnId", "turnId", "revision", "reviewId", "contentHash", "commitId", "taskId", "messageId", "profileId", "requestId", "jobId", "approvalRequestId", "decision", "projectId", "path", "artifactId", "attachmentId", "expectedSha256", "_profileBinding", "id", "offset", "length", "version", "query", "terminalId", "hostTaskId", "runId", "cursor", "cols", "rows", "expectedVersion", "expectedInstallationId", "targetInstallationId", "memberId", "teamId", "conversationId", "expectedRevision", "expectedGeneration", "expectedMemberGeneration", "assignmentId", "questionId", "answerId", "quoteMessageId", "recipientMemberId")) if (meta.second.has(name)) metadata.put(name, meta.second.get(name))
         var failure = if (!event.optBoolean("ok")) event.optString("message", "操作未完成") else null
-        if (failure == null && (feature == "assistant" && command in setOf("editMessage", "deleteMessage", "deleteConversation", "delete") || feature == "attachments" && command == "delete")) { ownerArchives.invalidateExperienceReadings(); invalidateCognitionReadings() }
+        if (failure == null && (feature == "assistant" && command in setOf("editMessage", "deleteMessage", "deleteConversation", "delete") || feature == "attachments" && command == "delete")) { ++conversationSourceRevision; ownerArchives.invalidateExperienceReadings(); invalidateCognitionReadings() }
         if (feature == "teams") {
             if (event.opt("ok") !is Boolean) failure = "团队操作未返回有效确认"
             if (failure == null && command in setOf("get", "pause", "resume", "feedback", "cancel", "continueMessages", "reviseAssignment", "continueOutcome", "sendMessage") && meta.second.optString("runId") != result.optString("id")) failure = "团队回执与原任务不匹配，请刷新后核对"

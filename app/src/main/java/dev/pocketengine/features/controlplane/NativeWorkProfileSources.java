@@ -67,6 +67,10 @@ public final class NativeWorkProfileSources implements WorkProfileResolver.Sourc
         if (!(module instanceof dev.pocketengine.features.skills.SkillsModule)) throw new IllegalStateException("original_skill_store_not_mounted");
         JSONObject value = module.handle("get", new JSONObject().put("id", id).put("scope", new JSONObject().put("ownerId", "owner").put("spaceId", "private"))).getJSONObject("skill"); observation.check(); return value;
     }
+    @Override public JSONObject referencePackage(JSONObject reference,RunControl observation)throws Exception {
+        observation.check();EngineModule module=features.module("skills");if(!(module instanceof dev.pocketengine.features.skills.SkillsModule))throw new IllegalStateException("original_skill_store_not_mounted");
+        JSONObject value=((dev.pocketengine.features.skills.SkillsModule)module).referencePackageForHost(new JSONObject().put("ownerId","owner").put("spaceId","private"),reference.getString("id"),reference.getInt("revision"),reference.getString("digest"),hostCapabilities());observation.check();return value;
+    }
     @Override public JSONObject plugin(String id, RunControl observation) throws Exception {
         observation.check(); EngineModule module = features.module("plugins");
         if (!(module instanceof dev.pocketengine.features.plugins.PluginsModule)) throw new IllegalStateException("original_plugin_store_not_mounted");

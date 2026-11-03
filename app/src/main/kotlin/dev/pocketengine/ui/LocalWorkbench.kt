@@ -97,7 +97,7 @@ internal fun NativeLocalWorkbench(state: PocketUiState, controller: PocketWorldC
             Button(onClick = { projectId?.let { prepareRequest = controller.requestFeature("local", "prepare", JSONObject().put("projectId", it)) } }, enabled = projectId != null && "local.prepare" !in state.moduleBusy) { Text(if ("local.prepare" in state.moduleBusy) "准备中…" else "准备新的工作副本") }
         }
         if (checkouts.isNotEmpty()) {
-            LocalChoice("继续已有副本", checkouts.map { it.optString("id") to "${it.optString("name")} · ${it.optString("id").take(8)}${if (it.has("collectionOperationId")) " · 取回" else ""}" }, selectedId, { selectedId = it; switching = false; selectedJob = null; prepareRequest = null; materializeRequest = null })
+            LocalChoice("继续已有副本", checkouts.map { it.optString("id") to "${it.optString("name")} · ${it.optString("id").take(8)}${if (it.has("isolatedGit")) " · 私有隔离" else ""}${if (it.has("collectionOperationId")) " · 取回" else ""}" }, selectedId, { selectedId = it; switching = false; selectedJob = null; prepareRequest = null; materializeRequest = null })
         }
     }
     if (selected == null) return
@@ -109,7 +109,7 @@ internal fun NativeLocalWorkbench(state: PocketUiState, controller: PocketWorldC
     when (mode) {
         0 -> NativeProjectDevelopment(selected, state, controller, onManualTools = { mode = 3 })
         3 -> LocalCommands(checkoutId, state, controller) { selectedJob = it; mode = 2 }
-        1 -> LocalFiles(checkoutId, state, controller)
+        1 -> LocalFiles(checkoutId, state, controller) { selectedId = it; selectedJob = null; mode = 0 }
         2 -> {
             val jobs = local.optJSONArray("jobs").objects().map { it to false } + local.optJSONArray("termuxJobs").objects().map { it to true }
             val scoped = jobs.filter { (job, _) -> job.optString("checkoutId") == checkoutId }.sortedByDescending { it.first.optLong("createdAt") }
@@ -239,10 +239,10 @@ private fun LocalJobDetail(checkoutId: String, ref: LocalJobRef, metadata: JSONO
 }
 
 @Composable
-internal fun LocalFiles(checkoutId: String, state: PocketUiState, controller: PocketWorldController) {
+internal fun LocalFiles(checkoutId: String, state: PocketUiState, controller: PocketWorldController, onCheckoutSelected: (String) -> Unit = {}) {
     val projectId = state.feature("local").optJSONArray("checkouts").objects().firstOrNull { it.optString("id") == checkoutId }?.optString("projectId")
     if (projectId.isNullOrBlank()) { LocalCaption("原工作副本尚未核对，草稿未移到其他项目。请刷新原项目后重开。"); return }
-    ProjectGitSection(projectId, checkoutId, state, controller)
+    ProjectGitSection(projectId, checkoutId, state, controller, onCheckoutSelected)
     NativeProjectFileImportControls(checkoutId, controller.projectFileImports)
     val session = controller.projectWorkbench
     val opened = session.opened(checkoutId)

@@ -349,7 +349,7 @@ class HostTestEntrypointTest(unittest.TestCase):
         groups = batch().split(',')
         self.assertEqual(['phone-setup-recovery', 'phone-input-extensions', 'phone-semantic-profile', 'phone-access-history',
                           'phone-observation-boundaries', 'phone-sensitive-owner', 'local-phone-leases', 'phone-audio-owner',
-                          'phone-task-platform'], groups)
+                          'phone-task-platform', 'aion-conversations'], groups)
         self.assertEqual(groups, HOST.select(REGISTRY, groups, []))
         main_groups = ['phone-task-platform', 'memory-recall-quality', 'memory-evidence-plan', 'memory-method-quality']
         self.assertEqual(main_groups, HOST.select(REGISTRY, main_groups, []))
