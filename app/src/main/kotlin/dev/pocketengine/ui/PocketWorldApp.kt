@@ -82,6 +82,22 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
     LaunchedEffect(controller.conversationOrganizationOwnerVisible) { if (!controller.conversationOrganizationOwnerVisible) { conversationRename = null; conversationRenameBusy = false; conversationManageMessage = null } }
     var projectDialog by rememberSaveable { mutableStateOf(false) }
     var fileDialog by rememberSaveable { mutableStateOf(false) }
+    // Keep one stable state object so a pending switch rechecks the current sheet.
+    val chatQuoteMessage = remember { mutableStateOf<Triple<Long, String, UiMessage>?>(null) }
+    val chatQuoteGeneration = remember { mutableLongStateOf(0L) }
+    val openChatQuote: (UiMessage) -> Unit = { message ->
+        val conversation = message.ownerOriginalLocator?.optString("conversationId").orEmpty()
+        if (conversation.isNotEmpty() && controller.state.conversationId == conversation) {
+            check(chatQuoteGeneration.longValue < Long.MAX_VALUE) { "引用窗口代次已耗尽" }
+            chatQuoteGeneration.longValue += 1
+            chatQuoteMessage.value = Triple(chatQuoteGeneration.longValue, conversation, message)
+        }
+    }
+    val quoteConversation = state.conversationId
+    LaunchedEffect(quoteConversation) {
+        if (controller.state.conversationId == quoteConversation && chatQuoteMessage.value?.second != quoteConversation)
+            chatQuoteMessage.value = null
+    }
     val chatTaskMemoryReference = remember { mutableStateOf<JSONObject?>(null) }
     val chatAnswerSources = remember { mutableStateOf<JSONObject?>(null) }
     val chatAnswerSourceMemory = remember { mutableStateOf<JSONObject?>(null) }
@@ -182,7 +198,7 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
         val latest = controller.state
         val openLayer = tab != 0 || settings || connections || teamLaunch || selectedTaskId != null ||
             taskMemorySearch || conversationPicker || conversationRename != null ||
-            chatTaskMemoryReference.value != null || chatAnswerSources.value != null ||
+            chatQuoteMessage.value != null || chatTaskMemoryReference.value != null || chatAnswerSources.value != null ||
             projectDialog || fileDialog || consentGoal != null || suggestedGoal != null ||
             latest.teamRunId != null || latest.inspectionTaskId != null || latest.backgroundSetupOpen ||
             latest.filePath != null || latest.workspaceArtifactView != null || latest.chatAttachmentPickerOpen ||
@@ -252,7 +268,7 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
                 when (tab) {
                     0 -> ChatScreen(state, draft, changeDraft, phoneIntent, changePhoneIntent, executionMode, { executionMode = it }, {
                         if(phoneIntent==phoneComposerVisible){if (phoneComposerVisible) consentGoal = draft else if (draft.isNotBlank()) { controller.sendChat(draft,composerKey,composerEpoch) }}
-                    }, controller, { settings = true }, { task -> openTask(task.id) }, { teamLaunch = true }, chatScroll, observedMessage, { observedMessage = it }, newReplies, { newReplies = it }, readingReady, missingReadingAnchor, chatTaskMemoryReference, chatAnswerSources, chatAnswerSourceMemory)
+                    }, controller, { settings = true }, { task -> openTask(task.id) }, { teamLaunch = true }, chatScroll, observedMessage, { observedMessage = it }, newReplies, { newReplies = it }, readingReady, missingReadingAnchor, chatQuoteMessage, openChatQuote, chatTaskMemoryReference, chatAnswerSources, chatAnswerSourceMemory)
                     1 -> TaskAuditList(state, controller, { openTask(it.id) }, { taskMemorySearch = true })
                     2 -> ProjectsScreen(state, controller, { projectDialog = true }, { fileDialog = true })
                 }
@@ -306,12 +322,16 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
 @Composable
 private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) -> Unit, phone: Boolean, onPhone: (Boolean) -> Unit, mode: String, onMode: (String) -> Unit, send: () -> Unit, controller: PocketWorldController, settings: () -> Unit, task: (UiTask) -> Unit, collaborate: () -> Unit,
     scroll: LazyListState, observedMessage: String, observeMessage: (String) -> Unit, newReplies: Boolean, setNewReplies: (Boolean) -> Unit, readingReady:Boolean, missingReadingAnchor:Boolean,
-    taskMemoryState: MutableState<JSONObject?>, answerSourcesState: MutableState<JSONObject?>, answerSourceMemoryState: MutableState<JSONObject?>) {
+    quoteMessageState: MutableState<Triple<Long, String, UiMessage>?>, openQuote: (UiMessage) -> Unit, taskMemoryState: MutableState<JSONObject?>, answerSourcesState: MutableState<JSONObject?>, answerSourceMemoryState: MutableState<JSONObject?>) {
     var chatTools by remember { mutableStateOf(false) }
     var composerDetails by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
-    var quoteMessage by remember(state.conversationId) { mutableStateOf<UiMessage?>(null) }
-    quoteMessage?.let { MessageQuoteSheet(it, controller) { quoteMessage = null } }
+    var quoteMessage by quoteMessageState
+    quoteMessage?.let { (token, conversation, original) ->
+        if (conversation == controller.state.conversationId) key(token) {
+            MessageQuoteSheet(original, controller) { if (quoteMessage?.first == token) quoteMessage = null }
+        }
+    }
     var modelPickerOpen by remember { mutableStateOf(false) }
     val modelConnections = controller.nativeModelConnections()
     if (modelPickerOpen && modelConnections != null) ComposerModelPicker(modelConnections,
@@ -383,7 +403,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 if(messageDetails) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { clipboard.setText(AnnotatedString(message.content)) }, enabled = message.content.isNotEmpty(), modifier = Modifier.testTag("message_copy")) { Text("复制", fontSize = 12.sp) }
-                        if (!phone && message.ownerOriginalLocator != null) TextButton(onClick = { quoteMessage = message }, enabled = !state.chatSubmitting && ownerDraft != null && message.content.isNotEmpty(), modifier = Modifier.testTag("message_quote")) { Text("引用到草稿", fontSize = 12.sp) }
+                        if (!phone && message.ownerOriginalLocator != null) TextButton(onClick = { openQuote(message) }, enabled = !state.chatSubmitting && ownerDraft != null && message.content.isNotEmpty(), modifier = Modifier.testTag("message_quote")) { Text("引用到草稿", fontSize = 12.sp) }
                     }
                     message.id?.let { id -> SourceMemoryControl("message", id, message.content, state, controller, compact = true) }
                     finalAnswerSourceSelection(message)?.let { selection -> TextButton(onClick = { answerSources = selection; answerSourceMemory = message.memoryReference }, modifier = Modifier.testTag("final_answer_sources_open")) { Text("这次回答的来源", fontSize = 11.sp) } }
