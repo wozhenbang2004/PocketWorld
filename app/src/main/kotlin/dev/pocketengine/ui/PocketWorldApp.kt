@@ -567,6 +567,9 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 if (mainScreenBusy) Text("先暂停主屏任务，再切到需要的 App 捕获内容。", color = SecondaryInk, fontSize = 12.sp)
             }
             host.taskActionErrors[task.id]?.let { Text(it, color = Danger, fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 8.dp)) }
+            if (phoneTask) runCatching { dev.pocketengine.features.assistant.OwnerPhoneQuestions.pageQuestion(task.raw) }.getOrNull()?.let { question ->
+                key(task.id, question.toString()) { OwnerQuestionPanel(question, controller::answerOwnerQuestion) }
+            }
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(approvalAnchor))
             if (!pairedTask && !mediaTask && (!groupTask || controller.groupTaskReady) && pendingCapabilityApprovals(task).isNotEmpty()) CapabilityApprovals(task, controller)
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(reconciliationAnchor))

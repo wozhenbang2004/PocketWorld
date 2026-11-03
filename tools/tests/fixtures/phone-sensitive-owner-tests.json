@@ -153,7 +153,12 @@
         "shareNeedsOriginalOwnerApprovalThenOneNativeIntentAndNoAutomaticSendOrFurtherModelTurn",
         "httpsPackageLinkNeedsOriginalApprovalAndPausesForTheOwnerToVerifyTheActualTarget",
         "changedShareReceiverVersionWhileOwnerReviewsCannotConsumeOldApprovalOrLaunch",
-        "changedHttpsReceiverVersionWhileOwnerReviewsHasNoLaunchOrBrowserFallback"
+        "changedHttpsReceiverVersionWhileOwnerReviewsHasNoLaunchOrBrowserFallback",
+        "backgroundShareUsesTheOriginalApprovalRunnerAndExactNativeDisplay",
+        "backgroundHttpsUsesTheOriginalAppLinksContractAndNativeDisplay",
+        "backgroundTargetChangedDuringOwnerReviewNeverReachesNativeHelper",
+        "lostBackgroundNativeReplyLeavesOneUnresolvedOriginalOperationWithoutReplay",
+        "backgroundWrongUserLandingPausesWithoutClaimingTargetAccountOrDelivery"
       ]
     },
     {
@@ -179,6 +184,14 @@
     {
       "class": "dev.pocketengine.testutil.HttpServer",
       "source": "app/src/test/java/dev/pocketengine/testutil/HttpServer.java"
+    },
+    {
+      "class": "dev.pocketengine.features.semantic.SemanticBackgroundDisplayFixture",
+      "source": "app/src/test/java/dev/pocketengine/features/semantic/SemanticBackgroundDisplayFixture.java"
+    },
+    {
+      "class": "dev.pocketengine.displayhelper.DisplayTypedIntentNativeTest",
+      "source": "app/src/test/java/dev/pocketengine/displayhelper/DisplayTypedIntentNativeTest.java"
     }
   ],
   "referenceIntegrationCommit": "27a7bf4340d424ed45aa2ff4d3e7f35b33eeec80"

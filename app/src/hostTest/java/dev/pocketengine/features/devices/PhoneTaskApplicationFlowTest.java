@@ -383,6 +383,14 @@ public final class PhoneTaskApplicationFlowTest {
         var stages=java.util.Set.of("ordinary_question_wait","ordinary_question_first_snapshot","ordinary_question_observed","original_control_acquired","reconnect_close_requested","reconnect_closed","offline_snapshot_observed","reconnect_open_requested","reconnect_opened","reconnect_snapshot_observed");
         JSONObject safe=new JSONObject().put("phase",phases.contains(event.optString("phase"))?event.optString("phase"):"unrecognized");if(stages.contains(event.optString("stage")))safe.put("stage",event.getString("stage"));
         for(String key:new String[]{"taskPresent","currentReadUnavailable","phoneStateUnconfirmed","originalSessionPresent","ordinaryQuestionPresent"})if(event.opt(key) instanceof Boolean)safe.put(key,event.getBoolean(key));
+        if("failed".equals(event.optString("phase"))){
+            // The original Python fixture emits only these fixed codes. Keep failure
+            // location, never its report body, exception message, IDs or credentials.
+            if(java.util.Set.of("wait_original_question","acquire_control","status").contains(event.optString("stage")))safe.put("stage",event.getString("stage"));
+            if(java.util.Set.of("FixtureError","ClientError","KeyError","TypeError","ValueError","TimeoutError","OSError").contains(event.optString("errorType")))safe.put("errorType",event.getString("errorType"));
+            if(java.util.Set.of("original_control_not_acquired","acquire_status_changed_original_question_scope","original_control_missing_from_real_snapshot","original_task_identity_changed").contains(event.optString("code")))safe.put("code",event.getString("code"));
+            Object status=event.opt("httpStatus");if(status instanceof Integer||status instanceof Long){long value=((Number)status).longValue();if(value>=400&&value<=599)safe.put("httpStatus",value);}
+        }
         if(event.has("taskState"))safe.put("taskState",safeTaskState(event.optString("taskState")));return safe;
     }
     private static String safeTaskState(String state){return java.util.Set.of("preparing","running","pausing","paused","awaiting_user","needs_confirmation","cancelled","failed","completed","expired","interrupted").contains(state)?state:"unknown";}

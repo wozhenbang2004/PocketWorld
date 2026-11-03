@@ -22,8 +22,8 @@ public final class SemanticTaskAuthority implements SemanticCapabilityPort.Autho
         existing.check(tool,control);
         if(tool.equals(SemanticCapabilityPort.DISPATCH)) {
             JSONObject task=tasks.get(binding.taskId,false);
-            if(!binding.allowWrites||task==null||!"phone".equals(task.optString("kind"))||!"main_screen".equals(task.optString("executionMode")))
-                throw new SecurityException("此语义分派仅允许主人明确选择的原主屏手机任务");
+            if(!binding.allowWrites||task==null||!"phone".equals(task.optString("kind"))||!task.optString("executionMode").matches("main_screen|background"))
+                throw new SecurityException("此语义分派仅允许主人明确选择的原手机任务与执行位置");
         }
     }
     @Override public void requirePrepared(String operationId,String tool,JSONObject originalArguments) throws Exception {existing.requirePrepared(operationId,tool,originalArguments);}
@@ -31,7 +31,7 @@ public final class SemanticTaskAuthority implements SemanticCapabilityPort.Autho
         JSONObject result=tasks.requireCapabilityApproval(binding.taskId,binding.runId,tool,originalArguments,capability);
         if(!result.optBoolean("approved"))events.emit(new JSONObject().put("taskId",binding.taskId).put("runId",binding.runId).put("tool",tool)
                 .put("approvalId",result.optString("approvalId")).put("arguments",originalArguments).put("capability",capability)
-                .put("message","需要主人在本机确认本次App、入口参数和主屏执行位置；尚未派发"));
+                .put("message","需要主人在本机确认本次App、入口参数和原任务执行位置；尚未派发"));
         return result;
     }
 }

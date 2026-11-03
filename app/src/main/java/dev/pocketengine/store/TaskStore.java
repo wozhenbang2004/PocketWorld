@@ -485,6 +485,17 @@ public final class TaskStore {
         JSONObject t=base(UUID.randomUUID().toString(),goal,"phone",mode).put("displayId",mode.equals("background")?-1:0);
         write(t);return copy(t,false);
     }
+    /** Explicit native owner rehearsal; this flag is stored on the existing task, never accepted from model JSON. */
+    public synchronized JSONObject createOwnerPhonePractice(String goal,String mode)throws Exception {
+        JSONObject task=create(goal,mode);task.put("ownerPhonePractice",true);write(task);return copy(task,false);
+    }
+    public synchronized void requireOwnerPhonePractice(String id,String run,int epoch,RunControl original)throws Exception {
+        // Native target identity only: dispatch separately requires its exact prepared operation.
+        // A queued Activity may arrive after that same operation has already become a receipt.
+        if(original==null||!original.matchesHostRun(id,run,epoch)||original.isPaused())throw new SecurityException("owner_practice_original_run_required");
+        original.check();checkCapabilityCurrent(id,run,epoch,"phone_practice_target");JSONObject task=required(id);
+        if(!task.optBoolean("ownerPhonePractice")||!"phone".equals(task.optString("kind")))throw new SecurityException("owner_practice_required");
+    }
     public synchronized JSONObject createCapabilityTask(String goal,String conversationId)throws Exception{
         JSONObject task=base(UUID.randomUUID().toString(),goal,"assistant","capabilities").put("conversationId",conversationId==null?"":conversationId);
         write(task);return copy(task,false);
@@ -965,9 +976,87 @@ public final class TaskStore {
         }finally{db.endTransaction();}}
     }
 
+    public synchronized dev.pocketengine.features.assistant.OwnerPhoneQuestions.Held retainOwnerPhoneQuestion(dev.pocketengine.features.assistant.OwnerPhoneQuestions inputs,String id,RunControl original,dev.pocketengine.core.PhonePort physical,dev.pocketengine.core.ModelConfig captured,long generation,dev.pocketengine.features.assistant.OwnerPhoneQuestions.PhysicalOwner owner)throws Exception {
+        db.beginTransaction();try{
+            JSONObject task=required(id);dev.pocketengine.features.assistant.OwnerPhoneQuestions.requirePhoneTask(task);String run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
+            try(Cursor attempt=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='running'",new String[]{id,run,Integer.toString(epoch)})){if(!attempt.moveToFirst())throw new SecurityException("原手机执行已结束");}
+            JSONObject permission=grant(run);executionScopeCurrent(task,run,permission);if(permission.getLong("expiresAt")<=System.currentTimeMillis())throw new SecurityException("原手机问题已到期");if(!"owner".equals(permission.optString("principalId"))||!"private".equals(permission.optString("spaceId"))||!task.getString("executionMode").equals(permission.optString("mode")))throw new SecurityException("原手机授权身份不匹配");
+            var retained=inputs.retain(task,permission,original,physical,captured,generation,owner);
+            if(retained==null){task.remove("ownerPhoneQuestionHold");task.remove("ownerPhoneQuestionNotice");write(task);db.setTransactionSuccessful();return null;}
+            task.put("ownerPhoneQuestionHold",retained.view());JSONObject notice=dev.pocketengine.features.assistant.OwnerPhoneQuestions.noticeView(task);if(notice==null)throw new SecurityException("原手机普通问题定位尚不可用");
+            task.put("ownerPhoneQuestionNotice",notice.put("phase","available"));write(task);db.setTransactionSuccessful();return retained;
+        }finally{db.endTransaction();}
+    }
+    /** Original phone ownerInputs only: no conversation/source is invented for phone tasks. */
+    private JSONObject consumeOwnerPhoneQuestionReply(String id,String run,int epoch,String request,long revision,String token,String text)throws Exception {
+        db.beginTransaction();try{
+            JSONObject task=required(id);var accepted=dev.pocketengine.features.assistant.OwnerPhoneQuestions.reply(task,id,run,epoch,request,revision,token,text,System.currentTimeMillis());
+            if(accepted.duplicate()){db.setTransactionSuccessful();return accepted.result();}
+            try(Cursor attempt=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='running'",new String[]{id,run,Integer.toString(epoch)})){if(!attempt.moveToFirst())throw new SecurityException("原手机持有执行已结束，旧问题不能接收新输入");}
+            JSONObject permission=grant(run);executionScopeCurrent(task,run,permission);
+            if(task.optBoolean("cancelRequested")||permission.getLong("expiresAt")<=System.currentTimeMillis())throw new SecurityException("原手机问题已到期或停止；只可打开原任务");
+            requireOwnerPhoneQuestionSources(task,run);
+            JSONObject row=accepted.row();JSONArray rows=task.optJSONArray("ownerInputs");if(rows==null)rows=new JSONArray();rows.put(row);task.put("ownerInputs",rows);
+            task.getJSONObject("evidence").getJSONObject("ownerQuestion").put("replyConsumed",true).put("replyMessageId",row.getString("messageId")).put("replyConsumedAt",row.getLong("acceptedAt")).put("answerSourceKind","native_phone_owner_input").put("formalSourceRefAvailable",false);
+            task.getJSONObject("ownerPhoneQuestionNotice").put("phase","answered").put("answeredAt",row.getLong("acceptedAt"));
+            appendEvent(task,new JSONObject().put("type","owner_phone_question_answer_saved").put("runId",run).put("coordinatorEpoch",epoch).put("requestId",request).put("waitRevision",revision).put("messageId",row.getString("messageId")).put("sourceKind","native_phone_owner_input").put("formalSourceRefAvailable",false).put("executionAuthorized",false));
+            db.setTransactionSuccessful();return accepted.result();
+        }finally{db.endTransaction();}
+    }
+    /** Same running phone run/lease, exact original Held and grant. Only the closed original
+     * phone mailbox is reopened; this never creates/renews a run, scope, lease or budget. */
+    public synchronized JSONObject resumeOwnerPhoneQuestionRun(dev.pocketengine.features.assistant.OwnerPhoneQuestions.Held original)throws Exception {
+        db.beginTransaction();try{
+            original.requireOriginal();String id=original.taskId(),run=original.runId();int epoch=original.epoch();JSONObject task=required(id),permission=grant(run);
+            JSONObject reply=dev.pocketengine.features.assistant.OwnerPhoneQuestions.requireSavedContinuation(original,task,permission,checkpoint(run),System.currentTimeMillis());executionScopeCurrent(task,run,permission);
+            if(hasUnresolved(id))throw new SecurityException("原手机动作结果尚未核对，普通回答不重放外效");JSONArray approvals=task.optJSONArray("approvals");for(int i=0;approvals!=null&&i<approvals.length();i++)if("pending".equals(approvals.getJSONObject(i).optString("state")))throw new SecurityException("普通回答不代替原手机具体操作授权");
+            JSONObject scope=task.getJSONObject("executionScope");if(scope.getInt("modelCallLimit")-scope.getInt("modelCallsUsed")-deviceTasks.heldBudget(id,run,true)<1||scope.getInt("toolLimit")-scope.getInt("toolsUsed")-deviceTasks.heldBudget(id,run,false)<1)throw new SecurityException("原手机剩余预算已被占用");
+            try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id='phone.local'",null)){if(!lease.moveToFirst()||!run.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())throw new SecurityException("原手机物理执行租约已改变或到期");}
+            JSONObject mailbox=ownerMailbox(task,run,epoch);if(!Boolean.FALSE.equals(mailbox.opt("open"))||!mailbox.optString("conversationId").isEmpty())throw new SecurityException("原手机邮箱已被接手");
+            requireOwnerPhoneQuestionSources(task,run);
+            ContentValues claim=new ContentValues();claim.put("updated_at",System.currentTimeMillis());if(db.update("runs",claim,"task_id=? AND run_id=? AND epoch=? AND status='running'",new String[]{id,run,Integer.toString(epoch)})!=1)throw new SecurityException("原手机执行已结束");
+            mailbox.put("open",true);reply.getJSONObject("ownerQuestionReply").put("phase","continuing").put("continuationClaimedAt",System.currentTimeMillis());
+            task.put("ownerQuestionContinuation",new JSONObject().put("format","pocketworld.owner-question-continuation.v1").put("runId",run).put("epoch",epoch).put("requestId",original.requestId()).put("waitRevision",original.waitRevision()).put("messageId",reply.getString("messageId")).put("phase","claimed"))
+                .put("status","running");appendEvent(task,new JSONObject().put("type","owner_phone_question_continuation_claimed").put("runId",run).put("coordinatorEpoch",epoch).put("requestId",original.requestId()).put("messageId",reply.getString("messageId")).put("newGrant",false));
+            db.setTransactionSuccessful();return copy(task,false);
+        }finally{db.endTransaction();}
+    }
+    public synchronized void ownerPhoneQuestionContinuationUnavailable(dev.pocketengine.features.assistant.OwnerPhoneQuestions.Held original)throws Exception {
+        db.beginTransaction();try{
+            JSONObject task=required(original.taskId()),marker=task.optJSONObject("ownerQuestionContinuation"),evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");
+            if(!original.runId().equals(task.optString("runId"))||original.epoch()!=task.optInt("coordinatorEpoch")||marker==null||!"claimed".equals(marker.optString("phase"))||!original.runId().equals(marker.optString("runId"))||original.epoch()!=marker.optInt("epoch")||!original.requestId().equals(marker.optString("requestId"))
+                    ||question==null||!original.requestId().equals(question.optString("requestId"))||original.waitRevision()!=question.optLong("waitRevision")){db.setTransactionSuccessful();return;}
+            marker.put("phase","unavailable");JSONObject mailbox=ownerMailbox(task,original.runId(),original.epoch());mailbox.put("open",false);if(task.optString("status").matches("preparing|running"))task.put("status",original.originalControl().isCancelled()?"stopping":"awaiting_user");write(task);db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    private JSONObject noteOwnerPhoneQuestionAnswerState(JSONObject accepted,String requested)throws Exception {
+        if(!Set.of("saved_owner_action_required","saved_original_host_busy","saved_original_conversation_busy","saved_worker_unavailable","saved_source_sync_required","saved_execution_unavailable","original_worker_requested").contains(requested))throw new IllegalArgumentException("原手机回答状态无效");
+        db.beginTransaction();try{
+            JSONObject task=required(accepted.getString("taskId"));dev.pocketengine.features.assistant.OwnerPhoneQuestions.requirePhoneTask(task);JSONObject evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");
+            if(question==null||!task.getString("runId").equals(accepted.getString("runId"))||task.getInt("coordinatorEpoch")!=accepted.getInt("coordinatorEpoch")||!question.optString("requestId").equals(accepted.getString("requestId"))||!question.optString("replyMessageId").equals(accepted.getString("messageId"))){db.setTransactionSuccessful();return accepted;}
+            String state=requested,run=task.getString("runId");try{JSONObject scope=task.getJSONObject("executionScope"),permission=grant(run);
+                if(TaskExecutionScope.effectiveDeadline(scope)<=System.currentTimeMillis()||permission.getLong("expiresAt")<=System.currentTimeMillis())state="saved_scope_expired";
+                else if(scope.getInt("modelCallLimit")-scope.getInt("modelCallsUsed")-deviceTasks.heldBudget(task.getString("id"),run,true)<1||scope.getInt("toolLimit")-scope.getInt("toolsUsed")-deviceTasks.heldBudget(task.getString("id"),run,false)<1||permission.getInt("remainingOperations")<1)state="saved_budget_exhausted";
+                else if(scope.getLong("revision")!=permission.optLong("executionScopeRevision"))state="saved_original_authority_changed";
+            }catch(Exception scopeUnknown){state="saved_scope_unavailable";}
+            if(!state.matches("saved_scope_.*|saved_budget_exhausted|saved_original_authority_changed"))try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id='phone.local'",null)){if(!lease.moveToFirst()||!run.equals(lease.getString(0))||task.getInt("coordinatorEpoch")!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())state="saved_phone_lease_unavailable";}
+            if(!state.matches("saved_scope_.*|saved_budget_exhausted|saved_original_authority_changed"))try{requireOwnerPhoneQuestionSources(task,run);}catch(Exception sourceUnavailable){state="saved_source_unavailable";}
+            String action=state.matches("saved_source_.*")?"review_original_sources":"review_execution_scope";task.put("ownerQuestionReplyState",new JSONObject().put("format","pocketworld.owner-question-reply-state.v1").put("runId",run).put("epoch",task.getInt("coordinatorEpoch")).put("requestId",question.getString("requestId")).put("messageId",accepted.getString("messageId")).put("state",state).put("ownerAction",action).put("sourceKind","native_phone_owner_input").put("formalSourceRefAvailable",false).put("observedAt",System.currentTimeMillis()).put("executionAuthorized",false));write(task);db.setTransactionSuccessful();return new JSONObject(accepted.toString()).put("continuationState",state).put("ownerAction",action);
+        }finally{db.endTransaction();}
+    }
+
+    private void requireOwnerPhoneQuestionSources(JSONObject task,String run)throws Exception {
+        String id=task.getString("id");dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOutputContext(db,outputSources,id,run);
+        if(!task.optString("conversationId").isBlank()){
+            if(!conversationRepository.exists(task.getString("conversationId")))throw new SecurityException("原手机关联对话已删除");
+            dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOwnerSourceContinuation(db,conversationRepository,id,run,task.getString("conversationId"));
+        }
+    }
+
     /** The original question notice is consumed once in the same SQL transaction as its
      * original ownerInputs row and USER message/source. Saving an answer grants nothing. */
     public synchronized JSONObject consumeOwnerQuestionReply(String id,String run,int epoch,String requestId,long waitRevision,String noticeToken,String text)throws Exception {
+        if("phone".equals(required(id).optString("kind")))return consumeOwnerPhoneQuestionReply(id,run,epoch,requestId,waitRevision,noticeToken,text);
         db.beginTransaction();try{
             JSONObject task=required(id);requirePrivateOwner(task);JSONObject permission=grant(run);executionScopeCurrent(task,run,permission);if(permission.getLong("expiresAt")<=System.currentTimeMillis())throw new SecurityException("原问题已到期；只可打开原任务");JSONArray sourceRefs=scheduleProposalUserRefs(id,run,epoch,task.getString("conversationId"));requireScheduleProposalSources(id,run,epoch,task.getString("conversationId"),sourceRefs);var accepted=dev.pocketengine.features.assistant.OwnerQuestionInputs.reply(task,id,run,epoch,requestId,waitRevision,noticeToken,text,System.currentTimeMillis());
             if(accepted.duplicate()){db.setTransactionSuccessful();return accepted.result();}
@@ -985,7 +1074,7 @@ public final class TaskStore {
     }
     /** Read-only exact ACK lookup, including a lost commit return. Never consumes or resumes. */
     public synchronized JSONObject ownerQuestionReplyReceipt(String id,String run,int epoch,String request,long revision,String token,String text)throws Exception{
-        JSONObject task=required(id);dev.pocketengine.features.assistant.OwnerQuestionInputs.requirePrivateTask(task);if(text==null||text.isBlank()||text.length()>4000)return null;
+        JSONObject task=required(id);if("phone".equals(task.optString("kind")))dev.pocketengine.features.assistant.OwnerPhoneQuestions.requirePhoneTask(task);else dev.pocketengine.features.assistant.OwnerQuestionInputs.requirePrivateTask(task);if(text==null||text.isBlank()||text.length()>4000)return null;
         String digest=capabilityFingerprint(new JSONObject().put("text",text.strip()));JSONArray rows=task.optJSONArray("ownerInputs");
         for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i),proof=row.optJSONObject("ownerQuestionReply");if(proof==null||!dev.pocketengine.features.assistant.OwnerQuestionInputs.FORMAT.equals(proof.optString("format"))||!run.equals(row.optString("acceptedRunId"))||epoch!=row.optInt("acceptedEpoch")||!request.equals(proof.optString("requestId")))continue;
             if(revision!=proof.optLong("waitRevision")||!digest.equals(proof.optString("textDigest"))||!token.equals(proof.optString("noticeToken")))throw new SecurityException("同一原问题不能改写已保存回答");
@@ -1042,6 +1131,7 @@ public final class TaskStore {
 
     /** Native observation/navigation after a saved answer. This changes no execution authority. */
     public synchronized JSONObject noteOwnerQuestionAnswerState(JSONObject accepted,String requested)throws Exception {
+        if("phone".equals(required(accepted.getString("taskId")).optString("kind")))return noteOwnerPhoneQuestionAnswerState(accepted,requested);
         if(!Set.of("saved_owner_action_required","saved_original_host_busy","saved_original_conversation_busy","saved_worker_unavailable","saved_source_sync_required","saved_execution_unavailable","original_worker_requested").contains(requested))throw new IllegalArgumentException("问题续接状态无效");
         db.beginTransaction();try{
             JSONObject task=required(accepted.getString("taskId"));dev.pocketengine.features.assistant.OwnerQuestionInputs.requirePrivateTask(task);JSONObject evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");
@@ -9007,7 +9097,21 @@ public final class TaskStore {
     public synchronized JSONObject ownerExperienceOutputsForOwner(OwnerExperienceProjection.Gate gate,String task,String cursor,RunControl control)throws Exception{return OwnerExperienceProjection.outputs(db,conversationRepository,gate,task,cursor,control);}
     /** Owner presentation only. Native authorization/recovery continues to use get/hasUnresolved. */
     public synchronized JSONObject taskSummaryPage(String cursor,int limit)throws Exception{
-        JSONObject page=TaskAuditStore.summaryPage(db,cursor,limit);JSONArray rows=page.getJSONArray("tasks"),visible=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if("inference".equals(row.optString("kind")))continue;row.put("hasUnresolvedOperations",hasUnresolved(row.getString("id"))).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(row.getString("id")));visible.put(row);}return page.put("tasks",visible).put("accountingRecordsExcluded",rows.length()-visible.length());
+        JSONObject page=TaskAuditStore.summaryPage(db,cursor,limit);JSONArray rows=page.getJSONArray("tasks"),visible=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if("inference".equals(row.optString("kind")))continue;row=phoneOwnerQuestionForUi(row);row.put("hasUnresolvedOperations",hasUnresolved(row.getString("id"))).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(row.getString("id")));visible.put(row);}return page.put("tasks",visible).put("accountingRecordsExcluded",rows.length()-visible.length());
+    }
+    /** A source withdrawal retires this derived view, never the original task or audit.
+     * Header rows retain enough original identity to apply the same source gate without
+     * materializing an oversized task document or treating its summary as new evidence. */
+    private JSONObject phoneOwnerQuestionForUi(JSONObject task)throws Exception {
+        if(!"awaiting_user".equals(task.optString("status")))return task;
+        try{dev.pocketengine.features.assistant.OwnerPhoneQuestions.requirePhoneTask(task);}catch(SecurityException otherScope){return task;}
+        try{requireOwnerPhoneQuestionSources(task,task.getString("runId"));return task;}
+        catch(Exception unavailable){
+            JSONObject view=new JSONObject();for(String key:new String[]{"id","kind","executionMode","actorId","spaceId","status","conversationId","runId","coordinatorEpoch","createdAt","updatedAt","cancelRequested","taskCoreBytes","taskCoreReadLimited"})if(task.has(key))view.put(key,task.get(key));
+            return view.put("goal","原手机任务").put("summary","原问题来源已撤回或尚不可核对。已保留原任务，请核对来源；你仍可停止原任务。")
+                    .put("taskProjection","source_unavailable").put("ownerQuestionReadState","source_unavailable").put("sourceCurrentReadRequired",true)
+                    .put("auditBodyIncluded",false).put("executionAuthorized",false).put("hasUnresolvedOperations",hasUnresolved(task.getString("id"))).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(task.getString("id")));
+        }
     }
     /** Bounded durable accounting view over the same task headers, not fake executable tasks. */
     public synchronized JSONObject nativeInferenceUsagePage(String cursor,int limit)throws Exception{
@@ -9024,6 +9128,7 @@ public final class TaskStore {
             if(!limited&&"needs_confirmation".equals(result.optString("status")))result.put("resultReviewDigest",resultReviewDigest(result));
             result.put("taskCoreBytes",row.getLong(2)).put("taskCoreReadLimited",limited);
         }
+        JSONObject sourceView=phoneOwnerQuestionForUi(result);if(sourceView!=result)return sourceView;
         JSONObject events=TaskAuditStore.eventPage(db,id,"",32,65536),operations=TaskAuditStore.operationPage(db,id,"",24,65536);
         JSONArray eventBodies=new JSONArray(),operationBodies=new JSONArray(),eventRows=events.getJSONArray("entries"),operationRows=operations.getJSONArray("entries");
         for(int i=0;i<eventRows.length();i++){JSONObject row=eventRows.getJSONObject(i);if(row.optJSONObject("event")!=null)eventBodies.put(row.getJSONObject("event"));}

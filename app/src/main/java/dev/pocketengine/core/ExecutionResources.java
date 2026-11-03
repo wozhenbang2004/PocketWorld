@@ -9,6 +9,8 @@ import java.util.function.LongSupplier;
  */
 public final class ExecutionResources {
     private final LongSupplier clock;
+    private final dev.pocketengine.phone.access.PhoneAppResources phoneApps=new dev.pocketengine.phone.access.PhoneAppResources();
+    public dev.pocketengine.phone.access.PhoneAppResources phoneApps(){return phoneApps;}
     private String phoneToken;
     private String browserToken;
     private long browserExpiresAt;

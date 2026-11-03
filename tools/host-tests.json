@@ -251,10 +251,82 @@
     "helpers": [
       "dev.pocketengine.phone.observation.PhoneCollectionFixtures",
       "dev.pocketengine.phone.observation.PhoneTreeSequenceTest",
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.semantic.SemanticBackgroundDisplayFixture",
+      "dev.pocketengine.displayhelper.DisplayTypedIntentNativeTest"
     ],
     "robolectric": true,
     "description": "Human-only sensitive native/OCR/coordinate steps, ordinary-form/pure-image preservation, original target/read/unknown fences and Runner/TaskStore sequence receipts; synthetic FG/BG fixtures, not physical Android/OEM or real payment acceptance. Original confirmed-phone-route source/currentness, native owner review, guarded per-child Runner/SQL and original App factory tests; model/package/tree/ack are explicit fixtures, not physical acceptance. Exact-package plaintext/HTTPS typed-entry original owner approval and App/Service/SQL journeys; explicit PM/model/service-safety fixtures, no external delivery/visual proof."
+  },
+  "phone-setup-recovery": {
+    "class": "dev.pocketengine.phone.setup.PairingEntrySessionTest",
+    "additionalClasses": [
+      "dev.pocketengine.phone.PhoneRecoveryPolicyTest",
+      "dev.pocketengine.phone.setup.AccessibilityRecoveryMutationTest",
+      "dev.pocketengine.phone.setup.PhoneSetupModuleNativeTest",
+      "dev.pocketengine.phone.setup.OwnerPhoneAppsNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.phone.setup.AndroidAppCopiesNativeTest"
+    ],
+    "robolectric": true,
+    "description": "Original owner notification/PendingIntent/private receiver, source-bound one-shot claim, registered unlock lifecycle and revocable recovery with persisted partial-write compensation. Actual SDK35 settings/preferences/package-profile objects; explicit original display/settings service fixtures, no physical pairing or OEM restart acceptance."
+  },
+  "phone-input-extensions": {
+    "class": "dev.pocketengine.phone.setup.ClipboardRestorationTest",
+    "additionalClasses": [
+      "dev.pocketengine.phone.observation.PhoneExtensionJournalTest",
+      "dev.pocketengine.phone.observation.PhoneAdvancedExtensionJourneyTest",
+      "dev.pocketengine.phone.setup.ClipboardOwnerConsentTest",
+      "dev.pocketengine.displayhelper.DisplayMultiGesturePathsTest",
+      "dev.pocketengine.phone.setup.AndroidClipboardUnreadableNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.phone.observation.PhoneCollectionFixtures",
+      "dev.pocketengine.phone.observation.PhoneTreeSequenceTest"
+    ],
+    "robolectric": true,
+    "description": "Original guarded phone/Runner/journal advanced input and wait chain, owner clipboard policy/restoration, cancellation/source changes and native bounded pointer/wheel paths. SDK35/native SQLite and explicit clipboard/helper fixtures; no physical input, clipboard foreground access or IME acceptance."
+  },
+  "phone-semantic-profile": {
+    "class": "dev.pocketengine.features.semantic.SemanticProfileIdentityTest",
+    "additionalClasses": [
+      "dev.pocketengine.displayhelper.DisplayTypedIntentNativeTest",
+      "dev.pocketengine.displayhelper.DisplayAppCopiesNativeTest",
+      "dev.pocketengine.phone.setup.AndroidAppCopiesNativeTest",
+      "dev.pocketengine.features.semantic.SemanticTypedShareRunnerSqlTest",
+      "dev.pocketengine.features.semantic.AndroidSemanticCancellationTest",
+      "dev.pocketengine.features.semantic.AndroidSemanticPauseReviewTest",
+      "dev.pocketengine.features.semantic.A26NativeCancelReviewTest",
+      "dev.pocketengine.features.semantic.NativePauseBoundaryReviewTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.semantic.SemanticBackgroundDisplayFixture",
+      "dev.pocketengine.features.semantic.AndroidTypedShareIntentTest",
+      "dev.pocketengine.features.semantic.SemanticTypedShareRequestTest",
+      "dev.pocketengine.features.semantic.SemanticCalendarRequestTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original typed intent discovery/owner approval/Runner/SQL and native display consumer, exact installed signer/version/user-serial/UID, accessible profile copies, original cancellation and pause contracts. Actual SDK35 PM/UM/Intent objects and explicit helper topology fixtures; OS acceptance never proves account or business delivery."
+  },
+  "phone-access-history": {
+    "class": "dev.pocketengine.runtime.history.RecentScreenHistoryTest",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.RecentScreenRunnerTest",
+      "dev.pocketengine.phone.access.GuardedPhonePortTest",
+      "dev.pocketengine.phone.access.PhoneAppResourcesTest",
+      "dev.pocketengine.phone.access.AndroidPhoneAccessStoreNativeTest",
+      "dev.pocketengine.phone.diagnostics.PhonePracticeEvidenceTest",
+      "dev.pocketengine.phone.diagnostics.PhoneOwnedPracticeNativeTest",
+      "dev.pocketengine.displayhelper.DisplayAppOwnershipTest",
+      "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original TaskStore/Runner historical-frame IDs versus current observation/attachments, live per-app owner policy, original resource exclusivity and exact policy CAS. Explicit phone/model/transport fixtures; no current-screen claim from history or unproved device parallel isolation. Self-owned practice before/action/after evidence and truthful display capability negotiation preserve unsupported when isolation proof is absent. Private owner practice also exercises the actual TaskStore flag, non-exported Activity, one native session/nonce/display claim and original-run cancellation cleanup; no physical-device input or rehearsal pass is claimed."
   },
   "agent-preferences": {
     "class": "dev.pocketengine.store.AgentPreferenceStoreTest",
@@ -327,6 +399,7 @@
       "dev.pocketengine.features.conversation.InterruptedAttemptsTest",
       "dev.pocketengine.features.assistant.notifications.OwnerQuestionReferenceTest",
       "dev.pocketengine.features.assistant.OwnerQuestionInputsNativeTest",
+      "dev.pocketengine.features.assistant.OwnerPhoneQuestionsNativeTest",
       "dev.pocketengine.features.assistant.OwnerQuestionRunnerNativeTest",
       "dev.pocketengine.features.assistant.ConversationInterruptedNativeJourneyTest"
     ],
@@ -336,7 +409,7 @@
       "dev.pocketengine.features.channels.ChannelSecurityTest"
     ],
     "robolectric": true,
-    "description": "Original owner conversation storage/migrations/transfer and native title/pin organization. Includes mounted Compose owner rename/cancel/pin/unpin and pinned-history refresh; no physical device or visual-design acceptance. Includes interrupted output history and original private-owner question/notification replies with SQL, controlled HTTP model, one-time answer, old notices, cancellation and canonical forgetting. Ordinary phone-held execution remains outside this increment."
+    "description": "Original owner conversation storage/migrations/transfer and native title/pin organization. Includes mounted Compose owner rename/cancel/pin/unpin and pinned-history refresh; no physical device or visual-design acceptance. Includes interrupted output history and original private-owner question/notification replies with SQL, controlled HTTP model, one-time answer, old notices, cancellation and canonical forgetting. Includes ordinary phone questions retained by the original physical port/service worker, exact same-run continuation, source/lease/expiry/queue race guards, and existing notification routing; physical Android/device/visual acceptance remains unverified."
   },
   "remote-transport": {
     "class": "dev.pocketengine.features.remote.RemoteTransportTest",
@@ -962,6 +1035,7 @@
     "class": "dev.pocketengine.features.devices.PhoneTaskInputsNativeTest",
     "additionalClasses": [
       "dev.pocketengine.features.devices.PhoneTaskApplicationFlowTest",
+      "dev.pocketengine.features.devices.DeviceTrustSqlConcurrencyNativeTest",
       "dev.pocketengine.features.devices.DeviceProtocolTest"
     ],
     "helpers": [

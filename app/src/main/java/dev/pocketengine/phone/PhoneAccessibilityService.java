@@ -80,8 +80,10 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
 
     private void disconnect() {
-        if (instance == this) instance = null;
+        boolean wasCurrent=instance==this;
+        if (wasCurrent) instance = null;
         changeSignals.close();
+        if(wasCurrent)dev.pocketengine.phone.setup.PhoneSetupModule.onAccessibilityDisconnected();
         if (control != null) control.cancel();
         if (quickPanel != null) quickPanel.close();
         removeControls();
