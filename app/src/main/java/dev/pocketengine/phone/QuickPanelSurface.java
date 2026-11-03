@@ -4,7 +4,7 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Color;
+import dev.pocketengine.ui.UiAppearance;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Looper;
@@ -65,12 +65,12 @@ final class QuickPanelSurface implements AutoCloseable {
     private LinearLayout body, footer;
 
     QuickPanelSurface(Context context, String goal, String location, Actions actions) {
-        this.context = context;
+        this.context = new android.view.ContextThemeWrapper(context, UiAppearance.theme(context));
         this.windows = context.getSystemService(WindowManager.class);
         this.goal = goal;
         this.location = location;
         this.actions = actions;
-        root = new LinearLayout(context) {
+        root = new LinearLayout(this.context) {
             @Override protected void onMeasure(int widthSpec, int heightSpec) {
                 int limit = availableHeight();
                 int size = MeasureSpec.getSize(heightSpec);
@@ -87,7 +87,7 @@ final class QuickPanelSurface implements AutoCloseable {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setOnApplyWindowInsetsListener((view, insets) -> { view.requestLayout(); return insets; });
         root.setElevation(dp(6));
-        root.setBackground(background(Color.WHITE, 18));
+        root.setBackground(background(UiAppearance.surface(context), 18));
         layout = new WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -131,6 +131,8 @@ final class QuickPanelSurface implements AutoCloseable {
     View view() { return root; }
 
     private void render() {
+        ((android.view.ContextThemeWrapper) context).setTheme(UiAppearance.theme(context));
+        root.setBackground(background(UiAppearance.surface(context), 18));
         closeNoteEditor(); root.removeAllViews(); body = null; footer = null;
         if (image != null) { image.recycle(); image = null; }
         root.setPadding(dp(expanded ? 12 : 4), dp(expanded ? 8 : 4), dp(expanded ? 12 : 4), dp(expanded ? 8 : 4));
@@ -141,44 +143,44 @@ final class QuickPanelSurface implements AutoCloseable {
             root.addView(open);
         } else {
             LinearLayout heading = row(); heading.setTag("quick_panel_header");
-            TextView title = text("补充原任务", 16, 0xff222428); title.setTypeface(null, android.graphics.Typeface.BOLD);
+            TextView title = text("补充原任务", 16, UiAppearance.foreground(context)); title.setTypeface(null, android.graphics.Typeface.BOLD);
             title.setMaxLines(1); title.setEllipsize(android.text.TextUtils.TruncateAt.END); title.setAccessibilityHeading(true);
             heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
             heading.addView(button("收起", () -> { expanded = false; render(); }, false));
             heading.addView(button("关闭", actions::close, false)); root.addView(heading);
             if (preview != null && preview.truncated && (phase == Phase.REVIEW || phase == Phase.ERROR)) {
-                TextView partial = text("部分内容 · 本次捕获有截断", 12, 0xffa3443d); partial.setTag("quick_panel_partial"); root.addView(partial);
+                TextView partial = text("部分内容 · 本次捕获有截断", 12, UiAppearance.warning(context)); partial.setTag("quick_panel_partial"); root.addView(partial);
             }
             // Header and phase actions stay outside this one bounded scrolling body, including under IME/font scaling.
             ScrollView scroll = new ScrollView(context); scroll.setTag("quick_panel_body_scroll"); scroll.setFillViewport(false);
             body = new LinearLayout(context); body.setOrientation(LinearLayout.VERTICAL); body.setPadding(dp(2), 0, dp(2), dp(6));
             scroll.addView(body); root.addView(scroll, new LinearLayout.LayoutParams(-1, -2, 1));
             footer = new LinearLayout(context); footer.setTag("quick_panel_phase_actions"); footer.setOrientation(LinearLayout.VERTICAL); root.addView(footer, new LinearLayout.LayoutParams(-1, -2));
-            TextView target = text(goal, 14, 0xff222428); target.setMaxLines(3); target.setEllipsize(android.text.TextUtils.TruncateAt.END); body.addView(target);
-            body.addView(text("原任务执行位置 · " + location, 12, 0xff72777f));
+            TextView target = text(goal, 14, UiAppearance.foreground(context)); target.setMaxLines(3); target.setEllipsize(android.text.TextUtils.TruncateAt.END); body.addView(target);
+            body.addView(text("原任务执行位置 · " + location, 12, UiAppearance.secondary(context)));
             if (phase == Phase.LOADING || phase == Phase.BLOCKED) {
-                body.addView(text(phase == Phase.LOADING ? "正在读取这个原任务的本机草稿…" : message, 13, 0xff72777f));
+                body.addView(text(phase == Phase.LOADING ? "正在读取这个原任务的本机草稿…" : message, 13, UiAppearance.secondary(context)));
                 footer.addView(button("查看原任务", actions::openOriginalTask, false));
             } else if (phase == Phase.CAPTURING || phase == Phase.SENDING) {
                 ProgressBar progress = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal);
                 progress.setIndeterminate(true); body.addView(progress, new LinearLayout.LayoutParams(-1, dp(4)));
-                body.addView(text(phase == Phase.CAPTURING ? "正在读取你刚才明确选择的手机主屏…" : "正在登记这份固定内容，未自动继续任务…", 13, 0xff72777f));
+                body.addView(text(phase == Phase.CAPTURING ? "正在读取你刚才明确选择的手机主屏…" : "正在登记这份固定内容，未自动继续任务…", 13, UiAppearance.secondary(context)));
                 if (phase == Phase.CAPTURING) footer.addView(button("取消这次捕获", this::dismissPreview, false));
                 else footer.addView(button("查看原任务", actions::openOriginalTask, false));
             } else if (phase == Phase.UNKNOWN) {
-                body.addView(text(message, 13, 0xffa3443d));
-                body.addView(text("仅查询原发送身份，不再发送或捕获。关闭后仍可在原任务核对回执。", 12, 0xff72777f));
+                body.addView(text(message, 13, UiAppearance.warning(context)));
+                body.addView(text("仅查询原发送身份，不再发送或捕获。关闭后仍可在原任务核对回执。", 12, UiAppearance.secondary(context)));
                 Button query = button(querying ? "查询中…" : "查询原回执", actions::queryReceipt, true); query.setEnabled(!querying); footer.addView(query);
                 footer.addView(button("查看原任务", actions::openOriginalTask, false));
             } else if (phase == Phase.SAVED) {
-                body.addView(text(message, 14, 0xff222428));
+                body.addView(text(message, 14, UiAppearance.foreground(context)));
                 footer.addView(button("查看原任务", actions::openOriginalTask, true));
                 footer.addView(button("再补充一份页面", () -> { phase = Phase.READY; render(); }, false));
             } else if (preview != null) {
                 renderPreview();
             } else {
-                if (message != null) body.addView(text(message, 13, 0xffa3443d));
-                body.addView(text("先切到需要的 App。仅在你点下方按钮时读取手机主屏，不会持续监看。", 13, 0xff72777f));
+                if (message != null) body.addView(text(message, 13, UiAppearance.warning(context)));
+                body.addView(text("先切到需要的 App。仅在你点下方按钮时读取手机主屏，不会持续监看。", 13, UiAppearance.secondary(context)));
                 renderDraftActions();
                 CheckBox screenshot = new CheckBox(context); screenshot.setText("这次同时捕获截图"); screenshot.setTextSize(13);
                 screenshot.setMinHeight(dp(48)); screenshot.setChecked(includeScreenshot); screenshot.setOnCheckedChangeListener((v, checked) -> includeScreenshot = checked); body.addView(screenshot);
@@ -191,8 +193,8 @@ final class QuickPanelSurface implements AutoCloseable {
 
     private void renderPreview() {
         PreviewContent content = preview;
-        TextView sourceLabel = text("来源 · 当前手机主屏（捕获时） · " + content.appLabel, 13, 0xff222428); sourceLabel.setTypeface(null, android.graphics.Typeface.BOLD); body.addView(sourceLabel);
-        body.addView(text("只发送这份固定内容；之后切换 App 不会替换它。", 12, 0xff72777f));
+        TextView sourceLabel = text("来源 · 当前手机主屏（捕获时） · " + content.appLabel, 13, UiAppearance.foreground(context)); sourceLabel.setTypeface(null, android.graphics.Typeface.BOLD); body.addView(sourceLabel);
+        body.addView(text("只发送这份固定内容；之后切换 App 不会替换它。", 12, UiAppearance.secondary(context)));
         if (content.imageBytes != null) {
             BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
             BitmapFactory.decodeByteArray(content.imageBytes, 0, content.imageBytes.length, bounds);
@@ -200,14 +202,14 @@ final class QuickPanelSurface implements AutoCloseable {
                 image = BitmapFactory.decodeByteArray(content.imageBytes, 0, content.imageBytes.length);
                 if (image != null) { ImageView picture = new ImageView(context); picture.setImageBitmap(image); picture.setScaleType(ImageView.ScaleType.FIT_CENTER); picture.setContentDescription("这次明确捕获的手机主屏截图"); body.addView(picture, new LinearLayout.LayoutParams(-1, dp(190))); }
             }
-            if (image == null) body.addView(text("截图暂不能预览，请取消后重新捕获。", 13, 0xffa3443d));
+            if (image == null) body.addView(text("截图暂不能预览，请取消后重新捕获。", 13, UiAppearance.warning(context)));
         }
-        if (!content.screenshotMessage.isBlank()) body.addView(text(content.screenshotMessage, 12, 0xff72777f));
-        TextView source = text(content.text.isBlank() ? "这次没有可读取的页面文字。" : content.text, 14, 0xff222428);
+        if (!content.screenshotMessage.isBlank()) body.addView(text(content.screenshotMessage, 12, UiAppearance.secondary(context)));
+        TextView source = text(content.text.isBlank() ? "这次没有可读取的页面文字。" : content.text, 14, UiAppearance.foreground(context));
         source.setTextIsSelectable(true); source.setTag("quick_panel_source"); body.addView(source);
-        if (message != null) body.addView(text(message, 13, 0xffa3443d));
-        body.addView(text("只登记到原任务，不更换执行位置或原有审批。", 12, 0xff72777f));
-        if (!note.isEmpty() && !noteReviewed()) body.addView(text("已保留未发送说明。请打开编辑器核对它是否适用于这份新来源，再点“保存说明”；不会把旧说明自动带入另一份捕获。", 12, 0xffa3443d));
+        if (message != null) body.addView(text(message, 13, UiAppearance.warning(context)));
+        body.addView(text("只登记到原任务，不更换执行位置或原有审批。", 12, UiAppearance.secondary(context)));
+        if (!note.isEmpty() && !noteReviewed()) body.addView(text("已保留未发送说明。请打开编辑器核对它是否适用于这份新来源，再点“保存说明”；不会把旧说明自动带入另一份捕获。", 12, UiAppearance.warning(context)));
         Button edit = button(note.isEmpty() ? "添加说明（可选）" : "编辑说明（" + note.length() + "字）", this::editNote, false);
         edit.setTag("quick_panel_edit_note"); footer.addView(edit);
         renderDraftStatus();
@@ -231,8 +233,8 @@ final class QuickPanelSurface implements AutoCloseable {
         editor.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         editor.setHint("原任务的未发送说明"); editor.setContentDescription("原任务本机草稿；编辑、保存和关闭都不发送"); editor.setTag("quick_panel_note");
         LinearLayout content = new LinearLayout(context); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(dp(16), dp(4), dp(16), dp(8));
-        content.addView(text(expected == null ? "原任务说明；发送前仍需重新捕获并核对页面来源。" : "来源 · " + expected.appLabel + "。核对说明与这份捕获一致，再点“保存说明”；不会发送或重新捕获。", 12, 0xff72777f)); content.addView(editor);
-        TextView status = text(draftStatus, 12, 0xff72777f); status.setId(android.R.id.message); content.addView(status);
+        content.addView(text(expected == null ? "原任务说明；发送前仍需重新捕获并核对页面来源。" : "来源 · " + expected.appLabel + "。核对说明与这份捕获一致，再点“保存说明”；不会发送或重新捕获。", 12, UiAppearance.secondary(context))); content.addView(editor);
+        TextView status = text(draftStatus, 12, UiAppearance.secondary(context)); status.setId(android.R.id.message); content.addView(status);
         ScrollView scroll = new ScrollView(context); scroll.addView(content);
         AlertDialog dialog = new AlertDialog.Builder(context).setTitle("补充说明").setView(scroll).setPositiveButton("保存说明", null).setNegativeButton("收起，保留草稿", null).create();
         noteDialog = dialog; noteInput = editor;
@@ -278,7 +280,7 @@ final class QuickPanelSurface implements AutoCloseable {
         if (!note.isEmpty()) footer.addView(button("清除未发送说明", actions::clearDraft, false));
     }
     private void renderDraftStatus() {
-        TextView status = text(draftStatus, 12, 0xff72777f); status.setTag("quick_panel_draft_status"); body.addView(status);
+        TextView status = text(draftStatus, 12, UiAppearance.secondary(context)); status.setTag("quick_panel_draft_status"); body.addView(status);
     }
     private void closeNoteEditor() {
         AlertDialog current = noteDialog; EditText editor = noteInput; noteDialog = null; noteInput = null;
@@ -318,10 +320,10 @@ final class QuickPanelSurface implements AutoCloseable {
     private TextView text(String value, int size, int color) { TextView view = new TextView(context); view.setText(value); view.setTextSize(size); view.setTextColor(color); view.setPadding(0, dp(4), 0, dp(4)); return view; }
     private Button button(String label, Runnable action, boolean primary) {
         Button button = new Button(context); button.setText(label); button.setTextSize(13); button.setAllCaps(false); button.setMinHeight(dp(48));
-        button.setTextColor(primary ? Color.WHITE : 0xff222428); button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(primary ? 0xff222428 : 0xfff5f6f7));
+        button.setTextColor(primary ? UiAppearance.onPrimary(context) : UiAppearance.foreground(context)); button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(primary ? UiAppearance.primary(context) : UiAppearance.surfaceVariant(context)));
         button.setOnClickListener(v -> action.run()); return button;
     }
-    private GradientDrawable background(int color, int radius) { GradientDrawable drawable = new GradientDrawable(); drawable.setColor(color); drawable.setCornerRadius(dp(radius)); drawable.setStroke(dp(1), 0xffdfe2e6); return drawable; }
+    private GradientDrawable background(int color, int radius) { GradientDrawable drawable = new GradientDrawable(); drawable.setColor(color); drawable.setCornerRadius(dp(radius)); drawable.setStroke(dp(1), UiAppearance.outline(context)); return drawable; }
     private int dp(int value) { return Math.round(value * context.getResources().getDisplayMetrics().density); }
     private static void mainOnly() { if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("QuickPanel UI requires the main thread"); }
 

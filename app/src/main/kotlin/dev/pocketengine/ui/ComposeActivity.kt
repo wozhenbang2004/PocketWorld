@@ -68,6 +68,7 @@ class ComposeActivity : ComponentActivity() {
         catch (_: RuntimeException) { controller.projectPackages.importResult(null) }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(pocketWindowTheme(this))
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val engine = application as EngineApplication

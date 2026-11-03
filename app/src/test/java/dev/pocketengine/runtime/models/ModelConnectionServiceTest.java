@@ -72,6 +72,26 @@ public final class ModelConnectionServiceTest {
     private JSONArray messages()throws Exception{return new JSONArray().put(new JSONObject().put("role","user").put("content","实际文字请求"));}
     private JSONObject richModel()throws Exception{return new JSONObject().put("data",new JSONArray().put(new JSONObject().put("id","remote-model").put("context_length",8192).put("top_provider",new JSONObject().put("max_completion_tokens",2048)).put("architecture",new JSONObject().put("input_modalities",new JSONArray().put("text").put("image"))).put("supported_parameters",new JSONArray().put("tools").put("reasoning_effort").put("max_completion_tokens")).put("reasoning",new JSONObject().put("supported_efforts",new JSONArray().put("low").put("high")))));}
 
+    @Test public void batchFavoritesPreviewExactReferencesWithoutSelectingCopyingSecretsOrCallingModels()throws Exception{
+        service.connections();modelBody="{\"data\":[{\"id\":\"remote-model\",\"supported_endpoints\":[\"/chat/completions\"]},{\"id\":\"other-protocol\",\"supported_endpoints\":[\"/messages\"]}]}";
+        ModelBinding binding=enable(ModelBinding.Format.OPENAI);service.refresh(binding,new RunControl());JSONObject profile=service.snapshot().getJSONObject("connections").getJSONArray("connections").getJSONObject(0);long revision=profile.getLong("revision");String original=settings.get().model;
+        JSONArray requested=new JSONArray().put("remote-model").put("remote-model").put("other-protocol").put("not-listed");JSONObject preview=service.previewModelFavorites(binding,revision,requested);JSONArray rows=preview.getJSONArray("results");
+        assertEquals("new",rows.getJSONObject(0).getString("status"));assertEquals("duplicate",rows.getJSONObject(1).getString("status"));assertEquals("unavailable",rows.getJSONObject(2).getString("status"));assertEquals("catalog_protocol_mismatch",rows.getJSONObject(2).getString("reason"));assertEquals("unavailable",rows.getJSONObject(3).getString("status"));
+        assertEquals(0,preview.getInt("credentialCopies"));assertEquals(0,preview.getInt("networkRequests"));assertFalse(preview.getBoolean("selectionChanged"));
+        assertEquals("added",service.saveModelFavorites(binding,revision,requested).getJSONArray("results").getJSONObject(0).getString("status"));assertEquals("existing",service.saveModelFavorites(binding,revision,requested).getJSONArray("results").getJSONObject(0).getString("status"));assertEquals(original,settings.get().model);assertEquals(0,inferences.get());assertEquals(1,modelCalls.get());
+        ModelConnectionService reopened=new ModelConnectionService(settings,cache,Clock.systemUTC());JSONArray restored=reopened.modelPickerSnapshot().getJSONArray("models");assertEquals("remote-model",restored.getJSONObject(0).getString("modelId"));assertTrue(restored.getJSONObject(0).getBoolean("favorite"));assertEquals(0,restored.getJSONObject(0).getLong("lastUsedAt"));
+    }
+    @Test public void composerSelectionUsesExistingMainPurposeAndRejectsChangedOriginalConnection()throws Exception{
+        service.connections();ModelBinding binding=enable(ModelBinding.Format.OPENAI);service.refresh(binding,new RunControl());field(binding,"remote-model",Field.CHAT_OUTPUT_PARAMETER,OwnerValue.known(ChatOutputParameter.MAX_TOKENS),false);
+        JSONObject profile=service.snapshot().getJSONObject("connections").getJSONArray("connections").getJSONObject(0);long revision=profile.getLong("revision");ModelConfig captured=settings.get();
+        service.selectPickerModel(binding,revision,"remote-model");assertEquals("remote-model",settings.get().model);assertEquals("manual-model",captured.model);assertEquals("manual-model",settings.apiConfigForCatalog().model);assertEquals("remote-model",settings.modelPurposeTarget("MAIN").modelId());assertEquals(0,inferences.get());
+        settings.setApiConnectionEnabled(profile.getString("id"),revision,false);assertThrows(SecurityException.class,()->service.selectPickerModel(binding,revision,"remote-model"));assertThrows(SecurityException.class,()->service.saveModelFavorites(binding,revision,new JSONArray().put("remote-model")));assertEquals(0,inferences.get());
+    }
+    @Test public void explicitOtherProtocolCannotBeSelectedFromCatalogButManualConnectionSurvives()throws Exception{
+        service.connections();modelBody="{\"data\":[{\"id\":\"remote-model\",\"supported_endpoints\":[\"/messages\"]}]}";ModelBinding binding=enable(ModelBinding.Format.OPENAI);service.refresh(binding,new RunControl());
+        assertEquals("declared_incompatible",row("remote-model").getString("protocolCompatibility"));assertThrows(IllegalStateException.class,()->service.select(binding,"remote-model",512,ReasoningOptions.DEFAULT));assertEquals("manual-model",settings.get().model);assertEquals(1,settings.apiConnectionsSnapshot().getJSONArray("connections").length());assertEquals(0,inferences.get());
+    }
+
     @Test public void nativeConnectRefreshExplainOverrideSelectAndActualStreamSurviveReopen()throws Exception{
         assertNull(settings.get().capabilityBinding);ModelBinding binding=enable(ModelBinding.Format.OPENAI);service.refresh(binding,new RunControl());
         JSONObject initial=row("remote-model");assertFalse(initial.getJSONObject("facts").getJSONObject("TOOL_CALLS").getBoolean("known"));assertTrue(initial.getLong("catalogFetchedAtMillis")>0);

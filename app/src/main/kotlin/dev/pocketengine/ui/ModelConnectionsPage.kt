@@ -37,6 +37,13 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
     var edit by remember(service) { mutableStateOf<ModelFacts.Field?>(null) }
     var configuring by remember(service) { mutableStateOf(false) }
     var refreshControl by remember(service) { mutableStateOf<RunControl?>(null) }
+    var library by remember(service) { mutableStateOf(JSONObject()) }
+    var modelQuery by remember { mutableStateOf("") }
+    var batchMode by remember { mutableStateOf(false) }
+    var batchModels by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var batchPreview by remember { mutableStateOf<JSONObject?>(null) }
+    var batchResult by remember { mutableStateOf<JSONObject?>(null) }
+    var metadataExpanded by remember { mutableStateOf(false) }
     val alive = remember(service) { AtomicBoolean(true) }
     val main = remember { Handler(Looper.getMainLooper()) }
     val secondary = SecondaryInk
@@ -61,10 +68,12 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
                 }
             }
             if (next == null) try { next = service.snapshot() } catch (_: Exception) { /* Keep the last real snapshot. */ }
+            val picker = runCatching { service.modelPickerSnapshot() }.getOrNull()
             val result = next; val message = failure
             main.post {
                 if (alive.get()) {
                     if (result != null) snapshot = result
+                    if (picker != null) library = picker
                     error = message; busy = false; refreshControl = null
                     if (message == null && result != null) onSuccess?.invoke()
                     changed()
@@ -77,8 +86,12 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
     BackHandler { if (openedModel != null) openedModel = null else back() }
     val api = snapshot.optJSONObject("api") ?: JSONObject()
     val binding = snapshot.optJSONObject("binding")?.let { ModelBinding.fromJson(it) }
-    val rows = modelRows(snapshot.optJSONArray("models"))
+    val preferences = modelRows(library.optJSONArray("models")).filter { it.optString("connectionId") == binding?.connectionId() }.associateBy { it.optString("modelId") }
+    val rows = modelRows(snapshot.optJSONArray("models")).sortedWith(compareByDescending<JSONObject> { preferences[it.optString("modelId")]?.optBoolean("favorite") == true }
+        .thenByDescending { preferences[it.optString("modelId")]?.optLong("lastUsedAt") ?: 0L }.thenBy { it.optString("modelId").lowercase() })
     val selected = rows.find { it.optString("modelId") == openedModel }
+    val profile = modelRows(snapshot.optJSONObject("connections")?.optJSONArray("connections")).find { it.optString("id") == binding?.connectionId() }
+    LaunchedEffect(binding?.toJson()?.toString()) { batchModels = emptySet(); batchPreview = null; batchResult = null }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -94,7 +107,7 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
                     { id, revision -> execute { service.selectConnection(id, revision) } },
                     { id, revision, enabled -> execute { service.enableConnection(id, revision, enabled) } })
                 if (snapshot.optBoolean("selectionUnavailable")) Text(snapshot.optString("selectionMessage"), color = MaterialTheme.colorScheme.error)
-                ModelGroupsPanel(snapshot.optJSONObject("modelGroups") ?: JSONObject(), snapshot.optJSONObject("connections") ?: JSONObject(), busy,
+                ModelGroupsPanel(snapshot.optJSONObject("modelGroups") ?: JSONObject(), snapshot.optJSONObject("connections") ?: JSONObject(), library, busy,
                     { id, revision, name, definition, saved -> execute(saved) { service.saveGroup(id, revision, name, definition) } },
                     { purpose, target -> execute { service.selectPurpose(purpose, target) } })
                 StepRoutingControls(service, runOnWorker)
@@ -111,20 +124,72 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
                 ModelPriceControls(snapshot.optJSONObject("pricing") ?: JSONObject(), busy, error) { expected, model, revision, values, clear, saved ->
                     execute(saved) { service.price(expected, model, revision, values, clear) }
                 }
+                val metadataBinding = api.optJSONObject("capabilityBinding")?.let(ModelBinding::fromJson)
+                val metadata = snapshot.optJSONObject("metadataSuggestion") ?: JSONObject()
+                if (metadataBinding != null && api.optString("model").isNotBlank()) {
+                    TextButton(onClick = { metadataExpanded = !metadataExpanded }) { Text(if (metadataExpanded) "收起第三方规格参考" else "models.dev 规格参考（可选）") }
+                    if (metadataExpanded) {
+                        var sourceProvider by remember(metadataBinding, api.optString("model"), metadata.optString("providerId")) { mutableStateOf(metadata.optString("providerId")) }
+                        Text("只核对当前保留 API 模型的参考资料。主人覆盖与原服务目录保持优先；参考不会改变工具、图片、预算、价目或请求。", style = MaterialTheme.typography.bodySmall)
+                        OutlinedTextField(sourceProvider, { sourceProvider = it.take(100) }, label = { Text("models.dev Provider ID") }, supportingText = { Text("使用来源中的准确 ID，例如 openai；协议名与中转商不等于同一提供方。") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                        Text("点击读取会访问 models.dev 的公共目录，不发送密钥、账号、模型 ID 或聊天。没有精确 provider/model 组合时保持未知。", style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(enabled = !busy && sourceProvider.matches(Regex("[a-z0-9][a-z0-9_-]{0,99}")) && metadata.optBoolean("cacheReadable", true), onClick = {
+                                val control = RunControl(); refreshControl = control
+                                execute { service.refreshMetadataSuggestion(metadataBinding, api.getString("model"), sourceProvider, control) }
+                            }) { Text("读取公共参考") }
+                            if (metadata.optBoolean("available")) TextButton(enabled = !busy, onClick = { execute { service.clearMetadataSuggestion(metadataBinding, api.getString("model")) } }) { Text("清除这项参考") }
+                        }
+                        if (!metadata.optBoolean("cacheReadable", true)) Text("参考缓存暂不可读取，原文件保留；原模型与机主设置仍可使用。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        if (metadata.optBoolean("available")) {
+                            Text("${metadata.optString("providerId")} / ${metadata.optString("modelId")} · 读取于 ${modelTime(metadata.optLong("observedAtMillis"))}", style = MaterialTheme.typography.bodySmall)
+                            Text(if (metadata.optBoolean("fresh")) "来源观察在7天内；仍未证明该连接实际支持。" else "离线保留的旧参考（超过7天或时钟变化），请重新核对。", style = MaterialTheme.typography.bodySmall)
+                            Text(when (metadata.optString("originMatch")) { "different_origin" -> "来源的提供方地址与当前连接不同，不可将同名模型能力当作此中转连接事实。"; "same_origin_only_not_model_verification" -> "来源与当前连接同源；路径、账号和实际能力仍需分别核对。"; else -> "来源未给出可核对的服务地址，提供方归属尚未证实。" }, style = MaterialTheme.typography.bodySmall)
+                            val hints = metadata.optJSONObject("hints") ?: JSONObject()
+                            val labels = listOf("limit.context" to "上下文 tokens", "limit.input" to "输入上限 tokens", "limit.output" to "输出上限 tokens", "tool_call" to "工具结构", "image_input" to "图片输入", "reasoning" to "推理", "structured_output" to "结构化输出", "cost.input" to "输入 USD/百万 tokens", "cost.output" to "输出 USD/百万 tokens", "cost.cache_read" to "缓存读取 USD/百万 tokens", "cost.cache_write" to "缓存写入 USD/百万 tokens", "cost.reasoning" to "推理 USD/百万 tokens")
+                            labels.forEach { (key, label) -> Text("$label：${if (hints.has(key)) when (val value = hints.get(key)) { is Boolean -> if (value) "来源声称支持" else "来源声称不支持"; else -> value.toString() } else "未知"}", style = MaterialTheme.typography.bodySmall) }
+                            Text("来源 ${metadata.optString("source")} · ${metadata.optString("sourceVersion")}", style = MaterialTheme.typography.labelSmall)
+                            Text("如需采用，请先核对原服务文档，再使用本页已有的逐项机主调整。此参考不是实测或账单。", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
                 if (binding != null) {
                     Text("连接修订 ${binding.installationRevision()} · 凭据修订 ${binding.credentialRevision()}", fontSize = 12.sp, color = secondary)
                     Text(snapshot.optString("modelsEndpoint"), fontSize = 11.sp, color = secondary)
                     val attempt = snapshot.optJSONObject("refreshAttempt")
                     if (attempt != null) Text("最近尝试：${modelTime(attempt.optLong("startedAtMillis"))} · ${attempt.optString("status")} ${attempt.optString("code")}", fontSize = 11.sp, color = secondary)
                     Button(onClick = { val control = RunControl(); refreshControl = control; execute { service.refresh(binding, control) } }, enabled = !busy) { Text(if (busy && refreshControl != null) "正在刷新目录…" else "刷新这项连接的目录") }
+                    Text("目录全部分页共用 ${(snapshot.optLong("catalogTimeoutMillis", 15000) + 999) / 1000} 秒期限；可随时停止，失败保留原目录。", style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = { configuring = true }, enabled = !busy) { Text("目录来源与格式") }
+                    OutlinedTextField(modelQuery, { modelQuery = it }, label = { Text("搜索目录模型") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Text("收藏优先，其后按实际成功调用排序。收藏只保存模型引用，不复制密钥，也不会选择或测试模型。", style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { batchMode = !batchMode; batchModels = emptySet() }, enabled = !busy) { Text(if (batchMode) "结束多选" else "批量收藏") }
+                        if (batchMode) TextButton(enabled = !busy && batchModels.isNotEmpty() && profile != null, onClick = {
+                            val ids = JSONArray(batchModels.toList())
+                            var preview: JSONObject? = null
+                            execute({ batchPreview = preview }) { preview = service.previewModelFavorites(binding, profile!!.getLong("revision"), ids); service.snapshot() }
+                        }) { Text("预览 ${batchModels.size} 项") }
+                    }
+                    batchResult?.let { result ->
+                        val results = modelRows(result.optJSONArray("results"))
+                        Text("已添加 ${results.count { it.optString("status") == "added" }} 项，已存在 ${results.count { it.optString("status") == "existing" }} 项，不可用 ${results.count { it.optString("status") == "unavailable" }} 项。", style = MaterialTheme.typography.bodySmall)
+                    }
                     if (rows.isEmpty()) Text("暂无目录记录。刷新失败不会生成模型或能力；也可在设置中明确保存模型名称后回到此页配置它。", fontSize = 12.sp, lineHeight = 20.sp)
-                    rows.forEach { row ->
-                        Column(Modifier.fillMaxWidth().clickable(enabled = !busy) { openedModel = row.optString("modelId") }.padding(vertical = 9.dp)) {
+                    rows.filter { modelQuery.isBlank() || it.optString("modelId").contains(modelQuery, true) }.forEach { row ->
+                        val preference = preferences[row.optString("modelId")]
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (batchMode) Checkbox(row.optString("modelId") in batchModels, { checked -> batchModels = if (checked) batchModels + row.optString("modelId") else batchModels - row.optString("modelId") }, enabled = !busy && (row.optString("modelId") in batchModels || batchModels.size < 512))
+                        Column(Modifier.weight(1f).clickable(enabled = !busy) { openedModel = row.optString("modelId") }.padding(vertical = 9.dp)) {
                             Text(row.optString("modelId") + if (row.optString("modelId") == api.optString("model")) " · 已选择" else "", fontSize = 15.sp, fontWeight = FontWeight.Medium)
                             val listed = row.optJSONObject("listed")
                             if (listed?.optBoolean("known") == true && !listed.optBoolean("value")) Text("机主填写 · 目录未列出此模型", fontSize = 11.sp, color = secondary)
                             Text(if (row.optBoolean("catalogFresh")) "目录读取于 ${modelTime(row.optLong("catalogFetchedAtMillis"))}" else "目录未获取或已过期，机主覆盖仍独立有效", fontSize = 11.sp, color = secondary)
+                            if (row.optString("protocolCompatibility") == "declared_incompatible") Text("目录声明使用其他接口协议，已从可选候选排除；连接仍保留。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        }
+                        TextButton(enabled = !busy && profile != null && library.optBoolean("preferencesAvailable", true), onClick = {
+                            execute { service.favoriteModel(binding, profile!!.getLong("revision"), row.getString("modelId"), preference?.optBoolean("favorite") != true); service.snapshot() }
+                        }) { Text(if (preference?.optBoolean("favorite") == true) "已收藏" else "收藏") }
                         }
                         HorizontalDivider(color = Line)
                     }
@@ -136,6 +201,11 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
                 val facts = selected.optJSONObject("facts") ?: JSONObject()
                 val ownerRevision = selected.optLong("ownerRevision")
                 Text("能力绑定当前连接、凭据和模型。机主逐字段覆盖独立保存，刷新不会覆盖；清除覆盖后恢复来源值，来源没有数据时仍为未知。", fontSize = 12.sp, lineHeight = 20.sp, color = secondary)
+                selected.optJSONObject("endpointSupport")?.let { declaration ->
+                    Text("目录端点声明：${declaration.optJSONArray("endpointTokens")} · ${modelTime(declaration.optLong("observedAtMillis"))}", style = MaterialTheme.typography.bodySmall)
+                    Text(declaration.optString("sourceRef"), style = MaterialTheme.typography.labelSmall)
+                    if (selected.optString("protocolCompatibility") == "declared_incompatible") Text("该模型声明不支持当前协议，不能从目录选择。可在原连接修改协议或明确手填校正；不会跟随目录中的地址发送密钥。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
                 ModelFacts.Field.entries.forEach { field ->
                     val fact = facts.optJSONObject(field.name) ?: JSONObject()
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -201,6 +271,20 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
             formats.forEach { choice -> Row(verticalAlignment = Alignment.CenterVertically) { RadioButton(format == choice, { format = choice }); Text(choice.name) } }
         } }, confirmButton = { TextButton(onClick = { try { val uri = URI(endpoint.trim()); configuring = false; execute { service.configure(binding, format, uri) } } catch (_: Exception) { error = "目录地址无效。" } }) { Text("保存来源") } }, dismissButton = { TextButton(onClick = { configuring = false }) { Text("保留当前配置") } })
     }
+    batchPreview?.let { preview ->
+        val results = modelRows(preview.optJSONArray("results"))
+        AlertDialog(onDismissRequest = { if (!busy) batchPreview = null }, title = { Text("核对批量模型引用") }, text = {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("只新增收藏引用；不复制凭据、不发起测试、不更改主模型。不可用项会保留原因并跳过。")
+                results.forEach { Text(it.optString("modelId") + " · " + when (it.optString("status")) { "new" -> "将添加"; "existing" -> "已存在"; "duplicate" -> "重复项"; else -> pickerUnavailableReason(it.optString("reason")) }, style = MaterialTheme.typography.bodySmall) }
+            }
+        }, confirmButton = { TextButton(enabled = !busy, onClick = {
+            val original = ModelBinding.fromJson(preview.getJSONObject("binding")); val revision = preview.getLong("connectionRevision")
+            val ids = JSONArray(results.map { it.getString("modelId") })
+            var saved: JSONObject? = null
+            execute({ batchResult = saved; batchPreview = null; batchModels = emptySet() }) { saved = service.saveModelFavorites(original, revision, ids); service.snapshot() }
+        }) { Text("保存引用") } }, dismissButton = { TextButton(enabled = !busy, onClick = { batchPreview = null }) { Text("取消") } })
+    }
 }
 
 @Composable
@@ -236,7 +320,7 @@ private fun ModelCapabilityDialog(field: ModelFacts.Field, fact: JSONObject, cha
 
 private fun modelRows(array: JSONArray?): List<JSONObject> = if (array == null) emptyList() else (0 until array.length()).mapNotNull { array.optJSONObject(it) }
 private fun modelRowsText(array: JSONArray?): String = if (array == null) "" else (0 until array.length()).joinToString(",") { array.optString(it) }
-private fun modelTime(at: Long): String = if (at <= 0) "未获取" else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(at))
+internal fun modelTime(at: Long): String = if (at <= 0) "未获取" else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(at))
 private fun modelSource(source: String): String = when (source) { "OWNER_OVERRIDE" -> "机主覆盖"; "PROVIDER_CATALOG" -> "提供方目录"; else -> "尚未观察" }
 private fun modelFactReason(reason: String): String = when (reason) { "not_observed" -> "尚未获取到此项能力"; "catalog_expired" -> "目录已过期，请刷新后核对"; "owner_marked_unknown" -> "机主明确标为未知，暂不采用来源值"; "catalog_capabilities_unavailable" -> "提供方目录本次未能提供可靠能力"; else -> "来源未声明可验证的值" }
 private fun modelFieldTitle(field: ModelFacts.Field): String = when (field) { ModelFacts.Field.CONTEXT_WINDOW -> "上下文窗口"; ModelFacts.Field.OUTPUT_TOKENS -> "最大输出"; ModelFacts.Field.IMAGE_INPUT -> "图像输入"; ModelFacts.Field.TOOL_CALLS -> "工具调用"; ModelFacts.Field.REASONING -> "推理能力"; ModelFacts.Field.REASONING_LEVELS -> "推理级别"; ModelFacts.Field.CHAT_OUTPUT_PARAMETER -> "Chat 输出参数字段" }

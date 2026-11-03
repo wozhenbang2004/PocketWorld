@@ -16,7 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -148,7 +147,7 @@ internal fun MyDevicesPanel(
     val pending = snapshot?.optJSONArray("pendingPairings").objects()
 
     Column(Modifier.fillMaxSize().background(PageSurface).testTag("device_workspace")) {
-        Row(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 12.dp, vertical = 6.dp),
+        Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = ::goBack, modifier = Modifier.heightIn(min = 48.dp).testTag("device_workspace_back")) { Text("返回") }
             Text(if (selectedId == null) "我的设备" else selected?.let(::deviceName) ?: "设备详情",
@@ -343,7 +342,7 @@ private fun DeviceRecoveryChoices(offers: List<JSONObject>, committed: List<JSON
 @Composable
 private fun DevicePairingAbandonment(view: JSONObject, busy: Boolean, close: () -> Unit, confirm: () -> Unit) {
     var checked by remember(view) { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text("放弃本机待配对？") }, text = {
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("放弃本机待配对？") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("本机将不再接收这次邀请的配对结果。对端可能已经保存配对，这里不会替对端撤销，请在对端分别核对。", style = MaterialTheme.typography.bodyMedium)
             DeviceFingerprint("原设备指纹", view.optString("inviterFingerprint"))
@@ -359,7 +358,7 @@ private fun DeviceRecoveryLocator(original: JSONObject, addresses: List<String>,
     var port by remember(original) { mutableStateOf("") }
     val value = port.toIntOrNull()
     val relay = host.startsWith("wss://") || host.startsWith("https://")
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text(if (providing) "提供原配对结果" else "核对原配对结果") }, text = {
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (providing) "提供原配对结果" else "核对原配对结果") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (providing) {
                 Text("选择本机实际局域网地址或已配置中继。原结果只读窗口开放30秒，退出将关闭。", style = MaterialTheme.typography.bodyMedium)
@@ -379,7 +378,7 @@ private fun DeviceRecoveryLocator(original: JSONObject, addresses: List<String>,
 @Composable
 private fun DeviceRecoveryEndpoint(endpoint: JSONObject, close: () -> Unit) {
     val relay = endpoint.optString("kind") == "relay"
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text("原配对结果恢复端口") }, text = {
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("原配对结果恢复端口") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SelectionContainer { Text(if (relay) endpoint.optString("serviceBase") else "${endpoint.optString("host")}  ·  ${endpoint.optInt("port")}", style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace) }
             Text("请在原设备填写上述${if (relay) "已配置中继服务" else "地址和端口"}。入口截至 ${deviceTime(endpoint.optLong("expiresAt"))}；到期后需要重新开启，不延长原权限。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
@@ -555,7 +554,7 @@ private fun DeviceAddDialog(actions: JSONObject, busy: Boolean, close: () -> Uni
     var raw by remember { mutableStateOf("") }
     val addresses = actions.optJSONArray("localAddresses")?.let { list -> (0 until list.length()).map { list.optString(it) } }.orEmpty()
     var selectedAddress by remember(addresses) { mutableStateOf(addresses.singleOrNull()) }
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text("配对你的另一台设备") },
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("配对你的另一台设备") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("已有另一台设备的邀请", style = MaterialTheme.typography.titleSmall)
             Text("从可信的另一台设备复制短时邀请。接着核对两台设备显示的完整指纹。", style = MaterialTheme.typography.bodyMedium, color = SecondaryInk)
@@ -581,7 +580,7 @@ private fun DeviceAddDialog(actions: JSONObject, busy: Boolean, close: () -> Uni
 private fun DeviceConnectionInputDialog(peerId: String, leases: JSONArray, busy: Boolean, close: () -> Unit, relay: (String) -> Unit, inspect: (String) -> Unit) {
     var raw by remember { mutableStateOf("") }
     val bounded = raw.isNotBlank() && raw.toByteArray(Charsets.UTF_8).size <= 16_384
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text("更新设备连接地址") },
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("更新设备连接地址") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("复制这台设备的新邀请。只更新地址，不改变设备权限。", style = MaterialTheme.typography.bodyMedium, color = SecondaryInk)
             val relayChoices = leases.objects().filter { lease -> (lease.optString("inviterDeviceId") == peerId || lease.optString("inviterDeviceId") == lease.optString("localDeviceId")) && (!lease.optBoolean("peerBound") || lease.optString("peerDeviceId") == peerId) }
@@ -598,7 +597,7 @@ private fun DeviceConnectionInputDialog(peerId: String, leases: JSONArray, busy:
 
 @Composable
 private fun DeviceConnectionReviewDialog(view: JSONObject, busy: Boolean, close: () -> Unit, confirm: () -> Unit) {
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text("确认新的连接地址") },
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("确认新的连接地址") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("地址匹配已配对身份，连接时仍会验证这台设备。", style = MaterialTheme.typography.bodyMedium, color = SecondaryInk)
             DeviceFact("设备", "设备 ${view.optString("deviceId").takeLast(4)}")
@@ -611,7 +610,7 @@ private fun DeviceConnectionReviewDialog(view: JSONObject, busy: Boolean, close:
 
 @Composable
 private fun DeviceInvitationDialog(raw: String, close: () -> Unit) {
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text("只交给你信任的设备") },
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("只交给你信任的设备") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("这段邀请含一次性配对凭据，不要公开发送。另一台设备读取后，还须在本机核对双端指纹；邀请本身不是业务授权。", style = MaterialTheme.typography.bodyMedium)
             SelectionContainer { Text(raw, fontSize = 12.sp, lineHeight = 19.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.testTag("device_invitation_secret")) }
@@ -656,7 +655,7 @@ private fun DevicePairingReview(view: JSONObject, busy: Boolean, close: () -> Un
     val selectionReady = forwardReady && extraOrigins.size <= 8 && forwardingIds.size <= 8 && (!retainHistory || historyMethods.isNotEmpty() && historyExpiry > System.currentTimeMillis()) && option != null && tools != null && tools in option.optInt("toolBudgetMin", 0)..option.optInt("toolBudgetMax", 0) &&
         models != null && models in option.optInt("modelBudgetMin", 0)..option.optInt("modelBudgetMax", 0) && expiry > System.currentTimeMillis()
     val exactGrant = grant != null && grant.optString("digest").matches(Regex("[a-f0-9]{64}")) && grant.optJSONArray("capabilities") != null && grant.optJSONArray("resources") != null
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text(if (editingGrant) { if (grant == null) "调整设备权限" else "确认权限修改" } else if (grant == null) "这台设备可以做什么？" else "核对授权与双端身份") },
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (editingGrant) { if (grant == null) "调整设备权限" else "确认权限修改" } else if (grant == null) "这台设备可以做什么？" else "核对授权与双端身份") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (grant == null) {
                 Text(if (editingGrant) "下面的选择将替换本机授予对端的权限。未选择的转交来源和下游范围将不再允许，已有用量不会清零。" else "选择另一台设备可以在这里做什么。双方分别决定各自的权限。", style = MaterialTheme.typography.bodyMedium)
@@ -869,7 +868,7 @@ internal fun DeviceGoalModelReview(view: JSONObject, busy: Boolean, close: () ->
     var contextExpanded by remember(view.optString("reviewId")) { mutableStateOf(false) }
     val accountUnproven = view.optString("source") == "local_account"
     val origin = view.optJSONObject("origin") ?: JSONObject()
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text("用这台手机的模型处理") },
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("用这台手机的模型处理") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("此任务来自你的另一台设备，按你确认的权限执行。", style = MaterialTheme.typography.bodyMedium)
             if (view.optString("goal").isNotBlank()) Text(view.optString("goal"), style = MaterialTheme.typography.titleSmall)
@@ -898,13 +897,13 @@ internal fun DeviceGoalModelReview(view: JSONObject, busy: Boolean, close: () ->
 
 @Composable
 private fun DeviceConfirmDialog(title: String, text: String, label: String, busy: Boolean, close: () -> Unit, confirm: () -> Unit) {
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text(title) }, text = { Text(text, style = MaterialTheme.typography.bodyMedium) },
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text(title) }, text = { Text(text, style = MaterialTheme.typography.bodyMedium) },
         confirmButton = { Button(onClick = confirm, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text(if (busy) "提交中" else label) } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("保留") } })
 }
 
 @Composable
 internal fun DeviceContentSurface(content: @Composable ColumnScope.() -> Unit) {
-    Surface(Modifier.fillMaxWidth().pocketDepth(PocketDepth.CONTENT, 14.dp), color = Color.White, shape = RoundedCornerShape(14.dp), border = BorderStroke(.5.dp, Line)) { Column(content = content) }
+    Surface(Modifier.fillMaxWidth().pocketDepth(PocketDepth.CONTENT, 14.dp), color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(14.dp), border = BorderStroke(.5.dp, Line)) { Column(content = content) }
 }
 @Composable
 private fun DeviceMark(platform: String) {
@@ -914,16 +913,17 @@ private fun DeviceMark(platform: String) {
 }
 @Composable
 private fun DeviceOutline(platform: String, modifier: Modifier) {
+    val ink = Ink
     androidx.compose.foundation.Canvas(modifier) {
         val phone = platform.contains("android", true) || platform.contains("phone", true)
         val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx())
         val left = size.width * if (phone) .28f else .08f; val top = size.height * .12f
         val width = size.width - left * 2; val height = size.height * if (phone) .76f else .57f
-        drawRoundRect(Ink, androidx.compose.ui.geometry.Offset(left, top), androidx.compose.ui.geometry.Size(width, height), androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()), style = stroke)
-        if (phone) drawLine(Ink, androidx.compose.ui.geometry.Offset(size.width * .44f, size.height * .76f), androidx.compose.ui.geometry.Offset(size.width * .56f, size.height * .76f), strokeWidth = 1.5.dp.toPx())
+        drawRoundRect(ink, androidx.compose.ui.geometry.Offset(left, top), androidx.compose.ui.geometry.Size(width, height), androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()), style = stroke)
+        if (phone) drawLine(ink, androidx.compose.ui.geometry.Offset(size.width * .44f, size.height * .76f), androidx.compose.ui.geometry.Offset(size.width * .56f, size.height * .76f), strokeWidth = 1.5.dp.toPx())
         else {
-            drawLine(Ink, androidx.compose.ui.geometry.Offset(size.width * .5f, size.height * .7f), androidx.compose.ui.geometry.Offset(size.width * .5f, size.height * .86f), strokeWidth = 1.5.dp.toPx())
-            drawLine(Ink, androidx.compose.ui.geometry.Offset(size.width * .3f, size.height * .86f), androidx.compose.ui.geometry.Offset(size.width * .7f, size.height * .86f), strokeWidth = 1.5.dp.toPx())
+            drawLine(ink, androidx.compose.ui.geometry.Offset(size.width * .5f, size.height * .7f), androidx.compose.ui.geometry.Offset(size.width * .5f, size.height * .86f), strokeWidth = 1.5.dp.toPx())
+            drawLine(ink, androidx.compose.ui.geometry.Offset(size.width * .3f, size.height * .86f), androidx.compose.ui.geometry.Offset(size.width * .7f, size.height * .86f), strokeWidth = 1.5.dp.toPx())
         }
     }
 }

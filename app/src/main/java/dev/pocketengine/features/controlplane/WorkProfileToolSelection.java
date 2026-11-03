@@ -138,6 +138,23 @@ public final class WorkProfileToolSelection {
         if (execution == null || !ref.getString("installationId").equals(entry.optString("installationId")) || ref.getLong("stateRevision") != execution.optLong("stateRevision", -1) || !ref.getString("grantsDigest").equals(execution.optString("grantsDigest"))) return false;
         JSONArray tools = ref.getJSONArray("tools"); for (int i = 0; i < tools.length(); i++) if (tools.getString(i).equals(entry.optString("tool"))) return true; return false;
     }
+    /** Optional plugin isolation must never silently remove an exact included profile dependency. */
+    public void requirePluginTools(JSONArray actualRegistry) throws Exception {
+        checkCurrent();
+        java.util.Objects.requireNonNull(actualRegistry);
+        for (Map.Entry<String,String> selected : plugins.entrySet()) {
+            JSONArray required = new JSONObject(selected.getValue()).getJSONArray("tools");
+            for (int i = 0; i < required.length(); i++) {
+                String tool = required.getString(i); boolean present = false;
+                for (int j = 0; j < actualRegistry.length(); j++) {
+                    JSONObject entry = actualRegistry.getJSONObject(j);
+                    if (selected.getKey().equals(entry.optString("pluginId")) && tool.equals(entry.optString("tool"))
+                            && includesPluginTool(entry)) { present = true; break; }
+                }
+                if (!present) throw new SecurityException("selected_profile_plugin_tool_unavailable");
+            }
+        }
+    }
     /** Preserve original discovery/error/budget provenance; only remove nonselected metadata. */
     public JSONObject filterSkillDiscovery(JSONObject original) throws Exception {
         checkCurrent();return filterDiscoveryData(original);

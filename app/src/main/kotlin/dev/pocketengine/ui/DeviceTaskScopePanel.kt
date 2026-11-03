@@ -13,7 +13,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -295,7 +294,7 @@ internal fun DeviceScopeSelection(nativeView: JSONObject, busy: Boolean, modifie
             }
             ScopeContextSummary(drafts.values.sumOf { it.files.size }, drafts.values.sumOf { it.projects.size })
         }
-        Surface(color = Color.White, shadowElevation = 8.dp) {
+        Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("已选 ${selectedOptions.size} 个范围 · 工具 $totalTools · 模型 $totalModels", style = MaterialTheme.typography.bodyMedium)
                 inputError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = SecondaryInk) }
@@ -360,7 +359,7 @@ internal fun DeviceScopeReview(view: JSONObject, source: JSONObject, busy: Boole
                 Checkbox(checked = consent, onCheckedChange = null); Text("允许这个任务按以上范围使用设备", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             }
         }
-        Surface(color = Color.White, shadowElevation = 8.dp) { Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) { Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = close, modifier = Modifier.heightIn(min = 48.dp)) { Text("暂不修改") }
             Button(onClick = confirm, enabled = consent && !busy, modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("device_scope_confirm")) { Text(if (busy) "正在确认…" else "确认任务范围") }
         } }
@@ -496,7 +495,7 @@ internal fun DeviceScopeProjectImportReview(view: JSONObject, busy: Boolean, mod
                 Text("已核对原接收操作、完整清单与目标工作区，允许原任务仅按以上范围导入", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             }
         }
-        Surface(color = Color.White, shadowElevation = 8.dp) { Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) { Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = close, modifier = Modifier.heightIn(min = 48.dp)) { Text("暂不允许") }
             Button(onClick = confirm, enabled = consent && !busy, modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("device_scope_project_import_confirm")) { Text(if (busy) "正在核对…" else "允许原任务导入") }
         } }

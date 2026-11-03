@@ -99,6 +99,10 @@ class Client:
         if not 32 <= len(self._token) <= 2048 or any(ord(c) < 33 or ord(c) > 126 for c in self._token):
             raise ClientError("Invalid private Companion token file")
 
+    def redact_diagnostic_text(self, text):
+        """Remove the already loaded local secret without exposing it to the exporter."""
+        return text.replace(self._token, "[redacted-known-secret]")
+
     def execute(self, action, params):
         if not isinstance(action, str) or not isinstance(params, dict):
             raise ClientError("Use one named phone action and object parameters")

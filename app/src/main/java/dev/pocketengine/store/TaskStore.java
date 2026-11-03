@@ -8200,6 +8200,66 @@ public final class TaskStore {
             JSONObject merged=new JSONObject(returned.toString());for(String key:new String[]{"artifacts","missingArtifactPaths","artifactsTruncated"})if(actual.has(key))merged.put(key,actual.get(key));return merged;
         }
     }
+    /** Issued only from an actual prepared native removal operation. It is not a new usage ledger.
+     * SQL checks run outside Book. The later Book CAS consumes only this in-memory one-shot guard,
+     * without acquiring TaskStore again. Neither stage calls the other while holding its monitor. */
+    public final class SkillRemovalGuard {
+        private final String task,operation,expected;private final RunControl original;private final long pauseRevision;private final java.util.concurrent.atomic.AtomicBoolean checked=new java.util.concurrent.atomic.AtomicBoolean(),entered=new java.util.concurrent.atomic.AtomicBoolean();
+        private SkillRemovalGuard(String task,String operation,JSONObject expected,RunControl original)throws Exception{this.task=task;this.operation=operation;this.original=java.util.Objects.requireNonNull(original);pauseRevision=original.pauseRevision();this.expected=dev.pocketengine.features.skills.SkillRemovalPolicy.pin(expected).toString();}
+        public JSONObject expected()throws Exception{return new JSONObject(expected);}
+        public boolean entered(){return entered.get();}
+        public void requireOutsideTaskMonitor(){if(Thread.holdsLock(TaskStore.this))throw new SecurityException("技能卸载不能从TaskStore锁反向进入Book");}
+        public void checkCurrentOutsideBook(JSONObject current)throws Exception{requireOutsideTaskMonitor();original.check();synchronized(TaskStore.this){
+            if(checked.get()||entered.get())throw new SecurityException("原卸载门禁已核对，只使用同一次原生确认");
+            dev.pocketengine.features.skills.SkillRemovalPolicy.requireRemovable(current,new JSONObject(expected));
+            JSONObject actual=preparedSkillRemoval(task,operation);dev.pocketengine.features.skills.SkillRemovalPolicy.requireSame(new JSONObject(expected),actual);
+            checkSkillRemovalIdle(current.getString("id"),task,operation);checked.set(true);
+        }}
+        /** The Book has rechecked disabled content and exact generation under its own lock. No SQL here. */
+        public void enterBookDeletion(JSONObject current)throws Exception{
+            requireOutsideTaskMonitor();dev.pocketengine.features.skills.SkillRemovalPolicy.requireRemovable(current,new JSONObject(expected));
+            // Pure cancellation flags only: authority callbacks must not re-enter SQL under Book.
+            if(original.isCancelled()||original.isPaused()||Thread.currentThread().isInterrupted()||original.pauseRevision()!=pauseRevision)throw new InterruptedException("原卸载已停止或暂停过，请重新审阅");
+            if(!checked.get()||!entered.compareAndSet(false,true))throw new SecurityException("卸载缺少同一次原使用核对，或已进入删除");
+        }
+    }
+    public SkillRemovalGuard skillRemovalGuardForPreparedOperation(String task,String operation,RunControl original)throws Exception{
+        original.check();synchronized(this){return new SkillRemovalGuard(task,operation,preparedSkillRemoval(task,operation),original);}
+    }
+    private JSONObject preparedSkillRemoval(String taskId,String operationId)throws Exception{
+        JSONObject task=required(taskId);requirePrivateOwner(task);
+        if(task.has("origin")||!taskId.equals(task.optString("runId"))||task.optInt("coordinatorEpoch",-1)!=0||!"running".equals(task.optString("status"))||task.optBoolean("cancelRequested"))throw new SecurityException("原主人卸载任务不再可用");
+        try(Cursor row=db.rawQuery("SELECT run_id,tool,state,arguments FROM operations WHERE task_id=? AND operation_id=?",new String[]{taskId,operationId})){
+            if(!row.moveToFirst()||!task.optString("runId").equals(row.getString(0))||!"prepared".equals(row.getString(2)))throw new SecurityException("缺少同一原生卸载意图");
+            JSONObject args=new JSONObject(row.getString(3));String tool=row.getString(1);
+            boolean owner="skills_removeReviewed".equals(tool)&&"skills".equals(task.optString("feature"))&&"removeReviewed".equals(task.optString("command"));
+            boolean pack="plugins_pack_component".equals(tool)&&"plugins".equals(task.optString("feature"))&&"functional_pack".equals(task.optString("command"))&&"skill_zip".equals(args.optString("componentKind"))&&"remove".equals(args.optString("action"));
+            if(!owner&&!pack)throw new SecurityException("原操作不是此技能卸载");
+            return dev.pocketengine.features.skills.SkillRemovalPolicy.pin(args.getJSONObject("expected"));
+        }
+    }
+    public synchronized void checkSkillRemovalIdleForOwner(String skill)throws Exception{checkSkillRemovalIdle(skill,"","");}
+    private void checkSkillRemovalIdle(String skill,String currentTask,String currentOperation)throws Exception{
+        if(skill==null||!skill.matches("[a-f0-9-]{36}"))throw new SecurityException("原技能定位无效");
+        try(Cursor live=db.rawQuery("SELECT task_id FROM runs WHERE status='running' AND task_id<>? LIMIT 1",new String[]{currentTask})){if(live.moveToFirst())throw new SecurityException("当前仍有原任务运行或等待，请结束并核对后再卸载技能");}
+        try(Cursor lease=db.rawQuery("SELECT resource_id FROM leases LIMIT 1",null)){if(lease.moveToFirst())throw new SecurityException("仍有原资源租约未释放；过期不等于物理资源已释放");}
+        // An unresolved earlier removal can only be queried, even if a caller opens another page.
+        try(Cursor removals=db.rawQuery("SELECT operation_id,arguments FROM operations WHERE tool IN ('skills_removeReviewed','plugins_pack_component') AND state IN ('prepared','unknown') LIMIT 1001",null)){
+            int seen=0;while(removals.moveToNext()){if(++seen>1000)throw new SecurityException("原目录未决记录超过本次可核对范围");if(currentOperation.equals(removals.getString(0)))continue;JSONObject args=new JSONObject(removals.getString(1)),expected=args.optJSONObject("expected");if(expected!=null&&skill.equals(expected.optString("id")))throw new SecurityException("此技能已有未决原目录动作，只核对原回执，不重提");}
+        }
+        try(Cursor executions=db.rawQuery("SELECT operation_id,task_id,state,arguments,receipt,length(CAST(arguments AS BLOB)),coalesce(length(CAST(receipt AS BLOB)),0) FROM operations WHERE tool='skills_execute' ORDER BY created_at DESC LIMIT 4001",null)){
+            int seen=0;long readBytes=0;while(executions.moveToNext()){
+                if(++seen>4000||executions.getLong(5)>262144||executions.getLong(6)>262144||(readBytes+=executions.getLong(5)+executions.getLong(6))>16L*1024*1024)throw new SecurityException("原技能使用记录超过本次有界核对范围，未把未读记录当空");
+                JSONObject args=new JSONObject(executions.getString(3)),metadata=args.optJSONObject("nativeSkill"),review=metadata==null?null:metadata.optJSONObject("review"),pack=review==null?null:review.optJSONObject("package");
+                String referenced=pack==null?args.optString("id"):pack.optString("id");if(referenced.isEmpty())throw new SecurityException("原技能记录缺少准确归属，不能证明资源已释放");if(!skill.equals(referenced))continue;
+                requirePrivateOwner(required(executions.getString(1)));String state=executions.getString(2);JSONObject receipt=executions.isNull(4)?null:new JSONObject(executions.getString(4));
+                if(dev.pocketengine.features.skills.SkillRemovalPolicy.knownNeverDispatched(state,metadata,receipt))continue;
+                if(metadata!=null&&metadata.optJSONObject("nativeManagedJob")!=null&&nativeExecutionCacheDispositionForOwner("skill_copy",executions.getString(0)).settled)continue;
+                throw new SecurityException("此技能有活动、未知或缺少原进程释放证明的执行；请先核对原任务，不卸载");
+            }
+        }
+    }
+
     /** Foreground exact owner selection starts the original task through its existing budget/grant path.
      * The selection is memory-only; the audit below cannot restore or replay it after cold recovery. */
     public synchronized JSONObject startOwnerSkillAttempt(dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation selected,int allocation,RunControl original)throws Exception {

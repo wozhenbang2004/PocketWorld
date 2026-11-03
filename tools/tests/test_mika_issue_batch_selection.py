@@ -15,9 +15,9 @@ class MikaIssueBatchSelectionTest(unittest.TestCase):
         self.assertEqual(3, workflow.count(exact))
         self.assertIn('github.event.pull_request.head.repo.full_name == github.repository', workflow)
         self.assertIn('github.event.repository.private', workflow)
-        self.assertIn("'mika-issue-integration,runner-budget-stream'", workflow)
+        self.assertIn("'mika-issue-integration,runner-budget-stream,mika-models,model-capability-probe,mika-ecosystem,magpie-work-profile,mika-phone-evidence,phone-access-history,mika-skill-lifecycle,aion-mcp-skills'", workflow)
         registry = json.loads((ROOT / 'tools/host-tests.json').read_text())
-        self.assertEqual(['mika-issue-integration', 'runner-budget-stream'], selection.selected(registry, 'mika-issue-integration', 'mika-issue-integration,runner-budget-stream'))
+        self.assertEqual('mika-issue-integration,runner-budget-stream,mika-models,model-capability-probe,mika-ecosystem,magpie-work-profile,mika-phone-evidence,phone-access-history,mika-skill-lifecycle,aion-mcp-skills'.split(','), selection.selected(registry, 'mika-issue-integration', 'mika-issue-integration,runner-budget-stream,mika-models,model-capability-probe,mika-ecosystem,magpie-work-profile,mika-phone-evidence,phone-access-history,mika-skill-lifecycle,aion-mcp-skills'))
         group = registry['mika-issue-integration']
         self.assertEqual(10, len([group['class']] + group['additionalClasses']))
         for name in [group['class']] + group['additionalClasses']:

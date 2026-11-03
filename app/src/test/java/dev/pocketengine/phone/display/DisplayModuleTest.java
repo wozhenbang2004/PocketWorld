@@ -103,6 +103,18 @@ public final class DisplayModuleTest {
         first.put("imageBase64","changed-by-viewer");assertEquals("fixture-only",port.cachedObservationForOwner("task-a").getString("imageBase64"));
         assertThrows(SecurityException.class,()->port.cachedObservationForOwner("other-task"));
     }
+    @Test public void inlineOwnerPreviewRequiresTheLifecycleBoundOriginalRunAndOnlyLabelsItsCache()throws Exception {
+        DisplayModule module=module();BackgroundPhonePort port=ownedPort(module);RunControl original=new RunControl();original.bindHostRun("task-a","original-run",2);
+        assertThrows(SecurityException.class,()->port.requireOwnerObservationRun("task-a","original-run",2,original));
+        port.bindLifecycle(RuntimeEnvironment.getApplication(),"task-a","original-run",2,original);
+        port.requireOwnerObservationRun("task-a","original-run",2,original);
+        assertThrows(SecurityException.class,()->port.requireOwnerObservationRun("task-a","new-run",2,original));
+        assertThrows(SecurityException.class,()->port.requireOwnerObservationRun("task-a","original-run",3,original));
+        RunControl substitute=new RunControl();substitute.bindHostRun("task-a","original-run",2);
+        assertThrows(SecurityException.class,()->port.requireOwnerObservationRun("task-a","original-run",2,substitute));
+        JSONObject noFrame=port.cachedObservationForOwner("task-a");assertEquals("original-run",noFrame.getString("runId"));assertEquals(2,noFrame.getInt("coordinatorEpoch"));assertEquals("no_observation",noFrame.getString("error"));
+        original.cancel();assertThrows(SecurityException.class,()->port.requireOwnerObservationRun("task-a","original-run",2,original));
+    }
     @Test public void manualInputRequiresPausedCurrentTaskAndPinnedDisplayIdentity()throws Exception {
         DisplayModule module=module();BackgroundPhonePort port=ownedPort(module);RunControl control=new RunControl();
         JSONObject target=new JSONObject().put("displayId",7).put("sessionId","owned-display");

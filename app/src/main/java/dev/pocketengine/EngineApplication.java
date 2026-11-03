@@ -2203,7 +2203,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             }if(automationPlanTask(task))return controlAutomationPlanTask(automationModule(),json("taskId",id,"runId",task.optString("runId"),"coordinatorEpoch",task.optInt("coordinatorEpoch"),"occurrenceId",source.getString("occurrenceId"),"commitmentId",source.getString("commitmentId")),"cancel");RunControl capability=capabilityControls.get(id);if(capability==null)capability=pendingCapabilityStops.get(id);if(capability!=null)cancelCapabilityAttempt(capability);else {features.cancelRelatedTasks(id);stop(id);}return null;}
             case "takeoverTask":return takeoverTask(input.getString("taskId"));
             case "ownerPhoneHandoff":return ownerPhoneHandoff(input.getString("taskId"),input.getString("handoffAction"),input.optString("handoffId"));
-            case "observeTask":return observeTask(input.getString("taskId"));
+            case "observeTask":return observeTask(input.getString("taskId"),input);
             case "manualTaskAction":return manualTaskAction(input.getString("taskId"),input.getString("tool"),input.optJSONObject("args"),input.optString("observationId"));
             case "ownerSecretInput":return manualTaskAction(input.getString("taskId"),"phone_type",json("nodeId",input.getString("nodeId")),input.getString("observationId"),input.getString("text"));
             case "resolveOperation":{String id=input.getString("taskId");JSONObject reviewed=tasks.get(id,false);if(teamWriteOrigin(reviewed))tasks.requireTeamOwnerAttempt(input);if(groupOrigin(reviewed)){groupOwnerWorkflows.check();reviewedGroupAttempt(reviewed,input);}RunControl control=control(id);if(ownerActionActive||control!=null&&!control.isPaused()||capabilityControls.containsKey(id)||features.mediaControl(id)!=null||features.teamControl(id)!=null)throw new IllegalStateException("请等待动作回执并暂停执行，再核对动作结果");JSONObject result=tasks.resolveOperation(id,input.getString("operationId"),input.getString("outcome"));if(!tasks.hasUnresolved(id)){EngineModule semantic=features.module("semantic");if(semantic instanceof dev.pocketengine.features.semantic.SemanticModule)((dev.pocketengine.features.semantic.SemanticModule)semantic).releaseRun(control);}pushTask(id);if(channelTaskHost!=null)channelTaskHost.publishTaskState(id);return result;}
@@ -2278,11 +2278,13 @@ public final class EngineApplication extends Application implements dev.pocketen
             }finally{ownerActionActive=false;}
         }
     }
-    private JSONObject observeTask(String id)throws Exception {
+    private JSONObject observeTask(String id,JSONObject input)throws Exception {
+        dev.pocketengine.phone.observation.PhoneObservationPreview.Identity expected=dev.pocketengine.phone.observation.PhoneObservationPreview.expected(input);
         synchronized(ownerInteractions){
             PhonePort port;RunControl owner;synchronized(this){if(!id.equals(activeTaskId))throw new IllegalStateException("请先接管或恢复原任务");port=activePort;owner=activeControl;}
             if(!(port instanceof dev.pocketengine.phone.display.BackgroundPhonePort))throw new IllegalStateException("独立屏仍在准备或该任务使用主屏");
             dev.pocketengine.phone.display.BackgroundPhonePort background=(dev.pocketengine.phone.display.BackgroundPhonePort)port;
+            if(expected!=null)background.requireOwnerObservationRun(id,expected.runId,expected.epoch,owner);
             if(owner!=null&&!owner.phoneSurfaceActive())throw new SecurityException("当前在专用网页；原手机屏幕仅保留，未开放手动输入");
             boolean manual=owner!=null&&owner.isPaused()&&!owner.isCancelled()&&!tasks.hasUnresolved(id)&&!background.ownerHandoffActive();
             JSONObject observation=owner!=null&&owner.isPaused()&&!owner.isCancelled()?background.observeForOwner(id,owner):background.cachedObservationForOwner(id);

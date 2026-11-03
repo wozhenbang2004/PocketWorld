@@ -72,4 +72,15 @@ public final class SkillBookTest {
         book.setEnabled(scope(),record.getString("id"),false,"",false,1200);assertThrows(SecurityException.class,()->book.readForHost(scope(),record.getString("id"),"SKILL.md",0,100,record.getString("digest"),Set.of("phone.observe"),1300));
         book.delete(scope(),record.getString("id"));assertEquals(0,new SkillBook(root).list(scope(),1400).length());assertFalse(new File(root,record.getString("id")).exists());
     }
+    @Test public void selectedSingleDocumentUsesOriginalPreviewDigestPolicyAndDisabledRevision()throws Exception{
+        SkillBook book=new SkillBook(new File(temp.getRoot(),"skills"));JSONObject created=book.install(scope(),imported().put("expiresAt",9000),1000);
+        JSONObject old=book.configureSourceForOwner(scope(),created.getString("id"),created.getInt("revision"),created.getString("digest"),created.getLong("executionGeneration"),SkillSourcePolicy.Layer.PROJECT,SkillSourcePolicy.Invocation.OWNER_ONLY,"10000000-0000-0000-0000-000000000001",1050);enable(book,old,1100);
+        byte[] selected=(manifest()+"\n新的所选正文。").getBytes(StandardCharsets.UTF_8);
+        JSONObject preview=book.inspectDocument(scope(),new java.io.ByteArrayInputStream(selected),old.getString("id"),1200),options=new JSONObject().put("source","local:selected-skill-document").put("id",old.getString("id")).put("revision",old.getInt("revision")).put("expectedCurrentDigest",old.getString("digest")).put("inspectedDigest",preview.getJSONObject("package").getString("digest"));
+        assertTrue(preview.getBoolean("singleDocumentOnly"));assertEquals("references/check.md",preview.getJSONObject("comparison").getJSONArray("removed").getString(0));
+        assertThrows(SecurityException.class,()->book.importDocument(scope(),new java.io.ByteArrayInputStream((manifest()+" changed").getBytes(StandardCharsets.UTF_8)),options,1300));assertEquals(1,book.get(scope(),old.getString("id"),1300).getInt("revision"));
+        JSONObject updated=book.importDocument(scope(),new java.io.ByteArrayInputStream(selected),options,1400);assertEquals(old.getString("id"),updated.getString("id"));assertEquals(2,updated.getInt("revision"));assertEquals(1,updated.getJSONArray("resources").length());assertEquals("SKILL.md",updated.getJSONArray("resources").getString(0));assertEquals("phone.observe",updated.getJSONArray("requiredCapabilities").getString(0));assertEquals(9000,updated.getLong("expiresAt"));assertFalse(updated.getBoolean("enabled"));assertFalse(updated.getBoolean("active"));
+        JSONObject policy=updated.getJSONObject("sourcePolicy");assertEquals("PROJECT",policy.getString("layer"));assertEquals("OWNER_ONLY",policy.getString("invocation"));assertEquals("10000000-0000-0000-0000-000000000001",policy.getString("projectId"));assertFalse(policy.getBoolean("modelInvocable"));
+        assertThrows(IllegalStateException.class,()->book.importDocument(scope(),new java.io.ByteArrayInputStream(selected),options,1500));
+    }
 }

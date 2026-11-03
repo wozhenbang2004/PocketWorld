@@ -71,9 +71,10 @@ public final class CatalogHttpClient {
         @Override public String toString() { return "CatalogHeaders[redacted]"; }
     }
 
-    public record Snapshot(ModelBinding binding, long fetchedAtMillis, Map<String, ModelFacts> models,Map<String,ModelPrice> prices) {
-        public Snapshot(ModelBinding binding,long fetchedAtMillis,Map<String,ModelFacts> models){this(binding,fetchedAtMillis,models,Map.of());}
-        public Snapshot { models = Collections.unmodifiableMap(new LinkedHashMap<>(models));prices=Collections.unmodifiableMap(new LinkedHashMap<>(prices)); }
+    public record Snapshot(ModelBinding binding, long fetchedAtMillis, Map<String, ModelFacts> models,Map<String,ModelPrice> prices,Map<String,ModelEndpointSupport> endpointSupport) {
+        public Snapshot(ModelBinding binding,long fetchedAtMillis,Map<String,ModelFacts> models){this(binding,fetchedAtMillis,models,Map.of(),Map.of());}
+        public Snapshot(ModelBinding binding,long fetchedAtMillis,Map<String,ModelFacts> models,Map<String,ModelPrice> prices){this(binding,fetchedAtMillis,models,prices,Map.of());}
+        public Snapshot { models = Collections.unmodifiableMap(new LinkedHashMap<>(models));prices=Collections.unmodifiableMap(new LinkedHashMap<>(prices));endpointSupport=Collections.unmodifiableMap(new LinkedHashMap<>(endpointSupport)); }
     }
 
     public CatalogHttpClient(Clock clock, int timeoutMillis) {
@@ -85,8 +86,10 @@ public final class CatalogHttpClient {
                 .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build();
     }
 
+    int totalBudgetMillis() { return timeoutMillis; }
+
     public Snapshot fetch(ModelBinding binding, Headers headers, BooleanSupplier stillCurrent) throws CatalogException {
-        Map<String, ModelFacts> models = new LinkedHashMap<>();Map<String,ModelPrice> prices=new LinkedHashMap<>(); Set<URI> visited = new HashSet<>();
+        Map<String, ModelFacts> models = new LinkedHashMap<>();Map<String,ModelPrice> prices=new LinkedHashMap<>();Map<String,ModelEndpointSupport> endpointSupport=new LinkedHashMap<>(); Set<URI> visited = new HashSet<>();
         URI at = binding.modelsEndpoint(); int bytes = 0;
         long deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
         for (int page = 1; page <= MAX_PAGES; page++) {
@@ -104,15 +107,27 @@ public final class CatalogHttpClient {
                 if (models.put(row.getKey(), row.getValue()) != null) throw new CatalogException(CatalogException.Code.PAGINATION_INCOMPLETE);
             }
             prices.putAll(parsed.prices());
+            endpointSupport.putAll(parsed.endpointSupport());
             if (models.size() > 10000) throw new CatalogException(CatalogException.Code.TOO_LARGE);
             requireCurrent(stillCurrent);
-            if (parsed.pagination() == CatalogParser.Pagination.NONE) { remainingMillis(deadline); return new Snapshot(binding, clock.millis(), models,prices); }
+            if (parsed.pagination() == CatalogParser.Pagination.NONE) { remainingMillis(deadline); return new Snapshot(binding, clock.millis(), models,prices,endpointSupport); }
             at = next(binding.modelsEndpoint(), parsed);
         }
         throw new CatalogException(CatalogException.Code.PAGINATION_INCOMPLETE);
     }
 
     private byte[] request(URI endpoint, Headers headers, long deadline, BooleanSupplier current) throws CatalogException {
+        return request(endpoint,headers,deadline,current,PAGE_BYTES);
+    }
+    /** Explicit public metadata fetch. The fixed origin never receives model IDs, API keys or account headers. */
+    public String modelsDev(BooleanSupplier current)throws CatalogException{
+        long deadline=System.nanoTime()+timeoutMillis*1_000_000L;
+        byte[] bytes=request(URI.create(ModelMetadataSuggestions.SOURCE),Headers.none(),deadline,current,ModelMetadataSuggestions.MAX_DOCUMENT_BYTES);
+        requireCurrent(current);remainingMillis(deadline);
+        try{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();}
+        catch(Exception invalid){throw new CatalogException(CatalogException.Code.INVALID_CATALOG);}
+    }
+    private byte[] request(URI endpoint, Headers headers, long deadline, BooleanSupplier current,int maxBytes) throws CatalogException {
         Call call = null;
         Thread cancellation = null;
         java.util.concurrent.atomic.AtomicBoolean finished = new java.util.concurrent.atomic.AtomicBoolean();
@@ -148,7 +163,7 @@ public final class CatalogHttpClient {
                 if (status < 200 || status >= 300) throw new CatalogException(CatalogException.Code.HTTP_ERROR, status);
                 ResponseBody body = response.body();
                 if (body == null) throw new CatalogException(CatalogException.Code.INVALID_CATALOG);
-                if (body.contentLength() > PAGE_BYTES) throw new CatalogException(CatalogException.Code.TOO_LARGE);
+                if (body.contentLength() > maxBytes) throw new CatalogException(CatalogException.Code.TOO_LARGE);
                 String type = response.header("Content-Type");
                 if (type != null && !type.toLowerCase(java.util.Locale.ROOT).matches("application/(json|[a-z0-9.+-]+\\+json)(;.*)?")) {
                     throw new CatalogException(CatalogException.Code.INVALID_CATALOG);
@@ -159,7 +174,7 @@ public final class CatalogHttpClient {
                         requireCurrent(current); remainingMillis(deadline);
                         count = input.read(buffer);
                         if (count == -1) break;
-                        if (count > PAGE_BYTES - out.size()) throw new CatalogException(CatalogException.Code.TOO_LARGE);
+                        if (count > maxBytes - out.size()) throw new CatalogException(CatalogException.Code.TOO_LARGE);
                         out.write(buffer, 0, count);
                     }
                     if (invalidated.get()) throw new CatalogException(CatalogException.Code.CANCELLED);

@@ -11,7 +11,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -477,7 +476,7 @@ internal fun MemoryLearningReviewPage(
     }
     BackHandler { back() }
 
-    Surface(Modifier.fillMaxSize(), color = Color.White) {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxSize().imePadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { back() }, enabled = !reviewBusy) { Text("返回") }
@@ -665,7 +664,7 @@ internal fun MemoryLearningReviewPage(
     }
     confirmConsolidation?.let { frozen ->
         val canSend = !busy && recordsLoaded && recordsRead == null && runCatching { MemoryLearningReviewGuard.consolidationPayload(frozen, JSONArray(recordRows)) }.isSuccess
-        AlertDialog(onDismissRequest = { confirmConsolidation = null }, containerColor = Color.White,
+        AlertDialog(onDismissRequest = { confirmConsolidation = null }, containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("将这 ${frozen.length()} 条记忆发给当前模型？", fontSize = 19.sp) }, text = {
                 Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("发送所选记忆及其来源引用，只归纳一条待审候选，不调用工具。原记忆保持不变；模型可能判断证据不足而不产生候选。接受、编辑或拒绝由你另行决定。", fontSize = 14.sp, lineHeight = 24.sp)
@@ -688,7 +687,7 @@ internal fun MemoryLearningReviewPage(
     }
     parentContext?.let { context ->
         val matches = !detailStale && MemoryLearningReviewGuard.sameReview(context.candidate, detail)
-        AlertDialog(onDismissRequest = { parentContext = null; parentRead = null; parentRecord = null }, containerColor = Color.White,
+        AlertDialog(onDismissRequest = { parentContext = null; parentRead = null; parentRecord = null }, containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("父记忆 · 版本 ${MemoryLearningReviewGuard.revision(context.reference)}", fontSize = 19.sp) }, text = {
                 Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (parentRead != null) { LinearProgressIndicator(Modifier.fillMaxWidth(), color = Ink, trackColor = Soft); MemoryLearningCaption("正在精确读取这一版父记忆…") }
@@ -712,7 +711,7 @@ internal fun MemoryLearningReviewPage(
             }, confirmButton = { TextButton(onClick = { parentContext = null; parentRead = null; parentRecord = null }) { Text("返回候选") } },
             dismissButton = { if (matches && parentRead == null && parentRecord == null) TextButton(onClick = { openParent(context.candidate, context.reference) }) { Text("重试读取这一版") } })
     }
-    if (stopAndLeave) AlertDialog(onDismissRequest = { stopAndLeave = false }, containerColor = Color.White,
+    if (stopAndLeave) AlertDialog(onDismissRequest = { stopAndLeave = false }, containerColor = MaterialTheme.colorScheme.surface,
         title = { Text("停止归纳并返回？") }, text = { Text("结束本次请求且不自动重试。已经产生的候选不会撤销；仍需你接受后才成为正式记忆。") },
         confirmButton = { TextButton(onClick = { cancelConsolidation(); stopAndLeave = false; onDismissSource(); onBack() }) { Text("停止并返回") } },
         dismissButton = { TextButton(onClick = { stopAndLeave = false }) { Text("继续等待") } })
@@ -720,7 +719,7 @@ internal fun MemoryLearningReviewPage(
         val current = if (review.command == "forgetReviewed") formalRecord else detail
         val currentMatches = !detailStale && MemoryLearningReviewGuard.sameReview(review.reviewed, current)
         val label = memoryLearningActionLabel(review.command)
-        AlertDialog(onDismissRequest = { if (!busy) action = null }, containerColor = Color.White,
+        AlertDialog(onDismissRequest = { if (!busy) action = null }, containerColor = MaterialTheme.colorScheme.surface,
             title = { Text(label + "？", fontSize = 19.sp) }, text = {
                 Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (review.command == "acceptCandidate" && review.reviewed.has("appKnowledge")) Text("将此 App 修订作为试用参考，暂时替换所指旧稿但不删除。成功/失败须核对原任务结果；不授予任何权限。", fontSize = 14.sp, lineHeight = 24.sp)
@@ -740,7 +739,7 @@ internal fun MemoryLearningReviewPage(
                 }, enabled = !busy && currentMatches && (review.command != "rejectCandidate" || rejection.trim().length in 1..1000)) { Text(if (busy) "正在处理" else label) }
             }, dismissButton = { TextButton(onClick = { action = null }, enabled = !busy) { Text("取消") } })
     }
-    if (discardEditor) AlertDialog(onDismissRequest = { discardEditor = false }, containerColor = Color.White, title = { Text("放弃未保存的修改？") }, text = { Text("只丢弃本页草稿，不会修改候选或接受记忆。") }, confirmButton = { TextButton(onClick = { editing = null; discardEditor = false; localError = null; refresh() }) { Text("放弃并重新读取") } }, dismissButton = { TextButton(onClick = { discardEditor = false }) { Text("继续编辑") } })
+    if (discardEditor) AlertDialog(onDismissRequest = { discardEditor = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("放弃未保存的修改？") }, text = { Text("只丢弃本页草稿，不会修改候选或接受记忆。") }, confirmButton = { TextButton(onClick = { editing = null; discardEditor = false; localError = null; refresh() }) { Text("放弃并重新读取") } }, dismissButton = { TextButton(onClick = { discardEditor = false }) { Text("继续编辑") } })
 }
 
 private fun memoryLearningObjects(array: JSONArray?): List<JSONObject> = (0 until (array?.length() ?: 0)).mapNotNull { array?.optJSONObject(it)?.let { value -> JSONObject(value.toString()) } }

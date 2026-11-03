@@ -171,7 +171,7 @@ public final class AdaptivePhonePort implements PhonePort {
             if(captured!=practice||blocked!=null||control.pauseRevision()!=revision){clearReferences();throw new SecurityException("practice_session_changed");}
         }
         JSONObject frame=captured.targetCurrent(actual)?dev.pocketengine.phone.diagnostics.PhonePracticeFrame.inspect(actual,scope.displayId,scope.sessionId,revision):new JSONObject().put("state","unknown").put("reason","practice_target_not_current").put("localOnly",true).put("imageUploaded",false);
-        synchronized(this){captured.frame(frame);clearReferences();}
+        synchronized(this){captured.frame(frame,actual);clearReferences();}
         JSONObject fresh=readOnlyTree(control);if(fresh.optBoolean("ok"))frame.put("observationId",fresh.getString("observationId"));return frame.put("ok",true);
     }
     private JSONObject waitNativeEvent(JSONObject args,RunControl control)throws Exception {

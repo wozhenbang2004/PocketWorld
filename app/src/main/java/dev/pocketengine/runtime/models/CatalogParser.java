@@ -20,8 +20,9 @@ import static dev.pocketengine.runtime.models.ModelFacts.*;
 public final class CatalogParser {
     private CatalogParser() { }
     public enum Pagination { NONE, AFTER_ID, GEMINI_TOKEN, SAME_ENDPOINT_LINK }
-    public record Page(Map<String, ModelFacts> models, Pagination pagination, String cursor,Map<String,ModelPrice> prices) {
-        public Page(Map<String,ModelFacts> models,Pagination pagination,String cursor){this(models,pagination,cursor,Map.of());}
+    public record Page(Map<String, ModelFacts> models, Pagination pagination, String cursor,Map<String,ModelPrice> prices,Map<String,ModelEndpointSupport> endpointSupport) {
+        public Page(Map<String,ModelFacts> models,Pagination pagination,String cursor){this(models,pagination,cursor,Map.of(),Map.of());}
+        public Page(Map<String,ModelFacts> models,Pagination pagination,String cursor,Map<String,ModelPrice> prices){this(models,pagination,cursor,prices,Map.of());}
     }
 
     public static Page parse(ModelBinding binding, String body, long observedAtMillis, int pageNumber) throws CatalogException {
@@ -33,7 +34,7 @@ public final class CatalogParser {
             String rowsKey = binding.format() == ModelBinding.Format.GEMINI ? "models" : "data";
             JSONArray rows = object.getJSONArray(rowsKey);
             if (rows.length() > 10000) throw new CatalogException(CatalogException.Code.TOO_LARGE);
-            Map<String, ModelFacts> models = new LinkedHashMap<>();Map<String,ModelPrice> prices=new LinkedHashMap<>();
+            Map<String, ModelFacts> models = new LinkedHashMap<>();Map<String,ModelPrice> prices=new LinkedHashMap<>();Map<String,ModelEndpointSupport> endpointSupport=new LinkedHashMap<>();
             for (int n = 0; n < rows.length(); n++) {
                 JSONObject row = rows.getJSONObject(n);
                 Object rawId = row.get(binding.format() == ModelBinding.Format.GEMINI ? "name" : "id");
@@ -42,6 +43,7 @@ public final class CatalogParser {
                 String ref = binding.modelsEndpoint().toASCIIString() + "#page=" + pageNumber + "/" + rowsKey + "/" + n;
                 if (models.put(id, facts(binding, row, ref, observedAtMillis)) != null) throw new IllegalArgumentException();
                 ModelPrice price=ModelPrice.provider(binding,id,row,ref,observedAtMillis);if(price!=null)prices.put(id,price);
+                if(binding.format()==ModelBinding.Format.OPENAI||binding.format()==ModelBinding.Format.ANTHROPIC){ModelEndpointSupport declared=ModelEndpointSupport.parse(row.opt("supported_endpoints"),ref+"/supported_endpoints",observedAtMillis);if(declared!=null)endpointSupport.put(id,declared);}
             }
             Pagination pagination = Pagination.NONE;
             String cursor = "";
@@ -64,7 +66,7 @@ public final class CatalogParser {
                 }
             }
             if (pagination != Pagination.NONE && (cursor.isEmpty() || models.isEmpty())) throw new CatalogException(CatalogException.Code.PAGINATION_INCOMPLETE);
-            return new Page(Collections.unmodifiableMap(models), pagination, cursor,Collections.unmodifiableMap(prices));
+            return new Page(Collections.unmodifiableMap(models), pagination, cursor,Collections.unmodifiableMap(prices),Collections.unmodifiableMap(endpointSupport));
         } catch (CatalogException e) { throw e; }
         catch (Exception invalid) { throw new CatalogException(CatalogException.Code.INVALID_CATALOG); }
     }

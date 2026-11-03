@@ -10,7 +10,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -74,7 +73,7 @@ private fun CommitmentDetail(record: JSONObject, state: PocketUiState, controlle
     val id = record.optString("id")
     val revision = record.optLong("revision")
     val taskId = record.optString("taskId")
-    AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text(record.optString("title"), fontSize = 19.sp) }, text = {
+    AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text(record.optString("title"), fontSize = 19.sp) }, text = {
         Column(Modifier.heightIn(max = 490.dp).verticalScroll(rememberScrollState())) {
             CommitmentCaption(commitmentStatus(record.optString("status")) + " · 当前版本 " + revision)
             if (record.optString("details").isNotBlank()) SelectionContainer { Text(record.optString("details"), fontSize = 13.sp, lineHeight = 23.sp) }
@@ -96,8 +95,8 @@ private fun CommitmentDetail(record: JSONObject, state: PocketUiState, controlle
             state.moduleErrors.filterKeys { it.startsWith("automation.") && it.endsWith("Commitment") }.values.distinct().forEach { Text(it, color = Danger, fontSize = 12.sp) }
         }
     }, confirmButton = { if (!terminal) Button(onClick = { confirmComplete = JSONObject(record.toString()) }, enabled = state.feature("automation").optBoolean("completionEvidenceAvailable") && "automation.completeCommitment" !in state.moduleBusy) { Text("确认已完成") } else TextButton(onClick = close) { Text("关闭") } }, dismissButton = { if (!terminal) TextButton(onClick = close) { Text("返回") } })
-    confirmComplete?.let { frozen -> AlertDialog(onDismissRequest = { confirmComplete = null }, containerColor = Color.White, title = { Text("确认当前承诺已经完成？") }, text = { Text("这会记录你对当前版本的真实确认。编辑过的承诺需要以新版本重新核对，不沿用旧任务的完成结论。") }, confirmButton = { Button(onClick = { controller.requestFeature("automation", "completeCommitment", JSONObject().put("id", frozen.optString("id")).put("revision", frozen.optLong("revision"))); confirmComplete = null }) { Text("我已核对，确认完成") } }, dismissButton = { TextButton(onClick = { confirmComplete = null }) { Text("尚未完成") } }) }
-    confirmCancel?.let { frozen -> AlertDialog(onDismissRequest = { confirmCancel = null }, containerColor = Color.White, title = { Text("取消这项承诺？") }, text = { Text("取消后保留历史，不再作为待跟进候选。") }, confirmButton = { TextButton(onClick = { controller.requestFeature("automation", "cancelCommitment", JSONObject().put("id", frozen.optString("id")).put("revision", frozen.optLong("revision"))); confirmCancel = null }) { Text("取消承诺", color = Danger) } }, dismissButton = { TextButton(onClick = { confirmCancel = null }) { Text("保留") } }) }
+    confirmComplete?.let { frozen -> AlertDialog(onDismissRequest = { confirmComplete = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("确认当前承诺已经完成？") }, text = { Text("这会记录你对当前版本的真实确认。编辑过的承诺需要以新版本重新核对，不沿用旧任务的完成结论。") }, confirmButton = { Button(onClick = { controller.requestFeature("automation", "completeCommitment", JSONObject().put("id", frozen.optString("id")).put("revision", frozen.optLong("revision"))); confirmComplete = null }) { Text("我已核对，确认完成") } }, dismissButton = { TextButton(onClick = { confirmComplete = null }) { Text("尚未完成") } }) }
+    confirmCancel?.let { frozen -> AlertDialog(onDismissRequest = { confirmCancel = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("取消这项承诺？") }, text = { Text("取消后保留历史，不再作为待跟进候选。") }, confirmButton = { TextButton(onClick = { controller.requestFeature("automation", "cancelCommitment", JSONObject().put("id", frozen.optString("id")).put("revision", frozen.optLong("revision"))); confirmCancel = null }) { Text("取消承诺", color = Danger) } }, dismissButton = { TextButton(onClick = { confirmCancel = null }) { Text("保留") } }) }
 }
 
 @Composable
@@ -111,7 +110,7 @@ private fun CommitmentEditor(record: JSONObject?, state: PocketUiState, controll
     val command = if (record == null) "createCommitment" else "updateCommitment"
     val busy = "automation." + command in state.moduleBusy
     LaunchedEffect(busy) { if (submitted && !busy && state.moduleErrors["automation." + command] == null) close() }
-    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text(if (record == null) "新增明确委托" else "编辑当前承诺") }, text = {
+    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (record == null) "新增明确委托" else "编辑当前承诺") }, text = {
         Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(title, { title = it }, label = { Text("承诺目标") }, minLines = 1, maxLines = 3)
             OutlinedTextField(details, { details = it }, label = { Text("具体要求") }, minLines = 2, maxLines = 6)

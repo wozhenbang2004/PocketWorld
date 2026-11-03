@@ -17,7 +17,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -45,8 +44,8 @@ internal fun AffectToolCallCard(id: String, name: String, statusLabel: String,
     LaunchedEffect(needsReview) { if (needsReview && !manuallyToggled) expanded = true }
     val ease = CubicBezierEasing(.22f, 1f, .36f, 1f)
     val rotation by androidx.compose.animation.core.animateFloatAsState(targetValue = if (expanded) 180f else 0f, animationSpec = tween(360, easing = ease), label = "toolDisclosure")
-    Surface(modifier = modifier.fillMaxWidth().pocketDepth(PocketDepth.CONTENT, 10.dp), color = Color.White,
-        shape = RoundedCornerShape(10.dp), border = BorderStroke(.5.dp, Color(0xffebebeb)),
+    Surface(modifier = modifier.fillMaxWidth().pocketDepth(PocketDepth.CONTENT, 10.dp), color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(10.dp), border = BorderStroke(.5.dp, Line),
         shadowElevation = 0.dp) {
         Column {
             Row(Modifier.fillMaxWidth().clickable(role = Role.Button) {
@@ -66,7 +65,7 @@ internal fun AffectToolCallCard(id: String, name: String, statusLabel: String,
                 enter = expandVertically(animationSpec = tween(380, easing = ease)) + fadeIn(tween(240)),
                 exit = shrinkVertically(animationSpec = tween(380, easing = ease)) + fadeOut(tween(200))) {
                 Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
-                    HorizontalDivider(color = Color(0xffeeeeee), thickness = .5.dp)
+                    HorizontalDivider(color = Line, thickness = .5.dp)
                     if (toolDisplayName(name) != name) Text(name, fontFamily = FontFamily.Monospace,
                         color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                     if (arguments.isNotBlank()) {
@@ -91,7 +90,7 @@ internal fun AffectToolCallCard(id: String, name: String, statusLabel: String,
                             overflow = TextOverflow.Ellipsis,
                             onTextLayout = { if(!showFull) clipped = it.hasVisualOverflow },
                             modifier = Modifier.fillMaxWidth().heightIn(max = if(showFull) 400.dp else 220.dp)
-                                .background(Color(0xfff4f4f4), RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(8.dp))
                                 .then(if(showFull) Modifier.verticalScroll(rememberScrollState()) else Modifier)
                                 .padding(horizontal = 12.dp, vertical = 10.dp))
                     }

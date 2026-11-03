@@ -1,13 +1,111 @@
-"""Bounded MCP 2025-11-25 tools, adapting the same task Client as CLI/Desk.
+"""Bounded dual-era MCP tools, adapting the same task Client as CLI/Desk.
 
 No model sampling, approval tool, device-token export or independent execution.
 An MCP connection closing stops local reads only; phone cancellation is explicit.
 """
+import base64
 import json
 
 import device_protocol as wire
 
 VERSION = "2025-11-25"
+MODERN_VERSION = "2026-07-28"
+SUPPORTED_VERSIONS = [MODERN_VERSION, VERSION]
+META_VERSION = "io.modelcontextprotocol/protocolVersion"
+META_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities"
+META_CLIENT = "io.modelcontextprotocol/clientInfo"
+META_SERVER = "io.modelcontextprotocol/serverInfo"
+SERVER_INFO = {"name": "pocketworld-phone-tasks", "version": "1.1.0"}
+INSTRUCTIONS = ("Phone TaskStore is the only executor. Keep original operation/control identities. "
+                "Native approvals and takeover stay on phone. Answer only a native ordinary question; "
+                "steer only the original active goal. Read current native task/run/allocation and explicitly "
+                "acquire its control lease first. Unknown writes are never replayed.")
+
+
+def protocol_support():
+    """A local support matrix; discovery does not claim phone connectivity or permission."""
+    return {"inboundPhoneTaskServer": {"versions": SUPPORTED_VERSIONS.copy(), "transports": ["stdio", "loopback_streamable_http"],
+                                       "capabilities": ["tools"], "cacheScope": "private", "ttlMs": 0},
+            "outboundAndroidPluginClient": {"httpsStreamableHttp": {"versions": SUPPORTED_VERSIONS.copy()},
+                                             "boundedStdio": {"versions": [VERSION]},
+                                             "scope": "Reviewed plugin capabilities only; independent of the phone task server"},
+            "executionAuthority": "Existing native phone TaskStore, grants and run control", "executionAuthorized": False}
+
+
+class RequestError(ValueError):
+    def __init__(self, message, code=-32602, data=None):
+        super().__init__(message)
+        self.code, self.data = code, data
+
+
+def error_response(request_id, failure):
+    error = {"code": failure.code, "message": str(failure)}
+    if failure.data is not None:
+        error["data"] = failure.data
+    return {"jsonrpc": "2.0", "id": request_id, "error": error}
+
+
+def modern_request(message):
+    if not isinstance(message, dict):
+        return False
+    params = message.get("params")
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    return message.get("method") == "server/discover" or isinstance(meta, dict) and any(
+        key in meta for key in (META_VERSION, META_CAPABILITIES, META_CLIENT))
+
+
+def checked_parameters(message):
+    params = message.get("params", {})
+    if not isinstance(params, dict):
+        raise RequestError("Object parameters required")
+    meta = params.get("_meta", {})
+    if not isinstance(meta, dict):
+        raise RequestError("Object request metadata required")
+    modern = modern_request(message)
+    if modern:
+        version = meta.get(META_VERSION)
+        if not isinstance(version, str) or not isinstance(meta.get(META_CAPABILITIES), dict):
+            raise RequestError("Every modern request requires protocolVersion and object clientCapabilities metadata")
+        if version != MODERN_VERSION:
+            raise RequestError("Unsupported protocol version", -32022, {"supported": SUPPORTED_VERSIONS.copy(), "requested": version})
+        if META_CLIENT in meta:
+            client = meta[META_CLIENT]
+            if not isinstance(client, dict) or not isinstance(client.get("name"), str) or not isinstance(client.get("version"), str):
+                raise RequestError("Client identity must have a string name and version")
+    return modern, {key: value for key, value in params.items() if key != "_meta"}
+
+
+def modern_http_error(message, headers):
+    """Validate mirrored headers before dispatching any original phone action."""
+    request_id = message.get("id")
+    if (message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str)
+            or message.keys() - {"jsonrpc", "id", "method", "params"}
+            or "id" in message and (type(request_id) not in (str, int) or isinstance(request_id, str) and len(request_id) > 128)):
+        return error_response(None, RequestError("Invalid bounded JSON-RPC request", -32600))
+    try:
+        modern, params = checked_parameters(message)
+        if not modern:
+            raise RequestError("Modern HTTP requests require per-request metadata")
+        required = {"MCP-Protocol-Version": message["params"]["_meta"][META_VERSION], "Mcp-Method": message.get("method")}
+        if message.get("method") in {"tools/call", "prompts/get", "resources/read"}:
+            required["Mcp-Name"] = params.get("uri" if message["method"] == "resources/read" else "name")
+        for name, expected in required.items():
+            values = headers.get_all(name, [])
+            if len(values) != 1 or not isinstance(expected, str):
+                raise RequestError("Missing or malformed mirrored MCP header", -32020)
+            value = values[0]
+            if not value or value != value.strip() or any(ord(char) < 32 and char != "\t" or ord(char) > 126 for char in value):
+                raise RequestError("Malformed mirrored MCP header", -32020)
+            if name == "Mcp-Name" and value.startswith("=?base64?") and value.endswith("?="):
+                try:
+                    value = base64.b64decode(value[9:-2], validate=True).decode("utf-8")
+                except (ValueError, UnicodeError):
+                    raise RequestError("Malformed encoded MCP name", -32020) from None
+            if value != expected:
+                raise RequestError("MCP header does not match the request body", -32020)
+        return None
+    except RequestError as failure:
+        return error_response(request_id, failure)
 
 
 def tool_definitions():
@@ -64,20 +162,25 @@ def rpc(client, message, *, fixed_peer=None):
         # a request to cancel the already accepted original phone task.
         return None
     try:
-        if not isinstance(params, dict):
-            raise ValueError("Object parameters required")
-        if method == "initialize":
+        modern, params = checked_parameters(message)
+        if method == "server/discover":
+            if params:
+                raise ValueError("Discovery accepts only request metadata")
+            result = {"supportedVersions": SUPPORTED_VERSIONS.copy(), "capabilities": {"tools": {"listChanged": False}},
+                      "instructions": INSTRUCTIONS, "ttlMs": 0, "cacheScope": "private"}
+        elif method == "initialize" and not modern:
             if not isinstance(params.get("protocolVersion"), str) or not isinstance(params.get("capabilities"), dict) or not isinstance(params.get("clientInfo"), dict):
                 raise ValueError("Initialize requires protocol version, capabilities and clientInfo")
             result = {"protocolVersion": VERSION, "capabilities": {"tools": {"listChanged": False}},
-                      "serverInfo": {"name": "pocketworld-phone-tasks", "version": "1.0.0"},
-                      "instructions": "Phone TaskStore is the only executor. Keep original operation/control identities. Native approvals and takeover stay on phone. Answer only a native ordinary question; steer only the original active goal. Read current native task/run/allocation and explicitly acquire its control lease first. Unknown writes are never replayed."}
-        elif method == "ping":
+                      "serverInfo": SERVER_INFO.copy(), "instructions": INSTRUCTIONS}
+        elif method == "ping" and not modern:
             result = {}
         elif method == "tools/list":
             if params:
                 raise ValueError("This bounded tool list has no cursor")
             result = {"tools": tool_definitions()}
+            if modern:
+                result.update(ttlMs=0, cacheScope="private")
         elif method == "tools/call":
             if set(params) != {"name", "arguments"} or not isinstance(params["arguments"], dict):
                 raise ValueError("Use one named tool with object arguments")
@@ -108,7 +211,11 @@ def rpc(client, message, *, fixed_peer=None):
                 result = {"content": [{"type": "text", "text": "Original phone action unavailable; query the same operation identifier. No automatic retry."}], "isError": True}
         else:
             return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}}
+        if modern:
+            result.update(resultType="complete", _meta={META_SERVER: SERVER_INFO.copy()})
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
+    except RequestError as failure:
+        return error_response(request_id, failure)
     except ValueError as failure:
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": str(failure)}}
 
@@ -123,7 +230,11 @@ def stdio(client, source, destination):
             return  # Framing cannot be safely resumed by treating a suffix as another request.
         try:
             message = wire.parse_json_object(raw)
-            if message.get("method") == "initialize" and state == "new":
+            if modern_request(message):
+                # Modern requests are independent; they neither inherit nor mutate a
+                # legacy initialize session and must carry metadata on every request.
+                response = rpc(client, message)
+            elif message.get("method") == "initialize" and state == "new":
                 response = rpc(client, message)
                 if response is not None and "result" in response:
                     state = "negotiated"

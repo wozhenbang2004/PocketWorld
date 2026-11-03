@@ -39,12 +39,13 @@ public final class ModelCatalog {
     }
     private record OwnerRecord(long revision, Map<Field, Fact<?>> fields,ModelPrice price) { }
     public record View(ModelKey key, long ownerRevision, boolean catalogFresh, long catalogFetchedAtMillis,
-                       Fact<Boolean> listed, ModelFacts facts) {
+                       Fact<Boolean> listed, ModelFacts facts, ModelEndpointSupport endpointSupport) {
         public JSONObject toJson() throws org.json.JSONException {
             return new JSONObject().put("binding", key.binding().json()).put("modelId", key.modelId())
                     .put("ownerRevision", ownerRevision).put("catalogFresh", catalogFresh)
                     .put("catalogFetchedAtMillis", catalogFetchedAtMillis == 0 ? JSONObject.NULL : catalogFetchedAtMillis)
-                    .put("listed", listed.toJson()).put("facts", facts.toJson());
+                    .put("listed", listed.toJson()).put("facts", facts.toJson()).put("endpointSupport",endpointSupport==null?JSONObject.NULL:endpointSupport.toJson())
+                    .put("protocolCompatibility",endpointSupport==null?"unknown":endpointSupport.supports(key.binding().protocol())?"declared_compatible":"declared_incompatible");
         }
     }
     public enum RefreshResult { APPLIED, SUPERSEDED }
@@ -65,6 +66,9 @@ public final class ModelCatalog {
         this.clock = Objects.requireNonNull(clock);
         load();
     }
+
+    Path selectionMetadataPath() { return file.resolveSibling(file.getFileName().toString() + ".model-preferences"); }
+    Path thirdPartyMetadataPath() { return file.resolveSibling(file.getFileName().toString() + ".metadata-suggestions"); }
 
     /** Call from the native host's current config/account/install identity, including every revision. */
     public synchronized void bind(ModelBinding binding) {
@@ -111,6 +115,7 @@ public final class ModelCatalog {
             ModelPrice price=entry.getValue();if(!fetched.models().containsKey(entry.getKey())||!price.binding.equals(ticket.binding)||!price.model.equals(entry.getKey())
                 ||price.source!=ModelPrice.Source.PROVIDER_CATALOG||price.observedAt<ticket.startedAtMillis||price.observedAt>fetched.fetchedAtMillis())throw new IllegalArgumentException("refresh_price_provenance_mismatch");
         }
+        for(var entry:fetched.endpointSupport().entrySet())validateEndpointSupport(ticket.binding,fetched.models(),entry.getKey(),entry.getValue(),ticket.startedAtMillis,fetched.fetchedAtMillis());
         Map<ModelBinding, CatalogHttpClient.Snapshot> next = new LinkedHashMap<>(snapshots); next.put(ticket.binding, fetched);
         save(next, overrides); snapshots = next;
         // A ticket is single-use, including a duplicate completion after owner edits.
@@ -178,7 +183,7 @@ public final class ModelCatalog {
         Fact<Boolean> listed = snapshot == null ? Fact.unknown(Source.UNOBSERVED, key.binding().modelsEndpoint().toASCIIString(), 0, "not_observed")
                 : fresh ? Fact.known(snapshot.models().containsKey(key.modelId()), Source.PROVIDER_CATALOG, key.binding().modelsEndpoint().toASCIIString(), fetchedAt)
                 : Fact.unknown(Source.PROVIDER_CATALOG, key.binding().modelsEndpoint().toASCIIString(), fetchedAt, "catalog_expired");
-        return new View(key, owner == null ? 0 : owner.revision(), fresh, fetchedAt, listed, facts);
+        return new View(key, owner == null ? 0 : owner.revision(), fresh, fetchedAt, listed, facts,fresh?snapshot.endpointSupport().get(key.modelId()):null);
     }
 
     public synchronized List<View> list(ModelBinding binding, long maxCatalogAgeMillis) {
@@ -225,7 +230,9 @@ public final class ModelCatalog {
                 Map<String,ModelPrice> prices=new LinkedHashMap<>();JSONArray storedPrices=row.optJSONArray("prices");
                 for(int nPrice=0;storedPrices!=null&&nPrice<storedPrices.length();nPrice++){ModelPrice price=ModelPrice.fromJson(storedPrices.getJSONObject(nPrice));
                     if(!price.binding.equals(binding)||price.source!=ModelPrice.Source.PROVIDER_CATALOG||price.observedAt>fetched||!models.containsKey(price.model)||prices.put(price.model,price)!=null)throw new IllegalArgumentException();}
-                if (loadedSnapshots.put(binding, new CatalogHttpClient.Snapshot(binding, fetched, models,prices)) != null) throw new IllegalArgumentException();
+                Map<String,ModelEndpointSupport> endpointSupport=new LinkedHashMap<>();JSONObject storedEndpoints=row.optJSONObject("endpointSupport");
+                if(storedEndpoints!=null){java.util.Iterator<String> ids=storedEndpoints.keys();while(ids.hasNext()){String id=ids.next();ModelEndpointSupport value=ModelEndpointSupport.fromJson(storedEndpoints.getJSONObject(id));validateEndpointSupport(binding,models,id,value,1,fetched);endpointSupport.put(id,value);}}
+                if (loadedSnapshots.put(binding, new CatalogHttpClient.Snapshot(binding, fetched, models,prices,endpointSupport)) != null) throw new IllegalArgumentException();
             }
             Map<ModelKey, OwnerRecord> loadedOverrides = new LinkedHashMap<>(); JSONArray owners = root.getJSONArray("overrides");
             for (int n = 0; n < owners.length(); n++) {
@@ -243,6 +250,11 @@ public final class ModelCatalog {
         ModelPrice price=ModelPrice.fromJson(saved);if(price.source!=ModelPrice.Source.OWNER_REVIEWED||!price.binding.equals(key.binding())||!price.model.equals(key.modelId()))throw new SecurityException("owner_price_cache_identity_mismatch");return price;
     }
 
+    private static void validateEndpointSupport(ModelBinding binding,Map<String,ModelFacts> models,String id,ModelEndpointSupport declared,long earliest,long latest){
+        if(!models.containsKey(id)||declared.observedAtMillis()<earliest||declared.observedAtMillis()>latest
+                ||!declared.sourceRef().startsWith(binding.modelsEndpoint().toASCIIString()+"#page=")||!declared.sourceRef().endsWith("/supported_endpoints"))throw new IllegalArgumentException("refresh_endpoint_provenance_mismatch");
+    }
+
     private void save(Map<ModelBinding, CatalogHttpClient.Snapshot> snapshots, Map<ModelKey, OwnerRecord> owners) throws IOException {
         final byte[] bytes;
         try {
@@ -251,7 +263,8 @@ public final class ModelCatalog {
                 JSONArray models = new JSONArray();
                 for (Map.Entry<String, ModelFacts> row : snapshot.models().entrySet()) models.put(new JSONObject().put("id", row.getKey()).put("facts", row.getValue().toJson()));
                 JSONArray prices=new JSONArray();for(ModelPrice price:snapshot.prices().values())prices.put(price.toJson());
-                saved.put(new JSONObject().put("binding", snapshot.binding().json()).put("fetchedAtMillis", snapshot.fetchedAtMillis()).put("models", models).put("prices",prices));
+                JSONObject endpoints=new JSONObject();for(var entry:snapshot.endpointSupport().entrySet())endpoints.put(entry.getKey(),entry.getValue().toJson());
+                saved.put(new JSONObject().put("binding", snapshot.binding().json()).put("fetchedAtMillis", snapshot.fetchedAtMillis()).put("models", models).put("prices",prices).put("endpointSupport",endpoints));
             }
             for (Map.Entry<ModelKey, OwnerRecord> row : owners.entrySet()) overrides.put(new JSONObject().put("binding", row.getKey().binding().json())
                     .put("modelId", row.getKey().modelId()).put("revision", row.getValue().revision()).put("fields", ModelFacts.fieldsJson(row.getValue().fields())).put("price",row.getValue().price()==null?JSONObject.NULL:row.getValue().price().toJson()));

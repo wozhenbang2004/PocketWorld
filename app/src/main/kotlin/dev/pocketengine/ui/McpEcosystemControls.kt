@@ -7,7 +7,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -254,6 +253,6 @@ internal fun McpTaskRecoveryControls(snapshot: JSONObject, responses: Map<String
         receipt.optJSONObject("outputCapture")?.let { McpInstallCaption("长结果保存状态：${it.optString("status", it.optString("reason", "请查看原任务来源回执"))}") }
     }
     selected?.let { frozen ->
-        AlertDialog(onDismissRequest = { selected = null }, containerColor = Color.White, title = { Text("取消这个远端执行？") }, text = { Text("只向这个原任务发送一次取消请求。服务可能已经产生效果，仍需随后查询终态。\n原任务：${frozen.optString("taskId")}") }, confirmButton = { TextButton(onClick = { issue("cancelMcpTask", frozen); selected = null }, enabled = !busy) { Text("请求取消") } }, dismissButton = { TextButton(onClick = { selected = null }) { Text("返回") } })
+        AlertDialog(onDismissRequest = { selected = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("取消这个远端执行？") }, text = { Text("只向这个原任务发送一次取消请求。服务可能已经产生效果，仍需随后查询终态。\n原任务：${frozen.optString("taskId")}") }, confirmButton = { TextButton(onClick = { issue("cancelMcpTask", frozen); selected = null }, enabled = !busy) { Text("请求取消") } }, dismissButton = { TextButton(onClick = { selected = null }) { Text("返回") } })
     }
 }

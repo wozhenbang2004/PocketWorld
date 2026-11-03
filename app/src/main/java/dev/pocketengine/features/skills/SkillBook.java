@@ -501,6 +501,10 @@ public final class SkillBook {
         String[] owner=scope(scope);JSONObject files=SkillArchive.read(archive);
         synchronized(lock){return inspectFiles(owner,files,id,now);}
     }
+    public JSONObject inspectDocument(JSONObject scope,InputStream document,String id,long now)throws Exception {
+        String[] owner=scope(scope);JSONObject files=SkillDocument.read(document);
+        synchronized(lock){return inspectFiles(owner,files,id,now).put("singleDocumentOnly",true);}
+    }
     private JSONObject inspectFiles(String[] owner,JSONObject files,String id,long now)throws Exception {
         JSONObject record=id==null||id.isEmpty()?null:required(state().getJSONArray("skills"),owner,id);
             JSONObject metadata=SkillManifest.parse(files.getString("SKILL.md"));String digest=digest(files);
@@ -522,12 +526,18 @@ public final class SkillBook {
     }
     /** Re-importing an exported older package creates a new disabled revision, never restores approval. */
     public JSONObject importPackage(JSONObject scope,InputStream archive,JSONObject options,long now)throws Exception {
-        String[] owner=scope(scope);JSONObject input=new JSONObject(options.toString()),files=SkillArchive.read(archive);
+        return importFiles(scope,SkillArchive.read(archive),options,now);
+    }
+    public JSONObject importDocument(JSONObject scope,InputStream document,JSONObject options,long now)throws Exception {
+        return importFiles(scope,SkillDocument.read(document),options,now);
+    }
+    private JSONObject importFiles(JSONObject scope,JSONObject files,JSONObject options,long now)throws Exception {
+        String[] owner=scope(scope);JSONObject input=new JSONObject(options.toString());
         if(!digest(files).equals(input.optString("inspectedDigest")))throw new SecurityException("技能包已改变，请重新检查后导入");
         synchronized(lock){String id=input.optString("id");if(!id.isEmpty()){
                 JSONObject current=required(state().getJSONArray("skills"),owner,id);
                 if(input.optInt("revision",-1)!=current.getInt("revision")||!current.getString("digest").equals(input.optString("expectedCurrentDigest")))throw new IllegalStateException("当前技能版本已改变，请重新检查");
-                // ZIP carries content, not host policy. Omission must not relax the existing restrictions.
+                // Imported content does not carry host policy. Omission must not relax existing restrictions.
                 if(!input.has("requiredCapabilities"))input.put("requiredCapabilities",new JSONArray(current.getJSONArray("requiredCapabilities").toString()));
                 if(!input.has("expiresAt"))input.put("expiresAt",current.get("expiresAt"));
             }
@@ -988,13 +998,20 @@ public final class SkillBook {
     }
 
     /** Native package ownership cleanup only. Exact current content and approval-generation CAS share this original lock. */
-    public JSONObject deletePackageReviewed(JSONObject scope,String id,int revision,String digest,long executionGeneration)throws Exception {
+    public JSONObject deletePackageReviewed(JSONObject scope,String id,int revision,String digest,long executionGeneration,dev.pocketengine.store.TaskStore.SkillRemovalGuard guard)throws Exception {
         synchronized(lock){JSONObject record=required(state().getJSONArray("skills"),scope(scope),id);
-            if(record.has("origin")||record.getInt("revision")!=revision||!record.getString("digest").equals(digest)||record.optLong("executionGeneration",0)!=executionGeneration)throw new SecurityException("技能已被更新或审批改变，包卸载未删除此技能");
-            delete(scope,id);return new JSONObject().put("deleted",true).put("id",id).put("revision",revision).put("digest",digest);
+            if(guard==null)throw new SecurityException("卸载必须经过原TaskStore使用与资源门禁");
+            JSONObject expected=new JSONObject().put("id",id).put("revision",revision).put("digest",digest).put("executionGeneration",executionGeneration);
+            SkillRemovalPolicy.requireRemovable(record,expected);SkillRemovalPolicy.requireSame(expected,guard.expected());
+            // SQL was checked outside Book. The native HostPort claims the original operation
+            // before its final package snapshot: an earlier claim blocks deletion, and a later
+            // snapshot sees this disabled generation. Re-enabling/updating invalidates this CAS.
+            // Do not hold Book across backend.submit or re-enter TaskStore from this monitor.
+            guard.enterBookDeletion(record);delete(scope,id);return new JSONObject().put("deleted",true).put("id",id).put("revision",revision).put("digest",digest).put("originalReceiptsRetained",true);
         }
     }
-    public void delete(JSONObject scope,String id)throws Exception {
+    // Internal registry cleanup; native callers use deletePackageReviewed with the original guard.
+    void delete(JSONObject scope,String id)throws Exception {
         synchronized(lock){JSONObject state=state();JSONObject record=required(state.getJSONArray("skills"),scope(scope),id);remove(state.getJSONArray("skills"),id);
             if(record.has("origin")){cleanups(state).put(cleanupReceipt(id,0,scope(scope)));save(state);
                 if(retryCleanups(state,scope(scope))>0)throw new IOException("技能已从登记移除，但来源内容清理未完成；请恢复存储后重试经验对账");}
