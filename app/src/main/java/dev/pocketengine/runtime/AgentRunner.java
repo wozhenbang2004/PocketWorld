@@ -118,6 +118,16 @@ public final class AgentRunner {
 
     public RunOutcome run(String taskId, String goal, ModelConfig config, RunControl control,
                           EventSink sink, RunJournal journal) {
+        return runOriginal(taskId,goal,config,control,sink,journal,null);
+    }
+    /** A single typed foreground owner choice follows the same capability port, journal and cleanup.
+     * No model response, recovered JSON or text instruction can enter this route. */
+    public RunOutcome runOwnerSkill(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,
+                                   dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation selected) {
+        return runOriginal(taskId,goal,config,control,sink,journal,java.util.Objects.requireNonNull(selected));
+    }
+    private RunOutcome runOriginal(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,
+                                   dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation ownerSkill) {
         RunOutcome outcome=null;boolean endUnavailable=false,cleanupPending=false;
         java.util.List<String> ownedServiceOperations=new java.util.ArrayList<>(retainedServiceOperations);
         developmentYielded=false;
@@ -127,11 +137,12 @@ public final class AgentRunner {
         boolean deferred=capabilities!=null&&sink!=null;
         EventSink admitted=deferred?event->{if(!"result".equals(event.optString("type")))sink.emit(event);}:sink;
         try{
-            outcome=runBound(taskId,goal,config,control,admitted,journal,ownedServiceOperations);
+            outcome=ownerSkill==null?runBound(taskId,goal,config,control,admitted,journal,ownedServiceOperations):runOwnerSkillBound(taskId,goal,config,control,admitted,journal,ownerSkill);
             if(!developmentYielded&&capabilities!=null&&control!=null&&!control.isCancelled()&&!control.isPaused())try{capabilities.endRun(control);}
                 catch(dev.pocketengine.features.local.project.ProjectServiceDrainPending pending){serviceDrainObserved=pending;}
                 catch(Exception unavailable){endUnavailable=true;}
         }finally{
+            if(ownerSkill!=null)ownerSkill.close();
             if(!developmentYielded&&capabilities!=null)try{capabilities.close();}
                 catch(dev.pocketengine.features.local.project.ProjectServiceDrainPending pending){serviceDrainObserved=pending;}
                 catch(RuntimeException unavailable){cleanupPending=true;}
@@ -184,6 +195,69 @@ public final class AgentRunner {
     private static int executionStepCeiling(ModelConfig config,RunJournal journal)throws Exception {
         int ceiling=journal==null?config.maxSteps:journal.executionStepCeiling(config.maxSteps);
         if(ceiling<0||ceiling>400)throw new SecurityException("原任务步数范围无效");return ceiling;
+    }
+
+    private RunOutcome runOwnerSkillBound(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,
+                                         dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation selected) {
+        JSONObject evidence=new JSONObject(),confirmedReceipt=null;String operation=null,recordedOperation=null;boolean dispatchEntered=false;int steps=0;
+        try{
+            if(capabilities==null||journal==null||control==null||config==null||sink==null)throw new SecurityException("主人技能请求缺少原能力执行链");
+            selected.requireRun(taskId,control);JSONObject saved=restore(journal);Object used=saved.opt("steps");
+            if(used!=null&&(!(used instanceof Number)||((Number)used).doubleValue()!=((Number)used).intValue()||((Number)used).intValue()<0))throw new JournalFailure();
+            steps=used==null?0:((Number)used).intValue();
+            JSONArray stored=saved.optJSONArray("messages");if(saved.has("messages")&&stored==null)throw new JournalFailure();
+            JSONArray history=stored==null||stored.length()==0?new JSONArray().put(new JSONObject().put("role","system").put("content",SYSTEM)).put(new JSONObject().put("role","user").put("content",clean(goal,config))):durableHistory(stored,config);
+            RunContextBudget budget=new RunContextBudget(ContextBudgetPolicy.forRun(contextBudgets,control));
+            if(steps>=executionStepCeiling(config,journal))return finish(taskId,"needs_confirmation","原任务操作预算已用完，请核对原范围；主人选择没有派发。",evidence,steps,config,sink);
+            capabilities.beginRun(clean(goal,config),control);lifecycleBegun=true;
+            capabilities.prepareTurn(clean(goal,config),0,steps,control);
+            JSONObject arguments=selected.input();String name="skills_execute";
+            if(!capabilities.supports(name)||!capabilities.sideEffecting(name))throw new SecurityException("原任务没有技能执行能力");
+            capabilities.validate(name,arguments);selected.requireRun(taskId,control);
+            JSONObject refused=capabilities.beforeTool(name,safeJson(arguments,config,false),control);
+            if(refused!=null){if(refused.optBoolean("ok",true)||!Boolean.FALSE.equals(refused.opt("accepted"))||refused.optString("code").isEmpty())throw new SecurityException("前置策略没有给出明确未派发回执");return finish(taskId,"awaiting_user",refused.optString("message","原任务当前不能执行所选技能，请核对后重新选择。"),refused,steps,config,sink);}
+            selected.requireRun(taskId,control);long pause=control.pauseRevision();steps++;
+            JSONObject chosen=new JSONObject().put("kind","owner_skill_selection").put("selection",selected.view()).put("executionAuthorized",false);
+            appendObservation(history,chosen,config,budget);checkpoint(taskId,journal,history,steps,chosen,config,sink,budget);
+            operation=begin(journal,name,arguments,config);control.check();
+            if(control.isPaused()||pause!=control.pauseRevision())throw new UncertainOperation();
+            selected.requireRun(taskId,control);emit(taskId,"tool","running","正在为主人所选脚本准备原任务审阅，尚未批准执行。",name,null,config,sink);
+            dispatchEntered=true;JSONObject receipt=capabilities.execute(name,new JSONObject(arguments.toString()).put("_hostOperationId",operation),control);
+            if(receipt==null)throw new UncertainOperation();completeOperation(journal,operation,receipt,config);recordedOperation=operation;operation=null;confirmedReceipt=new JSONObject(receipt.toString());
+            evidence=new JSONObject(receipt.toString()).put("ownerSelectedSkill",true).put("businessVerified",false).put("automaticReplayAllowed",false).put("operationId",recordedOperation);
+            appendObservation(history,evidence,config,budget);checkpoint(taskId,journal,history,steps,evidence,config,sink,budget);
+            capabilities.afterTool(name,arguments,receipt,control);
+            boolean unknown=receipt.optString("status").equals("unknown")||receipt.optString("code").contains("unknown")||receipt.has("accepted")&&receipt.isNull("accepted");
+            if(unknown)evidence.put("requiresReconciliation",true);
+            String summary=unknown?"原脚本效果仍待核对，请读取原操作回执；不会重跑。":receipt.optBoolean("ok")?"主人所选脚本已返回执行回执，请在原任务核对实际成果；任务目标尚未确认完成。":receipt.optString("message","本次脚本未完成，请核对原任务回执和执行准备，再明确选择下一步。");
+            emit(taskId,"tool",receipt.optBoolean("ok")?"completed":"awaiting_user",summary,name,receipt,config,sink,recordedOperation);
+            return finish(taskId,receipt.optBoolean("ok")&&!receipt.optBoolean("requiresPause")?"needs_confirmation":"awaiting_user",summary,evidence,steps,config,sink);
+        }catch(Exception failure){
+            if(recordedOperation!=null){
+                try{if(confirmedReceipt!=null)evidence=new JSONObject(confirmedReceipt.toString());evidence.put("operationId",recordedOperation).put("ownerSelectedSkill",true).put("receiptRecorded",true).put("postProcessingIncomplete",true).put("businessVerified",false).put("automaticReplayAllowed",false);}catch(Exception retained){/* The journal already owns the original receipt. */}
+                return finishOwnerSkillFailure(taskId,control!=null&&control.isCancelled()?"cancelled":"awaiting_user","原脚本已取得并保存回执，但历史或后续处理未完成。请在原任务核对这一次操作和成果；不会重新执行。",evidence,steps,config,sink);
+            }
+            if(operation!=null){try{evidence.put("operationId",operation).put("status",dispatchEntered?"unknown":"rejected").put("accepted",dispatchEntered?JSONObject.NULL:false).put("nativeDispatchEntered",dispatchEntered).put("requiresReconciliation",dispatchEntered).put("automaticReplayAllowed",false);completeOperation(journal,operation,evidence,config);}catch(Exception retained){/* The original prepared/native receipt stays query-only. */}}
+            String message=operation!=null?dispatchEntered?"所选脚本的原操作需要核对；保留既有回执，不会自动重试。":"所选脚本没有进入派发；请在原任务核对已登记的操作，不会自动重试。":"主人所选技能或原任务条件已变化，尚未派发；请核对后重新选择。";
+            return finishOwnerSkillFailure(taskId,control!=null&&control.isCancelled()?"cancelled":"awaiting_user",message,evidence,steps,config,sink);
+        }
+    }
+
+    /** Finalization failure must not erase which original native operation needs checking. */
+    private static RunOutcome finishOwnerSkillFailure(String taskId,String status,String summary,JSONObject evidence,int steps,
+                                                      ModelConfig config,EventSink sink) {
+        try{return finish(taskId,status,summary,evidence,steps,config,sink);}
+        catch(Exception failedToRecord){
+            JSONObject retained=new JSONObject();
+            try{retained=safeJson(evidence,config,true);}catch(Exception unavailable){
+                // Keep only native receipt facts if sanitizing the full receipt is unavailable.
+                for(String key:new String[]{"operationId","status","accepted","nativeDispatchEntered","requiresReconciliation","receiptRecorded","postProcessingIncomplete","ownerSelectedSkill"})
+                    try{if(evidence.has(key))retained.put(key,evidence.get(key));}catch(Exception ignored){}
+            }
+            try{retained.put("steps",steps).put("verification","user_required").put("automaticallyVerified",false)
+                    .put("automaticReplayAllowed",false).put("ownerResultFinalizationIncomplete",true);}catch(Exception ignored){}
+            return new RunOutcome(status,summary,retained);
+        }
     }
 
     private RunOutcome runBound(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,java.util.List<String> ownedServiceOperations) {
@@ -1060,6 +1134,10 @@ public final class AgentRunner {
     private static boolean currentReferenceReceipt(String name,String body,JSONObject validation){
         try{
             if(validation==null)return false;JSONObject result=new JSONObject(body);
+            if(name.startsWith("skills_")&&validation.has("skillScopeFingerprint")){
+                String scope=validation.getString("skillScopeFingerprint");
+                if(!scope.matches("[a-f0-9]{64}")||!scope.equals(result.optString("skillScopeFingerprint")))return false;
+            }
             if(name.equals("skills_read"))return currentReference(result,validation.optJSONArray("skills"),true);
             JSONArray rows=result.optJSONArray(name.startsWith("memory_")?"records":"skills"),live=validation.optJSONArray(name.startsWith("memory_")?"memory":"skills");
             if(rows==null||live==null)return false;
@@ -1071,7 +1149,7 @@ public final class AgentRunner {
     }
     private static boolean currentReference(JSONObject row,JSONArray live,boolean skill)throws Exception{
         if(live==null||row.optString("id").isEmpty()||!(row.opt("revision") instanceof Number)||row.getLong("revision")<1)return false;
-        for(int i=0;i<live.length();i++){JSONObject current=live.getJSONObject(i);if(row.getString("id").equals(current.optString("id"))&&row.getLong("revision")==current.optLong("revision")&&(!skill||!row.optString("digest").isEmpty()&&row.getString("digest").equals(current.optString("digest"))))return true;}return false;
+        for(int i=0;i<live.length();i++){JSONObject current=live.getJSONObject(i);if(row.getString("id").equals(current.optString("id"))&&row.getLong("revision")==current.optLong("revision")&&(!skill||!row.optString("digest").isEmpty()&&row.getString("digest").equals(current.optString("digest"))&&row.optLong("executionGeneration",0)==current.optLong("executionGeneration",0)&&row.optString("skillScopeFingerprint").equals(current.optString("skillScopeFingerprint"))))return true;}return false;
     }
 
     /** These host-generated opaque identities are not prose. Redacting arbitrary substrings would

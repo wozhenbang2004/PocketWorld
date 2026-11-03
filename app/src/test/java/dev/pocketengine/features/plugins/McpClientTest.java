@@ -33,7 +33,7 @@ public class McpClientTest {
             assertEquals("write",tool.getString("effect"));assertTrue(tool.getJSONObject("schema").getJSONObject("properties").getJSONObject("region").has("description"));
             JSONObject result=client.call(tool,new JSONObject().put("region","你好\n東京"),new RunControl());
             assertTrue(result.getBoolean("isError"));assertTrue(result.getBoolean("untrusted"));assertTrue(result.getBoolean("instructionsAreData"));
-            assertFalse(result.toString().contains("test-secret"));assertFalse(result.toString().contains("do-not-forward"));assertFalse(result.getJSONObject("structuredContent").has("token"));
+            assertFalse(result.toString().contains("test-secret"));assertFalse(result.toString().contains("do-not-forward"));assertEquals("[凭据已隐藏]",result.getJSONObject("structuredContent").getString("token"));
             assertEquals(1,result.getJSONArray("omittedContent").length());assertEquals(1,f.count("tools/call"));assertEquals(0,f.count("initialize"));
             for(McpFixture.Exchange e:f.received){
                 assertEquals(McpData.VERSION,e.requestHeaders.get("mcp-protocol-version"));assertEquals(e.method(),e.requestHeaders.get("mcp-method"));
@@ -42,6 +42,44 @@ public class McpClientTest {
                 assertEquals(0,meta.getJSONObject("io.modelcontextprotocol/clientCapabilities").length());
                 if(e.method().equals("tools/call")){assertEquals("lookup",e.requestHeaders.get("mcp-name"));assertEquals(McpHeaders.encode("你好\n東京"),e.requestHeaders.get("mcp-param-region"));}
             }
+        }
+    }
+    @Test public void numericCredentialEchoAndAmbiguousCredentialValuesAreMaskedWithoutDroppingContainers()throws Exception {
+        try(McpFixture f=new McpFixture();McpClient client=new McpClient(f.endpoint(),"713531137")){
+            f.result=new JSONObject().put("resultType","complete").put("content",new JSONArray())
+                .put("structuredContent",new JSONObject().put("token",713531137L).put("apiKey","Bearer 713531137")
+                    .put("authorization",new JSONObject().put("status","owner_reviewed").put("token",new JSONArray().put("lexeme").put(17))).put("private",true).put("tokenCount",17));
+            JSONObject result=client.call(declaration(client,client.discover(new RunControl())),new JSONObject(),new RunControl());
+            JSONObject data=result.getJSONObject("structuredContent");assertEquals("[凭据已隐藏]",data.getString("token"));assertEquals("[凭据已隐藏]",data.getString("apiKey"));
+            assertEquals("[凭据已隐藏]",data.getJSONObject("authorization").getString("status"));assertEquals("[凭据已隐藏]",data.getJSONObject("authorization").getJSONArray("token").getString(0));
+            assertEquals("[凭据已隐藏]",data.getJSONObject("authorization").getJSONArray("token").getString(1));assertEquals(17,data.getInt("tokenCount"));assertTrue(data.getBoolean("private"));
+            assertFalse(result.toString().contains("713531137"));assertFalse(result.getJSONObject("outputProjection").getBoolean("allSecretsDetected"));assertEquals(1,f.count("tools/call"));
+        }
+    }
+    @Test public void unrelatedCredentialsAreMaskedOnRealWireWithoutChangingReviewedSchemaOrBusinessKeys()throws Exception {
+        try(McpFixture f=new McpFixture();McpClient client=new McpClient(f.endpoint(),"test-secret")){
+            JSONObject schema=new JSONObject().put("type","object").put("properties",new JSONObject().put("apiKey",new JSONObject().put("type","string").put("description","Bearer EXAMPLE_IN_SCHEMA"))).put("additionalProperties",false);
+            f.definitions=new JSONArray().put(McpFixture.tool("lookup",schema));
+            JSONObject business=new JSONObject().put("apiKey","OTHER_SYNTHETIC_VALUE").put("rows",new JSONArray().put(new JSONObject().put("API_KEY","OTHER_NESTED_VALUE").put("count",7)))
+                    .put("outputProjection",new JSONObject().put("policy","remote business data")).put("private",true);
+            f.result=new JSONObject().put("resultType","complete").put("content",new JSONArray().put(new JSONObject().put("type","text").put("text","Authorization: Bearer OTHER_BEARER_VALUE")))
+                    .put("structuredContent",business).put("outputProjection",new JSONObject().put("allSecretsDetected",true));
+            JSONArray definitions=client.discover(new RunControl());JSONObject reviewed=declaration(client,definitions);
+            assertEquals(McpData.digest(f.definitions.getJSONObject(0)),reviewed.getString("descriptorDigest"));assertEquals(schema.toString(),reviewed.getJSONObject("schema").toString());
+            JSONObject result=client.call(reviewed,new JSONObject(),new RunControl()),data=result.getJSONObject("structuredContent");
+            assertEquals("[凭据已隐藏]",data.getString("apiKey"));assertEquals("[凭据已隐藏]",data.getJSONArray("rows").getJSONObject(0).getString("API_KEY"));assertEquals(7,data.getJSONArray("rows").getJSONObject(0).getInt("count"));
+            assertEquals("remote business data",data.getJSONObject("outputProjection").getString("policy"));assertFalse(result.getJSONObject("outputProjection").getBoolean("allSecretsDetected"));
+            for(String secret:new String[]{"OTHER_SYNTHETIC_VALUE","OTHER_NESTED_VALUE","OTHER_BEARER_VALUE"})assertFalse(result.toString().contains(secret));
+            assertTrue(data.getBoolean("private"));assertEquals(business.length(),data.length());assertEquals(1,f.count("tools/call"));
+        }
+    }
+    @Test public void credentialRedactionKeyCollisionCannotSilentlyReplaceReturnedBusinessData()throws Exception {
+        try(McpFixture f=new McpFixture();McpClient client=new McpClient(f.endpoint(),"test-secret")){
+            f.result=new JSONObject().put("resultType","complete").put("content",new JSONArray())
+                .put("structuredContent",new JSONObject().put("test-secret","first business value").put("[凭据已隐藏]","second business value"));
+            JSONObject tool=declaration(client,client.discover(new RunControl()));
+            McpClient.CallFailure failure=assertThrows(McpClient.CallFailure.class,()->client.call(tool,new JSONObject(),new RunControl()));
+            assertTrue(failure.dispatched);assertFalse(failure.getMessage().contains("test-secret"));assertEquals(1,f.count("tools/call"));
         }
     }
     @Test public void legacyRequiresInitializeThenInitializedAndSessionHeaders()throws Exception {
@@ -319,15 +357,31 @@ public class McpClientTest {
             JSONObject failure=client.query(tool,"fixture-remote-task",new RunControl());assertTrue(failure.getJSONObject("error").getBoolean("dataOmitted"));assertFalse(failure.toString().contains("test-secret"));assertEquals(0,f.count("tasks/update"));assertEquals(0,f.count("sampling/createMessage"));
         }
     }
-    @Test public void taskRestartCanQueryKnownHandleWithoutReplayingToolAndDescriptorReplacementBlocksQuery()throws Exception {
+    @Test public void taskRestartQueriesKnownHandleWithoutRediscoveryOrReplayAndRejectsReplacedAuthority()throws Exception {
         try(McpFixture f=new McpFixture()){
             f.tasksSupport=true;JSONObject saved;
             try(McpClient first=new McpClient(f.endpoint(),"")){saved=declaration(first,first.discover(new RunControl()));f.result=task("working",true);first.start(saved,new JSONObject(),new RunControl());}
+            int toolLists=f.count("tools/list");
             f.handler=e->{if(e.method().equals("tasks/get"))e.json(task("working",false));else f.standard(e);};
             try(McpClient restored=new McpClient(f.endpoint(),"")){
-                restored.discover(new RunControl());assertEquals("working",restored.query(saved,"fixture-remote-task",new RunControl()).getString("status"));assertEquals(1,f.count("tools/call"));
-                f.definitions.getJSONObject(0).put("description","replacement");try{restored.query(saved,"fixture-remote-task",new RunControl());fail();}catch(Exception expected){}
-                assertEquals(1,f.count("tasks/get"));assertEquals(1,f.count("tools/call"));
+                restored.connectForTask(saved,new RunControl());assertEquals("working",restored.query(saved,"fixture-remote-task",new RunControl()).getString("status"));
+                f.definitions.getJSONObject(0).put("description","replacement")
+                        .put("inputSchema",new JSONObject().put("type","object").put("additionalProperties",false));
+                assertNotEquals(saved.getString("descriptorDigest"),McpData.digest(f.definitions.getJSONObject(0)));
+                assertEquals("working",restored.query(saved,"fixture-remote-task",new RunControl()).getString("status"));
+                assertEquals(2,f.count("tasks/get"));assertEquals(toolLists,f.count("tools/list"));assertEquals(1,f.count("tools/call"));
+                restored.close();int requests=f.received.size();
+                assertThrows(Exception.class,()->restored.query(saved,"fixture-remote-task",new RunControl()));assertEquals(requests,f.received.size());
+            }
+            // A known task survives tool-schema changes, but never a different server or lost
+            // Tasks negotiation. Once invalidated, restoring the peer cannot revive this client.
+            for(boolean replaceServer:new boolean[]{true,false})try(McpClient restored=new McpClient(f.endpoint(),"")){
+                restored.connectForTask(saved,new RunControl());
+                if(replaceServer)f.serverVersion="replacement";else f.tasksSupport=false;
+                assertThrows(Exception.class,()->restored.query(saved,"fixture-remote-task",new RunControl()));assertFalse(restored.usable());
+                f.serverVersion="1";f.tasksSupport=true;int requests=f.received.size();
+                assertThrows(Exception.class,()->restored.query(saved,"fixture-remote-task",new RunControl()));assertEquals(requests,f.received.size());
+                assertEquals(2,f.count("tasks/get"));assertEquals(toolLists,f.count("tools/list"));assertEquals(1,f.count("tools/call"));
             }
         }
     }

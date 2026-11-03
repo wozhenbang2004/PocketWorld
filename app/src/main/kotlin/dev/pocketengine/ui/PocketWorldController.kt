@@ -725,6 +725,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
     fun reviewOriginalTaskWorkProfile(page: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Page, id: String, run: String, epoch: Int, control: dev.pocketengine.core.RunControl): dev.pocketengine.features.controlplane.NativeWorkProfileHost.Review = page.reviewForTask(app.tasks, id, run, epoch, control)
+    fun reviewOriginalTaskWorkProfileProject(page: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Page, id: String, run: String, epoch: Int, control: dev.pocketengine.core.RunControl, project: dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection): dev.pocketengine.features.controlplane.NativeWorkProfileHost.Review = page.reviewForTask(app.tasks, id, run, epoch, control, project)
     fun originalTaskWorkProfileSnapshot(id: String, run: String, epoch: Int): JSONObject = if (run.isEmpty()) app.tasks.pendingWorkProfileTaskSnapshot(id) else app.tasks.workProfileRunSnapshot(id, run, epoch)
     fun continueOwnerWorkProfile(id: String, selected: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection, control: dev.pocketengine.core.RunControl, complete: (Result<JSONObject>) -> Unit) {
         check(!closed)
@@ -846,6 +847,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (domain == "mcp") listOf("discoverMcp", "discoverMcpAuthorized").forEach { discovery -> state.ownerResponses(domain)[discovery]?.optJSONObject("result")?.optString("previewId")?.takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardMcpPreview", JSONObject().put("previewId", it)) } }
         if (domain == "mcp") state.ownerResponses(domain)["prepareLocalMcpDiscovery"]?.optJSONObject("result")?.optString("reviewId")?.takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardLocalMcpReview", JSONObject().put("reviewId", it)) }
         if (domain == "mcp") state.ownerResponses(domain)["prepareLocalMcpInstall"]?.optJSONObject("result")?.optString("reviewId")?.takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardLocalMcpInstallReview", JSONObject().put("reviewId", it)) }
+        if (domain == "mcp") state.ownerResponses(domain)["getMcpResource"]?.optJSONObject("result")?.optString("snapshotId")?.takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardMcpResourceSnapshot", JSONObject().put("snapshotId", it)) }
         if (configPick?.domain == domain) { configPick?.call?.close(); configPick = null }
         state = state.copy(ownerSnapshots = if (domain == "memoryReview") state.ownerSnapshots - domain else state.ownerSnapshots, ownerPending = state.ownerPending.filterNot { it.startsWith("$domain.") }.toSet(), ownerResponses = state.ownerResponses - domain, ownerErrors = state.ownerErrors - domain, groupOwnerReceipts = if (domain == "groups") emptyMap() else state.groupOwnerReceipts, ownerSource = null)
     }
@@ -856,6 +858,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } catch (_: Exception) { /* An expired/already consumed preview or login needs no retry. */ } } } catch (_: java.util.concurrent.RejectedExecutionException) { }
     }
     fun requestOwnerDomain(domain: String, command: String, payload: JSONObject = JSONObject()): String {
+        if (domain == "mcp" && command == "discardMcpResourceSnapshot") {
+            cleanOwnerResult(domain, command, payload)
+            return "native-resource-window-closed"
+        }
+        if (domain == "mcp" && command == "cancel") {
+            val operation = payload.optString("operationId")
+            ownerRequests.values.filter { it.domain == "mcp" && it.payload.optString("_operationId").isNotBlank() && it.payload.optString("_operationId") == operation }.forEach { cancelOwnerControl(it); it.call.cancel() }
+        }
         if (domain == "groups" && command == "remoteInputs.leave") {
             groupOwnerWindow?.let { app.groupOwnerWorkflows.leaveRemoteInputs(it, payload.optString("pageId")) }
             return "native-remote-input-page-closed"
@@ -889,7 +899,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val request = OwnerRequest(UUID.randomUUID().toString(), domain, command, JSONObject(payload.toString()), ownerEpochs[domain] ?: 0, dev.pocketengine.features.proxy.accounts.GatewayCall(60000))
         ownerRequests[key] = request
         state = state.copy(ownerPending = state.ownerPending + key, ownerErrors = state.ownerErrors - domain)
-        val worker = if (command in setOf("cancel", "cancelLogin", "logout", "stopLearningJob", "cancelLocalMcpDiscovery", "discardLocalMcpReview", "discardLocalMcpInstallReview") || command == "setEnabled" && !payload.optBoolean("enabled")) controls else io
+        val worker = if (command in setOf("cancel", "cancelLogin", "logout", "stopLearningJob", "cancelLocalMcpDiscovery", "cancelMcpTask", "discardLocalMcpReview", "discardLocalMcpInstallReview") || command == "setEnabled" && !payload.optBoolean("enabled")) controls else io
         try { worker.execute {
             var result: JSONObject? = null
             var snapshot: JSONObject? = null
@@ -899,7 +909,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 result = when (domain) {
                     "taskMemory" -> app.nativeOwnerWorkflows.taskMemory(command, request.payload, request.control)
                     "memoryReview" -> memoryReviewCommand(capturedMemoryScope, command, request.payload, request.control)
-                    "mcp" -> app.nativeOwnerWorkflows.mcp(command, request.payload)
+                    "mcp" -> app.nativeOwnerWorkflows.mcp(command, request.payload, request.control)
                     "learning" -> when (command) {
                         "getAppLearningPolicy", "setAppLearningPolicy" -> app.appLearningCommand(command, request.payload, request.control)
                         "proposeLearning" -> app.proposeSourceMemoryLearning(dev.pocketengine.features.memory.SourceRef.fromJson(request.payload.getJSONObject("sourceRef")), request.control)
@@ -949,6 +959,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     if (command in setOf("discoverMcp", "discoverMcpAuthorized") && completed != null) cleanOwnerResult(domain, "discardMcpPreview", JSONObject().put("previewId", completed.optString("previewId")))
                     if (domain == "mcp" && command == "prepareLocalMcpDiscovery" && completed != null) completed.optString("reviewId").takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardLocalMcpReview", JSONObject().put("reviewId", it)) }
                     if (domain == "mcp" && command == "prepareLocalMcpInstall" && completed != null) completed.optString("reviewId").takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardLocalMcpInstallReview", JSONObject().put("reviewId", it)) }
+                    if (domain == "mcp" && command == "getMcpResource" && completed != null) completed.optString("snapshotId").takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardMcpResourceSnapshot", JSONObject().put("snapshotId", it)) }
                     return@post
                 }
                 ownerRequests.remove(key)

@@ -63,6 +63,7 @@ final class McpResultCapture {
         JSONObject out=new JSONObject().put("isError",data.getBoolean("isError"))
             .put("content",new JSONArray()).put("omittedContent",new JSONArray())
             .put("untrusted",true).put("instructionsAreData",true)
+            .put("outputProjection",McpData.outputProjection())
             .put("nativeResultCoverage","supported_text_and_structured_content_fields")
             .put("upstreamTruncationKnown",false);
         JSONArray texts=data.getJSONArray("content"),omitted=data.getJSONArray("omittedContent"),shown=out.getJSONArray("content");

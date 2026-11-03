@@ -71,6 +71,7 @@ public final class WorkProfileProjectMountedNativeTest {
         final ExecutorService worker=Executors.newSingleThreadExecutor();
         final AtomicInteger posts=new AtomicInteger(),starts=new AtomicInteger();
         final AtomicReference<JSONObject> result=new AtomicReference<>();
+        final AtomicReference<JSONObject> projectForReview=new AtomicReference<>();
         final AtomicReference<Throwable> failure=new AtomicReference<>();
         final HttpServer server;final String project,checkout;
         Fixture()throws Exception {
@@ -91,6 +92,7 @@ public final class WorkProfileProjectMountedNativeTest {
                 project=app.features.module("workspace").handle("create",new JSONObject().put("name","Mounted Profile original project")).getString("id");
                 app.features.module("workspace").handle("write",new JSONObject().put("projectId",project).put("path","original.txt").put("content","UNCHANGED").put("expectedVersion",0));
                 checkout=((LocalModule)app.features.module("local")).openProjectForOwner(project).getString("id");
+                projectForReview.set(new JSONObject().put("projectId",project).put("checkoutId",checkout));
                 worker.submit(()->{try{
                     var page=app.nativeWorkProfiles().newOwnerPage();page.setForeground(true);
                     try {JSONObject definition=WorkProfile.definition("mounted-draft",1,"Mounted original member Profile");
@@ -116,7 +118,7 @@ public final class WorkProfileProjectMountedNativeTest {
                 WorkProfilesPageKt.WorkProfilesPage(host,r->{f.worker.execute(r);return Unit.INSTANCE;},r->{f.worker.execute(r);return Unit.INSTANCE;},
                     (goal,selection,control,callback)->{f.failure.compareAndSet(null,new AssertionError("Member Profile must use the exact project route"));return Unit.INSTANCE;},
                     task->Unit.INSTANCE,domain->Unit.INSTANCE,()->Unit.INSTANCE,
-                    ()->{try{return f.app.reviewOwnerWorkProfileProject(f.project,f.checkout,"managed_process_v1");}catch(Exception error){throw new IllegalStateException(error);}},
+                    ()->{try{JSONObject source=f.projectForReview.get();return f.app.reviewOwnerWorkProfileProject(source.getString("projectId"),source.getString("checkoutId"),"managed_process_v1");}catch(Exception error){throw new IllegalStateException(error);}},
                     (goal,selection,control,project,callback)->{f.starts.incrementAndGet();try{
                         f.app.runOwnerWorkProfileAsync(goal,"",null,null,selection,control,project,(value,error)->{
                             if(error!=null)f.failure.compareAndSet(null,error);if(value!=null)f.result.set(value);complete(callback,value,error);
@@ -229,8 +231,12 @@ public final class WorkProfileProjectMountedNativeTest {
         try(Fixture f=new Fixture();Screen ui=new Screen(f)){
             ui.ready();assertTrue(ui.disabled("work_profile_start_exact"));assertEquals(0,f.posts.get());assertEquals(0,f.app.tasks.list().length());
             ui.clickTag("work_profile_owner_consent");assertTrue(ui.disabled("work_profile_start_exact"));assertEquals(0,f.starts.get());
-            ui.clickTag("work_profile_choose_original_project");ui.await("原项目 "+f.project);assertTrue(ui.disabled("work_profile_start_exact"));
+            ui.clickTag("work_profile_choose_original_project");ui.await("原项目 "+f.project);
+            assertThrows(AssertionError.class,()->ui.tagged("work_profile_start_exact"));
+            assertThrows(AssertionError.class,()->ui.tagged("work_profile_owner_consent"));
             assertEquals(0,f.app.tasks.list().length());assertEquals(0,f.posts.get());
+            ui.clickTag("work_profile_preflight");ui.awaitTag("work_profile_goal");ui.goal();
+            assertTrue(ui.disabled("work_profile_start_exact"));assertEquals(0,f.starts.get());
             ui.clickTag("work_profile_owner_consent");assertFalse(ui.disabled("work_profile_start_exact"));ui.clickTag("work_profile_start_exact");
             for(int i=0;i<120&&f.result.get()==null&&f.failure.get()==null;i++)ui.advance();
             if(f.failure.get()!=null)throw new AssertionError(f.failure.get());assertNotNull(f.result.get());assertEquals(1,f.starts.get());assertEquals(1,f.posts.get());
@@ -241,11 +247,29 @@ public final class WorkProfileProjectMountedNativeTest {
     }
     @Test public void oldStartCallbackCannotOutliveProjectWithdrawalOrNativeForegroundConsent()throws Exception {
         try(Fixture f=new Fixture();Screen ui=new Screen(f)){
-            ui.ready();ui.clickTag("work_profile_choose_original_project");ui.await("原项目 "+f.project);ui.clickTag("work_profile_owner_consent");
+            ui.ready();ui.clickTag("work_profile_choose_original_project");ui.await("原项目 "+f.project);
+            ui.clickTag("work_profile_preflight");ui.awaitTag("work_profile_goal");ui.goal();ui.clickTag("work_profile_owner_consent");
             assertFalse(ui.disabled("work_profile_start_exact"));Function0<?> old=ui.action("work_profile_start_exact");
-            ui.click("不关联项目");assertEquals(Boolean.TRUE,old.invoke());ui.advance();assertEquals(0,f.starts.get());assertEquals(0,f.app.tasks.list().length());
-            ui.clickTag("work_profile_choose_original_project");ui.await("原项目 "+f.project);ui.clickTag("work_profile_owner_consent");Function0<?> foreground=ui.action("work_profile_start_exact");
-            ui.owner.pause();ui.advance();assertEquals(Boolean.TRUE,foreground.invoke());ui.advance();assertEquals(0,f.starts.get());assertEquals(0,f.posts.get());assertEquals(0,f.app.tasks.list().length());
+            String replacement=f.app.features.module("workspace").handle("create",new JSONObject().put("name","Mounted replacement original project")).getString("id");
+            f.app.features.module("workspace").handle("write",new JSONObject().put("projectId",replacement).put("path","original.txt").put("content","SECOND_UNCHANGED").put("expectedVersion",0));
+            String replacementCheckout=((LocalModule)f.app.features.module("local")).openProjectForOwner(replacement).getString("id");
+            f.projectForReview.set(new JSONObject().put("projectId",replacement).put("checkoutId",replacementCheckout));
+            ui.clickTag("work_profile_choose_original_project");ui.await("原项目 "+replacement);
+            assertThrows(AssertionError.class,()->ui.tagged("work_profile_start_exact"));
+            assertThrows(AssertionError.class,()->ui.tagged("work_profile_owner_consent"));
+            assertEquals(Boolean.TRUE,old.invoke());f.worker.submit(()->null).get(10,TimeUnit.SECONDS);ui.advance();assertEquals(0,f.starts.get());assertEquals(0,f.posts.get());assertEquals(0,f.app.tasks.list().length());
+            ui.clickTag("work_profile_preflight");ui.awaitTag("work_profile_goal");ui.goal();
+            assertTrue(ui.disabled("work_profile_start_exact"));
+            assertEquals(Boolean.TRUE,old.invoke());f.worker.submit(()->null).get(10,TimeUnit.SECONDS);ui.advance();assertEquals(0,f.starts.get());assertEquals(0,f.posts.get());assertEquals(0,f.app.tasks.list().length());
+            ui.clickTag("work_profile_owner_consent");assertFalse(ui.disabled("work_profile_start_exact"));Function0<?> replacementStart=ui.action("work_profile_start_exact");
+            ui.click("不关联项目");ui.await("选择当前原项目工作台副本（项目技能与团队必选）");
+            assertEquals(Boolean.TRUE,replacementStart.invoke());f.worker.submit(()->null).get(10,TimeUnit.SECONDS);ui.advance();assertEquals(0,f.starts.get());assertEquals(0,f.posts.get());assertEquals(0,f.app.tasks.list().length());
+            f.projectForReview.set(new JSONObject().put("projectId",f.project).put("checkoutId",f.checkout));
+            ui.clickTag("work_profile_choose_original_project");ui.await("原项目 "+f.project);
+            ui.clickTag("work_profile_preflight");ui.awaitTag("work_profile_goal");ui.goal();ui.clickTag("work_profile_owner_consent");
+            assertFalse(ui.disabled("work_profile_start_exact"));Function0<?> foreground=ui.action("work_profile_start_exact");
+            ui.owner.pause();ui.advance();assertEquals(Boolean.TRUE,foreground.invoke());f.worker.submit(()->null).get(10,TimeUnit.SECONDS);ui.advance();assertEquals(0,f.starts.get());assertEquals(0,f.posts.get());assertEquals(0,f.app.tasks.list().length());
+            assertNull(f.failure.get());
         }
     }
 }

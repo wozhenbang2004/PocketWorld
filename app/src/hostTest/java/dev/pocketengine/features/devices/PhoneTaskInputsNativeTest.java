@@ -33,7 +33,9 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
@@ -213,6 +215,60 @@ public final class PhoneTaskInputsNativeTest {
         // transaction may surround the actual Runner/model request.
         RunOutcome waitingForOwner=f.runOriginal();assertEquals(f.diagnostics(waitingForOwner),"awaiting_user",waitingForOwner.status);assertEquals(1,f.requests.get());assertEquals(1,f.count("runs"));assertEquals(1,f.tasks.get(f.task,false).getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));
     }}
+    @Test public void concurrentPeerQueryCannotBlockOriginalSqlAuthorityRecheck()throws Exception{
+        requireConcurrentTrustReadDoesNotBlockOriginalTransaction(false);
+    }
+    @Test public void concurrentGrantQueryCannotBlockOriginalSqlAuthorityRecheck()throws Exception{
+        requireConcurrentTrustReadDoesNotBlockOriginalTransaction(true);
+    }
+    private static void requireConcurrentTrustReadDoesNotBlockOriginalTransaction(boolean grant)throws Exception{
+        try(Fixture f=new Fixture(4)){
+            assertFalse("Exercise the original single-connection database, without enabling WAL",f.sql.isWriteAheadLoggingEnabled());
+            String originalGrant=f.grant();JSONObject before=grant?f.trust.grant("input-grant"):f.trust.peer(f.peer.deviceId());
+            var waitingThread=new AtomicReference<Thread>();
+            var workers=Executors.newFixedThreadPool(2);
+            java.util.concurrent.Future<JSONObject> query=null;
+            try{
+                synchronized(f.tasks){
+                    f.sql.beginTransaction();
+                    try{
+                        query=workers.submit(()->{waitingThread.set(Thread.currentThread());return grant?f.trust.grant("input-grant"):f.trust.peer(f.peer.deviceId());});
+                        awaitOriginalSqlConnectionWait(waitingThread,query);
+                        // Check the actual wait edge before calling authority from
+                        // the transaction thread. If the old lock returns, fail
+                        // boundedly and release SQLite instead of hanging the JVM.
+                        var authorityMonitor=workers.submit(()->{synchronized(f.trust){return true;}});
+                        try{assertTrue(authorityMonitor.get(2,TimeUnit.SECONDS));}
+                        catch(TimeoutException inversion){throw new AssertionError("A concurrent trust read holds the authority monitor while waiting for the original SQL transaction",inversion);}
+                        f.session.checkCurrent();
+                        assertEquals(DeviceProtocol.canonical(before),DeviceProtocol.canonical(grant?f.trust.grant("input-grant"):f.trust.peer(f.peer.deviceId())));
+                        f.sql.setTransactionSuccessful();
+                    }finally{f.sql.endTransaction();}
+                }
+                assertEquals(DeviceProtocol.canonical(before),DeviceProtocol.canonical(query.get(5,TimeUnit.SECONDS)));
+                assertEquals(originalGrant,f.grant());assertEquals(1,f.count("tasks"));assertEquals(1,f.count("runs"));assertEquals(0,f.requests.get());
+                // Removing a Java read lock must never cache or relax revocation.
+                assertEquals(2,f.trust.revoke(f.peer.deviceId(),System.currentTimeMillis()));
+                assertThrows(SecurityException.class,()->f.session.checkCurrent());
+                assertTrue(f.trust.peer(f.peer.deviceId()).getBoolean("revoked"));
+                assertTrue(f.trust.grant("input-grant").getBoolean("revoked"));
+                assertEquals(originalGrant,f.grant());assertEquals(0,f.requests.get());
+            }finally{
+                workers.shutdown();assertTrue("The original SQL read and monitor probe must finish after transaction release",workers.awaitTermination(5,TimeUnit.SECONDS));
+            }
+        }
+    }
+    private static void awaitOriginalSqlConnectionWait(AtomicReference<Thread> reader,java.util.concurrent.Future<?> query)throws Exception{
+        long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+        while(System.nanoTime()<end){
+            Thread actual=reader.get();
+            if(actual!=null)for(StackTraceElement frame:actual.getStackTrace())
+                if(frame.getClassName().equals("android.database.sqlite.SQLiteConnectionPool")&&frame.getMethodName().equals("waitForConnection"))return;
+            if(query.isDone())fail("The competing read did not wait on the original SQLite connection");
+            Thread.sleep(5);
+        }
+        fail("The competing trust read did not reach the original SQLite connection wait");
+    }
     @Test public void realQuestionAndSteeringReachOriginalRunnerWithSameRunGrantAndCumulativeBudget()throws Exception{try(Fixture f=new Fixture(4)){
         f.observeResultClosingWindow=true;
         String lease=f.acquire("first-control",null).getString("leaseId"),grant=f.grant();

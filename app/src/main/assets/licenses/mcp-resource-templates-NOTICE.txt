@@ -1,0 +1,29 @@
+MCP resource template expansion
+
+Handy URI Templates 2.1.8
+Published artifact: com.damnhandy:handy-uri-templates:2.1.8
+Upstream: https://github.com/damnhandy/Handy-URI-Templates
+Release tag: handy-uri-templates-2.1.8
+Source commit: 9bd7ac3b040d5a79d8866e44ab4970084f6f1182
+Copyright 2012, Ryan J. McDonough
+Apache License 2.0; see handy-uri-templates-2.1.8-LICENSE.txt.
+Used through its published Java API without source modification or vendoring.
+The PocketWorld adapter validates a bounded subset and explicitly rejects prefix
+modifiers and known unsupported value forms; it does not claim full RFC 6570 Level 4.
+Those forms include square brackets in reserved/fragment values, empty composite
+matrix members or an empty scalar with matrix explode, empty values in non-query
+exploded maps, non-final empty list members (except exploded query/continuation
+lists), and non-final defined empty values in unnamed multi-variable expressions.
+The adapter rejects these inputs before any resource read; it never removes empty
+values or silently changes the RFC-defined separators. Undefined values and empty
+collections retain the standard omission behavior; supported empty strings stay
+distinct from undefined values.
+
+Joda-Time 2.10.2 (the published library's runtime dependency)
+Published artifact: joda-time:joda-time:2.10.2
+Upstream: https://github.com/JodaOrg/joda-time
+Release tag: v2.10.2
+Source commit: cd58bd7f397682cbd889940096a9d9a4fccbbad4
+Apache License 2.0; see joda-time-2.10.2-LICENSE.txt and joda-time-2.10.2-NOTICE.txt.
+MCP template parameters are bounded strings, string lists/maps or undefined values;
+no date objects, arbitrary Java objects, POJO reflection or custom renderers are accepted.
