@@ -7827,11 +7827,12 @@ public final class TaskStore {
             if(!java.util.Set.of("apply","not_applicable","not_selected").contains(decision)||reason.trim().isEmpty()||reason.length()>1000)throw new SecurityException("必须明确说明采用、不适用或未选的理由");
             if(!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(reason))throw new SecurityException("方法决定理由包含不完整字符");JSONArray ids=args.getJSONArray("stepOperationIds");
             if(ids.length()>8||decision.equals("apply")&&ids.length()<1||!decision.equals("apply")&&ids.length()!=0)throw new SecurityException("采用须关联1至8个原步骤；未采用不伪造步骤");
-            JSONArray steps=learnedMethodStepFacts(id,run,operation,ids,row.getLong("createdAt"));
+            JSONArray steps=learnedMethodStepFacts(id,run,operation,ids,row.getLong("createdAt"),true);
             JSONObject fact=selected.metadata().put("format","pocketworld.learned-method-decision.v1").put("taskId",id).put("runId",run).put("epoch",epoch).put("operationId",operation)
                     .put("decision",decision).put("reason",reason).put("stepRefs",steps).put("recordedAt",System.currentTimeMillis())
                     .put("applicationState",decision.equals("apply")?"model_apply_with_native_steps":decision).put("backendOutcome",decision.equals("apply")?"native_step_receipts_confirmed":"not_attempted")
                     .put("applicationScope","explicit_model_decision_and_original_step_receipts").put("methodSemanticUseIndependentlyVerified",false).put("methodBusinessSuccessVerified",false).put("executionAuthorized",false).put("replayAllowed",false);
+            fact.put("effectEvidence",dev.pocketengine.features.memory.MethodEffectEvidence.captureTaskDecision(fact,required(id)));
             selected.checkCurrent();args.put("nativeMethodDecision",fact);ContentValues value=new ContentValues();value.put("arguments",args.toString());
             if(db.update("operations",value,"task_id=? AND run_id=? AND operation_id=? AND tool='memory_method_decision' AND state='prepared'",new String[]{id,run,operation})!=1)throw new SecurityException("原方法决定操作已变化");
             dev.pocketengine.features.memory.OwnerSourceRunContext.formalPrepared(db,id,run,new JSONArray().put(new JSONObject().put("id",selected.recordId).put("revision",selected.revision)));
@@ -7847,6 +7848,10 @@ public final class TaskStore {
         }
     }
     private JSONArray learnedMethodStepFacts(String id,String run,String decisionOperation,JSONArray ids,long decisionAt)throws Exception{
+        // Reference-use records and old method receipts retain their original five-field shape.
+        return learnedMethodStepFacts(id,run,decisionOperation,ids,decisionAt,false);
+    }
+    private JSONArray learnedMethodStepFacts(String id,String run,String decisionOperation,JSONArray ids,long decisionAt,boolean effectEvidence)throws Exception{
         JSONArray result=new JSONArray();java.util.Set<String> unique=new java.util.HashSet<>();
         for(int i=0;i<ids.length();i++){String operation=ids.getString(i);
             if(!operation.matches("[a-f0-9-]{36}")||operation.equals(decisionOperation)||!unique.add(operation))throw new SecurityException("方法原步骤标识重复或无效");
@@ -7866,7 +7871,16 @@ public final class TaskStore {
                 if(Boolean.FALSE.equals(receipt.opt("accepted"))||receipt.has("accepted")&&receipt.isNull("accepted")||code.contains("unknown")||status.matches("unknown|pending|running|awaiting_receipt")
                         ||code.matches("approval_required|not_dispatched|invalid_arguments|source_unavailable|cancelled_before_dispatch")
                         ||!workspaceWrite&&!Boolean.TRUE.equals(receipt.opt("ok"))&&!Boolean.TRUE.equals(receipt.opt("accepted"))&&!status.matches("completed|success"))throw new SecurityException("未知、未派发或缺少确定回执的步骤不计采用证据");
-                result.put(new JSONObject().put("operationId",operation).put("tool",row.getString(0)).put("operationState","receipt").put("resultStatus",status.isEmpty()?code:status).put("receiptFingerprint",capabilityFingerprint(receipt)));
+                JSONObject step=new JSONObject().put("operationId",operation).put("tool",row.getString(0)).put("operationState","receipt").put("resultStatus",status.isEmpty()?code:status).put("receiptFingerprint",capabilityFingerprint(receipt));
+                if(effectEvidence&&!row.isNull(4)){
+                    JSONObject originalArguments=new JSONObject(row.getString(4));step.put("argumentsFingerprint",capabilityFingerprint(originalArguments));
+                    if(row.getString(0).startsWith("phone_")&&originalArguments.opt("observationId") instanceof String&&!originalArguments.getString("observationId").isBlank())step.put("observationId",originalArguments.getString("observationId"));
+                    if(workspaceWrite){
+                        step.put("workspaceSource",new JSONObject().put("projectId",originalArguments.getString("projectId")).put("path",originalArguments.getString("path")).put("expectedVersion",learnedMethodInteger(originalArguments,"expectedVersion",0)))
+                                .put("workspaceResult",new JSONObject().put("version",learnedMethodInteger(receipt,"version",1)).put("revisionId",receipt.getString("revisionId")));
+                    }
+                }
+                result.put(step);
             }
         }return result;
     }
@@ -7879,7 +7893,8 @@ public final class TaskStore {
                 ||!id.equals(fact.optString("taskId"))||!operation.equals(fact.optString("operationId"))||!row.getString("runId").equals(fact.optString("runId"))
                 ||!"owner".equals(fact.optString("ownerId"))||!"private".equals(fact.optString("spaceId"))||!canonical(fact).equals(canonical(receipt.getJSONObject("methodDecision"))))throw new SecurityException("原方法决定没有同一操作的最终回执");
         JSONArray steps=fact.getJSONArray("stepRefs"),ids=new JSONArray();for(int i=0;i<steps.length();i++)ids.put(steps.getJSONObject(i).getString("operationId"));
-        if(!canonical(steps).equals(canonical(learnedMethodStepFacts(id,row.getString("runId"),operation,ids,row.getLong("createdAt")))))throw new SecurityException("原方法步骤回执已变化");
+        if(!canonical(steps).equals(canonical(learnedMethodStepFacts(id,row.getString("runId"),operation,ids,row.getLong("createdAt"),fact.has("effectEvidence")))))throw new SecurityException("原方法步骤回执已变化");
+        dev.pocketengine.features.memory.MethodEffectEvidence.requireBinding(fact);
         JSONObject result=new JSONObject(fact.toString()).put("recordRevision",revision);if(args.has("appQualityFeedback"))result.put("appQualityFeedback",args.getJSONObject("appQualityFeedback"));return result;
     }
     public synchronized dev.pocketengine.features.memory.AppQualityReceipt reviewAppQuality(String task,String operation,String record,long revision,String outcome,String note)throws Exception {
@@ -7909,7 +7924,9 @@ public final class TaskStore {
                 catch(org.json.JSONException|SecurityException|IllegalArgumentException|IllegalStateException invalidNativeProof){unavailable++;}
             }
         }
-        return new JSONObject().put("recordId",record).put("recordRevision",revision).put("applications",results).put("nextCursor",more?next:"").put("scannedOperations",scanned).put("readLimitedOperations",limited).put("unavailableNativeProofs",unavailable).put("completeHistory",!more&&limited==0&&unavailable==0).put("executionAuthorized",false);
+        boolean complete=!more&&limited==0&&unavailable==0&&(cursor==null||cursor.isEmpty());
+        JSONObject comparison=dev.pocketengine.features.memory.MethodEffectComparison.summarize(results,complete);
+        return new JSONObject().put("recordId",record).put("recordRevision",revision).put("applications",results).put("effectComparison",comparison).put("nextCursor",more?next:"").put("scannedOperations",scanned).put("readLimitedOperations",limited).put("unavailableNativeProofs",unavailable).put("completeHistory",complete).put("executionAuthorized",false);
     }
     public synchronized void cancelSkillExecution(dev.pocketengine.features.skills.CompanionSkillBackend.ReceiptRef ref)throws Exception {
         requirePrivateOwner(required(ref.taskId));JSONObject row=skillOperation(ref.taskId,ref.operationId),args=row.getJSONObject("arguments"),metadata=skillMetadata(args);checkSkillRef(ref,metadata);
@@ -8701,6 +8718,7 @@ public final class TaskStore {
             checkCapability(id,run,epoch,tool,original);JSONObject task=required(id);requirePrivateOwner(task);
             if(!"owner".equals(metadata.optString("ownerId"))||!"private".equals(metadata.optString("spaceId")))throw new SecurityException("原记忆工具选择不属于私人原任务");
             dev.pocketengine.features.memory.OwnerSourceRunContext.formalPrepared(db,id,run,metadata.getJSONArray("records"));
+            if(metadata.has("retrievalDependencies"))dev.pocketengine.features.memory.OwnerSourceRunContext.formalPrepared(db,id,run,metadata.getJSONArray("retrievalDependencies"));
             appendEvent(task,new JSONObject().put("type","memory_tool_reference_prepared").put("tool",tool).put("selectionId",metadata.getString("selectionId")).put("contextDigest",metadata.getString("contextDigest")).put("records",metadata.getJSONArray("records")).put("modelUseVerified",false).put("executionAuthorized",false));
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}

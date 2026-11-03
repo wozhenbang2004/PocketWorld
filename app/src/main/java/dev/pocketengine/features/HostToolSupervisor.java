@@ -73,8 +73,8 @@ public final class HostToolSupervisor implements CapabilityPort {
             dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture,dev.pocketengine.features.controlplane.WorkProfileToolSelection workProfile)throws Exception{
         this.host=java.util.Objects.requireNonNull(host);this.tasks=java.util.Objects.requireNonNull(tasks);this.taskId=catalogueOnly?null:identifier(taskId);this.runId=catalogueOnly?null:identifier(runId);this.epoch=epoch;this.allowWrites=allowWrites;
         this.outputCapture=outputCapture;this.workProfile=workProfile;if(!catalogueOnly&&workProfile==null&&tasks.get(this.taskId,false).optJSONObject("workProfileRef")!=null)throw new SecurityException("此任务已冻结工作配置，必须接入原生准确选用；没有继承全局工具");
-        add("memory","search","memory_search","检索主人私人记忆，只返回真实已保存记录。可用queries补充至多3条同义/语义短查询；原query始终保留，不增加模型请求或来源权限。",false,props("query",text(8000),"queries",querySuggestions(),"limit",integer(1,100)),"query");
-        add("memory","recall","memory_recall","按当前问题召回主人私人记忆及来源。可用queries补充至多3条同义/语义短查询；原query始终保留，不增加模型请求或来源权限。",false,props("query",text(8000),"queries",querySuggestions(),"limit",integer(1,20)),"query");
+        add("memory","search","memory_search","检索主人私人记忆，只返回真实已保存记录。可用queries补充至多3条同义/语义短查询，constraints按时间、实体、来源缩小范围并限制0至2跳稳定身份关系。原query保留，不增加模型请求或读取权限；摘要不是原件，相关不代表事实或因果。",false,props("query",text(8000),"queries",querySuggestions(),"constraints",dev.pocketengine.features.memory.MemoryRecallConstraints.schema(),"limit",integer(1,100)),"query");
+        add("memory","recall","memory_recall","按当前问题召回主人私人记忆及来源。可用queries补充至多3条同义/语义短查询，constraints按时间、实体、来源缩小范围并限制0至2跳稳定身份关系。原query保留，不增加模型请求或读取权限；历史不自动代表当前事实，原件可经memory_history_search回读。",false,props("query",text(8000),"queries",querySuggestions(),"constraints",dev.pocketengine.features.memory.MemoryRecallConstraints.schema(),"limit",integer(1,20)),"query");
         add("memory","$method_decision","memory_method_decision","记录本任务对准确经验版本的明确采用/不适用/未选决定与理由。apply须关联本task/run已经返回确定回执的1至8个stepOperationIds，可从memory_raw_query(section=operations)取得原operationId。只记录决定和原步骤关系，不证明方法语义有效或导致业务成功，不执行或重试任何步骤。",true,
                 props("recordId",text(240),"revision",new JSONObject().put("type","integer").put("minimum",1).put("maximum",Long.MAX_VALUE),"decision",new JSONObject().put("type","string").put("enum",new JSONArray().put("apply").put("not_applicable").put("not_selected")),"reason",text(1000),"stepOperationIds",new JSONObject().put("type","array").put("maxItems",8).put("items",text(80))),"recordId","revision","decision","reason","stepOperationIds");
         add("workspace","$projects","workspace_projects","列出实际本地工作区项目。",false,new JSONObject());
@@ -371,13 +371,13 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         else if(projectMemory!=null&&tool.feature.equals("memory")){
             if(!java.util.Set.of("search","recall").contains(tool.command)||memoryControl!=control||taskMemory==null||memoryFence==null)throw new SecurityException("本run项目记忆没有全局记忆或方法执行后门");host.synchronizeMemory(privateScope());
-            var selected=args.has("queries")?taskMemory.prepareSemanticTaskRecall(privateScope(),memoryTask,dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.getJSONArray("queries")),Math.min(16,args.optInt("limit",6)),12000,memoryFence):taskMemory.prepareTaskRecall(privateScope(),memoryTask,args.getString("query"),Math.min(16,args.optInt("limit",6)),12000,memoryFence);
+            var selected=args.has("queries")||args.has("constraints")?taskMemory.prepareSemanticTaskRecall(privateScope(),memoryTask,dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.optJSONArray("queries")==null?new JSONArray():args.getJSONArray("queries"),args.optJSONObject("constraints")==null?new JSONObject():args.getJSONObject("constraints")),Math.min(16,args.optInt("limit",6)),12000,memoryFence):taskMemory.prepareTaskRecall(privateScope(),memoryTask,args.getString("query"),Math.min(16,args.optInt("limit",6)),12000,memoryFence);
             result=memoryFence.admit(()->{JSONObject snapshot=taskMemory.validateTaskMemorySelection(privateScope(),selected,memoryFence);tasks.prepareMemoryToolReference(name,selected,control);return snapshot;});
         }
-        else if(tool.feature.equals("memory")&&java.util.Set.of("search","recall").contains(tool.command)&&args.has("queries")){
+        else if(tool.feature.equals("memory")&&java.util.Set.of("search","recall").contains(tool.command)&&(args.has("queries")||args.has("constraints"))){
             if(memoryControl!=control||taskMemory==null||memoryTask==null||memoryFence==null)throw new SecurityException("原任务记忆选择尚未绑定，未放宽来源读取");
             host.synchronizeMemory(privateScope());
-            var plan=dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.getJSONArray("queries"));
+            var plan=dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.optJSONArray("queries")==null?new JSONArray():args.getJSONArray("queries"),args.optJSONObject("constraints")==null?new JSONObject():args.getJSONObject("constraints"));
             var selected=taskMemory.prepareSemanticTaskRecall(privateScope(),memoryTask,plan,Math.min(16,args.optInt("limit",6)),12000,memoryFence);
             result=memoryFence.admit(()->{
                 JSONObject snapshot=taskMemory.validateTaskMemorySelection(privateScope(),selected,memoryFence);

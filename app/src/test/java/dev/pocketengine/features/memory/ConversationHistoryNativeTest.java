@@ -76,7 +76,25 @@ public final class ConversationHistoryNativeTest {
         try(Fixture f=new Fixture();ConversationHistory.Capability cap=f.capability()){f.operation(0,ConversationHistory.SEARCH,"{\"text\":\"DERIVED_NOT_ORIGINAL\"}");f.operation(1,"workspace_read","{\"text\":\"NATIVE_CITATION\"}");JSONObject tasks=cap.execute(ConversationHistory.SEARCH,new JSONObject().put("kind","runs").put("query",""),f.control);JSONObject task=null;for(int i=0;i<tasks.getJSONArray("entries").length();i++){JSONObject row=tasks.getJSONArray("entries").getJSONObject(i);if(f.historical.equals(row.optString("sourceTaskId")))task=row;}assertNotNull(task);
             JSONObject runs=cap.execute(ConversationHistory.SEARCH,new JSONObject().put("kind","runs").put("query","").put("selectionId",task.getString("selectionId")),f.control);JSONObject receipt=cap.execute(ConversationHistory.SEARCH,new JSONObject().put("kind","operations").put("query","").put("selectionId",runs.getJSONArray("entries").getJSONObject(0).getString("selectionId")),f.control);assertEquals(1,receipt.getJSONArray("entries").length());assertFalse(receipt.toString().contains("DERIVED_NOT_ORIGINAL"));JSONObject caller=f.load(f.caller).put("events",new JSONArray().put(new JSONObject().put("type","assistant").put("tool",ConversationHistory.SEARCH).put("receipt",receipt)));assertEquals(0,TaskMemoryTrace.historyCitationJumps(caller).length());caller.put("events",new JSONArray().put(new JSONObject().put("type","tool").put("tool",ConversationHistory.SEARCH).put("receipt",receipt)));f.saveTask(caller,5);JSONArray citations=TaskMemoryTrace.historyCitationJumps(caller);assertEquals(1,citations.length());JSONObject citation=citations.getJSONObject(0);assertEquals(f.caller,citation.getString("callerTaskId"));assertEquals(f.historical,citation.getJSONObject("sourceJump").getString("taskId"));TaskStoreMemoryQuery.conversationHistoryCitation(f.db,citation);assertThrows(SecurityException.class,()->TaskStoreMemoryQuery.conversationHistoryCitation(f.db,new JSONObject(citation.toString()).put("callerRunId",UUID.randomUUID().toString())));
         }
-    }    @Test public void onlyLocalHistoryReadsHoldWrapperMonitorAndPauseLateReplyIsDiscarded()throws Exception{
+    }
+    @Test public void plannedTaskRunOperationTraversalReadsOriginalSqlReceiptWithoutReplayingHistoricalActions()throws Exception{
+        try(Fixture f=new Fixture();ConversationHistory.Capability cap=f.capability()){
+            String operation=f.operation(0,"workspace_read","{\"text\":\"The obsolete timer kept the worker waiting.\"}");
+            f.operation(1,ConversationHistory.SEARCH,"{\"text\":\"DERIVED_HISTORY_MUST_NOT_REENTER\"}");
+            JSONObject receipt=cap.execute(ConversationHistory.SEARCH,new JSONObject().put("kind","runs").put("query","timer")
+                    .put("follow","operations").put("maxCalls",8).put("readTop",1),f.control);
+            assertEquals(1,receipt.getJSONArray("entries").length());JSONObject row=receipt.getJSONArray("entries").getJSONObject(0);
+            assertEquals("task:"+f.historical+":operation:"+operation,row.getString("sourceId"));assertEquals(f.historical,row.getString("sourceTaskId"));assertEquals(f.pastRun,row.getString("sourceRunId"));
+            assertTrue(row.getBoolean("exactSourceRead"));assertTrue(row.getString("body").contains("obsolete timer"));assertFalse(row.getBoolean("currentFactVerified"));
+            assertFalse(receipt.toString().contains("DERIVED_HISTORY_MUST_NOT_REENTER"));assertEquals(1,receipt.getJSONArray("taskSourceRefs").length());
+            assertTrue(receipt.getJSONObject("queryPlan").getInt("producerCalls")<=8);assertFalse(receipt.getBoolean("executionAuthorized"));
+            assertTrue(f.control.matchesHostRun(f.caller,f.callerRun,1));assertFalse(f.control.matchesHostRun(f.historical,f.pastRun,2));
+            try(Cursor count=f.db.rawQuery("SELECT count(*) FROM operations",null)){count.moveToFirst();assertEquals(2,count.getInt(0));}
+            JSONObject exact=cap.execute(ConversationHistory.READ,new JSONObject().put("selectionId",row.getString("selectionId")).put("maxChars",4000),f.control);
+            assertEquals(row.getString("revision"),exact.getString("revision"));assertEquals(row.getString("body"),exact.getString("body"));
+        }
+    }
+    @Test public void onlyLocalHistoryReadsHoldWrapperMonitorAndPauseLateReplyIsDiscarded()throws Exception{
         try(Fixture f=new Fixture()){
             final CapabilityPort[] chain=new CapabilityPort[2];CapabilityPort existing=new CapabilityPort(){public JSONArray tools(){return new JSONArray();}public boolean supports(String name){return false;}public boolean sideEffecting(String name){return false;}public JSONObject execute(String name,JSONObject args,RunControl live)throws Exception{assertFalse(Thread.holdsLock(chain[0]));assertFalse(Thread.holdsLock(chain[1]));return new JSONObject().put("ok",true);}};
             chain[0]=new TaskStoreMemoryReader.RawCapability(existing,f.raw,new TaskStoreMemoryReader.RawAccess(){public JSONObject query(TaskStoreMemoryReader.RawBinding b,JSONObject args){throw new AssertionError();}public JSONObject read(TaskStoreMemoryReader.RawBinding b,JSONObject args){throw new AssertionError();}});

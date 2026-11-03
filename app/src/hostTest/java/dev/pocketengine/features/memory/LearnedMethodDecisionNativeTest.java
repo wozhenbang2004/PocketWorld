@@ -104,7 +104,9 @@ public final class LearnedMethodDecisionNativeTest {
                 if(server.failure.get()!=null)throw new AssertionError("actual loopback script failed",server.failure.get());assertEquals("original native write/decision receipts do not prove business completion", "needs_confirmation",result.status);assertEquals(4,server.count.get());}
             assertEquals(args.getString("content"),f.workspace.handle("read",new JSONObject().put("projectId",f.project).put("path","check.txt")).getString("content"));
             JSONObject receipt=f.page().getJSONArray("applications").getJSONObject(0);assertEquals("model_apply_with_native_steps",receipt.getString("applicationState"));assertEquals(step.get(),receipt.getJSONArray("stepRefs").getJSONObject(0).getString("operationId"));assertFalse(receipt.getBoolean("methodBusinessSuccessVerified"));assertFalse(receipt.getBoolean("executionAuthorized"));
-            f.control.cancel();TaskStore cold=new TaskStore(f.android);try{assertEquals(receipt.getString("operationId"),cold.learnedMethodApplications(f.record.getString("id"),f.record.getLong("revision"),"",20).getJSONArray("applications").getJSONObject(0).getString("operationId"));}finally{var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);((SQLiteDatabase)field.get(cold)).close();}
+            JSONObject effect=receipt.getJSONObject("effectEvidence");assertTrue(effect.getBoolean("inputComparable"));assertTrue(effect.getBoolean("environmentComparable"));assertFalse(effect.getBoolean("businessSuccessVerified"));
+            assertEquals(1,f.page().getJSONObject("effectComparison").getInt("eligibleApplications"));
+            f.control.cancel();TaskStore cold=new TaskStore(f.android);try{JSONObject restored=cold.learnedMethodApplications(f.record.getString("id"),f.record.getLong("revision"),"",20).getJSONArray("applications").getJSONObject(0);assertEquals(receipt.getString("operationId"),restored.getString("operationId"));assertEquals(effect.getString("evidenceFingerprint"),restored.getJSONObject("effectEvidence").getString("evidenceFingerprint"));}finally{var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);((SQLiteDatabase)field.get(cold)).close();}
         }
     }
     @Test public void explicitNotApplicableAndNotSelectedKeepReasonsWithoutCreatingExecutionOrCallingThemApplied()throws Exception{
@@ -127,5 +129,34 @@ public final class LearnedMethodDecisionNativeTest {
     }
     @Test public void originalOperationTransactionRollbackHasNoApplicationOrReusableDecisionProof()throws Exception{
         try(Fixture f=new Fixture()){f.port.beginRun(GOAL,f.control);f.db.execSQL("CREATE TRIGGER reject_method_decision BEFORE UPDATE OF arguments ON operations WHEN NEW.tool='memory_method_decision' BEGIN SELECT RAISE(ABORT,'fixture method decision atomic write rejected'); END");Exception failure=assertThrows(Exception.class,()->f.execute("not_selected",new JSONArray()));assertTrue("must reach the real SQL rollback, not pass through an earlier unrelated refusal",String.valueOf(failure.getMessage()).contains("fixture method decision atomic write rejected"));assertEquals(0,f.page().getJSONArray("applications").length());assertFalse(f.page().getBoolean("completeHistory"));try(var rows=f.db.rawQuery("SELECT arguments FROM operations WHERE tool='memory_method_decision'",null)){assertTrue(rows.moveToFirst());assertFalse(new JSONObject(rows.getString(0)).has("nativeMethodDecision"));}assertEquals(0,f.workspace.handle("list",new JSONObject().put("projectId",f.project)).getJSONArray("files").length());}
+    }
+
+    @Test public void nativeMethodEffectReviewPinsOriginalResultAndDeduplicatesARepeatedDecision()throws Exception{
+        try(Fixture f=new Fixture()){
+            f.port.beginRun(GOAL,f.control);JSONObject args=f.writeArgs();f.approve(args);
+            String step=f.journal().beginOperation("workspace_write",args);
+            JSONObject written=f.port.execute("workspace_write",new JSONObject(args.toString()).put("_hostOperationId",step),f.control);
+            f.journal().finishOperation(step,written);assertEquals(1,written.getInt("version"));
+            JSONObject first=f.execute("apply",new JSONArray().put(step)).getJSONObject("methodDecision");
+            JSONObject page=f.page(),projection=page.getJSONArray("applications").getJSONObject(0),evidence=projection.getJSONObject("effectEvidence");
+            assertTrue(evidence.getBoolean("inputComparable"));assertTrue(evidence.getBoolean("environmentComparable"));
+            assertFalse(evidence.getBoolean("causalEffectVerified"));assertFalse(evidence.getBoolean("executionAuthorized"));
+            assertFalse(evidence.toString().contains(args.getString("content")));assertFalse(evidence.toString().contains(GOAL));
+            assertEquals(1,page.getJSONObject("effectComparison").getInt("eligibleApplications"));
+            String operation=first.getString("operationId"),note="Owner inspected the exact saved workspace version and content";
+            JSONObject quality=f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"verified",note).snapshot();
+            assertEquals(evidence.getString("evidenceFingerprint"),quality.getJSONObject("methodEffectEvidence").getString("evidenceFingerprint"));
+            assertEquals(quality.toString(),f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"verified",note).snapshot().toString());
+            assertThrows(SecurityException.class,()->f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"skill_failed","different judgement"));
+            f.execute("apply",new JSONArray().put(step));JSONObject comparison=f.page().getJSONObject("effectComparison");
+            assertEquals(1,comparison.getInt("eligibleApplications"));assertEquals(1,comparison.getInt("duplicateRuns"));
+            assertEquals(1,comparison.getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0).getInt("ownerVerifiedResults"));
+            assertFalse(comparison.getBoolean("automaticPromotionAllowed"));assertEquals(0,comparison.getInt("confidenceDelta"));
+            // The old evidence cannot survive an actual change to the original operation result.
+            android.content.ContentValues changed=new android.content.ContentValues();changed.put("receipt",new JSONObject(written.toString()).put("version",2).toString());
+            assertEquals(1,f.db.update("operations",changed,"task_id=? AND operation_id=?",new String[]{f.task,step}));
+            JSONObject stale=f.page();assertEquals(0,stale.getJSONArray("applications").length());assertTrue(stale.getInt("unavailableNativeProofs")>=2);
+            assertThrows(SecurityException.class,()->f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"verified",note));
+        }
     }
 }

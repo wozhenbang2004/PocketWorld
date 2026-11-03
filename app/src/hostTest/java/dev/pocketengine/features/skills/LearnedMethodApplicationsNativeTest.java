@@ -58,4 +58,21 @@ public final class LearnedMethodApplicationsNativeTest {
             JSONObject page=f.page();assertEquals(1,page.getJSONArray("applications").length());assertEquals(1,page.getInt("unavailableNativeProofs"));assertFalse(page.getBoolean("completeHistory"));assertEquals(f.op,page.getJSONArray("applications").getJSONObject(0).getString("operationId"));assertThrows(IllegalArgumentException.class,()->f.tasks.learnedMethodApplications(f.record,3,"a".repeat(2049),20));assertEquals(2,f.tasks.get(f.task,false).getJSONArray("operations").length());
         }
     }
+
+    @Test public void effectEvidenceUsesFrozenRequestAndEnvironmentAndIgnoresLateBackendCallbacks()throws Exception{
+        try(Fixture f=new Fixture()){
+            assertEquals(0,f.page().getJSONObject("effectComparison").getInt("eligibleApplications"));
+            f.claim();f.receipt(SkillExecution.Status.COMPLETED);
+            JSONObject page=f.page(),row=page.getJSONArray("applications").getJSONObject(0),effect=row.getJSONObject("effectEvidence");
+            assertTrue(effect.getBoolean("inputComparable"));assertTrue(effect.getBoolean("environmentComparable"));
+            assertEquals("frozen_skill_request",effect.getString("inputCoverage"));
+            assertEquals("probed_backend_and_workspace_revision",effect.getString("environmentCoverage"));
+            assertEquals(1,page.getJSONObject("effectComparison").getInt("eligibleApplications"));
+            assertEquals(1,page.getJSONObject("effectComparison").getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0).getInt("unreviewed"));
+            f.receipt(SkillExecution.Status.RUNNING);f.receipt(SkillExecution.Status.FAILED);
+            JSONObject unchanged=f.page().getJSONArray("applications").getJSONObject(0).getJSONObject("effectEvidence");
+            assertEquals(effect.getString("evidenceFingerprint"),unchanged.getString("evidenceFingerprint"));
+            assertFalse(unchanged.getBoolean("businessSuccessVerified"));assertFalse(unchanged.getBoolean("replayAllowed"));
+        }
+    }
 }
