@@ -10,16 +10,19 @@ import java.util.Objects;
 import java.util.function.Supplier;
 import org.json.JSONObject;
 
-/** Request-only OS facts. Not input-origin provenance, external time verification,
+/** Request-only OS facts plus separately identified original input provenance. Not external time verification,
  * a scheduler, authorization or another persisted message history. */
 final class RequestClockContext {
-    static final int MAX_REFERENCE_BYTES=2048;
+    static final int MAX_REFERENCE_BYTES=24576; // At most the original 64 admitted rows plus native phone goal; no bodies.
     private final Clock clock;private final Supplier<ZoneId> zones;
     RequestClockContext(Clock clock,Supplier<ZoneId> zones){this.clock=Objects.requireNonNull(clock);this.zones=Objects.requireNonNull(zones);}
     static RequestClockContext system(){return new RequestClockContext(Clock.systemUTC(),ZoneId::systemDefault);}
-    JSONObject capture()throws Exception {
+    JSONObject capture()throws Exception {return capture(null);}
+    JSONObject capture(JSONObject inputOrigins)throws Exception {
+        JSONObject origins=inputOrigins==null?new JSONObject().put("format","pocketworld.input-origin-clock-context.v1").put("source","original_input_source_unavailable").put("status","missing").put("canonicalZoneId",JSONObject.NULL).put("zones",new org.json.JSONArray()).put("executionAuthorized",false).put("schedulesChanged",false):new JSONObject(inputOrigins.toString());
+        if(!"pocketworld.input-origin-clock-context.v1".equals(origins.optString("format"))||!java.util.Set.of("unique","mixed","missing").contains(origins.optString("status"))||origins.optBoolean("executionAuthorized")||origins.optBoolean("schedulesChanged")||origins.toString().getBytes(StandardCharsets.UTF_8).length>22528)throw new SecurityException("native_input_clock_projection_invalid");
         JSONObject result=new JSONObject().put("format","pocketworld.request-clock.v1").put("source","native_host_os_clock")
-                .put("externalTimeVerified",false).put("inputOriginTimeZones","not_projected")
+                .put("externalTimeVerified",false).put("inputOriginTimeZones",origins.getString("status")).put("inputOrigins",origins)
                 .put("sampling","logical_request_construction;transport_retries_keep_snapshot")
                 .put("executionAuthorized",false).put("schedulesChanged",false);
         Instant sampled;
@@ -35,7 +38,10 @@ final class RequestClockContext {
         }catch(RuntimeException unavailable){return result.put("zoneStatus","unavailable");}
     }
     String referenceData()throws Exception {
-        String reference="本次逻辑请求构建时的宿主OS时钟快照；不是外部校时、各输入来源时区或授权。传输重试沿用该快照，下一回合重采；不改变原预算或已有schedule时区。\n<native_request_clock>\n"+capture()+"\n</native_request_clock>";
+        return referenceData(null);
+    }
+    String referenceData(JSONObject inputOrigins)throws Exception {
+        String reference="本次逻辑请求构建时的宿主OS时钟快照；不是外部校时或授权。inputOrigins单列原输入首次接纳的时间和IANA来源，mixed/missing不可用宿主时区补成主人所在地。传输重试沿用该快照，下一回合重采；不改变原预算或已有schedule时区。\n<native_request_clock>\n"+capture(inputOrigins)+"\n</native_request_clock>";
         if(reference.getBytes(StandardCharsets.UTF_8).length>MAX_REFERENCE_BYTES)throw new IllegalStateException("native_request_clock_reference_exceeded");
         return reference;
     }

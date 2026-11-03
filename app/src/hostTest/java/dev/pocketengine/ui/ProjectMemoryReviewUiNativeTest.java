@@ -55,7 +55,21 @@ public final class ProjectMemoryReviewUiNativeTest {
         JSONObject snapshot(){return controller.getState().ownerSnapshot("memoryReview");}
         JSONObject response(String command){return controller.getState().ownerResponses("memoryReview").get(command);}
         JSONObject request(String command,JSONObject payload)throws Exception{controller.requestOwnerDomain("memoryReview",command,payload);settle();return response(command);}
-        JSONObject result(String command,JSONObject payload)throws Exception{JSONObject reply=request(command,payload);assertTrue(reply==null?"no native reply":reply.toString(),reply!=null&&reply.getBoolean("ok"));return reply.getJSONObject("result");}
+        private Object diagnosticField(Object target,String name)throws Exception{var field=target.getClass().getDeclaredField(name);field.setAccessible(true);return field.get(target);}
+        private int diagnosticEpoch()throws Exception{return ((java.util.Map<String,Integer>)diagnosticField(controller,"ownerEpochs")).getOrDefault("memoryReview",0);}
+        private String missingReplyDiagnostic(String command,String expectedId,int beforeEpoch)throws Exception{
+            var requests=(java.util.Map<?,?>)diagnosticField(controller,"ownerRequests");Object pending=requests.get("memoryReview."+command);
+            boolean matches=pending!=null&&expectedId.equals(diagnosticField(pending,"id"));
+            boolean epochMatches=pending!=null&&((Integer)diagnosticField(pending,"epoch"))==diagnosticEpoch();
+            return "no native reply; closed="+diagnosticField(controller,"closed")
+                    +"; epochUnchanged="+(beforeEpoch==diagnosticEpoch())
+                    +"; pending="+(pending!=null)+"; requestMatches="+matches+"; pendingEpochMatches="+epochMatches
+                    +"; callbackPostOrHandled=unobserved";
+        }
+        JSONObject result(String command,JSONObject payload)throws Exception{
+            int beforeEpoch=diagnosticEpoch();String expectedId=controller.requestOwnerDomain("memoryReview",command,payload);settle();JSONObject reply=response(command);
+            assertTrue(reply==null?missingReplyDiagnostic(command,expectedId,beforeEpoch):reply.toString(),reply!=null&&reply.getBoolean("ok"));return reply.getJSONObject("result");
+        }
         ProjectMemoryNamespaces.Selection token()throws Exception{var field=PocketWorldController.class.getDeclaredField("memoryReviewScope");field.setAccessible(true);Object scope=field.get(controller);var getter=scope.getClass().getDeclaredMethod("getSelected");getter.setAccessible(true);return (ProjectMemoryNamespaces.Selection)getter.invoke(scope);}
         JSONObject file()throws Exception{return result("projectFileChoices",new JSONObject()).getJSONArray("files").getJSONObject(0);}
         JSONObject propose(JSONObject file)throws Exception{return result("proposeProjectFile",new JSONObject().put("path",file.getString("path")).put("version",file.getInt("version")).put("revisionId",file.getString("revisionId")).put("sha256",file.getString("sha256")).put("offset",0).put("chars",4000));}

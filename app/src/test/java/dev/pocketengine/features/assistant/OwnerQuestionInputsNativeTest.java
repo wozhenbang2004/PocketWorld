@@ -55,12 +55,14 @@ public final class OwnerQuestionInputsNativeTest {
     }
     @Test public void oneAnswerReopensOnlyOriginalRunAndOriginalQueueWithoutRewritingGrant()throws Exception{try(Fixture f=new Fixture()){
         String grant=f.grant();JSONObject accepted=f.consume("Use the original second option");assertTrue(accepted.getBoolean("accepted"));assertFalse(accepted.getBoolean("duplicate"));assertFalse(accepted.getBoolean("executionAuthorized"));
+        JSONObject admitted=f.tasks.get(f.id,false).getJSONArray("ownerInputs").getJSONObject(1),clock=admitted.getJSONObject("inputOriginClock");assertEquals(admitted.getLong("acceptedAt"),clock.getLong("receivedAtEpochMillis"));assertEquals("native_phone_owner_admission",clock.getString("source"));String firstClock=clock.toString();
         assertNull(OwnerQuestionReply.reference(f.tasks.get(f.id,false)));JSONObject source=f.history.source(accepted.getString("messageId"));assertEquals("user",source.getString("role"));assertEquals(f.conversation,source.getString("conversationId"));
         assertEquals("Use the original second option",f.history.message(f.conversation,source.getString("sourceId")).getString("content"));assertEquals("awaiting_user",f.tasks.get(f.id,false).getString("status"));
         JSONObject resumed=f.tasks.resumeOwnerQuestionRun(f.waiting);assertEquals(f.run,resumed.getString("runId"));assertEquals(f.epoch,resumed.getInt("coordinatorEpoch"));assertEquals("preparing",resumed.getString("status"));assertEquals(grant,f.grant());assertEquals(1,f.count("runs"));assertEquals(0,f.count("operations"));
         assertTrue(f.tasks.ownerQuestionContinuationActive(f.id,f.run,f.epoch,f.original));assertTrue(resumed.getJSONObject("ownerInputMailbox").getBoolean("open"));
         JSONArray polled=f.tasks.pollOwnerInputs(f.id,f.run,f.epoch,new JSONArray(),true,false,f.original);assertEquals(1,polled.length());assertEquals(accepted.getString("messageId"),polled.getJSONObject(0).getString("messageId"));
         assertThrows(Exception.class,()->f.tasks.resumeOwnerQuestionRun(f.waiting));assertTrue(f.consume("Use the original second option").getBoolean("duplicate"));assertEquals(2,f.tasks.get(f.id,false).getJSONArray("ownerInputs").length());assertEquals(grant,f.grant());
+        assertEquals(firstClock,f.tasks.get(f.id,false).getJSONArray("ownerInputs").getJSONObject(1).getJSONObject("inputOriginClock").toString());
     }}
     @Test public void concurrentExactNoticeConsumeCreatesOneUserSourceAndChangedReplyCannotReplaceIt()throws Exception{try(Fixture f=new Fixture()){
         var workers=Executors.newFixedThreadPool(2);try{

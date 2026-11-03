@@ -126,6 +126,10 @@ public final class MemoryModule implements EngineModule {
     public boolean isSourceForgotten(JSONObject authenticatedScope,SourceRef ref)throws Exception {
         return book.isSourceForgotten(authenticatedScope,ref);
     }
+    /** Native owner reader only; not an EngineModule command or a model tool. */
+    public boolean isSavedEventForgotten(JSONObject authenticatedScope,String task,String run,long sequence,String eventRevision)throws Exception {
+        return book.isSavedEventForgotten(authenticatedScope,task,run,sequence,eventRevision);
+    }
     public JSONObject forgetReviewed(JSONObject authenticatedScope,String id,long expectedRevision,MemoryBook.BeforeForget receipt)throws Exception {
         JSONObject result=book.forgetReviewed(authenticatedScope,id,expectedRevision,receipt);
         context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));return result;

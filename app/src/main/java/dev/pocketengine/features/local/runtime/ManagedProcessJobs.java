@@ -25,7 +25,8 @@ public final class ManagedProcessJobs implements AutoCloseable {
     private volatile java.util.function.Consumer<JSONObject> receiptSink=receipt->{};
     private volatile java.util.function.Consumer<ProcessInputReceipt> inputSink=receipt->{throw new IllegalStateException("runtime_pty_native_receipt_sink_missing");};
     private volatile boolean inputSinkReady;
-    private final Map<String,Job> unresolvedPtyLeases=new HashMap<>();
+    // Original live objects retained after an unconfirmed drain/release; never restored from JSON.
+    private final Map<String,Job> unresolvedLeases=new HashMap<>();
     private boolean closing;
     private static final int MAX_LOG_BYTES=8*1024*1024;
     private static final class Job {
@@ -277,8 +278,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                         .put("preparationPhase",unknown?"observation_unknown":"interrupted");
             }catch(Exception ignored){}}
         } finally {
-            boolean leaseClosed=false;
-            try {job.lease.close();leaseClosed=true;}catch(Exception failed){synchronized(job){try{job.receipt.put("leaseError",true).put("error","runtime_resource_release_unconfirmed");}catch(Exception ignored){}}}
+            boolean leaseClosed=releaseObservedLease(job,releaseProven);
             synchronized(job) {try {
                 job.receipt.put("ownedWorkerLive",false).put("resourcesReleased",leaseClosed&&releaseProven).put("status",leaseClosed?finalStatus:"unknown");
                 if(leaseClosed&&"completed".equals(finalStatus))job.receipt.put("preparationPhase","ready");
@@ -369,11 +369,9 @@ public final class ManagedProcessJobs implements AutoCloseable {
             job.sourceWrites.writeLock().lock();
             try{
                 boolean markerClean=job.devSession==null||job.devSession.cleanupMarker();
-                boolean leaseClosed=false;
-                // An unconfirmed PTY session may retain foreground/background groups or an observed
-                // escaped descendant. Keep its real environment lease, not merely a JSON flag.
-                if((job.terminalInput==null&&job.pipeInput==null)||groupAbsent)try {job.lease.close();leaseClosed=true;} catch(Exception error) {synchronized(job){try{job.receipt.put("leaseError",true).put("error","runtime_resource_release_unconfirmed");}catch(Exception ignored){}}}
-                if((job.terminalInput!=null||job.pipeInput!=null)&&!leaseClosed)synchronized(this){unresolvedPtyLeases.put(job.id,job);}
+                // Ordinary jobs and preparation subprocesses require the same actual cleanup proof
+                // as PTY/pipe sessions before releasing their original environment lease.
+                boolean leaseClosed=releaseObservedLease(job,groupAbsent);
                 if(job.terminalInput!=null)try{pendingInputs=job.terminalInput.closeAndObserveNeverDequeued();}catch(Exception failed){synchronized(job){try{job.receipt.put("terminalInputCloseUnknown",true);}catch(Exception ignored){}}}
                 if(job.pipeInput!=null)job.pipeInput.close();
                 synchronized(job) {
@@ -395,6 +393,14 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 }catch(Exception ignored){}}
             }
         }
+    }
+    private boolean releaseObservedLease(Job job,boolean releaseProven) {
+        boolean closed=false;
+        // No jobs/Job monitor is held while entering the environment. A failed close is never retried.
+        if(releaseProven)try {job.lease.close();closed=true;}
+        catch(Exception failure){synchronized(job){try{job.receipt.put("leaseError",true).put("error","runtime_resource_release_unconfirmed");}catch(Exception ignored){}}}
+        if(!closed)synchronized(this){unresolvedLeases.put(job.id,job);}
+        return closed;
     }
     private void deliverReceipt(Job job,JSONObject actual)throws Exception {
         if(job.pipeAdmission==null)receiptSink.accept(actual);
@@ -618,6 +624,6 @@ public final class ManagedProcessJobs implements AutoCloseable {
         for(Job job:jobs)cancelPreparationIo(job);
         long until=System.currentTimeMillis()+5000;
         for(Job job:jobs) {long remaining=until-System.currentTimeMillis();if(remaining>0)job.thread.join(remaining);}
-        synchronized(this) {if(!live.isEmpty()||!unresolvedPtyLeases.isEmpty())throw new IllegalStateException("runtime_process_drain_unconfirmed");}
+        synchronized(this) {if(!live.isEmpty()||!unresolvedLeases.isEmpty())throw new IllegalStateException("runtime_process_drain_unconfirmed");}
     }
 }

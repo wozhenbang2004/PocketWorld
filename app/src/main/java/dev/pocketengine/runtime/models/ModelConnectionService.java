@@ -47,6 +47,23 @@ public final class ModelConnectionService {
         });
         ModelRequestPolicy.installHostSource(this::resolve);
         dev.pocketengine.runtime.ModelGateway.installModelGroupAdmission(settings::requireModelGroupAdmission);
+        StepModelRouting.installHostSource(new StepModelRouting.Source() {
+            public StepModelRouting.Preference preference(ModelConfig original) throws Exception {
+                JSONObject value=settings.stepRoutingPreferences();if(!value.getBoolean("enabled"))return null;
+                var selected=new StepModelRouting.Preference(value.getLong("revision"),value.getString("planFingerprint"),
+                        value.getString("candidateId"),value.getInt("minimumSuccesses"));
+                requireCurrent(selected,original);return selected;
+            }
+            public void requireCurrent(StepModelRouting.Preference expected,ModelConfig original) throws Exception {
+                synchronized(settings){JSONObject live=settings.stepRoutingPreferences();
+                    if(!live.getBoolean("enabled")||live.getLong("revision")!=expected.revision()
+                            ||!expected.planFingerprint().equals(StepModelRouting.planFingerprint(original.routePlan))
+                            ||!expected.planFingerprint().equals(StepModelRouting.planFingerprint(settings.get().routePlan)))
+                        throw new SecurityException("step_routing_original_configuration_changed");
+                }
+            }
+            public boolean capabilitiesKnown(ModelConfig candidate,boolean images)throws Exception {return stepRoutingCapabilities(candidate,images);}
+        });
         InferencePricing.installHostSource(this::resolvePrice);
         settings.installImageCapabilities(config -> {
             ModelCatalog.View view=resolve(config);if(view==null)return false;
@@ -67,6 +84,45 @@ public final class ModelConnectionService {
                     fact.source==ModelFacts.Source.OWNER_OVERRIDE?ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE:ContextBudgetPolicy.SourceKind.PROVIDER_METADATA,
                     Math.max(1,view.ownerRevision()),Math.max(1,fact.observedAtMillis));
         });
+    }
+
+    private boolean stepRoutingCapabilities(ModelConfig selected,boolean images)throws Exception {
+        ModelFacts facts;
+        if(selected.usesAccount()){
+            AccountCatalogFacts account=dev.pocketengine.runtime.ModelGateway.accountModelFacts(selected.accountModel);
+            if(account==null)return false;facts=account.facts;
+        }else {ModelCatalog.View view=resolve(selected);if(view==null)return false;facts=view.facts();}
+        return facts.toolCalls().known&&Boolean.TRUE.equals(facts.toolCalls().value)
+                &&(!images||facts.imageInput().known&&Boolean.TRUE.equals(facts.imageInput().value));
+    }
+    /** Metadata-only opt-in over existing MAIN candidates. No model selection, probe or HTTP request. */
+    public JSONObject stepRoutingSnapshot()throws Exception {
+        JSONObject out=settings.stepRoutingPreferences();JSONArray candidates=new JSONArray();out.put("candidates",candidates).put("currentPlanFingerprint","").put("configurationCurrent",false);
+        ModelConfig current;
+        try{current=settings.get();}catch(Exception unavailable){return out.put("availability","main_selection_unavailable");}
+        ModelRoutePlan plan=current.routePlan;var primary=StepModelRouting.primary(plan);
+        if(plan==null||plan.groupRevision<1||primary==null||!"MAIN".equals(plan.purpose)||!"APP_OWNER".equals(plan.audience))
+            return out.put("availability","select_existing_main_group");
+        String fingerprint=StepModelRouting.planFingerprint(plan);out.put("currentPlanFingerprint",fingerprint)
+                .put("configurationCurrent",fingerprint.equals(out.optString("planFingerprint"))).put("primaryModel",primary.config().model);
+        for(var candidate:plan.candidates)if(candidate!=primary&&candidate.config()!=null&&candidate.exclusion().isEmpty()){
+            boolean known=false;try{known=stepRoutingCapabilities(candidate.config(),current.sendScreenshots);}catch(Exception unavailable){/* Unknown stays unknown. */}
+            candidates.put(new JSONObject().put("candidateId",candidate.candidateId()).put("model",candidate.config().model)
+                    .put("provider",candidate.config().provider).put("capabilitiesKnown",known));
+        }
+        return out.put("availability",candidates.length()==0?"no_existing_light_candidate":"available");
+    }
+    public JSONObject saveStepRouting(boolean enabled,long expectedRevision,String expectedPlanFingerprint,String candidateId)throws Exception {
+        synchronized(settings){
+            if(enabled){ModelConfig selected=settings.get();ModelRoutePlan plan=selected.routePlan;var primary=StepModelRouting.primary(plan);
+                if(plan==null||plan.groupRevision<1||primary==null||!"MAIN".equals(plan.purpose)||!"APP_OWNER".equals(plan.audience)
+                        ||!expectedPlanFingerprint.equals(StepModelRouting.planFingerprint(plan)))throw new SecurityException("step_routing_original_configuration_changed");
+                ModelRoutePlan.Candidate chosen=null;for(var c:plan.candidates)if(c!=primary&&c.candidateId().equals(candidateId)&&c.config()!=null&&c.exclusion().isEmpty())chosen=c;
+                if(chosen==null||!stepRoutingCapabilities(chosen.config(),selected.sendScreenshots))throw new IllegalStateException("轻量候选的工具或图片能力未知，请先在原模型目录核对。");
+            }
+            settings.saveStepRoutingPreference(enabled,expectedRevision,expectedPlanFingerprint,candidateId);
+        }
+        return stepRoutingSnapshot();
     }
 
     /** Native owner mounting only. Never accepts a replacement for the original TaskStore. */

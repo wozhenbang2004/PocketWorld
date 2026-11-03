@@ -39,8 +39,27 @@ public final class EngineApplication extends Application implements dev.pocketen
     public SettingsStore settings;
     public dev.pocketengine.runtime.models.ModelConnectionService modelConnections;
     public TaskStore tasks;
+    private dev.pocketengine.runtime.usage.NativeDiagnosticsHost nativeDiagnostics;
+    /** Native owner UI only; not exposed through featureRequest or model tools. */
+    public synchronized dev.pocketengine.runtime.usage.NativeDiagnosticsHost nativeDiagnostics(){
+        if(nativeDiagnostics==null)nativeDiagnostics=new dev.pocketengine.runtime.usage.NativeDiagnosticsHost(new java.io.File(getFilesDir(),"diagnostics/native-traces.json"),tasks);
+        return nativeDiagnostics;
+    }
     public FeatureHost features;
     public final ExecutionResources resources=new ExecutionResources();
+    private dev.pocketengine.features.evaluation.NativeEvaluationHost evaluationHost;
+    /** Native owner-only entry. All model work is submitted to the existing capability executor. */
+    public synchronized dev.pocketengine.features.evaluation.NativeEvaluationHost nativeEvaluations(){
+        if(evaluationHost==null)evaluationHost=new dev.pocketengine.features.evaluation.NativeEvaluationHost(tasks,getFilesDir().toPath().resolve("synthetic-evaluations"),new dev.pocketengine.features.evaluation.NativeEvaluationHost.Models(){
+            public ModelConfig selected()throws Exception{return settings.get();}
+            public ModelConfig current(ModelConfig captured)throws Exception{return settings.currentForCaptured(captured);}
+        },(id,model,original,completion)->{
+            RunControl previous=capabilityControls.putIfAbsent(id,original);if(previous!=null&&previous!=original)throw new SecurityException("原评测任务已有执行");
+            try{capabilityWorkers.execute(()->{Exception failed=null;try{runCapabilityAttempt(id,null,model,original);}catch(Exception unavailable){failed=unavailable;}finally{completion.finished(failed);pushTask(id);}});}
+            catch(Exception unavailable){capabilityControls.remove(id,original);throw unavailable;}
+        });
+        return evaluationHost;
+    }
     private volatile String activeTaskId;
     private volatile RunControl activeControl;
     private volatile ModelConfig activeConfig;
@@ -1105,6 +1124,10 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(original!=retainedTaskControl(id))throw new SecurityException("原手机输入控制器已变化");
         tasks.openPhoneOwnerInputMailbox(id,run,epoch,original);
         return new dev.pocketengine.runtime.AgentRunner.OwnerInputs(){
+            @Override public JSONObject clockContext(java.util.List<String> included,RunControl live)throws Exception {
+                if(live!=original||original!=retainedTaskControl(id))throw new SecurityException("原手机输入控制器已变化");
+                return tasks.ownerInputClockContext(id,run,epoch,included,original,true);
+            }
             @Override public JSONArray poll(JSONArray included,boolean boundary,boolean close,RunControl live)throws Exception {
                 if(live!=original||original!=retainedTaskControl(id))throw new SecurityException("原手机输入控制器已变化");
                 return tasks.pollPhoneOwnerInputs(id,run,epoch,included,boundary,close,original);
@@ -1153,6 +1176,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     private CapabilityPort capabilitiesForTask(String id,RunControl original,PhonePort selectedPhone,ModelConfig inference)throws Exception{return capabilitiesForTask(id,original,selectedPhone,inference,null);}
     private CapabilityPort capabilitiesForTask(String id,RunControl original,PhonePort selectedPhone,ModelConfig inference,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selectedProfile)throws Exception{
         JSONObject task=tasks.get(id,false);if(task==null)throw new IllegalArgumentException("任务不存在");
+        if(task.has("evaluation")){if(selectedPhone!=null||selectedProfile!=null)throw new SecurityException("合成评测不能获得真实手机或工作配置工具");return nativeEvaluations().capability(id,original);}
         if(dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(task)){var device=originalDeviceGoalSession(id);if(device==null||device.originalControl()!=original)throw new SecurityException("没有该设备目标的原生闭集执行器");return deviceGoalCapabilities(device);}
         String run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
         var extensionBinding=new dev.pocketengine.runtime.extensions.ExtensionRuntime.Binding(id,run,epoch);checkLiveExtensionControl(extensionBinding,original);
@@ -1642,6 +1666,9 @@ public final class EngineApplication extends Application implements dev.pocketen
             }:null;
             final String[] lastOwnerReplyAttempted={null},lastOwnerReplyRecorded={null};
             dev.pocketengine.runtime.AgentRunner.OwnerInputs inputs=ownerMailbox?new dev.pocketengine.runtime.AgentRunner.OwnerInputs(){
+                @Override public JSONObject clockContext(java.util.List<String> included,RunControl live)throws Exception{
+                    if(capabilityControls.get(id)!=control||live!=control)throw new SecurityException("原聊天输入控制器已变化");return tasks.ownerInputClockContext(id,admittedRun,admittedEpoch,included,live,false);
+                }
                 @Override public JSONArray poll(JSONArray included,boolean boundary,boolean close,RunControl live)throws Exception{
                     if(capabilityControls.get(id)!=control||live!=control)throw new SecurityException("原聊天输入控制器已变化");return tasks.pollOwnerInputs(id,admittedRun,admittedEpoch,included,boundary,close,live);
                 }
@@ -1688,6 +1715,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     /** Called after capabilitiesForTask created C4's one current-run raw binding, including phone tasks. */
     public dev.pocketengine.core.RunJournal journalForTask(String id,String run,int epoch,RunControl original,ModelConfig capturedInference)throws Exception{
         dev.pocketengine.core.RunJournal journal=tasks.journal(id,run,epoch,original);JSONObject task=tasks.get(id,false),source=task==null?null:task.optJSONObject("origin");
+        if(task!=null&&task.has("evaluation"))return journal; // Closed synthetic history; no private memory projection or second journal.
         if(task==null||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||source!=null&&source.optString("kind").matches("channel|group"))return journal;
         var raw=rawMemoryBinding(id,run,epoch,original);
         return dev.pocketengine.features.teams.TeamParentResearchHistory.journal(journal.withCompaction(tasks.compactionJournal(id,run,epoch,original,raw,()->{
