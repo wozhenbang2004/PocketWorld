@@ -27,4 +27,24 @@ public final class ReferenceHistoryTest {
   java.lang.reflect.Method durable=AgentRunner.class.getDeclaredMethod("durableHistory",JSONArray.class,dev.pocketengine.core.ModelConfig.class);durable.setAccessible(true);
   JSONArray saved=(JSONArray)durable.invoke(null,history,new dev.pocketengine.core.ModelConfig("","","fixture",false,3,10));assertTrue(saved.toString().contains("actual-effect-evidence"));assertEquals("reference-call",saved.getJSONObject(saved.length()-1).getString("tool_call_id"));
  }
+ @Test public void nativeBodyFreeRefusalSurvivesNextRequestAndCheckpointWithoutKeepingErrorProse()throws Exception{
+  java.lang.reflect.Method durable=AgentRunner.class.getDeclaredMethod("durableHistory",JSONArray.class,dev.pocketengine.core.ModelConfig.class);durable.setAccessible(true);
+  for(String tool:new String[]{"memory_search","memory_recall","skills_read","skills_list"})for(String code:new String[]{"invalid_arguments","tool_withdrawn","owner_intent_read_only"}){
+   JSONArray history=history(tool,new JSONObject().put("ok",false).put("code",code).put("message","source-body-must-not-survive"));
+   AgentRunner.refreshReferenceHistory(history,null);JSONObject next=new JSONObject(history.getJSONObject(1).getString("content"));
+   assertFalse(next.getBoolean("ok"));assertEquals(code,next.getString("code"));assertEquals(3,next.length());assertFalse(history.toString().contains("source-body-must-not-survive"));
+   JSONArray saved=(JSONArray)durable.invoke(null,history,new dev.pocketengine.core.ModelConfig("","","fixture",false,3,10));
+   // durableHistory inserts the canonical system entry when this isolated history has none.
+   JSONObject savedTool=saved.getJSONObject(saved.length()-1);assertEquals("tool",savedTool.getString("role"));assertEquals("reference-call",savedTool.getString("tool_call_id"));
+   assertEquals(code,new JSONObject(savedTool.getString("content")).getString("code"));assertFalse(saved.toString().contains("source-body-must-not-survive"));
+  }
+ }
+ @Test public void refusalCodeCannotPreserveExtraSourceFieldsOrUnrecognizedErrorBodies()throws Exception{
+  for(String field:new String[]{"context","records","content","sourceRef"}){
+   JSONArray history=history("memory_search",new JSONObject().put("ok",false).put("code","invalid_arguments").put("message","stale-body").put(field,"stale-body"));
+   AgentRunner.refreshReferenceHistory(history,live());assertEquals("reference_expired",new JSONObject(history.getJSONObject(1).getString("content")).getString("code"));assertFalse(history.toString().contains("stale-body"));
+  }
+  JSONArray unknown=history("memory_recall",new JSONObject().put("ok",false).put("code","custom_failure").put("message","stale-body"));
+  AgentRunner.refreshReferenceHistory(unknown,live());assertEquals("reference_expired",new JSONObject(unknown.getJSONObject(1).getString("content")).getString("code"));assertFalse(unknown.toString().contains("stale-body"));
+ }
 }
