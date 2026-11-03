@@ -582,14 +582,17 @@
   "aion-team-wake": {
     "class": "dev.pocketengine.features.teams.TeamWakeQueueTest",
     "additionalClasses": [
-      "dev.pocketengine.features.teams.TeamWakeOriginalHostJourneyTest"
+      "dev.pocketengine.features.teams.TeamWakeOriginalHostJourneyTest",
+      "dev.pocketengine.features.teams.TeamResearchWakeNativeJourneyTest",
+      "dev.pocketengine.features.teams.TeamResearchPeerWakeNativeJourneyTest"
     ],
     "helpers": [
       "dev.pocketengine.features.teams.TeamParentRunnerJourneyTest",
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.teams.TeamResearchParentNativeJourneyTest"
     ],
     "robolectric": true,
-    "description": "Original bounded owner-policy continuation: thirteen pure wake contracts and ten native owner/SQL/Runner/page journeys. Local AUTHORIZED_CONTROL only; no peer, background, research or remote route acceptance."
+    "description": "Original bounded owner-policy continuation across production and readonly research paths. Native owner/SQL/Runner/page and separately opt-in peer wake checks retain original scopes, parent pools, completed-child cleanup, revocation and duplicate-claim boundaries. Background, cross-restart, completed-member automatic reopening and physical-device acceptance remain outside this selection."
   },
   "memory-project-namespaces": {
     "class": "dev.pocketengine.features.memory.ProjectMemoryNamespacesNativeTest",
@@ -912,5 +915,18 @@
     ],
     "robolectric": true,
     "description": "Original operation and native input/environment/version evidence, owner quality feedback, repeat/cancel/stale callback/legacy compatibility, bounded observational comparison; real original Runner and workspace write with scripted loopback model. No inferred business success, causality, promotion or new authorization."
+  },
+  "runtime-development-continuity": {
+    "class": "dev.pocketengine.features.local.project.ProjectExecutionContinuityJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.RuntimeActivityCaptionTest",
+      "dev.pocketengine.features.local.project.ProjectCommandSpecTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest"
+    ],
+    "native": true,
+    "robolectric": true,
+    "description": "Original approved command short wait then same-execution observation, exact total deadline and native cancel/drain. Real original SQLite/JNI Node exit7, live silence, immutable cursor logs, read-only owner reopening without input/stop authority, no per-poll activity journal growth and original private artifact capture. Includes exact command normalization/consent and same-operation UI enum projection; existing activity/PTY groups stay separate. No second Runner/job ledger, automatic replay, inferred input readiness, hardware or performance acceptance."
   }
 }

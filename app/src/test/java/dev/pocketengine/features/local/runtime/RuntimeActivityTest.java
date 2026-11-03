@@ -47,4 +47,15 @@ public final class RuntimeActivityTest {
         ack.put("nativeAcknowledged",false);assertEquals("unknown",view(live().put("lastTerminalInput",ack),0L,true).getJSONObject("input").getString("state"));
         ack.put("inputOperationId","not a native operation: private");assertFalse(view(live().put("lastTerminalInput",ack),0L,true).getJSONObject("input").has("operationId"));
     }
+    @Test public void observationWindowUsesOnlyOriginalLiveMonotonicStartWithoutExtendingDeadline()throws Exception{
+        JSONObject receipt=live().put("foregroundWaitMillis",500).put("backgroundObservationExplicitlyIncluded",true).put("timeoutMillis",5000);
+        JSONObject foreground=RuntimeActivity.describe("original-only",receipt,200L,true,499L).getJSONObject("observationWindow");
+        assertEquals("foreground_wait",foreground.getString("phase"));assertFalse(foreground.getBoolean("deadlineExtended"));assertFalse(foreground.getBoolean("executionAuthorized"));
+        JSONObject background=RuntimeActivity.describe("original-only",receipt,300L,true,500L).getJSONObject("observationWindow");
+        assertEquals("background_observation",background.getString("phase"));assertEquals(5000,background.getLong("totalTimeoutMillis"));assertTrue(background.getBoolean("sameExecution"));
+        receipt.put("ownedWorkerLive",false);assertEquals("observation_unknown",RuntimeActivity.describe("original-only",receipt,300L,true,500L).getJSONObject("observationWindow").getString("phase"));
+        receipt.put("ownedWorkerLive",true);assertEquals("observation_unknown",RuntimeActivity.describe("original-only",receipt,300L,true,null).getJSONObject("observationWindow").getString("phase"));
+        JSONObject done=exit(false).put("foregroundWaitMillis",500).put("backgroundObservationExplicitlyIncluded",true).put("timeoutMillis",5000);
+        assertEquals("exited",RuntimeActivity.describe("original-only",done,null,false,null).getJSONObject("observationWindow").getString("phase"));
+    }
 }
