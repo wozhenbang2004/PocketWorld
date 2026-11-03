@@ -4,7 +4,7 @@ import dev.pocketengine.core.RunControl;
 import java.util.List;
 import org.json.JSONObject;
 
-/** The production implementation uses PackageManager and the captured main-screen accessibility service. */
+/** The production implementation uses PackageManager and the captured phone display and user identity. */
 public interface SemanticPlatform {
     interface Admission { void check() throws Exception; }
     List<Target> discover(SemanticRequest request,RunControl control) throws Exception;
@@ -20,6 +20,7 @@ public interface SemanticPlatform {
             String safe=label==null?"":label.replaceAll("[\\p{Cntrl}]"," ");if(safe.length()>100)safe=safe.substring(0,100);
             description=new JSONObject().put("component",component).put("packageName",identity.getString("packageName"))
                     .put("label",safe).put("route",route).put("fingerprint",fingerprint).put("labelIsUntrusted",true);
+            for(String key:new String[]{"userId","profileSerial","uid"})if(identity.has(key))description.put(key,identity.get(key));
         }
         public JSONObject identity() throws Exception { return SemanticJson.copy(identity); }
         public JSONObject description() throws Exception { return SemanticJson.copy(description); }

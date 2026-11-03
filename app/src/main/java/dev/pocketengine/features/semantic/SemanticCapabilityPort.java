@@ -58,7 +58,7 @@ public final class SemanticCapabilityPort implements CapabilityPort {
     @Override public boolean supports(String name) { return own(name)||existing!=null&&existing.supports(name); }
     @Override public boolean sideEffecting(String name) { return own(name)?DISPATCH.equals(name):existing==null||existing.sideEffecting(name); }
     private JSONArray ownTools() throws Exception {
-        JSONArray out=new JSONArray().put(definition(DISCOVER,"发现真实可处理入口的App。web需要url；app_link需要准确packageName和HTTPS url，仍核OS App Links或浏览器处理资格，不接受自定义scheme；share_text需要packageName/text，仅传有界纯文本给选定App，接收方可能立即处理，启动不是已发送。两者都需原逐次审批并在一次启动后交主人核验。map_search需要query；dial需要number；email_draft需要to；calendar_draft需要title/start/end/timeZone，start/end为UTC毫秒，可含location/description；alarm需要24小时hour和minutes；timer需要seconds（1–86400），可含单行message。闹钟使用实际设备时区，不接受任意Intent/extra。发现不执行；空候选不代表App未安装。",SemanticRequest.discoverySchema()));
+        JSONArray out=new JSONArray().put(definition(DISCOVER,"发现真实可处理入口的App。web需要url；app_link需要准确packageName和HTTPS url，仍核OS App Links或浏览器处理资格，不接受自定义scheme；share_text需要packageName/text，仅传有界纯文本给选定App，接收方可能立即处理，启动不是已发送。两者都需原逐次审批并在一次启动后交主人核验。show_alarms打开闹钟列表；map_search需要query；dial需要number；email_draft需要to；calendar_draft需要title/start/end/timeZone，start/end为UTC毫秒，可含location/description；alarm需要24小时hour和minutes；timer需要seconds（1–86400），可含单行message。闹钟使用实际设备时区，不接受任意Intent/extra。发现不执行；空候选不代表App未安装。",SemanticRequest.discoverySchema()));
         if(dispatchEnabled)out.put(definition(DISPATCH,"请求打开本执行刚发现的固定App入口；需要原TaskStore具体参数审批与原operation。回执仅代表Android接受启动，随后需核验。拨号、邮件和日历交给用户完成；日历不代点保存。闹钟/计时请求可能立即生效，SKIP_UI=false不保证另有确认；仅在同意固定参数后派发一次，主人须核对实际结果，未知不重发。",dispatchSchema()));
         return out;
     }
@@ -137,7 +137,7 @@ public final class SemanticCapabilityPort implements CapabilityPort {
         JSONObject approval;
         try {approval=authority.approve(name,SemanticJson.copy(args),capability);}
         catch(Exception refused) {return refusal("needs_user","具体入口审批未获确认，尚未派发").put("requiresPause",true);}
-        if(!approval.optBoolean("approved"))return refusal("approval_required","需要主人确认固定App、入口参数和主屏位置，尚未执行")
+        if(!approval.optBoolean("approved"))return refusal("approval_required","需要主人确认固定App、入口参数和当前执行位置，尚未执行")
                 .put("approvalId",approval.optString("approvalId"));
         SemanticPlatform.Admission gate=()->{
             check(name,control);
@@ -152,12 +152,12 @@ public final class SemanticCapabilityPort implements CapabilityPort {
         JSONObject result;
         try { result=platform.dispatch(discovery.request,target,control,gate); }
         catch(Exception uncertain) { session.markUncertain();return unknown(operationId); }
-        if(result==null||!(result.opt("accepted") instanceof Boolean)||"unknown".equals(result.optString("status"))) {session.markUncertain();return unknown(operationId);}
+        if(result==null||!(result.opt("accepted") instanceof Boolean)||"unknown".equals(result.optString("status"))) {session.markUncertain();JSONObject out=unknown(operationId);if(result!=null)out.put("nativeResult",SemanticJson.copy(result));return out;}
         boolean accepted=result.getBoolean("accepted");
         JSONObject out=new JSONObject().put("ok",accepted).put("accepted",accepted).put("verified",false).put("verifiedBusinessSuccess",false)
                 .put("operationId",operationId).put("status",accepted?"launch_requested":"not_dispatched")
                 .put("code",accepted?"semantic_launch_accepted":result.optString("code","semantic_not_dispatched"))
-                .put("target",target.description()).put("followup",discovery.request.followup())
+                .put("target",target.description()).put("followup",discovery.request.followup()).put("resource",resource).put("nativeResult",SemanticJson.copy(result))
                 .put("nextObservationAction",accepted?"observe":"none").put("requiresPostconditionCheck",accepted)
                 .put("automaticFallback",false).put("message",accepted?"Android已接受打开入口；请观察目标App核验实际页面，尚未确认业务完成":"Android入口未派发，请重新检查phone/DOM路径");
         if(result.optBoolean("requiresPause"))out.put("requiresPause",true);
