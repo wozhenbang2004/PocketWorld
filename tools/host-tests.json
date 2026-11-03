@@ -856,5 +856,48 @@
     ],
     "robolectric": true,
     "description": "Task-scoped CDP transport, response metadata/body pins and bounded DOM/network quiet barriers, through the original approval and cancellation paths. SDK35 host fixtures; physical WebView devtools transport requires device validation."
+  },
+  "memory-recall-quality": {
+    "class": "dev.pocketengine.features.memory.MemoryRecallQualityTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.MemoryRecallAgentJourneyNativeTest",
+      "dev.pocketengine.features.memory.MemorySemanticRecallNativeTest",
+      "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest",
+      "dev.pocketengine.features.memory.MemoryEntityAliasRetrievalNativeTest",
+      "dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackendTest",
+      "dev.pocketengine.features.memory.MemoryReadAudienceTest",
+      "dev.pocketengine.features.memory.MemoryQueryPlanTest",
+      "dev.pocketengine.features.memory.MemoryRecallAgentCorpusNativeTest",
+      "dev.pocketengine.runtime.ReferenceHistoryTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Frozen synthetic 16-development/8-holdout corpus: default lexical, pre-existing query suggestions, and bounded constrained entity paths. Real Book/SQLite/TaskStore/Runner/HTTP fixture, original history rereads, reference refusal/retirement, revision/forget/audience and SDK35 test-source boundaries; no live model rewrite accuracy, causal effect, phone UI or device acceptance."
+  },
+  "memory-evidence-plan": {
+    "class": "dev.pocketengine.features.memory.MemoryEvidencePlanNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.ConversationHistoryNativeTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original history capability with real SQLite multi-session originals and bounded conversation/message and task/run/operation plans, exact version/span/hash rereads, cancellation/withdrawal/cost/partial guards. Producer-window reservation is not a physical SQLite I/O measurement."
+  },
+  "memory-method-quality": {
+    "class": "dev.pocketengine.features.memory.MethodEffectEvidenceTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.MethodEffectComparisonTest",
+      "dev.pocketengine.features.memory.LearnedMethodDecisionNativeTest",
+      "dev.pocketengine.features.skills.LearnedMethodApplicationsNativeTest",
+      "dev.pocketengine.features.memory.LearnedMethodReceiptTest",
+      "dev.pocketengine.features.skills.SkillQualityLifecycleTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original operation and native input/environment/version evidence, owner quality feedback, repeat/cancel/stale callback/legacy compatibility, bounded observational comparison; real original Runner and workspace write with scripted loopback model. No inferred business success, causality, promotion or new authorization."
   }
 }

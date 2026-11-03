@@ -13,7 +13,10 @@ public final class MemoryQueryPlan {
     public static final int MAX_QUERIES=4,MAX_QUERY_CHARS=500,MAX_TOTAL_CHARS=1500;
     private static final Set<String> FALLBACKS=Set.of("not_requested","empty_query");
     private final List<String> queries;private final String status,reason;
-    private MemoryQueryPlan(List<String> queries,String status,String reason){this.queries=List.copyOf(queries);this.status=status;this.reason=reason;}
+    private final MemoryRecallConstraints constraints;
+    private final boolean enriched;
+    private MemoryQueryPlan(List<String> queries,String status,String reason){this(queries,status,reason,MemoryRecallConstraints.compatibility(),false);}
+    private MemoryQueryPlan(List<String> queries,String status,String reason,MemoryRecallConstraints constraints,boolean enriched){this.queries=List.copyOf(queries);this.status=status;this.reason=reason;this.constraints=constraints;this.enriched=enriched;}
     public static MemoryQueryPlan lexical(String original,String reason){
         String query=checked(original);if(!FALLBACKS.contains(reason))throw new IllegalArgumentException("未知检索降级原因");
         return new MemoryQueryPlan(List.of(query),"lexical",reason);
@@ -22,6 +25,12 @@ public final class MemoryQueryPlan {
     public static MemoryQueryPlan agentSuggested(String original,JSONArray suggestions)throws Exception{
         java.util.Objects.requireNonNull(suggestions);if(suggestions.length()==0)return lexical(original,"not_requested");
         return rewritten(original,new JSONObject().put("queries",new JSONArray(suggestions.toString())).toString());
+    }
+    /** Explicit bounded semantic plan. Suggestions use the existing metered MAIN request;
+     * local graph/reranking performs no extra network/model request and grants no source. */
+    public static MemoryQueryPlan agentSuggested(String original,JSONArray suggestions,JSONObject constraints)throws Exception{
+        MemoryQueryPlan base=agentSuggested(original,suggestions);
+        return new MemoryQueryPlan(base.queries,"bounded_semantic_recall","main_queries_and_current_entity_links",MemoryRecallConstraints.checked(constraints),true);
     }
     static MemoryQueryPlan rewritten(String original,String response)throws Exception{
         String query=checked(original);if(query.isEmpty())throw new IllegalArgumentException("空主查询不能由建议替代");
@@ -39,7 +48,11 @@ public final class MemoryQueryPlan {
         return new MemoryQueryPlan(List.copyOf(unique),"agent_query_rewrite","bounded_query_suggestions");
     }
     public List<String> queries(){return queries;}
-    public JSONObject metadata()throws Exception{return new JSONObject().put("strategy",status).put("reason",reason).put("queryCount",queries.size()).put("scopeChanged",false).put("executionAuthorized",false).put("modelUseVerified",false);}
+    MemoryRecallConstraints constraints(){return constraints;}
+    boolean enriched(){return enriched;}
+    public JSONObject metadata()throws Exception{return new JSONObject().put("strategy",status).put("reason",reason).put("queryCount",queries.size()).put("constraints",constraints.metadata())
+            .put("querySuggestionSource",queries.size()>1?"existing_metered_MAIN":"original_query").put("additionalModelRequests",0).put("additionalNetworkRequests",0)
+            .put("scopeChanged",false).put("executionAuthorized",false).put("modelUseVerified",false);}
     private static String checked(String value){
         if(value==null||value.length()>MAX_QUERY_CHARS)throw new IllegalArgumentException("检索查询最多500字");MemoryBook.validateUnicode(value);
         String result=value.trim();for(int i=0;i<result.length();i++){char c=result.charAt(i);if(Character.isISOControl(c)&&c!='\n'&&c!='\r'&&c!='\t')throw new IllegalArgumentException("检索查询含控制字符");}return result;

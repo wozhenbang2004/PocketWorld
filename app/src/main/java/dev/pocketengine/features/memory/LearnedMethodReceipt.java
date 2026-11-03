@@ -36,6 +36,12 @@ public final class LearnedMethodReceipt {
                 .put("methodBusinessSuccessVerified",false).put("executionAuthorized",false).put("replayAllowed",false);
         if(claimed)result.put("claimedAt",original.getLong("claimedAt"));
         if(receipt!=null)for(String key:java.util.List.of("backendReceiptId","exitCode","outputSha256","outputBytes","outputTruncated"))if(receipt.has(key))result.put(key,receipt.get(key));
+        result.put("effectEvidence",MethodEffectEvidence.captureSkillAttempt(original,result));
+        if(original.optJSONObject("qualityFeedback")!=null){
+            JSONObject originalQuality=original.getJSONObject("qualityFeedback"),quality=new JSONObject();
+            for(String key:java.util.List.of("taskId","runId","operationId","skillId","revision","digest","executionGeneration","originRef","outcome","at","evidenceKind","originalReceiptFingerprint","automaticallyVerified","executionAuthorized","methodEffectEvidence"))if(originalQuality.has(key))quality.put(key,originalQuality.get(key));
+            result.put("qualityFeedback",quality);
+        }
         return result;
     }
 }

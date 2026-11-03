@@ -1229,6 +1229,37 @@ public final class MemoryBook {
             if(current!=null&&scope.matches(current)&&active.contains(id)&&live.contains(id)&&prior.getLong("revision")==current.getLong("revision")&&retrievalSourcesLive(current,verified))result.put(viewRecord(current));
         }return result;
     }
+    /** Disposable query-local graph. Every seed still passes the existing lexical/FTS gate;
+     * only reviewed, typed stable identities connect currently admitted formal revisions. */
+    private MemorySemanticRecall.Result semanticCandidates(Scope scope,MemoryQueryPlan plan,Set<String> active)throws Exception{
+        List<JSONArray> channels=new ArrayList<>();
+        for(String query:plan.queries())channels.add(query.isEmpty()?new JSONArray():search(scope,query,MAX_RECORDS,active));
+        Set<String> live=activeIds(System.currentTimeMillis());Map<SourceRef,Boolean> verified=new LinkedHashMap<>();List<JSONObject> admitted=new ArrayList<>();
+        for(JSONObject row:records.values())if(scope.matches(row)&&active.contains(row.getString("id"))&&live.contains(row.getString("id"))&&retrievalSourcesLive(row,verified))admitted.add(retrievalConstraintView(row));
+        return MemorySemanticRecall.rank(admitted,channels,plan);
+    }
+    private JSONObject retrievalConstraintView(JSONObject row)throws Exception{
+        Map<String,SourceRef> evidence=new LinkedHashMap<>();collectEvidence(row,evidence,new HashSet<>());JSONArray refs=new JSONArray();for(SourceRef ref:evidence.values())refs.put(ref.toJson());return copy(row).put("sourceRefs",refs);
+    }
+    private boolean retrievalPathCurrent(Scope scope,MemorySemanticRecall.Result result,MemorySemanticRecall.Candidate candidate,Set<String> live,Map<SourceRef,Boolean> verified)throws Exception{
+        for(String id:candidate.path){JSONObject expected=result.rows.get(id),current=records.get(id);
+            if(current==null||!scope.matches(current)||!live.contains(id)||expected.getLong("revision")!=current.getLong("revision")||!retrievalSourcesLive(current,verified))return false;
+        }return true;
+    }
+    /** Body-free derivation dependencies; never a second copy of the recalled text. */
+    private JSONObject retrievalReference(Scope scope,JSONObject row)throws Exception{
+        Map<String,SourceRef> evidence=new LinkedHashMap<>();collectEvidence(row,evidence,new HashSet<>());JSONArray refs=new JSONArray();for(SourceRef ref:evidence.values())refs.put(ref.toJson());
+        return new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId).put("id",row.getString("id")).put("revision",row.getLong("revision")).put("selection","retrieved").put("sourceRefs",refs);
+    }
+    synchronized void requireRetrievalDependencies(Scope scope,JSONObject snapshot,MemoryAudienceSelection audience)throws Exception{
+        JSONArray refs=snapshot.optJSONArray("retrievalDependencies");if(refs==null)return;
+        if(refs.length()>64)throw new SecurityException("语义检索依赖超过原run范围");Set<String> seen=new HashSet<>();
+        for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);String id=ref.getString("id");
+            if(!scope.ownerId.equals(ref.getString("ownerId"))||!scope.spaceId.equals(ref.getString("spaceId"))||!seen.add(id)
+                    ||audience!=null&&!audience.permits(id,ref.getLong("revision"))||!"current".equals(taskReferenceState(scope,ref).getString("status")))
+                throw new SecurityException("检索路径的原版本已更正、遗忘或撤回，未提供旧派生结果");
+        }
+    }
     static MemoryRetrievalBackend.Document retrievalDocument(JSONObject row,MemoryEntityAliasProjection aliases)throws Exception {
         StringBuilder searchable=new StringBuilder(row.getString("text"));JSONObject assertion=row.optJSONObject("assertion");
         // Reviewed semantics are a disposable lexical projection, never a second record body.
@@ -1417,14 +1448,21 @@ public final class MemoryBook {
         long now=System.currentTimeMillis();Set<String> active=retrievalActiveIds(s,now,audience),coreIds=new HashSet<>();
         if(audience!=null)active.removeIf(id->{JSONObject row=records.get(id);return row==null||!audience.permits(id,row.optLong("revision",-1));});
         List<JSONObject> core=new ArrayList<>();
-        for(JSONObject value:records.values())if(s.matches(value)&&active.contains(value.getString("id"))&&value.optBoolean("core",false)){
+        for(JSONObject value:records.values())if(s.matches(value)&&active.contains(value.getString("id"))&&value.optBoolean("core",false)&&(!plan.enriched()||plan.constraints().matches(retrievalConstraintView(value)))){
             core.add(value);coreIds.add(value.getString("id"));
         }
         core.sort(Comparator.comparingLong((JSONObject value)->value.optLong("updatedAt")).reversed()
                 .thenComparing(value->value.optString("id")));
         // A long current task must not suppress core preferences. Only lexical input is bounded.
         String lexicalQuery=plan.queries().get(0);
-        JSONArray hits=plan.queries().size()==1?(lexicalQuery.isEmpty()?new JSONArray():search(s,lexicalQuery,MAX_RECORDS,active)):searchQueries(s,plan,active);
+        MemorySemanticRecall.Result semantic=plan.enriched()?semanticCandidates(s,plan,active):null;JSONArray hits;
+        if(semantic==null)hits=plan.queries().size()==1?(lexicalQuery.isEmpty()?new JSONArray():search(s,lexicalQuery,MAX_RECORDS,active)):searchQueries(s,plan,active);
+        else{
+            hits=new JSONArray();Set<String> live=activeIds(System.currentTimeMillis());Map<SourceRef,Boolean> verified=new LinkedHashMap<>();
+            for(MemorySemanticRecall.Candidate candidate:semantic.candidates)if(retrievalPathCurrent(s,semantic,candidate,live,verified))
+                hits.put(viewRecord(records.get(candidate.id)).put("retrievalEvidence",new JSONObject().put("path",MemorySemanticRecall.pathRefs(semantic,candidate))
+                        .put("role","relevance_path_not_causal_or_truth_proof").put("originalEvidenceRead",false)));
+        }
         List<JSONObject> retrieved=new ArrayList<>();
         for(int i=0;i<hits.length();i++){
             JSONObject hit=hits.getJSONObject(i);
@@ -1440,17 +1478,22 @@ public final class MemoryBook {
         }
         JSONObject packed=MemoryRecallBudget.pack(core,retrieved,admitted,boundedLimit,boundedChars,CONTEXT_HEADER,queryTruncated,lexicalQuery.length(),retrieval.status().getString("backend"));
         JSONArray kept=packed.getJSONArray("records");String context=packed.getString("context");int keptCore=packed.getInt("coreSelected"),keptRetrieved=packed.getInt("retrievedSelected"),retrievedAvailable=retrieved.size();
-        return new JSONObject().put("scope",new JSONObject().put("ownerId",s.ownerId).put("spaceId",s.spaceId))
+        JSONObject snapshot=new JSONObject().put("scope",new JSONObject().put("ownerId",s.ownerId).put("spaceId",s.spaceId))
                 .put("generatedAt",now).put("records",kept).put("context",context).put("selectionDiagnostics",packed.getJSONObject("selectionDiagnostics"))
                 .put("retrieval","core_plus_"+retrieval.status().getString("backend")).put("queryTruncated",queryTruncated).put("authority","lower_priority_reference_data")
                 .put("executionAuthorized",false).put("limit",boundedLimit).put("maxChars",boundedChars).put("charsUsed",context.length())
                 .put("coreAvailable",core.size()).put("retrievedAvailable",retrievedAvailable)
                 .put("omittedCore",core.size()-keptCore).put("omittedRetrieved",retrievedAvailable-keptRetrieved)
                 .put("truncated",kept.length()<core.size()+retrievedAvailable).put("queryPlan",plan.metadata());
+        if(semantic!=null){
+            Set<String> selected=new HashSet<>(),seen=new HashSet<>();for(int i=0;i<kept.length();i++)selected.add(kept.getJSONObject(i).getString("id"));JSONArray dependencies=new JSONArray();
+            for(MemorySemanticRecall.Candidate candidate:semantic.candidates)if(selected.contains(candidate.id))for(String id:candidate.path)if(seen.add(id))dependencies.put(retrievalReference(s,semantic.rows.get(id)));
+            snapshot.put("retrievalDependencies",dependencies).put("retrievalDiagnostics",semantic.diagnostics());requireRetrievalDependencies(s,snapshot,audience);
+        }return snapshot;
     }
 
     synchronized void requireAudienceSnapshotCurrent(Scope scope,JSONObject snapshot,MemoryAudienceSelection audience)throws Exception{
-        if(audience==null)return;JSONArray selected=snapshot.getJSONArray("records");Set<String> active=retrievalActiveIds(scope,System.currentTimeMillis(),audience);
+        if(audience==null)return;requireRetrievalDependencies(scope,snapshot,audience);JSONArray selected=snapshot.getJSONArray("records");Set<String> active=retrievalActiveIds(scope,System.currentTimeMillis(),audience);
         for(int i=0;i<selected.length();i++){JSONObject prior=selected.getJSONObject(i),current=records.get(prior.getString("id"));
             if(current==null||!scope.matches(current)||!active.contains(current.getString("id"))||!audience.permits(current.getString("id"),current.getLong("revision"))
                     ||prior.getLong("revision")!=current.getLong("revision"))throw new SecurityException("成员选定记忆已换版、撤回或失效，未返回旧正文");
@@ -1466,10 +1509,12 @@ public final class MemoryBook {
             if(!prior.getString("text").equals(require(scope,prior.getString("id")).getString("text")))throw new SecurityException("记忆正文已变化");
             refs.put(reference.put("textDigest",dev.pocketengine.runtime.usage.InferenceCapture.historyDigest(new JSONObject().put("text",prior.getString("text")))));
         }
-        return new JSONObject().put("scope",new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId)).put("records",refs);
+        requireRetrievalDependencies(scope,snapshot,null);JSONObject result=new JSONObject().put("scope",new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId)).put("records",refs);
+        if(snapshot.has("retrievalDependencies"))result.put("retrievalDependencies",new JSONArray(snapshot.getJSONArray("retrievalDependencies").toString()));return result;
     }
     public synchronized void requireContextDependency(JSONObject dependency)throws Exception {
         Scope scope=Scope.from(dependency.getJSONObject("scope"));JSONArray refs=dependency.getJSONArray("records");
+        requireRetrievalDependencies(scope,dependency,null);
         if(refs.length()>MAX_CONTEXT_RECORDS)throw new SecurityException("记忆选择超出范围");
         for(int i=0;i<refs.length();i++){
             JSONObject ref=refs.getJSONObject(i),state=taskReferenceState(scope,ref);
