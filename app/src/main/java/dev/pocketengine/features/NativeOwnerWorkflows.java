@@ -126,6 +126,10 @@ public final class NativeOwnerWorkflows {
                 return module.readHistoryRecordForOwner(payload.getString("id"),positiveVersion(payload,"revision"));
             }
             case "resolveAssertionConflictReviewed":return sources.resolveAssertionConflictReviewed(scope,payload.getJSONArray("records"),payload.getString("decision"),payload.optString("selectedId"),payload.getString("reason"));
+            case "correctReviewed":{
+                for(var keys=payload.keys();keys.hasNext();)if(!java.util.Set.of("id","expectedRevision","text").contains(keys.next()))throw new SecurityException("纠正只能提交当前原记忆版本与新正文，不能自报来源或范围");
+                return sources.correctReviewed(scope,payload.getString("id"),positiveVersion(payload,"expectedRevision"),payload.getString("text"));
+            }
             case "readAssertionEvidence":return sources.readAssertionEvidence(scope,SourceRef.fromJson(payload.getJSONObject("sourceRef")),Math.toIntExact(nativeOffset(payload,"offset")),Math.toIntExact(positiveVersion(payload,"chars")),payload.getString("sha256"));
             case "acceptCandidate":return module.acceptCandidate(scope,payload.getString("id"),positiveVersion(payload,"revision"));
             case "candidateCapacity":return module.candidateCapacity(scope);

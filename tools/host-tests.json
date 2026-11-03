@@ -128,7 +128,10 @@
       "dev.pocketengine.features.KnowledgeLearningWorkflowTest",
       "dev.pocketengine.features.assistant.AutomaticOwnerUtteranceNativeTest",
       "dev.pocketengine.ui.AutomaticUserLearningUiNativeTest",
-      "dev.pocketengine.store.RetainedDevelopmentAdmissionTest"
+      "dev.pocketengine.store.RetainedDevelopmentAdmissionTest",
+      "dev.pocketengine.features.memory.SourceLearningJobNativeTest",
+      "dev.pocketengine.features.memory.SourceLearningJobContractTest",
+      "dev.pocketengine.features.memory.SourceLearningAttemptBudgetNativeTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer",
@@ -136,7 +139,7 @@
       "dev.pocketengine.features.channels.ChannelSecurityTest"
     ],
     "robolectric": true,
-    "description": "Thirty-six exact original SQLite/USER-source/opt-in/draft, retained-service admission, native Controller settings and Application/Runner loopback methods, including withdrawal after physical model send and honest capability/policy state. Helpers compile only; no real provider, Compose visual or device acceptance."
+    "description": "Original SQLite/USER-source/opt-in/draft and actual Application/Runner loopback paths. Native extraction contract pins the real prompt/schema/policy and actual model receipt; v1 draft recovery remains zero-call with explicit unknown provenance, v2 must match. Single-batch physical-attempt budget, no_candidate/unknown/skip, cancellation and source retirement. No live provider, visual or device acceptance."
   },
   "memory-assertion-recall": {
     "class": "dev.pocketengine.features.memory.MemoryAssertionRetrievalNativeTest",
@@ -156,7 +159,7 @@
       "dev.pocketengine.ui.ProjectMemoryReviewUiNativeTest"
     ],
     "robolectric": true,
-    "description": "Eighty exact typed-field/native SQLite/lexical fusion, private/project retained-history and existing owner Controller/Compose methods. Project history uses the same opaque native Selection/Book/SourceRef fences as original project list/get; it never falls back to global. Exact scope/query/revision/cursor/source/forget/cold and stale-callback boundaries remain. Default model recall stays current-only; unknown archiveOnly is not activated. No new model call, member/group grant, semantic backend, screenshots, visual or device acceptance."
+    "description": "Typed-field/native SQLite/lexical fusion, private/project retained history and original owner Controller/Compose paths. Currentness, native correction and reviewed conflict priority, candidate explanation retention, exact source/revision/cursor/forget and stale callback gates. Default model recall remains current-only. No new member/group grant, live provider, screenshots, visual or device acceptance."
   },
   "memory-consolidation": {
     "class": "dev.pocketengine.features.memory.MemoryConsolidationConfidenceTest",
@@ -185,16 +188,18 @@
     "additionalClasses": [
       "dev.pocketengine.features.memory.MemoryAssertionTest",
       "dev.pocketengine.features.memory.MemoryContinuityJourneyNativeTest",
-      "dev.pocketengine.features.workspace.OwnerExperienceLearningDraftProjectionTest"
+      "dev.pocketengine.features.workspace.OwnerExperienceLearningDraftProjectionTest",
+      "dev.pocketengine.features.workspace.OwnerDataArchiveJourneyTest"
     ],
     "helpers": [
       "dev.pocketengine.features.memory.MemoryAssertionTest",
       "dev.pocketengine.testutil.HttpServer",
       "dev.pocketengine.features.channels.ChannelTaskHostTest",
-      "dev.pocketengine.features.channels.ChannelSecurityTest"
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.features.workspace.OwnerDataArchiveFixture"
     ],
     "robolectric": true,
-    "description": "Twenty-seven exact original Book/archive regressions plus native Application/Runner loopback continuity and exact learning-draft archive withdrawal projections. Helpers compile only; no real provider semantics, Compose visual or device acceptance."
+    "description": "Original Book/assertion/experience and real owner import/branch -> ZIP -> cold-install read paths, plus Application/Runner loopback continuity and learning-draft archive withdrawal. Declared evidence gaps, source barriers, scoped passive restoration, future-event and native-review priority. Helpers compile only; no provider semantics, visual or device acceptance."
   },
   "browser-long-page": {
     "class": "dev.pocketengine.browser.BrowserLongPageNativeTest",
@@ -696,7 +701,8 @@
       "dev.pocketengine.features.memory.MemoryOwnerArchiveTest",
       "dev.pocketengine.features.workspace.ProjectMemoryArchiveNativeTest",
       "dev.pocketengine.features.workspace.ProjectMemoryArchiveMountedNativeTest",
-      "dev.pocketengine.ui.ProjectMemoryArchiveUiNativeTest"
+      "dev.pocketengine.ui.ProjectMemoryArchiveUiNativeTest",
+      "dev.pocketengine.ui.OwnerExperienceArchiveUiNativeTest"
     ],
     "helpers": [
       "dev.pocketengine.features.workspace.OwnerDataArchiveFixture",
@@ -864,6 +870,7 @@
     "class": "dev.pocketengine.features.memory.MemoryRecallQualityTest",
     "additionalClasses": [
       "dev.pocketengine.features.memory.MemoryRecallAgentJourneyNativeTest",
+      "dev.pocketengine.features.memory.HistoricalMemoryRecallAgentNativeTest",
       "dev.pocketengine.features.memory.MemorySemanticRecallNativeTest",
       "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest",
       "dev.pocketengine.features.memory.MemoryEntityAliasRetrievalNativeTest",
@@ -915,5 +922,24 @@
     "native": true,
     "robolectric": true,
     "description": "Original approved command short wait then same-execution observation, exact total deadline and native cancel/drain. Real original SQLite/JNI Node exit7, live silence, immutable cursor logs, read-only owner reopening without input/stop authority, no per-poll activity journal growth and original private artifact capture. Includes exact command normalization/consent and same-operation UI enum projection; existing activity/PTY groups stay separate. No second Runner/job ledger, automatic replay, inferred input readiness, hardware or performance acceptance."
+  },
+  "memory-lifecycle": {
+    "class": "dev.pocketengine.features.memory.EngineMemorySendAdmissionTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.MemorySendAdmissionTest",
+      "dev.pocketengine.features.channels.ChannelInferenceAudienceJourneyTest",
+      "dev.pocketengine.features.channels.QqC2CStreamJourneyTest",
+      "dev.pocketengine.features.channels.ChannelAnswerPagesTest",
+      "dev.pocketengine.features.channels.ChannelHttpTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.channels.QqOwnerImageJourneyTest",
+      "dev.pocketengine.features.channels.GroupTaskFlowsTest",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original Application/Gateway/Book/source retirement and owner-channel HTTP/SSE/outbox paths. Exact physical-send and post-response checks, already-accepted QQ ACK preservation, cancellation and unknown-no-replay. Controlled loopback endpoints; no live provider/platform or phone acceptance."
   }
 }

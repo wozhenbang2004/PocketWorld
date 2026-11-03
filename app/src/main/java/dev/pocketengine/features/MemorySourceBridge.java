@@ -122,7 +122,10 @@ public final class MemorySourceBridge {
     /** A pinned learning parent also requires source read eligibility, not only matching revision. */
     public void requireLearningReference(SourceRef expected)throws Exception {
         requireCurrentReference(expected);
-        if("message".equals(expected.kind)&&read(expected)==null)throw new SecurityException("原消息来源不可读"); // Also rejects retired/context-retired original messages.
+        // Read eligibility can retire without changing the original identity/revision.
+        // Keep large workspace/attachment reads out of this parent admission check.
+        boolean originalTaskSnapshot="task_evidence".equals(expected.kind)&&expected.sourceId.startsWith("task:")&&expected.sourceId.endsWith(":verified_result");
+        if(("message".equals(expected.kind)||originalTaskSnapshot)&&read(expected)==null)throw new SecurityException("原学习来源不可读");
     }
     public KnowledgeLearningWorkflow.SourceDocument read(SourceRef ref)throws Exception{
         if("workspace_file".equals(ref.kind))return readWorkspace(ref);

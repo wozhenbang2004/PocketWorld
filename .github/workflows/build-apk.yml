@@ -236,7 +236,7 @@ jobs:
         shell: bash
     env:
       HOST_TEST_GROUP: ${{ inputs.host_group }}
-      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && 'memory-recall-quality,memory-evidence-plan,memory-method-quality' || inputs.host_groups }}
+      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && 'memory-recall-quality,memory-evidence-plan,memory-method-quality,memory-automatic,memory-assertion-recall,memory-consolidation,memory-learning-assertions,memory-experience,memory-archive-currentness,memory-project-namespaces,memory-lifecycle' || inputs.host_groups }}
       POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
     steps:
       - name: Check out selected revision

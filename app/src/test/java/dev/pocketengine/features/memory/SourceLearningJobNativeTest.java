@@ -43,7 +43,7 @@ public final class SourceLearningJobNativeTest {
         final Context android=RuntimeEnvironment.getApplication();final FeatureContext context=new FeatureContext(android,new SettingsStore(android),new SecretVault(android),event->{});
         final File archive=new File(android.getFilesDir(),"learning-original-"+UUID.randomUUID()+".json");
         TaskStore tasks;AssistantModule assistant;MemoryModule memory;SkillsModule skills;SQLiteDatabase db;
-        final AtomicReference<InferenceReceipt> terminal=new AtomicReference<>();int modelCalls;String task,run;int epoch;RunControl control;Hook afterModel=()->{};boolean resultNull;
+        final AtomicReference<InferenceReceipt> terminal=new AtomicReference<>();int modelCalls;String task,run,lastInstruction;int epoch;RunControl control;Hook afterModel=()->{};boolean resultNull;
         Fixture(int count)throws Exception{android.deleteDatabase("pocket-world.db");open();tasks.conversationRepository().transaction(()->{tasks.conversationRepository().saveConversation(new JSONObject().put("conversationId","learning-private").put("title","逐批原文").put("messages",new JSONArray()));for(int i=0;i<count;i++){SourceRef source=ref(i);tasks.conversationRepository().saveSource(source.toJson().put("conversationId","learning-private").put("role","user").put("deleted",false));tasks.conversationRepository().saveMessage("learning-private",new JSONObject().put("id",source.sourceId).put("revision",source.revision).put("role","user").put("content","OWNER SOURCE "+i+"：前提不满足时不要使用此方法。"));}return null;});JSONArray inputs=new JSONArray();for(int i=0;i<count;i++)inputs.put(input(ref(i)));task=tasks.createSourceLearningJob(inputs).getString("taskId");}
         void open()throws Exception{tasks=new TaskStore(android);var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);db=(SQLiteDatabase)field.get(tasks);assistant=new AssistantModule(context,null,null,tasks);memory=new MemoryModule(context,(identity,kind,id)->assistant.resolveSource(identity,id));skills=new SkillsModule(context);}
         void reopen()throws Exception{assistant.close();db.close();open();}
@@ -54,13 +54,26 @@ public final class SourceLearningJobNativeTest {
         JSONObject invoke(int max)throws Exception{return new SourceLearningJob(tasks,task,run,epoch,control,workflow(),terminal::get,()->null,max).run();}
         void end(String status)throws Exception{tasks.endAttempt(task,run,status,"fixture native invocation stopped",new JSONObject().put("formalMemorySaved",false));}
         KnowledgeLearningWorkflow workflow(){RunControl original=control;return new KnowledgeLearningWorkflow(memory,skills,assistant::readMemorySource,(messages,current)->{
-            terminal.set(null);JSONObject active=snapshot().getJSONObject("active");int index=active.getInt("index");var target=tasks.sourceLearningInferenceTarget(task,run,epoch,active.getString("operationId"),original);
+            terminal.set(null);lastInstruction=messages.getJSONObject(0).getString("content");JSONObject active=snapshot().getJSONObject("active");int index=active.getInt("index");var target=tasks.sourceLearningInferenceTarget(task,run,epoch,active.getString("operationId"),original);
             target=InferenceCapture.observe(target,new InferenceCapture.Sink(){public void started(InferenceReceipt r){}public void finished(InferenceReceipt r){terminal.set(r);}});
             target=InferenceCapture.withAdmission(target,()->{original.check();JSONObject expected=snapshot().getJSONObject("job").getJSONArray("inputs").getJSONObject(index);assertEquals(expected.getString("sourceFingerprint"),input(SourceRef.fromJson(expected.getJSONObject("sourceRef"))).getString("sourceFingerprint"));});
             var capture=new InferenceCapture(new ModelConfig("https://fixture.invalid","fixture-key","fixture-model",false,20,10),original,target);capture.dispatch();modelCalls++;capture.finish(InferenceReceipt.Outcome.COMPLETED);afterModel.run();return new JSONObject().put("content",resultNull?"null":draft(index).toString());
         },new MemoryHostFence(){public void check()throws Exception{original.check();}public JSONObject admit(Admission action)throws Exception{synchronized(tasks){original.check();return action.run();}}});}
         JSONObject invoke()throws Exception{return new SourceLearningJob(tasks,task,run,epoch,control,workflow(),terminal::get,()->null).run();}
-        JSONObject cacheNext()throws Exception{JSONObject job=snapshot().getJSONObject("job");int index=job.getInt("nextIndex");JSONObject input=job.getJSONArray("inputs").getJSONObject(index),active=tasks.beginSourceLearningBatch(task,run,epoch,index,control);JSONObject recorded=workflow().extractRecordedLearning(scope(),SourceRef.fromJson(input.getJSONObject("sourceRef")),input.getString("sourceFingerprint"),control);tasks.recordSourceLearningDraft(task,run,epoch,active.getString("operationId"),recorded,terminal.get(),control);return recorded;}
+        JSONObject cacheNext()throws Exception{JSONObject job=snapshot().getJSONObject("job");int index=job.getInt("nextIndex");JSONObject input=job.getJSONArray("inputs").getJSONObject(index);KnowledgeLearningWorkflow learning=workflow();SourceRef source=SourceRef.fromJson(input.getJSONObject("sourceRef"));JSONObject contract=learning.sourceLearningContract(scope(),source,input.getString("sourceFingerprint"),control),active=tasks.beginSourceLearningBatch(task,run,epoch,index,control,contract);JSONObject recorded=learning.extractRecordedLearning(scope(),source,input.getString("sourceFingerprint"),control);tasks.recordSourceLearningDraft(task,run,epoch,active.getString("operationId"),recorded,terminal.get(),control);return recorded;}
+        /** Persist a historical schema/strategy fixture, retaining the original real call receipt.
+         * This edits the fixture DB only; no production migration can rewrite these identities. */
+        JSONObject installHistoricalDraftFixture(boolean legacy)throws Exception{
+            String operation=snapshot().getJSONObject("active").getString("operationId");JSONObject taskDocument,args,receipt;
+            try(Cursor row=db.rawQuery("SELECT document FROM tasks WHERE task_id=?",new String[]{task})){assertTrue(row.moveToFirst());taskDocument=new JSONObject(row.getString(0));}
+            try(Cursor row=db.rawQuery("SELECT arguments,receipt FROM operations WHERE task_id=? AND operation_id=?",new String[]{task,operation})){assertTrue(row.moveToFirst());args=new JSONObject(row.getString(0));receipt=new JSONObject(row.getString(1));}
+            JSONObject active=taskDocument.getJSONObject("sourceLearningJob").getJSONObject("active"),recorded=receipt.getJSONObject("recordedDraft");
+            if(legacy){recorded.put("format","pocketworld.source-learning-draft.v1");recorded.remove("extractionContract");args.remove("extractionContract");active.remove("extractionContract");receipt.remove("extractionContractFingerprint");}
+            else{JSONObject contract=recorded.getJSONObject("extractionContract").put("promptSha256","0".repeat(64));args.put("extractionContract",new JSONObject(contract.toString()));active.put("extractionContract",new JSONObject(contract.toString()));receipt.put("extractionContractFingerprint",TaskStore.capabilityFingerprint(contract));}
+            String fingerprint=TaskStore.capabilityFingerprint(recorded);receipt.put("draftFingerprint",fingerprint).put("candidateBindingKey",TaskStore.capabilityFingerprint(new JSONObject().put("sourceRef",recorded.getJSONObject("sourceRef")).put("sourceFingerprint",recorded.getString("sourceFingerprint")).put("draftFingerprint",fingerprint).put("callId",receipt.getString("callId"))));
+            db.beginTransaction();try{db.execSQL("UPDATE tasks SET document=? WHERE task_id=?",new Object[]{taskDocument.toString(),task});db.execSQL("UPDATE operations SET arguments=?,receipt=? WHERE task_id=? AND operation_id=?",new Object[]{args.toString(),receipt.toString(),task,operation});db.setTransactionSuccessful();}finally{db.endTransaction();}
+            return new JSONObject(recorded.toString());
+        }
         int candidates()throws Exception{return memory.handle("listCandidates",new JSONObject().put("scope",scope())).getJSONArray("candidates").length();}
         public void close(){assistant.close();db.close();}
     }
@@ -126,6 +139,39 @@ public final class SourceLearningJobNativeTest {
             }).run();
             assertEquals("all_batches_settled",result.getString("invocationOutcome"));assertEquals(1,prepared[0]);assertEquals(1,f.modelCalls);assertEquals(1,f.candidates());
             assertEquals(1,f.snapshot().getJSONObject("job").getInt("nextIndex"));assertEquals(1,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));
+        }
+    }
+
+    @Test public void preparedContractDescribesTheActualPromptAndSourceWhileOriginalCallKeepsModelIdentity()throws Exception{
+        try(Fixture f=new Fixture(1)){f.start();JSONObject recorded=f.cacheNext(),active=f.snapshot().getJSONObject("active"),contract=recorded.getJSONObject("extractionContract");String operation=active.getString("operationId");
+            assertEquals(LearningExtractionContract.DRAFT_FORMAT,recorded.getString("format"));assertEquals(TaskMemoryUse.digest(f.lastInstruction),contract.getString("promptSha256"));assertEquals("current_contract",active.getString("extractionContractStatus"));assertTrue(LearningExtractionContract.supported(contract));assertTrue(contract.isNull("ownerPolicyFingerprint"));
+            try(Cursor row=f.db.rawQuery("SELECT arguments,receipt FROM operations WHERE task_id=? AND operation_id=?",new String[]{f.task,operation})){assertTrue(row.moveToFirst());JSONObject args=new JSONObject(row.getString(0)),receipt=new JSONObject(row.getString(1));LearningExtractionContract.requireSame(contract,args.getJSONObject("extractionContract"));assertEquals(TaskStore.capabilityFingerprint(contract),receipt.getString("extractionContractFingerprint"));assertFalse(row.getString(0).contains("OWNER SOURCE"));assertFalse(row.getString(0).contains("fixture-key"));assertEquals(f.terminal.get().callId,receipt.getString("callId"));}
+            assertEquals("fixture-model",f.terminal.get().toJson().getJSONObject("route").getString("requestedModel"));assertEquals(1,f.modelCalls);
+            f.invoke();JSONObject result=f.snapshot().getJSONObject("job").getJSONArray("results").getJSONObject(0);assertEquals("exact_source_snapshot",result.getString("coverage"));assertEquals(f.input(ref(0)).getString("sourceFingerprint"),result.getString("sourceFingerprint"));assertEquals(ref(0),SourceRef.fromJson(result.getJSONObject("sourceRef")));LearningExtractionContract.requireSame(contract,result.getJSONObject("extractionContract"));assertEquals(1,f.modelCalls);assertEquals(1,f.candidates());
+        }
+    }
+
+    @Test public void receivedNonemptyDraftCannotBeSettledAsNoCandidateOrLoseItsWatermark()throws Exception{
+        try(Fixture f=new Fixture(1)){f.start();JSONObject recorded=f.cacheNext();String operation=f.snapshot().getJSONObject("active").getString("operationId");
+            assertThrows(SecurityException.class,()->f.tasks.completeSourceLearningBatch(f.task,f.run,f.epoch,operation,new JSONObject().put("formalMemorySaved",false).put("outcome","no_candidate"),f.control));
+            assertEquals(0,f.snapshot().getJSONObject("job").getInt("nextIndex"));assertEquals(recorded.toString(),f.tasks.sourceLearningDraft(f.task,operation).toString());assertEquals(0,f.candidates());assertEquals(1,f.modelCalls);
+            f.invoke();assertEquals("awaiting_review",f.snapshot().getJSONObject("job").getJSONArray("results").getJSONObject(0).getString("outcome"));assertEquals(1,f.snapshot().getJSONObject("job").getInt("nextIndex"));assertEquals(1,f.candidates());assertEquals(1,f.modelCalls);
+        }
+    }
+
+    @Test public void historicalV1DraftAndNoCandidateKeepTheirZeroRequestColdRecoveryWithoutInventedContract()throws Exception{
+        for(boolean noCandidate:new boolean[]{false,true})try(Fixture f=new Fixture(1)){f.resultNull=noCandidate;f.start();f.cacheNext();String operation=f.snapshot().getJSONObject("active").getString("operationId");JSONObject historical=f.installHistoricalDraftFixture(true);f.reopen();
+            assertEquals("legacy_contract_unknown",f.snapshot().getJSONObject("active").getString("extractionContractStatus"));assertTrue(f.snapshot().getBoolean("canContinue"));assertEquals(historical.toString(),f.tasks.sourceLearningDraft(f.task,operation).toString());
+            f.start();assertEquals("all_batches_settled",f.invoke().getString("invocationOutcome"));assertEquals(1,f.modelCalls);assertEquals(noCandidate?0:1,f.candidates());JSONObject result=f.snapshot().getJSONObject("job").getJSONArray("results").getJSONObject(0);assertEquals(noCandidate?"no_candidate":"awaiting_review",result.getString("outcome"));assertEquals("legacy_contract_unknown",result.getString("extractionContractStatus"));assertTrue(result.isNull("extractionContract"));assertEquals(1,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));
+        }
+    }
+
+    @Test public void changedV2StrategyRemainsReadableButCannotPublishResendOrAdvanceWithoutOwnerSkip()throws Exception{
+        try(Fixture f=new Fixture(1)){f.start();f.cacheNext();String operation=f.snapshot().getJSONObject("active").getString("operationId");JSONObject historical=f.installHistoricalDraftFixture(false);f.reopen();
+            assertEquals("contract_changed_requires_review",f.snapshot().getJSONObject("active").getString("extractionContractStatus"));assertFalse(f.snapshot().getBoolean("canContinue"));assertTrue(f.snapshot().getBoolean("canSkipBatch"));assertEquals(historical.toString(),f.tasks.sourceLearningDraft(f.task,operation).toString());
+            f.start();assertThrows(SecurityException.class,f::invoke);assertEquals(1,f.modelCalls);assertEquals(0,f.candidates());assertEquals(0,f.snapshot().getJSONObject("job").getInt("nextIndex"));assertEquals(historical.toString(),f.tasks.sourceLearningDraft(f.task,operation).toString());
+            f.end("awaiting_user");assertThrows(SecurityException.class,()->f.tasks.skipSourceLearningBatch(f.task,f.snapshot().getJSONObject("job").getLong("revision"),false));f.tasks.skipSourceLearningBatch(f.task,f.snapshot().getJSONObject("job").getLong("revision"),true);
+            assertEquals(1,f.snapshot().getJSONObject("job").getInt("nextIndex"));assertEquals(1,f.snapshot().getJSONObject("job").getInt("reservedModelAttempts"));assertEquals(1,f.modelCalls);assertEquals(0,f.candidates());try(Cursor row=f.db.rawQuery("SELECT state,receipt FROM operations WHERE task_id=? AND operation_id=?",new String[]{f.task,operation})){assertTrue(row.moveToFirst());assertEquals("receipt",row.getString(0));assertEquals(historical.toString(),new JSONObject(row.getString(1)).getJSONObject("recordedDraft").toString());}
         }
     }
 

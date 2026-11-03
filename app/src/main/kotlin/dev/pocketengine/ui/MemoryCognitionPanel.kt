@@ -22,13 +22,14 @@ import org.json.JSONObject
     var sourceReading by remember { mutableStateOf<String?>(null) }
     var source by remember { mutableStateOf<JSONObject?>(null) }
     var mutation by remember { mutableStateOf<String?>(null) }
+    var mutationCommand by remember { mutableStateOf("resolveAssertionConflictReviewed") }
     var error by remember { mutableStateOf<String?>(null) }
     fun send(command: String, payload: JSONObject): String? = try { request(command, payload) } catch (failed: Exception) { error = failed.message ?: "原生请求未发送"; null }
     LaunchedEffect(evidenceVersion) { view = null; source = null; reading = null; sourceReading = null }
     LaunchedEffect(responses) {
-        reading?.let { id -> MemoryLearningReviewGuard.exactEnvelope(id, responses["cognitionProjection"])?.let { envelope -> view = envelope.optJSONObject("result").takeIf { envelope.optBoolean("ok") }; error = if (envelope.optBoolean("ok")) null else envelope.optString("error", "原认知读取失败"); reading = null } }
+        reading?.let { id -> MemoryLearningReviewGuard.exactEnvelope(id, responses["cognitionProjection"])?.let { envelope -> view = envelope.optJSONObject("result").takeIf { envelope.optBoolean("ok") && it?.optString("subjectId") == subject.trim() }; error = if (view != null) null else envelope.optString("error", "原认知读取已变化，请重新读取"); reading = null } }
         sourceReading?.let { id -> MemoryLearningReviewGuard.exactEnvelope(id, responses["readAssertionEvidence"])?.let { envelope -> source = envelope.optJSONObject("result").takeIf { envelope.optBoolean("ok") }; error = if (envelope.optBoolean("ok")) null else envelope.optString("error", "确切原文不可读"); sourceReading = null } }
-        mutation?.let { id -> MemoryLearningReviewGuard.exactEnvelope(id, responses["resolveAssertionConflictReviewed"])?.let { envelope -> mutation = null; source = null; view = null; error = if (envelope.optBoolean("ok")) "处理已保存，原证据保留；请重新读取当前认知。" else envelope.optString("error", "冲突版本已变化，请刷新"); } }
+        mutation?.let { id -> MemoryLearningReviewGuard.exactEnvelope(id, responses[mutationCommand])?.let { envelope -> mutation = null; source = null; view = null; error = if (envelope.optBoolean("ok")) "处理已保存，原证据保留；请重新读取当前认知。" else envelope.optString("error", "记忆版本已变化，请刷新"); } }
     }
     TextButton(onClick = { open = !open; view = null; source = null; reading = null; sourceReading = null }) { Text(if (open) "收起主体认知与冲突" else "查看主体认知、历史与冲突…") }
     if (!open) return
@@ -36,8 +37,9 @@ import org.json.JSONObject
     MemoryOwnerHistorySearch(responses, evidenceVersion, mutation == null, request,
         onClearEvidence = { source = null; sourceReading = null },
         onEvidence = { span -> source = null; sourceReading = send("readAssertionEvidence", span) },
-        onSubject = { id -> subject = id; source = null; view = null; reading = send("cognitionProjection", JSONObject().put("subjectId", id)) })
-    OutlinedTextField(subject, { subject = it; view = null; source = null }, label = { Text("稳定主体身份，主人为 owner") }, modifier = Modifier.fillMaxWidth())
+        onSubject = { id -> subject = id; source = null; sourceReading = null; view = null; reading = send("cognitionProjection", JSONObject().put("subjectId", id)) },
+        onCorrect = { row, text -> mutationCommand = "correctReviewed"; mutation = send("correctReviewed", JSONObject().put("id", row.getString("id")).put("expectedRevision", row.getLong("revision")).put("text", text)) })
+    OutlinedTextField(subject, { subject = it; view = null; source = null; reading = null; sourceReading = null }, label = { Text("稳定主体身份，主人为 owner") }, modifier = Modifier.fillMaxWidth())
     TextButton(onClick = { error = null; source = null; reading = send("cognitionProjection", JSONObject().put("subjectId", subject.trim())) }, enabled = reading == null && mutation == null) { Text("读取当前版本") }
     error?.let { Text(it, fontSize = 12.sp) }
     view?.let { current ->
@@ -52,7 +54,7 @@ import org.json.JSONObject
             }
         }
         cognitionRows(current.optJSONArray("pendingConflicts")).groupBy { row -> row.getJSONObject("assertion").let { it.optString("predicate") + "\u0000" + it.optString("condition") } }.forEach { (_, rows) ->
-            MemoryConflictReview(rows, mutation == null && "resolveAssertionConflictReviewed" !in pending) { payload -> mutation = send("resolveAssertionConflictReviewed", payload) }
+            MemoryConflictReview(rows, mutation == null && "resolveAssertionConflictReviewed" !in pending) { payload -> mutationCommand = "resolveAssertionConflictReviewed"; mutation = send("resolveAssertionConflictReviewed", payload) }
         }
     }
     source?.let { original -> Text("真实原span回读（不证明陈述为真，不授予执行权）", fontSize = 12.sp); SelectionContainer { Text(original.optString("text"), fontSize = 13.sp) } }
@@ -64,9 +66,9 @@ import org.json.JSONObject
     var coexist by remember(signature) { mutableStateOf(false) }
     var reason by remember(signature) { mutableStateOf("") }
     var confirm by remember(signature) { mutableStateOf(false) }
-    Text("同一主体、条件与有效时点存在冲突，未自动覆盖原证据。", fontSize = 12.sp)
-    rows.forEach { row -> Row { RadioButton(selected == row.optString("id"), { selected = row.optString("id"); coexist = false }, enabled = enabled); Text(row.optString("text"), modifier = Modifier.weight(1f), fontSize = 13.sp) } }
-    Row { Checkbox(coexist, { coexist = it }, enabled = enabled); Text("有理由地共存，不选择唯一当前值", fontSize = 12.sp) }
+    Text("这些陈述需要核对。更晚的推断不会自动替换主人纠正；原证据仍保留。", fontSize = 12.sp)
+    rows.forEach { row -> Row { RadioButton(selected == row.optString("id"), { selected = row.optString("id"); coexist = false }, enabled = enabled); Text((if (row.optString("reviewRole") == "protected_current") "当前保留：" else "待核对：") + row.optString("text"), modifier = Modifier.weight(1f), fontSize = 13.sp) } }
+    if (rows.size > 1) Row { Checkbox(coexist, { coexist = it }, enabled = enabled); Text("有理由地共存，不选择唯一当前值", fontSize = 12.sp) }
     OutlinedTextField(reason, { reason = it }, label = { Text("为什么保留 / 共存") }, modifier = Modifier.fillMaxWidth())
     TextButton(onClick = { confirm = true }, enabled = enabled && reason.trim().length in 1..1000) { Text("核对并处理这组精确版本…") }
     if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text(if (coexist) "保留这组事实共存？" else "选择这一当前事实？") }, text = { Text("原证据仍保留。所有旧版本认知视图和在途使用将失效；不把此决定当执行授权。理由：${reason.trim()}") }, confirmButton = { TextButton(onClick = { confirm = false; val refs = JSONArray(); rows.forEach { refs.put(JSONObject().put("id", it.getString("id")).put("revision", it.getLong("revision"))) }; submit(JSONObject().put("records", refs).put("decision", if (coexist) "coexist" else "replace").put("selectedId", if (coexist) "" else selected).put("reason", reason.trim())) }) { Text("确认所示版本") } }, dismissButton = { TextButton(onClick = { confirm = false }) { Text("返回核对") } })
@@ -78,7 +80,8 @@ private fun cognitionRows(rows: JSONArray?): List<JSONObject> = if (rows == null
     responses: Map<String, JSONObject>, evidenceVersion: String, enabled: Boolean,
     request: (String, JSONObject) -> String, onClearEvidence: () -> Unit,
     onEvidence: ((JSONObject) -> Unit)?, onSubject: ((String) -> Unit)?,
-    displayedScope: JSONObject? = null, onOriginalSource: ((JSONObject) -> Unit)? = null
+    displayedScope: JSONObject? = null, onOriginalSource: ((JSONObject) -> Unit)? = null,
+    onCorrect: ((JSONObject, String) -> Unit)? = null
 ) {
     val scopeKey = (displayedScope?.optString("ownerId") ?: "owner") + ":" + (displayedScope?.optString("spaceId") ?: "private")
     var query by remember(scopeKey) { mutableStateOf("") }
@@ -89,6 +92,8 @@ private fun cognitionRows(rows: JSONArray?): List<JSONObject> = if (rows == null
     var header by remember(scopeKey) { mutableStateOf<JSONObject?>(null) }
     var record by remember(scopeKey) { mutableStateOf<JSONObject?>(null) }
     var error by remember(scopeKey) { mutableStateOf<String?>(null) }
+    var correction by remember(scopeKey, evidenceVersion) { mutableStateOf<JSONObject?>(null) }
+    var correctionText by remember(scopeKey, evidenceVersion) { mutableStateOf("") }
     val live = remember(scopeKey) { java.util.concurrent.atomic.AtomicBoolean(true) }
     val currentEvidence by rememberUpdatedState(evidenceVersion)
     DisposableEffect(scopeKey) { onDispose { live.set(false) } }
@@ -96,6 +101,7 @@ private fun cognitionRows(rows: JSONArray?): List<JSONObject> = if (rows == null
     fun send(command: String, input: JSONObject): String? = try { request(command, input) } catch (failed: Exception) { error = failed.message ?: "原生旧事查阅未开始"; null }
     fun search(cursor: String) { requestedQuery = query.trim(); error = null; header = null; record = null; recordReading = null; onClearEvidence(); reading = send("searchHistory", JSONObject().put("query", requestedQuery).put("cursor", cursor).put("limit", 12)) }
     LaunchedEffect(evidenceVersion, scopeKey) { clear() }
+    LaunchedEffect(enabled) { if (!enabled) { correction = null; clear() } }
     LaunchedEffect(responses) {
         reading?.let { id -> MemoryLearningReviewGuard.exactEnvelope(id, responses["searchHistory"])?.let { envelope ->
             page = MemoryHistoryReviewGuard.page(id, requestedQuery, envelope, displayedScope)
@@ -132,6 +138,12 @@ private fun cognitionRows(rows: JSONArray?): List<JSONObject> = if (rows == null
     record?.let { selected ->
         Text(historyStatus(selected.optString("temporalStatus")) + " · 已存记忆文本（不是原件）", fontSize = 13.sp)
         SelectionContainer { Text(selected.optString("text"), fontSize = 13.sp) }
+        MemoryLearningRationaleContent(selected)
+        if (onCorrect != null) TextButton(onClick = {
+            if (live.get() && enabled && currentEvidence == capturedEvidence && record?.optString("id") == selected.optString("id") && record?.optLong("revision") == selected.optLong("revision")) {
+                correction = JSONObject(selected.toString()); correctionText = selected.optString("text")
+            }
+        }, enabled = enabled) { Text("纠正这条已存记忆…") }
         val assertion = selected.optJSONObject("assertion")
         assertion?.let { typed ->
             Text(typed.optString("subjectLabel") + " · " + typed.optString("predicate") + "：" + typed.optString("object"), fontSize = 13.sp)
@@ -147,6 +159,20 @@ private fun cognitionRows(rows: JSONArray?): List<JSONObject> = if (rows == null
             TextButton(onClick = { if (live.get() && enabled && currentEvidence == capturedEvidence && query.trim() == requestedQuery && record?.optString("id") == selected.optString("id") && record?.optLong("revision") == selected.optLong("revision")) onOriginalSource(JSONObject(source.toString())) }, enabled = enabled) { Text("回读原选来源范围（非原话认证）") }
         }
         if (onSubject != null) assertion?.optString("subjectId")?.takeIf { it.isNotBlank() }?.let { id -> TextButton(onClick = { if (live.get() && enabled && currentEvidence == capturedEvidence && query.trim() == requestedQuery && record?.optString("id") == selected.optString("id") && record?.optLong("revision") == selected.optLong("revision")) onSubject?.invoke(id) }, enabled = enabled) { Text("查看此主体当前与历史的对照") } }
+    }
+    correction?.let { frozen ->
+        val current = live.get() && enabled && currentEvidence == capturedEvidence && record?.optString("id") == frozen.optString("id") && record?.optLong("revision") == frozen.optLong("revision")
+        AlertDialog(onDismissRequest = { correction = null }, title = { Text("纠正这条记忆？") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("保存新版本并停止使用旧派生内容。原会话和任务证据保留；不会把修改后的文字标成用户原话。", fontSize = 13.sp)
+                OutlinedTextField(correctionText, { correctionText = it }, modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 8, enabled = current, label = { Text("正确的内容") })
+                if (!current) Text("原版本或来源已变化，请返回重新读取。", fontSize = 12.sp)
+            }
+        }, confirmButton = { TextButton(onClick = {
+            if (live.get() && enabled && currentEvidence == capturedEvidence && correction?.optString("id") == frozen.optString("id") && correction?.optLong("revision") == frozen.optLong("revision") && record?.optString("id") == frozen.optString("id") && record?.optLong("revision") == frozen.optLong("revision")) {
+                correction = null; onCorrect?.invoke(JSONObject(frozen.toString()), correctionText.trim())
+            }
+        }, enabled = current && correctionText.trim().length in 1..4000 && correctionText.trim() != frozen.optString("text")) { Text("保存这次纠正") } }, dismissButton = { TextButton(onClick = { correction = null }) { Text("返回核对") } })
     }
 }
 private fun historyStatus(value: String): String = when (value) { "historical" -> "历史版本（不是现在的事实）"; "current" -> "当前记录（只读查阅）"; "pending_conflict" -> "冲突待核（不选作现实答案）"; else -> "主体 / 发生时间未记载" }

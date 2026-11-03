@@ -621,6 +621,7 @@ internal fun MemoryLearningReviewPage(
                             formalRecord?.let { record ->
                                 Text("当前正式记忆 · 版本 ${MemoryLearningReviewGuard.revision(record)}", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                                 SelectionContainer { Text(record.optString("text"), color = Ink, fontSize = 14.sp, lineHeight = 24.sp) }
+                                MemoryLearningRationaleContent(record)
                                 TextButton(onClick = { action = MemoryLearningAction("forgetReviewed", JSONObject(record.toString())) }, enabled = canAct && recordRead == null) { Text("遗忘这条正式记忆…", color = Danger) }
                             }
                         }
@@ -680,6 +681,7 @@ internal fun MemoryLearningReviewPage(
                     if (matches) parentRecord?.let { record ->
                         MemoryLearningCaption(memoryLearningLayer(record.optString("layer")) + if (record.optBoolean("core")) " · 已选为核心记忆" else " · 普通记忆")
                         SelectionContainer { Text(record.optString("text"), color = Ink, fontSize = 16.sp, lineHeight = 27.sp) }
+                        MemoryLearningRationaleContent(record)
                         if (record.opt("active") != true) MemoryLearningCaption("这条父记忆目前已失效，不能把它当作有效的新依据。")
                         val sourceRefs = memoryLearningObjects(record.optJSONArray("sourceRefs"))
                         Text("这条父记忆的来源", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Ink)
@@ -737,6 +739,16 @@ private fun memoryLearningConsequence(command: String): String = when (command) 
     "reconsiderRejected" -> "只将这一条完整拒绝项重新放回待审阅。不会自动接受，也不解除其他拒绝项或来源遗忘屏障。"
     "archiveCandidates" -> "永久移除这条终态候选的正文和拒绝原因，释放完整候选容量。接受过的正式记忆不会删除；必要的去重标记仍保留。没有正文的归档不能直接恢复。"
     else -> "删除这条正式记忆、依赖它的记忆，以及使用同一被遗忘证据的相关记忆。旧来源版本会被阻止自动重新导入，相关候选会失效。此操作不可在此撤销；不会删除原始对话或任务证据。"
+}
+@Composable internal fun MemoryLearningRationaleContent(record: JSONObject) {
+    val rationale = record.optJSONObject("learningRationale") ?: return
+    var expanded by remember(record.optString("id"), record.optLong("revision")) { mutableStateOf(false) }
+    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起提炼说明" else "查看当时的提炼说明…", color = SecondaryInk) }
+    if (expanded) {
+        MemoryLearningCaption("这是当时审阅候选的说明，未独立核实；不是主人作决定的原因，也不是方法有效的证明。")
+        SelectionContainer { Text(rationale.optString("reason"), color = SecondaryInk, fontSize = 13.sp, lineHeight = 23.sp) }
+        MemoryLearningCaption("原候选版本 ${rationale.optLong("candidateRevision")} · 随这条记忆保留；内容纠正后不沿用旧说明。")
+    }
 }
 @Composable private fun MemoryLearningCaption(value: String) { Text(value, color = SecondaryInk, fontSize = 13.sp, lineHeight = 23.sp) }
 @Composable private fun MemoryLearningRow(value: JSONObject, enabled: Boolean, open: () -> Unit) {

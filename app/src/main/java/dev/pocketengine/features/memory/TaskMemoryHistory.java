@@ -13,7 +13,9 @@ public final class TaskMemoryHistory {
     private TaskMemoryHistory(){}
     public static JSONObject dependency(JSONObject validation)throws Exception{
         JSONArray memory=validation==null?null:validation.optJSONArray("memory");
-        return memory==null?null:new JSONObject().put("format",1).put("memoryDigest",TaskStore.capabilityFingerprint(new JSONObject().put("memory",memory)));
+        if(memory==null)return null;JSONObject identity=new JSONObject().put("memory",memory);
+        JSONArray historical=validation.optJSONArray("historicalMemory");if(historical!=null&&historical.length()>0)identity.put("historicalMemory",historical);
+        return new JSONObject().put("format",1).put("memoryDigest",TaskStore.capabilityFingerprint(identity));
     }
     public static boolean current(JSONObject dependency,JSONObject validation)throws Exception{
         JSONObject actual=dependency(validation);
