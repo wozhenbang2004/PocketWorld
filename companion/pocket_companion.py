@@ -166,7 +166,9 @@ class JobManager:
         self.harness_gateway = harness_gateway.HarnessGateway(self)
         self.harness_endpoint_finished = self.harness_gateway.job_finished
         self.harness_endpoint_job_bound = self.harness_gateway.bind_job
-        for path in sorted(self.state.glob("job-*.json"))[-500:]:
+        # Retention is a soft bound on settled records, never a reason to lose
+        # an original unresolved job or its cold resource fence before reading it.
+        for path in self.state.glob("job-*.json"):
             try:
                 job = json.loads(path.read_text(encoding="utf-8"))
                 identifier(job["id"])
@@ -852,9 +854,21 @@ class JobManager:
         for old in sorted(self.jobs.values(), key=lambda value: value["createdAt"]):
             if len(self.jobs) <= 500:
                 break
-            if old["status"] in TERMINAL:
-                self.jobs.pop(old["id"], None)
-                (self.state / ("job-" + old["id"] + ".json")).unlink(missing_ok=True)
+            if old["status"] not in {"completed", "failed", "cancelled", "blocked"}:
+                continue
+            jobid = old["id"]
+            if (old.get("resourcesHeld") or old.get("dispatchFenceFinal") is not True
+                    or jobid in self.processes or jobid in self.drivers or jobid in self.stopping):
+                continue
+            # Owned copies/private inputs still depend on this original record,
+            # including copies waiting for a child or later contribution lookup.
+            if old.get("assignmentWorkspaces") or old.get("inputState"):
+                continue
+            if old.get("steeringUnknown") or any(receipt.get("status") in {"queued", "sending", "unknown"}
+                    for receipt in old.get("approvalReceipts", []) + old.get("questionReceipts", [])):
+                continue
+            self.jobs.pop(jobid, None)
+            (self.state / ("job-" + jobid + ".json")).unlink(missing_ok=True)
 
     def _save(self, job):
         if job.get("nativeDeviceOperation"):
