@@ -92,7 +92,7 @@ import org.json.JSONObject
         if(progress.optLong("locallyDiscardedEvents")>0)Text("本机只保留最近64条／24KiB事件；更早已读记录未常驻缓存。",fontSize=13.sp,color=SecondaryInk)
     }else Text("原job最近事件快照，由查询更新，不是实时直播或完整历史。已省略${progress.optInt("droppedCount")}条，当前保留序号${progress.optLong("retainedFromSequence")}–${progress.optLong("lastSequence")}。",fontSize=13.sp,color=SecondaryInk)
     if(children.isNotEmpty()||sourceFilter!="*") {
-        Text("仅按已核对的原生父子来源分看：Claude完整公开消息的parent tool-use；固定版本Codex的直接子thread/turn公开观察。不是可操作子会话，不新增权限、用量或恢复能力；有界读取不是子token直播，不读取隐藏thinking、不保证完整transcript。",fontSize=13.sp,color=SecondaryInk)
+        Text("仅按已核对的原生父子来源分看：Claude完整公开消息与固定版本工具进度的parent tool-use；固定版本Codex的直接子thread/turn公开观察。不是可操作子会话，不新增权限、用量或恢复能力；有界读取不是子token直播，不读取隐藏thinking、不保证完整transcript。",fontSize=13.sp,color=SecondaryInk)
         Box {
             OutlinedButton(onClick={sourceMenu=true}) { Text(if(sourceFilter=="*")"全部原来源"else if(sourceFilter=="main_or_unspecified")"主／未标记来源"else children.firstOrNull{it.getString("key")==sourceFilter}?.let(::sourceLabel)?:"已移出保留窗口的子来源") }
             DropdownMenu(expanded=sourceMenu,onDismissRequest={sourceMenu=false}) {

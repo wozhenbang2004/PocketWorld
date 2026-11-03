@@ -1,10 +1,13 @@
 """Independent adapter for the pinned Pi 1.4.0 RPC contract (MIT upstream).
 
-Official contract: earendil-works/pi tag v1.4.0, packages/coding-agent/docs/rpc.md
-and docs/cli.md. This client contains no upstream implementation code.
+Official contract: earendil-works/pi tag v1.4.0, packages/coding-agent/docs/rpc.md,
+docs/rpc-commands.md, docs/cli.md and src/core/agent-session.ts.
+Steer acknowledges queue admission only; events have no native per-input turn ID.
+This client contains no upstream implementation code.
 Only a no-tools conversation is enabled. Extension UI is NOT tool approval.
 The original Companion owns process lifetime, resource leases and persistence.
 """
+from collections import Counter
 from contextlib import nullcontext
 import json
 from pathlib import Path
@@ -96,8 +99,24 @@ class PiRpcDriver:
         self.abort_id = None
         self.abort_ack = False
         self.abort_deadline = None
+        self.stop_requested = False
         self.timed_out = False
         self.protocol_verified = False
+        self.prompt_accepted = False
+        self.agent_started = False
+        self.settled = False
+        self.steers = queue.Queue(maxsize=8)
+        self.steer_replies = {}
+        self.steering_unknown = False
+        self.steering_unresolved = False
+        self.dispatched_texts = []
+        self.native_steering = []
+        self.clear_id = None
+        self.clear_phase = None
+        self.stop_clear_done = False
+        self.final_clear_done = False
+        self.final_state_id = None
+        self.native_queue_empty_confirmed = False
         self.reported_model = None
         self.auto_compaction = None
         self.output, self.truncated = "", False
@@ -138,28 +157,44 @@ class PiRpcDriver:
     def _next(self):
         while True:
             now = time.monotonic()
-            if self.stopped() or now >= self.deadline:
+            if self.stop_requested or self.stopped() or now >= self.deadline:
                 if not self.turn_dispatched:
                     raise DriverError("Pi cancelled before prompt dispatch")
-                if self.abort_id is None:
+                if not self.stop_requested:
                     self.timed_out = now >= self.deadline
-                    self.abort_id, self.abort_deadline = str(uuid.uuid4()), now + 3
-                    self._send("abort", self.abort_id)
+                    self.stop_requested, self.abort_deadline = True, now + 3
+                    self._state()
                 if now >= self.abort_deadline:
-                    raise DriverError("Pi abort did not reach the native settled barrier; outcome unknown")
+                    raise DriverError("Pi stop did not confirm its native settled and empty-queue barriers; outcome unknown")
+            for pending in self.steer_replies.values():
+                if now >= pending["deadline"] and not pending.get("timedOut"):
+                    pending["timedOut"] = True
+                    self.steering_unknown = True
+                    pending["receipt"]("unknown", {"dispatched": True, "message": "Pi steering acknowledgement did not arrive; do not resend"})
+                    self._state()
             if self.read_error:
                 raise self.read_error
             try:
-                value = self.events.get(timeout=.05)
+                # Previously received settlement/retraction wins over a new input write.
+                value = self.events.get_nowait()
             except queue.Empty:
-                continue
+                self._pump_controls(now)
+                try:
+                    value = self.events.get(timeout=.05)
+                except queue.Empty:
+                    continue
             if value is None:
                 raise DriverError("Pi exited without the required native settled receipt; do not replay")
             self.event_count += 1
             return value
 
-    @staticmethod
-    def _session_observation(event):
+    def _owned_queue(self, steering, follow_up):
+        if (not isinstance(steering, list) or len(steering) > 64 or follow_up != []
+                or any(not isinstance(value, str) or len(value) > 12_000 for value in steering)
+                or Counter(steering) - Counter(self.dispatched_texts)):
+            raise DriverError("Pi has unreviewed queued work; no queue ownership or message consumption was inferred")
+
+    def _session_observation(self, event):
         kind = event.get("type")
         if kind == "entry_appended":
             # Native persistence notifications can contain raw provider history/thinking.
@@ -169,10 +204,121 @@ class PiRpcDriver:
                 raise DriverError("Pi native entry notification is malformed")
             return True
         if kind == "queue_update":
-            if event.get("steering") != [] or event.get("followUp") != []:
-                raise DriverError("Pi has unexpected queued work; no second prompt or queue mutation is allowed")
+            self._owned_queue(event.get("steering"), event.get("followUp"))
+            self.native_steering = list(event["steering"])
             return True
         return kind in {"session_info_changed", "thinking_level_changed"}
+
+    def _reject_unsent(self):
+        while True:
+            try:
+                _request, receipt = self.steers.get_nowait()
+            except queue.Empty:
+                return
+            receipt("rejected", {"dispatched": False, "message": "Original Pi prompt is no longer accepting input; nothing was sent"})
+
+    def _clear_queue(self, phase):
+        self.clear_id, self.clear_phase = str(uuid.uuid4()), phase
+        self._send("clear_queue", self.clear_id)
+
+    def _pump_controls(self, now):
+        if not self.turn_dispatched:
+            return
+        with self.dispatch_guard():
+            if self.stop_requested or self.settled:
+                self._reject_unsent()
+            if self.stop_requested:
+                # RPC command handlers are asynchronous. Clear before abort, then clear again
+                # AFTER all submitted steer replies and settlement to fence a late enqueue.
+                if not self.stop_clear_done:
+                    if self.clear_id is None:
+                        self._clear_queue("stop")
+                    return
+                if self.abort_id is None:
+                    self.abort_id = str(uuid.uuid4())
+                    self._send("abort", self.abort_id)
+                    return
+            if self.settled:
+                if self.steer_replies:
+                    if any(value.get("timedOut") for value in self.steer_replies.values()):
+                        raise DriverError("Pi settled with an unacknowledged input; queue outcome remains unknown")
+                    return
+                if self.stop_requested and not self.abort_ack:
+                    return
+                if not self.final_clear_done:
+                    if self.clear_id is None:
+                        self._clear_queue("final")
+                    return
+                if self.final_state_id is None and not self.native_queue_empty_confirmed:
+                    self.final_state_id = str(uuid.uuid4())
+                    self._send("get_state", self.final_state_id)
+                return
+            if not self.can_steer() or self.steer_replies or not self.events.empty():
+                return
+            try:
+                request, receipt = self.steers.get_nowait()
+            except queue.Empty:
+                return
+            if not self.can_steer(request["expectedPromptRequestId"]):
+                receipt("rejected", {"dispatched": False, "message": "Original Pi prompt identity changed before input dispatch"})
+                return
+            queue_frame = {"type": "queue_update", "steering": [*self.native_steering, request["text"]], "followUp": []}
+            if len((json.dumps(queue_frame, ensure_ascii=False) + "\n").encode("utf-8")) > MAX_EVENT:
+                receipt("rejected", {"dispatched": False, "message": "Pi native queue would exceed its bounded protocol frame; input was not sent or truncated"})
+                return
+            request_id = str(uuid.uuid4())
+            receipt("sending", {"nativeRequestId": request_id, "dispatched": None})
+            if not self.can_steer(request["expectedPromptRequestId"]):
+                receipt("rejected", {"dispatched": False, "message": "Stopped before Pi input dispatch"})
+                return
+            self.steer_replies[request_id] = {"receipt": receipt, "deadline": min(now + 5, self.deadline)}
+            self.dispatched_texts.append(request["text"])
+            try:
+                self._send("steer", request_id, message=request["text"])
+            except DriverError:
+                self.steer_replies.pop(request_id, None)
+                self.steering_unknown = self.steering_unresolved = True
+                receipt("unknown", {"dispatched": None, "message": "Pi input pipe write is unconfirmed; do not resend"})
+                raise
+
+    def _input_response(self, event):
+        request_id = event.get("id")
+        pending = self.steer_replies.pop(request_id, None) if isinstance(request_id, str) else None
+        if pending is not None:
+            if (event.get("command") != "steer" or event.get("success") is not True
+                    or not isinstance(event.get("data"), dict) or event["data"].get("disposition") != "queued"):
+                self.steering_unknown = self.steering_unresolved = True
+                pending["receipt"]("unknown", {"dispatched": True, "message": "Pi did not confirm this exact steering command as queued; do not resend"})
+                raise DriverError("Pi steering response is not the fixed no-tools queue contract")
+            pending["receipt"]("accepted", {"dispatched": True, "disposition": "queued",
+                "delivery": "native_queue", "consumed": "unknown",
+                "message": "Original Pi native queue accepted this input; consumption and task completion are not confirmed"})
+            self.steering_unknown = self.steering_unresolved or any(value.get("timedOut") for value in self.steer_replies.values())
+            return True
+        if self.clear_id is not None and request_id == self.clear_id:
+            data = event.get("data")
+            if event.get("command") != "clear_queue" or event.get("success") is not True or not isinstance(data, dict):
+                raise DriverError("Pi queue cleanup was not acknowledged; no empty queue was inferred")
+            self._owned_queue(data.get("steering"), data.get("followUp"))
+            if self.clear_phase == "stop":
+                self.stop_clear_done = True
+            else:
+                self.final_clear_done = True
+            self.clear_id = self.clear_phase = None
+            return True
+        if self.final_state_id is not None and request_id == self.final_state_id:
+            state = event.get("data")
+            if (event.get("command") != "get_state" or event.get("success") is not True
+                    or not isinstance(state, dict) or state.get("isStreaming") is not False
+                    or state.get("isCompacting") is not False or type(state.get("pendingMessageCount")) is not int
+                    or state["pendingMessageCount"] != 0 or state.get("sessionId") != self.native_session
+                    or state.get("sessionFile") != self.session_file
+                    or _model(state.get("model"))["id"] != self.reported_model["id"]):
+                raise DriverError("Pi final original session and empty native queue were not confirmed")
+            self.native_queue_empty_confirmed = True
+            self.final_state_id = None
+            return True
+        return False
 
     def _command(self, kind, **values):
         request_id = str(uuid.uuid4())
@@ -249,6 +395,8 @@ class PiRpcDriver:
         value = {"protocol": PROTOCOL, "protocolVerified": self.protocol_verified,
                  "sessionId": self.native_session, "threadId": self.native_session,
                  "promptRequestId": self.prompt_id, "reportedModel": self.reported_model["id"] if self.reported_model else None,
+                  "inputSteeringVerified": self.can_steer(), "steeringUnknown": self.steering_unknown,
+                  "nativeQueueEmptyConfirmed": self.native_queue_empty_confirmed,
                  "noTools": True, "osReadIsolationVerified": False, "autoCompactionEnabled": self.auto_compaction,
                  "inferenceUsage": {"modelCalls": None, "inputTokens": None, "outputTokens": None, "cost": None,
                                     "status": "unknown", "source": "native_session_may_retry_or_compact_no_per_request_accounting"},
@@ -267,24 +415,26 @@ class PiRpcDriver:
                 raise DriverError("Pi cancelled before prompt dispatch")
             self.turn_dispatched = True  # A partial write is UNKNOWN, never a retry license.
             self._send("prompt", self.prompt_id, message=prompt)
-        accepted, started, settled, aborted = False, False, False, False
+        aborted = False
         final_reason = None
         while True:
             event = self._next()
             kind = event["type"]
             if kind == "response":
-                if event.get("id") == self.prompt_id and event.get("command") == "prompt" and not accepted:
+                if self._input_response(event):
+                    pass
+                elif event.get("id") == self.prompt_id and event.get("command") == "prompt" and not self.prompt_accepted:
                     if event.get("success") is not True or not isinstance(event.get("data"), dict) or event["data"].get("disposition") != "started":
                         raise DriverError("Pi prompt was refused/queued/handled; no completion or replay is inferred")
-                    accepted = True
+                    self.prompt_accepted = True
                 elif self.abort_id and event.get("id") == self.abort_id and event.get("command") == "abort" and event.get("success") is True and not self.abort_ack:
                     self.abort_ack = True
                 else:
                     raise DriverError("Pi response does not match the exact original prompt/abort")
             elif kind == "agent_start":
-                if settled:
+                if self.settled:
                     raise DriverError("Pi started work after its settled barrier")
-                started = True
+                self.agent_started = True
                 self.progress.add("status", kind, status="running")
             elif kind == "message_update":
                 delta = event.get("assistantMessageEvent")
@@ -305,7 +455,13 @@ class PiRpcDriver:
                 if not isinstance(message, dict):
                     raise DriverError("Pi message is malformed")
                 role = message.get("role")
-                if role not in {"user", "assistant"}:
+                if role == "system":
+                    # Fixed 1.4.0 emits prompt-section patches as system messages. These
+                    # private native metadata are not public text or a tool permission grant.
+                    if (not isinstance(message.get("content"), str) or message.get("toolsAdded", []) != []
+                            or message.get("sections") is not None and not isinstance(message["sections"], dict)):
+                        raise DriverError("Pi system metadata is malformed or adds tools in no-tools mode")
+                elif role not in {"user", "assistant"}:
                     raise DriverError("Pi no-tools session emitted an unsupported message role")
                 if role == "assistant":
                     if kind == "message_start":
@@ -329,9 +485,11 @@ class PiRpcDriver:
                             raise DriverError("Pi assistant stop reason is unsupported")
                         self.progress.add("text", kind, text=self.output, status=final_reason)
             elif kind == "agent_settled":
-                if type(event.get("aborted")) is not bool or settled:
+                if type(event.get("aborted")) is not bool or self.settled:
                     raise DriverError("Pi native settled receipt is malformed or duplicated")
-                settled, aborted = True, event["aborted"]
+                with self.dispatch_guard():
+                    self.settled, aborted = True, event["aborted"]
+                    self._reject_unsent()
                 self.progress.add("status", kind, status="aborted" if aborted else "settled")
             elif self._session_observation(event):
                 pass
@@ -342,7 +500,8 @@ class PiRpcDriver:
             else:
                 raise DriverError("Pi emitted unsupported/tool/extension UI events in no-tools mode")
             value = self._state()
-            if accepted and started and settled and (not self.abort_id or self.abort_ack):
+            if (self.prompt_accepted and self.agent_started and self.settled and self.native_queue_empty_confirmed
+                    and not self.steer_replies and (not self.stop_requested or self.abort_ack)):
                 if not aborted and final_reason is None:
                     raise DriverError("Pi settled without an authoritative assistant result")
                 status = "cancelled" if aborted else "completed" if final_reason == "stop" else "failed"
@@ -350,12 +509,26 @@ class PiRpcDriver:
                         "timedOut": self.timed_out, "exitCode": None,
                         "message": "Pi no-tools conversation reached its native settled barrier; not Pi coding capability"}
 
-    def can_steer(self, _turn_id):
-        return False
+    def can_steer(self, expected_prompt_id=None):
+        return (self.protocol_verified and self.session_file is not None and self.prompt_accepted
+                and self.agent_started and not self.settled and not self.stop_requested
+                and not self.closed.is_set() and not self.steering_unknown and not self.stopped()
+                and time.monotonic() < self.deadline and len(self.dispatched_texts) < 64
+                and (expected_prompt_id is None or expected_prompt_id == self.prompt_id))
+
+    def steer(self, request, receipt):
+        if not isinstance(request.get("expectedPromptRequestId"), str) or not self.can_steer(request["expectedPromptRequestId"]):
+            raise DriverError("Pi input requires the exact active original prompt request")
+        self.steers.put_nowait((dict(request), receipt))
 
     def close_steering(self):
         # No process termination here: only the original JobManager owns cleanup proof.
         self.closed.set()
+        self._reject_unsent()
+        for request_id, pending in list(self.steer_replies.items()):
+            self.steer_replies.pop(request_id, None)
+            self.steering_unknown = True
+            pending["receipt"]("unknown", {"dispatched": True, "message": "Pi transport ended without this input acknowledgement; do not resend"})
 
 
 def session_stamp(path, directory):

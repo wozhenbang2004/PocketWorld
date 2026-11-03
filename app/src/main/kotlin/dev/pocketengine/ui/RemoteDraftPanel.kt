@@ -44,9 +44,12 @@ internal fun RemoteDraftPanel(snapshot: JSONObject, enabled: Boolean, clipboard:
         Text("草稿保存在这个任务。排队不会自动发送：当前执行结束、重连或重开App后，仍需核对原目标并在前台明确发送。未知回执只查原编号。",fontSize=14.sp)
         Text("草稿发送沿用原会话配置，不会借用其他继续表单的模型/档位选择。",fontSize=13.sp)
         Text(when {
+            pi&&currentTurn.optBoolean("observedAvailable") -> "当前输入：可追加到这个无工具任务的原Pi队列；队列接收不证明模型已处理，不另开prompt或增加额度。"
+            pi&&currentTurn.optBoolean("adapterMounted") -> "当前输入：Pi原队列输入已确认，但当前执行不允许追加；先保留本机草稿。"
             currentTurn.optBoolean("observedAvailable") -> "当前轮：可向本次准确Codex turn补充；接收回执不等于模型已经采用或任务完成。"
             currentTurn.optBoolean("adapterMounted") -> "当前轮：Codex原turn补充已挂接，但本次未观察到可发送的准确turn；先保留草稿。"
-            source.optString("protocol") in setOf("claude_stream_json","pi_rpc_v1") -> "当前轮：本适配器未挂接Claude / Pi运行中补充；本机草稿尚未发送给模型。"
+            pi -> "当前输入：未观察到可追加的原Pi执行。保存和排队本身不发送；既有操作请按原消息回执核对。"
+            source.optString("protocol")=="claude_stream_json" -> "当前轮：本适配器未挂接Claude运行中补充。保存和排队本身不发送；既有操作请按原消息回执核对。"
             else -> "当前轮输入能力尚未由原job确认；草稿不是发送许可。"
         },fontSize=13.sp)
         if(pi) Text("Pi仅限已确认同session/thread的无工具对话；不开放工具，不代表已具备Pi编程能力。",fontSize=13.sp)
@@ -57,7 +60,7 @@ internal fun RemoteDraftPanel(snapshot: JSONObject, enabled: Boolean, clipboard:
         }
         if (selected!=null) Text("保存目标：${selected.optJSONObject("scope")?.optString("threadId")} · 原job ${selected.optJSONObject("scope")?.optString("jobId")} · v$revision",fontSize=13.sp)
         Row { RadioButton(mode=="next_turn",{if(editable&&selected==null)mode="next_turn"},enabled=editable&&selected==null); Text("下一轮：原会话核对终态后明确续接；Pi仅无工具对话",fontSize=14.sp,modifier=Modifier.padding(top=12.dp)) }
-        if(source.optString("protocol")=="codex_app_server")Row { RadioButton(mode=="steer",{if(editable&&selected==null)mode="steer"},enabled=editable&&selected==null); Text("当前Codex turn补充：准确turn不变才可发送",fontSize=14.sp,modifier=Modifier.padding(top=12.dp)) }
+        if(source.optString("protocol")=="codex_app_server"||pi&&currentTurn.optBoolean("adapterMounted"))Row { RadioButton(mode=="steer",{if(editable&&selected==null)mode="steer"},enabled=editable&&selected==null); Text(if(pi) "当前Pi队列：原job/session/prompt不变才可追加" else "当前Codex turn补充：准确turn不变才可发送",fontSize=14.sp,modifier=Modifier.padding(top=12.dp)) }
         OutlinedTextField(text,{if(it.length<=12000){text=it;notice=null}},enabled=editable&&enabled,label={Text("给这个原会话的要求")},minLines=2,maxLines=6,modifier=Modifier.fillMaxWidth())
         if(clipboard!=null&&editable) {
             val readId=id;val readRevision=revision;val readMode=mode;val readReview=snapshot.optString("reviewId")
@@ -89,7 +92,7 @@ internal fun RemoteDraftPanel(snapshot: JSONObject, enabled: Boolean, clipboard:
                 Button(onClick={
                     if(id!=exactId||revision!=exactRevision||mode!=exactMode||text!=exactText){notice="草稿选择或内容已变化，未发送旧确认。";return@Button}
                     notice=null;send("sendDraft",JSONObject().put("draftId",exactId).put("draftRevision",exactRevision))
-                },enabled=enabled&&canSend&&matchesSaved){Text(if(mode=="steer")"明确发送这条到原turn" else "明确发送这条并继续原会话")}
+                },enabled=enabled&&canSend&&matchesSaved){Text(if(mode=="steer"&&pi)"明确追加这条到原Pi队列" else if(mode=="steer")"明确发送这条到原turn" else "明确发送这条并继续原会话")}
             }
             Text("不是自动排程；目标/电脑代次或会话变更将拒绝发送。新要求会消耗实际远端执行与计费，不代表结果成功。",fontSize=13.sp)
         }

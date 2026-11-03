@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from unittest.mock import patch
@@ -106,12 +107,32 @@ class EventReplayTests(unittest.TestCase):
                 if not page["hasMore"]: break
                 query.update(generation=page["generation"], after=page["nextSequence"], head=page["headSequence"])
             children = [row for row in rows if "childSourceProtocol" in row]
-            self.assertEqual(6, len(children))
+            self.assertEqual(8, len(children))
             self.assertEqual({"toolu_child_a", "toolu_child_b"}, {row["parentToolUseId"] for row in children})
             for row in children:
                 self.assertEqual(job["sessionId"], row["parentSessionId"])
                 self.assertEqual(job["promptRequestId"], row["parentPromptRequestId"])
-            self.assertNotIn("NEVER_EXPOSE_CHILD_THINKING", json.dumps(page))
+            progress = [row for row in children if row["nativeType"] == "tool_progress"]
+            self.assertEqual(2, len(progress))  # Native duplicates did not erase the other child's source.
+            self.assertEqual({"toolu_child_a", "toolu_child_b"}, {row["parentToolUseId"] for row in progress})
+            for row in progress:
+                self.assertEqual({"kind", "nativeType", "itemId", "tool", "status", "childSourceProtocol",
+                                  "parentToolUseId", "parentSessionId", "parentPromptRequestId", "nativeEventId",
+                                  "nativeLineageVersion", "sequence", "observedAt"}, set(row))
+                self.assertEqual("tool", row["kind"])
+                self.assertEqual("same-child-tool", row["itemId"])
+                self.assertEqual("Read", row["tool"])
+                self.assertEqual("running", row["status"])
+                self.assertEqual("2.1.317", row["nativeLineageVersion"])
+                self.assertEqual(str(uuid.UUID(row["nativeEventId"])), row["nativeEventId"])
+            runtime = job["modelRuntime"]
+            self.assertEqual("native_model_runtime_v1", runtime["protocol"])
+            self.assertEqual("claude", runtime["worker"])
+            self.assertEqual("2.1.317", runtime["runtimeVersion"])
+            self.assertEqual(job["sessionId"], runtime["sessionId"])
+            self.assertEqual(job["promptRequestId"], runtime["promptRequestId"])
+            for private in ("NEVER_EXPOSE_CHILD_THINKING", "NEVER_EXPOSE_RETRY_AGENT", "NEVER_EXPOSE_PROGRESS_TEXT"):
+                self.assertNotIn(private, json.dumps(rows))
             stored = json.loads((root / "state" / ("job-" + job["id"] + ".json")).read_text())
             self.assertEqual(children, [row for row in stored["progress"]["events"] if "childSourceProtocol" in row])
             self.assertEqual("1", (root / "submit-count").read_text())
