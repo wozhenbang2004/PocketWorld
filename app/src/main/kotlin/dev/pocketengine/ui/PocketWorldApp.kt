@@ -241,7 +241,7 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
         if (selectedTask != null) TaskSheet(selectedTask, state.activeTaskId == selectedTask.id, controller, if (taskReturnConnection != null) "返回原入口" else "返回" + listOf("对话", "任务", "项目")[taskReturnTab], ::closeTask)
         if (teamLaunch) TeamLaunchSheet(state, controller, draft) { teamLaunch = false }
         if (state.teamRunId != null) TeamRunDetail(state, controller)
-        if (state.inspectionTaskId != null) DeviceInspector(state, controller)
+        if (state.inspectionTaskId != null && controller.phoneInlinePreview == null) DeviceInspector(state, controller)
         if (state.backgroundSetupOpen) BackgroundPhoneSetup(state, controller)
         if (conversationPicker) ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = { conversationPicker = false }, containerColor = Color.White) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp).navigationBarsPadding()) {
@@ -632,7 +632,8 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 if (childLocator != null) OutlinedButton(onClick = { controller.openTeamChild(task); close() }, modifier = Modifier.padding(top = 12.dp).testTag("task_return_team_child")) { Text("回原团队处理此分工") }
                 else Text("原团队来源不完整或不一致，请从原团队记录核对。", color = Danger, fontSize = 12.sp)
             } else if (!pairedTask) teamRunReferences(task).forEach { runId -> OutlinedButton(onClick = { controller.openTeam(runId) }, modifier = Modifier.padding(top = 12.dp)) { Text("查看团队成员、会话与任务") } }
-            if (!pairedTask && phoneTask && task.executionMode == "background" && task.status != "completed") OutlinedButton(onClick = { controller.openInspection(task.id) }, modifier = Modifier.padding(top = 14.dp)) { Text("查看独立屏与接管") }
+            if (!pairedTask && phoneTask) PhoneResourceStatus(task, host, controller)
+            if (!pairedTask && phoneTask && task.executionMode == "background" && task.status != "completed") InlinePhoneObservation(task, host, controller)
             if (phoneTask && task.status == "reconciling" && unknown.isEmpty()) Text("正在读取待核对的动作，请稍候或重新打开此任务。", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 16.dp))
             if (!pairedTask && !phoneTask && task.raw.optString("kind") != "assistant" && task.status == "reconciling" && unknown.isEmpty()) Column(Modifier.fillMaxWidth().padding(top = 18.dp).clip(Rounded).background(Soft).padding(16.dp)) {
                 Text("核对外部执行结果", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)

@@ -236,7 +236,7 @@ internal fun DeviceInspector(state: PocketUiState, controller: PocketWorldContro
 }
 
 @Composable
-private fun ObservationFrame(observation: JSONObject?, interactive: Boolean, location: String, modifier: Modifier, action: (String, JSONObject) -> Unit) {
+internal fun ObservationFrame(observation: JSONObject?, interactive: Boolean, location: String, modifier: Modifier, action: (String, JSONObject) -> Unit) {
     val encoded = observation?.optString("imageBase64")?.takeIf { it.isNotBlank() } ?: observation?.optString("imageDataUrl")?.substringAfter("base64,", "").orEmpty()
     val bitmap = remember(encoded) {
         try {

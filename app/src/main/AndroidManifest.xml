@@ -39,7 +39,7 @@
             <intent-filter><action android:name="android.intent.action.SEND"/><category android:name="android.intent.category.DEFAULT"/><data android:mimeType="*/*"/></intent-filter>
             <intent-filter><action android:name="android.intent.action.SEND_MULTIPLE"/><category android:name="android.intent.category.DEFAULT"/><data android:mimeType="*/*"/></intent-filter>
         </activity>
-        <activity android:name=".phone.diagnostics.PhonePracticeActivity" android:exported="false" android:excludeFromRecents="true" android:windowSoftInputMode="adjustResize"/>
+        <activity android:name=".phone.diagnostics.PhonePracticeActivity" android:exported="false" android:excludeFromRecents="true" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"/>
         <receiver android:name=".phone.setup.PhoneSetupReceiver" android:exported="false"/>
         <receiver android:name=".phone.setup.PhoneRecoveryReceiver" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>
