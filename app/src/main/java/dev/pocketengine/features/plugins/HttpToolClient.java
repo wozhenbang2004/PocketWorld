@@ -7,7 +7,6 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class HttpToolClient {
@@ -27,10 +26,8 @@ public final class HttpToolClient {
             control.check();try(OutputStream out=connection.getOutputStream()){control.check();out.write(body);}
             int status=connection.getResponseCode();if(status<200||status>=300)throw new IllegalStateException("HTTP工具返回状态"+status+"；未自动重试");
             ByteArrayOutputStream bytes=new ByteArrayOutputStream();try(InputStream in=connection.getInputStream()){byte[] buffer=new byte[4096];int count;while((count=in.read(buffer))!=-1){control.check();if(bytes.size()+count>262144)throw new IllegalStateException("工具回复超过256KiB");bytes.write(buffer,0,count);}}
-            control.check();return scrub(new JSONObject(new String(bytes.toByteArray(),StandardCharsets.UTF_8)),token);
+            control.check();return (JSONObject)McpData.scrub(new JSONObject(new String(bytes.toByteArray(),StandardCharsets.UTF_8)),token,0);
         } catch(Exception failure) {throw new IllegalStateException("HTTP工具请求未取得有效结果，请先检查服务端结果再决定是否重试",failure);}
         finally {deadline.interrupt();control.removeCancelAction(disconnect);connection.disconnect();}
     }
-    private static JSONObject scrub(JSONObject source,String token)throws Exception {JSONObject result=new JSONObject();java.util.Iterator<String> keys=source.keys();while(keys.hasNext()){String key=keys.next();if(key.equalsIgnoreCase("authorization")||key.equalsIgnoreCase("apiKey")||key.equalsIgnoreCase("token"))continue;result.put(key,scrubValue(source.get(key),token));}return result;}
-    private static Object scrubValue(Object value,String token)throws Exception {if(value instanceof JSONObject)return scrub((JSONObject)value,token);if(value instanceof JSONArray){JSONArray result=new JSONArray(),array=(JSONArray)value;for(int i=0;i<array.length();i++)result.put(scrubValue(array.get(i),token));return result;}if(value instanceof String&&!token.isEmpty())return ((String)value).replace(token,"[凭据已隐藏]");return value;}
 }

@@ -1,0 +1,381 @@
+{
+  "schemaVersion": 1,
+  "scope": "Explicit host source registration only; this fixture is not evidence of product test execution.",
+  "groups": {
+    "phone-setup-recovery": {
+      "classes": [
+        {
+          "class": "dev.pocketengine.phone.setup.PairingEntrySessionTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/setup/PairingEntrySessionTest.java",
+          "methods": [
+            "oldNotificationCannotConsumeOrCancelCurrentPairingSession",
+            "pairingExpiryAndCancelNeverSubmitCode",
+            "repeatedBeginCannotExtendNonceAndOldExpiryCannotCancelReplacement",
+            "changedSourceInvalidatesNonceButMalformedCodeDoesNotConsumeIt",
+            "concurrentRepliesClaimExactlyOnce"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.PhoneRecoveryPolicyTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/PhoneRecoveryPolicyTest.java",
+          "methods": [
+            "missingConsentCannotChangeAccessibilityOrWirelessDebugging",
+            "consentDoesNotGrantSecureSettingsPermission",
+            "staleConsentCannotOverwriteARevocationFromAnotherOwnerView"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.setup.AccessibilityRecoveryMutationTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/setup/AccessibilityRecoveryMutationTest.java",
+          "methods": [
+            "revokedRevisionStopsReenableButCompensatesOnlyOriginalRemoval",
+            "failedCompensationSurvivesColdReadAndRequiresOwnerAction",
+            "ownerGlobalDisableIsNotUndoneByRecovery",
+            "neverPreviouslyAuthorizedServiceCannotBeGrantedByRecoveryConsent",
+            "laterPerServiceDisableCannotBorrowEarlierRecoveryConsent",
+            "cancellationRestoresOnlyTheRecordedRegistration",
+            "changedOwnerUidCannotReuseSavedConsentOrCompensation",
+            "registrationReadbackAndBindingRemainSeparate"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.setup.PhoneSetupModuleNativeTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/setup/PhoneSetupModuleNativeTest.java",
+          "methods": [
+            "notificationReplyUsesPrivateReceiverAndOriginalPairOnceWithoutClaimingConnection",
+            "cancellationBeforeQueuedReplyPreventsNativeDispatch",
+            "sourceRevisionAndOccupancyAreRecheckedAtConsumption",
+            "oldQueuedCancelAndReplyCannotConsumeOrDismissNewPortNotification",
+            "registeredUnlockSignalsUseSameConsentBoundWorkerAndStopAfterClose",
+            "unknownNativeReplyCannotBeReplayedAndCodeIsDiscarded",
+            "disabledNotificationChannelLeavesNoLivePairingAuthority",
+            "oldLifecycleCallbackCannotBorrowNewConsentAndRepeatedSignalsCoalesce",
+            "closeRejectsAlreadyQueuedReplyAndFinishesReceiver"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.setup.OwnerPhoneAppsNativeTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/setup/OwnerPhoneAppsNativeTest.java",
+          "methods": [
+            "ownerPickerDistinguishesActualProfileAndInstallationWithoutIssuingAnAction",
+            "lockedRecreatedDisabledOrExpiredSelectionCannotBecomeThePersonalCopy",
+            "changedVersionOrSignerIsRejectedEvenWhenPackageAndProfileStayTheSame"
+          ]
+        }
+      ],
+      "helpers": [
+        {
+          "class": "dev.pocketengine.phone.setup.AndroidAppCopiesNativeTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/setup/AndroidAppCopiesNativeTest.java"
+        }
+      ]
+    },
+    "phone-input-extensions": {
+      "classes": [
+        {
+          "class": "dev.pocketengine.phone.setup.ClipboardRestorationTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/setup/ClipboardRestorationTest.java",
+          "methods": [
+            "acceptedInputRestoresTheOriginalWithoutReturningEitherClipboardValue",
+            "cancelInsideInputRestoresBeforePropagatingTheOriginalStop",
+            "unknownNativeResultRestoresButNeverRetriesTheInput",
+            "failedRestoreRetainsRecoveryAndBlocksTheNextInputUntilRecovered",
+            "interveningOwnerClipboardChangeSurvivesCleanup",
+            "unreadableOriginalRefusesWithoutDispatchOrClipboardReplacement",
+            "waitingTaskCanCancelWithoutStealingOrWaitingForAnotherTasksClipboard"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.observation.PhoneExtensionJournalTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/observation/PhoneExtensionJournalTest.java",
+          "methods": [
+            "authorityLossAfterClearEntryCannotBecomeAReadOnlyNonDispatchReceipt"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.observation.PhoneAdvancedExtensionJourneyTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/observation/PhoneAdvancedExtensionJourneyTest.java",
+          "methods": [
+            "clearConsumesOneOriginalPreparedOperationAndDuplicateCannotReenter",
+            "wheelMakesOneNativeStepAndReportsActualPartialOrUnrelatedReplacement",
+            "unknownPasteRemainsInOriginalJournalAndNeitherRefreshNorDuplicateReplaysIt",
+            "dialogReturnsOnlyCurrentVisibleReferencesWithoutConfirmingAnything",
+            "eventHintIgnoresAnotherWindowAndReadsTheOriginalDisplayOnceAfterItsEvent",
+            "replacedSignalSourceCannotDeliverAnOldCallbackAsCurrentEvidence",
+            "cancellationAndPauseResumeFenceEventsBeforeAFreshRead",
+            "appPolicyRevisionRevokesHistoricalImagesAndOldModelResponseWithoutNativeRead",
+            "practiceScrollPassRequiresTheOriginalActionAndDifferentFreshRows"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.setup.ClipboardOwnerConsentTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/setup/ClipboardOwnerConsentTest.java",
+          "methods": [
+            "revokeThenEnableCannotReviveAQueuedOriginalPaste",
+            "changingConsentAfterBorrowRestoresTheOriginalWithoutPastingUnderTheNewConsent",
+            "aHostClipboardCannotAuthorizeAnotherProfileOrAnAmbiguousCopy",
+            "profileChangeAfterClipboardBorrowRestoresBeforeReturningExplicitUnsupported"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.displayhelper.DisplayMultiGesturePathsTest",
+          "source": "app/src/test/java/dev/pocketengine/displayhelper/DisplayMultiGesturePathsTest.java",
+          "methods": [
+            "twoPointersKeepTheirIdentityAndFinishWithoutASyntheticExtraCancel",
+            "rejectedMoveGetsOnlyOneCancelAndUnconfirmedCleanupBlocksFurtherInput",
+            "unconfirmedFirstDownCannotAuthorizeCancelOrAnotherGesture",
+            "cancellationBetweenReservationAndFirstDownPreventsTheLateDown",
+            "oldCleanupCannotClearOrCancelAReplacementLeaseSequence",
+            "cancelledQueuedHelperRequestNeverRunsWhenTheMainLooperEventuallyDrains"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.setup.AndroidClipboardUnreadableNativeTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/setup/AndroidClipboardUnreadableNativeTest.java",
+          "methods": [
+            "foregroundWithoutReadableOriginalCannotInventEmptyOrReplaceOwnerClipboard",
+            "nullWithNoProvenReadabilityAlsoRefusesWithoutWritingOrClearing",
+            "actuallyReadableOriginalStillUsesTheRealParcelSnapshotWithoutChangingIt"
+          ]
+        }
+      ],
+      "helpers": [
+        {
+          "class": "dev.pocketengine.phone.observation.PhoneCollectionFixtures",
+          "source": "app/src/test/java/dev/pocketengine/phone/observation/PhoneCollectionFixtures.java"
+        },
+        {
+          "class": "dev.pocketengine.phone.observation.PhoneTreeSequenceTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/observation/PhoneTreeSequenceTest.java"
+        }
+      ]
+    },
+    "phone-semantic-profile": {
+      "classes": [
+        {
+          "class": "dev.pocketengine.features.semantic.SemanticProfileIdentityTest",
+          "source": "app/src/test/java/dev/pocketengine/features/semantic/SemanticProfileIdentityTest.java",
+          "methods": [
+            "showAlarmsIsAClosedReadEntryAndNeverAClockMutation",
+            "samePackageVersionCannotReuseDiscoveryAfterNativeProfileSerialChanges",
+            "nativeUidFromAnotherProfileIsNotOfferedAsThisUsersSemanticTarget"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.displayhelper.DisplayTypedIntentNativeTest",
+          "source": "app/src/test/java/dev/pocketengine/displayhelper/DisplayTypedIntentNativeTest.java",
+          "methods": [
+            "showAlarmsEntersTheExactBackgroundComponentOnceWithoutClaimingAnAlarmExists",
+            "installChangeInsideFinalOwnershipGatePreventsNativeEntry",
+            "profileSerialAndUidCannotBeSubstitutedOrFallBackToTheCallingAccount",
+            "changedHttpsRouteCannotUseAnExplicitComponentToBypassOsAppLinks",
+            "cancellationAfterOwnershipCheckStillStopsTheNativeCall",
+            "staleNativeLeaseAfterFinalPackageReadCannotBecomeALateLaunch",
+            "exceptionAfterNativeEntryPreservesUnknownEffectAndDisallowsReplay",
+            "exactPackageShareHasOnlyTheApprovedTextAndNeverAChooserOrRecipient"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.displayhelper.DisplayAppCopiesNativeTest",
+          "source": "app/src/test/java/dev/pocketengine/displayhelper/DisplayAppCopiesNativeTest.java",
+          "methods": [
+            "originalRelatedProfileReferenceReachesOnlyItsPinnedBackgroundDisplay",
+            "wrongDisplayOrExpiredReferenceNeverBecomesAnUnqualifiedLaunch",
+            "changedInstallAfterOwnershipCheckStopsHelperEntry",
+            "referenceThatExpiresDuringFinalNativeAdmissionCannotEnterLauncherApps"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.setup.AndroidAppCopiesNativeTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/setup/AndroidAppCopiesNativeTest.java",
+          "methods": [
+            "referencesDistinguishSameNamedPersonalAndWorkCopiesWithNativeSignersAndSerials",
+            "originalRunDisplayAndExactExpiryAreRequiredEvenForAnUnchangedApp",
+            "pauseResumeAndRefreshInvalidateOldReferencesWithoutNativeLaunch",
+            "profileRecreatedOrLockedCannotFallBackToThePersonalCopy",
+            "inaccessibleWorkProfileProducesAPartialListWithoutInventingItsCopy",
+            "installChangedDuringAdmissionStopsTheOriginalNativeLaunch",
+            "platformPackageEventRevokesAnOtherwiseMatchingReference",
+            "selectedWorkUserIsTheOnlyNativeEntryAndReceiptStillRequiresOwnerAccountVerification",
+            "lostReplyAfterLaunchIsUnknownAndNeverRetriedInsideTheCopyConsumer",
+            "originalRunCancellationUnregistersItsCallbackAndCannotCloseAnotherRunPort"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.features.semantic.SemanticTypedShareRunnerSqlTest",
+          "source": "app/src/test/java/dev/pocketengine/features/semantic/SemanticTypedShareRunnerSqlTest.java",
+          "methods": [
+            "shareNeedsOriginalOwnerApprovalThenOneNativeIntentAndNoAutomaticSendOrFurtherModelTurn",
+            "httpsPackageLinkNeedsOriginalApprovalAndPausesForTheOwnerToVerifyTheActualTarget",
+            "changedShareReceiverVersionWhileOwnerReviewsCannotConsumeOldApprovalOrLaunch",
+            "changedHttpsReceiverVersionWhileOwnerReviewsHasNoLaunchOrBrowserFallback",
+            "backgroundShareUsesTheOriginalApprovalRunnerAndExactNativeDisplay",
+            "backgroundHttpsUsesTheOriginalAppLinksContractAndNativeDisplay",
+            "backgroundTargetChangedDuringOwnerReviewNeverReachesNativeHelper",
+            "lostBackgroundNativeReplyLeavesOneUnresolvedOriginalOperationWithoutReplay",
+            "backgroundWrongUserLandingPausesWithoutClaimingTargetAccountOrDelivery"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.features.semantic.AndroidSemanticCancellationTest",
+          "source": "app/src/test/java/dev/pocketengine/features/semantic/AndroidSemanticCancellationTest.java",
+          "methods": [
+            "normalCompletionRemovesOnlyThisDispatchRegistration",
+            "alreadyCancelledControlCannotLaunchOrRetainCallback",
+            "queuedCancellationCannotBecomeALateLaunch",
+            "queueTimeoutRemovesCallbackAndPreventsLateLaunch"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.features.semantic.AndroidSemanticPauseReviewTest",
+          "source": "app/src/test/java/dev/pocketengine/features/semantic/AndroidSemanticPauseReviewTest.java",
+          "methods": [
+            "normalControlStillStartsOnce",
+            "pauseInLastSafetyCallbackStopsWebEntry",
+            "pauseResumeInLastSafetyCallbackStopsOldCalendarDecision"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.features.semantic.A26NativeCancelReviewTest",
+          "source": "app/src/test/java/dev/pocketengine/features/semantic/A26NativeCancelReviewTest.java",
+          "methods": [
+            "positiveProductionCallbackLaunchesOnce",
+            "cancelBeforeGateEntryMustPreventLaunch"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.features.semantic.NativePauseBoundaryReviewTest",
+          "source": "app/src/test/java/dev/pocketengine/features/semantic/NativePauseBoundaryReviewTest.java",
+          "methods": [
+            "positiveProductionCallbackLaunchesOnce",
+            "pauseBeforeGateEntryMustPreventLaunch"
+          ]
+        }
+      ],
+      "helpers": [
+        {
+          "class": "dev.pocketengine.features.semantic.SemanticBackgroundDisplayFixture",
+          "source": "app/src/test/java/dev/pocketengine/features/semantic/SemanticBackgroundDisplayFixture.java"
+        },
+        {
+          "class": "dev.pocketengine.features.semantic.AndroidTypedShareIntentTest",
+          "source": "app/src/test/java/dev/pocketengine/features/semantic/AndroidTypedShareIntentTest.java"
+        },
+        {
+          "class": "dev.pocketengine.features.semantic.SemanticTypedShareRequestTest",
+          "source": "app/src/test/java/dev/pocketengine/features/semantic/SemanticTypedShareRequestTest.java"
+        },
+        {
+          "class": "dev.pocketengine.features.semantic.SemanticCalendarRequestTest",
+          "source": "app/src/test/java/dev/pocketengine/features/semantic/SemanticCalendarRequestTest.java"
+        },
+        {
+          "class": "dev.pocketengine.testutil.HttpServer",
+          "source": "app/src/test/java/dev/pocketengine/testutil/HttpServer.java"
+        }
+      ]
+    },
+    "phone-access-history": {
+      "classes": [
+        {
+          "class": "dev.pocketengine.runtime.history.RecentScreenHistoryTest",
+          "source": "app/src/test/java/dev/pocketengine/runtime/history/RecentScreenHistoryTest.java",
+          "methods": [
+            "recallReturnsExactPixelsWithoutAnActionReference",
+            "expiredPrivateAndPausedFramesNeverFallbackToAnotherPicture",
+            "ringIsBoundedAndSourceRevocationStopsReads",
+            "userAttachmentAndOldOrUnknownSourcesCannotBecomeCurrentCapture",
+            "cancellationAndExactExpiryInvalidateRetainedPixels"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.runtime.RecentScreenRunnerTest",
+          "source": "app/src/test/java/dev/pocketengine/runtime/RecentScreenRunnerTest.java",
+          "methods": [
+            "historyRegistrationDoesNotDestroyExistingDuplicateObservationBudgetProof",
+            "recalledImageCapPreservesOwnerAttachmentAndNeverRestoresActionCoordinates",
+            "forgettingRecalledFrameRemovesItsHistoricalPixelsFromTheNextRealModelRequest",
+            "revokedOriginalSourceCannotResendAlreadyAppendedHistoricalPixelsOnANewTurn",
+            "pauseAfterLastActionRefreshesTheOriginalTurnBeforeAnotherImageUpload"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.access.GuardedPhonePortTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/access/GuardedPhonePortTest.java",
+          "methods": [
+            "disabledAppIsDeniedBeforeAnyObservationAndOwnerSharingIsSeparate",
+            "revocationDuringReadDropsTheFrameWithoutClaimingAnUnknownAction",
+            "policyRevisionAndAnotherRunCannotReuseAnOldActionReference",
+            "acceptedEffectThenRevocationIsUnknownAndNotAutomaticallyReplayed",
+            "unknownProfileOwnershipNeverDefaultsToMainUser"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.access.PhoneAppResourcesTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/access/PhoneAppResourcesTest.java",
+          "methods": [
+            "sameAppUserIsExclusiveAndUnknownActualUseNeverReplacesTheOwner",
+            "waitingAcquiresOnlyAfterActualOwnerRelease",
+            "waitGraphDetectsAnActualTwoOwnerCycleWithoutTakingEitherApp",
+            "cancellationAndTimeoutLeaveExistingReservationsUntouched"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.access.AndroidPhoneAccessStoreNativeTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/access/AndroidPhoneAccessStoreNativeTest.java",
+          "methods": [
+            "independentNativeStoreInstancesUseOneRevisionAndRejectLostUpdates",
+            "corruptPersistedPolicyDoesNotBecomeAnEmptyAllowList"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.diagnostics.PhonePracticeEvidenceTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/diagnostics/PhonePracticeEvidenceTest.java",
+          "methods": [
+            "staticPrefilledCountersAndTextAreNotOperationProof",
+            "originalCanonicalIdsAndFreshChangedReadbackProveTheRequestedActions",
+            "refusedUnknownOrWrongReferenceActionsCannotClaimLaterUserChanges",
+            "anotherPracticeNonceBreaksPendingEvidenceEvenWhenTheOriginalPageLaterReturns",
+            "laterUnrelatedChangeCannotRepairTheFirstFailedReadback",
+            "liveUpdatesNeedElapsedNativeTimeAndBackNeedsAnAcceptedOriginalAction"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.diagnostics.PhoneOwnedPracticeNativeTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/diagnostics/PhoneOwnedPracticeNativeTest.java",
+          "methods": [
+            "ordinaryPhoneGoalCannotAcquireTheOwnerPracticeFlagOrLaunchThePrivateTarget",
+            "originalOwnerTargetEntersItsPrivateActivityAndCancellationClearsOnlyThatActivity",
+            "duplicateLaunchAndAnEndedOriginalRunCannotCreateAnotherTarget",
+            "privateActivityRequiresTheExactNativeNonceSessionDisplayAndOneClaim"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.displayhelper.DisplayAppOwnershipTest",
+          "source": "app/src/test/java/dev/pocketengine/displayhelper/DisplayAppOwnershipTest.java",
+          "methods": [
+            "observedProfileComesFromTheCompleteNativeTaskIdentityNotTheVisibleGuess",
+            "hiddenTaskInAnotherDisplayStillBlocksTheSameAppAndUser",
+            "MissingOrInconsistentFullTopologyIsUnknownAndCannotProveAnAppFree",
+            "ReplacedOrAmbiguousTasksNeverInheritTheOldVisibleIdentity"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/display/PhoneParallelCapabilitiesTest.java",
+          "methods": [
+            "explicitUnsupportedListsTheIsolationPrerequisitesWithoutEnablingConcurrency",
+            "countAndBooleanContractsCannotRoundOrCoerceARequestIntoSupportedSingleSession",
+            "parallelCreateIsRejectedBeforeConfigurationProbeTransportOrSessionMutation"
+          ]
+        }
+      ],
+      "helpers": [
+        {
+          "class": "dev.pocketengine.testutil.HttpServer",
+          "source": "app/src/test/java/dev/pocketengine/testutil/HttpServer.java"
+        }
+      ]
+    }
+  }
+}

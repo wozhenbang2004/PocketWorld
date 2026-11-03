@@ -6,6 +6,7 @@ grant. Only the fixture's original SQLite peer metadata is seeded. The grant is
 verified against a real, exact-pinned mTLS peer before any task is sent. All task
 actions use Client -> original Companion HTTP -> original PhoneTaskRouter; this
 file contains no phone response server, model, runner, approval or success stub.
+The happy journey discards verified native replies to exercise read-only recovery.
 """
 from __future__ import annotations
 
@@ -30,6 +31,7 @@ import device_identity
 import device_protocol as protocol
 import device_transport as transport
 from device_companion import DeviceCompanionService
+from phone_task_bridge import PhoneTaskError
 from phone_task_client import Client, ClientError, strict_json
 from phone_task_desk import TaskDesk
 from phone_task_mcp import VERSION as MCP_VERSION
@@ -89,7 +91,7 @@ class NativeFixture:
             state = task.get("state")
             event.update(taskPresent=bool(task), currentReadUnavailable=snapshot.get("currentRead") == "unavailable",
                 phoneStateUnconfirmed=snapshot.get("phoneStateUnconfirmed") is True,
-                taskState=state if isinstance(state, str) and state in {"preparing", "running", "pausing", "paused", "awaiting_user", "needs_confirmation", "cancelled", "failed", "completed", "expired", "interrupted"} else "unknown",
+                taskState=state if isinstance(state, str) and state in protocol.TASK_STATES | {"preparing", "running", "pausing", "paused", "awaiting_user", "needs_confirmation", "cancelled", "failed", "completed", "expired", "interrupted"} else "unknown",
                 originalSessionPresent=owner.get("originalSessionPresent") is True,
                 ordinaryQuestionPresent=isinstance(question, dict) and bool(question.get("requestId")))
         print(json.dumps(event, separators=(",", ":")), flush=True)
@@ -207,6 +209,65 @@ class NativeFixture:
         require(value.get("taskId") == self.report["taskId"] and value.get("operationId") == OPERATION,
                 "original_task_identity_changed")
         return value
+
+    def control_snapshot_matches(self, current, original, control):
+        """Keep fresh scope failures separate from a transport-unavailable read."""
+        if not isinstance(current, dict) or not isinstance(current.get("result"), dict):
+            return False, False
+        native = original["result"]["ownerInput"]
+        owner = current["result"].get("ownerInput", {})
+        owner = owner if isinstance(owner, dict) else {}
+        question = owner.get("ordinaryQuestion", {})
+        question = question if isinstance(question, dict) else {}
+        lease = current["result"].get("controlLease", {})
+        lease = lease if isinstance(lease, dict) else {}
+        scope_matches = (all(current.get(key) == original[key]
+                             for key in ("executorDeviceId", "instanceId", "taskId", "runId", "executorEpoch"))
+                         and type(current.get("revision")) is int and current["revision"] > original["revision"]
+                         and owner.get("allocationId") == native["allocationId"]
+                         and all(question.get(key) == native["ordinaryQuestion"][key]
+                                 for key in ("requestId", "waitRevision", "approval", "takeover")))
+        lease_matches = (lease.get("controlLeaseId") == control.get("controlLeaseId")
+                         and lease.get("expiresAt") == control.get("controlLeaseExpiresAt")
+                         and type(lease.get("expiresAt")) is int and lease["expiresAt"] > self.manager.now())
+        return scope_matches, lease_matches
+
+    def install_control_recovery(self, control_operation, original):
+        """Lose real replies on this fixture's router, never fabricate a native result."""
+        router = self.manager.device_companion.phone_tasks
+        exchange = router._exchange
+        facts = {"nativeAcquireCalls": 0, "originalOperationReads": 0, "taskReadsAfterReceipt": 0,
+                 "ackDiscarded": False, "ackUnknownObserved": False, "taskReadDiscarded": False,
+                 "taskReadUnavailableObserved": False, "recoveredByOriginalOperation": False}
+        state = {"readArmed": False, "control": None, "facts": facts}
+        self.report["controlRecovery"] = facts
+
+        async def discard_once(connection, peer, ticket, envelope, timeout=12):
+            acquire = envelope.method == "task.acquireControl"
+            if acquire:
+                facts["nativeAcquireCalls"] += 1
+            if envelope.method == "operation.get" and envelope.arguments.get("operationId") == control_operation:
+                facts["originalOperationReads"] += 1
+            task_read = (state["readArmed"] and envelope.method == "task.get"
+                         and envelope.arguments.get("taskId") == original["taskId"])
+            if task_read:
+                facts["taskReadsAfterReceipt"] += 1
+            response = await exchange(connection, peer, ticket, envelope, timeout)
+            if response["messageType"] == "DeviceResponse":
+                if (acquire and envelope.get("operationId") == control_operation
+                        and response["result"].get("accepted") is True and not facts["ackDiscarded"]):
+                    facts["ackDiscarded"] = True
+                    raise PhoneTaskError("Fixture discarded the original control acknowledgement", 504)
+                # Do not turn a wrong fresh identity, question, revision or lease
+                # into an unavailable read that a later good snapshot could hide.
+                if (task_read and not facts["taskReadDiscarded"]
+                        and all(self.control_snapshot_matches(response["result"], original, state["control"]))):
+                    facts["taskReadDiscarded"] = True
+                    raise PhoneTaskError("Fixture discarded one original task read response", 504)
+            return response
+
+        router._exchange = discard_once
+        return state
 
     @staticmethod
     def mcp_initialize(request_id):
@@ -510,26 +571,64 @@ class NativeFixture:
         self.progress("ordinary_question_observed", waiting)
         task = waiting["task"]
         native = task["result"]["ownerInput"]
-        question = native["ordinaryQuestion"]
         self.report.update(runId=task["runId"], executorEpoch=task["executorEpoch"], allocationId=native["allocationId"],
                            questionSnapshot=task)
         common = {"operationId": OPERATION, "peerDeviceId": self.spec["targetDeviceId"], "taskId": task["taskId"],
                   "runId": task["runId"], "executorEpoch": task["executorEpoch"], "allocationId": native["allocationId"]}
-        control = self.action("acquire_control", {**common, "controlOperationId": "phone-api-native-control", "ttlMs": 30000})
+        control_operation = "phone-api-native-control"
+        recovery = self.install_control_recovery(control_operation, task) if self.scenario == "happy" else None
+        control = self.action("acquire_control", {**common, "controlOperationId": control_operation, "ttlMs": 30000})
         self.report["controlReceipt"] = control
-        require(control.get("accepted") is True and control.get("controlLeaseId"), "original_control_not_acquired")
-        controlled = self.status()
+        unknown = control.get("status") == "unknown" and control.get("effectState") == "unknown"
+        if recovery:
+            recovery["facts"]["ackUnknownObserved"] = unknown and control.get("accepted") is not True
+        if unknown:
+            # Query the one original control operation. A task snapshot alone
+            # cannot prove that this mutation acquired a lease; never replay it.
+            control = self.action("status", {"operationId": control_operation, "peerDeviceId": common["peerDeviceId"]})
+            self.report["controlReceipt"] = control
+        require(control.get("accepted") is True and control.get("controlLeaseId")
+                and control.get("operationId") == control_operation and control.get("targetOperationId") == OPERATION
+                and control.get("kind") == "task.acquireControl" and control.get("peerDeviceId") == common["peerDeviceId"]
+                and all(control.get(key) == common[key] for key in ("taskId", "runId", "executorEpoch")),
+                "original_control_not_acquired")
+        if unknown and control.get("currentRead") != "unavailable":
+            scope_matches, lease_matches = self.control_snapshot_matches(control.get("task"), task, control)
+            require(scope_matches, "acquire_status_changed_original_question_scope")
+            require(lease_matches, "original_control_missing_from_real_snapshot")
+        elif control.get("currentRead") == "unavailable":
+            require("task" not in control, "acquire_status_changed_original_question_scope")
+        if recovery:
+            recovery["facts"]["recoveredByOriginalOperation"] = unknown
+            # Only the next original-task read is armed, after the control
+            # receipt query (including its internal task.get) has finished.
+            recovery.update(control=control, readArmed=True)
+        while True:
+            require(type(control.get("controlLeaseExpiresAt")) is int
+                    and control["controlLeaseExpiresAt"] > self.manager.now(), "original_control_missing_from_real_snapshot")
+            controlled = self.status()
+            if controlled.get("currentRead") != "unavailable":
+                break
+            require("task" not in controlled, "acquire_status_changed_original_question_scope")
+            if recovery:
+                recovery["facts"]["taskReadUnavailableObserved"] = True
+            remaining = control["controlLeaseExpiresAt"] - self.manager.now()
+            require(remaining > 0, "original_control_missing_from_real_snapshot")
+            time.sleep(min(0.05, remaining / 1000))
         current = controlled.get("task", {})
-        owner = current.get("result", {}).get("ownerInput", {})
-        current_question = owner.get("ordinaryQuestion", {})
-        lease = current.get("result", {}).get("controlLease", {})
-        require(all(current.get(key) == task[key] for key in ("executorDeviceId", "instanceId", "taskId", "runId", "executorEpoch"))
-                and current.get("revision", 0) > task["revision"] and owner.get("allocationId") == native["allocationId"]
-                and all(current_question.get(key) == question[key] for key in ("requestId", "waitRevision", "approval", "takeover")),
-                "acquire_status_changed_original_question_scope")
-        require(lease.get("controlLeaseId") == control["controlLeaseId"]
-                and lease.get("expiresAt") == control["controlLeaseExpiresAt"]
-                and lease.get("expiresAt", 0) > self.manager.now(), "original_control_missing_from_real_snapshot")
+        scope_matches, lease_matches = self.control_snapshot_matches(current, task, control)
+        require(scope_matches, "acquire_status_changed_original_question_scope")
+        require(lease_matches, "original_control_missing_from_real_snapshot")
+        owner = current["result"]["ownerInput"]
+        current_question = owner["ordinaryQuestion"]
+        lease = current["result"]["controlLease"]
+        if recovery:
+            recovery["readArmed"] = False
+            facts = recovery["facts"]
+            require(facts["nativeAcquireCalls"] == 1 and facts["originalOperationReads"] >= 1
+                    and facts["taskReadsAfterReceipt"] >= 2
+                    and all(facts[key] is True for key in ("ackDiscarded", "ackUnknownObserved", "taskReadDiscarded",
+                            "taskReadUnavailableObserved", "recoveredByOriginalOperation")), "original_control_not_acquired")
         self.progress("original_control_acquired", controlled)
         self.report["controlSnapshot"] = controlled
         # The same published snapshot is what Task Desk reads after acquisition;

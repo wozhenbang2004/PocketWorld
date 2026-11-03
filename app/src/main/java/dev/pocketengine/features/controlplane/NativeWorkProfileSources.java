@@ -26,13 +26,49 @@ public final class NativeWorkProfileSources implements WorkProfileResolver.Sourc
     private final TargetFacts targets;
     @FunctionalInterface public interface AccountFacts { JSONObject snapshot() throws Exception; }
     private final AccountFacts accounts;
+    @FunctionalInterface private interface ScopeFacts { JSONObject current() throws Exception; }
+    private final ScopeFacts scopeFacts;
+    private final String projectRuntime;
     public NativeWorkProfileSources(SettingsStore settings, FeatureHost features, NativePluginHost plugins, Set<String> capabilities, TargetFacts targets) { this(settings, features, plugins, capabilities, targets, null); }
     public NativeWorkProfileSources(SettingsStore settings, FeatureHost features, NativePluginHost plugins, Set<String> capabilities, TargetFacts targets, AccountFacts accounts) { this(settings,features,plugins,fixedCapabilities(capabilities),targets,accounts); }
     public NativeWorkProfileSources(SettingsStore settings,FeatureHost features,NativePluginHost plugins,CapabilityFacts capabilities,TargetFacts targets,AccountFacts accounts) {
+        this(settings,features,plugins,capabilities,targets,accounts,null,"");
+    }
+    private NativeWorkProfileSources(SettingsStore settings,FeatureHost features,NativePluginHost plugins,CapabilityFacts capabilities,TargetFacts targets,AccountFacts accounts,ScopeFacts scopeFacts,String projectRuntime) {
         this.accounts = accounts; this.settings = java.util.Objects.requireNonNull(settings); this.features = java.util.Objects.requireNonNull(features);
         this.plugins = java.util.Objects.requireNonNull(plugins); this.capabilities = java.util.Objects.requireNonNull(capabilities); this.targets = targets;
+        this.scopeFacts=scopeFacts;this.projectRuntime=projectRuntime;
     }
     private static CapabilityFacts fixedCapabilities(Set<String> capabilities) { Set<String> frozen=Set.copyOf(capabilities);return ()->frozen; }
+    private static JSONObject globalScope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
+    private dev.pocketengine.features.skills.SkillsModule skills() {
+        EngineModule module=features.module("skills");if(!(module instanceof dev.pocketengine.features.skills.SkillsModule))throw new IllegalStateException("original_skill_store_not_mounted");return (dev.pocketengine.features.skills.SkillsModule)module;
+    }
+    @Override public WorkProfileResolver.Sources forProject(dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection selected,RunControl observation)throws Exception {
+        observation.check();
+        if(selected==null)return new NativeWorkProfileSources(settings,features,plugins,capabilities,targets,accounts);
+        var original=skills();JSONObject scope=original.profileScopeForHost(selected);String frozen=scope.toString(),runtime=selected.view().getString("runtime");
+        original.requireProjectScopeForHost(scope);observation.check();
+        return new NativeWorkProfileSources(settings,features,plugins,capabilities,targets,accounts,()->{JSONObject expected=new JSONObject(frozen);original.requireProjectScopeForHost(expected);return expected;},runtime);
+    }
+    @Override public WorkProfileResolver.Sources forTask(dev.pocketengine.store.TaskStore tasks,String id,RunControl observation)throws Exception {
+        observation.check();JSONObject task=tasks.get(id,false);
+        if(task==null||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId")))throw new SecurityException("original_private_profile_task_required");
+        // Hosts without a Skill adapter cannot resolve any Skill. Keep their original model-
+        // only Profile contract; no project Skill scope or source authority is invented.
+        if(!(features.module("skills") instanceof dev.pocketengine.features.skills.SkillsModule))return new NativeWorkProfileSources(settings,features,plugins,capabilities,targets,accounts);
+        var original=skills();JSONObject scope=original.taskScopeForHost(task);String frozen=scope.toString();
+        JSONObject development=task.optJSONObject("developmentContext");String runtime=development==null?"":development.getString("runtime");
+        observation.check();
+        return new NativeWorkProfileSources(settings,features,plugins,capabilities,targets,accounts,()->{
+            JSONObject current=tasks.get(id,false),expected=new JSONObject(frozen);original.requireTaskScopeForHost(current,expected);
+            JSONObject context=current.optJSONObject("developmentContext");if(!runtime.equals(context==null?"":context.optString("runtime")))throw new SecurityException("original_profile_project_runtime_changed");return expected;
+        },runtime);
+    }
+    @Override public JSONObject skillScope(RunControl observation)throws Exception {
+        observation.check();if(!(features.module("skills") instanceof dev.pocketengine.features.skills.SkillsModule))return null;
+        JSONObject scope=scopeFacts==null?globalScope():scopeFacts.current();observation.check();return scope;
+    }
     @Override public ModelConfig model(ModelTargetRef reference, String purpose, RunControl observation) throws Exception {
         observation.check(); ModelConfig value = settings.captureWorkProfileModel(reference, purpose, "RELAY".equals(purpose) ? "EXTERNAL_RELAY" : "APP_OWNER"); checkModel(value, purpose, observation); observation.check(); return value;
     }
@@ -63,13 +99,25 @@ public final class NativeWorkProfileSources implements WorkProfileResolver.Sourc
         observation.check();
     }
     @Override public JSONObject skill(String id, RunControl observation) throws Exception {
-        observation.check(); EngineModule module = features.module("skills");
-        if (!(module instanceof dev.pocketengine.features.skills.SkillsModule)) throw new IllegalStateException("original_skill_store_not_mounted");
-        JSONObject value = module.handle("get", new JSONObject().put("id", id).put("scope", new JSONObject().put("ownerId", "owner").put("spaceId", "private"))).getJSONObject("skill"); observation.check(); return value;
+        return skillInScope(id,skillScope(observation),observation);
+    }
+    /** Original pre-scope snapshots can still use their global sources inside a project
+     * task, but never acquire a PROJECT source by reopening the old JSON snapshot. */
+    @Override public JSONObject legacyGlobalSkill(String id,RunControl observation)throws Exception {
+        skillScope(observation);JSONObject value=skillInScope(id,globalScope(),observation);if(value!=null)value.remove("skillScopeFingerprint");return value;
+    }
+    private JSONObject skillInScope(String id,JSONObject scope,RunControl observation)throws Exception {
+        observation.check();JSONObject value=find(skills().catalogueForHost(scope).getJSONArray("skills"),id);skillScope(observation);return value;
     }
     @Override public JSONObject referencePackage(JSONObject reference,RunControl observation)throws Exception {
-        observation.check();EngineModule module=features.module("skills");if(!(module instanceof dev.pocketengine.features.skills.SkillsModule))throw new IllegalStateException("original_skill_store_not_mounted");
-        JSONObject value=((dev.pocketengine.features.skills.SkillsModule)module).referencePackageForHost(new JSONObject().put("ownerId","owner").put("spaceId","private"),reference.getString("id"),reference.getInt("revision"),reference.getString("digest"),hostCapabilities());observation.check();return value;
+        return referencePackageInScope(reference,skillScope(observation),observation);
+    }
+    @Override public JSONObject legacyGlobalReferencePackage(JSONObject reference,RunControl observation)throws Exception {
+        skillScope(observation);return referencePackageInScope(reference,globalScope(),observation);
+    }
+    private JSONObject referencePackageInScope(JSONObject reference,JSONObject scope,RunControl observation)throws Exception {
+        observation.check();JSONObject value=skills().referencePackageForHost(scope,reference.getString("id"),reference.getInt("revision"),reference.getString("digest"),hostCapabilities());
+        skillScope(observation);observation.check();return value;
     }
     @Override public JSONObject plugin(String id, RunControl observation) throws Exception {
         observation.check(); EngineModule module = features.module("plugins");
@@ -102,9 +150,9 @@ public final class NativeWorkProfileSources implements WorkProfileResolver.Sourc
         JSONObject sections = new JSONObject();
         sections.put("models", choiceSection(() -> new JSONObject().put("api", settings.apiConnectionsSnapshot()).put("groups", settings.modelGroupsSnapshot()).put("originalStore", "SettingsStore"), observation));
         sections.put("skills", choiceSection(() -> {
-            EngineModule module = features.module("skills"); if (!(module instanceof dev.pocketengine.features.skills.SkillsModule)) throw new IllegalStateException("original_skill_store_not_mounted");
-            JSONArray rows = module.snapshot().getJSONArray("skills"), items = new JSONArray();
-            for (int i = 0; i < rows.length(); i++) items.put(publicFields(rows.getJSONObject(i), "id", "name", "revision", "digest", "executionGeneration", "expiresAt", "active", "status", "contentVerified", "requiredCapabilities"));
+            JSONArray rows = skills().catalogueForHost(skillScope(observation)).getJSONArray("skills"), items = new JSONArray();
+            for (int i = 0; i < rows.length(); i++) items.put(publicFields(rows.getJSONObject(i), "id", "name", "revision", "digest", "executionGeneration", "expiresAt", "active", "status", "contentVerified", "requiredCapabilities", "source", "sourceVersion", "sourcePolicy", "skillScopeFingerprint"));
+            skillScope(observation);
             return new JSONObject().put("items", items).put("originalStore", "SkillBook");
         }, observation));
         sections.put("plugins", choiceSection(() -> {
@@ -149,7 +197,14 @@ public final class NativeWorkProfileSources implements WorkProfileResolver.Sourc
     private static JSONObject publicFields(JSONObject row, String... fields) throws Exception {
         JSONObject result = new JSONObject(); for (String field : fields) if (row.has(field)) result.put(field, row.get(field)); return new JSONObject(result.toString());
     }
-    @Override public Set<String> hostCapabilities() throws Exception { return Set.copyOf(capabilities.current()); }
+    @Override public Set<String> hostCapabilities() throws Exception {
+        if(scopeFacts!=null)scopeFacts.current();java.util.Set<String> available=new java.util.HashSet<>(capabilities.current());
+        if(!projectRuntime.isEmpty()){
+            EngineModule module=features.module("local");if(!(module instanceof dev.pocketengine.features.local.LocalModule))throw new SecurityException("original_profile_project_host_not_mounted");
+            available.addAll(dev.pocketengine.features.local.project.ProjectCapabilityPort.configuredSkillCapabilitiesForOwner((dev.pocketengine.features.local.LocalModule)module,projectRuntime));
+        }
+        if(scopeFacts!=null)scopeFacts.current();return Set.copyOf(available);
+    }
     static JSONObject find(JSONArray rows, String id) throws Exception {
         for (int i = 0; i < rows.length(); i++) if (id.equals(rows.getJSONObject(i).optString("id"))) return new JSONObject(rows.getJSONObject(i).toString()); return null;
     }

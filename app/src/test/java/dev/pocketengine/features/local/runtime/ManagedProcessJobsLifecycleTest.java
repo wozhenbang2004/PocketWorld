@@ -33,6 +33,8 @@ public final class ManagedProcessJobsLifecycleTest {
     }
     @Test public void ownerReconstructionNeverAttachesCancelsOrReplaysThePreviousProcess()throws Exception {
         RuntimeInvocation invocation=call("owned", "sh",new JSONArray().put("-c").put("printf 'ORIGINAL_LOG\\n'; exec sleep 60"));
+        String operation=invocation.executionRef().operationId();var finalReceipt=new java.util.concurrent.CountDownLatch(1);
+        jobs.setReceiptSink(receipt->{if(operation.equals(receipt.optString("operationId"))&&receipt.has("finishedAt"))finalReceipt.countDown();});
         jobs.start(invocation,List.of("/bin/sh","-c","printf 'ORIGINAL_LOG\\n'; exec sleep 60"),Map.of("PATH","/usr/bin:/bin"),active.toFile(),5000,()->{});
         long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);JSONObject live=null;while(System.nanoTime()<until){live=jobs.query(invocation.executionRef()).json();if(live.optString("stdout").contains("ORIGINAL_LOG"))break;Thread.sleep(5);}
         assertNotNull(live);assertTrue(live.getBoolean("ownedWorkerLive"));assertFalse(live.getBoolean("receiptReceived"));
@@ -41,6 +43,7 @@ public final class ManagedProcessJobsLifecycleTest {
             JSONObject cancel=reconstructed.requestCancel(invocation.executionRef()).json();assertEquals("no_owned_live_process",cancel.getString("cancelDelivery"));assertFalse(cancel.getBoolean("resourcesReleased"));assertTrue("the original owner still supervises its same process",jobs.query(invocation.executionRef()).json().getBoolean("ownedWorkerLive"));
         }
         jobs.requestCancel(invocation.executionRef());JSONObject stopped=finished(invocation);assertTrue(stopped.getBoolean("cancelRequested"));assertTrue(stopped.getBoolean("processExited"));assertTrue(stopped.getBoolean("processGroupAbsent"));assertTrue(stopped.getBoolean("resourcesReleased"));assertEquals("failed",stopped.getString("status"));
+        assertTrue("the original final receipt must finish its log summary before fixture deletion",finalReceipt.await(3,TimeUnit.SECONDS));
     }
     @Test public void nativeDeadlineStopsAndDrainsWithoutReportingBusinessSuccess()throws Exception {
         RuntimeInvocation invocation=call("deadline","sh",new JSONArray().put("-c").put("exec sleep 60"));

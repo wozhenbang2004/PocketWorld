@@ -4,6 +4,7 @@ import dev.pocketengine.features.assistant.AssistantModule;
 import dev.pocketengine.features.memory.MemoryBook;
 import dev.pocketengine.features.memory.MemoryModule;
 import dev.pocketengine.features.memory.SourceRef;
+import dev.pocketengine.features.plugins.McpResourceEvidence;
 import dev.pocketengine.features.skills.ExperienceOrigin;
 import dev.pocketengine.features.skills.SkillsModule;
 import dev.pocketengine.store.TaskStore;
@@ -48,6 +49,9 @@ public final class MemorySourceBridge {
             if("attachment_document_read".equals(event.optString("type"))){var book=attachmentBook;if(book==null)throw new IllegalStateException("原附件Book尚未绑定");var readControl=control==null?new dev.pocketengine.core.RunControl():control;
                 book.readVerifiedMetadata(event.getString("attachmentId"),event.getString("sha256"),readControl);readControl.check();
                 if(!book.outputSourceCurrent(event.getString("attachmentId"),event.getString("sha256"),event.getString("attachmentGeneration")))throw new SecurityException("原件字节、代次或私人来源资格已变化");
+            }else if(McpResourceEvidence.EVENT_TYPE.equals(event.optString("type"))){
+                var book=attachmentBook;if(book==null)throw new IllegalStateException("原附件Book尚未绑定");
+                McpResourceEvidence.prepareRetainedSource(book,event,control==null?new dev.pocketengine.core.RunControl():control);
             }
             tasks.selectSavedMemorySource(address.taskId,address.runId,address.eventSeq,address.offset,address.chars);return;
         }
@@ -88,7 +92,7 @@ public final class MemorySourceBridge {
         if(kind.equals("workspace_file"))return workspaceState(scope,sourceId);
         if(kind.equals("task_evidence")&&dev.pocketengine.features.memory.TaskSavedEvidence.matches(sourceId)){
             SourceRef.State state=tasks.resolveMemorySource(scope,kind,sourceId);if(state==null||state.deleted)return state;JSONObject event=tasks.savedMemorySourceEvent(state.ref);
-            if("attachment_document_read".equals(event.optString("type"))){var book=attachmentBook;if(book==null||!book.outputSourceCurrent(event.getString("attachmentId"),event.getString("sha256"),event.getString("attachmentGeneration")))return null;}
+            if("attachment_document_read".equals(event.optString("type"))||McpResourceEvidence.EVENT_TYPE.equals(event.optString("type"))){var book=attachmentBook;if(book==null||!book.outputSourceCurrent(event.getString("attachmentId"),event.getString("sha256"),event.getString("attachmentGeneration")))return null;}
             return state;
         }
         if(kind.equals("task_evidence"))return tasks.resolveMemorySource(scope,kind,sourceId);
@@ -143,6 +147,10 @@ public final class MemorySourceBridge {
             text=joined.toString();title="原已读取文档范围 · "+result.optString("coverage")+"（不是全文或独立成功证明）";
         }else if("browser_source_retained".equals(event.optString("type"))){text=dev.pocketengine.features.memory.TaskSavedEvidence.browserText(event);title="原已批准保存的网页安全证据范围（非当前网页或整页）";}
         else if("app_learning_evidence".equals(event.optString("type"))){text=dev.pocketengine.features.memory.TaskSavedEvidence.appLearningText(event);title="原任务 App 动作经过（未独立核实成功，仅待审候选）";}
+        else if(McpResourceEvidence.EVENT_TYPE.equals(event.optString("type"))){
+            var book=attachmentBook;if(book==null)throw new IllegalStateException("原附件Book尚未绑定");
+            text=McpResourceEvidence.readRetainedText(book,event,new dev.pocketengine.core.RunControl());title="原已保存MCP文本快照（外部低信任数据；非当前资源或工具授权）";
+        }
         else throw new IllegalStateException("这份保存来源尚无准确安全正文路由");
         String excerpt=dev.pocketengine.features.memory.TaskSavedEvidence.excerpt(expected,text);requireCurrentReference(expected);tasks.savedMemorySourceEvent(expected);
         return new KnowledgeLearningWorkflow.SourceDocument(expected,title,excerpt,"app_learning_evidence".equals(event.optString("type"))?event.getJSONObject("context"):null);
@@ -169,7 +177,7 @@ public final class MemorySourceBridge {
             // SourceRef is not a new read grant. Warm only sources already indexed by this Book;
             // original native owner selections use prepareLearningSource on their separate IO path.
             JSONObject event;try{event=tasks.savedMemorySourceEvent(ref);}catch(SecurityException deleted){continue;}
-            if("attachment_document_read".equals(event.optString("type"))){var book=attachmentBook;if(book==null)throw new IllegalStateException("原附件Book尚未绑定");
+            if("attachment_document_read".equals(event.optString("type"))||McpResourceEvidence.EVENT_TYPE.equals(event.optString("type"))){var book=attachmentBook;if(book==null)throw new IllegalStateException("原附件Book尚未绑定");
                 if(!book.outputSourceCurrent(event.getString("attachmentId"),event.getString("sha256"),event.getString("attachmentGeneration"))){
                     // Count only actual byte warmups. Already checked documents, safe browser
                     // projections and deleted history must not permanently exhaust every pass.

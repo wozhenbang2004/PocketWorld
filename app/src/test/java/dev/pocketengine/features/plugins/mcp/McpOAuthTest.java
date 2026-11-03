@@ -19,8 +19,13 @@ import javax.crypto.spec.GCMParameterSpec;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk=35,manifest=Config.NONE,application=android.app.Application.class)
 public class McpOAuthTest {
     private static final String RESOURCE="https://mcp.example.com/public/mcp",ISSUER="https://auth.example.com/tenant",REDIRECT="https://app.example.com/oauth/callback";
     private static final class Secrets implements McpOAuth.EncryptedSecrets {

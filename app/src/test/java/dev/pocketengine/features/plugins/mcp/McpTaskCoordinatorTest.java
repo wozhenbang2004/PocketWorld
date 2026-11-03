@@ -87,6 +87,8 @@ public class McpTaskCoordinatorTest {
         Host host=new Host();Wire wire=new Wire();wire.initial="input_required";McpTaskCoordinator c=new McpTaskCoordinator(host,wire);McpTaskCoordinator.Binding b=binding("op");
         assertTrue(c.start(b,new JSONObject(),control()).getBoolean("unsupportedInputRequired"));JSONObject old=host.load(b);old.put("ttlMs",1);host.save(b,old);
         assertTrue(c.query(b,control()).getBoolean("receiptExpired"));assertEquals(0,wire.queries);assertEquals(1,wire.starts);
+        assertTrue(host.load(b).getBoolean("receiptExpired"));assertFalse(host.load(b).optBoolean("resolved"));
+        assertTrue(new McpTaskCoordinator(host,wire).query(b,control()).getBoolean("receiptExpired"));assertEquals(0,wire.queries);assertEquals(1,wire.starts);
     }
     @Test public void taskProtocolCannotSilentlyDowngrade()throws Exception {
         JSONObject declaration=binding("op").declaration().put("protocolVersion","2025-11-25");

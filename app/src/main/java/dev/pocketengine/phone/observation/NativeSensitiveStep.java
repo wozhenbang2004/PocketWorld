@@ -45,6 +45,18 @@ public final class NativeSensitiveStep {
     private static final Pattern PAY_AMOUNT=Pattern.compile("^(?:pay|payment|支付|付款)\\s*(?:[$¥€£]|(?:usd|cny|rmb|eur|gbp)\\s*)\\s*[0-9][0-9,.]*(?:\\s*(?:usd|cny|rmb|eur|gbp|元))?$");
     private static final Pattern TRANSFER_AMOUNT=Pattern.compile("^(?:transfer|send|转账|汇款)\\s*(?:[$¥€£]|(?:usd|cny|rmb|eur|gbp)\\s*)\\s*[0-9][0-9,.]*(?:\\s*(?:usd|cny|rmb|eur|gbp|元))?$");
 
+    /** Native history retention only. Reuses the existing sensitive-step vocabulary; never grants an action. */
+    public static boolean historyContainsSensitiveStep(JSONObject nativeObservation){
+        return sensitiveHistoryNodes(nativeObservation==null?null:nativeObservation.optJSONArray("nodes"));
+    }
+    private static boolean sensitiveHistoryNodes(JSONArray nodes){
+        for(int i=0;nodes!=null&&i<nodes.length();i++){
+            JSONObject node=nodes.optJSONObject(i);if(node==null)continue;if(node.optBoolean("password"))return true;
+            boolean editable=node.optBoolean("editable");String label=(editable?"":node.optString("text"))+" "+node.optString("description")+" "+node.optString("hint")+" "+node.optString("labelledBy");
+            if(risk(normal(label))!=null||classify(label,node.optString("resourceId",node.optString("viewId")),node.optString("packageName"),editable,editable,"")!=null||sensitiveHistoryNodes(node.optJSONArray("children")))return true;
+        }return false;
+    }
+
     /** Finite native facts BEFORE the public tree's text/body clipping; never a grant or retained UI text. */
     static final class Facts {
         final Reason click,type,labelRisk,ancestorPurpose,slide;
