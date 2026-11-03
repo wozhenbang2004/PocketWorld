@@ -3,6 +3,7 @@ package dev.pocketengine.media;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunJournal;
 import dev.pocketengine.media.jobs.ComfyUiTransport;
+import dev.pocketengine.media.jobs.MediaJobJournal;
 import dev.pocketengine.store.TaskStore;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -109,10 +110,13 @@ public final class MediaWorkflowHost implements AutoCloseable {
             entry.control.check();JSONObject receipt=module.handleForHost(command,input,entry.control);
             persist(entry,receipt,true);return withHost(receipt,entry);
         }catch(Exception failure){
+            boolean capacityRejected=failure instanceof MediaJobJournal.CapacityExceededException&&entry.operation.equals(((MediaJobJournal.CapacityExceededException)failure).operationId);
+            boolean undispatched=capacityRejected||failure instanceof SecurityException||failure instanceof IllegalArgumentException;
             JSONObject notice=new JSONObject().put("operationId",entry.operation).put("taskId",entry.task).put("runId",entry.run)
-                    .put("configurationRevision",entry.revision).put("status",failure instanceof SecurityException||failure instanceof IllegalArgumentException?"failed":"unknown")
-                    .put("receiptSource","native_host_failure").put("verified",false).put("message","媒体原操作未取得完整回执；请核对原操作，不会重新提交");
-            if(failure instanceof SecurityException||failure instanceof IllegalArgumentException)notice.put("dispatched",false);
+                    .put("configurationRevision",entry.revision).put("status",undispatched?"failed":"unknown")
+                    .put("receiptSource","native_host_failure").put("verified",false).put("message",capacityRejected?"媒体回执已达256个，未派发新生成；原回执保留，本任务不会重新提交":"媒体原操作未取得完整回执；请核对原操作，不会重新提交");
+            if(undispatched)notice.put("dispatched",false);
+            if(capacityRejected)notice.put("failureReason","receipt_capacity");
             persist(entry,notice,true);throw failure;
         }finally{active.remove(entry.operation,entry);startConfirmedReadContinuation(module,entry.task,entry.operation);}
     }

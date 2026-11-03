@@ -20,6 +20,15 @@ public final class MediaJobJournal {
     private final File file;
     private JSONObject records;
 
+    /** Exact new-operation refusal before a write or dispatch; existing receipts remain usable. */
+    public static final class CapacityExceededException extends IllegalStateException {
+        public final String operationId;
+        private CapacityExceededException(String operationId) {
+            super("媒体回执已达256个，未派发新生成");
+            this.operationId = operationId;
+        }
+    }
+
     public MediaJobJournal(File file) throws Exception {
         this.file = file;
         if (!file.exists()) { records = new JSONObject(); return; }
@@ -52,7 +61,7 @@ public final class MediaJobJournal {
     public synchronized void put(JSONObject record) throws Exception {
         String id = record.getString("operationId");
         identity(id);
-        if (!records.has(id) && records.length() >= MAX_RECEIPTS) throw new IllegalStateException("媒体回执已达256个，未派发新生成");
+        if (!records.has(id) && records.length() >= MAX_RECEIPTS) throw new CapacityExceededException(id);
         JSONObject next = copy(records);
         next.put(id, copy(record));
         write(next);
