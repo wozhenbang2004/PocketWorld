@@ -322,8 +322,8 @@ class HostTestEntrypointTest(unittest.TestCase):
                              {'__builtins__': {}}, {'github': github, 'inputs': SimpleNamespace(target=target)}))
 
         cases = [({'event': 'pull_request'}, (False, True)),
-                 # Latest main runs its bounded memory groups on other affected private PRs.
-                 # The separate batch-selection assertion below keeps phone groups exclusive.
+                 # Latest main runs its phone-platform/memory groups on other affected private PRs.
+                 # The separate batch-selection assertion keeps this advanced-phone batch exclusive.
                  ({'event': 'pull_request', 'same_repo': False}, (False, True)),
                  ({'event': 'pull_request', 'branch': 'uiux/workroom-20261102'}, (False, True)),
                  ({'event': 'pull_request', 'private': False}, (False, False)),
@@ -348,12 +348,13 @@ class HostTestEntrypointTest(unittest.TestCase):
                         {'__builtins__': {}}, {'github': github, 'inputs': SimpleNamespace(host_groups=manual)})
         groups = batch().split(',')
         self.assertEqual(['phone-setup-recovery', 'phone-input-extensions', 'phone-semantic-profile', 'phone-access-history',
-                          'phone-observation-boundaries', 'phone-sensitive-owner', 'local-phone-leases', 'phone-audio-owner'], groups)
+                          'phone-observation-boundaries', 'phone-sensitive-owner', 'local-phone-leases', 'phone-audio-owner',
+                          'phone-task-platform'], groups)
         self.assertEqual(groups, HOST.select(REGISTRY, groups, []))
-        memory = ['memory-recall-quality', 'memory-evidence-plan', 'memory-method-quality']
-        self.assertEqual(memory, HOST.select(REGISTRY, memory, []))
-        self.assertEqual(memory, batch(branch='uiux/workroom-20261102').split(','))
-        self.assertEqual(memory, batch(same_repo=False).split(','))
+        main_groups = ['phone-task-platform', 'memory-recall-quality', 'memory-evidence-plan', 'memory-method-quality']
+        self.assertEqual(main_groups, HOST.select(REGISTRY, main_groups, []))
+        self.assertEqual(main_groups, batch(branch='uiux/workroom-20261102').split(','))
+        self.assertEqual(main_groups, batch(same_repo=False).split(','))
         self.assertEqual('request-clock', batch(event='workflow_dispatch', manual='request-clock'))
         self.assertNotIn('matrix:', host)
         for field in ('testedCommit', 'prBaseCommit', 'prHeadCommit', 'deviceTestsPerformed', 'apkBuiltOrSigned'):

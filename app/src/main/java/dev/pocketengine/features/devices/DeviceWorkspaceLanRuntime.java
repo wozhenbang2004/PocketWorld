@@ -642,8 +642,7 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
      * execution/scope withdrawal cannot be silently converted into a new run or send ticket. */
     PairingCoordinator.OutgoingGrant currentManagementGrant(String target, String originalGrantId) throws Exception {
         PeerChannel actual = controlChannel(target); if (!channelOnline(actual)) throw new IOException("下游设备尚未连接，停止状态未知");
-        JSONObject original = owner.trust.outgoingGrant(target, originalGrantId); if (original == null) throw new SecurityException("没有原设备签发的管理授权回执");
-        PairingCoordinator.OutgoingGrant current = owner.pairing().acceptOutgoingGrant(actual.peer, original, System.currentTimeMillis());
+        PairingCoordinator.OutgoingGrant current = owner.pairing().restoreOutgoingGrant(actual.peer, originalGrantId, System.currentTimeMillis());
         if (!originalGrantId.equals(current.grantId())) throw new SecurityException("管理授权不是原任务的准确grant"); return current;
     }
     public PairingCoordinator.HistoryRoute currentHistoryRoute(String target, String originalGrantId) throws Exception {

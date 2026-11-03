@@ -16,6 +16,8 @@ public final class DeviceTaskCoordinator {
         void acceptGoal(String localTaskId, DeviceExecutionAdmission admission) throws Exception;
         /** Deliver the durable pause/cancel request to the actual retained executor, not a replacement. */
         void controlRequested(String localTaskId, String action) throws Exception;
+        default DeviceOwnerInputs ordinaryInputs(){return null;}
+        default void ordinaryInputAccepted(DeviceOwnerInputs.Scope original,JSONObject accepted)throws Exception{throw new SecurityException("原设备输入宿主尚未配置");}
     }
     private final TaskStore tasks;
     private final TaskStoreDeviceTasks devices;
@@ -62,15 +64,28 @@ public final class DeviceTaskCoordinator {
         return task;
     }
     public JSONObject task(PairingCoordinator.Permission permission) throws Exception {
-        return taskSnapshot(requireTask(permission,permission.envelope().arguments().getString("taskId")));
+        return taskSnapshot(requireTask(permission,permission.envelope().arguments().getString("taskId")),permission.callerDeviceId(),permission.authorizationEpoch());
     }
-    public JSONObject task(PairingCoordinator.HistoryPermission permission)throws Exception{return taskSnapshot(requireHistoryTask(permission,permission.envelope().arguments().getString("taskId")));}
-    private JSONObject taskSnapshot(JSONObject task)throws Exception{
+    public JSONObject task(PairingCoordinator.HistoryPermission permission)throws Exception{return taskSnapshot(requireHistoryTask(permission,permission.envelope().arguments().getString("taskId")),permission.callerDeviceId(),permission.authorizationEpoch());}
+    private JSONObject taskSnapshot(JSONObject task,String caller,long authorizationEpoch)throws Exception{
         JSONArray events = task.optJSONArray("events"); long cursor = 0;
         for (int i = 0; events != null && i < events.length(); i++) cursor = Math.max(cursor, events.getJSONObject(i).optLong("seq", i + 1L));
         JSONObject detail = new JSONObject().put("summary", task.optString("summary")).put("origin", task.getJSONObject("origin"))
                 .put("rootTaskId", task.getString("rootTaskId")).put("remoteParentTaskId", task.optString("remoteParentTaskId"))
                 .put("executionKind", task.getString("deviceExecutionKind")).put("transportStateIsNotExecutionState", true);
+        DeviceOwnerInputs inputs=host.ordinaryInputs();if(inputs!=null){JSONObject input=inputs.view(task);if(input!=null)detail.put("ownerInput",input);}
+        // Return only this authenticated caller's still-current original lease. Read-only
+        // history under a later authorization epoch cannot recover an old control identity.
+        JSONObject lease=task.optJSONObject("deviceControlLease"),origin=task.getJSONObject("origin");
+        if(lease!=null&&!task.optBoolean("cancelRequested")&&task.optString("status").matches("preparing|running|pausing|paused|awaiting_user")
+                &&caller.equals(origin.optString("callerDeviceId"))&&caller.equals(lease.optString("callerDeviceId"))
+                &&authorizationEpoch==origin.optLong("authorizationEpoch")&&authorizationEpoch==lease.optLong("authorizationEpoch")
+                &&!task.optString("runId").isEmpty()&&task.optString("runId").equals(lease.optString("runId"))
+                &&task.optInt("coordinatorEpoch")>0&&task.optInt("coordinatorEpoch")==lease.optInt("executorEpoch")
+                &&!lease.optString("leaseId").isEmpty()&&lease.optLong("expiresAt")>System.currentTimeMillis())
+            detail.put("controlLease",new JSONObject().put("controlLeaseId",lease.getString("leaseId")).put("expiresAt",lease.getLong("expiresAt")));
+        JSONObject resumeRequest=TaskStoreDeviceTasks.resumeRequestView(task);
+        if(resumeRequest!=null)detail.put("resumeRequest",resumeRequest);
         JSONObject evidence = task.optJSONObject("evidence");
         if (evidence != null && evidence.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 16_000) detail.put("evidence", evidence);
         else if (evidence != null) detail.put("evidenceTruncated", true).put("nextAction", "read_original_operation_receipts");
@@ -128,6 +143,36 @@ public final class DeviceTaskCoordinator {
         }
         return result;
     }
+    public JSONObject ownerInput(PairingCoordinator.Permission permission)throws Exception {
+        JSONObject args=permission.envelope().arguments(),task=requireTask(permission,args.getString("taskId"));
+        // A committed original receipt is read under the same current Permission.
+        // controlOperation still verifies its immutable digest; no session, lease,
+        // mailbox or continuation is touched for an already accepted operation.
+        if(devices.snapshot(permission.callerDeviceId(),permission.envelope().operationId()).optBoolean("accepted"))
+            return devices.controlOperation(permission,()->{throw new SecurityException("原输入索引已变化，只核对原回执，不重新派发");}).put("newGrant",false).put("executionAuthorized",false);
+        var inputs=host.ordinaryInputs();if(inputs==null)throw new SecurityException("原设备普通输入宿主尚未安装");
+        boolean answer="task.answerQuestion".equals(permission.envelope().method());var original=inputs.scope(task.getString("id"),answer);
+        devices.requireControlLease(permission.callerDeviceId(),task.getString("id"),args.getString("runId"),args.getInt("executorEpoch"),args.getString("controlLeaseId"));
+        JSONObject result=devices.controlOperation(permission,()->tasks.appendDeviceOwnerInput(permission,original));
+        if(!result.optBoolean("knownOperation")&&!result.optBoolean("duplicateInput")&&answer){
+            try{host.ordinaryInputAccepted(original,result);result.put("continuationRequested",true);}
+            catch(Exception notPickedUp){result.put("continuationRequested",false).put("continuationState","saved_waiting_original_dependency");}
+        }
+        return result.put("newGrant",false).put("executionAuthorized",false);
+    }
+
+    /** This stores a request for the local phone owner. It never wakes a runner. */
+    public JSONObject requestResume(PairingCoordinator.Permission permission)throws Exception{
+        JSONObject args=permission.envelope().arguments();
+        JSONObject task=requireTask(permission,args.getString("taskId"));
+        JSONObject result=devices.controlOperation(permission,()->devices.requestResume(permission));
+        if(!result.optBoolean("knownOperation")){
+            try{host.controlRequested(task.getString("id"),"resume_requested");}
+            catch(Exception notificationUnavailable){result.put("ownerNotificationPending",true);}
+        }
+        return result.put("newRun",false).put("newGrant",false).put("executionAuthorized",false);
+    }
+
     public static final class ChildAcceptance {
         private final DeviceIdentity.AuthenticatedPeer peer; private final String body;
         private ChildAcceptance(DeviceIdentity.AuthenticatedPeer peer, JSONObject result) throws Exception { this.peer = java.util.Objects.requireNonNull(peer); body = result.toString(); check(); }

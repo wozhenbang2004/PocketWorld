@@ -20,6 +20,12 @@ _PERMISSION = object()
 _CONFIRMATION = object()
 MAX_GRANT_MS = 30 * 86_400_000
 HISTORY_METHODS = frozenset({"operation.get", "task.get", "task.events", "artifact.describe", "artifact.readChunk"})
+PERSISTED_GRANT_PROFILE = "pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb"
+# Fixed to that signed profile's methods. Future current-wire methods must never
+# give an earlier receipt's unrecognized capability string new authority.
+PERSISTED_GRANT_METHODS = frozenset({"device.describe", "tool.invoke", "operation.get", "operation.cancel", "task.submitGoal",
+                                     "task.get", "task.events", "task.respond", "task.pause", "task.cancel", "task.acquireControl",
+                                     "artifact.describe", "artifact.readChunk"})
 
 
 def _copy(value):
@@ -843,6 +849,12 @@ def _verify_record(signer, record, kind):
 
 def _verify_record_certificate(certificate_der, record, kind):
     protocol.require_profile(record)
+    return _verify_record_signature(certificate_der, record, kind)
+
+
+def _verify_record_signature(certificate_der, record, kind):
+    # Callers first select their profile policy. Never rewrite the signed bytes
+    # to make a persisted record look like a newly received network record.
     protocol._keys(record, {"protocolVersion", "protocolProfile", "messageType", "issuerDeviceId", "issuerCertificateFingerprint", "body", "signature"})
     _require(record["protocolVersion"] == protocol.VERSION and record["messageType"] == kind and record["issuerDeviceId"] == identity.device_id(certificate_der) and record["issuerCertificateFingerprint"] == identity.certificate_fingerprint(certificate_der) and isinstance(record["body"], dict), "Signed record has wrong device or purpose")
     identity.verify_signature(certificate_der, protocol.canonical_bytes({key: value for key, value in record.items() if key != "signature"}), base64.b64decode(record["signature"], validate=True))
@@ -937,6 +949,7 @@ class OutgoingGrant:
         known = self._owner.store.peer(self.target_device_id)
         stored = self._owner.store.outgoing_grant(self.target_device_id, self.grant_id)
         _require(known is not None and not known["revoked"] and known["fingerprint"] == self._target.certificate_fingerprint
+                 and known["instanceId"] == self.target_instance_id
                  and stored is not None and protocol.canonical_bytes(stored["body"]["grant"]) == protocol.canonical_bytes(self._grant)
                  and stored["body"]["targetInstanceId"] == self.target_instance_id, "Native history route changed or revoked")
         validate_grant(self._grant, self.target_device_id, self._owner.local_device_id, now_ms, for_history=True)
@@ -977,7 +990,7 @@ class OutgoingGrant:
     def check_current(self, now_ms):
         known = self._owner.store.peer(self.target_device_id)
         stored = self._owner.store.outgoing_grant(self.target_device_id, self.grant_id)
-        _require(known is not None and not known["revoked"] and known["fingerprint"] == self._target.certificate_fingerprint and stored is not None and protocol.canonical_bytes(stored["body"]["grant"]) == protocol.canonical_bytes(self._grant) and stored["body"]["targetInstanceId"] == self.target_instance_id, "Native outgoing route changed or revoked")
+        _require(known is not None and not known["revoked"] and known["fingerprint"] == self._target.certificate_fingerprint and known["instanceId"] == self.target_instance_id and stored is not None and protocol.canonical_bytes(stored["body"]["grant"]) == protocol.canonical_bytes(self._grant) and stored["body"]["targetInstanceId"] == self.target_instance_id, "Native outgoing route changed or revoked")
         validate_grant(self._grant, self.target_device_id, self._owner.local_device_id, now_ms)
 
 
@@ -1388,19 +1401,31 @@ class PairingCoordinator:
 
     def history_route(self, target, grant_id, now_ms):
         """Restore ONLY a result-read route from original SQL and a new actual mTLS peer."""
-        _require(isinstance(target, identity.AuthenticatedPeer), "Current actual history target required")
+        return HistoryRoute(_PERMISSION, self._restore_outgoing_grant(target, grant_id, now_ms, for_history=True))
+
+    def restore_outgoing_grant(self, target, grant_id, now_ms):
+        """Restore the original SQL grant; this never accepts a network receipt."""
+        return self._restore_outgoing_grant(target, grant_id, now_ms)
+
+    def _restore_outgoing_grant(self, target, grant_id, now_ms, *, for_history=False):
+        _require(isinstance(target, identity.AuthenticatedPeer), "Current actual outgoing target required")
         protocol.identifier(grant_id, "grantId")
         known = self.store.peer(target.device_id)
         receipt = self.store.outgoing_grant(target.device_id, grant_id)
         _require(known is not None and not known["revoked"] and known["fingerprint"] == target.certificate_fingerprint and receipt is not None,
-                 "No paired persisted history route")
-        body = _verify_record(target, receipt, "PairGrantReceipt")
+                 "No paired persisted outgoing route")
+        _require(receipt.get("protocolProfile") in (protocol.PROFILE, PERSISTED_GRANT_PROFILE), "Unsupported persisted grant profile")
+        body = _verify_record_signature(target.certificate_der, receipt, "PairGrantReceipt")
         protocol._keys(body, {"grant", "targetInstanceId", "issuedAt"})
         grant = body["grant"]
-        validate_grant(grant, target.device_id, self.local_device_id, now_ms, for_history=True)
+        validate_grant(grant, target.device_id, self.local_device_id, now_ms, for_history=for_history)
+        if receipt["protocolProfile"] == PERSISTED_GRANT_PROFILE:
+            _require(set(grant["capabilities"]).issubset(PERSISTED_GRANT_METHODS),
+                     "Persisted earlier grant contains an unsupported capability")
+        protocol.identifier(body["targetInstanceId"], "targetInstanceId")
         _require(grant["grantId"] == grant_id and not grant.get("revoked",False) and known["instanceId"] == body["targetInstanceId"]
-                 and protocol.integer(body["issuedAt"], "issuedAt", 1) <= now_ms, "Persisted history route changed")
-        return HistoryRoute(_PERMISSION, OutgoingGrant(_PERMISSION, self, target, receipt, body))
+                 and protocol.integer(body["issuedAt"], "issuedAt", 1) <= now_ms, "Persisted outgoing route changed")
+        return OutgoingGrant(_PERMISSION, self, target, receipt, body)
 
     def discovery_query(self,local,target,now_ms,ttl_ms=15000):
         _require(isinstance(local,identity.LocalIdentity) and local.device_id==self.local_device_id and isinstance(target,identity.AuthenticatedPeer),"Current local identity and actual paired target required")

@@ -73,9 +73,15 @@ public final class DeviceGoalCapabilityPort implements CapabilityPort {
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception {check(control);nativeScoped.beforeModelRequest(requestId,messages,control);}
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception {check(control);return nativeScoped.afterModelResponse(requestId,answerId,control);}
     @Override public void modelRequestAbandoned(String requestId)throws Exception {nativeScoped.modelRequestAbandoned(requestId);}
-    @Override public JSONObject beforeTool(String name, JSONObject args, RunControl control) throws Exception { tool(name, control); return nativeScoped.beforeTool(name, args, control); }
+    @Override public JSONObject beforeTool(String name, JSONObject args, RunControl control) throws Exception {
+        if(dev.pocketengine.runtime.policy.RunOutcomeTools.supports(name)){check(control);return null;}
+        tool(name, control); return nativeScoped.beforeTool(name, args, control);
+    }
     @Override public JSONObject execute(String name, JSONObject args, RunControl control) throws Exception { tool(name, control); return nativeScoped.execute(name, args, control); }
-    @Override public void afterTool(String name, JSONObject args, JSONObject receipt, RunControl control) throws Exception { tool(name, control); nativeScoped.afterTool(name, args, receipt, control); }
+    @Override public void afterTool(String name, JSONObject args, JSONObject receipt, RunControl control) throws Exception {
+        if(dev.pocketengine.runtime.policy.RunOutcomeTools.supports(name)){check(control);return;}
+        tool(name, control); nativeScoped.afterTool(name, args, receipt, control);
+    }
     @Override public NativeToolObservation.Requirement observationRequirement(String name, JSONObject args, RunControl control) throws Exception { tool(name, control); return nativeScoped.observationRequirement(name, args, control); }
     @Override public NativeToolObservation takeToolObservation(String name, String operation, RunControl control) throws Exception { tool(name, control); return nativeScoped.takeToolObservation(name, operation, control); }
     @Override public NativeToolPlan takeToolPlan(String name, String operation, RunControl control) throws Exception { tool(name, control); return nativeScoped.takeToolPlan(name, operation, control); }
