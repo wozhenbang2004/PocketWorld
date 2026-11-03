@@ -659,8 +659,8 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             }
             if (auditDetails) {
                 if (task.raw.optJSONObject("historyEventPage")?.optBoolean("hasMore") == true || task.raw.optJSONObject("historyEventPage")?.optBoolean("readLimited") == true)
-                    Text("用量来自当前记录窗口；完整记录可继续按页查看。", color = SecondaryInk, fontSize = 13.sp)
-                TaskInferencePanel(task.raw, controller::reestimateInference, controller::openChatGptUsage)
+                    Text("展开用量可查询本任务仍保留的调用回执；读取有上限，新增调用请刷新。", color = SecondaryInk, fontSize = 13.sp)
+                TaskInferencePanel(task.raw, controller::reestimateInference, controller::openChatGptUsage, readUsage = controller::readTaskInferenceUsage)
                 TaskAuditPanel(task.id, controller)
             }
             Spacer(Modifier.height(24.dp))

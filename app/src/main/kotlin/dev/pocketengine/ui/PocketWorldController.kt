@@ -2369,6 +2369,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal var taskListNextCursor by mutableStateOf("")
         private set
+    /** Original receipt query only; closing the panel cancels the read and never a task. */
+    internal fun readTaskInferenceUsage(taskId: String, done: (JSONObject?, String?) -> Unit): () -> Unit {
+        val read = dev.pocketengine.core.RunControl()
+        if (closed || !privateWorkspaceView()) { done(null, "请在原私人任务中核对用量"); return { read.cancel() } }
+        try { io.execute {
+            val result = runCatching { read.check(); app.tasks.ownerTaskInferenceUsage(taskId, read) }
+            main.post { if (!closed && privateWorkspaceView() && !read.isCancelled) result.fold({ done(it, null) }, { done(null, message(it)) }) }
+        } } catch (failure: Exception) { done(null, message(failure)) }
+        return { read.cancel() }
+    }
     /** Alternate quote only. Original bounded native receipt read; no request, replay or setting write. */
     internal fun reestimateInference(taskId: String, callId: String, done: (JSONObject?, String?) -> Unit) {
         if (closed) return

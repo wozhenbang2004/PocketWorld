@@ -16,7 +16,8 @@ import org.json.JSONObject
 
 /** The original task sheet's optional detail, not another dashboard or accounting store. */
 @Composable
-internal fun TaskInferencePanel(task: JSONObject, reestimate: ((String, String, (JSONObject?, String?) -> Unit) -> Unit)? = null, openChatGptUsage: () -> Unit) {
+internal fun TaskInferencePanel(task: JSONObject, reestimate: ((String, String, (JSONObject?, String?) -> Unit) -> Unit)? = null, openChatGptUsage: () -> Unit,
+    readUsage: ((String, (JSONObject?, String?) -> Unit) -> (() -> Unit))? = null) {
     val id = task.optString("id")
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
     var groupsShown by rememberSaveable(id) { mutableIntStateOf(4) }
@@ -25,9 +26,25 @@ internal fun TaskInferencePanel(task: JSONObject, reestimate: ((String, String, 
     var estimateResult by remember(id) { mutableStateOf<JSONObject?>(null) }
     var estimateError by remember(id) { mutableStateOf<String?>(null) }
     var estimating by remember(id) { mutableStateOf(false) }
+    var usage by remember(id) { mutableStateOf<JSONObject?>(null) }
+    var usageError by remember(id) { mutableStateOf<String?>(null) }
+    var usageLoading by remember(id) { mutableStateOf(false) }
+    var usageRefresh by remember(id) { mutableIntStateOf(0) }
     val alive = remember(id) { java.util.concurrent.atomic.AtomicBoolean(true) }
     DisposableEffect(id) { onDispose { alive.set(false) } }
-    val snapshot = remember(task) { runCatching { TaskInferencePresentation.fromTask(task) }.getOrNull() }
+    DisposableEffect(id, expanded, usageRefresh) {
+        if (!expanded || readUsage == null) onDispose { }
+        else {
+            usageLoading = true; usageError = null
+            val cancel = readUsage(id) { result, error ->
+                usageLoading = false
+                if (result != null && runCatching { TaskInferencePresentation.fromNativeUsage(task, result) }.isSuccess) usage = result
+                else usageError = error ?: "累计回执无法核对；没有把当前窗口当作完整累计。"
+            }
+            onDispose { cancel() }
+        }
+    }
+    val snapshot = remember(task, usage) { runCatching { if (usage == null) TaskInferencePresentation.fromTask(task) else TaskInferencePresentation.fromNativeUsage(task, usage) }.getOrNull() }
     Column(Modifier.fillMaxWidth().padding(top = 12.dp).testTag("task_inference_panel")) {
         TextButton(onClick = { expanded = !expanded }, modifier = Modifier.testTag("task_inference_toggle")) {
             Text(if (expanded) "收起模型调用与上下文" else "模型调用与上下文 · 查看记录")
@@ -38,6 +55,9 @@ internal fun TaskInferencePanel(task: JSONObject, reestimate: ((String, String, 
             Text(snapshot.headline(), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             if (snapshot.context().attention()) Text(snapshot.context().title(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             if (expanded) Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 10.dp)) {
+                if (usageLoading) Text("正在核对原任务各次执行的保留回执…", style = MaterialTheme.typography.bodySmall)
+                usageError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                if (readUsage != null) TextButton(onClick = { usageRefresh++ }, enabled = !usageLoading, modifier = Modifier.testTag("task_inference_refresh")) { Text("刷新原任务累计") }
                 Text(snapshot.coverage(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 val logical = task.optJSONArray("logicalRequests")
                 if (logical != null && logical.length() > 0) {

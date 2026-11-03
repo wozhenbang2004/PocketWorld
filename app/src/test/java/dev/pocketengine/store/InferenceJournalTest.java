@@ -83,6 +83,17 @@ public final class InferenceJournalTest {
         Fixture f=new Fixture();InferenceCapture capture=f.capture(InferenceReceipt.Purpose.MAIN,"");f.control.pause();
         assertThrows(Exception.class,capture::dispatch);assertEquals(0,f.store.inferenceUsage(f.id).getInt("attempts"));
     }
+    @Test public void ownerTaskCumulativeReadKeepsTheReceiptOutsideTheUiEventWindow()throws Exception{
+        Fixture f=new Fixture();InferenceCapture capture=f.capture(InferenceReceipt.Purpose.MAIN,"");capture.dispatch();capture.usage.observe(reported(31),ProviderUsage.Stage.FINAL);capture.finish(InferenceReceipt.Outcome.COMPLETED);
+        for(int i=0;i<40;i++)f.store.event(f.id,f.run,f.epoch,new JSONObject().put("type","progress").put("message","native progress "+i));
+        JSONObject ui=f.store.getForUi(f.id,true);assertEquals(0,dev.pocketengine.runtime.usage.TaskInferencePresentation.fromTask(ui).calls().size());
+        String before=f.store.get(f.id,false).toString();JSONObject usage=f.store.ownerTaskInferenceUsage(f.id,new RunControl());
+        assertFalse(usage.getBoolean("queryLimited"));assertEquals(1,usage.getJSONObject("projection").getInt("attempts"));
+        assertEquals(1,dev.pocketengine.runtime.usage.TaskInferencePresentation.fromNativeUsage(ui,usage).calls().size());
+        assertEquals(before,f.store.get(f.id,false).toString());assertFalse(usage.getBoolean("executionAuthorized"));
+        assertThrows(SecurityException.class,()->f.store.ownerTaskInferenceUsage(f.id,f.control));
+        RunControl stopped=new RunControl();stopped.cancel();assertThrows(Exception.class,()->f.store.ownerTaskInferenceUsage(f.id,stopped));
+    }
     @Test public void nativeSummaryAndMemberPurposesHaveSeparateOriginalTaskAttribution()throws Exception{
         Fixture f=new Fixture();InferenceCapture member=f.capture(InferenceReceipt.Purpose.MEMBER,"member-a");member.dispatch();member.usage.observe(reported(10),ProviderUsage.Stage.FINAL);member.finish(InferenceReceipt.Outcome.COMPLETED);
         InferenceCapture summary=f.capture(InferenceReceipt.Purpose.SUMMARY,"");summary.dispatch();summary.usage.observe(reported(20),ProviderUsage.Stage.FINAL);summary.finish(InferenceReceipt.Outcome.COMPLETED);
