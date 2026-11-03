@@ -206,6 +206,34 @@ async function nativeAnswerContract(input) {
       nativeDispatchPerformed:false,capturedAnswerRequests:1};
   } finally { f.close(); }
 }
+async function cancelDuringOriginalWait(waitFinishesFirst) {
+  let releaseWait,releaseCancel,pending;
+  const f=await fixture(async request=>{
+    if(request.action==="wait")return new Promise(resolve=>{releaseWait=resolve;});
+    if(request.action==="cancel")return new Promise(resolve=>{releaseCancel=resolve;});
+  });
+  try {
+    await f.connected();pending=f.get("wait").onclick();await f.flush();
+    assert.equal(f.get("cancel").disabled,false,"A read-only wait must leave cancellation available");
+    f.get("cancel").onclick();await f.flush();
+    const cancel=f.calls.find(c=>c.action==="cancel");assert.ok(cancel);
+    assert.equal(cancel.params.operationId,"goal-A");assert.equal(cancel.params.peerDeviceId,PEER);
+    f.get("cancel").onclick();await f.flush();assert.equal(f.calls.filter(c=>c.action==="cancel").length,1);
+    if(waitFinishesFirst){releaseWait(snapshot("goal-A"));await pending;assert.equal(f.get("cancel").disabled,true,"Wait completion must not unlock an in-flight cancellation");}
+    releaseCancel({operationId:cancel.params.cancelOperationId,status:"unknown",effectState:"unknown"});await f.flush();
+    assert.equal(f.get("cancel").disabled,false);
+    f.get("cancel").onclick();await f.flush();
+    assert.ok(f.calls.some(c=>c.action==="status"&&c.params.operationId===cancel.params.cancelOperationId));
+    assert.equal(f.calls.filter(c=>c.action==="cancel").length,1,"Unknown cancellation is queried, never replayed");
+    if(!waitFinishesFirst){releaseWait(snapshot("goal-A"));await pending;}
+    assert.equal(f.run("selectedOperation"),"goal-A");assert.equal(f.get("operation").value,"goal-A");
+    assert.equal(f.run("currentTask"),null,"An older wait cannot overwrite an unknown original cancellation");
+    assert.equal(f.calls.filter(c=>c.action==="run").length,0);
+  } finally {
+    releaseWait?.(snapshot("goal-A"));releaseCancel?.({status:"unknown",effectState:"unknown"});
+    if(pending)await pending;await f.flush();f.close();
+  }
+}
 (async()=>{
   if (process.argv.length>2) {
     contractRequire(process.argv.length===3&&process.argv[2]==="--native-contract","unsupported_contract_arguments");
@@ -215,6 +243,8 @@ async function nativeAnswerContract(input) {
   process.stdout.write("Desk draft/unknown selection fixture: 2 cases passed\n");
   for(const test of [unknownSubmissionIsNeverResent,duplicateCancellationQueriesItsOriginalWrite,staleSourceAndScopeAreFenced,streamUsesCursorAndRejectsOtherPhone,resumeUsesPostLeaseRevisionAndOnlyRequestsPhoneReview,disconnectStopsWatchingWithoutMutation,submissionRechecksScopeAndPreservesCustomBudget])await test();
   process.stdout.write("Desk mutation, revision, event, cancellation and recovery fixtures: 7 cases passed\n");
+  await cancelDuringOriginalWait(false);await cancelDuringOriginalWait(true);
+  process.stdout.write("Desk cancellation during pending wait: 2 settlement orders passed\n");
 })().catch(error=>{
   // Contract input contains real signed scope and an original answer. Never
   // include assertion diffs, stacks, leases, or input text in native CI logs.
