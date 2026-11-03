@@ -31,16 +31,26 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import dev.pocketengine.browser.BrowserLease;
 import dev.pocketengine.browser.BrowserPageDialog;
+import dev.pocketengine.browser.BrowserPopupRoute;
+import dev.pocketengine.browser.BrowserSiteDecision;
 import dev.pocketengine.browser.BrowserSiteRequirement;
 import dev.pocketengine.browser.BrowserVisualCapture;
+import dev.pocketengine.browser.BrowserNativeInput;
+import dev.pocketengine.browser.BrowserSiteMode;
 import dev.pocketengine.core.NativeToolObservation;
 import dev.pocketengine.browser.BrowserDownloads;
 import dev.pocketengine.browser.BrowserProfiles;
 import dev.pocketengine.browser.BrowserTargetCondition;
 import dev.pocketengine.browser.BrowserProfileRegistry;
 import dev.pocketengine.browser.BrowserUploads;
+import dev.pocketengine.browser.BrowserArtifactUpload;
+import dev.pocketengine.browser.BrowserArtifactSource;
+import dev.pocketengine.browser.BrowserArtifactInput;
 import dev.pocketengine.browser.BrowserTaskSpace;
 import dev.pocketengine.browser.BrowserFrameObserver;
+import dev.pocketengine.browser.BrowserNativeNetwork;
+import dev.pocketengine.browser.BrowserNetworkDebugging;
+import dev.pocketengine.browser.BrowserWaitBarrier;
 import dev.pocketengine.browser.BrowserSemanticRead;
 import dev.pocketengine.browser.BrowserTaskCapabilityPort;
 import dev.pocketengine.core.CapabilityPort;
@@ -77,13 +87,17 @@ public final class BrowserActivity extends ComponentActivity {
     private volatile WebView web;
     private final java.util.Map<String,Page> pages=new java.util.concurrent.ConcurrentHashMap<>();
     private volatile Page activePage;
+    /** Only the synchronous native dispatch stack is exempt from owner takeover. */
+    private int nativeInputDispatchDepth;
+    private Runnable stopNativeInput;
     private BrowserTaskSpace taskSpace;
     private java.util.concurrent.atomic.AtomicReference<JSONObject> taskLease;
     private boolean closingProfile;
     private static final int MAX_ALL_PAGES=8;
     private static final class Page {
-        final String id;final WebView view;final BrowserProfileRegistry.Session profile;final boolean taskCreated;BrowserFrameObserver readObserver;dev.pocketengine.browser.BrowserNetworkWitness networkWitness;
+        final String id;final WebView view;final BrowserProfileRegistry.Session profile;final boolean taskCreated;BrowserFrameObserver readObserver;dev.pocketengine.browser.BrowserNetworkWitness networkWitness;BrowserNativeNetwork nativeNetwork;
         volatile String nativeOperationId="";volatile CompletableFuture<JSONObject> nativeCall;
+        volatile BrowserPopupRoute popup;String popupOpenerId="";Runnable popupCancel;android.app.AlertDialog popupConfirmation;BrowserPopupRoute.Request popupRequest;String popupRequestUrl="",popupRequestDocument="";long popupRequestNavigation;
         volatile BrowserTaskSpace.Tab taskOwner;BrowserTaskSpace handoffSpace;JSONObject handoffIdentity;BrowserTaskSpace.Gate taskGate;volatile long navigation;boolean loading;String observationId,observationUrl;long observationAt;
         Page(String id,WebView view,BrowserProfileRegistry.Session profile,BrowserTaskSpace.Tab owner){this.id=id;this.view=view;this.profile=profile;taskCreated=owner!=null;taskOwner=owner;}
     }
@@ -104,17 +118,22 @@ public final class BrowserActivity extends ComponentActivity {
     private boolean browserImeVisible;
     private android.app.AlertDialog closeConfirmation;
     private NativePageDialog pageDialog;private JSONObject lastPageDialog,lastSiteNotice;private boolean ownerForeground;
+    private NativeSiteRequest siteRequest;
+    private android.app.AlertDialog externalLinkConfirmation;
+    private static final java.util.concurrent.atomic.AtomicInteger SITE_PERMISSION_REQUESTS=new java.util.concurrent.atomic.AtomicInteger(20000);
     private record DeniedSiteRequest(Page page,long navigation,String document,String origin,String[] resources) { }
     private final java.util.Map<android.webkit.PermissionRequest,DeniedSiteRequest> deniedSiteRequests=new java.util.IdentityHashMap<>();
     private String recoveryUrl="https://www.bing.com";
     private android.webkit.ValueCallback<android.net.Uri[]> fileChooser;
     private BrowserUploads.Destination fileChooserDestination,uploadDestination;
+    private BrowserArtifactUpload artifactUpload;
     private android.webkit.ValueCallback<android.net.Uri[]> uploadCallback;
     private android.app.AlertDialog downloadDialog;
     private final java.util.Map<String,JSONObject> deliveredUploads=new java.util.LinkedHashMap<>();
     private static final java.util.concurrent.atomic.AtomicInteger FILE_CHOOSER_REQUESTS=new java.util.concurrent.atomic.AtomicInteger(1000);
     private int fileChooserRequest;
     private final java.util.concurrent.ExecutorService browserIo=java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final BrowserNetworkDebugging networkDebugging=new BrowserNetworkDebugging(WebView::setWebContentsDebuggingEnabled);
     private final BrowserLease lease=new BrowserLease();
     private final String pageKey="__pocketWorld_"+UUID.randomUUID().toString().replace("-","");
     private long observationAt;
@@ -136,7 +155,7 @@ public final class BrowserActivity extends ComponentActivity {
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);page.addView(progress,new LinearLayout.LayoutParams(-1,dp(2)));progress.setVisibility(View.GONE);
         message=new TextView(this);message.setTextSize(12);message.setTextColor(0xff777777);message.setPadding(dp(14),dp(6),dp(14),dp(6));message.setText("网页操作使用独立浏览器窗口；可返回助手继续。");page.addView(message);
         browserContainer=new android.widget.FrameLayout(this);try{profiles=BrowserProfiles.get(this);}catch(Exception unavailable){profileError="浏览器资料无法读取，请先核对设置";}createWebView();
-        page.addView(browserContainer,new LinearLayout.LayoutParams(-1,0,1));LinearLayout controls=new LinearLayout(this);navigationControls=controls;previous=button("上一页");previous.setOnClickListener(v->{takeover("主人已接管浏览器");if(web!=null&&web.canGoBack())web.goBack();});next=button("下一页");next.setOnClickListener(v->{takeover("主人已接管浏览器");if(web!=null&&web.canGoForward())web.goForward();});Button reload=button("刷新");reload.setOnClickListener(v->{takeover("主人已接管浏览器");if(web==null){createWebView();navigate(recoveryUrl);}else web.reload();});controls.setTag("browser_navigation");controls.addView(previous,new LinearLayout.LayoutParams(0,-2,1));controls.addView(next,new LinearLayout.LayoutParams(0,-2,1));controls.addView(reload,new LinearLayout.LayoutParams(0,-2,1));Button more=button("更多");more.setTag("browser_more");more.setOnClickListener(v->{android.widget.PopupMenu menu=new android.widget.PopupMenu(this,more);menu.getMenu().add(0,2,0,"浏览历史");menu.getMenu().add(0,3,1,"书签");menu.getMenu().add(0,4,2,"收藏当前页");menu.getMenu().add(0,5,3,"站点权限说明");menu.getMenu().add(0,6,4,"地址保存设置…");menu.getMenu().add(0,1,5,"关闭浏览器并结束网页执行…");menu.setOnMenuItemClickListener(item->{switch(item.getItemId()){case 1:confirmCloseForOwner();return true;case 2:showBrowserHistory(false);return true;case 3:showBrowserHistory(true);return true;case 4:bookmarkCurrentPage();return true;case 5:showSitePermissionDetails();return true;case 6:showExactUrlSettings();return true;default:return false;}});menu.show();});controls.addView(more,new LinearLayout.LayoutParams(0,-2,1));page.addView(controls);
+        page.addView(browserContainer,new LinearLayout.LayoutParams(-1,0,1));LinearLayout controls=new LinearLayout(this);navigationControls=controls;previous=button("上一页");previous.setOnClickListener(v->{takeover("主人已接管浏览器");if(web!=null&&web.canGoBack())web.goBack();});next=button("下一页");next.setOnClickListener(v->{takeover("主人已接管浏览器");if(web!=null&&web.canGoForward())web.goForward();});Button reload=button("刷新");reload.setOnClickListener(v->{takeover("主人已接管浏览器");if(web==null){createWebView();navigate(recoveryUrl);}else web.reload();});controls.setTag("browser_navigation");controls.addView(previous,new LinearLayout.LayoutParams(0,-2,1));controls.addView(next,new LinearLayout.LayoutParams(0,-2,1));controls.addView(reload,new LinearLayout.LayoutParams(0,-2,1));Button more=button("更多");more.setTag("browser_more");more.setOnClickListener(v->{android.widget.PopupMenu menu=new android.widget.PopupMenu(this,more);menu.getMenu().add(0,2,0,"浏览历史");menu.getMenu().add(0,3,1,"书签");menu.getMenu().add(0,4,2,"收藏当前页");menu.getMenu().add(0,5,3,"站点权限说明");menu.getMenu().add(0,6,4,"地址保存设置…");menu.getMenu().add(0,7,5,"本次原生网络观察…");menu.getMenu().add(0,1,6,"关闭浏览器并结束网页执行…");menu.setOnMenuItemClickListener(item->{switch(item.getItemId()){case 1:confirmCloseForOwner();return true;case 2:showBrowserHistory(false);return true;case 3:showBrowserHistory(true);return true;case 4:bookmarkCurrentPage();return true;case 5:showSitePermissionDetails();return true;case 6:showExactUrlSettings();return true;case 7:showNativeNetworkSettings();return true;default:return false;}});menu.show();});controls.addView(more,new LinearLayout.LayoutParams(0,-2,1));page.addView(controls);
         OwnerPanelInstaller installer=ownerPanelInstaller;if(installer!=null)try{ownerPanel=installer.install(this,page);}catch(Exception unavailable){message.setText("研究工作区暂不可用，请核对原任务；浏览页面仍可手动操作。");}
         setContentView(page);
         address.setOnEditorActionListener((view,action,event)->{if(action==EditorInfo.IME_ACTION_GO||(event!=null&&event.getKeyCode()==KeyEvent.KEYCODE_ENTER&&event.getAction()==KeyEvent.ACTION_UP)){takeover("主人已接管浏览器");navigate(address.getText().toString());hideBrowserIme();return true;}return false;});
@@ -151,12 +170,27 @@ public final class BrowserActivity extends ComponentActivity {
     }
     private void configureWebView(WebView target){
         Page configured=page(target);if(configured!=null){configured.readObserver=new BrowserFrameObserver(target);configured.networkWitness=new dev.pocketengine.browser.BrowserNetworkWitness(target);if(configured.taskOwner!=null)try{configured.readObserver.extraOriginsForNative(configured.taskOwner.space().frameOriginsForNative());}catch(Exception unavailable){configured.readObserver.close();throw new IllegalStateException("原任务嵌入来源配置无效");}}
-        target.setBackgroundColor(Color.WHITE);target.getSettings().setJavaScriptEnabled(true);target.getSettings().setDomStorageEnabled(true);target.getSettings().setAllowFileAccess(false);target.getSettings().setAllowContentAccess(false);target.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW);target.getSettings().setSupportMultipleWindows(false);target.getSettings().setJavaScriptCanOpenWindowsAutomatically(false);
+        target.setBackgroundColor(Color.WHITE);target.getSettings().setJavaScriptEnabled(true);target.getSettings().setDomStorageEnabled(true);target.getSettings().setAllowFileAccess(false);target.getSettings().setAllowContentAccess(false);target.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW);target.getSettings().setSupportMultipleWindows(true);target.getSettings().setJavaScriptCanOpenWindowsAutomatically(false);
         target.setWebViewClient(new WebViewClient(){
             @Override public boolean onRenderProcessGone(WebView view,android.webkit.RenderProcessGoneDetail detail){rendererGone(view);return true;}
-            @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){boolean allowed=allowedUrl(request.getUrl().toString());if(!allowed&&request.isForMainFrame())message.setText("这个链接需要其他应用处理，当前浏览器未打开它。");return !allowed;}
-            @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){Page page=page(view);if(page==null)return;cancelPageDialog(page,BrowserPageDialog.Reason.CONTEXT_CHANGED);deniedSiteRequests.values().removeIf(request->request.page==page);page.navigation++;if(page.networkWitness!=null)page.networkWitness.documentChanged();if(page.readObserver!=null)page.readObserver.documentStarted();page.loading=true;page.observationId=null;page.observationUrl=null;page.observationAt=0;if(page.taskOwner!=null)page.taskOwner.space().navigationChangedNative(page.id);if(page.taskOwner!=null)try{page.taskOwner.space().pageStartedNative(page.id,url);}catch(Exception ignored){}if(view!=web)return;navigation=page.navigation;cancelFileChooser();invalidateObservation();failPending("网页已跳转，请重新观察");loading=true;progress.setVisibility(View.VISIBLE);message.setText("正在加载网页…");address.setText(url);updateNavigation();}
-            @Override public void onPageFinished(WebView view,String url){Page page=page(view);if(page==null)return;page.loading=false;if(page.taskOwner!=null)try{page.taskOwner.space().pageLoadedNative(page.id,url,view.getTitle());}catch(Exception ignored){}if(page.taskOwner==null)recordOwnerHistory(page,false);if(view!=web)return;loading=false;progress.setVisibility(View.GONE);message.setText("网页已载入");address.setText(url);updateNavigation();}
+            @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){
+                Page source=page(view);String url=request.getUrl().toString();
+                if(source==null)return true;
+                if(source.popup!=null)try{source.popup.requireCurrent();}catch(Exception stale){closePopupForOwner(source,true);return true;}
+                if(!request.isForMainFrame())return !allowedUrl(url);
+                if(!allowedUrl(url)){requestExternalLink(source,request);return true;}
+                if(source!=null&&source.popup!=null&&!source.popup.originAdmitted(url)){requestPopupDestination(source,url,request.getMethod());return true;}
+                return false;
+            }
+            @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view,WebResourceRequest request){
+                Page source=configured;if(source!=null&&source.popup!=null&&request.isForMainFrame()&&!source.popup.originAdmitted(request.getUrl().toString())){
+                    String url=request.getUrl().toString(),method=request.getMethod();leaseTimers.post(()->requestPopupDestination(source,url,method));
+                    return new android.webkit.WebResourceResponse("text/plain","UTF-8",403,"Owner confirmation required",java.util.Map.of("Cache-Control","no-store"),new java.io.ByteArrayInputStream(new byte[0]));
+                }
+                return null;
+            }
+            @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){Page page=page(view);if(page==null)return;closePopupChildrenForOwner(page);if(page.popupRequest!=null&&(!url.equals(page.popupRequestUrl)||page.popup.originAdmitted(url))){closePopupForOwner(page,true);return;}cancelPageDialog(page,BrowserPageDialog.Reason.CONTEXT_CHANGED);cancelSiteRequest(page,false);deniedSiteRequests.values().removeIf(request->request.page==page);page.navigation++;closeNativeNetwork(page);if(page.networkWitness!=null)page.networkWitness.documentChanged();if(page.readObserver!=null)page.readObserver.documentStarted();if(page.popupRequest!=null){page.popupRequestNavigation=page.navigation;page.popupRequestDocument=page.readObserver.documentIdentityForNative();}page.loading=true;page.observationId=null;page.observationUrl=null;page.observationAt=0;if(page.taskOwner!=null)page.taskOwner.space().navigationChangedNative(page.id);if(page.taskOwner!=null)try{page.taskOwner.space().pageStartedNative(page.id,url);}catch(Exception ignored){}if(view!=web)return;navigation=page.navigation;cancelFileChooser();invalidateObservation();failPending("网页已跳转，请重新观察");loading=true;progress.setVisibility(View.VISIBLE);message.setText("正在加载网页…");address.setText(url);updateNavigation();}
+            @Override public void onPageFinished(WebView view,String url){Page page=page(view);if(page==null)return;page.loading=false;if(page.taskOwner!=null)try{page.taskOwner.space().pageLoadedNative(page.id,url,view.getTitle());}catch(Exception ignored){}if(page.taskOwner==null)recordOwnerHistory(page,false);if(page.popup!=null&&page.handoffSpace!=null)try{page.handoffSpace.ownerPopupNavigatedNative(page.id);}catch(Exception ignored){}if(view!=web)return;loading=false;progress.setVisibility(View.GONE);message.setText("网页已载入");address.setText(url);updateNavigation();}
             @Override public void onReceivedError(WebView view,WebResourceRequest request,WebResourceError error){if(view!=web)return;if(request.isForMainFrame()){loading=false;message.setText("网页加载失败，请检查地址或网络。");progress.setVisibility(View.GONE);}}
             @Override public void onReceivedSslError(WebView view,SslErrorHandler handler,SslError error){handler.cancel();if(view!=web)return;loading=false;message.setText("证书验证失败，已停止加载。");progress.setVisibility(View.GONE);}
         });
@@ -165,17 +199,172 @@ public final class BrowserActivity extends ComponentActivity {
             @Override public boolean onJsConfirm(WebView view,String url,String text,android.webkit.JsResult result){return showPageDialog(view,url,text,null,BrowserPageDialog.Kind.CONFIRM,result);}
             @Override public boolean onJsPrompt(WebView view,String url,String text,String initial,android.webkit.JsPromptResult result){return showPageDialog(view,url,text,initial,BrowserPageDialog.Kind.PROMPT,result);}
             @Override public boolean onJsBeforeUnload(WebView view,String url,String text,android.webkit.JsResult result){return showPageDialog(view,url,text,null,BrowserPageDialog.Kind.BEFORE_UNLOAD,result);}
-            @Override public boolean onCreateWindow(WebView view,boolean dialog,boolean gesture,android.os.Message reply){siteNotice(page(view),"popup_not_supported");return false;}
-            @Override public boolean onShowFileChooser(WebView view,android.webkit.ValueCallback<android.net.Uri[]> callback,FileChooserParams params){if(view!=web){callback.onReceiveValue(null);return true;}return chooseUpload(callback,params);}@Override public void onProgressChanged(WebView view,int value){if(view==web)progress.setProgress(value);}@Override public void onPermissionRequest(android.webkit.PermissionRequest request){DeniedSiteRequest original=null;try{Page source=page(target);if(source!=null&&source.profile.current()&&source.readObserver!=null){String origin=request.getOrigin()==null?null:request.getOrigin().toString();String[] resources=request.getResources();original=new DeniedSiteRequest(source,source.navigation,source.readObserver.documentIdentityForNative(),origin,resources==null?new String[0]:java.util.Arrays.copyOf(resources,Math.min(17,resources.length)));if(deniedSiteRequests.size()>=8)deniedSiteRequests.remove(deniedSiteRequests.keySet().iterator().next());deniedSiteRequests.put(request,original);}}catch(RuntimeException unavailable){original=null;}finally{request.deny();}if(original!=null&&deniedSiteRequests.get(request)==original)siteRequestNotice(original,"site_permission_denied");}
-            @Override public void onPermissionRequestCanceled(android.webkit.PermissionRequest request){DeniedSiteRequest original=deniedSiteRequests.remove(request);if(original!=null)siteRequestNotice(original,"site_request_cancelled");}
-            @Override public void onGeolocationPermissionsShowPrompt(String origin,android.webkit.GeolocationPermissions.Callback callback){callback.invoke(origin,false,false);siteNotice(page(target),"geolocation_denied",origin,new String[0]);}});
-        target.setOnTouchListener((view,event)->{if(view==web&&event.getActionMasked()==MotionEvent.ACTION_DOWN)takeover("主人正在操作网页，自动执行已停止");return false;});
+            @Override public boolean onCreateWindow(WebView view,boolean dialog,boolean gesture,android.os.Message reply){return createPopupForOwner(view,gesture,reply);}
+            @Override public void onCloseWindow(WebView window){Page child=page(window);if(child!=null&&child.popup!=null)closePopupForOwner(child,true);}
+            @Override public boolean onShowFileChooser(WebView view,android.webkit.ValueCallback<android.net.Uri[]> callback,FileChooserParams params){if(view!=web){callback.onReceiveValue(null);return true;}if(artifactUpload!=null){BrowserArtifactUpload original=artifactUpload;if(!leaseTimers.post(()->original.chooser(callback,params)))callback.onReceiveValue(null);return true;}return chooseUpload(callback,params);}@Override public void onProgressChanged(WebView view,int value){if(view==web)progress.setProgress(value);}@Override public void onPermissionRequest(android.webkit.PermissionRequest request){requestSitePermissions(page(target),request);}
+            @Override public void onPermissionRequestCanceled(android.webkit.PermissionRequest request){if(siteRequest!=null&&siteRequest.permission==request)cancelSiteRequest(siteRequest.page,true);}
+            @Override public void onGeolocationPermissionsShowPrompt(String origin,android.webkit.GeolocationPermissions.Callback callback){requestSiteLocation(page(target),origin,callback);}
+            @Override public void onGeolocationPermissionsHidePrompt(){if(siteRequest!=null&&siteRequest.page==page(target)&&siteRequest.location!=null)cancelSiteRequest(siteRequest.page,true);}});
+        target.setOnTouchListener((view,event)->{if(view==web&&nativeInputDispatchDepth==0&&event.getActionMasked()==MotionEvent.ACTION_DOWN)takeover("主人正在操作网页，自动执行已停止");return false;});
+        target.setOnKeyListener((view,key,event)->{if(view==web&&nativeInputDispatchDepth==0&&event.getAction()==KeyEvent.ACTION_DOWN)takeover("主人正在操作网页键盘，自动执行已停止");return false;});
         target.setDownloadListener((url,userAgent,disposition,mime,length)->{if(web==target)requestDownload(url,userAgent,disposition,mime,length);});
         target.setVisibility(View.GONE);browserContainer.addView(target,new android.widget.FrameLayout.LayoutParams(-1,-1));
     }
     private Page page(WebView view){for(Page page:pages.values())if(page.view==view)return page;return null;}
+    private JSONObject nativeOwnerPageIdentity(Page page,String sourceOrigin)throws Exception {
+        JSONObject identity=page.taskOwner!=null?page.taskOwner.identity():page.handoffIdentity!=null?new JSONObject(page.handoffIdentity.toString()):page.profile.identity().put("tabId",page.id);
+        return identity.put("navigation",page.navigation).put("documentId",page.readObserver.documentIdentityForNative()).put("sourceOrigin",dev.pocketengine.browser.BrowserFrameOrigins.exact(sourceOrigin));
+    }
+    private boolean hasPendingOwnerConfirmation(){
+        if(siteRequest!=null||externalLinkConfirmation!=null)return true;
+        for(Page candidate:pages.values())if(candidate.popupConfirmation!=null)return true;
+        return false;
+    }
+    private boolean createPopupForOwner(WebView parentView,boolean gesture,android.os.Message reply){
+        requireMain();Page opener=page(parentView);
+        if(!gesture||opener==null||opener!=activePage||!ownerForeground||opener.readObserver==null||pages.size()>=MAX_ALL_PAGES||pageDialog!=null||hasPendingOwnerConfirmation()||fileChooser!=null||!(reply.obj instanceof WebView.WebViewTransport)){siteNotice(opener,"popup_not_supported");return false;}
+        Page child=null;BrowserPopupRoute route=null;
+        try{
+            JSONObject parent=nativeOwnerPageIdentity(opener,dialogOrigin(opener.view.getUrl()));
+            BrowserTaskSpace original=opener.taskOwner!=null?opener.taskOwner.space():opener.handoffSpace;
+            long parentNavigation=opener.navigation;String parentDocument=opener.readObserver.documentIdentityForNative();
+            takeover("网页需要打开新窗口；自动浏览已暂停，请核对新窗口的站点。");
+            route=new BrowserPopupRoute(parent,()->{
+                requireMain();if(isDestroyed()||pages.get(opener.id)!=opener||profileSession!=opener.profile||!opener.profile.current()||opener.navigation!=parentNavigation||opener.readObserver==null||!parentDocument.equals(opener.readObserver.documentIdentityForNative()))throw new SecurityException("弹窗父页面已变化");
+                if(original!=null&&(original.ended()||original.originalControl.isCancelled()||!original.originalControl.matchesHostRun(original.binding.taskId,original.binding.runId,original.binding.epoch)))throw new SecurityException("弹窗原任务已结束");
+            });
+            WebView fresh=new WebView(this);profiles.bindFreshWebView(fresh,opener.profile);
+            child=new Page(UUID.randomUUID().toString(),fresh,opener.profile,null);child.popup=route;child.popupOpenerId=opener.id;pages.put(child.id,child);configureWebView(fresh);
+            if(original!=null){child.handoffSpace=original;child.handoffIdentity=original.registerOwnerPopupNative(opener.id,child.id,parent);final Page ownedChild=child;child.popupCancel=()->{ownedChild.popup.close();leaseTimers.post(()->closePopupForOwner(ownedChild,true));};original.originalControl.onCancel(child.popupCancel);}
+            final Page created=child;selectPage(created);siteNotice(created,"popup_owner_confirmation");
+            route.reply(()->{((WebView.WebViewTransport)reply.obj).setWebView(created.view);reply.sendToTarget();});
+            message.setText("新窗口来自原网页；等待你确认目标站点。完成后返回原页并交还任务。");return true;
+        }catch(Exception unavailable){boolean consumed=route!=null&&route.transportConsumed();if(child!=null)destroyPage(child,false);if(route!=null)route.close();if(pages.get(opener.id)==opener)selectPage(opener);siteNotice(opener,"popup_not_supported");return consumed;}
+    }
+    private void requestPopupDestination(Page child,String actualUrl,String method){
+        requireMain();if(pages.get(child.id)!=child||child.popup==null)return;
+        if(child.popupRequest!=null){
+            if(!"GET".equals(method)||!actualUrl.equals(child.popupRequestUrl)){siteNotice(child,"popup_method_unsupported");closePopupForOwner(child,true);}
+            return;
+        }
+        if(child.popup.originAdmitted(actualUrl))return;
+        try{
+            child.popup.requireCurrent();if(child!=activePage||!ownerForeground)throw new SecurityException("请先查看弹窗");
+            if(!"GET".equals(method)){siteNotice(child,"popup_method_unsupported");closePopupForOwner(child,true);return;}
+            BrowserPopupRoute.Request decision=child.popup.request(actualUrl);JSONObject preview=decision.preview();child.popupRequest=decision;
+            child.popupRequestUrl=actualUrl;child.popupRequestNavigation=child.navigation;child.popupRequestDocument=child.readObserver.documentIdentityForNative();
+            child.popupConfirmation=new android.app.AlertDialog.Builder(this).setTitle("打开此新窗口？")
+                    .setMessage("父页面："+preview.getString("sourceOrigin")+"\n目标站点："+preview.getString("destinationOrigin")+"\n\n系统不能核实是否由父页面内的第三方内容发起。此窗口使用原登录资料，保留原任务关系；自动执行保持暂停。地址参数不会写入任务记录。")
+                    .setNegativeButton("关闭新窗口",(dialog,which)->{decision.rejectForOwner();child.popupRequest=null;closePopupForOwner(child,true);})
+                    .setPositiveButton("打开此站点",(dialog,which)->{
+                        try{if(pages.get(child.id)!=child||child!=activePage||!ownerForeground||child.popupRequest!=decision||child.navigation!=child.popupRequestNavigation||!child.popupRequestDocument.equals(child.readObserver.documentIdentityForNative()))throw new SecurityException("弹窗确认已过期");String approved=decision.approveForOwner();child.popupRequest=null;child.popupConfirmation=null;siteNotice(child,"popup_opened",preview.optString("destinationOrigin"),new String[0]);child.view.loadUrl(approved);}
+                        catch(Exception changed){child.popupRequest=null;closePopupForOwner(child,true);}
+                    }).create();
+            child.popupConfirmation.setOnCancelListener(dialog->{decision.rejectForOwner();child.popupRequest=null;closePopupForOwner(child,true);});child.popupConfirmation.show();
+        }catch(Exception blocked){child.popupRequest=null;closePopupForOwner(child,true);}
+    }
+    private void closePopupChildrenForOwner(Page opener){
+        for(Page child:new java.util.ArrayList<>(pages.values()))if(child!=opener&&opener.id.equals(child.popupOpenerId)&&child.popup!=null)closePopupForOwner(child,true);
+    }
+    private void closePopupForOwner(Page child,boolean returnToOpener){
+        requireMain();if(child==null||pages.get(child.id)!=child||child.popup==null)return;Page opener=pages.get(child.popupOpenerId);siteNotice(child,"popup_cancelled");
+        destroyPage(child,false);if(returnToOpener&&opener!=null&&pages.get(opener.id)==opener&&opener.profile==profileSession)selectPage(opener);else selectOwnerFallback();
+        if(message!=null)message.setText("新窗口已关闭；请核对原页面，再从原任务交还并继续。");
+    }
+    private void requestExternalLink(Page source,WebResourceRequest request){
+        requireMain();if(source==null||source!=activePage||!ownerForeground||!request.hasGesture()||hasPendingOwnerConfirmation()){siteNotice(source,"external_link_denied");return;}
+        try{
+            dev.pocketengine.browser.BrowserExternalNavigation target=dev.pocketengine.browser.BrowserExternalNavigation.parse(request.getUrl().toString());
+            String document=source.readObserver.documentIdentityForNative();long version=source.navigation;BrowserProfileRegistry.Session session=source.profile;
+            BrowserTaskSpace original=source.taskOwner!=null?source.taskOwner.space():source.handoffSpace;
+            takeover("网页请求打开其他应用，自动浏览已暂停。");long pauseRevision=original==null?0:original.originalControl.pauseRevision();siteNotice(source,"external_link_confirmation");final java.util.concurrent.atomic.AtomicBoolean decisionConsumed=new java.util.concurrent.atomic.AtomicBoolean();
+            externalLinkConfirmation=new android.app.AlertDialog.Builder(this).setTitle("打开其他应用？")
+                    .setMessage("网页："+dialogOrigin(source.view.getUrl())+"\n链接类型："+target.scheme+(target.host.isEmpty()?"":"\n目标："+target.host)+"\n\n完整链接可能包含网页参数，将交给你选择的应用；不会自动继续原任务。")
+                    .setNegativeButton("留在网页",(dialog,which)->{decisionConsumed.set(true);externalLinkConfirmation=null;siteNotice(source,"external_link_denied");})
+                    .setPositiveButton("选择应用",(dialog,which)->{if(!decisionConsumed.compareAndSet(false,true))return;externalLinkConfirmation=null;try{
+                        if(!ownerForeground||source!=activePage||pages.get(source.id)!=source||profileSession!=session||!session.current()||source.navigation!=version||!document.equals(source.readObserver.documentIdentityForNative()))throw new SecurityException("外部链接的原页面已变化");
+                        if(source.taskOwner!=null||source.handoffSpace!=original||original!=null&&(!original.ownerTransferCurrent(source.id)||original.originalControl.pauseRevision()!=pauseRevision))throw new SecurityException("原任务接管状态已变化");
+                        android.content.Intent intent=new android.content.Intent(android.content.Intent.ACTION_VIEW,android.net.Uri.parse(target.uri));intent.addCategory(android.content.Intent.CATEGORY_BROWSABLE);startActivity(android.content.Intent.createChooser(intent,"选择打开此链接的应用"));siteNotice(source,"external_link_opened");
+                    }catch(Exception unavailable){siteNotice(source,"external_link_denied");message.setText("此链接未能交给其他应用；没有自动重试。");}}).create();
+            externalLinkConfirmation.setOnDismissListener(dialog->{decisionConsumed.set(true);externalLinkConfirmation=null;});externalLinkConfirmation.show();
+        }catch(Exception blocked){siteNotice(source,"external_link_denied");message.setText("此类链接无法直接打开，请在原网页或目标应用中处理。");}
+    }
+    private final class NativeSiteRequest {
+        final Page page;final BrowserProfileRegistry.Session session;final BrowserTaskSpace space;
+        final String document,origin;final long version,pauseRevision;
+        final android.webkit.PermissionRequest permission;final android.webkit.GeolocationPermissions.Callback location;
+        final dev.pocketengine.browser.BrowserSitePermissions policy;final BrowserSiteDecision decision;
+        final int requestCode=SITE_PERMISSION_REQUESTS.getAndIncrement();final Runnable cancelled,watch;
+        android.app.AlertDialog window;boolean finished,awaitingPlatform;Boolean platformAllowed;
+        NativeSiteRequest(Page page,String origin,android.webkit.PermissionRequest permission,android.webkit.GeolocationPermissions.Callback location,dev.pocketengine.browser.BrowserSitePermissions policy)throws Exception {
+            this.page=page;this.session=page.profile;this.space=page.handoffSpace;this.document=page.readObserver.documentIdentityForNative();this.version=page.navigation;this.origin=dev.pocketengine.browser.BrowserFrameOrigins.exact(origin);this.permission=permission;this.location=location;this.policy=policy;this.pauseRevision=space==null?0:space.originalControl.pauseRevision();
+            if(!this.origin.startsWith("https://"))throw new SecurityException("设备访问需要安全站点");
+            decision=new BrowserSiteDecision(nativeOwnerPageIdentity(page,this.origin),()->check(false),allowed->{if(permission!=null){if(allowed)permission.grant(policy.webResources.clone());else permission.deny();}else location.invoke(origin,allowed,false);},android.os.SystemClock::elapsedRealtime);
+            cancelled=()->leaseTimers.post(()->{if(siteRequest==this)cancelSiteRequest(page,false);});
+            watch=new Runnable(){public void run(){if(siteRequest!=NativeSiteRequest.this)return;try{decision.requireCurrent();if(!ownerForeground&&!awaitingPlatform)throw new SecurityException("主人已离开权限确认");leaseTimers.postDelayed(this,250);}catch(Exception changed){cancelSiteRequest(page,false);}}};
+        }
+        void check(boolean requireOwner)throws Exception {
+            requireMain();if(finished||isDestroyed()||isFinishing()||requireOwner&&!ownerForeground||pages.get(page.id)!=page||page!=activePage||profileSession!=session||!session.current()||page.navigation!=version||page.readObserver==null||!document.equals(page.readObserver.documentIdentityForNative()))throw new SecurityException("权限请求的原页面已变化");
+            if(space!=null&&(!space.ownerTransferCurrent(page.id)||space.originalControl.pauseRevision()!=pauseRevision))throw new SecurityException("权限请求的原任务已变化");
+        }
+    }
+    private void requestSitePermissions(Page page,android.webkit.PermissionRequest request){
+        requireMain();try{beginSiteRequest(page,request.getOrigin()==null?null:request.getOrigin().toString(),request,null,dev.pocketengine.browser.BrowserSitePermissions.media(request.getResources()));}
+        catch(Exception unsupported){try{request.deny();}catch(RuntimeException ignored){}siteNotice(page,"site_permission_unsupported",request.getOrigin()==null?null:request.getOrigin().toString(),request.getResources());}
+    }
+    private void requestSiteLocation(Page page,String origin,android.webkit.GeolocationPermissions.Callback callback){
+        requireMain();try{beginSiteRequest(page,origin,null,callback,dev.pocketengine.browser.BrowserSitePermissions.location());}
+        catch(Exception unsupported){callback.invoke(origin,false,false);siteNotice(page,"geolocation_denied",origin,new String[]{"native.geolocation"});}
+    }
+    private void beginSiteRequest(Page page,String origin,android.webkit.PermissionRequest permission,android.webkit.GeolocationPermissions.Callback location,dev.pocketengine.browser.BrowserSitePermissions policy)throws Exception {
+        if(page==null||page!=activePage||!ownerForeground||page.readObserver==null||hasPendingOwnerConfirmation()||pageDialog!=null||fileChooser!=null)throw new SecurityException("原生权限确认暂不可用");
+        takeover("网页请求设备权限，自动浏览已暂停。");NativeSiteRequest pending=new NativeSiteRequest(page,origin,permission,location,policy);siteRequest=pending;
+        try{
+        if(pending.space!=null)pending.space.originalControl.onCancel(pending.cancelled);
+        siteNotice(page,"site_permission_pending",pending.origin,policy.webResources);
+        pending.window=new android.app.AlertDialog.Builder(this).setTitle("允许此站点使用"+policy.ownerLabel+"？")
+                .setMessage("请求站点："+pending.origin+"\n当前页面："+dialogOrigin(page.view.getUrl())+"\n\n仅把这次真实网页请求交给系统处理，本应用不保存站点授权设置。你还需要通过Android权限确认；原任务保持暂停。")
+                .setNegativeButton("拒绝",(dialog,which)->chooseSiteRequest(pending,false))
+                .setPositiveButton("继续系统确认",(dialog,which)->chooseSiteRequest(pending,true)).create();
+        pending.window.setOnCancelListener(dialog->chooseSiteRequest(pending,false));pending.window.show();leaseTimers.post(pending.watch);
+        }catch(Exception unavailable){cancelSiteRequest(page,false);}
+    }
+    private void chooseSiteRequest(NativeSiteRequest request,boolean allow){
+        if(siteRequest!=request)return;
+        try{
+            request.check(true);request.decision.chooseForOwner(request.decision.id(),allow);
+            if(!allow){finishSiteRequest(request,"site_permission_denied");return;}
+            java.util.List<String> missing=new java.util.ArrayList<>();for(String permission:request.policy.androidPermissions)if(checkSelfPermission(permission)!=android.content.pm.PackageManager.PERMISSION_GRANTED)missing.add(permission);
+            request.awaitingPlatform=true;
+            if(missing.isEmpty()){request.platformAllowed=true;finishSitePlatformResult(request);}
+            else requestPermissions(missing.toArray(new String[0]),request.requestCode);
+        }catch(Exception changed){cancelSiteRequest(request.page,false);}
+    }
+    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults);NativeSiteRequest request=siteRequest;if(request==null||request.requestCode!=requestCode||!request.awaitingPlatform)return;
+        boolean granted=permissions.length>0&&permissions.length==grantResults.length;
+        for(int result:grantResults)granted&=result==android.content.pm.PackageManager.PERMISSION_GRANTED;
+        for(String permission:request.policy.androidPermissions)granted&=checkSelfPermission(permission)==android.content.pm.PackageManager.PERMISSION_GRANTED;
+        request.platformAllowed=granted;if(ownerForeground)finishSitePlatformResult(request);
+    }
+    private void finishSitePlatformResult(NativeSiteRequest request){
+        if(siteRequest!=request||request.platformAllowed==null)return;
+        try{request.check(true);request.decision.platformResult(request.platformAllowed);finishSiteRequest(request,request.platformAllowed?"site_permission_granted":"site_permission_denied");}
+        catch(Exception unknown){cancelSiteRequest(request.page,false);}
+    }
+    private void cancelSiteRequest(Page expected,boolean platformCancelled){
+        NativeSiteRequest request=siteRequest;if(request==null||expected!=null&&request.page!=expected)return;
+        try{if(platformCancelled)request.decision.platformCancelled();else request.decision.cancel();}catch(Exception unknown){/* The consumed callback is never retried. */}
+        finishSiteRequest(request,"site_request_cancelled");
+    }
+    private void finishSiteRequest(NativeSiteRequest request,String reason){
+        if(request.finished)return;request.finished=true;if(siteRequest==request)siteRequest=null;leaseTimers.removeCallbacks(request.watch);if(request.space!=null)request.space.originalControl.removeCancelAction(request.cancelled);
+        try{if("unknown".equals(request.decision.snapshot().optString("status")))reason="site_callback_unknown";}catch(Exception ignored){}
+        if(request.window!=null){request.window.dismiss();request.window=null;}siteNotice(request.page,reason,request.origin,request.policy.webResources);
+        if(message!=null)message.setText(reason.equals("site_permission_granted")?"已把本次设备许可交给原站点；请完成操作后交还原任务。":"这次站点权限请求已结束；没有自动重试或继续原任务。");
+    }
     private void selectPage(Page target){
-        if(activePage==target)return;cancelPageDialog(activePage,BrowserPageDialog.Reason.OWNER_LEFT);cancelFileChooser();if(downloadDialog!=null){downloadDialog.dismiss();downloadDialog=null;}failPending("已切换页面，原操作回执待核对");
+        if(activePage==target)return;cancelPageDialog(activePage,BrowserPageDialog.Reason.OWNER_LEFT);cancelSiteRequest(activePage,false);cancelFileChooser();if(downloadDialog!=null){downloadDialog.dismiss();downloadDialog=null;}failPending("已切换页面，原操作回执待核对");
         if(activePage!=null){activePage.navigation=navigation;activePage.loading=loading;activePage.observationId=observationId;activePage.observationUrl=observationUrl;activePage.observationAt=observationAt;activePage.view.setVisibility(View.GONE);activePage.view.onPause();}
         activePage=target;web=target==null?null:target.view;navigation=target==null?0:target.navigation;loading=target!=null&&target.loading;
         observationId=target==null?null:target.observationId;observationUrl=target==null?null:target.observationUrl;observationAt=target==null?0:target.observationAt;
@@ -186,7 +375,7 @@ public final class BrowserActivity extends ComponentActivity {
     }
     public BrowserTaskCapabilityPort attachTaskSpaceForOwner(ModelCapabilityAdapters.Binding binding,RunControl originalControl,ModelCapabilityAdapters.Authority authority,ModelCapabilityAdapters.ResourceCheck resource,BrowserTaskCapabilityPort.ApprovalPort approvals,BrowserTaskSpace.SourcePort sources,BrowserTaskSpace.NativeEvents lifecycle,CapabilityPort existing,String expectedBrowserSessionId)throws Exception {
         requireMain();if(web==null||profileSession==null||!profileSession.current()||!profileSession.sessionId.equals(expectedBrowserSessionId))throw new SecurityException("主人选择的浏览会话已变化");
-        if(pageDialog!=null||fileChooser!=null||downloadDialog!=null&&downloadDialog.isShowing())throw new IllegalStateException("请先结束当前文件选择或下载确认");
+        if(pageDialog!=null||hasPendingOwnerConfirmation()||fileChooser!=null||downloadDialog!=null&&downloadDialog.isShowing())throw new IllegalStateException("请先结束当前网页确认、文件选择或下载确认");
         if(taskSpace!=null&&(!taskSpace.snapshot().optString("status").equals("ended")||taskSpace.snapshot().getJSONArray("tabs").length()>0))throw new IllegalStateException("已有任务浏览空间，请先结束并清理其任务页");
         java.util.Objects.requireNonNull(approvals,"需要原TaskStore审批端口");
         originalControl.check();authority.check("browser_task_open",originalControl);resource.check();
@@ -199,7 +388,7 @@ public final class BrowserActivity extends ComponentActivity {
             private void check(BrowserTaskSpace.Tab tab,BrowserTaskSpace.Gate gate)throws Exception {gate.check();tab.check();lease.require(currentLease.get());}
             public JSONObject recoveryRecord(String logicalId,String url,String title,String state,String openedBy)throws Exception {return profiles.recoveryPageForOwner(selectedProfile,binding.taskId,logicalId,url,title,state,openedBy);}
             public String recoveryUrl(JSONObject page)throws Exception {return profiles.recoveryUrlForOwner(selectedProfile,binding.taskId,page);}
-            public JSONObject metadata(BrowserTaskSpace.Tab tab)throws Exception {Page page=owned(tab);JSONObject out=json("documentId",page.readObserver==null?"":page.readObserver.documentIdentityForNative(),"navigation",page==activePage?navigation:page.navigation,"loading",page==activePage?loading:page.loading,"url",page.view.getUrl()==null?"":page.view.getUrl(),"title",page.view.getTitle()==null?"":page.view.getTitle());if(lastSiteNotice!=null&&page.id.equals(lastSiteNotice.optString("tabId"))&&page.navigation==lastSiteNotice.optLong("navigation",-1))out.put("siteNotice",new JSONObject(lastSiteNotice.toString()));return out;}
+            public JSONObject metadata(BrowserTaskSpace.Tab tab)throws Exception {Page page=owned(tab);JSONObject out=json("documentId",page.readObserver==null?"":page.readObserver.documentIdentityForNative(),"navigation",page==activePage?navigation:page.navigation,"loading",page==activePage?loading:page.loading,"url",page.view.getUrl()==null?"":page.view.getUrl(),"title",page.view.getTitle()==null?"":page.view.getTitle(),"navigationHistory",BrowserSiteMode.historyPin(page.view));if(lastSiteNotice!=null&&page.id.equals(lastSiteNotice.optString("tabId"))&&page.navigation==lastSiteNotice.optLong("navigation",-1))out.put("siteNotice",new JSONObject(lastSiteNotice.toString()));return out;}
             public void open(BrowserTaskSpace.Tab tab,String url,BrowserTaskSpace.Gate gate)throws Exception {
                 check(tab,gate);if(pages.size()>=MAX_ALL_PAGES)throw new IllegalStateException("浏览页数量已达8个，请主人关闭不再使用的页");gate.entered();WebView fresh=new WebView(BrowserActivity.this);
                 try{profiles.bindFreshWebView(fresh,selectedProfile);Page page=new Page(tab.tabId,fresh,selectedProfile,tab);page.taskGate=gate;pages.put(page.id,page);configureWebView(fresh);check(tab,gate);selectPage(page);check(tab,gate);navigateForTask(url);}catch(Exception failed){Page made=pages.get(tab.tabId);if(made!=null&&made.view==fresh)destroyPage(made,false);else fresh.destroy();throw failed;}
@@ -211,8 +400,15 @@ public final class BrowserActivity extends ComponentActivity {
                 pageResult.whenComplete((receipt,error)->{if(error!=null){result.completeExceptionally(error);return;}try{check(tab,gate);Page actual=owned(tab);JSONObject bound=new JSONObject(receipt.toString());JSONObject identity=tab.identity();for(java.util.Iterator<String> keys=identity.keys();keys.hasNext();){String key=keys.next();bound.put(key,identity.get(key));}if(command.equals("observe")){String actualUrl=actual.view.getUrl()==null?"":actual.view.getUrl();if(bound.optBoolean("semanticRead")&&bound.optJSONObject("frameCoverage")!=null&&bound.getJSONObject("frameCoverage").optInt("schemaVersion")==2){if(!TaskStore.capabilityFingerprint(json("url",actualUrl)).equals(bound.getJSONObject("frameCoverage").getString("parentPageIdentityDigest")))throw new BrowserTaskSpace.StalePage("嵌入网页的原宿主已跳转");}else {if(!actualUrl.equals(bound.optString("url")))throw new BrowserTaskSpace.StalePage("网页观察回调的完整目的地已变化");bound.put("url",actualUrl).put("title",actual.view.getTitle()==null?"":actual.view.getTitle());}}result.complete(bound);}catch(Exception stale){result.completeExceptionally(stale);}});
                 result.whenComplete((value,error)->{if(result.isCancelled())pageResult.cancel(false);});
             }
+            public JSONObject uploadArtifactPin(BrowserTaskSpace.Tab tab,JSONObject args)throws Exception {owned(tab);return BrowserArtifactSource.pin(BrowserActivity.this,uploadWorkspace(),binding.taskId,args.getJSONObject("artifact"));}
             public boolean visualAvailable(){return true;}
+            public JSONObject inputPin(BrowserTaskSpace.Tab tab)throws Exception {return inputPagePin(owned(tab));}
+            public JSONObject siteModePin(BrowserTaskSpace.Tab tab)throws Exception {Page page=owned(tab);return inputPagePin(page).put("settings",BrowserSiteMode.settingsPin(page.view));}
+            public JSONObject resizePin(BrowserTaskSpace.Tab tab,JSONObject args)throws Exception {Page page=owned(tab);return inputPagePin(page).put("layout",BrowserSiteMode.resizePin(page.view,args));}
             public JSONObject visualPin(BrowserTaskSpace.Tab tab,JSONObject args)throws Exception {return visualPagePin(owned(tab),args);}
+            public JSONObject networkCapturePin(BrowserTaskSpace.Tab tab,String capture)throws Exception {Page page=owned(tab);if(page.nativeNetwork==null)throw new BrowserTaskSpace.StalePage("原生网络采集不可用");return page.nativeNetwork.capturePin(capture);}
+            public JSONObject networkBodyPin(BrowserTaskSpace.Tab tab,JSONObject args)throws Exception {Page page=owned(tab);if(page.nativeNetwork==null)throw new BrowserTaskSpace.StalePage("原生网络响应不可用");return page.nativeNetwork.bodyPin(args);}
+            public void deliveredNetwork(BrowserTaskSpace.Tab tab,JSONObject actual)throws Exception {Page page=owned(tab);if(page.nativeNetwork==null)throw new BrowserTaskSpace.StalePage("原生网络交付已失效");page.nativeNetwork.delivered(actual);}
             public void visualCapture(BrowserTaskSpace.Tab tab,JSONObject args,JSONObject pin,BrowserTaskSpace.Gate gate,CompletableFuture<BrowserVisualCapture.Frame> result)throws Exception {capturePageVisual(owned(tab),tab,args,pin,gate,result);}
             public JSONObject deliveredObservation(BrowserTaskSpace.Tab tab,JSONObject actual)throws Exception {Page page=owned(tab);if(page.readObserver==null||page.navigation!=actual.getLong("navigation"))throw new BrowserTaskSpace.StalePage("原frame交付页已变化");return page.readObserver.delivered(actual);}
             public JSONObject readFramePin(BrowserTaskSpace.Tab tab,String ref)throws Exception {Page page=owned(tab);if(page.readObserver==null)throw new BrowserTaskSpace.StalePage("原frame读取宿主不可用");return page.readObserver.framePinForNative(ref);}
@@ -239,25 +435,25 @@ public final class BrowserActivity extends ComponentActivity {
             }
             public JSONObject downloadStatus(String id,BrowserTaskSpace.Gate gate)throws Exception {gate.check();return BrowserDownloads.get(BrowserActivity.this).status(id,selectedProfile.profileId);}
             public void adoptOwner(BrowserTaskSpace.Tab tab,BrowserTaskSpace.Gate gate)throws Exception {authority.check("browser_task_open",originalControl);resource.check();check(tab,gate);Page page=pages.get(tab.tabId);if(page==null||page.taskOwner!=null||page.profile!=selectedProfile)throw new SecurityException("只能明确移交同Profile的主人页");page.taskOwner=tab;if(page.readObserver!=null)page.readObserver.extraOriginsForNative(tab.space().frameOriginsForNative());}
-            public JSONObject ownerMetadata(String tabId)throws Exception {Page page=pages.get(tabId);if(isDestroyed()||page==null||page.taskOwner!=null||page.profile!=selectedProfile||profileSession!=selectedProfile||!selectedProfile.current())throw new SecurityException("原接管页或登录资料已变化");return json("navigation",page==activePage?navigation:page.navigation,"url",page.view.getUrl()==null?"":page.view.getUrl());}
+            public JSONObject ownerMetadata(String tabId)throws Exception {Page page=pages.get(tabId);if(isDestroyed()||page==null||page.taskOwner!=null||page.profile!=selectedProfile||profileSession!=selectedProfile||!selectedProfile.current())throw new SecurityException("原接管页或登录资料已变化");return json("navigation",page==activePage?navigation:page.navigation,"documentId",page.readObserver==null?"":page.readObserver.documentIdentityForNative(),"title",page.view.getTitle()==null?"":page.view.getTitle(),"url",page.view.getUrl()==null?"":page.view.getUrl());}
             public void returnOwner(BrowserTaskSpace.Tab tab,BrowserTaskSpace.Gate gate)throws Exception {gate.check();ownerMetadata(tab.tabId);Page page=pages.get(tab.tabId);if(page!=activePage)throw new SecurityException("请先查看要交还的原页面");page.taskOwner=tab;page.taskGate=null;page.handoffSpace=null;page.handoffIdentity=null;if(page.readObserver!=null)page.readObserver.extraOriginsForNative(tab.space().frameOriginsForNative());}
-            public void releaseToOwner(BrowserTaskSpace.Tab tab)throws Exception {Page page=owned(tab);page.handoffSpace=tab.space();page.handoffIdentity=tab.identity();page.taskOwner=null;page.taskGate=null;lease.invalidate();leaseTimers.removeCallbacks(leaseExpiryCheck);invalidateObservation();failPending("主人已接管原任务页，自动浏览暂停");}
+            public void releaseToOwner(BrowserTaskSpace.Tab tab)throws Exception {Page page=owned(tab);closeNativeNetwork(page);page.handoffSpace=tab.space();page.handoffIdentity=tab.identity();page.taskOwner=null;page.taskGate=null;lease.invalidate();leaseTimers.removeCallbacks(leaseExpiryCheck);invalidateObservation();failPending("主人已接管原任务页，自动浏览暂停");}
             public boolean closeOwned(BrowserTaskSpace.Tab tab)throws Exception {Page page=pages.get(tab.tabId);if(page==null||page.taskOwner!=tab)return false;destroyPage(page,false);selectOwnerFallback();return true;}
-            public boolean closeOnFinish(BrowserTaskSpace.Tab tab)throws Exception {Page page=pages.get(tab.tabId);if(page==null||page.taskOwner!=tab)return false;if(page.taskCreated)return closeOwned(tab);page.taskOwner=null;page.taskGate=null;page.handoffSpace=null;page.handoffIdentity=null;if(page.readObserver!=null)page.readObserver.invalidate();selectOwnerFallback();return false;}
-            public void abort(BrowserTaskSpace.Tab tab,CompletableFuture<JSONObject> operation){Page page=pages.get(tab.tabId);cancelPageDialog(page,BrowserPageDialog.Reason.CONTEXT_CHANGED);if(page==null||page.taskOwner!=tab||activePage!=page)return;try{lease.require(currentLease.get());}catch(Exception replaced){return;}if(operation!=null)commandTimedOut(operation);failPending("任务浏览已停止，请核对原页面效果");}
+            public boolean closeOnFinish(BrowserTaskSpace.Tab tab)throws Exception {Page page=pages.get(tab.tabId);if(page==null||page.taskOwner!=tab)return false;if(page.taskCreated)return closeOwned(tab);closeNativeNetwork(page);page.taskOwner=null;page.taskGate=null;page.handoffSpace=null;page.handoffIdentity=null;if(page.readObserver!=null)page.readObserver.invalidate();selectOwnerFallback();return false;}
+            public void abort(BrowserTaskSpace.Tab tab,CompletableFuture<JSONObject> operation){Page page=pages.get(tab.tabId);cancelPageDialog(page,BrowserPageDialog.Reason.CONTEXT_CHANGED);if(page==null||page.taskOwner!=tab||activePage!=page)return;try{lease.require(currentLease.get());}catch(Exception replaced){return;}closeNativeNetwork(page);if(operation!=null)commandTimedOut(operation);failPending("任务浏览已停止，请核对原页面效果");}
             public void dialogOperationSettled(BrowserTaskSpace.Tab tab,BrowserPageDialog dialog)throws Exception {Page page=pages.get(tab.tabId);if(page==null||page.handoffSpace!=tab.space())throw new SecurityException("原网页提示页已变化");if(pageDialog!=null&&pageDialog.token==dialog){pageDialog.ownHandoff=true;pageDialog.pauseRevision=tab.space().originalControl.pauseRevision();}message.setText("网页提示已处理；请核对当前页面，再从研究任务交还并继续。");}
-            public void ended(){try{lease.release(currentLease.get(),"release");leaseTimers.removeCallbacks(leaseExpiryCheck);}catch(Exception noLongerOwned){}if(taskSpace!=null&&taskSpace.profile==selectedProfile)updateNavigation();}
+            public void ended(){for(Page candidate:new java.util.ArrayList<>(pages.values()))if(candidate.popup!=null&&((candidate.handoffSpace!=null&&candidate.handoffSpace.originalControl==originalControl)||(candidate.taskOwner!=null&&candidate.taskOwner.space().originalControl==originalControl)))closePopupForOwner(candidate,true);endNativeNetworkSession();try{lease.release(currentLease.get(),"release");leaseTimers.removeCallbacks(leaseExpiryCheck);}catch(Exception noLongerOwned){}if(taskSpace!=null&&taskSpace.profile==selectedProfile)updateNavigation();}
         };
         try{taskSpace=new BrowserTaskSpace(binding,originalControl,selectedProfile,driver,ui,sources,lifecycle);taskLease=currentLease;return new BrowserTaskCapabilityPort(taskSpace,authority,resource,approvals,ui,existing);}catch(Exception failed){lease.release(acquired,"cancel");throw failed;}
     }
     public JSONObject returnTaskSpaceForOwner(JSONObject expected,RunControl original,BrowserTaskSpace.Gate resume)throws Exception {
-        requireMain();if(taskSpace==null||taskSpace.originalControl!=original||taskLease==null||profileSession!=taskSpace.profile||pageDialog!=null||fileChooser!=null||uploadDestination!=null||pending!=null&&!pending.isDone()||downloadDialog!=null&&downloadDialog.isShowing())throw new SecurityException("请先处理原页面的文件选择或未决操作，再交还浏览");
+        requireMain();if(taskSpace==null||taskSpace.originalControl!=original||taskLease==null||profileSession!=taskSpace.profile||pageDialog!=null||hasPendingOwnerConfirmation()||fileChooser!=null||uploadDestination!=null||artifactUpload!=null&&artifactUpload.active()||pending!=null&&!pending.isDone()||downloadDialog!=null&&downloadDialog.isShowing())throw new SecurityException("请先处理原页面的文件选择或未决操作，再交还浏览");
         String tabId=expected.getString("tabId");if(!expected.toString().equals(taskSpace.returnPinNative(tabId).toString()))throw new SecurityException("交还目标已变化，请刷新后确认");
         final BrowserTaskSpace returning=taskSpace;JSONObject acquired=lease.acquireTask(taskSpace.profile.identity().put("taskId",taskSpace.binding.taskId).put("runId",taskSpace.binding.runId).put("principalId","owner").put("spaceId","private"),()->uploadStore().taskExecutionDeadline(returning.binding.taskId,returning.binding.runId,returning.binding.epoch));taskLease.set(acquired);
         try{JSONObject receipt=taskSpace.returnOwnerNative(expected,()->{if(original.isCancelled()||!original.isPaused()||original.pauseRevision()!=expected.getLong("pauseRevision")||profileSession!=taskSpace.profile)throw new SecurityException("原任务暂停状态已变化");});invalidateObservation();resume.check();scheduleLeaseExpiry(acquired);message.setText("已交还原任务，正在重新读取当前网页");return receipt;}
         catch(Exception failed){if(!tabId.isEmpty()&&activePage!=null&&activePage.taskOwner!=null&&activePage.taskOwner.space()==taskSpace)taskSpace.takeOverNative(tabId);else taskSpace.ownerBrowsingNative(tabId);try{lease.release(acquired,"return_failed");}catch(Exception ignored){}throw failed;}
     }
-    public void adoptOwnerTabForTask(String tabId)throws Exception {requireMain();if(taskSpace==null||pageDialog!=null||fileChooser!=null||uploadDestination!=null||pending!=null&&!pending.isDone()||downloadDialog!=null&&downloadDialog.isShowing())throw new IllegalStateException("没有可移交的原任务空间，或有文件/网页操作待核对");taskSpace.adoptOwnerNative(tabId,()->{if(profileSession!=taskSpace.profile)throw new SecurityException("资料会话已变化");});}
+    public void adoptOwnerTabForTask(String tabId)throws Exception {requireMain();if(taskSpace==null||pageDialog!=null||hasPendingOwnerConfirmation()||fileChooser!=null||uploadDestination!=null||artifactUpload!=null&&artifactUpload.active()||pending!=null&&!pending.isDone()||downloadDialog!=null&&downloadDialog.isShowing())throw new IllegalStateException("没有可移交的原任务空间，或有文件/网页操作待核对");taskSpace.adoptOwnerNative(tabId,()->{if(profileSession!=taskSpace.profile)throw new SecurityException("资料会话已变化");});}
     public void takeOverTaskTabForOwner(String tabId)throws Exception {requireMain();Page page=pages.get(tabId);if(page==null||page.taskOwner==null)throw new SecurityException("此页不属于任务");page.taskOwner.space().takeOverNative(tabId);selectPage(page);takeover("主人已接管任务页");}
     public void selectOwnerTabForOwner(String tabId)throws Exception {requireMain();Page page=pages.get(tabId);if(page==null||page.taskOwner!=null)throw new SecurityException("请选择主人自己的浏览页；任务页须明确接管");if(taskSpace!=null)taskSpace.ownerBrowsingNative(tabId);closingProfile=true;try{takeover("主人已切回自己的页面，自动浏览已暂停");}finally{closingProfile=false;}selectPage(page);}
     public JSONObject endTaskSpaceForOwner(String reason)throws Exception {requireMain();return taskSpace==null?json("status","not_active"):taskSpace.endNative(reason);}
@@ -272,6 +468,7 @@ public final class BrowserActivity extends ComponentActivity {
     public void closeOwnerTabForOwner(String tabId)throws Exception {requireMain();Page page=pages.get(tabId);if(page==null||page.taskOwner!=null)throw new SecurityException("只能明确关闭主人自己的页面");recordOwnerHistory(page,true);destroyPage(page,false);selectOwnerFallback();}
     private void requireMain(){if(Looper.myLooper()!=Looper.getMainLooper())throw new IllegalStateException("浏览页只能由原生主线程操作");}
     private void waitForTaskPage(Page page,JSONObject args,BrowserTaskSpace.Gate gate,CompletableFuture<JSONObject> result)throws Exception {
+        if(args.getString("condition").equals("barrier")){waitForTaskBarrier(page,args,gate,result);return;}
         if(args.getString("condition").equals("target")){waitForTaskTarget(page,args,gate,result);return;}
         final BrowserTaskSpace.Tab owner=page.taskOwner;final String condition=args.getString("condition"),expected=args.optString("value");final int timeout=args.optInt("timeoutMs",3000);final long deadline=android.os.SystemClock.elapsedRealtime()+timeout;
         Runnable expired=()->{if(result.isDone())return;try{requireWaitPage(page,owner,gate);result.complete(json("accepted",true,"verified",false,"status","failed","code","condition_timeout","condition",condition,"conditionMet",false,"message","限定时间内未观察到所需网页条件"));}catch(Exception stale){result.completeExceptionally(stale);}};
@@ -315,16 +512,48 @@ public final class BrowserActivity extends ComponentActivity {
         leaseTimers.postDelayed(expired,args.optInt("timeoutMs",3000));poll.run();
     }
     private void requireWaitPage(Page page,BrowserTaskSpace.Tab owner,BrowserTaskSpace.Gate gate)throws Exception {gate.check();if(owner==null||pages.get(page.id)!=page||page.taskOwner!=owner||profileSession!=page.profile)throw new SecurityException("等待的原任务页已关闭或交给主人");owner.check();}
+    private void waitForTaskBarrier(Page page,JSONObject args,BrowserTaskSpace.Gate gate,CompletableFuture<JSONObject> result)throws Exception {
+        final BrowserWaitBarrier.Tracker tracker=new BrowserWaitBarrier.Tracker(args.getJSONObject("barrier"));
+        final BrowserTaskSpace.Tab owner=page.taskOwner;requireWaitPage(page,owner,gate);
+        final long version=page.navigation,leaseEpoch=lease.require(args),pause=owner.space().originalControl.pauseRevision(),started=android.os.SystemClock.elapsedRealtime();
+        final String document=page.readObserver==null?"":page.readObserver.documentIdentityForNative(),url=page.view.getUrl();final int timeout=args.optInt("timeoutMs",3000);
+        final BrowserFrameObserver.Check current=()->{requireWaitPage(page,owner,gate);if(isDestroyed()||activePage!=page||web!=page.view||navigation!=version||page.navigation!=version||lease.require(args)!=leaseEpoch||!java.util.Objects.equals(url,page.view.getUrl())||!page.profile.current()||owner.space().originalControl.pauseRevision()!=pause||page.readObserver==null||!document.equals(page.readObserver.documentIdentityForNative()))throw new BrowserTaskSpace.StalePage("屏障原任务、文档或资料已变化");};
+        current.check();BrowserFrameObserver.DomBarrier available=null;
+        if(tracker.needsDom())try{available=page.readObserver.beginDomBarrier();}catch(IllegalStateException unavailable){tracker.accept(json("available",false),tracker.needsNetwork()?json("available",false):null);result.complete(tracker.receipt(false,false,0));return;}
+        final BrowserFrameObserver.DomBarrier dom=available;
+        final java.util.concurrent.atomic.AtomicReference<CompletableFuture<JSONObject>> sampling=new java.util.concurrent.atomic.AtomicReference<>();
+        Runnable expired=()->{if(result.isDone())return;try{current.check();result.complete(tracker.receipt(false,true,android.os.SystemClock.elapsedRealtime()-started).put("navigation",version).put("documentId",document));}catch(Exception stale){result.completeExceptionally(stale);}};
+        Runnable poll=new Runnable(){public void run(){if(result.isDone())return;try{
+            current.check();long elapsed=android.os.SystemClock.elapsedRealtime()-started;if(elapsed>=timeout){expired.run();return;}
+            if(tracker.exhausted()){result.complete(tracker.receipt(false,false,elapsed).put("navigation",version).put("documentId",document));return;}
+            gate.entered();CompletableFuture<JSONObject> probe=new CompletableFuture<>();sampling.set(probe);
+            probe.whenComplete((domEvidence,error)->{if(result.isDone())return;try{
+                current.check();if(android.os.SystemClock.elapsedRealtime()-started>=timeout){expired.run();return;}if(error!=null){result.completeExceptionally(error);return;}JSONObject network=null;
+                if(tracker.needsNetwork())try{if(page.nativeNetwork==null)throw new IllegalStateException("native_capture_unavailable");network=page.nativeNetwork.quiet(tracker.captureId);}catch(Exception unavailable){current.check();network=json("available",false);}
+                boolean met=tracker.accept(domEvidence,network);long duration=android.os.SystemClock.elapsedRealtime()-started;
+                if(met||tracker.unavailable()||tracker.exhausted()){result.complete(tracker.receipt(met,false,duration).put("navigation",version).put("documentId",document));return;}
+                leaseTimers.postDelayed(this,Math.min(tracker.delayMs(),Math.max(1,timeout-duration)));
+            }catch(Exception stale){result.completeExceptionally(stale);}});
+            if(dom!=null)dom.probe(current,probe);else probe.complete(null);
+        }catch(Exception stale){result.completeExceptionally(stale);}}};
+        result.whenComplete((value,failure)->{Runnable cleanup=()->{leaseTimers.removeCallbacks(poll);leaseTimers.removeCallbacks(expired);CompletableFuture<JSONObject> probe=sampling.getAndSet(null);if(probe!=null)probe.cancel(false);if(dom!=null)dom.close();};if(Looper.myLooper()==Looper.getMainLooper())cleanup.run();else leaseTimers.post(cleanup);});
+        leaseTimers.postDelayed(expired,timeout);poll.run();
+    }
+    private void closeNativeNetwork(Page page){if(page!=null&&page.nativeNetwork!=null){page.nativeNetwork.close();page.nativeNetwork=null;}}
+    private boolean endNativeNetworkSession(){for(Page page:pages.values())closeNativeNetwork(page);try{networkDebugging.close();return true;}catch(RuntimeException unavailable){if(message!=null)message.setText("采集连接已停止，但WebView调试关闭未确认；可从更多菜单再次关闭本次观察。");return false;}}
     private void selectOwnerFallback(){if(activePage!=null)return;for(Page page:pages.values())if(page.taskOwner==null){selectPage(page);return;}}
     private void destroyPage(Page page,boolean rendererGone){
-        if(pages.get(page.id)!=page)return;deniedSiteRequests.values().removeIf(request->request.page==page);cancelPageDialog(page,BrowserPageDialog.Reason.PAGE_CLOSED);if(page.readObserver!=null)page.readObserver.close();if(page.networkWitness!=null)page.networkWitness.close();pages.remove(page.id);if(activePage==page)selectPage(null);
+        if(pages.get(page.id)!=page)return;
+        for(Page child:new java.util.ArrayList<>(pages.values()))if(child!=page&&page.id.equals(child.popupOpenerId))destroyPage(child,rendererGone);
+        cancelSiteRequest(page,false);if(page.popupConfirmation!=null){page.popupConfirmation.dismiss();page.popupConfirmation=null;}if(page.popup!=null){page.popup.close();BrowserTaskSpace owner=page.taskOwner!=null?page.taskOwner.space():page.handoffSpace;if(owner!=null){if(page.popupCancel!=null)owner.originalControl.removeCancelAction(page.popupCancel);try{owner.popupClosedNative(page.id);}catch(Exception ignored){}}}
+        deniedSiteRequests.values().removeIf(request->request.page==page);cancelPageDialog(page,BrowserPageDialog.Reason.PAGE_CLOSED);closeNativeNetwork(page);if(page.readObserver!=null)page.readObserver.close();if(page.networkWitness!=null)page.networkWitness.close();pages.remove(page.id);if(activePage==page)selectPage(null);
         if(!rendererGone)try{page.view.stopLoading();page.view.setWebChromeClient(null);page.view.setWebViewClient(new WebViewClient());}catch(RuntimeException ignored){}
         if(page.view.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)page.view.getParent()).removeView(page.view);page.view.destroy();
     }
     public static BrowserActivity current(){BrowserActivity activity=current.get();return activity==null||activity.isDestroyed()||activity.isFinishing()?null:activity;}
     public static void setEvents(java.util.function.Consumer<JSONObject> listener){events=listener;}
     public void openForOwner(String url){takeover("主人重新打开了浏览器");if(web==null){createWebView();navigate(url!=null&&!url.trim().isEmpty()?url:recoveryUrl);}else if(url!=null&&!url.trim().isEmpty())navigate(url);}
-    public JSONObject snapshot(){return json("open",web!=null,"url",web==null||web.getUrl()==null?"":web.getUrl(),"title",web==null||web.getTitle()==null?"":web.getTitle(),"loading",loading,"navigation",navigation,"lease",lease.snapshot(),"agentDomTools",true,"backgroundDisplay",false,"profileId",profileSession==null?profiles==null?"":profiles.selectedId():profileSession.profileId,"profileRevision",profileSession==null?0:profileSession.profileRevision,"browserSessionId",profileSession==null?"":profileSession.sessionId,"profileIsolation",profileSession==null?"unavailable":profileSession.isolation,"profiles",profileState(),"profileError",profileError,"sharedWithSystemChrome",false,"domIsolation","page-world-untrusted","operationInFlight",pending!=null&&!pending.isDone(),"rendererRecoveryNeeded",rendererRecoveryNeeded,"fileChooserPending",fileChooser!=null,"uploadInProgress",uploadDestination!=null,"uploadViaOwnerPicker",true,"downloadToAttachments",true,"downloadsRequireOwnerConfirmation",true,"pageDialog",lastPageDialog==null?JSONObject.NULL:lastPageDialog,"siteNotice",currentSiteNotice(),"pageCapabilities",json("javascriptDialogs","native_owner_confirmation","popupWindows","not_instrumented_multiple_windows_disabled","oauthPopup","not_supported","hardwarePermissions","denied_by_default"));}
+    public JSONObject snapshot(){return json("open",web!=null,"url",web==null||web.getUrl()==null?"":web.getUrl(),"title",web==null||web.getTitle()==null?"":web.getTitle(),"loading",loading,"navigation",navigation,"lease",lease.snapshot(),"agentDomTools",true,"backgroundDisplay",false,"profileId",profileSession==null?profiles==null?"":profiles.selectedId():profileSession.profileId,"profileRevision",profileSession==null?0:profileSession.profileRevision,"browserSessionId",profileSession==null?"":profileSession.sessionId,"profileIsolation",profileSession==null?"unavailable":profileSession.isolation,"profiles",profileState(),"profileError",profileError,"sharedWithSystemChrome",false,"domIsolation","page-world-untrusted","operationInFlight",pending!=null&&!pending.isDone(),"rendererRecoveryNeeded",rendererRecoveryNeeded,"fileChooserPending",fileChooser!=null,"uploadInProgress",uploadDestination!=null||artifactUpload!=null&&artifactUpload.active(),"uploadViaOwnerPicker",true,"uploadExactTaskArtifact",true,"downloadToAttachments",true,"downloadsRequireOwnerConfirmation",true,"pageDialog",lastPageDialog==null?JSONObject.NULL:lastPageDialog,"siteNotice",currentSiteNotice(),"pageCapabilities",json("javascriptDialogs","native_owner_confirmation","popupWindows","native_owner_origin_confirmation","oauthPopup","same_profile_task_opener_return","hardwarePermissions","exact_owner_and_android_permission"));}
     private JSONObject profileState(){try{if(profiles==null)return json("available",false);JSONObject state=profiles.snapshot();return json("multiProfileSupported",state.optBoolean("multiProfileSupported"),"featureCheck",state.optString("featureCheck"),"providerPackage",state.optString("providerPackage"),"providerVersion",state.optString("providerVersion"),"ownerManagementOnly",true);}catch(Exception error){return json("available",false,"message","资料状态无法读取");}}
     /** Called only after the native owner's revision-checked profile mutation. */
     public void profileChangedForOwner(){closeProfileSession("主人已切换或停用浏览器资料，原会话执行已停止");createWebView();if(web!=null)navigate(null);}
@@ -333,7 +562,7 @@ public final class BrowserActivity extends ComponentActivity {
         closingProfile=true;takeover(reason);if(taskSpace!=null)try{taskSpace.endNative("profile_closed");}catch(Exception ignored){}cancelFileChooser();if(downloadDialog!=null){downloadDialog.dismiss();downloadDialog=null;}
         BrowserProfileRegistry.Session old=profileSession;profileSession=null;if(profiles!=null)profiles.endSession(old);lease.bindProfile(null);navigation++;invalidateObservation();
         if(old!=null)try{BrowserDownloads.get(this).cancelSession(old.sessionId);}catch(Exception ignored){}
-        for(Page page:new java.util.ArrayList<>(pages.values()))destroyPage(page,rendererGone);web=null;activePage=null;loading=false;taskSpace=null;taskLease=null;lastPageDialog=null;lastSiteNotice=null;deniedSiteRequests.clear();closingProfile=false;
+        for(Page page:new java.util.ArrayList<>(pages.values()))destroyPage(page,rendererGone);endNativeNetworkSession();web=null;activePage=null;loading=false;taskSpace=null;taskLease=null;lastPageDialog=null;lastSiteNotice=null;deniedSiteRequests.clear();closingProfile=false;
     }
     public void execute(String command,JSONObject args,CompletableFuture<JSONObject> result){
         if(result.isDone())return;
@@ -354,11 +583,13 @@ public final class BrowserActivity extends ComponentActivity {
                     if(!allowedUrl(args.getString("url")))throw new IllegalArgumentException("浏览器工具只接受有效的 http/https 地址");
                     if(activePage!=null&&activePage.taskOwner!=null)navigateForTask(args.getString("url"));else navigate(args.getString("url"));result.complete(json("accepted",true,"verified",false,"status","navigation_requested"));return;
                 case "back":case "forward":case "reload":
-                    invalidateObservation();
-                    boolean accepted=command.equals("reload")||command.equals("back")&&web.canGoBack()||command.equals("forward")&&web.canGoForward();
-                    if(accepted){if(command.equals("back"))web.goBack();else if(command.equals("forward"))web.goForward();else web.reload();}
-                    result.complete(json("accepted",accepted,"verified",false,"status","navigation_requested"));return;
-                case "evaluate":case "inspect":case "script":case "network":{executePageProgram(command,args,result,epoch);return;}
+                    final Page historyPage=activePage;final WebView historyWeb=web;JSONObject history=args.optJSONObject("_nativeNavigationHistory");if(historyPage!=null&&historyPage.taskOwner!=null&&history==null)throw new SecurityException("网页历史需要原审批固定的实际目的地");
+                    BrowserNativeInput.Check historyCurrent=()->{if(activePage!=historyPage||web!=historyWeb||lease.require(args)!=epoch)throw new BrowserTaskSpace.StalePage("原网页历史所属页已变化");if(historyPage!=null&&historyPage.taskOwner!=null){historyPage.taskOwner.check();if(historyPage.taskGate==null)throw new SecurityException("原历史操作已停止");historyPage.taskGate.check();}};
+                    result.complete(BrowserSiteMode.navigateHistory(historyWeb,command,history==null?BrowserSiteMode.historyPin(historyWeb):history,historyCurrent,()->{invalidateObservation();if(historyPage!=null&&historyPage.taskGate!=null)historyPage.taskGate.entered();}));return;
+                case "native_input":executeNativeInput(args,result,epoch);return;
+                case "site_mode":case "resize":executeViewportCommand(command,args,result,epoch);return;
+                case "upload_artifact":{startArtifactUpload(args,result,epoch);return;}
+                case "evaluate":case "inspect":case "script":case "network":case "network_body":{executePageProgram(command,args,result,epoch);return;}
                 case "observe":{
                     if(args.has("read")){observeSemantic(args,result,epoch);return;}
                     if(loading)throw new IllegalStateException("网页正在加载，请稍后重新观察");
@@ -368,7 +599,7 @@ public final class BrowserActivity extends ComponentActivity {
                     String script=dev.pocketengine.browser.BrowserFormControls.observationScript(pageKey,observed);
                     evaluateInFrame(actionFrame,script,value->{
                         if(!callbackCurrent(result,epoch,version,observedWeb))return;
-                        try{JSONObject observedPage=decoded(value);if(actionFrame!=null){if(!observedPage.has("elements"))throw new IllegalStateException("frame观察未返回动作目标");actionFrame.put("url",observedPage.getString("url"));observedPage.put("actionFrame",actionFrame).put("url",observedWeb.getUrl());}observationId=observed;observationUrl=actionFrame==null?observedPage.optString("url"):actionFrame.getString("url");observationAt=android.os.SystemClock.elapsedRealtime();observedPage.put("observationId",observed).put("navigation",version).put("untrustedPageContent",true).put("expiresInMs",20000).put("profileId",profileSession.profileId).put("profileRevision",profileSession.profileRevision).put("browserSessionId",profileSession.sessionId);result.complete(observedPage);}catch(Exception malformed){result.completeExceptionally(new IllegalStateException("无法读取网页内容"));}finally{clearPending(result);}
+                        try{JSONObject observedPage=decoded(value);if(actionFrame!=null){if(!observedPage.has("elements"))throw new IllegalStateException("frame观察未返回动作目标");actionFrame.put("url",observedPage.getString("url"));observedPage.put("actionFrame",actionFrame).put("url",observedWeb.getUrl());}observationId=observed;observationUrl=actionFrame==null?observedPage.optString("url"):actionFrame.getString("url");observationAt=android.os.SystemClock.elapsedRealtime();observedPage.remove("_nativeInputViewport");if(actionFrame==null)try{observedPage.put("_nativeInputViewport",inputPagePin(activePage));}catch(Exception unavailable){}observedPage.put("observationId",observed).put("navigation",version).put("untrustedPageContent",true).put("expiresInMs",20000).put("profileId",profileSession.profileId).put("profileRevision",profileSession.profileRevision).put("browserSessionId",profileSession.sessionId);result.complete(observedPage);}catch(Exception malformed){result.completeExceptionally(new IllegalStateException("无法读取网页内容"));}finally{clearPending(result);}
                     },result);return;
                 }
                 case "click":case "type":case "set_date":case "focus":case "press":case "select_option":case "set_checked":case "scroll":{
@@ -387,6 +618,43 @@ public final class BrowserActivity extends ComponentActivity {
             }
         }catch(Exception error){result.completeExceptionally(error);}
     }
+    /** Current native view geometry. Pixel capture and page-supplied coordinates are not authority. */
+    private JSONObject inputPagePin(Page page)throws Exception {
+        requireMain();if(page==null||pages.get(page.id)!=page||activePage!=page||web!=page.view||page.profile!=profileSession||!page.profile.current()||!ownerForeground||!hasWindowFocus()||page.loading||isDestroyed())throw new BrowserTaskSpace.StalePage("原生输入需要当前前台已加载的原任务页");
+        if(pageDialog!=null||fileChooser!=null||uploadDestination!=null||artifactUpload!=null&&artifactUpload.active()||siteRequest!=null||externalLinkConfirmation!=null||page.popupConfirmation!=null||downloadDialog!=null&&downloadDialog.isShowing()||ownerPanel!=null&&ownerPanel.obscuresPage())throw new BrowserTaskSpace.StalePage("原网页被主人界面或提示遮挡，请先处理后重新观察");
+        android.graphics.Rect visible=new android.graphics.Rect();if(!page.view.isAttachedToWindow()||!page.view.isShown()||page.view.getWidth()<=0||page.view.getHeight()<=0||!page.view.getGlobalVisibleRect(visible)||visible.width()!=page.view.getWidth()||visible.height()!=page.view.getHeight()||page.readObserver==null)throw new BrowserTaskSpace.StalePage("原网页真实可见视口或文档不可核对");
+        int[] location=new int[2];page.view.getLocationInWindow(location);return json("documentId",page.readObserver.documentIdentityForNative(),"frameId","main","navigation",page.navigation,"url",page.view.getUrl(),"width",page.view.getWidth(),"height",page.view.getHeight(),"scrollX",page.view.getScrollX(),"scrollY",page.view.getScrollY(),"scale",page.view.getScale(),"windowX",location[0],"windowY",location[1]);
+    }
+    private BrowserNativeInput.Check originalInputPage(Page page,JSONObject args,long epoch)throws Exception {
+        if(page==null||page.taskOwner==null||page.taskGate==null||page.readObserver==null)throw new SecurityException("此动作仅用于原任务的当前网页");
+        final BrowserTaskSpace.Tab owner=page.taskOwner;final BrowserTaskSpace.Gate gate=page.taskGate;final String document=page.readObserver.documentIdentityForNative(),url=page.view.getUrl();final long version=page.navigation,pause=owner.space().originalControl.pauseRevision();
+        return ()->{requireMain();if(activePage!=page||web!=page.view||pages.get(page.id)!=page||page.taskOwner!=owner||page.taskGate!=gate||page.navigation!=version||page.loading||!document.equals(page.readObserver.documentIdentityForNative())||!java.util.Objects.equals(url,page.view.getUrl())||lease.require(args)!=epoch||!ownerForeground||!hasWindowFocus())throw new BrowserTaskSpace.StalePage("原生动作的原文档、焦点窗口或执行身份已变化");owner.check();gate.check();if(owner.space().originalControl.pauseRevision()!=pause)throw new BrowserTaskSpace.StalePage("原生动作的原暂停版本已变化，未沿旧决定继续");};
+    }
+    private void executeViewportCommand(String command,JSONObject args,CompletableFuture<JSONObject> result,long epoch)throws Exception {
+        final Page source=activePage;BrowserNativeInput.Check current=originalInputPage(source,args,epoch);current.check();inputPagePin(source);pending=result;pendingMutation=false;
+        Runnable entered=()->{source.taskGate.entered();pendingMutation=true;invalidateObservation();};result.whenComplete((value,error)->clearPending(result));
+        if(command.equals("site_mode")){result.complete(BrowserSiteMode.apply(source.view,args.getString("mode"),current,entered));return;}
+        BrowserSiteMode.resize(source.view,args,current,entered,result);
+    }
+    private void executeNativeInput(JSONObject args,CompletableFuture<JSONObject> result,long epoch)throws Exception {
+        BrowserNativeInput.validate(args);if(loading||observationId==null||!observationId.equals(args.optString("observationId"))||android.os.SystemClock.elapsedRealtime()-observationAt>20_000L||args.has("_nativeActionFrame"))throw new BrowserTaskSpace.StalePage("原生输入需要原主文档的最新普通动作观察");
+        final Page source=activePage;final WebView originalWeb=web;final String observed=observationId,expected=observationUrl,token=UUID.randomUUID().toString();final BrowserTaskSpace.Gate gate=source.taskGate;final RunControl original=source.taskOwner.space().originalControl;final long pause=original.pauseRevision();
+        final BrowserNativeInput.Check current=originalInputPage(source,args,epoch);final JSONObject viewport=new JSONObject(args.getJSONObject("_nativeInputViewport").toString());
+        BrowserNativeInput.Check geometryCurrent=()->{current.check();if(!viewport.toString().equals(inputPagePin(source).toString()))throw new BrowserTaskSpace.StalePage("原生输入的实际视口、滚动或缩放已变化");if(args.getString("action").equals("key")&&!originalWeb.hasFocus())throw new BrowserTaskSpace.StalePage("按键只能送给原已聚焦WebView");};
+        geometryCurrent.check();pending=result;pendingMutation=false;final boolean[] entered={false};CompletableFuture<JSONObject> dispatch=new CompletableFuture<>();
+        Runnable begin=()->{nativeInputDispatchDepth++;if(!entered[0]){entered[0]=true;gate.entered();pendingMutation=true;invalidateObservation();}};Runnable end=()->nativeInputDispatchDepth--;
+        Runnable stop=new Runnable(){public void run(){if(result.isDone())return;if(nativeInputDispatchDepth>0){leaseTimers.post(this);return;}try{result.complete(entered[0]?BrowserNativeInput.unknown("native_input_owner_or_window_changed"):json("status","unavailable","accepted",false,"verified",false,"code","native_input_not_dispatched"));}catch(Exception stopped){result.completeExceptionally(stopped);}}};stopNativeInput=stop;
+        AutoCloseable watch=source.taskOwner.watch(()->runOnUiThread(stop));
+        result.whenComplete((value,error)->{if(stopNativeInput==stop)stopNativeInput=null;try{watch.close();}catch(Exception ignored){}if(!dispatch.isDone())dispatch.cancel(false);clearPending(result);});if(result.isDone())return;
+        dispatch.whenComplete((receipt,failure)->{if(result.isDone())return;if(failure!=null||receipt==null||receipt.optString("status").equals("unknown")){try{result.complete(BrowserNativeInput.unknown("native_input_dispatch_unknown"));}catch(Exception malformed){result.completeExceptionally(malformed);}return;}if(Boolean.FALSE.equals(receipt.opt("accepted"))){result.complete(receipt);return;}
+            if(!leaseTimers.postDelayed(()->{if(result.isDone())return;try{current.check();originalWeb.evaluateJavascript(BrowserNativeInput.readbackScript(pageKey,expected,observed,token),raw->{if(result.isDone())return;try{current.check();result.complete(BrowserNativeInput.readback(receipt,decoded(raw)));}catch(Exception lost){try{result.complete(BrowserNativeInput.unknown("native_input_readback_unknown"));}catch(Exception malformed){result.completeExceptionally(malformed);}}});}catch(Exception lost){try{result.complete(BrowserNativeInput.unknown("native_input_readback_unknown"));}catch(Exception malformed){result.completeExceptionally(malformed);}}},600))try{result.complete(BrowserNativeInput.unknown("native_input_readback_unavailable"));}catch(Exception malformed){result.completeExceptionally(malformed);}
+        });
+        String script=BrowserNativeInput.geometryScript(pageKey,expected,observed,args,args.getJSONObject("_nativeTargetPreview"),args.optJSONObject("_nativeToTargetPreview"),token);geometryCurrent.check();
+        originalWeb.evaluateJavascript(script,raw->{if(result.isDone())return;try{geometryCurrent.check();JSONObject geometry=decoded(raw);if(!geometry.optString("status").equals("geometry_observed")){result.complete(json("status","unavailable","accepted",false,"verified",false,"code","native_input_geometry_changed","freshObservationRequired",true,"automaticReplayAllowed",false));return;}
+            BrowserNativeInput.Probe probe=(ready,stopped)->{geometryCurrent.check();originalWeb.evaluateJavascript(BrowserNativeInput.continuationScript(pageKey,expected,observed,token),value->{if(dispatch.isDone()||result.isDone())return;try{geometryCurrent.check();if(!decoded(value).optString("status").equals("input_current"))throw new BrowserTaskSpace.StalePage("原生手势的原节点、遮挡或几何已变化");ready.run();}catch(Exception lost){stopped.accept(lost);}});};
+            BrowserNativeInput.dispatch(originalWeb,args,geometry,geometryCurrent,probe,begin,end,original,pause,dispatch);
+        }catch(Exception changed){if(entered[0])try{result.complete(BrowserNativeInput.unknown("native_input_interrupted"));}catch(Exception malformed){result.completeExceptionally(malformed);}else result.completeExceptionally(changed);}});
+    }
     /** Read-only programs use the isolated observer; raw effectful JS stays in the page world. */
     private void executePageProgram(String command,JSONObject args,CompletableFuture<JSONObject> result,long leaseEpoch)throws Exception {
         final Page source=activePage;final WebView originalWeb=web;final long version=navigation;final String document=source==null||source.readObserver==null?"":source.readObserver.documentIdentityForNative();
@@ -394,6 +662,7 @@ public final class BrowserActivity extends ComponentActivity {
         BrowserFrameObserver.Check current=()->{if(source!=activePage||source.view!=web||navigation!=version||pages.get(source.id)!=source||!document.equals(source.readObserver.documentIdentityForNative())||lease.require(args)!=leaseEpoch)throw new BrowserTaskSpace.StalePage("原脚本页面/文档已变化");source.taskOwner.check();source.taskGate.check();};
         current.check();pending=result;pendingMutation=command.equals("script")||command.equals("network")&&!args.optString("action").equals("read");
         result.whenComplete((value,error)->clearPending(result));
+        if(command.equals("network_body")||command.equals("network")&&args.optString("backend","witness").equals("native")){executeNativeNetwork(source,command,args,result,current,leaseEpoch,version,document);return;}
         if(command.equals("network")){current.check();if(source.networkWitness==null)throw new IllegalStateException("网络witness不可用");String action=args.getString("action");if(action.equals("read")){source.taskGate.entered();result.complete(source.networkWitness.snapshot());return;}if(action.equals("stop")){source.taskGate.entered();source.networkWitness.close();result.complete(json("status","stopped","accepted",true,"networkRequestsCancelled",false));return;}String code=source.networkWitness.start(originalWeb.getUrl(),document);current.check();evaluate(code,value->{if(!callbackCurrent(result,leaseEpoch,version,originalWeb))return;try{current.check();result.complete(decoded(value).put("documentId",document).put("untrustedPageContent",true));}catch(Exception unknown){source.networkWitness.close();result.complete(unknownReceipt("页面witness安装回执未知"));}});return;}
         if(command.equals("script")){
             dev.pocketengine.browser.BrowserPagePrograms.validateScript(args);invalidateObservation();String token=UUID.randomUUID().toString();
@@ -408,6 +677,25 @@ public final class BrowserActivity extends ComponentActivity {
         first.whenComplete((before,error)->{if(result.isDone())return;if(error!=null){result.completeExceptionally(error);return;}if(!command.equals("inspect")||!before.optString("status").equals("observed")){try{if(before.optString("status").equals("observed"))before.put("advancedRead",true).put("observationId",UUID.randomUUID().toString()).put("navigation",version);result.complete(before);}catch(Exception invalid){result.completeExceptionally(invalid);}return;}
             leaseTimers.postDelayed(()->{if(result.isDone())return;try{current.check();CompletableFuture<JSONObject> next=new CompletableFuture<>();source.readObserver.evaluateLive(args,true,current,next);next.whenComplete((after,failure)->{if(result.isDone())return;try{current.check();if(failure!=null){result.completeExceptionally(failure);return;}boolean complete=!before.getJSONObject("coverage").optBoolean("partial")&&!after.getJSONObject("coverage").optBoolean("partial");after.put("stability",json("samples",2,"minimumIntervalMs",600,"firstObservedAt",before.optLong("observedAt"),"lastObservedAt",after.optLong("observedAt"),"boundedBodyUnchanged",before.optString("text").equals(after.optString("text")),"coverageComplete",complete,"entirePageStable",false,"networkIdleProven",false));after.put("advancedRead",true).put("observationId",UUID.randomUUID().toString()).put("navigation",version);result.complete(after);}catch(Exception changed){result.completeExceptionally(changed);}});}catch(Exception changed){result.completeExceptionally(changed);}},600);
         });
+    }
+    private void executeNativeNetwork(Page source,String command,JSONObject args,CompletableFuture<JSONObject> result,BrowserFrameObserver.Check callCurrent,long leaseEpoch,long version,String document)throws Exception {
+        callCurrent.check();final BrowserTaskSpace.Tab owner=source.taskOwner;final BrowserTaskSpace.Gate gate=source.taskGate;
+        if(!networkDebugging.permitted()){result.complete(BrowserNativeNetwork.unavailable("owner_native_network_consent_required","请主人从浏览器更多→本次原生网络观察确认本进程WebView调试范围。模型工具不能开启这项设置。"));return;}
+        String action=command.equals("network_body")?"body":args.getString("action");
+        if(action.equals("start")){
+            if(source.nativeNetwork!=null&&source.nativeNetwork.active()){result.complete(BrowserNativeNetwork.unavailable("native_capture_already_active","此页已有采集，请使用原captureId读取或停止；没有覆盖旧采集。"));return;}
+            BrowserNativeNetwork.DocumentProof proof;try{proof=source.readObserver.nativeNetworkProof();}catch(IllegalStateException unavailable){result.complete(BrowserNativeNetwork.unavailable("native_document_proof_unavailable",unavailable.getMessage()));return;}
+            final String url=source.view.getUrl();final long pause=owner.space().originalControl.pauseRevision();
+            BrowserFrameObserver.Check live=()->{owner.check();gate.liveCheck();if(isDestroyed()||!networkDebugging.permitted()||pages.get(source.id)!=source||source.taskOwner!=owner||source.profile!=profileSession||!source.profile.current()||source.navigation!=version||source.readObserver==null||!document.equals(source.readObserver.documentIdentityForNative())||!java.util.Objects.equals(url,source.view.getUrl())||lease.require(args)!=leaseEpoch||owner.space().originalControl.pauseRevision()!=pause)throw new BrowserTaskSpace.StalePage("原生网络采集的原任务或文档已变化");};
+            JSONObject identity=owner.identity().put("documentId",document).put("navigation",version).put("pauseRevision",pause).put("captureStartOperationId",source.nativeOperationId);
+            gate.entered();BrowserNativeNetwork capture=new BrowserNativeNetwork(identity,proof,browserIo,live,()->source.nativeOperationId);source.nativeNetwork=capture;
+            capture.retain(owner.watch(capture::close));capture.start(result);return;
+        }
+        BrowserNativeNetwork capture=source.nativeNetwork;if(capture==null){result.complete(BrowserNativeNetwork.unavailable("native_capture_unavailable","原生采集已停止、过期或文档已变化；旧响应引用不可恢复，也不会补发请求。"));return;}
+        callCurrent.check();capture.capturePin(args.getString("captureId"));gate.entered();
+        if(action.equals("read")){result.complete(capture.snapshot(args.getString("captureId")));return;}
+        if(action.equals("stop")){result.complete(capture.stop(args.getString("captureId")));return;}
+        result.whenComplete((value,error)->{if(result.isCancelled()||error!=null)capture.close();});capture.body(args,callCurrent,result);
     }
     /** Exactly one delayed read of the original node. No write retry, fresh locator, submit or navigation. */
     private void readBackForm(String command,JSONObject args,CompletableFuture<JSONObject> result,long epoch,long version,WebView actedWeb,String observed,String expected,String token,JSONObject dispatch) {
@@ -426,7 +714,7 @@ public final class BrowserActivity extends ComponentActivity {
     }
     private JSONObject visualPagePin(Page page,JSONObject args)throws Exception {
         requireMain();if(page==null||pages.get(page.id)!=page||activePage!=page||web!=page.view||page.profile!=profileSession||!page.profile.current()||!ownerForeground||!hasWindowFocus()||page.loading||isDestroyed())throw new IllegalStateException("请先查看已载入的原任务页，再请求截图");
-        if(browserImeVisible||pageDialog!=null||fileChooser!=null||uploadDestination!=null||ownerPanel!=null&&ownerPanel.obscuresPage())throw new IllegalStateException("请先关闭键盘、研究面板或网页提示，避免把遮挡内容当作网页截图");
+        if(browserImeVisible||pageDialog!=null||fileChooser!=null||uploadDestination!=null||artifactUpload!=null&&artifactUpload.active()||ownerPanel!=null&&ownerPanel.obscuresPage())throw new IllegalStateException("请先关闭键盘、研究面板或网页提示，避免把遮挡内容当作网页截图");
         if((getWindow().getAttributes().flags&android.view.WindowManager.LayoutParams.FLAG_SECURE)!=0)throw new IllegalStateException("此窗口禁止截屏，未绕过系统保护");
         android.graphics.Rect visible=new android.graphics.Rect();if(!page.view.isAttachedToWindow()||!page.view.isShown()||!page.view.getGlobalVisibleRect(visible)||visible.width()!=page.view.getWidth()||visible.height()!=page.view.getHeight())throw new IllegalStateException("原网页尚未完整显示，未捕获其他区域");
         if(page.readObserver==null)throw new IllegalStateException("原网页文档身份不可核对");int[] location=new int[2];page.view.getLocationInWindow(location);
@@ -483,7 +771,7 @@ public final class BrowserActivity extends ComponentActivity {
     public void commandTimedOut(CompletableFuture<JSONObject> operation){
         if(pending==operation)takeover("浏览器操作超时，执行已停止；请先核对是否发生");
     }
-    public void takeover(String reason){cancelPageDialog(null,BrowserPageDialog.Reason.CONTEXT_CHANGED);JSONObject previous=lease.snapshot();if(!closingProfile&&activePage!=null)try{if(activePage.taskOwner!=null)activePage.taskOwner.space().takeOverNative(activePage.id);else if(taskSpace!=null&&!taskSpace.ended())taskSpace.ownerBrowsingNative(activePage.id);}catch(Exception ignored){}lease.invalidate();leaseTimers.removeCallbacks(leaseExpiryCheck);invalidateObservation();failPending(reason);if(message!=null)message.setText(reason);if(previous.optBoolean("active"))try{emitLeaseEvent(previous.put("status","taken_over").put("active",false).put("message",reason));}catch(Exception ignored){}}
+    public void takeover(String reason){if(artifactUpload!=null){BrowserArtifactUpload upload=artifactUpload;artifactUpload=null;upload.close();}cancelPageDialog(null,BrowserPageDialog.Reason.CONTEXT_CHANGED);cancelSiteRequest(null,false);JSONObject previous=lease.snapshot();if(!closingProfile&&activePage!=null)try{if(activePage.taskOwner!=null)activePage.taskOwner.space().takeOverNative(activePage.id);else if(taskSpace!=null&&!taskSpace.ended())taskSpace.ownerBrowsingNative(activePage.id);}catch(Exception ignored){}lease.invalidate();leaseTimers.removeCallbacks(leaseExpiryCheck);invalidateObservation();failPending(reason);if(message!=null)message.setText(reason);if(previous.optBoolean("active"))try{emitLeaseEvent(previous.put("status","taken_over").put("active",false).put("message",reason));}catch(Exception ignored){}}
     private void emitLeaseEvent(JSONObject receipt){java.util.function.Consumer<JSONObject> listener=events;if(listener!=null)listener.accept(receipt);}
     private void scheduleLeaseExpiry(JSONObject snapshot){leaseTimers.removeCallbacks(leaseExpiryCheck);if(snapshot.optBoolean("active"))leaseTimers.postDelayed(leaseExpiryCheck,Math.max(1,Math.min(1_000,snapshot.optLong("expiresAt")-System.currentTimeMillis())));}
     private boolean callbackCurrent(CompletableFuture<JSONObject> result,long epoch,long version,WebView expectedWeb){
@@ -593,9 +881,31 @@ public final class BrowserActivity extends ComponentActivity {
                 .setNegativeButton("保持现状",null).setPositiveButton(enabled?"停止并清除精确地址":"在本机私密保存完整地址",(dialog,which)->{try{profiles.exactUrlsForOwner(selected,!enabled);if(activePage!=null&&activePage.taskOwner==null)recordOwnerHistory(activePage,false);message.setText(enabled?"已停止并清除本资料的私有精确地址；旧引用不再可用。":"已选择本机私密保存；地址参数不会显示在历史或研究页清单中。");}catch(Exception changed){message.setText("资料已变化或保存失败，未修改其他资料的地址设置。");}}).show();
         }catch(Exception unavailable){message.setText("请先选择可用的浏览资料。");}
     }
+    /** Explicit native owner choice. Neither a model tool nor a webpage can call this path. */
+    private void showNativeNetworkSettings(){
+        requireMain();final BrowserProfileRegistry.Session selected=profileSession;
+        if(selected==null||!selected.current()){message.setText("请先选择可用的浏览资料。");return;}
+        if(networkDebugging.permitted()||networkDebugging.enabledByThisSession()){
+            String state=networkDebugging.enabledByThisSession()?"本次浏览器开启了进程WebView调试。停止观察、研究结束、关闭浏览器或切换资料时，会撤销本功能开启的调试。":"本进程原先已提供WebView调试。本次仅允许任务连接；停止后保留原来的调试设置。";
+            new android.app.AlertDialog.Builder(this).setTitle(networkDebugging.permitted()?"本次原生网络观察已允许":"调试关闭待确认").setMessage(state+"\n\n网络采集仍需原任务精确审批，并绑定原页面；响应正文须另行审批。停止采集不会取消网站已发出的请求。")
+                    .setNegativeButton("继续允许",null).setPositiveButton("停止本次观察",(dialog,which)->{if(endNativeNetworkSession())message.setText("本次原生网络观察已停止；网站请求没有撤销。");}).show();return;
+        }
+        new android.app.AlertDialog.Builder(this).setTitle("允许本次原生网络观察？")
+                .setMessage("为当前浏览会话启用真实WebView网络观察，需要允许本进程WebView调试。Android的这项设置影响本进程全部WebView，系统调试工具可能看到其他页面及其敏感内容。\n\n本应用的任务工具仍只连接通过原文档验证且单独批准的任务页。默认只交付脱敏元数据；正文需逐个响应另行确认。研究结束、关闭浏览器或切换资料时，仅撤销本功能自行开启的调试；不改变已有的开发版调试设置。不会重载页面。")
+                .setNegativeButton("暂不允许",null).setPositiveButton("允许本次观察",(dialog,which)->{
+                    message.setText("正在核对本进程网络观察后端…");
+                    try{browserIo.execute(()->{boolean listening=BrowserNativeNetwork.backendListening();runOnUiThread(()->{
+                        if(isDestroyed()||isFinishing()||profileSession!=selected||!selected.current())return;
+                        boolean debuggable=(getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0;
+                        try{if(!networkDebugging.enableForOwner(debuggable,listening)){message.setText("原WebView调试状态无法安全接管；本次未改变设置。开发版请使用原有调试配置。");return;}
+                            message.setText(networkDebugging.enabledByThisSession()?"已允许本次进程WebView调试；任务仍须精确审批采集。关闭浏览器或切换资料会撤销本次开启。":"已允许任务使用原有网络观察后端；原调试设置保持不变，采集仍须精确审批。");
+                        }catch(RuntimeException unavailable){if(endNativeNetworkSession())message.setText("WebView调试后端暂不可用，未开始网络采集。");}
+                    });});}catch(java.util.concurrent.RejectedExecutionException closed){message.setText("浏览器已关闭，未开启网络观察。");}
+                }).show();
+    }
     private Object currentSiteNotice(){if(lastSiteNotice==null)return JSONObject.NULL;Page page=pages.get(lastSiteNotice.optString("tabId"));return page!=null&&page.profile.current()&&page.navigation==lastSiteNotice.optLong("navigation",-1)&&page.readObserver!=null&&page.readObserver.documentIdentityForNative().equals(lastSiteNotice.optString("documentId"))?lastSiteNotice:JSONObject.NULL;}
     private static String permissionTypesForOwner(JSONArray types){java.util.List<String> labels=new java.util.ArrayList<>();for(int i=0;types!=null&&i<types.length();i++)labels.add(switch(types.optString(i)){case "camera"->"相机";case "microphone"->"麦克风";case "location"->"定位";case "protected_media"->"受保护媒体";case "midi_sysex"->"MIDI设备";case "popup"->"新窗口";case "javascript_dialog"->"网页确认提示";default->"其他设备权限";});return String.join("、",labels);}
-    private void showSitePermissionDetails(){String text="网页不能自动获得相机、麦克风、定位或其他设备权限。当前版本默认拒绝；只读研究授权不会改变这一点。你可以回网页继续其他操作，或回原任务说明需要人工处理。";if(currentSiteNotice()!=JSONObject.NULL&&activePage!=null&&activePage.id.equals(lastSiteNotice.optString("tabId")))text+="\n\n最近请求来源："+(lastSiteNotice.isNull("origin")?"暂不可核对":lastSiteNotice.optString("origin"))+"\n请求类型："+permissionTypesForOwner(lastSiteNotice.optJSONArray("requestTypes"))+"\n处理：已拒绝/取消，没有自动重试。";new android.app.AlertDialog.Builder(this).setTitle("站点权限").setMessage(text).setPositiveButton("返回网页",null).setNeutralButton("回原任务",(d,w)->returnToOwnerForUi()).show();}
+    private void showSitePermissionDetails(){String text="站点的相机、麦克风和大致位置请求需要你逐次确认，并由Android核对应用权限。原任务会暂停，页面或资料变化后旧请求会取消；未支持的设备类型仍明确拒绝。";if(currentSiteNotice()!=JSONObject.NULL&&activePage!=null&&activePage.id.equals(lastSiteNotice.optString("tabId")))text+="\n\n最近请求来源："+(lastSiteNotice.isNull("origin")?"暂不可核对":lastSiteNotice.optString("origin"))+"\n请求类型："+permissionTypesForOwner(lastSiteNotice.optJSONArray("requestTypes"))+"\n实际状态："+lastSiteNotice.optString("status")+"。没有自动重试或继续任务。";new android.app.AlertDialog.Builder(this).setTitle("站点权限").setMessage(text).setPositiveButton("返回网页",null).setNeutralButton("回原任务",(d,w)->returnToOwnerForUi()).show();}
     private void siteRequestNotice(DeniedSiteRequest request,String reason){Page page=request.page;if(!ownerForeground||pages.get(page.id)!=page||!page.profile.current()||page.navigation!=request.navigation||page.readObserver==null||!request.document.equals(page.readObserver.documentIdentityForNative()))return;siteNotice(page,reason,request.origin,request.resources);}
     private void siteNotice(Page page,String reason){siteNotice(page,reason,page==null?null:dialogOrigin(page.view.getUrl()),new String[0]);}
     private void siteNotice(Page page,String reason,String origin,String[] resources){
@@ -609,6 +919,72 @@ public final class BrowserActivity extends ComponentActivity {
     private static String dialogOrigin(String url){try{URI u=new URI(url);return new URI(u.getScheme(),null,u.getHost(),u.getPort(),null,null,null).toASCIIString();}catch(Exception malformed){return "来源暂不可核对";}}
     private static String dialogText(String value,int limit){if(value==null)return "";int end=Math.min(value.length(),limit);if(end>0&&end<value.length()&&Character.isHighSurrogate(value.charAt(end-1))&&Character.isLowSurrogate(value.charAt(end)))end--;return (end<value.length()?"（网页提示较长，仅显示前面部分）\n":"")+value.substring(0,end);}
 
+    private dev.pocketengine.features.workspace.WorkspaceModule uploadWorkspace(){
+        var module=((EngineApplication)getApplication()).features.module("workspace");
+        return module instanceof dev.pocketengine.features.workspace.WorkspaceModule?(dev.pocketengine.features.workspace.WorkspaceModule)module:null;
+    }
+    private void startArtifactUpload(JSONObject args,CompletableFuture<JSONObject> result,long leaseEpoch)throws Exception {
+        final Page source=activePage;final WebView sourceView=web;
+        if(source==null||source.taskOwner==null||source.taskGate==null||source.readObserver==null||loading||pageDialog!=null||fileChooser!=null||uploadDestination!=null)
+            throw new SecurityException("请先处理原任务网页的未决操作");
+        if(artifactUpload!=null&&(artifactUpload.active()||artifactUpload.inputRequested()&&!artifactUpload.chooserSeen()))
+            throw new SecurityException("上次文件控件请求仍需核对，请主人处理或重新打开原页面；不会把迟到的选择器接到新文件");
+        if(observationId==null||!observationId.equals(args.optString("observationId"))||android.os.SystemClock.elapsedRealtime()-observationAt>20_000L)
+            throw new BrowserTaskSpace.StalePage("上传控件观察已过期，请重新读取原网页");
+        final BrowserTaskSpace.Tab tab=source.taskOwner;final BrowserTaskSpace.Gate gate=source.taskGate;
+        final long version=navigation;final String document=source.readObserver.documentIdentityForNative(),url=sourceView.getUrl(),observed=observationId;
+        final JSONObject target=new JSONObject(args.getJSONObject("_nativeTargetPreview").toString()),artifact=new JSONObject(args.getJSONObject("_nativeUploadArtifact").toString());
+        BrowserArtifactInput.requireTarget(target);
+        final String operation=source.nativeOperationId;BrowserTaskSpace.uuid(operation);
+        final String chooser=UUID.randomUUID().toString();JSONObject identity=tab.identity().put("operationId",operation).put("navigation",version).put("documentId",document).put("chooserId",chooser).put("fileInput",target);
+        JSONObject destination=BrowserUploads.destinationIdentity(url);for(var keys=destination.keys();keys.hasNext();){String key=keys.next();identity.put(key,destination.get(key));}
+        final BrowserArtifactUpload[] holder=new BrowserArtifactUpload[1];
+        BrowserArtifactUpload upload=new BrowserArtifactUpload(this,uploadWorkspace(),uploadStore(),tab.space().originalControl,identity,artifact,browserIo,new BrowserArtifactUpload.Host(){
+            public void post(Runnable work){if(!leaseTimers.post(work))throw new IllegalStateException("原网页线程不可用");}
+            public void later(Runnable work,long delay){if(!leaseTimers.postDelayed(work,delay))throw new IllegalStateException("原网页超时检查不可用");}
+            public void check()throws Exception {
+                requireMain();gate.check();tab.check();
+                if(isDestroyed()||!ownerForeground||!hasWindowFocus()||pageDialog!=null||fileChooser!=null||uploadDestination!=null||downloadDialog!=null&&downloadDialog.isShowing()||ownerPanel!=null&&ownerPanel.obscuresPage()||artifactUpload!=holder[0]||source!=activePage||sourceView!=web||pages.get(source.id)!=source||source.taskOwner!=tab||source.taskGate!=gate
+                        ||source.navigation!=version||navigation!=version||source.readObserver==null||!document.equals(source.readObserver.documentIdentityForNative())||!url.equals(sourceView.getUrl())||lease.require(args)!=leaseEpoch)
+                    throw new BrowserTaskSpace.StalePage("上传原页面、输入控件或执行身份已变化");
+            }
+            public void openInput(BrowserArtifactUpload delivery)throws Exception {
+                check();if(!sourceView.requestFocus()||!sourceView.hasFocus())throw new BrowserTaskSpace.StalePage("原文件输入页未获得真实焦点");
+                String code=BrowserArtifactInput.script(pageKey,url,observed,target,chooser,true);
+                gate.entered();sourceView.evaluateJavascript(code,raw->{
+                    try{
+                        check();JSONObject receipt=decoded(raw);if(!receipt.optBoolean("accepted")||!receipt.optString("status").equals("file_input_ready")){delivery.inputNotOpened();return;}
+                        delivery.activateInput(()->{
+                            if(!sourceView.hasFocus())throw new BrowserTaskSpace.StalePage("原文件输入页焦点已变化");
+                            // Chromium file inputs require a native activation. Never retry a missing callback.
+                            long down=android.os.SystemClock.uptimeMillis();boolean accepted;nativeInputDispatchDepth++;
+                            try{
+                                accepted=sourceView.dispatchKeyEvent(new KeyEvent(down,down,KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_SPACE,0,0,android.view.KeyCharacterMap.VIRTUAL_KEYBOARD,0,0,android.view.InputDevice.SOURCE_KEYBOARD));
+                                accepted&=sourceView.dispatchKeyEvent(new KeyEvent(down,android.os.SystemClock.uptimeMillis(),KeyEvent.ACTION_UP,KeyEvent.KEYCODE_SPACE,0,0,android.view.KeyCharacterMap.VIRTUAL_KEYBOARD,0,0,android.view.InputDevice.SOURCE_KEYBOARD));
+                            }finally{nativeInputDispatchDepth--;}
+                            if(!accepted)throw new BrowserTaskSpace.StalePage("原文件控件未接受本次native按键");
+                        });
+                    }
+                    catch(Exception changed){delivery.close();}
+                });
+            }
+            public void verifyInput(java.util.function.Consumer<Boolean> reply)throws Exception {
+                check();sourceView.evaluateJavascript(BrowserArtifactInput.script(pageKey,url,observed,target,chooser,false),raw->{
+                    try{check();reply.accept(decoded(raw).optBoolean("accepted"));}catch(Exception changed){reply.accept(false);}
+                });
+            }
+            public void delivered(JSONObject attempt)throws Exception {
+                check();deliveredUploads.put(attempt.getString("attemptId"),attempt);
+                while(deliveredUploads.size()>100)deliveredUploads.remove(deliveredUploads.keySet().iterator().next());
+                leaseTimers.postDelayed(()->uploadEventAsync(attempt,"site_unknown",json("source","bounded_timeout","note","30秒内没有主人确认原站点结果；没有再次上传")),30000);
+                message.setText("准确文件版本已交给网页，请在原任务核对站点结果。");
+            }
+        },result);
+        holder[0]=upload;artifactUpload=upload;pending=result;pendingMutation=true;invalidateObservation();
+        AutoCloseable pageWatch=tab.watch(upload::close);
+        result.whenComplete((value,error)->{try{pageWatch.close();}catch(Exception ignored){}leaseTimers.post(()->clearPending(result));});
+        upload.start();
+    }
     private boolean chooseUpload(android.webkit.ValueCallback<android.net.Uri[]> callback,android.webkit.WebChromeClient.FileChooserParams parameters){
         if(parameters.getMode()!=android.webkit.WebChromeClient.FileChooserParams.MODE_OPEN&&parameters.getMode()!=android.webkit.WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE){callback.onReceiveValue(null);message.setText("暂不支持网页保存或整文件夹授权，请使用单文件下载或上传");return true;}
         cancelFileChooser();int pickerRequest=FILE_CHOOSER_REQUESTS.getAndIncrement();if(pickerRequest>65534){callback.onReceiveValue(null);message.setText("文件选择次数已达进程上限，请重新打开应用");return true;}
@@ -624,7 +1000,7 @@ public final class BrowserActivity extends ComponentActivity {
             pick.putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE,parameters.getMode()==android.webkit.WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE);startActivityForResult(pick,pickerRequest);return true;
         }catch(Exception unavailable){cancelFileChooser();once.onReceiveValue(null);message.setText("系统文件选择器不可用，请稍后重试");return true;}
     }
-    private void cancelFileChooser(){android.webkit.ValueCallback<android.net.Uri[]> callback=fileChooser,copying=uploadCallback;BrowserUploads.Destination picked=fileChooserDestination,importing=uploadDestination;fileChooser=null;fileChooserDestination=null;fileChooserRequest=0;uploadDestination=null;uploadCallback=null;if(picked!=null)picked.close();if(importing!=null)importing.close();if(callback!=null)callback.onReceiveValue(null);if(copying!=null)copying.onReceiveValue(null);}
+    private void cancelFileChooser(){BrowserArtifactUpload artifact=artifactUpload;artifactUpload=null;if(artifact!=null)artifact.close();android.webkit.ValueCallback<android.net.Uri[]> callback=fileChooser,copying=uploadCallback;BrowserUploads.Destination picked=fileChooserDestination,importing=uploadDestination;fileChooser=null;fileChooserDestination=null;fileChooserRequest=0;uploadDestination=null;uploadCallback=null;if(picked!=null)picked.close();if(importing!=null)importing.close();if(callback!=null)callback.onReceiveValue(null);if(copying!=null)copying.onReceiveValue(null);}
     @Override protected void onActivityResult(int request,int result,android.content.Intent data){
         if(request==0||request!=fileChooserRequest){super.onActivityResult(request,result,data);return;}
         final android.webkit.ValueCallback<android.net.Uri[]> callback=fileChooser;final BrowserUploads.Destination destination=fileChooserDestination;final BrowserProfileRegistry.Session session=profileSession;final WebView sourceView=web;fileChooser=null;fileChooserDestination=null;fileChooserRequest=0;
@@ -702,10 +1078,12 @@ public final class BrowserActivity extends ComponentActivity {
         if(pageDialog!=null){decidePageDialog(pageDialog,false,null);return;}
         if(ownerPanel!=null&&ownerPanel.backToPage())return;
         if(web!=null&&web.canGoBack()){takeover("主人已接管浏览器");web.goBack();return;}
+        if(activePage!=null&&activePage.popup!=null){closePopupForOwner(activePage,true);return;}
         returnToOwnerForUi();
     }
-    @Override public void onPause(){ownerForeground=false;deniedSiteRequests.clear();if(pageDialog!=null){cancelPageDialog(null,BrowserPageDialog.Reason.OWNER_LEFT);takeover("你已离开网页，网页提示已取消；已发生的动作请回原任务核对。");}for(Page page:pages.values())page.view.onPause();super.onPause();}
-    @Override public void onResume(){super.onResume();ownerForeground=true;if(web!=null)web.onResume();}
+    @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(!focused&&stopNativeInput!=null)stopNativeInput.run();}
+    @Override public void onPause(){ownerForeground=false;if(artifactUpload!=null)artifactUpload.close();if(stopNativeInput!=null)stopNativeInput.run();deniedSiteRequests.clear();if(siteRequest!=null&&!siteRequest.awaitingPlatform)cancelSiteRequest(siteRequest.page,false);if(externalLinkConfirmation!=null){externalLinkConfirmation.dismiss();externalLinkConfirmation=null;}if(pageDialog!=null){cancelPageDialog(null,BrowserPageDialog.Reason.OWNER_LEFT);takeover("你已离开网页，网页提示已取消；已发生的动作请回原任务核对。");}for(Page page:pages.values())page.view.onPause();super.onPause();}
+    @Override public void onResume(){super.onResume();ownerForeground=true;if(web!=null)web.onResume();if(siteRequest!=null&&siteRequest.platformAllowed!=null)finishSitePlatformResult(siteRequest);}
     @Override protected void onSaveInstanceState(Bundle state){Page owner=activePage!=null&&activePage.taskOwner==null?activePage:null;if(owner==null)for(Page page:pages.values())if(page.taskOwner==null){owner=page;break;}if(owner!=null&&profileSession!=null&&profileSession.current()){Bundle page=new Bundle();owner.view.saveState(page);state.putBundle("browserState",page);state.putString("browserProfileId",profileSession.profileId);state.putLong("browserProfileRevision",profileSession.profileRevision);state.putString("browserProfileIsolation",profileSession.isolation);if(owner.view.getUrl()!=null)state.putString("browserUrl",owner.view.getUrl());}super.onSaveInstanceState(state);}
     @Override public void onDestroy(){if(closeConfirmation!=null){closeConfirmation.dismiss();closeConfirmation=null;}if(current.get()==this)current.clear();closeProfileSession("浏览器已关闭");if(ownerPanel!=null)try{ownerPanel.close();}catch(Exception ignored){}ownerPanel=null;browserIo.shutdown();leaseTimers.removeCallbacksAndMessages(null);lease.setExpirationListener(null);super.onDestroy();}
     private Button button(String label){Button button=new Button(this);button.setText(label);button.setTextSize(13);button.setTextColor(0xff222222);button.setAllCaps(false);button.setMinWidth(0);button.setMinimumWidth(0);button.setMinHeight(dp(48));button.setPadding(dp(9),dp(4),dp(9),dp(4));return button;}

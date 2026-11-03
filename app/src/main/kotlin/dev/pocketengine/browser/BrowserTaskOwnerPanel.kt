@@ -251,7 +251,9 @@ private fun JSONObject.child(name: String) = optJSONObject(name) ?: JSONObject()
 private fun JSONObject.array(name: String) = optJSONArray(name) ?: JSONArray()
 internal fun toolLabel(tool: String) = when (tool.removePrefix("browser_task_")) {
     "observe_visual" -> "查看网页图像"; "open" -> "打开研究页"; "select" -> "切换研究页"; "observe" -> "读取网页"; "navigate" -> "打开页面链接"
-    "evaluate" -> "只读计算当前网页"; "inspect" -> "检查正文与页面状态"; "script" -> "运行这段页面脚本"; "network" -> "页面网络证据"
+    "evaluate" -> "只读计算当前网页"; "inspect" -> "检查正文与页面状态"; "script" -> "运行这段页面脚本"; "network" -> "页面网络证据"; "network_body" -> "披露这一个响应正文"; "upload_artifact" -> "上传这一个文件版本"
+    "native_input" -> "确认原网页的真实输入"; "site_mode" -> "切换网页站点模式"; "resize" -> "调整网页实际显示尺寸"
+    "back" -> "后退到原历史页"; "forward" -> "前进到原历史页"; "reload" -> "刷新当前网页"
     "select_option" -> "选择下拉选项"
     "set_checked" -> "设置勾选状态"
     "click" -> "点击网页控件"; "type" -> "填写网页内容"; "scroll" -> "滚动网页"; "wait" -> "等待网页条件"
@@ -612,7 +614,27 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                 val publicRead = request.optString("tool") == "browser_task_read_public"
                 Text(if (publicRead) "匿名公共读取，不使用登录资料或系统代理凭据" else "登录资料：${profile?.optString("label") ?: "当前资料"}")
                 val args = request.child("arguments")
-                if (request.optString("tool") == "browser_task_network") Text("网络witness：${args.optString("action")}。启用会在当前页面包装fetch/XHR，只在本机保留有界请求/响应元数据，读取时才交给原模型。无正文、Cookie、Authorization或URL查询；URL路径仍可能含个人标识。页面可修改或绕过，非底层网络记录；导航即停用，停止采集不撤回已发网络。", style = MaterialTheme.typography.bodyMedium)
+                if (request.optString("tool") == "browser_task_native_input") Text(runCatching { BrowserNativeInput.approvalSummary(args, request.child("capability")) }.getOrElse { "原输入目标或视口已不可核对；请拒绝这次操作并重新观察。" }, style = MaterialTheme.typography.bodyMedium)
+                if (request.optString("tool") in setOf("browser_task_site_mode", "browser_task_resize", "browser_task_back", "browser_task_forward", "browser_task_reload")) Text(runCatching { BrowserSiteMode.approvalSummary(request.optString("tool").removePrefix("browser_task_"), args, request.child("capability")) }.getOrElse { "原网页设置、尺寸或历史目的地已不可核对；请拒绝后重新读取。" }, style = MaterialTheme.typography.bodyMedium)
+                if (request.optString("tool") == "browser_task_network") Text(if (args.optString("backend", "witness") == "native") "原生网络观察：${args.optString("action")}。通过本进程WebView后端读取已经批准的原任务页；首次使用须在更多菜单允许本次进程调试。最多120秒、128条脱敏元数据，不包括正文、凭据头或URL参数。只覆盖启用后开始的主文档请求；子frame、worker与旧请求未覆盖，不证明全局网络空闲。导航、接管或取消即停；不会补发请求。" else "网络witness：${args.optString("action")}。启用会在当前页面包装fetch/XHR，只在本机保留有界请求/响应元数据，读取时才交给原模型。无正文、Cookie、Authorization或URL查询；URL路径仍可能含个人标识。页面可修改或绕过，非底层网络记录；导航即停用，停止采集不撤回已发网络。", style = MaterialTheme.typography.bodyMedium)
+                if (request.optString("tool") == "browser_task_upload_artifact") {
+                    val capability = request.child("capability")
+                    val artifact = capability.child("uploadArtifact")
+                    val input = capability.child("targetPreview")
+                    Text("仅把下方这个原任务文件版本交给此网页的文件控件一次。交给浏览器后仍须核对站点接收结果；未知不会自动重传。", style = MaterialTheme.typography.bodyMedium)
+                    Text("文件：${artifact.optString("name")}\n来源：${if (artifact.optString("store") == "workspace") "任务工作区" else "任务附件"}\n大小：${artifact.optLong("size")} 字节 · ${artifact.optString("mimeType")}")
+                    Text("网页：${capability.optString("pageUrl")}\n文件控件：${input.optString("ref")} · ${input.optString("id")} · ${input.optString("name")}\n表单目标（页面声明）：${input.optString("formAction")} · ${input.optString("formMethod")}", style = MaterialTheme.typography.bodySmall)
+                    if (artifact.optString("store") == "workspace") Text("文件版本：${artifact.optInt("sourceVersion")}\n修订：${artifact.optString("sourceRevisionId")}\n项目：${artifact.optString("projectId")}", style = MaterialTheme.typography.bodySmall)
+                    else Text("此附件以原文件ID与校验值固定，页面不能改选其它文件。", style = MaterialTheme.typography.bodySmall)
+                    SelectionContainer { Text("文件ID：${artifact.optString("id")}\nSHA-256：${artifact.optString("sha256")}\n原文档：${capability.optString("documentId")}\n原控件：${input.optString("nodeKey")}", style = MaterialTheme.typography.bodySmall) }
+                    Text("网页可用脚本处理所选文件；表单地址不代表文件的唯一去向。请确认你信任这个站点。", style = MaterialTheme.typography.bodySmall)
+                }
+                if (request.optString("tool") == "browser_task_network_body") {
+                    val response = request.child("capability").child("networkResponse")
+                    Text("把这一个已展示响应的脱敏JSON正文交给原任务模型。它可能仍含个人或账户内容；这次确认不授权其他响应。不是重新抓取或发送网页请求。", style = MaterialTheme.typography.bodyMedium)
+                    Text("原响应：${response.optString("url")}\n状态：${response.optInt("status")} · ${response.optString("mimeType")}\n本次披露上限：${response.optInt("maxDisclosureBytes")} 字节", style = MaterialTheme.typography.bodySmall)
+                    Text("只读取原文档后端缓存；敏感端点、非JSON、旧文档或已读取对象会拒绝。已知敏感字段和明显凭据值会脱敏，超限会明确截断；缓存丢失、取消或回执未知都不自动重取。", style = MaterialTheme.typography.bodySmall)
+                }
                 if (request.optString("tool") == "browser_task_script") {
                     Text("真实页面脚本：会使用当前登录网页的权限，可能读取隐私、修改DOM、发网络或提交。不是只读脚本，也不受隔离世界保护。仅批准下方这段源码一次；异步效果可能继续，未知结果不会自动重跑。", style = MaterialTheme.typography.bodyMedium)
                     Text("模型声明的目的与效果（未经核实）：\n${args.optString("effectReview")}")
@@ -643,6 +665,11 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                     Text(label + if (predicate.has("value")) "：${predicate.optString("value")}" else if (predicate.has("expected")) if (predicate.optBoolean("expected")) "：是" else "：否" else "", style = MaterialTheme.typography.bodySmall)
                     Text("最多 ${args.optInt("timeoutMs", 3000)} 毫秒；所读目标状态持续 ${predicate.optInt("stableMs")} 毫秒。页面状态不等于服务器业务成功。", style = MaterialTheme.typography.bodySmall)
                 }
+                if (args.optString("condition") == "barrier") {
+                    val barrier = args.child("barrier")
+                    val scope = when (barrier.optString("kind")) { "dom" -> "主文档DOM变化"; "network" -> "原采集已观察的主文档请求"; else -> "主文档DOM变化及原采集已观察的请求" }
+                    Text("只读等待$scope 的 ${barrier.optInt("quietMs", 500)} 毫秒安静窗口，最多 ${args.optInt("timeoutMs", 3000)} 毫秒。不会自行开启网络采集或重放操作；未覆盖frame、旧请求与未来定时工作仍未知，不证明服务器业务完成。", style = MaterialTheme.typography.bodySmall)
+                }
                 if (request.optString("tool") == BrowserVisualCapture.TOOL) {
                     Text("将当前已确认网页的真实可见图像发送给模型；可能包含页面显示的个人信息。图像不默认保存，不用于自动授权或坐标点击。", style = MaterialTheme.typography.bodyMedium)
                     Text("确认后会收起此面板，等同一页面回到原显示区域再取一次图。检测到密码、验证码或未核对的嵌入内容时会阻止截图；其他可见个人信息仍请你确认。", style = MaterialTheme.typography.bodySmall)
@@ -653,7 +680,7 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                 if (!stillPending) Text("本次请求已失效，请返回工作区查看当前状态。", color = MaterialTheme.colorScheme.error)
                 c.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
-        }, confirmButton = { TextButton(onClick = { if (request.optString("tool") == BrowserVisualCapture.TOOL) { approval = null; c.backToPage() }; c.command({ checkNotNull(c.host.decideIfWaiting(activeTask.getString("id"), request.getString("id"), true)) { "原浏览请求已不再等待" } }, { approval = null }) }, enabled = stillPending && !c.busy) { Text("确认这次操作") } }, dismissButton = { TextButton(onClick = { c.command({ checkNotNull(c.host.decideIfWaiting(activeTask.getString("id"), request.getString("id"), false)) { "原浏览请求已不再等待" } }, { approval = null }) }, enabled = stillPending && !c.busy) { Text("拒绝") } })
+        }, confirmButton = { TextButton(onClick = { if (request.optString("tool") in setOf(BrowserVisualCapture.TOOL, "browser_task_native_input", "browser_task_site_mode", "browser_task_resize", "browser_task_upload_artifact")) { approval = null; c.backToPage() }; c.command({ checkNotNull(c.host.decideIfWaiting(activeTask.getString("id"), request.getString("id"), true)) { "原浏览请求已不再等待" } }, { approval = null }) }, enabled = stillPending && !c.busy) { Text("确认这次操作") } }, dismissButton = { TextButton(onClick = { c.command({ checkNotNull(c.host.decideIfWaiting(activeTask.getString("id"), request.getString("id"), false)) { "原浏览请求已不再等待" } }, { approval = null }) }, enabled = stillPending && !c.busy) { Text("拒绝") } })
     }
     recipeSource?.let { source -> AlertDialog(onDismissRequest = { recipeSource = null; recipePreview = null }, title = { Text("制作网站只读配方") }, text = { Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("下次读取这个网站时，按同一结构直接整理字段；表头、路径或页面变化就回普通读取。配方不包含账号授权，也不会导航、点击或提交。"); Text(source.optString("url"), style = MaterialTheme.typography.bodySmall); OutlinedTextField(value = recipeQuery, onValueChange = { recipeQuery = it.take(160); recipePreview = null }, label = { Text("区域识别词，如这张表的标题") }, modifier = Modifier.fillMaxWidth()); TextButton(onClick = { val query = recipeQuery; var actual: JSONObject? = null; c.command({ actual = c.host.prepareRecipeForOwner(source.getString("taskId"), source.getString("sourceId"), query) }, { if (recipeQuery == query) recipePreview = actual }) }, enabled = !c.busy && recipeQuery.isNotBlank()) { Text("核对读取字段") }; recipePreview?.let { preview -> Text("字段：${preview.array("expectedHeaders").rows().joinToString("、") { it.optString("text") }.ifBlank { "列表逐字正文与原行位置" }}"); Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(checked = recipeEnabled, onCheckedChange = { recipeEnabled = it }); Text("保存后启用这份只读配方（仍使用本次任务的网页读取授权）。", Modifier.weight(1f)) } } } }, confirmButton = { TextButton(onClick = { val preview = recipePreview ?: return@TextButton; val expected = dev.pocketengine.store.TaskStore.capabilityFingerprint(preview); val query = preview.getString("query"); val enable = recipeEnabled; c.command({ c.host.saveRecipeForOwner(source.getString("taskId"), source.getString("sourceId"), query, expected, enable) }, { recipeSource = null; recipePreview = null }) }, enabled = recipePreview != null && !c.busy) { Text(if (recipeEnabled) "保存并启用" else "保存为停用配方") } }, dismissButton = { TextButton(onClick = { recipeSource = null; recipePreview = null }) { Text("取消") } }) }
     recoveryReview?.let { selected -> AlertDialog(onDismissRequest = { recoveryReview = null; recoveryConsent = false }, title = { Text("重新继续原研究？") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("保留同一个任务和已保存依据，新建执行并重新读取需要的页面。重开仍使用当前这份登录资料并逐次确认；不恢复旧授权、不自动重发未知操作，也不保证未保存表单可恢复。"); Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(checked = recoveryConsent, onCheckedChange = { recoveryConsent = it }); Text("我同意把重新读取的网页观察发送给当前模型。", Modifier.weight(1f)) } } }, confirmButton = { TextButton(onClick = { val pinned = JSONObject(selected.toString()); c.command({ c.host.recoverResearchForOwner(pinned.getString("taskId"), pinned.getString("manifestFingerprint"), pinned.getJSONObject("profile"), true) }, { recoveryReview = null; recoveryConsent = false; c.workspaceView = "research" }) }, enabled = recoveryConsent && !c.busy) { Text("恢复原任务") } }, dismissButton = { TextButton(onClick = { recoveryReview = null; recoveryConsent = false }) { Text("暂不恢复") } }) }
