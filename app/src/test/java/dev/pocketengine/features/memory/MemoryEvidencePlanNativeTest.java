@@ -7,6 +7,7 @@ import dev.pocketengine.core.CapabilitySnapshot;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.assistant.ConversationRepository;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -34,7 +35,7 @@ public final class MemoryEvidencePlanNativeTest {
         final RunControl control=new RunControl();final AtomicLong revision=new AtomicLong();
         final TaskStoreMemoryReader.RawBinding raw;
         int queryCalls,readCalls,directoryCalls,failQuery;
-        StepHook afterQuery=call->{},beforeRead=call->{};
+        StepHook afterQuery=call->{},beforeRead=call->{},afterRead=call->{};
         Fixture()throws Exception{
             db.execSQL("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
             db.execSQL("INSERT INTO meta(key,value) VALUES('assistant_history_new_install','1')");
@@ -72,7 +73,9 @@ public final class MemoryEvidencePlanNativeTest {
                     JSONObject state=repository.state(where,expected);if(!"current".equals(state.getString("status")))return state;
                     JSONObject message=repository.historyMessage(where,expected.sourceId,new CancellationSignal());
                     if(message==null)return new JSONObject().put("status","unavailable").put("reason","original_missing");
-                    return ConversationHistory.messagePage(where,message,offset,maxChars);
+                    JSONObject page=ConversationHistory.messagePage(where,message,offset,maxChars).put("readBudget",new JSONObject()
+                            .put("scannedRows",1).put("scannedUtf8Bytes",message.getString("content").getBytes(StandardCharsets.UTF_8).length).put("physicalIoMeasured",false));
+                    afterRead.after(readCalls);return page;
                 }
             };
             return new ConversationHistory.Capability(new CapabilityPort(){
@@ -100,6 +103,7 @@ public final class MemoryEvidencePlanNativeTest {
             assertTrue(row.getBoolean("exactSourceRead"));assertTrue(row.getBoolean("historicalEvidence"));assertFalse(row.getBoolean("currentFactVerified"));
             assertTrue(row.getString("bodyFingerprint").matches("sha256:[0-9a-f]{64}"));assertEquals(0,row.getJSONObject("readRange").getInt("offset"));
             assertEquals(2,reply.getJSONObject("queryPlan").getInt("queryCount"));assertEquals(3,reply.getJSONObject("queryPlan").getInt("producerCalls"));
+            assertEquals("existing_metered_MAIN",reply.getJSONObject("queryPlan").getString("querySuggestionSource"));assertFalse(reply.getJSONObject("queryPlan").getBoolean("querySuggestionsAreEvidence"));
             assertEquals(0,reply.getJSONObject("queryPlan").getInt("extraNetworkRequests"));assertFalse(reply.getBoolean("executionAuthorized"));
             assertTrue(TaskStoreMemoryReader.isDerivedReferenceTool(ConversationHistory.SEARCH));
             JSONObject again=f.execute(cap,request);assertEquals(1,again.getJSONArray("entries").length());assertEquals(5,f.queryCalls);assertEquals(2,f.readCalls);
@@ -153,11 +157,11 @@ public final class MemoryEvidencePlanNativeTest {
     }
 
     @Test public void finalCurrentnessCheckRejectsWithdrawnBodyAndTheNextPlanCannotResurrectIt()throws Exception{
-        try(Fixture f=new Fixture()){
+        for(boolean exactRead:List.of(false,true))try(Fixture f=new Fixture()){
             SourceRef withdrawn=f.message("withdrawn-message",f.conversation,1,"revoked internal note",10);
-            f.afterQuery=call->f.withdraw(withdrawn);
-            try(ConversationHistory.Capability cap=f.capability()){assertThrows(SecurityException.class,()->f.execute(cap,f.plan("internal")));}
-            f.afterQuery=call->{};
+            if(exactRead)f.afterRead=call->f.withdraw(withdrawn);else f.afterQuery=call->f.withdraw(withdrawn);
+            try(ConversationHistory.Capability cap=f.capability()){assertThrows(SecurityException.class,()->f.execute(cap,f.plan("internal").put("readTop",exactRead?1:0)));}
+            f.afterQuery=call->{};f.afterRead=call->{};
             try(ConversationHistory.Capability fresh=f.capability()){
                 JSONObject reply=f.execute(fresh,f.plan("internal").put("queries",new JSONArray().put("note")));
                 assertEquals(0,reply.getJSONArray("entries").length());assertFalse(reply.toString().contains("revoked internal note"));

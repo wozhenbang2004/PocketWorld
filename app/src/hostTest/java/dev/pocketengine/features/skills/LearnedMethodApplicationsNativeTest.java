@@ -69,6 +69,15 @@ public final class LearnedMethodApplicationsNativeTest {
             assertEquals("probed_backend_and_workspace_revision",effect.getString("environmentCoverage"));
             assertEquals(1,page.getJSONObject("effectComparison").getInt("eligibleApplications"));
             assertEquals(1,page.getJSONObject("effectComparison").getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0).getInt("unreviewed"));
+            JSONObject pack=f.plan.review().getJSONObject("package");
+            f.tasks.reviewSkillQuality(f.task,f.op,pack.getString("id"),pack.getInt("revision"),pack.getString("digest"),"verified","Owner checked the original output");
+            assertEquals(1,f.page().getJSONObject("effectComparison").getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0).getInt("ownerVerifiedResults"));
+            JSONObject wrongImplementation=f.tasks.readSkillExecution(f.task,f.op);wrongImplementation.getJSONObject("qualityFeedback").put("digest","f".repeat(64));
+            JSONObject wrongReview=dev.pocketengine.features.memory.LearnedMethodReceipt.project(wrongImplementation,f.record,3,"owner","private");
+            JSONObject rejectedReview=dev.pocketengine.features.memory.MethodEffectComparison.summarize(new JSONArray().put(wrongReview),false).getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0);
+            assertEquals(0,rejectedReview.getInt("ownerVerifiedResults"));assertEquals(1,rejectedReview.getInt("invalidFeedback"));
+            JSONObject changedPlan=f.tasks.readSkillExecution(f.task,f.op);changedPlan.getJSONObject("review").getJSONObject("request").put("workingDirectory","changed-input");
+            assertThrows(SecurityException.class,()->dev.pocketengine.features.memory.LearnedMethodReceipt.project(changedPlan,f.record,3,"owner","private"));
             f.receipt(SkillExecution.Status.RUNNING);f.receipt(SkillExecution.Status.FAILED);
             JSONObject unchanged=f.page().getJSONArray("applications").getJSONObject(0).getJSONObject("effectEvidence");
             assertEquals(effect.getString("evidenceFingerprint"),unchanged.getString("evidenceFingerprint"));

@@ -39,7 +39,7 @@ public final class LearnedMethodReceipt {
         result.put("effectEvidence",MethodEffectEvidence.captureSkillAttempt(original,result));
         if(original.optJSONObject("qualityFeedback")!=null){
             JSONObject originalQuality=original.getJSONObject("qualityFeedback"),quality=new JSONObject();
-            for(String key:java.util.List.of("taskId","runId","operationId","originRef","outcome","at","evidenceKind","automaticallyVerified","executionAuthorized","methodEffectEvidence"))if(originalQuality.has(key))quality.put(key,originalQuality.get(key));
+            for(String key:java.util.List.of("taskId","runId","operationId","skillId","revision","digest","executionGeneration","originRef","outcome","at","evidenceKind","automaticallyVerified","executionAuthorized","methodEffectEvidence"))if(originalQuality.has(key))quality.put(key,originalQuality.get(key));
             result.put("qualityFeedback",quality);
         }
         return result;

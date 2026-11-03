@@ -113,6 +113,14 @@ public final class MethodEffectComparison {
         if (origin == null || !evidence.getString("recordId").equals(origin.optString("recordId"))
                 || evidence.getLong("recordRevision") != origin.optLong("revision") || !evidence.getString("ownerId").equals(origin.optString("ownerId"))
                 || !evidence.getString("spaceId").equals(origin.optString("spaceId"))) return "invalid";
+        if ("original_skill_operation".equals(evidence.optString("source"))) {
+            JSONObject implementation = evidence.getJSONObject("implementationRef");
+            if (!"owner_reviewed_original_execution".equals(feedback.optString("evidenceKind"))
+                    || !implementation.getString("id").equals(feedback.optString("skillId"))
+                    || implementation.getLong("revision") != feedback.optLong("revision")
+                    || !implementation.getString("digest").equals(feedback.optString("digest"))
+                    || implementation.optLong("executionGeneration") != feedback.optLong("executionGeneration")) return "invalid";
+        } else if (!"owner_reviewed_original_method_steps".equals(feedback.optString("evidenceKind"))) return "invalid";
         JSONObject link = feedback.optJSONObject("methodEffectEvidence");
         if (link != null && !evidence.getString("evidenceFingerprint").equals(link.optString("evidenceFingerprint"))) return "invalid";
         String outcome = feedback.optString("outcome");

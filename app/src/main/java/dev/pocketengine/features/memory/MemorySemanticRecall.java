@@ -39,8 +39,8 @@ final class MemorySemanticRecall {
             String id=row.getString("id");rows.put(id,row);
             for(String entity:identities(row))byEntity.computeIfAbsent(entity,unused->new ArrayList<>()).add(id);
         }
-        MemoryEntityAliasProjection aliases=MemoryEntityAliasProjection.from(admitted);
-        Map<String,Double> fused=new LinkedHashMap<>();Set<String> exact=new HashSet<>();
+        MemoryEntityAliasProjection aliases=MemoryEntityAliasProjection.from(admitted),directOnly=MemoryEntityAliasProjection.from(List.of());
+        Map<String,Double> fused=new LinkedHashMap<>();Map<String,List<String>> seedPaths=new LinkedHashMap<>();Set<String> exact=new HashSet<>();
         for(int channel=0;channel<channels.size();channel++){
             JSONArray matches=channels.get(channel);String query=plan.queries().get(channel);Set<String> seen=new HashSet<>();
             for(int rank=0;rank<Math.min(1000,matches.length());rank++){
@@ -48,7 +48,12 @@ final class MemorySemanticRecall {
                 if(row==null||row.getLong("revision")!=match.getLong("revision")||!seen.add(row.getString("id")))continue;
                 // Function-word-only hits do not seed a graph or claim semantic relevance.
                 if(!meaningfulMatch(row,query,aliases))continue;
-                String id=row.getString("id");fused.merge(id,(channel==0?1d:.8d)/(60+rank+1),Double::sum);
+                String id=row.getString("id");List<String> path=List.of(id);
+                if(!meaningfulMatch(row,query,directOnly)){
+                    String donor=aliasDonor(admitted,row,query,aliases);if(donor==null)continue;path=List.of(donor,id);
+                }
+                if(!seedPaths.containsKey(id)||path.size()<seedPaths.get(id).size())seedPaths.put(id,path);
+                fused.merge(id,(channel==0?1d:.8d)/(60+rank+1),Double::sum);
                 if(channel==0&&LexicalMemoryRetrievalBackend.normalize(row.getString("text")).contains(LexicalMemoryRetrievalBackend.normalize(query))&&!query.isBlank())exact.add(id);
             }
         }
@@ -56,7 +61,7 @@ final class MemorySemanticRecall {
                 .thenComparing(Comparator.<String>comparingDouble(fused::get).reversed()).thenComparing(id->id));
         Map<String,Candidate> selected=new LinkedHashMap<>();List<Candidate> frontier=new ArrayList<>();boolean limited=ordered.size()>MAX_CANDIDATES;int seeds=0,visits=0;
         for(String id:ordered){
-            Candidate candidate=new Candidate(rows.get(id),List.of(id),fused.get(id),exact.contains(id));
+            Candidate candidate=new Candidate(rows.get(id),seedPaths.get(id),fused.get(id),exact.contains(id));
             if(selected.size()<MAX_CANDIDATES)selected.put(id,candidate);
             if(seeds<MAX_SEEDS){frontier.add(candidate);seeds++;}
         }
@@ -89,11 +94,21 @@ final class MemorySemanticRecall {
     }
     private static void addIdentity(Set<String> into,String type,String id){if(!id.isEmpty()&&(type.equals("person")||type.equals("entity")))into.add(type+'\0'+id);}
     private static boolean meaningfulMatch(JSONObject row,String query,MemoryEntityAliasProjection aliases)throws Exception {
+        return meaningfulText(MemoryBook.retrievalDocument(row,aliases).text,query);
+    }
+    private static boolean meaningfulText(String source,String query){
         String normalized=LexicalMemoryRetrievalBackend.normalize(query);if(normalized.isEmpty())return false;
-        String text=LexicalMemoryRetrievalBackend.normalize(MemoryBook.retrievalDocument(row,aliases).text);
+        String text=LexicalMemoryRetrievalBackend.normalize(source);
         if(text.contains(normalized)&&!STOP_WORDS.contains(normalized))return true;
         for(String term:LexicalMemoryRetrievalBackend.terms(normalized))if(!STOP_WORDS.contains(term)&&text.contains(term))return true;
         return false;
+    }
+    private static String aliasDonor(List<JSONObject> admitted,JSONObject row,String query,MemoryEntityAliasProjection aliases)throws Exception{
+        Set<String> targets=identities(row);
+        for(JSONObject donor:admitted){JSONObject assertion=donor.optJSONObject("assertion");if(assertion==null||donor.getString("id").equals(row.getString("id")))continue;
+            String identity=assertion.getString("subjectType")+'\0'+assertion.getString("subjectId");
+            if(targets.contains(identity)&&aliases.mayDonateToQuery(donor,query)&&meaningfulText(assertion.getString("subjectLabel"),query))return donor.getString("id");
+        }return null;
     }
     static JSONArray pathRefs(Result result,Candidate candidate)throws Exception {
         JSONArray refs=new JSONArray();for(String id:candidate.path){JSONObject row=result.rows.get(id);refs.put(new JSONObject().put("id",id).put("revision",row.getLong("revision")));}return refs;

@@ -465,6 +465,7 @@ public final class ConversationHistory {
             if(candidates.omittedCount()>0){incomplete=true;stop="candidate_limit";}
             if(incomplete&&stop.equals("complete_bounded_plan"))stop="source_coverage_gaps";
             JSONObject planMeta=budget.metadata().put("strategy","bounded_native_history_rrf_v1").put("queryCount",plan.queries.size())
+                    .put("querySuggestionSource",plan.queries.size()>1?"existing_metered_MAIN":"original_query").put("querySuggestionsAreEvidence",false)
                     .put("follow",plan.follow).put("maxBranchesPerLayer",MemoryEvidencePlan.MAX_BRANCHES).put("traversedBranches",traversedBranches)
                     .put("candidateCount",candidates.size()).put("maxCandidates",MemoryEvidencePlan.MAX_CANDIDATES).put("omittedCandidates",candidates.omittedCount())
                     .put("exactReadAttempts",readAttempts).put("stopReason",stop).put("scopeExpanded",false)

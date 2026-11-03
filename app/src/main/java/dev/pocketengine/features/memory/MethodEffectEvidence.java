@@ -67,6 +67,7 @@ public final class MethodEffectEvidence {
     public static JSONObject captureSkillAttempt(JSONObject original, JSONObject projection) throws Exception {
         JSONObject reference = original.getJSONObject("reference"), review = original.getJSONObject("review");
         JSONObject request = review.optJSONObject("request"), receipt = original.optJSONObject("receipt"), pack = review.getJSONObject("package");
+        boolean exactPlan = originalSkillReviewBound(review, reference);
         JSONObject implementation = new JSONObject();
         for (String key : new String[]{"id", "revision", "digest", "executionGeneration"}) if (pack.has(key)) implementation.put(key, pack.get(key));
         if (review.has("scriptSha256")) implementation.put("scriptSha256", review.get("scriptSha256"));
@@ -74,10 +75,10 @@ public final class MethodEffectEvidence {
         JSONObject result = base(projection).put("source", "original_skill_operation")
                 .put("implementationFingerprint", exactImplementation ? digest(implementation) : "")
                 .put("implementationRef", implementation)
-                .put("inputComparable", request != null && exactImplementation)
-                .put("inputCoverage", request == null ? "unavailable_legacy" : "frozen_skill_request")
+                .put("inputComparable", request != null && exactImplementation && exactPlan)
+                .put("inputCoverage", request == null || !exactPlan ? "unavailable_legacy" : "frozen_skill_request")
                 .put("inputFingerprint", request == null ? "" : digest(request))
-                .put("environmentComparable", true).put("environmentCoverage", "probed_backend_and_workspace_revision")
+                .put("environmentComparable", exactPlan).put("environmentCoverage", exactPlan ? "probed_backend_and_workspace_revision" : "unavailable_legacy")
                 .put("environmentFingerprint", digest(new JSONObject().put("environmentBinding", hashValue(reference, "environmentBinding"))
                         .put("workspaceRevision", reference.getString("workspaceRevision"))))
                 .put("stepCount", receipt == null ? 0 : 1)
@@ -85,6 +86,21 @@ public final class MethodEffectEvidence {
                         .put("receiptFingerprint", receipt == null ? JSONObject.NULL : digest(receipt))))
                 .put("capturedAt", original.optLong("claimedAt", 0));
         return seal(result);
+    }
+
+    private static boolean originalSkillReviewBound(JSONObject review, JSONObject reference) throws Exception {
+        if (!review.has("planDigest")) return false; // Old incomplete receipts stay readable.
+        JSONObject unsigned = new JSONObject(review.toString()); String claimed = hashValue(unsigned, "planDigest"); unsigned.remove("planDigest");
+        if (!claimed.equals(hashValue(reference, "planDigest")) || !claimed.equals(digest(unsigned)))
+            throw new SecurityException("原方法执行计划已变化");
+        JSONObject run = review.getJSONObject("run"), backend = review.getJSONObject("backend");
+        for (String key : new String[]{"taskId", "runId", "epoch", "ownerId", "spaceId"})
+            if (!String.valueOf(run.get(key)).equals(String.valueOf(reference.get(key))))
+                throw new SecurityException("原方法执行计划不属于同一任务代次");
+        if (!digest(backend).equals(hashValue(reference, "environmentBinding"))
+                || !backend.getString("workspaceRevision").equals(reference.getString("workspaceRevision")))
+            throw new SecurityException("原方法执行环境已变化");
+        return true;
     }
 
     /** Revalidate a persisted projection against its exact original decision before displaying it. */

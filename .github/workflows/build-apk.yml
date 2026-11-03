@@ -1,7 +1,20 @@
 name: Build private debug APK
-run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
+run-name: ${{ github.event_name == 'pull_request' && 'Memory quality host tests' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/src/main/java/dev/pocketengine/features/memory/**'
+      - 'app/src/main/java/dev/pocketengine/features/HostToolSupervisor.java'
+      - 'app/src/main/java/dev/pocketengine/store/TaskStore.java'
+      - 'app/src/main/kotlin/dev/pocketengine/ui/LearnedMethodApplications.kt'
+      - 'app/src/test/java/dev/pocketengine/features/memory/**'
+      - 'app/src/hostTest/java/dev/pocketengine/features/memory/**'
+      - 'app/src/hostTest/java/dev/pocketengine/features/skills/LearnedMethodApplicationsNativeTest.java'
+      - 'app/src/test/resources/memory/**'
+      - 'tools/host-tests.json'
+      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
     inputs:
       target:
@@ -52,7 +65,7 @@ concurrency:
 
 jobs:
   apk:
-    if: ${{ github.event.repository.private && (github.event_name != 'workflow_dispatch' || inputs.target != 'host-tests') }}
+    if: ${{ github.event.repository.private && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.target != 'host-tests') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -211,8 +224,9 @@ jobs:
           retention-days: 7
 
   host-tests:
-    # Manual, bounded, single-group verification. Never add this to every APK push.
-    if: ${{ github.event.repository.private && github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' }}
+    # Explicit manual selection, or the three bounded memory groups on affected private PRs.
+    # This is still separate from APK pushes and never packages or signs a PR build.
+    if: ${{ github.event.repository.private && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -220,7 +234,7 @@ jobs:
         shell: bash
     env:
       HOST_TEST_GROUP: ${{ inputs.host_group }}
-      HOST_TEST_GROUPS: ${{ inputs.host_groups }}
+      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && 'memory-recall-quality,memory-evidence-plan,memory-method-quality' || inputs.host_groups }}
       POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
     steps:
       - name: Check out selected revision

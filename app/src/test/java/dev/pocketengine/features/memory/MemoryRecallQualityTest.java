@@ -112,6 +112,7 @@ public final class MemoryRecallQualityTest {
                 enriched.requestBoundaryCases++;
                 details.put(new JSONObject().put("id", scenario.getString("id"))
                         .put("requestBudgetRejected", enriched.rejectedRequests > 0));
+                fixture.book.closeRetrieval();
                 continue;
             }
             if (scenario.getBoolean("zeroOriginalLexicalOverlap")) {
@@ -252,7 +253,7 @@ public final class MemoryRecallQualityTest {
             // TemporaryFolder has created an empty file; a fresh Book expects an absent file.
             Files.delete(file.toPath());
             SourceRef.Resolver resolver = (scope, kind, id) ->
-                    sources.get(scope.ownerId + "\u0000" + scope.spaceId + "\u0000" + kind + "\u0000" + id);
+                    sources.get(scope.ownerId + "\0" + scope.spaceId + "\0" + kind + "\0" + id);
             book = new MemoryBook(file, resolver);
             JSONArray rows = scenario.getJSONArray("records");
             for (int i = 0; i < rows.length(); i++) {
@@ -311,7 +312,7 @@ public final class MemoryRecallQualityTest {
             return new JSONObject().put("ownerId", ref.ownerId).put("spaceId", ref.spaceId);
         }
         private static String sourceKey(SourceRef ref) {
-            return ref.ownerId + "\u0000" + ref.spaceId + "\u0000" + ref.kind + "\u0000" + ref.sourceId;
+            return ref.ownerId + "\0" + ref.spaceId + "\0" + ref.kind + "\0" + ref.sourceId;
         }
     }
 }

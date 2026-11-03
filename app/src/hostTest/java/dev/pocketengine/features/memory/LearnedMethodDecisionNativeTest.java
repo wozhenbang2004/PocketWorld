@@ -2,7 +2,7 @@ package dev.pocketengine.features.memory;
 
 import android.app.Application;
 import android.database.sqlite.SQLiteDatabase;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.*;
 import dev.pocketengine.features.*;
 import dev.pocketengine.features.assistant.AssistantModule;
@@ -13,7 +13,6 @@ import dev.pocketengine.store.*;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import org.json.*;
 import org.junit.Test;
@@ -39,9 +38,9 @@ public final class LearnedMethodDecisionNativeTest {
         JSONArray messages=request.getJSONArray("messages");for(int i=messages.length()-1;i>=0;i--){JSONObject row=messages.getJSONObject(i);if("tool".equals(row.optString("role"))&&callId.equals(row.optString("tool_call_id")))return new JSONObject(row.getString("content"));}throw new AssertionError("missing original tool receipt "+callId);
     }
     private static final class Server implements AutoCloseable {
-        final HttpServer server;final ExecutorService workers=Executors.newSingleThreadExecutor();final AtomicInteger count=new AtomicInteger();final AtomicReference<Throwable> failure=new AtomicReference<>();
+        final HttpServer server;final AtomicInteger count=new AtomicInteger();final AtomicReference<Throwable> failure=new AtomicReference<>();
         Server(Script script)throws Exception{
-            server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.setExecutor(workers);server.createContext("/",exchange->{
+            server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.createContext("/",exchange->{
                 try{JSONObject request=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));JSONObject answer=script.answer(count.getAndIncrement(),request);
                     byte[] bytes=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",answer).put("finish_reason",answer.has("tool_calls")?"tool_calls":"stop"))).toString().getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
@@ -49,7 +48,7 @@ public final class LearnedMethodDecisionNativeTest {
             });server.start();
         }
         ModelConfig config(){return new ModelConfig("http://127.0.0.1:"+server.getAddress().getPort(),"","fixture-model",false,10,10,"openai_chat",2000);}
-        public void close(){server.stop(0);workers.shutdownNow();}
+        public void close(){server.stop(0);}
     }
     private static final class Fixture implements AutoCloseable {
         final Application android=RuntimeEnvironment.getApplication();final TaskStore tasks;final SQLiteDatabase db;final FeatureHost host=new FeatureHost(event->{});
@@ -157,6 +156,58 @@ public final class LearnedMethodDecisionNativeTest {
             assertEquals(1,f.db.update("operations",changed,"task_id=? AND operation_id=?",new String[]{f.task,step}));
             JSONObject stale=f.page();assertEquals(0,stale.getJSONArray("applications").length());assertTrue(stale.getInt("unavailableNativeProofs")>=2);
             assertThrows(SecurityException.class,()->f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"verified",note));
+        }
+    }
+
+    @Test public void historicalFiveFieldStepsAndOwnerFeedbackRemainReadableButNotComparable()throws Exception{
+        try(Fixture f=new Fixture()){
+            f.port.beginRun(GOAL,f.control);JSONObject args=f.writeArgs();f.approve(args);
+            String step=f.journal().beginOperation("workspace_write",args);
+            JSONObject written=f.port.execute("workspace_write",new JSONObject(args.toString()).put("_hostOperationId",step),f.control);
+            f.journal().finishOperation(step,written);
+            String operation=f.execute("apply",new JSONArray().put(step)).getJSONObject("methodDecision").getString("operationId");
+            // Emulate the persisted pre-effect schema using an actual completed native operation.
+            JSONObject originalArguments,originalReceipt;
+            try(var rows=f.db.rawQuery("SELECT arguments,receipt FROM operations WHERE task_id=? AND operation_id=?",new String[]{f.task,operation})){
+                assertTrue(rows.moveToFirst());originalArguments=new JSONObject(rows.getString(0));originalReceipt=new JSONObject(rows.getString(1));
+            }
+            JSONObject legacy=originalArguments.getJSONObject("nativeMethodDecision");legacy.remove("effectEvidence");
+            JSONObject oldStep=legacy.getJSONArray("stepRefs").getJSONObject(0);
+            for(String key:List.of("argumentsFingerprint","observationId","workspaceSource","workspaceResult"))oldStep.remove(key);
+            assertEquals(5,oldStep.length());originalReceipt.put("methodDecision",new JSONObject(legacy.toString()));
+            android.content.ContentValues restored=new android.content.ContentValues();restored.put("arguments",originalArguments.toString());restored.put("receipt",originalReceipt.toString());
+            assertEquals(1,f.db.update("operations",restored,"task_id=? AND operation_id=?",new String[]{f.task,operation}));
+            JSONObject page=f.page(),projection=page.getJSONArray("applications").getJSONObject(0);
+            assertFalse(projection.has("effectEvidence"));assertEquals(5,projection.getJSONArray("stepRefs").getJSONObject(0).length());
+            assertEquals(0,page.getJSONObject("effectComparison").getInt("eligibleApplications"));
+            assertEquals(1,page.getJSONObject("effectComparison").getInt("excludedIncompleteEvidence"));
+            String note="Owner checked the originally saved legacy workspace result";
+            JSONObject feedback=f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"verified",note).snapshot();
+            assertEquals("legacy_original_steps_only",feedback.getJSONObject("methodEffectEvidence").getString("evaluationCoverage"));
+            // Old feedback did not carry a format or input/environment link. A repeat owner click
+            // must still use its original timestamp, without rewriting or rejecting that feedback.
+            for(String key:List.of("format","methodEffectEvidence","resultVerifiedByOwner","attributionSource","causalEffectVerified","confidenceDelta","replayAllowed"))feedback.remove(key);
+            originalArguments.put("appQualityFeedback",feedback);restored.clear();restored.put("arguments",originalArguments.toString());
+            assertEquals(1,f.db.update("operations",restored,"task_id=? AND operation_id=?",new String[]{f.task,operation}));
+            JSONObject repeat=f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"verified",note).snapshot();
+            assertEquals(feedback.getLong("at"),repeat.getLong("at"));assertFalse(repeat.getBoolean("automaticallyVerified"));
+            assertFalse(f.page().getJSONArray("applications").getJSONObject(0).getJSONObject("appQualityFeedback").has("methodEffectEvidence"));
+        }
+    }
+
+    @Test public void aFinalCursorPageDoesNotClaimCompleteHistoryOrAddNotSelectedDecisionsToEffects()throws Exception{
+        try(Fixture f=new Fixture()){
+            f.port.beginRun(GOAL,f.control);f.execute("not_selected",new JSONArray());f.execute("not_applicable",new JSONArray());
+            TaskMemoryNativeHost nativeHost=new TaskMemoryNativeHost(f.host,f.tasks,f.bridge);
+            JSONObject options=new JSONObject().put("recordId",f.record.getString("id")).put("revision",f.record.getLong("revision")).put("cursor","").put("limit",1);
+            JSONObject first=nativeHost.handle("readLearnedMethodApplications",options);
+            assertEquals(1,first.getJSONArray("applications").length());assertFalse(first.getString("nextCursor").isEmpty());assertFalse(first.getBoolean("completeHistory"));
+            JSONObject last=nativeHost.handle("readLearnedMethodApplications",new JSONObject(options.toString()).put("cursor",first.getString("nextCursor")));
+            assertEquals(1,last.getJSONArray("applications").length());assertEquals("",last.getString("nextCursor"));assertFalse(last.getBoolean("completeHistory"));
+            assertNotEquals(first.getJSONArray("applications").getJSONObject(0).getString("operationId"),last.getJSONArray("applications").getJSONObject(0).getString("operationId"));
+            JSONObject comparison=last.getJSONObject("effectComparison");assertEquals("bounded_page_only",comparison.getString("coverage"));
+            assertEquals(0,comparison.getInt("eligibleApplications"));assertEquals(1,comparison.getInt("excludedUnapplied"));
+            assertTrue(f.page().getBoolean("completeHistory"));
         }
     }
 }
