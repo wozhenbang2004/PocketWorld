@@ -944,7 +944,6 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     else -> throw IllegalArgumentException("未知原生管理页面")
                 }
             } catch (error: Exception) { failure = error }
-            if (failure == null && domain == "accounts" && command == "selectModel") app.sendState()
             if (failure == null && domain != "accounts" && command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "cognitionProjection", "searchHistory", "readHistoryRecord", "readAssertionEvidence", "openSource", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "discoverMcp", "discoverMcpAuthorized", "discardMcpPreview", "cancel")) {
                 try { app.features.sendState() } catch (_: Exception) { /* The direct receipt remains authoritative. */ }
             }
@@ -961,6 +960,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             } catch (error: Exception) { if (result == null && failure == null) failure = error }
             request.call.close(); request.control.cancel()
             val completed = result; val currentSnapshot = snapshot; val error = failure
+            if (domain == "accounts" && (currentSnapshot?.optString("mainModelRoute") == "account" || error == null && command == "selectModel")) app.sendState()
             main.post {
                 val sourceStage=originalSourceStages.remove(request.id)
                 if (closed || request.epoch != (ownerEpochs[domain] ?: 0) || ownerRequests[key]?.id != request.id) {
@@ -2614,7 +2614,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 val merged = incoming.map { row -> mergeTaskSummary(row, state.tasks.find { it.id == row.id }) }
                 val retained = state.tasks.filter { old -> old.id !in incoming.map { it.id } && old.id in setOf(state.activeTaskId, state.requestedTaskId) }
 
-                state = state.copy(modelName = config.optString("model"), baseUrl = config.optString("baseUrl"), hasApiKey = config.optBoolean("hasApiKey"), screenshots = config.optBoolean("sendScreenshots", true), localCaptureAllowed = config.optBoolean("localCaptureAllowed", false), localOcrAllowed = config.optBoolean("localOcrAllowed", false), supportsImageInput = config.optBoolean("supportsImageInput", false), modelProvider = config.optString("provider", "openai_chat"), modelRoute = config.optString("modelRoute", "api_key"), modelCatalogEnabled = config.optJSONObject("capabilityBinding") != null, maxOutputTokens = config.optInt("maxOutputTokens", 4096), cleartextConsent = config.optString("cleartextConsent"), accessibilityEnabled = payload.optBoolean("accessibilityEnabled"), notificationsEnabled = payload.optBoolean("notificationsEnabled"), phoneReadiness = PhoneReadinessState.parse(payload.optJSONObject("phoneReadiness")), activeTaskId = payload.optString("activeTaskId").takeUnless { it.isBlank() || it == "null" }, tasks = merged + retained, modelDrafts = ModelStreamDrafts.retain(state.modelDrafts, merged + retained))
+                state = state.copy(modelName = config.optString("model"), baseUrl = config.optString("baseUrl"), hasApiKey = config.optBoolean("hasApiKey"), screenshots = config.optBoolean("sendScreenshots", true), localCaptureAllowed = config.optBoolean("localCaptureAllowed", false), localOcrAllowed = config.optBoolean("localOcrAllowed", false), supportsImageInput = config.optBoolean("supportsImageInput", false), modelProvider = config.optString("provider", "openai_chat"), modelRoute = config.optString("modelRoute", "api_key"), accountModelAvailable = config.optBoolean("accountModelAvailable", false), modelCatalogEnabled = config.optJSONObject("capabilityBinding") != null, maxOutputTokens = config.optInt("maxOutputTokens", 4096), cleartextConsent = config.optString("cleartextConsent"), accessibilityEnabled = payload.optBoolean("accessibilityEnabled"), notificationsEnabled = payload.optBoolean("notificationsEnabled"), phoneReadiness = PhoneReadinessState.parse(payload.optJSONObject("phoneReadiness")), activeTaskId = payload.optString("activeTaskId").takeUnless { it.isBlank() || it == "null" }, tasks = merged + retained, modelDrafts = ModelStreamDrafts.retain(state.modelDrafts, merged + retained))
             }
             "task" -> event.optJSONObject("task")?.let(::mergeTask)
             "features_state" -> {
