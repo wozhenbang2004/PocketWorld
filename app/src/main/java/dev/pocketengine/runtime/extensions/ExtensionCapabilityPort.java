@@ -90,6 +90,7 @@ final class ExtensionCapabilityPort implements CapabilityPort {
         }catch(Exception failure){capabilitySnapshot.invalidate();stale=true;throw failure;}
     }
     @Override public void prepareTurnSurface(RunControl control)throws Exception {check(control);existing.prepareTurnSurface(control);check(control);}
+    @Override public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl control)throws Exception {check(control);return !stale&&!admitted.containsKey(tool)&&existing.stepReadSourceCurrent(tool,receipt,control);}
     @Override public boolean responseCurrent(RunControl control)throws Exception {check(control);boolean current=!stale&&admittedFingerprint.equals(sync(false))&&admittedBaseFingerprint.equals(toolFingerprint(existing.tools()))&&existing.responseCurrent(control);if(!current){stale=true;if(capabilitySnapshot!=null)capabilitySnapshot.invalidate();}return current;}
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception{check(control);existing.beforeModelRequest(requestId,messages,control);}
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception{check(control);return existing.afterModelResponse(requestId,answerId,control);}

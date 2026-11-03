@@ -4,6 +4,8 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import dev.pocketengine.ui.memory.TaskMemoryWorkflowSheet
 import dev.pocketengine.ui.memory.TaskMemorySearchSheet
+import dev.pocketengine.ui.memory.FinalAnswerSourcesSheet
+import dev.pocketengine.ui.memory.finalAnswerSourceSelection
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -271,6 +273,7 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
         } }, confirmButton = { Button(onClick = { controller.startPhone(goal, executionMode); consentGoal = null }) { Text("开始任务") } }, dismissButton = { TextButton(onClick = { controller.cancelChannelPhone(); consentGoal = null }) { Text("取消") } }) }
         BackHandler(enabled = !settings && !connections && !teamLaunch && state.teamRunId == null && state.inspectionTaskId == null && !state.backgroundSetupOpen && selectedTaskId == null && !conversationPicker && state.filePath == null && tab != 0) { tab = 0 }
         NativeInferenceHistory(controller)
+        NativeEvaluationPage(controller)
         ConversationReader(controller)
         QueuedOwnerInputsPanel(controller)
         AttachmentOutcomeOverlay(controller.attachmentOutcomes)
@@ -285,6 +288,9 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
     ChatAttachmentChooser(state,controller)
     var taskMemoryReference by remember { mutableStateOf<JSONObject?>(null) }
     taskMemoryReference?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
+    var answerSources by remember { mutableStateOf<JSONObject?>(null) }
+    var answerSourceMemory by remember { mutableStateOf<JSONObject?>(null) }
+    answerSources?.let { FinalAnswerSourcesSheet(controller, it, answerSourceMemory) { answerSources = null } }
     val ownerDraft=controller.composerDraft
     val ownerKey=ownerDraft?.key.orEmpty();val ownerEpoch=controller.composerViewEpoch
     if(!phone&&ownerDraft!=null&&ownerDraft.voiceText.isNotEmpty()&&!controller.canReviewVoiceDraft(false))RecoveredComposerVoiceReview(ownerDraft,controller)
@@ -342,6 +348,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 message.submission?.let{ChatInputReceipt(it,controller)}
                 if(messageDetails) {
                     message.id?.let { id -> SourceMemoryControl("message", id, message.content, state, controller, compact = true) }
+                    finalAnswerSourceSelection(message)?.let { selection -> TextButton(onClick = { answerSources = selection; answerSourceMemory = message.memoryReference }, modifier = Modifier.testTag("final_answer_sources_open")) { Text("这次回答的来源", fontSize = 11.sp) } }
                     message.memoryReference?.let { reference -> TextButton(onClick = { taskMemoryReference = JSONObject(reference.toString()) }) { Text("本次提供的记忆来源", fontSize = 11.sp) } }
                 }
                 (message.taskId ?: message.submission?.optString("taskId"))?.takeIf { it.isNotBlank() }?.let { id ->
@@ -486,6 +493,8 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
     val pairedTask = task.raw.optJSONObject("origin")?.optString("kind") == "paired_device"
     var taskMemoryReference by remember(task.id) { mutableStateOf<JSONObject?>(null) }
     taskMemoryReference?.takeUnless { pairedTask }?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
+    var answerSources by remember(task.id) { mutableStateOf<JSONObject?>(null) }
+    answerSources?.let { FinalAnswerSourcesSheet(controller, it) { answerSources = null } }
     var feedback by rememberSaveable(task.id) { mutableStateOf("") }
     var resumeConsent by remember(task.id) { mutableStateOf(false) }
     var reconciliationNote by rememberSaveable(task.id) { mutableStateOf("") }
@@ -575,6 +584,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                         }
                         Spacer(Modifier.height(10.dp))
                         RichConversationMessageBody(task.summary)
+                        if (!pairedTask) finalAnswerSourceSelection(task)?.let { selection -> TextButton(onClick = { answerSources = selection }, modifier = Modifier.testTag("task_answer_sources_open")) { Text("这次最终回答的来源") } }
                     }
                 }
             }
