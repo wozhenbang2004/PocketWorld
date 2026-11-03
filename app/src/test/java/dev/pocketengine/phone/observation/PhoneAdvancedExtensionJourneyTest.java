@@ -38,7 +38,7 @@ public final class PhoneAdvancedExtensionJourneyTest {
     private static final class Physical implements PhonePort,NativePhoneExtensions,NativeTreeScrollPort,NativePhoneSignals {
         final RunControl original;final AtomicInteger observations=new AtomicInteger(),effects=new AtomicInteger();
         volatile PhoneUiSignals signals=new PhoneUiSignals("accessibility-session",()->1000L);
-        volatile boolean connected=true,unknownPaste,dialog,practice,replaceWheel;
+        volatile boolean connected=true,unknownPaste,unknownScroll,dialog,practice,replaceWheel;
         volatile int wheel=1;String afterWheelResource;
         Physical(RunControl original){this.original=original;}
         public boolean isConnected(){return connected;}
@@ -75,7 +75,7 @@ public final class PhoneAdvancedExtensionJourneyTest {
         }
         public JSONObject scrollNode(JSONObject arguments,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
             assertSame(original,control);
-            return NativePhoneEntry.call(control,control.pauseRevision(),admission,()->{effects.incrementAndGet();wheel++;return j("ok",true,"accepted",true);});
+            return NativePhoneEntry.call(control,control.pauseRevision(),admission,()->{effects.incrementAndGet();wheel++;return unknownScroll?j("ok",false,"accepted",JSONObject.NULL,"error","action_unknown"):j("ok",true,"accepted",true);});
         }
     }
     private static final class Host implements AutoCloseable {
@@ -125,6 +125,14 @@ public final class PhoneAdvancedExtensionJourneyTest {
             if(replacement){assertEquals("unreadable",receipt.getString("status"));assertTrue(receipt.isNull("actualValue"));}
             else{assertEquals("partial",receipt.getString("status"));assertEquals("2",receipt.getString("actualValue"));}
             assertFalse(receipt.getBoolean("automaticReplayAllowed"));
+        }
+        try(Host host=new Host()){
+            host.physical.unknownScroll=true;JSONObject observation=host.observe();
+            JSONObject args=j("observationId",observation.getString("observationId"),"nodeId","n0","direction","forward","value","3");
+            JSONObject receipt=host.execute("phone_set_wheel",host.prepared("phone_set_wheel",args));
+            assertTrue(receipt.isNull("accepted"));assertTrue("unconfirmed input cannot claim zero performed steps",receipt.isNull("stepsPerformed"));
+            assertEquals(1,host.physical.effects.get());assertEquals(1,host.physical.observations.get());assertFalse(receipt.getBoolean("automaticReplayAllowed"));
+            assertEquals("reconciliation_required",host.phone.observe(false,host.control).getString("error"));
         }
     }
     @Test public void unknownPasteRemainsInOriginalJournalAndNeitherRefreshNorDuplicateReplaysIt()throws Exception {

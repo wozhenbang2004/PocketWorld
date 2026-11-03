@@ -243,6 +243,7 @@ internal fun LocalFiles(checkoutId: String, state: PocketUiState, controller: Po
     val projectId = state.feature("local").optJSONArray("checkouts").objects().firstOrNull { it.optString("id") == checkoutId }?.optString("projectId")
     if (projectId.isNullOrBlank()) { LocalCaption("原工作副本尚未核对，草稿未移到其他项目。请刷新原项目后重开。"); return }
     ProjectGitSection(projectId, checkoutId, state, controller)
+    NativeProjectFileImportControls(checkoutId, controller.projectFileImports)
     val session = controller.projectWorkbench
     val opened = session.opened(checkoutId)
     var requestId by remember(checkoutId) { mutableStateOf<String?>(null) }
@@ -542,3 +543,38 @@ private fun LocalChoice(label: String, options: List<Pair<String, String>>, sele
 @Composable private fun LocalCode(text: String) { SelectionContainer { Text(text, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState())) } }
 private fun localJobTitle(job: JSONObject, termux: Boolean): String = when (job.optString("kind")) { "project_stage" -> "准备 Termux 副本"; "workspace_collect" -> "取回 Termux 文件"; "tool_probe" -> "探测 Termux 工具"; else -> (if (termux) "Termux · " + job.optString("executable") else "系统 · " + job.optJSONArray("argv")?.optString(0).orEmpty()) }
 private fun localJobStatus(status: String): String = when (status) { "awaiting_result" -> "已交给 Termux · 等待真实回执"; "unknown" -> "结果不明 · 仅核对，不重发"; "interrupted" -> "本机已中断 · 未重放"; "timed_out" -> "执行超时"; else -> taskStatus(status) }
+
+
+/** Existing workbench controls; native picker bytes never enter a model/module JSON action. */
+@Composable
+private fun NativeProjectFileImportControls(checkoutId: String, flow: ProjectFileImportCoordinator) {
+    DisposableEffect(checkoutId) { flow.activate(checkoutId); onDispose { flow.deactivate() } }
+    val current = flow.state
+    TextButton(onClick = flow::open, enabled = !current.busy && !current.picking) { Text("从系统文件导入到此副本…") }
+    if (!current.open || current.checkout != checkoutId) return
+    var path by remember(checkoutId, current.source) { mutableStateOf(current.suggestedPath) }
+    var details by remember(current.source) { mutableStateOf(false) }
+    AlertDialog(onDismissRequest = flow::dismiss, title = { Text("导入一份文件到工作副本") }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LocalCaption("只处理系统明确选择的≤2MiB普通文件，不跟随虚拟/未下载项；先读取并核对，再单次确认。此入口不运行、不分享、不自动写正式版本库。")
+            current.source?.let { selected ->
+                Text(selected.optString("name"), fontWeight = FontWeight.Medium)
+                LocalCaption("${selected.optLong("bytes")} 字节 · SHA ${selected.optString("sha256").take(16)}…")
+                OutlinedTextField(value = path, onValueChange = { path = it; flow.targetChanged() }, enabled = !current.busy, label = { Text("副本内相对目标路径") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                LocalCaption("父目录须已存在；沿原source/已知私有配置排除。导入后，同副本项目工具可按原授权读取这些字节，未来运行也仍需原授权；不要选择密码或令牌。来源快照不保证provider原子版本。")
+                current.review?.let { review -> LocalCaption(if (review.optString("expectedHash") == "absent") "目标原先不存在，将新建这个文件。" else "将替换此工作文件；刚核对旧 SHA ${review.optString("expectedHash").take(16)}…") }
+                TextButton(onClick = { details = !details }) { Text(if (details) "收起原字节摘要" else "展开完整SHA与有限hex") }
+                if (details) { LocalCode(selected.optString("sha256")); LocalCode(selected.optString("previewHex").chunked(32).joinToString("\n")); LocalCaption("只显示前 ${selected.optInt("previewBytes")} / ${selected.optInt("bytes")} 字节，不是text diff/格式安全验证。") }
+            }
+            if (current.busy || current.picking) LinearProgressIndicator(Modifier.fillMaxWidth())
+            current.notice?.let { LocalCaption(it) }
+            current.receipt?.let { receipt -> LocalCaption("原导入回执：${receipt.optString("status")} · 不自动重发。若未知，请返回文件树核对当前目标；当前同SHA不冒原操作证明。") }
+        }
+    }, confirmButton = {
+        when {
+            current.review != null -> Button(onClick = flow::confirm, enabled = !current.busy) { Text("将这份文件导入工作副本") }
+            current.source != null -> Button(onClick = { flow.review(path) }, enabled = !current.busy && path.isNotBlank()) { Text("核对这个目标") }
+            else -> Button(onClick = flow::choose, enabled = !current.busy && !current.picking) { Text("在系统中选择文件…") }
+        }
+    }, dismissButton = { TextButton(onClick = flow::dismiss) { Text(if (current.busy) "取消并核对" else "返回文件树") } })
+}

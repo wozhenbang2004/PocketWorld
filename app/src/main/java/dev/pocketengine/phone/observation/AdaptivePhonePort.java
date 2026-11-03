@@ -200,7 +200,7 @@ public final class AdaptivePhonePort implements PhonePort {
             }
         }
         boolean reached=value!=null&&value.equals(args.getString("value"));
-        return result.put("target",args.getString("value")).put("actualValue",value==null?JSONObject.NULL:value).put("reached",reached).put("status",reached?"target_observed":value==null?"unreadable":"partial").put("stepsPerformed",Boolean.TRUE.equals(result.opt("accepted"))?1:0).put("verifiedBusinessSuccess",false);
+        return result.put("target",args.getString("value")).put("actualValue",value==null?JSONObject.NULL:value).put("reached",reached).put("status",reached?"target_observed":value==null?"unreadable":"partial").put("stepsPerformed",result.has("accepted")&&result.isNull("accepted")?JSONObject.NULL:Boolean.TRUE.equals(result.opt("accepted"))?1:0).put("verifiedBusinessSuccess",false);
     }
     @Override public synchronized void clearReferences() {
         latest = null; latestBinding = null; textTargets.clear();ocrSensitive=null;source.clearReferences();
