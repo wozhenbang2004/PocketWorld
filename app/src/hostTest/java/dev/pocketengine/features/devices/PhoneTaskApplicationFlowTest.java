@@ -238,8 +238,48 @@ public final class PhoneTaskApplicationFlowTest {
         assertEquals(scenario.taskId,actual.getString("taskId"));assertEquals(started.runId,actual.getString("runId"));assertEquals(started.epoch,actual.getInt("executorEpoch"));assertEquals(started.allocationId,actual.getString("allocationId"));
         assertEquals(scenario.targetDeviceId,actual.getString("actualPeerDeviceId"));
     }
+    private JSONObject requireOriginalNativeResult(Scenario scenario,Started started)throws Exception{
+        JSONObject task=app.tasks.get(scenario.taskId,false),result=task.getJSONObject("deviceGoalResult");
+        assertEquals("needs_confirmation",task.getString("status"));assertFalse(task.optBoolean("cancelRequested"));
+        assertSame(started.original,app.control(scenario.taskId));assertFalse(started.original.isCancelled());assertTrue(started.original.isPaused());
+        DeviceGoalSession session=app.originalDeviceGoalSession(scenario.taskId);assertNotNull(session);assertSame(started.original,session.originalControl());assertFalse(session.ownerResultClosed());
+        assertEquals(scenario.taskId,session.taskId());assertEquals(started.runId,task.getString("runId"));assertEquals(started.epoch,task.getInt("coordinatorEpoch"));
+        assertEquals(started.allocationId,task.getJSONObject("deviceExecutionScope").getString("allocationId"));
+        assertTrue(result.getBoolean("nativeRunnerExited"));assertTrue(result.getBoolean("nativeDispatchClosed"));assertFalse(result.getBoolean("closed"));
+        assertEquals(started.runId,result.getString("runId"));assertEquals(started.epoch,result.getInt("executorEpoch"));
+        assertTrue(result.getString("summary").contains("NATIVE-PHONE-RESULT"));assertEquals(result.getString("summary"),task.getString("summary"));
+        // Read the original native result review; do not mark it confirmed or
+        // construct a Finished object, completion receipt, new grant or run.
+        assertEquals(started.runId,app.tasks.deviceTasks().reviewGoalResult(scenario.taskId,started.runId,started.epoch).runId());
+        assertThrows(SecurityException.class,()->app.tasks.taskExecutionDeadline(scenario.taskId,started.runId,started.epoch));
+        assertThrows(SecurityException.class,()->session.modelApproval().checkCurrent(started.original));
+        return task;
+    }
+    private void awaitStableOriginalNativeResult(Scenario scenario,Started started)throws Exception{
+        long readyBy=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+        while(System.nanoTime()<readyBy){
+            pumpServices();JSONObject task=app.tasks.get(scenario.taskId,false),proof=task.optJSONObject("deviceGoalResult");
+            assertFalse("Original run cancelled while publishing its native result",started.original.isCancelled());
+            if(proof!=null&&proof.optBoolean("nativeRunnerExited")&&proof.optBoolean("nativeDispatchClosed")&&started.original.isPaused())break;
+            TimeUnit.MILLISECONDS.sleep(20);
+        }
+        JSONObject original=requireOriginalNativeResult(scenario,started);String result=DeviceProtocol.canonical(original.getJSONObject("deviceGoalResult"));
+        long revision=original.getLong("deviceStateRevision"),until=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(1500);
+        // Exercise the real one-second lease watchdog after native completion.
+        // Its old deadline fence cancelled needs_confirmation on the next tick.
+        do{
+            pumpServices();JSONObject current=requireOriginalNativeResult(scenario,started);
+            assertEquals(result,DeviceProtocol.canonical(current.getJSONObject("deviceGoalResult")));assertEquals(original.getString("summary"),current.getString("summary"));
+            assertTrue("Native result revision regressed",current.getLong("deviceStateRevision")>=revision);revision=current.getLong("deviceStateRevision");
+            TimeUnit.MILLISECONDS.sleep(20);
+        }while(System.nanoTime()<until);
+        assertEquals(2,modelRequests.get());assertEquals(1,count("runs"));signal("original-result-stable");
+    }
     @Test public void externalHttpClientReachesOriginalPhoneApprovalRunnerAndSameTaskResult()throws Exception{
-        Scenario scenario=startScenario("happy");Started started=approve(scenario);JSONObject actual=completeReport();sameOriginal(scenario,started,actual);
+        Scenario scenario=startScenario("happy");Started started=approve(scenario);JSONObject observed=phase("result_observed",60);
+        assertEquals("phone-api-native-submit",observed.getString("operationId"));assertEquals(scenario.taskId,observed.getString("taskId"));assertEquals(started.runId,observed.getString("runId"));assertEquals(started.epoch,observed.getInt("executorEpoch"));
+        awaitStableOriginalNativeResult(scenario,started);JSONObject actual=completeReport();sameOriginal(scenario,started,actual);
+        assertTrue(actual.getBoolean("nativeResultBarrierAcknowledged"));requireOriginalNativeResult(scenario,started);
         assertEquals(2,modelRequests.get());assertTrue(modelBodies.get(1).contains("NATIVE-PHONE-EXACT-ANSWER"));
         JSONObject done=app.tasks.get(scenario.taskId,false),result=done.getJSONObject("deviceGoalResult");assertEquals("needs_confirmation",done.getString("status"));assertTrue(result.getBoolean("nativeRunnerExited"));assertTrue(result.getBoolean("nativeDispatchClosed"));assertEquals(started.runId,result.getString("runId"));assertEquals(started.epoch,result.getInt("executorEpoch"));
         assertEquals(2,done.getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));assertEquals(started.allocationId,done.getJSONObject("deviceExecutionScope").getString("allocationId"));assertEquals(1,count("runs"));assertEquals(1,done.getJSONArray("ownerInputs").length());

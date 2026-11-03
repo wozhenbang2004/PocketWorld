@@ -353,7 +353,14 @@ public final class PhoneRunService extends Service {
         if(leaseWatch!=null)leaseWatch.cancel(false);deadlineReached=false;
         leaseWatch=leaseSupervisor.scheduleWithFixedDelay(()->{
             if(destroyed||!id.equals(runningId)||!run.equals(runningRunId)||original!=ownerControl)return;
-            try{if(original.isCancelled()||app.control(id)!=original)throw new SecurityException("原任务控制已变化");long end=app.tasks.taskExecutionDeadline(id,run,epoch);
+            try{if(original.isCancelled()||app.control(id)!=original)throw new SecurityException("原任务控制已变化");
+                var goal=deviceGoal;long end;
+                if(goal!=null&&goal.originalControl()==original&&id.equals(goal.taskId())){
+                    // A real exited Runner with its original closed dispatch and
+                    // paused control is waiting for owner result review, not execution.
+                    if(original.isPaused())try{app.tasks.deviceTasks().reviewGoalResult(id,run,epoch);return;}catch(SecurityException notClosedYet){/* Ordinary question/pause still retains the original deadline. */}
+                    end=app.tasks.deviceTasks().goalSupervisionDeadline(goal);
+                }else end=app.tasks.taskExecutionDeadline(id,run,epoch);
                 if(end!=Long.MAX_VALUE&&System.currentTimeMillis()>=end){deadlineReached=true;throw new SecurityException("任务期限已到");}
                 BackgroundPhonePort background=taskBackgroundPort;if(background!=null&&background.isConnected())background.renewTaskLease(id,run,epoch,original,end);
                 synchronized(this){if(wakeLock!=null&&!waitingForUser)wakeLock.acquire(30_000L);}

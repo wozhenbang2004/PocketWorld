@@ -23,8 +23,10 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.SecureRandom;
+import java.security.Signature;
 import java.security.cert.X509Certificate;
 import java.security.spec.ECGenParameterSpec;
+import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -68,7 +70,8 @@ public final class PhoneTaskInputsNativeTest {
         final DeviceGoalSession session;volatile DeviceGoalSession current;final DeviceOwnerInputs inputs;final DeviceTaskCoordinator coordinator;
         final HttpServer http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);final AtomicInteger requests=new AtomicInteger(),continuations=new AtomicInteger();
         final List<String> bodies=new CopyOnWriteArrayList<>();final List<JSONObject> events=new CopyOnWriteArrayList<>();final ModelConfig model;final String task,run,allocation;final int epoch;
-        final AgentRunner.OwnerInputs mailbox;boolean continueAutomatically=true;
+        final AgentRunner.OwnerInputs mailbox;boolean continueAutomatically=true,observeResultClosingWindow;
+        final AtomicInteger resultClosingWindows=new AtomicInteger();
         Fixture(int modelBudget)throws Exception {
             var context=RuntimeEnvironment.getApplication();context.deleteDatabase("pocket-world.db");tasks=new TaskStore(context);
             var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);sql=(SQLiteDatabase)field.get(tasks);
@@ -148,7 +151,21 @@ public final class PhoneTaskInputsNativeTest {
         RunOutcome runOriginal()throws Exception {
             NativeInferenceScope audience=NativeInferenceScope.pairedDeviceGoal(session.modelApproval(),original);
             DeviceGoalCapabilityPort guarded=new DeviceGoalCapabilityPort(NO_EFFECTS,admission,original,()->InferenceAudiencePolicy.require(model,audience,original));
-            session.runnerStarted();RunOutcome result=new AgentRunner(null,guarded,ContextBudgetPolicy.currentHostSource(),null,mailbox).run(task,tasks.get(task,false).getString("goal"),model,original,event->{try{JSONObject selected=new JSONObject();for(String key:List.of("type","status","tool","message","code"))if(event.has(key))selected.put(key,event.get(key));events.add(selected);tasks.event(task,run,epoch,event);}catch(Exception failure){throw new IllegalStateException(failure);}},tasks.journal(task,run,epoch,original));
+            session.runnerStarted();RunOutcome result=new AgentRunner(null,guarded,ContextBudgetPolicy.currentHostSource(),null,mailbox).run(task,tasks.get(task,false).getString("goal"),model,original,event->{try{
+                JSONObject selected=new JSONObject();for(String key:List.of("type","status","tool","message","code"))if(event.has(key))selected.put(key,event.get(key));events.add(selected);tasks.event(task,run,epoch,event);
+                if(observeResultClosingWindow&&"result".equals(event.optString("type"))&&"needs_confirmation".equals(event.optString("status"))){
+                    // This is the actual original result event, before run() has
+                    // returned and before the service can receive its Finished.
+                    JSONObject closing=tasks.get(task,false);long revision=closing.getLong("deviceStateRevision");String originalGrant=grant();
+                    assertFalse(closing.has("deviceGoalResult"));assertFalse(original.isPaused());assertFalse(original.isCancelled());
+                    assertEquals(Math.min(new JSONObject(originalGrant).getLong("expiresAt"),admission.deadline()),tasks.deviceTasks().goalSupervisionDeadline(session));
+                    assertThrows(SecurityException.class,()->tasks.taskExecutionDeadline(task,run,epoch));
+                    assertThrows(SecurityException.class,()->session.modelApproval().checkCurrent(original));
+                    assertThrows(SecurityException.class,()->guarded.beforeTool("run_ask_user",new JSONObject(),original));
+                    assertEquals(revision,tasks.get(task,false).getLong("deviceStateRevision"));assertEquals(originalGrant,grant());
+                    resultClosingWindows.incrementAndGet();
+                }
+            }catch(Exception failure){throw new IllegalStateException(failure);}},tasks.journal(task,run,epoch,original));
             if("failed".equals(result.status))System.err.println("Original paired Runner fixture: "+diagnostics(result));
             var finished=session.runnerFinished(result);if(result.status.equals("awaiting_user")){tasks.status(task,"awaiting_user",result.summary);original.pause();tasks.recordDeviceOrdinaryQuestionWait(finished);inputs.waiting(finished);}return result;
         }
@@ -158,6 +175,7 @@ public final class PhoneTaskInputsNativeTest {
         public void close(){original.cancel();inputs.released(task,original);tasks.deviceTasks().release(run,original);http.stop(0);sql.close();}
     }
     @Test public void realQuestionAndSteeringReachOriginalRunnerWithSameRunGrantAndCumulativeBudget()throws Exception{try(Fixture f=new Fixture(4)){
+        f.observeResultClosingWindow=true;
         String lease=f.acquire("first-control",null).getString("leaseId"),grant=f.grant();
         JSONObject guidance=f.coordinator.ownerInput(f.permission(f.input("task.steer","original-guidance",lease,"FIXTURE-RUNNING-GUIDANCE")));assertTrue(guidance.getBoolean("inputSaved"));
         RunOutcome waiting=f.runOriginal();assertEquals(f.diagnostics(waiting),"awaiting_user",waiting.status);assertEquals(1,f.requests.get());assertTrue(f.bodies.get(0).contains("FIXTURE-RUNNING-GUIDANCE"));
@@ -166,7 +184,7 @@ public final class PhoneTaskInputsNativeTest {
         assertEquals(1,f.continuations.get());assertEquals(f.run,f.tasks.get(f.task,false).getString("runId"));assertEquals(f.epoch,f.tasks.get(f.task,false).getInt("coordinatorEpoch"));assertEquals(grant,f.grant());assertEquals(1,f.count("runs"));
         JSONObject repeated=f.owner(write);assertTrue(repeated.getBoolean("knownOperation"));assertEquals(saved.getString("messageId"),repeated.getString("messageId"));assertEquals(1,f.continuations.get());
         JSONObject changed=new JSONObject(write.toString());changed.getJSONObject("arguments").put("text","CHANGED-AFTER-NATIVE-RESUME");assertThrows(SecurityException.class,()->f.owner(changed));assertEquals(1,f.continuations.get());
-        RunOutcome completed=f.runOriginal();assertTrue(f.diagnostics(completed),List.of("completed","needs_confirmation").contains(completed.status));assertEquals(2,f.requests.get());assertTrue(f.bodies.get(1).contains("FIXTURE-PAIRED-SECOND-SECTION"));
+        RunOutcome completed=f.runOriginal();assertTrue(f.diagnostics(completed),List.of("completed","needs_confirmation").contains(completed.status));assertEquals(1,f.resultClosingWindows.get());assertEquals(2,f.requests.get());assertTrue(f.bodies.get(1).contains("FIXTURE-PAIRED-SECOND-SECTION"));
         JSONObject task=f.tasks.get(f.task,false);assertEquals(2,task.getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));assertNotEquals("owner",task.getString("actorId"));assertNotEquals("private",task.getString("spaceId"));assertTrue(task.optString("conversationId").isEmpty());
         assertEquals(2,task.getJSONArray("ownerInputs").length());for(int i=0;i<2;i++){JSONObject row=task.getJSONArray("ownerInputs").getJSONObject(i);assertEquals("native_paired_task_input",row.getString("sourceKind"));assertFalse(row.getBoolean("formalSourceRefAvailable"));assertFalse(row.has("userSourceRef"));}
     }}
@@ -251,6 +269,7 @@ public final class PhoneTaskInputsNativeTest {
             else if(reason.equals("cancelled")){f.tasks.requestCancel(f.task,f.run);f.original.cancel();}
             else f.tasks.deviceTasks().release(f.run,f.original);
             assertThrows(Exception.class,()->f.decide(request,true));assertEquals(0,f.requests.get());assertEquals(1,f.count("runs"));
+            assertThrows(SecurityException.class,()->f.tasks.deviceTasks().goalSupervisionDeadline(f.session));
             assertEquals("pending_owner_confirmation",f.tasks.get(f.task,false).getJSONObject("deviceResumeRequest").getString("state"));
         }
     }
@@ -265,23 +284,97 @@ public final class PhoneTaskInputsNativeTest {
         RunOutcome waiting=f.runOriginal();assertEquals(f.diagnostics(waiting),"awaiting_user",waiting.status);String lease=f.acquire("question-control",null).getString("leaseId");
         assertThrows(SecurityException.class,()->f.owner(f.resume("not-an-answer",lease)));assertEquals(1,f.requests.get());assertEquals(0,f.continuations.get());assertEquals(1,f.count("runs"));
     }}
+    @Test public void persistedOriginalSignedGrantSurvivesUpgradeWithoutExpandingNetworkOrMethodAuthority()throws Exception{
+        final String oldProfile="pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb",grantId="retained-before-phone-input-upgrade",instance="retained-peer-instance";
+        Peers tls=authenticatedPeers();var app=RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");TaskStore first=new TaskStore(app);
+        var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);SQLiteDatabase initial=(SQLiteDatabase)field.get(first);
+        long now=System.currentTimeMillis(),executionExpiry=now+60000,historyExpiry=now+120000,receivedAt=now-500;
+        JSONObject binding=new JSONObject().put("screenMode","capabilities"),grant=new JSONObject().put("grantId",grantId).put("localDeviceId",tls.caller.deviceId()).put("peerDeviceId",tls.target)
+            .put("authorizationEpoch",1).put("issuedAt",now-1000).put("expiresAt",executionExpiry)
+            .put("capabilities",new JSONArray().put("task.submitGoal").put("tool.invoke").put("operation.cancel").put("operation.get").put("task.get"))
+            .put("toolNames",new JSONArray().put("phone_observe")).put("resources",new JSONArray().put(binding)).put("allowedOrigins",new JSONArray().put(tls.target))
+            .put("allowDelegation",false).put("maxDelegationDepth",0).put("toolBudget",2).put("modelBudget",2)
+            .put("historyRead",new JSONObject().put("expiresAt",historyExpiry).put("methods",new JSONArray().put("operation.get").put("task.get")));
+        JSONObject original=signedGrant(tls.source,grant,oldProfile,instance,"PairGrantReceipt",now-1000);
+        ContentValues known=new ContentValues();known.put("device_id",tls.caller.deviceId());known.put("certificate_der",tls.caller.certificateDer());known.put("fingerprint",tls.caller.certificateFingerprint());known.put("instance_id",instance);known.put("authorization_epoch",1);known.put("revoked",0);known.put("updated_at",now);
+        try{initial.insertOrThrow("device_peers",null,known);new TaskStoreDeviceTrust(initial).putOutgoingGrant(tls.caller.deviceId(),grantId,original,receivedAt);}finally{initial.close();}
+        // A real reopen of the same TaskStore file, not an in-memory route cache.
+        TaskStore reopened=new TaskStore(app);SQLiteDatabase sql=(SQLiteDatabase)field.get(reopened);
+        try{
+            TaskStoreDeviceTrust trust=new TaskStoreDeviceTrust(sql);PairingCoordinator pairing=new PairingCoordinator(trust,tls.target,"retained-local-instance");
+            DeviceIdentity.LocalIdentity local=localIdentity(tls.receiver,"retained-local-instance");
+            PairingCoordinator.OutgoingGrant route=pairing.restoreOutgoingGrant(tls.caller,grantId,now);route.requireTargetPeer(tls.caller,now);
+            assertEquals(DeviceProtocol.canonical(grant),DeviceProtocol.canonical(route.grant()));assertEquals(1,route.authorizationEpoch());assertEquals(executionExpiry,route.deadline());
+            assertEquals(tls.caller.deviceId(),route.targetDeviceId());assertEquals(instance,route.targetInstanceId());
+            var stop=route.operationCancel(local,"original-unknown-operation","a".repeat(64),"original-stop-request",binding,now,1000);stop.requireTargetPeer(tls.caller,now);
+            assertEquals("operation.cancel",stop.envelope().method());assertEquals(DeviceProtocol.PROFILE,stop.envelope().json().getString("protocolProfile"));assertFalse(stop.envelope().json().has("budget"));
+            var history=pairing.historyRoute(tls.caller,grantId,executionExpiry+1);
+            var query=history.historyQuery(local,"operation.get","original-unknown-operation",binding,executionExpiry+1,1000,null);query.requireTargetPeer(tls.caller,executionExpiry+1);
+            assertEquals("original-unknown-operation",query.envelope().arguments().getString("operationId"));assertEquals(DeviceProtocol.PROFILE,query.envelope().json().getString("protocolProfile"));assertFalse(query.envelope().json().has("budget"));
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,executionExpiry+1));
+            assertThrows(SecurityException.class,()->history.historyQuery(local,"operation.get","original-unknown-operation",binding,historyExpiry+1,1000,null));
+            assertEquals(DeviceProtocol.canonical(original),DeviceProtocol.canonical(trust.outgoingGrant(tls.caller.deviceId(),grantId)));
+            try(Cursor row=sql.rawQuery("SELECT receipt_json,received_at FROM device_outgoing_grants WHERE target_device_id=? AND grant_id=?",new String[]{tls.caller.deviceId(),grantId})){assertTrue(row.moveToFirst());assertEquals(DeviceProtocol.canonical(original),row.getString(0));assertEquals(receivedAt,row.getLong(1));}
+            assertEquals(1,trust.peer(tls.caller.deviceId()).getLong("authorizationEpoch"));
+            // Original network parsing stays strict even though this stored record can restore.
+            assertThrows(DeviceProtocol.ProtocolException.class,()->pairing.acceptOutgoingGrant(tls.caller,original,now));
+            assertThrows(DeviceProtocol.ProtocolException.class,()->pairing.acceptHistoryGrantReceipt(tls.caller,original,now));
+            JSONObject oldWire=new JSONObject(query.envelope().json().toString()).put("protocolProfile",oldProfile);assertThrows(DeviceProtocol.ProtocolException.class,()->DeviceProtocol.parseRequest(DeviceProtocol.canonicalBytes(oldWire)));
+            for(String added:List.of("task.answerQuestion","task.steer","task.requestResume","future.ownerControl")){
+                trust.putOutgoingGrant(tls.caller.deviceId(),grantId,original,receivedAt);
+                assertFalse(PairingCoordinator.contains(route.grant().getJSONArray("capabilities"),added));
+                assertThrows(SecurityException.class,()->history.historyQuery(local,added,"original-unknown-operation",binding,now,1000,null));
+                JSONObject expanded=new JSONObject(grant.toString());expanded.getJSONArray("capabilities").put(added);
+                trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.source,expanded,oldProfile,instance,"PairGrantReceipt",now-1000),receivedAt);
+                assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));assertThrows(SecurityException.class,()->pairing.historyRoute(tls.caller,grantId,now));
+            }
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.source,grant,"pwp1_"+"0".repeat(64),instance,"PairGrantReceipt",now-1000),receivedAt);
+            assertThrows(DeviceProtocol.ProtocolException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            JSONObject tampered=new JSONObject(original.toString());tampered.getJSONObject("body").getJSONObject("grant").put("toolBudget",3);trust.putOutgoingGrant(tls.caller.deviceId(),grantId,tampered,receivedAt);
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.source,grant,oldProfile,instance,"DeviceKeyRotation",now-1000),receivedAt);
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.receiver,grant,oldProfile,instance,"PairGrantReceipt",now-1000),receivedAt);
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.source,grant,oldProfile,"different-peer-instance","PairGrantReceipt",now-1000),receivedAt);
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,original,receivedAt);Peers other=authenticatedPeers();
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(other.caller,grantId,now));assertThrows(SecurityException.class,()->route.requireTargetPeer(other.caller,now));
+            ContentValues changed=new ContentValues();changed.put("instance_id","different-current-instance");sql.update("device_peers",changed,"device_id=?",new String[]{tls.caller.deviceId()});
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));assertThrows(SecurityException.class,()->route.checkCurrent(now));
+            changed.put("instance_id",instance);sql.update("device_peers",changed,"device_id=?",new String[]{tls.caller.deviceId()});
+            pairing.revokeLocally(tls.caller.deviceId(),now);assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));assertThrows(SecurityException.class,()->pairing.historyRoute(tls.caller,grantId,now));assertThrows(SecurityException.class,()->query.requireTargetPeer(tls.caller,executionExpiry+1));
+            assertEquals(DeviceProtocol.canonical(original),DeviceProtocol.canonical(trust.outgoingGrant(tls.caller.deviceId(),grantId)));
+        }finally{sql.close();}
+    }
     private record Material(KeyPair keys,X509Certificate cert){}
-    private record Peers(DeviceIdentity.AuthenticatedPeer caller,String target){}
+    private record Peers(DeviceIdentity.AuthenticatedPeer caller,String target,Material source,Material receiver){}
+    private static JSONObject signedGrant(Material signer,JSONObject grant,String profile,String instance,String type,long issuedAt)throws Exception{
+        JSONObject record=new JSONObject().put("protocolVersion",DeviceProtocol.VERSION).put("protocolProfile",profile).put("messageType",type).put("issuerDeviceId",DeviceIdentity.id(signer.cert)).put("issuerCertificateFingerprint",DeviceProtocol.sha256(signer.cert.getEncoded()))
+            .put("body",new JSONObject().put("grant",new JSONObject(grant.toString())).put("targetInstanceId",instance).put("issuedAt",issuedAt));
+        Signature signature=Signature.getInstance("SHA256withECDSA");signature.initSign(signer.keys.getPrivate());signature.update(DeviceProtocol.canonicalBytes(record));return record.put("signature",Base64.getEncoder().encodeToString(signature.sign()));
+    }
+    private static DeviceIdentity.LocalIdentity localIdentity(Material material,String instance)throws Exception{
+        // Existing host-test identity technique: the exact real TLS key/certificate
+        // stays in an in-memory KeyStore; no production private key is loaded or saved.
+        KeyStore store=KeyStore.getInstance("PKCS12");store.load(null);store.setKeyEntry("pocketworld.device.identity.v1",material.keys.getPrivate(),null,new java.security.cert.Certificate[]{material.cert});
+        var constructor=DeviceIdentity.LocalIdentity.class.getDeclaredConstructor(KeyStore.class,X509Certificate.class,String.class);constructor.setAccessible(true);return constructor.newInstance(store,material.cert,instance);
+    }
     private static Material certificate()throws Exception{
         KeyPairGenerator generator=KeyPairGenerator.getInstance("EC");generator.initialize(new ECGenParameterSpec("secp256r1"));KeyPair keys=generator.generateKeyPair();long now=System.currentTimeMillis();X500Name name=new X500Name("CN=PocketWorld Ordinary Input Synthetic Fixture");
         X509Certificate certificate=new JcaX509CertificateConverter().getCertificate(new JcaX509v3CertificateBuilder(name,new java.math.BigInteger(120,new SecureRandom()).add(java.math.BigInteger.ONE),new Date(now-60000),new Date(now+3600000),name,keys.getPublic()).build(new JcaContentSignerBuilder("SHA256withECDSA").build(keys.getPrivate())));return new Material(keys,certificate);
     }
     private static SSLContext context(Material local,Material peer)throws Exception{
-        // The host fixture uses the JDK TLS stack. Robolectric's default Conscrypt
-        // client needs unavailable java.net reflection on JDK 17; trust is still
-        // restricted to the exact synthetic peer certificate on both endpoints.
-        KeyStore keys=KeyStore.getInstance("PKCS12");keys.load(null);keys.setKeyEntry("fixture",local.keys.getPrivate(),"fixture-only".toCharArray(),new java.security.cert.Certificate[]{local.cert});KeyManagerFactory km=KeyManagerFactory.getInstance("SunX509","SunJSSE");km.init(keys,"fixture-only".toCharArray());
-        KeyStore trusted=KeyStore.getInstance(KeyStore.getDefaultType());trusted.load(null);trusted.setCertificateEntry("fixture-peer",peer.cert);TrustManagerFactory tm=TrustManagerFactory.getInstance("PKIX","SunJSSE");tm.init(trusted);SSLContext context=SSLContext.getInstance("TLSv1.3","SunJSSE");context.init(km.getKeyManagers(),tm.getTrustManagers(),new SecureRandom());return context;
+        // Keep the platform provider used by the original host fixtures. The
+        // bounded CI group opens Conscrypt's JDK 17 socket metadata access only;
+        // both trust stores still contain the exact synthetic peer certificate.
+        KeyStore keys=KeyStore.getInstance("PKCS12");keys.load(null);keys.setKeyEntry("fixture",local.keys.getPrivate(),"fixture-only".toCharArray(),new java.security.cert.Certificate[]{local.cert});KeyManagerFactory km=KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());km.init(keys,"fixture-only".toCharArray());
+        KeyStore trusted=KeyStore.getInstance(KeyStore.getDefaultType());trusted.load(null);trusted.setCertificateEntry("fixture-peer",peer.cert);TrustManagerFactory tm=TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());tm.init(trusted);SSLContext context=SSLContext.getInstance("TLSv1.3");context.init(km.getKeyManagers(),tm.getTrustManagers(),new SecureRandom());return context;
     }
     private static Peers authenticatedPeers()throws Exception{
         Material source=certificate(),target=certificate();SSLContext serverContext=context(target,source),clientContext=context(source,target);var worker=Executors.newSingleThreadExecutor();
         try(SSLServerSocket server=(SSLServerSocket)serverContext.getServerSocketFactory().createServerSocket(0,1,InetAddress.getLoopbackAddress())){server.setNeedClientAuth(true);var receiving=worker.submit(()->{try(SSLSocket socket=(SSLSocket)server.accept()){socket.startHandshake();return DeviceIdentity.authenticatedPeer(socket.getSession());}});
-            try(SSLSocket client=(SSLSocket)clientContext.getSocketFactory().createSocket(InetAddress.getLoopbackAddress(),server.getLocalPort())){client.startHandshake();return new Peers(receiving.get(10,TimeUnit.SECONDS),DeviceIdentity.id(target.cert));}
+            try(SSLSocket client=(SSLSocket)clientContext.getSocketFactory().createSocket(InetAddress.getLoopbackAddress(),server.getLocalPort())){client.startHandshake();return new Peers(receiving.get(10,TimeUnit.SECONDS),DeviceIdentity.id(target.cert),source,target);}
         }finally{worker.shutdownNow();}
     }
 }

@@ -284,12 +284,18 @@ class NativeFixture:
         require(isinstance(value, dict) and value.get("operationId") == OPERATION
                 and value.get("peerDeviceId") == self.spec["targetDeviceId"]
                 and value.get("taskId") == self.report["taskId"], "mcp_read_changed_original_operation")
-        actual, previous = value.get("task", {}), original["task"]
-        require(all(actual.get(key) == previous[key]
-                    for key in ("executorDeviceId", "instanceId", "taskId", "runId", "executorEpoch", "state"))
-                and actual.get("revision", 0) >= previous["revision"]
-                and actual.get("result", {}).get("summary") == previous["result"]["summary"],
-                "mcp_read_changed_original_result")
+        require(isinstance(value.get("task"), dict) and not value.get("currentRead")
+                and not value.get("phoneStateUnconfirmed"), "mcp_read_original_snapshot_unavailable")
+        actual, previous = value["task"], original["task"]
+        changed = [key for key in ("executorDeviceId", "instanceId", "taskId", "runId", "executorEpoch", "state")
+                   if actual.get(key) != previous[key]]
+        if actual.get("revision", 0) < previous["revision"]:
+            changed.append("revision")
+        if actual.get("result", {}).get("summary") != previous["result"]["summary"]:
+            changed.append("summary")
+        # Fixed field names only: expose no result text, credential, identity or
+        # remote body if a real native transition violates the result contract.
+        require(not changed, "mcp_read_changed_original_result_" + "_".join(changed))
 
     def read_through_task_desk(self, original):
         """Use the original Desk session over HTTP, then close it without stopping the phone."""
@@ -512,6 +518,16 @@ class NativeFixture:
                     and "NATIVE-PHONE-RESULT" in final.get("result", {}).get("summary", ""))
 
         final = self.poll(finished, "wait_original_result")
+        print(json.dumps({"phase": "result_observed", "taskId": self.report["taskId"], "operationId": OPERATION,
+                          "runId": self.report["runId"], "executorEpoch": self.report["executorEpoch"]}), flush=True)
+        # Java waits for the actual original Finished proof and paused control,
+        # and keeps the real service/watchdog alive across its next lease tick.
+        # This phase command authorizes no task write, model call or new run.
+        self.owner_barrier("original-result-stable")
+        settled = self.status()
+        self.require_same_result(settled, final)
+        self.report["nativeResultBarrierAcknowledged"] = True
+        final = settled
         final = self.read_through_task_desk(final)
         self.report["duplicateAnswerReceiptUnchanged"] = True
         return self.finish(final)

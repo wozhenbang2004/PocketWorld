@@ -160,10 +160,9 @@ class PhoneTaskRouter:
         if history:
             ticket = pairing.history_route(peer, grant_id, self.manager.now())
         else:
-            receipt = self.service.receiver.trust.outgoing_grant(peer_id, grant_id)
-            if receipt is None:
+            if self.service.receiver.trust.outgoing_grant(peer_id, grant_id) is None:
                 raise PhoneTaskError("Selected phone has no current native signed grant", 403)
-            ticket = pairing.accept_outgoing_grant(peer, receipt, self.manager.now())
+            ticket = pairing.restore_outgoing_grant(peer, grant_id, self.manager.now())
         return connection, peer, ticket
 
     async def _exchange(self, connection, peer, ticket, envelope, timeout=12):

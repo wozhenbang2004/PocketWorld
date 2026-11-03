@@ -1018,10 +1018,9 @@ class DeviceCompanionService:
         if route is not None:
             if route["peerDeviceId"] != peer.device_id or route["expiresAt"] <= self.manager.now():
                 await connection.close("revoked"); return
-            receipt = self.receiver.trust.outgoing_grant(peer.device_id, route["grantId"])
-            if receipt is None:
+            if self.receiver.trust.outgoing_grant(peer.device_id, route["grantId"]) is None:
                 await connection.close("revoked"); return
-            outgoing = self.receiver.pairing.accept_outgoing_grant(peer, receipt, self.manager.now())
+            outgoing = self.receiver.pairing.restore_outgoing_grant(peer, route["grantId"], self.manager.now())
             outgoing.require_target_peer(peer, self.manager.now())
         self.connections.add(connection)
         self.phone_tasks.connection_opened(connection, peer)

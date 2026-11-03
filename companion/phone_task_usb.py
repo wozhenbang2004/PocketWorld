@@ -177,11 +177,10 @@ async def attach(service, peer_id, grant_id, forward):
             if peer.device_id != peer_id:
                 await actual.close("revoked")
                 return
-            receipt = service.receiver.trust.outgoing_grant(peer_id, grant_id)
-            if receipt is None:
+            if service.receiver.trust.outgoing_grant(peer_id, grant_id) is None:
                 await actual.close("revoked")
                 return
-            route = service.receiver.pairing.accept_outgoing_grant(peer, receipt, service.manager.now())
+            route = service.receiver.pairing.restore_outgoing_grant(peer, grant_id, service.manager.now())
             route.require_target_peer(peer, service.manager.now())
             await service._bind(actual, peer)
             if actual.closed or actual not in service.connections:

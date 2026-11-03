@@ -50,6 +50,9 @@ tasks.withType(Test).configureEach {
     maxHeapSize = '1024m'
     // Robolectric's real document FD close needs the JDK17 java.io bridge; host JVM only.
     if (selected.contains('project-file-operations')) jvmArgs '--add-opens=java.base/java.io=ALL-UNNAMED'
+    // The SDK35 host Conscrypt socket bridge inspects InetAddress on JDK17.
+    // Keep real mutually authenticated TLS; open only this host-test module/package.
+    if (selected.contains('phone-task-platform')) jvmArgs '--add-opens=java.base/java.net=ALL-UNNAMED'
     enableAssertions = true
     outputs.upToDateWhen { false }
     // AGP's test_config.properties paths are app-module relative. A repository-root

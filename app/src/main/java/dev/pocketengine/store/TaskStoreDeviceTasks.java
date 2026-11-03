@@ -107,11 +107,33 @@ public final class TaskStoreDeviceTasks {
             GoalModelReview review=reviewGoalModel(id,current.getLong("deviceStateRevision"),admission,selected);review.confirmed=true;review.policyKey=modelPolicyKey(admission);review.policyDigest=TaskStore.capabilityFingerprint(policy);return new GoalModelApproval(review);
         }
     }
-    private void checkGoalModel(GoalModelApproval proof,RunControl actual)throws Exception{
+    private void checkGoalModel(GoalModelApproval proof,RunControl actual)throws Exception{checkGoalModel(proof,actual,false);}
+    private void checkGoalModel(GoalModelApproval proof,RunControl actual,boolean supervisionOnly)throws Exception{
         proof.review.admission.checkCurrent();synchronized(owner){
             if(proof.review.issuer!=this||!proof.matchesOriginal(actual)||goalModels.get(proof.run)!=proof||actual.isCancelled())throw new SecurityException("没有该本机owner选定模型的原生准入");
             if(!proof.review.policyKey.isEmpty()){JSONObject policy=modelPolicy(proof.review.policyKey);if(policy==null||!proof.review.policyDigest.equals(TaskStore.capabilityFingerprint(policy)))throw new SecurityException("B本机模型策略已撤销或换版");requireModelPolicyScope(policy,proof.review.admission);}
-            JSONObject current=task(proof.review.id);requireDevice(current);if(!proof.run.equals(current.optString("runId"))||proof.epoch!=current.optInt("coordinatorEpoch")||current.optBoolean("cancelRequested")||!current.optString("status").matches("preparing|running|pausing|paused|awaiting_user"))throw new SecurityException("原设备模型任务已停止或换代");
+            JSONObject current=task(proof.review.id);requireDevice(current);if(!proof.run.equals(current.optString("runId"))||proof.epoch!=current.optInt("coordinatorEpoch")||current.optBoolean("cancelRequested")||!(current.optString("status").matches("preparing|running|pausing|paused|awaiting_user")||supervisionOnly&&"needs_confirmation".equals(current.optString("status"))))throw new SecurityException("原设备模型任务已停止或换代");
+        }
+    }
+    /** Read-only service supervision of the original native GoalSession. The Runner
+     * publishes its result before returning its Finished proof; that short closing
+     * phase must retain the old deadline without reopening any model/effect fence. */
+    public long goalSupervisionDeadline(dev.pocketengine.features.devices.DeviceGoalSession session)throws Exception{
+        if(session==null)throw new SecurityException("没有原设备目标会话");
+        RunControl original=session.originalControl();GoalModelApproval approved=session.modelApproval();
+        checkGoalModel(approved,original,true);
+        synchronized(owner){
+            JSONObject current=task(session.taskId());requireDevice(current);requireSameSession(current,session.admission());
+            String run=current.getString("runId");int epoch=current.getInt("coordinatorEpoch");Live active=live.get(run);
+            if(active==null||active.original!=original||active.admission!=session.admission()||goalModels.get(run)!=approved
+                    ||!approved.matchesOriginal(original)||!original.matchesHostRun(session.taskId(),run,epoch)
+                    ||original.isCancelled()||current.optBoolean("cancelRequested"))throw new SecurityException("原设备目标监管身份已变化");
+            if(!"needs_confirmation".equals(current.optString("status")))return owner.taskExecutionDeadline(session.taskId(),run,epoch);
+            try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{session.taskId(),run,String.valueOf(epoch)})){
+                if(!row.moveToFirst()||!"running".equals(row.getString(0)))throw new SecurityException("原设备目标run已结束");
+            }
+            long deadline=Math.min(access.grant(run).getLong("expiresAt"),session.admission().deadline());
+            if(deadline<1)throw new SecurityException("没有原设备目标期限");return deadline;
         }
     }
     /** Explicit local owner revocation; a current run notices it at the next model/effect fence. */
