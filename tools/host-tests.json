@@ -49,6 +49,12 @@
     "robolectric": true,
     "description": "Exact original-source targeted tests; no complete Android, physical device, external service or UI acceptance."
   },
+  "main-model-selection": {
+    "class": "dev.pocketengine.store.SettingsMainSelectionTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original SettingsStore/SharedPreferences explicit MAIN replacements, preserved groups and other purposes, frozen API admission bindings, profile and legacy selection paths, single-commit service selection and before/after/throwing persistence-failure fences. No live provider, Android device or visual acceptance."
+  },
   "mika-issue-integration": {
     "class": "dev.pocketengine.features.assistant.OwnerSourceProjectionNativeTest",
     "additionalClasses": [
