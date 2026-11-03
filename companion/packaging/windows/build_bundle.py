@@ -2,6 +2,8 @@
 
 No download, dependency installation, credential generation, deployment, signing,
 or public release. A bundle hash proves bytes, NOT source/binary correspondence.
+Input and staging paths still require a builder protected from concurrent writers;
+digest checks do not make path-based copies or signature verification atomic.
 """
 import argparse
 import hashlib
@@ -115,31 +117,42 @@ def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, out
         if record is None:
             if actual != unsigned_hash or (name in required_signed and not allow_unsigned_development):
                 raise ValueError("Unsigned build identity changed without signing evidence")
-            return
+            return actual
         if (record.get("unsignedSha256") != unsigned_hash or record.get("finalSha256") != actual
                 or record.get("signatureStatus") != "Valid" or not record.get("signerThumbprint")):
             raise ValueError("Pre/post-sign artifact identity does not match")
-        if not allow_unsigned_development:
-            verify_authenticode(path, record["signerThumbprint"])
+        return actual
+    admitted = {}
     for name, path in frozen_files:
-        admitted_hash("app/"+name, path, runtime["unsignedFiles"][name])
-    admitted_hash("driver/cua-driver.exe", driver_binary, provenance["artifactSha256"])
+        admitted["app/"+name] = admitted_hash("app/"+name, path, runtime["unsignedFiles"][name])
+    admitted["driver/cua-driver.exe"] = admitted_hash("driver/cua-driver.exe", driver_binary, provenance["artifactSha256"])
+    if admitted["driver/cua-driver.exe"] != driver_sha256:
+        raise ValueError("Driver admitted identity differs from supplied SHA-256")
     for name in MANAGEMENT_SCRIPTS:
         path = management_dir / name
         if not path.is_file(): raise ValueError("Management entry missing from package")
         unsigned = runtime.get("managementUnsignedFiles", {}).get(name)
         if not re.fullmatch(r"[a-f0-9]{64}", unsigned or ""): raise ValueError("Management source/build hash missing")
-        admitted_hash("tools/"+name, path, unsigned)
+        admitted["tools/"+name] = admitted_hash("tools/"+name, path, unsigned)
+    signers = {name: signed[name]["signerThumbprint"] for name in admitted if name in signed}
+    admitted.update({"licenses/runtime/"+name: runtime["licenseFiles"][name] for name, _ in license_files})
+    admitted["licenses/cua-driver-THIRD-PARTY-NOTICES.md"] = CUA_NOTICES_SHA256
+    admitted["licenses/cua-driver-MIT.txt"] = file_hash(source / "licenses/cua-driver-MIT.txt")
     with tempfile.TemporaryDirectory(prefix="pocketworld-bundle-") as temporary:
         root = Path(temporary)
-        # Validate BEFORE copy, so copytree cannot follow an unreviewed junction.
-        for name, path in tree(frozen_dir):
+        def write_metadata(name, value):
+            raw = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            (root / name).write_bytes(raw)
+            admitted[name] = hashlib.sha256(raw).hexdigest()
+        # Copy only the admitted members. Paths can change after the input checks;
+        # staged and archived bytes must still match the captured identities.
+        for name, path in frozen_files:
             target = root / "app" / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, target)
         (root / "driver").mkdir()
         shutil.copyfile(driver_binary, root / "driver" / "cua-driver.exe")
-        (root / "driver" / "cua-build-provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_metadata("driver/cua-build-provenance.json", provenance)
         (root / "licenses").mkdir()
         shutil.copyfile(source / "licenses" / "cua-driver-MIT.txt", root / "licenses" / "cua-driver-MIT.txt")
         shutil.copyfile(notices, root / "licenses" / "cua-driver-THIRD-PARTY-NOTICES.md")
@@ -147,22 +160,40 @@ def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, out
             target = root / "licenses" / "runtime" / name; target.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(path, target)
         (root / "tools").mkdir()
         for name in MANAGEMENT_SCRIPTS: shutil.copyfile(management_dir / name, root / "tools" / name)
-        (root / "runtime-build-provenance.json").write_text(json.dumps(runtime, sort_keys=True, indent=2)+"\n", encoding="utf-8")
-        if signing is not None: (root / "signing-provenance.json").write_text(json.dumps(signing, sort_keys=True, indent=2)+"\n", encoding="utf-8")
+        write_metadata("runtime-build-provenance.json", runtime)
+        if signing is not None: write_metadata("signing-provenance.json", signing)
+        staged_files = tree(root)
+        if {name for name, _ in staged_files} != set(admitted):
+            raise ValueError("Staged bundle members differ from admitted inputs")
+        entries = []
+        for name, path in staged_files:
+            if file_hash(path) != admitted[name]:
+                raise ValueError("Staged bundle bytes differ from admitted identity: " + name)
+            if name in signers and not allow_unsigned_development:
+                verify_authenticode(path, signers[name])
+            entries.append({"path": name, "sha256": admitted[name], "bytes": path.stat().st_size})
         manifest = {"schemaVersion": 1, "product": "PocketWorld-Companion", "version": version,
                     "sourceCommit": source_commit, "platform": "windows-x64", "protocol": "device-v1",
                     "cua": {"version": CUA_VERSION, "sourceCommit": CUA_COMMIT, "sha256": driver_sha256,
                             "releaseStatus": "prerelease", "spacesIncluded": False, "perceptionIncluded": False},
                     "credentialsIncluded": False, "guiAcceptance": "unverified", "codeSigning": "unsigned_development" if allow_unsigned_development else "verified_final_bytes",
-                    "installationSchemaVersion": 2, "runtimeProvenanceSha256": file_hash(root / "runtime-build-provenance.json"),
-                    "files": [{"path": name, "sha256": file_hash(path), "bytes": path.stat().st_size} for name, path in tree(root)]}
-        (root / "bundle-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                    "installationSchemaVersion": 2, "runtimeProvenanceSha256": admitted["runtime-build-provenance.json"],
+                    "files": entries}
+        write_metadata("bundle-manifest.json", manifest)
         output.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(output, "x", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-            for name, path in tree(root):
+            archive_files = tree(root)
+            if {name for name, _ in archive_files} != set(admitted):
+                raise ValueError("Archive members differ from admitted inputs")
+            sizes = {entry["path"]: entry["bytes"] for entry in entries}
+            for name, path in archive_files:
+                raw = path.read_bytes()
+                if (hashlib.sha256(raw).hexdigest() != admitted[name]
+                        or (name in sizes and len(raw) != sizes[name])):
+                    raise ValueError("Archive bytes differ from admitted identity: " + name)
                 info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
                 info.compress_type, info.external_attr = zipfile.ZIP_DEFLATED, 0o100600 << 16
-                archive.writestr(info, path.read_bytes())
+                archive.writestr(info, raw)
     return {"path": str(output), "sha256": file_hash(output), "bytes": output.stat().st_size,
             "sourceCommit": source_commit, "guiAcceptance": "unverified"}
 
