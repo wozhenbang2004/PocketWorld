@@ -9,7 +9,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -52,7 +51,7 @@ internal fun NativeSsh(state: PocketUiState, controller: PocketWorldController) 
         else if (probe.optString("fingerprint").isNotBlank()) OutlinedButton(onClick = { checked = false; trust = probe }, enabled = "ssh.approveHostKey" !in state.moduleBusy) { Text("核对并信任这个指纹") }
     }
     editing?.let { profile -> SshProfileDialog(profile, state, controller) { editing = null } }
-    trust?.let { candidate -> AlertDialog(onDismissRequest = { trust = null }, containerColor = Color.White, title = { Text("确认主机身份") }, text = { Column {
+    trust?.let { candidate -> AlertDialog(onDismissRequest = { trust = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("确认主机身份") }, text = { Column {
         Text("请将下方指纹与这台主机已有可信渠道提供的指纹比较。", fontSize = 13.sp, lineHeight = 22.sp)
         SelectionContainer { Text(candidate.optString("fingerprint"), fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 12.dp)) }
         Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(checked, { checked = it }); Text("已通过可信渠道核对一致", fontSize = 12.sp) }
@@ -72,7 +71,7 @@ private fun SshProfileDialog(profile: JSONObject, state: PocketUiState, controll
     var submitted by remember { mutableStateOf(false) }
     val busy = "ssh.saveProfile" in state.moduleBusy
     LaunchedEffect(busy) { if (submitted && !busy && state.moduleErrors["ssh.saveProfile"] == null) { secret = ""; passphrase = ""; close() } }
-    AlertDialog(onDismissRequest = { if (!busy) { secret = ""; passphrase = ""; close() } }, containerColor = Color.White, title = { Text(if (profile.has("id")) "编辑 SSH 主机" else "添加 SSH 主机") }, text = {
+    AlertDialog(onDismissRequest = { if (!busy) { secret = ""; passphrase = ""; close() } }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (profile.has("id")) "编辑 SSH 主机" else "添加 SSH 主机") }, text = {
         Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(name, { name = it }, label = { Text("名称") }, singleLine = true)
             OutlinedTextField(host, { host = it }, label = { Text("主机地址") }, singleLine = true)

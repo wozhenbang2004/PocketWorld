@@ -32,13 +32,14 @@ public final class MainActivity extends Activity {
     private final String compatibilityPageId=java.util.UUID.randomUUID().toString();
     private final EngineApplication.Observer observer=this::send;
     @Override public void onCreate(Bundle state){
-        super.onCreate(state);app=(EngineApplication)getApplication();media=new MediaController(this,app::publish);
+        setTheme(dev.pocketengine.ui.UiAppearance.theme(this));
+        super.onCreate(state);dev.pocketengine.ui.UiAppearance.window(this);app=(EngineApplication)getApplication();media=new MediaController(this,app::publish);
         web=new WebView(this);web.setBackgroundColor(0xffffffff);web.getSettings().setJavaScriptEnabled(true);web.getSettings().setDomStorageEnabled(true);web.getSettings().setAllowFileAccess(false);web.getSettings().setAllowContentAccess(false);web.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW);web.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
         web.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){return true;}});
         web.addJavascriptInterface(new Bridge(),"Native");setContentView(web);app.addObserver(observer);
         try(InputStream stream=getAssets().open("index.html")){ByteArrayOutputStream bytes=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int count;while((count=stream.read(buffer))!=-1)bytes.write(buffer,0,count);String html=new String(bytes.toByteArray(),StandardCharsets.UTF_8);web.loadDataWithBaseURL("https://pocketengine.local/",html,"text/html","UTF-8",null);}catch(Exception ex){web.loadData("<html><body><p>界面资源未加载，请重新安装完整测试包。</p></body></html>","text/html","UTF-8");}
     }
-    @Override protected void onResume(){super.onResume();if(ready)app.sendState();}
+    @Override protected void onResume(){super.onResume();dev.pocketengine.ui.UiAppearance.window(this);if(ready)app.sendState();}
     @Override protected void onPause(){media.stopListening();super.onPause();}
     @Override public void onBackPressed(){if(web!=null&&ready)web.evaluateJavascript("Boolean(window.Pocket&&window.Pocket.handleBack())",handled->{if(!"true".equals(handled))moveTaskToBack(true);});else moveTaskToBack(true);}
     @Override protected void onDestroy(){app.removeObserver(observer);media.close();io.shutdownNow();web.removeJavascriptInterface("Native");web.destroy();super.onDestroy();}

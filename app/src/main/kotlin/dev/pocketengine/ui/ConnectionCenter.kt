@@ -14,7 +14,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -47,7 +46,7 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
         }
     }
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize(), color = Color.White) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 if (nativePage) {
                     val domain = section!!
@@ -168,7 +167,7 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
         }
         BackHandler(enabled = !nativePage) { if (section == null) close() else section = null }
         state.ownerSource?.let { source ->
-            AlertDialog(onDismissRequest = controller::dismissOwnerSource, containerColor = Color.White,
+            AlertDialog(onDismissRequest = controller::dismissOwnerSource, containerColor = MaterialTheme.colorScheme.surface,
                 title = { Text(source.optString("title", "真实来源")) },
                 text = { Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                     SelectionContainer { Text(source.optString("text"), fontSize = 14.sp, lineHeight = 22.sp) }
@@ -239,7 +238,7 @@ private fun RemoteProfileDialog(profile: JSONObject, state: PocketUiState, contr
     var submitted by remember { mutableStateOf(false) }
     val busy = "remote.saveProfile" in state.moduleBusy
     LaunchedEffect(busy) { if (submitted && !busy && state.moduleErrors["remote.saveProfile"] == null) close() }
-    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text(if (profile.has("id")) "编辑电脑连接" else "添加电脑连接") }, text = {
+    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (profile.has("id")) "编辑电脑连接" else "添加电脑连接") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedTextField(name, { name = it }, label = { Text("名称") }, singleLine = true)
             OutlinedTextField(url, { url = it }, label = { Text("Companion 地址") }, placeholder = { Text("https://你的电脑地址") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
@@ -337,7 +336,7 @@ private fun MemoryEditor(record: JSONObject, state: PocketUiState, controller: P
     val busy = "memory.save" in state.moduleBusy
     fun dateValue(key: String, value: String): Any = if (value.isBlank()) JSONObject.NULL else if (value == date(key)) initial!!.get(key) else java.time.LocalDate.parse(value).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
     LaunchedEffect(busy) { if (submitted && !busy && state.moduleErrors["memory.save"] == null) close() }
-    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text("私人记忆") }, text = { Column(Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("私人记忆") }, text = { Column(Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         OutlinedTextField(text, { text = it }, label = { Text("希望记住什么") }, minLines = 3, maxLines = 7)
         listOf("fact", "preference", "episodic", "procedural").forEach { value -> Row(Modifier.fillMaxWidth().clickable { layer = value }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected = layer == value, onClick = { layer = value }); Text(memoryLayer(value), fontSize = 13.sp) } }
         Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(typed, { if (initial == null) typed = it }, enabled = initial == null); Text("明确主体、陈述类型与适用时间", fontSize = 13.sp) }
@@ -453,7 +452,7 @@ private fun NativeChannels(state: PocketUiState, controller: PocketWorldControll
         val current = bindings.find { it.optString("profileId") == proposal.optString("profileId") }
         val unchanged = current != null && current.optString("bindingEpoch") == proposal.optString("bindingEpoch") && current.optString("taskGrantEpoch") == proposal.optString("taskGrantEpoch")
         val enabling = proposal.optBoolean("enabled")
-        AlertDialog(onDismissRequest = { if (!taskBusy) taskPermission = null }, containerColor = Color.White,
+        AlertDialog(onDismissRequest = { if (!taskBusy) taskPermission = null }, containerColor = MaterialTheme.colorScheme.surface,
             title = { Text(if (enabling) "允许这个主人私聊创建任务？" else "关闭这个渠道的任务权限？") },
             text = { Column {
                 Text(proposal.optString("profileName") + " · " + proposal.optString("senderId"), fontSize = 14.sp)
@@ -564,7 +563,7 @@ private fun NativeSkills(state: PocketUiState, controller: PocketWorldController
         if (hasMore) TextButton(onClick = { controller.requestFeature("skills", "read", JSONObject().put("id", skill.optString("id")).put("path", "SKILL.md").put("offset", nextOffset).put("length", 8000)) }, enabled = "skills.read" !in state.moduleBusy) { Text("读取后续说明") }
         if (!skill.optBoolean("enabled")) OutlinedButton(onClick = { enabling = skill }, enabled = content.isNotBlank() && !hasMore) { Text("启用这个版本") }
     }
-    enabling?.let { skill -> AlertDialog(onDismissRequest = { enabling = null }, containerColor = Color.White, title = { Text("启用这个技能版本？") }, text = { Text("确认已核对来源和当前说明。能力调用仍受宿主授权约束。") }, confirmButton = { Button(onClick = { controller.requestFeature("skills", "setEnabled", JSONObject().put("id", skill.optString("id")).put("enabled", true).put("acceptedDigest", skill.optString("digest")).put("confirmed", true)); enabling = null }) { Text("确认启用") } }, dismissButton = { TextButton(onClick = { enabling = null }) { Text("取消") } }) }
+    enabling?.let { skill -> AlertDialog(onDismissRequest = { enabling = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("启用这个技能版本？") }, text = { Text("确认已核对来源和当前说明。能力调用仍受宿主授权约束。") }, confirmButton = { Button(onClick = { controller.requestFeature("skills", "setEnabled", JSONObject().put("id", skill.optString("id")).put("enabled", true).put("acceptedDigest", skill.optString("digest")).put("confirmed", true)); enabling = null }) { Text("确认启用") } }, dismissButton = { TextButton(onClick = { enabling = null }) { Text("取消") } }) }
 }
 
 @Composable
@@ -574,7 +573,7 @@ private fun ConnectionRow(title: String, detail: String, open: () -> Unit) {
 }
 @Composable internal fun CenterCaption(value: String) { Text(value, color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp)) }
 @Composable internal fun CenterHeading(value: String) { Text(value, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 22.dp, bottom = 10.dp)) }
-@Composable internal fun ConfirmAction(title: String, detail: String, label: String, close: () -> Unit, accept: () -> Unit) { AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text(title) }, text = { Text(detail) }, confirmButton = { TextButton(onClick = accept) { Text(label, color = Danger) } }, dismissButton = { TextButton(onClick = close) { Text("取消") } }) }
+@Composable internal fun ConfirmAction(title: String, detail: String, label: String, close: () -> Unit, accept: () -> Unit) { AlertDialog(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface, title = { Text(title) }, text = { Text(detail) }, confirmButton = { TextButton(onClick = accept) { Text(label, color = Danger) } }, dismissButton = { TextButton(onClick = close) { Text("取消") } }) }
 private fun memoryLayer(value: String): String = when (value) { "fact" -> "事实与项目知识"; "preference" -> "个人偏好"; "episodic" -> "经历与结果"; "procedural" -> "有效做法"; else -> value }
 internal fun centerDate(value: Long): String = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(value))
 private fun featureSummary(id: String, value: JSONObject): String {

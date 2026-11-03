@@ -5,7 +5,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,7 +80,7 @@ internal fun ChannelReceivingPanel(state: PocketUiState, controller: PocketWorld
     for (command in listOf("start", "stop", "refresh")) state.moduleErrors["owner.channelReceiving.$command"]?.let { Text(it, color = Danger, fontSize = 12.sp) }
     review?.let { shown ->
         val unchanged = try { reviewChannelReceiving(channels, shown.profileIds).fingerprint == shown.fingerprint } catch (_: Exception) { false }
-        AlertDialog(onDismissRequest = { if (!busy) review = null }, containerColor = Color.White,
+        AlertDialog(onDismissRequest = { if (!busy) review = null }, containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("开启这些连接的持续接收？") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 shown.names.forEach { Text(it, fontSize = 13.sp) }

@@ -13,7 +13,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import dev.pocketengine.features.proxy.accounts.ChatGptRecovery
 import androidx.compose.ui.text.font.FontWeight
@@ -277,7 +276,7 @@ internal fun AccountConnectionsPage(
     BackHandler { if (logout != null) logout = null else if (adding) adding = false else onBack() }
 
     Column(Modifier.fillMaxSize().background(PageSurface).imePadding()) {
-        Row(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("返回") }
             Text("ChatGPT 账号", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink, modifier = Modifier.weight(1f))
             TextButton(onClick = { submit("snapshot", JSONObject()) }, enabled = !loading && "snapshot" !in pendingCommands) { Text("刷新状态") }
@@ -336,7 +335,7 @@ internal fun AccountConnectionsPage(
                 val validRow = id.isNotBlank() && accountConnectionsVersion(row) >= 0
                 Column(Modifier.fillMaxWidth().padding(top = 14.dp)
                     .pocketDepth(PocketDepth.CONTENT, 16.dp).clip(RoundedCornerShape(16.dp))
-                    .background(Color.White).border(.5.dp, Line, RoundedCornerShape(16.dp)).padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    .background(MaterialTheme.colorScheme.surface).border(.5.dp, Line, RoundedCornerShape(16.dp)).padding(horizontal = 16.dp, vertical = 4.dp)) {
                     Row(Modifier.fillMaxWidth().clickable(enabled = validRow) { expandedId = if (expanded) null else id }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.padding(end = 12.dp).size(38.dp).clip(RoundedCornerShape(11.dp)).background(Soft), contentAlignment = Alignment.Center) {
                             AffectGlyph("spark", Modifier.size(20.dp))
@@ -434,7 +433,7 @@ internal fun AccountConnectionsPage(
     val welcomeAccount = rows.firstOrNull { it.optBoolean("planUsageEnabled") && it.optBoolean("enabled") }
     if (snapshot.optBoolean("planWelcomeRequired") && welcomeAccount != null) {
         val acknowledge = { if (!busy && !closed) requestRow("acknowledgePlanWelcome", welcomeAccount, false, "") }
-        AlertDialog(onDismissRequest = acknowledge, containerColor = Color.White,
+        AlertDialog(onDismissRequest = acknowledge, containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("已通过 ChatGPT 登录") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("在本应用选择 ChatGPT 模型后，推理使用你的 ChatGPT 套餐，并受套餐及此应用的使用限制。API key 连接单独保留。", fontSize = 14.sp, lineHeight = 22.sp)
@@ -445,7 +444,7 @@ internal fun AccountConnectionsPage(
     logout?.let { draft ->
         val current = accountConnectionsRow(snapshot, draft.accountId)
         val currentVersion = accountConnectionsVersion(current) == draft.version
-        AlertDialog(onDismissRequest = { logout = null }, containerColor = Color.White, title = { Text("退出这个账号？") }, text = {
+        AlertDialog(onDismissRequest = { logout = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("退出这个账号？") }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(draft.label, fontWeight = FontWeight.SemiBold)
                 Text("将先停止本机使用并清理凭据，再尝试撤销远端授权。已发生的远端操作不会撤回，账号记录会保留。远端撤销和本机清理可能需要另行核对。", fontSize = 14.sp, lineHeight = 22.sp)

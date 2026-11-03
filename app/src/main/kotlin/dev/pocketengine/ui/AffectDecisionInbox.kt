@@ -14,7 +14,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -29,15 +28,15 @@ internal data class AffectDecisionItem(val id: String, val title: String,
 @Composable
 internal fun AffectDecisionInbox(items: List<AffectDecisionItem>, onReview: (String) -> Unit) {
     if (items.isEmpty()) return
-    Surface(color = Color.White, shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(.5.dp, Color(0xffe9e9e9)), shadowElevation = 0.dp,
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(.5.dp, Line), shadowElevation = 0.dp,
         modifier = Modifier.fillMaxWidth().pocketDepth(PocketDepth.CONTENT, 10.dp).animateContentSize()) {
         Column {
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(Modifier.size(16.dp).background(Ink, CircleShape), contentAlignment = Alignment.Center) {
-                    Text("!", color = Color.White, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("!", color = MaterialTheme.colorScheme.onPrimary, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium)
                 }
                 Text("${items.size} 项需要你处理", fontSize = 14.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f))
@@ -45,7 +44,7 @@ internal fun AffectDecisionInbox(items: List<AffectDecisionItem>, onReview: (Str
             }
             items.forEach { item -> key(item.id) {
                 var detailOpen by rememberSaveable(item.id) { mutableStateOf(false) }
-                HorizontalDivider(thickness = .5.dp, color = Color(0xffeeeeee))
+                HorizontalDivider(thickness = .5.dp, color = Line)
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                     Text(item.title, fontSize = 15.sp, lineHeight = 22.sp, color = Ink, fontWeight = FontWeight.Medium)
                     if(item.detail.isNotBlank()) Text(item.detail, fontSize = 13.sp, lineHeight = 20.sp,
@@ -72,9 +71,9 @@ internal fun AffectDecisionInbox(items: List<AffectDecisionItem>, onReview: (Str
 private fun AffectDecisionAction(label: String, primary: Boolean, onClick: () -> Unit) {
     Box(Modifier.heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onClick)
         .padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
-        Surface(shape = RoundedCornerShape(6.dp), color = if(primary) Ink else Color.White,
-            contentColor = if(primary) Color.White else Ink,
-            border = if(primary) null else BorderStroke(.5.dp, Color(0xffdedede))) {
+        Surface(shape = RoundedCornerShape(6.dp), color = if(primary) Ink else MaterialTheme.colorScheme.surface,
+            contentColor = if(primary) MaterialTheme.colorScheme.onPrimary else Ink,
+            border = if(primary) null else BorderStroke(.5.dp, Line)) {
             Text(label, Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 fontSize = 13.sp, lineHeight = 20.sp)
         }

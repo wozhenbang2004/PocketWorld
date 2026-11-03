@@ -6,7 +6,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketengine.features.memory.SourceRef
@@ -101,7 +100,7 @@ internal fun MemoryAssertionReviewDialog(
     }
     val busy = writing != null || "reviewCandidateAssertion" in pendingCommands
     val allowed = currentReview() && prepared && !busy && !consumed.get()
-    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White,
+    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = MaterialTheme.colorScheme.surface,
         title = { Text("核对主体与关系") }, text = {
             Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("只修改这条待审候选。原来源继续保留；接受保存仍需另行确认，不会签发事实证明或执行权限。", fontSize = 13.sp, lineHeight = 22.sp)

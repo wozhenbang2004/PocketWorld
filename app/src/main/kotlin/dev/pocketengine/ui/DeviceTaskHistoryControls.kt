@@ -9,7 +9,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -75,7 +74,7 @@ internal fun DeviceTaskHistoryControls(task: UiTask, host: NativeDeviceWorkspace
     } }
     selected?.let { native -> view?.let { safe ->
         var details by remember(native) { mutableStateOf(false) }
-        AlertDialog(onDismissRequest = ::close, containerColor = Color.White, title = { Text("设备执行结果") }, text = {
+        AlertDialog(onDismissRequest = ::close, containerColor = MaterialTheme.colorScheme.surface, title = { Text("设备执行结果") }, text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 DeviceFact("执行设备", "设备 ${safe.optString("targetDeviceId").takeLast(4)}")
                 DeviceFact("原操作", safe.optString("operationId").takeLast(12))

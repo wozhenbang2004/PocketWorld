@@ -10,7 +10,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -112,7 +111,7 @@ internal fun SshTerminalView(binding: SshTerminalBinding, state: PocketUiState, 
         controller.requestFeature("ssh", "writePty", binding.payload().put("dataBase64", Base64.getEncoder().encodeToString(bytes)))
     }
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize(), color = Color.White) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = close) { Text("收起") }
@@ -154,7 +153,7 @@ internal fun SshTerminalView(binding: SshTerminalBinding, state: PocketUiState, 
         }
         BackHandler { close() }
     }
-    if (closing) AlertDialog(onDismissRequest = { closing = false }, containerColor = Color.White, title = { Text("关闭这个 SSH 连接？") }, text = { Text("将关闭本机 PTY 连接。远端进程是否终止仍需核对，不会自动重连或重放输入。") }, confirmButton = { TextButton(onClick = { input = ""; automatic = false; controller.requestFeature("ssh", "closePty", binding.payload()); closing = false }, enabled = "ssh.closePty" !in state.moduleBusy) { Text("关闭本机连接", color = Danger) } }, dismissButton = { TextButton(onClick = { closing = false }) { Text("取消") } })
+    if (closing) AlertDialog(onDismissRequest = { closing = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("关闭这个 SSH 连接？") }, text = { Text("将关闭本机 PTY 连接。远端进程是否终止仍需核对，不会自动重连或重放输入。") }, confirmButton = { TextButton(onClick = { input = ""; automatic = false; controller.requestFeature("ssh", "closePty", binding.payload()); closing = false }, enabled = "ssh.closePty" !in state.moduleBusy) { Text("关闭本机连接", color = Danger) } }, dismissButton = { TextButton(onClick = { closing = false }) { Text("取消") } })
 }
 
 internal fun ownerReviewedPtyInput(receipt: JSONObject?, task: UiTask?): Boolean {

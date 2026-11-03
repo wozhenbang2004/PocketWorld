@@ -141,7 +141,7 @@ internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask
     }
     var showAll by rememberSaveable(task.id, task.runId) { mutableStateOf(false) }
     Surface(modifier = modifier.fillMaxWidth().testTag("conversation_task_" + task.id).pocketDepth(PocketDepth.CONTENT, 14.dp),
-        shape = RoundedCornerShape(14.dp), color = Color.White) {
+        shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f).clickable(enabled = task.id.isNotBlank()) {

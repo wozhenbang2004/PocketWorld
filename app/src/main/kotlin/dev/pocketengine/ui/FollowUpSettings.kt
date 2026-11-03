@@ -8,7 +8,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -24,7 +23,7 @@ internal fun FollowUpSettings(state: PocketUiState, controller: PocketWorldContr
     LaunchedEffect(Unit) { controller.requestFeature("automation", "getFollowUpPolicy") }
     val policy = latestFollowUpPolicy(state)
     TextButton(onClick = { open = true }) { Text(if (policy?.optBoolean("enabled") == true) "跟进设置 · 已启用" else "跟进设置 · 默认关闭", fontSize = 12.sp) }
-    if (open && policy == null) AlertDialog(onDismissRequest = { open = false }, containerColor = Color.White, title = { Text("读取跟进设置") }, text = { Text(state.moduleErrors["automation.getFollowUpPolicy"] ?: "正在读取已保存的真实设置…") }, confirmButton = { TextButton(onClick = { controller.requestFeature("automation", "getFollowUpPolicy") }) { Text("重新读取") } }, dismissButton = { TextButton(onClick = { open = false }) { Text("关闭") } })
+    if (open && policy == null) AlertDialog(onDismissRequest = { open = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("读取跟进设置") }, text = { Text(state.moduleErrors["automation.getFollowUpPolicy"] ?: "正在读取已保存的真实设置…") }, confirmButton = { TextButton(onClick = { controller.requestFeature("automation", "getFollowUpPolicy") }) { Text("重新读取") } }, dismissButton = { TextButton(onClick = { open = false }) { Text("关闭") } })
     if (open && policy != null) FollowUpPolicyEditor(policy, state, controller) { open = false }
 }
 
@@ -41,7 +40,7 @@ private fun FollowUpPolicyEditor(policy: JSONObject, state: PocketUiState, contr
     var submitted by remember { mutableStateOf<String?>(null) }
     val busy = "owner.setFollowUpPolicy" in state.moduleBusy
     LaunchedEffect(state.moduleResults["owner.setFollowUpPolicy"]) { if (submitted != null && state.moduleResultInputs["owner.setFollowUpPolicy"]?.optString("_requestId") == submitted) close() }
-    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text("承诺跟进") }, text = {
+    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("承诺跟进") }, text = {
         Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("仅对你已明确保存的承诺发送本机通知。通知打开详情，不会自动操作手机。", fontSize = 13.sp, lineHeight = 22.sp)
             Row(verticalAlignment = Alignment.CenterVertically) { Text("启用跟进通知", Modifier.weight(1f), fontSize = 14.sp); Switch(enabled, { enabled = it }, enabled = !busy) }
@@ -80,6 +79,6 @@ internal fun FollowUpReceipts(id: String, state: PocketUiState, controller: Pock
         }
     }
     listOf("owner.listFollowUpReceipts", "owner.reconcileFollowUpNotification", "owner.confirmFollowUpReceipt").mapNotNull { state.moduleErrors[it] }.distinct().forEach { Text(it, color = Danger, fontSize = 12.sp) }
-    confirm?.let { target -> AlertDialog(onDismissRequest = { confirm = null }, containerColor = Color.White, title = { Text("记录你的核对结论？") }, text = { Text(if (target.second == "notified") "你已亲自看到这条跟进通知。此操作只记录核对结果。" else "请确认你已核对这次通知没有发送。此操作不会自动重发通知。") }, confirmButton = { Button(onClick = { controller.requestOwnerAction("confirmFollowUpReceipt", JSONObject().put("claimId", target.first).put("outcome", target.second)); confirm = null }, enabled = "owner.confirmFollowUpReceipt" !in state.moduleBusy) { Text("确认记录") } }, dismissButton = { TextButton(onClick = { confirm = null }) { Text("返回核对") } }) }
+    confirm?.let { target -> AlertDialog(onDismissRequest = { confirm = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("记录你的核对结论？") }, text = { Text(if (target.second == "notified") "你已亲自看到这条跟进通知。此操作只记录核对结果。" else "请确认你已核对这次通知没有发送。此操作不会自动重发通知。") }, confirmButton = { Button(onClick = { controller.requestOwnerAction("confirmFollowUpReceipt", JSONObject().put("claimId", target.first).put("outcome", target.second)); confirm = null }, enabled = "owner.confirmFollowUpReceipt" !in state.moduleBusy) { Text("确认记录") } }, dismissButton = { TextButton(onClick = { confirm = null }) { Text("返回核对") } }) }
 }
 private fun followUpTime(value: Long): String = if (value <= 0) "时间未记录" else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(value))
