@@ -181,7 +181,9 @@ public final class TaskStore {
     }
     /** Provenance only, including a finished run; never a new grant, resume or dispatch.
      * Original SQLite transaction serializes direct repo deletion/retirement too. The callback
-     * may only touch the original proposal Book; no alarms, model/helper calls or MemoryBook. */
+     * may only touch the original proposal Book and its short local notification dispatch;
+     * no alarm scheduling, host callbacks, model/helper calls or MemoryBook. The caller keeps
+     * a possibly dispatched receipt unknown on failure; it must never defer it for replay. */
     public synchronized <T>T withScheduleProposalSourceCurrent(String id,String run,int epoch,String conversation,JSONArray expected,java.util.concurrent.Callable<T> action)throws Exception {
         db.beginTransaction();try{JSONArray actual=scheduleProposalUserRefs(id,run,epoch,conversation);if(!capabilityFingerprint(new JSONObject().put("refs",actual)).equals(capabilityFingerprint(new JSONObject().put("refs",expected))))throw new SecurityException("原提案纳入的主人来源已变化");requireScheduleProposalSources(id,run,epoch,conversation,actual);T result=action.call();requireScheduleProposalSources(id,run,epoch,conversation,actual);db.setTransactionSuccessful();return result;}finally{db.endTransaction();}
     }

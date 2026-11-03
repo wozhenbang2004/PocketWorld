@@ -965,7 +965,8 @@
       "dev.pocketengine.features.channels.QqC2CStreamJourneyTest",
       "dev.pocketengine.features.channels.ChannelAnswerPagesTest",
       "dev.pocketengine.features.channels.ChannelHttpTest",
-      "dev.pocketengine.features.MemorySourceCleanupHostTest"
+      "dev.pocketengine.features.MemorySourceCleanupHostTest",
+      "dev.pocketengine.features.OrdinaryScheduleNativeJourneyTest"
     ],
     "helpers": [
       "dev.pocketengine.features.channels.QqOwnerImageJourneyTest",
@@ -975,7 +976,7 @@
       "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
-    "description": "Original Application/Gateway/Book/source retirement and owner-channel HTTP/SSE/outbox paths. Exact physical-send and post-response checks, already-accepted QQ ACK preservation, cancellation and unknown-no-replay. Controlled loopback endpoints; no live provider/platform or phone acceptance."
+    "description": "Original Application/Gateway/Book/source retirement and owner-channel HTTP/SSE/outbox paths. Exact physical-send and post-response checks, already-accepted QQ ACK preservation, cancellation and unknown-no-replay. Original approved schedule source transaction also covers its local notification dispatch; source deletion races and post-dispatch uncertainty retain the same occurrence. Controlled loopback endpoints and native notification shadows; no live provider/platform or phone acceptance."
   },
   "project-git-isolation": {
     "class": "dev.pocketengine.features.local.project.ProjectGitIsolationNativeJourneyTest",

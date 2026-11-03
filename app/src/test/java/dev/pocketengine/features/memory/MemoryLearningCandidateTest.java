@@ -174,8 +174,10 @@ public final class MemoryLearningCandidateTest {
         assertEquals(0,book.listCandidates(s).length());assertEquals(1,book.list(s).length());assertTrue(direct.getBoolean("core"));
         JSONObject candidate=book.proposeLearning(s,draft("procedural","先核对再操作"),2,source);
         JSONObject accepted=book.acceptCandidate(s,candidate.getString("id"),1,3).getJSONObject("record");
-        JSONObject corrected=book.save(s,new JSONObject(accepted.toString()).put("text","机主直接纠正流程"),4);
+        rejected(()->book.save(s,new JSONObject(accepted.toString()).put("text","机主直接纠正流程"),4));
+        JSONObject corrected=book.save(s,new JSONObject().put("id",accepted.getString("id")).put("revision",accepted.getLong("revision")).put("text","机主直接纠正流程"),4);
         assertEquals("unverified",corrected.getString("validationStatus"));assertEquals(accepted.getString("applicability"),corrected.getString("applicability"));
+        assertFalse(corrected.has("learningRationale"));
         assertEquals(1,book.listCandidates(s).length());
         assertEquals("机主直接纠正流程",new MemoryBook(file(),host).acceptCandidate(s,candidate.getString("id"),1,5).getJSONObject("record").getString("text"));
     }

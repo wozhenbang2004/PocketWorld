@@ -28,8 +28,11 @@ public final class OwnerDataArchiveJourneyTest {
     private static JSONObject json(String key,Object value)throws Exception{return new JSONObject().put(key,value);}
     private static String phase(OwnerDataArchiveFixture target,OwnerDataArchives archives,OwnerDataArchives.Selection selected,String name,String projects)throws Exception {
         var meta=selected.metadata();var map=target.host.ownerArchiveProjectMapForOwner(projects,meta.getString("archiveSha256"));var review=archives.review(selected,name,map,new RunControl());var confirmed=review.confirm();String action=confirmed.actionId();target.host.submitOwnerArchivePhaseForOwner(confirmed);long deadline=System.nanoTime()+10_000_000_000L;JSONObject row;
-        do{row=target.tasks.ownerArchivePhaseForOwner(action);if(!row.getString("status").equals("running"))break;Thread.sleep(10);}while(System.nanoTime()<deadline);
-        assertEquals("phase="+name+"; safe original state="+row,"completed",row.getString("status"));assertFalse(target.tasks.hasUnresolved(action));assertThrows(Exception.class,()->target.tasks.startAttempt(action,"capabilities",5));return action;
+        // A durable completed receipt can precede the original worker's final controller
+        // release. Query only this action until the host can return its native observation.
+        do{row=target.host.queryOwnerArchivePhaseForOwner(action,new RunControl());if(!"original_native_phase_still_running".equals(row.optString("observation")))break;Thread.sleep(10);}while(System.nanoTime()<deadline);
+        assertNotEquals("phase="+name+"; original worker has not settled: "+row,"original_native_phase_still_running",row.optString("observation"));
+        assertEquals("phase="+name+"; safe original state="+row,"completed",row.getString("status"));assertTrue("phase="+name+"; original native result unavailable: "+row,row.optBoolean("found"));assertFalse(row.optBoolean("currentDataUnavailable"));assertFalse(target.tasks.hasUnresolved(action));assertThrows(Exception.class,()->target.tasks.startAttempt(action,"capabilities",5));return action;
     }
     @Test public void fullPortableArchiveRestoresSixExplicitSectionsToNewInstallAndColdQueriesNeverReplay()throws Exception {
         Path root=Files.createTempDirectory("owner-full-portable-");byte[] portable;String project,originalAttachment,firstSha;String originalProjectArtifact,retiredRevision;byte[] binary={0,9,(byte)255};String activeCheckout;

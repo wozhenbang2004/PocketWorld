@@ -186,6 +186,12 @@ public final class MemorySourceBridge {
             else if(actual.ref.revision>ref.revision)mutate(scope,memory,false,receipt->memory.sourceUpdated(scope,actual.ref,receipt));
         }
         SkillsModule skills=skills();if(skills!=null)skills.reconcileExperiences(scope);
+        // A reviewed reminder may reference an original USER message without any formal
+        // memory row. Its original source/receipt still needs revocation before source
+        // synchronization can report completion; no unindexed message is added to Book.
+        if("owner".equals(identity.ownerId)&&"private".equals(identity.spaceId)){
+            EngineModule automation=host.module("automation");if(automation instanceof dev.pocketengine.features.automation.AutomationModule schedules)schedules.reconcileNativeScheduleSources();
+        }
     }
     public synchronized JSONObject forgetReviewed(JSONObject scope,String id,long revision)throws Exception{
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;

@@ -68,8 +68,12 @@ public final class HistoricalMemoryRecallAgentNativeTest {
     @Test public void directOwnerOldVersionReachesOriginalAgentWithoutEnteringCurrentRecallOrExpandingScope()throws Exception{
         try(Fixture f=new Fixture("Review the recorded residency timeline.")){
             JSONObject past=save(f,OLD,"Cedar harbor",PAST),current=save(f,NOW,"Maple harbor",PAST+1000);
-            JSONObject foreign=f.memory.handle("save",new JSONObject().put("scope",new JSONObject().put("ownerId","another-owner").put("spaceId","private"))
-                    .put("record",remembered("residency FOREIGN_BODY_MUST_NOT_ESCAPE","Elsewhere",PAST))).getJSONObject("record");
+            JSONObject foreignScope=new JSONObject().put("ownerId","another-owner").put("spaceId","private"),foreignInput=remembered("residency FOREIGN_BODY_MUST_NOT_ESCAPE","Elsewhere",PAST);
+            assertThrows(SecurityException.class,()->f.memory.handle("save",new JSONObject().put("scope",foreignScope).put("record",foreignInput)));
+            // Seed an unselected namespace in the same original Book as fixture data. The
+            // generic/model entry remains rejected, not used as a namespace authority.
+            var bookField=MemoryModule.class.getDeclaredField("book");bookField.setAccessible(true);
+            JSONObject foreign=((MemoryBook)bookField.get(f.memory)).save(foreignScope,foreignInput,System.currentTimeMillis());
             assertEquals(0,past.getJSONArray("sourceRefs").length());
             JSONArray baseline=f.memory.contextSnapshot(scope(),"residency",8,12000).getJSONArray("records");
             assertEquals(1,baseline.length());assertEquals(current.getString("id"),baseline.getJSONObject(0).getString("id"));
@@ -101,7 +105,7 @@ public final class HistoricalMemoryRecallAgentNativeTest {
     @Test public void historicalSourceRevisionForgetAndCancellationDiscardOutstandingCallbacksWithoutReplay()throws Exception{
         for(String mutation:List.of("source_revision","forget","cancel"))try(Fixture f=new Fixture("Review the recorded residency timeline.")){
             Original past=f.remember(OLD,"person:traveller","Traveller","residency",PAST);
-            f.remember(NOW,"person:traveller","Traveller","residency",PAST+1000);
+            Original current=f.remember(NOW,"person:traveller","Traveller","residency",PAST+1000);
             JSONObject args=arguments("historical");args.getJSONObject("constraints").put("eventBefore",PAST).put("sourceKinds",new JSONArray().put("message"));
             try(Gateway gateway=new Gateway(f,(request,body)->{
                 if(request==1)return calls(recall("original-past",args));assertEquals("no model replay after source fence",2,request);
@@ -122,7 +126,14 @@ public final class HistoricalMemoryRecallAgentNativeTest {
                 if(mutation.equals("forget")){
                     assertTrue(f.memory.isSourceForgotten(scope(),past.ref));f.assertOriginal(past);
                     MemoryModule reopened=new MemoryModule(new FeatureContext(f.context,null,null,event->{}),(scope,kind,id)->f.originals.resolveMetadata(id).state);
-                    assertEquals(0,reopened.searchHistoryForOwner(OLD,"",8).getJSONArray("matches").length());reopened.close();
+                    try{
+                        JSONArray matches=reopened.searchHistoryForOwner(OLD,"",8).getJSONArray("matches");
+                        // "residency" still matches the valid current row. Forget fences the
+                        // exact old record/body, not every other row sharing a lexical term.
+                        for(int i=0;i<matches.length();i++){JSONObject match=matches.getJSONObject(i);assertNotEquals(past.record.getString("id"),match.getString("id"));assertFalse(match.getString("textPreview").contains(OLD));}
+                        assertEquals(current.record.getString("id"),row(reopened.searchHistoryForOwner(NOW,"",8).getJSONArray("matches"),current.record.getString("id")).getString("id"));
+                        assertThrows(Exception.class,()->reopened.readHistoryRecordForOwner(past.record.getString("id"),past.record.getLong("revision")));
+                    }finally{reopened.close();}
                 }
             }
         }
