@@ -106,12 +106,20 @@ class OriginalProcessGroupTests(unittest.TestCase):
             self.wait(lambda: getattr(self.manager.processes.get(job["id"]), "_pocket_worker_finished", False), "Unknown group did not retain its finished original worker")
             original_process = self.manager.processes[job["id"]]
             self.assertTrue(getattr(original_process, "_pocket_worker_finished"))
+            with self.manager.lock:
+                for index in range(500):
+                    key = "settled-retention-fixture-" + str(index)
+                    self.manager.jobs[key] = {"id": key, "status": "completed", "createdAt": self.manager.now() + index,
+                                              "resourcesHeld": False, "dispatchFenceFinal": True, "notStartedConfirmed": True}
+                self.manager._prune()
+            self.assertTrue(job["id"] in self.manager.jobs, "Retention lost the original process cleanup/query entry")
+            self.assertTrue((self.manager.state / ("job-" + job["id"] + ".json")).exists())
             observed = self.manager.get(job["id"])
             self.assertEqual("unknown", observed["status"])
             self.assertTrue(observed["controls"]["cancel"], "The retained original must still expose its exact stop")
             self.assertIs(original_process, self.manager.processes[job["id"]])
             self.assertEqual(job["id"], self.submit("from pathlib import Path; Path('once').write_text('actual effect')")["id"])
-            self.assertEqual(1, len(self.manager.jobs))
+            self.assertEqual(500, len(self.manager.jobs))
         reconciled = self.manager.get(job["id"])
         self.assertTrue(reconciled["processCleanupProof"]["processGroupStoppedVerified"])
         self.assertFalse(reconciled["resourcesHeld"])
@@ -119,7 +127,7 @@ class OriginalProcessGroupTests(unittest.TestCase):
         self.assertNotIn(job["id"], self.manager.processes)
         self.assertNotIn(self.manager.jobs[job["id"]]["resourceId"], self.manager.resources)
         self.assertEqual("actual effect", (self.workspace / "once").read_text())
-        self.assertEqual(1, len(self.manager.jobs))
+        self.assertEqual(500, len(self.manager.jobs))
 
     def test_unknown_original_can_be_explicitly_stopped_without_replacement_process(self):
         with patch.object(JobManager, "_observe_process_group", return_value={"leaderReaped": False, "processGroupStoppedVerified": False, "observationUnknown": True}):
