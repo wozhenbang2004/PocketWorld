@@ -1,0 +1,52 @@
+<div id="press-stretch-switch" class="viz-dotted-background">
+  <section class="switch-surface" aria-label="设置开关参考复现">
+    <div class="switch-setting">
+      <div><span id="stretch-switch-label" class="switch-label">自动保存</span><span class="switch-hint">编辑时保存当前草稿</span></div>
+      <button type="button" role="switch" aria-checked="false" aria-labelledby="stretch-switch-label" class="switch-hit cursor-interaction">
+        <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+      </button>
+    </div>
+    <div class="switch-result" aria-live="polite">已关闭</div>
+  </section>
+</div>
+<style>
+  #press-stretch-switch { padding:32px 18px; }
+  #press-stretch-switch .switch-surface { --switch-surface:light-dark(#fff,#191b20); --switch-ink:light-dark(#25262b,#eeeeef); --switch-dim:light-dark(#72737c,#a8aab2); --switch-off:light-dark(#e4e5e9,#3e4148); --switch-on:light-dark(#282a31,#e7e8eb); --switch-knob:light-dark(#fff,#1e2026); --switch-shadow:light-dark(#0000001a,#00000030); background:var(--switch-surface); color:var(--switch-ink); font:14px/1.5 system-ui,sans-serif; max-width:390px; margin:auto; border:1px solid light-dark(#e9e9ed,#33363e); border-radius:16px; padding:22px 24px 16px; box-shadow:0 8px 22px var(--switch-shadow); }
+  #press-stretch-switch .switch-setting { display:flex; align-items:center; justify-content:space-between; gap:20px; }
+  #press-stretch-switch .switch-label { display:block; font-weight:550; }
+  #press-stretch-switch .switch-hint { display:block; margin-top:4px; font-size:12px; color:var(--switch-dim); }
+  #press-stretch-switch .switch-hit { width:44px; height:44px; flex-shrink:0; border:0; border-radius:9px; background:transparent; padding:0; display:grid; place-items:center; touch-action:manipulation; }
+  #press-stretch-switch .switch-track { width:32px; height:20px; padding:2px; box-sizing:border-box; border-radius:99px; background:var(--switch-off); position:relative; transition:background 160ms; }
+  #press-stretch-switch .switch-hit[aria-checked="true"] .switch-track { background:var(--switch-on); }
+  #press-stretch-switch .switch-thumb { position:absolute; left:2px; top:2px; width:16px; height:16px; border-radius:99px; background:var(--switch-knob); box-shadow:0 1px 2px var(--switch-shadow); }
+  #press-stretch-switch .switch-result { margin-top:12px; font-size:12px; color:var(--switch-dim); }
+  @media(max-width:360px){ #press-stretch-switch {padding:24px 8px} #press-stretch-switch .switch-surface {padding:18px} }
+</style>
+<script>
+(() => {
+  const root=document.getElementById('press-stretch-switch');
+  const hit=root.querySelector('.switch-hit'), knob=root.querySelector('.switch-thumb'), result=root.querySelector('.switch-result');
+  const reduced=window.matchMedia('(prefers-reduced-motion: reduce)');
+  let checked=false, pressed=false, x=0, width=16, xv=0, wv=0, frame=0, previous=0;
+  function targets(){ const w=pressed?19:16; return [checked?28-w:0,w]; }
+  function render(){ knob.style.transform=`translateX(${x}px)`; knob.style.width=`${width}px`; }
+  function step(now){
+    const dt=Math.min((now-previous)/1000 || 1/60,0.024); previous=now;
+    const [tx,tw]=targets();
+    xv+=(300*(tx-x)-25*xv)*dt; wv+=(300*(tw-width)-25*wv)*dt;
+    x+=xv*dt; width+=wv*dt; render();
+    if(Math.abs(tx-x)+Math.abs(tw-width)+Math.abs(xv)+Math.abs(wv)>0.015){frame=requestAnimationFrame(step);} else {x=tx;width=tw;xv=wv=0;render();frame=0;}
+  }
+  function update(){
+    hit.setAttribute('aria-checked',String(checked)); result.textContent=checked?'已开启':'已关闭';
+    if(reduced.matches){cancelAnimationFrame(frame);frame=0;[x,width]=targets();render();}
+    else if(!frame){previous=performance.now();frame=requestAnimationFrame(step);}
+  }
+  hit.addEventListener('pointerdown',()=>{pressed=true;update();});
+  ['pointerup','pointercancel','pointerleave','blur'].forEach(name=>hit.addEventListener(name,()=>{pressed=false;update();}));
+  hit.addEventListener('keydown',e=>{if(e.key===' '||e.key==='Enter'){pressed=true;update();}});
+  hit.addEventListener('keyup',()=>{pressed=false;update();});
+  hit.addEventListener('click',()=>{pressed=false;checked=!checked;update();});
+  render();
+})();
+</script>

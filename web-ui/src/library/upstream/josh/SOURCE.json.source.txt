@@ -1,0 +1,43 @@
+{
+  "author": "Josh W. Comeau",
+  "url": "https://www.joshwcomeau.com/animation/3d-button/",
+  "original_sha256": "338d47d45c87cdb75471da4f0262e71e1d5af2ff624a262b7a537752e9ce2479",
+  "review_date": "2026-10-09",
+  "timezone": "Asia/Shanghai",
+  "user_feedback": "这个非常舒服",
+  "evidence": "User actually pressed this precise adapted fragment; no automated real-browser visual PASS, no separately stated white-flash acceptance",
+  "approval": "strong approval of comfortable base variant, no dust/anime variant approval",
+  "license": "Copyable author tutorial code; no separate SPDX declared; not MIT",
+  "files": [
+    {
+      "path": "MODIFICATIONS.md",
+      "bytes": 1258,
+      "sha256": "46ee9c1616010b9c0bab3093f78e1a9eac4a6973c1b8aa69f7b89a987de2866d"
+    },
+    {
+      "path": "UPSTREAM-SOURCE.json",
+      "bytes": 393,
+      "sha256": "4886ec35373c592ffd129eabd1019f5c3d9873b0a41f4774863ace879bc93a9c"
+    },
+    {
+      "path": "josh-original.html",
+      "bytes": 1814,
+      "sha256": "338d47d45c87cdb75471da4f0262e71e1d5af2ff624a262b7a537752e9ce2479"
+    },
+    {
+      "path": "offline.html",
+      "bytes": 11581,
+      "sha256": "774c896140c72f6f4d51e2b8348806a3ef42ba9b9232510afbed030576631ab9"
+    },
+    {
+      "path": "review-approved.html",
+      "bytes": 11137,
+      "sha256": "11ed2af51eaf6cdd78f4f880045517b0823898bc8cc363158f82f2db6a37cb7e"
+    },
+    {
+      "path": "upstream-to-approved.diff",
+      "bytes": 11303,
+      "sha256": "ad1d03aef5e6ab5a0095c0671b53b6cd02aa355bdcd11785804dd86732b48ebc"
+    }
+  ]
+}

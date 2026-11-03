@@ -10,7 +10,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.pocketengine.EngineApplication
-import dev.pocketengine.MainActivity
 import dev.pocketengine.runtime.ModelGateway
 import java.util.UUID
 import java.io.File
@@ -111,6 +110,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private fun outcomeOwnerWindow():String = groupTaskWindow ?: groupOwnerWindow ?: app.groupOwnerWorkflows.open(activity).also { groupOwnerWindow=it }
     private fun releaseOutcomeWindow(){if(groupTaskPage==null&&ownerDomain!="groups"){groupOwnerWindow?.let{app.groupOwnerWorkflows.close(it)};groupOwnerWindow=null}}
     private val pending = mutableMapOf<String, Pair<String, JSONObject>>()
+    private val taskReviewReads = mutableMapOf<String, (UiTask?, String?) -> Unit>()
     private var wirelessSettingsLaunched = false
     @Volatile private var closed = false
     private val ownerComposerStore = OwnerComposerStore(app.filesDir)
@@ -134,6 +134,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private val composerSave = Runnable { persistOwnerComposer() }
     private var chatViewEpoch by mutableStateOf(0)
     val composerViewEpoch: Int get() = chatViewEpoch
+    internal fun webUiCanInteract(): Boolean = !closed && voiceForeground && !activity.isFinishing && !activity.isDestroyed
     private var attachmentComposerKey: String? = null
     private var attachmentComposerEpoch = -1
     private data class OriginalSourceStage(val key:String,val revision:Long,val viewEpoch:Int,val conversation:String)
@@ -1122,7 +1123,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun attach() { app.addObserver(observer);loadOwnerComposer(); refresh() }
     /** Native owner action; the host resolves the existing original control, never payload authority. */
 
-    fun detach() { projectFileImports.detach();synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
+    fun detach() { projectFileImports.detach();synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear(); closeTaskReviewReads() }
     fun refresh() { authorizationOpening = null; ownerDomain?.let { requestOwnerDomain(it, "snapshot") }; native("getState"); native("getFeatures"); native("rescheduleAutomation"); feature("assistant", "list") }
     fun suggestInput(text: String, phoneTask: Boolean? = null) {
         if (text.isNotBlank()) state = state.copy(suggestedInputRevision = state.suggestedInputRevision + 1, suggestedInput = text, suggestedPhoneTask = phoneTask)
@@ -1436,7 +1437,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun dismissError() { state = state.copy(error = null) }
     fun dismissNotice() { state = state.copy(notice = null) }
     fun openAdvanced(panel: String = "settings") {
-        activity.startActivity(MainActivity.advancedPanelIntent(activity, panel))
+        // A capability may request a destination, but never revive the retired business UI.
+        openConnection(panel.takeIf { it in setOf("settings", "devices", "models", "accounts", "remote", "ssh", "local", "memory", "memoryReview", "automation", "commitments", "channels", "skills", "learning", "plugins", "pluginCatalog", "mcp", "teams", "groups", "media", "realtime", "proxy") } ?: "settings")
     }
     var conversationReader by mutableStateOf<ConversationReadPage?>(null)
         private set
@@ -1683,8 +1685,24 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun confirmReviewedTask(task: UiTask, done: Boolean, feedback: String) { native("confirmResult", reviewedTaskInput(task).put("resultReviewDigest", task.raw.optString("resultReviewDigest")).put("completed", done).put("feedback", feedback)) }
     fun resolveReviewedTask(task: UiTask, operationId: String, outcome: String) { native("resolveOperation", reviewedTaskInput(task).put("operationId", operationId).put("outcome", outcome)) }
     fun getTask(id: String) { native("getTask", JSONObject().put("taskId", id)) }
-    fun focusTask(id: String) { closeConversationReader();getTask(id); state = state.copy(requestedTaskId = id, requestedTaskRevision = state.requestedTaskRevision + 1) }
-    fun openConnection(section: String) { taskMcpPreparation = null; state = state.copy(requestedConnectionSection = section, requestedConnectionRevision = state.requestedConnectionRevision + 1) }
+    fun focusTask(id: String) { focusTask(id, requestNavigation = true) }
+
+    internal fun focusTask(id: String, requestNavigation: Boolean) {
+        closeConversationReader()
+        getTask(id)
+        // Web-owned routes load the task without emitting another external navigation request.
+        if (requestNavigation) {
+            state = state.copy(requestedTaskId = id, requestedTaskRevision = state.requestedTaskRevision + 1)
+        }
+    }
+    internal fun prepareConnectionEntry() {
+        taskMcpPreparation = null
+    }
+
+    fun openConnection(section: String) {
+        prepareConnectionEntry()
+        state = state.copy(requestedConnectionSection = section, requestedConnectionRevision = state.requestedConnectionRevision + 1)
+    }
     fun usesChatGptPlan(phone: Boolean): Boolean {
         if (phone || !state.chatBusy) return state.modelRoute == "account"
         val binding = state.chatActiveTurn ?: return false
@@ -2137,6 +2155,52 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal var taskListNextCursor by mutableStateOf("")
         private set
+    /** Read the original detailed task before a Web review handle can be issued. */
+    internal fun readTaskForReview(id: String, complete: (UiTask?, String?) -> Unit) {
+        if (closed) { complete(null, "原任务读取窗口已关闭"); return }
+        if (id.isBlank()) { complete(null, "原任务身份缺失"); return }
+        val requestId = UUID.randomUUID().toString()
+        taskReviewReads[requestId] = complete
+        fun finish(task: UiTask?, error: String?) {
+            taskReviewReads.remove(requestId)?.invoke(task, error)
+        }
+        try {
+            io.execute {
+                try {
+                    check(!closed) { "原任务读取窗口已关闭" }
+                    val result = app.dispatchOwnerAction("getTask", JSONObject().put("taskId", id))
+                    val task = result?.optJSONObject("task") ?: result?.takeIf { it.has("id") }
+                        ?: throw IllegalStateException("未取得原任务的完整核对信息")
+                    require(task.optString("id") == id) { "读取结果不属于原任务" }
+                    check(task.optString("taskProjection") != "summary") { "原任务只返回了摘要，请重新读取核对信息" }
+                    check(!task.optBoolean("taskCoreReadLimited")) { "当前任务内容较多，本次只读到摘要，未取得完整成果，不能确认结果。请返回查看原任务记录。" }
+                    val detail = JSONObject(task.toString())
+                    main.post {
+                        if (closed) { finish(null, "原任务读取窗口已关闭"); return@post }
+                        if (requestId !in taskReviewReads) return@post
+                        val current = runCatching {
+                            mergeTask(detail)
+                            val selected = state.tasks.firstOrNull { it.id == id }
+                                ?: throw IllegalStateException("原任务不在当前读取窗口，请重新打开")
+                            check(selected.raw.optString("taskProjection") != "summary") { "原任务已更新，请重新读取完整核对信息" }
+                            check(!selected.raw.optBoolean("taskCoreReadLimited")) { "当前任务内容较多，本次只读到摘要，未取得完整成果，不能确认结果。请返回查看原任务记录。" }
+                            selected
+                        }
+                        current.fold({ finish(it, null) }, { finish(null, message(it)) })
+                    }
+                } catch (error: Exception) {
+                    main.post { finish(null, if (closed) "原任务读取窗口已关闭" else message(error)) }
+                }
+            }
+        } catch (error: Exception) {
+            finish(null, if (closed) "原任务读取窗口已关闭" else message(error))
+        }
+    }
+    private fun closeTaskReviewReads() {
+        val callbacks = taskReviewReads.values.toList()
+        taskReviewReads.clear()
+        callbacks.forEach { callback -> runCatching { callback(null, "原任务读取窗口已关闭") } }
+    }
     /** Alternate quote only. Original bounded native receipt read; no request, replay or setting write. */
     internal fun reestimateInference(taskId: String, callId: String, done: (JSONObject?, String?) -> Unit) {
         if (closed) return

@@ -24,7 +24,13 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn("inputs.target == 'host-tests'", block)
         self.assertIn("(inputs.host_groups != '' && 'host-selected-batch' || format('host-{0}', inputs.host_group)) || 'apk'", block)
         self.assertIn('github.ref', block)
-        self.assertIn('cancel-in-progress: false', block)
+        cancellation = re.findall(r'^  cancel-in-progress: (.+)$', block, re.M)
+        self.assertEqual(1, len(cancellation))
+        self.assertIn(cancellation[0], (
+            'false',
+            "${{ startsWith(github.ref, 'refs/heads/uiux/') && "
+            "(github.event_name != 'workflow_dispatch' || inputs.target != 'host-tests') }}",
+        ))
 
     def test_selection_is_explicit_and_deduplicated(self):
         name = REGISTRY['device-receiver']['class']
