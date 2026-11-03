@@ -279,7 +279,8 @@ public final class MemoryRecallAgentJourneyNativeTest {
                 if (!"owner".equals(scope.ownerId) || !"private".equals(scope.spaceId)) return null;
                 if ("message".equals(kind)) return originals.resolveMetadata(sourceId).state;
                 return tasks.resolveMemorySource(scope, kind, sourceId);
-            });
+            }, SQLiteMemoryRetrievalBackend.create());
+            System.out.println("MEMORY_AGENT_NATIVE_BACKEND " + memory.snapshot().getJSONObject("retrievalBackend"));
             memoryFile = new File(context.getFilesDir(), "memory/records.json");
             host.register(memory);
             JSONObject attempt = tasks.startAttempt(tasks.create(goal, "main_screen").getString("id"), "main_screen", 8);

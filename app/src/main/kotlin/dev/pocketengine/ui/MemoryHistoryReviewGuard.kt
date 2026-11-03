@@ -4,11 +4,12 @@ import org.json.JSONObject
 
 /** Rendering consistency only. Native owner/Book/Bridge, not these JSON markers, authorize reads. */
 internal object MemoryHistoryReviewGuard {
-    @JvmStatic fun page(requestId: String?, query: String, envelope: JSONObject?): JSONObject? = runCatching {
+    @JvmStatic fun page(requestId: String?, query: String, envelope: JSONObject?): JSONObject? = page(requestId, query, envelope, null)
+    @JvmStatic fun page(requestId: String?, query: String, envelope: JSONObject?, displayedScope: JSONObject?): JSONObject? = runCatching {
         val value = MemoryLearningReviewGuard.result(requestId, envelope) ?: return null
         require(value.optString("format") == "pocketworld.owner-memory-history-page.v1" && value.optString("query") == query.trim())
         require(value.optBoolean("sourceCurrentChecked") && !value.optBoolean("activeRecall", true) && !value.optBoolean("originalEvidenceRead", true) && !value.optBoolean("archiveOnlyActivated", true) && !value.optBoolean("memberReadAuthorized", true) && !value.optBoolean("executionAuthorized", true))
-        require(value.optJSONObject("scope")?.let { it.optString("ownerId") == "owner" && it.optString("spaceId") == "private" } == true)
+        require(sameDisplayedScope(value.optJSONObject("scope"), displayedScope))
         require(value.optString("resultVersion").matches(Regex("[a-f0-9]{64}")))
         val rows = value.getJSONArray("matches"); val ids = mutableSetOf<String>()
         require(rows.length() <= 20)
@@ -26,13 +27,22 @@ internal object MemoryHistoryReviewGuard {
         }
         JSONObject(value.toString())
     }.getOrNull()
-    @JvmStatic fun record(requestId: String?, header: JSONObject?, envelope: JSONObject?): JSONObject? = runCatching {
+    @JvmStatic fun record(requestId: String?, header: JSONObject?, envelope: JSONObject?): JSONObject? = record(requestId, header, envelope, null)
+    @JvmStatic fun record(requestId: String?, header: JSONObject?, envelope: JSONObject?, displayedScope: JSONObject?): JSONObject? = runCatching {
         if (header == null) return null
         val value = MemoryLearningReviewGuard.result(requestId, envelope) ?: return null
         require(value.optBoolean("sourceCurrentChecked") && !value.optBoolean("originalEvidenceRead", true) && !value.optBoolean("activeRecall", true) && !value.optBoolean("executionAuthorized", true))
         val row = value.getJSONObject("record")
+        require(sameDisplayedScope(row, displayedScope))
         require(row.optString("id") == header.optString("id") && MemoryLearningReviewGuard.revision(row) == MemoryLearningReviewGuard.revision(header))
         require(row.optString("temporalStatus") == header.optString("temporalStatus") && row.optBoolean("readOnlyHistory") && !row.optBoolean("memoryTextIsOriginalEvidence", true))
         JSONObject(row.toString())
     }.getOrNull()
+    // Display consistency only. This JSON never constructs the facade's opaque Selection.
+    private fun sameDisplayedScope(value: JSONObject?, displayed: JSONObject?): Boolean {
+        val owner = displayed?.optString("ownerId") ?: "owner"
+        val space = displayed?.optString("spaceId") ?: "private"
+        val supported = owner == "owner" && (space == "private" || space.matches(Regex("project:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")))
+        return supported && value?.optString("ownerId") == owner && value.optString("spaceId") == space
+    }
 }
