@@ -34,6 +34,7 @@ def main():
     common = [one(options.deps, name) for name in ("okhttp-*.jar", "okio-jvm-*.jar", "kotlin-stdlib-*.jar", "junit-*.jar", "hamcrest-core-*.jar")]
     sources = java_sources(ROOT, options.w07_source_root.resolve())
     sources += sorted((ROOT / "app/src/test/java/dev/pocketengine/features/plugins/sdk").glob("*.java"))
+    sources += sorted((ROOT / "sdk/tests/java").rglob("*.java"))
     for android in ([False, True] if options.android_jvm else [False]):
         json_jar = one(options.deps, "android-all-*.jar" if android else "json-*.jar")
         dependencies = os.pathsep.join([json_jar] + common)
@@ -42,10 +43,12 @@ def main():
                  "-encoding", "UTF-8", "-cp", dependencies, "-d", classes] + sources)
             classpath = classes + os.pathsep + dependencies
             print("JSON implementation: " + ("Android API35 JVM" if android else "org.json desktop"), flush=True)
-            run([options.java, "-XX:-UsePerfData", "-cp", classpath, "org.junit.runner.JUnitCore", "dev.pocketengine.features.plugins.sdk.PluginSdkTest"])
+            run([options.java, "-XX:-UsePerfData", "-cp", classpath, "org.junit.runner.JUnitCore", "dev.pocketengine.features.plugins.sdk.PluginSdkTest",
+                 "dev.pocketengine.sdk.SdkOutputOwnershipTest"])
             if not android:
                 env = dict(os.environ, POCKET_PLUGIN_TEST_CLASSPATH=classpath, POCKET_PLUGIN_TEST_JAVA=options.java, PYTHONDONTWRITEBYTECODE="1")
                 run([sys.executable, "-B", "-m", "unittest", "discover", "-s", ROOT / "sdk/tests", "-p", "test_tooling.py", "-v"], env=env, cwd=ROOT)
+                run([sys.executable, "-B", "-m", "unittest", "discover", "-s", ROOT / "sdk/tests", "-p", "test_output_ownership.py", "-v"], env=env, cwd=ROOT)
 
 
 if __name__ == "__main__":

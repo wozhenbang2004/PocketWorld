@@ -83,8 +83,12 @@ def main(argv=None):
             (target / "project.json").write_text(json.dumps(dict(id=options.id, name=options.name, version=options.version), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             shutil.copyfile(ROOT / "sdk/examples/executable-js/extension.js", target / "extension.js")
             receipt = bridge(["validate", str(target / "extension.js"), *metadata(target)], options)
-        except Exception:
-            shutil.rmtree(target); raise
+        except Exception as failure:
+            # A sibling process can replace this path after mkdir; even a stat before
+            # rmtree cannot establish ownership across the subsequent deletion.
+            raise ValueError("Initialization failed; no output was removed. Output path may contain "
+                             f"partial or replaced data: {target.absolute()}. "
+                             f"Inspect it before cleanup or retry. Cause: {failure}") from failure
         receipt.update(created=str(target.resolve()))
         return receipt
     if options.command == "inspect":

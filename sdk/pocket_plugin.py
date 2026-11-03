@@ -118,9 +118,12 @@ def main(argv=None):
             (target / "arguments.json").write_text('{"text":"  real   local text  "}\n', encoding="utf-8")
             if options.kind == "http":
                 shutil.copyfile(ROOT / "sdk/examples/text_tools.py", target / "tools.py")
-        except Exception:
-            shutil.rmtree(target)
-            raise
+        except Exception as failure:
+            # A sibling process can replace this path after mkdir; even a stat before
+            # rmtree cannot establish ownership across the subsequent deletion.
+            raise ValueError("Initialization failed; no output was removed. Output path may contain "
+                             f"partial or replaced data: {target.absolute()}. "
+                             f"Inspect it before cleanup or retry. Cause: {failure}") from failure
         return {"created": str(target.resolve()), "serverStarted": False, "installed": False}
     if command == "inspect":
         request = dict(action="inspect", packagePath=str(Path(options.package).resolve()))
