@@ -42,6 +42,7 @@ internal object LocalWorkbenchGuard {
     }
     @JvmStatic fun importPayload(review: JSONObject): JSONObject {
         require(!dev.pocketengine.features.local.project.ProjectBinaryImport.isReview(review)) { "原字节审阅须走原字节确认，不借文字参数导回" }
+        if (review.optBoolean("baselineNeedsRefresh")) return dev.pocketengine.features.local.project.ProjectTextImport.reconciliationPayload(review)
         val version = review.opt("expectedVersion")
         require((version is Int || version is Long) && (version as Number).toLong() in 0..Int.MAX_VALUE.toLong()) { "缺少已审项目版本" }
         val hash = review.optString("expectedHash")
@@ -375,6 +376,7 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
     var saveIntent by remember(checkoutId, path) { mutableStateOf<ProjectFileDraft.SaveIntent?>(null) }
     var needsFreshRead by remember(checkoutId, path) { mutableStateOf(!fresh) }
     var importedVersion by remember(checkoutId, path) { mutableStateOf<Int?>(null) }
+    var importNotice by remember(projectId, checkoutId, path) { mutableStateOf<String?>(null) }
     var discard by remember { mutableStateOf(false) }
     var useLatest by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
@@ -428,7 +430,11 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
         val receipt = saved ?: return@LaunchedEffect
         try {
             when (original.first) {
-                "importToProject" -> { importedVersion = receipt.getInt("version"); acknowledged = false }
+                "importToProject" -> {
+                    importedVersion = receipt.getInt("version").takeIf { receipt.optBoolean("checkoutBaselineUpdated") }
+                    importNotice = receipt.optString("message")
+                    acknowledged = false; needsFreshRead = true; reload()
+                }
                 "writeFile" -> { update(editor!!.saved(saveIntent!!, receipt)); needsFreshRead = true; reload(); mode = 1 }
                 "deleteFile" -> { update(editor!!.deleted(receipt)); needsFreshRead = true; reload(); mode = 1 }
             }
@@ -467,7 +473,7 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
                 val readInput = state.moduleResultInputs["local.reviewFile"]
                 if (reviewRequest != null && readInput?.optString("_requestId") == reviewRequest && readInput?.optBoolean("_failed") == true) state.moduleErrors["local.reviewFile"]?.let { Text("未读到当前文件，草稿已保留：$it", color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
                 cacheError?.let { error -> Text("草稿尚未可靠保留：$error", color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis); TextButton(onClick = { current?.let(store::retry); cacheRetry++ }) { Text("重试保留草稿") } }
-                importedVersion?.let { Text("已按审阅版本导回 v$it", style = MaterialTheme.typography.bodyMedium) }
+                importNotice?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                 when {
                     mode == 0 && current != null -> {
                         val editableSize = current.text.toByteArray(Charsets.UTF_8).size <= 262144
@@ -498,16 +504,17 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
                         TextButton(onClick = { useLatest = true }, enabled = !busy) { Text("改用当前文件，放弃我的草稿…", color = MaterialTheme.colorScheme.error) }
                     }
                     mode == 1 && reviewed != null -> {
+                        val baselineOnly = reviewed.optBoolean("baselineNeedsRefresh")
                         Text("正式版本库 v${reviewed.optInt("expectedVersion")} → 当前工作副本${if (reviewed.optBoolean("deleted")) "（删除）" else ""}", style = MaterialTheme.typography.bodyMedium)
                         ProjectReadOnlyTextPages("这份副本差异", reviewed.optString("diff").ifEmpty { "（无内容差异）" }, "diff:$checkoutId:$path:${reviewed.optString("expectedHash")}:${reviewed.optInt("expectedVersion")}", Modifier.weight(1f))
                         Text(reviewed.optString("message"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (reviewed.optBoolean("truncated")) Text("原差异不完整，不能凭截断片段导回。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         if (dirty) Text("手机草稿尚未保存在副本，不在这份导回差异内。", style = MaterialTheme.typography.bodySmall)
-                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(acknowledged, { acknowledged = it }, enabled = !busy && !dirty && !conflict && !needsFreshRead && reviewed.optBoolean("importable") && !reviewed.optBoolean("truncated")); Text("已核对差异和正式目标版本", style = MaterialTheme.typography.bodySmall) }
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(acknowledged, { acknowledged = it }, enabled = !busy && !dirty && !conflict && !needsFreshRead && reviewed.optBoolean("importable") && !reviewed.optBoolean("truncated")); Text(if (baselineOnly) "已核对正式版本与副本一致，只登记基线" else "已核对差异和正式目标版本", style = MaterialTheme.typography.bodySmall) }
                         Button(onClick = {
-                            try { val frozen = LocalWorkbenchGuard.importPayload(JSONObject(reviewed.toString())); submitted = "importToProject" to controller.requestFeature("local", "importToProject", frozen); acknowledged = false; localError = null }
+                            try { val frozen = LocalWorkbenchGuard.importPayload(JSONObject(reviewed.toString())); submitted = "importToProject" to controller.requestFeature("local", "importToProject", frozen); acknowledged = false; localError = null; importNotice = null }
                             catch (failure: Exception) { localError = failure.message }
-                        }, enabled = acknowledged && !busy && !liveWriteBlocked && !dirty && !conflict && !needsFreshRead && reviewed.optBoolean("importable") && !reviewed.optBoolean("truncated") && importedVersion == null, modifier = Modifier.fillMaxWidth()) { Text(if (reviewed.optBoolean("deleted")) "确认删除正式项目文件" else "明确导回正式版本库") }
+                        }, enabled = acknowledged && !busy && !liveWriteBlocked && !dirty && !conflict && !needsFreshRead && reviewed.optBoolean("importable") && !reviewed.optBoolean("truncated") && importedVersion == null, modifier = Modifier.fillMaxWidth()) { Text(if (baselineOnly) "只登记已一致的副本基线" else if (reviewed.optBoolean("deleted")) "确认删除正式项目文件" else "明确导回正式版本库") }
                         TextButton(onClick = { notices = !notices }) { Text(if (notices) "收起其他文件操作" else "其他文件操作") }
                     }
                     else -> Spacer(Modifier.weight(1f))
