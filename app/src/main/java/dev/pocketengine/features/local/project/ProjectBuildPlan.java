@@ -102,6 +102,7 @@ public final class ProjectBuildPlan {
     }
     private static JSONObject create(EngineModule local,JSONObject input,int editByteLimit)throws Exception {
         String checkout=input.getString("checkoutId"),intent=input.getString("intent");
+        if(input.has("foregroundWaitMillis")&&!"command".equals(intent))throw new IllegalArgumentException("前台观察时窗仅适用于明确的原精确command计划");
         if(input.has("includePaths")&&!"freeze_package".equals(intent))throw new IllegalArgumentException("includePaths仅属于原freeze_package源码子集，不混入其它操作");
         if(intent.equals(ProjectGit.INTENT))return ProjectGit.create(local,input);
         if(intent.equals("freeze_package"))return freezePackage(local,input);
@@ -252,6 +253,7 @@ public final class ProjectBuildPlan {
         JSONObject action=step("command","project.runtime.run",payload,pty?"启动本轮交互终端（含限定后续输入）":"执行这一精确项目命令",true);action.getJSONObject("effects").put("runtime",runtime).put("writes",true).put("networkMayBeUsed",true).put("argumentTransport","literal_argv").put("scopeEnforced",false).put("interactiveInput",pty);
         JSONArray warnings=new JSONArray().put("argv逐项原样传入，不进行Shell拆词；sh等解释器仅执行上面明确写出的参数。命令和项目代码仍可访问当前App账号可见的文件与网络，不是UID隔离沙箱。普通env不接受路径、加载器、解释器注入或凭据变量，不要在参数/输入中放密码和令牌。");
         if(pty)warnings.put("本次启动批准明确包括原execution在本run内有限文字输入、canonical模式EOF控制符和窗口调整，输入会继续触发该程序执行。stdout/stderr在PTY合流；EOF不是强行关闭任意raw输入。任务结束必须停止并取得原session/进程组/资源释放证据；不能凭旧PID恢复输入或信号。未观察到的自行脱离session后代不属于OS沙箱保证。");
+        if(payload.has("foregroundWaitMillis"))warnings.put("先在前台观察最多"+payload.getLong("foregroundWaitMillis")+"毫秒；若原进程仍在运行，只转为观察同一个execution，不重新启动。继续运行仅限本次原run与已批准总期限"+payload.getLong("timeoutMillis")+"毫秒；取消、任务结束或原授权更早到期仍停止并核对清场，观察超时不是执行失败或成功。");
         if(!available)warnings.put("所选原工具或PTY实际接口尚未准备，本步骤未派发，不会换用其他执行环境");
         return seal(new JSONObject().put("format","pocketworld.project-plan.v1").put("checkoutId",checkout).put("projectId",source.getString("projectId")).put("sourceDigest",source.getString("sourceDigest")).put("sourceManifest",source.getJSONArray("files")).put("runtimeId",runtime).put("runtimeIdentity",facts.optString("identity")).put("intent","command").put("ecosystem","native_command").put("runMode",payload.getString("runMode")).put("steps",new JSONArray().put(action)).put("available",available).put("warnings",warnings).put("automaticChaining",false));
     }

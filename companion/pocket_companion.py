@@ -2023,6 +2023,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
             parts = [unquote(x) for x in url.path.strip("/").split("/")]
             if any("/" in part for part in parts):
                 raise RequestError("Invalid path")
+            if parts[:2] == ["v1", "phone-tasks"]:
+                from phone_task_api import handle
+                result = handle(self.server.manager, self, post, parts, RequestError)
+                self._send(200, {"ok": True, "result": result})
+                return
             request = {}
             if post:
                 length = self.headers.get("Content-Length", "")

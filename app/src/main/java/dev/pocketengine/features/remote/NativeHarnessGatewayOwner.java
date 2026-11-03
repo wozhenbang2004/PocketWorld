@@ -28,6 +28,7 @@ public final class NativeHarnessGatewayOwner {
         default ParentAccess parentResume(String child)throws Exception {throw new SecurityException("原App网关恢复宿主未就绪");}
         default JSONArray parentProfileChoices(String child)throws Exception {throw new SecurityException("原保存工作配置入口尚未接入");}
         default ParentAccess parentResumeProfile(String child,String profile,long revision)throws Exception {throw new SecurityException("原保存工作配置入口尚未接入");}
+        default JSONObject saveProfileTarget(String profile,long revision,TargetReference source)throws Exception {throw new SecurityException("原工作配置目标保存入口尚未接入");}
         Access capture(String parentTask,String parentRun,String remoteTask)throws Exception;
         JSONObject existing(String parentTask,String parentRun)throws Exception;
         JSONObject query(String parentTask,String parentRun,String lease)throws Exception;
@@ -56,6 +57,28 @@ public final class NativeHarnessGatewayOwner {
     public ParentAccess parentResume(String child)throws Exception{return host.parentResume(child);}
     public JSONArray parentProfileChoices(String child)throws Exception{return host.parentProfileChoices(child);}
     public ParentAccess parentResumeProfile(String child,String profile,long revision)throws Exception{return host.parentResumeProfile(child,profile,revision);}
+    /** Metadata reference only. Only this actual native owner page can issue it; no target
+     * JSON, credential, config claim, run or lease is accepted or created by saving it. */
+    public static final class TargetReference {
+        private final NativeHarnessGatewayOwner host;private final Page page;private final String value;
+        private TargetReference(NativeHarnessGatewayOwner host,Page page,JSONObject value){this.host=host;this.page=page;this.value=value.toString();}
+        public boolean issuedBy(TaskStore actual){return host.tasks==actual;}
+        public JSONObject view()throws Exception{checkCurrent();return new JSONObject(value);}
+        public void checkCurrent()throws Exception {
+            host.current(page);JSONObject ref=new JSONObject(value);
+            JSONObject env=host.environment(page);
+            if(!ref.getString("environmentBinding").equals(env.getString("bindingHash"))||!ref.getString("profileBinding").equals(page.profileBinding))throw new SecurityException("原电脑目标引用代次已变化，未保存替代值");
+            host.current(page);
+        }
+    }
+    public JSONObject saveCurrentProfileTarget(String child,String profile,long revision,Fence ownerWindow)throws Exception {
+        Page page=page(child,ownerWindow);observe(page);current(page);String worker=page.source.getString("worker");
+        if(!worker.matches("codex_app_server|claude"))throw new SecurityException("此保存入口仅接已支持的准确Codex/Claude目标引用");
+        JSONObject env=environment(page);
+        JSONObject ref=new JSONObject().put("kind","remote_harness").put("profileId",page.source.getString("profileId")).put("profileBinding",page.profileBinding)
+            .put("environmentId",page.source.getString("environmentId")).put("environmentBinding",env.getString("bindingHash")).put("worker",worker).put("optional",false);
+        TargetReference source=new TargetReference(this,page,ref);source.checkCurrent();return host.saveProfileTarget(profile,revision,source);
+    }
     public void stopContinuation(String child)throws Exception {JSONObject parent=tasks.gatewayParentTarget(child);host.stopParent(parent.getString("parentTaskId"),parent.getString("parentRunId"));}
     /** Capture only the existing real parent control; this creates neither run nor gateway. */
     public Access captureContinuation(String child)throws Exception {JSONObject parent=tasks.gatewayParentTarget(child);Access access=host.capture(parent.getString("parentTaskId"),parent.getString("parentRunId"),child);access.checkCurrent();JSONObject budget=access.view().getJSONObject("budget");if(!budget.optBoolean("scopePresent")||budget.optInt("modelCallsRemaining")<1)throw new SecurityException("请先在原任务执行范围确认真实模型额度；网关不补造预算");return access;}

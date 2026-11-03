@@ -366,10 +366,12 @@ class DeviceConnection:
         self._queue = asyncio.Queue(maxsize=16 if lane == "control" else 2)
         self._decoder = FrameDecoder()
 
-    def send_control(self, raw: bytes):
+    def send_control(self, raw: bytes, *, before_write=None):
         if self.lane != "control":
             raise TransportError("Control requires its reserved TLS lane")
-        return self._enqueue(encode_control(raw))
+        if before_write is not None and not callable(before_write):
+            raise TransportError("Current control-write gate must be callable")
+        return self._enqueue(encode_control(raw), before_write)
 
     def send_chunk(self, transfer_id, offset, raw, *, before_write):
         if self.lane != "bulk":
@@ -431,7 +433,7 @@ class DeviceConnection:
                         if gate is not None:
                             checked = gate(peer)
                             if inspect.isawaitable(checked): checked = await checked
-                            if checked is False: raise PermissionError("Native bulk read withdrawn before write")
+                            if checked is False: raise PermissionError("Native request withdrawn before write")
                         self.delivery_may_be_unknown = True
                         self.tls.write(frame)
                         await self._flush_tls()

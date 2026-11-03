@@ -60,6 +60,16 @@ public final class NativeWorkProfileHost {
             if(definition.getJSONObject("modelPolicies").has("RELAY"))choices.put(new JSONObject().put("profileId",profile.id).put("revision",profile.revision).put("name",profile.name).put("configurationApplied",false));}
         review.checkCurrent();return choices;
     }
+    /** Original Settings CAS only; saving this native reference does not approve application. */
+    public JSONObject saveGatewayProfileTarget(dev.pocketengine.store.TaskStore tasks,String profileId,long revision,dev.pocketengine.features.remote.NativeHarnessGatewayOwner.TargetReference source)throws Exception {
+        if(source==null||!source.issuedBy(tasks))throw new SecurityException("原任务主人页的准确目标引用必需");source.checkCurrent();
+        WorkProfile profile=stored(profileId,revision);JSONObject definition=profile.toJson();
+        if(!definition.getJSONObject("modelPolicies").has("RELAY"))throw new SecurityException("请先在原工作配置页明确选择API RELAY引用");
+        JSONObject ref=source.view(),identity=new JSONObject(ref.toString());identity.remove("optional");JSONArray targets=definition.getJSONArray("targetBindings");boolean known=false;
+        for(int i=0;i<targets.length();i++){JSONObject existing=new JSONObject(targets.getJSONObject(i).toString());existing.remove("optional");if(WorkProfile.fingerprint(existing).equals(WorkProfile.fingerprint(identity)))known=true;}
+        if(known)return definition;
+        targets.put(ref);source.checkCurrent();return settings.saveWorkProfile(profile.id,profile.revision,profile.name,definition);
+    }
     /** First Profile binding to an existing owner task, never first task/scope authorization.
      * Original GatewayParentRunReview/foreground approval still owns the exact child and budget. */
     public GatewayReview reviewGatewayParentProfile(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.store.TaskStore.GatewayParentRunReview review,String profileId,long revision)throws Exception {

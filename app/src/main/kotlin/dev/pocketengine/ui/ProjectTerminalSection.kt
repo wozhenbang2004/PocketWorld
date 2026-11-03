@@ -30,6 +30,17 @@ internal fun NativeProjectTerminal(task: UiTask) {
         val actual = row.optJSONObject("receipt")?.optJSONObject("executionReceipt")
         row.optString("tool") == "project_execute" && row.optString("runId") == task.raw.optString("runId") && actual?.optString("terminalMode") == "pty"
     }?.optString("operationId") ?: return
+    NativeProjectExecutionView(task, execution, false)
+}
+
+/** The same original log renderer, without any input/stop capability token. */
+@Composable
+internal fun NativeProjectExecutionObservation(task: UiTask, execution: String) {
+    NativeProjectExecutionView(task, execution, true)
+}
+
+@Composable
+private fun NativeProjectExecutionView(task: UiTask, execution: String, observingOnly: Boolean) {
     val context = LocalContext.current
     val app = context.applicationContext as EngineApplication
     val lifecycle = remember(context) { generateSequence(context) { (it as? ContextWrapper)?.baseContext?.takeUnless { next -> next === it } }.filterIsInstance<LifecycleOwner>().firstOrNull()?.lifecycle }
@@ -37,6 +48,7 @@ internal fun NativeProjectTerminal(task: UiTask) {
     var session by remember(task.id, execution) { mutableStateOf<ProjectOwnerTerminal.Session?>(null) }
     var metadata by remember(task.id, execution) { mutableStateOf<JSONObject?>(null) }
     var logPolicy by remember(task.id, execution) { mutableStateOf<JSONObject?>(null) }
+    var activity by remember(task.id, execution) { mutableStateOf<JSONObject?>(null) }
     var web by remember(task.id, execution) { mutableStateOf<ProjectTerminalWebView?>(null) }
     var ready by remember(task.id, execution) { mutableStateOf(false) }
     var takingInput by remember(task.id, execution) { mutableStateOf(false) }
@@ -50,9 +62,9 @@ internal fun NativeProjectTerminal(task: UiTask) {
     var incomplete by remember(task.id, execution) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val actions = remember(task.id, execution, opened) { Channel<JSONObject>(16) }
-    fun closeView() { takingInput = false; opened = false; ready = false; web?.release(); web = null; session?.close(); session = null; metadata = null; logPolicy = null; cursor = 0; actions.close() }
+    fun closeView() { takingInput = false; opened = false; ready = false; web?.release(); web = null; session?.close(); session = null; metadata = null; logPolicy = null; activity = null; cursor = 0; actions.close() }
     fun enqueue(action: JSONObject) {
-        if (!takingInput || !active || nativeStatus != "running" || stopped || incomplete) return
+        if (observingOnly || !takingInput || !active || nativeStatus != "running" || stopped || incomplete) return
         if (!actions.trySend(action).isSuccess) { takingInput = false; notice = "输入队列已满，这次未发送；请核对终端后再明确操作。" }
     }
     DisposableEffect(actions) { onDispose { actions.close() } }
@@ -68,7 +80,7 @@ internal fun NativeProjectTerminal(task: UiTask) {
         if (!opened) return@LaunchedEffect
         val observation = RunControl()
         try {
-            val original = withContext(Dispatchers.IO) { app.features.openProjectTerminalForOwner(task.id, execution, observation) }
+            val original = withContext(Dispatchers.IO) { if (observingOnly) app.features.openProjectExecutionForOwner(task.id, execution, observation) else app.features.openProjectTerminalForOwner(task.id, execution, observation) }
             if (!opened || !active) { original.close(); return@LaunchedEffect }
             session = original
             metadata = withContext(Dispatchers.IO) { original.metadata() }
@@ -97,6 +109,7 @@ internal fun NativeProjectTerminal(task: UiTask) {
                 if (web?.waitingForParser() != true) {
                     val page = withContext(Dispatchers.IO) { original.read(cursor) }
                     logPolicy = page.optJSONObject("logObservationPolicy")
+                    activity = page.optJSONObject("activity")
                     nativeStatus = page.optString("nativeStatus", "unknown")
                     if (nativeStatus != "running" || page.optBoolean("inputUncertain")) takingInput = false
                     if (page.optBoolean("logIncompleteTail")) { incomplete = true; takingInput = false; notice = "原日志末条未写完整，仅显示此前完整记录；原字节保留，已关闭输入，请核对原任务回执。" }
@@ -109,11 +122,12 @@ internal fun NativeProjectTerminal(task: UiTask) {
             catch (failed: Exception) { takingInput = false; nativeStatus = "unknown"; notice = failed.message?.take(240) ?: "原终端输出待核；没有重启。"; break }
         }
     }
-    LaunchedEffect(web, takingInput, active, nativeStatus, incomplete) { web?.inputEnabled(takingInput && active && nativeStatus == "running" && !stopped && !incomplete) }
-    OutlinedButton(onClick = { if (opened) closeView() else opened = true }, modifier = Modifier.testTag("project_native_terminal_open")) { Text(if (opened) "收起终端" else "打开交互终端") }
+    LaunchedEffect(web, takingInput, active, nativeStatus, incomplete) { web?.inputEnabled(!observingOnly && takingInput && active && nativeStatus == "running" && !stopped && !incomplete) }
+    OutlinedButton(onClick = { if (opened) closeView() else opened = true }, modifier = Modifier.testTag(if (observingOnly) "project_native_execution_observe_$execution" else "project_native_terminal_open")) { Text(if (observingOnly) { if (opened) "收起原执行日志" else "观察原执行日志" } else if (opened) "收起终端" else "打开交互终端") }
     if (opened && metadata != null) {
         Text("${metadata!!.optString("executable")} · ${metadata!!.optString("workingDirectory")}", style = MaterialTheme.typography.titleSmall)
-        WorkbenchCaption("显示这个原PTY的VT屏幕，标准输出与错误合流。关闭屏幕不会停止任务；输入限原启动批准，不支持密码或令牌。")
+        WorkbenchCaption(if (observingOnly) "只读显示同一原执行按接收顺序合并的日志画布；原日志仍保留stdout/stderr来源和cursor。收起或切到后台只关观察，不停止进程；需停止时使用上方原任务停止入口。" else "显示这个原PTY的VT屏幕，标准输出与错误合流。关闭屏幕不会停止任务；输入限原启动批准，不支持密码或令牌。")
+        runtimeActivityCaption(activity, execution)?.let { WorkbenchCaption(it) }
         if (logPolicy?.optBoolean("automaticLogPageReduced") == true) WorkbenchCaption(logPolicy!!.optString("ownerMessage"))
         key(task.id, execution, metadata) {
             AndroidView(factory = { nativeContext ->
@@ -126,6 +140,7 @@ internal fun NativeProjectTerminal(task: UiTask) {
                 catch (failed: Exception) { notice = failed.message; TextView(nativeContext).apply { text = "此WebView暂不能显示隔离终端，可继续在原任务读日志。" } }
             }, modifier = Modifier.fillMaxWidth().height(360.dp).testTag("project_native_vt_screen"))
         }
+        if (!observingOnly) {
         Row(Modifier.fillMaxWidth()) { Checkbox(takingInput, { value -> takingInput = value }, enabled = ready && nativeStatus == "running" && !stopped && !incomplete); Text("接管普通终端输入（最多 ${metadata!!.optLong("inputByteLimit")} 字节、${metadata!!.optInt("inputRequestLimit")} 次动作）", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { enqueue(JSONObject().put("action", "text").put("text", "\u0003")) }, enabled = takingInput) { Text("Ctrl-C") }
@@ -152,6 +167,7 @@ internal fun NativeProjectTerminal(task: UiTask) {
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (failed: Exception) { notice = failed.message?.take(240) ?: "原停止结果待核。" } }
         }, enabled = !stopped) { Text("明确停止原终端进程") }
+        }
     }
     notice?.let { Text(it, color = SecondaryInk, style = MaterialTheme.typography.bodySmall) }
 }

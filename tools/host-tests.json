@@ -582,14 +582,17 @@
   "aion-team-wake": {
     "class": "dev.pocketengine.features.teams.TeamWakeQueueTest",
     "additionalClasses": [
-      "dev.pocketengine.features.teams.TeamWakeOriginalHostJourneyTest"
+      "dev.pocketengine.features.teams.TeamWakeOriginalHostJourneyTest",
+      "dev.pocketengine.features.teams.TeamResearchWakeNativeJourneyTest",
+      "dev.pocketengine.features.teams.TeamResearchPeerWakeNativeJourneyTest"
     ],
     "helpers": [
       "dev.pocketengine.features.teams.TeamParentRunnerJourneyTest",
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.teams.TeamResearchParentNativeJourneyTest"
     ],
     "robolectric": true,
-    "description": "Original bounded owner-policy continuation: thirteen pure wake contracts and ten native owner/SQL/Runner/page journeys. Local AUTHORIZED_CONTROL only; no peer, background, research or remote route acceptance."
+    "description": "Original bounded owner-policy continuation across production and readonly research paths. Native owner/SQL/Runner/page and separately opt-in peer wake checks retain original scopes, parent pools, completed-child cleanup, revocation and duplicate-claim boundaries. Background, cross-restart, completed-member automatic reopening and physical-device acceptance remain outside this selection."
   },
   "memory-project-namespaces": {
     "class": "dev.pocketengine.features.memory.ProjectMemoryNamespacesNativeTest",
@@ -944,5 +947,31 @@
     ],
     "robolectric": true,
     "description": "Task-scoped CDP transport, response metadata/body pins and bounded DOM/network quiet barriers, through the original approval and cancellation paths. SDK35 host fixtures; physical WebView devtools transport requires device validation."
+  },
+  "phone-task-platform": {
+    "class": "dev.pocketengine.features.devices.PhoneTaskInputsNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.devices.PhoneTaskApplicationFlowTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "python": true,
+    "description": "Inbound phone task HTTP/MCP/CLI/Desk on the original native pairing, TaskStore, owner confirmation, PhoneRunService and Runner. Real loopback Python Client/CompanionHTTP/mTLS/native ingress and synthetic model fixture; exact ordinary question and phone-reviewed resume gates, no new task/runner/grant or automatic replay. Shared Java/Python protocol vectors retained. No physical Android/USB, real model/account or public relay deployment claim."
+  },
+  "runtime-development-continuity": {
+    "class": "dev.pocketengine.features.local.project.ProjectExecutionContinuityJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.RuntimeActivityCaptionTest",
+      "dev.pocketengine.features.local.project.ProjectCommandSpecTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest"
+    ],
+    "native": true,
+    "robolectric": true,
+    "description": "Original approved command short wait then same-execution observation, exact total deadline and native cancel/drain. Real original SQLite/JNI Node exit7, live silence, immutable cursor logs, read-only owner reopening without input/stop authority, no per-poll activity journal growth and original private artifact capture. Includes exact command normalization/consent and same-operation UI enum projection; existing activity/PTY groups stay separate. No second Runner/job ledger, automatic replay, inferred input readiness, hardware or performance acceptance."
   }
 }
