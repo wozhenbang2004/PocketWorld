@@ -58,6 +58,20 @@ public final class McpLocalPackageNativeTest {
             assertFalse(result.toString().contains(managerBody(f)));assertFalse(result.toString().contains("pythonArgv"));
         }
     }
+    @Test public void packageInitializationOutlivesOneInputAckBudgetWithoutResendingItsFrame()throws Exception {
+        String delayed=SERVER.replace("const q=JSON.parse(line);let result;","const q=JSON.parse(line);if(q.method==='initialize'){fs.appendFileSync('INITIALIZE_REQUESTS','once');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,21000);}let result;");
+        try(Fixture f=new Fixture(0,false,delayed)){
+            long started=System.nanoTime();JSONObject result=f.run();
+            assertEquals(result.toString(),"completed",result.getString("status"));
+            assertTrue("The real initialize reply must arrive after the original 20-second ACK budget",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started)>20000);
+            Path copy=f.base.android.getFilesDir().toPath().resolve("local-development/mcp-discovery-copies").resolve(result.getString("taskId"));
+            assertEquals("once",readUtf8(copy.resolve("INITIALIZE_REQUESTS")));
+            assertTrue(result.getJSONObject("receipt").getBoolean("metadataAvailable"));
+            assertTrue(result.getJSONObject("receipt").getJSONObject("processReceipt").getBoolean("resourcesReleased"));
+            assertEquals(1,f.base.tasks.list().length());assertEquals(1,f.base.tasks.get(result.getString("taskId"),false).getJSONArray("operations").length());
+            assertEquals(0,f.base.runtime.environmentManager().describe(f.base.pack).getInt("activeLeases"));
+        }
+    }
     private static String managerBody(Fixture f){return f.manager.toString();}
     @Test public void preparationFailureOrChangedSourceNeverBecomesDiscoveredOrInstalled()throws Exception {
         for(boolean tamper:new boolean[]{false,true})try(Fixture f=new Fixture(tamper?0:19,tamper)){

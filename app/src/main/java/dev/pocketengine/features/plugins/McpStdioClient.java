@@ -78,7 +78,8 @@ public final class McpStdioClient implements AutoCloseable {
         long until=clock.getAsLong()+rpcMillis*1000000;write(new JSONObject().put("jsonrpc","2.0").put("method","notifications/initialized"),until);
     }
     private void write(JSONObject envelope,long until)throws Exception {
-        byte[] frame=McpStdioFrames.encode(envelope);current();JSONObject receipt=channel.write(UUID.randomUUID().toString(),frame,original,remaining(until));
+        // Package initialization may await its reply longer; the original stdin ACK ticket still has a 20-second ceiling.
+        byte[] frame=McpStdioFrames.encode(envelope);current();JSONObject receipt=channel.write(UUID.randomUUID().toString(),frame,original,Math.min(MAX_RPC_MILLIS,remaining(until)));
         if(receipt==null)throw new InputFailure(true);int written=receiptCount(receipt,"writtenBytes"),requested=receiptCount(receipt,"requestedBytes");if(requested!=frame.length||written<0||written>requested)throw new InputFailure(true);
         boolean noEffects=Boolean.FALSE.equals(receipt.opt("effectMayHaveOccurred"))&&written==0;
         if("not_dispatched".equals(receipt.optString("status"))&&noEffects)throw new InputFailure(false);
