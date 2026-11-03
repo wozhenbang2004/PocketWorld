@@ -130,9 +130,12 @@ private fun RemoteInputFlowDialog(request: JSONObject?, originalTask: String, co
         }
     }
     if (confirm && review != null && scope != null) {
+        val captured = scope.optJSONObject("request") ?: JSONObject()
         AlertDialog(onDismissRequest = { confirm = false }, title = { Text("仅向这个准确目标发送这些原件") }, text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SelectionContainer { Text("${scope.optString("profileId")}\n${scope.optString("serviceBase")}\n${scope.optString("workspace")}/${scope.optString("inputDirectory")}", fontSize = 14.sp, lineHeight = 22.sp) }
+                Text(remoteWorkerLabel(captured.optString("worker")) + " · " + captured.optString("model").ifBlank { "执行端默认模型" }, fontSize = 14.sp, lineHeight = 22.sp)
+                if (captured.has("effort")) Text("本次请求档位：${captured.optString("effort")}；真实读回在原任务另列，未因此增加额度或工具权限。", fontSize = 14.sp, lineHeight = 22.sp)
                 scope.optJSONObject("continuationSource")?.let { original -> Text("原会话：${original.optString("threadId")}\n来源job：${original.optString("jobId")}\n原执行：${original.optString("runId")}；本次是新的run与输入目录，旧操作不会重发。",fontSize=14.sp,lineHeight=22.sp) }
                 scope.optJSONArray("files").objects().forEach { file -> SelectionContainer { Text("${file.optString("name")} · ${file.optLong("bytes")} 字节\n${file.optString("mimeType")}\nSHA-256 ${file.optString("sha256")}", fontSize = 13.sp, lineHeight = 20.sp) } }
                 snapshot.optJSONArray("channelInputSources").objects().forEach { origin -> Text("原私聊：${origin.optString("profileName")} · ${origin.optString("senderId")}\n本次是向电脑外传的单独批准；不会把原收件人变成电脑权限，也不自动发送任何成果。", fontSize = 14.sp, lineHeight = 22.sp) }
