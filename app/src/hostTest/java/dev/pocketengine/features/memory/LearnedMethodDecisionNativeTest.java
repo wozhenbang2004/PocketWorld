@@ -63,13 +63,15 @@ public final class LearnedMethodDecisionNativeTest {
         public void close(){server.stop(0);}
     }
     private static final class Fixture implements AutoCloseable {
-        final Application android=RuntimeEnvironment.getApplication();final TaskStore tasks;final SQLiteDatabase db;final FeatureHost host=new FeatureHost(event->{});
+        final Application android=RuntimeEnvironment.getApplication();final TaskStore tasks;final SQLiteDatabase db;final FeatureHost host;
         final FeatureContext context;
         final MemorySourceBridge bridge;final MemoryModule memory;final AssistantModule assistant;final SkillsModule skills;final WorkspaceModule workspace;
         final SourceRef source=new SourceRef("message",UUID.randomUUID().toString(),1,"owner","private");
         final JSONObject record,skill;final String task,run,project;final int epoch;final RunControl control=new RunControl();final HostToolSupervisor port;
         Fixture()throws Exception{
             android.deleteDatabase("pocket-world.db");tasks=new TaskStore(android);var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);db=(SQLiteDatabase)field.get(tasks);
+            // The real model-send lifecycle checks parent inputs through this same original ledger.
+            host=new FeatureHost(event->{},tasks,()->false);
             java.io.File files=new java.io.File(android.getFilesDir(),"ordinary-method-"+UUID.randomUUID());assertTrue(files.mkdirs());
             android.content.Context isolated=new android.content.ContextWrapper(android){@Override public java.io.File getFilesDir(){return files;}@Override public android.content.Context getApplicationContext(){return this;}};
             context=new FeatureContext(isolated,new SettingsStore(android),new SecretVault(android),event->{});

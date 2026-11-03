@@ -7,9 +7,11 @@ on:
     paths:
       - 'app/src/main/java/dev/pocketengine/features/memory/**'
       - 'app/src/main/java/dev/pocketengine/features/HostToolSupervisor.java'
+      - 'app/src/main/java/dev/pocketengine/runtime/AgentRunner.java'
       - 'app/src/main/java/dev/pocketengine/store/TaskStore.java'
       - 'app/src/main/kotlin/dev/pocketengine/ui/LearnedMethodApplications.kt'
       - 'app/src/test/java/dev/pocketengine/features/memory/**'
+      - 'app/src/test/java/dev/pocketengine/runtime/ReferenceHistoryTest.java'
       - 'app/src/hostTest/java/dev/pocketengine/features/memory/**'
       - 'app/src/hostTest/java/dev/pocketengine/features/skills/LearnedMethodApplicationsNativeTest.java'
       - 'app/src/test/resources/memory/**'

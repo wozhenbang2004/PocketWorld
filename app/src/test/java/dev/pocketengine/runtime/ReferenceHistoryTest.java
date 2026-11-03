@@ -34,7 +34,9 @@ public final class ReferenceHistoryTest {
    AgentRunner.refreshReferenceHistory(history,null);JSONObject next=new JSONObject(history.getJSONObject(1).getString("content"));
    assertFalse(next.getBoolean("ok"));assertEquals(code,next.getString("code"));assertEquals(3,next.length());assertFalse(history.toString().contains("source-body-must-not-survive"));
    JSONArray saved=(JSONArray)durable.invoke(null,history,new dev.pocketengine.core.ModelConfig("","","fixture",false,3,10));
-   assertEquals(code,new JSONObject(saved.getJSONObject(1).getString("content")).getString("code"));assertFalse(saved.toString().contains("source-body-must-not-survive"));
+   // durableHistory inserts the canonical system entry when this isolated history has none.
+   JSONObject savedTool=saved.getJSONObject(saved.length()-1);assertEquals("tool",savedTool.getString("role"));assertEquals("reference-call",savedTool.getString("tool_call_id"));
+   assertEquals(code,new JSONObject(savedTool.getString("content")).getString("code"));assertFalse(saved.toString().contains("source-body-must-not-survive"));
   }
  }
  @Test public void refusalCodeCannotPreserveExtraSourceFieldsOrUnrecognizedErrorBodies()throws Exception{
