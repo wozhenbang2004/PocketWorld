@@ -686,6 +686,10 @@ class JobManager:
                         raise RequestError("Cold continuation requires the exact original proof and NEW explicit owner walltime/unknown-billing acknowledgement", 409)
                 elif "recoveryProofId" in request or "recoveryOwnerAcknowledged" in request:
                     raise RequestError("Recovery proof cannot be imported into an ordinary settled continuation", 409)
+                try:
+                    self.harness_configs.cold_codex_continuation(prior, request, env)
+                except harness_config.ConfigError as failure:
+                    raise RequestError(str(failure), failure.status) from failure
                 if prior.get("readOnly"):
                     env = {**env, "writeAllowed": False}
                     request["readOnly"] = True
@@ -898,7 +902,7 @@ class JobManager:
                 raise
 
     def _public(self, job):
-        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer", "_piSession"}}
+        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer", "_piSession"}}
         result.pop("_inputPersistenceUnconfirmed", None)
         if job.get("_inputPersistenceUnconfirmed"):
             result.pop("inputState", None)
@@ -1332,6 +1336,10 @@ class JobManager:
                     child_env = self.cc_switch_imports.child_environment(job, job.get("_ccSwitchImportRequest", {}), actual_env, child_env)
                 except cc_switch_import.ImportErrorState as error:
                     raise RequestError(str(error), error.status) from None
+                config_pin = cold_session.pin_configuration(self, job, actual_env, argv, cwd, child_env)
+                if config_pin is not None:
+                    job["_coldConfigHome"] = config_pin
+                    argv = [config_pin["executable"], *argv[1:]]
                 process = self._spawn(actual_env, argv, cwd, stdin=subprocess.PIPE if codex else subprocess.DEVNULL,
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL if codex else subprocess.STDOUT, env=child_env)
                 process._pocket_cleanup_lock = threading.Lock()
@@ -1410,7 +1418,7 @@ class JobManager:
                 if codex["request"].get("recoveryProofId"):
                     with self.lock:
                         prior = self.jobs.get(codex["request"].get("resumeJobId"))
-                        if prior is None or codex["request"]["recoveryProofId"] != prior.get("recoveryProof", {}).get("proofId") or not cold_session.proof_matches(prior, actual_env):
+                        if prior is None or codex["request"]["recoveryProofId"] != prior.get("recoveryProof", {}).get("proofId") or not cold_session.proof_matches(prior, actual_env) or not cold_session.same_configuration_home(prior, job):
                             raise DriverError("Original cold recovery proof or process/configuration changed; no new turn was dispatched")
                         original_turn = prior["turnId"]
                     driver.read_original_turn(codex["request"]["threadId"], original_turn)
