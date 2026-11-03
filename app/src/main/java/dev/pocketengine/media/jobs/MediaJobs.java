@@ -8,6 +8,7 @@ import org.json.JSONObject;
 
 /** Executes one host-requested protocol step. There are no threads, timers, or automatic resubmissions. */
 public final class MediaJobs {
+    private static final long MAX_IMPORT_BYTES = 40L * 1024 * 1024;
     public interface ArtifactSink {
         JSONObject save(MediaTransport.Payload payload,JSONObject source,RunControl control)throws Exception;
         default JSONObject find(JSONObject source,RunControl control)throws Exception{return null;}
@@ -245,15 +246,25 @@ public final class MediaJobs {
         long total = 0;
         for (int i = 0; i < saved.length(); i++) total += saved.getJSONObject(i).optLong("size");
         try {
+            if (total > MAX_IMPORT_BYTES) throw new IllegalStateException("本任务产物超过40MiB导入上限");
             for (int i = saved.length(); i < outputs.length(); i++) {
                 control.check();
                 JSONObject output = outputs.getJSONObject(i);
                 JSONObject found=artifacts.find(source(record,config,MediaJobJournal.hash(output)),control);
-                if(found!=null){saved.put(found);record.put("attachments",saved).put("resultStatus",saved.length()==outputs.length()?"saved":"partial");if(saved.length()==1)record.put("attachment",found);save(record);continue;}
+                if(found!=null){
+                    total += found.optLong("size");
+                    saved.put(found);
+                    record.put("attachments",saved).put("resultStatus",total<=MAX_IMPORT_BYTES&&saved.length()==outputs.length()?"saved":"partial");
+                    if(saved.length()==1)record.put("attachment",found);
+                    save(record); // The original already exists; retain its receipt even when over budget.
+                    if(total>MAX_IMPORT_BYTES)throw new IllegalStateException("本任务产物超过40MiB导入上限");
+                    continue;
+                }
+                if (total >= MAX_IMPORT_BYTES) throw new IllegalStateException("本任务产物超过40MiB导入上限");
                 byte[] bytes = MediaTransport.exchange(ComfyUiTransport.outputUri(config.getString("baseUrl"), output), key, "GET", null,
-                        MediaTransport.MAX_MEDIA_BYTES, control);
+                        (int) Math.min(MediaTransport.MAX_MEDIA_BYTES, MAX_IMPORT_BYTES - total), control);
                 total += bytes.length;
-                if (total > 40L * 1024 * 1024) throw new IllegalStateException("本任务产物超过40MiB导入上限");
+                if (total > MAX_IMPORT_BYTES) throw new IllegalStateException("本任务产物超过40MiB导入上限");
                 MediaTransport.Payload payload = MediaTransport.outputPayload(bytes);
                 control.check();
                 JSONObject attachment = artifacts.save(payload, source(record, config, MediaJobJournal.hash(output)), control);
