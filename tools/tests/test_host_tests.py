@@ -113,10 +113,11 @@ class HostTestEntrypointTest(unittest.TestCase):
                           'dev.pocketengine.features.local.project.ProjectCommandSpecTest',
                           'dev.pocketengine.ui.TaskExecutionPresentationTest',
                           'dev.pocketengine.store.TaskAuditStoreTest'], entry.get('additionalClasses', []))
-        self.assertEqual(['dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest'], entry['helpers'])
+        self.assertEqual(['dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest',
+                          'dev.pocketengine.testutil.HttpServer'], entry['helpers'])
         self.assertEqual(['runtime-development-continuity'], HOST.select(REGISTRY, [], [entry['class']]))
         source = (HOST.ROOT / 'app/src/hostTest/java' / (entry['class'].replace('.', '/') + '.java')).read_text()
-        self.assertEqual(4, len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', source)))
+        self.assertEqual(5, len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', source)))
         self.assertNotIn('@Ignore', source)
 
     def test_owner_diagnostic_metadata_is_explicit_and_consumes_the_shared_phone_whitelist(self):

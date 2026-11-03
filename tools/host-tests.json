@@ -944,11 +944,24 @@
       "dev.pocketengine.store.TaskAuditStoreTest"
     ],
     "helpers": [
-      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest"
+      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest",
+      "dev.pocketengine.testutil.HttpServer"
     ],
     "native": true,
     "robolectric": true,
-    "description": "Original approved command short wait then same-execution observation, exact total deadline and native cancel/drain. Real original SQLite/JNI Node exit7, live silence, immutable cursor logs, read-only owner reopening without input/stop authority, no per-poll activity journal growth and original private artifact capture. Includes exact command normalization/consent and same-operation UI enum projection; existing activity/PTY groups stay separate. No second Runner/job ledger, automatic replay, inferred input readiness, hardware or performance acceptance."
+    "description": "Original approved command short wait then same-execution observation, exact total deadline and native cancel/drain. Real original SQLite/JNI Node exit7, live silence, immutable cursor logs, read-only owner reopening beyond the recent operation window, original private artifact capture and bounded Unicode head/tail on actual Runner HTTP wire with complete original log pages. Includes exact command normalization/consent and same-operation UI projection; existing activity/PTY groups stay separate. No second Runner/job ledger, automatic replay, inferred input readiness, hardware or performance acceptance."
+  },
+  "runtime-output-display": {
+    "class": "dev.pocketengine.features.capabilities.ToolTextDisplayTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.capabilities.ModelCapabilityAdaptersTest",
+      "dev.pocketengine.features.memory.ToolOutputBoundaryNativeTest",
+      "dev.pocketengine.features.memory.ToolOutputStoreNativeTest",
+      "dev.pocketengine.features.memory.ProjectNativeOutputCaptureTest"
+    ],
+    "helpers": ["dev.pocketengine.testutil.HttpServer"],
+    "robolectric": true,
+    "description": "Explicit text display UTF-8/JSON budgets and exact head/tail omission facts; preserve native receipt, original source/SHA/cursor, whole document chunks and browser references. Existing real SQLite output capture/raw recovery, redaction, authority loss and storage-failure contracts remain active. Controlled SSH producer is not a real remote SSH test; no replacement spool, image import or physical device claim."
   },
   "project-git-isolation": {
     "class": "dev.pocketengine.features.local.project.ProjectGitIsolationNativeJourneyTest",
