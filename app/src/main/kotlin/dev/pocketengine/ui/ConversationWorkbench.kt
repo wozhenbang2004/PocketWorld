@@ -1,4 +1,5 @@
 package dev.pocketengine.ui
+import org.json.JSONObject
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -129,7 +130,9 @@ private fun ConversationTable(block: RichMessageDocument.Block, link: (String) -
 /** Source is an actual host TaskStore projection. Controls only open/refresh that same task. */
 @Composable
 internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask: (String) -> Unit,
-    onLoadDetails: (String) -> Unit, modifier: Modifier = Modifier) {
+    onLoadDetails: (String) -> Unit, modifier: Modifier = Modifier,
+    interruptedSourceRevision: Long = 0, readInterrupted: ((String, (JSONObject?, String?) -> Unit) -> Unit)? = null,
+    answerQuestion: ((JSONObject, String) -> Unit)? = null) {
     var expanded by rememberSaveable(task.id, task.runId) {
         mutableStateOf(task.status in setOf("preparing", "running", "awaiting_user", "waiting_approval", "reconciling", "unknown", "failed"))
     }
@@ -177,6 +180,8 @@ internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask
                     Text("原任务记录尚未载入。", fontSize = 13.sp, color = SecondaryInk)
                     TextButton(onClick = { onLoadDetails(task.id) }) { Text("读取记录") }
                 } else if (task.operations.isEmpty()) Text("原任务还没有工具调用记录。", fontSize = 13.sp, color = SecondaryInk)
+                if (answerQuestion != null) task.ownerQuestion?.let { question -> key(task.id, interruptedSourceRevision, question.toString()) { OwnerQuestionPanel(question, answerQuestion) } }
+                if (readInterrupted != null) InterruptedAttemptJournal(task.id, interruptedSourceRevision, readInterrupted)
                 val visible = if(showAll) task.operations else task.operations.takeLast(3)
                 if(task.operations.size > 3) TextButton(onClick = { showAll = !showAll }) {
                     Text(if(showAll) "只看最近调用" else "展开其余 ${task.operations.size - 3} 条", fontSize = 13.sp)

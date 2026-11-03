@@ -25,7 +25,7 @@ internal data class ProjectGitState(
 /** Native owner selection over the original task/approval/job. No model proxy, persisted grant or second ledger. */
 internal class ProjectGitCoordinator(
     private val app: EngineApplication, private val io: ExecutorService, private val main: Handler,
-    private val privateOwner: () -> Boolean
+    private val privateOwner: () -> Boolean, private val selectOriginalCheckout: (JSONObject) -> Unit = {}
 ) {
     var state by mutableStateOf(ProjectGitState()); private set
     private var generation = 0L
@@ -94,6 +94,20 @@ internal class ProjectGitCoordinator(
         }
         prepare(args, executeRead = false)
     }
+    fun reviewIsolation(baseCommit: String, branch: String) {
+        val snapshot = state.snapshot ?: return
+        val args = JSONObject().put("gitAction", "isolate").put("gitPin", snapshot.getJSONObject("pin"))
+            .put("baseCommit", dev.pocketengine.features.local.project.ProjectGitIsolation.commit(baseCommit.trim()))
+            .put("branch", dev.pocketengine.features.local.project.ProjectGitIsolation.branch(branch.trim()))
+        prepare(args, executeRead = false)
+    }
+    fun selectRelated(target: String, selected: (String) -> Unit = {}) {
+        owner(); val current = state.checkoutId ?: return
+        work({ local().relatedGitCheckoutForOwner(current, target) }) { actual ->
+            check(actual.getString("projectId") == state.projectId) { "副本选择的原项目已变化" }
+            selectOriginalCheckout(actual); selected(actual.getString("id"))
+        }
+    }
     private fun prepare(args: JSONObject, executeRead: Boolean) {
         owner(); if (state.busy || state.processPending || state.review != null) return
         if (!executeRead && state.uncertain) { state = state.copy(error = "上一项变更结果仍待核对，不能另起Git变更。请读取原操作。"); return }
@@ -124,7 +138,7 @@ internal class ProjectGitCoordinator(
             notice = when { git.optBoolean("publicationUnknown") -> "原操作的变更结果仍待核对；不会重复执行。"
                 git.optString("code") == "git_original_process_pending" -> "原Git进程仍在执行，可以查看同一任务或明确停止。"
                 !git.optBoolean("ok") -> gitMessage(git.optString("code"))
-                else -> "已取得这次Git的真实结果。" })
+                else -> if (action == "isolate") "私有隔离副本已完成。原仓与未提交修改保留，选择后继续开发；不会自动合并。" else "已取得这次Git的真实结果。" })
         if (git.optBoolean("ok") && data != null) {
             if (action == "status") {
                 val same = state.snapshot?.optJSONObject("pin")?.optString("snapshotDigest") == data.optJSONObject("pin")?.optString("snapshotDigest")
@@ -137,7 +151,7 @@ internal class ProjectGitCoordinator(
                 val originalPin = state.snapshot?.optJSONObject("pin")?.optString("snapshotDigest")
                 val read = data.getString("layer") == "head_index" && data.getJSONObject("pin").getString("snapshotDigest") == originalPin && identity == diffIdentity && diffReadThrough == data.getInt("totalBytes")
                 next = next.copy(diff = data, reviewedStagedDiffs = if (read) state.reviewedStagedDiffs + data.getString("path") else state.reviewedStagedDiffs)
-            } else if (ProjectGit.writes(action)) next = next.copy(snapshot = null, diff = null, history = null, selected = emptySet(), reviewedStagedDiffs = emptySet(), notice = "Git动作已有确定结果。请重新读取状态；原工作树内容和未选文件保留。")
+            } else if (ProjectGit.writes(action) && action != "isolate") next = next.copy(snapshot = null, diff = null, history = null, selected = emptySet(), reviewedStagedDiffs = emptySet(), notice = "Git动作已有确定结果。请重新读取状态；原工作树内容和未选文件保留。")
         }
         state = next
     }
@@ -156,6 +170,8 @@ internal class ProjectGitCoordinator(
         } } catch (failure: Exception) { state = state.copy(busy = false, error = failure.message?.take(500)) }
     }
     private fun gitMessage(code: String): String = when (code) {
+        "git_isolation_incomplete" -> "隔离创建未完整完成。原副本仍在，私有失败现场保留；只核对原任务，不自动重放或删除。"
+        "git_isolation_branch_exists", "git_isolation_target_exists" -> "分支或目标已存在，未覆盖。请核对原操作和现有副本。"
         "git_review_stale", "git_state_changed_during_read", "git_worktree_changed_during_read" -> "Git或文件已变化；原内容没有被覆盖，请重新读取状态后再选择。"
         "git_diff_not_utf8" -> "原Git差异包含非UTF-8字节，这个文字视图不替换或修改二进制/非UTF-8内容。"
         "git_index_locked" -> "仓库已有其它索引锁，未删除该锁。请核对原Git操作。"
