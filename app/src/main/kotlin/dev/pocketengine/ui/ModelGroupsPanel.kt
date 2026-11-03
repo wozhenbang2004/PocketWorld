@@ -58,11 +58,13 @@ internal fun ModelGroupsPanel(snapshot: JSONObject, connections: JSONObject, ref
 
 @Composable
 private fun ModelGroupEditor(original: JSONObject?, connections: JSONObject, references: JSONObject, busy: Boolean, close: () -> Unit, save: (String, JSONObject) -> Unit) {
+    var editError by remember(original) { mutableStateOf<String?>(null) }
     var name by remember(original) { mutableStateOf(original?.optString("name").orEmpty()) }
     var chosen by remember(original) { mutableStateOf(jsonRows(original?.optJSONArray("candidates"))) }
     var attempts by remember(original) { mutableIntStateOf(original?.optJSONObject("attemptPolicy")?.optInt("maxAttempts", 1) ?: 1) }
     var switches by remember(original) { mutableStateOf(original?.optJSONObject("attemptPolicy")?.optInt("maxRouteSwitches", 0) == 1) }
-    var external by remember(original) { mutableStateOf(chosen.any { it.optJSONArray("allowedAudiences")?.toString()?.contains("EXTERNAL_RELAY") == true }) }
+    val originalExternal = remember(original) { chosen.any { it.optJSONArray("allowedAudiences")?.toString()?.contains("EXTERNAL_RELAY") == true } }
+    var external by remember(original) { mutableStateOf(originalExternal) }
     val defaults = jsonRows(connections.optJSONArray("connections"))
     val favorites = jsonRows(references.optJSONArray("models")).filter { it.optBoolean("favorite") && it.optBoolean("available") }.map {
         JSONObject().put("id", it.getString("connectionId")).put("name", it.optString("connectionName")).put("model", it.getString("modelId"))
@@ -97,18 +99,15 @@ private fun ModelGroupEditor(original: JSONObject?, connections: JSONObject, ref
             TextButton(enabled = !busy, onClick = { attempts = if (attempts == 3) 1 else attempts + 1 }) { Text("最多 $attempts 次物理尝试 · 点按调整") }
             Row { Checkbox(switches, { switches = it }, enabled = !busy && attempts > 1); Text("瞬时故障时允许切换一次候选", style = MaterialTheme.typography.bodySmall) }
             Row { Checkbox(external, { external = it }, enabled = !busy); Text("允许本地服务使用此 API 组（仍需独立选择）", style = MaterialTheme.typography.bodySmall) }
+            editError?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Text("401/403/额度/政策拒绝不换号；输出开始后不拼接第二模型。每次尝试都记用量，未知不按0；仍受原任务预算与总期限限制。", style = MaterialTheme.typography.bodySmall)
         } },
         confirmButton = { TextButton(enabled = !busy && name.isNotBlank() && chosen.isNotEmpty(), onClick = {
-            val accounts = JSONArray(); val ids = mutableSetOf<String>(); val rows = JSONArray()
-            chosen.forEach { candidate ->
-                val row = JSONObject(candidate.toString()); val id = row.getJSONObject("target").getString("connectionId")
-                if (ids.add(id)) accounts.put(id)
-                row.put("allowedPurposes", JSONArray(if (external) listOf("MAIN", "SUMMARY", "MEMBER", "RELAY") else listOf("MAIN", "SUMMARY", "MEMBER")))
-                row.put("allowedAudiences", JSONArray(if (external) listOf("APP_OWNER", "EXTERNAL_RELAY") else listOf("APP_OWNER")))
-                rows.put(row)
-            }
-            save(name.trim(), JSONObject().put("allowedAccounts", JSONObject().put("mode", "EXPLICIT").put("refs", accounts)).put("candidates", rows).put("attemptPolicy", JSONObject().put("maxAttempts", attempts).put("maxRouteSwitches", if (attempts > 1 && switches) 1 else 0)))
+            try {
+                val definition = modelGroupEditDefinition(original, chosen, attempts, switches, external, external != originalExternal)
+                editError = null
+                save(name.trim(), definition)
+            } catch (invalid: IllegalArgumentException) { editError = invalid.message ?: "请重新打开原模型组后再保存" }
         }) { Text(if (busy) "保存中…" else "保存组（不发请求）") } },
         dismissButton = { TextButton(enabled = !busy, onClick = close) { Text("取消") } })
 }
