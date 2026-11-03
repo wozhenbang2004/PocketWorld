@@ -6,6 +6,7 @@ import dev.pocketengine.features.workspace.JsonFiles;
 import dev.pocketengine.features.workspace.VersionedWorkspace;
 import dev.pocketengine.features.local.project.ProjectDevelopment;
 import dev.pocketengine.features.local.project.ProjectSources;
+import dev.pocketengine.features.local.project.ProjectFileBytes;
 import dev.pocketengine.features.local.runtime.ProjectRuntime;
 import dev.pocketengine.features.local.runtime.RuntimeExecutionRef;
 import dev.pocketengine.features.local.runtime.RuntimeInvocation;
@@ -842,7 +843,9 @@ public final class LocalModule implements EngineModule {
     }
     private JSONObject read(String id,String path)throws Exception {
         File target=NativeCommandExecutor.within(content(id),VersionedWorkspace.path(path));if(!target.isFile()||target.length()>ProjectSources.MAX_FILE_BYTES)throw new IllegalArgumentException("本地文件不存在或超过2MiB");
-        byte[] bytes=Files.readAllBytes(target.toPath());if(bytes.length>ProjectSources.MAX_FILE_BYTES)throw new IllegalArgumentException("本地文件超过2MiB");
+        var attrs=Files.readAttributes(target.toPath(),java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        if(attrs.isSymbolicLink()||!attrs.isRegularFile()||attrs.size()>ProjectSources.MAX_FILE_BYTES)throw new IllegalArgumentException("本地文件不存在或超过2MiB");
+        byte[] bytes=ProjectFileBytes.read(target.toPath(),attrs,ProjectSources.MAX_FILE_BYTES);NativeCommandExecutor.within(content(id),path);
         String text;try{text=StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString();if(text.indexOf('\0')>=0)throw new java.nio.charset.CharacterCodingException();}catch(java.nio.charset.CharacterCodingException binary){throw new IllegalArgumentException("此文件不是可编辑的UTF-8文字；二进制原字节仍保留，可用固定成果预览或项目包导出",binary);}return new JSONObject().put("checkoutId",id).put("path",path).put("content",text).put("sha256",hash(bytes)).put("bytes",bytes.length);
     }
     private JSONObject localFile(String id,String path)throws Exception {
@@ -940,14 +943,16 @@ public final class LocalModule implements EngineModule {
     private JSONObject export(String id)throws Exception {
         requireIdle(id);return exportDirectory(content(id),checkout(id));
     }
-    private JSONObject exportDirectory(File directory,JSONObject metadata)throws Exception {
+    private static JSONObject exportDirectory(File directory,JSONObject metadata)throws Exception {
         String id=metadata.getString("id");JSONArray files=new JSONArray();long[] total={0};
         Files.walkFileTree(directory.toPath(),new java.nio.file.SimpleFileVisitor<java.nio.file.Path>(){
             @Override public java.nio.file.FileVisitResult preVisitDirectory(java.nio.file.Path path,java.nio.file.attribute.BasicFileAttributes attrs){return ProjectSources.sourcePath(directory.toPath().relativize(path).toString())?java.nio.file.FileVisitResult.CONTINUE:java.nio.file.FileVisitResult.SKIP_SUBTREE;}
             @Override public java.nio.file.FileVisitResult visitFile(java.nio.file.Path path,java.nio.file.attribute.BasicFileAttributes attrs)throws java.io.IOException {
                 String relative=directory.toPath().relativize(path).toString();if(!ProjectSources.sourcePath(relative))return java.nio.file.FileVisitResult.CONTINUE;
                 try{if(attrs.isSymbolicLink()||!attrs.isRegularFile())throw new SecurityException("源码清单不跟随符号链接或特殊文件");if(files.length()>=ProjectSources.MAX_FILES||attrs.size()>ProjectSources.MAX_FILE_BYTES)throw new IllegalStateException("源码清单超过2000文件/单文件2MiB范围");
-                    byte[] bytes=Files.readAllBytes(path);total[0]+=bytes.length;if(bytes.length>ProjectSources.MAX_FILE_BYTES||total[0]>ProjectSources.MAX_TOTAL_BYTES)throw new IllegalStateException("源码清单超过16MiB；依赖缓存和构建输出不纳入版本");
+                    NativeCommandExecutor.within(directory,relative);
+                    byte[] bytes=ProjectFileBytes.read(path,attrs,(int)Math.min(ProjectSources.MAX_FILE_BYTES,ProjectSources.MAX_TOTAL_BYTES-total[0]));
+                    NativeCommandExecutor.within(directory,relative);total[0]+=bytes.length;
                     JSONObject file=new JSONObject().put("checkoutId",id).put("path",relative).put("sha256",hash(bytes)).put("bytes",bytes.length);
                     try{String text=StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString();if(text.indexOf('\0')>=0)throw new java.nio.charset.CharacterCodingException();file.put("content",text);}catch(java.nio.charset.CharacterCodingException binary){file.put("binary",true).put("contentBase64",java.util.Base64.getEncoder().encodeToString(bytes));}files.put(file);
                     return java.nio.file.FileVisitResult.CONTINUE;
