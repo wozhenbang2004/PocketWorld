@@ -2,6 +2,7 @@ package dev.pocketengine.features.local.project;
 
 import static org.junit.Assert.*;
 import android.app.Application;
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.os.Looper;
@@ -39,9 +40,17 @@ public final class ProjectOwnerTerminalThermalJourneyTest {
     private static <T>T field(Object object,String name)throws Exception {var f=object.getClass().getDeclaredField(name);f.setAccessible(true);@SuppressWarnings("unchecked")T value=(T)f.get(object);return value;}
     private JSONObject tool(String name,JSONObject args)throws Exception {var m=fixture.getClass().getDeclaredMethod("tool",String.class,JSONObject.class);m.setAccessible(true);try{return (JSONObject)m.invoke(fixture,name,args);}catch(InvocationTargetException failure){if(failure.getCause() instanceof Exception)throw (Exception)failure.getCause();throw failure;}}
     private static void idle(){Shadows.shadowOf(Looper.getMainLooper()).idle();}
+    private static void memory(boolean low){ActivityManager.MemoryInfo info=new ActivityManager.MemoryInfo();info.lowMemory=low;info.availMem=low?50:600;info.totalMem=1000;info.threshold=100;Shadows.shadowOf(RuntimeEnvironment.getApplication().getSystemService(ActivityManager.class)).setMemoryInfo(info);}
+    private JSONObject memoryAfter(long previous)throws Exception {
+        long until=System.nanoTime()+3_000_000_000L;JSONObject facts;
+        do{runtime.automaticLogObservationPolicyForHost();idle();facts=runtime.automaticLogObservationPolicyForHost();if(facts.getLong("memoryObservationSequence")>previous)return facts;Thread.sleep(5);}while(System.nanoTime()<until);
+        throw new AssertionError("Original native memory observation did not return: "+facts);
+    }
+    private void freshCooldown()throws Exception{for(int i=0;i<6;i++){long previous=runtime.automaticLogObservationPolicyForHost().getLong("memoryObservationSequence");Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(5));memoryAfter(previous);}}
     @Before public void setup()throws Exception {
         assertTrue(new NativeProcessSupervisor().available());fixture=new ProjectOwnerTerminalJourneyTest();fixture.setup();
         tasks=field(fixture,"tasks");local=field(fixture,"local");original=field(fixture,"original");task=field(fixture,"task");run=field(fixture,"run");checkout=field(fixture,"checkout");epoch=field(fixture,"epoch");runtime=field(field(fixture,"factory"),"runtime");
+        memory(false);
     }
     @After public void closeOnlyThisOriginalFixture()throws Exception {try{if(session!=null)session.close();}finally{try{if(fixture!=null)fixture.close();}finally{idle();}}}
     private static int bytes(JSONObject page)throws Exception {int total=0;JSONArray chunks=page.getJSONArray("chunks");for(int i=0;i<chunks.length();i++)total+=Base64.getDecoder().decode(chunks.getJSONObject(i).getString("dataBase64")).length;return total;}
@@ -75,7 +84,7 @@ public final class ProjectOwnerTerminalThermalJourneyTest {
         JSONObject hot=session.read(0);assertEquals(8192,hot.getJSONObject("logObservationPolicy").getInt("automaticLogPageBytes"));assertTrue(bytes(hot)>0);assertTrue(bytes(hot)<=8192);assertTrue(hot.getBoolean("hasMore"));assertTrue(hot.getLong("nextCursor")>0);
         JSONObject explicit=local.projectLogForHost(exact,originalRequest.getJSONObject("binding"),0,32768);assertTrue(bytes(explicit)>8192);assertTrue(bytes(explicit)<=32768);unchangedOriginal(count,identity,metadata);
         shadow.setCurrentThermalStatus(PowerManager.THERMAL_STATUS_NONE);idle();assertEquals(8192,session.read(0).getJSONObject("logObservationPolicy").getInt("automaticLogPageBytes"));
-        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(30));JSONObject cold=session.read(0);assertEquals(32768,cold.getJSONObject("logObservationPolicy").getInt("automaticLogPageBytes"));assertTrue(bytes(cold)>8192);assertTrue(bytes(cold)<=32768);unchangedOriginal(count,identity,metadata);
+        freshCooldown();JSONObject cold=session.read(0);assertEquals(32768,cold.getJSONObject("logObservationPolicy").getInt("automaticLogPageBytes"));assertTrue(bytes(cold)>8192);assertTrue(bytes(cold)<=32768);unchangedOriginal(count,identity,metadata);
         JSONObject next=session.read(hot.getLong("nextCursor"));assertTrue(next.getLong("nextCursor")>hot.getLong("nextCursor"));assertNotEquals(hot.getJSONArray("chunks").getJSONObject(0).getLong("sequence"),next.getJSONArray("chunks").getJSONObject(0).getLong("sequence"));stopAndConfirmOnlyOriginalService();
     }
     @Test public void unavailableSourceNeverClaimsColdOrStopsOriginalAndClosingViewKeepsItsRealJob()throws Exception {
@@ -84,5 +93,16 @@ public final class ProjectOwnerTerminalThermalJourneyTest {
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(31));JSONObject page=session.read(0),policy=page.getJSONObject("logObservationPolicy");assertTrue(policy.isNull("thermalStatus"));assertEquals(8192,policy.getInt("automaticLogPageBytes"));assertFalse(policy.getBoolean("resourceReleaseProved"));assertFalse(policy.getBoolean("energySavingsMeasured"));assertTrue(bytes(page)>0);assertTrue(bytes(page)<=8192);unchangedOriginal(count,identity,metadata);
         session.close();assertFalse(original.isCancelled());session=null;
         String id=originalRequest.getJSONObject("binding").getString("operationId");var host=this.<TaskStoreProjectHost>field(field(fixture,"factory"),"host");session=host.ownerTerminals().open(task,id,new RunControl());assertEquals(metadata,session.metadata().toString());stopAndConfirmOnlyOriginalService();
+    }
+    @Test public void memoryPressureAndDiagnosticCacheRemainBoundToOriginalLiveExecution()throws Exception {
+        PowerManager power=RuntimeEnvironment.getApplication().getSystemService(PowerManager.class);Shadows.shadowOf(power).setCurrentThermalStatus(PowerManager.THERMAL_STATUS_NONE);
+        var observer=AndroidRuntimeThermalObservation.open(RuntimeEnvironment.getApplication());runtime.bindLogObservationForHost(observer);memoryAfter(0);freshCooldown();assertEquals(32768,runtime.automaticLogObservationPolicyForHost().getInt("automaticLogPageBytes"));
+        String identity=runtime.identity();launchOneOriginalService();int count=tasks.get(task,false).getJSONArray("operations").length();String metadata=session.metadata().toString();
+        long previous=runtime.automaticLogObservationPolicyForHost().getLong("memoryObservationSequence");memory(true);Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(5));JSONObject low=memoryAfter(previous);assertEquals(0,low.getInt("thermalStatus"));assertTrue(low.getBoolean("memoryLow"));assertEquals(8192,low.getInt("automaticLogPageBytes"));
+        JSONObject automatic=session.read(0);assertTrue(bytes(automatic)>0);assertTrue(bytes(automatic)<=8192);assertTrue(bytes(local.projectLogForHost(exact,originalRequest.getJSONObject("binding"),0,32768))>8192);unchangedOriginal(count,identity,metadata);
+        long sampled=observer.cachedSnapshotForHost().getLong("memoryObservationSequence");var preview=local.diagnosticMetadataForOwner(new RunControl());JSONObject diagnostic=new JSONObject(preview.textForOwner()).getJSONObject("sources").getJSONObject("runtime").getJSONObject("facts");
+        assertTrue(diagnostic.getBoolean("memoryLow"));assertTrue(diagnostic.getBoolean("memoryFresh"));assertEquals(50,diagnostic.getLong("memoryAvailableBytes"));assertEquals(1000,diagnostic.getLong("memoryTotalBytes"));assertEquals(100,diagnostic.getLong("memoryThresholdBytes"));assertEquals(8192,diagnostic.getInt("automaticLogPageBytes"));assertEquals(sampled,observer.cachedSnapshotForHost().getLong("memoryObservationSequence"));assertFalse(diagnostic.has("generation"));assertFalse(diagnostic.has("taskId"));assertFalse(diagnostic.has("source"));
+        memory(false);previous=sampled;Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(5));memoryAfter(previous);assertEquals(8192,session.read(0).getJSONObject("logObservationPolicy").getInt("automaticLogPageBytes"));freshCooldown();assertTrue(bytes(session.read(0))>8192);unchangedOriginal(count,identity,metadata);
+        session.close();assertFalse(original.isCancelled());var host=this.<TaskStoreProjectHost>field(field(fixture,"factory"),"host");session=host.ownerTerminals().open(task,originalRequest.getJSONObject("binding").getString("operationId"),new RunControl());assertEquals(metadata,session.metadata().toString());stopAndConfirmOnlyOriginalService();
     }
 }

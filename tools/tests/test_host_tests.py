@@ -90,7 +90,7 @@ class HostTestEntrypointTest(unittest.TestCase):
             sources = [path for path in matches if path.is_file()]
             self.assertEqual(1, len(sources))
             methods += len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', sources[0].read_text()))
-        self.assertEqual(15, methods)
+        self.assertEqual(23, methods)
         helper = (HOST.ROOT / 'app/src/hostTest/java/dev/pocketengine/features/local/project/ProjectManagedRunnerJourneyTest.java').read_text()
         self.assertIn('createFixture(true)', helper)
         self.assertIn('createTerminalFixture()throws Exception {createFixture(false);}', helper)

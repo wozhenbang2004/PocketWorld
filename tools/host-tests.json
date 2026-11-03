@@ -490,7 +490,7 @@
     ],
     "native": true,
     "robolectric": true,
-    "description": "Fifteen focused original-runtime checks: actual approval/SQLite/Node JNI PTY uses only automatic viewer pages 32KiB/8KiB; explicit reads and original task/run/control/identity/input/stop/lease stay unchanged. Scoped production PowerManager adapter is tested with simulated OS statuses, fresh cold reread and 30s hysteresis, stale/closed generation guards and original Factory lifecycle. No model/worker concurrency changes or OEM/energy/temperature/VT/device proof. Terminal-only helper declares only its real sh/node/python, no npm prerequisite or mock tool."
+    "description": "Twenty-three focused original-runtime checks: actual approval/SQLite/Node JNI PTY and diagnostic cache use native thermal/memory facts only for future automatic viewer pages 32KiB/8KiB; explicit reads and original task/run/control/identity/input/stop/lease stay unchanged. Production PowerManager/ActivityManager adapters use simulated OS facts, fresh recovery rereads, 30s hysteresis and memory expiry; bounded uncooperative-reader fixtures check cancellation, invalidation and no replacement readers. No model/process concurrency changes or OEM/energy/physical memory/temperature/VT/device proof. Terminal-only helper declares only its real sh/node/python, no npm prerequisite or mock tool."
   },
   "aion-mcp-config": {
     "class": "dev.pocketengine.features.plugins.McpConfigImportAdapterTest",
@@ -623,12 +623,17 @@
   "request-clock": {
     "class": "dev.pocketengine.runtime.RequestClockContextTest",
     "additionalClasses": [
-      "dev.pocketengine.runtime.RequestClockRunnerTest"
+      "dev.pocketengine.runtime.RequestClockRunnerTest",
+      "dev.pocketengine.store.OwnerInputClockNativeTest",
+      "dev.pocketengine.features.assistant.QueuedOwnerInputRunnerJourneyTest",
+      "dev.pocketengine.features.assistant.OwnerQuestionInputsNativeTest"
     ],
     "helpers": [
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.store.OwnerInputMailboxTest"
     ],
-    "description": "Deterministic same-instant OS clock/zone/DST/missing facts plus actual bounded Gateway/Runner cross-midnight request-only projection. No external time verification, input-origin zone/mixed admission, scheduler or device acceptance."
+    "robolectric": true,
+    "description": "Same-instant host clock/DST/missing facts plus real SQLite native owner admissions and actual bounded Gateway/Runner requests. Original admitted IANA zones/time survive duplicate/new-run recovery and project as unique/mixed/missing only for included owner input; pending or legacy/remote sources cannot borrow the executor zone. Request references never become checkpoint messages, execution authority or changed schedules. Simulated OS zones, no physical second-device or external time verification."
   },
   "runner-repeat-notice": {
     "class": "dev.pocketengine.runtime.RepeatToolNoticeTest",

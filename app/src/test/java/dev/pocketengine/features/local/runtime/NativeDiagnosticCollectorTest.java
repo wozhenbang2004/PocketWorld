@@ -14,7 +14,8 @@ public final class NativeDiagnosticCollectorTest {
     static JSONObject facts(NativeDiagnosticCollector.Domain domain)throws Exception {
         JSONObject value=new JSONObject();switch(domain){
             case PLATFORM:return value.put("deviceSdk",35).put("targetSdk",35).put("appVersionCode",3L).put("arm64Advertised",true);
-            case RUNTIME:return value.put("androidProfilePresent",true).put("activeGenerationLoaded",false).put("supervisorLoaded",true).put("ptyAvailable",true).put("duplexAvailable",true).put("integrityRechecked",false).put("runtimeIdentityFingerprintSha256","a".repeat(64)).put("catalogFingerprintSha256",JSONObject.NULL);
+            case RUNTIME:return value.put("androidProfilePresent",true).put("activeGenerationLoaded",false).put("supervisorLoaded",true).put("ptyAvailable",true).put("duplexAvailable",true).put("integrityRechecked",false).put("runtimeIdentityFingerprintSha256","a".repeat(64)).put("catalogFingerprintSha256",JSONObject.NULL)
+                    .put("thermalStatus",JSONObject.NULL).put("observationAgeMillis",JSONObject.NULL).put("memoryLow",JSONObject.NULL).put("memoryFresh",false).put("memoryAvailableBytes",JSONObject.NULL).put("memoryTotalBytes",JSONObject.NULL).put("memoryThresholdBytes",JSONObject.NULL).put("memoryObservationAgeMillis",JSONObject.NULL).put("automaticLogPageBytes",8192).put("automaticLogPageReduced",true);
             case PHONE:for(String key:List.of("mainObservation","mainScreenshot","mainExecution","taskNotifications","stopControl"))value.put(key,"unknown");return value.put("backgroundSampled",false);
             case STORAGE:return value.put("homeLogicalBytes",12L).put("temporaryLogicalBytes",0L).put("downloadLogicalBytes",JSONObject.NULL).put("originalLogLogicalBytes",34L).put("incompleteScopes",1L).put("generationScopeCount",2L).put("linkScopeCount",3L).put("logicalCountsNotAdditive",true).put("fileContentsRead",false);
         }throw new AssertionError();

@@ -483,6 +483,7 @@ public final class TaskStore {
     public synchronized JSONObject create(String goal,String mode)throws Exception{
         if(!mode.equals("main_screen")&&!mode.equals("background"))throw new IllegalArgumentException("无效执行模式");
         JSONObject t=base(UUID.randomUUID().toString(),goal,"phone",mode).put("displayId",mode.equals("background")?-1:0);
+        t.put("goalOriginClock",OwnerInputClock.capture(t.getLong("createdAt")));
         write(t);return copy(t,false);
     }
     public synchronized JSONObject createCapabilityTask(String goal,String conversationId)throws Exception{
@@ -913,7 +914,7 @@ public final class TaskStore {
                 if(!attempt.moveToFirst()||!"awaiting_user".equals(attempt.getString(0)))throw new SecurityException("原问题执行尚未结算或已变化，未接收旧通知");
             }
             JSONObject mailbox=ownerMailbox(task,run,epoch);if(mailbox.optBoolean("open")||!task.getString("conversationId").equals(mailbox.optString("conversationId")))throw new SecurityException("原问题邮箱未关闭或不属于原对话");
-            JSONObject row=accepted.row();OwnerInputQueue.accepted(row,false);JSONArray rows=task.optJSONArray("ownerInputs");if(rows==null)rows=new JSONArray();rows.put(row);task.put("ownerInputs",rows);
+            JSONObject row=accepted.row();row.put("inputOriginClock",OwnerInputClock.capture(row.getLong("acceptedAt")));OwnerInputQueue.accepted(row,false);JSONArray rows=task.optJSONArray("ownerInputs");if(rows==null)rows=new JSONArray();rows.put(row);task.put("ownerInputs",rows);
             task.getJSONObject("evidence").getJSONObject("ownerQuestion").put("replyConsumed",true).put("replyMessageId",row.getString("messageId")).put("replyConsumedAt",row.getLong("acceptedAt"));
             task.getJSONObject("ownerNotification").put("phase","answered").put("answeredAt",row.getLong("acceptedAt"));write(task);
             conversationRepository.recordOwnerQuestionInput(this,accepted);
@@ -6262,6 +6263,13 @@ public final class TaskStore {
     public synchronized JSONObject appendOwnerGoalInput(String id,String run,int epoch,String conversation,JSONObject message,String mode,RunControl control)throws Exception{
         return appendNativeOwnerInput(id,run,epoch,conversation,message,mode,control,false,true);
     }
+    /** Request-only projection from this original task's admitted input rows.
+     * It neither polls/claims pending input nor restores authority after restart. */
+    public synchronized JSONObject ownerInputClockContext(String id,String run,int epoch,java.util.List<String> included,RunControl control,boolean phone)throws Exception{
+        checkExtensionRun(id,run,epoch,control);JSONObject current=required(id);
+        JSONObject task=nativeOwnerInputTask(id,run,epoch,phone?"":current.getString("conversationId"),control,phone);
+        return OwnerInputClock.project(task,java.util.Objects.requireNonNull(included),phone);
+    }
     private JSONObject appendNativeOwnerInput(String id,String run,int epoch,String conversation,JSONObject message,String mode,RunControl control,boolean phone,boolean taskGoal)throws Exception{
         db.beginTransaction();try{
             JSONObject task=nativeOwnerInputTask(id,run,epoch,conversation,control,phone),mailbox=ownerMailbox(task,run,epoch);
@@ -6290,7 +6298,7 @@ public final class TaskStore {
             if(taskGoal&&(rows.length()!=0||!content.equals(task.optString("goal"))))throw new SecurityException("初始输入必须是这次新任务已接收的同一目标");
             if(rows.length()>=64||characters>240000)throw new IllegalStateException("本次原任务的输入留存已达上限，请先结束并核对原任务；未自动新建任务");
             if(sourceRefs.length()>0)try(var inspection=conversationRepository.inspectOwnerSources()){for(int i=0;i<sourceRefs.length();i++)inspection.requireSource(sourceRefs.getJSONObject(i));}
-            JSONObject row=new JSONObject().put("messageId",messageId).put("clientMessageId",client).put("content",content).put("mode",mode).put("attachments",attachments).put("payloadSha256",digest).put("acceptedRunId",run).put("acceptedEpoch",epoch).put("acceptedAt",System.currentTimeMillis());if(sourceRefs.length()>0)row.put("ownerSourceRefs",sourceRefs);if(message.has("revision")){Object actual=message.get("revision");if(!(actual instanceof Integer||actual instanceof Long)||((Number)actual).longValue()<1)throw new IllegalArgumentException("原生消息revision必须为实际正整数");row.put("ownerMessageRevision",((Number)actual).longValue());}if(!phone&&message.has("requestFingerprint")){Object fingerprint=message.get("requestFingerprint");if(!(fingerprint instanceof String)||!((String)fingerprint).matches("[a-f0-9]{64}"))throw new IllegalArgumentException("原生提交fingerprint无效");row.put("ownerRequestFingerprint",fingerprint);}if(!phone){row.put("acceptedTaskId",id);OwnerInputQueue.accepted(row,taskGoal);}rows.put(row);task.put("ownerInputs",rows);write(task);db.setTransactionSuccessful();return new JSONObject(row.toString()).put("duplicate",false);
+            JSONObject row=new JSONObject().put("messageId",messageId).put("clientMessageId",client).put("content",content).put("mode",mode).put("attachments",attachments).put("payloadSha256",digest).put("acceptedRunId",run).put("acceptedEpoch",epoch).put("acceptedAt",System.currentTimeMillis());row.put("inputOriginClock",OwnerInputClock.capture(row.getLong("acceptedAt")));if(sourceRefs.length()>0)row.put("ownerSourceRefs",sourceRefs);if(message.has("revision")){Object actual=message.get("revision");if(!(actual instanceof Integer||actual instanceof Long)||((Number)actual).longValue()<1)throw new IllegalArgumentException("原生消息revision必须为实际正整数");row.put("ownerMessageRevision",((Number)actual).longValue());}if(!phone&&message.has("requestFingerprint")){Object fingerprint=message.get("requestFingerprint");if(!(fingerprint instanceof String)||!((String)fingerprint).matches("[a-f0-9]{64}"))throw new IllegalArgumentException("原生提交fingerprint无效");row.put("ownerRequestFingerprint",fingerprint);}if(!phone){row.put("acceptedTaskId",id);OwnerInputQueue.accepted(row,taskGoal);}rows.put(row);task.put("ownerInputs",rows);write(task);db.setTransactionSuccessful();return new JSONObject(row.toString()).put("duplicate",false);
         }finally{db.endTransaction();}
     }
     private static JSONObject ownerMailbox(JSONObject task,String run,int epoch)throws Exception{

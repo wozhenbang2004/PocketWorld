@@ -24,7 +24,7 @@ import static org.junit.Assert.*;
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class TaskAuditStoreTest {
     private SQLiteDatabase db;
-    @Before public void open(){db=SQLiteDatabase.create(null);db.execSQL("CREATE TABLE tasks(task_id TEXT PRIMARY KEY,document TEXT NOT NULL,updated_at INTEGER NOT NULL)");db.execSQL("CREATE TABLE operations(operation_id TEXT PRIMARY KEY,task_id TEXT NOT NULL,run_id TEXT NOT NULL,tool TEXT NOT NULL,arguments TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT,created_at INTEGER NOT NULL)");TaskAuditStore.createSchema(db);}
+    @Before public void open(){db=SQLiteDatabase.create(null);db.execSQL("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)");db.execSQL("CREATE TABLE tasks(task_id TEXT PRIMARY KEY,document TEXT NOT NULL,updated_at INTEGER NOT NULL)");db.execSQL("CREATE TABLE operations(operation_id TEXT PRIMARY KEY,task_id TEXT NOT NULL,run_id TEXT NOT NULL,tool TEXT NOT NULL,arguments TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT,created_at INTEGER NOT NULL)");TaskAuditStore.createSchema(db);}
     @After public void close(){db.close();}
     private static String id(){return UUID.randomUUID().toString();}
     private JSONObject task(String id,JSONArray events)throws Exception{return new JSONObject().put("id",id).put("goal","原目标🧭").put("status","paused").put("actorId","owner").put("spaceId","private").put("updatedAt",42).put("events",events);}

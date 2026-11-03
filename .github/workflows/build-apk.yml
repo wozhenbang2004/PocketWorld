@@ -250,7 +250,7 @@ jobs:
         shell: bash
     env:
       HOST_TEST_GROUP: ${{ inputs.host_group }}
-      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/dsh-runtime-continuity' && 'native-normal-cleanup,runtime-development-continuity,runtime-preparation-cancel,runtime-recovery-admission,native-duplex-pipes,runtime-activity' || 'phone-task-platform,memory-recall-quality,memory-evidence-plan,memory-method-quality') || inputs.host_groups }}
+      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/dsh-runtime-continuity' && 'native-normal-cleanup,runtime-development-continuity,runtime-preparation-cancel,runtime-recovery-admission,native-duplex-pipes,runtime-activity,runtime-thermal-log-policy,runtime-diagnostic-metadata,request-clock' || 'phone-task-platform,memory-recall-quality,memory-evidence-plan,memory-method-quality') || inputs.host_groups }}
       POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
     steps:
       - name: Check out selected revision
