@@ -60,14 +60,15 @@ public final class MemoryRecallConstraints {
         JSONObject properties=new JSONObject().put("maxHops",new JSONObject().put("type","integer").put("minimum",0).put("maximum",2));
         properties.put("layers",arraySchema(4,20,new JSONArray(List.of("fact","preference","episodic","procedural"))));
         properties.put("sourceKinds",arraySchema(4,30,new JSONArray(List.of("message","task_evidence","workspace_file","owner_saved"))));
-        properties.put("entityIds",arraySchema(8,160,null).put("description","Exact existing stable subject/object IDs, not display names or permission grants."));
-        for(String field:List.of("updatedAfter","updatedBefore","eventAfter","eventBefore"))properties.put(field,new JSONObject().put("type","integer").put("minimum",0).put("maximum",Long.MAX_VALUE)
-                .put("description",field.startsWith("event")?"Inclusive event-time bound in Unix milliseconds. Unknown event time is excluded; update time is never substituted.":"Inclusive saved-record update-time bound in Unix milliseconds; this is not the historical event time."));
+        properties.put("entityIds",arraySchema(8,160,null));
+        // HostToolSupervisor uses PluginRules' original bounded schema subset. Semantic
+        // value checks (stable identity, nonempty/unique strings, ordered times) stay in checked().
+        for(String field:List.of("updatedAfter","updatedBefore","eventAfter","eventBefore"))properties.put(field,new JSONObject().put("type","integer").put("minimum",0).put("maximum",Long.MAX_VALUE));
         return new JSONObject().put("type","object").put("properties",properties).put("additionalProperties",false);
     }
     private static JSONObject arraySchema(int max,int chars,JSONArray values)throws Exception {
-        JSONObject item=new JSONObject().put("type","string").put("minLength",1).put("maxLength",chars);if(values!=null)item.put("enum",values);
-        return new JSONObject().put("type","array").put("maxItems",max).put("uniqueItems",true).put("items",item);
+        JSONObject item=new JSONObject().put("type","string").put("maxLength",chars);if(values!=null)item.put("enum",values);
+        return new JSONObject().put("type","array").put("maxItems",max).put("items",item);
     }
     private static Set<String> strings(JSONObject input,String key,Set<String> allowed,int max,int chars)throws Exception {
         if(!input.has(key))return Set.of();Object raw=input.get(key);if(!(raw instanceof JSONArray))throw new IllegalArgumentException(key+"必须是列表");

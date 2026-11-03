@@ -37,6 +37,18 @@ public final class LearnedMethodDecisionNativeTest {
     private static JSONObject lastReceipt(JSONObject request,String callId)throws Exception{
         JSONArray messages=request.getJSONArray("messages");for(int i=messages.length()-1;i>=0;i--){JSONObject row=messages.getJSONObject(i);if("tool".equals(row.optString("role"))&&callId.equals(row.optString("tool_call_id")))return new JSONObject(row.getString("content"));}throw new AssertionError("missing original tool receipt "+callId);
     }
+    /** Preserve every native return/exception; diagnose only this isolated fixture's failing
+     * boundary without logging model messages, arguments, task bodies or database contents. */
+    private static <T>T traceNativeFailure(Class<T> type,T original,AtomicReference<String> failure){
+        return type.cast(java.lang.reflect.Proxy.newProxyInstance(type.getClassLoader(),new Class<?>[]{type},(proxy,method,args)->{
+            try{return method.invoke(original,args);}
+            catch(java.lang.reflect.InvocationTargetException wrapped){
+                Throwable cause=wrapped.getCause();String detail=String.valueOf(cause.getMessage());
+                failure.compareAndSet(null,type.getSimpleName()+"."+method.getName()+":"+cause.getClass().getSimpleName()+":"+detail.substring(0,Math.min(240,detail.length())));
+                throw cause;
+            }
+        }));
+    }
     private static final class Server implements AutoCloseable {
         final HttpServer server;final AtomicInteger count=new AtomicInteger();final AtomicReference<Throwable> failure=new AtomicReference<>();
         Server(Script script)throws Exception{
@@ -93,15 +105,20 @@ public final class LearnedMethodDecisionNativeTest {
         try(Fixture f=new Fixture()){
             assertTrue("new production audit tool must be actually registered",f.port.supports("memory_method_decision"));assertFalse(f.port.tools().toString().contains("scripts/check.py"));
             f.skills.readForHost(scope(),f.skill.getString("id"),"SKILL.md",0,8000,f.skill.getString("digest"),Set.of());assertEquals(0,f.page().getJSONArray("applications").length());
-            JSONObject args=f.writeArgs();f.approve(args);AtomicReference<String> step=new AtomicReference<>();
+            JSONObject args=f.writeArgs();f.approve(args);AtomicReference<String> step=new AtomicReference<>(),nativeFailure=new AtomicReference<>();
+            List<String> eventStates=new java.util.concurrent.CopyOnWriteArrayList<>();
             try(Server server=new Server((index,request)->{
                 if(index==0){assertTrue(request.toString().contains("备份前核对目录"));return call("workspace_write",args,index);}
                 if(index==1){assertEquals(1,lastReceipt(request,"method-call-0").getInt("version"));return call(TaskStoreMemoryReader.RAW_QUERY,new JSONObject().put("section","operations").put("query","workspace_write").put("limit",10).put("maxChars",8000),index);}
                 if(index==2){JSONArray entries=lastReceipt(request,"method-call-1").getJSONArray("entries");assertTrue(entries.length()>0);step.set(entries.getJSONObject(0).getString("operationId"));return call("memory_method_decision",f.decision("apply",new JSONArray().put(step.get())),index);}
                 if(index==3){JSONObject actual=lastReceipt(request,"method-call-2").getJSONObject("methodDecision");assertEquals("model_apply_with_native_steps",actual.getString("applicationState"));assertFalse(actual.getBoolean("methodSemanticUseIndependentlyVerified"));return new JSONObject().put("role","assistant").put("content","已保存原方法决定和原步骤关联；这不是方法有效性或业务成功证明。");}
                 throw new AssertionError("unexpected replay/model call "+index);
-            })){RunOutcome result=new AgentRunner(null,f.raw()).run(f.task,GOAL,server.config(),f.control,event->{try{f.tasks.event(f.task,f.run,f.epoch,event);}catch(Exception failed){throw new IllegalStateException(failed);}},f.journal());
-                if(server.failure.get()!=null)throw new AssertionError("actual loopback script failed",server.failure.get());assertEquals("original native write/decision receipts do not prove business completion", "needs_confirmation",result.status);assertEquals(4,server.count.get());}
+            })){RunOutcome result=new AgentRunner(null,traceNativeFailure(CapabilityPort.class,f.raw(),nativeFailure)).run(f.task,GOAL,server.config(),f.control,event->{
+                if(eventStates.size()<24)eventStates.add(event.optString("type")+":"+event.optString("status")+":"+event.optString("tool"));
+                try{f.tasks.event(f.task,f.run,f.epoch,event);}catch(Exception failed){nativeFailure.compareAndSet(null,"TaskStore.event:"+failed.getClass().getSimpleName());throw new IllegalStateException(failed);}
+            },traceNativeFailure(RunJournal.class,f.journal(),nativeFailure));
+                if(server.failure.get()!=null)throw new AssertionError("actual loopback script failed",server.failure.get());
+                assertEquals("original native write/decision receipts do not prove business completion; modelRequests="+server.count.get()+"; summary="+result.summary+"; steps="+result.evidence.optInt("steps",-1)+"; nativeFailure="+nativeFailure.get()+"; eventStates="+eventStates,"needs_confirmation",result.status);assertEquals(4,server.count.get());}
             assertEquals(args.getString("content"),f.workspace.handle("read",new JSONObject().put("projectId",f.project).put("path","check.txt")).getString("content"));
             JSONObject receipt=f.page().getJSONArray("applications").getJSONObject(0);assertEquals("model_apply_with_native_steps",receipt.getString("applicationState"));assertEquals(step.get(),receipt.getJSONArray("stepRefs").getJSONObject(0).getString("operationId"));assertFalse(receipt.getBoolean("methodBusinessSuccessVerified"));assertFalse(receipt.getBoolean("executionAuthorized"));
             JSONObject effect=receipt.getJSONObject("effectEvidence");assertTrue(effect.getBoolean("inputComparable"));assertTrue(effect.getBoolean("environmentComparable"));assertFalse(effect.getBoolean("businessSuccessVerified"));

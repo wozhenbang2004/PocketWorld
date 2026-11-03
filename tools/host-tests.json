@@ -808,13 +808,14 @@
       "dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackendTest",
       "dev.pocketengine.features.memory.MemoryReadAudienceTest",
       "dev.pocketengine.features.memory.MemoryQueryPlanTest",
-      "dev.pocketengine.features.memory.MemoryRecallAgentCorpusNativeTest"
+      "dev.pocketengine.features.memory.MemoryRecallAgentCorpusNativeTest",
+      "dev.pocketengine.runtime.ReferenceHistoryTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
-    "description": "Frozen synthetic 16-development/8-holdout corpus, unchanged lexical baseline versus bounded MAIN query suggestions and typed entity paths. Real Book/SQLite/TaskStore/Runner/HTTP fixture, revision/forget/audience and SDK35 test-source boundaries; no live model rewrite accuracy, causal effect, phone UI or device acceptance."
+    "description": "Frozen synthetic 16-development/8-holdout corpus: default lexical, pre-existing query suggestions, and bounded constrained entity paths. Real Book/SQLite/TaskStore/Runner/HTTP fixture, original history rereads, reference refusal/retirement, revision/forget/audience and SDK35 test-source boundaries; no live model rewrite accuracy, causal effect, phone UI or device acceptance."
   },
   "memory-evidence-plan": {
     "class": "dev.pocketengine.features.memory.MemoryEvidencePlanNativeTest",

@@ -24,8 +24,10 @@ import org.junit.rules.TemporaryFolder;
 /**
  * A fixed synthetic retrieval corpus, separate from the native Agent journey.
  * Query suggestions are authored paraphrases, NOT live-model results or independent evidence.
- * The baseline uses the original Book search/context route, including its existing alias
- * projection; both routes receive the same record/character budget and live source checks.
+ * Three arms retain the original default query, the pre-existing two-argument query-suggestion
+ * plan, and the new constrained plan. Every arm receives the same record/character budget,
+ * existing alias projection and live source checks. The old suggestion plan has no new filters;
+ * gains over the default query alone must not be attributed entirely to this implementation.
  */
 public final class MemoryRecallQualityTest {
     private static final String RESOURCE = "memory/recall-quality-v1.json";
@@ -88,10 +90,11 @@ public final class MemoryRecallQualityTest {
     }
 
     private void evaluate(String split, int expectedCount) throws Exception {
-        Metrics baseline = new Metrics(), enriched = new Metrics();
+        Metrics baseline = new Metrics(), existingQueryPlanBaseline = new Metrics(), enriched = new Metrics();
         JSONArray scenarios = corpus().getJSONArray("scenarios"), details = new JSONArray();
         List<String> failures = new ArrayList<>();
-        int cases = 0, zeroOverlapGains = 0;
+        int cases = 0, zeroOverlapGains = 0, beyondExistingQueryPlanGains = 0;
+        int defaultSnapshots = 0, existingSnapshots = 0, enrichedSnapshots = 0, existingPlanAttempts = 0;
         for (int i = 0; i < scenarios.length(); i++) {
             JSONObject scenario = scenarios.getJSONObject(i);
             if (!split.equals(scenario.getString("split"))) continue;
@@ -100,8 +103,16 @@ public final class MemoryRecallQualityTest {
             JSONObject before = fixture.book.contextSnapshotQueriesScoped(scenario.getJSONObject("scope"),
                     MemoryQueryPlan.lexical(scenario.getString("query"), "not_requested"),
                     scenario.getInt("limit"), scenario.getInt("maxChars"), null);
+            defaultSnapshots++;
             checkBudgetAndScope(scenario, before, fixture);
             if ("reject".equals(scenario.getString("expectation"))) {
+                boolean oldPlanRejected = false;
+                existingPlanAttempts++;
+                try {
+                    MemoryQueryPlan.agentSuggested(scenario.getString("query"), scenario.getJSONArray("suggestions"));
+                } catch (IllegalArgumentException expected) {
+                    existingQueryPlanBaseline.rejectedRequests++; oldPlanRejected = true;
+                }
                 try {
                     plan(scenario);
                     failures.add(scenario.getString("id") + ": invalid request budget was accepted");
@@ -109,12 +120,21 @@ public final class MemoryRecallQualityTest {
                     enriched.rejectedRequests++;
                 }
                 baseline.requestBoundaryCases++;
+                existingQueryPlanBaseline.requestBoundaryCases++;
                 enriched.requestBoundaryCases++;
                 details.put(new JSONObject().put("id", scenario.getString("id"))
-                        .put("requestBudgetRejected", enriched.rejectedRequests > 0));
+                        .put("requestBudgetRejected", enriched.rejectedRequests > 0)
+                        .put("existingQueryPlanBaseline", new JSONObject().put("requestBoundaryCase", true)
+                                .put("requestBudgetRejected", oldPlanRejected).put("retrievalExecuted", false)));
                 fixture.book.closeRetrieval();
                 continue;
             }
+            existingPlanAttempts++;
+            JSONObject existing = fixture.book.contextSnapshotQueriesScoped(scenario.getJSONObject("scope"),
+                    MemoryQueryPlan.agentSuggested(scenario.getString("query"), scenario.getJSONArray("suggestions")),
+                    scenario.getInt("limit"), scenario.getInt("maxChars"), null);
+            existingSnapshots++;
+            checkBudgetAndScope(scenario, existing, fixture);
             if (scenario.getBoolean("zeroOriginalLexicalOverlap")) {
                 for (String key : strings(scenario.getJSONArray("expectedRelevant"))) {
                     String raw = fixture.specs.get(key).getJSONObject("source").getString("originalText");
@@ -131,6 +151,7 @@ public final class MemoryRecallQualityTest {
                     plan(scenario), scenario.getInt("limit"), scenario.getInt("maxChars"), null);
             JSONObject repeated = fixture.book.contextSnapshotQueriesScoped(scenario.getJSONObject("scope"),
                     plan(scenario), scenario.getInt("limit"), scenario.getInt("maxChars"), null);
+            enrichedSnapshots += 2;
             assertEquals("repeat query changed selection", fixture.keys(after.getJSONArray("records")),
                     fixture.keys(repeated.getJSONArray("records")));
             assertArrayEquals("retrieval mutated authoritative memory", prior, Files.readAllBytes(fixture.file.toPath()));
@@ -140,9 +161,12 @@ public final class MemoryRecallQualityTest {
             assertFalse(after.getBoolean("executionAuthorized"));
             assertFalse(after.getJSONObject("queryPlan").getBoolean("modelUseVerified"));
             List<String> beforeKeys = fixture.keys(before.getJSONArray("records"));
+            List<String> existingKeys = fixture.keys(existing.getJSONArray("records"));
             List<String> afterKeys = fixture.keys(after.getJSONArray("records"));
             JSONObject beforeMetric = baseline.add(scenario, beforeKeys);
+            JSONObject existingMetric = existingQueryPlanBaseline.add(scenario, existingKeys);
             JSONObject afterMetric = enriched.add(scenario, afterKeys);
+            if (afterMetric.getInt("relevantRetrieved") > existingMetric.getInt("relevantRetrieved")) beyondExistingQueryPlanGains++;
             if (scenario.getBoolean("zeroOriginalLexicalOverlap") && afterMetric.getInt("relevantRetrieved") > 0) zeroOverlapGains++;
             Set<String> relevant = strings(scenario.getJSONArray("expectedRelevant"));
             if (!afterKeys.containsAll(relevant)) failures.add(scenario.getString("id") + ": missed relevant records");
@@ -157,13 +181,22 @@ public final class MemoryRecallQualityTest {
                 if (!allowed.containsAll(afterKeys)) failures.add(scenario.getString("id") + ": unsupported answer candidate returned");
             }
             details.put(new JSONObject().put("id", scenario.getString("id"))
-                    .put("baseline", beforeMetric).put("enriched", afterMetric));
+                    .put("baseline", beforeMetric).put("existingQueryPlanBaseline", existingMetric).put("enriched", afterMetric));
             fixture.book.closeRetrieval();
         }
         assertEquals(expectedCount, cases);
         JSONObject report = new JSONObject().put("datasetId", "memory-recall-quality-v1")
                 .put("datasetSha256", FROZEN_SHA256).put("split", split).put("fixedScenarioCount", expectedCount)
-                .put("baseline", baseline.json()).put("enriched", enriched.json())
+                .put("baseline", baseline.json()).put("existingQueryPlanBaseline", existingQueryPlanBaseline.json()).put("enriched", enriched.json())
+                .put("baselineDefinition", "legacy_default_no_query_suggestions")
+                .put("existingQueryPlanBaselineDefinition", "preexisting_two_argument_plan_same_suggestions_no_new_constraints")
+                .put("existingQueryPlanBaselineHasNewConstraintSupport", false)
+                .put("enrichedDefinition", "three_argument_plan_same_suggestions_with_declared_constraints")
+                .put("querySnapshotExecutions", new JSONObject().put("legacyDefault", defaultSnapshots)
+                        .put("existingQueryPlanBaseline", existingSnapshots).put("enrichedIncludingRepeatCheck", enrichedSnapshots))
+                .put("existingQueryPlanAttemptsIncludingRequestBoundary", existingPlanAttempts)
+                .put("beyondExistingQueryPlanRelevantGainCases", beyondExistingQueryPlanGains)
+                .put("zeroOriginalOverlapGainsComparedTo", "legacy_default_no_query_suggestions")
                 .put("zeroOriginalOverlapGains", zeroOverlapGains).put("details", details)
                 .put("liveModelQualityMeasured", false).put("syntheticRewriteFixture", true)
                 .put("extraModelRequests", 0).put("testMethodsAreNotRetrievalQuality", true);

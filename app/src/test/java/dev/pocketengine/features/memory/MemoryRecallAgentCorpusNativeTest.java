@@ -26,7 +26,9 @@ import org.robolectric.annotation.SQLiteMode;
 
 /** A frozen development corpus through the original native Agent entry, separate from the
  * 24-task Book quality evaluation and its held-out labels. All facts and model responses are
- * synthetic; original SQLite sources, query execution, result events and metering are real. */
+ * synthetic; original SQLite sources, query execution, result events and metering are real.
+ * The four paired baselines are legacy_default_no_query_suggestions, not all prior capability:
+ * the pre-existing optional suggestion plan is separately measured by MemoryRecallQualityTest. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, manifest = Config.NONE, application = Application.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
@@ -77,7 +79,11 @@ public final class MemoryRecallAgentCorpusNativeTest {
                 if (caseFailures.isEmpty()) { completed++; detail.put("passed", true); }
                 else { detail.put("passed", false).put("failures", new JSONArray(caseFailures)); failures.add(scenario.getString("id") + ": " + caseFailures); }
             } catch (Exception | AssertionError failure) {
-                detail.put("passed", false).put("failureType", failure.getClass().getSimpleName());
+                detail.put("passed", false).put("failureType", failure.getClass().getSimpleName())
+                        .put("failureMessage", String.valueOf(failure.getMessage()));
+                for (StackTraceElement frame : failure.getStackTrace()) if (frame.getClassName().equals(getClass().getName())) {
+                    detail.put("failureLocation", frame.toString()); break;
+                }
                 failures.add(scenario.getString("id") + ": " + failure.getClass().getSimpleName() + " " + failure.getMessage());
             }
             details.put(detail);
@@ -86,6 +92,9 @@ public final class MemoryRecallAgentCorpusNativeTest {
                 .put("manifestSha256", MANIFEST_SHA).put("fixedScenarioCount", 12).put("passedScenarios", completed)
                 .put("fixedPairedComparisons", 4).put("completedPairedComparisons", compared)
                 .put("expectedNativeExecutions", 16).put("completedNativeExecutions", executions)
+                .put("completedNativeExecutionsMeaning", "fixture_and_assertions_completed_not_physical_http_count")
+                .put("pairedBaseline", "legacy_default_no_query_suggestions")
+                .put("pairedBaselineRepresentsAllPriorCapabilities", false)
                 .put("pairedBaselineHits", baselineHits).put("pairedEnrichedHits", enrichedHits)
                 .put("pairedBaselineMrr", baselineRr / 4).put("pairedEnrichedMrr", enrichedRr / 4)
                 .put("syntheticModelResponses", true).put("liveModelQualityMeasured", false).put("holdoutUsed", false)
@@ -127,7 +136,29 @@ public final class MemoryRecallAgentCorpusNativeTest {
                 }
                 return answer("The original source checks are recorded. No external action or business result is claimed.");
             })) {
-                RunOutcome outcome = fixture.run(gateway); gateway.assertHealthy();
+                RunOutcome outcome = fixture.run(gateway);
+                // Preserve the actual native return and the independently observed wire
+                // projection before assertions. A failed fixture is not zero execution.
+                JSONArray nativeReceipts = new JSONArray(), wireReceipts = new JSONArray();
+                for (JSONObject event : fixture.events) if ("tool".equals(event.optString("type")) && event.has("receipt"))
+                    nativeReceipts.put(new JSONObject().put("tool", event.optString("tool"))
+                            .put("status", event.optString("status")).put("receipt", event.getJSONObject("receipt")));
+                for (int requestIndex = 1; requestIndex < gateway.requests.size(); requestIndex++) {
+                    JSONArray messages = gateway.requests.get(requestIndex).getJSONArray("messages");
+                    for (int messageIndex = 0; messageIndex < messages.length(); messageIndex++) {
+                        JSONObject message = messages.getJSONObject(messageIndex);
+                        if ("tool".equals(message.optString("role"))) wireReceipts.put(new JSONObject()
+                                .put("physicalRequest", requestIndex + 1).put("toolCallId", message.optString("tool_call_id"))
+                                .put("content", message.opt("content")));
+                    }
+                }
+                System.out.println("MEMORY_AGENT_CASE_OBSERVATION " + new JSONObject().put("id", scenario.getString("id"))
+                        .put("category", scenario.getString("category")).put("developmentScenario", scenario.getString("developmentScenario"))
+                        .put("arm", enriched ? "enriched" : "legacy_default_no_query_suggestions")
+                        .put("nativeOutcome", outcome.status).put("physicalHttpPosts", gateway.requests.size())
+                        .put("originalMeter", fixture.tasks.inferenceUsage(fixture.id)).put("nativeToolReceipts", nativeReceipts)
+                        .put("wireToolResults", wireReceipts).put("syntheticDevelopmentFactsOnly", true));
+                gateway.assertHealthy();
                 assertEquals(mode.equals("duplicate_cancel") ? "cancelled" : "needs_confirmation", outcome.status);
                 assertEquals(2, gateway.requests.size());
                 List<JSONObject> returned = toolResults(gateway.requests.get(1));

@@ -6,12 +6,14 @@ import android.app.Application;
 import android.content.Context;
 import android.database.sqlite.SQLiteDatabase;
 import dev.pocketengine.testutil.HttpServer;
+import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunOutcome;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.FeatureHost;
 import dev.pocketengine.features.HostToolSupervisor;
+import dev.pocketengine.features.assistant.AssistantModule;
 import dev.pocketengine.features.assistant.ConversationRepository;
 import dev.pocketengine.runtime.AgentRunner;
 import dev.pocketengine.runtime.context.ContextBudgetPolicy;
@@ -239,6 +241,77 @@ public final class MemoryRecallAgentJourneyNativeTest {
         }
     }
 
+    @Test public void rawHistoryPlanReachesOriginalAgentRequestAndWithdrawalStopsItsLateFollowUp() throws Exception {
+        String query = "服务恢复办法";
+        String original = "The gateway stalled; restarting the worker restored traffic.";
+        try (Fixture f = new Fixture(query, true)) {
+            Original target = f.importOriginal(original, new JSONObject().put("layer", "episodic")
+                    .put("text", "A stored summary without the original recovery instructions."), EVENT_AT);
+            AssistantModule assistant = new AssistantModule(new FeatureContext(f.context, null, null, event -> {}),
+                    f.memory, null, f.tasks);
+            f.host.register(assistant);
+            // The model cannot open this scope; this is the original owner's explicit native setting.
+            assertEquals("OWNER_PRIVATE", assistant.setHistoryReadScope(f.conversation, 0, "OWNER_PRIVATE", true).getString("mode"));
+            JSONObject arguments = new JSONObject().put("kind", "conversations").put("follow", "messages")
+                    .put("query", query).put("queries", new JSONArray().put("restarting the worker"))
+                    .put("readTop", 1).put("maxCalls", 8).put("limit", 4).put("maxChars", 4000)
+                    .put("createdAfter", EVENT_AT - 1).put("createdBefore", EVENT_AT + 1);
+            try (CapabilityPort port = f.historyPort(assistant); Gateway gateway = new Gateway(f, (request, body) -> {
+                if (request == 1) {
+                    assertFalse(body.toString().contains(original));
+                    assertTrue(body.getJSONArray("tools").toString().contains(ConversationHistory.SEARCH));
+                    JSONObject call = call("raw-history-plan", arguments);
+                    call.getJSONObject("function").put("name", ConversationHistory.SEARCH);
+                    return calls(call);
+                }
+                assertEquals("withdrawal must stop any further model request", 2, request);
+                List<JSONObject> results = toolResults(body);assertEquals(1, results.size());
+                JSONObject receipt = results.get(0),row = receipt.getJSONArray("entries").getJSONObject(0);
+                assertEquals("current", receipt.getString("status"));assertTrue(receipt.getBoolean("ok"));
+                assertEquals(1, receipt.getJSONArray("entries").length());assertEquals(original, row.getString("body"));
+                assertEquals(target.conversation, row.getString("sourceConversationId"));
+                assertEquals(target.ref, SourceRef.fromJson(row.getJSONObject("sourceRef")));
+                assertEquals("sha256:" + sha256(original), row.getString("bodyFingerprint"));
+                assertTrue(row.getBoolean("exactSourceRead"));assertTrue(row.getBoolean("historicalEvidence"));
+                assertFalse(row.getBoolean("currentFactVerified"));assertFalse(receipt.getBoolean("executionAuthorized"));
+                JSONObject span = row.getJSONObject("readRange"),jump = row.getJSONObject("sourceJump");
+                assertEquals(0, span.getInt("offset"));assertEquals(original.length(), span.getInt("chars"));
+                assertEquals(original.length(), span.getInt("totalChars"));assertEquals("UTF-16", span.getString("unit"));
+                assertEquals(target.ref, SourceRef.fromJson(jump.getJSONObject("sourceRef")));
+                assertEquals(target.conversation, jump.getString("conversationId"));
+                assertEquals(row.getString("bodyFingerprint"), jump.getString("bodyFingerprint"));
+                assertEquals(span.getInt("offset"), jump.getInt("offset"));assertEquals(span.getInt("chars"), jump.getInt("chars"));
+                JSONObject plan = receipt.getJSONObject("queryPlan");
+                assertEquals("messages", plan.getString("follow"));assertEquals(2, plan.getInt("queryCount"));
+                assertEquals(6, plan.getInt("producerCalls"));assertEquals(1, plan.getInt("exactReadAttempts"));
+                assertEquals(0, plan.getInt("extraModelRequests"));assertEquals(0, plan.getInt("extraNetworkRequests"));
+                assertTrue(plan.getBoolean("historicalEvidence"));assertFalse(plan.getBoolean("currentFactVerified"));
+                assertEquals(target.ref, SourceRef.fromJson(receipt.getJSONArray("messageSourceRefs").getJSONObject(0)));
+                assertEquals(1, assistant.retireMemoryContexts(new JSONArray().put(new JSONObject()
+                        .put("sourceRefs", new JSONArray().put(target.ref.toJson()))), "owner_forget"));
+                // A real source withdrawal occurs while the second HTTP response is outstanding.
+                // Its attempted follow-up must never dispatch or turn into a newly provided body.
+                JSONObject stale = call("late-raw-follow-up", arguments);
+                stale.getJSONObject("function").put("name", ConversationHistory.SEARCH);
+                return calls(stale);
+            })) {
+                RunOutcome outcome = f.run(gateway, port);gateway.assertHealthy();
+                assertEquals("cancelled", outcome.status);assertTrue(f.control.isCancelled());
+                assertEquals(2, gateway.requests.size());assertEquals("retired", f.originals.state(target.conversation, target.ref).getString("status"));
+                JSONObject task = f.tasks.get(f.id, false);
+                List<JSONObject> delivered = events(task, "tool").stream().filter(event -> event.has("receipt")).toList();
+                assertEquals(1, delivered.size());assertEquals(ConversationHistory.SEARCH, delivered.get(0).getString("tool"));
+                assertEquals(target.ref, SourceRef.fromJson(delivered.get(0).getJSONObject("receipt")
+                        .getJSONArray("entries").getJSONObject(0).getJSONObject("sourceRef")));
+                assertEquals(0, operations(task, ConversationHistory.SEARCH).size());
+                JSONArray operations = task.getJSONArray("operations");
+                for (int i = 0; i < operations.length(); i++) assertEquals(TaskMemoryJournal.TOOL, operations.getJSONObject(i).getString("tool"));
+                assertEquals(0, events(task, "memory_tool_reference_prepared").size());
+                assertEquals(2, f.tasks.inferenceUsage(f.id).getInt("attempts"));
+            }
+        }
+    }
+
     static final class Original {
         final String conversation, text;
         final SourceRef ref;
@@ -256,12 +329,16 @@ public final class MemoryRecallAgentJourneyNativeTest {
         final FeatureHost host;
         final MemoryModule memory;
         final File memoryFile;
-        final String id, run, goal;
+        final String id, run, goal, conversation;
         final int epoch;
         final RunControl control = new RunControl();
         final List<JSONObject> events = new CopyOnWriteArrayList<>();
 
         Fixture(String goal) throws Exception {
+            this(goal, false);
+        }
+
+        Fixture(String goal, boolean rawHistory) throws Exception {
             this.goal = goal;
             context.deleteDatabase("pocket-world.db");
             Path memoryDirectory = new File(context.getFilesDir(), "memory").toPath();
@@ -283,7 +360,14 @@ public final class MemoryRecallAgentJourneyNativeTest {
             System.out.println("MEMORY_AGENT_NATIVE_BACKEND " + memory.snapshot().getJSONObject("retrievalBackend"));
             memoryFile = new File(context.getFilesDir(), "memory/records.json");
             host.register(memory);
-            JSONObject attempt = tasks.startAttempt(tasks.create(goal, "main_screen").getString("id"), "main_screen", 8);
+            conversation = rawHistory ? UUID.randomUUID().toString() : "";
+            if (rawHistory) originals.transaction(() -> {
+                originals.saveConversation(new JSONObject().put("conversationId", conversation)
+                        .put("title", "Current original Agent session").put("createdAt", EVENT_AT + 100).put("updatedAt", EVENT_AT + 100));
+                return null;
+            });
+            JSONObject created = rawHistory ? tasks.createCapabilityTask(goal, conversation) : tasks.create(goal, "main_screen");
+            JSONObject attempt = tasks.startAttempt(created.getString("id"), rawHistory ? "capabilities" : "main_screen", 8);
             id = attempt.getString("id"); run = attempt.getString("runId"); epoch = attempt.getInt("coordinatorEpoch");
             control.bindHostRun(id, run, epoch);
             tasks.authorizeTools(id, run, new JSONArray().put("memory_search").put("memory_recall"));
@@ -354,7 +438,51 @@ public final class MemoryRecallAgentJourneyNativeTest {
         }
 
         RunOutcome run(Gateway gateway) throws Exception {
+            return run(gateway, new HostToolSupervisor(host, tasks, id, run, epoch, false));
+        }
+
+        /** Exact native wrappers used by EngineApplication.bindRawTaskEvidence, without a second
+         * application or fake history provider. Every read delegates to the original Tasks/Assistant. */
+        CapabilityPort historyPort(AssistantModule assistant) throws Exception {
             HostToolSupervisor nativePort = new HostToolSupervisor(host, tasks, id, run, epoch, false);
+            MemoryHostFence fence = new MemoryHostFence() {
+                public void check() throws Exception { control.check(); tasks.checkExtensionRun(id, run, epoch, control); }
+                public JSONObject admit(Admission action) throws Exception { synchronized (tasks) { check(); return action.run(); } }
+            };
+            TaskStoreMemoryReader.RawBinding raw = new TaskStoreMemoryReader.RawBinding(id, run, epoch, control, fence, host::memoryContextRevision);
+            if (tasks.toolOutputSources() != null) raw.bindOutputSources(tasks.toolOutputSources());
+            tasks.bindRawModelExposure(raw);
+            CapabilityPort rawPort = new TaskStoreMemoryReader.RawCapability(nativePort, raw, new TaskStoreMemoryReader.RawAccess() {
+                public JSONObject query(TaskStoreMemoryReader.RawBinding selected, JSONObject options) throws Exception { return tasks.queryMemoryRaw(selected, options); }
+                public JSONObject read(TaskStoreMemoryReader.RawBinding selected, JSONObject citation) throws Exception { return tasks.readMemoryRaw(selected, citation); }
+            });
+            ConversationHistory.HistoryBinding history = new ConversationHistory.HistoryBinding(raw, conversation, new ConversationHistory.Source() {
+                public ConversationHistory.Gate open(String id) throws Exception { return assistant.openHistoryConversation(id); }
+                public ConversationHistory.ReadScope captureReadScope(String id) throws Exception { return assistant.captureHistoryReadScope(id); }
+                public String conversationFor(SourceRef ref) throws Exception { return assistant.historyConversationFor(ref); }
+                public JSONObject conversations(ConversationHistory.ReadScope scope, JSONObject options, RunControl original) throws Exception { return assistant.queryHistoryConversations(scope, options, original); }
+                public JSONObject query(ConversationHistory.Gate gate, JSONObject options, RunControl original) throws Exception { return assistant.queryRetainedHistory(gate, options, original); }
+                public JSONArray inspect(ConversationHistory.Gate gate, List<SourceRef> expected) throws Exception { return assistant.inspectHistorySources(gate, expected); }
+                public JSONObject read(ConversationHistory.Gate gate, SourceRef ref, int offset, int chars, RunControl original) throws Exception { return assistant.readHistoryMessage(gate, ref, offset, chars, original); }
+                public JSONObject neighbors(ConversationHistory.Gate gate, SourceRef ref, String fingerprint, String direction, JSONObject options, RunControl original) throws Exception { return assistant.historyNeighbors(gate, ref, fingerprint, direction, options, original); }
+            });
+            raw.bindMessageCurrentness(ConversationHistory.currentness(history,
+                    remaining -> tasks.openConversationHistoryProjection(history, remaining), new ConversationHistory.MessageProjection() {
+                        public JSONArray project(JSONArray messages, java.util.Set<String> delegated) throws Exception { return assistant.projectMemoryHistory(messages, delegated, conversation); }
+                        public JSONArray project(JSONArray messages, java.util.Set<String> delegated, ConversationHistory.SourceBytes bytes) throws Exception { return assistant.projectMemoryHistory(messages, delegated, conversation, bytes); }
+                    }));
+            CapabilityPort exposed = new ConversationHistory.Capability(rawPort, history, new ConversationHistory.Tasks() {
+                public JSONObject query(ConversationHistory.HistoryBinding binding, ConversationHistory.SourceLocator selected, String kind, JSONObject options) throws Exception { return tasks.queryConversationHistory(binding, selected, kind, options); }
+                public JSONObject read(ConversationHistory.HistoryBinding binding, ConversationHistory.SourceLocator selected, int offset, int chars) throws Exception { return tasks.readConversationHistoryOperation(binding, selected, offset, chars); }
+                public void requireCurrent(ConversationHistory.HistoryBinding binding, List<ConversationHistory.SourceLocator> selected) throws Exception { tasks.requireConversationHistorySources(binding, selected); }
+            });
+            JSONArray tools = exposed.tools(), names = new JSONArray();
+            for (int i = 0; i < tools.length(); i++) names.put(tools.getJSONObject(i).getJSONObject("function").getString("name"));
+            tasks.authorizeTools(id, run, names);
+            return exposed;
+        }
+
+        RunOutcome run(Gateway gateway, CapabilityPort nativePort) throws Exception {
             ContextBudgetPolicy.Source budgets = selected -> ContextBudgetPolicy.RouteBudget.forRoute(selected,
                     new ContextWindow.Budget(131072, 2048, 1024, 262144, 64, 0),
                     ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE, 1, 1);
