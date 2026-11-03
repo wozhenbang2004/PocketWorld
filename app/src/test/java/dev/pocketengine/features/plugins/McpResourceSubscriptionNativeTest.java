@@ -207,8 +207,8 @@ public final class McpResourceSubscriptionNativeTest {
         }
         void refresh() throws Exception { installation = owner.mcpSnapshot().getJSONArray("plugins").getJSONObject(0); }
         void enable() throws Exception {
-            owner.mcp("setToolGrantReviewed", args(id()).put("expectedGrantsDigest", installation.getString("grantsDigest")).put("tool", "lookup").put("granted", true));
-            owner.mcp("setEnabledReviewed", args(id()).put("enabled", true)); refresh();
+            installation = owner.mcp("setToolGrantReviewed", args(id()).put("expectedGrantsDigest", installation.getString("grantsDigest")).put("tool", "lookup").put("granted", true));
+            installation = owner.mcp("setEnabledReviewed", PluginOwnerTestReview.payload(installation, true)); refresh();
         }
         @Override public void close() throws Exception { if (release != null) release.countDown(); if (readRelease != null) readRelease.countDown(); try { host.close(); } finally { db.close(); server.close(); } }
     }
@@ -248,7 +248,7 @@ public final class McpResourceSubscriptionNativeTest {
 
     @Test public void disablingSourceOnlyInstallationCancelsOldReadsButFreshOwnerReadAddsNoExecutionGrant() throws Exception {
         try (Fixture fixture = new Fixture(true)) {
-            fixture.installation = fixture.owner.mcp("setEnabledReviewed", fixture.args(id()).put("enabled", true));
+            fixture.installation = fixture.owner.mcp("setEnabledReviewed", PluginOwnerTestReview.payload(fixture.installation, true));
             McpSkillSource.Fetched pin = fixture.skill(); pin.checkCurrent();
             JSONObject resource = fixture.resources().getJSONArray("resources").getJSONObject(0);
             JSONObject oldRead = fixture.args(id()).put("uri", resource.getString("uri")).put("descriptorDigest", resource.getString("descriptorDigest"));
@@ -257,7 +257,7 @@ public final class McpResourceSubscriptionNativeTest {
             try {
                 Future<JSONObject> pending = worker.submit(() -> fixture.owner.mcp("getMcpResource", oldRead, original));
                 assertTrue("The original resource read must enter HTTP before disable", fixture.readEntered.await(3, TimeUnit.SECONDS));
-                fixture.installation = fixture.owner.mcp("setEnabledReviewed", fixture.args(id()).put("enabled", false));
+                fixture.installation = fixture.owner.mcp("setEnabledReviewed", PluginOwnerTestReview.payload(fixture.installation, false));
                 assertTrue(original.isCancelled()); fixture.readRelease.countDown();
                 assertThrows(ExecutionException.class, () -> pending.get(3, TimeUnit.SECONDS));
                 assertThrows(SecurityException.class, pin::checkCurrent);

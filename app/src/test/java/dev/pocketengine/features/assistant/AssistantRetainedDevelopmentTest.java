@@ -31,6 +31,10 @@ public final class AssistantRetainedDevelopmentTest {
             });
             JSONObject first=module.handle("send",j("message","retain one","clientMessageId",UUID.randomUUID().toString()));idle(module);RunControl original=calls.get(0);
             module.handle("send",j("message","retain two","clientMessageId",UUID.randomUUID().toString()));idle(module);
+            JSONObject heldSnapshot=module.snapshot();assertFalse(heldSnapshot.getBoolean("running"));assertEquals(0,heldSnapshot.getJSONObject("turnSlots").getInt("active"));
+            JSONArray retained=heldSnapshot.getJSONArray("retainedTurns");assertEquals(2,retained.length());
+            JSONObject firstRetained=null;for(int i=0;i<retained.length();i++)if(first.getString("conversationId").equals(retained.getJSONObject(i).getString("conversationId")))firstRetained=retained.getJSONObject(i);
+            assertNotNull(firstRetained);assertEquals(first.getString("taskId"),firstRetained.getString("taskId"));assertEquals(first.getString("runId"),firstRetained.getString("runId"));assertFalse(firstRetained.getBoolean("workerSlotHeld"));
             module.handle("send",j("message","ordinary third","clientMessageId",UUID.randomUUID().toString()));idle(module);assertEquals(3,starts.get());assertEquals(3,calls.size());
             JSONObject resumed=module.handle("send",j("message","edit original","clientMessageId",UUID.randomUUID().toString(),"conversationId",first.getString("conversationId")));idle(module);
             assertEquals(first.getString("taskId"),resumed.getString("taskId"));assertEquals(first.getString("runId"),resumed.getString("runId"));assertSame(original,calls.get(3));assertEquals(3,starts.get());assertEquals(1,appends.get());

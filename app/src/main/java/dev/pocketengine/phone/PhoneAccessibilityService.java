@@ -189,6 +189,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
 
     public void hideControls() { runOnMain(this::removeControls); }
+    public void hideControls(RunControl original) { runOnMain(()->{if(original!=null&&control==original)removeControls();}); }
     public boolean hasVisibleControls() { return visible; }
 
     /** Only the visible owner UI opens this entry. Opening it never reads the foreground screen. */

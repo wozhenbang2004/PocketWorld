@@ -71,6 +71,21 @@ public final class ChannelReceiveServiceTest {
             }
         }
     }
+    @Test public void staleReviewedStartCannotReserveANewEpochAndOldServiceIntentCannotStartChangedProfiles()throws Exception {
+        AtomicInteger network=new AtomicInteger();try(Endpoint endpoint=new Endpoint("ws://127.0.0.1:1/websocket",network);ChannelsModule module=module(endpoint.base());ActivityController<Activity> activity=Robolectric.buildActivity(Activity.class).setup().visible().windowFocusChanged(true)){
+            installServiceMetadata();String id=profile(module);JSONObject original=module.snapshot().getJSONArray("profiles").getJSONObject(0);
+            JSONArray reviewed=new JSONArray().put(new JSONObject().put("id",id).put("transportEpoch",original.getString("transportEpoch")));
+            JSONObject next=module.handle("profile.save",new JSONObject(original.toString()).put("expectedTransportEpoch",original.getString("transportEpoch")).put("name","changed before review confirmation"));
+            assertThrows(SecurityException.class,()->module.startReviewedBackgroundReceiving(activity.get(),reviewed,true));assertEquals("stopped",module.backgroundState().getString("status"));assertEquals(0,network.get());
+            JSONArray actual=new JSONArray().put(new JSONObject().put("id",id).put("transportEpoch",next.getString("transportEpoch")));
+            JSONObject ticket=module.startReviewedBackgroundReceiving(activity.get(),actual,true);String session=ticket.getString("sessionId");assertEquals(next.getString("transportEpoch"),ticket.getJSONArray("profiles").getJSONObject(0).getString("transportEpoch"));
+            module.handle("profile.save",new JSONObject(next.toString()).put("expectedTransportEpoch",next.getString("transportEpoch")).put("name","changed before service intent"));
+            FixtureService.module=module;try(ServiceFixture controller=new ServiceFixture()){
+                controller.get().onStartCommand(new Intent(ChannelReceiveService.START).putExtra("sessionId",session),0,1);
+                assertEquals(0,network.get());assertFalse(module.backgroundState().getBoolean("foregroundServicePresent"));assertFalse(module.backgroundState().getBoolean("foregroundActive"));
+            }
+        }
+    }
     @Test public void weixinUsesSameForegroundLifetimeAndNotificationRevocationCancelsBlockedPoll()throws Exception {
         CountDownLatch blocked=new CountDownLatch(1),release=new CountDownLatch(1);AtomicInteger requests=new AtomicInteger();HttpServer http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         http.createContext("/",exchange->{try{

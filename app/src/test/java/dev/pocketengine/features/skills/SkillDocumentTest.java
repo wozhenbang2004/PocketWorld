@@ -17,4 +17,24 @@ public final class SkillDocumentTest {
         JSONObject files=read(restricted),parsed=SkillManifest.parse(files.getString("SKILL.md"));assertEquals(restricted,files.getString("SKILL.md"));assertTrue(parsed.getBoolean("disable-model-invocation"));assertFalse(parsed.getBoolean("user-invocable"));
         assertThrows(IllegalArgumentException.class,()->read(restricted.replace("disable-model-invocation: true","disable-model-invocation: sometimes")));
     }
+    @Test public void exportKeepsExactUnicodeAndLineEndingsWithOnlyOmittedPathHints()throws Exception{
+        String exact=GOOD.replace("\n","\r\n")+"文字与 emoji 🙂\r\n";
+        JSONObject files=read(exact).put("scripts/private.sh","SECRET_RESOURCE_BODY").put("resources/example.md","SECRET_REFERENCE_BODY");
+        JSONObject preview=SkillDocument.exportPreview(files);
+        assertEquals(exact,preview.getString("manifest"));assertEquals(exact.getBytes(StandardCharsets.UTF_8).length,preview.getInt("documentBytes"));
+        String expected=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(exact.getBytes(StandardCharsets.UTF_8)));
+        assertEquals(expected,preview.getString("documentSha256"));assertEquals("resources/example.md",preview.getJSONArray("omittedResources").getString(0));assertEquals(2,preview.getJSONArray("omittedResources").length());
+        assertEquals(1,preview.getJSONArray("mentionedOmittedResources").length());assertEquals("resources/example.md",preview.getJSONArray("mentionedOmittedResources").getString(0));
+        assertFalse(preview.toString().contains("SECRET_RESOURCE_BODY"));assertFalse(preview.toString().contains("SECRET_REFERENCE_BODY"));
+        assertFalse(preview.getBoolean("executionAuthorized"));assertFalse(preview.getBoolean("containsHostApproval"));assertFalse(preview.getBoolean("containsHostSourceBinding"));assertFalse(preview.getBoolean("resourceReferencesComplete"));
+        assertEquals(3,files.length());assertEquals("SECRET_RESOURCE_BODY",files.getString("scripts/private.sh"));
+    }
+    @Test public void absenceOfPackagedResourcesNeverClaimsExternalReferencesAreComplete()throws Exception{
+        JSONObject preview=SkillDocument.exportPreview(read(GOOD));assertEquals(0,preview.getJSONArray("omittedResources").length());assertFalse(preview.getBoolean("resourceReferencesComplete"));assertEquals("exact_packaged_paths_in_text_only",preview.getString("resourceReferenceAnalysis"));
+    }
+    @Test public void exportStillValidatesManifestAndRejectsLossyUnicode()throws Exception{
+        assertThrows(IllegalArgumentException.class,()->SkillDocument.exportPreview(new JSONObject().put("SKILL.md","ordinary markdown")));
+        assertThrows(IllegalArgumentException.class,()->SkillDocument.exportPreview(new JSONObject().put("SKILL.md",GOOD+"\u0000")));
+        assertThrows(IllegalArgumentException.class,()->SkillDocument.exportPreview(new JSONObject().put("SKILL.md",GOOD+"\ud800")));
+    }
 }

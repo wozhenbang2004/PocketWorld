@@ -23,6 +23,14 @@ public final class FeatureContext {
     public synchronized void installTeamProfileModels(TeamProfileModels original){if(teamProfileModels!=null)throw new IllegalStateException("原团队Profile来源已挂载");teamProfileModels=java.util.Objects.requireNonNull(original);}
     public TeamProfileModels teamProfileModels(){return teamProfileModels;}
     public ModelConfig model() throws Exception { return settings.get(); }
+    public boolean executionAllowed(){return !(android instanceof dev.pocketengine.EngineApplication app)||app.executionAllowed();}
+    public void requireExecutionEnabled(){if(!executionAllowed())throw new SecurityException("PocketWorld 已停用，请在本机设置明确恢复");}
+    /** Existing native resources have no task of their own; retain only the same host admission revision. */
+    public void admitResourceExecution(dev.pocketengine.core.RunControl original){
+        requireExecutionEnabled();
+        if(android instanceof dev.pocketengine.EngineApplication app)try{original.retainAuthorityCheck(app.tasks.admitExecutionControl(original,"","",0));}
+        catch(Exception unavailable){throw new SecurityException("原本机资源执行准入不可核对",unavailable);}
+    }
     public void emit(String module, JSONObject payload) {
         JSONObject event=new JSONObject();try{event.put("type","feature_event").put("feature",module).put("payload",payload);}catch(Exception ignored){}
         events.emit(event);

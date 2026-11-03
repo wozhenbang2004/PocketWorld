@@ -46,6 +46,17 @@ class ComposeActivity : ComponentActivity() {
     private val ownerArchiveExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> controller.ownerArchives.exportResult(uri) }
     internal fun pickOwnerDataArchive() { try { ownerArchiveImportPicker.launch(arrayOf("application/zip", "application/octet-stream")) } catch (_: RuntimeException) { controller.ownerArchives.importResult(null) } }
     internal fun createOwnerDataArchive(name: String) { try { ownerArchiveExportPicker.launch(name) } catch (_: RuntimeException) { controller.ownerArchives.exportResult(null) } }
+    private var storageDiagnosticTicket: dev.pocketengine.features.local.runtime.NativeDiagnosticWindow.Ticket? = null
+    private val storageDiagnosticPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val original = storageDiagnosticTicket; storageDiagnosticTicket = null
+        controller.projectStorage.diagnosticExportResult(original, uri)
+    }
+    internal fun createStorageDiagnostic(ticket: dev.pocketengine.features.local.runtime.NativeDiagnosticWindow.Ticket) {
+        check(storageDiagnosticTicket == null) { "原诊断文件选择尚未结束" }
+        storageDiagnosticTicket = ticket
+        try { storageDiagnosticPicker.launch("pocketworld-diagnostic-metadata.json") }
+        catch (_: RuntimeException) { storageDiagnosticTicket = null; controller.projectStorage.diagnosticPickerUnavailable(ticket) }
+    }
     private val projectPackageImportPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> controller.projectPackages.importResult(uri) }
     private val projectPackageExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> controller.projectPackages.exportResult(uri) }
     internal fun pickProjectPackageDocument() {
@@ -110,6 +121,7 @@ class ComposeActivity : ComponentActivity() {
         deliverRemoteAttention(intent)
         deliverGoal(intent)
         deliverSharedFiles(intent)
+        deliverSkillDocument(intent)
         deliverAccountEntry(intent)
         deliverCompatibilityChat(intent)
     }
@@ -152,7 +164,7 @@ class ComposeActivity : ComponentActivity() {
     private fun webWorkspaceCanSwitch(): Boolean {
         val state = controller.state
         return ::webHost.isInitialized && webHost.canSwitchPresentation() && state.ownerPending.isEmpty() && state.moduleBusy.isEmpty() && !state.chatSubmitting &&
-            !state.phoneSubmitting && !state.fileSaving && !state.modelSaving && !state.modelTesting &&
+            !state.phoneSubmitting && !state.fileSaving && !state.modelSaving && !state.modelTesting && !controller.modelSelectionPending() &&
             !state.agentPreferencesSaving && !state.inspectionBusy && !state.exportPending &&
             !controller.attachmentOutcomes.state.open && !controller.composerSaving && !controller.voicePresentationBusy()
     }
@@ -189,7 +201,7 @@ class ComposeActivity : ComponentActivity() {
     override fun onResume() { super.onResume(); if (!nativeWorkspace && ::webHost.isInitialized) webHost.resume(); if (::controller.isInitialized) controller.notificationPreviewsForeground(true); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.foreground(true); controller.projectFileImports.foreground(true);controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
     override fun onPause() { if (!nativeWorkspace && ::webHost.isInitialized) webHost.pause(); if (::controller.isInitialized) controller.notificationPreviewsForeground(false); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectFileImports.foreground(false);controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.projectGitImports.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
     override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); if (::controller.isInitialized) controller.notificationPreviewsFocus(hasFocus) }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent); deliverAccountEntry(intent); deliverCompatibilityChat(intent) }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent); deliverSkillDocument(intent); deliverAccountEntry(intent); deliverCompatibilityChat(intent) }
     private fun deliverCompatibilityChat(intent: Intent?) {
         val id = intent?.getStringExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA) ?: return
         intent.removeExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA)
@@ -205,6 +217,14 @@ class ComposeActivity : ComponentActivity() {
     }
     private fun deliverPhoneTask(intent: Intent?) {
         val app = application as EngineApplication
+        if (intent?.action == dev.pocketengine.phone.QuickPanelVoiceHandoff.ACTION) {
+            val token = intent.getStringExtra(dev.pocketengine.phone.QuickPanelVoiceHandoff.TOKEN_EXTRA)
+            intent.action = null; intent.removeExtra(dev.pocketengine.phone.QuickPanelVoiceHandoff.TOKEN_EXTRA)
+            if (!token.isNullOrBlank()) controller.openQuickPanelVoice(token)
+            return
+        }
+        if (dev.pocketengine.features.assistant.notifications.ImmediateTaskNotifications.openRequestedTask(intent,
+                app.tasks::openOriginalTaskNotice, controller::showOriginalTaskNotice, controller::showTaskNoticeWarning)) return
         if (dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications.openRequestedTask(app.tasks, intent, { current -> controller.focusTask(current.getString("taskId")) }, app::error)) return
         dev.pocketengine.phone.PhoneNotificationControls.openRequestedTask(application as EngineApplication, intent) { controller.focusTask(it) }
         intent?.getStringExtra("quickPanelTaskId")?.takeIf { it.isNotBlank() }?.let {
@@ -260,6 +280,14 @@ class ComposeActivity : ComponentActivity() {
         exportPath = path
         try { exportPicker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mimeType).putExtra(Intent.EXTRA_TITLE, name)) }
         catch (_: RuntimeException) { exportPath = null; controller.completeExport(null, path) }
+    }
+    private fun deliverSkillDocument(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        try {
+            if (controller.skillDocuments.acceptView(intent)) controller.openConnection("skills")
+        } catch (failure: Exception) {
+            android.widget.Toast.makeText(this, failure.message ?: "无法接收这份待检查文件", android.widget.Toast.LENGTH_LONG).show()
+        } finally { intent.action = null }
     }
     private fun deliverSharedFiles(intent: Intent?) {
         if (intent?.action == Intent.ACTION_SEND || intent?.action == Intent.ACTION_SEND_MULTIPLE) {

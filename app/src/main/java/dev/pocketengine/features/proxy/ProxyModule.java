@@ -30,6 +30,7 @@ public final class ProxyModule implements EngineModule {
     @Override public synchronized JSONObject handle(String command,JSONObject input)throws Exception {
         switch(command){
             case "start":{
+                context.requireExecutionEnabled();
                 if(relay!=null&&relay.running())throw new IllegalStateException("反代已运行，请先停止再修改配置");
                 ModelConfig selection=context.settings.captureRelaySelection();
                 InferenceAudiencePolicy.require(selection,NativeInferenceScope.externalRelay(),null);
@@ -39,6 +40,7 @@ public final class ProxyModule implements EngineModule {
                 String token=input.optString("token");if(token.isEmpty())throw new IllegalArgumentException("请先生成或填写本地访问令牌");
                 LoopbackRelay next=new LoopbackRelay(input.optInt("port",0),token,new LoopbackRelay.ConfigSource(){
                     @Override public ModelConfig get()throws Exception{
+                        context.requireExecutionEnabled();
                         ModelConfig current=context.settings.captureRelaySelection();
                         if(current.usesAccount()!=selection.usesAccount()||(selection.usesAccount()&&!selection.accountModel.sameModel(current.accountModel)))throw new GatewayFailure("RELAY_ROUTE_CHANGED");
                         return current;

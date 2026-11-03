@@ -81,8 +81,9 @@ internal fun SourceLearningJobPanel(task: JSONObject, controller: PocketWorldCon
             OutlinedButton(onClick = { refresh() }, enabled = pending == null) { Text("刷新原水位") }
             Button(onClick = { runConsent = true }, enabled = pending == null && snapshot?.optBoolean("canContinue") == true) { Text(if (continuous) "连续处理所选清单" else "继续有限批次") }
         }
+        val stopSnapshot = snapshot?.let { JSONObject(it.toString()) }
         if (busy) TextButton(onClick = { pending?.second?.let(controller::cancelLearning); pending = null; error = "停止请求已记录；请刷新原水位，已有 draft/候选与未知用量不会被当作未发生。" }) { Text("停止本次提炼") }
-        else if (snapshot?.optString("taskStatus") in setOf("preparing", "running", "stopping")) TextButton(onClick = { request("stopLearningJob", JSONObject().put("taskId", taskId)) }, enabled = pending == null) { Text("停止这个原任务的当前提炼") }
+        else if (snapshot?.optString("taskStatus") in setOf("preparing", "running", "stopping")) TextButton(onClick = { stopSnapshot?.let { original -> request("stopLearningJob", JSONObject().put("taskId", taskId).put("runId", original.getString("runId")).put("epoch", original.getInt("epoch"))) } }, enabled = pending == null) { Text("停止这个原任务的当前提炼") }
         if (snapshot?.optBoolean("canSkipBatch") == true && pending == null) TextButton(onClick = { skipConsent = true }) { Text("核对并跳过当前来源") }
         if (results != null && (0 until results.length()).any { results.getJSONObject(it).optJSONObject("candidateRef") != null }) TextButton(onClick = reviewCandidates) { Text("去审阅候选（不自动采用）") }
     }

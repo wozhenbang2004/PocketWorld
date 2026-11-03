@@ -35,7 +35,7 @@ public class McpInstallPreviewStateTest {
     private McpInstallReviewed freeze(JSONObject response) throws Exception { return McpInstallPreviewRules.freeze(discovery(), config, 1L, empty(), response, NOW); }
     private JSONObject saved(McpInstallReviewed reviewed) throws Exception {
         JSONObject declaration = new JSONObject(reviewed.getBody()).getJSONArray("tools").getJSONObject(0).getJSONObject("declaration");
-        return new JSONObject().put("id", config.getId()).put("installationId", "installed-new").put("enabled", false).put("grants", new JSONArray()).put("mcpStatus", "ready")
+        return new JSONObject().put("id", config.getId()).put("installationId", "installed-new").put("stateRevision", 1).put("grantsDigest", dev.pocketengine.features.plugins.PluginRules.grantsDigest(new JSONArray())).put("enabled", false).put("grants", new JSONArray()).put("mcpStatus", "ready")
             .put("manifest", new JSONObject().put("id", config.getId()).put("name", config.getName()).put("version", "mcp-version").put("tools", new JSONArray().put(declaration)));
     }
     private JSONObject sourceBody(String capability) throws Exception {
@@ -43,7 +43,7 @@ public class McpInstallPreviewStateTest {
             .put("mcpSource", new JSONObject().put("endpoint", config.getEndpoint()).put("protocolVersion", config.getProtocolVersion()).put("serverDigest", SERVER));
     }
     private JSONObject savedSource(McpInstallReviewed reviewed) throws Exception {
-        return new JSONObject().put("id", config.getId()).put("installationId", "installed-new").put("enabled", false).put("grants", new JSONArray()).put("mcpStatus", "ready")
+        return new JSONObject().put("id", config.getId()).put("installationId", "installed-new").put("stateRevision", 1).put("grantsDigest", dev.pocketengine.features.plugins.PluginRules.grantsDigest(new JSONArray())).put("enabled", false).put("grants", new JSONArray()).put("mcpStatus", "ready")
             .put("manifest", new JSONObject().put("id", config.getId()).put("name", config.getName()).put("version", "mcp-source-version").put("tools", new JSONArray())
                 .put("mcpSource", new JSONObject(reviewed.getBody()).getJSONObject("mcpSource")));
     }
@@ -141,13 +141,24 @@ public class McpInstallPreviewStateTest {
     @Test public void enablingRequiresNativeCapabilityExactInstallationAndExplicitPayload() throws Exception {
         JSONObject saved = saved(freeze(response())); JSONObject snapshot = snapshot(saved); String before = snapshot.toString();
         JSONObject payload = McpInstallPreviewRules.enablePayload(saved, snapshot, true);
-        assertEquals(Set.of("id", "expectedInstallationId", "enabled"), keys(payload)); assertTrue(payload.getBoolean("enabled"));
+        assertEquals(Set.of("id", "expectedInstallationId", "expectedStateRevision", "expectedGrantsDigest", "enabled"), keys(payload)); assertTrue(payload.getBoolean("enabled"));
         assertEquals(saved.getString("installationId"), payload.getString("expectedInstallationId")); assertEquals(before, snapshot.toString());
+        assertEquals(saved.getLong("stateRevision"), payload.getLong("expectedStateRevision"));
+        assertEquals(saved.getString("grantsDigest"), payload.getString("expectedGrantsDigest"));
         JSONObject absent = snapshot(saved).put("nativeCapabilities", new JSONObject()); rejected(() -> McpInstallPreviewRules.enablePayload(saved, absent, true));
         JSONObject newer = snapshot(new JSONObject(saved.toString()).put("installationId", "another")); rejected(() -> McpInstallPreviewRules.enablePayload(saved, newer, true));
         JSONObject legacy = new JSONObject(saved.toString()).put("mcpStatus", "needs_discovery"); JSONObject legacySnapshot = snapshot(legacy);
         rejected(() -> McpInstallPreviewRules.enablePayload(legacy, legacySnapshot, true));
         rejected(() -> McpInstallPreviewRules.enablePayload(saved, legacySnapshot, true)); assertFalse(McpInstallPreviewRules.enablePayload(legacy, legacySnapshot, false).getBoolean("enabled"));
+    }
+    @Test public void oldToggleReviewRejectsChangedGrantsAndEnableDisableAba() throws Exception {
+        JSONObject saved = saved(freeze(response()));
+        JSONObject changed = new JSONObject(saved.toString()).put("stateRevision", 2).put("grants", new JSONArray().put("tool:lookup"))
+            .put("grantsDigest", dev.pocketengine.features.plugins.PluginRules.grantsDigest(new JSONArray().put("tool:lookup")));
+        rejected(() -> McpInstallPreviewRules.enablePayload(saved, snapshot(changed), true));
+        JSONObject aba = new JSONObject(saved.toString()).put("stateRevision", 3);
+        rejected(() -> McpInstallPreviewRules.enablePayload(saved, snapshot(aba), true));
+        assertEquals(3, McpInstallPreviewRules.enablePayload(aba, snapshot(aba), true).getLong("expectedStateRevision"));
     }
     @Test public void enablingReceiptCannotBeAttributedToAnotherRequestOrInstallation() throws Exception {
         McpInstallEnableAttempt attempt = new McpInstallEnableAttempt("enable-1", config.getId(), "installed-new", true);

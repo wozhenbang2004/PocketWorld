@@ -33,26 +33,26 @@ public final class PhoneNotificationControls {
                 .putExtra("taskId",id).putExtra(RUN,run).putExtra(EPOCH,epoch);
     }
     public static boolean dispatch(EngineApplication app,Intent intent,String serviceTask,String serviceRun,int serviceEpoch,RunControl original) {
-        synchronized(app) {
-            boolean nativeOwner=false;
-            try {
-                String id=intent.getStringExtra("taskId"),run=intent.getStringExtra(RUN);int epoch=intent.getIntExtra(EPOCH,-1);
+        boolean nativeOwner=false;
+        try {
+            String id=intent.getStringExtra("taskId"),run=intent.getStringExtra(RUN);int epoch=intent.getIntExtra(EPOCH,-1);
+            synchronized(app){
                 if(!handles(intent.getAction())||id==null||run==null||!id.equals(serviceTask)||!run.equals(serviceRun)||epoch!=serviceEpoch
                         ||original==null||!id.equals(app.activeId())||original!=app.control(id)||!original.hasHostRun()||!original.matchesHostRun(id,run,epoch))return false;
                 nativeOwner=true;
-                JSONObject task=app.tasks.get(id,false);
-                if(task==null||!"phone".equals(task.optString("kind"))||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))return false;
-                boolean active=task.optString("status").matches("preparing|running|pausing|paused|awaiting_user|reconciling");
-                if(PhoneRunService.STOP.equals(intent.getAction())){if(active)app.stop(id);else original.cancel();return true;}
-                if(!active||original.isCancelled())return false;
-                if(PAUSE.equals(intent.getAction())){if(!original.isPaused())app.pause();}
-                else if(original.isPaused())app.resume(); // Original unresolved/manual-action gate and Service wake remain authoritative.
-                return true;
-            } catch(Exception unavailable) {
-                if(nativeOwner&&PhoneRunService.STOP.equals(intent.getAction()))original.cancel();
-                else if(nativeOwner&&PAUSE.equals(intent.getAction()))original.pause();
-                app.error("手机通知所属执行暂不可核对，已阻止继续；请打开原任务核对记录");return false;
             }
+            JSONObject task=app.tasks.get(id,false);
+            if(task==null||!"phone".equals(task.optString("kind"))||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))return false;
+            boolean active=task.optString("status").matches("preparing|running|pausing|paused|awaiting_user|reconciling");
+            if(PhoneRunService.STOP.equals(intent.getAction())){if(active)app.stopOriginalPhoneRun(id,run,epoch);else original.cancel();return true;}
+            if(!active||original.isCancelled())return false;
+            if(PAUSE.equals(intent.getAction())){if(!original.isPaused())app.pauseOriginalPhoneRun(id,run,epoch);}
+            else if(original.isPaused())app.resumeOriginalPhoneRun(id,run,epoch);
+            return true;
+        } catch(Exception unavailable) {
+            if(nativeOwner&&PhoneRunService.STOP.equals(intent.getAction()))original.cancel();
+            else if(nativeOwner&&PAUSE.equals(intent.getAction()))original.pause();
+            app.error("手机通知所属执行暂不可核对，已阻止继续；请打开原任务核对记录");return false;
         }
     }
     /** Read-only navigation. Exported Activity extras cannot resume, approve, stop or create any task. */

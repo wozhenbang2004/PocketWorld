@@ -93,6 +93,44 @@ public class McpResultCaptureTest {
         assertFalse(McpData.resultForCapture(source(privateBlock),"PRIVATE").toString().contains("UNRELATED_MARKER_MATERIAL"));
         assertFalse(McpData.resultForCapture(source("Bearer UNRELATED_MARKER_TOKEN"),"Bearer").toString().contains("UNRELATED_MARKER_TOKEN"));
     }
+    @Test public void boundCredentialIsMaskedAcrossEveryTextBlockBoundaryBeforeCaptureAndView()throws Exception {
+        splitCredential("before SYNTHETIC_BOUND_714\nafter","SYNTHETIC_BOUND_714","before \nafter");
+    }
+    @Test public void bearerAndBasicMarkersAndValuesAreMaskedAcrossEveryTextBlockBoundary()throws Exception {
+        splitCredential("before Bearer UNRELATED_BEARER_714\nafter","","before Bearer \nafter");
+        splitCredential("before Basic dXNlcjpwYXNz\nafter","","before Basic \nafter");
+    }
+    @Test public void privateKeyHeadersAndFootersMaySpanTextBlocksWithoutLeakingOrEatingFollowingText()throws Exception {
+        splitCredential("before -----BEGIN RSA PRIVATE KEY-----\nSYNTHETIC_KEY_MATERIAL_714\n-----END RSA PRIVATE KEY-----\nafter","","before \nafter");
+        splitCredential("before -----BEGIN PRIVATE KEY-----\nSYNTHETIC_UNFINISHED_MATERIAL_714","","before ");
+    }
+    @Test public void textBlockStartRemainsACredentialBoundaryWhenPreviousBlockEndsWithAWord()throws Exception {
+        JSONObject response=source("previous");
+        response.getJSONArray("content").put(new JSONObject().put("type","text").put("text","Bear"))
+                .put(new JSONObject().put("type","text").put("text","er SYNTHETIC_TOKEN_714\nafter"));
+        assertProjectedText(response,"","previousBearer \nafter");
+    }
+    private static void splitCredential(String original,String token,String expected)throws Exception {
+        for(int split=1;split<original.length();split++){
+            JSONObject response=source(original.substring(0,split));
+            response.getJSONArray("content").put(new JSONObject().put("type","text").put("text",original.substring(split)));
+            assertProjectedText(response,token,expected);
+        }
+    }
+    private static void assertProjectedText(JSONObject response,String token,String expected)throws Exception {
+        String unchanged=response.toString();AtomicReference<JSONObject> archived=new AtomicReference<>();
+        McpResultCapture capture=McpResultCapture.open((name,op,kind,live)->(data,truncated)->{
+            archived.set(data);return ToolOutputCapture.unavailable("native_output_run_budget");
+        },"plugin_0123456789abcdef01234567",id(),original(),new JSONObject().put("transport","streamable_http"));
+        JSONObject view=capture.result(response,token);assertNotNull(archived.get());
+        for(JSONObject result:new JSONObject[]{archived.get().getJSONObject("result"),view}){
+            JSONArray blocks=result.getJSONArray("content");assertEquals(response.getJSONArray("content").length(),blocks.length());
+            StringBuilder text=new StringBuilder();for(int i=0;i<blocks.length();i++)text.append(blocks.getJSONObject(i).getString("text"));
+            assertEquals("Only credential spans may be removed, including split markers and values",expected,text.toString().replace("[凭据已隐藏]",""));
+            assertFalse(result.getJSONObject("outputProjection").getBoolean("allSecretsDetected"));
+        }
+        assertEquals(unchanged,response.toString());
+    }
     @Test public void archiveFailureDoesNotTurnAMatchedErrorIntoSuccessOrAcceptServerForgedCaptureMetadata()throws Exception {
         AtomicReference<JSONObject> actual=new AtomicReference<>();RunControl c=original();
         McpResultCapture capture=McpResultCapture.open((name,op,kind,live)->(data,truncated)->{actual.set(data);throw new IOException("synthetic full disk");},

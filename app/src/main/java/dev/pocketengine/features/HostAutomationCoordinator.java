@@ -43,7 +43,11 @@ public class HostAutomationCoordinator implements AutomationModule.AlarmHost {
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
     private AutomationModule module(){EngineModule module=features.module("automation");return module instanceof AutomationModule?(AutomationModule)module:null;}
 
+    @Override public long nextMaintenanceAt(long now)throws Exception{return tasks.nextTaskScreenshotExpiry();}
+    @Override public void onMaintenanceDue(long now)throws Exception{tasks.maintainTaskScreenshots();}
+
     @Override public long nextAutomationAt(long now)throws Exception {
+        if(!tasks.executionEnabled())return -1;
         if(Thread.currentThread().isInterrupted())return -1;
         AutomationModule automation=module();if(automation==null)return -1;
         JSONObject scope=scope();long next=plans==null?-1:automation.nextPlanTaskAt(scope,now);
@@ -67,6 +71,7 @@ public class HostAutomationCoordinator implements AutomationModule.AlarmHost {
     }
 
     @Override public void onAutomationDue(long now,int maxCandidates)throws Exception {
+        if(!tasks.executionEnabled())return;
         if(maxCandidates<=0||Thread.currentThread().isInterrupted())return;
         AutomationModule automation=module();if(automation==null)return;
         int planAdmissions=plans==null?0:plans.onDue(automation,now,maxCandidates);maxCandidates-=planAdmissions;
@@ -125,9 +130,11 @@ public class HostAutomationCoordinator implements AutomationModule.AlarmHost {
     }
 
     protected void post(String tag,int id,Notification notification)throws Exception {
+        tasks.requireExecutionEnabled();
         NotificationManager manager=context.getSystemService(NotificationManager.class);if(manager==null)throw new IllegalStateException("通知服务不可用");manager.notify(tag,id,notification);
     }
     private boolean notificationsAllowed(){
+        if(!tasks.executionEnabled())return false;
         if(Build.VERSION.SDK_INT>=33&&context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)return false;
         NotificationManager manager=context.getSystemService(NotificationManager.class);if(manager==null||!manager.areNotificationsEnabled())return false;
         NotificationChannel channel=manager.getNotificationChannel(CHANNEL);if(channel==null||channel.getImportance()==NotificationManager.IMPORTANCE_NONE)return false;

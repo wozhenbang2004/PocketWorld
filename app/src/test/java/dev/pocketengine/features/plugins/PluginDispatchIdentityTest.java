@@ -47,7 +47,7 @@ public final class PluginDispatchIdentityTest {
             }catch(Exception closed){}},"plugin-exact-dispatch");responder.setDaemon(true);responder.start();
             JSONObject tool=new JSONObject().put("name","write").put("kind","http").put("effect","write").put("endpoint","http://127.0.0.1:"+server.getLocalPort()+"/tool");
             module.handle("install",new JSONObject().put("manifest",new JSONObject().put("id","dispatch-test").put("name","精确派发").put("version","1").put("tools",new JSONArray().put(tool))));
-            module.handle("enable",new JSONObject().put("id","dispatch-test").put("enabled",true));
+            dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(module,"dispatch-test",true);
             module.handle("grant",new JSONObject().put("id","dispatch-test").put("grants",new JSONArray().put("tool:write")));control.bindHostRun(task,run,1);
         }
         JSONObject input()throws Exception {
@@ -58,7 +58,7 @@ public final class PluginDispatchIdentityTest {
         }
         void cycle(boolean grant)throws Exception {
             if(grant){module.handle("grant",new JSONObject().put("id","dispatch-test").put("grants",new JSONArray()));module.handle("grant",new JSONObject().put("id","dispatch-test").put("grants",new JSONArray().put("tool:write")));}
-            else{String installation=input().getString("expectedInstallationId");module.setEnabledReviewed("dispatch-test",installation,false);module.setEnabledReviewed("dispatch-test",installation,true);}
+            else{JSONObject disabled=PluginOwnerTestReview.enableReviewed(module,PluginOwnerTestReview.current(module,"dispatch-test"),false);PluginOwnerTestReview.enableReviewed(module,disabled,true);}
         }
         @Override public void close()throws Exception {module.close();server.close();responder.join(1000);}
         private static String line(InputStream in)throws Exception {

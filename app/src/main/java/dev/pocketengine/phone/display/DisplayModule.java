@@ -70,10 +70,22 @@ public final class DisplayModule implements EngineModule {
         if(ownerTaskId.isEmpty())bootstrapEpoch++;
         ownerTaskId=taskId;
     }
-    public synchronized void unpinOwner(String taskId){if(ownerTaskId.equals(taskId))ownerTaskId="";}
+    public synchronized void unpinOwner(String taskId){
+        if(ownerTaskId.equals(taskId)){ownerTaskId="";if(!context.executionAllowed())try{stopForOwnerDisable();}catch(Exception unknown){message="总停用后原后台资源释放尚未确认，请核对原连接";}}
+    }
+    /** Only our original helper bindings are stopped; pending display/audio recovery stays explicit. */
+    public synchronized JSONObject stopForOwnerDisable()throws Exception {
+        if(context.executionAllowed())throw new SecurityException("总运行状态已恢复，旧清理失效");
+        if(!ownerTaskId.isEmpty()||releasePending||state.optBoolean("sessionActive"))
+            return new JSONObject().put("state","original_display_cleanup_pending").put("releaseConfirmed",false).put("helperStopRequested",false);
+        bootstrapEpoch++;verifiedAdbStatus=null;verifiedAdbEpoch=-1;connected=false;
+        adb.cancel();JSONObject actual=shizuku.stop();
+        return new JSONObject().put("state","stop_requested").put("helperStopRequested",true).put("physicalCleanupVerified",false).put("shizuku",actual);
+    }
     synchronized boolean ownedBy(String taskId){return !ownerTaskId.isEmpty()&&ownerTaskId.equals(taskId);}
     @Override public synchronized JSONObject handle(String command,JSONObject input)throws Exception {
         if(input==null)input=new JSONObject();
+        if(java.util.Set.of("adb.pair","adb.connect","shizuku.start","create").contains(command))context.requireExecutionEnabled();
         // Native owner controls remain available during a run so revocation reaches its live fences.
         if("access.set".equals(command)){
             new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context.android).setOwnerRule(
@@ -231,6 +243,7 @@ public final class DisplayModule implements EngineModule {
             throw new SecurityException("后台助手返回的会话身份无效");
     }
     public synchronized JSONObject create(JSONObject input,RunControl control)throws Exception {
+        context.requireExecutionEnabled();
         PhoneParallelCapabilities.require(input);
         connect(control);
         if(state.optBoolean("sessionActive"))throw new IllegalStateException("后台屏已有会话，请先释放");
@@ -284,6 +297,18 @@ public final class DisplayModule implements EngineModule {
         if(control!=null&&(control.hostRunIdentity()==null||!task.equals(control.hostRunIdentity().taskId())||admission==null))throw new SecurityException("original_audio_admission_required");
         JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
         return request(command,pinned,control,revision,false,control==null?null:admission);
+    }
+    /** Native owner audio review only. Its admission is rechecked at the original helper write;
+     * the application and TaskStore monitors are not held while waiting for the helper reply. */
+    JSONObject ownerAudioForTask(String command,JSONObject payload,String task,String run,int epoch,String expectedSession,int expectedDisplay,RunControl original,long revision,boolean paused,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+        if(!java.util.Set.of("ownership","audio.get","audio.set").contains(command)||original==null||admission==null)throw new SecurityException("original_owner_audio_admission_required");
+        dev.pocketengine.phone.observation.NativePhoneEntry.Admission checked=()->{
+            admission.check();
+            if(!original.matchesHostRun(task,run,epoch)||original.isCancelled()||original.isPaused()!=paused||original.pauseRevision()!=revision)throw new SecurityException("original_owner_audio_run_changed");
+            synchronized(DisplayModule.this){JSONObject current=session();if(!ownedBy(task)||expectedDisplay!=current.optInt("displayId",-1)||!expectedSession.equals(current.optString("sessionId")))throw new SecurityException("original_owner_audio_session_changed");}
+        };
+        checked.check();JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
+        return request(command,pinned,original,revision,paused,checked);
     }
     /** Explicit native owner undo; no model tool exposes it and no live session is displaced. */
     public synchronized JSONObject audioRecovery(String command,JSONObject payload)throws Exception {

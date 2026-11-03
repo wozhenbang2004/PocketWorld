@@ -41,7 +41,7 @@ public class PluginLifecycleTest {
         return module.handle("install",new JSONObject().put("manifest",manifest(version)));
     }
     private void enable(PluginsModule module)throws Exception {
-        module.handle("enable",new JSONObject().put("id","lifecycle").put("enabled",true));
+        dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(module,"lifecycle",true);
         module.handle("grant",new JSONObject().put("id","lifecycle").put("grants",new JSONArray().put("tool:show")));
     }
     private JSONObject current(PluginsModule module)throws Exception {return module.snapshot().getJSONArray("plugins").getJSONObject(0);}
@@ -97,12 +97,12 @@ public class PluginLifecycleTest {
         try{
             JSONObject first=install(module,"1"),replacement=install(module,"2");
             File file=new File(context.getFilesDir(),"plugins/manifests.json");byte[] before=Files.readAllBytes(file.toPath());
-            try{module.setEnabledReviewed("lifecycle",first.getString("installationId"),true);fail();}catch(IllegalStateException expected){}
-            try{module.setEnabledReviewed("lifecycle","",true);fail();}catch(IllegalArgumentException expected){}
+            try{dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(module,first,true);fail();}catch(IllegalStateException expected){}
+            try{module.setEnabledReviewed("lifecycle","",0,replacement.getString("grantsDigest"),true);fail();}catch(IllegalArgumentException expected){}
             assertArrayEquals(before,Files.readAllBytes(file.toPath()));assertFalse(current(module).getBoolean("enabled"));
-            JSONObject enabled=module.setEnabledReviewed("lifecycle",replacement.getString("installationId"),true);
+            JSONObject enabled=dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(module,replacement,true);
             assertTrue(enabled.getBoolean("enabled"));assertEquals(0,enabled.getJSONArray("grants").length());assertEquals(0,module.toolRegistry().length());
-            assertFalse(module.setEnabledReviewed("lifecycle",replacement.getString("installationId"),false).getBoolean("enabled"));
+            assertFalse(dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(module,enabled,false).getBoolean("enabled"));
             assertFalse(module.snapshot().getJSONArray("commands").toString().contains("setEnabledReviewed"));
             try{module.handle("setEnabledReviewed",new JSONObject().put("id","lifecycle").put("expectedInstallationId",replacement.getString("installationId")).put("enabled",true));fail();}catch(IllegalArgumentException expected){}
         }finally{module.close();}
@@ -113,11 +113,78 @@ public class PluginLifecycleTest {
         try{
             JSONObject first=install(module,"1");Future<?> result;
             synchronized(module){
-                result=worker.submit(()->{queued.countDown();try{module.setEnabledReviewed("lifecycle",first.getString("installationId"),true);fail();}catch(IllegalStateException expected){}return null;});
+                result=worker.submit(()->{queued.countDown();try{dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(module,first,true);fail();}catch(IllegalStateException expected){}return null;});
                 assertTrue(queued.await(2,TimeUnit.SECONDS));install(module,"2");
             }
             result.get(2,TimeUnit.SECONDS);assertFalse(current(module).getBoolean("enabled"));assertEquals(0,current(module).getJSONArray("grants").length());
         }finally{worker.shutdownNow();module.close();}
+    }
+
+    @Test public void sameInstallationGrantChangeInvalidatesEnableAndNoOpReviews()throws Exception {
+        Context context=RuntimeEnvironment.getApplication();PluginsModule module=module(context);
+        try{
+            JSONObject reviewed=install(module,"1");
+            JSONObject granted=module.setToolGrantReviewed("lifecycle",reviewed.getString("installationId"),reviewed.getString("grantsDigest"),"show",true);
+            assertEquals(reviewed.getString("installationId"),granted.getString("installationId"));
+            File file=new File(context.getFilesDir(),"plugins/manifests.json");byte[] before=Files.readAllBytes(file.toPath());
+            assertThrows(IllegalStateException.class,()->PluginOwnerTestReview.enableReviewed(module,reviewed,true));
+            assertThrows(IllegalStateException.class,()->PluginOwnerTestReview.enableReviewed(module,reviewed,false));
+            // A current revision cannot stand in for the actual grants that the owner reviewed.
+            assertThrows(IllegalStateException.class,()->module.setEnabledReviewed("lifecycle",granted.getString("installationId"),granted.getLong("stateRevision"),reviewed.getString("grantsDigest"),true));
+            assertArrayEquals(before,Files.readAllBytes(file.toPath()));assertFalse(current(module).getBoolean("enabled"));assertEquals(0,module.toolRegistry().length());
+            JSONObject enabled=PluginOwnerTestReview.enableReviewed(module,granted,true);
+            assertTrue(enabled.getBoolean("enabled"));assertEquals(1,module.toolRegistry().length());
+        }finally{module.close();}
+    }
+
+    @Test public void enableDisableCycleCannotReviveAnOlderToggleEvenForAnUnchangedValue()throws Exception {
+        Context context=RuntimeEnvironment.getApplication();PluginsModule module=module(context);
+        try{
+            JSONObject reviewed=install(module,"1"),enabled=PluginOwnerTestReview.enableReviewed(module,reviewed,true);
+            JSONObject disabled=PluginOwnerTestReview.enableReviewed(module,enabled,false);
+            assertEquals(reviewed.getString("installationId"),disabled.getString("installationId"));
+            assertEquals(reviewed.getString("grantsDigest"),disabled.getString("grantsDigest"));assertEquals(reviewed.getLong("stateRevision")+2,disabled.getLong("stateRevision"));
+            File file=new File(context.getFilesDir(),"plugins/manifests.json");byte[] before=Files.readAllBytes(file.toPath());
+            assertThrows(IllegalStateException.class,()->PluginOwnerTestReview.enableReviewed(module,reviewed,true));
+            assertThrows(IllegalStateException.class,()->PluginOwnerTestReview.enableReviewed(module,reviewed,false));
+            assertArrayEquals(before,Files.readAllBytes(file.toPath()));
+            JSONObject unchanged=PluginOwnerTestReview.enableReviewed(module,disabled,false);
+            assertEquals(disabled.getLong("stateRevision"),unchanged.getLong("stateRevision"));
+        }finally{module.close();}
+    }
+
+    @Test public void queuedReviewedEnableRechecksChangedGrantsInsideTheMutationLock()throws Exception {
+        PluginsModule module=module(RuntimeEnvironment.getApplication());ExecutorService worker=Executors.newSingleThreadExecutor();CountDownLatch queued=new CountDownLatch(1);
+        try{
+            JSONObject reviewed=install(module,"1");Future<?> result;
+            synchronized(module){
+                result=worker.submit(()->{queued.countDown();assertThrows(IllegalStateException.class,()->PluginOwnerTestReview.enableReviewed(module,reviewed,true));return null;});
+                assertTrue(queued.await(2,TimeUnit.SECONDS));
+                module.setToolGrantReviewed("lifecycle",reviewed.getString("installationId"),reviewed.getString("grantsDigest"),"show",true);
+            }
+            result.get(2,TimeUnit.SECONDS);assertFalse(current(module).getBoolean("enabled"));assertEquals(1,current(module).getJSONArray("grants").length());assertEquals(0,module.toolRegistry().length());
+        }finally{worker.shutdownNow();module.close();}
+    }
+
+    @Test public void genericEnableRequiresTheSameExactReviewAndCannotBypassTheNativeGate()throws Exception {
+        Context context=RuntimeEnvironment.getApplication();PluginsModule module=module(context);
+        try{
+            JSONObject reviewed=install(module,"1"),accepted=PluginOwnerTestReview.payload(reviewed,true);
+            File file=new File(context.getFilesDir(),"plugins/manifests.json");byte[] before=Files.readAllBytes(file.toPath());
+            for(String field:new String[]{"expectedInstallationId","expectedStateRevision","expectedGrantsDigest"}){
+                JSONObject missing=new JSONObject(accepted.toString());missing.remove(field);
+                assertThrows(org.json.JSONException.class,()->module.handle("enable",missing));
+            }
+            for(Object revision:new Object[]{"0",-1,0.5,true,new java.math.BigInteger("9223372036854775808")}){
+                JSONObject invalid=new JSONObject(accepted.toString()).put("expectedStateRevision",revision);
+                assertThrows(IllegalArgumentException.class,()->module.handle("enable",invalid));
+            }
+            assertArrayEquals(before,Files.readAllBytes(file.toPath()));assertFalse(current(module).getBoolean("enabled"));
+            JSONObject enabled=module.handle("enable",accepted);assertTrue(enabled.getBoolean("enabled"));
+            JSONObject disabled=module.handle("enable",PluginOwnerTestReview.payload(enabled,false));
+            assertThrows(IllegalStateException.class,()->module.handle("enable",accepted));
+            assertEquals(disabled.getLong("stateRevision"),current(module).getLong("stateRevision"));assertFalse(current(module).getBoolean("enabled"));
+        }finally{module.close();}
     }
 
     @Test public void stalePreviewAndRollbackCannotOverwriteAnInterveningInstallation()throws Exception {
@@ -157,8 +224,8 @@ public class PluginLifecycleTest {
             JSONObject first=install(module,"1"),second=install(module,"2");
             JSONObject history=module.handle("history",new JSONObject().put("id","lifecycle"));
             JSONObject request=rollback(second,first).put("expectedStateRevision",history.optLong("currentStateRevision"));
-            module.setEnabledReviewed("lifecycle",second.getString("installationId"),true);
-            module.setEnabledReviewed("lifecycle",second.getString("installationId"),false);
+            JSONObject enabled=dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(module,second,true);
+            dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(module,enabled,false);
             File file=new File(context.getFilesDir(),"plugins/manifests.json");byte[] before=Files.readAllBytes(file.toPath());
             try{module.handle("rollback",request);fail("a restored value must not revive a stale restore approval");}catch(IllegalStateException expected){}
             assertArrayEquals(before,Files.readAllBytes(file.toPath()));
@@ -194,7 +261,7 @@ public class PluginLifecycleTest {
         Context context=RuntimeEnvironment.getApplication();PluginsModule module=module(context);
         try{
             JSONObject installed=install(module,"1");
-            JSONObject enabled=module.setEnabledReviewed("lifecycle",installed.getString("installationId"),true);
+            JSONObject enabled=dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(module,installed,true);
             JSONObject granted=module.setToolGrantReviewed("lifecycle",installed.getString("installationId"),enabled.getString("grantsDigest"),"show",true);
             JSONObject admitted=module.toolRegistry().getJSONObject(0).getJSONObject("executionBinding");
             JSONObject revoked=module.setToolGrantReviewed("lifecycle",installed.getString("installationId"),granted.getString("grantsDigest"),"show",false);assertEquals(0,module.toolRegistry().length());
@@ -210,8 +277,8 @@ public class PluginLifecycleTest {
         try{
             JSONObject installed=install(module,"1");enable(module);
             JSONObject admitted=module.toolRegistry().getJSONObject(0).getJSONObject("executionBinding");
-            module.setEnabledReviewed("lifecycle",installed.getString("installationId"),false);assertEquals(0,module.toolRegistry().length());
-            module.setEnabledReviewed("lifecycle",installed.getString("installationId"),true);
+            JSONObject disabled=dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(module,current(module),false);assertEquals(0,module.toolRegistry().length());
+            dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(module,disabled,true);
             JSONObject renewed=module.toolRegistry().getJSONObject(0).getJSONObject("executionBinding");
             assertEquals(admitted.getString("installationId"),renewed.getString("installationId"));assertEquals(admitted.getString("grantsDigest"),renewed.getString("grantsDigest"));
             assertNotEquals("an enable cycle cannot restore an old model or Skill plan identity",admitted.toString(),renewed.toString());
@@ -240,7 +307,7 @@ public class PluginLifecycleTest {
             JSONObject invoke=new JSONObject().put("id","lifecycle").put("tool","show").put("expectedVersion","1")
                     .put("expectedInstallationId",restored.getString("installationId")).put("arguments",new JSONObject().put("query","real task input"));
             try{module.handle("invoke",invoke);fail("restoration must not execute before enabling");}catch(IllegalStateException disabled){}
-            JSONObject enabled=module.setEnabledReviewed("lifecycle",restored.getString("installationId"),true);assertEquals(1,enabled.getLong("stateRevision"));
+            JSONObject enabled=dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(module,restored,true);assertEquals(1,enabled.getLong("stateRevision"));
             try{module.handle("invoke",invoke);fail("enabling does not restore an old grant");}catch(SecurityException ungranted){}
             JSONObject granted=module.setToolGrantReviewed("lifecycle",restored.getString("installationId"),enabled.getString("grantsDigest"),"show",true);assertEquals(2,granted.getLong("stateRevision"));
             JSONObject receipt=module.handle("invoke",invoke);assertEquals("response_received",receipt.getString("status"));assertFalse(receipt.getBoolean("verified"));

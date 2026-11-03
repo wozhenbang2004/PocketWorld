@@ -33,8 +33,8 @@ public final class McpReplacementSkillReviewTest {
     private static JSONObject install(PluginsModule plugins,McpFixture wire)throws Exception {
         JSONObject preview=plugins.handle("discoverMcp",new JSONObject().put("id","remote").put("name","same-name service").put("endpoint",wire.endpoint()).put("protocolVersion",McpData.VERSION));
         JSONObject row=plugins.handle("installMcp",new JSONObject().put("previewId",preview.getString("previewId")).put("expectedInstallationId",preview.getString("expectedInstallationId")).put("tools",new JSONArray().put("lookup")));
-        plugins.setToolGrantReviewed("remote",row.getString("installationId"),row.getString("grantsDigest"),"lookup",true);
-        return plugins.setEnabledReviewed("remote",row.getString("installationId"),true);
+        row=plugins.setToolGrantReviewed("remote",row.getString("installationId"),row.getString("grantsDigest"),"lookup",true);
+        return dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(plugins,row,true);
     }
     @Test public void replacementWithIdenticalToolDefinitionMustInvalidateTheRetainedSkillReview()throws Exception {
         try(NativeSkillExecutionHostTest.Fixture f=new NativeSkillExecutionHostTest.Fixture();McpFixture oldWire=new McpFixture();McpFixture newWire=new McpFixture()){

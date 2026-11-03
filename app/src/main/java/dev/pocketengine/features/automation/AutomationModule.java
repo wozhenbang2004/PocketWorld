@@ -28,10 +28,11 @@ public final class AutomationModule implements EngineModule {
     private static final Object SCHEDULE_LOCK=new Object();
     private static long scheduleGeneration;
     private static long lastHostNext=-1;
+    private static long lastMaintenanceNext=-1;
     private static final long HOST_QUERY_TIMEOUT=1000,HOST_DUE_TIMEOUT=3000,MIN_HOST_WAKE_DELAY=60000;
 
     /** Implement on the Application; return null until its dependencies are fully initialized. */
-    public interface AlarmHostProvider { AlarmHost automationAlarmHost(); default AutomationModule originalReminderModule(){return null;} }
+    public interface AlarmHostProvider { AlarmHost automationAlarmHost(); default AutomationModule originalReminderModule(){return null;} default boolean executionAllowed(){return true;} }
     /**
      * Existing-host hook, not another scheduler or an authorization source. No model/network/
      * phone work here. Both methods run on a bounded worker, outside all book locks. Derive
@@ -41,6 +42,9 @@ public final class AutomationModule implements EngineModule {
     public interface AlarmHost {
         long nextAutomationAt(long now)throws Exception;
         void onAutomationDue(long now,int maxCandidates)throws Exception;
+        /** Privacy expiry only. This does not admit task, model, tool, or notification work. */
+        default long nextMaintenanceAt(long now)throws Exception{return -1;}
+        default void onMaintenanceDue(long now)throws Exception{}
     }
     private final FeatureContext context;
     private final AutomationBook book;
@@ -160,10 +164,27 @@ public final class AutomationModule implements EngineModule {
     }
     /** Native private conversation/owner glue only, not exposed by generic module tools. */
     public JSONObject proposeScheduleForTask(JSONObject nativeOrigin,String operation,JSONObject draft)throws Exception{return book.proposeSchedule(nativeOrigin,operation,draft,System.currentTimeMillis());}
+    /** The original book is the draft receipt; accepting this tool never creates a task or
+     * reschedules an alarm. Publication happens only after the original SQL admission ends. */
+    public JSONObject receiveDeviceScheduleDraft(dev.pocketengine.features.devices.DeviceScheduleDrafts.Admission original,dev.pocketengine.store.TaskStore tasks)throws Exception{
+        final boolean[] entered={false};JSONObject result;
+        try{result=tasks.withDeviceScheduleAdmission(original,()->{entered[0]=true;JSONObject row=original.queryOnly()?book.deviceScheduleProposal(original.origin()):book.proposeDeviceSchedule(original.origin(),original.draft(),System.currentTimeMillis());return original.receipt(row);});}
+        catch(AutomationBook.DeviceDraftRefused rejected){return original.notAccepted(rejected.code,false);}
+        catch(Exception unknown){if(original.queryOnly()||!entered[0])throw unknown;return original.notAccepted("draft_save_unconfirmed",true);}
+        if(!original.queryOnly())try{context.emit(id(),new JSONObject().put("event","schedule_proposal_received").put("executionAuthorized",false));}catch(Exception publicationUnknown){/* The original persisted draft receipt remains authoritative. */}
+        return result;
+    }
     public JSONArray scheduleProposalsForTask(String task)throws Exception{return book.scheduleProposals(task);}
     @FunctionalInterface public interface OriginalProposalSource {JSONObject call(java.util.concurrent.Callable<JSONObject> originalBookAction)throws Exception;}
     /** Source/Tasks scopes end before touching alarms or the native scheduling host. */
-    public JSONObject approveScheduleProposalForOwner(String id,String digest,OriginalProposalSource source)throws Exception{JSONObject result=java.util.Objects.requireNonNull(source).call(()->book.approveScheduleProposal(id,digest,System.currentTimeMillis()));reschedule(context.android);if(!result.optBoolean("duplicate"))emitScheduleChange("approveSchedule",result.getJSONObject("rule"),id);return result;}
+    public JSONObject approveScheduleProposalForOwner(String id,String digest,OriginalProposalSource source)throws Exception{
+        JSONObject result=java.util.Objects.requireNonNull(source).call(()->{
+            // Only the actual current-source gate may release a retained quarantine.
+            // An old displayed row cannot clear it by calling the Book directly.
+            JSONArray rows=book.scheduleProposals(null);for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(id.equals(row.getString("id"))){book.nativeScheduleSourcePending(row.getJSONObject("origin"),false,System.currentTimeMillis());break;}}
+            return book.approveScheduleProposal(id,digest,System.currentTimeMillis());
+        });reschedule(context.android);if(!result.optBoolean("duplicate"))emitScheduleChange("approveSchedule",result.getJSONObject("rule"),id);return result;
+    }
     /** Native supervisor validates this exact occurrence before admitting its own persistent task. */
     public JSONObject taskRequest(String occurrenceId)throws Exception {
         JSONObject origin=book.receiptNativeOrigin(occurrenceId);if(origin==null)return book.taskRequest(occurrenceId,System.currentTimeMillis());final Exception[] bookFailure={null};
@@ -309,12 +330,16 @@ public final class AutomationModule implements EngineModule {
         Context app=context.getApplicationContext();AutomationModule mounted=app instanceof AlarmHostProvider?((AlarmHostProvider)app).originalReminderModule():null;return deliver(app,mounted==null?open(app):mounted.book,mounted);
     }
     private static JSONArray deliver(Context context,AutomationBook book,AutomationModule mounted)throws Exception {
-        Context app=context.getApplicationContext();recover(book);ensureChannel(app);if(mounted!=null)mounted.reconcileNativeScheduleSources();
+        Context app=context.getApplicationContext();long maintenanceAt=System.currentTimeMillis();
+        HOST_GATE.call(()->{AlarmHost host=alarmHost(app);if(host!=null)host.onMaintenanceDue(maintenanceAt);return Boolean.TRUE;},maintenanceAt,HOST_DUE_TIMEOUT);
+        if(!executionAllowed(app)){schedule(app,book);return new JSONArray();}
+        recover(book);ensureChannel(app);if(mounted!=null)mounted.reconcileNativeScheduleSources();
         JSONArray results=new JSONArray();
         try{
             book.recheckConditions(System.currentTimeMillis());
             JSONArray claimed=book.claimDue(System.currentTimeMillis(),10);
             for(int i=0;i<claimed.length();i++){
+                if(!executionAllowed(app))break;
                 String id=claimed.getJSONObject(i).getString("id");
                 JSONObject origin=book.receiptNativeOrigin(id);
                 if(origin==null)book.dispatchReceipt(id,receipt->postNotification(app,receipt),System.currentTimeMillis());
@@ -348,12 +373,13 @@ public final class AutomationModule implements EngineModule {
         }finally{
             // Legacy notification failures must not bypass the host pass or final reschedule.
             long now=System.currentTimeMillis();
-            HOST_GATE.call(()->{AlarmHost host=alarmHost(app);if(host!=null)host.onAutomationDue(now,20);return Boolean.TRUE;},now,HOST_DUE_TIMEOUT);
+            if(executionAllowed(app))HOST_GATE.call(()->{AlarmHost host=alarmHost(app);if(host!=null&&executionAllowed(app))host.onAutomationDue(now,20);return Boolean.TRUE;},now,HOST_DUE_TIMEOUT);
             schedule(app,book);
         }
         return results;
     }
     private static AlarmHost alarmHost(Context app){return app instanceof AlarmHostProvider?((AlarmHostProvider)app).automationAlarmHost():null;}
+    private static boolean executionAllowed(Context context){Context app=context.getApplicationContext();return !(app instanceof AlarmHostProvider)||((AlarmHostProvider)app).executionAllowed();}
     static AutomationBook open(Context context)throws Exception{return new AutomationBook(new File(context.getFilesDir(),"automation/rules.json"),null,new AndroidAutomationConditions(context));}
     private static PendingIntent alarmIntent(Context context){
         Intent intent=new Intent(context,AutomationReceiver.class).setAction(ALARM_ACTION);
@@ -365,18 +391,21 @@ public final class AutomationModule implements EngineModule {
         AlarmManager manager=context.getSystemService(AlarmManager.class);if(manager==null)return false;
         final long generation;
         synchronized(SCHEDULE_LOCK){generation=++scheduleGeneration;}
-        long now=System.currentTimeMillis(),reminderNext=book.nextAt(),hostNext;
+        long now=System.currentTimeMillis(),reminderNext=executionAllowed(context)?book.nextAt():-1,hostNext,maintenanceNext;
         if(queryHost){
-            Long read=HOST_GATE.call(()->{AlarmHost host=alarmHost(context);return host==null?-1L:host.nextAutomationAt(now);},now,HOST_QUERY_TIMEOUT);
-            hostNext=read==null?HOST_GATE.retryAt(now):read;
+            long[] read=HOST_GATE.call(()->{AlarmHost host=alarmHost(context);return host==null?new long[]{-1,-1}:new long[]{executionAllowed(context)?host.nextAutomationAt(now):-1,host.nextMaintenanceAt(now)};},now,HOST_QUERY_TIMEOUT);
+            hostNext=read==null?HOST_GATE.retryAt(now):read[0];maintenanceNext=read==null?HOST_GATE.retryAt(now):read[1];
             if(hostNext < -1)hostNext=HOST_GATE.retryAt(now);
+            if(maintenanceNext < -1)maintenanceNext=HOST_GATE.retryAt(now);
             // An unchanged overdue candidate cannot generate an immediate busy alarm loop.
             if(hostNext>=0)hostNext=Math.max(now+MIN_HOST_WAKE_DELAY,hostNext);
-        }else synchronized(SCHEDULE_LOCK){hostNext=lastHostNext;}
+            if(maintenanceNext>=0)maintenanceNext=Math.max(now+MIN_HOST_WAKE_DELAY,maintenanceNext);
+        }else synchronized(SCHEDULE_LOCK){hostNext=lastHostNext;maintenanceNext=lastMaintenanceNext;}
         synchronized(SCHEDULE_LOCK){
             if(generation!=scheduleGeneration)return false; // A newer policy/state replan owns the alarm.
-            if(queryHost)lastHostNext=hostNext;
-            long next=reminderNext<0?hostNext:hostNext<0?reminderNext:Math.min(reminderNext,hostNext);
+            if(queryHost){lastHostNext=hostNext;lastMaintenanceNext=maintenanceNext;}
+            long next=executionAllowed(context)?(reminderNext<0?hostNext:hostNext<0?reminderNext:Math.min(reminderNext,hostNext)):-1;
+            if(maintenanceNext>=0)next=next<0?maintenanceNext:Math.min(next,maintenanceNext);
             PendingIntent intent=alarmIntent(context);manager.cancel(intent);
             if(next>=0)manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,Math.max(System.currentTimeMillis()+1000,next),intent);
             return true;
@@ -388,6 +417,7 @@ public final class AutomationModule implements EngineModule {
     }
     private static Intent notificationIntent(Context context,String id){Intent open=context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());if(open==null)open=new Intent().setClassName(context.getPackageName(),context.getPackageName()+".MainActivity");return open.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP).setData(Uri.parse("pocketengine://automation/"+id));}
     private static JSONObject postNotification(Context context,JSONObject receipt)throws Exception {
+        if(!executionAllowed(context))throw new SecurityException("总停用已禁止本次新通知；原回执保留待核对");
         ensureChannel(context);NotificationManager manager=context.getSystemService(NotificationManager.class);
         NotificationChannel channel=manager==null?null:manager.getNotificationChannel(CHANNEL);
         if(manager==null||!manager.areNotificationsEnabled()||channel==null||channel.getImportance()==NotificationManager.IMPORTANCE_NONE)

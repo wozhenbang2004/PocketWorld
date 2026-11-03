@@ -13,7 +13,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.pocketengine.runtime.models.ModelBinding
 import dev.pocketengine.runtime.models.ModelConnectionService
+import dev.pocketengine.runtime.models.ModelSelectionCoordinator
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 
 /** Existing native model selection in a temporary surface; no task, inference or draft is created. */
@@ -33,41 +35,69 @@ internal fun ComposerModelPicker(
     var error by remember { mutableStateOf<String?>(null) }
     val alive = remember(service) { AtomicBoolean(true) }
     val main = remember { Handler(Looper.getMainLooper()) }
-    DisposableEffect(service) { onDispose { alive.set(false) } }
-    fun execute(close: Boolean = false, action: () -> JSONObject) {
+    val selection = remember(service) { service.modelSelection() }
+    val pendingWrite = remember(service) { AtomicReference<ModelSelectionCoordinator.Mutation?>(null) }
+    var shared by remember(selection) { mutableStateOf(selection.status()) }
+    var loadedRevision by remember(selection) { mutableLongStateOf(-1L) }
+    var readAttemptRevision by remember(selection) { mutableLongStateOf(-1L) }
+    var snapshotAvailable by remember(selection) { mutableStateOf(false) }
+    DisposableEffect(service) {
+        alive.set(true)
+        val subscription = selection.observe { main.post { if (alive.get()) shared = selection.status() } }
+        shared = selection.status()
+        onDispose { alive.set(false); pendingWrite.getAndSet(null)?.close(); subscription.close() }
+    }
+    fun execute(close: Boolean = false, mutation: Boolean = false, action: () -> JSONObject) {
         if (busy || !alive.get()) return
+        if (mutation && !snapshotAvailable) { error = "请先重新读取当前模型，再保存选择。"; return }
+        val reservation = if (mutation) try { selection.beginMutation(loadedRevision) } catch (failed: IllegalStateException) { error = failed.message; shared = selection.status(); return } else null
+        if (reservation != null) pendingWrite.set(reservation)
         busy = true; error = null
         try { worker(Runnable {
-            val result = runCatching(action)
+            val writeFailure = if (reservation != null) runCatching { reservation.run { action() } }.exceptionOrNull() else null
+            if (reservation != null) pendingWrite.compareAndSet(reservation, null)
+            val result = runCatching { selection.readStable { if (mutation) service.modelPickerSnapshot() else action() } }
+            val completed = selection.status()
             main.post {
+                if (mutation) changed()
                 if (alive.get()) {
-                    busy = false
-                    result.fold({ state = it; changed(); if (close) onDismiss() }, {
+                    busy = false; shared = selection.status()
+                    result.fold({
+                        readAttemptRevision = it.revision()
+                        if (!shared.pending() && shared.revision() == it.revision()) { state = it.value(); loadedRevision = it.revision(); snapshotAvailable = true }
+                        if (close && writeFailure == null && !shared.pending() && shared.revision() == it.revision()) onDismiss()
+                    }, {
+                        snapshotAvailable = false; readAttemptRevision = completed.revision()
                         error = if (it is IllegalArgumentException || it is IllegalStateException || it is SecurityException) it.message else "模型选择未能保存，请重新读取当前连接。"
                     })
+                    if (writeFailure != null) error = writeFailure.message ?: "模型选择未能保存，请重新读取当前连接。"
                 }
             }
-        }) } catch (_: Exception) { busy = false; error = "本机工作线程暂不可用，请稍后重新打开。" }
+        }) } catch (_: Exception) { reservation?.close(); if (reservation != null) pendingWrite.compareAndSet(reservation, null); busy = false; snapshotAvailable = false; error = "本机工作线程暂不可用，请稍后重新打开。"; readAttemptRevision = selection.status().revision() }
     }
-    LaunchedEffect(service) { execute { service.connections(); service.modelPickerSnapshot() } }
+    LaunchedEffect(service, shared, busy) {
+        if (!busy && !shared.pending() && readAttemptRevision < shared.revision()) execute { service.connections(); service.modelPickerSnapshot() }
+    }
     val models = state.optJSONArray("models")
     val rows = (0 until (models?.length() ?: 0)).mapNotNull { models?.optJSONObject(it) }
         .filter { query.isBlank() || it.optString("modelId").contains(query, true) || it.optString("connectionName").contains(query, true) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    val blocked = busy || shared.pending() || !snapshotAvailable || loadedRevision < shared.revision()
+    ModalBottomSheet(onDismissRequest = { if (!busy && !shared.pending()) onDismiss() }) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 20.dp)) {
             Text("选择下一任务的模型", style = MaterialTheme.typography.titleLarge)
             Text("只用于下一个新聊天或手机任务；在途任务及其连续补充保持原模型。关闭此面板会保留输入内容、附件与引用。", style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(query, { query = it }, label = { Text("搜索模型或连接") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+            if (busy || shared.pending()) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
             if (!state.optBoolean("preferencesAvailable", true) || state.optBoolean("recentUseSaveFailed")) Text("收藏或最近记录暂不可保存；原记录保留，模型选择仍可用。", style = MaterialTheme.typography.bodySmall)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            if (!snapshotAvailable && !busy) TextButton(enabled = !shared.pending(), onClick = { execute { service.connections(); service.modelPickerSnapshot() } }) { Text("重新读取模型") }
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
                 items(rows, key = { it.optString("connectionId") + "\u0000" + it.optString("modelId") }) { row ->
                     val available = row.optBoolean("available")
                     val binding = row.optJSONObject("binding")?.let(ModelBinding::fromJson)
-                    Row(Modifier.fillMaxWidth().clickable(enabled = available && !busy && binding != null) {
-                        execute(true) { service.selectPickerModel(binding!!, row.getLong("connectionRevision"), row.getString("modelId")) }
+                    Row(Modifier.fillMaxWidth().clickable(enabled = available && !blocked && binding != null) {
+                        execute(close = true, mutation = true) { service.selectPickerModel(binding!!, row.getLong("connectionRevision"), row.getString("modelId")) }
                     }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(row.optString("modelId") + if (row.optBoolean("selected")) " · 当前" else "", style = MaterialTheme.typography.titleSmall)
@@ -75,8 +105,8 @@ internal fun ComposerModelPicker(
                             Text(if (!available) pickerUnavailableReason(row.optString("unavailableReason")) else "图片：${pickerCapability(row.optJSONObject("imageInput"))} · 工具：${pickerCapability(row.optJSONObject("toolCalls"))}", style = MaterialTheme.typography.labelSmall)
                             if (row.optLong("lastUsedAt") > 0) Text("最近成功调用：${modelTime(row.optLong("lastUsedAt"))}", style = MaterialTheme.typography.labelSmall)
                         }
-                        TextButton(enabled = !busy && state.optBoolean("preferencesAvailable", true) && (available || row.optBoolean("favorite")), onClick = {
-                            execute {
+                        TextButton(enabled = !blocked && state.optBoolean("preferencesAvailable", true) && (available || row.optBoolean("favorite")), onClick = {
+                            execute(mutation = true) {
                                 if (row.optBoolean("favorite")) service.removeModelFavorite(row.getString("connectionId"), row.getString("modelId"))
                                 else service.favoriteModel(binding!!, row.getLong("connectionRevision"), row.getString("modelId"), true)
                             }
@@ -87,8 +117,8 @@ internal fun ComposerModelPicker(
             }
             if (rows.isEmpty() && !busy) Text(if (query.isBlank()) "没有已保存的 API 模型，可先添加连接。" else "没有匹配的模型。", modifier = Modifier.padding(vertical = 16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onAccounts, enabled = !busy) { Text("ChatGPT 套餐模型") }
-                TextButton(onClick = onManage, enabled = !busy) { Text("管理连接与能力") }
+                TextButton(onClick = onAccounts, enabled = !blocked) { Text("ChatGPT 套餐模型") }
+                TextButton(onClick = onManage, enabled = !blocked) { Text("管理连接与能力") }
             }
         }
     }

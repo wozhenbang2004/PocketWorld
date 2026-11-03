@@ -13,7 +13,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** A native presentation review only; the actual module/visible Activity remain admission authority. */
-internal data class ChannelReceivingReview(val profileIds: List<String>, val fingerprint: String, val names: List<String>)
+internal data class ChannelReceivingReview(val profileIds: List<String>, val fingerprint: String, val names: List<String>, val reviewedProfiles: String)
 internal fun reviewChannelReceiving(channels: JSONObject, ids: Collection<String>): ChannelReceivingReview {
     require(ids.size in 1..6 && ids.toSet().size == ids.size) { "请选择1至6个不同连接" }
     val profiles = channels.optJSONArray("profiles").objects()
@@ -21,7 +21,8 @@ internal fun reviewChannelReceiving(channels: JSONObject, ids: Collection<String
     require(rows.all { it.optString("provider") in setOf("qq", "weixin") && it.opt("enabled") == true && it.opt("hasSecret") == true }) { "仅支持已启用并配置凭据的QQ官方机器人或微信iLink" }
     require(rows.count { it.optString("provider") == "qq" } <= 3 && rows.count { it.optString("provider") == "weixin" } <= 3) { "QQ与微信分别最多选择3个连接" }
     val reviewed = JSONArray(); rows.forEach { reviewed.put(JSONObject(it.toString())) }
-    return ChannelReceivingReview(rows.map { it.getString("id") }, TaskStore.capabilityFingerprint(JSONObject().put("profiles", reviewed)), rows.map { it.optString("name") + " · " + if (it.optString("provider") == "qq") "QQ官方机器人" else "微信iLink" })
+    val epochs = JSONArray(); rows.forEach { epochs.put(JSONObject().put("id", it.getString("id")).put("transportEpoch", it.getString("transportEpoch"))) }
+    return ChannelReceivingReview(rows.map { it.getString("id") }, TaskStore.capabilityFingerprint(JSONObject().put("profiles", reviewed)), rows.map { it.optString("name") + " · " + if (it.optString("provider") == "qq") "QQ官方机器人" else "微信iLink" }, epochs.toString())
 }
 internal fun channelReceivingCanStop(background: JSONObject): Boolean = background.optString("sessionId").isNotBlank() && (background.optString("status") in setOf("starting", "foreground") || background.optBoolean("foregroundServicePresent") || background.optBoolean("cleanupPending") || background.optInt("runningReceivers") > 0)
 internal fun channelReceivingOwns(channels: JSONObject, profileId: String): Boolean {

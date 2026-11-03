@@ -94,7 +94,7 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
                     try{return stopAndReconcile(link,receipt,operation,events);}finally{Thread.currentThread().interrupt();}
                 }
                 try{receipt=remote.call("getJob",jobRequest(receipt));}
-                catch(IOException uncertain){receipt=unknown(operation,"电脑任务状态无法读取；原任务可能继续执行，未重复提交").put("id",receipt.optString("id"));}
+                catch(IOException uncertain){receipt=unknown(operation,"电脑任务状态无法读取；原任务可能继续执行，未重复提交").put("id",receipt.optString("id")).put("serviceBase",receipt.optString("serviceBase")).put("profileBinding",receipt.opt("profileBinding"));}
                 result=save(link,receipt,events);
                 if(stopped(control,pauseRevision)&&cancellable(receipt))return stopAndReconcile(link,receipt,operation,events);
             }
@@ -105,7 +105,8 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
             catch(IOException unavailable){return unknown(operation,"无法核对原操作；未提交新任务");}
         }
         private JSONObject jobRequest(JSONObject receipt)throws Exception {
-            return copy(binding).put("jobId",identifier(receipt,"id"));
+            JSONObject target=copy(binding).put("jobId",identifier(receipt,"id")).put("jobOperationId",identifier(receipt,"operationId")).put("serviceBase",text(receipt,"serviceBase",2048));
+            if(receipt.has("profileBinding"))target.put("_profileBinding",text(receipt,"profileBinding",64));return target;
         }
         private JSONObject stopAndReconcile(JSONObject link,JSONObject receipt,String operation,Consumer<JSONObject> events)throws Exception {
             if(receipt.optString("id").isEmpty())return save(link,unknown(operation,"未取得电脑任务编号，无法确认停止；请按操作编号核对"),events);

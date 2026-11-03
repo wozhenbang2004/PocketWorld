@@ -44,6 +44,7 @@ public final class ModelConnectionService {
         modelPreferences=new ModelSelectionPreferences(catalog.selectionMetadataPath());
         metadataSuggestions=new ModelMetadataSuggestions(catalog.thirdPartyMetadataPath());
     }
+    public ModelSelectionCoordinator modelSelection(){return settings.modelSelection();}
 
     /** Application-only mounting. Existing AgentRunner/context and Gateway remain the consumers. */
     public void install() {
@@ -56,8 +57,8 @@ public final class ModelConnectionService {
                         &&receipt.context.purpose!=dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.CONNECTION_TEST
                         &&receipt.context.purpose!=dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.UNATTRIBUTED)try{
                     JSONObject route=receipt.toJson().getJSONObject("route");String id="account".equals(route.optString("kind"))?"account:"+route.optString("accountId"):route.optString("connectionId");
-                    if(!id.isEmpty()){modelPreferences.used(new ModelSelectionPreferences.Key(id,route.getString("requestedModel")),receipt.finishedAt);recentUseSaveFailed=false;}
-                }catch(Exception metadataFailure){recentUseSaveFailed=true;}
+                    if(!id.isEmpty()){modelPreferences.used(new ModelSelectionPreferences.Key(id,route.getString("requestedModel")),receipt.finishedAt);recentUseSaveFailed=false;modelSelection().changed();}
+                }catch(Exception metadataFailure){recentUseSaveFailed=true;modelSelection().changed();}
             }
         });
         ModelRequestPolicy.installHostSource(this::resolve);
@@ -320,7 +321,8 @@ public final class ModelConnectionService {
     /** Existing owner model page, no feature/model tool and no automatic network request. */
     public JSONObject connections()throws Exception{synchronized(settings){settings.apiConnections();return snapshot();}}
     public JSONObject saveConnection(String id,long revision,String name,JSONObject input)throws Exception{synchronized(settings){settings.saveApiConnection(id,revision,name,input);return snapshot();}}
-    public JSONObject selectConnection(String id,long revision)throws Exception{synchronized(settings){settings.selectApiConnection(id,revision);settings.selectModelPurpose("MAIN",null);return snapshot();}}
+    public JSONObject selectConnection(String id,long revision)throws Exception{synchronized(settings){settings.selectApiConnection(id,revision);return snapshot();}}
+    public JSONObject addAndSelectConnection(String name,JSONObject input)throws Exception{synchronized(settings){settings.addAndSelectApiConnection(name,input);return snapshot();}}
     public JSONObject enableConnection(String id,long revision,boolean enabled)throws Exception{synchronized(settings){settings.setApiConnectionEnabled(id,revision,enabled);return snapshot();}}
     public JSONObject saveGroup(String id,long revision,String name,JSONObject definition)throws Exception{synchronized(settings){settings.saveModelGroup(id,revision,name,definition);return snapshot();}}
     public JSONObject selectPurpose(String purpose,ModelTargetRef target)throws Exception{synchronized(settings){settings.selectModelPurpose(purpose,target);return snapshot();}}
@@ -333,6 +335,7 @@ public final class ModelConnectionService {
     /** Local metadata only. Catalog availability and live identity remain independent of favorites. */
     public JSONObject modelPickerSnapshot() throws Exception {
         synchronized(settings){
+            modelPreferences.refresh();
             JSONObject connections=settings.apiConnectionsSnapshot();JSONArray profiles=connections.getJSONArray("connections");
             Map<ModelSelectionPreferences.Key,JSONObject> rows=new java.util.LinkedHashMap<>();
             String selectedConnection="",selectedModel="";
@@ -379,18 +382,19 @@ public final class ModelConnectionService {
     public JSONObject favoriteModel(ModelBinding expected,long connectionRevision,String model,boolean favorite)throws Exception {
         synchronized(settings){JSONObject row=requirePickerRow(expected,connectionRevision,model);
             if(favorite&&!row.getBoolean("available"))throw new IllegalStateException("先核对原连接与模型目录，再收藏此模型。");
-            modelPreferences.favorites(java.util.List.of(new ModelSelectionPreferences.Key(expected.connectionId(),model)),favorite);return modelPickerSnapshot();}
+            modelPreferences.favorites(java.util.List.of(new ModelSelectionPreferences.Key(expected.connectionId(),model)),favorite);modelSelection().changed();return modelPickerSnapshot();}
     }
     /** Removing stale metadata cannot activate or edit its missing connection. */
-    public JSONObject removeModelFavorite(String connection,String model)throws Exception {modelPreferences.favorites(java.util.List.of(new ModelSelectionPreferences.Key(connection,model)),false);return modelPickerSnapshot();}
+    public JSONObject removeModelFavorite(String connection,String model)throws Exception {modelPreferences.favorites(java.util.List.of(new ModelSelectionPreferences.Key(connection,model)),false);modelSelection().changed();return modelPickerSnapshot();}
     /** Local account presentation only; the account page still requires its current native catalog reference for selection. */
     public JSONObject accountModelPreferences(String accountId)throws Exception{
+        modelPreferences.refresh();
         String connection=accountPreferenceId(accountId);JSONArray rows=new JSONArray();
         for(ModelSelectionPreferences.Entry entry:modelPreferences.entries())if(entry.key().connectionId().equals(connection))rows.put(new JSONObject().put("modelId",entry.key().modelId()).put("favorite",entry.favorite()).put("lastUsedAt",entry.lastUsedAt()));
         return new JSONObject().put("models",rows).put("preferencesAvailable",modelPreferences.readable()).put("recentUseSaveFailed",recentUseSaveFailed);
     }
     public JSONObject favoriteAccountModel(String accountId,String model,boolean favorite)throws Exception{
-        modelPreferences.favorites(java.util.List.of(new ModelSelectionPreferences.Key(accountPreferenceId(accountId),model)),favorite);return accountModelPreferences(accountId);
+        modelPreferences.favorites(java.util.List.of(new ModelSelectionPreferences.Key(accountPreferenceId(accountId),model)),favorite);modelSelection().changed();return accountModelPreferences(accountId);
     }
     private static String accountPreferenceId(String accountId){if(accountId==null||!accountId.matches("[A-Za-z0-9_.:-]{1,200}"))throw new IllegalArgumentException("invalid_account_model_reference");return "account:"+accountId;}
     public JSONObject previewModelFavorites(ModelBinding expected,long connectionRevision,JSONArray models)throws Exception {
@@ -413,7 +417,7 @@ public final class ModelConnectionService {
     public JSONObject saveModelFavorites(ModelBinding expected,long connectionRevision,JSONArray models)throws Exception {
         synchronized(settings){JSONObject preview=previewModelFavorites(expected,connectionRevision,models);JSONArray rows=preview.getJSONArray("results");java.util.List<ModelSelectionPreferences.Key> add=new java.util.ArrayList<>();
             for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if("new".equals(row.getString("status")))add.add(new ModelSelectionPreferences.Key(expected.connectionId(),row.getString("modelId")));}
-            if(!add.isEmpty())modelPreferences.favorites(add,true);
+            if(!add.isEmpty()){modelPreferences.favorites(add,true);modelSelection().changed();}
             for(int i=0;i<rows.length();i++)if("new".equals(rows.getJSONObject(i).getString("status")))rows.getJSONObject(i).put("status","added");
             return preview.put("saved",true);
         }

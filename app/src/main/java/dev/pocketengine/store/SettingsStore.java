@@ -12,6 +12,7 @@ import dev.pocketengine.runtime.models.ModelTargetRef;
 import dev.pocketengine.features.controlplane.WorkProfile;
 import dev.pocketengine.runtime.models.ModelGroup;
 import dev.pocketengine.runtime.models.ModelRoutePlan;
+import dev.pocketengine.runtime.models.ModelSelectionCoordinator;
 import org.json.JSONArray;
 import dev.pocketengine.runtime.models.ModelCatalogRoutes;
 import dev.pocketengine.runtime.models.ReasoningOptions;
@@ -28,8 +29,10 @@ public final class SettingsStore {
     private static final String ALIAS="pocketengine.model-key.v1";
     // Android commits to memory before reporting the disk result. Never consume that memory as a confirmed selection.
     private static final java.util.Set<SharedPreferences> UNCERTAIN=java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    private static final java.util.Map<SharedPreferences,ModelSelectionCoordinator> MODEL_SELECTIONS=new java.util.WeakHashMap<>();
     private final SharedPreferences prefs;
     private final ApiSecrets apiSecrets;
+    private final ModelSelectionCoordinator modelSelection;
     public interface ApiSecrets { String get(String slot)throws Exception;void put(String slot,String value)throws Exception; }
     private static final String API_PROFILES="apiConnections";
     private record Profiles(java.util.LinkedHashMap<String,ApiConnectionProfile> rows,String selected,long selectionRevision){}
@@ -37,19 +40,28 @@ public final class SettingsStore {
     private ImageCapabilitySource imageCapabilities;
     public SettingsStore(Context context) { this(context.getSharedPreferences("private_settings",Context.MODE_PRIVATE),new SecretVault(context)); }
     SettingsStore(SharedPreferences prefs) { this(prefs,null); }
-    SettingsStore(SharedPreferences prefs,ApiSecrets secrets) { this.prefs=java.util.Objects.requireNonNull(prefs);apiSecrets=secrets; }
+    SettingsStore(SharedPreferences prefs,ApiSecrets secrets) { this.prefs=java.util.Objects.requireNonNull(prefs);apiSecrets=secrets;synchronized(MODEL_SELECTIONS){modelSelection=MODEL_SELECTIONS.computeIfAbsent(prefs,ignored->new ModelSelectionCoordinator());} }
+    public ModelSelectionCoordinator modelSelection(){return modelSelection;}
     public static final class PersistenceUncertain extends IllegalStateException {
         PersistenceUncertain(){super("本机模型设置的写入结果不确定；请检查存储并重新启动应用后核对选择。没有把未确认的内存值当作保存成功。");}
     }
     private void requireConfirmed(){synchronized(UNCERTAIN){if(UNCERTAIN.contains(prefs))throw new PersistenceUncertain();}}
-    private void commitConfirmed(SharedPreferences.Editor edit){
+    private void commitConfirmed(SharedPreferences.Editor edit){commitConfirmed(edit,true);}
+    private void commitConfirmed(SharedPreferences.Editor edit,boolean selectionChanged){
         synchronized(UNCERTAIN){if(UNCERTAIN.contains(prefs))throw new PersistenceUncertain();UNCERTAIN.add(prefs);}
-        try{if(edit.commit()){synchronized(UNCERTAIN){UNCERTAIN.remove(prefs);}return;}}catch(RuntimeException failure){/* The disk outcome can no longer be established here. */}
+        try{if(edit.commit()){synchronized(UNCERTAIN){UNCERTAIN.remove(prefs);}if(selectionChanged)modelSelection.changed();return;}}catch(RuntimeException failure){/* The disk outcome can no longer be established here. */}
+        if(selectionChanged)modelSelection.changed();
         throw new PersistenceUncertain();
+    }
+    /** Explicit owner opt-in only. Reading this preference never starts playback or changes a model. */
+    public synchronized boolean taskAnnouncementsEnabled(){requireConfirmed();return prefs.getBoolean("taskAnnouncementsEnabled",false);}
+    public synchronized void saveTaskAnnouncementsEnabled(boolean enabled){
+        requireConfirmed();commitConfirmed(prefs.edit().putBoolean("taskAnnouncementsEnabled",enabled),false);
     }
     /** Application singleton only; current facts may change without rewriting private model settings. */
     public synchronized void installImageCapabilities(ImageCapabilitySource source) { imageCapabilities=java.util.Objects.requireNonNull(source); }
     public synchronized ModelConfig get() throws Exception {
+        modelSelection.requireAvailable();
         ModelConfig selected=getSelected(),global=selected;
         ModelTargetRef target=modelPurposeTarget("MAIN");
         if(target!=null)selected=captureModelTarget(target,"MAIN","APP_OWNER",selected);
@@ -196,7 +208,7 @@ public final class SettingsStore {
         String encrypted=c.apiKey.isEmpty()?"":encrypt(c.apiKey);
         SharedPreferences.Editor edit=prefs.edit().putString("modelRoute","api_key").remove("accountModelRef").putString("baseUrl",c.baseUrl).putString("model",c.model).putString("provider",c.provider).putString("cleartextConsent",c.cleartextConsent).putInt("maxOutputTokens",c.maxOutputTokens).putString("encryptedKey",encrypted).putBoolean("sendScreenshots",c.sendScreenshots).putBoolean("supportsImageInput",c.supportsImageInput).putInt("maxSteps",c.maxSteps).putInt("requestTimeoutSeconds",c.requestTimeoutSeconds);
         if(binding!=null){edit.putString("apiCatalogBinding",binding.toJson().toString());if(changed||previous==null||!previous.model.equals(c.model))edit.putString("modelReasoning",ReasoningOptions.DEFAULT.toJson().toString()).putInt("modelImageTokenReserve",0);}
-        commitConfirmed(edit);
+        commitConfirmed(clearMainBinding(edit));
         return getApiKeyConfig();
     }
     /** Native owner opt-in. A failed/missing catalog never changes route or guesses capabilities. */
@@ -237,7 +249,7 @@ public final class SettingsStore {
             profiles.rows.put(row.id(),new ApiConnectionProfile(row.name,Math.addExact(row.revision,1),row.enabled,row.secretSlot,selected));
             commitProfiles(profiles,Math.addExact(profiles.selectionRevision,1),true);return getApiKeyConfig();
         }
-        commitConfirmed(prefs.edit().putString("modelRoute","api_key").remove("accountModelRef").putString("model",model).putInt("maxOutputTokens",output).putString("modelReasoning",reasoning.toJson().toString()).putInt("modelImageTokenReserve",imageTokenReserve));
+        commitConfirmed(clearMainBinding(prefs.edit().putString("modelRoute","api_key").remove("accountModelRef").putString("model",model).putInt("maxOutputTokens",output).putString("modelReasoning",reasoning.toJson().toString()).putInt("modelImageTokenReserve",imageTokenReserve)));
         return getApiKeyConfig();
     }
     /** Native owner only, after the host checks the current account catalog and version. */
@@ -249,8 +261,8 @@ public final class SettingsStore {
     public synchronized ModelConfig selectAccountModel(JSONObject nativeRef,ReasoningOptions reasoning,int imageReserve,int outputReserve)throws Exception {
         requireConfirmed();ModelConfig.AccountModelRef ref=ModelConfig.AccountModelRef.fromJson(nativeRef);
         new ModelConfig("","","",false,1,10).withAccountModel(ref).withAccountOptions(reasoning,imageReserve,outputReserve);
-        commitConfirmed(prefs.edit().putString("modelRoute","account").putString("accountModelRef",ref.toJson().toString())
-                .putString("accountReasoning",reasoning.toJson().toString()).putInt("accountImageReserve",imageReserve).putInt("accountOutputReserve",outputReserve));
+        commitConfirmed(clearMainBinding(prefs.edit().putString("modelRoute","account").putString("accountModelRef",ref.toJson().toString())
+                .putString("accountReasoning",reasoning.toJson().toString()).putInt("accountImageReserve",imageReserve).putInt("accountOutputReserve",outputReserve)));
         return get();
     }
     /** Native renewal CAS. False means the owner changed selection; never overwrite that choice. */
@@ -265,7 +277,7 @@ public final class SettingsStore {
     public synchronized ModelConfig useApiKeyModel() throws Exception {
         Profiles profiles=profiles();if(profiles!=null&&!selectedProfile(profiles).enabled)throw new IllegalStateException("当前API连接已停用，请明确启用或选择另一项");
         ModelConfig config=getApiKeyConfig();validate(config);
-        commitConfirmed(prefs.edit().putString("modelRoute","api_key").remove("accountModelRef"));
+        commitConfirmed(clearMainBinding(prefs.edit().putString("modelRoute","api_key").remove("accountModelRef")));
         return config;
     }
     /** Explicit native owner page entry. Existing API settings are atomically moved, never reset. */
@@ -283,12 +295,31 @@ public final class SettingsStore {
     public synchronized long apiSelectionRevision()throws Exception{requireConfirmed();Profiles p=profiles();return p==null?0:p.selectionRevision;}
     /** A settings switch chooses future calls; an existing task keeps its original enabled profile. */
     public synchronized ModelConfig currentForCaptured(ModelConfig captured)throws Exception{
-        requireConfirmed();Profiles state=profiles();
-        if(state!=null&&!captured.usesAccount()&&captured.capabilityBinding!=null){
+        requireConfirmed();java.util.Objects.requireNonNull(captured);
+        // The account gateway checks this run's actual renewal lineage and current revocation.
+        // A later default account/model or new-task option is not that run's identity.
+        if(captured.usesAccount())return captured;
+        Profiles state=profiles();
+        if(state!=null&&captured.capabilityBinding!=null){
             ApiConnectionProfile row=state.rows.get(captured.capabilityBinding.connectionId());
             if(row==null||!row.enabled||!row.configuration.capabilityBinding.equals(captured.capabilityBinding))throw new SecurityException("原API连接已停用或凭据/地址代次已变化，未切换连接");
-            return materialize(row,true).withModel(captured.model).withRoutePlan(captured.routePlan);
-        }return get();
+            ModelConfig live=materialize(row,true);
+            if(!captured.provider.equals(live.provider)||!captured.baseUrl.equals(live.baseUrl)||captured.catalogEnforced!=live.catalogEnforced
+                    ||!captured.apiKey.isEmpty()&&!java.security.MessageDigest.isEqual(captured.apiKey.getBytes(StandardCharsets.UTF_8),live.apiKey.getBytes(StandardCharsets.UTF_8)))
+                throw new SecurityException("原API连接的身份或凭据已变化，未切换连接");
+            if(captured.apiKey.equals(live.apiKey))return captured;
+            // Exact native metadata lookups may need the original profile's credential materialized.
+            ModelConfig resolved=new ModelConfig(captured.baseUrl,live.apiKey,captured.model,captured.sendScreenshots,captured.maxSteps,captured.requestTimeoutSeconds,captured.provider,captured.maxOutputTokens)
+                    .withStepCeiling(captured.maxSteps).withCleartextConsent(captured.cleartextConsent).withOwnerImageInput(captured.supportsImageInput)
+                    .withProviderCompatibility(captured.compatibility).withLocalObservation(captured.localCaptureAllowed,captured.localOcrAllowed)
+                    .withRoutePlan(captured.routePlan).withPurposePlans(captured.purposePlans);
+            return captured.catalogEnforced?resolved.withNativeCatalog(captured.capabilityBinding,captured.reasoning,captured.imageTokenReserve):resolved.withApiConnection(captured.capabilityBinding);
+        }
+        ModelConfig live=getApiKeyConfig();
+        if(!captured.provider.equals(live.provider)||!captured.baseUrl.equals(live.baseUrl)||!captured.apiKey.equals(live.apiKey)
+                ||!java.util.Objects.equals(captured.capabilityBinding,live.capabilityBinding)||captured.catalogEnforced!=live.catalogEnforced)
+            throw new SecurityException("原API连接已变化，未改用新的默认模型");
+        return captured;
     }
     /** Owner estimate lookup only; returns no key bytes, never selects or materializes a credential. */
     public synchronized ModelConfig apiMetadataForPricing(String connectionId,String model)throws Exception{
@@ -298,6 +329,27 @@ public final class SettingsStore {
     /** No caller-supplied identity, key slot or catalog policy is accepted. Saving never selects another profile. */
     public synchronized JSONObject saveApiConnection(String id,long expectedRevision,String name,JSONObject input)throws Exception{
         return saveApiConnectionInternal(id,expectedRevision,name,input,false);
+    }
+    /** Explicit add-and-use: never edits the previously selected profile or borrows its credential. */
+    public synchronized JSONObject addAndSelectApiConnection(String name,JSONObject input)throws Exception{
+        return saveApiConnectionInternal("",0,name,input,true);
+    }
+    /** Unsaved connection test input: add has no previous secret; edit is bound to the reviewed row. */
+    public synchronized ModelConfig previewApiConnection(String id,long expectedRevision,JSONObject input)throws Exception{
+        requireConfirmed();boolean adding=id==null||id.isEmpty();
+        if(adding&&expectedRevision!=0)throw new IllegalStateException("新增连接不能复用旧连接修订");
+        ModelConfig old=unconfiguredApi();
+        if(!adding){ApiConnectionProfile row=requireProfile(requireProfiles(),id,expectedRevision);
+            if(!row.enabled)throw new IllegalStateException("请先明确启用原连接，再测试此连接");
+            try{old=materialize(row,true);}catch(Exception unavailable){
+                if(!input.optBoolean("clearApiKey",false)&&input.optString("apiKey").trim().isEmpty())throw new IllegalStateException("原API凭据不可读取，请填写替换密钥或明确清除；未借用其他连接密钥");
+                old=row.configuration;
+            }
+        }
+        ModelConfig next=mergeApi(old,input);validate(next);
+        if(old.capabilityBinding!=null&&old.provider.equals(next.provider)&&old.baseUrl.equals(next.baseUrl)&&old.apiKey.equals(next.apiKey))
+            return old.catalogEnforced?next.withNativeCatalog(old.capabilityBinding,old.model.equals(next.model)?old.reasoning:ReasoningOptions.DEFAULT,old.model.equals(next.model)?old.imageTokenReserve:0):next.withApiConnection(old.capabilityBinding);
+        return next;
     }
     private JSONObject saveApiConnectionInternal(String id,long expectedRevision,String name,JSONObject input,boolean useApi)throws Exception{
         requireConfirmed();Profiles state=profiles();if(state==null){migrateApiConnections();state=profiles();}
@@ -327,6 +379,7 @@ public final class SettingsStore {
         else stored=stored.withApiConnection(identity);
         ApiConnectionProfile saved=new ApiConnectionProfile(checkedName,prior==null?1:Math.addExact(prior.revision,1),prior==null||prior.enabled,slot,stored);
         state.rows.put(saved.id(),saved);long nextRevision=Math.addExact(state.selectionRevision,1);
+        if(useApi)state=new Profiles(state.rows,saved.id(),state.selectionRevision);
         profilesDocument(state,nextRevision); // Preflight before writing even the inactive credential slot.
         if(credential&&!slot.isEmpty())putProfileSecret(slot,next.apiKey);
         commitProfiles(state,nextRevision,useApi);return saved.publicJson();
@@ -423,6 +476,12 @@ public final class SettingsStore {
         JSONObject root=modelGroupsDocument(),bindings=root.getJSONObject("purposeBindings");if(ref==null)bindings.remove(purpose);else bindings.put(purpose,ref.toJson());saveModelGroups(root);
     }
     private void saveModelGroups(JSONObject root)throws Exception {String raw=root.toString();if(raw.getBytes(StandardCharsets.UTF_8).length>131072)throw new IllegalArgumentException("模型组资料超限");commitConfirmed(prefs.edit().putString("modelGroups",raw).putLong("modelGroupSelectionRevision",Math.addExact(prefs.getLong("modelGroupSelectionRevision",0),1)));}
+    /** Explicit main-model choices supersede MAIN in the same commit; other purpose bindings survive. */
+    private SharedPreferences.Editor clearMainBinding(SharedPreferences.Editor edit)throws Exception{
+        JSONObject root=modelGroupsDocument(),bindings=root.getJSONObject("purposeBindings");
+        if(bindings.has("MAIN")){bindings.remove("MAIN");edit.putString("modelGroups",root.toString()).putLong("modelGroupSelectionRevision",Math.addExact(prefs.getLong("modelGroupSelectionRevision",0),1));}
+        return edit;
+    }
     public synchronized ModelTargetRef modelPurposeTarget(String purpose)throws Exception {requireConfirmed();JSONObject bindings=modelGroupsDocument().getJSONObject("purposeBindings");JSONObject value=bindings.optJSONObject(purpose);return value==null?null:ModelTargetRef.fromJson(value);}
     /** Explicit native local-service selection. MAIN/SUMMARY group permission never grants external use. */
     public synchronized ModelConfig captureRelaySelection()throws Exception {
@@ -511,7 +570,7 @@ public final class SettingsStore {
     }
     private void commitProfiles(Profiles state,long selectionRevision,boolean useApi)throws Exception{
         SharedPreferences.Editor edit=prefs.edit().putString(API_PROFILES,profilesDocument(state,selectionRevision));
-        if(useApi)edit.putString("modelRoute","api_key").remove("accountModelRef");commitConfirmed(edit);
+        if(useApi)clearMainBinding(edit.putString("modelRoute","api_key").remove("accountModelRef"));commitConfirmed(edit);
     }
     private void migrateApiConnections()throws Exception{
         if(profiles()!=null)return;

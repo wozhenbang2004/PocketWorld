@@ -58,11 +58,7 @@ internal suspend fun readFinalAnswerSourceRequest(
                 try {
                     val response = read(request, control)
                     control.check()
-                    check(response.optString("format") == FinalAnswerSources.FORMAT && response.optString("readId") == request.getString("readId")) { "原来源读取回执不属于这次选择" }
-                    val expected = request.getJSONObject("answer")
-                    val actual = response.getJSONObject("answer")
-                    expected.keys().forEach { key -> check(actual.has(key) && CompactionPlan.fingerprint(expected.get(key)) == CompactionPlan.fingerprint(actual.get(key))) { "原来源回执改变了回答身份或修订" } }
-                    if (response.optString("status") == "current" && request.has("source")) check(CompactionPlan.fingerprint(request.getJSONObject("source")) == CompactionPlan.fingerprint(response.getJSONObject("source").getJSONObject("pin"))) { "原来源回执不属于选中的来源修订" }
+                    checkedFinalAnswerSourceReceipt(request, response)
                     if (continuation.isActive) continuation.resume(response)
                 } catch (failure: Exception) {
                     if (continuation.isActive) continuation.resumeWithException(failure)
@@ -73,6 +69,16 @@ internal suspend fun readFinalAnswerSourceRequest(
             if (continuation.isActive) continuation.resumeWithException(failure)
         }
     }
+
+/** Shared native/Web receipt validation; no source URL or label can replace an original pin. */
+internal fun checkedFinalAnswerSourceReceipt(request: JSONObject, response: JSONObject): JSONObject {
+    check(response.optString("format") == FinalAnswerSources.FORMAT && response.optString("readId") == request.getString("readId")) { "原来源读取回执不属于这次选择" }
+    val expected = request.getJSONObject("answer")
+    val actual = response.getJSONObject("answer")
+    expected.keys().forEach { key -> check(actual.has(key) && CompactionPlan.fingerprint(expected.get(key)) == CompactionPlan.fingerprint(actual.get(key))) { "原来源回执改变了回答身份或修订" } }
+    if (response.optString("status") == "current" && request.has("source")) check(CompactionPlan.fingerprint(request.getJSONObject("source")) == CompactionPlan.fingerprint(response.getJSONObject("source").getJSONObject("pin"))) { "原来源回执不属于选中的来源修订" }
+    return response
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

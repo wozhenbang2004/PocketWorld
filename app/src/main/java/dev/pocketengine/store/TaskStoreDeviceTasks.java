@@ -586,6 +586,7 @@ public final class TaskStoreDeviceTasks {
                         db.setTransactionSuccessful(); committed=true; return result;
                     }
                 }
+                owner.requireExecutionEnabled();
                 JSONObject envelope = request.json(); String session = envelope.getString("localTaskId");
                 String id = dev.pocketengine.features.devices.DeviceProtocol.receiverTaskId(request);
                 JSONObject current = access.read(id);
@@ -711,6 +712,7 @@ public final class TaskStoreDeviceTasks {
     private JSONObject startAttempt(String id,DeviceExecutionAdmission admission,RunControl original,GoalModelApproval localOwnerModel)throws Exception{
         admission.checkCurrent();
         synchronized (owner) {
+            owner.requireExecutionEnabled();
             db.beginTransaction(); try {
                 JSONObject current = task(id); requireDevice(current); requireSameSession(current, admission);
                 if (original == null || original.hasHostRun() || original.isCancelled() || original.isPaused()) throw new SecurityException("需要新的原生控制器");
@@ -747,6 +749,7 @@ public final class TaskStoreDeviceTasks {
             JSONObject current = task(id); requireDevice(current);
             if (!run.equals(current.optString("runId")) || epoch != current.optInt("coordinatorEpoch")) throw new SecurityException("设备执行代次已变化");
             if (!dispatch) return; // Original receipts remain writable after cancel/revocation; never authorize an effect.
+            owner.requireExecutionEnabled();
             Live binding = live.get(run);
             if (binding == null || control != binding.original || !control.matchesHostRun(id, run, epoch) || control.isCancelled() || control.isPaused()
                     || current.optBoolean("cancelRequested") || !current.optString("status").matches("preparing|running")) throw new SecurityException("没有当前设备任务的原生控制");

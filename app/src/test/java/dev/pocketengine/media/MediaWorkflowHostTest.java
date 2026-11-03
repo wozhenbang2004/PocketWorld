@@ -116,4 +116,29 @@ public final class MediaWorkflowHostTest {
             assertTrue(host.submitFromOwner(media,"submitWorkflow",input).getBoolean("knownOperation"));assertEquals(1,posts.get());
         }finally{release.countDown();worker.shutdownNow();}
     }
+    @Test public void lateOriginalReceiptSurvivesANewerRunWithoutSettlingOrChargingIt()throws Exception{
+        JSONObject first=host.submitFromOwner(media,"submitWorkflow",prepared(args()));
+        String id=first.getString("taskId"),operation=first.getString("operationId"),oldRun=first.getString("runId");
+        JSONObject oldSource=tasks.ownerMediaOperationSource(id,operation);
+        JSONObject newer=tasks.startAttempt(id,"capabilities",1);String newRun=newer.getString("runId");int newEpoch=newer.getInt("coordinatorEpoch");
+        assertNotEquals(oldRun,newRun);assertTrue(newEpoch>oldSource.getInt("epoch"));
+        tasks.status(id,"reconciling","The newer run is awaiting its own owner decision");
+        JSONObject before=tasks.get(id,false);String grantAndCheckpoint=runGrantAndCheckpoint(newRun);
+        JSONObject late=new JSONObject(first.toString()).put("status","running").put("delayedNativeFixture",true);
+        host.recordEvent(new JSONObject().put("type","feature_event").put("feature","media").put("payload",late));
+        JSONObject after=tasks.get(id,false),original=after.getJSONArray("operations").getJSONObject(0);
+        assertEquals(oldRun,original.getString("runId"));assertEquals("running",original.getJSONObject("receipt").getString("status"));assertTrue(original.getJSONObject("receipt").getBoolean("delayedNativeFixture"));
+        assertEquals(newRun,after.getString("runId"));assertEquals(newEpoch,after.getInt("coordinatorEpoch"));assertEquals("reconciling",after.getString("status"));assertEquals(before.getString("summary"),after.getString("summary"));
+        assertEquals(String.valueOf(before.opt("executionScope")),String.valueOf(after.opt("executionScope")));assertEquals(grantAndCheckpoint,runGrantAndCheckpoint(newRun));
+        assertEquals(2,rows("runs"));assertEquals(1,rows("operations"));assertEquals(1,posts.get());assertEquals(0,queries.get());
+        JSONObject forged=new JSONObject(late.toString()).put("runId",newRun);
+        assertThrows(SecurityException.class,()->host.recordEvent(new JSONObject().put("type","feature_event").put("feature","media").put("payload",forged)));
+        assertEquals(oldRun,tasks.get(id,false).getJSONArray("operations").getJSONObject(0).getJSONObject("receipt").getString("runId"));
+        assertEquals(grantAndCheckpoint,runGrantAndCheckpoint(newRun));assertNull(eventFailure.get());
+    }
+    private String runGrantAndCheckpoint(String run)throws Exception{
+        try(SQLiteDatabase db=SQLiteDatabase.openDatabase(app.getDatabasePath("pocket-world.db").getAbsolutePath(),null,SQLiteDatabase.OPEN_READONLY);Cursor cursor=db.rawQuery("SELECT status,grant_json,checkpoint FROM runs WHERE run_id=?",new String[]{run})){
+            assertTrue(cursor.moveToFirst());return new JSONArray().put(cursor.getString(0)).put(cursor.getString(1)).put(cursor.getString(2)).toString();
+        }
+    }
 }

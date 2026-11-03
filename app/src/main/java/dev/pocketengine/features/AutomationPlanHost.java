@@ -44,6 +44,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
 
     private JSONObject withProposalSource(JSONObject source,java.util.concurrent.Callable<JSONObject> action)throws Exception {
+        if(dev.pocketengine.features.automation.DeviceScheduleOrigin.isDevice(source))return tasks.withDeviceScheduleSourceCurrent(source,action);
         ProposalSources guard=proposalSources;if(guard==null)throw new dev.pocketengine.features.automation.ScheduleSourceState.Unavailable();String task=source.getString("taskId"),run=source.getString("runId"),conversation=source.getString("conversationId");int epoch=source.getInt("epoch");JSONArray refs=tasks.scheduleProposalUserRefs(task,run,epoch,conversation);
         return guard.call(refs,()->tasks.withScheduleProposalSourceCurrent(task,run,epoch,conversation,refs,action));
     }
@@ -97,7 +98,16 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         return new JSONObject().put("plans",plans).put("scheduleProposals",proposalSnapshot(module)).put("remoteWaitCandidates",tasks.automationRemoteWaitCandidates(20)).put("businessWaitCandidates",businessWaitCandidates()).put("businessWaitSourceAvailable",businessEvents!=null).put("conditions",module.conditionsSnapshot()).put("taskAuthority","TaskStore").put("workerState","not_inferred_from_plan_state").put("snapshotProcess",snapshotProcess).put("snapshotSequence",snapshotSequence.incrementAndGet());
     }
     private JSONArray proposalSnapshot(AutomationModule module)throws Exception {
-        JSONArray rows=module.scheduleProposalsForTask(null),result=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);try{AutomationBook.reviewedProposalForDisplay(row);result.put(withProposalSource(row.getJSONObject("origin"),()->new JSONObject(row.toString()).put("sourceAvailable",true)));}catch(Exception unavailable){boolean invalidated=row.optBoolean("sourceInvalidated")||unavailable instanceof dev.pocketengine.features.automation.ScheduleSourceState.Invalidated;result.put(new JSONObject().put("id",row.optString("id")).put("status",invalidated?"source_invalidated":"source_check_pending").put("sourceInvalidated",invalidated).put("sourceAvailable",false).put("executionAuthorized",false));}}return result;
+        JSONArray rows=module.scheduleProposalsForTask(null),result=new JSONArray();
+        for(int i=0;i<rows.length();i++){
+            JSONObject row=rows.getJSONObject(i),checked=null;
+            try{checked=AutomationBook.reviewedProposalForDisplay(row);JSONObject shown=withProposalSource(row.getJSONObject("origin"),()->new JSONObject(row.toString()).put("sourceAvailable",true));if(dev.pocketengine.features.automation.DeviceScheduleOrigin.isDevice(row.getJSONObject("origin")))shown.put("sourceLabel","已配对设备提交，等待本机审阅");result.put(shown);}
+            catch(Exception unavailable){
+                // Credential withdrawal is not a request to forget the owner's retained draft.
+                if(checked!=null&&dev.pocketengine.features.automation.DeviceScheduleOrigin.isDevice(checked.getJSONObject("origin"))){result.put(checked.put("sourceAvailable",false).put("sourceCheckPending",true).put("approvalBlocked",true).put("sourceLabel","原设备授权已失效或暂不可核对；草稿保留，安排已暂停").put("executionAuthorized",false));continue;}
+                boolean invalidated=row.optBoolean("sourceInvalidated")||unavailable instanceof dev.pocketengine.features.automation.ScheduleSourceState.Invalidated;result.put(new JSONObject().put("id",row.optString("id")).put("status",invalidated?"source_invalidated":"source_check_pending").put("sourceInvalidated",invalidated).put("sourceAvailable",false).put("executionAuthorized",false));
+            }
+        }return result;
     }
     private JSONObject executionView(AutomationModule module,JSONObject plan)throws Exception{
         if(plan.optJSONObject("execution")==null)return plan;JSONArray steps=plan.getJSONArray("steps");

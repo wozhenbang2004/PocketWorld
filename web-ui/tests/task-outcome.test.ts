@@ -87,3 +87,35 @@ test('deduplicating a reply body preserves its actual attachments, including att
     assert.deepEqual(value.reply?.attachments, [file]);
   }
 });
+
+const screenshotTask = (screenshot: Record<string, unknown>) => ({
+  id: 'task', status: 'completed', raw: {runId: 'new-run', coordinatorEpoch: 3,
+    evidence: {modelSummary: '本轮已完成', imageDataUrl: 'data:image/jpeg;base64,YQ==',
+      nativeFinalAnswer: {format: 'pocketworld.runner-final-answer.v1', taskId: 'task', runId: 'new-run', coordinatorEpoch: 3, inputBoundaryEmpty: true},
+      screenshot: {format: 'pocketworld.task-screenshot.v1', taskId: 'task', runId: 'new-run', epoch: 3, imageId: 'image', state: 'stored', encrypted: true, readState: 'available', createdAt: 10, expiresAt: 20, ...screenshot}},
+  },
+});
+
+test('a cached screenshot disappears at its original expiry even without a new host snapshot', () => {
+  const task = screenshotTask({});
+  assert.equal(getTaskOutcome(task, [], 19).image, 'data:image/jpeg;base64,YQ==');
+  const expired = getTaskOutcome(task, [], 20);
+  assert.equal(expired.image, undefined); assert.equal(expired.retained?.image, undefined);
+  assert.equal(expired.screenshot?.state, 'expired'); assert.equal(expired.text, '本轮已完成');
+});
+
+test('deleted, unreadable, and foreign screenshot records cannot expose cached image bytes', () => {
+  for (const record of [{state: 'deleted'}, {readState: 'unreadable'}, {taskId: 'foreign'}, {format: 'untrusted'}]) {
+    const result = getTaskOutcome(screenshotTask(record), [], 15);
+    assert.equal(result.image, undefined); assert.equal(result.retained?.image, undefined);
+  }
+});
+
+test('fresh final text cannot relabel a retained image from a previous run or epoch', () => {
+  for (const record of [{runId: 'old-run'}, {epoch: 2}]) {
+    const result = getTaskOutcome(screenshotTask(record), [], 15);
+    assert.equal(result.text, '本轮已完成'); assert.equal(result.evidenceRunBound, true);
+    assert.equal(result.screenshot?.currentRun, false); assert.equal(result.image, 'data:image/jpeg;base64,YQ==');
+  }
+  assert.equal(getTaskOutcome(screenshotTask({}), [], 15).screenshot?.currentRun, true);
+});

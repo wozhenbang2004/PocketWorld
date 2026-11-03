@@ -60,6 +60,17 @@ public final class SshCredentialFenceTest {
     private RunControl control(){RunControl control=new RunControl();control.bindHostRun("fixture-task","fixture-run",7);control.setAuthorityCheck(()->{});return control;}
     private JSONObject operation(String binding,String id)throws Exception {return new JSONObject().put("profileId","fixture").put("_profileBinding",binding).put("hostTaskId","fixture-task").put("_operationId",id).put("_hostRunId","fixture-run").put("_hostEpoch",7).put("principalId","owner").put("spaceId","private");}
 
+    @Test public void staleOwnerEditorCannotChangeReplacementCredentialsOrRemoveProfile()throws Exception {
+        SshProfile profile=initial(22,"password");seed(profile);SshModule module=new SshModule(context());
+        try{
+            JSONObject before=module.handle("saveProfile",profile.document().put("password",BEFORE));
+            JSONObject after=module.handle("saveProfile",profile.document().put("expectedBindingHash",before.getString("bindingHash")).put("password",AFTER));
+            assertThrows(SecurityException.class,()->module.handle("saveProfile",profile.document().put("expectedBindingHash",before.getString("bindingHash")).put("password",BEFORE)));
+            assertThrows(SecurityException.class,()->module.handle("removeProfile",new JSONObject().put("profileId",profile.id).put("expectedBindingHash",before.getString("bindingHash"))));
+            assertEquals(after.getString("bindingHash"),current(module).getString("bindingHash"));assertEquals(AFTER,new JSONObject(vault.get(persisted().credentialSlot())).getString("password"));
+        }finally{module.close();}
+    }
+
     @Test public void credentialReplacementRejectsOriginalBindingBeforeRegistrationAndTcp()throws Exception {
         AtomicInteger accepted=new AtomicInteger();
         try(ServerSocket tcp=new ServerSocket(0,1,InetAddress.getLoopbackAddress())){

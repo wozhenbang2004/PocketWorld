@@ -106,6 +106,10 @@ public final class OwnerSourceRunContext {
             .put("nativeOutputReturned",hadOutput||prior!=null&&prior.optBoolean("nativeOutputReturned"))
             .put("formalMemoryDependencies",prior==null?new JSONArray():formalDependencies(prior.optJSONArray("formalMemoryDependencies")))
             .put("formalMemoryTrackingComplete",fresh||prior!=null&&prior.optBoolean("formalMemoryTrackingComplete"));
+        // These are exact final-request parts of this run. A previous summary, imported
+        // checkpoint or read of a different task never backfills full user-message proof.
+        fact.put("nativeUserParts",new JSONArray()).put("nativeUserTrackingComplete",fresh)
+            .put("nativeUserExposureStage","final_main_request_prepared").put("nativeUserCollectionCoverage","prepared_parts_only");
         write(db,fact);initializeRawExposure(db,task,run,previousRun);
     }
     /** The original host calls after preparing current source parts, before actual model dispatch. */
@@ -114,6 +118,49 @@ public final class OwnerSourceRunContext {
             for(int i=0;i<accepted.length();i++){JSONObject row=accepted.getJSONObject(i);check.requireCarrier(row,conversation);JSONArray refs=row.getJSONArray("ownerSourceRefs");for(int j=0;j<refs.length();j++)check.requireSource(refs.getJSONObject(j));}
         }
         merge(db,loaded(db,task,run,null,null),accepted);
+    }
+    /** Same original TaskStore transaction as carrier preparation. Body-free facts are
+     * captured only by the final physical MAIN admission, never by model-nominated IDs. */
+    public static void nativeUsersPrepared(SQLiteDatabase db,ConversationRepository originals,String task,String run,String conversation,JSONArray supplied)throws Exception {
+        if(supplied==null||supplied.length()>MAX_CARRIERS)throw new IllegalArgumentException("原请求主人来源超过100条");
+        JSONObject fact=loaded(db,task,run,null,null);JSONArray old=fact.optJSONArray("nativeUserParts");if(old==null)old=new JSONArray();if(old.length()>MAX_CARRIERS)throw new SecurityException("原主人来源累计事实不可读");
+        LinkedHashMap<String,JSONObject> union=new LinkedHashMap<>();for(int i=0;i<old.length();i++){JSONObject part=old.getJSONObject(i);union.put(nativePartKey(part),part);}
+        try(var check=originals.inspectOwnerSources()){
+            for(int i=0;i<supplied.length();i++){JSONObject part=new JSONObject(supplied.getJSONObject(i).toString());check.requireNativeUserPart(part,conversation);String key=nativePartKey(part);JSONObject previous=union.get(key);
+                if(previous!=null&&!TaskMemoryTrace.rawFingerprint(previous).equals(TaskMemoryTrace.rawFingerprint(part)))throw new SecurityException("同一原请求来源范围不能改写正文指纹");union.put(key,part);}
+        }
+        if(union.size()>MAX_CARRIERS)throw new IllegalStateException("原主人来源累计达到100条上限，未截断当作完整");JSONArray parts=new JSONArray();for(JSONObject part:union.values())parts.put(part);
+        fact.put("nativeUserParts",parts).put("nativeUserTrackingComplete",fact.optBoolean("nativeUserTrackingComplete",false))
+            .put("nativeUserExposureStage","final_main_request_prepared").put("nativeUserCollectionCoverage","prepared_parts_only");write(db,fact);
+    }
+    private static String nativePartKey(JSONObject part)throws Exception {
+        SourceRef ref=SourceRef.fromJson(part.getJSONObject("sourceRef"));return new JSONArray().put(part.getString("generation")).put(ref.sourceId).put(ref.revision).put(part.getString("coverage")).put(part.get("offset")).put(part.get("chars")).toString();
+    }
+    /** Exact selected source identities, not a complete-history assertion. Partial, absent,
+     * legacy, retired, edited or summary-only evidence cannot become a full-message source. */
+    public static JSONArray preparedUserRefs(SQLiteDatabase db,ConversationRepository originals,String task,String run,String conversation,JSONArray selected)throws Exception {
+        if(selected==null||selected.length()<1||selected.length()>20)throw new IllegalArgumentException("请选择1到20条已实际准备的主人消息");JSONObject fact=loaded(db,task,run,null,null);
+        if(!"final_main_request_prepared".equals(fact.optString("nativeUserExposureStage"))||!"prepared_parts_only".equals(fact.optString("nativeUserCollectionCoverage")))throw new SecurityException("原run缺少最终请求来源证明，不能从会话成员身份补全");
+        JSONArray parts=fact.optJSONArray("nativeUserParts");if(parts==null||parts.length()>MAX_CARRIERS)throw new SecurityException("原run主人来源证明不可读");JSONArray result=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
+        try(var check=originals.inspectOwnerSources()){
+            for(int i=0;i<selected.length();i++){
+                JSONObject selection=selected.getJSONObject(i);if(selection.length()!=2||!(selection.opt("sourceId") instanceof String)||!selection.has("revision"))throw new SecurityException("来源选择只允许sourceId和revision");String id=selection.getString("sourceId");long revision=integer(selection,"revision");if(!seen.add(id+":"+revision))throw new IllegalArgumentException("来源选择重复");JSONObject matched=null;
+                for(int j=0;j<parts.length();j++){JSONObject part=parts.getJSONObject(j);SourceRef ref=SourceRef.fromJson(part.getJSONObject("sourceRef"));if("full".equals(part.optString("coverage"))&&id.equals(ref.sourceId)&&revision==ref.revision&&conversation.equals(part.optString("sourceConversationId"))){matched=part;break;}}
+                if(matched==null)throw new SecurityException("所选原主人消息没有最终请求全文准备证明；范围、摘要或未知不能补作全文");check.requireNativeUserPart(matched,conversation);result.put(new JSONObject(matched.getJSONObject("sourceRef").toString()));
+            }
+        }return result;
+    }
+    /** Body-free discovery over this exact existing proof set; absence is unknown, not
+     * evidence that the source did not occur elsewhere in the conversation. */
+    public static JSONArray preparedUserSources(SQLiteDatabase db,ConversationRepository originals,String task,String run,String conversation)throws Exception {
+        JSONObject fact=loaded(db,task,run,null,null);JSONArray result=new JSONArray(),parts=fact.optJSONArray("nativeUserParts");
+        if(!"final_main_request_prepared".equals(fact.optString("nativeUserExposureStage"))||parts==null)return result;if(parts.length()>MAX_CARRIERS)throw new SecurityException("原run主人来源证明不可读");
+        java.util.Set<String> seen=new java.util.HashSet<>();try(var check=originals.inspectOwnerSources()){
+            for(int i=0;i<parts.length();i++){JSONObject part=parts.getJSONObject(i);if(!"full".equals(part.optString("coverage"))||!conversation.equals(part.optString("sourceConversationId")))continue;
+                try{check.requireNativeUserPart(part,conversation);}catch(ConversationRepository.SourceUnavailable unavailable){continue;}
+                SourceRef ref=SourceRef.fromJson(part.getJSONObject("sourceRef"));if(seen.add(ref.sourceId+":"+ref.revision))result.put(new JSONObject().put("sourceRef",ref.toJson()).put("coverage","full").put("exposureStage","final_main_request_prepared").put("modelConsumptionConfirmed",false));
+            }
+        }return result;
     }
     /** Native history body preparation propagates the same original dependencies to its caller.
      * No new source permission or model-consumption receipt is created. Both run identities came

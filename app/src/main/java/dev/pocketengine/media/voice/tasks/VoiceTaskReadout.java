@@ -28,6 +28,7 @@ public final class VoiceTaskReadout implements AutoCloseable {
     public JSONObject snapshot()throws Exception{synchronized(gate){return new JSONObject().put("readoutId",current==null?"":current.id).put("state",phase).put("message",message).put("active",active()).put("leaseHeld",leaseHeld()).put("resourceReleaseUnknown",unknown).put("playbackClockAvailable",false).put("source","owned_system_tts");}}
     public boolean active(){synchronized(gate){return current!=null&&!current.done;}}
     public boolean leaseHeld(){synchronized(gate){return current!=null&&current.leased;}}
+    public String currentId(){synchronized(gate){return current==null?"":current.id;}}
     public void start(String text,VoiceTaskHostPort.Authority liveAuthority,Audio audio)throws Exception{
         liveAuthority.check();if(text==null||text.isBlank()||text.length()>3000)throw new IllegalArgumentException("原任务结果为空或过长，请打开原任务查看");
         Reading reading=new Reading(java.util.Objects.requireNonNull(audio));reading.authority.setAuthorityCheck(liveAuthority::check);
@@ -48,11 +49,14 @@ public final class VoiceTaskReadout implements AutoCloseable {
         });}catch(RuntimeException failure){finishWithoutLease(reading);}
     }
     /** Identity checked: an old stop button cannot stop a replacement readout or any task. */
-    public void stop(String expectedId){
-        Reading reading;synchronized(gate){reading=current;if(reading==null||!reading.id.equals(expectedId))throw new IllegalStateException("朗读已变化");if(reading.done)return;reading.cancelled=true;phase="stopping";message="正在停止朗读，原任务继续保留";}
+    public void stop(String expectedId){stopCurrent(expectedId,true);}
+    private void stopCurrent(String expectedId,boolean requireIdentity){
+        Reading reading;synchronized(gate){reading=current;if(reading==null||!reading.id.equals(expectedId)){if(requireIdentity)throw new IllegalStateException("朗读已变化");return;}if(reading.done)return;reading.cancelled=true;phase="stopping";message="正在停止朗读，原任务继续保留";}
         reading.authority.cancel();if(reading.leased)cleanup(reading,false);signal();
     }
-    public void invalidate(){Reading reading;synchronized(gate){reading=current;}if(reading!=null&&!reading.done)stop(reading.id);}
+    /** A delayed lifecycle invalidation can only affect the readout it originally observed. */
+    public void invalidate(String expectedId){stopCurrent(expectedId,false);}
+    public void invalidate(){invalidate(currentId());}
     private void cleanup(Reading reading,boolean success){
         synchronized(gate){if(reading.cleaning||reading.done)return;reading.cleaning=true;reading.successful=success&&!reading.cancelled;phase="stopping";}
         try{reading.audio.stop(reading.id).whenComplete((value,error)->{

@@ -35,10 +35,13 @@ final class QuickPanelSurface implements AutoCloseable {
         void noteChanged(String note);
         void clearDraft();
         void openOriginalTask();
+        default void voice() { }
+        default void reviewAudio() { }
+        default void setAudio(String reviewId,boolean muted) { }
         void close();
     }
 
-    private enum Phase { LOADING, BLOCKED, READY, CAPTURING, REVIEW, SENDING, UNKNOWN, SAVED, ERROR }
+    private enum Phase { LOADING, BLOCKED, READY, CAPTURING, REVIEW, SENDING, OPENING_VOICE, UNKNOWN, SAVED, ERROR }
     private final Context context;
     private final WindowManager windows;
     private final Actions actions;
@@ -63,6 +66,9 @@ final class QuickPanelSurface implements AutoCloseable {
     private AlertDialog noteDialog;
     private String draftStatus = "草稿只保存在本机，不会自动发送。";
     private LinearLayout body, footer;
+    private boolean audioSupported, audioBusy;
+    private org.json.JSONObject audioState;
+    private String audioReviewId, audioTarget, audioMessage;
 
     QuickPanelSurface(Context context, String goal, String location, Actions actions) {
         this.context = new android.view.ContextThemeWrapper(context, UiAppearance.theme(context));
@@ -109,17 +115,32 @@ final class QuickPanelSurface implements AutoCloseable {
     void restoreDraft(String text) { mainOnly(); draftWritable = true; note = text; noteReviewedFor = null; phase = Phase.READY; message = text.isEmpty() ? null : "已恢复这个原任务的未发送说明；请重新捕获并核对来源后再发送。"; render(); }
     void draftUnavailable(String detail) { mainOnly(); phase = Phase.BLOCKED; message = detail; expanded = true; render(); }
     void draftNotice(String detail) { mainOnly(); draftStatus = detail; TextView shown = root.findViewWithTag("quick_panel_draft_status"); if (shown != null) shown.setText(detail); if (noteDialog != null) { TextView editorStatus = noteDialog.findViewById(android.R.id.message); if (editorStatus != null) editorStatus.setText(detail); } }
-    void draftFailure(String detail) { mainOnly(); draftWritable = false; draftNotice(detail); Button send = root.findViewWithTag("quick_panel_send"); if (send != null) send.setEnabled(false); Button capture = root.findViewWithTag("quick_panel_capture"); if (capture != null) capture.setEnabled(false); }
+    void draftFailure(String detail) { mainOnly(); draftWritable = false; draftNotice(detail); Button send = root.findViewWithTag("quick_panel_send"); if (send != null) send.setEnabled(false); Button capture = root.findViewWithTag("quick_panel_capture"); if (capture != null) capture.setEnabled(false); Button voice = root.findViewWithTag("quick_panel_voice"); if (voice != null) voice.setEnabled(false); }
     void draftStored() { mainOnly(); boolean blocked = !draftWritable; draftWritable = true; draftNotice("已保存这个原任务的本机草稿；收起或关闭后可继续编辑。"); if (blocked && noteDialog == null) render(); }
     void draftCleared() { mainOnly(); note = ""; noteReviewedFor = null; draftStatus = "本机未发送说明已清除；没有撤回任何已登记输入。"; render(); }
     void capturing() { mainOnly(); clearPreview(); phase = Phase.CAPTURING; message = null; expanded = true; render(); }
     void preview(PreviewContent content) { mainOnly(); if (preview != content) clearPreview(); preview = content; phase = Phase.REVIEW; message = null; expanded = true; render(); }
     void sending() { mainOnly(); phase = Phase.SENDING; message = null; render(); }
+    void openingVoice() { mainOnly(); phase = Phase.OPENING_VOICE; message = null; expanded = true; render(); }
     void unknown(String detail) { mainOnly(); querying = false; phase = Phase.UNKNOWN; message = detail; render(); }
     void querying() { mainOnly(); querying = true; render(); }
     void saved(String detail) { mainOnly(); querying = false; clearPreview(); note = ""; phase = Phase.SAVED; message = detail; render(); }
     void error(String detail) { mainOnly(); phase = Phase.ERROR; message = detail; expanded = true; render(); }
     void ready() { mainOnly(); clearPreview(); phase = Phase.READY; message = null; render(); }
+    void audioScope(boolean supported) { audioSupported=supported; }
+    void audioLoading(boolean write) { mainOnly();audioBusy=true;audioReviewId=null;audioMessage=write?"正在核对原 App 并请求这次声音修改…":"正在读取原后台目标 App 和实际声音状态…";render(); }
+    void audioFailure(String detail) { mainOnly();audioBusy=false;audioReviewId=null;audioState=null;audioTarget=null;audioMessage=detail;render(); }
+    void audioResult(org.json.JSONObject result,boolean review) {
+        mainOnly();audioBusy=false;audioReviewId=review?result.optString("reviewId",null):null;
+        audioTarget=result.optString("packageName")+" · user "+result.optInt("userId",-1);
+        audioState=result.optBoolean("stateVerified")?result.optJSONObject("state"):null;
+        audioMessage=review?"只作用于这个后台 App 的此资料；确认前还会重新核对原任务和目标。":!result.optBoolean("confirmed")?"结果尚未证实。请读取当前状态核对；不会重放这次操作。":switch(result.optString("outcome")){
+            case "silenced_verified" -> "已读回目标 App 的静音状态。";
+            case "owner_mode_preserved" -> "已保留主人后来设置的声音状态，并清理原恢复记录。";
+            default -> "已核对并恢复原记录中的声音状态。";
+        };
+        render();
+    }
 
     void captureHidden(boolean value) {
         mainOnly(); hidden = value; if (value) closeNoteEditor();
@@ -158,13 +179,14 @@ final class QuickPanelSurface implements AutoCloseable {
             footer = new LinearLayout(context); footer.setTag("quick_panel_phase_actions"); footer.setOrientation(LinearLayout.VERTICAL); root.addView(footer, new LinearLayout.LayoutParams(-1, -2));
             TextView target = text(goal, 14, UiAppearance.foreground(context)); target.setMaxLines(3); target.setEllipsize(android.text.TextUtils.TruncateAt.END); body.addView(target);
             body.addView(text("原任务执行位置 · " + location, 12, UiAppearance.secondary(context)));
+            renderAudioControls();
             if (phase == Phase.LOADING || phase == Phase.BLOCKED) {
                 body.addView(text(phase == Phase.LOADING ? "正在读取这个原任务的本机草稿…" : message, 13, UiAppearance.secondary(context)));
                 footer.addView(button("查看原任务", actions::openOriginalTask, false));
-            } else if (phase == Phase.CAPTURING || phase == Phase.SENDING) {
+            } else if (phase == Phase.CAPTURING || phase == Phase.SENDING || phase == Phase.OPENING_VOICE) {
                 ProgressBar progress = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal);
                 progress.setIndeterminate(true); body.addView(progress, new LinearLayout.LayoutParams(-1, dp(4)));
-                body.addView(text(phase == Phase.CAPTURING ? "正在读取你刚才明确选择的手机主屏…" : "正在登记这份固定内容，未自动继续任务…", 13, UiAppearance.secondary(context)));
+                body.addView(text(phase == Phase.CAPTURING ? "正在读取你刚才明确选择的手机主屏…" : phase == Phase.OPENING_VOICE ? "正在保留原说明并打开前台听写窗口。尚未录音或发送…" : "正在登记这份固定内容，未自动继续任务…", 13, UiAppearance.secondary(context)));
                 if (phase == Phase.CAPTURING) footer.addView(button("取消这次捕获", this::dismissPreview, false));
                 else footer.addView(button("查看原任务", actions::openOriginalTask, false));
             } else if (phase == Phase.UNKNOWN) {
@@ -184,7 +206,7 @@ final class QuickPanelSurface implements AutoCloseable {
                 renderDraftActions();
                 CheckBox screenshot = new CheckBox(context); screenshot.setText("这次同时捕获截图"); screenshot.setTextSize(13);
                 screenshot.setMinHeight(dp(48)); screenshot.setChecked(includeScreenshot); screenshot.setOnCheckedChangeListener((v, checked) -> includeScreenshot = checked); body.addView(screenshot);
-                Button capture = button("捕获并预览", () -> actions.capture(includeScreenshot), true); capture.setTag("quick_panel_capture"); capture.setEnabled(draftWritable); footer.addView(capture);
+                Button capture = button("捕获并预览", () -> actions.capture(includeScreenshot), true); capture.setTag("quick_panel_capture"); capture.setEnabled(draftWritable&&!audioBusy); footer.addView(capture);
                 footer.addView(button("查看原任务", actions::openOriginalTask, false));
             }
         }
@@ -212,6 +234,7 @@ final class QuickPanelSurface implements AutoCloseable {
         if (!note.isEmpty() && !noteReviewed()) body.addView(text("已保留未发送说明。请打开编辑器核对它是否适用于这份新来源，再点“保存说明”；不会把旧说明自动带入另一份捕获。", 12, UiAppearance.warning(context)));
         Button edit = button(note.isEmpty() ? "添加说明（可选）" : "编辑说明（" + note.length() + "字）", this::editNote, false);
         edit.setTag("quick_panel_edit_note"); footer.addView(edit);
+        renderVoiceAction();
         renderDraftStatus();
         if (!note.isEmpty()) footer.addView(button("清除未发送说明", actions::clearDraft, false));
         LinearLayout actionsRow = row();
@@ -221,7 +244,7 @@ final class QuickPanelSurface implements AutoCloseable {
             if (!note.isEmpty() && !noteReviewed()) { message = "请先核对这份捕获对应的说明；尚未发送。"; render(); return; }
             actions.send(note);
         }, true);
-        send.setEnabled(canSendNote() && (!content.text.isBlank() || image != null) && (content.imageBytes == null || image != null));
+        send.setEnabled(!audioBusy && canSendNote() && (!content.text.isBlank() || image != null) && (content.imageBytes == null || image != null));
         send.setTag("quick_panel_send"); actionsRow.addView(send, new LinearLayout.LayoutParams(0, -2, 1)); footer.addView(actionsRow);
     }
 
@@ -277,10 +300,31 @@ final class QuickPanelSurface implements AutoCloseable {
     private void renderDraftActions() {
         Button edit = button(note.isEmpty() ? "添加未发送说明" : "编辑未发送说明（" + note.length() + "字）", this::editNote, false);
         edit.setTag("quick_panel_edit_note"); footer.addView(edit); renderDraftStatus();
+        renderVoiceAction();
         if (!note.isEmpty()) footer.addView(button("清除未发送说明", actions::clearDraft, false));
     }
     private void renderDraftStatus() {
         TextView status = text(draftStatus, 12, UiAppearance.secondary(context)); status.setTag("quick_panel_draft_status"); body.addView(status);
+    }
+    private void renderVoiceAction() {
+        Button voice = button("语音补充说明", actions::voice, false);
+        voice.setTag("quick_panel_voice");voice.setEnabled(draftWritable&&!audioBusy);footer.addView(voice);
+        body.addView(text("听写在应用前台进行；最终文字核对后追加为本机草稿，仍由你发送。",12,UiAppearance.secondary(context)));
+    }
+    private void renderAudioControls() {
+        if(!audioSupported){body.addView(text("按 App 声音控制仅支持可核对的后台目标；当前执行位置不提供此操作。",12,UiAppearance.secondary(context)));return;}
+        body.addView(text("目标 App 声音",13,UiAppearance.foreground(context)));
+        if(audioTarget!=null)body.addView(text(audioTarget,12,UiAppearance.secondary(context)));
+        if(audioState!=null){String mode=audioState.optString("mode");String label=switch(mode){case "ignore" -> "静音（已读回）";case "allow" -> "允许播放（已读回）";case "deny" -> "系统拒绝播放（已读回）";case "foreground" -> "仅前台播放（已读回）";default -> "系统默认（已读回）";};body.addView(text(label,12,UiAppearance.foreground(context)));}
+        body.addView(text(audioMessage==null?"读取当前目标后，可只静音这个 App 或恢复它原来的声音。当前支持 user 0；不会调整手机总音量。":audioMessage,12,UiAppearance.secondary(context)));
+        boolean ready=!audioBusy&&phase!=Phase.CAPTURING&&phase!=Phase.SENDING&&phase!=Phase.OPENING_VOICE;
+        if(audioReviewId!=null&&audioState!=null){
+            final String review=audioReviewId;
+            if(audioState.optBoolean("canMute")){Button mute=button("仅静音这个 App",()->actions.setAudio(review,true),false);mute.setTag("quick_panel_audio_mute");mute.setEnabled(ready);body.addView(mute);}
+            if(audioState.optBoolean("canRestore")){Button restore=button("恢复原声音",()->actions.setAudio(review,false),false);restore.setTag("quick_panel_audio_restore");restore.setEnabled(ready);body.addView(restore);}
+            if(!audioState.optBoolean("canMute")&&!audioState.optBoolean("canRestore"))body.addView(text("当前没有本任务可恢复的声音记录，保持 App 现有状态。",12,UiAppearance.secondary(context)));
+        }
+        Button read=button(audioBusy?"核对声音中…":"读取目标 App 声音",actions::reviewAudio,false);read.setTag("quick_panel_audio_read");read.setEnabled(ready);body.addView(read);
     }
     private void closeNoteEditor() {
         AlertDialog current = noteDialog; EditText editor = noteInput; noteDialog = null; noteInput = null;
@@ -289,7 +333,7 @@ final class QuickPanelSurface implements AutoCloseable {
     }
 
     private void dismissPreview() {
-        if (phase == Phase.SENDING || phase == Phase.UNKNOWN) return;
+        if (phase == Phase.SENDING || phase == Phase.UNKNOWN || phase == Phase.OPENING_VOICE) return;
         actions.cancelPreview();
     }
 
@@ -314,7 +358,7 @@ final class QuickPanelSurface implements AutoCloseable {
     }
 
     private boolean noteReviewed() { return preview != null && noteReviewedFor == preview && reviewedNote.equals(note); }
-    private boolean canSendNote() { return draftWritable && note.length() <= 1500 && (note.isEmpty() || noteReviewed()); }
+    private boolean canSendNote() { return draftWritable && !audioBusy && note.length() <= 1500 && (note.isEmpty() || noteReviewed()); }
     private void clearPreview() { if (preview != null) preview.close(); preview = null; noteReviewedFor = null; reviewedNote = ""; }
     private LinearLayout row() { LinearLayout row = new LinearLayout(context); row.setGravity(Gravity.CENTER_VERTICAL); return row; }
     private TextView text(String value, int size, int color) { TextView view = new TextView(context); view.setText(value); view.setTextSize(size); view.setTextColor(color); view.setPadding(0, dp(4), 0, dp(4)); return view; }

@@ -24,10 +24,27 @@ public final class PhoneAudioRecovery {
             if(!first||current.equals("ignore"))return receipt(current.equals("ignore")?"silenced_verified":"audio_changed_by_owner",true);
             if(!current.equals(records.get(app).before))return receipt("audio_changed_by_owner",true);audio.write(app,"ignore");return receipt("ignore".equals(audio.read(app))?"silenced_verified":"silence_unconfirmed",true);}catch(Exception unknown){return receipt("silence_unconfirmed",true);}
     }
-    public synchronized JSONObject restoreOwner(String owner)throws Exception {
-        int restored=0,conflicts=0;for(AppCopyKey app:new java.util.ArrayList<>(records.keySet())){Saved saved=records.get(app);if(!saved.owner.equals(owner))continue;
+    /** The original owner can inspect only the current App; this never admits a new set. */
+    public synchronized JSONObject inspectOwner(String owner,AppCopyKey app)throws Exception {
+        Saved saved=records.get(app);if(saved!=null&&!saved.owner.equals(owner))throw new SecurityException("audio_owned_by_other_run");
+        String current=audio.read(app);mode(current);
+        return new JSONObject().put("mode",current).put("muted",current.equals("ignore"))
+                .put("restorationRecorded",saved!=null).put("originalMode",saved==null?JSONObject.NULL:saved.before)
+                .put("canMute",saved==null&&!current.equals("ignore")).put("canRestore",saved!=null).put("globalVolumeChanged",false);
+    }
+    public synchronized JSONObject restoreOwner(String owner)throws Exception {return restore(owner,null,false);}
+    /** A reviewed owner restore cannot alter another App from the same run. */
+    public synchronized JSONObject restoreApp(String owner,AppCopyKey app)throws Exception {
+        Saved saved=records.get(app);if(saved!=null&&!saved.owner.equals(owner))throw new SecurityException("audio_owned_by_other_run");
+        return restore(owner,app,true);
+    }
+    /** Restore the previous target before launching a different App, preserving this target's claim. */
+    public synchronized JSONObject restoreOwnerExcept(String owner,AppCopyKey keep)throws Exception {return restore(owner,keep,false);}
+    private JSONObject restore(String owner,AppCopyKey selected,boolean onlySelected)throws Exception {
+        int restored=0,conflicts=0;for(AppCopyKey app:new java.util.ArrayList<>(records.keySet())){Saved saved=records.get(app);if(!saved.owner.equals(owner)||selected!=null&&(onlySelected!=app.equals(selected)))continue;
             try{String current=audio.read(app);mode(current);if(current.equals(saved.before)){remove(app);restored++;continue;}if(!current.equals("ignore")){remove(app);conflicts++;continue;}audio.write(app,saved.before);if(saved.before.equals(audio.read(app))){remove(app);restored++;}}catch(Exception unavailable){/* Keep the original durable row for owner recovery. */}}
-        return new JSONObject().put("restored",restored).put("supersededByOwner",conflicts).put("pending",records.values().stream().filter(row->row.owner.equals(owner)).count()).put("globalVolumeChanged",false);
+        long pending=records.entrySet().stream().filter(row->row.getValue().owner.equals(owner)&&(selected==null||onlySelected==row.getKey().equals(selected))).count();
+        return new JSONObject().put("restored",restored).put("supersededByOwner",conflicts).put("pending",pending).put("globalVolumeChanged",false);
     }
     public synchronized JSONObject snapshot()throws Exception {return new JSONObject().put("pendingCount",records.size()).put("containsPackageList",false).put("globalVolumeChanged",false);}
     public synchronized JSONObject restoreAll()throws Exception {int restored=0,conflicts=0;Set<String> owners=new java.util.LinkedHashSet<>();for(Saved row:records.values())owners.add(row.owner);for(String owner:owners){JSONObject result=restoreOwner(owner);restored+=result.getInt("restored");conflicts+=result.getInt("supersededByOwner");}return new JSONObject().put("restored",restored).put("supersededByOwner",conflicts).put("pending",records.size()).put("globalVolumeChanged",false);}

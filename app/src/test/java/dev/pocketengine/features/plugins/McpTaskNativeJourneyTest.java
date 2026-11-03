@@ -180,11 +180,10 @@ public final class McpTaskNativeJourneyTest {
             installed = plugins.handle("installMcp", new JSONObject().put("previewId", preview.getString("previewId"))
                     .put("expectedInstallationId", preview.getString("expectedInstallationId")).put("tools", new JSONArray().put("lookup")));
             NativeOwnerWorkflows owner = new NativeOwnerWorkflows(features, context, tasks, new MemorySourceBridge(features, tasks));
-            owner.mcp("setToolGrantReviewed", new JSONObject().put("id", installed.getString("id"))
+            installed = owner.mcp("setToolGrantReviewed", new JSONObject().put("id", installed.getString("id"))
                     .put("expectedInstallationId", installed.getString("installationId")).put("expectedGrantsDigest", installed.getString("grantsDigest"))
                     .put("tool", "lookup").put("granted", true));
-            owner.mcp("setEnabledReviewed", new JSONObject().put("id", installed.getString("id"))
-                    .put("expectedInstallationId", installed.getString("installationId")).put("enabled", true));
+            installed = owner.mcp("setEnabledReviewed", PluginOwnerTestReview.payload(installed, true));
         }
 
         void reopen() throws Exception { features.close(); db.close(); open(); }

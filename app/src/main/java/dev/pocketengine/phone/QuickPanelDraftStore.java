@@ -47,6 +47,19 @@ final class QuickPanelDraftStore {
         }
     }
 
+    /** A foreground handoff may write only the exact draft that the original panel saved. */
+    void requireSnapshot(State expected) throws Exception {
+        synchronized (DISK) {
+            requireReady();
+            if (expected == null || !expected.pendingClient.isEmpty() || !expected.same(current) || !expected.same(read()))
+                throw new IllegalStateException("原浮层草稿或发送状态已变化，请返回原浮层核对；未覆盖内容");
+        }
+    }
+
+    State saveReviewed(State expected, String note) throws Exception {
+        synchronized (DISK) { requireSnapshot(expected); return save(note, ""); }
+    }
+
     State prepareSubmission(String note, String client) throws Exception {
         synchronized (DISK) {
             requireReady();

@@ -11,12 +11,13 @@ export interface TaskOutcome {
   image?: string;
   retained?: { text: string; image?: string };
   evidenceRunBound?: boolean;
+  screenshot?: { imageId: string; state: string; currentRun: boolean; encrypted: boolean; legacyRetained: boolean; createdAt?: number; expiresAt?: number; readState: string; deletionPending: boolean };
   /** A linked reply has task identity, but the message protocol has no run identity. */
   reply?: { id: string; text: string; at?: number; attachments: Row[] };
   partial: boolean;
 }
 
-export function getTaskOutcome(input: unknown, messages: unknown = []): TaskOutcome {
+export function getTaskOutcome(input: unknown, messages: unknown = [], now: number = Date.now()): TaskOutcome {
   const task = row(input), raw = row(task.raw), id = text(task.id), runId = text(raw.runId);
   const page = row(raw.historyEventPage);
   const validPage = !!id && (!text(page.taskId) || page.taskId === id) && (!text(page.section) || page.section === 'events');
@@ -47,7 +48,17 @@ export function getTaskOutcome(input: unknown, messages: unknown = []): TaskOutc
   const useEvidence = !!evidenceText && (currentEvidence || (!latest && !evidenceRun && readingResult));
   const output = useEvidence ? evidenceText : latest ? text(latest.event.message) : summary;
   const imageData = text(evidence.imageDataUrl);
-  const image = /^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=\r\n]+$/.test(imageData) ? imageData : undefined;
+  const imageRecord = row(evidence.screenshot), hasImageRecord = Object.keys(imageRecord).length > 0;
+  const imageOwned = imageRecord.format === 'pocketworld.task-screenshot.v1' && imageRecord.taskId === id && !!text(imageRecord.imageId) || imageRecord.imageId === 'legacy:' + id;
+  const expiry = finite(imageRecord.expiresAt), expired = expiry !== undefined && expiry > 0 && now >= expiry;
+  const screenshot = hasImageRecord && imageOwned ? {
+    imageId: text(imageRecord.imageId), state: expired && imageRecord.state !== 'deleted' ? 'expired' : text(imageRecord.state),
+    currentRun: !!runId && imageRecord.runId === runId && imageRecord.epoch === raw.coordinatorEpoch,
+    encrypted: imageRecord.encrypted === true, legacyRetained: imageRecord.legacyRetained === true,
+    createdAt: finite(imageRecord.createdAt), expiresAt: expiry, readState: text(imageRecord.readState), deletionPending: imageRecord.deletionPending === true,
+  } : undefined;
+  const mayShowImage = !hasImageRecord || screenshot?.state === 'stored' && screenshot.readState !== 'unreadable';
+  const image = mayShowImage && /^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=\r\n]+$/.test(imageData) ? imageData : undefined;
   const linked = rows(messages).filter(message => id && (text(message.taskId) || text(row(message.submission).taskId)) === id && message.role === 'assistant' &&
     (text(message.content).trim() || rows(message.attachments).some(file => typeof file.id === 'string' && file.id))).at(-1);
   const attachments = rows(linked?.attachments).filter(file => typeof file.id === 'string' && file.id);
@@ -56,7 +67,7 @@ export function getTaskOutcome(input: unknown, messages: unknown = []): TaskOutc
     id: text(linked.id), text: replyText, at: finite(linked.at), attachments,
   } : undefined;
   const retained = !useEvidence && (evidenceText || image) ? {text: evidenceText, ...(image ? {image} : {})} : undefined;
-  return { text: output, source: useEvidence ? 'evidence' : latest ? 'result-event' : summary ? 'task-summary' : 'none', reply,
+  return { text: output, source: useEvidence ? 'evidence' : latest ? 'result-event' : summary ? 'task-summary' : 'none', reply, ...(screenshot ? {screenshot} : {}),
     ...(useEvidence ? {evidenceRunBound: currentEvidence} : {}),
     ...(image && useEvidence ? {image} : {}), ...(retained ? {retained} : {}),
     partial: evidence.modelSummaryTruncated === true || evidence.outputTruncated === true || evidence.diffTruncated === true ||

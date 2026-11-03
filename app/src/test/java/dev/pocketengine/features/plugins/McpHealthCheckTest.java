@@ -94,7 +94,7 @@ public final class McpHealthCheckTest {
     }
     @Test public void originalInstallationStateChangeDuringPingInvalidatesTheResult()throws Exception{
         try(Installed f=new Installed()){
-            f.server.handler=e->{if(e.method().equals("ping")){f.plugins.handle("enable",new JSONObject().put("id","remote").put("enabled",true));e.json(new JSONObject());}else f.server.standard(e);};assertThrows(Exception.class,()->f.ping(new RunControl()));assertEquals(1,f.server.count("ping"));assertEquals(0,f.server.count("tools/call"));
+            f.server.handler=e->{if(e.method().equals("ping")){dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(f.plugins,"remote",true);e.json(new JSONObject());}else f.server.standard(e);};assertThrows(Exception.class,()->f.ping(new RunControl()));assertEquals(1,f.server.count("ping"));assertEquals(0,f.server.count("tools/call"));
         }
     }
     @Test public void jsonRpcErrorIsNotAHealthyResponseAndIsNotRetried()throws Exception{

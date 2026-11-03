@@ -146,6 +146,7 @@ public final class RealtimeSessionModule implements EngineModule {
         throw new SecurityException("通话操作只能从原生主人界面确认");
     }
     public JSONObject handleOwner(Activity owner,String command,JSONObject input)throws Exception{
+        if(java.util.Set.of("prepareCall","prepareProviderCall","prepareNaturalVoice","startVoiceTurn","acceptInvitation","startVoiceTask","commitVoiceTask","commitTurn","readVoiceTask").contains(command))context.requireExecutionEnabled();
         synchronized(this){if(owner==null||visibleOwner.get()!=owner)throw new SecurityException("通话界面已变化，请重新打开");requireVisible();}
         switch(command){
             case "snapshot":return snapshot();
@@ -179,6 +180,12 @@ public final class RealtimeSessionModule implements EngineModule {
             case "disconnect":synchronized(this){requireOwner(owner);requireSession(input);cancelProviderAccept();invitationState="ended";invitationMessage="通话已挂断，已有任务继续运行；已收到的文字保留供你复核";stopSession("owner_hangup");return snapshot();}
             default:throw new IllegalArgumentException("不支持的原生通话操作");
         }
+    }
+    /** Native global owner stop only. Keep the module reusable; never replay a voice turn on resume. */
+    public synchronized JSONObject stopForOwnerDisable()throws Exception{
+        if(!(context.android instanceof dev.pocketengine.EngineApplication app)||app.executionAllowed())throw new SecurityException("需要原本机已保存的总停用状态");
+        cancelProviderAccept();voice.cancelForLifecycle("owner_disabled");invitationState="cancelled";
+        invitationMessage="PocketWorld 已停用；原文字和任务记录保留，没有自动续听";stopSession("owner_disabled");emitState();return snapshot();
     }
     public synchronized RealtimeMediaSession.VideoBinding bindVideo(Activity owner,String expectedSessionId,String trackSid){
         if(owner!=visibleOwner.get()||!visible()||session==null||!sessionId.equals(expectedSessionId)||!session.snapshot().optString("state").equals("connected"))throw new IllegalStateException("通话或视频已变化");
@@ -300,6 +307,7 @@ public final class RealtimeSessionModule implements EngineModule {
         }
     }
     private JSONObject changeCapture(Activity owner,boolean enabled,boolean camera,JSONObject input)throws Exception{
+        if(enabled)context.requireExecutionEnabled();
         final RealtimeMediaSession current;final long epoch;
         synchronized(this){requireOwner(owner);requireSession(input);if(session==null||!session.snapshot().optString("state").equals("connected")||accepting||changingCapture)throw new IllegalStateException("通话尚未就绪或采集操作正在处理");if(enabled)requireCapturePermission(!camera,camera);current=session;epoch=lifecycleEpoch;changingCapture=true;}
         try{

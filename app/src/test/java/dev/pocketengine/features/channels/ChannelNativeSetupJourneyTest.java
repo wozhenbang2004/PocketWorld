@@ -34,11 +34,11 @@ public final class ChannelNativeSetupJourneyTest {
         final FeatureContext context=new FeatureContext(RuntimeEnvironment.getApplication(),new SettingsStore(RuntimeEnvironment.getApplication()),new SecretVault(RuntimeEnvironment.getApplication()),ignored->{});
         final HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         final AtomicInteger starts=new AtomicInteger(),polls=new AtomicInteger(),updates=new AtomicInteger();final AtomicReference<String> loginState=new AtomicReference<>("wait");
-        final CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);volatile boolean holdStart;final String base;ChannelsModule module;
+        final CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1),pollEntered=new CountDownLatch(1),pollRelease=new CountDownLatch(1);volatile boolean holdStart,holdPoll;final String base;ChannelsModule module;
         Fixture()throws Exception {
             server.createContext("/",exchange->{try{String path=exchange.getRequestURI().getPath();exchange.getRequestBody().readAllBytes();JSONObject response;
                 if(path.equals("/ilink/bot/get_bot_qrcode")){assertNull(exchange.getRequestHeaders().getFirst("Authorization"));starts.incrementAndGet();entered.countDown();if(holdStart)assertTrue(release.await(5,TimeUnit.SECONDS));response=new JSONObject().put("qrcode","fixture-native-code").put("qrcode_img_content","https://weixin.qq.com/fixture-only-local-qr");}
-                else if(path.equals("/ilink/bot/get_qrcode_status")){assertNull(exchange.getRequestHeaders().getFirst("Authorization"));polls.incrementAndGet();response=new JSONObject().put("status",loginState.get());if(loginState.get().equals("confirmed"))response.put("bot_token","fixture-only-native-bot-token").put("ilink_bot_id","fixture-bot@im.bot").put("baseurl",WeixinClient.DEFAULT_BASE);}
+                else if(path.equals("/ilink/bot/get_qrcode_status")){assertNull(exchange.getRequestHeaders().getFirst("Authorization"));polls.incrementAndGet();pollEntered.countDown();if(holdPoll)assertTrue(pollRelease.await(5,TimeUnit.SECONDS));response=new JSONObject().put("status",loginState.get());if(loginState.get().equals("confirmed"))response.put("bot_token","fixture-only-native-bot-token").put("ilink_bot_id","fixture-bot@im.bot").put("baseurl",WeixinClient.DEFAULT_BASE);}
                 else if(path.equals("/ilink/bot/getupdates")){assertEquals("Bearer fixture-only-native-bot-token",exchange.getRequestHeaders().getFirst("Authorization"));int n=updates.incrementAndGet();response=new JSONObject().put("ret",0).put("get_updates_buf","cursor-"+n).put("msgs",new JSONArray().put(new JSONObject().put("message_id",String.valueOf(n)).put("from_user_id","actual-native-peer@im.wechat").put("message_type",1).put("message_state",2).put("create_time_ms",System.currentTimeMillis()).put("context_token","fixture-context-"+n).put("item_list",new JSONArray().put(new JSONObject().put("type",1).put("text_item",new JSONObject().put("text","Native binding source "+n))))));}
                 else throw new AssertionError("unexpected setup fixture route "+path);
                 byte[] bytes=response.toString().getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
@@ -47,7 +47,7 @@ public final class ChannelNativeSetupJourneyTest {
         void open()throws Exception {module=new ChannelsModule(context,new ChannelHttp(base),new QqGatewayClient(true),new WeixinClient(base));}
         JSONObject call(String command,String id)throws Exception {return module.handle("weixin.login."+command,new JSONObject().put("loginId",id).put("name","Native original login"));}
         String complete(String id)throws Exception {call("start",id);loginState.set("confirmed");return call("poll",id).getJSONObject("profile").getString("id");}
-        @Override public void close(){release.countDown();module.close();server.stop(0);}
+        @Override public void close(){release.countDown();pollRelease.countDown();module.close();server.stop(0);}
     }
     @Test public void nativeOriginalLoginCanBeInspectedAndConfirmedWithoutStartingReceiversBindingOrRepeatingCreation()throws Exception {
         try(Fixture f=new Fixture()){
@@ -83,6 +83,58 @@ public final class ChannelNativeSetupJourneyTest {
             JSONObject saved=f.module.snapshot().getJSONArray("profiles").getJSONObject(0);saved.put("name","new transport revision");f.module.handle("profile.save",saved);
             assertThrows(SecurityException.class,()->f.module.handle("owner.bind",new JSONObject().put("profileId",profile).put("verifiedEventId",first.getString("id")).put("confirmed",true)));
             f.module.handle("weixin.poll",new JSONObject().put("id",profile));JSONObject second=f.module.snapshot().getJSONArray("inbox").getJSONObject(1);assertEquals("weixin_session",second.getString("authenticatedBy"));f.module.handle("owner.bind",new JSONObject().put("profileId",profile).put("verifiedEventId",second.getString("id")).put("confirmed",true));assertEquals("actual-native-peer@im.wechat",f.module.snapshot().getJSONArray("bindings").getJSONObject(0).getString("senderId"));assertFalse(f.module.snapshot().getJSONArray("bindings").getJSONObject(0).getBoolean("ownerTasksEnabled"));
+        }
+    }
+    @Test public void staleProfileSaveAndRemovalCannotTouchTheNewCredentialOrConfiguration()throws Exception {
+        try(Fixture f=new Fixture()){
+            String id=f.complete(UUID.randomUUID().toString());JSONObject old=f.module.snapshot().getJSONArray("profiles").getJSONObject(0);
+            JSONObject changed=f.module.handle("profile.save",new JSONObject(old.toString()).put("expectedTransportEpoch",old.getString("transportEpoch")).put("name","newer native configuration"));
+            String credential=f.context.secrets.get("channels."+id+".secret");
+            assertThrows(SecurityException.class,()->f.module.handle("profile.save",new JSONObject(old.toString()).put("expectedTransportEpoch",old.getString("transportEpoch")).put("secret","stale-fixture-secret")));
+            assertThrows(SecurityException.class,()->f.module.handle("profile.remove",new JSONObject().put("id",id).put("expectedTransportEpoch",old.getString("transportEpoch"))));
+            assertEquals(credential,f.context.secrets.get("channels."+id+".secret"));
+            JSONObject actual=f.module.snapshot().getJSONArray("profiles").getJSONObject(0);assertEquals(changed.getString("transportEpoch"),actual.getString("transportEpoch"));assertEquals("newer native configuration",actual.getString("name"));
+        }
+    }
+    @Test public void invalidRetargetingIsRejectedBeforeChangingTheOriginalVaultSlot()throws Exception {
+        try(Fixture f=new Fixture()){
+            String id=f.complete(UUID.randomUUID().toString());JSONObject original=f.module.snapshot().getJSONArray("profiles").getJSONObject(0);
+            String credential=f.context.secrets.get("channels."+id+".secret");
+            assertThrows(IllegalArgumentException.class,()->f.module.handle("profile.save",new JSONObject(original.toString()).put("expectedTransportEpoch",original.getString("transportEpoch")).put("appId","different-bot").put("secret","must-not-be-written")));
+            assertEquals(credential,f.context.secrets.get("channels."+id+".secret"));assertEquals(original.getString("transportEpoch"),f.module.snapshot().getJSONArray("profiles").getJSONObject(0).getString("transportEpoch"));
+        }
+    }
+    @Test public void anOldOwnerReviewCannotUnbindTheNewOwnerOrResetItsGrant()throws Exception {
+        try(Fixture f=new Fixture()){
+            String id=f.complete(UUID.randomUUID().toString());f.module.handle("weixin.poll",new JSONObject().put("id",id));JSONObject snapshot=f.module.snapshot(),profile=snapshot.getJSONArray("profiles").getJSONObject(0),event=snapshot.getJSONArray("inbox").getJSONObject(0);
+            JSONObject binding=f.module.handle("owner.bind",new JSONObject().put("profileId",id).put("verifiedEventId",event.getString("id")).put("confirmed",true));
+            JSONObject old=new JSONObject().put("profileId",id).put("expectedTransportEpoch",profile.getString("transportEpoch")).put("expectedBindingEpoch",binding.getString("bindingEpoch")).put("expectedTaskGrantEpoch",binding.getString("taskGrantEpoch"));
+            JSONObject next=f.module.handle("owner.bind",new JSONObject(old.toString()).put("verifiedEventId",event.getString("id")).put("confirmed",true));
+            assertThrows(SecurityException.class,()->f.module.handle("owner.unbind",old));
+            assertThrows(SecurityException.class,()->f.module.handle("owner.tasks.set",new JSONObject(old.toString()).put("confirmed",true).put("enabled",true)));
+            JSONObject actual=f.module.snapshot().getJSONArray("bindings").getJSONObject(0);assertEquals(next.getString("bindingEpoch"),actual.getString("bindingEpoch"));assertFalse(actual.getBoolean("ownerTasksEnabled"));
+        }
+    }
+    @Test public void officialConfirmationCapturedBeforeALocalEditCannotOverwriteTheNewConfiguration()throws Exception {
+        try(Fixture f=new Fixture()){
+            String id=f.complete(UUID.randomUUID().toString()),login=UUID.randomUUID().toString();f.call("start",login);
+            JSONObject original=f.module.snapshot().getJSONArray("profiles").getJSONObject(0);
+            JSONObject changed=f.module.handle("profile.save",new JSONObject(original.toString()).put("expectedTransportEpoch",original.getString("transportEpoch")).put("name","edited after requesting QR"));
+            assertThrows(SecurityException.class,()->f.call("poll",login));
+            assertEquals("failed",f.call("inspect",login).getString("status"));int polls=f.polls.get();assertEquals("failed",f.call("poll",login).getString("status"));assertEquals(polls,f.polls.get());
+            JSONObject actual=f.module.snapshot().getJSONArray("profiles").getJSONObject(0);assertEquals(id,actual.getString("id"));assertEquals(changed.getString("transportEpoch"),actual.getString("transportEpoch"));assertEquals("edited after requesting QR",actual.getString("name"));
+        }
+    }
+    @Test public void configurationCanChangeWhileOfficialPollIsBlockedAndLateReceiptCannotReplaceIt()throws Exception {
+        try(Fixture f=new Fixture()){
+            String login=UUID.randomUUID().toString();f.call("start",login);f.loginState.set("confirmed");f.holdPoll=true;
+            ExecutorService worker=Executors.newSingleThreadExecutor();try{
+                Future<JSONObject> pending=worker.submit(()->f.call("poll",login));assertTrue(f.pollEntered.await(5,TimeUnit.SECONDS));
+                JSONObject created=f.module.handle("profile.save",new JSONObject().put("name","new native owner configuration").put("provider","weixin").put("appId","fixture-bot@im.bot").put("secret","newer-native-fixture-credential").put("enabled",true));
+                f.pollRelease.countDown();assertThrows(ExecutionException.class,()->pending.get(5,TimeUnit.SECONDS));
+                assertEquals("failed",f.call("inspect",login).getString("status"));JSONObject actual=f.module.snapshot().getJSONArray("profiles").getJSONObject(0);
+                assertEquals(created.getString("id"),actual.getString("id"));assertEquals(created.getString("transportEpoch"),actual.getString("transportEpoch"));assertEquals("newer-native-fixture-credential",f.context.secrets.get("channels."+actual.getString("id")+".secret"));
+            }finally{f.pollRelease.countDown();worker.shutdownNow();assertTrue(worker.awaitTermination(5,TimeUnit.SECONDS));}
         }
     }
 }

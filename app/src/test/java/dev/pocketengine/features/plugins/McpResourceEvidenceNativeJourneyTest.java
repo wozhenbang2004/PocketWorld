@@ -210,7 +210,7 @@ public final class McpResourceEvidenceNativeJourneyTest {
                     .put("expectedTaskPin", target.getString("targetPin")).put("_operationId", id());
         }
         JSONObject save(JSONObject snapshot, JSONObject target) throws Exception { return owner.mcp("saveMcpResource", savePayload(snapshot, target)); }
-        void enabled(boolean enabled) throws Exception { owner.mcp("setEnabledReviewed", args().put("enabled", enabled)); refresh(); }
+        void enabled(boolean enabled) throws Exception { owner.mcp("setEnabledReviewed", PluginOwnerTestReview.payload(installation, enabled)); refresh(); }
         void nextRun() throws Exception {
             tasks.endAttempt(task, run, "needs_confirmation", "原任务等待主人继续", new JSONObject());
             JSONObject next = tasks.startAttempt(task, "capabilities", 8);

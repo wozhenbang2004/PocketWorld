@@ -1,5 +1,3 @@
-import { useSyncExternalStore } from 'react';
-
 export type PocketSnapshot = {
   revision?: number;
   state: Record<string, any>;
@@ -42,6 +40,10 @@ let current: PocketSnapshot = {
 let sequence = 0;
 const documentId = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('');
 class HostHandshakeTimeout extends Error {}
+class NativeCommandError extends Error {
+  code: string;
+  constructor(message: string, code: string) { super(message); this.code = code; }
+}
 let documentBound = false;
 let hostDocumentToken: string | null = null;
 const tokenListeners = new Set<() => void>();
@@ -66,6 +68,11 @@ let advertisedCommands: string[] = [];
 let backHandler: (() => boolean) | null = null;
 const listeners = new Set<() => void>();
 const pending = new Map<string, { action: string; resolve(value: any): void; reject(error: Error): void; timeout: ReturnType<typeof setTimeout> }>();
+// React page cleanup and the next entry can occur in one turn. Native changes its
+// window ticket during navigation, so only send the next command after that receipt.
+// Ordinary reads/writes remain concurrent once the navigation has settled.
+const navigationActions = new Set(['connections.enter', 'connections.leave', 'channels.open', 'channels.close', 'skills.open', 'skills.close', 'routeReference.open', 'routeReference.close', 'tasks.open', 'tasks.close', 'projects.select', 'conversation.new', 'conversation.select', 'archives.open', 'archives.close', 'storage.open', 'storage.close']);
+let navigationTail: Promise<void> | null = null;
 acceptHostDocumentToken(window.__pocketDocumentToken);
 
 function publish() { listeners.forEach(listener => listener()); }
@@ -105,9 +112,35 @@ function receive(input: NativeMessage | string) {
     }
     else {
       const value = message.error;
-      request.reject(new Error(typeof value === 'string' ? value : value && typeof value === 'object' && 'message' in value ? String(value.message) : '操作未能受理，请保留当前内容并核对原回执。'));
+      const detail = typeof value === 'string' ? value : value && typeof value === 'object' && 'message' in value ? String(value.message) : '操作未能受理，请保留当前内容并核对原回执。';
+      const code = value && typeof value === 'object' && 'code' in value ? String(value.code) : 'unknown';
+      request.reject(new NativeCommandError(detail, code));
     }
   }
+}
+
+function sendCommand<T>(action: string, args: Record<string, unknown>): Promise<T> {
+  const native = window.PocketNative;
+  if (!native || typeof native.postMessage !== 'function') return Promise.reject(new NativeCommandError('界面尚未连接应用，请保留当前输入。', 'not_sent'));
+  if (action !== 'app.ready' && action !== 'app.refresh' && !current.capabilities.commands.includes(action)) {
+    return Promise.reject(new NativeCommandError('当前窗口不可执行此操作，请刷新原对象后核对。', 'not_sent'));
+  }
+  const id = `${Date.now().toString(36)}-${++sequence}`;
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pending.delete(id);
+      reject(action === 'app.ready' ? new HostHandshakeTimeout('尚未收到页面握手回执，请保留当前内容。') : new NativeCommandError('尚未收到本次请求的受理回执；内容仍保留，请先核对原动作。', 'outcome_unknown'));
+    }, 30_000);
+    pending.set(id, { action, resolve, reject, timeout });
+    try {
+      const encoded = JSON.stringify({ v: 1, id, documentId, hostDocumentToken, action, args: action === 'app.ready' ? { ...args, documentId } : args });
+      if (encoded.length > 16 * 1024 * 1024) throw new Error('当前请求过长，请保留原文件后缩小本次内容。');
+      native.postMessage(encoded);
+    } catch (error) {
+      clearTimeout(timeout); pending.delete(id);
+      reject(error instanceof Error ? error : new NativeCommandError('请求未能登记，当前输入仍保留。', 'not_sent'));
+    }
+  });
 }
 
 export const bridge = {
@@ -137,28 +170,24 @@ export const bridge = {
     return () => { if (backHandler === handler) backHandler = null; };
   },
   command<T = any>(action: string, args: Record<string, unknown> = {}): Promise<T> {
-    const native = window.PocketNative;
-    if (!native || typeof native.postMessage !== 'function') return Promise.reject(new Error('界面尚未连接应用，请保留当前输入。'));
-    if (action !== 'app.ready' && action !== 'app.refresh' && !current.capabilities.commands.includes(action)) {
-      return Promise.reject(new Error('当前窗口不可执行此操作，请刷新原对象后核对。'));
+    const prior = action === 'app.ready' ? null : navigationTail;
+    const originalToken = hostDocumentToken;
+    let operation: Promise<T>;
+    if (prior) {
+      let frozen: string;
+      try { frozen = JSON.stringify(args); if (frozen.length > 16 * 1024 * 1024) throw new Error('请求过长'); }
+      catch { return Promise.reject(new NativeCommandError('请求未能登记，请保留原内容。', 'not_sent')); }
+      operation = prior.then(() => {
+        if (hostDocumentToken !== originalToken) throw new NativeCommandError('原页面已恢复或变化，排队中的操作没有发送，请重新核对。', 'not_sent');
+        return sendCommand<T>(action, JSON.parse(frozen));
+      });
+    } else operation = sendCommand<T>(action, args);
+    if (navigationActions.has(action)) {
+      const settled = operation.then(() => {}, () => {});
+      navigationTail = settled;
+      void settled.then(() => { if (navigationTail === settled) navigationTail = null; });
     }
-    const id = `${Date.now().toString(36)}-${++sequence}`;
-    return new Promise<T>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        pending.delete(id);
-        reject(action === 'app.ready' ? new HostHandshakeTimeout('尚未收到页面握手回执，请保留当前内容。') : new Error('尚未收到本次请求的受理回执；内容仍保留，请先核对原动作。'));
-      }, 30_000);
-      pending.set(id, { action, resolve, reject, timeout });
-      try {
-        const encoded = JSON.stringify({ v: 1, id, documentId, hostDocumentToken, action, args: action === 'app.ready' ? { ...args, documentId } : args });
-        if (encoded.length > 16 * 1024 * 1024) throw new Error('当前请求过长，请保留原文件后缩小本次内容。');
-        native.postMessage(encoded);
-      } catch (error) {
-        clearTimeout(timeout);
-        pending.delete(id);
-        reject(error instanceof Error ? error : new Error('请求未能登记，当前输入仍保留。'));
-      }
-    });
+    return operation;
   },
 };
 
@@ -175,7 +204,3 @@ window.PocketWeb = {
     publish();
   },
 };
-
-export function usePocketSnapshot() {
-  return useSyncExternalStore(bridge.subscribe, bridge.getState, bridge.getState);
-}

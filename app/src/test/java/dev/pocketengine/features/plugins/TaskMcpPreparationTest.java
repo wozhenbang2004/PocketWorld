@@ -58,7 +58,7 @@ public final class TaskMcpPreparationTest {
             JSONObject installed=install(plugins,wire);assertFalse(installed.getBoolean("enabled"));assertEquals(0,plugins.toolRegistry().length());assertEquals(0,wire.count("tools/call"));
             JSONObject granted=plugins.setToolGrantReviewed("remote",installed.getString("installationId"),installed.getString("grantsDigest"),"lookup",true);
             assertThrows(IllegalStateException.class,()->plugins.setToolGrantReviewed("remote",installed.getString("installationId"),installed.getString("grantsDigest"),"lookup",false));
-            plugins.setEnabledReviewed("remote",installed.getString("installationId"),true);assertEquals(1,plugins.toolRegistry().length());
+            dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(plugins,granted,true);assertEquals(1,plugins.toolRegistry().length());
             assertEquals("active",skills.diagnoseDiscovery(scope,"查询任务",HostToolSupervisor.configuredSkillCapabilities(host,tasks)).getJSONArray("skills").getJSONObject(0).getString("status"));
             JSONObject task=tasks.startAttempt(tasks.createCapabilityTask("查询并核对原任务的真实MCP结果","").getString("id"),"capabilities",20);String id=task.getString("id"),run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
             HostToolSupervisor first=new HostToolSupervisor(host,tasks,id,run,epoch,true);tasks.authorizeTools(id,run,toolNames(first));RunControl control=new RunControl();control.bindHostRun(id,run,epoch);

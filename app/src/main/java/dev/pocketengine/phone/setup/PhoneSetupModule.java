@@ -258,7 +258,7 @@ public final class PhoneSetupModule implements EngineModule {
     }
 
     void recoverAfterLifecycle(Runnable finished) {
-        if (closed || recoveryRunning.get() || !recoveryQueued.compareAndSet(false, true)) { finished.run(); return; }
+        if (closed || !context.executionAllowed() || recoveryRunning.get() || !recoveryQueued.compareAndSet(false, true)) { finished.run(); return; }
         final long consentRevision;
         try { consentRevision = recovery.snapshot().getLong("revision"); }
         catch (Exception unavailable) { recoveryQueued.set(false); finished.run(); return; }
@@ -272,12 +272,13 @@ public final class PhoneSetupModule implements EngineModule {
     }
 
     private JSONObject restoreConnection() throws Exception {
+        context.requireExecutionEnabled();
         if (!recoveryRunning.compareAndSet(false, true)) return snapshot();
         try {
             requireOpen();
             JSONObject before = recovery.snapshot();
             long revision = before.getLong("revision");
-            recovery.restore(() -> !closed);
+            recovery.restore(() -> !closed && context.executionAllowed());
             if (!recovery.consentCurrent(revision) || closed) lastConnectionOutcome = "consent_required";
             else if (!recovery.snapshot().optBoolean("userUnlocked")) lastConnectionOutcome = "owner_unlock_required";
             else synchronized (display) {

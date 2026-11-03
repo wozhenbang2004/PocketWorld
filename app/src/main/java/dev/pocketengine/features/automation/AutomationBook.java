@@ -34,7 +34,7 @@ public final class AutomationBook {
             for(String section:new String[]{"rules","proposals"}){JSONArray rows=state.optJSONArray(section);if(rows==null)continue;for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i),origin=row.optJSONObject(section.equals("rules")?"nativeOrigin":"origin");if(origin!=null&&!row.optBoolean("sourceInvalidated")&&seen.add(proposalOriginKey(origin)))result.put(copy(origin));}}return result;
         }
     }
-    private static String proposalOriginKey(JSONObject origin)throws Exception{return new JSONArray().put(origin.optString("ownerId")).put(origin.optString("spaceId")).put(origin.optString("taskId")).put(origin.optString("conversationId")).put(origin.optString("runId")).put(origin.optInt("epoch",-1)).toString();}
+    private static String proposalOriginKey(JSONObject origin)throws Exception{if(DeviceScheduleOrigin.isDevice(origin))return DeviceScheduleOrigin.authorityKey(origin);return new JSONArray().put(origin.optString("ownerId")).put(origin.optString("spaceId")).put(origin.optString("taskId")).put(origin.optString("conversationId")).put(origin.optString("runId")).put(origin.optInt("epoch",-1)).toString();}
     public JSONObject receiptNativeOrigin(String id)throws Exception {
         synchronized(lock){JSONObject state=read();JSONArray rows=state.getJSONArray("receipts");int at=indexOf(rows,id);if(at<0)throw new IllegalArgumentException("原提醒不存在");JSONObject receipt=rows.getJSONObject(at),origin=receipt.optJSONObject("nativeOrigin");
             // Older original receipts may omit the carrier. Only their exact original
@@ -139,19 +139,37 @@ public final class AutomationBook {
 
     /** A conversation proposal is inert until native owner review. Stored in the original book. */
     public JSONObject proposeSchedule(JSONObject nativeOrigin,String nativeOperation,JSONObject requested,long now)throws Exception {
-        if(requested==null)throw new IllegalArgumentException("请提供原计划草案");if(requested.has("semanticCondition"))throw new SecurityException("当前普通计划入口未接入语义条件；未创建或降级为无条件目标");
         if(nativeOrigin==null||nativeOrigin.length()!=6||!"owner".equals(nativeOrigin.optString("ownerId"))||!"private".equals(nativeOrigin.optString("spaceId"))||!nativeOrigin.optString("taskId").matches("[a-f0-9-]{36}")||nativeOrigin.optString("conversationId").isBlank()||nativeOrigin.optString("conversationId").length()>160||!nativeOrigin.optString("runId").matches("[a-f0-9-]{36}")||!(nativeOrigin.opt("epoch") instanceof Integer)||nativeOrigin.optInt("epoch")<1||nativeOperation==null||!nativeOperation.matches("[a-f0-9-]{36}"))throw new SecurityException("计划草案缺原本机对话身份");
+        return storeScheduleProposal(nativeOrigin,nativeOrigin.getString("taskId")+":"+nativeOperation,requested,now,false);
+    }
+    /** Metadata is supplied only by the authenticated native admission under the original
+     * Tasks/SQL source gate. This file owns only inert drafts and the existing rule review. */
+    public JSONObject proposeDeviceSchedule(JSONObject nativeOrigin,JSONObject requested,long now)throws Exception{
+        DeviceScheduleOrigin.checked(nativeOrigin);return storeScheduleProposal(nativeOrigin,DeviceScheduleOrigin.identity(nativeOrigin),requested,now,true);
+    }
+    public static final class DeviceDraftRefused extends SecurityException{public final String code;private DeviceDraftRefused(String code,String message){super(message);this.code=code;}}
+    public static JSONObject checkedScheduleProposal(JSONObject requested)throws Exception{
+        if(requested==null)throw new IllegalArgumentException("请提供原计划草案");if(requested.has("semanticCondition"))throw new SecurityException("当前普通计划入口未接入语义条件；未创建或降级为无条件目标");
         for(var keys=requested.keys();keys.hasNext();)if(!java.util.Set.of("title","kind","goal","schedule").contains(keys.next()))throw new SecurityException("计划提议不能携带批准、权限或替代来源");
         JSONObject draft=new JSONObject().put("title",text(requested.optString("title"),1,200,"提醒名称")).put("kind",requested.optString("kind","reminder"));
         if(!java.util.Set.of("reminder","phone_goal").contains(draft.getString("kind")))throw new IllegalArgumentException("计划类型无效");
         if(draft.getString("kind").equals("phone_goal"))draft.put("goal",text(requested.optString("goal"),1,4000,"手机目标"));
-        draft.put("schedule",validateSchedule(requested.getJSONObject("schedule")));
-        String digest=proposalDigest(nativeOrigin,draft),identity=nativeOrigin.getString("taskId")+":"+nativeOperation;
+        return draft.put("schedule",validateSchedule(requested.getJSONObject("schedule")));
+    }
+    private JSONObject storeScheduleProposal(JSONObject nativeOrigin,String identity,JSONObject requested,long now,boolean device)throws Exception{
+        JSONObject draft=checkedScheduleProposal(requested);String digest=proposalDigest(nativeOrigin,draft);
         synchronized(lock){JSONObject state=read();JSONArray proposals=state.optJSONArray("proposals");if(proposals==null){proposals=new JSONArray();state.put("proposals",proposals);}
-            for(int i=0;i<proposals.length();i++){JSONObject prior=proposals.getJSONObject(i);if(identity.equals(prior.optString("identity"))){if(!digest.equals(prior.getString("digest")))throw new SecurityException("同一个计划提议操作不能更换内容或原对话");return copy(prior);}}
+            int recent=0;long last=0;
+            for(int i=0;i<proposals.length();i++){JSONObject prior=proposals.getJSONObject(i);if(identity.equals(prior.optString("identity"))){if(!digest.equals(prior.getString("digest"))){if(device)throw new DeviceDraftRefused("original_operation_changed","同一原设备操作不能更换草稿或授权身份");throw new SecurityException("同一个计划提议操作不能更换内容或原对话");}return copy(prior);}JSONObject source=prior.optJSONObject("origin");if(device&&DeviceScheduleOrigin.isDevice(source)&&nativeOrigin.getString("callerDeviceId").equals(source.optString("callerDeviceId"))&&nativeOrigin.getString("targetDeviceId").equals(source.optString("targetDeviceId"))){long created=prior.optLong("createdAt");last=Math.max(last,created);if(created>now-3_600_000L)recent++;}}
+            if(device&&(recent>=8||last>0&&now-last<30_000L))throw new DeviceDraftRefused("rate_limited","同一配对设备最多每30秒提交一次、每小时八份草稿，请先审阅已有内容");
+            if(device&&proposals.length()>=100)throw new DeviceDraftRefused("draft_capacity_reached","原计划草稿已达有界上限");
             if(proposals.length()>=100)throw new IllegalStateException("待审及历史计划草案已达100项，请先在原管理入口核对");
             JSONObject row=new JSONObject().put("id",UUID.randomUUID().toString()).put("identity",identity).put("origin",copy(nativeOrigin)).put("draft",draft).put("digest",digest).put("status","pending").put("createdAt",now).put("ruleCreationEntered",false).put("ruleCreationState","not_entered").put("executionAuthorized",false);proposals.put(row);write(state);return copy(row);
         }
+    }
+    public JSONObject deviceScheduleProposal(JSONObject original)throws Exception{
+        DeviceScheduleOrigin.checked(original);String identity=DeviceScheduleOrigin.identity(original);
+        synchronized(lock){JSONArray rows=read().optJSONArray("proposals");for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!identity.equals(row.optString("identity")))continue;JSONObject source=DeviceScheduleOrigin.checked(row.getJSONObject("origin"));if(!source.getString("argumentsDigest").equals(original.getString("argumentsDigest"))||!DeviceScheduleOrigin.authorityKey(source).equals(DeviceScheduleOrigin.authorityKey(original)))throw new SecurityException("原设备草稿来源或内容指纹不匹配");return copy(row);}return null;}
     }
     public JSONArray scheduleProposals(String originalTask)throws Exception {
         synchronized(lock){JSONArray rows=read().optJSONArray("proposals"),result=new JSONArray();for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(originalTask==null||originalTask.equals(row.getJSONObject("origin").optString("taskId")))result.put(copy(row));}return result;}
@@ -160,6 +178,7 @@ public final class AutomationBook {
     public JSONObject approveScheduleProposal(String proposal,String digest,long now)throws Exception {
         synchronized(lock){JSONObject state=read();JSONArray rows=state.optJSONArray("proposals");int at=rows==null?-1:indexOf(rows,proposal);if(at<0)throw new IllegalArgumentException("计划草案不存在");JSONObject row=rows.getJSONObject(at);
             reviewedProposalForDisplay(row);
+            if(row.optBoolean("sourceCheckPending"))throw new SecurityException("原草稿来源尚未核对，不能批准新安排");
             if(!digest.equals(row.getString("digest"))||!digest.equals(proposalDigest(row.getJSONObject("origin"),row.getJSONObject("draft"))))throw new SecurityException("显示的计划草案已变化");
             JSONObject exactSchedule=row.getJSONObject("draft").getJSONObject("schedule");if(AutomationSchedule.nextAt(exactSchedule,Math.max(0,now-1))<0)throw new IllegalStateException("草案时间已过或日历已耗尽，请在原对话明确重新提出安排");
             if(!row.getString("status").matches("pending|approved"))throw new SecurityException("此草案不能批准");
@@ -185,7 +204,9 @@ public final class AutomationBook {
         if(submitted==null||submitted.optBoolean("sourceInvalidated"))throw new SecurityException("原草案来源已撤回，不显示或恢复旧正文");
         JSONObject row=copy(submitted),origin=row.getJSONObject("origin"),draft=row.getJSONObject("draft");
         if(draft.has("semanticCondition"))throw new SecurityException("当前普通计划入口不能审阅或执行语义条件草案");
-        if(!row.optString("id").matches("[a-f0-9-]{36}")||!row.optString("status").matches("pending|approved")||origin.length()!=6||!"owner".equals(origin.optString("ownerId"))||!"private".equals(origin.optString("spaceId"))||!origin.optString("taskId").matches("[a-f0-9-]{36}")||!origin.optString("runId").matches("[a-f0-9-]{36}")||!(origin.opt("epoch") instanceof Integer)||origin.optInt("epoch")<1||origin.optString("conversationId").isBlank()||origin.optString("conversationId").length()>160)throw new SecurityException("草案缺准确原对话执行身份，请在原对话明确重提");
+        if(!row.optString("id").matches("[a-f0-9-]{36}")||!row.optString("status").matches("pending|approved"))throw new SecurityException("草案原身份或状态无效");
+        if(DeviceScheduleOrigin.isDevice(origin))DeviceScheduleOrigin.checked(origin);
+        else if(origin.length()!=6||!"owner".equals(origin.optString("ownerId"))||!"private".equals(origin.optString("spaceId"))||!origin.optString("taskId").matches("[a-f0-9-]{36}")||!origin.optString("runId").matches("[a-f0-9-]{36}")||!(origin.opt("epoch") instanceof Integer)||origin.optInt("epoch")<1||origin.optString("conversationId").isBlank()||origin.optString("conversationId").length()>160)throw new SecurityException("草案缺准确原对话执行身份，请在原对话明确重提");
         for(var keys=draft.keys();keys.hasNext();)if(!java.util.Set.of("title","kind","goal","schedule").contains(keys.next()))throw new SecurityException("草案包含未审阅字段");
         text(draft.optString("title"),1,200,"提醒名称");if(!java.util.Set.of("reminder","phone_goal").contains(draft.optString("kind")))throw new SecurityException("草案类型无效");if("phone_goal".equals(draft.optString("kind")))text(draft.optString("goal"),1,4000,"原目标");
         JSONObject normalized=validateSchedule(draft.getJSONObject("schedule"));if(!canonicalObject(normalized).equals(canonicalObject(draft.getJSONObject("schedule"))))throw new SecurityException("草案日历定义不是原规范化版本");
@@ -193,7 +214,8 @@ public final class AutomationBook {
     }
     private static String proposalDigest(JSONObject origin,JSONObject draft)throws Exception {
         // Fixed field order is reconstructed from validated semantic data, independent of JSON map order.
-        String value=new JSONArray().put(origin.getString("ownerId")).put(origin.getString("spaceId")).put(origin.getString("taskId")).put(origin.getString("conversationId")).put(origin.getString("runId")).put(origin.getInt("epoch")).put(draft.getString("title")).put(draft.getString("kind")).put(draft.optString("goal")).put(canonicalObject(draft.getJSONObject("schedule"))).put(JSONObject.NULL).toString();
+        JSONArray fields=DeviceScheduleOrigin.isDevice(origin)?new JSONArray().put(canonicalObject(DeviceScheduleOrigin.checked(origin))):new JSONArray().put(origin.getString("ownerId")).put(origin.getString("spaceId")).put(origin.getString("taskId")).put(origin.getString("conversationId")).put(origin.getString("runId")).put(origin.getInt("epoch"));
+        String value=fields.put(draft.getString("title")).put(draft.getString("kind")).put(draft.optString("goal")).put(canonicalObject(draft.getJSONObject("schedule"))).put(JSONObject.NULL).toString();
         byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));StringBuilder text=new StringBuilder();for(byte b:hash)text.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return text.toString();
     }
     private static String canonicalObject(JSONObject value)throws Exception{java.util.List<String> keys=new java.util.ArrayList<>();value.keys().forEachRemaining(keys::add);keys.sort(String::compareTo);JSONArray result=new JSONArray();for(String key:keys)result.put(new JSONArray().put(key).put(value.get(key)));return result.toString();}
@@ -302,7 +324,7 @@ public final class AutomationBook {
                     .put("revision",rule.getInt("revision")).put("overlapPolicy",policy.getString("overlap")).put("validUntil",deadline)
                     .put("goal",receipt.getString("goal")).put("title",receipt.getString("title")).put("actorId","owner").put("spaceId","private")
                     .put("origin",new JSONObject().put("kind","automation").put("occurrenceId",receipt.getString("id"))).put("requiresHostAdmission",true).put("executionAuthorized",false);
-            JSONObject nativeOrigin=receipt.optJSONObject("nativeOrigin");if(nativeOrigin!=null)request.getJSONObject("origin").put("originConversationId",nativeOrigin.getString("conversationId")).put("originTaskId",nativeOrigin.getString("taskId")).put("nativeOrigin",copy(nativeOrigin));return request;
+            JSONObject nativeOrigin=receipt.optJSONObject("nativeOrigin");if(nativeOrigin!=null){request.getJSONObject("origin").put("nativeOrigin",copy(nativeOrigin));if(!DeviceScheduleOrigin.isDevice(nativeOrigin))request.getJSONObject("origin").put("originConversationId",nativeOrigin.getString("conversationId")).put("originTaskId",nativeOrigin.getString("taskId"));}return request;
         }
     }
     public long nextAt()throws Exception {

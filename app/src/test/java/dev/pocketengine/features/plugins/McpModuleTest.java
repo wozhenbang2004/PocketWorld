@@ -33,7 +33,7 @@ public class McpModuleTest {
                 .put("expectedInstallationId",preview.getString("expectedInstallationId")));
     }
     private void authorize(PluginsModule m)throws Exception {
-        m.handle("enable",new JSONObject().put("id","remote").put("enabled",true));
+        dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(m,"remote",true);
         m.handle("grant",new JSONObject().put("id","remote").put("grants",new JSONArray().put("tool:lookup")));
     }
     private JSONObject invocation(JSONObject plugin)throws Exception {

@@ -8,6 +8,7 @@ import dev.pocketengine.features.memory.AutomaticMemoryPolicy;
 import dev.pocketengine.features.memory.LearningAssertionDraft;
 import dev.pocketengine.features.memory.LearningExtractionContract;
 import dev.pocketengine.features.memory.SourceRef;
+import dev.pocketengine.features.memory.TaskEpisodeEvidence;
 import dev.pocketengine.features.skills.ExperienceOrigin;
 import dev.pocketengine.features.skills.SkillsModule;
 import java.util.Objects;
@@ -37,10 +38,12 @@ public final class KnowledgeLearningWorkflow {
     public static final class SourceDocument {
         public final SourceRef ref;
         public final String title,text;
-        public final JSONObject appContext;
+        public final JSONObject appContext,episodeContext;
         public SourceDocument(SourceRef ref,String title,String text) {this(ref,title,text,null);}
-        public SourceDocument(SourceRef ref,String title,String text,JSONObject appContext) {
-            try{this.appContext=appContext==null?null:new JSONObject(appContext.toString());}catch(Exception invalid){throw new IllegalArgumentException("App来源上下文无效",invalid);}
+        public SourceDocument(SourceRef ref,String title,String text,JSONObject appContext) {this(ref,title,text,appContext,null);}
+        public SourceDocument(SourceRef ref,String title,String text,JSONObject appContext,JSONObject episodeContext) {
+            if(appContext!=null&&episodeContext!=null)throw new SecurityException("原任务经过不能替代App方法修订");
+            try{this.appContext=appContext==null?null:new JSONObject(appContext.toString());this.episodeContext=episodeContext==null?null:new JSONObject(episodeContext.toString());}catch(Exception invalid){throw new IllegalArgumentException("原生来源上下文无效",invalid);}
             this.ref=Objects.requireNonNull(ref);this.title=checkedText(title,1,160,"来源标题");
             this.text=checkedText(text,1,MAX_SOURCE_CHARS,"来源正文");
         }
@@ -91,7 +94,8 @@ public final class KnowledgeLearningWorkflow {
                 +"程序经验必须包含具体适用条件和限制；没有足够依据时返回null。不要包含来源、身份、scope、id、审批或core字段，不要Markdown围栏。";
         instruction+=LearningAssertionDraft.instruction();
         if(exactUserQuote)instruction+="自动原话模式必须额外返回quote：逐字引用来源text中的1至4000字符，不得提炼秘密；宿主只保存该quote作为待审text，不接受网页或工具补充。";
-        user.check();admission.check();JSONObject answer=complete(instruction,evidence,control,12000);admission.check();user.check();if(exactUserQuote)exactQuotedDraft(answer,source);JSONObject draft=LearningAssertionDraft.checked(answer,source.ref,source.text);
+        if(source.episodeContext!=null){if(exactUserQuote)throw new SecurityException("自动用户原话不能替换成任务经过");instruction=LearningExtractionContract.instruction(LearningExtractionContract.EPISODE);}
+        user.check();admission.check();JSONObject answer=complete(instruction,evidence,control,12000);admission.check();user.check();if(exactUserQuote)exactQuotedDraft(answer,source);JSONObject draft=source.episodeContext!=null?TaskEpisodeEvidence.learningDraft(answer,source.episodeContext):LearningAssertionDraft.checked(answer,source.ref,source.text);
         return admission.admit(()->{
             control.check();user.check();revalidate(source);control.check();
             if(draft==null){requireRemembered(scope,expected);return new JSONObject().put("proposed",false).put("reason","来源不足以提炼可靠候选").put("formalMemorySaved",false).put("reviewRequired",false).put("outcome","no_candidate");}
@@ -108,7 +112,7 @@ public final class KnowledgeLearningWorkflow {
     /** Body-free, exact input identity for the original TaskStore learning manifest. A hash is
      * content provenance, never a SourceRef revision or permission to send the source. */
     public static String sourceFingerprint(SourceDocument document)throws Exception{
-        JSONObject identity=new JSONObject().put("title",document.title).put("text",document.text);if(document.appContext!=null)identity.put("appContext",document.appContext);return dev.pocketengine.features.memory.TaskMemoryTrace.rawFingerprint(identity);
+        JSONObject identity=new JSONObject().put("title",document.title).put("text",document.text);if(document.appContext!=null)identity.put("appContext",document.appContext);if(document.episodeContext!=null)identity.put("episodeContext",document.episodeContext);return dev.pocketengine.features.memory.TaskMemoryTrace.rawFingerprint(identity);
     }
     public void requireCurrentLearningInput(JSONObject authenticatedScope,SourceRef expected,String fingerprint,RunControl control)throws Exception{
         sourceLearningContract(authenticatedScope,expected,fingerprint,control);
@@ -119,8 +123,8 @@ public final class KnowledgeLearningWorkflow {
         return admission.admit(()->{control.check();if(automaticUser!=null)automaticUser.check(expected,control);requireRemembered(scope,expected);SourceDocument source=read(expected);if(!fingerprint.equals(sourceFingerprint(source)))throw new IllegalStateException("原来源版本/正文已变化，请回原任务核对；未重发");return extractionContract(source);});
     }
     private JSONObject extractionContract(SourceDocument source)throws Exception{
-        if(automaticUser!=null&&source.appContext!=null)throw new SecurityException("自动原话不得替换为App方法修订");
-        String mode=source.appContext!=null?LearningExtractionContract.APP:automaticUser!=null?LearningExtractionContract.OWNER_QUOTE:LearningExtractionContract.SOURCE;
+        if(automaticUser!=null&&(source.appContext!=null||source.episodeContext!=null))throw new SecurityException("自动原话不得替换为App方法修订或任务经过");
+        String mode=source.appContext!=null?LearningExtractionContract.APP:source.episodeContext!=null?LearningExtractionContract.EPISODE:automaticUser!=null?LearningExtractionContract.OWNER_QUOTE:LearningExtractionContract.SOURCE;
         return LearningExtractionContract.capture(mode,automaticUser==null?null:automaticUser.selected);
     }
     /** One actual no-tool model result, separated from candidate publication so the original
@@ -134,7 +138,7 @@ public final class KnowledgeLearningWorkflow {
         if(source.appContext!=null){JSONObject app=source.appContext;if(app.has("outcomeSourceRef"))requireRemembered(scope,SourceRef.fromJson(app.getJSONObject("outcomeSourceRef")));String base=app.getString("baseId");JSONObject old=base.isEmpty()?null:memory.reviewedProcedure(scope,base,app.getLong("baseRevision"));evidence.put("appContext",app).put("currentKnowledge",old==null?JSONObject.NULL:old.getString("text"));
         }
         if(automaticUser!=null)automaticUser.check(expected,control);
-        admission.check();JSONObject answer=complete(instruction,evidence,control,LearningExtractionContract.OUTPUT_CHARS);if(automaticUser!=null){automaticUser.check(expected,control);exactQuotedDraft(answer,source);}JSONObject draft=source.appContext==null?LearningAssertionDraft.checked(answer,source.ref,source.text):answer==null?null:MemoryBook.checkedLearningDraft(answer);admission.check();
+        admission.check();JSONObject answer=complete(instruction,evidence,control,LearningExtractionContract.OUTPUT_CHARS);if(automaticUser!=null){automaticUser.check(expected,control);exactQuotedDraft(answer,source);}JSONObject draft=source.episodeContext!=null?TaskEpisodeEvidence.learningDraft(answer,source.episodeContext):source.appContext==null?LearningAssertionDraft.checked(answer,source.ref,source.text):answer==null?null:MemoryBook.checkedLearningDraft(answer);admission.check();
         return admission.admit(()->{control.check();if(automaticUser!=null)automaticUser.check(expected,control);requireRemembered(scope,expected);revalidate(source);return new JSONObject().put("format",LearningExtractionContract.DRAFT_FORMAT).put("sourceRef",expected.toJson()).put("sourceFingerprint",expectedFingerprint).put("draft",draft==null?JSONObject.NULL:draft).put("extractionContract",contract);});
     }
     /** Consume only the native host's original recorded operation draft, never UI/model JSON.
@@ -150,6 +154,7 @@ public final class KnowledgeLearningWorkflow {
             // v1 keeps its existing source/schema recovery contract; missing historical strategy
             // provenance is not filled with this installation's version. v2 must match exactly.
             if(!legacy)LearningExtractionContract.requireSame(recorded.getJSONObject("extractionContract"),extractionContract(current));
+            if(current.episodeContext!=null&&(legacy||draft!=null&&(!"episodic".equals(draft.optString("layer"))||draft.has("assertion"))))throw new SecurityException("原任务经过只能采用原契约生成的待审episodic候选");
             if(draft==null)return new JSONObject().put("proposed",false).put("formalMemorySaved",false).put("reviewRequired",false).put("outcome","no_candidate");
             JSONObject result=current.appContext==null?memory.proposeLearning(scope,draft,expected):memory.proposeAppRevisionFromSource(scope,expected,current.appContext,draft);boolean pending="pending".equals(result.getJSONObject("candidate").getString("status"));return result.put("proposed",pending).put("formalMemorySaved",false).put("reviewRequired",pending).put("outcome",pending?"awaiting_review":"existing_candidate_barrier");
         });
@@ -221,7 +226,7 @@ public final class KnowledgeLearningWorkflow {
     }
     private void revalidate(SourceDocument old)throws Exception {
         SourceDocument current=read(old.ref);
-        if(!old.text.equals(current.text)||!old.title.equals(current.title))throw new IllegalStateException("来源正文已变化，请刷新后重试");
+        if(!sourceFingerprint(old).equals(sourceFingerprint(current)))throw new IllegalStateException("来源正文或原生上下文已变化，请刷新后重试");
     }
     private static boolean sameProcedure(JSONObject a,JSONObject b)throws Exception {
         return a.getString("text").equals(b.getString("text"))&&a.optString("applicability").equals(b.optString("applicability"))

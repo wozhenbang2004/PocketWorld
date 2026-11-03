@@ -56,6 +56,8 @@ public final class PairingCoordinator {
         private final PairingCoordinator owner;private final DeviceIdentity.AuthenticatedPeer peer;private final DeviceTaskEnvelope envelope;private final JSONObject grant;
         private Permission(PairingCoordinator owner,DeviceIdentity.AuthenticatedPeer peer,DeviceTaskEnvelope envelope,JSONObject grant){this.owner=owner;this.peer=peer;this.envelope=envelope;this.grant=copy(grant);}
         public void checkCurrent(long now)throws Exception{owner.evaluate(peer,envelope,now);}
+        /** Narrow native consumers may bind an exact reviewed grant, not merely a still-allowed method. */
+        public void checkOriginalGrantCurrent(long now)throws Exception{JSONObject current=owner.evaluate(peer,envelope,now);if(!DeviceProtocol.canonical(grant).equals(DeviceProtocol.canonical(current)))throw new SecurityException("Original receiving-device grant changed");}
         /** Same live native TLS peer only; persisted JSON cannot resurrect this handle after death. */
         public Permission reauthorize(DeviceTaskEnvelope request,long now)throws Exception{return owner.checkPermission(peer,request,now);}
         public DeviceTaskEnvelope envelope(){return envelope;}

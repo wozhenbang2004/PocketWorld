@@ -157,8 +157,17 @@ internal object McpInstallPreviewRules {
         check(snapshot.optJSONObject("nativeCapabilities")?.opt("setEnabledReviewed") == true) { "当前宿主暂不支持安全启停，请返回后更新宿主。" }
         check(id.isNotBlank() && expected.isNotBlank() && expected == installationId(snapshot, id)) { "安装记录已变化，请重新核对当前版本。" }
         val current = objects(snapshot.optJSONArray("plugins")).find { it.optString("id") == id }
-        check(!enabled || current?.optString("mcpStatus") != "needs_discovery") { "旧会话已失效，请重新发现并安装。" }
-        return JSONObject().put("id", id).put("expectedInstallationId", expected).put("enabled", enabled)
+            ?: error("安装记录已变化，请重新核对当前版本。")
+        val revisionValue = plugin.opt("stateRevision")
+        check(revisionValue is Int || revisionValue is Long) { "启停状态版本不可核对，请重新审阅。" }
+        val revision = (revisionValue as Number).toLong()
+        val grants = plugin.optString("grantsDigest")
+        check(revision >= 0 && (current.opt("stateRevision") is Int || current.opt("stateRevision") is Long) &&
+            current.optLong("stateRevision", -1) == revision &&
+            grants.matches(Regex("[a-f0-9]{64}")) && grants == current.optString("grantsDigest")) { "启停状态或工具权限已变化，请重新审阅。" }
+        check(!enabled || current.optString("mcpStatus") != "needs_discovery") { "旧会话已失效，请重新发现并安装。" }
+        return JSONObject().put("id", id).put("expectedInstallationId", expected).put("expectedStateRevision", revision)
+            .put("expectedGrantsDigest", grants).put("enabled", enabled)
     }
 
     @JvmStatic fun enabled(attempt: McpInstallEnableAttempt?, envelope: JSONObject?): JSONObject? {

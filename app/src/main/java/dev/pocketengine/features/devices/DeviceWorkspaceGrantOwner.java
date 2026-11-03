@@ -47,7 +47,7 @@ final class DeviceWorkspaceGrantOwner {
         Catalog catalog = catalog(peerId); JSONArray options = owner.localGrantOptions();
         for (int i = 0; i < options.length(); i++) {
             JSONObject option = options.getJSONObject(i); boolean goal = PairingCoordinator.contains(option.getJSONArray("capabilities"), "task.submitGoal");
-            option.put("allowDelegation", goal && !catalog.forwards.isEmpty()).put("maxDelegationDepth", 2);
+            option.put("allowDelegation", goal && !catalog.forwards.isEmpty()).put("maxDelegationDepth", "schedule_drafts".equals(option.optString("optionId"))?0:2);
         }
         JSONArray origins = new JSONArray(), forwards = new JSONArray();
         for (Map.Entry<String, JSONObject> entry : catalog.origins.entrySet()) { JSONObject peer = entry.getValue(); origins.put(new JSONObject().put("optionId", entry.getKey()).put("deviceId", peer.getString("deviceId")).put("label", label(peer.getString("deviceId"))).put("certificateFingerprint", peer.getString("fingerprint"))); }
@@ -84,6 +84,7 @@ final class DeviceWorkspaceGrantOwner {
         // Local resource/options resolve independently; extras below cannot create local capability.
         NativeDeviceWorkspaceHost.GrantChoice local = new NativeDeviceWorkspaceHost.GrantChoice(choice.optionId, choice.toolBudget, choice.modelBudget, choice.expiresAt, false, 0, choice.historyReadExpiresAt, choice.historyReadMethods, java.util.Collections.emptyList(), java.util.Collections.emptyList(), 0, 0, choice.wholeDisplayCapture);
         JSONObject grant = owner.reviewLocalGrantFor(peerId, local); Catalog catalog = catalog(peerId); Map<String, JSONObject> origins = new LinkedHashMap<>(); JSONArray allowed = grant.getJSONArray("allowedOrigins");
+        if(PairingCoordinator.contains(grant.getJSONArray("toolNames"),DeviceScheduleDrafts.PROPOSE)&&(!choice.additionalOriginOptionIds.isEmpty()||!choice.forwardingOptionIds.isEmpty()))throw new SecurityException("计划草稿只授予本次直接配对设备，不接受转交或下游范围");
         for (String id : choice.additionalOriginOptionIds) { JSONObject peer = catalog.origins.get(id); if (peer == null) throw new SecurityException("转交来源不再是本机已认证的选项"); origins.put(id, peer); allowed.put(peer.getString("deviceId")); }
         List<PairingCoordinator.OutgoingGrant> nativeGrants = new ArrayList<>();
         if (!choice.forwardingOptionIds.isEmpty()) {

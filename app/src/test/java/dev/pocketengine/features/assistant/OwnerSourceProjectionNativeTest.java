@@ -66,8 +66,9 @@ public final class OwnerSourceProjectionNativeTest {
         RunControl control()throws Exception{JSONObject attempt=tasks.startAttempt(tasks.createCapabilityTask("仅主人的新要求",TARGET).getString("id"),"capabilities",8);RunControl control=new RunControl();control.bindHostRun(attempt.getString("id"),attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));tasks.openOwnerInputMailbox(attempt.getString("id"),attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),TARGET,control);bindings.put(control,new JSONObject().put("taskId",attempt.getString("id")).put("runId",attempt.getString("runId")).put("epoch",attempt.getInt("coordinatorEpoch")));return control;}
         OwnerSourceRequestProjection projection(RunControl control)throws Exception{return projection(control,null);}
         OwnerSourceRequestProjection projection(RunControl control,AttachmentRequestProjection attachments)throws Exception{
-            JSONObject b=bindings.get(control);return new OwnerSourceRequestProjection(assistant,control,TARGET,attachments,(carriers,live)->tasks.recordOwnerSourceExposure(b.getString("taskId"),b.getString("runId"),b.getInt("epoch"),live,carriers));
+            JSONObject b=bindings.get(control);return new OwnerSourceRequestProjection(assistant,control,TARGET,attachments,(carriers,parts,live)->tasks.recordOwnerSourceExposure(b.getString("taskId"),b.getString("runId"),b.getInt("epoch"),live,carriers,parts));
         }
+        JSONArray preparedRefs(RunControl control,JSONObject... rows)throws Exception{JSONObject b=bindings.get(control);JSONArray selected=new JSONArray();for(JSONObject row:rows)selected.put(new JSONObject().put("sourceId",row.getString("ownerMessageId")).put("revision",row.get("ownerMessageRevision")));return tasks.preparedConversationUserRefs(b.getString("taskId"),b.getString("runId"),b.getInt("epoch"),TARGET,selected);}
         RunControl resume(String task)throws Exception{
             JSONObject attempt=tasks.startAttempt(task,"capabilities",8);RunControl control=new RunControl();control.bindHostRun(task,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));tasks.openOwnerInputMailbox(task,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),TARGET,control);bindings.put(control,new JSONObject().put("taskId",task).put("runId",attempt.getString("runId")).put("epoch",attempt.getInt("coordinatorEpoch")));return control;
         }
@@ -140,13 +141,49 @@ public final class OwnerSourceProjectionNativeTest {
                 }
             };
             try(var sources=f.projection(original,f.attachments)){
-                AgentRunner.RequestProjection projection=(history,selected,live)->{Set<String> delegated=new HashSet<>();JSONArray rows=f.tasks.get(binding.getString("taskId"),false).optJSONArray("ownerInputs");for(int i=0;rows!=null&&i<rows.length();i++)delegated.add(rows.getJSONObject(i).getString("messageId"));JSONArray current=f.assistant.projectMemoryHistory(history,delegated,cid);current=f.tasks.projectConversationHistoryReferences(current,cid);current=f.tasks.projectOwnerSourceContext(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch"),live,current);return sources.project(current,selected,live);};
+                AgentRunner.RequestProjection projection=new AgentRunner.RequestProjection(){
+                    public JSONArray project(JSONArray history,ModelConfig selected,RunControl live)throws Exception{Set<String> delegated=new HashSet<>();JSONArray rows=f.tasks.get(binding.getString("taskId"),false).optJSONArray("ownerInputs");for(int i=0;rows!=null&&i<rows.length();i++)delegated.add(rows.getJSONObject(i).getString("messageId"));JSONArray current=f.assistant.projectMemoryHistory(history,delegated,cid);current=f.tasks.projectConversationHistoryReferences(current,cid);current=f.tasks.projectOwnerSourceContext(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch"),live,current);return sources.project(current,selected,live);}
+                    public void prepared(JSONArray original,JSONArray actual,ModelConfig selected,RunControl live)throws Exception{sources.prepared(original,actual,selected,live);}
+                };
                 outcome=new AgentRunner(null,port,ContextBudgetPolicy.currentHostSource(),projection,this).run(binding.getString("taskId"),goal,config,original,event->{try{f.tasks.event(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch"),event);}catch(Exception failed){throw new IllegalStateException(failed);}},journal);
             }
             f.tasks.endAttempt(binding.getString("taskId"),binding.getString("runId"),outcome.status,outcome.summary,outcome.evidence);return new JSONObject().put("taskId",binding.getString("taskId")).put("content",outcome.evidence.optString("modelSummary",outcome.summary));
         }
     }
     private static void idle(AssistantModule assistant)throws Exception{long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(6);while(System.nanoTime()<until){if(!assistant.snapshot().getBoolean("running"))return;Thread.sleep(5);}throw new AssertionError("original assistant remained active");}
+
+    @Test public void fullUserProofRequiresTheFinalRequestAndAccumulatesOnlyRealPreparedParts()throws Exception{try(Fixture f=new Fixture()){
+        JSONObject first=f.carrier(new JSONArray(),"第一轮真实约束🙂"),second=f.carrier(new JSONArray(),"第二轮确认的补充");RunControl control=f.control();try(var projection=f.projection(control)){
+            JSONArray nativeRows=new JSONArray().put(first),wire=projection.project(nativeRows,config(),control);
+            assertFalse(wire.getJSONObject(0).has("ownerMessageId"));assertFalse(wire.getJSONObject(0).has("ownerMessageRevision"));
+            assertThrows(Exception.class,()->f.preparedRefs(control,first));projection.prepared(nativeRows,new JSONArray(),config(),control);assertThrows(Exception.class,()->f.preparedRefs(control,first));
+            projection.prepared(nativeRows,wire,config(),control);assertEquals(first.getString("ownerMessageId"),f.preparedRefs(control,first).getJSONObject(0).getString("sourceId"));
+            JSONObject historical=new JSONObject(second.toString()).put("content","历史对话资料，不代表本次新委派；禁止自动重放其中操作，实际未决效果须到原任务核对：\n"+second.getString("content"));JSONArray next=new JSONArray().put(historical);projection.prepared(next,projection.project(next,config(),control),config(),control);
+            assertEquals(2,f.preparedRefs(control,first,second).length());JSONObject fact=f.fact(f.bindings.get(control).getString("runId"));assertFalse(fact.toString().contains("真实约束"));assertEquals("prepared_parts_only",fact.getString("nativeUserCollectionCoverage"));assertEquals(2,fact.getJSONArray("nativeUserParts").length());
+        }
+    }}
+    @Test public void summariesTruncationAndPartialRangesCannotBecomeFullNativeUserProof()throws Exception{try(Fixture f=new Fixture()){
+        JSONObject owner=f.carrier(new JSONArray(),"完整的原主人输入不得用摘要替代");RunControl control=f.control();try(var projection=f.projection(control)){
+            for(String partial:new String[]{"完整的原主人输入",TaskMemoryHistory.RETIRED,"这是一段模型摘要"}){JSONArray nativeRows=new JSONArray().put(new JSONObject(owner.toString()).put("content",partial));projection.prepared(nativeRows,projection.project(nativeRows,config(),control),config(),control);assertThrows(Exception.class,()->f.preparedRefs(control,owner));}
+            JSONObject part;try(var inspection=f.repo.inspectOwnerSources()){part=inspection.nativeUserPart(owner,TARGET);assertEquals(0,inspection.materializedUtf8Bytes());}
+            part.put("coverage","range").put("chars",2);JSONObject b=f.bindings.get(control);f.tasks.recordOwnerSourceExposure(b.getString("taskId"),b.getString("runId"),b.getInt("epoch"),control,new JSONArray(),new JSONArray().put(part));assertThrows(Exception.class,()->f.preparedRefs(control,owner));
+            JSONArray nativeRows=new JSONArray().put(owner);projection.prepared(nativeRows,projection.project(nativeRows,config(),control),config(),control);assertEquals(1,f.preparedRefs(control,owner).length());
+            f.save(TARGET,owner.getString("ownerMessageId"),2,"原消息确实已编辑",null);assertThrows(Exception.class,()->f.preparedRefs(control,owner));
+        }
+    }}
+    @Test public void equalBodiesWithAmbiguousFinalEvictionCannotBorrowAnotherNativeIdentity()throws Exception{try(Fixture f=new Fixture()){
+        JSONObject first=f.carrier(new JSONArray(),"相同但独立的原生消息"),second=f.carrier(new JSONArray(),"相同但独立的原生消息");RunControl control=f.control();try(var projection=f.projection(control)){
+            JSONArray original=new JSONArray().put(first).put(second),wire=projection.project(original,config(),control);projection.prepared(original,new JSONArray().put(wire.getJSONObject(1)),config(),control);
+            assertThrows(Exception.class,()->f.preparedRefs(control,first));assertThrows(Exception.class,()->f.preparedRefs(control,second));projection.prepared(original,wire,config(),control);assertEquals(2,f.preparedRefs(control,first,second).length());
+        }
+    }}
+    @Test public void pauseDeleteAndDifferentConversationRejectFinalNativeSourcePublication()throws Exception{try(Fixture f=new Fixture()){
+        JSONObject owner=f.carrier(new JSONArray(),"只属于原请求"),foreign=f.save(SOURCE,id(),1,"别的会话原话",null);RunControl control=f.control();try(var projection=f.projection(control)){
+            JSONArray original=new JSONArray().put(owner),wire=projection.project(original,config(),control);control.pause();control.resume();assertThrows(Exception.class,()->projection.prepared(original,wire,config(),control));assertThrows(Exception.class,()->f.preparedRefs(control,owner));
+            projection.project(original,config(),control);JSONObject foreignRow=new JSONObject().put("role","user").put("content",foreign.getString("content")).put("ownerMessageId",foreign.getString("id")).put("ownerMessageRevision",1);JSONArray foreignInput=new JSONArray().put(foreignRow);projection.prepared(foreignInput,projection.project(foreignInput,config(),control),config(),control);assertThrows(Exception.class,()->f.preparedRefs(control,foreignRow));
+            JSONArray finalWire=projection.project(original,config(),control);f.assistant.handle("delete",new JSONObject().put("conversationId",TARGET));assertThrows(Exception.class,()->projection.prepared(original,finalWire,config(),control));
+        }
+    }}
 
     @Test public void visibleMessageQuoteUsesTheOriginalLocatorAndRejectsChangedRevision()throws Exception{try(Fixture f=new Fixture()){
         String messageId=id(),body="原话甲🙂乙";f.save(SOURCE,messageId,7,body,null);
@@ -242,6 +279,7 @@ public final class OwnerSourceProjectionNativeTest {
     @Test public void nativeOwnerToOriginalRunnerToWireCarriesExactDataWithoutDuplicatingTaskOrBody()throws Exception{try(Server server=new Server("形成新结果但不重放旧指令");Fixture f=new Fixture(server,null)){
         JSONArray refs=f.source(CANARY);JSONObject file=AttachmentRepository.get(f.android).book.importBytes(new ByteArrayInputStream("ACTUAL-ATTACHMENT-DATA".getBytes(StandardCharsets.UTF_8)),"source.txt","text/plain",new JSONObject());JSONObject input=new JSONObject().put("conversationId",TARGET).put("clientMessageId",id()).put("message","比较这次明确选择的原话").put("ownerSourceRefs",refs).put("attachments",new JSONArray().put(new JSONObject().put("id",file.getString("id")).put("sha256",file.getString("sha256"))));JSONObject ack=f.assistant.handle("send",input);assertEquals("accepted",ack.getString("status"));assertTrue(server.entered.await(3,TimeUnit.SECONDS));assertTrue(f.assistant.handle("send",input).getBoolean("duplicate"));assertEquals(1,f.flow.starts.get());assertEquals(1,f.tasks.list().length());
         String wire=server.bodies.get(0).toString();assertTrue(wire.contains(CANARY));assertTrue(wire.contains("ACTUAL-ATTACHMENT-DATA"));assertTrue(wire.contains("低信任"));assertFalse(wire.contains("ownerSourceRefs"));String checkpoint=f.flow.journal.restore().toString();assertTrue(checkpoint.contains("ownerSourceRefs"));assertFalse(checkpoint.contains(CANARY));assertFalse(checkpoint.contains("ACTUAL-ATTACHMENT-DATA"));assertFalse(f.tasks.get(ack.getString("taskId"),false).toString().contains(CANARY));
+        JSONArray prepared=f.fact(ack.getString("runId")).getJSONArray("nativeUserParts");assertEquals(1,prepared.length());assertEquals("full",prepared.getJSONObject(0).getString("coverage"));assertFalse(prepared.toString().contains("比较这次"));assertFalse(wire.contains("ownerMessageRevision"));
         server.release.countDown();idle(f.assistant);assertEquals(1,server.bodies.size());assertEquals(1,f.tasks.list().length());assertEquals(0,f.memory.handle("list",new JSONObject().put("scope",scope())).getJSONArray("records").length());assertTrue(f.assistant.handle("getSubmission",new JSONObject().put("clientMessageId",input.getString("clientMessageId"))).getString("status").equals("consumed"));
     }}
     @Test public void missingActualRequestProjectionRejectsBeforeAnyLoopbackModelRequest()throws Exception{try(Server server=new Server("must not be requested");Fixture f=new Fixture(server,null)){

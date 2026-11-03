@@ -36,8 +36,8 @@ public final class PluginStateApprovalReviewTest {
             tasks.authorizeTools(taskId,first.getString("runId"),new JSONArray().put(name));JSONObject args=new JSONObject().put("message","once");
             JSONObject pending=before.execute(name,args,new RunControl());assertEquals("approval_required",pending.getString("code"));
             tasks.endAttempt(taskId,first.getString("runId"),"awaiting_user","等待授权",new JSONObject());
-            plugins.setEnabledReviewed("approval-test",original.getString("installationId"),false);
-            plugins.setEnabledReviewed("approval-test",original.getString("installationId"),true);
+            JSONObject disabled=dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(plugins,original,false);
+            dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(plugins,disabled,true);
             JSONObject current=plugins.snapshot().getJSONArray("plugins").getJSONObject(0);
             assertEquals(original.getString("installationId"),current.getString("installationId"));assertEquals(original.getLong("stateRevision")+2,current.getLong("stateRevision"));
             tasks.decideCapabilityApproval(taskId,pending.getString("approvalId"),true);
@@ -54,7 +54,7 @@ public final class PluginStateApprovalReviewTest {
         JSONObject tool=new JSONObject().put("name","write").put("kind","http").put("endpoint",endpoint).put("effect","write").put("schema",schema);
         plugins.handle("install",new JSONObject().put("manifest",new JSONObject().put("id","approval-test").put("name","审批测试").put("version","1").put("tools",new JSONArray().put(tool))));
         plugins.handle("grant",new JSONObject().put("id","approval-test").put("grants",new JSONArray().put("tool:write")));
-        plugins.handle("enable",new JSONObject().put("id","approval-test").put("enabled",true));
+        dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(plugins,"approval-test",true);
     }
     private static final class Endpoint implements AutoCloseable{
         final ServerSocket server;final AtomicInteger requests=new AtomicInteger();final Thread worker;

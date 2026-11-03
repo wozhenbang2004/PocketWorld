@@ -47,6 +47,10 @@ public final class TeamsModule implements EngineModule {
     private synchronized JSONObject definition(String id)throws Exception{JSONArray all=definitions();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))return new JSONObject(all.getJSONObject(i).toString());throw new SecurityException("原已配置团队不存在");}
     public boolean parentOrchestrationConfigured(){return parentHost!=null;}
     public boolean continuousResearchConfigured(){return researchHost!=null;}
+    public synchronized TeamCoordinator.OriginalResearchStart startOriginalResearch(JSONObject input)throws Exception {
+        return coordinator.startOriginalResearch(definition(input.getString("teamId")),JsonFiles.text(input,"goal",8000),input.optInt("rounds",1),context.model(),input.getString("_operationId"),evidenceFactory,externalFactory);
+    }
+    public TeamCoordinator.OriginalCancellation originalCancellation(String run)throws Exception{return coordinator.originalCancellation(run);}
     public void checkParentResearchInputs(dev.pocketengine.store.TaskStore.TeamParentOrigin original,JSONArray refs)throws Exception{coordinator.checkParentResearchInputs(original,refs);}
 
     /** Actual parent Runner facade, deliberately absent from EngineModule.handle/generic native commands. */
@@ -107,7 +111,7 @@ public final class TeamsModule implements EngineModule {
             case "sendMessage":return coordinator.sendMessage(input,writeHost);
             case "answerAssignment":return input.has("expectedRevision")?coordinator.answerAssignment(input,requireWriteHost(),context.model(),evidenceFactory,externalFactory):requireWriteHost().answer(input);
             case "continueOutcome":{coordinator.reviewedControl("feedback",input,context.model(),evidenceFactory,externalFactory);TaskStoreTeamWriteHost.OutcomeContinuation next=requireWriteHost().continueOutcome(input);return coordinator.adoptOutcomeContinuation(input.getString("runId"),next.scope).put("revisedAssignment",next.receipt);}
-            case "reviseAssignment":{JSONObject paused=coordinator.reviewedControl("feedback",input,context.model(),evidenceFactory,externalFactory);JSONObject revision=requireWriteHost().revise(input);return paused.put("revisedAssignment",revision);}
+            case "reviseAssignment":return coordinator.reviseAssignment(input,()->requireWriteHost().revise(input));
             case "reviewOutputs":return requireWriteHost().reviewSnapshot(input.getString("runId"),new dev.pocketengine.core.RunControl());
             case "approveOutputs":return requireWriteHost().approve(input.getString("runId"),input.getString("expectedPlanHash"),new dev.pocketengine.core.RunControl());
             case "feedback":return coordinator.feedback(input.getString("runId"),input.optString("memberId"),input.getString("text"));

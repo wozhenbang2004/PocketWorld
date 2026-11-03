@@ -588,7 +588,7 @@ public final class ConversationRepository {
         private final CancellationSignal signal=new CancellationSignal();
         private final long deadlineNanos=System.nanoTime()+500_000_000L;
         private final java.util.concurrent.ScheduledFuture<?> deadline=DEADLINES.schedule(signal::cancel,500,java.util.concurrent.TimeUnit.MILLISECONDS);
-        private final Map<String,JSONObject> checkedSources=new LinkedHashMap<>(),checkedCarriers=new LinkedHashMap<>();
+        private final Map<String,JSONObject> checkedSources=new LinkedHashMap<>(),checkedCarriers=new LinkedHashMap<>(),checkedNativeUsers=new LinkedHashMap<>();
         private long materializedBytes;private int statements;private boolean closed;
         private void current(){if(closed||!healthy||signal.isCanceled()||System.nanoTime()>deadlineNanos||Thread.currentThread().isInterrupted())throw new IllegalStateException("原文引用批次超时、停止或权威不确定");}
         private void statement(){current();if(++statements>500)throw new IllegalStateException("原文引用metadata批次超过语句预算");}
@@ -615,6 +615,46 @@ public final class ConversationRepository {
             String sql="SELECT 1 FROM meta a JOIN assistant_sources s ON s.generation=a.value JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id AND m.conversation_id=s.conversation_id JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE a.key='assistant_history_generation' AND s.source_id=? AND s.revision=? AND m.revision=s.revision AND s.conversation_id=? AND s.role='user' AND s.deleted=0 AND s.retired_through<s.revision AND s.context_retired=0 AND m.body IS NOT NULL AND c.deleted=0 LIMIT 1";
             boolean found;try(Cursor actual=db.rawQuery(sql,new String[]{row.getString("ownerMessageId"),revision.toString(),conversation},signal)){found=actual.moveToFirst();}current();return found;
         }
+        /** Body-free proof for one actual native request row. A retained ID on a summary,
+         * truncated row or retirement notice never proves that the original body was supplied. */
+        public JSONObject nativeUserPart(JSONObject row,String conversation)throws Exception {
+            if(!nativeOwnerInput(row,conversation))return null;
+            String id=row.getString("ownerMessageId");long revision=row.getLong("ownerMessageRevision");statement();JSONObject part;
+            String sql="SELECT a.value,m.body_sha,m.body_bytes FROM meta a JOIN assistant_sources s ON s.generation=a.value JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id AND m.conversation_id=s.conversation_id JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE a.key='assistant_history_generation' AND s.source_id=? AND s.revision=? AND m.revision=s.revision AND s.conversation_id=? AND s.role='user' AND s.deleted=0 AND s.retired_through<s.revision AND s.context_retired=0 AND m.body IS NOT NULL AND c.deleted=0 LIMIT 1";
+            try(Cursor actual=db.rawQuery(sql,new String[]{id,Long.toString(revision),conversation},signal)){
+                if(!actual.moveToFirst())throw new SourceUnavailable("原主人消息在准备请求时已变化");
+                String fingerprint=actual.getString(1);long bytes=actual.getLong(2);String supplied=row.opt("content") instanceof String?row.getString("content"):"";
+                // AssistantModule's existing historical-data prefix is host text, not part
+                // of the source body. Strip only this exact prefix and still verify its hash.
+                String historical="历史对话资料，不代表本次新委派；禁止自动重放其中操作，实际未决效果须到原任务核对：\n";
+                String body=supplied;boolean full=matchesNativeBody(body,fingerprint,bytes);
+                if(!full&&supplied.startsWith(historical)){body=supplied.substring(historical.length());full=matchesNativeBody(body,fingerprint,bytes);}
+                part=new JSONObject().put("sourceRef",new SourceRef("message",id,revision,"owner","private").toJson())
+                        .put("sourceConversationId",conversation).put("generation",actual.getString(0)).put("bodyFingerprint",fingerprint).put("utf8Bytes",bytes)
+                        .put("coverage",full?"full":"unknown").put("offset",0).put("chars",full?body.length():0).put("unit","UTF-16");
+            }
+            requireNativeUserPart(part,conversation);return part;
+        }
+        private boolean matchesNativeBody(String value,String fingerprint,long bytes)throws Exception {
+            if(value.isEmpty()||!StandardCharsets.UTF_8.newEncoder().canEncode(value))return false;
+            byte[] actual=value.getBytes(StandardCharsets.UTF_8);return actual.length==bytes&&("sha256:"+shaBytes(actual)).equals(fingerprint);
+        }
+        /** Revalidate native PREPARE metadata only. This does not read a body, extend a
+         * range, authorize an import, or assert that a provider consumed the request. */
+        public void requireNativeUserPart(JSONObject part,String conversation)throws Exception {
+            current();java.util.Set<String> fields=java.util.Set.of("sourceRef","sourceConversationId","generation","bodyFingerprint","utf8Bytes","coverage","offset","chars","unit");
+            if(part.length()!=fields.size())throw new SecurityException("原主人准备事实只接受有界原生元数据");for(var keys=part.keys();keys.hasNext();)if(!fields.contains(keys.next()))throw new SecurityException("原主人准备事实不能携带正文或权限");
+            JSONObject identity=part.getJSONObject("sourceRef");if(identity.length()!=5)throw new SecurityException("原主人准备事实身份无效");Object revision=identity.opt("revision");if(!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<1)throw new SecurityException("原主人准备事实修订无效");
+            SourceRef ref=SourceRef.fromJson(identity);String coverage=part.getString("coverage"),generation=part.getString("generation"),fingerprint=part.getString("bodyFingerprint");
+            if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||!conversation.equals(part.getString("sourceConversationId"))||generation.isEmpty()||generation.length()>80||!fingerprint.matches("sha256:[a-f0-9]{64}")||!"UTF-16".equals(part.opt("unit"))||!java.util.Set.of("full","range","unknown").contains(coverage))throw new SecurityException("原主人准备事实不属于原私人消息");
+            long bytes=integer(part,"utf8Bytes",0),offset=integer(part,"offset",0),chars=integer(part,"chars",0);
+            if(bytes>MAX_BYTES||offset>Integer.MAX_VALUE||chars>Integer.MAX_VALUE||(long)offset+chars>Integer.MAX_VALUE
+                    ||"full".equals(coverage)&&(offset!=0||chars<1||bytes<1)||"range".equals(coverage)&&(chars<1||chars>OwnerSourceReferences.MAX_RANGE_CHARS)
+                    ||"unknown".equals(coverage)&&(offset!=0||chars!=0))throw new SecurityException("原主人准备事实范围不完整");
+            statement();String sql="SELECT 1 FROM meta a JOIN assistant_sources s ON s.generation=a.value JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id AND m.conversation_id=s.conversation_id JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE a.key='assistant_history_generation' AND a.value=? AND s.source_id=? AND s.revision=? AND m.revision=s.revision AND s.conversation_id=? AND s.role='user' AND s.deleted=0 AND s.retired_through<s.revision AND s.context_retired=0 AND m.body IS NOT NULL AND m.body_sha=? AND m.body_bytes=? AND c.deleted=0 LIMIT 1";
+            try(Cursor actual=db.rawQuery(sql,new String[]{generation,ref.sourceId,Long.toString(ref.revision),conversation,fingerprint,Long.toString(bytes)},signal)){if(!actual.moveToFirst())throw new SourceUnavailable("原主人准备来源已删除、停用、换代或换版");}
+            current();String key=TaskMemoryTrace.rawFingerprint(part);if(!checkedNativeUsers.containsKey(key)&&checkedNativeUsers.size()>=100)throw limited("native_user_part_budget");checkedNativeUsers.put(key,new JSONObject(part.toString()));
+        }
         /** A model/checkpoint cannot invent a selected source on an arbitrary user row. */
         public void requireCarrier(JSONObject row,String conversation)throws Exception {
             current();if(!nativeOwnerInput(row,conversation))throw new SecurityException("原文引用缺少属于当前原会话的原生主人消息");
@@ -638,6 +678,7 @@ public final class ConversationRepository {
             try{
                 current();for(JSONObject ref:new ArrayList<>(checkedSources.values()))requireSource(ref);
                 for(JSONObject row:new ArrayList<>(checkedCarriers.values()))requireCarrier(row,row.getString("_nativeConversationId"));
+                for(JSONObject row:new ArrayList<>(checkedNativeUsers.values()))requireNativeUserPart(row,row.getString("sourceConversationId"));
             }finally{closed=true;deadline.cancel(false);}
         }
     }

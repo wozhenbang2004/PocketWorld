@@ -81,8 +81,8 @@ public final class SshModule implements EngineModule {
         if(closed)throw new IllegalStateException("SSH模块已关闭");if(input==null)input=new JSONObject();
         switch(command){
             case "saveProfile":return saveProfile(input);
-            case "removeProfile":return removeProfile(text(input,"profileId",80));
-            case "probeHostKey":return probe(text(input,"profileId",80));
+            case "removeProfile":return removeProfile(input);
+            case "probeHostKey":return probe(input);
             case "approveHostKey":return approve(input);
             case "forgetHostKey":return forget(input);
             case "exec":case "listFiles":case "readFile":case "writeFile":case "inspectFile":case "downloadFile":case "uploadFile":case "openPty":case "doctor":return execute(command,input,new RunControl(),"",0);
@@ -178,7 +178,7 @@ public final class SshModule implements EngineModule {
     private synchronized JSONObject saveProfile(JSONObject input)throws Exception {
         JSONObject value=new JSONObject();for(String field:new String[]{"id","name","host","port","username","workspace","authType"})if(input.has(field))value.put(field,input.get(field));
         if(value.optString("id").isEmpty())value.put("id",UUID.randomUUID().toString());
-        SshProfile next=new SshProfile(value);SshProfile old=profiles.get(next.id);if(old!=null)notBusy(old);
+        SshProfile next=new SshProfile(value);SshProfile old=profiles.get(next.id);checkEditorBinding(input,old);if(old!=null)notBusy(old);
         if(old==null&&profiles.size()>=20)throw new IllegalStateException("最多保存20个SSH连接");
         boolean same=old!=null&&old.binding().equals(next.binding());if(same)value.put("pinnedKey",old.pinnedKey);
         value.put("configRevision",UUID.randomUUID().toString()).put("credentialRevision",UUID.randomUUID().toString());next=new SshProfile(value);
@@ -193,25 +193,32 @@ public final class SshModule implements EngineModule {
         boolean cleanupPending=old!=null&&!old.credentialSlot().equals(next.credentialSlot())&&!removeCredential(old.credentialSlot());
         final String id=next.id;probes.entrySet().removeIf(entry->entry.getValue().profileId.equals(id));JSONObject result=publicProfile(next);if(cleanupPending)result.put("credentialCleanupPending",true);return result;
     }
-    private synchronized JSONObject removeProfile(String id)throws Exception {
-        SshProfile old=profile(id);notBusy(old);Map<String,SshProfile> proposed=new java.util.LinkedHashMap<>(profiles);proposed.remove(id);commitProfiles(proposed);boolean cleanupPending=!removeCredential(old.credentialSlot());probes.entrySet().removeIf(entry->entry.getValue().profileId.equals(id));return new JSONObject().put("removed",true).put("credentialCleanupPending",cleanupPending);
+    private synchronized JSONObject removeProfile(JSONObject input)throws Exception {
+        String id=text(input,"profileId",80);SshProfile old=profile(id);checkEditorBinding(input,old);notBusy(old);Map<String,SshProfile> proposed=new java.util.LinkedHashMap<>(profiles);proposed.remove(id);commitProfiles(proposed);boolean cleanupPending=!removeCredential(old.credentialSlot());probes.entrySet().removeIf(entry->entry.getValue().profileId.equals(id));return new JSONObject().put("removed",true).put("credentialCleanupPending",cleanupPending);
     }
-    private JSONObject probe(String id)throws Exception {
-        SshProfile selected=profile(id);JSONObject found=DirectSshClient.probe(selected);String probeId=UUID.randomUUID().toString();
+    private void checkEditorBinding(JSONObject input,SshProfile old)throws Exception {
+        if(!input.has("expectedBindingHash"))return;
+        Object expected=input.get("expectedBindingHash");
+        if(!(expected instanceof String)||!(old==null?"":old.bindingHash()).equals(expected))throw new SecurityException("SSH连接已在其他页面修改或移除，请重新打开当前连接；没有覆盖新配置");
+    }
+    private JSONObject probe(JSONObject input)throws Exception {
+        String id=text(input,"profileId",80);SshProfile selected; synchronized(this){selected=profile(id);if(input.has("_profileBinding"))selected.requireBinding(text(input,"_profileBinding",64));}
+        JSONObject found=DirectSshClient.probe(selected);String probeId=UUID.randomUUID().toString();
+        synchronized(this){profile(id).requireBinding(selected.bindingHash());}
         Probe probe=new Probe(id,selected.bindingHash(),found.getString("key"),found.getString("fingerprint"),System.currentTimeMillis()+300_000);
         if(probes.size()>=40)probes.entrySet().removeIf(entry->entry.getValue().expiresAt<System.currentTimeMillis());
         if(probes.size()>=40)throw new IllegalStateException("待核对指纹过多，请先处理已有请求");probes.put(probeId,probe);
-        found.remove("key");return found.put("probeId",probeId).put("profileId",id).put("expiresAt",probe.expiresAt).put("hostKeyTrusted",!selected.pinnedKey.isEmpty()&&!found.optBoolean("changed"));
+        found.remove("key");return found.put("probeId",probeId).put("profileId",id).put("bindingHash",selected.bindingHash()).put("expiresAt",probe.expiresAt).put("hostKeyTrusted",!selected.pinnedKey.isEmpty()&&!found.optBoolean("changed"));
     }
     private synchronized JSONObject approve(JSONObject input)throws Exception {
-        SshProfile selected=profile(text(input,"profileId",80));notBusy(selected);String id=text(input,"probeId",80);Probe probe=probes.get(id);
+        SshProfile selected=profile(text(input,"profileId",80));checkEditorBinding(input,selected);notBusy(selected);String id=text(input,"probeId",80);Probe probe=probes.get(id);
         if(probe==null||probe.expiresAt<=System.currentTimeMillis()||!probe.profileId.equals(selected.id)||!probe.binding.equals(selected.bindingHash())||!probe.fingerprint.equals(text(input,"fingerprint",100)))
             throw new SecurityException("指纹核对请求已过期或不属于该主机与工作区，请重新探测");
         if(!selected.pinnedKey.isEmpty()&&!selected.pinnedKey.equals(probe.key))throw new SecurityException("已保存的主机密钥发生变化，先独立核对并显式清除旧指纹，不能直接批准覆盖");
         JSONObject changed=selected.document().put("pinnedKey",probe.key).put("configRevision",UUID.randomUUID().toString());SshProfile next=new SshProfile(changed);Map<String,SshProfile> proposed=new java.util.LinkedHashMap<>(profiles);proposed.put(next.id,next);commitProfiles(proposed);probes.remove(id);return publicProfile(next);
     }
     private synchronized JSONObject forget(JSONObject input)throws Exception {
-        SshProfile selected=profile(text(input,"profileId",80));notBusy(selected);
+        SshProfile selected=profile(text(input,"profileId",80));checkEditorBinding(input,selected);notBusy(selected);
         if(selected.pinnedKey.isEmpty()||!SshProfile.fingerprint(Base64.getDecoder().decode(selected.pinnedKey)).equals(text(input,"fingerprint",100)))throw new SecurityException("请明确核对要移除的当前主机指纹");
         SshProfile next=new SshProfile(selected.document().put("pinnedKey","").put("configRevision",UUID.randomUUID().toString()));Map<String,SshProfile> proposed=new java.util.LinkedHashMap<>(profiles);proposed.put(next.id,next);commitProfiles(proposed);return publicProfile(next);
     }

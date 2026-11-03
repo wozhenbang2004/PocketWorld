@@ -44,7 +44,11 @@ public final class AgentRunner {
     private final CapabilityPort capabilities;
     private final ContextBudgetPolicy.Source contextBudgets;
     /** Native-only materialization; retain owner rows/order and never persist returned bytes. */
-    public interface RequestProjection { JSONArray project(JSONArray history,ModelConfig config,RunControl control)throws Exception; }
+    public interface RequestProjection {
+        JSONArray project(JSONArray history,ModelConfig config,RunControl control)throws Exception;
+        /** Native source facts for the final physical MAIN request, after budgeting/compaction. */
+        default void prepared(JSONArray nativeProvenance,JSONArray finalRequest,ModelConfig config,RunControl control)throws Exception{}
+    }
     /** The existing task store owns admission, dedup and the atomic terminal/send fence. */
     public interface OwnerInputs {
         JSONArray poll(JSONArray includedMessageIds,boolean turnBoundary,boolean closeIfEmpty,RunControl control)throws Exception;
@@ -461,6 +465,7 @@ public final class AgentRunner {
                     dev.pocketengine.runtime.usage.InferenceCapture.Target originalMain=journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,"");
                     if(currentRoutes!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->currentRoutes.requireCurrentSources(control));
                     if(stepRouting.selectedLight())originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,stepRouting::requireLightCurrent);
+                    if(requestProjection!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->requestProjection.prepared(nativeProvenance,actualModelMessages,requestConfig,control));
                     if(screens!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->{
                         if(!historyTurnPrepared.get())throw new ModelGateway.RequestRefreshRequired();
                         try{screens.requireUploads(nativeProvenance,control);}catch(SecurityException withdrawn){throw new ModelGateway.RequestRefreshRequired();}

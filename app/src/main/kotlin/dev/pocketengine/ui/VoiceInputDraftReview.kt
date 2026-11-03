@@ -12,7 +12,7 @@ import org.json.JSONObject
 
 /** Final text is editable data. Neither this editor nor recognition sends or authorizes a task. */
 @Composable
-internal fun VoiceInputDraftReview(input: JSONObject, currentTarget: Boolean, onUse: (String, String) -> Unit, onDiscard: (String) -> Unit) {
+internal fun VoiceInputDraftReview(input: JSONObject, currentTarget: Boolean, onUse: (String, String) -> Unit, onDiscard: (String) -> Unit, destinationLabel: String? = null, saving: Boolean = false) {
     if (!input.optBoolean("reviewAvailable")) return
     val id = input.optString("inputId")
     if (!currentTarget) {
@@ -22,15 +22,15 @@ internal fun VoiceInputDraftReview(input: JSONObject, currentTarget: Boolean, on
     }
     var edited by remember(id) { mutableStateOf(input.optString("finalText")) }
     val target = input.optJSONObject("target") ?: JSONObject()
-    AlertDialog(onDismissRequest = { onDiscard(id) }, containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text(if (target.optBoolean("phoneInput")) "核对手机办事草稿" else "核对原对话草稿") },
+    AlertDialog(onDismissRequest = { if (!saving) onDiscard(id) }, containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text(destinationLabel ?: if (target.optBoolean("phoneInput")) "核对手机办事草稿" else "核对原对话草稿") },
         text = { Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("来自你选择的系统听写，可能使用网络；中文支持和实际识别效果由设备服务决定。", fontSize = 12.sp, lineHeight = 20.sp, color = SecondaryInk)
-            OutlinedTextField(edited, { if (it.length <= 4000) edited = it }, label = { Text("最终文字，可修改") }, modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 8)
+            OutlinedTextField(edited, { if (it.length <= 4000) edited = it }, label = { Text("最终文字，可修改") }, modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 8, enabled = !saving)
             Text("逐字核对姓名、数字和目标。放入原输入只保留可编辑文字，仍需你按原入口发送或开始；识别结果不是执行授权。", fontSize = 12.sp, lineHeight = 20.sp, color = SecondaryInk)
         } },
-        confirmButton = { Button(onClick = { onUse(id, edited) }, enabled = edited.isNotBlank() && !input.optBoolean("resourceReleaseUnknown")) { Text("放入原输入，暂不发送") } },
-        dismissButton = { TextButton(onClick = { onDiscard(id) }) { Text("丢弃") } })
+        confirmButton = { Button(onClick = { onUse(id, edited) }, enabled = !saving && edited.isNotBlank() && !input.optBoolean("resourceReleaseUnknown")) { Text(if (destinationLabel != null) "追加到原浮层草稿" else "放入原输入，暂不发送") } },
+        dismissButton = { TextButton(onClick = { onDiscard(id) }, enabled = !saving) { Text("丢弃") } })
 }
 
 @Composable
@@ -54,5 +54,22 @@ internal fun systemTtsDescription(speech: JSONObject): String {
             else -> "当前系统声音的联网属性未知。"
         }
         else -> "按需使用系统朗读；引擎与联网属性尚未确认。"
+    }
+}
+
+/** Reuses the existing voice review and confirmation surfaces for the original overlay draft. */
+@Composable
+internal fun QuickPanelVoiceReview(controller: PocketWorldController) {
+    val handoff = controller.quickPanelVoice ?: return
+    val input = controller.state.voiceInput
+    val close = { controller.closeQuickPanelVoice() }
+    val saved = handoff.optJSONObject("receipt")
+    if (handoff.optBoolean("closed") || saved != null || handoff.optBoolean("saveAttempted") && !handoff.optBoolean("saving")) {
+        ConfirmAction("原浮层听写", handoff.optString("message").ifBlank { if (saved?.optBoolean("requiresEditingBeforeSend") == true) "已追加到原草稿；超过1500字，发送前请回浮层编辑。" else "已追加到原浮层草稿，尚未发送。" }, "关闭", close, close)
+    } else if (input.optBoolean("reviewAvailable") && input.optJSONObject("target")?.optString("conversationId") == "quick-panel:" + handoff.optString("handoffId")) {
+        VoiceInputDraftReview(input, true, { id, text -> controller.saveQuickPanelVoice(handoff.getString("handoffId"), id, text) { _, error -> if (error != null) controller.showTaskNoticeWarning(error) } }, { close() }, "核对原浮层补充说明", handoff.optBoolean("saving"))
+    } else {
+        val active = input.optBoolean("active")
+        ConfirmAction("原浮层语音补充", input.optString("message").ifBlank { "原说明已保留。系统听写可能联网；最终文字先核对，再追加到原草稿，不会发送或继续任务。" }, if (active) "结束本次听写" else "开始系统听写", close) { if (active) controller.stopListening() else controller.startQuickPanelVoice(handoff.getString("handoffId")) }
     }
 }

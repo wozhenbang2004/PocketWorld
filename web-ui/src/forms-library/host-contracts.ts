@@ -50,7 +50,7 @@ export function connectionProfilePayload(domain: 'remote' | 'ssh', draft: HostOb
   const string = (key: string) => typeof draft[key] === 'string' ? draft[key] : draft[key] == null ? '' : String(draft[key]);
   const payload: HostObject = { name: string('name').trim() };
   if (typeof entry?.id === 'string' && entry.id) payload.id = entry.id;
-  if (entry?.revision != null) payload.expectedRevision = entry.revision;
+  payload.expectedBindingHash = typeof entry?.bindingHash === 'string' ? entry.bindingHash : '';
   if (domain === 'remote') {
     payload.baseUrl = string('baseUrl').trim();
     if (string('token') !== '') payload.token = string('token');
@@ -62,4 +62,12 @@ export function connectionProfilePayload(domain: 'remote' | 'ssh', draft: HostOb
     if (payload.authType === 'key' && string('passphrase') !== '') payload.passphrase = string('passphrase');
   }
   return payload;
+}
+
+/** Editing and testing use the row the owner opened; add never borrows its identity. */
+export function modelConnectionCommand(adding: boolean, testing: boolean, entry?: HostObject) {
+  if (adding) return { action: testing ? 'models.connection.test' : 'models.connection.add', identity: { id: '', expectedRevision: 0 } };
+  if (typeof entry?.id !== 'string' || !entry.id || !Number.isSafeInteger(entry.revision) || entry.revision < 1)
+    throw new Error('请先重新读取这项原连接，再编辑或测试。');
+  return { action: testing ? 'models.connection.test' : 'models.connection.edit', identity: { id: entry.id, expectedRevision: entry.revision } };
 }

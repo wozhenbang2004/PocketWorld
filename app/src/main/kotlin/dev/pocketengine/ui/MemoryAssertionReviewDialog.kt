@@ -187,7 +187,7 @@ private fun assertionReviewTime(value: JSONObject?, field: String): String = val
     if (raw is Int || raw is Long) Instant.ofEpochMilli((raw as Number).toLong()).toString() else ""
 }.orEmpty()
 
-private fun assertionReviewDate(value: String): Any {
+internal fun assertionReviewDate(value: String): Any {
     val text = value.trim()
     if (text.isEmpty()) return JSONObject.NULL
     return try {
@@ -197,7 +197,7 @@ private fun assertionReviewDate(value: String): Any {
 }
 
 /** Native donor dependencies may add source refs, but may never discard the original evidence. */
-private fun assertionReviewKeepsSources(before: JSONObject, after: JSONObject): Boolean = runCatching {
+internal fun assertionReviewKeepsSources(before: JSONObject, after: JSONObject): Boolean = runCatching {
     val original = before.getJSONArray("sourceRefs")
     val returned = after.getJSONArray("sourceRefs")
     val refs = (0 until returned.length()).map { SourceRef.fromJson(returned.getJSONObject(it)) }.toSet()

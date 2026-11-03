@@ -50,17 +50,20 @@ public final class ChannelTaskCoordinator implements HostTaskPort {
             task=tasks.cancelChannelTask(request.taskId,request.origin(),request.expectedRunId,request.expectedCoordinatorEpoch,original);
             // The same TaskStore monitor keeps a newer parent run from adding children while
             // the existing host's bounded cancellation routing captures the old children.
-            features.cancelRelatedTasks(request.taskId);
+            features.cancelRelatedTasks(request.taskId,request.expectedRunId,request.expectedCoordinatorEpoch);
         }
         changed.accept(request.taskId);return state(task);
     }
     /** Local-owner stop remains available even after the external account/grant was revoked. */
     public void stop(String id)throws Exception{
+        JSONObject task=tasks.get(id,false);stopOriginal(id,task.optString("runId"),task.optInt("coordinatorEpoch"));
+    }
+    public void stopOriginal(String id,String run,int epoch)throws Exception {
         RunControl original=originalControl(id);
         synchronized(tasks){
             JSONObject task=tasks.get(id,false),source=origin(task);
-            tasks.cancelChannelTask(id,source,task.optString("runId"),task.optInt("coordinatorEpoch"),original);
-            features.cancelRelatedTasks(id);
+            tasks.cancelChannelTask(id,source,run,epoch,original);
+            features.cancelRelatedTasks(id,run,epoch);
         }
         changed.accept(id);publishTaskState(id);
     }

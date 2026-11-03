@@ -43,7 +43,7 @@ public final class TaskSavedEvidence {
         try(Cursor row=db.rawQuery("SELECT e.native_seq,e.event_type,e.body_bytes,CASE WHEN e.body_bytes>=0 AND e.body_bytes<=131072 THEN e.event_json END,r.epoch FROM task_events e JOIN runs r ON r.task_id=e.task_id AND r.run_id=? WHERE e.task_id=? AND e.event_order=? AND e.native_seq=?",new String[]{run,task,Long.toString(seq),Long.toString(seq)})){
             if(!row.moveToFirst())return null;if(row.isNull(3))throw new IllegalStateException("原事件超出本次128KiB读取范围，未加载整张审计表");
             JSONObject event=new JSONObject(row.getString(3));if(seq!=SourceRef.integer(event,"seq",1)||!run.equals(event.optString("runId"))||row.getInt(4)!=event.optInt("epoch")||!row.getString(1).equals(event.optString("type"))
-                    ||McpResourceEvidence.EVENT_TYPE.equals(event.optString("type"))&&!task.equals(event.optString("taskId")))throw new SecurityException("原已保存事件的task/run/epoch或序号不一致");return event;
+                    ||(McpResourceEvidence.EVENT_TYPE.equals(event.optString("type"))||TaskEpisodeEvidence.EVENT_TYPE.equals(event.optString("type")))&&!task.equals(event.optString("taskId")))throw new SecurityException("原已保存事件的task/run/epoch或序号不一致");return event;
         }
     }
     public static DocumentContent.Request documentRange(JSONObject event)throws Exception{
@@ -54,6 +54,7 @@ public final class TaskSavedEvidence {
         if("attachment_document_read".equals(event.optString("type"))){documentRange(event);return;}
         if("browser_source_retained".equals(event.optString("type"))){dev.pocketengine.browser.BrowserTaskSpace.savedMemoryProjection(event);return;}
         if("app_learning_evidence".equals(event.optString("type"))){appLearningText(event);return;}
+        if(TaskEpisodeEvidence.EVENT_TYPE.equals(event.optString("type"))){TaskEpisodeEvidence.text(event);return;}
         if(McpResourceEvidence.EVENT_TYPE.equals(event.optString("type"))){McpResourceEvidence.requireIndexEvent(event);return;}
         throw new IllegalStateException("这份原保存事件尚无可核对的安全正文交付定位，不扩大网页保存范围");
     }
@@ -80,6 +81,7 @@ public final class TaskSavedEvidence {
         SourceRef ref=new SourceRef("task_evidence",sourceId,a.eventSeq,scope.ownerId,scope.spaceId);JSONObject task=task(db,a.taskId);if(task==null)return new SourceRef.State(ref,true);
         JSONObject original=event(db,a.taskId,a.runId,a.eventSeq);if(original==null||!a.eventSha256.equals(TaskStore.capabilityFingerprint(original)))return new SourceRef.State(ref,true);
         requireSupported(original);
+        if(TaskEpisodeEvidence.EVENT_TYPE.equals(original.optString("type"))&&!episodeCurrent(db,task,original,a))return new SourceRef.State(ref,true);
         if("app_learning_evidence".equals(original.optString("type"))&&original.getJSONObject("context").has("outcomeSourceRef")){
             SourceRef outcome=SourceRef.fromJson(original.getJSONObject("context").getJSONObject("outcomeSourceRef"));
             if(!outcome.sourceId.equals("task:"+a.taskId+":verified_result"))throw new SecurityException("App结果来源不是原task");
@@ -89,6 +91,24 @@ public final class TaskSavedEvidence {
         }
         return new SourceRef.State(ref,false);
     }
+    /** The original ended-run snapshot retires when its actual task/run, observed owner review
+     * or selected receipt changes. This is SQL-only below Book; it takes no Tasks/host lock. */
+    private static boolean episodeCurrent(SQLiteDatabase db,JSONObject task,JSONObject event,Address address)throws Exception {
+        JSONObject snapshot=TaskEpisodeEvidence.snapshot(event);String text=TaskEpisodeEvidence.text(event);
+        if(address.offset!=0||address.chars!=text.length()||task.has("origin")||task.has("sourceLearningJob")||!Set.of("assistant","phone").contains(task.optString("kind"))||!address.runId.equals(task.optString("runId"))||snapshot.getLong("epoch")!=task.optLong("coordinatorEpoch")||snapshot.getLong("resultRevision")!=task.optLong("resultRevision",-1)||!snapshot.getString("taskStatus").equals(task.optString("status")))return false;
+        JSONObject originalRun;
+        try(Cursor run=db.rawQuery("SELECT epoch,status,updated_at FROM runs WHERE task_id=? AND run_id=?",new String[]{address.taskId,address.runId})){if(!run.moveToFirst())return false;originalRun=new JSONObject().put("taskId",address.taskId).put("runId",address.runId).put("epoch",run.getInt(0)).put("status",run.getString(1)).put("updatedAt",run.getLong(2));}
+        long total;
+        try(Cursor count=db.rawQuery("SELECT COUNT(*) FROM operations WHERE task_id=? AND run_id=?",new String[]{address.taskId,address.runId})){if(!count.moveToFirst())return false;total=count.getLong(0);}
+        JSONObject verification=null;
+        try(Cursor row=db.rawQuery("SELECT body_bytes,CASE WHEN body_bytes>=0 AND body_bytes<=131072 THEN event_json END FROM task_events WHERE task_id=? AND event_type='user_verification' ORDER BY event_order DESC LIMIT 1",new String[]{address.taskId})){if(row.moveToFirst()){if(row.isNull(1))return false;verification=new JSONObject(row.getString(1));}}
+        JSONArray selected=snapshot.getJSONArray("operations"),operations=new JSONArray();
+        for(int i=0;i<selected.length();i++){String operation=selected.getJSONObject(i).getString("operationId");try(Cursor row=db.rawQuery("SELECT tool,state,created_at,length(CAST(receipt AS BLOB)),CASE WHEN receipt IS NULL OR length(CAST(receipt AS BLOB))<=131072 THEN receipt END FROM operations WHERE task_id=? AND run_id=? AND operation_id=?",new String[]{address.taskId,address.runId,operation})){
+            if(!row.moveToFirst()||!row.isNull(3)&&row.getLong(3)>131072)return false;JSONObject receipt=row.isNull(4)?null:new JSONObject(row.getString(4));
+            operations.put(new JSONObject().put("operationId",operation).put("runId",address.runId).put("tool",row.getString(0)).put("state",row.getString(1)).put("createdAt",row.getLong(2)).put("receipt",receipt==null?JSONObject.NULL:receipt).put("receiptDigest",TaskStore.capabilityFingerprint(new JSONObject().put("receipt",receipt==null?JSONObject.NULL:receipt))));
+        }}
+        try{return TaskStore.capabilityFingerprint(snapshot).equals(TaskStore.capabilityFingerprint(TaskEpisodeEvidence.project(task,originalRun,operations,total,verification).getJSONObject("snapshot")));}catch(SecurityException changed){return false;}
+    }
     public static JSONObject readEvent(SQLiteDatabase db,SourceRef expected)throws Exception{
         Address a=address(expected.sourceId);if(!"task_evidence".equals(expected.kind)||expected.revision!=a.eventSeq)throw new SecurityException("来源修订不是原事件本机投影版本");
         MemoryBook.Scope scope=MemoryBook.Scope.from(new JSONObject().put("ownerId",expected.ownerId).put("spaceId",expected.spaceId));SourceRef.State state=resolve(db,scope,expected.sourceId);
@@ -97,16 +117,17 @@ public final class TaskSavedEvidence {
     }
     public static SourceRef select(SQLiteDatabase db,String taskId,String runId,long seq,int offset,int chars)throws Exception{
         JSONObject originalTask=task(db,taskId);if(originalTask==null)throw new SecurityException("原task已不可读");JSONObject original=event(db,taskId,runId,seq);if(original==null)throw new IllegalStateException("所选原事件已不可读");requireSupported(original);
+        if(TaskEpisodeEvidence.EVENT_TYPE.equals(original.optString("type"))&&(offset!=0||chars!=TaskEpisodeEvidence.text(original).length()))throw new SecurityException("任务经过提炼须选完整原生有限投影，不能把半段文字提升为完整episode来源");
         SourceRef ref=reference(taskId,runId,seq,original,offset,chars);TaskAuditStore.pinSequence(db,taskId,seq);return ref;
     }
     public static JSONObject list(SQLiteDatabase db,String taskId,long before,int limit)throws Exception{
         if(taskId==null||!taskId.matches(UUID)||before<0||limit<1||limit>20)throw new IllegalArgumentException("请选择原task与最多20条保存来源");if(task(db,taskId)==null)throw new SecurityException("原私人task已不可读");
         JSONArray entries=new JSONArray();long next=before==0?Long.MAX_VALUE:before,used=0;boolean more=false;
-        try(Cursor rows=db.rawQuery("SELECT event_order,native_seq,event_type,body_bytes,CASE WHEN body_bytes>=0 AND body_bytes<=131072 THEN event_json END FROM task_events WHERE task_id=? AND event_order<? AND event_type IN ('attachment_document_read','browser_source_retained','app_learning_evidence','mcp_resource_retained') ORDER BY event_order DESC LIMIT ?",new String[]{taskId,Long.toString(next),Integer.toString(limit+1)})){
+        try(Cursor rows=db.rawQuery("SELECT event_order,native_seq,event_type,body_bytes,CASE WHEN body_bytes>=0 AND body_bytes<=131072 THEN event_json END FROM task_events WHERE task_id=? AND event_order<? AND event_type IN ('attachment_document_read','browser_source_retained','app_learning_evidence','mcp_resource_retained','task_episode_evidence') ORDER BY event_order DESC LIMIT ?",new String[]{taskId,Long.toString(next),Integer.toString(limit+1)})){
             while(rows.moveToNext()){
                 if(entries.length()==limit){more=true;break;}long seq=rows.getLong(1),bytes=rows.getLong(3);next=rows.getLong(0);JSONObject item=new JSONObject().put("eventSeq",seq).put("eventOrder",next).put("type",rows.getString(2)).put("originalBodyIncluded",false);
                 if(rows.isNull(4)||used+bytes>262144){entries.put(item.put("status","read_limited"));more=true;break;}used+=bytes;JSONObject original=new JSONObject(rows.getString(4));item.put("runId",original.optString("runId")).put("epoch",original.optInt("epoch"));
-                try{requireSupported(original);if(seq<1||seq!=next||!original.optString("runId").matches(UUID))throw new IllegalStateException("原事件不是可核native序号");item.put("status","available").put("coverage",original.optString("coverage")).put("title","attachment_document_read".equals(rows.getString(2))?"原已读取文档的准确范围":"app_learning_evidence".equals(rows.getString(2))?"原限定App动作证据（仅候选）":McpResourceEvidence.EVENT_TYPE.equals(rows.getString(2))?"原已保存MCP文本快照（历史参考）":"原已批准保存的网页证据");}
+                try{requireSupported(original);if(seq<1||seq!=next||!original.optString("runId").matches(UUID))throw new IllegalStateException("原事件不是可核native序号");item.put("status","available").put("coverage",original.optString("coverage")).put("title","attachment_document_read".equals(rows.getString(2))?"原已读取文档的准确范围":"app_learning_evidence".equals(rows.getString(2))?"原限定App动作证据（仅候选）":TaskEpisodeEvidence.EVENT_TYPE.equals(rows.getString(2))?"原已结束任务经过（结果分类独立）":McpResourceEvidence.EVENT_TYPE.equals(rows.getString(2))?"原已保存MCP文本快照（历史参考）":"原已批准保存的网页证据");}
                 catch(Exception unavailable){item.put("status","source_unavailable").put("reason","native_exact_saved_delivery_pins_unavailable");}
                 entries.put(item);
             }

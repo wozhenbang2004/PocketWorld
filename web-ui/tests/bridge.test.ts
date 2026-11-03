@@ -55,8 +55,8 @@ test('document-fenced requests keep native acceptance separate from durable inpu
   receiver.receive({ v: 1, kind: 'result', id: sendRequest.id, ok: true, value: { accepted: true } });
   assert.deepEqual(await send, { accepted: true });
   assert.equal(bridge.getState().composer?.text, '保留中的输入');
-  receiver.receive({ v: 1, kind: 'result', id: editRequest.id, ok: false, error: { message: '原输入窗口已更新' } });
-  await assert.rejects(edit, /原输入窗口已更新/);
+  receiver.receive({ v: 1, kind: 'result', id: editRequest.id, ok: false, error: { code: 'not_accepted', message: '原输入窗口已更新' } });
+  await assert.rejects(edit, error => error instanceof Error && error.message === '原输入窗口已更新' && (error as any).code === 'not_accepted');
   assert.equal(sent.length, 3, 'a rejected or unmatched receipt must not resend an operation');
 
   receiver.receive({ v: 1, kind: 'state', revision: 0, snapshot: { composer: { text: '' } } });
@@ -88,6 +88,6 @@ test('document-fenced requests keep native acceptance separate from durable inpu
   assert.equal(receiver.handleBack(), false);
   assert.equal(returns, 1);
   delete (globalThis as any).window.PocketNative;
-  await assert.rejects(bridge.command('composer.edit', {}), /尚未连接/);
+  await assert.rejects(bridge.command('composer.edit', {}), error => error instanceof Error && /尚未连接/.test(error.message) && (error as any).code === 'not_sent');
   assert.equal(sent.length, 3);
 });

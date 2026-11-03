@@ -83,4 +83,23 @@ public final class SkillBookTest {
         JSONObject policy=updated.getJSONObject("sourcePolicy");assertEquals("PROJECT",policy.getString("layer"));assertEquals("OWNER_ONLY",policy.getString("invocation"));assertEquals("10000000-0000-0000-0000-000000000001",policy.getString("projectId"));assertFalse(policy.getBoolean("modelInvocable"));
         assertThrows(IllegalStateException.class,()->book.importDocument(scope(),new java.io.ByteArrayInputStream(selected),options,1500));
     }
+    @Test public void reviewedSingleDocumentExportsExactManifestAndReimportsAsDisabledContentOnly()throws Exception{
+        SkillBook book=new SkillBook(new File(temp.getRoot(),"skills"));JSONObject old=book.install(scope(),imported(),1000);enable(book,old,1100);
+        JSONObject review=book.inspectDocumentExport(scope(),old.getString("id"),old.getInt("revision"),old.getString("digest"),1200);
+        assertEquals(manifest(),review.getString("manifest"));assertEquals("references/check.md",review.getJSONArray("omittedResources").getString(0));
+        java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();JSONObject receipt=book.exportDocument(scope(),old.getString("id"),old.getInt("revision"),old.getString("digest"),review.getString("documentSha256"),bytes,1300);
+        assertArrayEquals(manifest().getBytes(StandardCharsets.UTF_8),bytes.toByteArray());assertFalse(receipt.has("manifest"));assertFalse(receipt.getBoolean("containsHostApproval"));
+        JSONObject still=book.get(scope(),old.getString("id"),1400);assertTrue(still.getBoolean("active"));assertEquals(2,still.getJSONArray("resources").length());assertEquals(old.getString("digest"),still.getString("digest"));
+        JSONObject inspected=book.inspectDocument(scope(),new java.io.ByteArrayInputStream(bytes.toByteArray()),null,1500);assertEquals(manifest(),inspected.getJSONObject("document").getString("manifest"));
+        JSONObject imported=book.importDocument(scope(),new java.io.ByteArrayInputStream(bytes.toByteArray()),new JSONObject().put("source","owner-reviewed single document").put("inspectedDigest",inspected.getJSONObject("package").getString("digest")),1600);
+        assertNotEquals(old.getString("id"),imported.getString("id"));assertFalse(imported.getBoolean("enabled"));assertEquals(1,imported.getJSONArray("resources").length());assertEquals(0,imported.getJSONArray("requiredCapabilities").length());
+    }
+    @Test public void singleDocumentExportRejectsStaleTupleWrongBodyDigestAndChangedResourcesBeforeWriting()throws Exception{
+        File root=new File(temp.getRoot(),"skills");SkillBook book=new SkillBook(root);JSONObject old=book.install(scope(),imported(),1000);
+        JSONObject review=book.inspectDocumentExport(scope(),old.getString("id"),1,old.getString("digest"),1100);java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
+        assertThrows(SecurityException.class,()->book.exportDocument(scope(),old.getString("id"),1,old.getString("digest"),"0".repeat(64),output,1200));assertEquals(0,output.size());
+        assertThrows(SecurityException.class,()->book.exportDocument(scope(),old.getString("id"),2,old.getString("digest"),review.getString("documentSha256"),output,1200));assertEquals(0,output.size());
+        Files.write(new File(root,old.getString("id")+"/1/calculator-check/references/check.md").toPath(),"tampered omitted resource".getBytes(StandardCharsets.UTF_8));
+        assertThrows(IllegalStateException.class,()->book.exportDocument(scope(),old.getString("id"),1,old.getString("digest"),review.getString("documentSha256"),output,1300));assertEquals(0,output.size());
+    }
 }

@@ -19,13 +19,14 @@ final class QqGatewayAdapter implements AutoCloseable {
     private final Map<String,RunControl> monitors=new ConcurrentHashMap<>();
     private final Map<String,JSONObject> states=new ConcurrentHashMap<>();
     private volatile boolean closed;
+    private java.util.function.Consumer<RunControl> executionAdmission=original->{};
     QqGatewayAdapter(FeatureContext context,ChannelCore core,ChannelHttp delivery,WeixinAdapter.Accepted accepted){
         this(context,core,delivery,accepted,new QqGatewayClient());
     }
     QqGatewayAdapter(FeatureContext context,ChannelCore core,ChannelHttp delivery,WeixinAdapter.Accepted accepted,QqGatewayClient client){
         this(core,delivery,id->context.secrets.get("channels."+id+".secret"),accepted,id->{
             try{context.emit("channels",new JSONObject().put("type","qq_gateway_state").put("profileId",id));}catch(Exception ignored){}
-        },client);
+        },client);executionAdmission=context::admitResourceExecution;
     }
     QqGatewayAdapter(ChannelCore core,ChannelHttp delivery,Credential credentials,WeixinAdapter.Accepted accepted,java.util.function.Consumer<String> changed,QqGatewayClient client){
         this.core=core;this.delivery=delivery;this.credentials=credentials;this.accepted=accepted;this.changed=changed;this.client=client;
@@ -46,7 +47,7 @@ final class QqGatewayAdapter implements AutoCloseable {
     private synchronized JSONObject start(String id)throws Exception {
         JSONObject profile=requireProfile(id);String secret=credentials.get(id);if(secret==null||secret.isEmpty())throw new SecurityException("请先配置QQ官方机器人AppID和AppSecret");
         if(monitors.size()>=3&&!monitors.containsKey(id))throw new IllegalStateException("当前最多同时接收3个QQ机器人");
-        RunControl control=new RunControl();if(monitors.putIfAbsent(id,control)!=null)throw new IllegalStateException("此QQ连接正在接收或停止中");
+        RunControl control=new RunControl();executionAdmission.accept(control);if(monitors.putIfAbsent(id,control)!=null)throw new IllegalStateException("此QQ连接正在接收或停止中");
         String fingerprint=configurationFingerprint(profile),credentialFingerprint=ChannelCore.digest(secret);
         ChannelHttp.DispatchGuard guard=()->{
             control.check();if(closed||!fingerprint.equals(configurationFingerprint(requireProfile(id)))||!credentialFingerprint.equals(ChannelCore.digest(credentials.get(id))))throw new SecurityException("QQ接入配置已变化");
@@ -111,6 +112,7 @@ final class QqGatewayAdapter implements AutoCloseable {
     // Cancellation must not wait for another profile's synchronized token HTTP request.
     // Cache entries remain credential-fingerprint bound and refresh on actual auth rejection.
     void cancel(String id){RunControl control=monitors.get(id);if(control!=null)control.cancel();}
+    void stopOriginalReceivers(){for(RunControl control:new java.util.ArrayList<>(monitors.values()))control.cancel();}
     void forget(String id){states.remove(id);delivery.forgetQqToken(id);}
     private void state(String id,String status,String message,long success){
         try{core.profile(id);JSONObject prior=states.get(id);states.put(id,new JSONObject().put("status",status).put("message",message).put("lastSyncAt",success>0?success:prior==null?0:prior.optLong("lastSyncAt")));changed.accept(id);}catch(IllegalArgumentException removed){states.remove(id);}catch(Exception ignored){}

@@ -44,7 +44,7 @@ public final class SkillBook {
         synchronized(lock){if(mcpSourceValidator!=null)throw new IllegalStateException("MCP技能来源校验已挂载");mcpSourceValidator=java.util.Objects.requireNonNull(validator);}
     }
     public JSONObject install(JSONObject scope,JSONObject input,long now)throws Exception {
-        if(input.has("origin")||input.has("provenance")||input.has("experienceRef")||input.has("gitSource")||input.has("mcpSource")||input.has("restoredFrom")||input.has("sourcePolicy"))throw new SecurityException("经验来源和来源策略只能由可信宿主提供");
+        if(input.has("origin")||input.has("provenance")||input.has("experienceRef")||input.has("gitSource")||input.has("mcpSource")||input.has("restoredFrom")||input.has("sourcePolicy")||input.has("conversationDraftReceipt"))throw new SecurityException("经验来源和来源策略只能由可信宿主提供");
         return install(scope,input,now,null);
     }
     private JSONObject install(JSONObject scope,JSONObject input,long now,ExperienceOrigin origin)throws Exception {
@@ -57,6 +57,9 @@ public final class SkillBook {
         return installRetained(scope,input,now,origin,nativeGit,restoredFrom,nativeMcp,null);
     }
     private JSONObject installRetained(JSONObject scope,JSONObject input,long now,ExperienceOrigin origin,JSONObject nativeGit,JSONObject restoredFrom,JSONObject nativeMcp,JSONObject inheritedPolicy)throws Exception {
+        return installRetained(scope,input,now,origin,nativeGit,restoredFrom,nativeMcp,inheritedPolicy,null);
+    }
+    private JSONObject installRetained(JSONObject scope,JSONObject input,long now,ExperienceOrigin origin,JSONObject nativeGit,JSONObject restoredFrom,JSONObject nativeMcp,JSONObject inheritedPolicy,JSONObject nativeConversation)throws Exception {
         synchronized(lock){String[] owner=scope(scope);JSONObject state=state();JSONArray records=state.getJSONArray("skills");String id=input.optString("id");JSONObject old=id.isEmpty()?null:required(records,owner,id);
             if(old!=null&&((origin==null&&old.has("origin"))||(origin!=null&&!old.has("origin"))))throw new SecurityException("普通技能和来源型技能不能互相覆盖，请登记为新技能");
             if(origin!=null){requireOrigin(owner,origin);if(old!=null&&!origin.ref.sameIdentity(ExperienceOrigin.fromJson(old.getJSONObject("origin")).ref))throw new SecurityException("更新不能改变经验身份");}
@@ -84,6 +87,7 @@ public final class SkillBook {
                 else if(restoredFrom==null&&old!=null&&old.has("gitSource"))record.put("gitSource",new JSONObject(old.getJSONObject("gitSource").toString()));
                 else if(restoredFrom==null&&old!=null&&old.has("mcpSource"))record.put("mcpSource",new JSONObject(old.getJSONObject("mcpSource").toString()));
                 if(restoredFrom!=null)record.put("restoredFrom",new JSONObject(restoredFrom.toString()));
+                if(nativeConversation!=null){conversationDraftSource(nativeConversation);record.put("conversationDraftReceipt",new JSONObject(nativeConversation.toString()).put("format","pocketworld.conversation-skill-save.v1").put("id",stable).put("revision",revision).put("digest",digest));}
                 if(!record.has("origin"))retainRevision(record,now);
                 if(old!=null)remove(records,stable);records.put(record);save(state);return present(record,now);
             }catch(Exception failure){
@@ -503,7 +507,7 @@ public final class SkillBook {
     }
     public JSONObject inspectDocument(JSONObject scope,InputStream document,String id,long now)throws Exception {
         String[] owner=scope(scope);JSONObject files=SkillDocument.read(document);
-        synchronized(lock){return inspectFiles(owner,files,id,now).put("singleDocumentOnly",true);}
+        synchronized(lock){return inspectFiles(owner,files,id,now).put("singleDocumentOnly",true).put("document",SkillDocument.exportPreview(files));}
     }
     private JSONObject inspectFiles(String[] owner,JSONObject files,String id,long now)throws Exception {
         JSONObject record=id==null||id.isEmpty()?null:required(state().getJSONArray("skills"),owner,id);
@@ -518,7 +522,7 @@ public final class SkillBook {
                 for(int i=0;i<newPaths.length();i++){String path=newPaths.getString(i);if(!contains(oldPaths,path))added.put(path);else if(oldFiles==null||!oldFiles.getString(path).equals(files.getString(path)))modified.put(path);}
                 for(int i=0;i<oldPaths.length();i++)if(!files.has(oldPaths.getString(i)))removed.put(oldPaths.getString(i));
                 comparison.put("kind",oldFiles==null?"repair":record.getString("digest").equals(digest)?"same-content":"changed-content")
-                        .put("id",record.getString("id")).put("revision",record.getInt("revision")).put("expectedCurrentDigest",record.getString("digest"))
+                        .put("id",record.getString("id")).put("revision",record.getInt("revision")).put("expectedCurrentDigest",record.getString("digest")).put("expectedExecutionGeneration",record.optLong("executionGeneration",0))
                         .put("currentSourceVersion",record.getString("sourceVersion")).put("currentContentVerified",oldFiles!=null)
                         .put("added",added).put("removed",removed).put("modified",modified);
             }
@@ -537,6 +541,10 @@ public final class SkillBook {
         synchronized(lock){String id=input.optString("id");if(!id.isEmpty()){
                 JSONObject current=required(state().getJSONArray("skills"),owner,id);
                 if(input.optInt("revision",-1)!=current.getInt("revision")||!current.getString("digest").equals(input.optString("expectedCurrentDigest")))throw new IllegalStateException("当前技能版本已改变，请重新检查");
+                if(input.has("expectedExecutionGeneration")){
+                    Object generation=input.get("expectedExecutionGeneration");
+                    if(!(generation instanceof Integer||generation instanceof Long)||((Number)generation).longValue()<0||current.optLong("executionGeneration",0)!=((Number)generation).longValue())throw new SecurityException("原技能的启停或来源策略已变化，请重新检查导入");
+                }
                 // Imported content does not carry host policy. Omission must not relax existing restrictions.
                 if(!input.has("requiredCapabilities"))input.put("requiredCapabilities",new JSONArray(current.getJSONArray("requiredCapabilities").toString()));
                 if(!input.has("expiresAt"))input.put("expiresAt",current.get("expiresAt"));
@@ -557,8 +565,33 @@ public final class SkillBook {
         }
         output.write(archive);return result;
     }
+    /** Native owner review of the exact single-document transfer. The original package and
+     * its omitted resources remain unchanged; source-bound experience cannot be detached. */
+    public JSONObject inspectDocumentExport(JSONObject scope,String id,int revision,String expectedDigest,long now)throws Exception {
+        synchronized(lock){JSONObject record=required(state().getJSONArray("skills"),scope(scope),id);
+            if(record.getInt("revision")!=revision||!record.getString("digest").equals(expectedDigest))throw new SecurityException("所选技能版本已变化，请重新检查导出内容");
+            if(record.has("origin"))throw new SecurityException("来源型技能不能去除原来源绑定后导出单文件");
+            return SkillDocument.exportPreview(verifiedFiles(record)).put("id",id).put("revision",revision).put("digest",expectedDigest).put("name",record.getString("name"));
+        }
+    }
+    public JSONObject exportDocument(JSONObject scope,String id,int revision,String expectedDigest,String expectedDocumentSha256,OutputStream output,long now)throws Exception {
+        if(output==null)throw new IllegalArgumentException("请选择SKILL.md保存位置");JSONObject checked=inspectDocumentExport(scope,id,revision,expectedDigest,now);
+        if(expectedDocumentSha256==null||!expectedDocumentSha256.equals(checked.getString("documentSha256")))throw new SecurityException("单文件正文与本次审阅不符，未导出");
+        byte[] bytes=checked.getString("manifest").getBytes(StandardCharsets.UTF_8);output.write(bytes);checked.remove("manifest");return checked;
+    }
     public JSONObject setEnabled(JSONObject scope,String id,boolean enabled,String digest,boolean confirmed,long now)throws Exception {
         return setEnabled(scope,id,enabled,digest,confirmed,now,false);
+    }
+    /** Native owner review also pins approval generation, including disable/enable ABA. */
+    public JSONObject setEnabledReviewed(JSONObject scope,String id,int revision,String digest,long expectedExecutionGeneration,boolean enabled,long now)throws Exception {
+        synchronized(lock){requireReviewedGeneration(scope,id,revision,digest,expectedExecutionGeneration);return setEnabled(scope,id,enabled,digest,true,now,false);}
+    }
+    public JSONObject approveExperienceReviewed(JSONObject scope,String id,int revision,String digest,long expectedExecutionGeneration,long now)throws Exception {
+        synchronized(lock){requireReviewedGeneration(scope,id,revision,digest,expectedExecutionGeneration);return approveExperience(scope,id,revision,digest,now);}
+    }
+    private void requireReviewedGeneration(JSONObject scope,String id,int revision,String digest,long expectedExecutionGeneration)throws Exception {
+        JSONObject row=required(state().getJSONArray("skills"),scope(scope),id);
+        if(expectedExecutionGeneration<0||row.getInt("revision")!=revision||!row.getString("digest").equals(digest)||row.optLong("executionGeneration",0)!=expectedExecutionGeneration)throw new SecurityException("原技能版本或批准已变化，请重新读取后审阅");
     }
     /** Owner's exact reviewed package only. Classification is not provenance and grants no
      * execution permission. Changing it withdraws the old approval before any new discovery. */
@@ -784,6 +817,7 @@ public final class SkillBook {
             expiresAt=Math.addExact(now,600_000L);
         }
         public JSONObject view()throws Exception { return new JSONObject(view); }
+        boolean conversationMutationEntered(){return applied;}
     }
     public static final class SourceUnavailable extends Exception {
         public final String code;
@@ -868,6 +902,74 @@ public final class SkillBook {
         }
         return inspection;
     }
+    /** Native conversation proposal review reuses the original package parser, complete
+     * local scan, retained versions and install CAS. A draft never creates a skill here. */
+    public SourceReview inspectConversationDraft(JSONObject authenticatedScope,JSONObject draft,JSONObject expectedTarget,JSONObject nativeOrigin,long now)throws Exception {
+        JSONObject scope=SkillSourcePolicy.checkedScope(authenticatedScope);String[] owner=scope(scope);JSONObject files=experienceDraftFiles(draft);conversationDraftSource(nativeOrigin);
+        if(!"owner".equals(owner[0])||!"private".equals(owner[1]))throw new SecurityException("对话技能只属于原私人主人空间");
+        JSONObject target=expectedTarget==null?new JSONObject():new JSONObject(expectedTarget.toString());String id=target.optString("id");
+        if(target.length()!=0&&(target.length()!=3||!(target.opt("id") instanceof String)||!(target.opt("revision") instanceof Integer)||!target.optString("digest").matches("[a-f0-9]{64}")))throw new SecurityException("更新目标只接受准确id、revision和digest");
+        synchronized(lock){LocalPackage local=localPackage(owner,id);requireConversationTarget(scope,local,target);
+            JSONObject resultingPolicy=local!=null?SkillSourcePolicy.current(local.record):scope.has("projectId")?SkillSourcePolicy.of(SkillSourcePolicy.Layer.PROJECT,SkillSourcePolicy.Invocation.MODEL_AND_OWNER,scope.getString("projectId")):SkillSourcePolicy.of(SkillSourcePolicy.Layer.USER,SkillSourcePolicy.Invocation.MODEL_AND_OWNER);
+            JSONObject inspection=inspectSourceFiles(owner,files,id,local,now).put("kind","conversation_draft").put("targetId",id)
+                    .put("nativeOrigin",new JSONObject(nativeOrigin.toString())).put("targetStateDigest",targetPin(local)).put("skillScope",scope)
+                    .put("beforeFiles",fileDescriptors(local==null?new JSONObject():local.files)).put("afterFiles",fileDescriptors(files))
+                    .put("resultSourcePolicy",resultingPolicy).put("requiredCapabilities",local==null?new JSONArray():new JSONArray(local.record.getJSONArray("requiredCapabilities").toString())).put("expiresAtPolicy",local==null?JSONObject.NULL:local.record.get("expiresAt"))
+                    .put("savedAsIndependentSkill",true).put("originalSourcesAutoRevoke",false).put("requiresSeparateEnable",true)
+                    .put("formalSkillSaved",false).put("executionAuthorized",false).put("expiresAt",Math.addExact(now,600_000L));
+            JSONObject nativeTarget=new JSONObject();if(local!=null)nativeTarget.put("id",id).put("revision",local.record.getInt("revision")).put("digest",local.digest)
+                    .put("executionGeneration",local.record.optLong("executionGeneration",0)).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(scope));
+            inspection.put("target",nativeTarget).put("reviewDigest",SkillExecution.digestJson(inspection));
+            return new SourceReview(this,owner,targetPin(local),files,null,null,inspection,now);
+        }
+    }
+    private static String conversationDraftSource(JSONObject origin)throws Exception {
+        if(origin==null||origin.length()!=5||!(origin.opt("epoch") instanceof Integer)||origin.getInt("epoch")<1||!origin.optString("proposalDigest").matches("[a-f0-9]{64}"))throw new SecurityException("对话技能缺少原生提案身份");
+        for(String key:new String[]{"taskId","runId","operationId"})if(!origin.getString(key).matches("[a-f0-9-]{36}"))throw new SecurityException("对话技能原任务标识无效");
+        return "conversation-draft:"+origin.getString("taskId")+":"+origin.getString("runId")+":"+origin.getString("operationId");
+    }
+    private static void requireConversationTarget(JSONObject scope,LocalPackage local,JSONObject expected)throws Exception {
+        if(local==null){if(expected.length()!=0)throw new SecurityException("原更新目标不存在，不能改成新建");return;}
+        JSONObject record=local.record;SkillSourcePolicy.requireApplicable(record,scope);
+        if(record.has("origin")||record.has("gitSource")||record.has("mcpSource")||SkillSourcePolicy.Layer.BUNDLED.name().equals(SkillSourcePolicy.current(record).getString("layer")))throw new SecurityException("内置和绑定来源的技能保留原更新流程，不能被对话草稿覆盖");
+        if(!local.registeredContent||!record.getString("id").equals(expected.optString("id"))||record.getInt("revision")!=expected.optInt("revision",-1)||!local.digest.equals(expected.optString("digest")))throw new SourceUnavailable("stale_target");
+    }
+    private static JSONArray fileDescriptors(JSONObject files)throws Exception {
+        List<String> paths=jsonKeys(files);paths.sort(String::compareTo);JSONArray result=new JSONArray();for(String path:paths){String text=files.getString(path);byte[] bytes=text.getBytes(StandardCharsets.UTF_8);result.put(new JSONObject().put("path",path).put("chars",text.length()).put("bytes",bytes.length).put("sha256",hex(MessageDigest.getInstance("SHA-256").digest(bytes))));}return result;
+    }
+    /** Paged exact before/after content. Metadata/hash and every added, removed and changed
+     * file were frozen in the same review; a changed target rejects both reading and saving. */
+    public JSONObject readConversationDraftFile(JSONObject scope,SourceReview review,String side,String path,int offset,int length,long now)throws Exception {
+        synchronized(lock){String[] owner=scope(scope);requireReview(owner,review,now);JSONObject view=review.view();if(!"conversation_draft".equals(view.optString("kind"))||!java.util.Set.of("before","after").contains(side))throw new SecurityException("不是原对话技能文件审阅");
+            LocalPackage local=localPackage(owner,view.getString("targetId"));if(!review.targetPin.equals(targetPin(local))||!SkillSourcePolicy.scopeFingerprint(scope).equals(SkillSourcePolicy.scopeFingerprint(view.getJSONObject("skillScope"))))throw new SourceUnavailable("stale_target");
+            JSONObject files=side.equals("after")?new JSONObject(review.files):local==null?new JSONObject():local.files;String name=path(path);if(!files.has(name))throw new IllegalArgumentException("原审阅没有这份文件");String body=files.getString(name);
+            if(offset<0||offset>body.length()||length<1||length>12000||offset>0&&offset<body.length()&&Character.isLowSurrogate(body.charAt(offset))&&Character.isHighSurrogate(body.charAt(offset-1)))throw new IllegalArgumentException("文件审阅范围无效");
+            int end=(int)Math.min(body.length(),(long)offset+length);if(end<body.length()&&end>offset&&Character.isHighSurrogate(body.charAt(end-1)))end--;
+            return new JSONObject().put("side",side).put("path",name).put("content",body.substring(offset,end)).put("offset",offset).put("nextOffset",end).put("hasMore",end<body.length()).put("totalChars",body.length())
+                    .put("sha256",hex(MessageDigest.getInstance("SHA-256").digest(body.getBytes(StandardCharsets.UTF_8)))).put("reviewDigest",view.getString("reviewDigest")).put("untrustedReference",true).put("executionAuthorized",false);
+        }
+    }
+    /** Invoke only after the original operations receipt has durably consumed its native
+     * owner confirmation. Both success and uncertain failure consume this in-memory review. */
+    public JSONObject applyConversationDraft(JSONObject scope,SourceReview review,long now)throws Exception {
+        synchronized(lock){String[] owner=scope(scope);requireReview(owner,review,now);JSONObject view=review.view();if(!"conversation_draft".equals(view.optString("kind")))throw new SecurityException("不是原对话技能审阅");
+            if(!SkillSourcePolicy.scopeFingerprint(scope).equals(SkillSourcePolicy.scopeFingerprint(view.getJSONObject("skillScope"))))throw new SourceUnavailable("stale_target");LocalPackage local=localPackage(owner,view.getString("targetId"));
+            if(!review.targetPin.equals(targetPin(local)))throw new SourceUnavailable("stale_target");JSONObject expected=view.getJSONObject("target"),pin=new JSONObject();if(expected.length()>0)pin.put("id",expected.getString("id")).put("revision",expected.getInt("revision")).put("digest",expected.getString("digest"));requireConversationTarget(scope,local,pin);
+            JSONObject origin=view.getJSONObject("nativeOrigin"),files=new JSONObject(review.files),options=new JSONObject().put("source",conversationDraftSource(origin)).put("sourceVersion",origin.getString("proposalDigest")).put("manifest",files.getString("SKILL.md"));files.remove("SKILL.md");options.put("resources",files);
+            JSONObject policy=scope.has("projectId")?SkillSourcePolicy.of(SkillSourcePolicy.Layer.PROJECT,SkillSourcePolicy.Invocation.MODEL_AND_OWNER,scope.getString("projectId")):SkillSourcePolicy.of(SkillSourcePolicy.Layer.USER,SkillSourcePolicy.Invocation.MODEL_AND_OWNER);
+            if(local!=null){JSONObject current=local.record;options.put("id",current.getString("id")).put("revision",current.getInt("revision")).put("requiredCapabilities",new JSONArray(current.getJSONArray("requiredCapabilities").toString())).put("expiresAt",current.get("expiresAt"));policy=SkillSourcePolicy.current(current);}
+            review.applied=true;return installRetained(scope,options,now,null,null,null,null,policy,origin);
+        }
+    }
+    /** Lost receipt recovery is a current exact package read, never another import. A
+     * missing/replaced marker remains unknown; absence cannot justify replay. */
+    public JSONObject findConversationDraftResult(JSONObject scope,JSONObject origin,String expectedDigest,long now)throws Exception {
+        String marker=conversationDraftSource(origin);if(expectedDigest==null||!expectedDigest.matches("[a-f0-9]{64}"))throw new SecurityException("原草稿内容hash无效");
+        synchronized(lock){String[] owner=scope(scope);JSONArray records=state().getJSONArray("skills");for(int i=0;i<records.length();i++){JSONObject record=records.getJSONObject(i),saved=record.optJSONObject("conversationDraftReceipt");if(saved==null||!"pocketworld.conversation-skill-save.v1".equals(saved.optString("format")))continue;boolean exact=true;for(String key:jsonKeys(origin))exact&=origin.get(key).equals(saved.opt(key));
+                if(exact&&matches(record,owner)&&record.getString("id").equals(saved.optString("id"))&&record.getInt("revision")==saved.optInt("revision",-1)&&expectedDigest.equals(saved.optString("digest"))&&marker.equals(record.optString("source"))&&origin.getString("proposalDigest").equals(record.optString("sourceVersion"))&&expectedDigest.equals(record.optString("digest"))){verifiedFiles(record);return new JSONObject().put("found",true).put("skill",present(record,now));}}
+            return new JSONObject().put("found",false).put("status","unknown").put("replayAllowed",false);
+        }
+    }
     /** Git download occurs outside the existing registry lock; current content is rehashed at both ends. */
     public SourceReview inspectGitSource(JSONObject scope,String id,SkillGitSource source,SkillGitClient client,dev.pocketengine.core.RunControl control,long now)throws Exception {
         String[] owner=scope(scope);String pin;
@@ -919,7 +1021,7 @@ public final class SkillBook {
     public JSONObject applySourceReview(JSONObject scope,SourceReview review,SourceChoice choice,boolean discardLocal,long now)throws Exception {
         String[] owner=scope(scope);
         synchronized(lock) {
-            requireReview(owner,review,now);JSONObject view=review.view();LocalPackage local=localPackage(owner,view.getString("targetId"));
+            requireReview(owner,review,now);JSONObject view=review.view();if("conversation_draft".equals(view.optString("kind")))throw new SecurityException("对话技能必须核对原提案回执后单次确认");LocalPackage local=localPackage(owner,view.getString("targetId"));
             if(!review.targetPin.equals(targetPin(local)))throw new SourceUnavailable("stale_target");
             JSONObject current=local==null?null:local.record;
             if(choice==null||review.restore!=null&&choice==SourceChoice.FORK)throw new IllegalArgumentException("请选择明确的替换操作");
