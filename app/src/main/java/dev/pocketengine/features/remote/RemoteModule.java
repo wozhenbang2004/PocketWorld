@@ -43,7 +43,7 @@ public final class RemoteModule implements EngineModule {
         try{JSONArray stored=new JSONArray(new String(file.readFully(),StandardCharsets.UTF_8));for(int i=0;i<stored.length()&&profiles.length()<20;i++){JSONObject p=stored.optJSONObject(i);if(p!=null&&p.optString("id").matches("[A-Za-z0-9_-]{1,80}"))profiles.put(p);}}catch(Exception ignored){}
         try{JSONArray stored=new JSONArray(new String(operationFile.readFully(),StandardCharsets.UTF_8));for(int i=0;i<stored.length()&&operations.length()<100;i++){JSONObject item=stored.optJSONObject(i);if(item!=null){if("submitting".equals(item.optString("status")))item.put("status","unknown").put("message","手机进程中断，需在电脑任务列表核对操作编号");operations.put(item);}}}catch(Exception ignored){}
         // Restore only read-side watches. Never resubmit a persisted operation.
-        for(int i=0;i<operations.length();i++)try{JSONObject op=operations.getJSONObject(i);JSONObject selected=find(op.optString("profileId"));if(selected!=null&&!op.optString("jobId").isEmpty()&&"accepted".equals(op.optString("status"))&&endpoint(selected.optString("baseUrl")).equals(op.optString("serviceBase")))watch(op.optString("profileId"),op.optString("jobId"),op.optString("serviceBase"));}catch(Exception ignored){}
+        for(int i=0;i<operations.length();i++)try{JSONObject op=operations.getJSONObject(i);JSONObject selected=find(op.optString("profileId"));if(selected!=null&&!op.optString("jobId").isEmpty()&&"accepted".equals(op.optString("status"))&&endpoint(selected.optString("baseUrl")).equals(op.optString("serviceBase")))watch(op.optString("profileId"),op.optString("jobId"),op.optString("operationId"),op.optString("serviceBase"));}catch(Exception ignored){}
         poller.scheduleWithFixedDelay(this::poll,2,2,TimeUnit.SECONDS);
     }
     @Override public String id(){return "remote";}
@@ -249,10 +249,12 @@ public final class RemoteModule implements EngineModule {
     private synchronized JSONObject operation(String id)throws Exception {for(int i=0;i<operations.length();i++)if(id.equals(operations.getJSONObject(i).optString("operationId")))return new JSONObject(operations.getJSONObject(i).toString());return null;}
     private static String endpoint(String base){return base.replaceAll("/+$","");}
     private static boolean active(String status){return status.equals("queued")||status.equals("running")||status.equals("stopping")||status.equals("awaiting_approval")||status.equals("awaiting_input");}
-    private void watch(String profileId,String jobId,String serviceBase){if(watches.size()<12)watches.putIfAbsent(profileId+":"+jobId,new Watch(profileId,jobId,serviceBase));}
+    // Freeze the accepted/persisted identity, never learn it from a later poll response.
+    private void watch(String profileId,String jobId,String operationId,String serviceBase){if(jobId.matches("[A-Za-z0-9_-]{1,80}")&&operationId.matches("[A-Za-z0-9_-]{1,80}")&&watches.size()<12)watches.putIfAbsent(profileId+":"+jobId,new Watch(profileId,jobId,operationId,serviceBase));}
     private void acceptReceipt(JSONObject job)throws Exception {
         String profileId=job.optString("profileId"),jobId=job.optString("id"),service=job.optString("serviceBase");
         if(!service.equals(endpoint(profile(profileId).getString("baseUrl"))))throw new IllegalStateException("电脑连接已更改，旧地址回执没有接入新连接；请恢复原地址再核对");
+        Watch original=watches.get(profileId+":"+jobId);if(original!=null)original.requireReceipt(job);
         JSONObject op=operation(job.optString("operationId"));
         if(op!=null){
             if(!"job_submit".equals(op.optString("kind","job_submit"))||!profileId.equals(op.optString("profileId"))||!service.equals(op.optString("serviceBase"))
@@ -266,7 +268,7 @@ public final class RemoteModule implements EngineModule {
             op.put("jobId",jobId).put("status",active(job.optString("status"))?"accepted":"settled").put("executorStatus",job.optString("status"));recordOperation(op);
         }
         remember(job);
-        if(active(job.optString("status")))watch(profileId,jobId,service);else watches.remove(profileId+":"+jobId);
+        if(active(job.optString("status")))watch(profileId,jobId,job.optString("operationId"),service);else watches.remove(profileId+":"+jobId);
         context.emit(id(),new JSONObject().put("kind","job").put("job",metadata(job)));
         // Reuse the existing read-side job watch; a message ACK is not a job terminal event.
         JSONObject message=job.optJSONObject("lastSteerMessage");
@@ -626,7 +628,7 @@ public final class RemoteModule implements EngineModule {
     }
     /** Foreground recovery schedules only original GETs on the existing bounded poll executor. */
     public void requestReadRefresh(){
-        if(closed||!readRefreshQueued.compareAndSet(false,true))return;try{poller.execute(()->{try{synchronized(RemoteModule.this){for(int i=0;i<operations.length();i++)try{JSONObject op=operations.getJSONObject(i),selected=find(op.optString("profileId"));if(selected!=null&&!op.optString("jobId").isEmpty()&&op.optString("status").equals("accepted")&&endpoint(selected.optString("baseUrl")).equals(op.optString("serviceBase")))watch(op.getString("profileId"),op.getString("jobId"),op.getString("serviceBase"));}catch(Exception originalUnavailable){/* Never rebind or create. */}}poll();}finally{readRefreshQueued.set(false);}});}catch(java.util.concurrent.RejectedExecutionException closedExecutor){readRefreshQueued.set(false);}
+        if(closed||!readRefreshQueued.compareAndSet(false,true))return;try{poller.execute(()->{try{synchronized(RemoteModule.this){for(int i=0;i<operations.length();i++)try{JSONObject op=operations.getJSONObject(i),selected=find(op.optString("profileId"));if(selected!=null&&!op.optString("jobId").isEmpty()&&op.optString("status").equals("accepted")&&endpoint(selected.optString("baseUrl")).equals(op.optString("serviceBase")))watch(op.getString("profileId"),op.getString("jobId"),op.getString("operationId"),op.getString("serviceBase"));}catch(Exception originalUnavailable){/* Never rebind or create. */}}poll();}finally{readRefreshQueued.set(false);}});}catch(java.util.concurrent.RejectedExecutionException closedExecutor){readRefreshQueued.set(false);}
     }
     /** One original prepared package operation. Existing ledger retains every slot before raw IO. */
     public JSONObject prepareProjectAssignment(JSONObject input,dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen original,
@@ -874,6 +876,7 @@ public final class RemoteModule implements EngineModule {
                 BoundRequest target;synchronized(this){target=bind(watch.profileId,watch.serviceBase);}
                 JSONObject result=send(target,"/v1/jobs/"+watch.jobId,null,5);
                 if(!watch.serviceBase.equals(result.optString("serviceBase"))){watches.remove(entry.getKey(),watch);continue;}
+                watch.requireReceipt(result);
                 result.put("profileId",watch.profileId);acceptReceipt(result);watch.failures=0;
                 String status=result.optString("status");if(status.equals("completed")||status.equals("failed")||status.equals("cancelled")||status.equals("interrupted")||status.equals("unknown"))watches.remove(entry.getKey(),watch);
             }catch(Exception unavailable){if(++watch.failures>=3){watches.remove(entry.getKey(),watch);try{context.emit(id(),new JSONObject().put("kind","connection_lost").put("profileId",watch.profileId).put("jobId",watch.jobId).put("status","unknown").put("message","电脑状态暂时无法读取；任务是否继续请重新连接后核对"));}catch(Exception ignored){}}}
@@ -967,5 +970,9 @@ public final class RemoteModule implements EngineModule {
     private static String required(JSONObject input,String key,int limit)throws Exception {Object value=input.opt(key);if(!(value instanceof String)||((String)value).trim().isEmpty()||((String)value).length()>limit)throw new IllegalArgumentException("请填写有效的"+key);return ((String)value).trim();}
     private static String identifier(JSONObject input,String key)throws Exception {String id=required(input,key,80);if(!id.matches("[A-Za-z0-9_-]{1,80}"))throw new IllegalArgumentException("编号无效："+key);return id;}
     @Override public void close(){closed=true;watches.clear();poller.shutdownNow();}
-    private static final class Watch{final String profileId,jobId,serviceBase;int failures;Watch(String profileId,String jobId,String serviceBase){this.profileId=profileId;this.jobId=jobId;this.serviceBase=serviceBase;}}
+    private static final class Watch{
+        final String profileId,jobId,operationId,serviceBase;int failures;
+        Watch(String profileId,String jobId,String operationId,String serviceBase){this.profileId=profileId;this.jobId=jobId;this.operationId=operationId;this.serviceBase=serviceBase;}
+        void requireReceipt(JSONObject receipt){if(!jobId.equals(receipt.optString("id"))||!operationId.equals(receipt.optString("operationId")))throw new SecurityException("电脑轮询回执不属于原任务或操作");}
+    }
 }
