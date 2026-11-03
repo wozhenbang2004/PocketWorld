@@ -24,8 +24,31 @@ import org.json.JSONObject
 
 /** One native owner UI for the existing engine; backend events remain the source of truth. */
 internal class PocketWorldController(private val activity: ComposeActivity, private val app: EngineApplication) {
-    var state by mutableStateOf(PocketUiState())
-        private set
+    private var webWindowEpoch = 0L
+    private var phoneWindowIdentity: Triple<String, String?, Int?>? = null
+    private fun syncPhoneWindowIdentity(value: PocketUiState) {
+        val task = value.activeTaskId?.let { id -> value.tasks.find { it.id == id } }
+        val identity = value.activeTaskId?.let { id ->
+            Triple(id, task?.raw?.optString("runId")?.takeIf { it.isNotBlank() },
+                task?.raw?.takeIf { it.has("coordinatorEpoch") }?.optInt("coordinatorEpoch"))
+        }
+        if (identity != phoneWindowIdentity) { webWindowEpoch++; phoneWindowIdentity = identity }
+    }
+    private var stateBacking by mutableStateOf(PocketUiState())
+    var state: PocketUiState
+        get() = stateBacking
+        private set(value) {
+            val previous = stateBacking
+            syncPhoneWindowIdentity(value)
+            if (previous.conversationId != value.conversationId || previous.projectId != value.projectId ||
+                previous.filePath != value.filePath || previous.workspaceArtifactEditorOrigin != value.workspaceArtifactEditorOrigin ||
+                previous.workspaceArtifactView?.source != value.workspaceArtifactView?.source ||
+                previous.workspaceArtifactView?.fromTaskId != value.workspaceArtifactView?.fromTaskId ||
+                previous.requestedTaskRevision != value.requestedTaskRevision ||
+                previous.requestedProjectRevision != value.requestedProjectRevision ||
+                previous.requestedConnectionRevision != value.requestedConnectionRevision) webWindowEpoch++
+            stateBacking = value
+        }
     var deviceWorkspaceRevision by mutableStateOf(0L)
         private set
     internal var remoteAttentionNotice by mutableStateOf<JSONObject?>(null)
@@ -162,6 +185,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private val composerSave = Runnable { persistOwnerComposer() }
     private var chatViewEpoch by mutableStateOf(0)
     val composerViewEpoch: Int get() = chatViewEpoch
+    internal fun webWindowTicket(): Pair<Triple<Long, Int, Long>, Long> {
+        // Snapshot immutable identity even if a JSONObject was mutated in place.
+        syncPhoneWindowIdentity(state)
+        return Pair(Triple(webWindowEpoch, chatViewEpoch, projectWorkbench.navigationRevision()), artifactContinuationGeneration)
+    }
     internal fun webUiCanInteract(): Boolean = !closed && voiceForeground && !activity.isFinishing && !activity.isDestroyed
     private var attachmentComposerKey: String? = null
     private var attachmentComposerEpoch = -1
@@ -438,8 +466,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             } catch (failure: Exception) { main.post { if (!closed) state = state.copy(attachmentOpens = state.attachmentOpens + (key to UiAttachmentOpen(error = "附件未打开：" + message(failure)))) } }
         }
     }
-    var queuedInputsPage by mutableStateOf<QueuedOwnerInputsPage?>(null)
-        private set
+    private var queuedInputsBacking by mutableStateOf<QueuedOwnerInputsPage?>(null)
+    var queuedInputsPage: QueuedOwnerInputsPage?
+        get() = queuedInputsBacking
+        private set(value) {
+            fun identity(page: QueuedOwnerInputsPage?) = page?.editor?.let {
+                Pair(Triple(it.message, it.queueRevision, it.messageRevision), it.withdrawn)
+            }
+            if (queuedInputsBacking?.window != value?.window || identity(queuedInputsBacking) != identity(value)) webWindowEpoch++
+            queuedInputsBacking = value
+        }
     private var queuedInputWindow = 0L
     private var queuedInputRead = 0L
     private fun queuedInputCurrent(page:QueuedOwnerInputsPage):Boolean =
@@ -631,6 +667,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private val ownerRequests = mutableMapOf<String, OwnerRequest>()
     private val ownerEpochs = java.util.concurrent.ConcurrentHashMap<String, Int>()
     private var ownerDomain: String? = null
+        set(value) { webWindowEpoch++; field = value }
     /** In-process owner choice only. Metadata in snapshots is never deserialized into this token. */
     private sealed class MemoryReviewScope {
         data object Private : MemoryReviewScope()
@@ -643,6 +680,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private var groupOwnerWindow: String? = null
     private var groupTaskWindow: String? = null
     private var groupTaskPage: String? = null
+        set(value) { webWindowEpoch++; field = value }
     private var groupTaskId: String? = null
     var groupTaskReady by mutableStateOf(false)
         private set

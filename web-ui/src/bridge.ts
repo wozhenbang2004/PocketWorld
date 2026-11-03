@@ -23,6 +23,7 @@ type NativeMessage = {
 declare global {
   interface Window {
     PocketNative?: { postMessage(value: string): void };
+    __pocketDocumentToken?: string;
     PocketWeb: {
       receive(message: NativeMessage | string): void;
       handleBack(): boolean;
@@ -40,11 +41,32 @@ let current: PocketSnapshot = {
 };
 let sequence = 0;
 const documentId = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('');
+class HostHandshakeTimeout extends Error {}
 let documentBound = false;
+let hostDocumentToken: string | null = null;
+const tokenListeners = new Set<() => void>();
+let hostDocumentResolve: (() => void) | null = null;
+const hostDocumentReady = new Promise<void>(resolve => { hostDocumentResolve = resolve; });
+function acceptHostDocumentToken(value: unknown) {
+  if (typeof value !== 'string' || !value) return;
+  if (hostDocumentToken !== null && hostDocumentToken !== value) {
+    for (const [id, request] of pending) {
+      if (request.action === 'app.ready') {
+        clearTimeout(request.timeout); pending.delete(id);
+        request.reject(new Error('工作台已恢复，正在重新绑定当前页面。'));
+      }
+    }
+  }
+  hostDocumentToken = value;
+  tokenListeners.forEach(listener => listener());
+  delete window.__pocketDocumentToken;
+  hostDocumentResolve?.(); hostDocumentResolve = null;
+}
 let advertisedCommands: string[] = [];
 let backHandler: (() => boolean) | null = null;
 const listeners = new Set<() => void>();
 const pending = new Map<string, { action: string; resolve(value: any): void; reject(error: Error): void; timeout: ReturnType<typeof setTimeout> }>();
+acceptHostDocumentToken(window.__pocketDocumentToken);
 
 function publish() { listeners.forEach(listener => listener()); }
 
@@ -90,6 +112,25 @@ function receive(input: NativeMessage | string) {
 
 export const bridge = {
   getState: () => current,
+  waitForHostDocument: () => hostDocumentReady,
+  async bindHostDocument() {
+    await hostDocumentReady;
+    while (true) {
+      const token = hostDocumentToken;
+      try { return await bridge.command('app.ready'); }
+      catch (error) {
+        if (token === hostDocumentToken) {
+          if (!(error instanceof HostHandshakeTimeout)) throw error;
+          // Do not replay a handshake against the same window after an unknown outcome.
+          // A later native foreground token can safely start one new handshake.
+          await new Promise<void>(resolve => {
+            const changed = () => { if (token !== hostDocumentToken) { tokenListeners.delete(changed); resolve(); } };
+            tokenListeners.add(changed); changed();
+          });
+        }
+      }
+    }
+  },
   subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   setBackHandler(handler: (() => boolean) | null) {
     backHandler = handler;
@@ -105,11 +146,11 @@ export const bridge = {
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
         pending.delete(id);
-        reject(new Error('尚未收到本次请求的受理回执；内容仍保留，请先核对原动作。'));
+        reject(action === 'app.ready' ? new HostHandshakeTimeout('尚未收到页面握手回执，请保留当前内容。') : new Error('尚未收到本次请求的受理回执；内容仍保留，请先核对原动作。'));
       }, 30_000);
       pending.set(id, { action, resolve, reject, timeout });
       try {
-        const encoded = JSON.stringify({ v: 1, id, documentId, action, args: action === 'app.ready' ? { ...args, documentId } : args });
+        const encoded = JSON.stringify({ v: 1, id, documentId, hostDocumentToken, action, args: action === 'app.ready' ? { ...args, documentId } : args });
         if (encoded.length > 16 * 1024 * 1024) throw new Error('当前请求过长，请保留原文件后缩小本次内容。');
         native.postMessage(encoded);
       } catch (error) {
@@ -125,7 +166,9 @@ window.PocketWeb = {
   receive,
   handleBack() { return Boolean(backHandler?.()); },
   hostConfiguration(value) {
-    current = { ...current, host: { ...current.host, ...value } };
+    acceptHostDocumentToken(value.documentToken);
+    const { documentToken: _documentToken, ...presentation } = value;
+    current = { ...current, host: { ...current.host, ...presentation } };
     if (typeof value.keyboardVisible === 'boolean') {
       document.documentElement.dataset.pocketKeyboard = String(value.keyboardVisible);
     }

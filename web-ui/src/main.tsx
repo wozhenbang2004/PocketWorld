@@ -29,7 +29,9 @@ function MountedApp() {
       if (disposed) return;
       console.info('PocketWebUi startup phase=frames-ready');
       console.info('PocketWebUi startup phase=handshake-sent');
-      await bridge.command('app.ready');
+      await bridge.waitForHostDocument();
+      if (disposed) return;
+      await bridge.bindHostDocument();
       if (!disposed) console.info('PocketWebUi startup phase=handshake-accepted');
       // A command receipt can arrive before its state snapshot. Wait for the
       // actual App subscription and painted surface, not merely the handshake.

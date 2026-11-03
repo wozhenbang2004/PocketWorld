@@ -3,7 +3,6 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.webkit.JavascriptInterface
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateObserver
 import dev.pocketengine.core.ModelConfig
@@ -77,6 +76,7 @@ internal class PocketWebBridge(
     private var section: String? = null
     private var taskPage: String? = null
     private var taskReviewGeneration = 0L
+    private val commandFence = PocketWebCommandFence()
     private val reviews = PocketWebTaskReviews()
     private val commandReceipts = linkedMapOf<String, Pair<String, JSONObject>>()
     private val pendingCommands = mutableMapOf<String, String>()
@@ -177,12 +177,25 @@ internal class PocketWebBridge(
         pendingCommands.clear(); commandReceipts.clear()
     }
 
-    @JavascriptInterface
-    fun postMessage(raw: String) {
+    internal fun captureWindow(): PocketWebWindowTicket = PocketWebWindowTicket(commandFence.ticket(), controller.webWindowTicket())
+    internal fun acceptsWindow(ticket: PocketWebWindowTicket): Boolean =
+        ticket.accepts(commandFence.ticket(), controller.webWindowTicket())
+
+    fun postMessage(raw: String, window: PocketWebWindowTicket, onStaleWindow: () -> Unit) {
         if (closed) return
         // The existing workspace backend remains the authority on individual file size limits.
         if (raw.length > 16 * 1024 * 1024) return
-        main.post { if (!closed && started) process(raw) }
+        main.post { if (!closed && started) { if (acceptsWindow(window)) process(raw) else onStaleWindow() } }
+    }
+
+    /** Synchronously invalidate queued commands and short-lived owner review handles. */
+    fun invalidatePresentation(documentReplaced: Boolean) {
+        check(Looper.myLooper() == Looper.getMainLooper())
+        commandFence.invalidate()
+        taskReviewGeneration++
+        domainGeneration++
+        reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear()
+        if (documentReplaced) documentId = null
     }
 
     private fun publishState(force: Boolean = false) {
@@ -228,7 +241,7 @@ internal class PocketWebBridge(
             val action = requiredString(request, "action")
             require(action in commands) { "这项操作没有已接入的宿主能力" }
             require(action == "app.ready" || documentId != null && request.optString("documentId") == documentId) { "原界面文档已变化，请重新打开当前工作" }
-            require(action == "app.ready" || controller.webUiCanInteract()) { "原界面已不在前台，未继续这项操作" }
+            require(controller.webUiCanInteract()) { "原界面已不在前台，未继续这项操作" }
             val args = if (request.has("args")) request.getJSONObject("args") else JSONObject()
             val identity = digest(action + "\u0000" + args.toString())
             commandReceipts[id]?.let { prior ->
@@ -759,8 +772,8 @@ internal class PocketWebBridge(
     private fun isGroup(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") == "group"
     private fun canUseTaskControls(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") != "paired_device" && (!isGroup(task) || taskPage != null && controller.groupTaskReady)
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
-    private fun leaveTask() { taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
-    private fun leaveConnection() { ++domainGeneration; modelReviews.clear(); deviceWindow?.close(); deviceWindow = null; section?.takeIf { it in ownerDomains }?.let(controller::leaveOwnerDomain); section = null }
+    private fun leaveTask() { commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
+    private fun leaveConnection() { commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); deviceWindow?.close(); deviceWindow = null; section?.takeIf { it in ownerDomains }?.let(controller::leaveOwnerDomain); section = null }
     private fun requireSection(expected: String) { require(section == expected) { "原能力窗口已关闭，请重新进入" } }
     private fun requireComposer(args: JSONObject, optional: Boolean = false) {
         val draft = controller.composerDraft ?: error("原输入尚未恢复")
