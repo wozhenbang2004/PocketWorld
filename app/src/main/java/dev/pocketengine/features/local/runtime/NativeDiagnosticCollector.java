@@ -99,7 +99,8 @@ public final class NativeDiagnosticCollector implements AutoCloseable {
         switch(domain){
             case PLATFORM:for(String key:List.of("deviceSdk","targetSdk","appVersionCode"))fields.put(key,Type.COUNT);fields.put("arm64Advertised",Type.BOOL);break;
             case RUNTIME:
-                for(String key:List.of("androidProfilePresent","activeGenerationLoaded","supervisorLoaded","ptyAvailable","duplexAvailable","integrityRechecked"))fields.put(key,Type.BOOL);
+                for(String key:List.of("androidProfilePresent","activeGenerationLoaded","supervisorLoaded","ptyAvailable","duplexAvailable","integrityRechecked","memoryLow","memoryFresh","automaticLogPageReduced"))fields.put(key,Type.BOOL);
+                for(String key:List.of("thermalStatus","observationAgeMillis","memoryAvailableBytes","memoryTotalBytes","memoryThresholdBytes","memoryObservationAgeMillis","automaticLogPageBytes"))fields.put(key,Type.COUNT);
                 fields.put("runtimeIdentityFingerprintSha256",Type.FINGERPRINT);fields.put("catalogFingerprintSha256",Type.FINGERPRINT);break;
             case PHONE:
                 for(String key:List.of("mainObservation","mainScreenshot","mainExecution","taskNotifications","stopControl"))fields.put(key,Type.STATE);fields.put("backgroundSampled",Type.BOOL);break;
