@@ -92,6 +92,31 @@ public final class MediaWorkflowHostTest {
         assertEquals("queued",host.handleOriginal(media,"getOperation",new JSONObject().put("operationId",operation)).getString("status"));
         tasks.startAttempt(taskId.get(),"capabilities",1);assertThrows(SecurityException.class,()->host.handleOriginal(media,"getJob",new JSONObject().put("operationId",operation)));assertEquals(0,queries.get());
     }
+    @Test public void fullProviderJournalSettlesUnsentOwnerOperationWithoutLosingOldReceipts()throws Exception{
+        JSONObject input=prepared(args());media.close();
+        JSONObject receipts=new JSONObject();for(int i=0;i<dev.pocketengine.media.jobs.MediaJobJournal.MAX_RECEIPTS;i++)receipts.put("old-"+i,new JSONObject().put("operationId","old-"+i).put("status","unknown").put("dispatched",true));
+        java.io.File file=new java.io.File(app.getFilesDir(),"media-receipts-v1.json");
+        Files.writeString(file.toPath(),new JSONObject().put("version",1).put("receipts",receipts).toString());byte[] before=Files.readAllBytes(file.toPath());media=module();
+        assertThrows(IllegalStateException.class,()->host.submitFromOwner(media,"submitWorkflow",input));
+        JSONObject task=tasks.get(taskId.get(),false);assertEquals("failed",task.getString("status"));assertFalse(tasks.hasUnresolved(taskId.get()));
+        JSONObject operation=task.getJSONArray("operations").getJSONObject(0),receipt=operation.getJSONObject("receipt");
+        assertEquals("failed",receipt.getString("status"));assertFalse(receipt.getBoolean("dispatched"));assertEquals("receipt_capacity",receipt.getString("failureReason"));
+        assertEquals(operation.getString("operationId"),receipt.getString("operationId"));assertEquals(taskId.get(),receipt.getString("taskId"));assertEquals(task.getString("runId"),receipt.getString("runId"));
+        assertArrayEquals(before,Files.readAllBytes(file.toPath()));assertEquals(256,media.snapshot().getJSONArray("jobs").length());
+        host.close();media.close();closeStore();tasks=new TaskStore(app);host=new MediaWorkflowHost(tasks);media=module();
+        JSONObject original=host.submitFromOwner(media,"submitWorkflow",input);assertTrue(original.getBoolean("knownOperation"));assertFalse(original.getBoolean("dispatched"));
+        assertEquals(receipt.getString("operationId"),original.getString("operationId"));assertEquals(0,posts.get());assertEquals(0,queries.get());assertEquals(0,downloads.get());
+        assertEquals(1,rows("tasks"));assertEquals(1,rows("runs"));assertEquals(1,rows("operations"));assertArrayEquals(before,Files.readAllBytes(file.toPath()));
+    }
+    @Test public void unclassifiedJournalWriteFailureKeepsUnknownOriginalEffect()throws Exception{
+        JSONObject input=prepared(args());java.io.File file=new java.io.File(app.getFilesDir(),"media-receipts-v1.json");
+        assertTrue(file.mkdir());Files.writeString(new java.io.File(file,"unrelated").toPath(),"preserve");
+        assertThrows(Exception.class,()->host.submitFromOwner(media,"submitWorkflow",input));
+        JSONObject task=tasks.get(taskId.get(),false),receipt=task.getJSONArray("operations").getJSONObject(0).getJSONObject("receipt");
+        assertEquals("reconciling",task.getString("status"));assertEquals("unknown",receipt.getString("status"));assertFalse(receipt.has("dispatched"));
+        assertTrue(host.submitFromOwner(media,"submitWorkflow",input).getBoolean("knownOperation"));assertEquals(0,posts.get());assertEquals(1,rows("operations"));
+        assertEquals("preserve",Files.readString(new java.io.File(file,"unrelated").toPath()));
+    }
     @Test public void lostAdmissionRecoversOnlyOriginalIdentityWithoutSecondPostOrNewTask()throws Exception{
         lostAck.set(true);JSONObject input=prepared(args()),receipt=host.submitFromOwner(media,"submitWorkflow",input);assertEquals("unknown",receipt.getString("status"));assertEquals("reconciling",tasks.get(taskId.get(),false).getString("status"));
         assertTrue(host.submitFromOwner(media,"submitWorkflow",input).getBoolean("knownOperation"));assertEquals(1,posts.get());
