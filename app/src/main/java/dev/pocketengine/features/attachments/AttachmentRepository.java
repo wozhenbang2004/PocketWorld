@@ -55,10 +55,7 @@ public final class AttachmentRepository {
         return new JSONObject().put("attachments",imported).put("errors",errors).put("status",errors.length()==0?"imported":imported.length()>0?"partially_imported":"failed");
     }
     public synchronized JSONObject exportToUri(String id,Uri destination)throws Exception{
-        requireContent(destination);book.get(id);long size;
-        try(OutputStream output=context.getContentResolver().openOutputStream(destination,"wt")){if(output==null)throw new IllegalStateException("目标文件无法写入");size=book.exportTo(id,output);}
-        catch(Exception partial){throw new IllegalStateException("附件导出未完成，目标可能已有部分内容；请核对后再操作",partial);}
-        return new JSONObject().put("id",id).put("status","exported").put("bytes",size).put("verified",true);
+        return exportVerifiedToUri(id,book.get(id).getString("sha256"),destination,new RunControl());
     }
     /** Native SAF export of the exact reviewed immutable artifact, with cancellation and version rechecks. */
     public JSONObject exportVerifiedToUri(String id,String expectedSha256,Uri destination,RunControl control)throws Exception{
@@ -111,8 +108,10 @@ public final class AttachmentRepository {
         if(uri==null||!"content".equals(uri.getScheme())||!context.getPackageName().concat(".attachments").equals(uri.getAuthority())||uri.getPathSegments().size()!=2||!"view".equals(uri.getPathSegments().get(0))||uri.getQuery()!=null||uri.getFragment()!=null)throw new SecurityException("只能清理本次尚未交付的原生查看快照");
         new AttachmentViewSnapshots(context).discard(uri.getLastPathSegment());
     }
-    public Intent viewIntent(String id)throws Exception{return new Intent(Intent.ACTION_VIEW).setDataAndType(uri(id),book.get(id).getString("mimeType")).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);}
-    public Intent shareIntent(String id)throws Exception{Uri uri=uri(id);Intent share=new Intent(Intent.ACTION_SEND).setType(book.get(id).getString("mimeType")).putExtra(Intent.EXTRA_STREAM,uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);share.setClipData(ClipData.newRawUri("Pocket World attachment",uri));return share;}
+    public Intent viewIntent(String id)throws Exception{return viewIntent(id,book.get(id).getString("sha256"));}
+    Intent viewIntent(String id,String expectedSha256)throws Exception{return verifiedViewIntent(id,expectedSha256,new RunControl());}
+    public Intent shareIntent(String id)throws Exception{return shareIntent(id,book.get(id).getString("sha256"));}
+    Intent shareIntent(String id,String expectedSha256)throws Exception{Intent prepared=viewIntent(id,expectedSha256);Uri uri=prepared.getData();Intent share=new Intent(Intent.ACTION_SEND).setType(prepared.getType()).putExtra(Intent.EXTRA_STREAM,uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);share.setClipData(ClipData.newRawUri("Pocket World attachment",uri));return share;}
     private boolean persisted(Uri uri){for(UriPermission permission:context.getContentResolver().getPersistedUriPermissions())if(uri.equals(permission.getUri())&&permission.isReadPermission())return true;return false;}
     private void release(Uri uri){try{context.getContentResolver().releasePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(SecurityException ignored){}}
     private static void requireContent(Uri uri){if(uri==null||!"content".equals(uri.getScheme())||uri.getAuthority()==null)throw new IllegalArgumentException("附件只接受Android授权的content URI");}

@@ -105,7 +105,12 @@ public final class AttachmentBook {
     public synchronized JSONObject get(String id)throws Exception{return visible(internal(id));}
     synchronized JSONObject internal(String id)throws Exception{checkId(id);try{File record=new File(root,id+".json"),data=new File(root,id+".blob");if(!record.isFile()||!data.isFile())throw new IllegalArgumentException("附件不存在");JSONObject value=new JSONObject(new String(Files.readAllBytes(record.toPath()),StandardCharsets.UTF_8));if(!id.equals(value.optString("id"))||data.length()!=value.getLong("size"))throw new IllegalStateException("附件记录与文件不一致");return value;}catch(Exception missingOrChanged){revokeOutputEligibility(id);throw missingOrChanged;}}
     public synchronized File file(String id)throws Exception{internal(id);return new File(root,id+".blob");}
-    public synchronized JSONObject readText(String id)throws Exception{JSONObject meta=internal(id);if(meta.getLong("size")>65536)throw new IllegalArgumentException("文本预览最多64KiB，请打开附件查看");byte[] data=Files.readAllBytes(file(id).toPath());String text=StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(data)).toString();if(text.indexOf('\0')>=0)throw new IllegalArgumentException("此附件不是可预览的UTF-8文本");return visible(meta).put("text",text).put("untrustedAttachmentContent",true);}
+    public synchronized JSONObject readText(String id)throws Exception{return readText(id,internal(id).getString("sha256"));}
+    synchronized JSONObject readText(String id,String expectedSha256)throws Exception{
+        JSONObject meta=internal(id);if(meta.getLong("size")>65536)throw new IllegalArgumentException("文本预览最多64KiB，请打开附件查看");byte[] data=verifiedBytes(id,expectedSha256,new RunControl());
+        try{String text=StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(data)).toString();if(text.indexOf('\0')>=0)throw new IllegalArgumentException("此附件不是可预览的UTF-8文本");return visible(meta).put("text",text).put("untrustedAttachmentContent",true);}
+        finally{Arrays.fill(data,(byte)0);}
+    }
     static final class InputChangedException extends Exception {
         InputChangedException(){super("Attachment no longer matches the requested digest");}
     }
@@ -190,7 +195,11 @@ public final class AttachmentBook {
         File data=new File(root,id+".blob"),record=new File(root,id+".json");meta.put("outputSourceRetired",true);atomicJson(record,meta);
         if(!data.delete())throw new IllegalStateException("附件文件未能删除，派生读取已停用");if(!record.delete())throw new IllegalStateException("附件索引未能删除，派生读取已停用");
     }
-    public synchronized long exportTo(String id,java.io.OutputStream output)throws Exception{long copied=0;try(InputStream input=new FileInputStream(file(id))){byte[] data=new byte[32768];for(int n;(n=input.read(data))!=-1;){if(Thread.currentThread().isInterrupted())throw new InterruptedException("附件导出已停止，目标可能包含部分内容");output.write(data,0,n);copied+=n;}}output.flush();return copied;}
+    public synchronized long exportTo(String id,java.io.OutputStream output)throws Exception{
+        String expected=internal(id).getString("sha256");RunControl control=new RunControl();byte[] bytes=verifiedBytes(id,expected,control);
+        try{for(int at=0;at<bytes.length;){control.checkpoint();int count=Math.min(32768,bytes.length-at);output.write(bytes,at,count);at+=count;}output.flush();requireUnchanged(id,expected,control);return bytes.length;}
+        finally{Arrays.fill(bytes,(byte)0);}
+    }
     public static String displayName(String input){String name=input==null?"attachment":input.replaceAll("[\\p{Cntrl}/\\\\]","_").trim();if(name.isEmpty()||name.equals(".")||name.equals(".."))name="attachment";return name.substring(0,Math.min(160,name.length()));}
     public static String mimeType(String raw){return raw!=null&&raw.matches("[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+")?raw.toLowerCase(java.util.Locale.ROOT):"application/octet-stream";}
     private static JSONObject visible(JSONObject original)throws Exception{JSONObject result=new JSONObject(original.toString()),source=result.optJSONObject("source");if(source!=null){source.remove("uri");source.remove("url");}return result;}

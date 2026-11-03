@@ -1,4 +1,14 @@
 {
+  "attachment-legacy-integrity": {
+    "class": "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.AttachmentBookTest",
+      "dev.pocketengine.features.attachments.AttachmentRepositoryTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Exact legacy module/export/provider bytes, pinned SHA, owner/group/retirement and quota tests. The JDK17 native dup fixture requires test JVM --add-opens=java.base/java.io=ALL-UNNAMED and --add-opens=java.base/sun.nio.fs=ALL-UNNAMED; no device, mounted UI or external-reader acceptance."
+  },
   "mika-skill-lifecycle": {
     "class": "dev.pocketengine.features.skills.NativeSkillExecutionHostTest",
     "additionalClasses": [
