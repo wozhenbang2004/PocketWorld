@@ -202,9 +202,38 @@ internal class AttachmentOutcomeCoordinator(
         }
     }
     fun openExternal(){val file=state.file?:return;val group=state.group;val task=state.taskId
-        work{c,w->val intent=if(group==null)app.attachmentOutcomes.open(task,file.getString("id"),file.getString("sha256"),c) else {
-            var prepared:Intent?=null;groupCall(w){prepared=app.openGroupOutcome(group,c);JSONObject()};prepared?:throw IllegalStateException("原群文件未准备好")
-        };main.post{if(state.open&&!c.isCancelled&&resumed)try{activity.startActivity(intent)}catch(_:Exception){state=state.copy(error="当前没有可打开此类型的应用；可以导出文件后查看")}};JSONObject().put("opened",true) to null}
+        work{c,w->
+            // Only this preparation may release its copy. Entry into Android launch wins over later cancellation.
+            val disposition=java.util.concurrent.atomic.AtomicInteger(0) // prepared / launch entered / discarded
+            fun discard(intent:Intent){runCatching{io.execute{runCatching{
+                if(group==null)app.attachmentOutcomes.discardUnissuedView(intent)
+                else dev.pocketengine.features.attachments.AttachmentViewSnapshots(app).discardUnissuedView(intent)
+            }}}} // A rejected cleanup retains the existing TTL; never wait for snapshot disk IO on main.
+            fun retain(intent:Intent):Intent {
+                c.onCancel(Runnable{if(disposition.compareAndSet(0,2))discard(intent)})
+                return intent
+            }
+            try{
+                val intent=if(group==null)retain(app.attachmentOutcomes.open(task,file.getString("id"),file.getString("sha256"),c))else{
+                    var prepared:Intent?=null;groupCall(w){prepared=retain(app.openGroupOutcome(group,c));JSONObject()};prepared?:throw IllegalStateException("原群文件未准备好")
+                }
+                if(!main.post{
+                    if(!closed&&state.open&&wait===c&&!c.isCancelled&&resumed&&disposition.compareAndSet(0,1)){
+                        intent.putExtra(dev.pocketengine.features.attachments.AttachmentOutcomeHost.NATIVE_VIEW_ISSUED,true)
+                        try{activity.startActivity(intent)}catch(_:android.content.ActivityNotFoundException){
+                            // This Android result explicitly means there was no reader, even if cancel ran during entry.
+                            intent.removeExtra(dev.pocketengine.features.attachments.AttachmentOutcomeHost.NATIVE_VIEW_ISSUED)
+                            if(disposition.compareAndSet(1,2))discard(intent)
+                            state=state.copy(error="当前没有可打开此类型的应用；可以导出文件后查看")
+                        }catch(_:Exception){
+                            // Android may already have handed off the URI. Keep the reader copy until its normal TTL.
+                            state=state.copy(error="外部查看是否启动尚未确认；原文件保留，可以导出后查看")
+                        }
+                    }else c.cancel()
+                })c.cancel()
+                JSONObject().put("externalViewPrepared",true) to null
+            }catch(failure:Exception){c.cancel();throw failure}
+        }
     }
     fun prepareExport(){
         if(state.team!=null){val actual=state.snapshot?.optJSONObject("artifact")?:return;if(actual.optString("kind")=="file_tombstone"){state=state.copy(notice="删除修订没有文件正文；历史与原分工保留。");return};export=locator().put("provider","teams");activity.createOutcomeDocument(actual.getString("mimeType"),actual.getString("path").substringAfterLast('/'));return}
