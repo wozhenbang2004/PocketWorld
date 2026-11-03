@@ -297,6 +297,7 @@
       "dev.pocketengine.features.skills.SkillSourceUpdateTest",
       "dev.pocketengine.features.skills.SkillCatalogueHostNativeTest",
       "dev.pocketengine.features.skills.SkillSourcePolicyTest",
+      "dev.pocketengine.features.skills.HostSkillProjectScopeTest",
       "dev.pocketengine.features.skills.SkillSourceModuleJourneyTest",
       "dev.pocketengine.features.skills.SkillExecutionTest",
       "dev.pocketengine.features.skills.SkillDiscoveryTest",
@@ -441,6 +442,7 @@
     "additionalClasses": [
       "dev.pocketengine.features.skills.ManagedSkillPolicyTest",
       "dev.pocketengine.features.skills.SkillExecutionConfigurationRecoveryTest",
+      "dev.pocketengine.features.local.project.ProjectSkillCapabilityProjectionNativeTest",
       "dev.pocketengine.features.skills.SkillCataloguePagingTest"
     ],
     "helpers": [],

@@ -1040,6 +1040,10 @@ public final class AgentRunner {
     private static boolean currentReferenceReceipt(String name,String body,JSONObject validation){
         try{
             if(validation==null)return false;JSONObject result=new JSONObject(body);
+            if(name.startsWith("skills_")&&validation.has("skillScopeFingerprint")){
+                String scope=validation.getString("skillScopeFingerprint");
+                if(!scope.matches("[a-f0-9]{64}")||!scope.equals(result.optString("skillScopeFingerprint")))return false;
+            }
             if(name.equals("skills_read"))return currentReference(result,validation.optJSONArray("skills"),true);
             JSONArray rows=result.optJSONArray(name.startsWith("memory_")?"records":"skills"),live=validation.optJSONArray(name.startsWith("memory_")?"memory":"skills");
             if(rows==null||live==null)return false;
@@ -1051,7 +1055,7 @@ public final class AgentRunner {
     }
     private static boolean currentReference(JSONObject row,JSONArray live,boolean skill)throws Exception{
         if(live==null||row.optString("id").isEmpty()||!(row.opt("revision") instanceof Number)||row.getLong("revision")<1)return false;
-        for(int i=0;i<live.length();i++){JSONObject current=live.getJSONObject(i);if(row.getString("id").equals(current.optString("id"))&&row.getLong("revision")==current.optLong("revision")&&(!skill||!row.optString("digest").isEmpty()&&row.getString("digest").equals(current.optString("digest"))&&row.optLong("executionGeneration",0)==current.optLong("executionGeneration",0)))return true;}return false;
+        for(int i=0;i<live.length();i++){JSONObject current=live.getJSONObject(i);if(row.getString("id").equals(current.optString("id"))&&row.getLong("revision")==current.optLong("revision")&&(!skill||!row.optString("digest").isEmpty()&&row.getString("digest").equals(current.optString("digest"))&&row.optLong("executionGeneration",0)==current.optLong("executionGeneration",0)&&row.optString("skillScopeFingerprint").equals(current.optString("skillScopeFingerprint"))))return true;}return false;
     }
 
     /** These host-generated opaque identities are not prose. Redacting arbitrary substrings would

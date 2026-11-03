@@ -92,18 +92,18 @@ public final class SkillBook {
             }
         }
     }
-    public JSONArray list(JSONObject scope,long now)throws Exception {synchronized(lock){String[] owner=scope(scope);JSONArray rows=state().getJSONArray("skills"),result=new JSONArray();Map<String,String> preferred=preferredSources(rows,owner,now);for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(matches(record,owner))result.put(ownerSourceStatus(inspectCurrent(record,null,now),record,preferred));}return result;}}
-    public JSONObject get(JSONObject scope,String id,long now)throws Exception {synchronized(lock){JSONArray rows=state().getJSONArray("skills");String[] owner=scope(scope);JSONObject record=required(rows,owner,id);return ownerSourceStatus(inspectCurrent(record,null,now),record,preferredSources(rows,owner,now));}}
+    public JSONArray list(JSONObject scope,long now)throws Exception {synchronized(lock){String[] owner=scope(scope);JSONArray rows=state().getJSONArray("skills"),result=new JSONArray();Map<String,String> preferred=preferredSources(rows,scope,now);for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(matches(record,owner))result.put(ownerSourceStatus(inspectCurrent(record,null,now),record,preferred,scope));}return result;}}
+    public JSONObject get(JSONObject scope,String id,long now)throws Exception {synchronized(lock){JSONArray rows=state().getJSONArray("skills");String[] owner=scope(scope);JSONObject record=required(rows,owner,id);return ownerSourceStatus(inspectCurrent(record,null,now),record,preferredSources(rows,scope,now),scope);}}
 
     /** Compatibility catalogue: metadata only, with fresh package validation and isolated bad packages. */
     public JSONObject catalogueForHost(JSONObject authenticatedScope,long now)throws Exception {
         synchronized(lock){String[] owner=scope(authenticatedScope);JSONArray rows=state().getJSONArray("skills"),selected=new JSONArray();int invalid=0;
-            Map<String,String> preferred=preferredSources(rows,owner,now);
-            for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(!matches(record,owner))continue;
+            Map<String,String> preferred=preferredSources(rows,authenticatedScope,now);
+            for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(!matches(record,owner)||!SkillSourcePolicy.applicable(record,authenticatedScope))continue;
                 JSONObject current=inspectCurrent(record,null,now);if(current.getString("status").equals("invalid"))invalid++;
-                if(current.getBoolean("active")&&preferred(record,preferred)&&SkillSourcePolicy.modelAllowed(record))selected.put(current);
+                if(current.getBoolean("active")&&preferred(record,preferred)&&SkillSourcePolicy.modelAllowed(record))selected.put(current.put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(authenticatedScope)));
             }
-            return new JSONObject().put("skills",selected).put("metadataOnly",true).put("grantsAdded",new JSONArray())
+            return new JSONObject().put("skills",selected).put("metadataOnly",true).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(authenticatedScope)).put("grantsAdded",new JSONArray())
                     .put("status",invalid==0?"ok":"partial").put("invalidCount",invalid).put("untrustedReference",true).put("executable",false);
         }
     }
@@ -119,22 +119,22 @@ public final class SkillBook {
         Set<String> selection=selectedVersions==null?null:Set.copyOf(selectedVersions);
         if(pageSize<1||pageSize>20)throw new IllegalArgumentException("技能目录每页为1至20项");
         synchronized(lock){JSONArray rows=state().getJSONArray("skills"),identity=new JSONArray(),page=new JSONArray();List<JSONObject> eligible=new ArrayList<>();int invalid=0;
-            Map<String,String> preferred=preferredSources(rows,owner,now);
-            for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(!matches(record,owner))continue;
+            Map<String,String> preferred=preferredSources(rows,authenticatedScope,now);
+            for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(!matches(record,owner)||!SkillSourcePolicy.applicable(record,authenticatedScope))continue;
                 if(selection!=null&&!selection.contains(new JSONArray().put(record.getString("id")).put(record.getInt("revision")).put(record.getString("digest")).toString()))continue;
                 JSONObject current=inspectCurrent(record,capabilities,now);if(current.getString("status").equals("invalid"))invalid++;
                 if(!current.getString("status").equals("active")||!preferred(record,preferred)||!SkillSourcePolicy.modelAllowed(record))continue;
-                eligible.add(discoveryMetadata(record,new JSONObject().put("score",0).put("matchReasons",new JSONArray())));
+                eligible.add(discoveryMetadata(record,new JSONObject().put("score",0).put("matchReasons",new JSONArray())).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(authenticatedScope)));
             }
             eligible.sort(Comparator.comparing((JSONObject row)->row.optString("name")).thenComparing(row->row.optString("id")));
             for(JSONObject row:eligible)identity.put(new JSONArray().put(row.getString("id")).put(row.getInt("revision")).put(row.getString("digest"))
                     .put(row.getLong("executionGeneration")).put(row.getString("source")).put(row.getString("sourceVersion")).put(row.getJSONObject("sourcePolicy").toString()));
             List<String> sortedCapabilities=new ArrayList<>(capabilities);sortedCapabilities.sort(Comparator.naturalOrder());
-            String fingerprint=digest(new JSONObject().put("owner",owner[0]).put("space",owner[1]).put("capabilities",new JSONArray(sortedCapabilities).toString()).put("versions",identity.toString()));
+            String fingerprint=digest(new JSONObject().put("scope",SkillSourcePolicy.scopeFingerprint(authenticatedScope)).put("capabilities",new JSONArray(sortedCapabilities).toString()).put("versions",identity.toString()));
             int offset=0;
             if(cursor!=null){if(cursor.length()!=2||!fingerprint.equals(cursor.optString("catalogueDigest"))||!(cursor.opt("offset") instanceof Integer||cursor.opt("offset") instanceof Long))throw new SecurityException("技能目录或宿主能力已变化，请从第一页重新发现");long raw=cursor.getLong("offset");if(raw<0||raw>eligible.size())throw new SecurityException("技能目录游标越界");offset=(int)raw;}
             int end=Math.min(offset+pageSize,eligible.size());for(int i=offset;i<end;i++)page.put(eligible.get(i));
-            return new JSONObject().put("skills",page).put("totalCount",eligible.size()).put("pageSize",pageSize).put("offset",offset)
+            return new JSONObject().put("skills",page).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(authenticatedScope)).put("totalCount",eligible.size()).put("pageSize",pageSize).put("offset",offset)
                     .put("catalogueDigest",fingerprint).put("nextCursor",end<eligible.size()?new JSONObject().put("catalogueDigest",fingerprint).put("offset",end):JSONObject.NULL)
                     .put("hasMore",end<eligible.size()).put("metadataOnly",true).put("status",invalid==0?"ok":"partial").put("invalidCount",invalid)
                     .put("untrustedReference",true).put("executable",false).put("grantsAdded",new JSONArray());
@@ -147,19 +147,19 @@ public final class SkillBook {
         if(limit<1||limit>20)throw new IllegalArgumentException("技能发现数量必须为1至20");
         if(maxChars<512||maxChars>32000)throw new IllegalArgumentException("技能发现预算必须为512至32000字符");
         synchronized(lock){JSONArray rows=state().getJSONArray("skills"),selected=new JSONArray();List<JSONObject> candidates=new ArrayList<>();
-            Map<String,String> preferred=preferredSources(rows,owner,now);
+            Map<String,String> preferred=preferredSources(rows,authenticatedScope,now);
             JSONObject omitted=new JSONObject().put("inactive",0).put("invalid",0).put("missingCapabilities",0).put("noMatch",0).put("duplicates",0).put("shadowed",0).put("ownerOnly",0).put("limit",0).put("budget",0);
-            for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(!matches(record,owner))continue;
+            for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(!matches(record,owner)||!SkillSourcePolicy.applicable(record,authenticatedScope))continue;
                 JSONObject current=inspectCurrent(record,capabilities,now);String status=current.getString("status");
                 if(!status.equals("active")){increment(omitted,status);continue;}
                 if(!preferred(record,preferred)){increment(omitted,samePreferredDigest(record,rows,preferred)?"duplicates":"shadowed");continue;}
                 if(!SkillSourcePolicy.modelAllowed(record)){increment(omitted,"ownerOnly");continue;}
                 JSONObject match=match(record,terms,query);if(match.getInt("score")==0){increment(omitted,"noMatch");continue;}
-                candidates.add(discoveryMetadata(record,match));
+                candidates.add(discoveryMetadata(record,match).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(authenticatedScope)));
             }
             candidates.sort(Comparator.<JSONObject>comparingInt(row->row.optInt("score")).reversed()
                     .thenComparing(row->row.optString("name")).thenComparing(row->row.optString("id")));
-            JSONObject result=new JSONObject().put("skills",selected).put("metadataOnly",true).put("matching","lexical-v1")
+            JSONObject result=new JSONObject().put("skills",selected).put("metadataOnly",true).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(authenticatedScope)).put("matching","lexical-v1")
                     .put("status",omitted.getInt("invalid")==0?"ok":"partial").put("omitted",omitted).put("truncated",false)
                     .put("untrustedReference",true).put("executable",false).put("requiresHostAuthorization",true).put("grantsAdded",new JSONArray());
             Set<String> digests=new HashSet<>();
@@ -177,7 +177,7 @@ public final class SkillBook {
     public JSONObject diagnoseDiscovery(JSONObject authenticatedScope,String query,Set<String> hostCapabilities,long now)throws Exception {
         String[] owner=scope(authenticatedScope);Set<String> capabilities=hostCapabilities(hostCapabilities),terms=queryTerms(query);
         synchronized(lock){JSONArray rows=state().getJSONArray("skills");List<JSONObject> diagnostics=new ArrayList<>();int invalid=0;
-            Map<String,String> preferred=preferredSources(rows,owner,now);
+            Map<String,String> preferred=preferredSources(rows,authenticatedScope,now);
             for(int i=0;i<rows.length();i++){JSONObject record=rows.getJSONObject(i);if(!matches(record,owner))continue;
                 JSONObject current=inspectCurrent(record,capabilities,now);
                 if(current.getString("status").equals("invalid"))invalid++;
@@ -187,7 +187,10 @@ public final class SkillBook {
                         else if(!SkillSourcePolicy.modelAllowed(record))current.put("status","ownerOnly");
                         else if(match.getInt("score")==0)current.put("status","noMatch");
                     }}
-                current.put("eligibleForDiscovery",current.getString("status").equals("active"));diagnostics.add(current);
+                boolean applicable=SkillSourcePolicy.applicable(record,authenticatedScope);
+                if(!applicable)current.put("status",SkillSourcePolicy.bindingRequired(record)?"projectBindingRequired":"differentProject");
+                current.put("applicableToScope",applicable).put("eligibleForDiscovery",applicable&&current.getString("status").equals("active"))
+                        .put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(authenticatedScope));diagnostics.add(current);
             }
             diagnostics.sort(Comparator.comparing((JSONObject row)->row.optString("name")).thenComparing(row->row.optString("id")));
             return new JSONObject().put("skills",new JSONArray(diagnostics)).put("managementOnly",true).put("metadataOnly",true)
@@ -198,6 +201,7 @@ public final class SkillBook {
     private JSONObject inspectCurrent(JSONObject record,Set<String> capabilities,long now)throws Exception {
         JSONObject current=present(record,now);JSONArray reasons=new JSONArray(),missing=new JSONArray();boolean verified=true;
         if(!record.optBoolean("enabled"))reasons.put("disabled");
+        if(SkillSourcePolicy.bindingRequired(record))reasons.put("projectBindingRequired");
         if(expired(record,now))reasons.put("expired");
         if(!record.getString("digest").equals(record.optString("approvedDigest")))reasons.put("approvalMismatch");
         // Only expected content-validation failures are per-package diagnostics. Index/algorithm/programming errors propagate.
@@ -231,10 +235,10 @@ public final class SkillBook {
     /** Choose before query/capability filtering. A broken, unavailable or owner-only winner
      * cannot silently fall through to another source with the same name. Explicit withdrawal
      * can expose the next enabled source, with a new catalogue identity. */
-    private static Map<String,String> preferredSources(JSONArray rows,String[] owner,long now)throws Exception {
-        Map<String,JSONObject> winners=new HashMap<>();
+    private static Map<String,String> preferredSources(JSONArray rows,JSONObject nativeScope,long now)throws Exception {
+        String[] owner=scope(nativeScope);SkillSourcePolicy.checkedScope(nativeScope);Map<String,JSONObject> winners=new HashMap<>();
         for(int i=0;i<rows.length();i++){
-            JSONObject row=rows.getJSONObject(i);if(!matches(row,owner)||!active(row,now))continue;
+            JSONObject row=rows.getJSONObject(i);if(!matches(row,owner)||!active(row,now)||!SkillSourcePolicy.applicable(row,nativeScope))continue;
             String name=row.getString("name");JSONObject previous=winners.get(name);
             if(previous==null||sourceRank(row)>sourceRank(previous)||sourceRank(row)==sourceRank(previous)&&row.getString("id").compareTo(previous.getString("id"))<0)winners.put(name,row);
         }
@@ -245,13 +249,14 @@ public final class SkillBook {
     private static boolean samePreferredDigest(JSONObject row,JSONArray rows,Map<String,String> winners)throws Exception {
         String selected=winners.get(row.getString("name"));for(int i=0;selected!=null&&i<rows.length();i++){JSONObject candidate=rows.getJSONObject(i);if(selected.equals(candidate.optString("id")))return row.getString("digest").equals(candidate.getString("digest"));}return false;
     }
-    private static JSONObject ownerSourceStatus(JSONObject current,JSONObject record,Map<String,String> winners)throws Exception {
-        boolean selected=preferred(record,winners),model=SkillSourcePolicy.modelAllowed(record);
+    private static JSONObject ownerSourceStatus(JSONObject current,JSONObject record,Map<String,String> winners,JSONObject nativeScope)throws Exception {
+        boolean applicable=SkillSourcePolicy.applicable(record,nativeScope),selected=applicable&&preferred(record,winners),model=SkillSourcePolicy.modelAllowed(record);
+        if(!applicable)current.put("status",SkillSourcePolicy.bindingRequired(record)?"projectBindingRequired":"differentProject");
         if("active".equals(current.getString("status"))){
             if(!selected)current.put("status","shadowed").put("shadowedBy",winners.get(record.getString("name")));
             else if(!model)current.put("status","ownerOnly");
         }
-        return current.put("sourceSelected",selected).put("eligibleForModel",current.getBoolean("active")&&selected&&model);
+        return current.put("applicableToScope",applicable).put("sourceSelected",selected).put("eligibleForModel",current.getBoolean("active")&&selected&&model);
     }
 
     private static JSONObject match(JSONObject record,Set<String> queryTerms,String query)throws Exception {
@@ -549,11 +554,16 @@ public final class SkillBook {
      * execution permission. Changing it withdraws the old approval before any new discovery. */
     public JSONObject configureSourceForOwner(JSONObject scope,String id,int revision,String digest,long expectedExecutionGeneration,
             SkillSourcePolicy.Layer layer,SkillSourcePolicy.Invocation invocation,long now)throws Exception {
-        JSONObject next=SkillSourcePolicy.of(layer,invocation);
+        return configureSourceForOwner(scope,id,revision,digest,expectedExecutionGeneration,layer,invocation,null,now);
+    }
+    /** Native module has rechecked this project against the original project catalogue. */
+    JSONObject configureSourceForOwner(JSONObject scope,String id,int revision,String digest,long expectedExecutionGeneration,
+            SkillSourcePolicy.Layer layer,SkillSourcePolicy.Invocation invocation,String projectId,long now)throws Exception {
+        JSONObject next=SkillSourcePolicy.of(layer,invocation,projectId);
         synchronized(lock){JSONObject state=state(),record=required(state.getJSONArray("skills"),scope(scope),id);
             if(record.getInt("revision")!=revision||!record.getString("digest").equals(digest)||record.optLong("executionGeneration",0)!=expectedExecutionGeneration)throw new SecurityException("技能来源、版本或批准已变化，请重新打开当前详情");
             verify(record);JSONObject current=SkillSourcePolicy.current(record);
-            if(current.getString("layer").equals(next.getString("layer"))&&current.getString("invocation").equals(next.getString("invocation")))return present(record,now);
+            if(SkillExecution.digestJson(current).equals(SkillExecution.digestJson(next)))return present(record,now);
             record.put("sourcePolicy",next).put("enabled",false).put("approvedDigest","").put("updatedAt",now)
                     .put("executionGeneration",Math.addExact(expectedExecutionGeneration,1));save(state);return present(record,now);
         }
@@ -568,7 +578,7 @@ public final class SkillBook {
     private JSONObject setEnabled(JSONObject scope,String id,boolean enabled,String digest,boolean confirmed,long now,boolean nativeExperienceApproval)throws Exception {
         synchronized(lock){JSONObject state=state(),record=required(state.getJSONArray("skills"),scope(scope),id);
             if(enabled&&record.has("origin")&&!nativeExperienceApproval)throw new SecurityException("来源型技能必须通过原生审阅入口批准");
-            if(enabled){if(!confirmed||!record.getString("digest").equals(digest))throw new SecurityException("请先核对当前技能内容与来源，再确认启用");if(expired(record,now))throw new IllegalStateException("技能已过期，请重新导入更新");verify(record);}
+            if(enabled){if(SkillSourcePolicy.bindingRequired(record))throw new SecurityException("原项目技能尚未绑定真实项目，请先重新审阅来源");if(!confirmed||!record.getString("digest").equals(digest))throw new SecurityException("请先核对当前技能内容与来源，再确认启用");if(expired(record,now))throw new IllegalStateException("技能已过期，请重新导入更新");verify(record);}
             if(record.optBoolean("enabled")==enabled&&(enabled?record.getString("digest").equals(record.optString("approvedDigest")):record.optString("approvedDigest").isEmpty()))return present(record,now);
             if(record.has("origin")&&enabled){record.put("qualityState","trial").put("qualityWindow",new JSONArray());}
             record.put("enabled",enabled).put("approvedDigest",enabled?record.getString("digest"):"").put("updatedAt",now)
@@ -581,12 +591,13 @@ public final class SkillBook {
         private ReferenceSelection(SkillBook issuer,JSONObject scope,JSONObject binding,Set<String> capabilities){this.issuer=issuer;this.scope=scope.toString();this.binding=binding.toString();this.capabilities=Set.copyOf(capabilities);}
         public JSONObject metadata()throws Exception{return new JSONObject(binding);}
         public void requireNoBookMonitorHeld(){if(Thread.holdsLock(issuer.lock))throw new SecurityException("不得从技能锁反向进入原任务");}
-        public void checkCurrent()throws Exception{JSONObject expected=metadata();synchronized(issuer.lock){JSONObject row=required(issuer.state().getJSONArray("skills"),scope(new JSONObject(scope)),expected.getString("id"));issuer.assertHostRead(row,expected.getString("digest"),capabilities,System.currentTimeMillis());if(row.getInt("revision")!=expected.getInt("revision")||row.optLong("executionGeneration",0)!=expected.getLong("executionGeneration"))throw new SecurityException("参考技能版本或批准已改变");}}
+        public void checkCurrent()throws Exception{JSONObject expected=metadata(),nativeScope=new JSONObject(scope);synchronized(issuer.lock){JSONObject row=required(issuer.state().getJSONArray("skills"),scope(nativeScope),expected.getString("id"));issuer.assertHostRead(row,nativeScope,expected.getString("digest"),capabilities,System.currentTimeMillis());if(row.getInt("revision")!=expected.getInt("revision")||row.optLong("executionGeneration",0)!=expected.getLong("executionGeneration"))throw new SecurityException("参考技能版本或批准已改变");}}
     }
     public ReferenceSelection selectReferenceForHost(JSONObject scope,String id,int revision,String digest,Set<String> capabilities,long now)throws Exception {
-        synchronized(lock){JSONObject row=required(state().getJSONArray("skills"),scope(scope),id);assertHostRead(row,digest,capabilities,now);if(row.getInt("revision")!=revision)throw new SecurityException("参考技能版本已改变");
+        synchronized(lock){JSONObject row=required(state().getJSONArray("skills"),scope(scope),id);assertHostRead(row,scope,digest,capabilities,now);if(row.getInt("revision")!=revision)throw new SecurityException("参考技能版本已改变");
             JSONObject binding=new JSONObject().put("id",id).put("revision",revision).put("digest",digest).put("executionGeneration",row.optLong("executionGeneration",0))
-                    .put("source",row.getString("source")).put("sourceVersion",row.getString("sourceVersion")).put("sourcePolicy",SkillSourcePolicy.metadata(row));if(row.has("origin"))binding.put("origin",new JSONObject(row.getJSONObject("origin").toString()));
+                    .put("source",row.getString("source")).put("sourceVersion",row.getString("sourceVersion")).put("sourcePolicy",SkillSourcePolicy.metadata(row))
+                    .put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(scope)).put("skillScope",SkillSourcePolicy.checkedScope(scope));if(row.has("origin"))binding.put("origin",new JSONObject(row.getJSONObject("origin").toString()));
             return new ReferenceSelection(this,scope,binding,capabilities);
         }
     }
@@ -633,27 +644,29 @@ public final class SkillBook {
     }
     /** This method is for the native supervisor; it is deliberately absent from feature commands. */
     public JSONObject loadForHost(JSONObject scope,String id,String expectedDigest,Set<String> hostCapabilities,long now)throws Exception {
-        synchronized(lock){JSONObject record=required(state().getJSONArray("skills"),scope(scope),id);JSONObject files=assertHostRead(record,expectedDigest,hostCapabilities,now);
-            return new JSONObject().put("skill",present(record,now)).put("instructions",files.getString("SKILL.md"))
+        synchronized(lock){JSONObject record=required(state().getJSONArray("skills"),scope(scope),id);JSONObject files=assertHostRead(record,scope,expectedDigest,hostCapabilities,now);
+            return new JSONObject().put("skill",present(record,now).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(scope))).put("instructions",files.getString("SKILL.md"))
                     .put("untrustedReference",true).put("allowedToolsAreAdvisory",true).put("grantsAdded",new JSONArray()).put("scriptsExecutable",false);
         }
     }
     public JSONObject readForHost(JSONObject scope,String id,String path,int offset,int length,String expectedDigest,Set<String> hostCapabilities,long now)throws Exception {
-        synchronized(lock){JSONObject record=required(state().getJSONArray("skills"),scope(scope),id);return readVerified(record,assertHostRead(record,expectedDigest,hostCapabilities,now),path,offset,length,now);}
+        synchronized(lock){JSONObject record=required(state().getJSONArray("skills"),scope(scope),id);return readVerified(record,assertHostRead(record,scope,expectedDigest,hostCapabilities,now),path,offset,length,now).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(scope));}
     }
     /** Discovery consumers can additionally pin the revision, including same-content ZIP restores. */
     public JSONObject readForHost(JSONObject scope,String id,String path,int offset,int length,int expectedRevision,String expectedDigest,Set<String> hostCapabilities,long now)throws Exception {
         if(expectedRevision<1)throw new IllegalArgumentException("技能版本必须为正整数");
         synchronized(lock){JSONObject record=required(state().getJSONArray("skills"),scope(scope),id);
             if(record.getInt("revision")!=expectedRevision)throw new SecurityException("技能版本已改变，请重新发现");
-            return readVerified(record,assertHostRead(record,expectedDigest,hostCapabilities,now),path,offset,length,now);}
+            return readVerified(record,assertHostRead(record,scope,expectedDigest,hostCapabilities,now),path,offset,length,now).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(scope));}
     }
-    private JSONObject assertHostRead(JSONObject record,String expectedDigest,Set<String> hostCapabilities,long now)throws Exception {
+    private JSONObject assertHostRead(JSONObject record,JSONObject nativeScope,String expectedDigest,Set<String> hostCapabilities,long now)throws Exception {
+        SkillSourcePolicy.requireApplicable(record,nativeScope);
         if(!SkillSourcePolicy.modelAllowed(record))throw new SecurityException("此技能仅供主人手动使用，模型不能读取、采用或执行");
-        if(!preferred(record,preferredSources(state().getJSONArray("skills"),new String[]{record.getString("ownerId"),record.getString("spaceId")},now)))throw new SecurityException("同名技能已由更高优先级或稳定首选来源覆盖，请重新发现");
-        return assertApprovedRead(record,expectedDigest,hostCapabilities,now);
+        if(!preferred(record,preferredSources(state().getJSONArray("skills"),nativeScope,now)))throw new SecurityException("同名技能已由更高优先级或稳定首选来源覆盖，请重新发现");
+        return assertApprovedRead(record,nativeScope,expectedDigest,hostCapabilities,now);
     }
-    private JSONObject assertApprovedRead(JSONObject record,String expectedDigest,Set<String> hostCapabilities,long now)throws Exception {
+    private JSONObject assertApprovedRead(JSONObject record,JSONObject nativeScope,String expectedDigest,Set<String> hostCapabilities,long now)throws Exception {
+        SkillSourcePolicy.requireApplicable(record,nativeScope);
         Set<String> capabilities=hostCapabilities(hostCapabilities);
         if(!active(record,now)||!record.getString("digest").equals(expectedDigest))throw new SecurityException("技能未启用、已失效或版本已改变");JSONArray required=record.getJSONArray("requiredCapabilities");
         for(int i=0;i<required.length();i++)if(!capabilities.contains(required.getString(i)))throw new SecurityException("宿主未授予技能所需能力："+required.getString(i));
@@ -667,17 +680,17 @@ public final class SkillBook {
         }
         void checkCurrent()throws Exception{issuer.ownerExecutionSnapshot(this,capabilities,System.currentTimeMillis());}
         void requireRequest(JSONObject requestedScope,String requestedId,int requestedRevision,String requestedDigest)throws Exception {
-            if(!java.util.Arrays.equals(scope(new JSONObject(scope)),scope(requestedScope))||!id.equals(requestedId)||revision!=requestedRevision||!digest.equals(requestedDigest))throw new SecurityException("执行请求不是主人明确选择的准确技能");
+            if(!SkillSourcePolicy.scopeFingerprint(new JSONObject(scope)).equals(SkillSourcePolicy.scopeFingerprint(requestedScope))||!id.equals(requestedId)||revision!=requestedRevision||!digest.equals(requestedDigest))throw new SecurityException("执行请求不是主人明确选择的准确技能与原项目");
         }
         JSONObject read(String path,int offset,int length,long now)throws Exception {
-            synchronized(issuer.lock){JSONObject row=required(issuer.state().getJSONArray("skills"),scope(new JSONObject(scope)),id);require(row);return issuer.readVerified(row,issuer.assertApprovedRead(row,digest,capabilities,now),path,offset,length,now);}
+            synchronized(issuer.lock){JSONObject nativeScope=new JSONObject(scope),row=required(issuer.state().getJSONArray("skills"),scope(nativeScope),id);require(row);return issuer.readVerified(row,issuer.assertApprovedRead(row,nativeScope,digest,capabilities,now),path,offset,length,now).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(nativeScope));}
         }
         private void require(JSONObject row)throws Exception {
             if(row.getInt("revision")!=revision||!digest.equals(row.getString("digest"))||row.optLong("executionGeneration",0)!=generation||!SkillSourcePolicy.ownerInvocable(row))throw new SecurityException("主人所选技能已变化、已撤回或清单不允许直接调用");
         }
     }
     OwnerExecutionSelection selectExecutionForOwner(JSONObject scope,String id,int revision,String digest,long generation,Set<String> capabilities,long now)throws Exception {
-        synchronized(lock){JSONObject row=required(state().getJSONArray("skills"),scope(scope),id);assertApprovedRead(row,digest,capabilities,now);
+        synchronized(lock){JSONObject row=required(state().getJSONArray("skills"),scope(scope),id);assertApprovedRead(row,scope,digest,capabilities,now);
             if(row.getInt("revision")!=revision||row.optLong("executionGeneration",0)!=generation||!SkillSourcePolicy.ownerInvocable(row))throw new SecurityException("主人所选技能版本或批准已变化，或清单禁止直接调用");
             return new OwnerExecutionSelection(this,scope,row,capabilities);
         }
@@ -691,7 +704,8 @@ public final class SkillBook {
     private ExecutionSnapshot ownerExecutionSnapshotLocked(OwnerExecutionSelection selected,Set<String> capabilities,long now)throws Exception {
         if(selected==null||selected.issuer!=this)throw new SecurityException("没有原主人技能选择");
         JSONObject row=required(state().getJSONArray("skills"),scope(new JSONObject(selected.scope)),selected.id);selected.require(row);
-        return executionSnapshot(row,assertApprovedRead(row,selected.digest,capabilities,now),"owner_selection");
+        JSONObject nativeScope=new JSONObject(selected.scope);
+        return executionSnapshot(row,assertApprovedRead(row,nativeScope,selected.digest,capabilities,now),"owner_selection",nativeScope);
     }
     /** Exact current bytes for the native execution leaf; never exposes a private filesystem path. */
     ExecutionSnapshot executionSnapshot(JSONObject scope,String id,int revision,String digest,Set<String> capabilities,long now)throws Exception {
@@ -705,13 +719,13 @@ public final class SkillBook {
     private ExecutionSnapshot executionSnapshotLocked(JSONObject scope,String id,int revision,String digest,Set<String> capabilities,long now)throws Exception {
         JSONObject record=required(state().getJSONArray("skills"),scope(scope),id);
         if(record.getInt("revision")!=revision)throw new SecurityException("技能版本已改变，请重新审阅执行计划");
-        JSONObject files=assertHostRead(record,digest,capabilities,now);
-        return executionSnapshot(record,files,"model_request");
+        JSONObject files=assertHostRead(record,scope,digest,capabilities,now);
+        return executionSnapshot(record,files,"model_request",scope);
     }
-    private ExecutionSnapshot executionSnapshot(JSONObject record,JSONObject files,String invocation)throws Exception {
+    private ExecutionSnapshot executionSnapshot(JSONObject record,JSONObject files,String invocation,JSONObject nativeScope)throws Exception {
         JSONObject binding=new JSONObject().put("id",record.getString("id")).put("revision",record.getInt("revision")).put("digest",record.getString("digest")).put("invocationOrigin",invocation)
                 .put("executionGeneration",record.optLong("executionGeneration",0)).put("approvedDigest",record.getString("approvedDigest"))
-                .put("source",record.getString("source")).put("sourceVersion",record.getString("sourceVersion")).put("sourcePolicy",SkillSourcePolicy.metadata(record))
+                .put("source",record.getString("source")).put("sourceVersion",record.getString("sourceVersion")).put("sourcePolicy",SkillSourcePolicy.metadata(record)).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(nativeScope))
                 .put("requiredCapabilities",new JSONArray(record.getJSONArray("requiredCapabilities").toString()))
                 .put("expiresAt",record.optLong("expiresAt",0));
         if(record.has("origin"))binding.put("origin",ExperienceOrigin.fromJson(record.getJSONObject("origin")).toJson());
@@ -995,7 +1009,7 @@ public final class SkillBook {
     private static String[] scope(JSONObject value){if(value==null)throw new IllegalArgumentException("必须指定技能空间");String owner=value.optString("ownerId"),space=value.optString("spaceId");if(!owner.matches("[\\p{L}\\p{N}_.:/@-]{1,160}")||!space.matches("[\\p{L}\\p{N}_.:/@-]{1,200}"))throw new IllegalArgumentException("技能空间无效");return new String[]{owner,space};}
     private static boolean matches(JSONObject record,String[] scope){return scope[0].equals(record.optString("ownerId"))&&scope[1].equals(record.optString("spaceId"));}
     private static JSONObject required(JSONArray records,String[] scope,String id)throws Exception {if(!id.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("技能标识无效");for(int i=0;i<records.length();i++){JSONObject record=records.getJSONObject(i);if(id.equals(record.optString("id"))&&matches(record,scope))return record;}throw new IllegalArgumentException("当前空间没有此技能");}
-    private static boolean active(JSONObject record,long now){return record.optBoolean("enabled")&&!expired(record,now)&&record.optString("digest").equals(record.optString("approvedDigest"));}
+    private static boolean active(JSONObject record,long now){try{return !SkillSourcePolicy.bindingRequired(record)&&record.optBoolean("enabled")&&!expired(record,now)&&record.optString("digest").equals(record.optString("approvedDigest"));}catch(Exception invalid){return false;}}
     private static boolean expired(JSONObject record,long now){return !record.isNull("expiresAt")&&record.optLong("expiresAt",0)<=now;}
     private static JSONObject present(JSONObject record,long now)throws Exception{JSONObject result=new JSONObject(record.toString()).put("active",active(record,now)).put("requiresHostAuthorization",true).put("scriptsExecutable",false)
             .put("sourceKind",SkillSourcePolicy.kind(record)).put("sourcePolicy",SkillSourcePolicy.metadata(record)).put("executionGeneration",record.optLong("executionGeneration",0))

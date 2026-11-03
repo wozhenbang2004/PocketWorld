@@ -21,6 +21,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 internal fun skillSourceClassification(value: String): String = when (value) {
@@ -67,6 +68,7 @@ internal fun SkillSourceControls(state: PocketUiState, controller: PocketWorldCo
     var request by remember { mutableLongStateOf(0) }
     var message by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var projectChoices by remember { mutableStateOf<JSONArray?>(null) }
     val target = skills.find { it.optString("id") == targetId }
     val view = review?.view()
     val current = view != null && skillSourceReviewMatches(view, target)
@@ -110,11 +112,16 @@ internal fun SkillSourceControls(state: PocketUiState, controller: PocketWorldCo
         }
     }
     target?.let { selected ->
-        SkillSourcePolicyControls(selected, busy) { layer, invocation ->
+        SkillSourcePolicyControls(selected, busy, projectChoices, {
+            work { control ->
+                val actual = withContext(Dispatchers.IO) { module.projectSourceChoicesForOwner() }
+                control.check(); projectChoices = actual
+            }
+        }) { layer, invocation, project ->
             val id = selected.getString("id"); val revision = selected.getInt("revision")
             val digest = selected.getString("digest"); val generation = selected.optLong("executionGeneration", 0)
             work {
-                withContext(Dispatchers.IO) { module.configureSourceForOwner(skillOwnerPrivateScope(), id, revision, digest, generation, layer, invocation) }
+                withContext(Dispatchers.IO) { module.configureSourceForOwner(skillOwnerPrivateScope(), id, revision, digest, generation, layer, invocation, project) }
                 clearPreview(); message = "来源与调用方式已更新，此技能已停用。请核对内容后重新启用。"; controller.refresh()
             }
         }
@@ -244,7 +251,8 @@ internal fun SkillSourceControls(state: PocketUiState, controller: PocketWorldCo
 }
 
 @Composable
-private fun SkillSourcePolicyControls(skill: JSONObject, busy: Boolean, apply: (SkillSourcePolicy.Layer, SkillSourcePolicy.Invocation) -> Unit) {
+private fun SkillSourcePolicyControls(skill: JSONObject, busy: Boolean, projects: JSONArray?, loadProjects: () -> Unit,
+                                      apply: (SkillSourcePolicy.Layer, SkillSourcePolicy.Invocation, JSONObject?) -> Unit) {
     val policy = skill.optJSONObject("sourcePolicy") ?: JSONObject()
     val currentLayer = runCatching { SkillSourcePolicy.Layer.valueOf(policy.optString("layer", "USER")) }.getOrDefault(SkillSourcePolicy.Layer.USER)
     val currentInvocation = runCatching { SkillSourcePolicy.Invocation.valueOf(policy.optString("invocation", "MODEL_AND_OWNER")) }.getOrDefault(SkillSourcePolicy.Invocation.MODEL_AND_OWNER)
@@ -253,9 +261,14 @@ private fun SkillSourcePolicyControls(skill: JSONObject, busy: Boolean, apply: (
     var layer by remember(identity) { mutableStateOf(currentLayer) }
     var invocation by remember(identity) { mutableStateOf(currentInvocation) }
     var layersOpen by remember(identity) { mutableStateOf(false) }
+    var projectMenu by remember(identity) { mutableStateOf(false) }
+    var selectedProject by remember(identity) { mutableStateOf<JSONObject?>(null) }
+    val originalProject = policy.optString("projectId")
+    val choices = projects.objects()
+    val project = selectedProject?.takeIf { selected -> choices.any { row -> row.optBoolean("available") && row.optString("projectId") == selected.optString("projectId") && row.optString("checkoutId") == selected.optString("checkoutId") && row.optString("revision") == selected.optString("revision") } }
     TextButton(onClick = { expanded = !expanded }, enabled = !busy) { Text(if (expanded) "收起来源顺序与调用方式" else "来源顺序与调用方式") }
     if (!expanded) return
-    SourceCaption("同名技能依次采用项目、个人、随附来源；同层按登记标识稳定选择。更高顺序的来源不可用时，请核对或停用后再切换。调整不会改变原始出处，也不代表信任其代码。")
+    SourceCaption("同名技能依次采用当前任务项目、个人、备用来源；同层按登记标识稳定选择。项目来源只在原任务已选择该项目时生效。备用是主人指定的顺序，不代表原生内置或可信代码。")
     SelectionContainer { SourceCaption("来源：${skill.optString("source")}\n版本：${skill.optString("sourceVersion")}") }
     if (skill.has("shadowedBy")) SourceCaption("此技能已被同名的更高顺序来源覆盖；当前保留在列表中，可继续核对内容。")
     Box {
@@ -266,6 +279,21 @@ private fun SkillSourcePolicyControls(skill: JSONObject, busy: Boolean, apply: (
             }
         }
     }
+    if (layer == SkillSourcePolicy.Layer.PROJECT) {
+        SourceCaption(if (originalProject.isEmpty()) "这份项目来源尚未绑定真实项目，请从原项目目录选择。未绑定的旧项目分类不能启用或执行。" else "当前绑定项目：$originalProject。改变来源或调用方式前，请重新核对原项目选择。")
+        TextButton(onClick = loadProjects, enabled = !busy) { Text(if (projects == null) "读取原项目列表" else "重新核对项目列表") }
+        if (projects != null && choices.none { it.optBoolean("available") }) SourceCaption("当前没有可确认的私人项目副本。原技能保留，没有改为全局来源。")
+        Box {
+            OutlinedButton(onClick = { projectMenu = true }, enabled = !busy && choices.any { it.optBoolean("available") }) { Text(project?.optString("name") ?: "选择此技能适用的原项目") }
+            DropdownMenu(expanded = projectMenu, onDismissRequest = { projectMenu = false }) {
+                choices.forEach { row -> DropdownMenuItem(
+                    text = { Text(row.optString("name", "项目") + " · " + row.optString("projectId").take(8)) },
+                    enabled = row.optBoolean("available"),
+                    onClick = { selectedProject = JSONObject(row.toString()); projectMenu = false }) }
+            }
+        }
+        project?.let { SourceCaption("所选项目 ${it.optString("projectId")}\n副本 ${it.optString("checkoutId")}") }
+    }
     Row(Modifier.fillMaxWidth()) {
         Checkbox(checked = invocation == SkillSourcePolicy.Invocation.OWNER_ONLY, onCheckedChange = { invocation = if (it) SkillSourcePolicy.Invocation.OWNER_ONLY else SkillSourcePolicy.Invocation.MODEL_AND_OWNER }, enabled = !busy)
         Text("仅由我明确选择和发起", fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 12.dp).weight(1f))
@@ -273,13 +301,14 @@ private fun SkillSourcePolicyControls(skill: JSONObject, busy: Boolean, apply: (
     if (policy.optBoolean("manifestRestrictsModel")) SourceCaption("技能清单已禁止模型调用；取消此选项也不会放宽清单限制。")
     if (!policy.optBoolean("userInvocable", true)) SourceCaption("技能清单禁止主人直接调用；这里不能改写该限制。")
     SourceCaption("保存后撤回当前启用与旧引用。每次脚本执行仍需要原任务审阅、运行环境和能力权限。")
-    OutlinedButton(onClick = { apply(layer, invocation) }, enabled = !busy && (layer != currentLayer || invocation != currentInvocation)) { Text("保存并停用，重新审阅") }
+    val changed = layer != currentLayer || invocation != currentInvocation || layer == SkillSourcePolicy.Layer.PROJECT && project != null && project.optString("projectId") != originalProject
+    OutlinedButton(onClick = { apply(layer, invocation, if (layer == SkillSourcePolicy.Layer.PROJECT) project else null) }, enabled = !busy && changed && (layer != SkillSourcePolicy.Layer.PROJECT || project != null)) { Text("保存并停用，重新审阅") }
 }
 
 private fun skillLayerLabel(layer: SkillSourcePolicy.Layer): String = when (layer) {
     SkillSourcePolicy.Layer.PROJECT -> "项目来源 · 优先"
     SkillSourcePolicy.Layer.USER -> "个人来源"
-    SkillSourcePolicy.Layer.BUNDLED -> "随附来源 · 备用"
+    SkillSourcePolicy.Layer.BUNDLED -> "备用来源"
 }
 
 @Composable private fun SourceCaption(value: String) { Text(value, color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 5.dp, bottom = 8.dp)) }

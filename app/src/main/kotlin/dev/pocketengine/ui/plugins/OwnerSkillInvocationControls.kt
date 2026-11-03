@@ -15,6 +15,10 @@ import org.json.JSONObject
 @Composable
 internal fun OwnerSkillInvocationControls(snapshot: JSONObject, busy: Boolean, submit: (JSONObject, Long) -> Unit) {
     val selection = snapshot.optJSONObject("ownerInvocation") ?: return
+    if (selection.has("projectScopeAvailable") && !selection.optBoolean("projectScopeAvailable")) {
+        Text("原任务项目暂不能核对，当前不能选择新的技能。原脚本回执和已保存成果仍可在下方读取。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp)
+        return
+    }
     val choices = selection.optJSONArray("skills").objects()
     if (choices.isEmpty()) return
     val pin = selection.optString("taskPin")
@@ -35,7 +39,9 @@ internal fun OwnerSkillInvocationControls(snapshot: JSONObject, busy: Boolean, s
     if (!expanded) return
     Text("在这项原任务发起", fontSize = 14.sp, fontWeight = FontWeight.Medium)
     Text("可选择仅供主人使用的已启用技能。这里只提交准确脚本与参数；随后仍需审阅本次执行计划、依赖和输入输出范围。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp)
+    if (selection.optString("projectId").isNotEmpty()) Text("适用原任务项目：${selection.optString("projectId")}", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp)
     if (!available) Text("请先核对原任务状态、未决操作与执行位置，再明确选择。不会恢复旧请求或替你重新启用技能。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp)
+    if (selection.has("projectConfigurationCompatible") && !selection.optBoolean("projectConfigurationCompatible")) Text("当前手机配置选用了另一项目副本。请在本页按原任务项目重新准备执行位置；没有读取另一项目的输入。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp)
     Box {
         OutlinedButton(onClick = { choicesOpen = true }, enabled = !busy && !submitted) { Text(skill?.optString("name") ?: "选择已启用技能") }
         DropdownMenu(expanded = choicesOpen, onDismissRequest = { choicesOpen = false }) {

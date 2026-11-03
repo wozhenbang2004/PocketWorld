@@ -53,10 +53,16 @@ public final class ManagedSkillNativeJourneyTest {
         Fixture(String interpreter,String script,String... arguments)throws Exception {
             this(interpreter,script,Map.of(),false,arguments);
         }
+        Fixture(String interpreter,String script,boolean originalProjectScope,String... arguments)throws Exception {
+            this(interpreter,script,Map.of(),false,false,null,originalProjectScope,arguments);
+        }
         Fixture(String interpreter,String script,Map<String,String> extraResources,boolean prepareDependencies,String... arguments)throws Exception {
             this(interpreter,script,extraResources,prepareDependencies,false,null,arguments);
         }
         Fixture(String interpreter,String script,Map<String,String> extraResources,boolean prepareDependencies,boolean immediateArtifacts,ManagedScriptCallbackTransport.Factory callbackTransport,String... arguments)throws Exception {
+            this(interpreter,script,extraResources,prepareDependencies,immediateArtifacts,callbackTransport,false,arguments);
+        }
+        Fixture(String interpreter,String script,Map<String,String> extraResources,boolean prepareDependencies,boolean immediateArtifacts,ManagedScriptCallbackTransport.Factory callbackTransport,boolean originalProjectScope,String... arguments)throws Exception {
             this.callbackTransport=callbackTransport;
             byte[] marker="self-owned Skill fixture environment; host interpreter is not redistributed\n".getBytes(StandardCharsets.UTF_8);ByteArrayOutputStream bytes=new ByteArrayOutputStream();try(ZipOutputStream zip=new ZipOutputStream(bytes)){zip.putNextEntry(new ZipEntry("share/fixture.txt"));zip.write(marker);zip.closeEntry();}byte[] archive=bytes.toByteArray();
             pack=new dev.pocketengine.features.local.runtime.RuntimeEnvironment.Package(new JSONObject().put("id","c2-managed-skill-host-fixture").put("revision","1").put("license","CC0-1.0 own marker; host tools not redistributed").put("abi","linux-x64-host-only").put("archiveSha256",ProjectSources.sha256(archive)).put("archiveBytes",archive.length).put("files",new JSONArray().put(new JSONObject().put("path","share/fixture.txt").put("bytes",marker.length).put("sha256",ProjectSources.sha256(marker)))));
@@ -66,7 +72,13 @@ public final class ManagedSkillNativeJourneyTest {
             project=workspace.handle("create",new JSONObject().put("name","Self-owned Skill source")).getString("id");workspace.handle("write",new JSONObject().put("projectId",project).put("path","input/data.txt").put("expectedVersion",0).put("content","40.00"));checkout=local.handle("prepare",new JSONObject().put("projectId",project)).getString("id");
             String path=interpreter.equals("sh")?"scripts/main.sh":"scripts/main.py";
             installed=skills.handle("import",new JSONObject().put("source","own:managed-phone-native-fixture").put("manifest","---\nname: own-phone-skill\ndescription: 原手机托管脚本与原任务成果\n---\n只用于明确的自有验证脚本。\n").put("resources",new JSONObject(extraResources).put(path,script))).getJSONObject("skill");skills.handle("setEnabled",new JSONObject().put("id",installed.getString("id")).put("enabled",true).put("confirmed",true).put("acceptedDigest",installed.getString("digest")));
-            task=tasks.startAttempt(tasks.createCapabilityTask("在手机原托管环境运行明确的自有Skill，生成并核对45.00结果","").getString("id"),"capabilities",30);control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));tasks.authorizeTools(task.getString("id"),task.getString("runId"),new JSONArray().put("skills_execute"));connectHost();
+            task=tasks.startAttempt(tasks.createCapabilityTask("在手机原托管环境运行明确的自有Skill，生成并核对45.00结果","").getString("id"),"capabilities",30);control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));
+            if(originalProjectScope){
+                var memory=new dev.pocketengine.features.memory.MemoryModule(context);skills.mountProjectNamespaces(memory.projectNamespacesForOwner(local,workspace));
+                String sourceDigest=ProjectSources.describe(local.managedSkillSourceForHost(checkout,control)).getString("sourceDigest");
+                tasks.bindDevelopmentContext(id(),task.getString("runId"),task.getInt("coordinatorEpoch"),control,new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",checkout).put("runtime","managed_process_v1").put("initialSourceDigest",sourceDigest).put("clientMessageId",UUID.randomUUID().toString()));
+            }
+            tasks.authorizeTools(task.getString("id"),task.getString("runId"),new JSONArray().put("skills_execute"));connectHost();
             window=host.openOwnerWindow();window.setForeground(true);JSONObject configuration=configuration(interpreter).put("preparePinnedDependencies",prepareDependencies);if(immediateArtifacts)configuration.put("immediatePrivateArtifacts",true);var reviewed=host.inspectPhoneConfiguration(task.getString("id"),configuration);host.installConfiguration(window,reviewed,reviewed.digest);
             input=new JSONObject().put("id",installed.getString("id")).put("revision",installed.getInt("revision")).put("digest",installed.getString("digest")).put("scriptPath",path).put("arguments",new JSONArray(arguments)).put("timeoutSeconds",20).put("maxOutputBytes",65536);String operation=tasks.journal(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control).beginOperation("skills_execute",input);input.put("_hostOperationId",operation);
         }

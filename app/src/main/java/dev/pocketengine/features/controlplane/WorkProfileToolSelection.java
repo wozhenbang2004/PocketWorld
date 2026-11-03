@@ -131,6 +131,7 @@ public final class WorkProfileToolSelection {
             JSONObject metadata = new JSONObject().put("id", row.getString("id")).put("revision", row.getInt("revision")).put("digest", row.getString("digest"))
                     .put("name", row.getString("name")).put("description", row.optString("description")).put("entryPath", "SKILL.md")
                     .put("matchReasons", new JSONArray().put("native_work_profile_selection")).put("selectionSource", "native_work_profile");
+            for(String identity:new String[]{"executionGeneration","skillScopeFingerprint"})if(row.has(identity))metadata.put(identity,row.get(identity));
             if (retained.length() >= 8 || result.toString().length() + metadata.toString().length() + 120 > 6000) { omitted++; continue; }
             retained.put(metadata); included.add(row.getString("id")); added++;
         }

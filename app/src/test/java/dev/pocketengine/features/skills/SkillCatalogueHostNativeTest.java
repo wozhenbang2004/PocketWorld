@@ -135,13 +135,18 @@ public final class SkillCatalogueHostNativeTest {
     @Test public void nativeSourceReplacementInvalidatesAnOldCatalogueAndOldToolSelection()throws Exception {
         try(Rig r=new Rig(false)){
             JSONObject cursor=r.catalogue(null,4).getJSONObject("nextCursor"),original=r.rows.get(0);
-            JSONObject source=r.skills.handle("import",new JSONObject().put("source","native:project-reference").put("sourceVersion","fixed-project-revision").put("manifest","---\nname: guide-00\ndescription: 项目专用资料\n---\nPROJECT_REFERENCE")).getJSONObject("skill");
-            r.skills.configureSourceForOwner(new JSONObject().put("ownerId","owner").put("spaceId","private"),source.getString("id"),source.getInt("revision"),source.getString("digest"),source.getLong("executionGeneration"),SkillSourcePolicy.Layer.PROJECT,SkillSourcePolicy.Invocation.MODEL_AND_OWNER);
+            // This fixture has no native project. Exercise global source replacement here;
+            // real project scope is covered by HostSkillProjectScopeTest with original checkouts.
+            JSONObject privateScope=new JSONObject().put("ownerId","owner").put("spaceId","private");
+            JSONObject current=r.skills.handle("get",new JSONObject().put("id",original.getString("id"))).getJSONObject("skill");
+            r.skills.configureSourceForOwner(privateScope,current.getString("id"),current.getInt("revision"),current.getString("digest"),current.getLong("executionGeneration"),SkillSourcePolicy.Layer.BUNDLED,SkillSourcePolicy.Invocation.MODEL_AND_OWNER);
+            r.skills.handle("setEnabled",new JSONObject().put("id",original.getString("id")).put("enabled",true).put("confirmed",true).put("acceptedDigest",original.getString("digest")));
+            JSONObject source=r.skills.handle("import",new JSONObject().put("source","native:owner-reference").put("sourceVersion","fixed-owner-revision").put("manifest","---\nname: guide-00\ndescription: 主人资料\n---\nOWNER_REFERENCE")).getJSONObject("skill");
             r.skills.handle("setEnabled",new JSONObject().put("id",source.getString("id")).put("enabled",true).put("confirmed",true).put("acceptedDigest",source.getString("digest")));
             assertThrows(SecurityException.class,()->r.catalogue(cursor,4));assertEquals(13,r.catalogue(null,20).getInt("totalCount"));
             assertThrows(SecurityException.class,()->r.call("skills_read",new JSONObject().put("id",original.getString("id")).put("revision",1).put("digest",original.getString("digest"))));
             JSONObject read=r.call("skills_read",new JSONObject().put("id",source.getString("id")).put("revision",1).put("digest",source.getString("digest")));
-            assertTrue(read.getString("content").contains("PROJECT_REFERENCE"));assertEquals("fixed-project-revision",read.getString("sourceVersion"));assertEquals(1,r.tasks.list().length());
+            assertTrue(read.getString("content").contains("OWNER_REFERENCE"));assertEquals("fixed-owner-revision",read.getString("sourceVersion"));assertEquals(1,r.tasks.list().length());
         }
     }
 }

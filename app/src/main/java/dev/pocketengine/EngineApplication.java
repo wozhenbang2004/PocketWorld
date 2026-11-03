@@ -456,6 +456,8 @@ public final class EngineApplication extends Application implements dev.pocketen
         }
         EngineModule skills=addModule("skills",()->new dev.pocketengine.features.skills.SkillsModule(context,memory instanceof dev.pocketengine.features.memory.MemoryModule?((dev.pocketengine.features.memory.MemoryModule)memory)::resolveExperience:null));
         if(skills instanceof dev.pocketengine.features.skills.SkillsModule){
+            if(memory instanceof dev.pocketengine.features.memory.MemoryModule originalMemory&&development instanceof dev.pocketengine.features.local.LocalModule originalLocal&&workspace instanceof dev.pocketengine.features.workspace.WorkspaceModule originalWorkspace)
+                ((dev.pocketengine.features.skills.SkillsModule)skills).mountProjectNamespaces(originalMemory.projectNamespacesForOwner(originalLocal,originalWorkspace,memorySources));
             pluginHost.mountFunctionalPacks((dev.pocketengine.features.skills.SkillsModule)skills);
             skillExecutionHost=new dev.pocketengine.features.skills.NativeSkillExecutionHost(this,(dev.pocketengine.features.skills.SkillsModule)skills,remote,tasks,
                     (task,run,epoch,original)->checkLiveExtensionControl(new dev.pocketengine.runtime.extensions.ExtensionRuntime.Binding(task,run,epoch),original),this::pushTask,features.module("local") instanceof dev.pocketengine.features.local.LocalModule nativeSkillLocal?nativeSkillLocal:null);
@@ -908,7 +910,20 @@ public final class EngineApplication extends Application implements dev.pocketen
     /** Native task page only. No run is fabricated and no permission is granted by opening it. */
     public JSONObject taskCapabilitySnapshot(String taskId)throws Exception {
         if(skillExecutionHost==null)throw new IllegalStateException("技能执行宿主不可用");features.synchronizeMemory(json("ownerId","owner","spaceId","private"));
-        EngineModule plugins=features.module("plugins");return skillExecutionHost.taskSnapshot(taskId,dev.pocketengine.features.HostToolSupervisor.configuredSkillCapabilities(features,tasks),plugins==null?new JSONObject():plugins.snapshot());
+        java.util.Set<String> configured;boolean unavailable=false;
+        try{configured=taskSkillCapabilitiesForOwner(taskId);}catch(Exception sourceUnavailable){configured=java.util.Set.of();unavailable=true;}
+        EngineModule plugins=features.module("plugins");JSONObject snapshot=skillExecutionHost.taskSnapshot(taskId,configured,plugins==null?new JSONObject():plugins.snapshot());
+        if(unavailable){snapshot.put("capabilityPreparationMessage","当前任务的工具与项目范围无法核对，请先处理原来源状态；已有执行记录仍可查看。");snapshot.getJSONObject("ownerInvocation").put("available",false);}return snapshot;
+    }
+    /** Metadata from the same original tool definitions, for native owner preparation only.
+     * Actual execution still receives the original run's final CapabilitySnapshot and grants. */
+    public java.util.Set<String> taskSkillCapabilitiesForOwner(String taskId)throws Exception {
+        JSONObject task=tasks.get(taskId,false);EngineModule module=features.module("skills");
+        if(!(module instanceof dev.pocketengine.features.skills.SkillsModule skills))throw new IllegalStateException("技能来源宿主不可用");
+        JSONObject scope=skills.taskScopeForHost(task);java.util.Set<String> names=new java.util.HashSet<>(dev.pocketengine.features.HostToolSupervisor.configuredSkillCapabilities(features,tasks));
+        JSONObject development=task.optJSONObject("developmentContext");
+        if(development!=null){EngineModule selected=features.module("local");if(!(selected instanceof dev.pocketengine.features.local.LocalModule local))throw new IllegalStateException("原项目执行器不可用");names.addAll(dev.pocketengine.features.local.project.ProjectCapabilityPort.configuredSkillCapabilitiesForOwner(local,development.getString("runtime")));}
+        skills.requireTaskScopeForHost(tasks.get(taskId,false),scope);return java.util.Set.copyOf(names);
     }
     /** Explicit native preview binding only. Opening it neither reads a screen nor changes the original task. */
     public dev.pocketengine.phone.OwnerScreenContext openOwnerScreenContext(JSONObject expected)throws Exception {

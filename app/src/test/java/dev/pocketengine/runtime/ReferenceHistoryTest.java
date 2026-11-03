@@ -28,6 +28,24 @@ public final class ReferenceHistoryTest {
    AgentRunner.refreshReferenceHistory(history,reapproved);assertFalse(history.toString().contains("OLD_APPROVAL_BODY"));assertTrue(history.toString().contains("reference_expired"));
   }
  }
+ @Test public void changedProjectScopeRetiresSameVersionGlobalAndProjectReferences()throws Exception{
+  String first="a".repeat(64),next="b".repeat(64);JSONObject current=live().put("skillScopeFingerprint",first);
+  current.getJSONArray("skills").getJSONObject(0).put("skillScopeFingerprint",first);
+  for(String tool:new String[]{"skills_read","skills_list"}){
+   JSONObject row=new JSONObject().put("id","s").put("revision",3).put("digest","digest-current").put("skillScopeFingerprint",first).put("content","EXACT_PROJECT_BODY");
+   JSONObject receipt=tool.equals("skills_read")?row:new JSONObject().put("skills",new JSONArray().put(row)).put("skillScopeFingerprint",first);
+   JSONArray history=history(tool,receipt);AgentRunner.refreshReferenceHistory(history,current);assertTrue(history.toString().contains("EXACT_PROJECT_BODY"));
+   JSONObject switched=new JSONObject(current.toString()).put("skillScopeFingerprint",next);switched.getJSONArray("skills").getJSONObject(0).put("skillScopeFingerprint",next);
+   AgentRunner.refreshReferenceHistory(history,switched);assertFalse(history.toString().contains("EXACT_PROJECT_BODY"));assertTrue(history.toString().contains("reference_expired"));
+  }
+ }
+ @Test public void oldUnscopedReceiptsCannotAcquireNewNativeScopeByMatchingVersion()throws Exception{
+  String scope="c".repeat(64);JSONObject current=live().put("skillScopeFingerprint",scope);current.getJSONArray("skills").getJSONObject(0).put("skillScopeFingerprint",scope);
+  JSONObject row=new JSONObject().put("id","s").put("revision",3).put("digest","digest-current").put("content","LEGACY_UNSCOPED_BODY");
+  JSONArray history=history("skills_read",row);AgentRunner.refreshReferenceHistory(history,current);assertFalse(history.toString().contains("LEGACY_UNSCOPED_BODY"));
+  row.put("skillScopeFingerprint",scope);history=history("skills_list",new JSONObject().put("skills",new JSONArray().put(row)).put("skillScopeFingerprint","d".repeat(64)));
+  AgentRunner.refreshReferenceHistory(history,current);assertFalse(history.toString().contains("LEGACY_UNSCOPED_BODY"));
+ }
  @Test public void oneStaleMemberClearsWholeRecallInsteadOfLeavingItsTextInContext()throws Exception{
   JSONArray rows=new JSONArray().put(new JSONObject().put("id","r").put("revision",2).put("text","live")).put(new JSONObject().put("id","forgotten").put("revision",1).put("text","forgotten-body"));JSONArray history=history("memory_recall",new JSONObject().put("records",rows).put("context","live + forgotten-body"));AgentRunner.refreshReferenceHistory(history,live());assertFalse(history.toString().contains("forgotten-body"));
  }

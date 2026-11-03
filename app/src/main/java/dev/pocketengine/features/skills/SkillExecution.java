@@ -44,12 +44,18 @@ public final class SkillExecution {
         public final String ownerId,spaceId,taskId,runId;
         public final int epoch;
         private final Set<String> capabilities;
+        private String nativeScope;
         public Run(String ownerId,String spaceId,String taskId,String runId,int epoch,Set<String> capabilities){
             this.ownerId=identity(ownerId,160);this.spaceId=identity(spaceId,200);this.taskId=uuid(taskId);this.runId=uuid(runId);
             if(epoch<1||capabilities==null||capabilities.size()>256)throw new IllegalArgumentException("执行身份或能力集合无效");
             this.epoch=epoch;TreeSet<String> copy=new TreeSet<>();for(String capability:capabilities){if(capability==null||!capability.matches("[a-z][a-z0-9_.:-]{0,79}"))throw new IllegalArgumentException("能力名称无效");copy.add(capability);}this.capabilities=Collections.unmodifiableSet(copy);
         }
-        JSONObject scope()throws Exception{return new JSONObject().put("ownerId",ownerId).put("spaceId",spaceId);}
+        /** Original native task context, not a project selected by tool arguments. */
+        public Run(JSONObject authenticatedScope,String taskId,String runId,int epoch,Set<String> capabilities)throws Exception {
+            this(authenticatedScope.getString("ownerId"),authenticatedScope.getString("spaceId"),taskId,runId,epoch,capabilities);
+            nativeScope=SkillSourcePolicy.checkedScope(authenticatedScope).toString();
+        }
+        JSONObject scope()throws Exception{return nativeScope==null?new JSONObject().put("ownerId",ownerId).put("spaceId",spaceId):new JSONObject(nativeScope);}
         JSONObject json()throws Exception{return scope().put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("capabilities",new JSONArray(capabilities));}
     }
     /** Literal workspace-relative rules: trailing '/' means a subtree, otherwise one exact file. */

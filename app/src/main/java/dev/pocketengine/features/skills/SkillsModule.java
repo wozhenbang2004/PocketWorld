@@ -14,6 +14,7 @@ public final class SkillsModule implements EngineModule {
     private final SkillBook book;
     private final SkillGitClient gitClient;
     private volatile dev.pocketengine.features.plugins.PluginsModule mcpSources;
+    private volatile dev.pocketengine.features.memory.ProjectMemoryNamespaces projectNamespaces;
     public SkillsModule(FeatureContext context)throws Exception{this(context,null);}
     public SkillsModule(FeatureContext context,ExperienceOrigin.ExperienceResolver resolver)throws Exception{this(context,new SkillBook(new File(context.android.getFilesDir(),"skills"),resolver),new SkillGitClient());}
     /** Same native module with a loopback protocol client for direct tests; no feature/model input. */
@@ -27,11 +28,13 @@ public final class SkillsModule implements EngineModule {
             .put("nativePackageStreams",true).put("maxPackageArchiveBytes",SkillArchive.MAX_ARCHIVE_BYTES)
             .put("nativeDiscovery",true).put("discoveryMatching","lexical-v1")
             .put("nativeSourcePolicyReview",true).put("sourcePriority","project_then_user_then_bundled_then_stable_id").put("modelInvocationPolicyEnforced",true)
+            .put("nativeProjectSourceBinding",projectNamespaces!=null).put("automaticProjectWatch",false)
             .put("nativeExecutionReview",true).put("executionRequiresNativeBackend",true)
             .put("nativeExperienceImport",true).put("experienceResolverAvailable",book.experienceResolverAvailable()).put("experienceExecutionVerified",false)
             .put("commands",new JSONArray(new String[]{"list","get","import","read","setEnabled","delete"}));}
     @Override public JSONObject handle(String command,JSONObject input)throws Exception {
         JSONObject scope=input.optJSONObject("scope");if(scope==null)scope=privateScope();long now=System.currentTimeMillis();JSONObject result;
+        for(String key:new String[]{"projectId","checkoutId","projectRevision","projectSelection","namespace"})if(input.has(key)||scope.has(key))throw new SecurityException("项目技能范围只能来自原生项目选择与原任务，不接受命令JSON指定");
         switch(command){
             case "list":return new JSONObject().put("skills",book.list(scope,now));
             case "get":return new JSONObject().put("skill",book.get(scope,input.getString("id"),now));
@@ -62,8 +65,47 @@ public final class SkillsModule implements EngineModule {
     /** Explicit native owner action; not accepted by generic feature or model command JSON. */
     public JSONObject configureSourceForOwner(JSONObject authenticatedScope,String id,int revision,String digest,long expectedExecutionGeneration,
             SkillSourcePolicy.Layer layer,SkillSourcePolicy.Invocation invocation)throws Exception {
-        JSONObject result=new JSONObject().put("skill",book.configureSourceForOwner(authenticatedScope,id,revision,digest,expectedExecutionGeneration,layer,invocation,System.currentTimeMillis()));
+        return configureSourceForOwner(authenticatedScope,id,revision,digest,expectedExecutionGeneration,layer,invocation,null);
+    }
+    public JSONObject configureSourceForOwner(JSONObject authenticatedScope,String id,int revision,String digest,long expectedExecutionGeneration,
+            SkillSourcePolicy.Layer layer,SkillSourcePolicy.Invocation invocation,JSONObject observedProjectChoice)throws Exception {
+        String project=null;
+        if(layer==SkillSourcePolicy.Layer.PROJECT){
+            if(observedProjectChoice==null)throw new SecurityException("请选择原生目录中的真实项目，再审阅项目技能来源");
+            JSONObject actual=projectChoice(observedProjectChoice.getString("projectId"),observedProjectChoice.getString("checkoutId"));
+            if(!actual.getString("revision").equals(observedProjectChoice.getString("revision")))throw new SecurityException("原项目或副本身份已变化，请重新读取项目列表");
+            project=actual.getString("projectId");
+        }else if(observedProjectChoice!=null)throw new SecurityException("全局技能来源不接受项目选择");
+        JSONObject result=new JSONObject().put("skill",book.configureSourceForOwner(authenticatedScope,id,revision,digest,expectedExecutionGeneration,layer,invocation,project,System.currentTimeMillis()));
         context.emit(id(),new JSONObject().put("event","skills_changed").put("reason","source_policy_changed"));return result;
+    }
+    /** Reuses the original project catalogue. Reading choices does not activate or replace the
+     * owner's project-memory selection, and creates no additional namespace or grant. */
+    public synchronized void mountProjectNamespaces(dev.pocketengine.features.memory.ProjectMemoryNamespaces original){
+        java.util.Objects.requireNonNull(original);if(projectNamespaces!=null&&projectNamespaces!=original)throw new SecurityException("原项目来源宿主不能替换");projectNamespaces=original;
+    }
+    public JSONArray projectSourceChoicesForOwner()throws Exception {
+        var original=projectNamespaces;if(original==null)throw new SkillExecution.Unavailable("原项目目录尚未接入，不能把项目技能改成全局来源");
+        return original.choicesForOwner();
+    }
+    private JSONObject projectChoice(String project,String checkout)throws Exception {
+        SkillSourcePolicy.project(project);SkillSourcePolicy.project(checkout);JSONArray choices=projectSourceChoicesForOwner();
+        for(int i=0;i<choices.length();i++){JSONObject row=choices.getJSONObject(i);if(project.equals(row.optString("projectId"))&&checkout.equals(row.optString("checkoutId"))&&row.optBoolean("available"))return row;}
+        throw new SecurityException("原项目/副本已不存在或不属于私人主人项目，请重新选择");
+    }
+    /** Only native callers pass a freshly read original TaskStore record. This is deliberately
+     * absent from handle(): tool JSON and catalogue metadata cannot select a project. */
+    public JSONObject taskScopeForHost(JSONObject originalTask)throws Exception {
+        if(originalTask==null||!"owner".equals(originalTask.optString("actorId"))||!"private".equals(originalTask.optString("spaceId")))throw new SecurityException("技能范围只来自原主人私人任务");JSONObject scope=privateScope();
+        if(!originalTask.has("developmentContext"))return scope;
+        if(!"assistant".equals(originalTask.optString("kind"))||originalTask.has("origin"))throw new SecurityException("项目技能只使用原私人任务的项目范围");
+        JSONObject selected=originalTask.getJSONObject("developmentContext");
+        if(!"pocketworld.development-context.v1".equals(selected.optString("format")))throw new SecurityException("原任务项目选择格式已变化");
+        JSONObject actual=projectChoice(selected.getString("projectId"),selected.getString("checkoutId"));
+        return SkillSourcePolicy.checkedScope(scope.put("projectId",actual.getString("projectId")).put("checkoutId",actual.getString("checkoutId")).put("projectRevision",actual.getString("revision")));
+    }
+    public void requireTaskScopeForHost(JSONObject originalTask,JSONObject expectedScope)throws Exception {
+        if(!SkillSourcePolicy.scopeFingerprint(taskScopeForHost(originalTask)).equals(SkillSourcePolicy.scopeFingerprint(expectedScope)))throw new SecurityException("原任务项目已变化或解绑，旧技能正文与脚本选择已失效");
     }
     public JSONObject readForHost(JSONObject scope,String id,String path,int offset,int length,String expectedDigest,Set<String> hostCapabilities)throws Exception{return book.readForHost(scope,id,path,offset,length,expectedDigest,hostCapabilities,System.currentTimeMillis());}
     public JSONObject readForHost(JSONObject scope,String id,String path,int offset,int length,int expectedRevision,String expectedDigest,Set<String> hostCapabilities)throws Exception{return book.readForHost(scope,id,path,offset,length,expectedRevision,expectedDigest,hostCapabilities,System.currentTimeMillis());}
