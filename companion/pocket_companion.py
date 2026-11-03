@@ -903,6 +903,14 @@ class JobManager:
 
     def _public(self, job):
         result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer", "_piSession"}}
+        if job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest")):
+            result.pop("harnessColdRootRetirement", None)
+            try:
+                retired_root = self.harness_configs.cold_root_retirement(job)
+                if retired_root is not None:
+                    result["harnessColdRootRetirement"] = retired_root  # Read the durable outcome; never retire from GET.
+            except harness_config.ConfigError:
+                pass
         result.pop("_inputPersistenceUnconfirmed", None)
         if job.get("_inputPersistenceUnconfirmed"):
             result.pop("inputState", None)
@@ -930,7 +938,8 @@ class JobManager:
         result["coldRecovery"] = {"protocol": cold_session.PROTOCOL, "supportedForOriginalJob": cold_session.eligible(job), "requiresNativeOwnerReview": True, "readOnlyInspection": True, "lastInspection": json.loads(json.dumps(job.get("coldRecoveryRead", {"status": "not_checked"}))), "reason": "Original process identity and exact latest stored terminal Codex turn are both required; old jobs/Claude/SSH/private input staging have no cold continuation proof"}
         retained = self.processes.get(job.get("id"))
         original_stop = retained is not None and getattr(retained, "_pocket_worker_finished", False) and job.get("resourcesHeld") is True
-        result["controls"] = {"readSessionRecovery": cold_session.eligible(job), "cancel": job.get("status") not in TERMINAL or original_stop,
+        cold_root_cancel = job.get("status") == "interrupted" and self._can_resume(job) and self.harness_configs.active_cold_root(job) is not None
+        result["controls"] = {"readSessionRecovery": cold_session.eligible(job), "cancel": job.get("status") not in TERMINAL or original_stop or cold_root_cancel,
                               "approve": live and bool(job.get("pendingApprovals")),
                               "answerQuestion": live and not job.get("assignmentWorkspace") and any(value.get("canAnswer") for value in job.get("pendingQuestions", [])),
                               "threadResume": self._can_resume(job), "threadFork": native and self._can_resume(job) and job.get("status") in {"completed", "failed", "cancelled"},
@@ -1176,7 +1185,24 @@ class JobManager:
         if not isinstance(request, dict) or set(request) != {"jobOperationId"}:
             raise RequestError("Original cancellation requires only jobOperationId")
         expected = identifier(request["jobOperationId"], "jobOperationId")
-        result = self.cancel(jobid, expected_operation_id=expected)
+        with self.lock:
+            job = self._original_cancel_job_locked(jobid, expected)
+            configured_cold = job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest"))
+        if configured_cold:
+            self._reconcile_original_process(jobid)  # Existing read-only original-group fence, never a cold PID signal.
+        try:
+            with self.lock:
+                job = self._original_cancel_job_locked(jobid, expected)
+                cold_root = configured_cold and job.get("status") == "interrupted" and (self.harness_configs.active_cold_root(job) is not None or self.harness_configs.cold_root_retirement(job) is not None)
+        except harness_config.ConfigError as failure:
+            raise RequestError(str(failure), failure.status) from failure
+        if cold_root:
+            try:
+                result = cold_session.retire_configuration_root(self, jobid, expected, RequestError)
+            except harness_config.ConfigError as failure:
+                raise RequestError(str(failure), failure.status) from failure
+        else:
+            result = self.cancel(jobid, expected_operation_id=expected)
         if result.get("id") != jobid or result.get("operationId") != expected:
             raise RequestError("Original cancellation outcome is unconfirmed; query the original operation", 409)
         result["originalCancellation"] = {"protocol": ORIGINAL_JOB_CANCELLATION_PROTOCOL,

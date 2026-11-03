@@ -12,6 +12,7 @@ import uuid
 
 PROTOCOL = "codex_stored_turn_recovery_v1"
 GROUP_PROTOCOL = "original_posix_process_group_v1"
+COLD_ROOT_RETIREMENT = "explicit_original_codex_cold_root_retirement_v1"
 CONFIG_KEYS = ("kind", "root", "host", "user", "port", "writeAllowed", "workers", "commands", "knownHosts", "identityFile", "sshConfig")
 
 
@@ -181,6 +182,65 @@ def proof_matches(job, env):
     if _configured_home(job):
         expected["configurationHomeHash"] = _digest(job["_coldConfigHome"])
     return all(proof.get(key) == value for key, value in expected.items()) and proof.get("processGroupStoppedVerified") is True and proof.get("storedLatestTurnVerified") is True and proof.get("readOnlyInspection") is True and proof.get("turnStartedByInspection") is False and proof.get("observedTurnStatus") in {"completed", "failed", "interrupted"} and isinstance(proof.get("proofId"), str) and re.fullmatch(r"[a-f0-9-]{36}", proof["proofId"]) is not None
+
+
+def root_retirement_evidence(manager, job, proof_id, error):
+    """Final read-only gate for the explicit owner's original cancellation.
+
+    Caller holds manager.lock. The ordinary interrupted status and every cold
+    continuation gate remain intact; this is not a task-completion transition.
+    """
+    env = manager._environment(job["environmentId"])
+    if manager.closed or job["id"] in manager.stopping or job.get("status") != "interrupted" or not _configured_home(job) or not proof_matches(job, env) or job["recoveryProof"].get("proofId") != proof_id:
+        raise error("Original configured cold proof changed; root retirement is not authorized", 409)
+    if job["id"] in manager.processes or job["id"] in manager.drivers or job.get("resourcesHeld") is True or job["resourceId"] in manager.resources or manager.workspace_identity(env) != job["workspaceIdentity"]:
+        raise error("Original worker/workspace is still held; no configuration root was retired", 409)
+    first, second = job.get("_coldProcess", {}), job.get("_originalProcessGroup", {})
+    if any(first.get(key) != second.get(key) for key in ("bootId", "pidNamespace")) or any(first.get("process", {}).get(key) != second.get("process", {}).get(key) for key in ("pid", "pgid", "sessionId", "startTicks", "uid")) or not original_process_group_stopped(job, env):
+        raise error("Exact original group absence requires ESRCH; no cold PID was signalled or root retired", 409)
+    if any(value.get("status") in {"queued", "sending", "unknown"} for value in job.get("approvalReceipts", []) + job.get("questionReceipts", [])) or job.get("steeringUnknown"):
+        raise error("Original approval/input acknowledgement remains unresolved; no root was retired", 409)
+    if any(json.loads(raw).get("status") in {"queued", "sending", "unknown"} for (raw,) in manager.ledger.execute("SELECT receipt FROM steer_messages WHERE job_id=?", (job["id"],)).fetchall()):
+        raise error("Original turn input remains unresolved; no root was retired", 409)
+    if any(other["id"] != job["id"] and other.get("threadId") == job["threadId"] and (other.get("status") not in {"completed", "failed", "cancelled"} or other.get("resumeJobId") == job["id"]) for other in manager.jobs.values()):
+        raise error("Original thread already has another invocation; no root was retired", 409)
+    _configuration_environment(manager, job, env, error)
+    return {"protocol": COLD_ROOT_RETIREMENT, "retirementId": str(uuid.uuid4()), "jobId": job["id"], "jobOperationId": job["operationId"],
+            "jobStatus": "interrupted", "explicitOriginalOwnerCancellation": True, "configurationHomePin": job["_coldConfigHome"],
+            "storedTurnProof": job["recoveryProof"], "coldProcess": first, "originalProcessGroup": second,
+            "processCleanupProof": {"processGroupStoppedVerified": True, "verificationMethod": "original_pgid_esrch", "detachedDescendantIsolationVerified": False},
+            "oldEndpointRevived": False, "newExecutionAuthorized": False, "effectsReversed": False}
+
+
+def retire_configuration_root(manager, jobid, operation, error):
+    """Only the exact cancel-original endpoint may call this owner action."""
+    with manager.lock:
+        job = manager._original_cancel_job_locked(jobid, operation)
+        finished = manager.harness_configs.cold_root_retirement(job)
+        if finished is not None:
+            job["harnessColdRootRetirement"] = finished
+            manager._save(job)
+            return manager._public(job)
+        expected = manager.harness_configs.active_cold_root(job)
+        if expected is None:
+            raise error("Original active configuration root identity is unavailable; no root was retired", 409)
+        previous_proof = job.get("recoveryProof")
+        proof_id = previous_proof.get("proofId") if isinstance(previous_proof, dict) else None
+        root_retirement_evidence(manager, job, proof_id, error)
+        original = (job["operationId"], _scope(job, manager._environment(job["environmentId"])))
+    # Refresh the exact stored terminal turn without retaining the manager monitor
+    # across CLI IO. Inspection itself never releases or reauthorizes the root.
+    inspected = inspect(manager, jobid, error)
+    with manager.lock:
+        job = manager._original_cancel_job_locked(jobid, operation)
+        if original != (job["operationId"], _scope(job, manager._environment(job["environmentId"]))):
+            raise error("Original configuration/job changed during cancellation review; no root was retired", 409)
+        proof_id = inspected["recoveryProof"]["proofId"]
+        evidence = root_retirement_evidence(manager, job, proof_id, error)
+        finished = manager.harness_configs.retire_cold_root(job, expected, evidence)
+        job.update(harnessColdRootRetirement=finished, message="Owner explicitly retired the stopped original configuration root; job remains interrupted and prior effects/usage unverified. New owner restore/configuration/scope/budget are still required", updatedAt=manager.now())
+        manager._save(job)
+        return manager._public(job)
 
 
 def inspect(manager, jobid, error):

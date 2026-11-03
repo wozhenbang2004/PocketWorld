@@ -1150,7 +1150,10 @@ class HarnessConfigs:
             raise ConfigError("Original configuration receipt/cleanup proof is missing or changed")
         never_started = proof.get("jobNeverBound") is True and proof.get("notStartedConfirmed") is True
         settled = proof.get("jobStatus") in {"completed", "failed", "cancelled", "blocked"} and proof.get("processCleanupProof", {}).get("processGroupStoppedVerified") is True
-        if not (never_started or settled):
+        cold_retired = self._valid_cold_root_retirement(original, proof)
+        cold_form = any(key in proof for key in ("protocol", "retirementId", "explicitOriginalOwnerCancellation", "configurationHomePin", "storedTurnProof", "coldProcess", "originalProcessGroup"))
+        release_verified = cold_retired if cold_form else never_started or settled
+        if not release_verified:
             raise ConfigError("Original process exit was not verified; missing PID does not release the root")
         # No endpoint is registered and no grant/token lifetime is extended here. Only
         # an explicitly reviewed compensation plan may move to the new generation.
@@ -1305,6 +1308,96 @@ class HarnessConfigs:
         current = self.cold_codex_source(candidate, env)
         if any(current.get(key) != pin.get(key) for key in ("home", "rootIdentity", "bindingId", "executable", "executableIdentity")):
             raise ConfigError("Configured Codex continuation cannot switch the original home/root/executable")
+
+    def _cold_root_record(self, job):
+        row = self.db.execute("SELECT private_plan FROM harness_plans WHERE operation_id=?", (identifier(job.get("harnessConfigOperationId")),)).fetchone()
+        if row is None:
+            raise ConfigError("Original configuration root operation is missing")
+        plan = json.loads(row[0])
+        lease = self.db.execute("SELECT operation_id,binding_id,job_id,state,proof FROM harness_root_leases WHERE resource_key=?", (plan["target"]["resourceKey"],)).fetchone()
+        return plan, lease
+
+    def active_cold_root(self, job):
+        try:
+            plan, lease = self._cold_root_record(job)
+            if lease is not None and lease[:4] == (plan["operationId"], plan["target"]["bindingId"], job["id"], "ACTIVE"):
+                return (plan["target"]["resourceKey"], *lease)
+        except (ConfigError, ValueError, KeyError, TypeError):
+            pass
+        return None
+
+    def _valid_cold_root_retirement(self, plan, proof):
+        import cold_session
+        try:
+            pin, turn = proof["configurationHomePin"], proof["storedTurnProof"]
+            first, second = proof["coldProcess"], proof["originalProcessGroup"]
+            identity = plan["identity"]
+            owner_request = {"harnessConfigOperationId": plan["operationId"], "harnessOwnerBinding": {key: plan["request"][key] for key in ("taskId", "runId", "epoch", "profileDigest", "endpointLeaseRef")}}
+            return (plan["restoreOf"] is None and identity["family"] == "codex" and proof["protocol"] == cold_session.COLD_ROOT_RETIREMENT and proof["explicitOriginalOwnerCancellation"] is True
+                    and proof["jobStatus"] == "interrupted" and proof["configurationOperationId"] == plan["operationId"] and proof["configReceiptDigest"] == digest(self._operation(plan["operationId"]))
+                    and proof["rootResourceKey"] == plan["target"]["resourceKey"] and proof["physicalRootKey"] == plan["target"]["physicalRootKey"]
+                    and pin["format"] == "codex_config_home_v1" and pin["operationId"] == plan["operationId"] and pin["planDigest"] == plan["planDigest"] and pin["receiptDigest"] == proof["configReceiptDigest"]
+                    and pin["configurationDigest"] == digest(plan["afterRaw"]) and pin["ownerBindingDigest"] == digest(owner_request)
+                    and pin["home"] == plan["target"]["root"] and pin["rootIdentity"] == identity["rootIdentity"] and pin["bindingId"] == identity["bindingId"]
+                    and pin["executable"] == identity["executable"] and pin["executableIdentity"] == identity["executableIdentity"]
+                    and turn["jobId"] == proof["jobId"] and turn["jobOperationId"] == proof["jobOperationId"] and turn["format"] == cold_session.PROTOCOL
+                    and turn["configurationHomeHash"] == cold_session._digest(pin) and first["scope"]["configurationHomeHash"] == turn["configurationHomeHash"]
+                    and first["format"] == cold_session.PROTOCOL and second["format"] == cold_session.GROUP_PROTOCOL and turn["processIdentityHash"] == cold_session._digest(first)
+                    and pin["harnessDefinitionsDigest"] == first["scope"]["harnessDefinitionsHash"]
+                    and all(first["scope"][key] == second["scope"][key] for key in ("jobId", "jobOperationId", "environmentId", "worker", "resourceId", "workspaceIdentity", "requestFingerprint", "environmentConfigHash"))
+                    and all(turn[key] == first["scope"][key] for key in ("jobId", "jobOperationId", "environmentId", "worker", "workspaceIdentity", "environmentConfigHash"))
+                    and turn["storedLatestTurnVerified"] is True and turn["processGroupStoppedVerified"] is True and turn["readOnlyInspection"] is True and turn["turnStartedByInspection"] is False and turn["observedTurnStatus"] in {"completed", "failed", "interrupted"}
+                    and turn["businessSuccessVerified"] is False and turn["internalUsageKnown"] is False and re.fullmatch(r"[a-f0-9-]{36}", proof["retirementId"]) is not None and re.fullmatch(r"[a-f0-9-]{36}", turn["proofId"]) is not None
+                    and all(first[key] == second[key] for key in ("bootId", "pidNamespace"))
+                    and all(first["process"][key] == second["process"][key] for key in ("pid", "pgid", "sessionId", "startTicks", "uid"))
+                    and proof["processCleanupProof"]["processGroupStoppedVerified"] is True and proof["processCleanupProof"]["verificationMethod"] == "original_pgid_esrch"
+                    and proof["oldEndpointRevived"] is False and proof["newExecutionAuthorized"] is False and proof["effectsReversed"] is False)
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _cold_retirement_summary(proof):
+        return {"protocol": proof["protocol"], "status": "retired", "retirementId": proof["retirementId"], "jobId": proof["jobId"], "jobOperationId": proof["jobOperationId"],
+                "configurationOperationId": proof["configurationOperationId"], "readOnlyProofId": proof["storedTurnProof"]["proofId"],
+                "oldEndpointRevived": False, "newExecutionAuthorized": False, "effectsReversed": False}
+
+    def cold_root_retirement(self, job):
+        plan, lease = self._cold_root_record(job)
+        if lease is not None and lease[:4] == (plan["operationId"], plan["target"]["bindingId"], None, "CONFIGURED"):
+            proof = json.loads(lease[4])
+            if self._valid_cold_root_retirement(plan, proof) and proof["jobId"] == job["id"] and proof["jobOperationId"] == job["operationId"]:
+                return self._cold_retirement_summary(proof)
+        previous = job.get("harnessColdRootRetirement")
+        if isinstance(previous, dict) and previous.get("status") == "retired" and previous.get("jobId") == job["id"] and previous.get("jobOperationId") == job["operationId"] and previous.get("configurationOperationId") == plan["operationId"] and (lease is None or lease[0] != plan["operationId"]):
+            return previous  # Acknowledged retirement is history after explicit restoration/reconfiguration.
+        return None
+
+    def retire_cold_root(self, job, expected, evidence):
+        """One exact owner action retires only the old ACTIVE root, never its grant."""
+        plan, lease = self._cold_root_record(job)
+        if (plan["target"]["resourceKey"], *(lease or ())) != expected or self.active_cold_root(job) != expected:
+            raise ConfigError("Original active root changed before explicit retirement")
+        bound = json.loads(lease[4])
+        if bound.get("configurationOperationId") != plan["operationId"] or bound.get("jobId") != job["id"] or bound.get("jobNeverBound") is not False:
+            raise ConfigError("Original active root binding proof changed")
+        proof = {**evidence, "configurationOperationId": plan["operationId"], "configReceiptDigest": digest(self._operation(plan["operationId"])),
+                 "rootResourceKey": plan["target"]["resourceKey"], "physicalRootKey": plan["target"]["physicalRootKey"], "jobNeverBound": False}
+        if not self._valid_cold_root_retirement(plan, proof):
+            raise ConfigError("Original explicit cold root retirement evidence is incomplete")
+        changed = self.db.execute("UPDATE harness_root_leases SET job_id=NULL,state='CONFIGURED',proof=? WHERE resource_key=? AND operation_id=? AND binding_id=? AND job_id=? AND state='ACTIVE' AND proof=?",
+                                  (encoded(proof), expected[0], expected[1], expected[2], expected[3], expected[5])).rowcount
+        if changed != 1:
+            self.db.rollback()
+            raise ConfigError("Original root changed before retirement; no replacement lease was touched")
+        try:
+            self.db.commit()
+        except Exception:
+            try:
+                self.db.rollback()
+            except Exception:
+                pass  # Persistence remains unconfirmed; never report or replay success.
+            raise ConfigError("Original root retirement persistence is unconfirmed; query the original job before retrying")
+        return self._cold_retirement_summary(proof)
 
     @staticmethod
     def _pi_worker_identity(env, plan):
