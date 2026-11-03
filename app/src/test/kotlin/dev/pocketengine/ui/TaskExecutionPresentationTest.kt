@@ -205,4 +205,69 @@ class TaskExecutionPresentationTest {
         assertTrue(TaskExecutionPresentation.outputNotes(receipt, true).any { it.contains("未留存部分不能由摘要恢复") })
         assertTrue(TaskExecutionPresentation.outputNotes(JSONObject().put("runtimeId", "managed_process_v1").put("outputTruncated", "true"), true).isEmpty())
     }
+    private fun trailOperations(count: Int): JSONArray = JSONArray((1..count).map { index ->
+        operation().put("operationId", "op-$index").put("createdAt", index.toLong())
+            .put("runId", if (index <= 80) "old-run" else "current-run")
+    })
+
+    @Test fun browserTrailKeepsTheLatestFortyOfFortyOneWithoutChangingSharedPages() {
+        val original = trailOperations(41)
+        val before = original.toString()
+        val window = TaskExecutionPresentation.recentOperations(original)
+        assertEquals((2..41).map { "operation:op-$it" }, window.records.map { it.key })
+        assertEquals((39..41).map { "operation:op-$it" }, window.records.takeLast(3).map { it.key })
+        assertEquals(1, window.omittedEarlierCount)
+        assertEquals("最近 40 条", window.expandLabel)
+        assertTrue(window.summary(false)!!.contains("另有 1 条较早调用未在此处展示"))
+        assertTrue(window.summary(true)!!.contains("仅显示最近 40 条"))
+        assertFalse(window.summary(true)!!.contains("全部"))
+        assertEquals((1..40).map { "operation:op-$it" }, TaskExecutionPresentation.records(JSONObject().put("entries", original), "operations").map { it.key })
+        assertEquals(before, original.toString())
+    }
+
+    @Test fun browserTrailKeepsLatestFortyOfHundredAndDisclosesBothCollapsedAndExpandedOmissions() {
+        val original = trailOperations(100)
+        val before = original.toString()
+        val window = TaskExecutionPresentation.recentOperations(original)
+        assertEquals((61..100).map { "operation:op-$it" }, window.records.map { it.key })
+        assertEquals((98..100).map { "operation:op-$it" }, window.records.takeLast(3).map { it.key })
+        assertEquals(60, window.omittedEarlierCount)
+        assertEquals("最近 40 条", window.expandLabel)
+        assertEquals("显示最近 3 条原调用；展开可查看最近 40 条。另有 60 条较早调用未在此处展示。", window.summary(false))
+        assertEquals("仅显示最近 40 条原调用；另有 60 条较早调用未在此处展示。", window.summary(true))
+        assertEquals(before, original.toString())
+    }
+
+    @Test fun browserTrailKeepsOriginalRunIdentityOrderAndLatestErrorUnknownAndReturnReceipts() {
+        val original = trailOperations(100)
+        // Journal order remains authoritative even when a later run has older timestamps.
+        for (index in 80 until 100) original.getJSONObject(index).put("createdAt", 1)
+        original.getJSONObject(97).put("receipt", JSONObject().put("ok", false).put("status", "failed"))
+        original.getJSONObject(98).put("state", "unknown").put("receipt", JSONObject().put("accepted", JSONObject.NULL))
+        val before = original.toString()
+        val records = TaskExecutionPresentation.recentOperations(original).records
+        assertEquals((61..100).map { "operation:op-$it" }, records.map { it.key })
+        assertEquals(List(20) { "old-run" } + List(20) { "current-run" }, records.map { it.runId })
+        assertEquals(listOf(TaskExecutionPresentation.Tone.ERROR, TaskExecutionPresentation.Tone.UNCERTAIN, TaskExecutionPresentation.Tone.RETURNED), records.takeLast(3).map { it.tone })
+        assertEquals(original.getJSONObject(98).getJSONObject("receipt").toString(), records[38].receipt)
+        assertEquals(before, original.toString())
+    }
+
+    @Test fun browserTrailZeroThreeAndFortyBoundariesDoNotClaimTruncation() {
+        for (count in listOf(0, 3, 40)) {
+            val original = trailOperations(count)
+            val window = TaskExecutionPresentation.recentOperations(original)
+            assertEquals(count, window.records.size)
+            assertEquals(0, window.omittedEarlierCount)
+            assertEquals("全部 $count 条", window.expandLabel)
+            assertEquals((1..count).map { "operation:op-$it" }, window.records.map { it.key })
+            assertNull(window.summary(true))
+            if (count <= 3) assertNull(window.summary(false))
+            else assertEquals("显示最近 3 条原调用；展开可回查更早记录。", window.summary(false))
+            assertEquals(count, original.length())
+        }
+        assertTrue(TaskExecutionPresentation.recentOperations(null).records.isEmpty())
+        assertNull(TaskExecutionPresentation.recentOperations(null).summary(false))
+    }
+
 }
