@@ -36,3 +36,22 @@ class HostSelectionTest(unittest.TestCase):
         self.assertIn('id: selected_host_tests', s)
         self.assertIn("contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'remote-transport')", s)
         self.assertIn("inputs.host_groups == '' && inputs.host_group == 'browser-long-page'", s)
+
+    def test_model_quality_pr_entry_is_same_repository_and_exact_branch_only(self):
+        import json
+        import re
+        s = (M.ROOT / '.github/workflows/build-apk.yml').read_text()
+        self.assertRegex(s, r'(?m)^  pull_request:\n    branches: \[main\]$')
+        self.assertNotIn('pull_request_target:', s)
+        host = s.split('  host-tests:\n', 1)[1]
+        guard = re.search(r'(?m)^    if: (.+)$', host).group(1)
+        self.assertEqual(
+            "${{ github.event.repository.private && (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'pro/workpack-06-model-quality') }}",
+            guard)
+        batch = 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,gateway-continuation,runner-budget-stream'
+        self.assertIn("HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && '" + batch + "' || inputs.host_groups }}", host)
+        registry = json.loads((M.ROOT / 'tools/host-tests.json').read_text())
+        self.assertEqual(batch.split(','), M.selected(registry, '', batch))
+        self.assertIn("HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && 'model-quality-routing' || inputs.host_group }}", host)
+        apk = s.split('  apk:\n', 1)[1].split('  host-tests:\n', 1)[0]
+        self.assertIn("if: ${{ github.event.repository.private && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.target != 'host-tests') }}", apk)
