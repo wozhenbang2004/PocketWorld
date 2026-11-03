@@ -29,6 +29,9 @@ public final class WorkProfileResolver {
         default JSONObject skillScope(RunControl observation)throws Exception {observation.check();return null;}
         /** Compatibility for old native snapshots: global sources only, never a new project selection. */
         default JSONObject legacyGlobalSkill(String id,RunControl observation)throws Exception {return skill(id,observation);}
+        default JSONObject referencePackage(JSONObject exactReference,RunControl observation)throws Exception{throw new SecurityException("原技能文本投射读取未挂载，请保留编辑");}
+        /** Old native snapshots retain their global text sources inside a project task. */
+        default JSONObject legacyGlobalReferencePackage(JSONObject exactReference,RunControl observation)throws Exception{return referencePackage(exactReference,observation);}
         JSONObject plugin(String id, RunControl observation) throws Exception;
         JSONObject extension(String id, RunControl observation) throws Exception;
         JSONObject team(String id, RunControl observation) throws Exception;

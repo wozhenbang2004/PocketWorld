@@ -36,6 +36,7 @@ public final class AssistantModule implements EngineModule {
         /** Native task hosts also persist cancellation and enqueue their original child stops. */
         default void cancel(RunControl control)throws Exception{control.cancel();}
         default boolean retainsDevelopment(RunControl control){return false;}
+        default void settled(JSONObject turn,ModelConfig captured,RunControl original)throws Exception{}
     }
     public interface CheckedAction {void run()throws Exception;}
     private static JSONObject nativeExecutionScope(JSONObject input)throws Exception {
@@ -404,6 +405,21 @@ public final class AssistantModule implements EngineModule {
                 .put("conversationId",message.getString("conversationId")).put("taskId",completed.taskId).put("messageId",message.getString("id")));}
         return copy(saved);
     }
+    public void ownerQuestionInputSaved(JSONObject accepted)throws Exception{
+        final String conversation;
+        synchronized(admission){
+            if(historyTasks==null||!durable()||accepted==null||!accepted.optBoolean("accepted")||accepted.optBoolean("duplicate"))throw new SecurityException("原问题输入没有首次原生接收事实");
+            synchronized(historyTasks){
+                JSONObject task=historyTasks.get(accepted.getString("taskId"),false);OwnerQuestionInputs.requirePrivateTask(task);conversation=task.getString("conversationId");
+                JSONObject row=null;JSONArray rows=task.getJSONArray("ownerInputs");for(int i=0;i<rows.length();i++)if(accepted.getString("messageId").equals(rows.getJSONObject(i).optString("messageId")))row=rows.getJSONObject(i);
+                JSONObject proof=row==null?null:row.optJSONObject("ownerQuestionReply"),source=historyRepository.source(accepted.getString("messageId")),message=historyRepository.message(conversation,accepted.getString("messageId"));
+                if(proof==null||!OwnerQuestionInputs.FORMAT.equals(proof.optString("format"))||!accepted.getString("requestId").equals(proof.optString("requestId"))
+                        ||source==null||source.optBoolean("deleted")||!"user".equals(source.optString("role"))||!conversation.equals(source.optString("conversationId"))||message==null||!row.getString("content").equals(message.getString("content")))throw new SecurityException("原回答来源已删除或改变，未同步旧副本");
+                sourceGeneration++;synchronizationPending=true;
+            }
+        }
+        synchronizeSources();context.emit(id(),new JSONObject().put("phase","owner_question_answer_saved").put("conversationId",conversation).put("taskId",accepted.getString("taskId")).put("messageId",accepted.getString("messageId")));
+    }
     private void executeNativeTurn(JSONObject turn,String goal,JSONArray history,ModelConfig config,RunControl control,String messageId){
         String cid=turn.optString("conversationId");boolean retainedResult=false;
         try{
@@ -419,6 +435,7 @@ public final class AssistantModule implements EngineModule {
             try{context.emit(id(),copy(turn).put("phase",control.isCancelled()?"cancelled":"failed").put("messageId",messageId).put("message",control.isCancelled()?"已停止后续执行；已有输入保留在原任务":"本轮未完成，请核对原任务；不会自动重发输入或动作"));}catch(Exception ignored){}
         }finally{
             synchronized(admission){if(retainedResult&&!control.isCancelled()&&nativeInputHost!=null&&nativeInputHost.retainsDevelopment(control))developmentTurns.put(cid,new DevelopmentTurn(turn,config,control));else developmentTurns.remove(cid);active.compareAndSet(control,null);if(activeTurn!=null&&turn.optString("runId").equals(activeTurn.optString("runId"))){activeTurn=null;activeModel=null;}}
+            try{NativeInputHost host=nativeInputHost;if(!retainedResult&&host!=null)host.settled(copy(turn),config,control);}catch(Exception unavailable){/* The original settled wait is retained only in this process; never a new attempt. */}
             try{context.emit(id(),copy(turn).put("phase","idle").put("messageId",messageId));}catch(Exception ignored){}
             // An owner input accepted between the final empty boundary and yield must not be stranded.
             if(retainedResult)try{synchronized(admission){

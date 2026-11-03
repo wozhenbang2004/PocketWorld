@@ -100,6 +100,17 @@ public final class NativeWorkProfileSkillScopeTest {
     private static boolean contains(JSONArray rows,String id)throws Exception {for(int i=0;i<rows.length();i++)if(id.equals(rows.getJSONObject(i).getString("id")))return true;return false;}
     private static JSONArray skillChoices(JSONObject choices)throws Exception{return choices.getJSONObject("sections").getJSONObject("skills").getJSONArray("items");}
     private File checkoutFile(JSONObject checkout,String path)throws Exception{return new File(app.getFilesDir(),"local-development/checkouts/"+checkout.getString("id")+"/"+path);}
+    private static void assertHarnessReference(JSONObject payload,JSONObject selected,String body,String excluded)throws Exception {
+        assertEquals("pocketworld.harness-reference-assets.v1",payload.getString("format"));assertFalse(payload.getBoolean("permissionsChanged"));assertFalse(payload.getBoolean("scriptsExecutable"));
+        JSONArray assets=payload.getJSONArray("assets");assertEquals(1,assets.length());JSONObject asset=assets.getJSONObject(0);
+        assertEquals(selected.getString("id"),asset.getString("id"));assertEquals(selected.getInt("revision"),asset.getInt("revision"));assertEquals(selected.getString("digest"),asset.getString("digest"));
+        assertTrue(asset.getBoolean("untrustedReference"));assertFalse(asset.getBoolean("permissionsChanged"));assertFalse(asset.getBoolean("scriptsExecutable"));assertEquals(new JSONArray().put("instruction").toString(),asset.getJSONArray("kinds").toString());
+        JSONArray files=asset.getJSONArray("files");assertEquals(1,files.length());JSONObject file=files.getJSONObject(0);assertEquals("SKILL.md",file.getString("path"));
+        StringBuilder actual=new StringBuilder();JSONArray chunks=file.getJSONArray("chunks");for(int i=0;i<chunks.length();i++)actual.append(chunks.getString(i));
+        String expected="---\nname: scope-guide\ndescription: Original native Profile fixture\n---\n"+body;
+        assertEquals(expected,actual.toString());assertEquals(dev.pocketengine.features.local.project.ProjectSources.sha256(expected.getBytes(StandardCharsets.UTF_8)),file.getString("sha256"));
+        assertFalse(payload.toString().contains(excluded));assertFalse(payload.toString().contains("OWNER_ONLY_MUST_NOT_REACH_MODEL"));
+    }
 
     @Test public void originalProjectPreflightRunnerAndStoredRecoveryKeepScopeWhileNormalSourceEditsRemainUsable()throws Exception {
         JSONObject result=worker.submit(()->{
@@ -157,7 +168,7 @@ public final class NativeWorkProfileSkillScopeTest {
     }
 
     @Test public void oldUnscopedSqlSnapshotKeepsItsGlobalReferenceInsideAnOriginalProjectTask()throws Exception {
-        worker.submit(()->{
+        JSONObject continuedResult=worker.submit(()->{
             NativeWorkProfileSources current=sources();
             // Simulate the earlier native adapter's persisted shape through original typed
             // admission, rather than constructing a new authority from a JSON snapshot.
@@ -178,6 +189,12 @@ public final class NativeWorkProfileSkillScopeTest {
                 RunControl control=new RunControl();var selected=page.select(review,review.digest,control);JSONObject pending=app.tasks.createCapabilityTaskWithWorkProfile("Continue the existing global reference","",selected,control);
                 app.tasks.configureExecutionScope(pending.getString("id"),0,System.currentTimeMillis()+300000,8,4);task=app.tasks.startAttemptWithWorkProfile(pending.getString("id"),"capabilities",8,selected,control);
                 var ownerField=EngineApplication.class.getDeclaredField("projectOwnerWorkflows");ownerField.setAccessible(true);((ProjectOwnerWorkflows)ownerField.get(app)).bindWorkProfileProject(selectedProject(checkoutA),task,control);
+                // This manually retained old run must contain its original read-only grant.
+                // A later continuation may intersect it, never fill an empty frozen tool set.
+                app.tasks.authorizeTools(task.getString("id"),task.getString("runId"),new JSONArray().put("project_inspect"));
+                var references=app.nativeWorkProfiles().harnessReferencesForRun(app.tasks,task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control);
+                assertNotNull(references);references.checkCurrent();assertHarnessReference(references.view(),global,"GLOBAL_REFERENCE_ONLY",MARKER);
+                assertEquals(new JSONArray().put("project_inspect").toString(),app.tasks.get(task.getString("id"),false).getJSONObject("executionScope").getJSONArray("tools").toString());
                 app.tasks.endAttempt(task.getString("id"),task.getString("runId"),"awaiting_user","Original read-only fixture stopped before inference",new JSONObject());
             }finally{page.close();}
             TaskStore reopened=new TaskStore(app);try{
@@ -191,10 +208,47 @@ public final class NativeWorkProfileSkillScopeTest {
             }finally{var database=TaskStore.class.getDeclaredField("db");database.setAccessible(true);((android.database.sqlite.SQLiteDatabase)database.get(reopened)).close();}
             var originalPage=app.nativeWorkProfiles().newOwnerPage();originalPage.setForeground(true);
             try{
+                JSONObject originalScope=app.tasks.get(task.getString("id"),false).getJSONObject("executionScope");
                 var review=originalPage.reviewForTask(app.tasks,task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),new RunControl());RunControl next=new RunControl();var selected=originalPage.select(review,review.digest,next);
-                JSONObject result=app.continueOwnerWorkProfile(task.getString("id"),null,selected,next);assertEquals(task.getString("id"),result.getString("taskId"));assertEquals(1,app.tasks.list().length());return result;
+                JSONObject result=app.continueOwnerWorkProfile(task.getString("id"),null,selected,next);assertEquals(task.getString("id"),result.getString("taskId"));assertEquals(1,app.tasks.list().length());
+                JSONObject continued=app.tasks.get(task.getString("id"),false),scope=continued.getJSONObject("executionScope");assertEquals(task.getInt("coordinatorEpoch")+1,continued.getInt("coordinatorEpoch"));
+                for(String field:new String[]{"revision","deadlineAt","toolLimit","modelCallLimit"})assertEquals(originalScope.get(field),scope.get(field));
+                assertEquals(new JSONArray().put("project_inspect").toString(),scope.getJSONArray("tools").toString());assertEquals(originalScope.getJSONArray("tools").toString(),scope.getJSONArray("tools").toString());assertEquals(0,continued.getJSONArray("operations").length());return result;
             }finally{originalPage.close();}
-        }).get(40,TimeUnit.SECONDS);assertEquals(1,requests.size());boolean delivered=false;
+        }).get(40,TimeUnit.SECONDS);assertEquals(continuedResult.toString(),1,requests.size());boolean delivered=false;
         JSONArray messages=requests.get(0).getJSONArray("messages");for(int i=0;i<messages.length();i++){JSONObject message=messages.getJSONObject(i);String content=message.optString("content");assertFalse("Old global pin must not gain the shadowing project source",content.contains(MARKER));if(content.contains("GLOBAL_REFERENCE_ONLY")){delivered=true;assertEquals("user",message.getString("role"));assertTrue(content.contains("<host_reference_data>"));}}assertTrue("Legacy cold continuation must read its original global body through the actual Runner",delivered);
+    }
+
+    @Test public void projectHarnessReferencesKeepExactScopedBytesAndOriginalWithdrawalFences()throws Exception {
+        worker.submit(()->{
+            var host=app.nativeWorkProfiles();var ownerField=EngineApplication.class.getDeclaredField("projectOwnerWorkflows");ownerField.setAccessible(true);var projects=(ProjectOwnerWorkflows)ownerField.get(app);
+            for(String withdrawal:new String[]{"cancel","checkout","disable"}){
+                int priorTasks=app.tasks.list().length();var page=host.newOwnerPage();page.setForeground(true);RunControl original=new RunControl();JSONObject task=null;
+                try{
+                    var projectSelection=selectedProject(checkoutA);JSONObject saved=page.save("",0,"Original Harness "+withdrawal,definition(project));
+                    var review=page.review(saved.getString("profileId"),1,new RunControl(),projectSelection);assertTrue(review.view().toString(),review.view().getBoolean("ready"));
+                    var selected=page.select(review,review.digest,original);host.requireProjectSelection(selected,projectSelection,original);
+                    JSONObject pending=app.tasks.createCapabilityTaskWithWorkProfile("Read the original project reference without execution","",selected,original);
+                    app.tasks.configureExecutionScope(pending.getString("id"),0,System.currentTimeMillis()+300000,8,4);task=app.tasks.startAttemptWithWorkProfile(pending.getString("id"),"capabilities",8,selected,original);
+                    projects.bindWorkProfileProject(projectSelection,task,original);host.bindOriginalTaskScope(app.tasks,task.getString("id"),selected,original);
+                    JSONArray readTools=new JSONArray().put("project_inspect").put("project_read_file");app.tasks.authorizeTools(task.getString("id"),task.getString("runId"),readTools);
+                    final String id=task.getString("id"),run=task.getString("runId");final int epoch=task.getInt("coordinatorEpoch");
+                    JSONObject before=app.tasks.get(id,false),scope=before.getJSONObject("executionScope");
+                    var references=host.harnessReferencesForRun(app.tasks,id,run,epoch,original);assertNotNull(references);references.checkCurrent();
+                    assertHarnessReference(references.view(),project,MARKER,"GLOBAL_REFERENCE_ONLY");assertEquals(review.view().getString("resolutionDigest"),references.view().getString("resolutionDigest"));
+                    assertEquals(priorTasks+1,app.tasks.list().length());assertEquals(scope.toString(),app.tasks.get(id,false).getJSONObject("executionScope").toString());assertEquals(0,app.tasks.get(id,false).getJSONArray("operations").length());
+                    if("cancel".equals(withdrawal))original.cancel();
+                    else if("checkout".equals(withdrawal)){File record=checkoutFile(checkoutA,"checkout.json");JSONObject occurrence=JsonFiles.read(record);occurrence.put("createdAt",Math.addExact(occurrence.getLong("createdAt"),1));JsonFiles.write(record,occurrence);}
+                    else skills.handle("setEnabled",new JSONObject().put("id",project.getString("id")).put("enabled",false));
+                    if("cancel".equals(withdrawal))assertThrows(InterruptedException.class,references::checkCurrent);else assertThrows(SecurityException.class,references::checkCurrent);
+                    assertThrows(Exception.class,()->host.harnessReferencesForRun(app.tasks,id,run,epoch,original));
+                    JSONObject after=app.tasks.get(id,false);assertEquals(run,after.getString("runId"));assertEquals(epoch,after.getInt("coordinatorEpoch"));assertEquals(priorTasks+1,app.tasks.list().length());assertEquals(0,after.getJSONArray("operations").length());
+                    assertEquals(scope.toString(),after.getJSONObject("executionScope").toString());assertEquals(readTools.toString(),after.getJSONObject("executionScope").getJSONArray("tools").toString());assertEquals(0,requests.size());
+                }finally{
+                    if(task!=null)app.tasks.endAttempt(task.getString("id"),task.getString("runId"),original.isCancelled()?"cancelled":"awaiting_user","Original reference-only fixture ended without dispatch",new JSONObject());
+                    original.cancel();page.close();
+                }
+            }return null;
+        }).get(40,TimeUnit.SECONDS);assertEquals(3,app.tasks.list().length());assertEquals(0,requests.size());
     }
 }

@@ -109,6 +109,16 @@ public final class NativeWorkProfileSources implements WorkProfileResolver.Sourc
     private JSONObject skillInScope(String id,JSONObject scope,RunControl observation)throws Exception {
         observation.check();JSONObject value=find(skills().catalogueForHost(scope).getJSONArray("skills"),id);skillScope(observation);return value;
     }
+    @Override public JSONObject referencePackage(JSONObject reference,RunControl observation)throws Exception {
+        return referencePackageInScope(reference,skillScope(observation),observation);
+    }
+    @Override public JSONObject legacyGlobalReferencePackage(JSONObject reference,RunControl observation)throws Exception {
+        skillScope(observation);return referencePackageInScope(reference,globalScope(),observation);
+    }
+    private JSONObject referencePackageInScope(JSONObject reference,JSONObject scope,RunControl observation)throws Exception {
+        observation.check();JSONObject value=skills().referencePackageForHost(scope,reference.getString("id"),reference.getInt("revision"),reference.getString("digest"),hostCapabilities());
+        skillScope(observation);observation.check();return value;
+    }
     @Override public JSONObject plugin(String id, RunControl observation) throws Exception {
         observation.check(); EngineModule module = features.module("plugins");
         if (!(module instanceof dev.pocketengine.features.plugins.PluginsModule)) throw new IllegalStateException("original_plugin_store_not_mounted");

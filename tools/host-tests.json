@@ -119,7 +119,7 @@
     ],
     "robolectric": true,
     "python": true,
-    "description": "Original App/SQL/Service plus original Companion/drivers on loopback. Original script peer cases remain unchanged; exact Profile target cases use a real temporary ELF fixture entrypoint (requires CC/cc), with version/content/execution-chain verification still false. No real CLI/account, phone or WAN acceptance.",
+    "description": "Original App/SQL/Service plus original Companion/drivers on loopback. Original script peer cases remain unchanged; exact Profile target cases use a real temporary ELF fixture entrypoint (requires CC/cc), with version/content/execution-chain verification still false. Exact current Book instruction/Skill revisions become reference-only native target files through the same config operation, complete diff/readback, live source fences and original driver/model request. Configuration SQL retains identities/hashes, not source bodies; reopened observation cannot mint a source approval. No target script/hooks/tool permission grants, installed production CLI discovery, real account, phone or WAN acceptance.",
     "nativeCompiler": true
   },
   "memory-automatic": {
@@ -332,11 +332,20 @@
       "dev.pocketengine.store.DeviceV8MigrationNativeTest",
       "dev.pocketengine.features.assistant.ConversationOwnerTitleNativeTest",
       "dev.pocketengine.features.conversation.ConversationPinnedHistoryTest",
-      "dev.pocketengine.ui.ConversationOrganizationUiNativeTest"
+      "dev.pocketengine.ui.ConversationOrganizationUiNativeTest",
+      "dev.pocketengine.features.conversation.InterruptedAttemptsTest",
+      "dev.pocketengine.features.assistant.notifications.OwnerQuestionReferenceTest",
+      "dev.pocketengine.features.assistant.OwnerQuestionInputsNativeTest",
+      "dev.pocketengine.features.assistant.OwnerQuestionRunnerNativeTest",
+      "dev.pocketengine.features.assistant.ConversationInterruptedNativeJourneyTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
     "robolectric": true,
-    "description": "Original owner conversation storage/migrations/transfer and native title/pin organization. Includes mounted Compose owner rename/cancel/pin/unpin and pinned-history refresh; no physical device or visual-design acceptance."
+    "description": "Original owner conversation storage/migrations/transfer and native title/pin organization. Includes mounted Compose owner rename/cancel/pin/unpin and pinned-history refresh; no physical device or visual-design acceptance. Includes interrupted output history and original private-owner question/notification replies with SQL, controlled HTTP model, one-time answer, old notices, cancellation and canonical forgetting. Ordinary phone-held execution remains outside this increment."
   },
   "remote-transport": {
     "class": "dev.pocketengine.features.remote.RemoteTransportTest",
@@ -965,5 +974,16 @@
     "native": true,
     "robolectric": true,
     "description": "Original approved command short wait then same-execution observation, exact total deadline and native cancel/drain. Real original SQLite/JNI Node exit7, live silence, immutable cursor logs, read-only owner reopening without input/stop authority, no per-poll activity journal growth and original private artifact capture. Includes exact command normalization/consent and same-operation UI enum projection; existing activity/PTY groups stay separate. No second Runner/job ledger, automatic replay, inferred input readiness, hardware or performance acceptance."
+  },
+  "project-git-isolation": {
+    "class": "dev.pocketengine.features.local.project.ProjectGitIsolationNativeJourneyTest",
+    "helpers": [],
+    "native": true,
+    "robolectric": true,
+    "description": "Original owner Git approval and one JNI/SQL operation create a private common repository from only an exact local ancestor commit reachable object graph and a genuine linked worktree. Source WIP/index/refs and configuration stay unchanged, arbitrary gitfiles stay rejected, failed pools remain; native checkout selection/return adds no run or grant. Original approved project edit/command uses the selected tree, while the actual final Runner HTTP request receives one bounded low-trust current project/runtime/preview reference. No direct linkage to the user common repository, network Git, automatic merge/cleanup, ARM/PRoot or visual acceptance.",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.project.ProjectGitNativeJourneyTest",
+      "dev.pocketengine.features.local.project.ProjectGitPolicyTest"
+    ]
   }
 }

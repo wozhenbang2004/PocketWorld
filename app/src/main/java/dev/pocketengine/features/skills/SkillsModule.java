@@ -127,6 +127,8 @@ public final class SkillsModule implements EngineModule {
     }
     public JSONObject readForHost(JSONObject scope,String id,String path,int offset,int length,String expectedDigest,Set<String> hostCapabilities)throws Exception{return book.readForHost(scope,id,path,offset,length,expectedDigest,hostCapabilities,System.currentTimeMillis());}
     public JSONObject readForHost(JSONObject scope,String id,String path,int offset,int length,int expectedRevision,String expectedDigest,Set<String> hostCapabilities)throws Exception{return book.readForHost(scope,id,path,offset,length,expectedRevision,expectedDigest,hostCapabilities,System.currentTimeMillis());}
+    /** Native owner reviewed Harness reference projection, absent from feature commands. */
+    public JSONObject referencePackageForHost(JSONObject scope,String id,int revision,String digest,Set<String> capabilities)throws Exception{return book.referencePackageForHost(scope,id,revision,digest,capabilities,System.currentTimeMillis());}
     /** Trusted native owner/model-worker bridge. Draft is only content; origin and options are host state. */
     public JSONObject inspectExperience(JSONObject authenticatedScope,ExperienceOrigin origin,JSONObject draft,JSONObject options)throws Exception {
         return book.inspectExperience(authenticatedScope,origin,draft,options,System.currentTimeMillis());

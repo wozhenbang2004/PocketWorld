@@ -659,6 +659,21 @@ public final class SkillBook {
             if(record.getInt("revision")!=expectedRevision)throw new SecurityException("技能版本已改变，请重新发现");
             return readVerified(record,assertHostRead(record,scope,expectedDigest,hostCapabilities,now),path,offset,length,now).put("skillScopeFingerprint",SkillSourcePolicy.scopeFingerprint(scope));}
     }
+    /** Native owner configuration preview only. Immutable text bytes, not executable grants.
+     * Capture the complete approved revision under the original Book lock; never page a
+     * changing package into a mixed revision. Content is chunked for the original SQL sanitizer. */
+    public JSONObject referencePackageForHost(JSONObject scope,String id,int revision,String digest,Set<String> capabilities,long now)throws Exception {
+        synchronized(lock){JSONObject record=required(state().getJSONArray("skills"),scope(scope),id);
+            if(record.getInt("revision")!=revision)throw new SecurityException("技能版本已改变，请重新审阅投射");
+            JSONObject files=assertHostRead(record,scope,digest,capabilities,now);JSONArray texts=new JSONArray();
+            for(String name:jsonKeys(files)){String content=files.getString(name);JSONArray chunks=new JSONArray();
+                for(int offset=0;offset<content.length();){int end=Math.min(content.length(),offset+8000);if(end<content.length()&&Character.isHighSurrogate(content.charAt(end-1)))end--;chunks.put(content.substring(offset,end));offset=end;}
+                texts.put(new JSONObject().put("path",name).put("chunks",chunks).put("sha256",hex(MessageDigest.getInstance("SHA-256").digest(content.getBytes(StandardCharsets.UTF_8)))));}
+            return new JSONObject().put("id",id).put("revision",revision).put("digest",digest).put("name",record.getString("name")).put("description",record.getString("description")).put("sourceVersion",record.getString("sourceVersion")).put("files",texts)
+                .put("untrustedReference",true).put("scriptsExecutable",false).put("permissionsChanged",false);
+        }
+    }
+    private static String hex(byte[] bytes){StringBuilder value=new StringBuilder();for(byte b:bytes)value.append(String.format(Locale.ROOT,"%02x",b&255));return value.toString();}
     private JSONObject assertHostRead(JSONObject record,JSONObject nativeScope,String expectedDigest,Set<String> hostCapabilities,long now)throws Exception {
         SkillSourcePolicy.requireApplicable(record,nativeScope);
         if(!SkillSourcePolicy.modelAllowed(record))throw new SecurityException("此技能仅供主人手动使用，模型不能读取、采用或执行");
