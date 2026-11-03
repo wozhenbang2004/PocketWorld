@@ -429,10 +429,10 @@ class HostTestEntrypointTest(unittest.TestCase):
             'dev.pocketengine.features.teams.TeamResearchSelectionPageTest': 2,
             'dev.pocketengine.ui.ResearchReadAccessDraftTest': 3,
             'dev.pocketengine.ui.ResearchReadAccessMountedNativeTest': 5,
-            'dev.pocketengine.features.remote.RemotePiDraftOwnerJourneyTest': 4,
-            'dev.pocketengine.features.remote.RemoteInputDeliveryTest': 8,
-            'dev.pocketengine.features.remote.RemoteTaskDraftsTest': 3,
-            'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest': 8,
+            'dev.pocketengine.features.remote.RemotePiDraftOwnerJourneyTest': 6,
+            'dev.pocketengine.features.remote.RemoteInputDeliveryTest': 11,
+            'dev.pocketengine.features.remote.RemoteTaskDraftsTest': 4,
+            'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest': 10,
             'dev.pocketengine.features.automation.AutomationIntervalTest': 4,
         }
         for name, count in expected.items():
