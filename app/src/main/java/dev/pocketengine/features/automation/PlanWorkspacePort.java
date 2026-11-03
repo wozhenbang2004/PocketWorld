@@ -41,6 +41,7 @@ public final class PlanWorkspacePort implements CapabilityPort {
     @Override public void beginRun(String goal,RunControl control)throws Exception{original.beginRun(goal,control);}
     @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{JSONObject turn=original.prepareTurn(query,round,steps,control);turn.put("tools",filter(turn.getJSONArray("tools"))).put("reference",contextSnapshot(query));return turn;}
     @Override public boolean responseCurrent(RunControl control)throws Exception{return original.responseCurrent(control);}
+    @Override public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl control)throws Exception{return original.stepReadSourceCurrent(tool,receipt,control);}
     @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{return supports(name)?original.observationRequirement(name,args,control):dev.pocketengine.core.NativeToolObservation.Requirement.NONE;}
     @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl control)throws Exception{return supports(name)?original.takeToolObservation(name,operation,control):null;}
     @Override public dev.pocketengine.core.NativeToolPlan takeToolPlan(String name,String operation,RunControl control)throws Exception{return supports(name)?original.takeToolPlan(name,operation,control):null;}

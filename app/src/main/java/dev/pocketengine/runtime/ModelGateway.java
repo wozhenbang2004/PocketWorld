@@ -268,7 +268,7 @@ public final class ModelGateway {
         long deadline=System.currentTimeMillis()+config.requestTimeoutSeconds*1000L;JSONObject snapshot=plan.toJson();JSONArray rows=snapshot.getJSONArray("orderedCandidates");java.util.List<ModelRoutePlan.Candidate> eligible=new java.util.ArrayList<>();Exception rejection=null;
         boolean opaque=false;for(int i=0;messages!=null&&i<messages.length();i++)if(messages.getJSONObject(i).optJSONObject("provider_data")!=null)opaque=true;
         for(int i=0;i<plan.candidates.size();i++){
-            ModelRoutePlan.Candidate candidate=plan.candidates.get(i);if(candidate.config()==null||!candidate.exclusion().isEmpty())continue;
+            ModelRoutePlan.Candidate candidate=plan.candidates.get(i);if(candidate.config()==null||!candidate.exclusion().isEmpty()||!plan.dispatches(candidate))continue;
             try{
                 if(candidate.config().usesAccount()&&target.context.purpose==InferenceReceipt.Purpose.MODEL_CAPABILITY_PROBE)throw new SecurityException("API_ONLY_MODEL_CAPABILITY_PROBE");
                 if(candidate.config().usesAccount()&&(!"APP_OWNER".equals(plan.audience)||target.context.purpose==InferenceReceipt.Purpose.RELAY))throw new SecurityException("CHATGPT_PLAN_APP_ONLY");
@@ -276,9 +276,9 @@ public final class ModelGateway {
                 checkGroup(plan,candidate);preflight.check(candidate.config());eligible.add(candidate);
             }catch(Exception refused){if(refused instanceof InterruptedException)throw refused;rejection=refused;rows.getJSONObject(i).put("exclusion",refused instanceof ModelRequestPolicy.Rejected?((ModelRequestPolicy.Rejected)refused).code:refused instanceof SecurityException?"origin_or_audience_denied":"candidate_capability_unavailable");}
         }
-        String logical=java.util.UUID.randomUUID().toString();int maximum=plan.maxAttempts;
+        String logical=java.util.UUID.randomUUID().toString();int maximum=plan.dispatchMaxAttempts();
         String resourceOwner=null;int inheritedResourceLimit=Integer.MAX_VALUE;
-        if(authority!=null){String digest=nativeDigest==null?requestDigest(messages,tools):nativeDigest;JSONObject admitted=authority.begin(logical,digest,snapshot,deadline);deadline=admitted.getLong("deadlineAt");maximum=admitted.getJSONObject("control").getInt("maxAttempts");
+        if(authority!=null){String digest=nativeDigest==null?requestDigest(messages,tools):nativeDigest;JSONObject admitted=authority.begin(logical,digest,snapshot,deadline,plan.dispatchMaxAttempts());deadline=admitted.getLong("deadlineAt");maximum=Math.min(plan.dispatchMaxAttempts(),admitted.getJSONObject("control").getInt("maxAttempts"));
             if(admitted.has("modelResourceScope")){
                 if(!(admitted.opt("modelResourceScope") instanceof JSONObject))throw new SecurityException("original_native_model_resource_scope_required");
                 JSONObject resources=admitted.getJSONObject("modelResourceScope");
