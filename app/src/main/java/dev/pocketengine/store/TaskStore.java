@@ -7865,6 +7865,10 @@ public final class TaskStore {
             }
             private JSONObject active(String id)throws Exception {lockedAdmission();JSONObject row=own(id);if(!java.util.Set.of("PLANNED","ATTEMPT_RESERVED","DISPATCH_MAY_HAVE_OCCURRED","SEMANTIC_COMMITTED").contains(row.getString("state"))||row.getLong("deadlineAt")<=System.currentTimeMillis())throw new SecurityException("logical_request_not_active");return row;}
             public JSONObject begin(String id,String digest,JSONObject plan,long requestedDeadline)throws Exception {
+                return begin(id,digest,plan,requestedDeadline,plan.getInt("maxAttempts"));
+            }
+            public JSONObject begin(String id,String digest,JSONObject plan,long requestedDeadline,int nativeAttempts)throws Exception {
+                if(nativeAttempts<1||nativeAttempts>plan.getInt("maxAttempts"))throw new SecurityException("native_dispatch_cap_cannot_expand_original_plan");
                 admission.check();synchronized(TaskStore.this){lockedAdmission();JSONObject task=required(context.taskId),owner=teamPoolOwnerForChild(task);long hard;
                     if(context.bindingKind==InferenceReceipt.BindingKind.HOST_RUN)hard=grant(context.runId).getLong("expiresAt");
                     else {hard=owner==null||originalStandaloneTeamBudgetContext(owner,teamBudget(owner),context)?requestedDeadline:grant(teamBudget(owner).getString("parentRunId")).getLong("expiresAt");}
@@ -7872,7 +7876,7 @@ public final class TaskStore {
                     // supplies another, a group policy cannot silently increase that grant.
                     JSONObject origin=task.optJSONObject("origin");int cap=owner!=null||origin!=null&&java.util.Set.of("group","channel").contains(origin.optString("kind"))?1:nativeMaxAttempts;
                     JSONObject resources=originalProfileModelResources(task,owner,context);
-                    JSONObject admitted=InferenceRequestStore.begin(db,id,context.taskId+":"+context.runId,digest,context,plan,owner==null?context.taskId:owner.getString("id"),Math.min(hard,requestedDeadline),Math.min(cap,plan.getInt("maxAttempts")));
+                    JSONObject admitted=InferenceRequestStore.begin(db,id,context.taskId+":"+context.runId,digest,context,plan,owner==null?context.taskId:owner.getString("id"),Math.min(hard,requestedDeadline),Math.min(cap,Math.min(nativeAttempts,plan.getInt("maxAttempts"))));
                     if(resources!=null)admitted.put("modelResourceScope",resources);return admitted;
                 }
             }

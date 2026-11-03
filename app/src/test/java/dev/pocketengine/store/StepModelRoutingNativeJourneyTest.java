@@ -165,4 +165,59 @@ public final class StepModelRoutingNativeJourneyTest {
         withPhone=true;RunOutcome outcome=run();assertTrue(outcome.summary,outcome.status.matches("completed|needs_confirmation"));
         assertEquals(List.of("main","main","light","main"),wireModels);assertEquals(2,reads.get());checkReceipts(4);
     }
+    @Test public void narrowedStepSurvivesTheGatewaysMainPurposeProjection()throws Exception {
+        StepModelRouting.Session session=StepModelRouting.open(selected,control,true);
+        CapabilityPort original=new CapabilityPort(){
+            public JSONArray tools(){return new JSONArray();}
+            public boolean supports(String name){return "browser_task_observe".equals(name);}
+            public boolean sideEffecting(String name){return false;}
+            public boolean stepReadSourceCurrent(String name,JSONObject receipt,RunControl actual){assertSame(control,actual);return true;}
+            public JSONObject execute(String name,JSONObject args,RunControl actual){throw new AssertionError("selection does not execute tools");}
+        };
+        assertEquals("main",session.choose(new JSONArray(),null,original).forPurpose("MAIN").model);
+        JSONObject read=new JSONObject().put("ok",true).put("status","observed").put("browserSessionId","original-session").put("tabId","original-tab")
+                .put("tabGeneration",1).put("navigation",1).put("pageIdentityDigest","source-identity").put("documentId","document-1");
+        session.completedRead("browser_task_observe",read,null,true);session.completedRead("browser_task_observe",read,null,true);
+        ModelConfig light=session.choose(new JSONArray(),null,original);assertTrue(session.selectedLight());assertEquals("light",light.model);
+        ModelConfig admitted=light.forPurpose("MAIN");assertEquals("light",admitted.model);assertEquals(selected.routePlan.candidates.size(),admitted.routePlan.candidates.size());
+        assertEquals(1,admitted.routePlan.dispatchMaxAttempts());
+        assertTrue(admitted.routePlan.dispatches(admitted.routePlan.candidates.get(1)));assertFalse(admitted.routePlan.dispatches(admitted.routePlan.candidates.get(0)));
+        assertEquals(StepModelRouting.planFingerprint(selected.routePlan),StepModelRouting.planFingerprint(admitted.routePlan));
+        assertFalse(admitted.routePlan.toJson().has("nativeStep"));
+        ModelRoutePlan restored=new ModelRoutePlan(admitted.routePlan.requestedAlias,admitted.routePlan.groupRevision,admitted.routePlan.purpose,admitted.routePlan.audience,
+                admitted.routePlan.candidates,admitted.routePlan.maxAttempts,admitted.routePlan.maxRouteSwitches);
+        assertEquals("main",restored.primary().model); // Original serialized identity cannot revive the transient preference.
+        try{ModelConfig.fromJson(new JSONObject().put("model","light").put("routePlan",admitted.routePlan.toJson()));fail("model JSON installed a native route");}catch(IllegalArgumentException expected){}
+        assertEquals(selected.routePlan.candidates.size(),selected.forPurpose("MAIN").routePlan.candidates.size());
+        assertEquals("main",selected.forPurpose("MAIN").model);assertTrue(wireModels.isEmpty());checkReceipts(0);
+    }
+
+    @Test public void nativeDispatchCapKeepsFullSqlIdentityAndRejectsExpansionOrRunChanges()throws Exception {
+        JSONObject old=settings.modelGroupsSnapshot().getJSONArray("groups").getJSONObject(0);
+        old.getJSONObject("attemptPolicy").put("maxAttempts",3);
+        JSONObject saved=settings.saveModelGroup(old.getString("groupId"),old.getLong("revision"),old.getString("name"),old);
+        settings.selectModelPurpose("MAIN",ModelTargetRef.group(saved.getString("groupId"),saved.getLong("revision")));selected=settings.get();
+        JSONObject complete=selected.routePlan.toJson();assertEquals(2,complete.getJSONArray("orderedCandidates").length());assertEquals(3,complete.getInt("maxAttempts"));
+        var authority=journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,"").logical;
+        long deadline=System.currentTimeMillis()+60000;String digest="0".repeat(64);
+        JSONObject light=authority.begin(UUID.randomUUID().toString(),digest,complete,deadline,1);assertEquals(1,light.getJSONObject("control").getInt("maxAttempts"));
+        JSONObject main=authority.begin(UUID.randomUUID().toString(),digest,complete,deadline,3);assertEquals(3,main.getJSONObject("control").getInt("maxAttempts"));
+        assertEquals(complete.getJSONArray("orderedCandidates").toString(),light.getJSONObject("routeSnapshot").getJSONArray("orderedCandidates").toString());
+        assertEquals(complete.getLong("groupRevision"),light.getJSONObject("routeSnapshot").getLong("groupRevision"));
+        for(String field:List.of("requestedAlias","groupRevision","configurationDigest","credentialRevision")){
+            JSONObject changed=new JSONObject(complete.toString());
+            if(field.equals("requestedAlias"))changed.put(field,"other-original-group");
+            else if(field.equals("groupRevision"))changed.put(field,changed.getLong(field)+1);
+            else if(field.equals("configurationDigest"))changed.getJSONArray("orderedCandidates").getJSONObject(0).put(field,"1".repeat(64));
+            else {JSONObject binding=changed.getJSONArray("orderedCandidates").getJSONObject(0).getJSONObject("binding");binding.put(field,binding.getLong(field)+1);}
+            try{authority.begin(UUID.randomUUID().toString(),digest,changed,deadline,1);fail("changed complete run identity accepted: "+field);}catch(SecurityException expected){assertEquals("original_run_model_selection_changed",expected.getMessage());}
+        }
+        for(int cap:new int[]{0,4})try{authority.begin(UUID.randomUUID().toString(),digest,complete,deadline,cap);fail("native cap expanded or invalid");}catch(SecurityException expected){assertEquals("native_dispatch_cap_cannot_expand_original_plan",expected.getMessage());}
+        var summary=journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,"").logical;
+        JSONObject other=ModelRoutePlan.exact(selected,"SUMMARY","APP_OWNER").toJson();
+        assertEquals(1,summary.begin(UUID.randomUUID().toString(),digest,other,deadline,1).getJSONObject("control").getInt("maxAttempts"));
+        assertEquals(0,tasks.inferenceUsage(task.getString("id")).getInt("attempts"));assertTrue(wireModels.isEmpty());
+        control.cancel();try{authority.begin(UUID.randomUUID().toString(),digest,complete,deadline,1);fail("cancelled original run admitted");}catch(InterruptedException expected){}
+    }
+
 }

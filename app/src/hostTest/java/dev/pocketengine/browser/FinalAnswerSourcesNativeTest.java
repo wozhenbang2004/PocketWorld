@@ -128,9 +128,17 @@ public final class FinalAnswerSourcesNativeTest {
             SourceRef selected=tasks.selectSavedMemorySource(journey.answer.getString("taskId"),journey.answer.getString("runId"),page.getLong("eventSeq"),3,17);
             JSONObject record=journey.owner.memory.handle("importFromSources",j("scope",scope(),"record",j("text","主人保留的范围依据","layer","fact","sourceRefs",new JSONArray().put(selected.toJson())))).getJSONObject("record");
             journey.owner.nativeOwner.memory("forgetReviewed",j("id",record.getString("id"),"expectedRevision",record.getLong("revision")));
-            JSONObject denied=journey.owner.read(listed.getJSONObject("answer"),page);assertEquals("source_forgotten",denied.getString("status"));assertFalse(denied.has("detail"));
-            assertEquals("source_forgotten",journey.owner.read(journey.answer,null).getString("status"));
-            try(Owner reopened=new Owner(tasks)){assertEquals("source_forgotten",reopened.read(listed.getJSONObject("answer"),page).getString("status"));}
+            JSONObject checkpoint;try(Cursor rows=database(tasks).rawQuery("SELECT checkpoint FROM runs WHERE task_id=? AND run_id=?",new String[]{journey.answer.getString("taskId"),journey.answer.getString("runId")})){
+                assertTrue(rows.moveToFirst());checkpoint=new JSONObject(rows.getString(0));
+            }
+            JSONObject retired=checkpoint.getJSONArray("messages").getJSONObject(listed.getJSONObject("answer").getInt("messageIndex"));
+            assertTrue(retired.getBoolean("memoryContextRetired"));assertEquals(dev.pocketengine.features.memory.TaskMemoryHistory.RETIRED,retired.getString("content"));
+            assertNotEquals(journey.answer.getString("answerFingerprint"),CompactionPlan.fingerprint(retired.getString("content")));
+            // Canonical forget retired the answer itself, before its saved-source view is eligible.
+            for(JSONObject denied:new JSONObject[]{journey.owner.read(listed.getJSONObject("answer"),page),journey.owner.read(journey.answer,null)}){
+                assertEquals("answer_unavailable",denied.getString("status"));assertFalse(denied.has("detail"));assertFalse(denied.has("entries"));assertFalse(denied.has("frame"));
+            }
+            try(Owner reopened=new Owner(tasks)){JSONObject denied=reopened.read(listed.getJSONObject("answer"),page);assertEquals("answer_unavailable",denied.getString("status"));assertFalse(denied.has("detail"));assertFalse(denied.has("entries"));assertFalse(denied.has("frame"));}
         }
     }
 

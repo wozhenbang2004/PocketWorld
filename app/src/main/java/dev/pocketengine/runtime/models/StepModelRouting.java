@@ -147,9 +147,10 @@ public final class StepModelRouting {
         }
         private ModelConfig narrowed(ModelRoutePlan.Candidate candidate, int attempts) {
             ModelRoutePlan plan = original.routePlan;
-            ModelRoutePlan selected = new ModelRoutePlan(plan.requestedAlias, plan.groupRevision, plan.purpose,
-                    plan.audience, List.of(candidate), attempts, 0);
-            return candidate.config().withRoutePlan(selected).withPurposePlans(original.purposePlans);
+            ModelRoutePlan selected = plan.withNativeStepDispatch(candidate,attempts);
+            java.util.Map<String,ModelRoutePlan> purposes=new java.util.LinkedHashMap<>(original.purposePlans);
+            purposes.put(plan.purpose,selected);
+            return candidate.config().withRoutePlan(selected).withPurposePlans(purposes);
         }
         public ModelConfig useMain(String why) { reset(why); return enabled() ? narrowed(main, original.routePlan.maxAttempts) : original; }
         public void completedRead(String tool, JSONObject receipt, JSONObject phone, boolean nativeReadOnly) {
