@@ -3,7 +3,7 @@
 # descendants with matching PID/birth/group/session; no process sweep or outer kill.
 import argparse,ctypes,json,os,pathlib,selectors,subprocess,sys,time,uuid
 args=argparse.ArgumentParser(description='Only this explicit test launcher owns/reaps its newly created JNI subtree')
-args.add_argument('--mode',choices=['delayed-reap','held-through-receipt'],required=True)
+args.add_argument('--mode',choices=['delayed-reap','held-through-receipt','managed-held-through-receipt','preparation-held-through-receipt'],required=True)
 args.add_argument('--java',required=True);args.add_argument('--classpath',required=True);args.add_argument('--native',required=True);args.add_argument('--python',required=True);args.add_argument('--output',required=True)
 options=args.parse_args();ROOT=pathlib.Path(options.output).resolve();ROOT.mkdir(parents=True,exist_ok=True)
 java_command=[options.java,'-Xmx192m','-Djava.library.path='+options.native,'-cp',options.classpath,'dev.pocketengine.features.local.runtime.OwnedGroupObservationProbe']
@@ -19,7 +19,8 @@ flag=ctypes.c_int()
 if libc.prctl(37,ctypes.byref(flag),0,0,0)!=0 or flag.value!=1: raise RuntimeError('own_test_subreaper_not_observed')
 mode=options.mode; nonce=str(uuid.uuid4()); observations=[]; scope=None; result=None; reaped=False; zombie_at=None
 started=time.monotonic(); stderr=open(ROOT/(mode+'-'+nonce+'-stderr.log'),'wb')
-worker=subprocess.Popen(java_command+[str(pathlib.Path(options.python).resolve()),nonce,str(ROOT)],stdout=subprocess.PIPE,stderr=stderr,bufsize=0)
+managed=['preparation' if mode.startswith('preparation-') else 'command'] if mode.startswith(('managed-','preparation-')) else []
+worker=subprocess.Popen(java_command+[str(pathlib.Path(options.python).resolve()),nonce,str(ROOT)]+managed,stdout=subprocess.PIPE,stderr=stderr,bufsize=0)
 java_identity=fact(worker.pid); selector=selectors.DefaultSelector();selector.register(worker.stdout,selectors.EVENT_READ); pending=b''
 try:
     while time.monotonic()-started<25:
@@ -45,7 +46,7 @@ try:
             if not exact(actual,scope['child']):raise RuntimeError('original_child_identity_changed')
             if actual['state']=='Z' and actual['parent']==os.getpid():
                 if zombie_at is None:zombie_at=time.monotonic();observations.append(dict(event='own_orphan_zombie_observed',fact=actual,elapsedMillis=int((zombie_at-started)*1000)))
-                due=(mode=='delayed-reap' and time.monotonic()-zombie_at>=.4) or (mode=='held-through-receipt' and result is not None)
+                due=(mode=='delayed-reap' and time.monotonic()-zombie_at>=.4) or (mode.endswith('held-through-receipt') and result is not None)
                 if due:
                     pid,status=os.waitpid(scope['child']['pid'],0)
                     if pid!=scope['child']['pid']:raise RuntimeError('wrong_original_child_reaped')

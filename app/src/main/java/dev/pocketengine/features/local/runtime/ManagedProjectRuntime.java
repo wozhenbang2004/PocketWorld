@@ -66,9 +66,14 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         dev.pocketengine.features.local.runtime.android.AndroidRuntimeThermalObservation original;boolean closed;
         synchronized(this){original=logObservation;closed=logObservationClosed;}
         if(original!=null)return original.snapshotForHost();
+        return unavailableLogObservationPolicy(closed);
+    }
+    private JSONObject unavailableLogObservationPolicy(boolean closed)throws Exception {
         boolean android=androidRuntime!=null||!configurationProblem.isEmpty(),conservative=closed||android;
         return new JSONObject().put("format","pocketworld.runtime-log-observation-policy.v1").put("source",android?"android_thermal_observer_unavailable":"non_android_host_runtime")
                 .put("thermalStatus",JSONObject.NULL).put("automaticLogPageBytes",conservative?8192:32768).put("automaticLogPageReduced",conservative)
+                .put("observationAgeMillis",JSONObject.NULL).put("memoryLow",JSONObject.NULL).put("memoryFresh",false)
+                .put("memoryAvailableBytes",JSONObject.NULL).put("memoryTotalBytes",JSONObject.NULL).put("memoryThresholdBytes",JSONObject.NULL).put("memoryObservationAgeMillis",JSONObject.NULL)
                 .put("reason",closed?"thermal_observer_closed":conservative?"thermal_status_unknown":"non_android_host_default_unchanged")
                 .put("ownerMessage",conservative?RuntimeLogObservationPolicy.UNKNOWN_MESSAGE:"")
                 .put("explicitLogLimitsChanged",false).put("executionPolicyChanged",false).put("resourceReleaseProved",false).put("energySavingsMeasured",false);
@@ -82,6 +87,10 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
                 .put("supervisorLoaded",jobs.available()).put("ptyAvailable",jobs.ptyAvailable()).put("duplexAvailable",jobs.pipesAvailable()).put("integrityRechecked",false)
                 .put("runtimeIdentityFingerprintSha256",ProjectSources.sha256(identity().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
                 .put("catalogFingerprintSha256",profile==null?JSONObject.NULL:ProjectSources.sha256(profile.catalogIdentity().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        dev.pocketengine.features.local.runtime.android.AndroidRuntimeThermalObservation original;boolean closed;
+        synchronized(this){original=logObservation;closed=logObservationClosed;}
+        JSONObject cached=original==null?unavailableLogObservationPolicy(closed):original.cachedSnapshotForHost();
+        for(String key:java.util.List.of("thermalStatus","observationAgeMillis","memoryLow","memoryFresh","memoryAvailableBytes","memoryTotalBytes","memoryThresholdBytes","memoryObservationAgeMillis","automaticLogPageBytes","automaticLogPageReduced"))facts.put(key,cached.opt(key)==null?JSONObject.NULL:cached.get(key));
         observation.check();return facts;
     }
 
