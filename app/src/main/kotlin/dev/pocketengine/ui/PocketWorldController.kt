@@ -59,6 +59,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         projectWorkbench.selectView(checkout.getString("projectId"), 1)
         selectProject(checkout.getString("projectId")); developmentCheckoutId = checkout.getString("id"); developmentNavigationRevision++
     }, { file -> attachmentOutcomes.openFile(file) })
+    internal val projectFileImports = ProjectFileImportCoordinator(activity, app, io, main, ::privateWorkspaceView, ::refresh)
     internal val projectStorage = ProjectStorageCoordinator(app, io, main, ::privateWorkspaceView) { id -> ownerArchives.openCache(id) }
     internal val projectGitImports = ProjectGitImportCoordinator(app, io, main, ::privateWorkspaceView, { state.requestedProjectRevision.toString() + ":" + projectWorkbench.navigationRevision() }) { checkout ->
         closeProjectPreview(); closeProjectLivePreview()
@@ -612,6 +613,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         private set
     fun enterGroupTask(taskId: String): String {
         projectGit.deactivate()
+        projectFileImports.deactivate()
         projectPackages.leavePrivate()
         closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null)
         groupTaskWindow?.let { app.groupOwnerWorkflows?.close(it) }
@@ -789,7 +791,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun enterOwnerDomain(domain: String) {
         if (domain !in setOf("memoryReview", "taskMemory", "mcp", "accounts", "learning", "groups", "channelMedia")) return
-        if (domain == "groups") { projectGit.deactivate();projectPackages.leavePrivate(); closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null) }
+        if (domain == "groups") { projectGit.deactivate();projectFileImports.deactivate();projectPackages.leavePrivate(); closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null) }
         ownerDomain = domain
         if (domain == "channelMedia") { channelMediaWindow?.close(); channelMediaReview = null; channelMediaWindow = nativeChannelModule().openOwnerMediaWindow(activity) }
         if (domain == "groups") try { groupOwnerWindow = app.groupOwnerWorkflows.open(activity) } catch (error: Exception) { state = state.copy(ownerErrors = state.ownerErrors + (domain to message(error))) }
@@ -1120,7 +1122,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun attach() { app.addObserver(observer);loadOwnerComposer(); refresh() }
     /** Native owner action; the host resolves the existing original control, never payload authority. */
 
-    fun detach() { synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
+    fun detach() { projectFileImports.detach();synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
     fun refresh() { authorizationOpening = null; ownerDomain?.let { requestOwnerDomain(it, "snapshot") }; native("getState"); native("getFeatures"); native("rescheduleAutomation"); feature("assistant", "list") }
     fun suggestInput(text: String, phoneTask: Boolean? = null) {
         if (text.isNotBlank()) state = state.copy(suggestedInputRevision = state.suggestedInputRevision + 1, suggestedInput = text, suggestedPhoneTask = phoneTask)
@@ -2380,7 +2382,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 else if (result.optString("message").isNotBlank()) state = state.copy(notice = result.optString("message"))
             }
             "assistant" -> when (command) {
-                "list" -> state = state.copy(conversations = parseConversations(result.optJSONArray("conversations")))
+                "list" -> {
+                    // The legacy chronological page must not evict a pinned native row from the owner's bounded window.
+                    val assistant = state.feature("assistant")
+                    state = state.copy(conversations = parseConversations(if (assistant.optBoolean("durableOriginalHistory")) assistant.optJSONArray("conversations") else result.optJSONArray("conversations")))
+                }
                 "get" -> {
                     if(requestId!=latestChatGet)return
                     val id = result.optString("conversationId")
@@ -2476,6 +2482,30 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (action == "takeoverTask" && allowed && observation == null) observeInspection()
         if (inspectionRefreshPending && !state.inspectionBusy) { inspectionRefreshPending = false; observeInspection() }
         app.sendState()
+    }
+    internal val conversationOrganizationOwnerVisible get() = privateWorkspaceView()
+    /** Metadata from the original native snapshot, not a model-supplied revision. */
+    internal fun conversationOrganizationItem(row: UiConversation): dev.pocketengine.features.conversation.ConversationHistory.Item {
+        val original = state.feature("assistant").optJSONArray("conversations").objects().firstOrNull { it.optString("conversationId") == row.id }
+        return dev.pocketengine.features.conversation.ConversationHistory.Item(row.id, row.title, row.updatedAt, original?.optLong("pinOrder", 0) ?: 0, original?.optLong("organizationRevision", -1) ?: -1)
+    }
+    internal fun organizeConversation(id: String, revision: Long, title: String?, pinned: Boolean?, done: (JSONObject?, String?) -> Unit) {
+        if (!privateWorkspaceView() || revision < 0) { done(null, "请在原私人会话列表刷新后重新打开。"); return }
+        val key = "assistant.organization:" + id
+        if (key in state.moduleBusy) return
+        val changes = JSONObject(); if (title != null) changes.put("title", title); if (pinned != null) changes.put("pinOrder", if (pinned) 1 else 0)
+        if (changes.length() == 0) return
+        state = state.copy(moduleBusy = state.moduleBusy + key)
+        try { io.execute {
+            if (!privateWorkspaceView()) { main.post { state = state.copy(moduleBusy = state.moduleBusy - key); done(null, "原私人界面已切换，尚未保存。") }; return@execute }
+            val result = runCatching { app.features.ownerConversationWorkbench("updateOrganization", JSONObject().put("conversationId", id).put("expectedRevision", revision).put("changes", changes)) }
+            main.post {
+                state = state.copy(moduleBusy = state.moduleBusy - key)
+                if (!privateWorkspaceView()) return@post
+                result.fold({ done(it, null) }, { done(null, "会话元数据已变化或保存结果未确认；请刷新后重新打开，不会自动重试。") })
+                native("getFeatures")
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) { state = state.copy(moduleBusy = state.moduleBusy - key); done(null, "原界面已关闭，请重新打开。") }
     }
     private fun parseConversations(array: org.json.JSONArray?): List<UiConversation> = array.objects().map { UiConversation(it.optString("conversationId"), it.optString("title"), it.optLong("updatedAt")) }
     private fun message(error: Throwable): String = error.message?.take(300) ?: "操作未完成，请检查连接和配置"

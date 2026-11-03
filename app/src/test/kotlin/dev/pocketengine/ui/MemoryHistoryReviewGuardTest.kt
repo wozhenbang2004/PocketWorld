@@ -7,7 +7,7 @@ import org.junit.Test
 
 /** Display consistency fixtures only; flags here never issue native read authority. */
 class MemoryHistoryReviewGuardTest {
-    private fun header() = JSONObject().put("id", "record").put("revision", 7).put("textPreview", "保留的旧事摘录").put("memoryTextIsOriginalEvidence", false).put("temporalStatus", "historical")
+    private fun header() = JSONObject().put("ownerId", "owner").put("spaceId", "private").put("id", "record").put("revision", 7).put("textPreview", "保留的旧事摘录").put("memoryTextIsOriginalEvidence", false).put("temporalStatus", "historical")
     private fun page() = JSONObject().put("format", "pocketworld.owner-memory-history-page.v1").put("query", "旧事").put("sourceCurrentChecked", true).put("activeRecall", false).put("originalEvidenceRead", false).put("archiveOnlyActivated", false).put("memberReadAuthorized", false).put("executionAuthorized", false).put("scope", JSONObject().put("ownerId", "owner").put("spaceId", "private")).put("resultVersion", "a".repeat(64)).put("matches", JSONArray().put(header()))
     private fun envelope(value: JSONObject, id: String = "request") = JSONObject().put("requestId", id).put("ok", true).put("result", value)
     @Test fun onlyTheExactRequestAndStillDisplayedQueryMayPopulateThePage() {
@@ -26,6 +26,17 @@ class MemoryHistoryReviewGuardTest {
         val changed = read(); changed.getJSONObject("record").put("revision", 8); assertNull(MemoryHistoryReviewGuard.record("request", header(), envelope(changed)))
         val promoted = read(); promoted.getJSONObject("record").put("temporalStatus", "current"); assertNull(MemoryHistoryReviewGuard.record("request", header(), envelope(promoted)))
         assertNull(MemoryHistoryReviewGuard.record("request", header(), envelope(read().put("originalEvidenceRead", true))))
+    }
+    @Test fun projectRenderingRequiresTheExactDisplayedNativeScopeAndNeverUsesPrivateFallback() {
+        val selected = JSONObject().put("ownerId", "owner").put("spaceId", "project:11111111-1111-1111-1111-111111111111")
+        val nativePage = page().put("scope", JSONObject(selected.toString()))
+        assertNotNull(MemoryHistoryReviewGuard.page("request", "旧事", envelope(nativePage), selected))
+        assertNull(MemoryHistoryReviewGuard.page("request", "旧事", envelope(nativePage)))
+        assertNull(MemoryHistoryReviewGuard.page("request", "旧事", envelope(page()), selected))
+        assertNull(MemoryHistoryReviewGuard.page("request", "旧事", envelope(nativePage), JSONObject().put("ownerId", "owner").put("spaceId", "group:one")))
+        val read = JSONObject().put("sourceCurrentChecked", true).put("originalEvidenceRead", false).put("activeRecall", false).put("executionAuthorized", false).put("record", header().put("readOnlyHistory", true).put("spaceId", selected.getString("spaceId")))
+        assertNotNull(MemoryHistoryReviewGuard.record("request", header(), envelope(read), selected))
+        assertNull(MemoryHistoryReviewGuard.record("request", header(), envelope(read)))
     }
     @Test fun acceptedRenderingCopiesDoNotMutateTheNativeReceiptOrInventAnOwnerSubject() {
         val source = page(); val copy = MemoryHistoryReviewGuard.page("request", "旧事", envelope(source))!!
