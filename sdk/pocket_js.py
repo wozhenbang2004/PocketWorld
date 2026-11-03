@@ -30,7 +30,8 @@ def unique_object(pairs):
 
 def metadata(project):
     path = project / "project.json"
-    raw = path.read_bytes()
+    with path.open("rb", buffering=0) as stream:
+        raw = stream.read(4097)
     if len(raw) > 4096:
         raise ValueError("Project metadata exceeds4KiB")
     value = json.loads(raw.decode("utf-8", errors="strict"), object_pairs_hook=unique_object)
