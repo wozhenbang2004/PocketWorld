@@ -72,7 +72,9 @@ def main():
                     'app/src/test/java/dev/pocketengine/browser/EmitBrowserLongPageRead.java',
                     'app/src/test/js/browser-long-page.chromium.cjs',
                     'app/src/test/js/browser-long-page.test.mjs',
-                    'app/src/test/js/browser-composed-cursor.test.mjs']
+                    'app/src/test/js/browser-composed-cursor.test.mjs',
+                    'app/src/test/js/browser-owned-rows.test.mjs',
+                    'app/src/test/js/browser-owned-rows.chromium.cjs']
     identity = dict(commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                     baselineCommit='afba870564e83034339ad084c2e7247260ea0c9c',
                     baselineSourceSha256=digest(baseline),
@@ -87,6 +89,9 @@ def main():
     run(['node', str(ROOT / 'app/src/test/js/browser-composed-cursor.test.mjs'),
          str(out / 'current-scripts.json'), str(out / 'composed-interface-receipts.json')], out / 'composed-interfaces.log')
     run([java, '-cp', cp, EMITTER, 'verify', str(out / 'composed-interface-receipts.json')], out / 'composed-validation.log')
+    run(['node', str(ROOT / 'app/src/test/js/browser-owned-rows.test.mjs'),
+         str(out / 'current-scripts.json'), str(out / 'owned-row-interface-receipts.json')], out / 'owned-row-interfaces.log')
+    run([java, '-cp', cp, EMITTER, 'verify', str(out / 'owned-row-interface-receipts.json')], out / 'owned-row-interface-validation.log')
     # Same compiled dependencies/emitter, only the original production class comes first.
     run([javac, '-cp', cp, '-sourcepath', str(empty), '-d', str(baseline_classes), str(baseline)], out / 'baseline-javac.log')
     run([java, '-cp', str(baseline_classes) + os.pathsep + cp, EMITTER], out / 'emit-baseline.log', output=out / 'baseline-scripts.json')
@@ -99,6 +104,9 @@ def main():
     run(['node', str(ROOT / 'app/src/test/js/browser-long-page.chromium.cjs'),
          str(out / 'current-scripts.json'), str(out / 'current-chromium.json')], out / 'current-chromium.log')
     run([java, '-cp', cp, EMITTER, 'verify', str(out / 'current-chromium.json')], out / 'chromium-validation.log')
+    run(['node', str(ROOT / 'app/src/test/js/browser-owned-rows.chromium.cjs'),
+         str(out / 'current-scripts.json'), str(out / 'owned-row-chromium.json')], out / 'owned-row-chromium.log')
+    run([java, '-cp', cp, EMITTER, 'verify', str(out / 'owned-row-chromium.json')], out / 'owned-row-chromium-validation.log')
     run([java, '-cp', cp, 'dev.pocketengine.browser.EmitBrowserFrameRead', str(out / 'frame-scripts.json')], out / 'emit-frame.log')
     run(['node', str(ROOT / 'app/src/test/js/browser-frame-read.test.mjs'), str(out / 'frame-scripts.json')], out / 'frame-regression.log')
     dynamic = {}
