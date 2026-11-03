@@ -379,6 +379,173 @@ class CompanionTests(unittest.TestCase):
         self.finish(job["id"])
         self.assertFalse((self.workspace / "blocked.txt").exists())
 
+    def original_cancel_active(self, operation="original-cancel-operation"):
+        job = self.submit("from pathlib import Path; import time; Path('original-cancel-launches').open('a').write('1'); print('started',flush=True); time.sleep(20)", operation=operation)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            with self.manager.lock:
+                process = self.manager.processes.get(job["id"])
+                if process is not None and process.poll() is None and (self.workspace / "original-cancel-launches").exists():
+                    return job, process
+            time.sleep(.01)
+        self.fail("Original fixture process did not start")
+
+    def test_original_cancel_capability_and_empty_legacy_cancel_remain_compatible(self):
+        status, response = self.request("/v1/status")
+        self.assertEqual(200, status)
+        self.assertEqual(1, response["result"]["protocolVersion"])
+        capability = response["result"]["originalJobCancellation"]
+        self.assertEqual("pocketworld.original-job-cancel.v1", capability["protocol"])
+        self.assertIs(True, capability["supported"])
+        self.assertEqual("/v1/jobs/{jobId}/cancel-original", capability["endpoint"])
+        self.assertEqual(["jobOperationId"], capability["requiredFields"])
+        self.assertEqual("locked_job_operation_before_mutation", capability["identityCheck"])
+        self.assertEqual("job_manager_cli_jobs_only", capability["scope"])
+        job, process = self.original_cancel_active()
+        self.assertEqual(200, self.request("/v1/jobs/" + job["id"] + "/cancel", {})[0])
+        self.assertEqual("cancelled", self.finish(job["id"])["status"])
+        self.assertIsNotNone(process.poll())
+
+    def test_legacy_cancel_never_ignores_identity_preconditions(self):
+        job, process = self.original_cancel_active()
+        status, response = self.request("/v1/jobs/" + job["id"] + "/cancel", {"jobOperationId": "another-original-operation"})
+        self.assertEqual(400, status, response)
+        with self.manager.lock:
+            self.assertNotIn(job["id"], self.manager.stopping)
+            self.assertEqual("original-cancel-operation", self.manager.jobs[job["id"]]["operationId"])
+        self.assertIsNone(process.poll())
+
+    def test_original_cancel_rejects_missing_wrong_and_extra_identity_before_effect(self):
+        job, process = self.original_cancel_active()
+        path = "/v1/jobs/" + job["id"] + "/cancel-original"
+        for body, expected in [({}, 400), ({"jobOperationId": None}, 400),
+                               ({"jobOperationId": "wrong-original-operation"}, 409),
+                               ({"jobOperationId": job["operationId"], "replacement": True}, 400)]:
+            with self.subTest(body=body):
+                status, response = self.request(path, body)
+                self.assertEqual(expected, status, response)
+                self.assertIsNone(process.poll())
+                with self.manager.lock:
+                    self.assertNotIn(job["id"], self.manager.stopping)
+                    self.assertEqual("running", self.manager.jobs[job["id"]]["status"])
+        self.assertEqual("1", (self.workspace / "original-cancel-launches").read_text())
+        self.assertEqual(1, len(self.manager.jobs))
+
+    def test_original_cancel_matches_exact_process_and_repetition_never_relaunches(self):
+        job, process = self.original_cancel_active()
+        path = "/v1/jobs/" + job["id"] + "/cancel-original"
+        status, response = self.request(path, {"jobOperationId": job["operationId"]})
+        self.assertEqual(200, status, response)
+        proof = response["result"]["originalCancellation"]
+        self.assertEqual("pocketworld.original-job-cancel.v1", proof["protocol"])
+        self.assertEqual(job["id"], proof["jobId"])
+        self.assertEqual(job["operationId"], proof["jobOperationId"])
+        self.assertIs(True, proof["identityMatched"])
+        self.assertIs(False, proof["effectsReversed"])
+        self.assertEqual("cancelled", self.finish(job["id"])["status"])
+        self.assertIsNotNone(process.poll())
+        with patch.object(self.manager, "_launch", side_effect=AssertionError("Cancellation must never submit or launch")):
+            self.assertEqual(200, self.request(path, {"jobOperationId": job["operationId"]})[0])
+        self.assertEqual("1", (self.workspace / "original-cancel-launches").read_text())
+        self.assertEqual(1, len(self.manager.jobs))
+        self.assertEqual(1, self.manager.ledger.execute("SELECT count(*) FROM operations").fetchone()[0])
+
+    def test_original_cancel_rechecks_identity_after_waiting_for_manager_lock(self):
+        job, process = self.original_cancel_active()
+        attempted, finished = threading.Event(), threading.Event()
+        failures = []
+        def stop():
+            attempted.set()
+            try:
+                self.manager.cancel_original(job["id"], {"jobOperationId": job["operationId"]})
+            except Exception as error:
+                failures.append(error)
+            finally:
+                finished.set()
+        worker = threading.Thread(target=stop, daemon=True)
+        try:
+            with self.manager.lock:
+                worker.start()
+                self.assertTrue(attempted.wait(2))
+                self.assertFalse(finished.wait(.05))
+                self.manager.jobs[job["id"]]["operationId"] = "replacement-operation-under-lock"
+            self.assertTrue(finished.wait(3))
+            self.assertEqual(1, len(failures))
+            self.assertIsInstance(failures[0], RequestError)
+            self.assertEqual(409, failures[0].status)
+            self.assertIsNone(process.poll())
+            with self.manager.lock:
+                self.assertNotIn(job["id"], self.manager.stopping)
+                self.assertEqual("running", self.manager.jobs[job["id"]]["status"])
+        finally:
+            with self.manager.lock:
+                self.manager.jobs[job["id"]]["operationId"] = job["operationId"]
+            worker.join(timeout=3)
+            self.assertFalse(worker.is_alive())
+
+    def test_original_cancel_identity_and_stop_mutation_share_one_lock(self):
+        job, process = self.original_cancel_active()
+        marked, release, observing, observed = (threading.Event() for _ in range(4))
+        snapshot, errors = [], []
+        save = self.manager._save
+        def held_save(current):
+            if current["id"] == job["id"] and current["status"] == "stopping":
+                marked.set()
+                if not release.wait(3):
+                    raise AssertionError("Controlled stop publication was not released")
+            return save(current)
+        def stop():
+            try:
+                self.manager.cancel_original(job["id"], {"jobOperationId": job["operationId"]})
+            except Exception as error:
+                errors.append(error)
+        def observe():
+            observing.set()
+            with self.manager.lock:
+                current = self.manager.jobs[job["id"]]
+                snapshot.append((current["operationId"], current["status"]))
+            observed.set()
+        worker, reader = threading.Thread(target=stop, daemon=True), threading.Thread(target=observe, daemon=True)
+        try:
+            with patch.object(self.manager, "_save", side_effect=held_save):
+                worker.start()
+                self.assertTrue(marked.wait(3))
+                reader.start()
+                self.assertTrue(observing.wait(2))
+                self.assertFalse(observed.wait(.05))
+                release.set()
+                worker.join(timeout=4)
+                reader.join(timeout=3)
+            self.assertFalse(worker.is_alive())
+            self.assertFalse(reader.is_alive())
+            self.assertEqual([], errors)
+            self.assertTrue(observed.is_set())
+            self.assertEqual(job["operationId"], snapshot[0][0])
+            self.assertIn(snapshot[0][1], {"stopping", "cancelled"})
+            self.assertEqual("cancelled", self.finish(job["id"])["status"])
+        finally:
+            release.set()
+            worker.join(timeout=4)
+            if reader.ident is not None:
+                reader.join(timeout=3)
+
+    def test_original_cancel_does_not_borrow_native_device_or_desktop_authority(self):
+        for jobid, special in [("desktop-original", {"protocol": "desktop-v1"}),
+                               ("device-original", {"nativeDeviceOperation": {"toolName": "workspace.receive"}}),
+                               ("device-incomplete", {"nativeDeviceOperation": {}})]:
+            with self.subTest(jobid=jobid):
+                with self.manager.lock:
+                    self.manager.jobs[jobid] = {"id": jobid, "operationId": "native-operation", "worker": "command", "status": "running", **special}
+                try:
+                    status, response = self.request("/v1/jobs/" + jobid + "/cancel-original", {"jobOperationId": "native-operation"})
+                    self.assertEqual(409, status, response)
+                    with self.manager.lock:
+                        self.assertNotIn(jobid, self.manager.stopping)
+                        self.assertEqual("running", self.manager.jobs[jobid]["status"])
+                finally:
+                    with self.manager.lock:
+                        self.manager.jobs.pop(jobid, None)
+
     def test_cancel_stops_running_local_process(self):
         job = self.submit("import time; print('started',flush=True); time.sleep(20)")
         deadline = time.monotonic() + 2
