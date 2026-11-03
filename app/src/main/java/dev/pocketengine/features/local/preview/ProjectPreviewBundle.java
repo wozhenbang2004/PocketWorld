@@ -1,6 +1,7 @@
 package dev.pocketengine.features.local.preview;
 
 import dev.pocketengine.features.local.project.ProjectSources;
+import dev.pocketengine.features.local.project.ProjectFileBytes;
 import dev.pocketengine.features.local.NativeCommandExecutor;
 import dev.pocketengine.features.workspace.VersionedWorkspace;
 import java.io.File;
@@ -64,7 +65,9 @@ public final class ProjectPreviewBundle {
             @Override public java.nio.file.FileVisitResult preVisitDirectory(java.nio.file.Path path,java.nio.file.attribute.BasicFileAttributes attrs){String relative=root.toPath().relativize(path).toString();for(String part:relative.split("/"))if(java.util.Set.of(".git","node_modules",".venv","venv",".gradle",".pocketworld","__pycache__").contains(part))return java.nio.file.FileVisitResult.SKIP_SUBTREE;return java.nio.file.FileVisitResult.CONTINUE;}
             @Override public java.nio.file.FileVisitResult visitFile(java.nio.file.Path path,java.nio.file.attribute.BasicFileAttributes attrs)throws java.io.IOException {
                 String relative=root.toPath().relativize(path).toString();if(mime(relative).isEmpty())return java.nio.file.FileVisitResult.CONTINUE;
-                try{VersionedWorkspace.path(relative);if(attrs.isSymbolicLink()||!attrs.isRegularFile())throw new SecurityException("预览资源不跟随链接或特殊文件");if(attrs.size()>MAX_RESOURCE_BYTES||resources.size()>=MAX_RESOURCES)throw new IllegalArgumentException("预览资源超过256个或单文件4MiB");NativeCommandExecutor.within(root,relative);byte[] bytes=Files.readAllBytes(path);total[0]+=bytes.length;if(bytes.length>MAX_RESOURCE_BYTES||total[0]>MAX_TOTAL_BYTES)throw new IllegalArgumentException("预览资源总量超过32MiB");resources.put(relative,new Resource(relative,bytes));return java.nio.file.FileVisitResult.CONTINUE;}catch(java.io.IOException failed){throw failed;}catch(Exception invalid){throw new java.io.IOException(invalid.getMessage(),invalid);}
+                try{VersionedWorkspace.path(relative);if(attrs.isSymbolicLink()||!attrs.isRegularFile())throw new SecurityException("预览资源不跟随链接或特殊文件");if(attrs.size()>MAX_RESOURCE_BYTES||resources.size()>=MAX_RESOURCES)throw new IllegalArgumentException("预览资源超过256个或单文件4MiB");NativeCommandExecutor.within(root,relative);
+                    byte[] bytes=ProjectFileBytes.read(path,attrs,Math.min(MAX_RESOURCE_BYTES,MAX_TOTAL_BYTES-total[0]));
+                    NativeCommandExecutor.within(root,relative);total[0]+=bytes.length;resources.put(relative,new Resource(relative,bytes));return java.nio.file.FileVisitResult.CONTINUE;}catch(java.io.IOException failed){throw failed;}catch(Exception invalid){throw new java.io.IOException(invalid.getMessage(),invalid);}
             }
         });
         if(!resources.containsKey(entryPath.substring(slash+1)))throw new SecurityException("预览入口不在实际资源清单中");return new Verified(checkout,project,source,entryPath,relativeRoot,resources,total[0]);
