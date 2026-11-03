@@ -53,6 +53,9 @@ internal fun HarnessConfigurationPanel(taskId: String, snapshot: JSONObject, con
             }
         }
         if (config != null) {
+            config.optJSONObject("workProfileSource")?.let { profile ->
+                Text("任务工作配置 · 版本 ${profile.optLong("profileRevision")}", color = SecondaryInk, fontSize = 12.sp)
+            }
             Text("如需切换目标或另一份原操作，请返回再打开原任务页；回到前台后先重新查询。这里不会自动续用旧确认。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp)
             val target = config.optJSONObject("target")
             val scope = plan?.optJSONObject("scopeDelta")

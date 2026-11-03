@@ -49,12 +49,20 @@ public final class ProjectPackageArchive {
 
     /** Native LocalModule supplies the actual active root and observed source identity. No JSON host path. */
     public static Frozen capture(File activeRoot, JSONObject original, String mode, String entryPath, boolean includeGeneratedRoots) throws Exception {
+        return capture(activeRoot,original,mode,entryPath,includeGeneratedRoots,null);
+    }
+    /** Optional source-only subset, still the original codec/catalog and private-file policy. */
+    public static Frozen capture(File activeRoot, JSONObject original, String mode, String entryPath, boolean includeGeneratedRoots, JSONArray includePaths) throws Exception {
         if (!Set.of("source_project", "web_output").contains(mode)) throw new IllegalArgumentException("请选择源项目包或固定网页成果");
         for (String key : new String[]{"projectId", "checkoutId"}) ProjectBuildPlan.identity(original.getString(key));
         if (!original.getString("sourceDigest").matches("[a-f0-9]{64}")) throw new IllegalArgumentException("缺少实际源码摘要");
         File root = activeRoot.getAbsoluteFile();
         if (Files.isSymbolicLink(root.toPath()) || !root.isDirectory() || !root.equals(root.getCanonicalFile())) throw new SecurityException("项目根目录不可用或含链接");
         boolean web = mode.equals("web_output");
+        final JSONArray selected=includePaths==null?null:normalizedSelection(includePaths);
+        if(selected!=null&&web)throw new IllegalArgumentException("includePaths仅用于源码子集包；固定网页成果仍沿原完整资源根");
+        if(selected!=null)for(int i=0;i<selected.length();i++){String path=selected.getString(i);File target=NativeCommandExecutor.within(root,path);BasicFileAttributes attrs;try{attrs=Files.readAttributes(target.toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);}catch(java.nio.file.NoSuchFileException absent){throw new IllegalArgumentException("所选项目包路径不存在："+path,absent);}if(attrs.isSymbolicLink()||!attrs.isDirectory()&&!attrs.isRegularFile())throw new SecurityException("所选路径不是普通文件/目录，不跟随链接："+path);if(excluded(path,attrs.isDirectory(),includeGeneratedRoots)!=null)throw new SecurityException("所选路径被原项目包私有/依赖/生成根策略排除："+path);}
+
         String selectedEntry = entryPath == null ? "" : entryPath;
         if (!selectedEntry.isEmpty()) packagePath(selectedEntry);
         if (web && (!ProjectPreviewBundle.mime(packagePath(selectedEntry)).equals("text/html"))) throw new IllegalArgumentException("请选择项目内实际HTML入口");
@@ -77,6 +85,7 @@ public final class ProjectPackageArchive {
                         if(!root.toPath().resolve(relative).equals(path))throw new SecurityException("目录名不是可往返UTF-8路径，未另名保存");
                         String reason = excluded(relative, true, web || includeGeneratedRoots);
                         if (reason != null) { omit(omitted, relative, reason); return java.nio.file.FileVisitResult.SKIP_SUBTREE; }
+                        if(selected!=null&&!selectedPath(selected,relative,true)){omit(omitted,relative,"not_selected");return java.nio.file.FileVisitResult.SKIP_SUBTREE;}
                         if (relative.split("/").length > 40) throw new IllegalArgumentException("项目目录超过40层，未保存不完整成果");
                         NativeCommandExecutor.within(root, relative);
                         if(directories.size()>=MAX_FILES)throw new IllegalArgumentException("项目包目录超过2000，未丢弃空目录");directories.add(relative);
@@ -92,6 +101,7 @@ public final class ProjectPackageArchive {
                     if(!root.toPath().resolve(relative).equals(path))throw new SecurityException("文件名不是可往返UTF-8路径，未另名保存");
                     String reason = excluded(relative, false, web || includeGeneratedRoots);
                     if (reason != null) { omit(omitted, relative, reason); return java.nio.file.FileVisitResult.CONTINUE; }
+                    if(selected!=null&&!selectedPath(selected,relative,false)){omit(omitted,relative,"not_selected");return java.nio.file.FileVisitResult.CONTINUE;}
                     if (attrs.isSymbolicLink() || !attrs.isRegularFile()) throw new SecurityException("项目包不跟随链接或特殊文件：" + relative);
                     if (web && ProjectPreviewBundle.mime(relative).isEmpty()) { omit(omitted, relative, "unsupported_web_resource"); return java.nio.file.FileVisitResult.CONTINUE; }
                     if (attrs.size() > MAX_FILE_BYTES || files.size() >= MAX_FILES) throw new IllegalArgumentException("项目包超过2000文件/单文件2MiB；未保存部分成果");
@@ -114,8 +124,18 @@ public final class ProjectPackageArchive {
             .put("omitted", orderedOmissions(omitted)).put("includesHistory", false).put("includesToolEnvironment", false).put("atomicSourceFence", false)
             .put("policy", new JSONObject().put("version", 1).put("generatedRootsIncluded", web || includeGeneratedRoots).put("privateFilesExcluded", true));
         if (scope.toString().getBytes(StandardCharsets.UTF_8).length > MAX_MANIFEST_BYTES) throw new IllegalArgumentException("项目包清单超过1MiB，未生成不能重导入的包");
-        validateHeader(scope);return new Frozen(scope, files);
+        validateHeader(scope);if(selected!=null)requireSelectionManifest(scope,selected);return new Frozen(scope, files);
     }
+
+    /** Exact literal relative paths, never globs or host paths; omitted means legacy whole selection. */
+    public static JSONArray normalizedSelection(JSONArray values)throws Exception {
+        if(values.length()<1||values.length()>MAX_FILES)throw new IllegalArgumentException("includePaths需1至2000个原相对路径；空列表不冒完整项目");java.util.TreeSet<String> paths=new java.util.TreeSet<>();for(int i=0;i<values.length();i++){if(!(values.get(i) instanceof String))throw new IllegalArgumentException("includePaths逐项需相对路径文字");String path=packagePath(values.getString(i));if(path.split("/").length>40||!paths.add(path))throw new IllegalArgumentException("所选路径重复或超过40层");}return new JSONArray(paths);
+    }
+    /** A reviewed subset manifest must not contain extra payloads or silently omit a selected path. */
+    public static void requireSelectionManifest(JSONObject manifest,JSONArray selection)throws Exception {
+        JSONArray selected=normalizedSelection(selection);if(!"source_project".equals(manifest.optString("mode")))throw new SecurityException("路径子集不是源码项目包");java.util.Set<String> represented=new java.util.HashSet<>();JSONArray files=manifest.getJSONArray("files"),directories=manifest.getJSONArray("directories");for(int i=0;i<files.length();i++){String path=files.getJSONObject(i).getString("path");if(!selectedPath(selected,path,false))throw new SecurityException("子集包混入未选文件");represented.add(path);}for(int i=0;i<directories.length();i++){String path=directories.getString(i);if(!selectedPath(selected,path,true))throw new SecurityException("子集包混入未选目录");represented.add(path);}for(int i=0;i<selected.length();i++)if(!represented.contains(selected.getString(i)))throw new SecurityException("所选路径不在实际包清单中，未静默忽略");JSONArray omitted=manifest.getJSONArray("omitted");for(int i=0;i<omitted.length();i++){JSONObject row=omitted.getJSONObject(i);if("not_selected".equals(row.optString("reason"))&&selectedPath(selected,row.getString("path"),false))throw new SecurityException("包把明确选中路径冒未选择而遗漏");}
+    }
+    private static boolean selectedPath(JSONArray selected,String path,boolean directory)throws Exception {for(int i=0;i<selected.length();i++){String wanted=selected.getString(i);if(path.equals(wanted)||path.startsWith(wanted+"/")||directory&&wanted.startsWith(path+"/"))return true;}return false;}
 
     /** Native copied source selection, still unpublished. The existing codec remains the only writer. */
     public static Frozen captureSourceImport(File root,JSONObject original,boolean generated,JSONArray sourceOmissions)throws Exception {

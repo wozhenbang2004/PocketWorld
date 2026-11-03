@@ -1,6 +1,8 @@
 package dev.pocketengine.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -13,12 +15,17 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
+import dev.pocketengine.features.local.runtime.NativeDiagnosticWindow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun NativeOwnerProjectStorage(flow: ProjectStorageCoordinator) {
     val state = flow.state
     TextButton(onClick = flow::open, modifier = Modifier.testTag("owner_project_storage_open")) { Text("项目存储与清理") }
     if (!state.open) return
+    var pendingDiagnostic by remember(flow) { mutableStateOf<NativeDiagnosticWindow.Ticket?>(null) }
+    val diagnosticPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val original = pendingDiagnostic; pendingDiagnostic = null; flow.diagnosticExportResult(original, uri)
+    }
     var showProtected by remember { mutableStateOf(false) }
     var confirmed by remember(state.review?.optString("actionId")) { mutableStateOf(false) }
     var details by remember { mutableStateOf(false) }
@@ -35,6 +42,13 @@ import org.json.JSONObject
             Text("项目存储", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             StorageCaption(state.inventory?.let { "文件系统当前可用 ${size(it.optLong("filesystemUsableBytes"))}。清理前请核对，原项目、固定成果与用户 HOME 默认保留。" } ?: "读取实际目录占用，不把读取失败当成0字节。")
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item { NativeStorageDiagnosticMetadata(flow) {
+                    flow.prepareDiagnosticExport()?.let { ticket ->
+                        pendingDiagnostic = ticket
+                        try { diagnosticPicker.launch("pocketworld-diagnostic-metadata.json") }
+                        catch (unavailable: Exception) { pendingDiagnostic = null; flow.diagnosticPickerUnavailable(ticket) }
+                    }
+                } }
                 item {
                     TextButton(onClick = flow::refresh, enabled = !state.busy) { Text(if (state.busy) "读取中…" else "重新计量") }
                     Row { Checkbox(showProtected, { showProtected = it }); Text("显示受保护或空的范围", Modifier.weight(1f).padding(top = 13.dp), fontSize = 13.sp) }
@@ -95,6 +109,23 @@ import org.json.JSONObject
             TextButton(onClick = flow::closePage, modifier = Modifier.fillMaxWidth()) { Text("完成，返回") }
         }
     }
+}
+@Composable private fun NativeStorageDiagnosticMetadata(flow: ProjectStorageCoordinator, export: () -> Unit) {
+    val state = flow.state
+    var expanded by remember(state.diagnosticSha) { mutableStateOf(false) }
+    TextButton(onClick = flow::readDiagnostics, enabled = !state.busy && state.review == null && !state.diagnosticPickerPending, modifier = Modifier.testTag("owner_diagnostic_collect")) { Text("读取本机脱敏诊断元数据") }
+    StorageCaption("只读取固定状态、逻辑计数和身份指纹；各域独立限时。不会读取记忆或任务正文、截图、日志内容、地址或凭据，不运行修复/自检，不改变任务。后台手机会话在此入口未采样。")
+    if (state.diagnosticText != null) {
+        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起将保存的元数据" else "查看将保存的全部元数据") }
+        if (expanded) {
+            Text(state.diagnosticText, fontSize = 11.sp, lineHeight = 17.sp)
+            StorageCaption("固定字节：${state.diagnosticBytes} · SHA-256 ${state.diagnosticSha}")
+            Row { Checkbox(state.diagnosticReviewed, flow::reviewDiagnostics, enabled = !state.busy && !state.diagnosticPickerPending && !state.diagnosticExportEntered); Text("我已核对这个固定快照，明确保存这些元数据", Modifier.weight(1f).padding(top = 13.dp), fontSize = 13.sp) }
+            OutlinedButton(onClick = export, enabled = state.diagnosticReviewed && !state.busy && !state.diagnosticPickerPending && !state.diagnosticExportEntered, modifier = Modifier.testTag("owner_diagnostic_export")) { Text("选择位置，保存这些字节") }
+            StorageCaption("仅在系统文件选择器授予的位置写入。云端文档提供方可能自行同步；本App不会自动发送诊断。取消或关闭页面后旧选择不能再次写入，失败目标可能不完整。")
+        }
+    }
+    HorizontalDivider()
 }
 @Composable private fun StorageCaption(text: String) { Text(text, fontSize = 12.sp, lineHeight = 19.sp, color = SecondaryInk) }
 private fun size(bytes: Long): String = when { bytes >= 1024L * 1024 * 1024 -> "%.2f GiB".format(java.util.Locale.ROOT, bytes / (1024.0 * 1024 * 1024)); bytes >= 1024 * 1024 -> "%.1f MiB".format(java.util.Locale.ROOT, bytes / (1024.0 * 1024)); bytes >= 1024 -> "%.1f KiB".format(java.util.Locale.ROOT, bytes / 1024.0); else -> "$bytes B" }
