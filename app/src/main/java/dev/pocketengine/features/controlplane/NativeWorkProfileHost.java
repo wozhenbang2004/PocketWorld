@@ -49,20 +49,63 @@ public final class NativeWorkProfileHost {
         JSONObject frozen=tasks.workProfileRunSnapshot(scope.getString("parentTaskId"),scope.getString("previousParentRunId"),scope.getInt("previousParentEpoch"));RunControl observation=new RunControl();
         GatewayReview inspected=new GatewayReview(this,tasks,review,frozen,WorkProfileResolver.resolveStored(frozen,sources,observation),observation);inspected.checkCurrent();return inspected;
     }
+    /** Metadata only: listing saved references never contacts a model or target. The original
+     * parent scope must already exist; a pending goal cannot acquire its first scope here. */
+    public JSONArray gatewayProfileChoices(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.store.TaskStore.GatewayParentRunReview review)throws Exception {
+        if(review==null||!review.issuedBy(tasks))throw new SecurityException("original_gateway_profile_review_required");review.checkCurrent();
+        JSONObject task=tasks.get(review.view().getString("parentTaskId"),false);JSONArray choices=new JSONArray();
+        if(task.optJSONObject("workProfileRef")!=null||task.optJSONObject("workProfileIntent")!=null)return choices;
+        JSONArray saved=settings.workProfilesSnapshot().getJSONArray("profiles");
+        for(int i=0;i<saved.length();i++){WorkProfile profile=WorkProfile.fromJson(saved.getJSONObject(i));JSONObject definition=profile.toJson();
+            if(definition.getJSONObject("modelPolicies").has("RELAY"))choices.put(new JSONObject().put("profileId",profile.id).put("revision",profile.revision).put("name",profile.name).put("configurationApplied",false));}
+        review.checkCurrent();return choices;
+    }
+    /** First Profile binding to an existing owner task, never first task/scope authorization.
+     * Original GatewayParentRunReview/foreground approval still owns the exact child and budget. */
+    public GatewayReview reviewGatewayParentProfile(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.store.TaskStore.GatewayParentRunReview review,String profileId,long revision)throws Exception {
+        if(review==null||!review.issuedBy(tasks))throw new SecurityException("original_gateway_profile_review_required");review.checkCurrent();
+        JSONObject task=tasks.get(review.view().getString("parentTaskId"),false);
+        if(task.optJSONObject("workProfileRef")!=null||task.optJSONObject("workProfileIntent")!=null)throw new SecurityException("原任务已有冻结配置，须沿原配置恢复，不能另选替换");
+        WorkProfile profile=stored(profileId,revision);JSONObject definition=profile.toJson();
+        if(!definition.getJSONObject("modelPolicies").has("RELAY"))throw new SecurityException("此仅网关入口须明确选择Profile的API RELAY");
+        for(String field:new String[]{"instructionRefs","skillRefs","pluginRefs","extensionRefs"})if(definition.getJSONArray(field).length()!=0)throw new SecurityException("远端指导/技能/工具资产投射尚未接入，请保留编辑；此入口仅应用模型和准确目标引用");
+        if(!definition.isNull("teamTemplateRef"))throw new SecurityException("仅网关入口不启动团队或应用团队模板");
+        RunControl observation=new RunControl();var resolution=WorkProfileResolver.resolve(profile,sources,observation);
+        if(!resolution.view().getBoolean("ready")){JSONArray blocked=new JSONArray(),items=resolution.view().getJSONArray("items");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);if(!item.getBoolean("included")&&!item.getBoolean("optional")){JSONObject row=new JSONObject().put("kind",item.getString("kind")).put("id",item.getString("id")).put("status",item.getString("status"));JSONObject evidence=item.optJSONObject("sourceEvidence");if(evidence!=null)row.put("reasonCode",evidence.optString("reasonCode"));blocked.put(row);}}throw new SecurityException("工作配置来源尚未就绪，未发行新run："+blocked);}
+        resolution.requireReady();
+        JSONObject frozen=resolution.view().put("definition",definition);requireGatewayTargetScope(frozen,review.view());
+        GatewayReview inspected=new GatewayReview(this,tasks,review,frozen,resolution,observation,true);inspected.checkCurrent();return inspected;
+    }
+    /** All included targets must belong to this exact native child; no other ready target or
+     * unsupported SSH/runtime binding is silently dropped from a reusable Profile. */
+    private static int requireGatewayTargetScope(JSONObject frozen,JSONObject source)throws Exception {
+        JSONArray items=frozen.getJSONArray("items");int count=0;
+        for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);String kind=item.getString("kind");if(!kind.startsWith("target:"))continue;
+            if(!item.getBoolean("included"))throw new SecurityException("此网关入口不能应用工作配置中的目标，包括可选但不可用目标；请保留编辑并明确减选，未静默省略");
+            if(!kind.equals("target:remote_harness"))throw new SecurityException("此入口尚未应用SSH或本机运行目标，请保留原配置");
+            JSONObject binding=item.getJSONObject("binding");
+            for(String key:new String[]{"profileId","environmentId","worker"})if(!binding.getString(key).equals(source.optString(key)))throw new SecurityException("工作配置含另一准确目标；未将其省略或改绑到本任务");
+            if(source.has("environmentBinding")&&!binding.getString("environmentBinding").equals(source.getString("environmentBinding")))throw new SecurityException("原任务环境绑定与工作配置不同");count++;
+        }return count;
+    }
     public static final class GatewayReview {
         private final NativeWorkProfileHost issuer;private final dev.pocketengine.store.TaskStore tasks;private final dev.pocketengine.store.TaskStore.GatewayParentRunReview review;
-        private final String frozen,fingerprint;private final WorkProfileResolver.Resolution resolution;private final RunControl observation;private boolean selected;
-        private GatewayReview(NativeWorkProfileHost issuer,dev.pocketengine.store.TaskStore tasks,dev.pocketengine.store.TaskStore.GatewayParentRunReview review,JSONObject frozen,WorkProfileResolver.Resolution resolution,RunControl observation)throws Exception{this.issuer=issuer;this.tasks=tasks;this.review=review;this.frozen=frozen.toString();fingerprint=WorkProfile.fingerprint(frozen);this.resolution=resolution;this.observation=observation;}
+        private final String frozen,fingerprint;private final WorkProfileResolver.Resolution resolution;private final RunControl observation;private final boolean firstBinding;private boolean selected;
+        private GatewayReview(NativeWorkProfileHost issuer,dev.pocketengine.store.TaskStore tasks,dev.pocketengine.store.TaskStore.GatewayParentRunReview review,JSONObject frozen,WorkProfileResolver.Resolution resolution,RunControl observation)throws Exception{this(issuer,tasks,review,frozen,resolution,observation,false);}
+        private GatewayReview(NativeWorkProfileHost issuer,dev.pocketengine.store.TaskStore tasks,dev.pocketengine.store.TaskStore.GatewayParentRunReview review,JSONObject frozen,WorkProfileResolver.Resolution resolution,RunControl observation,boolean firstBinding)throws Exception{this.issuer=issuer;this.tasks=tasks;this.review=review;this.frozen=frozen.toString();fingerprint=WorkProfile.fingerprint(frozen);this.resolution=resolution;this.observation=observation;this.firstBinding=firstBinding;}
         public void checkCurrent()throws Exception {
-            review.checkCurrent();JSONObject saved=new JSONObject(frozen);JSONObject current=tasks.workProfileRunSnapshot(saved.getString("taskId"),saved.getString("runId"),saved.getInt("epoch"));
-            if(!fingerprint.equals(WorkProfile.fingerprint(current)))throw new SecurityException("original_gateway_profile_snapshot_changed");resolution.checkCurrent(observation);
+            review.checkCurrent();JSONObject saved=new JSONObject(frozen);
+            if(firstBinding){JSONObject task=tasks.get(review.view().getString("parentTaskId"),false);if(task.optJSONObject("workProfileRef")!=null||task.optJSONObject("workProfileIntent")!=null||!issuer.stored(saved.getString("profileId"),saved.getLong("profileRevision")).digest().equals(resolution.profile().digest()))throw new SecurityException("原任务或保存的工作配置已变化，请重新审阅");}
+            else {JSONObject current=tasks.workProfileRunSnapshot(saved.getString("taskId"),saved.getString("runId"),saved.getInt("epoch"));if(!fingerprint.equals(WorkProfile.fingerprint(current)))throw new SecurityException("original_gateway_profile_snapshot_changed");}
+            requireGatewayTargetScope(saved,review.view());resolution.checkCurrent(observation);
         }
         public ModelConfig relayModel()throws Exception{checkCurrent();return resolution.models().get("RELAY");}
-        public JSONObject view()throws Exception{checkCurrent();JSONObject saved=new JSONObject(frozen);return new JSONObject().put("profileId",saved.getString("profileId")).put("profileRevision",saved.getLong("profileRevision")).put("resolutionDigest",saved.getString("resolutionDigest")).put("relaySourceKind",resolution.models().containsKey("RELAY")?"frozen_original_work_profile_RELAY":"original_host_RELAY").put("configurationApplied",false).put("executionAuthorized",false);}
+        public JSONObject view()throws Exception{checkCurrent();JSONObject saved=new JSONObject(frozen);return new JSONObject().put("profileId",saved.getString("profileId")).put("profileRevision",saved.getLong("profileRevision")).put("resolutionDigest",saved.getString("resolutionDigest")).put("firstProfileBindingWithinOriginalScope",firstBinding).put("includedTargetConstraints",requireGatewayTargetScope(saved,review.view())).put("relaySourceKind",resolution.models().containsKey("RELAY")?"frozen_original_work_profile_RELAY":"original_host_RELAY").put("configurationApplied",false).put("executionAuthorized",false);}
         public Selection select(dev.pocketengine.features.RemoteOwnerWorkflows.GatewayParentRunApproval approval,RunControl original)throws Exception {
             if(approval==null||!approval.issuedBy(tasks)||approval.review()!=review||original==null||original.hasHostRun())throw new SecurityException("native_gateway_profile_approval_required");
-            approval.checkCurrent();checkCurrent();original.check();JSONObject saved=new JSONObject(frozen);
-            synchronized(this){if(selected)throw new SecurityException("gateway_profile_review_already_selected");selected=true;return new Selection(issuer,resolution,original,new TaskReview(saved.getString("taskId"),saved.getString("runId"),saved.getInt("epoch"),fingerprint));}
+            approval.checkCurrent();checkCurrent();original.check();JSONObject saved=new JSONObject(frozen),scope=review.view();
+            TaskReview task=firstBinding?new TaskReview(scope.getString("parentTaskId"),scope.getString("previousParentRunId"),scope.getInt("previousParentEpoch"),null):new TaskReview(saved.getString("taskId"),saved.getString("runId"),saved.getInt("epoch"),fingerprint);
+            synchronized(this){if(selected)throw new SecurityException("gateway_profile_review_already_selected");selected=true;return new Selection(issuer,resolution,original,task);}
         }
     }
     /** Opaque source from this host + verified original TaskStore snapshot. No constructor or JSON
@@ -84,6 +127,19 @@ public final class NativeWorkProfileHost {
         public void checkCurrent()throws Exception {
             bindingCurrent();issuer.sources.checkModel(captured,"RELAY",original);
             WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen),issuer.sources,original);bindingCurrent();
+        }
+        /** Additional constraint on the already native-approved target, never a target permit. */
+        public void requireTarget(dev.pocketengine.store.TaskStore.HarnessGatewayConfigurationOwner owner,JSONObject target)throws Exception {
+            checkCurrent();JSONObject saved=new JSONObject(frozen);JSONArray items=saved.getJSONArray("items");boolean configured=false;
+            for(int i=0;i<items.length();i++)if(items.getJSONObject(i).getString("kind").startsWith("target:"))configured=true;
+            if(!configured)return;
+            if(owner==null||!owner.issuedBy(tasks))throw new SecurityException("工作配置目标须沿原生父子配置owner审阅，不能借普通JSON选目标");
+            owner.checkCurrent();JSONObject identity=owner.view();if(!task.equals(identity.getString("parentTaskId"))||!run.equals(identity.getString("parentRunId"))||epoch!=identity.getInt("parentEpoch"))throw new SecurityException("工作配置目标不属于原父任务代次");
+            JSONObject source=tasks.remoteOwnerTarget(identity.getString("taskId"));requireGatewayTargetScope(saved,source);
+            for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);if(!item.getBoolean("included")||!item.getString("kind").startsWith("target:"))continue;JSONObject binding=item.getJSONObject("binding");
+                for(String key:new String[]{"profileId","environmentId","environmentBinding"})if(!binding.getString(key).equals(target.optString(key)))throw new SecurityException("网关准确目标与冻结工作配置不同");
+                if(!binding.getString("profileBinding").equals(target.optString("_profileBinding")))throw new SecurityException("网关电脑绑定与冻结工作配置不同");
+            }owner.checkCurrent();checkCurrent();
         }
         @Override public ModelConfig get()throws Exception{checkCurrent();return captured;}
         @Override public long selectionRevision()throws Exception{bindingCurrent();return revision;}
@@ -390,7 +446,7 @@ public final class NativeWorkProfileHost {
         /** Pure metadata check inside original SQL admission; existing Profile tasks require that exact task review. */
         public synchronized void requireTaskAdmission(String taskId,String runId,int epoch,String retainedDigest)throws Exception {
             if(intentTask!=null&&!intentTask.equals(taskId))throw new SecurityException("work_profile_pending_goal_mismatch");
-            if(taskReview!=null){if(!taskReview.taskId.equals(taskId)||!taskReview.runId.equals(runId)||taskReview.epoch!=epoch||!taskReview.snapshotDigest.equals(retainedDigest))throw new SecurityException("work_profile_original_task_review_changed");}
+            if(taskReview!=null){if(!taskReview.taskId.equals(taskId)||!taskReview.runId.equals(runId)||taskReview.epoch!=epoch||!java.util.Objects.equals(taskReview.snapshotDigest,retainedDigest))throw new SecurityException("work_profile_original_task_review_changed");}
             else if(retainedDigest!=null&&!(taskId.equals(intentTask)&&runId.isEmpty()))throw new SecurityException("work_profile_original_task_review_required");
         }
         /** Native TaskStore admission only: consumes this owner selection even if admission later fails. */

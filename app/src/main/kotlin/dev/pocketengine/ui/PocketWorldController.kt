@@ -567,6 +567,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun closePluginCatalogPage(page: dev.pocketengine.features.NativePluginHost.Page) { page.close(); if (pluginCatalogPage === page) pluginCatalogPage = null }
     fun runPluginCatalogWork(work: Runnable) { if (closed) throw java.util.concurrent.RejectedExecutionException(); io.execute(work) }
+    /** Read-only native source navigation; callers use the existing bounded IO worker. */
+    fun readFinalAnswerSources(request: JSONObject, control: dev.pocketengine.core.RunControl): JSONObject {
+        if (closed) throw java.util.concurrent.RejectedExecutionException()
+        control.check()
+        return app.nativeOwnerWorkflows.answerSources(request, control)
+    }
     fun preparePluginRuntime() {
         if (closed || pluginRuntime.optString("status") == "preparing") return
         pluginRuntime = JSONObject().put("status", "preparing").put("message", "正在核对已安装WebView和隔离能力。")
@@ -611,6 +617,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     var groupTaskReady by mutableStateOf(false)
         private set
     fun enterGroupTask(taskId: String): String {
+        closeNativeEvaluation()
         projectGit.deactivate()
         projectPackages.leavePrivate()
         closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null)
@@ -789,7 +796,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun enterOwnerDomain(domain: String) {
         if (domain !in setOf("memoryReview", "taskMemory", "mcp", "accounts", "learning", "groups", "channelMedia")) return
-        if (domain == "groups") { projectGit.deactivate();projectPackages.leavePrivate(); closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null) }
+        if (domain == "groups") { closeNativeEvaluation();projectGit.deactivate();projectPackages.leavePrivate(); closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null) }
         ownerDomain = domain
         if (domain == "channelMedia") { channelMediaWindow?.close(); channelMediaReview = null; channelMediaWindow = nativeChannelModule().openOwnerMediaWindow(activity) }
         if (domain == "groups") try { groupOwnerWindow = app.groupOwnerWorkflows.open(activity) } catch (error: Exception) { state = state.copy(ownerErrors = state.ownerErrors + (domain to message(error))) }
@@ -845,7 +852,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (domain == "accounts" && (command in setOf("beginLogin", "cancelLogin", "logout") || command in setOf("setEnabled", "setAppLearningPolicy") && !payload.optBoolean("enabled"))) authorizationOpening = null
         ownerRequests[key]?.let { previous ->
             if (previous.payload.toString() == payload.toString()) return previous.id
-            if (command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "namespaceChoices", "projectFileChoices", "cognitionProjection", "readAssertionEvidence", "models", "openSource", "prepareLearningSource", "discoverMcp", "discoverMcpAuthorized", "searchTaskMemoryTasks", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "getLearningJob", "listLearningJobs", "searchOwnerOriginals", "readOwnerOriginalSearchHit", "selectOwnerOriginalReference")) throw IllegalStateException("这项操作仍在处理中，请等待真实回执")
+            if (command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "namespaceChoices", "projectFileChoices", "cognitionProjection", "searchHistory", "readHistoryRecord", "readAssertionEvidence", "models", "openSource", "prepareLearningSource", "discoverMcp", "discoverMcpAuthorized", "searchTaskMemoryTasks", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "getLearningJob", "listLearningJobs", "searchOwnerOriginals", "readOwnerOriginalSearchHit", "selectOwnerOriginalReference")) throw IllegalStateException("这项操作仍在处理中，请等待真实回执")
             previous.control.cancel(); previous.call.cancel(); originalSourceStages.remove(previous.id)
             if (domain == "mcp" && command in setOf("discoverMcp", "discoverMcpAuthorized")) cleanOwnerResult(domain, "cancel", JSONObject().put("operationId", previous.payload.optString("_operationId")))
         }
@@ -893,7 +900,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
             } catch (error: Exception) { failure = error }
             if (failure == null && domain == "accounts" && command == "selectModel") app.sendState()
-            if (failure == null && domain != "accounts" && command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "cognitionProjection", "readAssertionEvidence", "openSource", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "discoverMcp", "discoverMcpAuthorized", "discardMcpPreview", "cancel")) {
+            if (failure == null && domain != "accounts" && command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "cognitionProjection", "searchHistory", "readHistoryRecord", "readAssertionEvidence", "openSource", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "discoverMcp", "discoverMcpAuthorized", "discardMcpPreview", "cancel")) {
                 try { app.features.sendState() } catch (_: Exception) { /* The direct receipt remains authoritative. */ }
             }
             try {
@@ -1120,7 +1127,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun attach() { app.addObserver(observer);loadOwnerComposer(); refresh() }
     /** Native owner action; the host resolves the existing original control, never payload authority. */
 
-    fun detach() { synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
+    fun detach() { synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeEvaluation();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
     fun refresh() { authorizationOpening = null; ownerDomain?.let { requestOwnerDomain(it, "snapshot") }; native("getState"); native("getFeatures"); native("rescheduleAutomation"); feature("assistant", "list") }
     fun suggestInput(text: String, phoneTask: Boolean? = null) {
         if (text.isNotBlank()) state = state.copy(suggestedInputRevision = state.suggestedInputRevision + 1, suggestedInput = text, suggestedPhoneTask = phoneTask)
@@ -1195,6 +1202,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun speak(text: String) { if (voiceInput.active()||voiceInput.leaseHeld()||realtimeOwnsAudio()) state = state.copy(error = "语音正在使用音频，请先结束后再朗读") else activity.media.speak(text) }
     fun stopSpeaking() { activity.media.stopSpeaking() }
     fun realtimeForeground(visible: Boolean) {
+        if (!visible) closeNativeEvaluation()
         voiceForeground=visible;if(!visible)voiceInputModeChanged()
         (app.features.module("channels") as? dev.pocketengine.features.channels.ChannelsModule)?.setNativeOwnerForeground(activity, visible)
         if (!visible && channelMediaWindow != null) leaveOwnerDomain("channelMedia")
@@ -1797,6 +1805,43 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun display(command: String) { feature("display", command) }
     internal val backgroundAudioOwnerVisible get() = privateWorkspaceView()
+    @Volatile private var phoneDiagnosticEpoch = 0L
+    @Volatile private var phoneDiagnosticReport: dev.pocketengine.phone.diagnostics.PhoneDiagnosticReport.Report? = null
+    internal val phoneDiagnosticsOwnerVisible get() = privateWorkspaceView() && state.backgroundSetupOpen
+    private fun clearPhoneDiagnostics() { phoneDiagnosticEpoch++; phoneDiagnosticReport = null }
+    /** Original private native owner setup only; never a generic module/model command. */
+    internal fun previewPhoneDiagnostics(done: (dev.pocketengine.phone.diagnostics.PhoneDiagnosticReport.Report?, String?) -> Unit) {
+        if (!phoneDiagnosticsOwnerVisible) return
+        val epoch = ++phoneDiagnosticEpoch
+        phoneDiagnosticReport = null
+        try { io.execute {
+            if (!phoneDiagnosticsOwnerVisible || epoch != phoneDiagnosticEpoch) return@execute
+            val result = runCatching {
+                val display = app.features.module("display") as? dev.pocketengine.phone.display.DisplayModule
+                dev.pocketengine.phone.diagnostics.AndroidPhoneDiagnostics.preview(app, display)
+            }
+            main.post {
+                if (!phoneDiagnosticsOwnerVisible || epoch != phoneDiagnosticEpoch) return@post
+                result.fold({ report -> phoneDiagnosticReport = report; done(report, null) }, { done(null, "诊断当前不可用，请刷新后重试；没有复制或分享任何内容。") })
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) { if (phoneDiagnosticsOwnerVisible) done(null, "原设置页已关闭，请重新打开。") }
+    }
+    internal fun copyPhoneDiagnostics(report: dev.pocketengine.phone.diagnostics.PhoneDiagnosticReport.Report): String? {
+        if (!phoneDiagnosticsOwnerVisible || phoneDiagnosticReport !== report) return "请在原手机设置页重新预览诊断。"
+        return try {
+            val clipboard = activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("PocketWorld 手机诊断", report.text()))
+            null
+        } catch (_: Exception) { "复制未确认，请重新核对；没有自动重试。" }
+    }
+    internal fun sharePhoneDiagnostics(report: dev.pocketengine.phone.diagnostics.PhoneDiagnosticReport.Report): String? {
+        if (!phoneDiagnosticsOwnerVisible || phoneDiagnosticReport !== report) return "请在原手机设置页重新预览诊断。"
+        return try {
+            val intent = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report.text())
+            activity.startActivity(Intent.createChooser(intent, "分享已预览的手机诊断"))
+            null
+        } catch (_: Exception) { "系统分享未确认，请自行核对；没有自动发送或重试。" }
+    }
     /** Private native owner action, never a generic feature/model command. */
     internal fun setBackgroundAudioSilence(enabled: Boolean, done: (JSONObject?, String?) -> Unit) {
         if (!privateWorkspaceView()) return
@@ -1829,14 +1874,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             main.post { if (privateWorkspaceView()) result.fold({ done(it, null) }, { done(null, message(it)) }) }
         }
     }
-    fun openBackgroundSetup() { state = state.copy(backgroundSetupOpen = true); refreshBackgroundSetup() }
+    fun openBackgroundSetup() { clearPhoneDiagnostics(); state = state.copy(backgroundSetupOpen = true); refreshBackgroundSetup() }
     fun startPhonePractice(packageName: String, field: String, mode: String) {
         if (!packageName.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")) || field.isBlank()) { state = state.copy(error = "请填写实际应用包名和一个可安全测试的普通输入框名称"); return }
         startPhone("这是主人明确批准的手机能力演练。仅打开包名 $packageName，读取当前窗口与控件，找到标签为“${field.take(120)}”的唯一普通非敏感输入框，输入“中文输入演练”，不点发送、保存、支付或任何提交。核对同一原生字段即时与延迟实际值，记录应用版本（可读时）、树覆盖、display/package归属、主屏干扰与结果；不唯一或不支持时交还主人。完成后保持现场供主人核对。", mode)
         if (state.phoneSubmitting) closeBackgroundSetup()
     }
-    fun closeBackgroundSetup() { state = state.copy(backgroundSetupOpen = false) }
+    fun closeBackgroundSetup() { clearPhoneDiagnostics(); state = state.copy(backgroundSetupOpen = false) }
     fun selectMainScreenCompatibility() {
+        clearPhoneDiagnostics()
         state = state.copy(backgroundSetupOpen = false, requestedPhoneMode = "main_screen", requestedPhoneModeRevision = state.requestedPhoneModeRevision + 1,
             notice = "已明确选择主屏兼容模式。请确认系统权限，再手动开始原目标；不会自动执行。")
     }
@@ -2087,10 +2133,36 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         native("featureRequest", JSONObject().put("feature", feature).put("command", command).put("payload", payload).put("requestId", id))
         return id
     }
+    internal var nativeEvaluationOpen by mutableStateOf(false)
+        private set
+    private var nativeEvaluationPage: dev.pocketengine.features.evaluation.NativeEvaluationHost.Page? = null
+    private var nativeEvaluationEpoch = 0L
+    fun openNativeEvaluation() {
+        if (closed || !privateWorkspaceView()) return
+        nativeEvaluationPage?.close()
+        nativeEvaluationPage = app.nativeEvaluations().openPage()
+        nativeEvaluationEpoch++; nativeEvaluationOpen = true
+    }
+    fun closeNativeEvaluation() { nativeEvaluationEpoch++; nativeEvaluationOpen = false; nativeEvaluationPage?.close(); nativeEvaluationPage = null }
+    internal fun evaluationCommand(command: String, input: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        val page = nativeEvaluationPage ?: return
+        val epoch = nativeEvaluationEpoch
+        if (closed || !nativeEvaluationOpen || !privateWorkspaceView()) return
+        try {
+            (if (command == "cancel") controls else io).execute {
+                val result = runCatching { page.command(command, JSONObject(input.toString())) }
+                main.post {
+                    if (!closed && nativeEvaluationOpen && nativeEvaluationPage === page && epoch == nativeEvaluationEpoch && privateWorkspaceView())
+                        result.fold({ done(it, null) }, { done(null, message(it)) })
+                }
+            }
+        } catch (failure: Exception) { done(null, message(failure)) }
+    }
     internal var nativeInferenceHistoryOpen by mutableStateOf(false)
         private set
+    internal val modelDiagnostics by lazy { ModelDiagnosticsUi(app.nativeDiagnostics(),io,main) { !closed && nativeInferenceHistoryOpen && privateWorkspaceView() } }
     fun openNativeInferenceHistory(){if(!closed&&privateWorkspaceView())nativeInferenceHistoryOpen=true}
-    fun closeNativeInferenceHistory(){nativeInferenceHistoryOpen=false}
+    fun closeNativeInferenceHistory(){nativeInferenceHistoryOpen=false;modelDiagnostics.close()}
     internal fun readNativeInferenceHistory(cursor:String,done:(JSONObject?,String?)->Unit){
         if(closed||!privateWorkspaceView())return
         io.execute{val result=runCatching{app.tasks.nativeInferenceUsagePage(cursor,40)};main.post{if(!closed&&nativeInferenceHistoryOpen&&privateWorkspaceView())result.fold({done(it,null)},{done(null,message(it))})}}
@@ -2399,7 +2471,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
     private fun invalidateCognitionReadings() {
-        val reads = setOf("cognitionProjection", "readAssertionEvidence")
+        val reads = setOf("cognitionProjection", "searchHistory", "readHistoryRecord", "readAssertionEvidence")
         val abandoned = ownerRequests.filter { it.value.domain == "memoryReview" && it.value.command in reads }
         abandoned.forEach { (key, request) -> request.control.cancel(); request.call.cancel(); ownerRequests.remove(key) }
         val snapshot = state.ownerSnapshots["memoryReview"]?.let { JSONObject(it.toString()).put("cognitionRevision", "invalidated:${java.util.UUID.randomUUID()}") }

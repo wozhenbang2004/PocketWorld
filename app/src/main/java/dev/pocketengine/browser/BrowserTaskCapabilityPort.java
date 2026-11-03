@@ -300,6 +300,13 @@ public final class BrowserTaskCapabilityPort implements CapabilityPort {
         JSONObject reference=prepared.optJSONObject("reference");if(reference==null)reference=new JSONObject();JSONObject browserContext=taskBrowserSnapshot(control);if(!space.ended())browserContext.put("readRecipes",space.readRecipesForHost());reference.put("taskBrowser",browserContext);return prepared.put("tools",selected).put("reference",reference);
     }
     @Override public boolean responseCurrent(RunControl control)throws Exception {try{if(closed)return false;if(space.ended())space.checkOriginalRun(control);else space.checkOriginal(control);return existing==null||existing.responseCurrent(control);}catch(Exception stale){return false;}}
+    @Override public boolean stepReadSourceCurrent(String name,JSONObject receipt,RunControl original)throws Exception {
+        if(!schemas.containsKey(name))return existing!=null&&existing.stepReadSourceCurrent(name,receipt,original);
+        if(!Set.of("browser_task_observe","browser_task_inspect","browser_task_wait").contains(name)||original!=space.originalControl||receipt==null||closed||uncertain||inFlight.get()||!entered.contains(receipt.optString("operationId")))return false;
+        if(name.equals("browser_task_inspect")&&!receipt.optBoolean("advancedRead")||name.equals("browser_task_observe")&&receipt.optBoolean("advancedRead"))return false;
+        original.check();try{live(name,original);boolean current=onMain(()->space.stepReadSourceCurrent(receipt),original);live(name,original);return current;}
+        catch(InterruptedException cancelled){throw cancelled;}catch(Exception unavailable){original.check();return false;}
+    }
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception {return existing==null?null:existing.beforeTool(name,args,control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception {
         JSONObject delivered=receipt==null?null:copy(receipt),arguments=args==null?null:copy(args);

@@ -62,6 +62,27 @@ public final class SettingsStore {
     public synchronized void saveLocalObservation(boolean capture,boolean ocr)throws Exception {
         requireConfirmed();commitConfirmed(prefs.edit().putBoolean("localCaptureAllowed",capture).putBoolean("localOcrAllowed",ocr));
     }
+    /** Native owner preference only; this never changes the selected models or issues a tool grant. */
+    public synchronized JSONObject stepRoutingPreferences() throws Exception {
+        requireConfirmed();String raw=prefs.getString("stepModelRouting","");
+        if(raw.isEmpty())return new JSONObject().put("format","pocketworld.step-routing-preferences.v1")
+                .put("enabled",false).put("revision",1).put("planFingerprint","").put("candidateId","").put("minimumSuccesses",2);
+        JSONObject value=new JSONObject(raw);
+        if(!"pocketworld.step-routing-preferences.v1".equals(value.getString("format"))||!(value.get("enabled") instanceof Boolean)
+                ||value.getLong("revision")<1)throw new IllegalStateException("轻量路由设置不可读取，请关闭后重新配置");
+        if(value.getBoolean("enabled"))new dev.pocketengine.runtime.models.StepModelRouting.Preference(value.getLong("revision"),
+                value.getString("planFingerprint"),value.getString("candidateId"),value.getInt("minimumSuccesses"));
+        return value;
+    }
+    public synchronized void saveStepRoutingPreference(boolean enabled,long expectedRevision,String planFingerprint,String candidateId) throws Exception {
+        JSONObject current=stepRoutingPreferences();if(current.getLong("revision")!=expectedRevision)throw new SecurityException("owner_revision_conflict");
+        long next=Math.addExact(expectedRevision,1);
+        if(enabled)new dev.pocketengine.runtime.models.StepModelRouting.Preference(next,planFingerprint,candidateId,2);
+        JSONObject value=new JSONObject().put("format","pocketworld.step-routing-preferences.v1").put("enabled",enabled)
+                .put("revision",next).put("planFingerprint",enabled?planFingerprint:"").put("candidateId",enabled?candidateId:"").put("minimumSuccesses",2);
+        commitConfirmed(prefs.edit().putString("stepModelRouting",value.toString()));
+    }
+
     /** Reversible agent preferences only. Model routes, grants, credentials and network policy are absent. */
     public synchronized JSONObject agentPreferences()throws Exception {
         requireConfirmed();return new JSONObject().put("enabled",prefs.getBoolean("allowAgentPreferences",false))

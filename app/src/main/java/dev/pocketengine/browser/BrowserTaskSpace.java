@@ -348,6 +348,32 @@ if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("nav
         JSONObject captured=observation(tab,original.getString("observationId")),page=driver.metadata(tab);
         if(page.getLong("navigation")!=original.getLong("navigation")||!pageMatchesObservation(page,original)||!captured.getString("documentId").equals(original.getString("documentId"))||!captured.getJSONObject("read").getString("projectionSha256").equals(original.getJSONObject("read").getString("projectionSha256")))throw new StalePage("browser_context_repair_document_changed");driver.requireObservedFrame(tab,original);
     }
+    /** Compare an actual read receipt with the existing native observation and current page pin.
+     * This does not query DOM, create observations, extend a lease or claim page-text truth. */
+    public boolean stepReadSourceCurrent(JSONObject receipt)throws Exception {
+        main();checkOriginal(originalControl);
+        if(receipt==null||!Boolean.TRUE.equals(receipt.opt("ok"))||Boolean.FALSE.equals(receipt.opt("accepted"))||!"observed".equals(receipt.optString("status"))||receipt.optString("observationId").isEmpty()||receipt.optString("documentId").isEmpty())return false;
+        Tab tab=required(receipt.getString("tabId"));JSONObject identity=tab.identity();
+        for(String key:new String[]{"taskId","runId","epoch","profileId","profileRevision","profileIsolation","browserSessionId","browserSpaceId","tabId","tabGeneration"})if(!String.valueOf(identity.get(key)).equals(String.valueOf(receipt.opt(key))))return false;
+        JSONObject captured=observation(tab,receipt.getString("observationId")),page=driver.metadata(tab);
+        JSONObject current=pin(new JSONObject().put("tabId",tab.tabId).put("observationId",receipt.getString("observationId")));
+        if(current.getLong("navigation")!=receipt.getLong("navigation")||!pageMatchesObservation(page,receipt)||!receipt.getString("documentId").equals(captured.optString("documentId")))return false;
+        if("main".equals(receipt.optString("frameId","main"))&&(page.optString("documentId").isEmpty()||!page.getString("documentId").equals(receipt.getString("documentId"))))return false;
+        driver.requireObservedFrame(tab,receipt);
+        // A newer selection on this tab supersedes the old projection even if its URL is equal.
+        boolean found=false;for(JSONObject observed:readObservations.values())if(tab.tabId.equals(observed.optString("tabId"))){if(found)return false;if(receipt.getString("observationId").equals(observed.optString("observationId")))found=true;}
+        if(!found)return false;
+        if(receipt.optBoolean("semanticRead")){
+            JSONObject read=receipt.optJSONObject("read"),nativeRead=captured.optJSONObject("read");
+            if(read==null||nativeRead==null||!dev.pocketengine.store.TaskStore.capabilityFingerprint(BrowserSemanticRead.sourceFacts(read)).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(BrowserSemanticRead.sourceFacts(nativeRead))))return false;
+            if(!deliveredStructuredObservations.containsKey(receipt.getString("observationId")))return false;
+            requireReadRepairRecipe(receipt);
+        }else{
+            if(!receipt.optBoolean("advancedRead")||!receipt.has("value")&&!receipt.has("text"))return false;
+            for(String key:new String[]{"value","text"})if(receipt.has(key)&&(!captured.has(key)||!dev.pocketengine.runtime.context.CompactionPlan.fingerprint(receipt.get(key)).equals(dev.pocketengine.runtime.context.CompactionPlan.fingerprint(captured.get(key)))))return false;
+        }
+        return true;
+    }
     public void beforeModelRequest(String id,JSONArray messages)throws Exception {main();checkOriginalRun(originalControl);for(Tab tab:tabs.values())driver.beforeModelRequest(tab,id,messages);}
     public void afterModelResponse(String id)throws Exception {main();checkOriginalRun(originalControl);for(Tab tab:tabs.values())driver.afterModelResponse(tab,id);}
     public void modelRequestAbandoned(String id)throws Exception {main();for(Tab tab:tabs.values())driver.modelRequestAbandoned(tab,id);}

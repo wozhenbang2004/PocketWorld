@@ -1,5 +1,6 @@
 """Controlled loopback peer for original-job replay; no real CLI/account or network target."""
 import time
+import sys
 from pathlib import Path
 import read_reconnect_fixture_server as original
 
@@ -21,6 +22,25 @@ child_blocks = """
 """
 burst = next(line for line in original.CLAUDE.splitlines() if "range(96)" in line)
 original.CLAUDE = original.CLAUDE.replace(burst, burst + child_blocks, 1)
+# Optional test-only protocol peer; default original scenarios are unchanged.
+if len(sys.argv) > 2 and sys.argv[2] == "codex-children":
+    original.CODEX_VERSION = "0.166.0-alpha.1"
+    original.CODEX = original.CODEX.replace("'userAgent':'question-fixture'", "'userAgent':'codex_cli_rs/0.166.0-alpha.1'", 1)
+    original.CODEX = original.CODEX.replace("    elif m=='turn/steer':", "    elif m=='model/list': emit({'id':x['id'],'result':{'data':[{'model':'fixture-model','displayName':'Explicit synthetic pinned Codex','isDefault':True,'defaultReasoningEffort':'medium','supportedReasoningEfforts':[{'reasoningEffort':'medium','description':'fixture only'}]}]}})\n    elif m=='turn/steer':", 1)
+    codex_children = """
+        for child in ('codex-child-a','codex-child-b'):
+            emit({'method':'thread/started','params':{'thread':{'id':child,'cliVersion':'0.166.0-alpha.1','parentThreadId':'question-thread','source':{'subAgent':{'thread_spawn':{'parent_thread_id':'question-thread','depth':1}}}}}})
+            for _ in range(2): emit({'method':'item/agentMessage/delta','params':{'threadId':child,'turnId':'child-turn','itemId':'same-public-item','delta':'PUBLIC '+child}})
+            emit({'method':'item/started','params':{'threadId':child,'turnId':'child-turn','item':{'id':'same-tool','type':'commandExecution','command':'PRIVATE_CHILD_COMMAND_NOT_DISPLAYED','cwd':'PRIVATE_CHILD_PATH'}}})
+            emit({'method':'item/reasoning/textDelta','params':{'threadId':child,'turnId':'child-turn','itemId':'thinking','delta':'NEVER_EXPOSE_CODEX_CHILD_THINKING'}})
+            emit({'method':'thread/tokenUsage/updated','params':{'threadId':child,'turnId':'child-turn','tokenUsage':{'total':{'totalTokens':999999}}}})
+            emit({'method':'turn/completed','params':{'threadId':child,'turn':{'id':'child-turn','status':'completed'}}})
+        emit({'id':'foreign-child-approval','method':'item/commandExecution/requestApproval','params':{'threadId':'codex-child-a','turnId':'child-turn','itemId':'child-approval','command':'not approved','cwd':str(Path.cwd())}})
+"""
+    burst = next(line for line in original.CODEX.splitlines() if "range(96)" in line)
+    original.CODEX = original.CODEX.replace(burst, burst + codex_children, 1)
+    response = "    elif x.get('id')=='foreign-child-approval' and 'result' in x:\n        assert x['result']=={'decision':'decline'}\n        Path('child-declined-count').write_text('1')\n"
+    original.CODEX = original.CODEX.replace("    elif x.get('id')=='wire-question'", response + "    elif x.get('id')=='wire-question'", 1)
 Base = original.CompanionHandler
 
 
@@ -39,6 +59,13 @@ class Handler(Base):
                 import copy
                 value = copy.deepcopy(value)
                 value["result"]["capabilities"].pop("originalJobEvents", None)
+        if self.command == "GET" and "/events?" in self.path and (root / "corrupt-child-parent").exists():
+            import copy
+            value = copy.deepcopy(value)
+            for row in value.get("result", {}).get("events", []):
+                if row.get("childSourceProtocol") == "codex_public_child_v1":
+                    row["nativeParentThreadId"] = "foreign-parent"
+                    break
         if self.command == "GET" and "/events?" in self.path and (root / "hold-event-reads").exists():
             (root / "event-read-held").write_text("Original persisted event page prepared; do not acknowledge after page disposal")
             until = time.monotonic() + 8

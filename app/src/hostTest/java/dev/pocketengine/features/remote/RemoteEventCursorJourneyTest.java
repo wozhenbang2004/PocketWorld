@@ -35,9 +35,10 @@ public final class RemoteEventCursorJourneyTest {
         final CountDownLatch nativeReadEntered=new CountDownLatch(1);
         Process server;BufferedReader output;String base,task,worker;
         TaskStore tasks;FeatureHost host;RemoteModule remote;RemoteOwnerWorkflows owner;
-        Fixture(String worker)throws Exception {this.worker=worker;try{
-            Path repo=Path.of(System.getProperty("pocket.gateway.source",System.getProperty("user.dir"))).toAbsolutePath().normalize();
-            server=new ProcessBuilder(System.getProperty("pocket.gateway.python","python3"),"-B","-u",repo.resolve("companion/event_replay_fixture_server.py").toString(),root.toString()).directory(repo.resolve("companion").toFile()).redirectError(root.resolve("server-stderr.log").toFile()).start();
+        Fixture(String worker)throws Exception {this(worker,false);}
+        Fixture(String worker,boolean codexChildren)throws Exception {this.worker=worker;try{
+            Path repo=Path.of(java.util.Objects.requireNonNull(System.getProperty("pocket.gateway.source"),"pocket.gateway.source is required")).toAbsolutePath().normalize();
+            server=new ProcessBuilder(System.getProperty("pocket.gateway.python","python3"),"-B","-u",repo.resolve("companion/event_replay_fixture_server.py").toString(),root.toString(),codexChildren?"codex-children":"original").directory(repo.resolve("companion").toFile()).redirectError(root.resolve("server-stderr.log").toFile()).start();
             output=new BufferedReader(new InputStreamReader(server.getInputStream(),StandardCharsets.UTF_8));
             long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);while(!output.ready()&&server.isAlive()&&System.nanoTime()<until)Thread.sleep(5);
             assertTrue(readUtf8(root.resolve("server-stderr.log")),output.ready());base=new JSONObject(output.readLine()).getString("baseUrl");boot(true);

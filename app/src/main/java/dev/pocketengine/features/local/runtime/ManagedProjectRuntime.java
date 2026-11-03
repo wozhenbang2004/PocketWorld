@@ -73,6 +73,17 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
                 .put("ownerMessage",conservative?RuntimeLogObservationPolicy.UNKNOWN_MESSAGE:"")
                 .put("explicitLogLimitsChanged",false).put("executionPolicyChanged",false).put("resourceReleaseProved",false).put("energySavingsMeasured",false);
     }
+    /** Cached metadata only: no integrity rescan, process probe, command, logs or
+     * raw persisted identity/configuration. Fingerprints are hashes of identity
+     * values, not arbitrary strings copied out of a module snapshot. */
+    public JSONObject diagnosticMetadataForHost(dev.pocketengine.core.RunControl observation)throws Exception {
+        observation.check();AndroidRuntimePreparation profile=androidRuntime;
+        JSONObject facts=new JSONObject().put("androidProfilePresent",profile!=null).put("activeGenerationLoaded",profile!=null&&profile.ready())
+                .put("supervisorLoaded",jobs.available()).put("ptyAvailable",jobs.ptyAvailable()).put("duplexAvailable",jobs.pipesAvailable()).put("integrityRechecked",false)
+                .put("runtimeIdentityFingerprintSha256",ProjectSources.sha256(identity().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .put("catalogFingerprintSha256",profile==null?JSONObject.NULL:ProjectSources.sha256(profile.catalogIdentity().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        observation.check();return facts;
+    }
 
     /** Native Skill description from this same installed generation/tools. No
      * argv/executable/env is accepted from model or downloaded Skill metadata. */
