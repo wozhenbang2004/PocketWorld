@@ -79,6 +79,22 @@ public final class MediaModule implements EngineModule {
         return handleInternal(command, input, control, true);
     }
 
+    /** Package-private owner bridge. Neither handle nor handleForHost accepts a JSON download grant. */
+    JSONObject originalResultDownloadForOwner(String command,JSONObject input,RunControl control)throws Exception {
+        if(control==null||!control.hasHostRun()||!control.matchesHostRun(input.optString("_taskId"),input.optString("_runId"),input.optInt("_epoch")))throw new SecurityException("一次原结果下载需要原主人任务实时控制");
+        if(!command.matches("reviewResultDownload|confirmResultDownload"))throw new SecurityException("不是原结果下载审阅或确认");
+        control.check();final JSONObject config;
+        synchronized(this){
+            if(closed||active!=null)throw new IllegalStateException("媒体模块已关闭或已有原请求正在执行");
+            config=read();active=control;activeOperation=input.getString("operationId");
+        }
+        try{
+            control.check();String slot=config.optString("secretSlot"),key=slot.isEmpty()?"":context.secrets.get(slot);
+            JSONObject result=command.equals("reviewResultDownload")?jobs().reviewOriginalResultDownload(input,config,key,control):jobs().confirmOriginalResultDownload(input,config,key,control);
+            return result.put("liveHostControl",true).put("hostRunBound",true);
+        }finally{synchronized(this){if(active==control){active=null;activeOperation=null;}}}
+    }
+
     /** Existing host worker + dedicated observer control; no generic feature/model command exposes this. */
     public JSONObject observeProgress(JSONObject originalBinding, RunControl control, ComfyUiProgressObserver.Listener listener) throws Exception {
         if (control == null || !control.hasHostRun()) throw new SecurityException("进度观察需要原任务实时控制");
@@ -109,6 +125,7 @@ public final class MediaModule implements EngineModule {
     }
 
     private JSONObject handleInternal(String command, JSONObject input, RunControl control, boolean nativeControl) throws Exception {
+        if (command.matches("reviewResultDownload|confirmResultDownload")) throw new SecurityException("一次原结果下载只能由原生主人审阅入口授权");
         if (command.equals("configure")) return configure(input);
         if (command.equals("listJobs") || command.equals("getOperation")) {
             synchronized (this) { if (closed) throw new IllegalStateException("媒体模块已关闭"); }
