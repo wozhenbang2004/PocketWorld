@@ -78,7 +78,7 @@ public final class TeamParentHost {
                     coordinator.checkResearchOutput(selected);break;
                 }
                 case "artifacts":{JSONArray refs=artifacts(source,id,original);out=new JSONObject().put("teamRunId",id).put("artifacts",refs).put("complete",true).put("businessVerified",false);break;}
-                case "output":{JSONArray refs=artifacts(source,id,original);JSONObject exact=null;for(int i=0;i<refs.length();i++)if(args.getString("artifactId").equals(refs.getJSONObject(i).getString("artifactId")))exact=refs.getJSONObject(i);if(exact==null)throw new SecurityException("成果不属于原父团队当前冻结贡献");JSONObject actual=TeamWorkReview.artifact(workspace,exact);source.checkCurrent();tasks.checkTeamArtifact(exact,original);out=range(actual.getString("content"),args.optInt("offset",0),args.optInt("length",4000)).put("source",exact).put("immutable",true).put("businessVerified",false);break;}
+                case "output":{JSONArray refs=artifacts(source,id,original);JSONObject exact=null;for(int i=0;i<refs.length();i++)if(args.getString("artifactId").equals(refs.getJSONObject(i).getString("artifactId")))exact=refs.getJSONObject(i);if(exact==null)throw new SecurityException("成果不属于原父团队当前冻结贡献");JSONObject actual=TeamWorkReview.artifact(workspace,exact);source.checkCurrent();tasks.checkTeamArtifact(exact,original);out=artifactOutput(actual,args.optInt("offset",0),args.optInt("length",4000)).put("source",exact).put("immutable",true).put("businessVerified",false);break;}
                 case "question":{JSONObject question=tasks.teamParentQuestion(source,id,args.getString("assignmentId"),args.getString("questionId"));out=range(question.getString("question"),args.optInt("offset",0),args.optInt("length",4000)).put("assignmentId",args.getString("assignmentId")).put("questionId",question.getString("questionId")).put("state",question.getString("state"));break;}
                 case "review":{JSONObject review=writes.review(id,original).snapshot();out=new JSONObject().put("teamRunId",id).put("planHash",review.getString("planHash")).put("canIntegrate",review.getBoolean("canIntegrate")).put("incompleteAssignments",review.getJSONArray("incompleteAssignments")).put("files",review.getJSONObject("plan").getJSONArray("files")).put("requiresOwnerReview",true).put("businessVerified",false);break;}
                 case "integration":out=integration(id);break;
@@ -162,6 +162,16 @@ public final class TeamParentHost {
     }
     private static JSONObject envelope(JSONObject args)throws Exception {JSONObject input=new JSONObject(args.toString()).put("runId",args.getString("teamRunId")).put("expectedRevision",args.getLong("expectedTeamRevision")).put("expectedGeneration",args.getInt("expectedGeneration"));if(args.has("memberId"))input.put("recipientMemberId",args.getString("memberId"));return input;}
     public static JSONObject originalTextRange(String text,int offset,int length)throws Exception{return range(text,offset,length);}
+    /** Project only the actual verified kind; a native byte artifact is not an empty text page. */
+    static JSONObject artifactOutput(JSONObject actual,int offset,int length)throws Exception {
+        String kind=actual.getString("kind");
+        if("text_file".equals(kind))return range(actual.getString("content"),offset,length).put("kind",kind).put("contentAvailable",true);
+        if(!"binary_file".equals(kind)&&!"file_tombstone".equals(kind))throw new SecurityException("原冻结成果类型不支持此只读视图");
+        boolean tombstone="file_tombstone".equals(kind);
+        return new JSONObject().put("kind",kind).put("sizeBytes",actual.getLong("sizeBytes")).put("mimeType",actual.getString("mimeType"))
+                .put("contentAvailable",false).put("tombstone",tombstone).put("requiresNativeByteRead",!tombstone)
+                .put("message",tombstone?"这是原冻结成果的删除修订标记，无正文；不代表目标项目文件已删除":"所选成果保留完整原字节，此视图没有文字正文；请使用原生查看或导出入口");
+    }
     private static JSONObject range(String text,int offset,int length)throws Exception{if(offset<0||offset>text.length()||length<1||length>8000||offset>0&&offset<text.length()&&Character.isLowSurrogate(text.charAt(offset))&&Character.isHighSurrogate(text.charAt(offset-1)))throw new IllegalArgumentException("原成果范围无效或切断Unicode字符");int end=Math.min(text.length(),offset+length);if(end<text.length()&&end>offset&&Character.isHighSurrogate(text.charAt(end-1))&&Character.isLowSurrogate(text.charAt(end)))end--;if(end==offset&&offset<text.length())throw new IllegalArgumentException("此范围不能容纳一个完整Unicode字符，请增加length");return new JSONObject().put("content",text.substring(offset,end)).put("offset",offset).put("endOffset",end).put("totalChars",text.length()).put("complete",offset==0&&end==text.length()).put("hasMore",end<text.length()).put("rangeUnit","UTF16_code_units_no_split_surrogate");}
     private static String preview(String text,int length){int end=Math.min(length,text.length());if(end<text.length()&&end>0&&Character.isHighSurrogate(text.charAt(end-1)))end--;return text.substring(0,end);}
 }
