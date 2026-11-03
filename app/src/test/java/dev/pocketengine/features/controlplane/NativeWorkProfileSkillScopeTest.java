@@ -100,6 +100,42 @@ public final class NativeWorkProfileSkillScopeTest {
     private static boolean contains(JSONArray rows,String id)throws Exception {for(int i=0;i<rows.length();i++)if(id.equals(rows.getJSONObject(i).getString("id")))return true;return false;}
     private static JSONArray skillChoices(JSONObject choices)throws Exception{return choices.getJSONObject("sections").getJSONObject("skills").getJSONArray("items");}
     private File checkoutFile(JSONObject checkout,String path)throws Exception{return new File(app.getFilesDir(),"local-development/checkouts/"+checkout.getString("id")+"/"+path);}
+    /** Recreate the original Application admission that the retained legacy fixture predates.
+     * Native lifecycle ports have read dependencies even when inference calls no tools. Build
+     * those contracts from the real composition, then freeze only its actual read-only names. */
+    @SuppressWarnings("unchecked")
+    private JSONArray prepareLegacyReadOnlyRun(JSONObject task,NativeWorkProfileHost.Selection selected,RunControl original)throws Exception {
+        String id=task.getString("id"),run=task.getString("runId");
+        var controlsField=EngineApplication.class.getDeclaredField("capabilityControls");controlsField.setAccessible(true);
+        var controls=(java.util.concurrent.ConcurrentHashMap<String,RunControl>)controlsField.get(app);
+        assertNull(controls.putIfAbsent(id,original));
+        dev.pocketengine.core.CapabilityPort port=null;
+        try{
+            var factory=EngineApplication.class.getDeclaredMethod("capabilitiesForTask",String.class,RunControl.class,dev.pocketengine.core.PhonePort.class,ModelConfig.class,NativeWorkProfileHost.Selection.class);factory.setAccessible(true);
+            try{port=(dev.pocketengine.core.CapabilityPort)factory.invoke(app,id,original,null,selected.models().get("MAIN"),selected);}
+            catch(java.lang.reflect.InvocationTargetException failure){throw new AssertionError("Original legacy fixture capability admission failed",failure.getCause());}
+            // This direct native probe exposes its original exception instead of losing the
+            // phase behind the Runner's user-safe error. It performs no HTTP or tool dispatch.
+            port.beginRun(task.getString("goal"),original);
+            JSONObject prepared=port.prepareTurn(task.getString("goal"),0,0,original);
+            String reference=prepared.getJSONObject("reference").getString("context");
+            assertTrue(reference.contains("GLOBAL_REFERENCE_ONLY"));assertFalse(reference.contains(MARKER));
+            JSONArray readOnly=new JSONArray(),tools=port.tools();
+            for(int i=0;i<tools.length();i++){
+                String name=tools.getJSONObject(i).getJSONObject("function").getString("name");
+                if(!port.sideEffecting(name)){assertTrue(port.supports(name));readOnly.put(name);}
+            }
+            assertTrue(readOnly.length()>0);
+            app.tasks.authorizeTools(id,run,readOnly);
+            JSONObject admitted=app.tasks.get(id,false),scope=admitted.getJSONObject("executionScope");
+            assertEquals(readOnly.toString(),scope.getJSONArray("tools").toString());
+            assertEquals(0,scope.getInt("toolsUsed"));assertEquals(0,scope.getInt("modelCallsUsed"));
+            assertEquals(0,admitted.getJSONArray("operations").length());assertEquals(0,requests.size());
+            port.endRun(original);return new JSONArray(readOnly.toString());
+        }finally{
+            try{if(port!=null)port.close();}finally{assertTrue(controls.remove(id,original));}
+        }
+    }
     private static void assertHarnessReference(JSONObject payload,JSONObject selected,String body,String excluded)throws Exception {
         assertEquals("pocketworld.harness-reference-assets.v1",payload.getString("format"));assertFalse(payload.getBoolean("permissionsChanged"));assertFalse(payload.getBoolean("scriptsExecutable"));
         JSONArray assets=payload.getJSONArray("assets");assertEquals(1,assets.length());JSONObject asset=assets.getJSONObject(0);
@@ -183,18 +219,18 @@ public final class NativeWorkProfileSkillScopeTest {
                 public JSONObject target(JSONObject ref,RunControl control)throws Exception{return current.target(ref,control);}
                 public Set<String> hostCapabilities()throws Exception{return current.hostCapabilities();}
             };
-            var oldHost=new NativeWorkProfileHost(app.settings,legacy);var page=oldHost.newOwnerPage();page.setForeground(true);JSONObject task;
+            var oldHost=new NativeWorkProfileHost(app.settings,legacy);var page=oldHost.newOwnerPage();page.setForeground(true);JSONObject task;JSONArray originalTools;
             try{
                 JSONObject saved=page.save("",0,"Original legacy reference",definition(global));var review=page.review(saved.getString("profileId"),1,new RunControl());assertFalse(review.view().has("skillScope"));
                 RunControl control=new RunControl();var selected=page.select(review,review.digest,control);JSONObject pending=app.tasks.createCapabilityTaskWithWorkProfile("Continue the existing global reference","",selected,control);
                 app.tasks.configureExecutionScope(pending.getString("id"),0,System.currentTimeMillis()+300000,8,4);task=app.tasks.startAttemptWithWorkProfile(pending.getString("id"),"capabilities",8,selected,control);
                 var ownerField=EngineApplication.class.getDeclaredField("projectOwnerWorkflows");ownerField.setAccessible(true);((ProjectOwnerWorkflows)ownerField.get(app)).bindWorkProfileProject(selectedProject(checkoutA),task,control);
-                // This manually retained old run must contain its original read-only grant.
-                // A later continuation may intersect it, never fill an empty frozen tool set.
-                app.tasks.authorizeTools(task.getString("id"),task.getString("runId"),new JSONArray().put("project_inspect"));
+                // Retain the original Application's read-only grant, not a hand-written tool
+                // subset that omits a mounted port's lifecycle dependency on cold continuation.
+                originalTools=prepareLegacyReadOnlyRun(task,selected,control);
                 var references=app.nativeWorkProfiles().harnessReferencesForRun(app.tasks,task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control);
                 assertNotNull(references);references.checkCurrent();assertHarnessReference(references.view(),global,"GLOBAL_REFERENCE_ONLY",MARKER);
-                assertEquals(new JSONArray().put("project_inspect").toString(),app.tasks.get(task.getString("id"),false).getJSONObject("executionScope").getJSONArray("tools").toString());
+                assertEquals(originalTools.toString(),app.tasks.get(task.getString("id"),false).getJSONObject("executionScope").getJSONArray("tools").toString());
                 app.tasks.endAttempt(task.getString("id"),task.getString("runId"),"awaiting_user","Original read-only fixture stopped before inference",new JSONObject());
             }finally{page.close();}
             TaskStore reopened=new TaskStore(app);try{
@@ -213,7 +249,7 @@ public final class NativeWorkProfileSkillScopeTest {
                 JSONObject result=app.continueOwnerWorkProfile(task.getString("id"),null,selected,next);assertEquals(task.getString("id"),result.getString("taskId"));assertEquals(1,app.tasks.list().length());
                 JSONObject continued=app.tasks.get(task.getString("id"),false),scope=continued.getJSONObject("executionScope");assertEquals(task.getInt("coordinatorEpoch")+1,continued.getInt("coordinatorEpoch"));
                 for(String field:new String[]{"revision","deadlineAt","toolLimit","modelCallLimit"})assertEquals(originalScope.get(field),scope.get(field));
-                assertEquals(new JSONArray().put("project_inspect").toString(),scope.getJSONArray("tools").toString());assertEquals(originalScope.getJSONArray("tools").toString(),scope.getJSONArray("tools").toString());assertEquals(0,continued.getJSONArray("operations").length());return result;
+                assertEquals(originalTools.toString(),scope.getJSONArray("tools").toString());assertEquals(originalScope.getJSONArray("tools").toString(),scope.getJSONArray("tools").toString());assertEquals(0,continued.getJSONArray("operations").length());return result;
             }finally{originalPage.close();}
         }).get(40,TimeUnit.SECONDS);assertEquals(continuedResult.toString(),1,requests.size());boolean delivered=false;
         JSONArray messages=requests.get(0).getJSONArray("messages");for(int i=0;i<messages.length();i++){JSONObject message=messages.getJSONObject(i);String content=message.optString("content");assertFalse("Old global pin must not gain the shadowing project source",content.contains(MARKER));if(content.contains("GLOBAL_REFERENCE_ONLY")){delivered=true;assertEquals("user",message.getString("role"));assertTrue(content.contains("<host_reference_data>"));}}assertTrue("Legacy cold continuation must read its original global body through the actual Runner",delivered);
