@@ -34,8 +34,8 @@ public final class NativeToolPlanBoundaryTest {
         RunControl phoneControl=original();NativeToolPlan phone=NativeToolPlan.capture("phone_prepare_sequence","phone-operation",phoneControl,phone(),1,(index,actual)->waitStep(),()->{});
         phone.consume("phone_prepare_sequence","phone-operation",phoneControl);assertThrows(SecurityException.class,()->phone.next(phoneControl));
     }
-    @Test public void phoneCaptureDoesNotGainReplayRouteAndFreshTreeRequirementsRemainStrict()throws Exception {
-        RunControl control=original();assertThrows(IllegalArgumentException.class,()->NativeToolPlan.capture("phone_replay_route","operation",control,phone(),1,(index,actual)->waitStep(),()->{}));
+    @Test public void phoneCaptureCannotUseBrowserParentAndFreshTreeRequirementsRemainStrict()throws Exception {
+        RunControl control=original();assertThrows(IllegalArgumentException.class,()->NativeToolPlan.capture("browser_task_prepare_sequence","operation",control,phone(),1,(index,actual)->waitStep(),()->{}));
         assertThrows(IllegalArgumentException.class,()->new NativeToolPlan.Resolved(NativeToolPlan.Tool.CLICK_NODE,new JSONObject().put("observationId","o").put("nodeId","n"),()->{}));
         assertThrows(IllegalArgumentException.class,()->new NativeToolPlan.Resolved(NativeToolPlan.Tool.BROWSER_CLICK,new JSONObject().put("tabId","tab").put("observationId","o").put("ref","n0"),()->{}));
         assertThrows(IllegalArgumentException.class,()->new NativeToolPlan.Resolved(NativeToolPlan.Tool.BROWSER_WAIT,new JSONObject().put("tabId","tab").put("condition","load").put("approvalId","model-provided"),()->{}));

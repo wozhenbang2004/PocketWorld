@@ -12,6 +12,8 @@ import dev.pocketengine.runtime.context.ContextWindow;
 import dev.pocketengine.store.TaskStore;
 import dev.pocketengine.testutil.HttpServer;
 import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -38,6 +40,15 @@ public final class EvaluationNativeJourneyTest {
     private NativeEvaluationHost host;private NativeEvaluationHost.Page page;private JSONObject study,lastTask;
     private final AtomicInteger requests=new AtomicInteger();private RunControl retained;
     private NativeEvaluationHost.Completion delayed;private String behavior="success";private boolean queued,rejectQueue;
+    // Android35's declared java.base omits Files.readString/writeString. Keep their
+    // strict UTF8 behavior and ordinary CREATE/TRUNCATE write semantics in this fixture.
+    private static String readUtf8File(Path path)throws java.io.IOException{
+        return StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(Files.readAllBytes(path))).toString();
+    }
+    private static void writeUtf8File(Path path,String text)throws java.io.IOException{
+        ByteBuffer encoded=StandardCharsets.UTF_8.newEncoder().encode(CharBuffer.wrap(text));
+        byte[] bytes=new byte[encoded.remaining()];encoded.get(bytes);Files.write(path,bytes);
+    }
     @Before public void open()throws Exception{
         Application app=RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");tasks=new TaskStore(app);root=Files.createTempDirectory("native-evaluation");
         server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.createContext("/",exchange->{
@@ -73,8 +84,8 @@ public final class EvaluationNativeJourneyTest {
         if("handover".equals(behavior)&&count==0)return response(message.put("tool_calls",call("run_ask_user",new JSONObject().put("question","请核对合成任务前提"))));
         if(count==0)return response(message.put("tool_calls",call(SyntheticEvaluationPort.READ,new JSONObject())));
         if(count==1){
-            if("source-change".equals(behavior))Files.writeString(SyntheticEvaluationPort.directory(root,lastTask.getString("id")).resolve("source.json"),"{\"changed\":true}");
-            if("unknown-write".equals(behavior))Files.writeString(SyntheticEvaluationPort.directory(root,lastTask.getString("id")).resolve("result.json.pending"),"uncertain original write");
+            if("source-change".equals(behavior))writeUtf8File(SyntheticEvaluationPort.directory(root,lastTask.getString("id")).resolve("source.json"),"{\"changed\":true}");
+            if("unknown-write".equals(behavior))writeUtf8File(SyntheticEvaluationPort.directory(root,lastTask.getString("id")).resolve("result.json.pending"),"uncertain original write");
             assertNotNull("actual source tool output must reach provider",source);JSONObject expected=EvaluationDataset.expected(source.getString("sourceId"));
             JSONObject args=new JSONObject().put("sourceId",source.getString("sourceId")).put("sourceRevision",source.getLong("sourceRevision")).put("sourceSha256",source.getString("sourceSha256"))
                     .put("count",expected.getInt("count")).put("totalCents",behavior.startsWith("wrong")?expected.getLong("totalCents")+1:expected.getLong("totalCents"));
@@ -97,7 +108,7 @@ public final class EvaluationNativeJourneyTest {
     }
     @Test public void modelClaimIsScoredSeparatelyFromFalseSuccessAndHonestFailure()throws Exception{
         behavior="wrong-claim";JSONObject falseSuccess=trial("tune-a","baseline");assertEquals("false_success",probe(falseSuccess).getString("classification"));assertFalse(probe(falseSuccess).getBoolean("effectMatches"));
-        Path file=SyntheticEvaluationPort.directory(root,falseSuccess.getString("id")).resolve("result.json");JSONObject changed=new JSONObject(Files.readString(file)).put("totalCents",EvaluationDataset.expected("tune-a").getLong("totalCents"));Files.writeString(file,changed.toString());
+        Path file=SyntheticEvaluationPort.directory(root,falseSuccess.getString("id")).resolve("result.json");JSONObject changed=new JSONObject(readUtf8File(file)).put("totalCents",EvaluationDataset.expected("tune-a").getLong("totalCents"));writeUtf8File(file,changed.toString());
         page.command("probe",new JSONObject().put("taskId",falseSuccess.getString("id")));JSONObject altered=probe(tasks.get(falseSuccess.getString("id"),false));assertTrue(altered.getBoolean("effectMatches"));assertEquals("harness_error",altered.getString("classification"));assertFalse(altered.getBoolean("passed"));
         behavior="wrong-honest";JSONObject honest=trial("tune-a","verify-first");assertEquals("actual_failure",probe(honest).getString("classification"));assertFalse(probe(honest).getBoolean("reportedComplete"));
     }

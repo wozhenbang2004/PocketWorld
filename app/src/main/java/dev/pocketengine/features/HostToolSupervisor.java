@@ -7,6 +7,7 @@ import dev.pocketengine.features.plugins.PluginsModule;
 import dev.pocketengine.features.skills.SkillsModule;
 import dev.pocketengine.store.TaskStore;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -33,6 +34,9 @@ public final class HostToolSupervisor implements CapabilityPort {
     private long admittedMemoryRevision;
     private dev.pocketengine.features.memory.TaskMemoryUse taskMemory;
     private dev.pocketengine.features.memory.TaskMemoryUse.Selection memorySelection;
+    private final Map<String,dev.pocketengine.features.memory.TaskMemoryUse.Selection> toolMemorySelections=new LinkedHashMap<>();
+    private long toolMemoryGeneration;
+    private boolean toolMemoryEnded;
     private dev.pocketengine.features.memory.TaskMemoryUse.TaskRef memoryTask;
     private dev.pocketengine.features.memory.TaskMemoryJournal.Intent memoryIntent;
     private dev.pocketengine.features.memory.MemoryHostFence memoryFence;
@@ -73,8 +77,8 @@ public final class HostToolSupervisor implements CapabilityPort {
             dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture,dev.pocketengine.features.controlplane.WorkProfileToolSelection workProfile)throws Exception{
         this.host=java.util.Objects.requireNonNull(host);this.tasks=java.util.Objects.requireNonNull(tasks);this.taskId=catalogueOnly?null:identifier(taskId);this.runId=catalogueOnly?null:identifier(runId);this.epoch=epoch;this.allowWrites=allowWrites;
         this.outputCapture=outputCapture;this.workProfile=workProfile;if(!catalogueOnly&&workProfile==null&&tasks.get(this.taskId,false).optJSONObject("workProfileRef")!=null)throw new SecurityException("此任务已冻结工作配置，必须接入原生准确选用；没有继承全局工具");
-        add("memory","search","memory_search","检索主人私人记忆，只返回真实已保存记录。可用queries补充至多3条同义/语义短查询；原query始终保留，不增加模型请求或来源权限。",false,props("query",text(8000),"queries",querySuggestions(),"limit",integer(1,100)),"query");
-        add("memory","recall","memory_recall","按当前问题召回主人私人记忆及来源。可用queries补充至多3条同义/语义短查询；原query始终保留，不增加模型请求或来源权限。",false,props("query",text(8000),"queries",querySuggestions(),"limit",integer(1,20)),"query");
+        add("memory","search","memory_search","检索主人私人记忆，只返回真实已保存记录。可用queries补充至多3条同义/语义短查询，constraints按时间、实体、来源缩小范围并限制0至2跳稳定身份关系。时间界限是含端点的Unix毫秒，event时间未知会排除，updated不是事发时间；entityIds仅接受已有稳定身份。原query保留，不增加模型请求或读取权限；摘要不是原件，相关不代表事实或因果。",false,props("query",text(8000),"queries",querySuggestions(),"constraints",dev.pocketengine.features.memory.MemoryRecallConstraints.schema(),"limit",integer(1,100)),"query");
+        add("memory","recall","memory_recall","按当前问题召回主人私人记忆及来源。可用queries补充至多3条同义/语义短查询，constraints按时间、实体、来源缩小范围并限制0至2跳稳定身份关系。时间界限是含端点的Unix毫秒，event时间未知会排除，updated不是事发时间；entityIds仅接受已有稳定身份。原query保留，不增加模型请求或读取权限；历史不自动代表当前事实，原件可经memory_history_search回读。",false,props("query",text(8000),"queries",querySuggestions(),"constraints",dev.pocketengine.features.memory.MemoryRecallConstraints.schema(),"limit",integer(1,20)),"query");
         add("memory","$method_decision","memory_method_decision","记录本任务对准确经验版本的明确采用/不适用/未选决定与理由。apply须关联本task/run已经返回确定回执的1至8个stepOperationIds，可从memory_raw_query(section=operations)取得原operationId。只记录决定和原步骤关系，不证明方法语义有效或导致业务成功，不执行或重试任何步骤。",true,
                 props("recordId",text(240),"revision",new JSONObject().put("type","integer").put("minimum",1).put("maximum",Long.MAX_VALUE),"decision",new JSONObject().put("type","string").put("enum",new JSONArray().put("apply").put("not_applicable").put("not_selected")),"reason",text(1000),"stepOperationIds",new JSONObject().put("type","array").put("maxItems",8).put("items",text(80))),"recordId","revision","decision","reason","stepOperationIds");
         add("workspace","$projects","workspace_projects","列出实际本地工作区项目。",false,new JSONObject());
@@ -123,6 +127,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         workingControl=java.util.Objects.requireNonNull(original);
         if(projectMemory!=null)projectMemory.requireOriginal(original,taskId,runId,epoch);
         memoryControl=original;
+        synchronized(toolMemorySelections){toolMemorySelections.clear();toolMemoryEnded=false;toolMemoryGeneration++;}
         workingFence=new dev.pocketengine.features.memory.MemoryHostFence(){
             public void check()throws Exception{synchronized(tasks){if(memoryControl!=original)throw new SecurityException("工作记忆的原控制已结束");tasks.checkExtensionRun(taskId,runId,epoch,original);}}
             public JSONObject admit(Admission action)throws Exception{synchronized(tasks){check();return action.run();}}
@@ -162,9 +167,28 @@ public final class HostToolSupervisor implements CapabilityPort {
         try{return working.snapshot();}catch(IllegalStateException ended){workingFence.check();closeWorking();return null;}
     }
     private void closeWorking(){var previous=working;RunControl owner=workingControl;Runnable cancelled=workingCancellation;working=null;workingControl=null;workingFence=null;workingCancellation=null;if(owner!=null&&cancelled!=null)owner.removeCancelAction(cancelled);if(previous!=null)host.releaseWorkingMemory(previous);}
-    @Override public void endRun(RunControl original){closeWorking();}
-    @Override public void close(){try{modelRequestAbandoned("");}catch(Exception ignored){}if(nativeDevicePort!=null)nativeDevicePort.close();nativeDevicePort=null;nativeDeviceRoutes=null;if(finalCapabilities!=null)finalCapabilities.invalidate();finalCapabilities=null;closeWorking();taskMemory=null;memorySelection=null;memoryTask=null;memoryControl=null;memoryFence=null;projectMemory=null;}
+    private void endToolMemorySelections(){synchronized(toolMemorySelections){toolMemoryEnded=true;toolMemoryGeneration++;toolMemorySelections.clear();}}
+    @Override public void endRun(RunControl original){endToolMemorySelections();closeWorking();}
+    @Override public void close(){try{modelRequestAbandoned("");}catch(Exception ignored){}if(nativeDevicePort!=null)nativeDevicePort.close();nativeDevicePort=null;nativeDeviceRoutes=null;if(finalCapabilities!=null)finalCapabilities.invalidate();finalCapabilities=null;endToolMemorySelections();closeWorking();taskMemory=null;memorySelection=null;memoryTask=null;memoryControl=null;memoryFence=null;projectMemory=null;}
+    private void retainToolMemorySelection(dev.pocketengine.features.memory.TaskMemoryUse.Selection selected)throws Exception{
+        JSONObject metadata=selected.metadata(),identity=new JSONObject().put("contextDigest",metadata.getString("contextDigest")).put("records",metadata.getJSONArray("records"));
+        for(String field:new String[]{"retrievalDependencies","memoryNamespace"})if(metadata.has(field))identity.put(field,metadata.get(field));
+        String digest=TaskStore.capabilityFingerprint(identity);synchronized(toolMemorySelections){
+            if(toolMemoryEnded)throw new SecurityException("原run已经结束，未保留迟到选择");
+            if(!toolMemorySelections.containsKey(digest)&&toolMemorySelections.size()>=16)throw new IllegalStateException("本run已达到16份不同记忆检索选择上限；未交付新正文");
+            toolMemorySelections.putIfAbsent(digest,selected);
+        }
+    }
+    private void validateToolMemorySelections(RunControl original)throws Exception{
+        List<dev.pocketengine.features.memory.TaskMemoryUse.Selection> selected;long generation;synchronized(toolMemorySelections){if(toolMemoryEnded)throw new SecurityException("原run已经结束，未接受旧回调");generation=toolMemoryGeneration;selected=new java.util.ArrayList<>(toolMemorySelections.values());}
+        if(selected.isEmpty())return;if(original!=memoryControl||taskMemory==null||memoryFence==null)throw new SecurityException("检索选择不属于原run");
+        for(var selection:selected)try{taskMemory.validateTaskMemorySelection(privateScope(),selection,memoryFence);}
+        catch(InterruptedException cancelled){throw cancelled;}
+        catch(Exception unavailable){original.check();throw new dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable(unavailable);}
+        synchronized(toolMemorySelections){if(toolMemoryEnded||generation!=toolMemoryGeneration)throw new SecurityException("检索校验期间原run已经结束");}
+    }
     @Override public boolean responseCurrent(RunControl original)throws Exception{
+        validateToolMemorySelections(original);
         if(workProfile!=null)try{workProfile.checkCurrent();}catch(Exception withdrawn){original.check();return false;}
         if(projectMemory!=null)projectMemory.requireOriginal(original,taskId,runId,epoch);
         host.checkTeamResearchParentInputs(taskId,runId,epoch,original);
@@ -180,6 +204,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     }
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl original)throws Exception{
         if(workProfile!=null)workProfile.checkCurrent();host.checkTeamResearchParentInputs(taskId,runId,epoch,original);
+        validateToolMemorySelections(original);
         if(nativeDevicePort!=null)nativeDevicePort.beforeModelRequest(requestId,messages,original);
         if(taskMemory==null||memorySelection==null)return;if(original!=memoryControl)throw new SecurityException("记忆发送不是原执行控制");
         if(admittedMemoryRevision!=host.memoryContextRevision())throw new SecurityException("参考上下文已变化，尚未提供旧片段");
@@ -197,6 +222,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             tasks.prepareMemoryReference(memoryIntent,original);return new JSONObject();});
     }
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl original)throws Exception{
+        validateToolMemorySelections(original);
         JSONObject device=nativeDevicePort==null?null:nativeDevicePort.afterModelResponse(requestId,answerId,original);
         if(memoryIntent==null||!requestId.equals(memoryIntent.requestId))return device;
         JSONObject memory=memoryFence.admit(()->{
@@ -303,7 +329,10 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(tool.preset!=null&&!pluginCurrent(name,tool))throw new CapabilityPort.Unavailable();
         JSONObject args=arguments==null?new JSONObject():arguments;if(args.toString().length()>131072)throw new IllegalArgumentException("工具参数过大");
         java.util.Iterator<String> keys=args.keys();while(keys.hasNext()){String key=keys.next();if(key.startsWith("_")||key.matches("taskId|runId|principalId|spaceId|ownerId|scope|epoch|coordinatorEpoch|feature|command"))throw new SecurityException("工具参数不能覆盖宿主身份或执行路由");}
-        PluginRules.validateArguments(args,tool.schema);if(workProfile!=null&&tool.feature.equals("skills")&&Set.of("$skills_read","$skill_reference_decision","$skill_execute").contains(tool.command)){if(profileCheck==null)workProfile.requireSkillRequest(args);else workProfile.requireSkillRequest(args,profileCheck);}
+        PluginRules.validateArguments(args,tool.schema);
+        if(tool.feature.equals("memory")&&Set.of("search","recall").contains(tool.command)&&(args.has("queries")||args.has("constraints")))
+            dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.has("queries")?args.getJSONArray("queries"):new JSONArray(),args.has("constraints")?args.getJSONObject("constraints"):new JSONObject());
+        if(workProfile!=null&&tool.feature.equals("skills")&&Set.of("$skills_read","$skill_reference_decision","$skill_execute").contains(tool.command)){if(profileCheck==null)workProfile.requireSkillRequest(args);else workProfile.requireSkillRequest(args,profileCheck);}
         if(tool.feature.equals("teams")&&name.startsWith("teams_"))dev.pocketengine.features.teams.TeamParentTools.validate(name,args);
     }
     /** Withdraw or changed-install metadata can never repoint an old model decision. */
@@ -375,17 +404,17 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         else if(projectMemory!=null&&tool.feature.equals("memory")){
             if(!java.util.Set.of("search","recall").contains(tool.command)||memoryControl!=control||taskMemory==null||memoryFence==null)throw new SecurityException("本run项目记忆没有全局记忆或方法执行后门");host.synchronizeMemory(privateScope());
-            var selected=args.has("queries")?taskMemory.prepareSemanticTaskRecall(privateScope(),memoryTask,dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.getJSONArray("queries")),Math.min(16,args.optInt("limit",6)),12000,memoryFence):taskMemory.prepareTaskRecall(privateScope(),memoryTask,args.getString("query"),Math.min(16,args.optInt("limit",6)),12000,memoryFence);
-            result=memoryFence.admit(()->{JSONObject snapshot=taskMemory.validateTaskMemorySelection(privateScope(),selected,memoryFence);tasks.prepareMemoryToolReference(name,selected,control);return snapshot;});
+            var selected=args.has("queries")||args.has("constraints")?taskMemory.prepareSemanticTaskRecall(privateScope(),memoryTask,dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.optJSONArray("queries")==null?new JSONArray():args.getJSONArray("queries"),args.optJSONObject("constraints")==null?new JSONObject():args.getJSONObject("constraints")),Math.min(16,args.optInt("limit",6)),12000,memoryFence):taskMemory.prepareTaskRecall(privateScope(),memoryTask,args.getString("query"),Math.min(16,args.optInt("limit",6)),12000,memoryFence);
+            result=memoryFence.admit(()->{JSONObject snapshot=taskMemory.validateTaskMemorySelection(privateScope(),selected,memoryFence);retainToolMemorySelection(selected);tasks.prepareMemoryToolReference(name,selected,control);return snapshot.put("ok",true);});
         }
-        else if(tool.feature.equals("memory")&&java.util.Set.of("search","recall").contains(tool.command)&&args.has("queries")){
+        else if(tool.feature.equals("memory")&&java.util.Set.of("search","recall").contains(tool.command)&&(args.has("queries")||args.has("constraints"))){
             if(memoryControl!=control||taskMemory==null||memoryTask==null||memoryFence==null)throw new SecurityException("原任务记忆选择尚未绑定，未放宽来源读取");
             host.synchronizeMemory(privateScope());
-            var plan=dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.getJSONArray("queries"));
+            var plan=dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.optJSONArray("queries")==null?new JSONArray():args.getJSONArray("queries"),args.optJSONObject("constraints")==null?new JSONObject():args.getJSONObject("constraints"));
             var selected=taskMemory.prepareSemanticTaskRecall(privateScope(),memoryTask,plan,Math.min(16,args.optInt("limit",6)),12000,memoryFence);
             result=memoryFence.admit(()->{
                 JSONObject snapshot=taskMemory.validateTaskMemorySelection(privateScope(),selected,memoryFence);
-                tasks.prepareMemoryToolReference(name,selected,control);return snapshot;
+                retainToolMemorySelection(selected);tasks.prepareMemoryToolReference(name,selected,control);return snapshot.put("ok",true);
             });
         }
         else if(tool.command.equals("$projects"))result=new JSONObject().put("projects",module.snapshot().getJSONArray("projects"));
