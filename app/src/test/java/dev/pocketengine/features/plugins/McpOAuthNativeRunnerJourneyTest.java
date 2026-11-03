@@ -35,7 +35,7 @@ import static org.junit.Assert.*;
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class McpOAuthNativeRunnerJourneyTest {
     private static final String PROVIDER="SyntheticMcpOAuthKeyStore";
-    @Before public void before(){Provider provider=new Provider(PROVIDER,"1","Known fixture key only, not Android hardware"){};provider.put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());Security.addProvider(provider);RuntimeEnvironment.getApplication().getSharedPreferences("feature_secrets",Context.MODE_PRIVATE).edit().clear().commit();RuntimeEnvironment.getApplication().deleteDatabase("pocket-world.db");}
+    @Before public void before(){Provider provider=new Provider(PROVIDER,1.0,"Known fixture key only, not Android hardware"){};provider.put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());Security.addProvider(provider);RuntimeEnvironment.getApplication().getSharedPreferences("feature_secrets",Context.MODE_PRIVATE).edit().clear().commit();RuntimeEnvironment.getApplication().deleteDatabase("pocket-world.db");}
     @After public void after(){Security.removeProvider(PROVIDER);ContextBudgetPolicy.installHostSource(c->null);}
     private static String id(){return UUID.randomUUID().toString();}
     private static JSONObject config(McpOAuthTlsFixture wire)throws Exception{return new JSONObject().put("id","oauth-native").put("name","原任务授权工具").put("endpoint",wire.resource()).put("protocolVersion",McpData.VERSION);}

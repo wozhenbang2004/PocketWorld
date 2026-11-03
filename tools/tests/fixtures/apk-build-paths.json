@@ -15,6 +15,8 @@
     "display-helper/src/dev/pocketengine/displayhelper/DisplayEngine.java",
     "tools/build-display-helper.sh",
     "tools/build-android-runtime.py",
+    "tools/app-version.py",
+    "tools/tests/test_app_version.py",
     "tools/build.sh",
     "build.gradle",
     "settings.gradle",

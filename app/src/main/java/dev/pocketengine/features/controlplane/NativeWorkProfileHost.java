@@ -21,12 +21,30 @@ public final class NativeWorkProfileHost {
     public void claimOwnerExecutionStart(Selection selected,RunControl original)throws Exception {
         if(selected==null||selected.issuer!=this)throw new SecurityException("original_native_work_profile_owner_required");selected.claimOwnerStart(original);selected.checkCurrent(original);
     }
+    /** A saved Profile cannot replace the opaque project reviewed by its native page. */
+    public void requireProjectSelection(Selection selected,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project,RunControl original)throws Exception {
+        requireOwnedSelection(selected,original);WorkProfileResolver.requireStoredSkillScope(selected.snapshot(),sources.forProject(project,original),original);selected.checkCurrent(original);
+    }
+    /** Called outside TaskStore's monitor after its original developmentContext binding.
+     * Later Profile checks derive scope from this same task; no JSON minting or second run. */
+    public void bindOriginalTaskScope(dev.pocketengine.store.TaskStore tasks,String id,Selection selected,RunControl original)throws Exception {
+        requireOwnedSelection(selected,original);JSONObject task=tasks.get(id,false);
+        selected.requireBoundRun(id,task.getString("runId"),task.getInt("coordinatorEpoch"),original);
+        WorkProfileResolver.Sources current=sources.forTask(tasks,id,original);WorkProfileResolver.requireStoredSkillScope(selected.snapshot(),current,original);
+        synchronized(selected){
+            selected.requireBoundRun(id,task.getString("runId"),task.getInt("coordinatorEpoch"),original);
+            if(selected.scopeTasks!=null&&selected.scopeTasks!=tasks)throw new SecurityException("original_work_profile_task_store_changed");
+            selected.scopeTasks=tasks;if(selected.boundScopeSources==null)selected.boundScopeSources=current;
+        }
+        selected.checkCurrent(original);
+    }
     /** Reuses the original run's frozen metadata. This only removes tools; it never starts/resumes a run. */
     public WorkProfileToolSelection toolSelectionForRun(dev.pocketengine.store.TaskStore tasks, String id, String run, int epoch, RunControl original) throws Exception {
         JSONObject frozen = tasks.workProfileRunSnapshot(id, run, epoch); String digest = frozen.getString("resolutionDigest");
         dev.pocketengine.core.CapabilitySnapshot.CurrentCheck full = () -> tasks.checkWorkProfileRun(id, run, epoch, digest, original);
         dev.pocketengine.core.CapabilitySnapshot.CurrentCheck binding = () -> tasks.checkWorkProfileCapabilityBinding(id,run,epoch,digest,original);
-        dev.pocketengine.core.CapabilitySnapshot.CurrentCheck source = () -> WorkProfileResolver.checkStoredAssetSourcesCurrent(frozen,sources,original);
+        WorkProfileResolver.Sources taskSources=sources.forTask(tasks,id,original);
+        dev.pocketengine.core.CapabilitySnapshot.CurrentCheck source = () -> WorkProfileResolver.checkStoredAssetSourcesCurrent(frozen,taskSources,original);
         WorkProfileToolSelection policy = new WorkProfileToolSelection(frozen, () -> { full.check(); source.check(); }, binding,source,
             (tool,operation,args,supplied)->{if(supplied!=original)throw new SecurityException("original_profile_control_required");tasks.checkWorkProfilePreparedTool(id,run,epoch,digest,tool,operation,args,original);});
         policy.checkCurrent(); return policy;
@@ -47,7 +65,7 @@ public final class NativeWorkProfileHost {
         if(review==null||!review.issuedBy(tasks))throw new SecurityException("original_gateway_profile_review_required");review.checkCurrent();JSONObject scope=review.view(),task=tasks.get(scope.getString("parentTaskId"),false);
         if(task.optJSONObject("workProfileRef")==null){if(task.optJSONObject("workProfileIntent")!=null)throw new SecurityException("待启动工作配置须先回原任务入口审阅；仅网关恢复不能创建首次授权");return null;}
         JSONObject frozen=tasks.workProfileRunSnapshot(scope.getString("parentTaskId"),scope.getString("previousParentRunId"),scope.getInt("previousParentEpoch"));RunControl observation=new RunControl();
-        GatewayReview inspected=new GatewayReview(this,tasks,review,frozen,WorkProfileResolver.resolveStored(frozen,sources,observation),observation);inspected.checkCurrent();return inspected;
+        GatewayReview inspected=new GatewayReview(this,tasks,review,frozen,WorkProfileResolver.resolveStored(frozen,sources.forTask(tasks,scope.getString("parentTaskId"),observation),observation),observation);inspected.checkCurrent();return inspected;
     }
     /** Metadata only: listing saved references never contacts a model or target. The original
      * parent scope must already exist; a pending goal cannot acquire its first scope here. */
@@ -80,7 +98,7 @@ public final class NativeWorkProfileHost {
         if(!definition.getJSONObject("modelPolicies").has("RELAY"))throw new SecurityException("此仅网关入口须明确选择Profile的API RELAY");
         for(String field:new String[]{"pluginRefs","extensionRefs"})if(definition.getJSONArray(field).length()!=0)throw new SecurityException("远端MCP/扩展授权投射尚未接入，请保留编辑；文本参考不复制工具权限");
         if(!definition.isNull("teamTemplateRef"))throw new SecurityException("仅网关入口不启动团队或应用团队模板");
-        RunControl observation=new RunControl();var resolution=WorkProfileResolver.resolve(profile,sources,observation);
+        RunControl observation=new RunControl();var resolution=WorkProfileResolver.resolve(profile,sources.forTask(tasks,review.view().getString("parentTaskId"),observation),observation);
         if(!resolution.view().getBoolean("ready")){JSONArray blocked=new JSONArray(),items=resolution.view().getJSONArray("items");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);if(!item.getBoolean("included")&&!item.getBoolean("optional")){JSONObject row=new JSONObject().put("kind",item.getString("kind")).put("id",item.getString("id")).put("status",item.getString("status"));JSONObject evidence=item.optJSONObject("sourceEvidence");if(evidence!=null)row.put("reasonCode",evidence.optString("reasonCode"));blocked.put(row);}}throw new SecurityException("工作配置来源尚未就绪，未发行新run："+blocked);}
         resolution.requireReady();
         JSONObject frozen=resolution.view().put("definition",definition);requireGatewayTargetScope(frozen,review.view());
@@ -136,7 +154,7 @@ public final class NativeWorkProfileHost {
         }
         public void checkCurrent()throws Exception {
             bindingCurrent();issuer.sources.checkModel(captured,"RELAY",original);
-            WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen),issuer.sources,original);bindingCurrent();
+            WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen),issuer.sources.forTask(tasks,task,original),original);bindingCurrent();
         }
         /** Additional constraint on the already native-approved target, never a target permit. */
         public void requireTarget(dev.pocketengine.store.TaskStore.HarnessGatewayConfigurationOwner owner,JSONObject target)throws Exception {
@@ -163,13 +181,13 @@ public final class NativeWorkProfileHost {
     /** Complete exact Book revisions for one existing owner run. This opaque object adds
      * no grant and cannot be reconstructed from the config request's content or digest. */
     public static final class HarnessReferences {
-        private final NativeWorkProfileHost issuer;private final dev.pocketengine.store.TaskStore tasks;private final RunControl original;
+        private final WorkProfileResolver.Sources taskSources;private final dev.pocketengine.store.TaskStore tasks;private final RunControl original;
         private final String task,run,resolution,frozen,payload;private final int epoch;private final long pauseRevision;
-        private HarnessReferences(NativeWorkProfileHost issuer,dev.pocketengine.store.TaskStore tasks,String task,String run,int epoch,RunControl original,JSONObject frozen,JSONObject payload)throws Exception{
-            this.issuer=issuer;this.tasks=tasks;this.task=task;this.run=run;this.epoch=epoch;this.original=original;this.frozen=frozen.toString();resolution=frozen.getString("resolutionDigest");this.payload=payload.toString();pauseRevision=original.pauseRevision();
+        private HarnessReferences(WorkProfileResolver.Sources taskSources,dev.pocketengine.store.TaskStore tasks,String task,String run,int epoch,RunControl original,JSONObject frozen,JSONObject payload)throws Exception{
+            this.taskSources=taskSources;this.tasks=tasks;this.task=task;this.run=run;this.epoch=epoch;this.original=original;this.frozen=frozen.toString();resolution=frozen.getString("resolutionDigest");this.payload=payload.toString();pauseRevision=original.pauseRevision();
         }
         public JSONObject view()throws Exception{return new JSONObject(payload);}
-        public void checkCurrent()throws Exception{original.check();if(original.isPaused()||original.pauseRevision()!=pauseRevision||!original.matchesHostRun(task,run,epoch))throw new SecurityException("原文本投射任务control已失效");tasks.checkWorkProfileRun(task,run,epoch,resolution,original);WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen),issuer.sources,original);}
+        public void checkCurrent()throws Exception{original.check();if(original.isPaused()||original.pauseRevision()!=pauseRevision||!original.matchesHostRun(task,run,epoch))throw new SecurityException("原文本投射任务control已失效");tasks.checkWorkProfileRun(task,run,epoch,resolution,original);WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen),taskSources,original);}
         /** SQL-only binding check. Book/source reads stay outside TaskStore monitors. */
         public void requireSqlBinding(dev.pocketengine.store.TaskStore actual,JSONObject owner)throws Exception{
             if(actual!=tasks||!task.equals(owner.optString("parentTaskId"))||!run.equals(owner.optString("parentRunId"))||epoch!=owner.optInt("parentEpoch",-1)||!resolution.equals(actual.workProfileRunSnapshot(task,run,epoch).getString("resolutionDigest")))throw new SecurityException("文本投射不是此原父任务冻结版本");
@@ -178,6 +196,8 @@ public final class NativeWorkProfileHost {
     }
     public HarnessReferences harnessReferencesForRun(dev.pocketengine.store.TaskStore tasks,String task,String run,int epoch,RunControl original)throws Exception{
         if(original==null||!original.matchesHostRun(task,run,epoch))throw new SecurityException("原文本投射control必需");original.check();JSONObject frozen=tasks.workProfileRunSnapshot(task,run,epoch),definition=frozen.getJSONObject("definition");
+        tasks.checkWorkProfileRun(task,run,epoch,frozen.getString("resolutionDigest"),original);
+        WorkProfileResolver.Sources taskSources=sources.forTask(tasks,task,original);WorkProfileResolver.checkStoredAssetSourcesCurrent(frozen,taskSources,original);
         for(String field:new String[]{"pluginRefs","extensionRefs"})if(definition.getJSONArray(field).length()!=0)throw new SecurityException("目标MCP/扩展投射仍未支持，请明确减选，未省略配置");
         if(!definition.isNull("teamTemplateRef"))throw new SecurityException("原CLI配置不应用团队模板");
         JSONArray assets=new JSONArray(),items=frozen.getJSONArray("items");java.util.Map<String,JSONObject> captured=new java.util.LinkedHashMap<>();int count=0;
@@ -185,7 +205,7 @@ public final class NativeWorkProfileHost {
             JSONObject ref=refs.getJSONObject(i);String id=ref.getString("id"),kind=section.equals("instructionRefs")?"instruction":"skill";boolean included=false;
             for(int n=0;n<items.length();n++){JSONObject item=items.getJSONObject(n);if(kind.equals(item.getString("kind"))&&id.equals(item.getString("id")))included=item.getBoolean("included");}
             if(!included)throw new SecurityException("所选文本参考不可用，包括可选项；请保留编辑并明确减选，未静默丢弃");
-            JSONObject asset=captured.get(id);if(asset==null){asset=issuerPackage(ref,original).put("kinds",new JSONArray());captured.put(id,asset);assets.put(asset);count+=asset.getJSONArray("files").length();}
+            JSONObject asset=captured.get(id);if(asset==null){asset=issuerPackage(taskSources,frozen,ref,original).put("kinds",new JSONArray());captured.put(id,asset);assets.put(asset);count+=asset.getJSONArray("files").length();}
             else if(asset.getInt("revision")!=ref.getInt("revision")||!asset.getString("digest").equals(ref.getString("digest")))throw new SecurityException("同一来源选择了不同版本，未投射");
             asset.getJSONArray("kinds").put(kind);
             if(count>160||assets.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>65536)throw new SecurityException("所选完整文本包超过64KiB/160文件投射窗口，请明确减选；没有截断内容");
@@ -193,9 +213,11 @@ public final class NativeWorkProfileHost {
         if(assets.length()==0)return null;
         JSONObject payload=new JSONObject().put("format","pocketworld.harness-reference-assets.v1").put("profileId",frozen.getString("profileId")).put("profileRevision",frozen.getLong("profileRevision")).put("resolutionDigest",frozen.getString("resolutionDigest")).put("assets",assets).put("permissionsChanged",false).put("scriptsExecutable",false);
         if(count>160||payload.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>65536)throw new SecurityException("所选完整文本包超过64KiB/160文件投射窗口，请明确减选；没有截断内容或改变任务上下文预算");
-        HarnessReferences result=new HarnessReferences(this,tasks,task,run,epoch,original,frozen,payload);result.checkCurrent();return result;
+        HarnessReferences result=new HarnessReferences(taskSources,tasks,task,run,epoch,original,frozen,payload);result.checkCurrent();return result;
     }
-    private JSONObject issuerPackage(JSONObject reference,RunControl original)throws Exception{return sources.referencePackage(new JSONObject(reference.toString()),original);}
+    private static JSONObject issuerPackage(WorkProfileResolver.Sources taskSources,JSONObject frozen,JSONObject reference,RunControl original)throws Exception{
+        JSONObject exact=new JSONObject(reference.toString());return frozen.has("skillScope")?taskSources.referencePackage(exact,original):taskSources.legacyGlobalReferencePackage(exact,original);
+    }
     /** Language-neutral identity hash: exact package digests cover every literal byte.
      * Do not hash JSON-escaped source text differently on Android and Companion. */
     public static String harnessReferenceDigest(JSONObject payload)throws Exception{
@@ -249,7 +271,7 @@ public final class NativeWorkProfileHost {
             if (actual == null || !teamId.equals(actual.optString("id"))) throw new SecurityException("original_work_profile_member_team_missing");
             teamDigest = WorkProfile.fingerprint(actual);
             if (!teamDigest.equals(proposed.getString("selectedDefinitionHash"))) throw new SecurityException("original_work_profile_member_team_changed");
-            Map<String,ModelConfig> frozenModels = WorkProfileResolver.resolveStored(frozen,issuer.sources,original).models();
+            Map<String,ModelConfig> frozenModels = WorkProfileResolver.resolveStored(frozen,issuer.sources.forTask(tasks,task,original),original).models();
             ModelConfig global = frozenModels.get("_GLOBAL"), summary = frozenModels.get("SUMMARY");
             if(global==null||summary==null)throw new SecurityException("原工作配置没有启动默认模型快照，请重新在原任务审阅；未借用MAIN或当前默认");
             baseModel=global.withPurposePlans(Map.of("SUMMARY",summary.routePlan==null?dev.pocketengine.runtime.models.ModelRoutePlan.exact(summary,"SUMMARY","APP_OWNER"):summary.routePlan));
@@ -313,7 +335,7 @@ public final class NativeWorkProfileHost {
             if (actual == null || !teamDigest.equals(WorkProfile.fingerprint(actual))) throw new SecurityException("original_work_profile_member_team_changed");
             for (String id : models.keySet()) issuer.sources.checkModel(models.get(id), purposes.get(id), original);
             issuer.sources.checkModel(baseModel,"DEFAULT",original);issuer.sources.checkModel(baseModel.forPurpose("SUMMARY"),"SUMMARY",original);
-            WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen), issuer.sources, original);
+            WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen), issuer.sources.forTask(tasks,task,original), original);
             original.check(); plan.checkCurrent();
             tasks.checkTeamWorkProfilePlanBinding(plan.origin(), digest, original);
         }
@@ -364,7 +386,7 @@ public final class NativeWorkProfileHost {
             teamId=marker.getString("teamId");teamDigest=marker.getString("selectedDefinitionHash");
             JSONObject team=issuer.sources.team(teamId,original);
             if(team==null||!teamDigest.equals(WorkProfile.fingerprint(team)))throw new SecurityException("原团队模板已改变，请重新提出准确计划");
-            actualTeam=team.toString();Map<String,ModelConfig> captured=WorkProfileResolver.resolveStored(saved,issuer.sources,original).models();
+            actualTeam=team.toString();Map<String,ModelConfig> captured=WorkProfileResolver.resolveStored(saved,issuer.sources.forTask(tasks,scope.getString("parentTaskId"),original),original).models();
             ModelConfig global=captured.get("_GLOBAL"),summary=captured.get("SUMMARY");if(global==null||summary==null)throw new SecurityException("原计划没有启动时默认模型，不使用当前默认或MAIN替代");
             base=global.withPurposePlans(Map.of("SUMMARY",summary.routePlan==null?dev.pocketengine.runtime.models.ModelRoutePlan.exact(summary,"SUMMARY","APP_OWNER"):summary.routePlan));
             if(!WorkProfile.fingerprint(marker.getJSONObject("globalModelDefault")).equals(WorkProfile.fingerprint(saved.getJSONObject("modelPolicies").getJSONObject("_GLOBAL")))||!WorkProfile.fingerprint(marker.getJSONObject("summaryModel")).equals(WorkProfile.fingerprint(saved.getJSONObject("modelPolicies").getJSONObject("SUMMARY"))))throw new SecurityException("原团队默认或摘要模型pin已改变");
@@ -396,7 +418,7 @@ public final class NativeWorkProfileHost {
             JSONObject current=issuer.sources.team(teamId,original);if(current==null||!teamDigest.equals(WorkProfile.fingerprint(current)))throw new SecurityException("原团队模板已改变");
             issuer.sources.checkModel(base,"DEFAULT",original);issuer.sources.checkModel(base.forPurpose("SUMMARY"),"SUMMARY",original);
             for(String id:defaults.keySet())issuer.sources.checkModel(defaults.get(id),purposes.get(id),original);
-            WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen),issuer.sources,original);
+            WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen),issuer.sources.forTask(tasks,approved.view().getJSONObject("scope").getString("parentTaskId"),original),original);
             approved.checkCurrent();tasks.checkTeamWorkProfileStartBinding(approved,digest,original);
         }
         public ModelConfig baseModel()throws Exception{checkCurrent();return base;}
@@ -419,8 +441,11 @@ public final class NativeWorkProfileHost {
         public synchronized JSONObject snapshot() throws Exception { current(false); return settings.workProfilesSnapshot().put("executionAuthorized", false).put("permissionsChanged", false); }
         /** Read-through owner choices, never a second asset/credential store or an implicit approval. */
         public JSONObject choices(RunControl observation) throws Exception {
+            return choices(observation,null);
+        }
+        public JSONObject choices(RunControl observation,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project)throws Exception {
             final long observed; synchronized(this) { current(false); observed = generation; }
-            JSONObject data = sources.choices(observation); synchronized(this) { current(false); if(observed != generation) throw new SecurityException("work_profile_owner_page_changed"); return data; }
+            JSONObject data = sources.forProject(project,observation).choices(observation); synchronized(this) { current(false); if(observed != generation) throw new SecurityException("work_profile_owner_page_changed"); return data; }
         }
         public synchronized JSONObject save(String id, long revision, String name, JSONObject definition) throws Exception {
             current(true); generation++; pending = null; return settings.saveWorkProfile(id, revision, name, definition);
@@ -429,16 +454,24 @@ public final class NativeWorkProfileHost {
             current(true); generation++; pending = null; return settings.removeWorkProfile(id, revision);
         }
         public Review review(String id, long revision, RunControl observation) throws Exception {
+            return review(id,revision,observation,null);
+        }
+        public Review review(String id,long revision,RunControl observation,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project)throws Exception {
             final long request; synchronized (this) { current(true); pending = null; request = ++generation; }
-            WorkProfile row = stored(id, revision); WorkProfileResolver.Resolution resolution = WorkProfileResolver.resolve(row, sources, observation);
+            WorkProfile row = stored(id, revision); WorkProfileResolver.Resolution resolution = WorkProfileResolver.resolve(row, sources.forProject(project,observation), observation);
             synchronized (this) { current(true); if(request != generation) throw new SecurityException("work_profile_review_superseded"); if (!row.digest().equals(stored(id, revision).digest())) throw new SecurityException("work_profile_definition_changed"); pending = new Review(this, generation, resolution, () -> { if (!row.digest().equals(stored(id, revision).digest())) throw new SecurityException("work_profile_definition_changed"); }); return pending; }
         }
         /** Explicit recovery of the original run's exact references, even if its reusable definition was removed.
          * Missing/changed sources remain visible blockers; this does not restart or replay the old run. */
         public Review reviewForTask(dev.pocketengine.store.TaskStore tasks, String taskId, String runId, int epoch, RunControl observation) throws Exception {
+            return reviewForTask(tasks,taskId,runId,epoch,observation,null);
+        }
+        public Review reviewForTask(dev.pocketengine.store.TaskStore tasks,String taskId,String runId,int epoch,RunControl observation,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project)throws Exception {
             final long request; synchronized (this) { current(true); pending = null; request = ++generation; }
             JSONObject original = runId.isEmpty()?tasks.pendingWorkProfileTaskSnapshot(taskId):tasks.workProfileRunSnapshot(taskId, runId, epoch);
-            WorkProfileResolver.Resolution resolution = WorkProfileResolver.resolveStored(original, sources, observation);
+            JSONObject task=tasks.get(taskId,false);if(project!=null&&task.has("developmentContext"))throw new SecurityException("原工作配置任务已有项目绑定，不能借恢复更换");
+            WorkProfileResolver.Sources originalSources=project==null?sources.forTask(tasks,taskId,observation):sources.forProject(project,observation);
+            WorkProfileResolver.Resolution resolution = WorkProfileResolver.resolveStored(original, originalSources, observation);
             String retained = WorkProfile.fingerprint(original);
             synchronized (this) {
                 current(true); if (request != generation) throw new SecurityException("work_profile_review_superseded");
@@ -481,13 +514,19 @@ public final class NativeWorkProfileHost {
         private final long admissionPauseRevision;
         private String reservedTask, boundRun, intentTask;
         private final TaskReview taskReview;
+        private volatile WorkProfileResolver.Sources boundScopeSources;
+        private dev.pocketengine.store.TaskStore scopeTasks;
         private boolean ownerStartClaimed;
         private int boundEpoch;
         private Selection(NativeWorkProfileHost issuer, WorkProfileResolver.Resolution resolution, RunControl original,TaskReview taskReview) { this.issuer = issuer; this.resolution = resolution; this.original = original;this.taskReview=taskReview;admissionPauseRevision = original.pauseRevision(); }
         public JSONObject snapshot() throws Exception { return resolution.view().put("definition", profile().toJson()); }
         public WorkProfile profile() { return resolution.profile(); }
         public Map<String, ModelConfig> models() { return resolution.models(); }
-        public void checkCurrent(RunControl observation) throws Exception { if (observation != original) throw new SecurityException("work_profile_control_mismatch"); observation.check(); resolution.checkCurrent(observation); }
+        public void checkCurrent(RunControl observation) throws Exception {
+            if (observation != original) throw new SecurityException("work_profile_control_mismatch");observation.check();
+            WorkProfileResolver.Sources bound=boundScopeSources;if(bound!=null)WorkProfileResolver.requireStoredSkillScope(resolution.view(),bound,observation);
+            resolution.checkCurrent(observation);if(bound!=null)WorkProfileResolver.requireStoredSkillScope(resolution.view(),bound,observation);
+        }
         private synchronized void claimOwnerStart(RunControl control)throws Exception {
             if(control!=original||ownerStartClaimed||control.hasHostRun()||control.isPaused()||control.pauseRevision()!=admissionPauseRevision)throw new SecurityException("work_profile_owner_start_already_used_or_changed");control.check();ownerStartClaimed=true;
         }

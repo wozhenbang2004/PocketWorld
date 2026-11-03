@@ -606,4 +606,27 @@ class PiCompanionTests(unittest.TestCase):
         self.assertEqual(64,self.manager.ledger.execute('SELECT count(*) FROM steer_messages').fetchone()[0])
 
 
+class GatewayFixtureCatalogueTest(unittest.TestCase):
+    def test_actual_pi_fixture_keeps_signature_and_serves_catalogue(self):
+        from gateway_fixture_server import inject_pi_catalogue
+        fixture = inject_pi_catalogue(FIXTURE.replace('import json, sys, time, threading', 'import json, sys, time, threading, os'))
+        original = "reply({'models':[model,{'provider':'fixture','id':'model-b','name':'Fixture B'}]})"
+        self.assertEqual(1, fixture.count(original))
+        fixture = fixture.replace(original, "reply({'models':pi_models})", 1)
+        self.assertIn("def done(aborted=False,final_text=", fixture)
+        args = ['normal', '--mode', 'rpc', '--no-tools', '--no-mcp', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-approve', '--offline']
+        with tempfile.TemporaryDirectory() as root:
+            process = subprocess.run([sys.executable, '-c', fixture, *args], cwd=root,
+                input=json.dumps({'id':'catalogue-1','type':'get_available_models'})+'\n', text=True,
+                capture_output=True, timeout=10)
+        self.assertEqual(0, process.returncode, process.stderr)
+        response = json.loads(process.stdout.strip())
+        self.assertEqual('catalogue-1', response['id'])
+        self.assertEqual('fixture', response['data']['models'][0]['provider'])
+    def test_missing_or_ambiguous_completion_fails_closed(self):
+        from gateway_fixture_server import inject_pi_catalogue
+        for bad in ('def different(): pass', 'def done(): pass\ndef done(x): pass'):
+            with self.assertRaises(ValueError): inject_pi_catalogue(bad)
+
+
 if __name__=='__main__':unittest.main()

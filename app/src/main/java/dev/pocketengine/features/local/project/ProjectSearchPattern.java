@@ -38,6 +38,21 @@ final class ProjectSearchPattern {
         }catch(OriginalStopped stopped){throw stopped.original;}
         finally{spentNanos+=Math.max(0,System.nanoTime()-started-originalCheckNanos);}
     }
+    int groupCount(){return pattern.groupCount();}
+    /** Full-input matching preserves anchors at a resumed offset. Only positions escape this
+     * adapter: the caller bounds previews without allocating a complete captured substring. */
+    int[][] findGroups(String text,int offset,ProjectFileQueries.Current original)throws Exception {
+        if(offset<0||offset>text.length())throw new IllegalArgumentException("正则匹配起点超出原文件范围");
+        original.check();long started=System.nanoTime();originalCheckNanos=0;if(spentNanos>=MAX_MATCH_NANOS)throw exhausted();
+        try{
+            Matcher matcher=pattern.matcher(new CheckedText(text,original,started,0,text.length()));
+            if(!matcher.find(offset)){checkOriginal(original);if(System.nanoTime()-started-originalCheckNanos+spentNanos>MAX_MATCH_NANOS)throw exhausted();return null;}
+            int[][] groups=new int[matcher.groupCount()+1][2];
+            for(int i=0;i<groups.length;i++){groups[i][0]=matcher.start(i);groups[i][1]=matcher.end(i);}
+            checkOriginal(original);if(System.nanoTime()-started-originalCheckNanos+spentNanos>MAX_MATCH_NANOS)throw exhausted();return groups;
+        }catch(OriginalStopped stopped){throw stopped.original;}
+        finally{spentNanos+=Math.max(0,System.nanoTime()-started-originalCheckNanos);}
+    }
     private void checkOriginal(ProjectFileQueries.Current original)throws Exception{long before=System.nanoTime();try{original.check();}finally{originalCheckNanos+=System.nanoTime()-before;}}
     private static IllegalArgumentException exhausted(){return new IllegalArgumentException("正则计算超过本次3秒/6400万字符访问预算，请缩小查询/文件范围；未返回不完整的空命中");}
     private static final class OriginalStopped extends RuntimeException {

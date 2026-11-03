@@ -57,10 +57,32 @@ public final class SemanticApplicationJourneyTest {
     private static JSONObject j(Object... values)throws Exception {JSONObject out=new JSONObject();for(int i=0;i<values.length;i+=2)out.put((String)values[i],values[i+1]);return out;}
     private static void set(Object target,String name,Object value)throws Exception {Field f=target.getClass().getDeclaredField(name);f.setAccessible(true);f.set(target,value);}
     private static Object get(Object target,String name)throws Exception {Field f=target.getClass().getDeclaredField(name);f.setAccessible(true);return f.get(target);}
-    private static void await(BooleanSupplier condition)throws Exception {
+    private void await(String phase,String taskId,RunControl original,AtomicInteger requests,
+            AtomicReference<Throwable> serverFailure,BooleanSupplier condition)throws Exception {
         long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(15);
-        while(!condition.getAsBoolean()&&System.nanoTime()<until){Shadows.shadowOf(Looper.getMainLooper()).idle();Thread.sleep(5);}
-        assertTrue("actual host did not reach expected state",condition.getAsBoolean());
+        while(!condition.getAsBoolean()&&System.nanoTime()<until){
+            JSONObject current=app.tasks.get(taskId,false);String status=current==null?"missing":current.optString("status");
+            if(serverFailure.get()!=null||original.isCancelled()||List.of("failed","cancelled","completed").contains(status))
+                fail("actual host stopped before "+phase+": "+journeyState(taskId,original,requests,serverFailure));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();Thread.sleep(5);
+        }
+        assertTrue("actual host did not reach "+phase+": "+journeyState(taskId,original,requests,serverFailure),condition.getAsBoolean());
+    }
+    /** Diagnostics deliberately exclude goals, messages, intent extras, source references and ids. */
+    private String journeyState(String taskId,RunControl original,AtomicInteger requests,
+            AtomicReference<Throwable> serverFailure)throws Exception {
+        JSONObject task=app.tasks.get(taskId,false),evidence=task==null?null:task.optJSONObject("evidence");
+        JSONArray approvals=task==null?null:task.optJSONArray("approvals"),operations=task==null?null:task.optJSONArray("operations");
+        String status=task==null?"missing":task.optString("status"),code=evidence==null?"":evidence.optString("code");
+        // Only native state/code tokens leave this test; never print a whole task or exception body.
+        if(!status.matches("[a-z_]{1,40}"))status="unrecognized";
+        if(!code.matches("[a-z_]{0,80}"))code="unrecognized";
+        Throwable failure=serverFailure.get();
+        return "status="+status+" requests="+requests.get()+" approvals="+(approvals==null?0:approvals.length())
+                +" operations="+(operations==null?0:operations.length())+" paused="+original.isPaused()
+                +" cancelled="+original.isCancelled()+" sameControl="+(app.control(taskId)==original)
+                +" serviceWaiting="+(service!=null&&Boolean.TRUE.equals(get(service,"waitingForUser")))
+                +" evidenceCode="+code+" fixtureFailure="+(failure==null?"none":failure.getClass().getSimpleName());
     }
     private static boolean pending(EngineApplication app,String task) {try{JSONObject current=app.tasks.get(task,false);return "awaiting_user".equals(current.optString("status"))&&current.getJSONArray("approvals").length()>0&&app.control(task).isPaused();}catch(Exception e){return false;}}
     private static void installBrowser(Context context,SemanticRequest request)throws Exception {
@@ -122,11 +144,11 @@ public final class SemanticApplicationJourneyTest {
         PhoneFixture phone=new PhoneFixture(accessibility.observationSessionId(),original);
         service=Robolectric.buildService(PhoneRunService.class).create().get();set(service,"heldPort",phone);
         service.onStartCommand(new Intent(app,PhoneRunService.class).setAction(PhoneRunService.START).putExtra("taskId",id),0,1);
-        Shadows.shadowOf(Looper.getMainLooper()).idleFor(750,TimeUnit.MILLISECONDS);await(()->pending(app,id));assertNull(String.valueOf(serverFailure.get()),serverFailure.get());assertEquals(2,requests.get());assertEquals(0,phone.launches.get());
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(750,TimeUnit.MILLISECONDS);await("first native approval",id,original,requests,serverFailure,()->pending(app,id));assertNull(String.valueOf(serverFailure.get()),serverFailure.get());assertEquals(2,requests.get());assertEquals(0,phone.launches.get());
         JSONObject pending=app.tasks.get(id,false).getJSONArray("approvals").getJSONObject(0);assertEquals("pending",pending.getString("state"));assertTrue((Boolean)get(service,"waitingForUser"));
         app.dispatchOwnerAction("approveCapability",j("taskId",id,"approvalId",pending.getString("id"),"approved",true));assertSame(original,app.control(id));assertFalse(original.isPaused());
         service.onStartCommand(new Intent(app,PhoneRunService.class).setAction(PhoneRunService.CONTINUE).putExtra("taskId",id),0,2);
-        await(()->requests.get()==(ownerCheck?3:4)&&original.isPaused());assertNull(String.valueOf(serverFailure.get()),serverFailure.get());
+        await("same-run owner verification",id,original,requests,serverFailure,()->requests.get()==(ownerCheck?3:4)&&original.isPaused());assertNull(String.valueOf(serverFailure.get()),serverFailure.get());
         JSONObject result=app.tasks.get(id,false);assertEquals(run,result.getString("runId"));assertEquals(task.getInt("coordinatorEpoch"),result.getInt("coordinatorEpoch"));assertEquals("consumed",result.getJSONArray("approvals").getJSONObject(0).getString("state"));
         if(ownerCheck){Intent accepted=Shadows.shadowOf(app).getNextStartedActivity();assertNotNull("OS launch acceptance only, not physical target visibility",accepted);assertEquals("journey.browser/journey.browser.Main",accepted.getComponent().flattenToString());assertEquals("journey.browser",accepted.getPackage());if(request.kind.equals("share_text")){assertEquals(Intent.ACTION_SEND,accepted.getAction());assertEquals("text/plain",accepted.getType());assertEquals(request.parameters().getString("text"),accepted.getStringExtra(Intent.EXTRA_TEXT));}else assertEquals(request.data,accepted.getDataString());assertNull(Shadows.shadowOf(app).getNextStartedActivity());assertEquals(0,phone.launches.get());assertEquals(0,phone.postObservations.get());}
         else{assertEquals(1,phone.launches.get());assertTrue(phone.postObservations.get()>0);}assertFalse(app.tasks.hasUnresolved(id));

@@ -23,10 +23,15 @@ public final class TaskStoreDeviceTrust implements PairingCoordinator.TrustStore
         db.execSQL("CREATE TABLE IF NOT EXISTS device_identity_rotations (rotation_id TEXT PRIMARY KEY,old_device_id TEXT NOT NULL,new_device_id TEXT NOT NULL,authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch>=1),receipt_json TEXT NOT NULL,created_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE IF NOT EXISTS device_pairing_candidates (invite_id TEXT PRIMARY KEY,attempts INTEGER NOT NULL CHECK(attempts>=0),candidate_digest TEXT,offer_digest TEXT,record_json TEXT,state TEXT NOT NULL CHECK(state IN ('checking','presented','confirmed','consumed','rejected')),expires_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)");
     }
-    @Override public synchronized JSONObject peer(String id)throws Exception{
+    // These single-statement permission reads share no mutable Java state. Do
+    // not take this facade's monitor: TaskStore rechecks them inside its original
+    // SQL transaction, while another caller may be waiting for that connection.
+    // SQL provides the read snapshot; all compound trust writes keep their locks
+    // and transactions below. Each read returns a new, caller-owned JSON value.
+    @Override public JSONObject peer(String id)throws Exception{
         try(Cursor row=db.rawQuery("SELECT certificate_der,fingerprint,instance_id,authorization_epoch,revoked,updated_at FROM device_peers WHERE device_id=?",new String[]{id})){if(!row.moveToFirst())return null;return new JSONObject().put("deviceId",id).put("certificateDer",Base64.getEncoder().encodeToString(row.getBlob(0))).put("fingerprint",row.getString(1)).put("instanceId",row.getString(2)).put("authorizationEpoch",row.getLong(3)).put("revoked",row.getInt(4)!=0).put("updatedAt",row.getLong(5));}
     }
-    @Override public synchronized JSONObject grant(String id)throws Exception{
+    @Override public JSONObject grant(String id)throws Exception{
         try(Cursor row=db.rawQuery("SELECT body_json,authorization_epoch,revoked FROM device_grants WHERE grant_id=?",new String[]{id})){if(!row.moveToFirst())return null;JSONObject value=new JSONObject(row.getString(0));value.put("authorizationEpoch",row.getLong(1)).put("revoked",row.getInt(2)!=0);return value;}
     }
     @Override public synchronized org.json.JSONArray grantsForPeer(String peer,int limit)throws Exception{if(limit<1||limit>16)throw new IllegalArgumentException("Invalid scoped grant limit");org.json.JSONArray values=new org.json.JSONArray();try(Cursor rows=db.rawQuery("SELECT grant_id FROM device_grants WHERE peer_device_id=? AND revoked=0 AND authorization_epoch=(SELECT authorization_epoch FROM device_peers WHERE device_id=?) ORDER BY grant_id LIMIT ?",new String[]{peer,peer,Integer.toString(limit)})){while(rows.moveToNext())values.put(grant(rows.getString(0)));}return values;}
@@ -119,7 +124,7 @@ public final class TaskStoreDeviceTrust implements PairingCoordinator.TrustStore
         }finally{db.endTransaction();}
     }
     @Override public synchronized void putOutgoingGrant(String target,String grant,JSONObject receipt,long now){ContentValues values=new ContentValues();values.put("target_device_id",target);values.put("grant_id",grant);values.put("receipt_json",DeviceProtocol.canonical(receipt));values.put("received_at",now);db.insertWithOnConflict("device_outgoing_grants",null,values,SQLiteDatabase.CONFLICT_REPLACE);}
-    @Override public synchronized JSONObject outgoingGrant(String target,String grant)throws Exception{try(Cursor row=db.rawQuery("SELECT receipt_json FROM device_outgoing_grants WHERE target_device_id=? AND grant_id=?",new String[]{target,grant})){return row.moveToFirst()?new JSONObject(row.getString(0)):null;}}
+    @Override public JSONObject outgoingGrant(String target,String grant)throws Exception{try(Cursor row=db.rawQuery("SELECT receipt_json FROM device_outgoing_grants WHERE target_device_id=? AND grant_id=?",new String[]{target,grant})){return row.moveToFirst()?new JSONObject(row.getString(0)):null;}}
     @Override public synchronized JSONObject rotatePeer(JSONObject previous,JSONObject next,JSONObject receipt,long now)throws Exception{
         db.beginTransaction();try{
             String oldId=previous.getString("deviceId"),newId=next.getString("deviceId");JSONObject actual=peer(oldId);if(actual==null||actual.getLong("authorizationEpoch")!=previous.getLong("authorizationEpoch")||!actual.getString("fingerprint").equals(previous.getString("fingerprint"))||actual.getBoolean("revoked")!=previous.getBoolean("revoked"))throw new SecurityException("Original identity changed before rotation");if(!oldId.equals(newId)&&peer(newId)!=null)throw new SecurityException("Replacement is already a separate paired device");

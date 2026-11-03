@@ -717,8 +717,10 @@ class JobManager:
                 raise RequestError("Claude requires CLI >=2.1.259 and the verified control/session flags; run a worker probe", 409)
         pi_session = None
         if request.get("worker") == "pi":
-            if native_device_admission is not None or set(request) - {"operationId", "environmentId", "environmentBinding", "worker", "prompt", "model", "readOnly", "timeoutSeconds", "threadId", "resumeJobId"}:
-                raise RequestError("Pi first slice is only an explicit no-tools private conversation; attachments/config imports/tools are unsupported", 409)
+            if native_device_admission is not None or set(request) - {"operationId", "environmentId", "environmentBinding", "worker", "prompt", "model", "readOnly", "timeoutSeconds", "threadId", "resumeJobId", "harnessConfigOperationId", "harnessOwnerBinding"}:
+                raise RequestError("Pi supports only an explicit no-tools private conversation and its original reviewed Harness configuration; attachments/imports/tools are unsupported", 409)
+            if ("harnessConfigOperationId" in request) != ("harnessOwnerBinding" in request):
+                raise RequestError("Pi configuration requires both original operation and native owner binding", 409)
             text(request.get("prompt"), "prompt")
             if env.get("kind", "local") != "local" or os.name == "nt":
                 raise RequestError("Pi managed sessions are currently available only in local POSIX environments", 409)
@@ -1266,6 +1268,7 @@ class JobManager:
                 child_env.pop("POCKETENGINE_COMPANION_TOKEN", None)
                 try:
                     child_env.update(self.harness_configs.job_environment(job, job.get("_harnessConfigRequest", {}), actual_env))
+                    argv = self.harness_configs.job_command(job, argv)
                 except harness_config.ConfigError as error:
                     raise RequestError(str(error), error.status)
                 if codex and codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP":

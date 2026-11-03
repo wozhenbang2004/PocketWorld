@@ -40,7 +40,7 @@ import static org.junit.Assert.*;
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 public final class QqOwnerImageJourneyTest {
     private static final byte[] PNG=Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMwbzr5HwAE+AKC+5SnugAAAABJRU5ErkJggg==");
-    @Before public void vault(){java.security.Security.addProvider(new java.security.Provider("QqImageFixtureVault","1","Test-only AndroidKeyStore SPI"){{put("KeyStore.AndroidKeyStore",ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    @Before public void vault(){java.security.Security.addProvider(new java.security.Provider("QqImageFixtureVault",1.0,"Test-only AndroidKeyStore SPI"){{put("KeyStore.AndroidKeyStore",ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     @After public void release(){java.security.Security.removeProvider("QqImageFixtureVault");}
     private static JSONObject wire(String id,String sender,String content,String url)throws Exception {JSONObject data=new JSONObject().put("id",id).put("author",new JSONObject().put("user_openid",sender)).put("content",content).put("timestamp",Instant.now().toString());if(url!=null)data.put("attachments",new JSONArray().put(new JSONObject().put("url",url).put("content_type","image/png").put("size",PNG.length)));return new JSONObject().put("op",0).put("t","C2C_MESSAGE_CREATE").put("s",1).put("d",data);}
     static final class Fixture implements AutoCloseable {

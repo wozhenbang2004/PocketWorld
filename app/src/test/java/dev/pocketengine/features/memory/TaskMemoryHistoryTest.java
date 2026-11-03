@@ -53,4 +53,28 @@ public final class TaskMemoryHistoryTest {
         ModelConfig config=new ModelConfig("https://example.invalid","","model",false,8,20).withAccountModel(ref);
         assertNotNull(dev.pocketengine.runtime.providers.AccountResponsesAdapter.request(config,wire,null));
     }
+    @Test public void retiredQueriesAndEffectArgumentsLoseWireBodiesWhileOriginalAuditAndPairingSurvive()throws Exception{
+        String marker="OLD_SOURCE_IN_DERIVED_ARGUMENTS_729";JSONArray calls=new JSONArray();
+        for(String name:new String[]{"memory_recall","workspace_write"})calls.put(new JSONObject().put("id","original-"+name).put("type","function")
+                .put("provider_data",new JSONObject().put("cached",marker)).put("thought_signature",marker)
+                .put("function",new JSONObject().put("name",name).put("arguments",new JSONObject().put("query",marker).put("nested",new JSONArray().put(marker)).toString()).put("extra_body",marker)));
+        JSONObject assistant=new JSONObject().put("role","assistant").put("content",marker).put("memoryContextRetired",true).put("tool_calls",calls)
+                .put("reasoning_content",marker).put("extra_body",marker).put("provider_data",new JSONObject().put("items",new JSONArray().put(marker)));
+        JSONObject reference=new JSONObject().put("role","tool").put("tool_call_id","original-memory_recall").put("content","{\"code\":\"reference_expired\"}");
+        JSONObject effect=new JSONObject().put("role","tool").put("tool_call_id","original-workspace_write").put("content","{\"operationId\":\"native-original-operation\",\"status\":\"unknown\",\"replayAllowed\":false}");
+        JSONArray journal=new JSONArray().put(assistant).put(reference).put(effect);String original=journal.toString();
+        JSONArray wire=TaskMemoryHistory.wireMessages(journal);assertFalse(wire.toString().contains(marker));assertEquals(original,journal.toString());
+        assertEquals(TaskMemoryHistory.RETIRED,wire.getJSONObject(0).getString("content"));assertEquals(effect.toString(),wire.getJSONObject(2).toString());
+        for(int i=0;i<2;i++){JSONObject call=wire.getJSONObject(0).getJSONArray("tool_calls").getJSONObject(i);
+            assertEquals(calls.getJSONObject(i).getString("id"),call.getString("id"));assertEquals(wire.getJSONObject(i+1).getString("tool_call_id"),call.getString("id"));
+            assertEquals(calls.getJSONObject(i).getJSONObject("function").getString("name"),call.getJSONObject("function").getString("name"));assertEquals("{}",call.getJSONObject("function").getString("arguments"));
+        }
+        for(String provider:new String[]{"openai_chat","openai_responses","anthropic","gemini"}){
+            ModelConfig config=new ModelConfig("https://example.invalid","","model",false,8,20,provider,1024);
+            JSONObject body=ProviderAdapters.selected(provider).request(config,wire,null);assertFalse(provider,body.toString().contains(marker));assertTrue(body.toString().contains("native-original-operation"));
+        }
+        ModelConfig.AccountModelRef ref=ModelConfig.AccountModelRef.fromJson(new JSONObject().put("provider",ModelConfig.ACCOUNT_PROVIDER).put("accountId","native-test-account").put("accountVersion",1).put("modelId","native-test-model"));
+        ModelConfig config=new ModelConfig("https://example.invalid","","model",false,8,20).withAccountModel(ref);
+        assertFalse(dev.pocketengine.runtime.providers.AccountResponsesAdapter.request(config,wire,null).toString().contains(marker));
+    }
 }

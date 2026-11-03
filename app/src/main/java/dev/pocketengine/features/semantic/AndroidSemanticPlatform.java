@@ -16,6 +16,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.UserManager;
 import android.provider.CalendarContract;
 import android.provider.AlarmClock;
 import android.view.Display;
@@ -48,6 +49,10 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
     }
     @Override public List<Target> discover(SemanticRequest request,RunControl control) throws Exception {
         control.check();requireClockPermission(request);PackageManager pm=context.getPackageManager();
+        int nativeUser=dev.pocketengine.phone.setup.AndroidAppCopies.id(android.os.Process.myUserHandle());
+        UserManager users=context.getSystemService(UserManager.class);
+        long profileSerial=users==null?-1:users.getSerialNumberForUser(android.os.Process.myUserHandle());
+        if(profileSerial<0||!users.isUserUnlocked())throw new SecurityException("semantic_profile_identity_unavailable");
         List<ResolveInfo> matches=pm.queryIntentActivities(intent(request),PackageManager.MATCH_DEFAULT_ONLY|PackageManager.GET_RESOLVED_FILTER);
         List<Target> targets=new ArrayList<>();Set<String> seen=new HashSet<>();int visited=0;
         String selectedPackage=request.kind.equals("app_link")||request.kind.equals("share_text")?request.parameters().getString("packageName"):"";
@@ -59,14 +64,15 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
             String component=new ComponentName(a.packageName,a.name).flattenToString();if(!seen.add(component))continue;
             try {
                 PackageInfo pkg=pm.getPackageInfo(a.packageName,PackageManager.GET_SIGNING_CERTIFICATES);
-                if(pkg.signingInfo==null)continue;Signature[] signatures=pkg.signingInfo.getApkContentsSigners();if(signatures==null||signatures.length==0)continue;
+                if(pkg.signingInfo==null||a.applicationInfo.uid<0||a.applicationInfo.uid/100000!=nativeUser)continue;Signature[] signatures=pkg.signingInfo.getApkContentsSigners();if(signatures==null||signatures.length==0)continue;
                 ArrayList<String> certificates=new ArrayList<>();for(Signature signature:signatures)certificates.add(SemanticJson.hash(signature.toByteArray()));certificates.sort(String::compareTo);
                 String route=request.kind.equals("web")||request.kind.equals("app_link")?webRoute(match,request.host):"official_intent";
                 // Explicit components bypass normal App Links routing, so unapproved non-browser
                 // handlers are deliberately not offered as eligible HTTPS targets.
                 if(route==null)continue;
                 JSONObject identity=new JSONObject().put("component",component).put("packageName",a.packageName).put("versionCode",pkg.getLongVersionCode())
-                        .put("lastUpdateTime",pkg.lastUpdateTime).put("uid",a.applicationInfo.uid).put("certificates",new JSONArray(certificates));
+                        .put("lastUpdateTime",pkg.lastUpdateTime).put("firstInstallTime",pkg.firstInstallTime).put("uid",a.applicationInfo.uid).put("certificates",new JSONArray(certificates))
+                        .put("userId",nativeUser).put("profileSerial",profileSerial);
                 if(request.clock())identity.put("deviceTimeZone",java.util.TimeZone.getDefault().getID());
                 targets.add(new Target(identity,String.valueOf(match.loadLabel(pm)),route));
             } catch(PackageManager.NameNotFoundException disappeared) { /* Removed/replaced while querying; not an eligible snapshot. */ }
@@ -99,6 +105,7 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
     static Intent intent(SemanticRequest request) throws Exception {
         if(request.kind.equals("share_text")){JSONObject p=request.parameters();return new Intent(Intent.ACTION_SEND).setType("text/plain").setPackage(p.getString("packageName")).putExtra(Intent.EXTRA_TEXT,p.getString("text"));}
         if(request.kind.equals("app_link"))return new Intent(Intent.ACTION_VIEW,Uri.parse(request.data)).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(request.parameters().getString("packageName"));
+        if(request.kind.equals("show_alarms"))return new Intent(AlarmClock.ACTION_SHOW_ALARMS);
         if(request.clock()) {
             JSONObject p=request.parameters();Intent intent=new Intent(request.kind.equals("alarm")?AlarmClock.ACTION_SET_ALARM:AlarmClock.ACTION_SET_TIMER)
                     .putExtra(AlarmClock.EXTRA_SKIP_UI,false);
@@ -140,7 +147,9 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
     }
     @Override public JSONObject resourceIdentity() throws Exception {
         if(service==null||PhoneAccessibilityService.get()!=service)throw new SecurityException("未绑定主屏手机服务");
-        return new JSONObject().put("executionMode","main_screen").put("displayId",Display.DEFAULT_DISPLAY).put("serviceSessionId",service.observationSessionId());
+        return new JSONObject().put("executionMode","main_screen").put("displayId",Display.DEFAULT_DISPLAY).put("serviceSessionId",service.observationSessionId())
+                .put("userId",dev.pocketengine.phone.setup.AndroidAppCopies.id(android.os.Process.myUserHandle()))
+                .put("profileSerial",profileSerial()).put("appPolicyRevision",new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context).current().revision());
     }
     @Override public JSONObject dispatch(SemanticRequest request,Target target,RunControl control,Admission admission) throws Exception {
         if(Looper.myLooper()==Looper.getMainLooper())return notDispatched("worker_required",false);
@@ -159,9 +168,9 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
                     ActivityOptions options=ActivityOptions.makeBasic();options.setLaunchDisplayId(Display.DEFAULT_DISPLAY);
                     // This is the actual call boundary, after all queued work. The closure retains
                     // the original TaskStore operation, control, service identity and package snapshot.
-                    requireService(control);admission.check();invalidatePhoneReferences.run();requireService(control);
+                    requireService(control);admission.check();requireAppAccess(target);invalidatePhoneReferences.run();requireService(control);
                     control.dispatchAtPauseRevision(admittedPauseRevision,()->{
-                        requireClockContext(request,target);
+                        requireClockContext(request,target);requireAppAccess(target);
                         if(!gate.enter()) {receipt.set(notDispatched("semantic_queue_cancelled",false));return;}
                         service.startActivity(selected,options.toBundle());
                         receipt.set(new JSONObject().put("accepted",true).put("status","launch_requested"));
@@ -185,6 +194,18 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
     private static JSONObject abandon(SemanticDispatchGate gate,AtomicReference<JSONObject> receipt) throws Exception {
         if(gate.cancelBeforeEntry())return notDispatched("semantic_queue_cancelled",true);
         JSONObject actual=receipt.get();return actual==null?new JSONObject().put("accepted",JSONObject.NULL).put("status","unknown"):actual;
+    }
+    private long profileSerial()throws Exception {
+        UserManager users=context.getSystemService(UserManager.class);
+        long serial=users==null?-1:users.getSerialNumberForUser(android.os.Process.myUserHandle());
+        if(serial<0||!users.isUserUnlocked())throw new SecurityException("semantic_profile_identity_unavailable");
+        return serial;
+    }
+    private void requireAppAccess(Target target)throws Exception {
+        int user=dev.pocketengine.phone.setup.AndroidAppCopies.id(android.os.Process.myUserHandle());
+        JSONObject identity=target.identity();
+        if(identity.getInt("userId")!=user||identity.getLong("profileSerial")!=profileSerial())throw new SecurityException("semantic_profile_changed");
+        new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context).current().require(Set.of(new dev.pocketengine.phone.access.AppCopyKey(identity.getString("packageName"),user)),true,dev.pocketengine.phone.access.PhoneAccessPolicy.Use.AUTOMATION);
     }
     private static JSONObject notDispatched(String code,boolean pause) throws Exception {return new JSONObject().put("accepted",false).put("code",code).put("requiresPause",pause);}
     private static void setReceipt(AtomicReference<JSONObject> receipt,String code,boolean pause) {try{receipt.set(notDispatched(code,pause));}catch(Exception ignored){}}

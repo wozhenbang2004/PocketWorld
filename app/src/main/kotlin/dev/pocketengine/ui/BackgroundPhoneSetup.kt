@@ -58,6 +58,7 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
     var alternatives by remember { mutableStateOf(false) }
     var foregroundConsent by remember { mutableStateOf(false) }
     var practice by remember { mutableStateOf(false) }
+    var externalPractice by remember { mutableStateOf(false) }
     var practicePackage by remember { mutableStateOf("") }
     var practiceField by remember { mutableStateOf("") }
     var forget by remember { mutableStateOf(false) }
@@ -72,7 +73,10 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
     val audioAvailable = display.opt("audioSilenceEnabled") is Boolean
     LaunchedEffect(display.opt("audioSilenceEnabled")) { if (audioAvailable) audioEnabled = display.getBoolean("audioSilenceEnabled") }
     LaunchedEffect(controller.backgroundAudioOwnerVisible) { if (!controller.backgroundAudioOwnerVisible) { audioBusy = false; audioReceipt = null; audioError = null } }
-    LaunchedEffect(mode, connection.wirelessAvailable) { if (mode == "wireless_adb" && connection.wirelessAvailable && !connection.taskOwned) controller.display("adb.discover") }
+    LaunchedEffect(mode, connection.wirelessAvailable) {
+        if (mode == "wireless_adb" && connection.wirelessAvailable && !connection.taskOwned) controller.display("adb.discover")
+        if (mode != "wireless_adb") controller.cancelPairingNotification()
+    }
     Dialog(onDismissRequest = controller::closeBackgroundSetup, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
@@ -115,13 +119,20 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
                         }
                     }
                     diagnosticMessage?.let { SetupCaption(it) }
-                    TextButton(onClick = { practice = !practice }, enabled = !connection.taskOwned && !state.phoneSubmitting) { Text(if (practice) "收起实际演练" else "开始一条实际手机演练…") }
+                    TextButton(onClick = { practice = !practice; if (practice) controller.readPhonePracticeEvidence() }, enabled = !state.phoneSubmitting) { Text(if (practice) "收起实际演练" else "手机演练与实际结果…") }
                     if (practice) {
-                        SetupCaption("这会创建一条原手机任务并真实输入“中文输入演练”。仅选可安全修改的普通测试字段；不会提交。暂停、停止和回执仍在原任务中。")
-                        OutlinedTextField(practicePackage, { practicePackage = it }, label = { Text("目标应用包名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(practiceField, { practiceField = it }, label = { Text("可安全测试的输入框标签") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        if (connection.helperConnected) OutlinedButton(onClick = { controller.startPhonePractice(practicePackage, practiceField, "background") }, enabled = !state.phoneSubmitting) { Text("明确开始后台演练") }
-                        OutlinedButton(onClick = { controller.startPhonePractice(practicePackage, practiceField, "main_screen") }, enabled = !state.phoneSubmitting) { Text("明确使用主屏演练（占用屏幕）") }
+                        SetupCaption("在 PocketWorld 自有测试页真实点击、输入中英文、滚动和返回，检查更新与后台屏。仍是一条原手机任务，最多 5 分钟并受原预算限制；暂停、停止和清场回执都在原任务中。")
+                        if (connection.helperConnected) OutlinedButton(onClick = { controller.startOwnedPhonePractice("background") }, enabled = !connection.taskOwned && !connection.busy && !state.phoneSubmitting) { Text("明确开始自有测试页后台演练") }
+                        OutlinedButton(onClick = { controller.startOwnedPhonePractice("main_screen") }, enabled = !connection.taskOwned && !connection.busy && !state.phoneSubmitting) { Text("明确使用主屏演练（占用屏幕）") }
+                        PhonePracticeEvidence(controller)
+                        TextButton(onClick = { externalPractice = !externalPractice }, enabled = !connection.taskOwned && !state.phoneSubmitting) { Text(if (externalPractice) "收起其他应用字段演练" else "已有其他测试应用？", fontSize = 12.sp) }
+                        if (externalPractice) {
+                            SetupCaption("沿用原单字段演练。仅选择你能安全修改的普通测试字段，真实输入“中文输入演练”，不提交；其结果保存在该原任务中，不计入上方自有测试页检查。")
+                            OutlinedTextField(practicePackage, { practicePackage = it }, label = { Text("目标测试应用包名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(practiceField, { practiceField = it }, label = { Text("可安全测试的输入框标签") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                            if (connection.helperConnected) OutlinedButton(onClick = { controller.startPhonePractice(practicePackage, practiceField, "background") }, enabled = !connection.taskOwned && !state.phoneSubmitting) { Text("明确开始此字段后台演练") }
+                            OutlinedButton(onClick = { controller.startPhonePractice(practicePackage, practiceField, "main_screen") }, enabled = !connection.taskOwned && !state.phoneSubmitting) { Text("明确用主屏演练此字段") }
+                        }
                     }
                     if (controller.backgroundAudioOwnerVisible) {
                         SetupHeading("后台应用声音")
@@ -150,7 +161,7 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
                         audioError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
                     }
                     if (connection.taskOwned) {
-                        SetupCaption("原手机任务正在持有执行资源。此处只能查看状态；更改连接前，请回原任务停止并等待资源释放。")
+                        SetupCaption("原手机任务正在持有执行资源。应用限制仍可撤销；更改连接前，请回原任务停止并等待资源释放。")
                         state.activeTaskId?.let { id -> TextButton(onClick = { controller.closeBackgroundSetup(); controller.focusTask(id) }) { Text("回到原任务") } }
                     }
                     if (connection.busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 12.dp))
@@ -162,11 +173,15 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
                         SetupCaption("已保留你之前选择的高级兼容连接，不会自动更换。")
                         TextButton(onClick = { alternatives = true }) { Text("恢复已选连接", fontSize = 12.sp) }
                     }
-                    state.moduleErrors.filterKeys { it.startsWith("display.") }.values.distinct().forEach { Text(it, fontSize = 12.sp, lineHeight = 21.sp, color = Danger, modifier = Modifier.padding(top = 10.dp)) }
+                    state.moduleErrors.filterKeys { it.startsWith("display.") || it.startsWith("phone_setup.") }.values.distinct().forEach { Text(it, fontSize = 12.sp, lineHeight = 21.sp, color = Danger, modifier = Modifier.padding(top = 10.dp)) }
                     if (!state.accessibilityEnabled || !state.notificationsEnabled) {
                         SetupHeading("任务还需要的权限")
                         if (!state.notificationsEnabled) { SetupCaption("任务通知用于暂停和停止；允许通知不等于完成无线调试配对。"); OutlinedButton(onClick = controller::openNotifications) { Text("允许任务通知", fontSize = 12.sp) } }
                         if (!state.accessibilityEnabled) { SetupCaption("无障碍用于系统允许的界面节点与文字读取，以及明确选择的主屏控制。"); OutlinedButton(onClick = controller::openAccessibility) { Text("设置界面读取权限", fontSize = 12.sp) } }
+                    }
+                    if (controller.backgroundAudioOwnerVisible) {
+                        PhoneOwnerExecutionControls(state, connection, controller)
+                        PhoneSetupControls(state.feature("phone_setup"), controller::phoneSetup)
                     }
                     TextButton(onClick = { alternatives = !alternatives }, modifier = Modifier.padding(top = 20.dp)) { Text(if (alternatives) "收起高级设置" else "高级兼容与连接恢复", fontSize = 12.sp) }
                     if (alternatives) {
@@ -232,7 +247,7 @@ private fun WirelessSetup(state: PocketUiState, connection: BackgroundConnection
     val endpoint = endpoints.find { it.key == selected }
     val port = if (manual) wirelessPort(portText) else endpoint?.port
     val host = if (manual) "127.0.0.1" else endpoint?.host ?: "127.0.0.1"
-    LaunchedEffect(host, port) { code = "" }
+    LaunchedEffect(host, port) { code = ""; controller.cancelPairingNotification() }
     SetupHeading(if (connecting) "连接端口" else "当前配对窗口")
     if (!manual && endpoints.size == 1) SetupCaption(if (connecting) "已发现这台手机的连接服务。" else "已发现这台手机的配对窗口。")
     if (!manual && endpoints.size > 1) endpoints.forEachIndexed { index, item -> Row(Modifier.fillMaxWidth().clickable { selected = item.key }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected == item.key, { selected = item.key }); Text("本机服务 " + (index + 1) + " · 端口 " + item.port, fontSize = 12.sp) } }
@@ -246,7 +261,17 @@ private fun WirelessSetup(state: PocketUiState, connection: BackgroundConnection
     if (!connecting) {
         OutlinedTextField(code, { code = it.filter { char -> char in '0'..'9' }.take(6) }, label = { Text("系统窗口当前的六位配对码") }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp), singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), enabled = connection.canPair)
         Button(onClick = { val currentCode = code; code = ""; port?.let { pairPort = it; controller.pairWireless(host, it, currentCode) } }, enabled = connection.canPair && port != null && wirelessPairCodeValid(code), modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) { Text("确认配对并继续") }
-        TextButton(onClick = { code = ""; connecting = true }, enabled = !connection.busy && !connection.taskOwned) { Text(if (connection.identityPresent) "使用已保存身份连接" else "此前配对过？直接连接", fontSize = 12.sp) }
+        val pairing = state.feature("phone_setup").optJSONObject("pairing")
+        if (pairing != null) {
+            if (pairing.optBoolean("active")) {
+                SetupCaption("通知输码已开启。保持系统配对窗口打开，从通知输入当前六位码；两分钟后失效，配对后仍需完成连接。")
+                TextButton(onClick = controller::cancelPairingNotification, enabled = "phone_setup.pairing.cancel" !in state.moduleBusy) { Text("取消这次通知输码", fontSize = 12.sp) }
+            } else TextButton(onClick = { code = ""; port?.let { pairPort = it; controller.beginPairingNotification(host, it) } },
+                enabled = connection.canPair && port != null && "phone_setup.pairing.begin" !in state.moduleBusy) { Text("改用通知输入配对码", fontSize = 12.sp) }
+            if (pairing.optString("lastOutcome") == "expired") SetupCaption("上次通知已过期，请重新读取当前配对窗口再开启。")
+            if (pairing.optString("lastOutcome") == "source_changed") SetupCaption("连接来源已改变，原通知已失效。请核对当前端口后重新开启。")
+        }
+        TextButton(onClick = { code = ""; controller.cancelPairingNotification(); connecting = true }, enabled = !connection.busy && !connection.taskOwned) { Text(if (connection.identityPresent) "使用已保存身份连接" else "此前配对过？直接连接", fontSize = 12.sp) }
     } else {
         if (port != null && port == pairPort) Text("这是刚才的配对端口。请读取无线调试主页的另一连接端口。", color = Danger, fontSize = 12.sp, lineHeight = 20.sp)
         Button(onClick = { port?.let { controller.connectWireless(host, it, pairPort) } }, enabled = connection.canConnect && port != null && port != pairPort, modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) { Text(if (connection.requiresConnectionCheck) "恢复并核对原连接" else "完成手机连接") }

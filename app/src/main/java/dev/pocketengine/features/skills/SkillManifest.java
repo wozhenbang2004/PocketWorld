@@ -21,7 +21,7 @@ public final class SkillManifest {
                 String key=line.substring(2,split).trim();if(!key.matches("[A-Za-z0-9_.-]{1,80}")||metadata.has(key))throw unsupported();metadata.put(key,scalar(line.substring(split+1).trim()));continue;
             }
             inMetadata=false;int split=line.indexOf(':');if(split<1)throw unsupported();String key=line.substring(0,split),raw=line.substring(split+1).trim();
-            if(!Set.of("name","description","license","compatibility","allowed-tools","metadata").contains(key)||fields.containsKey(key))throw unsupported();
+            if(!Set.of("name","description","license","compatibility","allowed-tools","metadata","disable-model-invocation","user-invocable").contains(key)||fields.containsKey(key))throw unsupported();
             if(key.equals("metadata")){if(!raw.isEmpty())throw unsupported();inMetadata=true;fields.put(key,"");continue;}
             if(raw.equals("|")||raw.equals(">")||raw.equals("|-")||raw.equals(">-")){
                 boolean folded=raw.charAt(0)=='>';StringBuilder block=new StringBuilder();
@@ -37,6 +37,10 @@ public final class SkillManifest {
         if(fields.getOrDefault("compatibility","").length()>500||fields.getOrDefault("license","").length()>1000||fields.getOrDefault("allowed-tools","").length()>1000)throw new IllegalArgumentException("技能元数据超出支持范围");
         JSONObject result=new JSONObject().put("name",name).put("description",description).put("metadata",metadata);
         for(String key:new String[]{"license","compatibility","allowed-tools"})if(fields.containsKey(key))result.put(key,fields.get(key));
+        for(String key:new String[]{"disable-model-invocation","user-invocable"})if(fields.containsKey(key)){
+            String value=fields.get(key);if(!value.equals("true")&&!value.equals("false"))throw new IllegalArgumentException(key+"只能为true或false");
+            result.put(key,Boolean.parseBoolean(value));
+        }
         return result;
     }
     private static String scalar(String raw)throws Exception {
@@ -46,5 +50,5 @@ public final class SkillManifest {
         if(raw.startsWith("!")||raw.startsWith("&")||raw.startsWith("*")||raw.startsWith("[")||raw.startsWith("{")||raw.startsWith("|")||raw.startsWith(">")||raw.contains("\t"))throw unsupported();
         int comment=raw.indexOf(" #");return (comment<0?raw:raw.substring(0,comment)).trim();
     }
-    private static IllegalArgumentException unsupported(){return new IllegalArgumentException("技能元数据当前支持文本字段、折行描述和字符串metadata；不支持YAML标签、锚点或复杂结构");}
+    private static IllegalArgumentException unsupported(){return new IllegalArgumentException("技能元数据当前支持文本字段、调用策略布尔值、折行描述和字符串metadata；不支持YAML标签、锚点或复杂结构");}
 }

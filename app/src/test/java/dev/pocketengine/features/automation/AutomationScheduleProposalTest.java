@@ -108,4 +108,26 @@ public final class AutomationScheduleProposalTest {
         JSONObject versioned=new JSONObject(requested.toString());versioned.getJSONObject("schedule").put("scheduleVersion",1);assertThrows(SecurityException.class,()->cold.proposeSchedule(nativeOrigin,operation,versioned,1001));
         assertEquals(legacy.getString("digest"),cold.approveScheduleProposal(legacy.getString("id"),legacy.getString("digest"),1002).getJSONObject("proposal").getString("digest"));assertFalse(cold.rules().getJSONObject(0).getJSONObject("schedule").has("scheduleVersion"));
     }
+    @Test public void sourcePendingRejectsStaleSaveAndPreservesOriginalUntilVerified()throws Exception {
+        File file=new File(temp.getRoot(),"pending-save.json"); AutomationBook book=new AutomationBook(file); JSONObject nativeOrigin=origin();
+        JSONObject proposal=book.proposeSchedule(nativeOrigin,UUID.randomUUID().toString(),draft(),90000);
+        JSONObject rule=book.approveScheduleProposal(proposal.getString("id"),proposal.getString("digest"),90001).getJSONObject("rule");
+        JSONObject stale=new JSONObject(rule.toString()).put("title","过期页面修改");
+        // Hold the actual shared Book monitor: the stale page queues a save while
+        // the same monitor records quarantine, then must observe the quarantine.
+        java.lang.reflect.Field lockField=AutomationBook.class.getDeclaredField("lock");lockField.setAccessible(true);Object lock=lockField.get(book);
+        AutomationBook staleBook=new AutomationBook(file);java.util.concurrent.ExecutorService executor=java.util.concurrent.Executors.newSingleThreadExecutor();byte[] original;
+        try {
+            java.util.concurrent.CountDownLatch queued=new java.util.concurrent.CountDownLatch(1);java.util.concurrent.Future<Boolean> rejected;
+            synchronized(lock){
+                rejected=executor.submit(()->{queued.countDown();try{staleBook.save(stale,90003);return false;}catch(SecurityException expected){return true;}});
+                assertTrue(queued.await(2,java.util.concurrent.TimeUnit.SECONDS));book.nativeScheduleSourcePending(nativeOrigin,true,90002);original=java.nio.file.Files.readAllBytes(file.toPath());
+            }
+            assertTrue(rejected.get(2,java.util.concurrent.TimeUnit.SECONDS));
+        } finally {executor.shutdownNow();}
+        assertArrayEquals(original,java.nio.file.Files.readAllBytes(file.toPath()));
+        assertTrue(book.rules().getJSONObject(0).getBoolean("sourceCheckPending"));assertEquals(0,book.claimDue(100000,10).length());
+        book.nativeScheduleSourcePending(nativeOrigin,false,90004);
+        JSONObject updated=book.save(stale,90005);assertEquals("过期页面修改",updated.getString("title"));assertEquals(rule.getInt("revision")+1,updated.getInt("revision"));
+    }
 }

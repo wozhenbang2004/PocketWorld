@@ -4,6 +4,7 @@ import dev.pocketengine.runtime.policy.OwnerIntent;
 import dev.pocketengine.runtime.policy.RunOutcomeTools;
 import dev.pocketengine.runtime.models.StepModelRouting;
 import dev.pocketengine.runtime.routes.PhoneRouteSession;
+import dev.pocketengine.runtime.history.RecentScreenHistory;
 import dev.pocketengine.core.EventSink;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.PhonePort;
@@ -117,6 +118,16 @@ public final class AgentRunner {
 
     public RunOutcome run(String taskId, String goal, ModelConfig config, RunControl control,
                           EventSink sink, RunJournal journal) {
+        return runOriginal(taskId,goal,config,control,sink,journal,null);
+    }
+    /** A single typed foreground owner choice follows the same capability port, journal and cleanup.
+     * No model response, recovered JSON or text instruction can enter this route. */
+    public RunOutcome runOwnerSkill(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,
+                                   dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation selected) {
+        return runOriginal(taskId,goal,config,control,sink,journal,java.util.Objects.requireNonNull(selected));
+    }
+    private RunOutcome runOriginal(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,
+                                   dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation ownerSkill) {
         RunOutcome outcome=null;boolean endUnavailable=false,cleanupPending=false;
         java.util.List<String> ownedServiceOperations=new java.util.ArrayList<>(retainedServiceOperations);
         developmentYielded=false;
@@ -126,11 +137,12 @@ public final class AgentRunner {
         boolean deferred=capabilities!=null&&sink!=null;
         EventSink admitted=deferred?event->{if(!"result".equals(event.optString("type")))sink.emit(event);}:sink;
         try{
-            outcome=runBound(taskId,goal,config,control,admitted,journal,ownedServiceOperations);
+            outcome=ownerSkill==null?runBound(taskId,goal,config,control,admitted,journal,ownedServiceOperations):runOwnerSkillBound(taskId,goal,config,control,admitted,journal,ownerSkill);
             if(!developmentYielded&&capabilities!=null&&control!=null&&!control.isCancelled()&&!control.isPaused())try{capabilities.endRun(control);}
                 catch(dev.pocketengine.features.local.project.ProjectServiceDrainPending pending){serviceDrainObserved=pending;}
                 catch(Exception unavailable){endUnavailable=true;}
         }finally{
+            if(ownerSkill!=null)ownerSkill.close();
             if(!developmentYielded&&capabilities!=null)try{capabilities.close();}
                 catch(dev.pocketengine.features.local.project.ProjectServiceDrainPending pending){serviceDrainObserved=pending;}
                 catch(RuntimeException unavailable){cleanupPending=true;}
@@ -185,6 +197,69 @@ public final class AgentRunner {
         if(ceiling<0||ceiling>400)throw new SecurityException("原任务步数范围无效");return ceiling;
     }
 
+    private RunOutcome runOwnerSkillBound(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,
+                                         dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation selected) {
+        JSONObject evidence=new JSONObject(),confirmedReceipt=null;String operation=null,recordedOperation=null;boolean dispatchEntered=false;int steps=0;
+        try{
+            if(capabilities==null||journal==null||control==null||config==null||sink==null)throw new SecurityException("主人技能请求缺少原能力执行链");
+            selected.requireRun(taskId,control);JSONObject saved=restore(journal);Object used=saved.opt("steps");
+            if(used!=null&&(!(used instanceof Number)||((Number)used).doubleValue()!=((Number)used).intValue()||((Number)used).intValue()<0))throw new JournalFailure();
+            steps=used==null?0:((Number)used).intValue();
+            JSONArray stored=saved.optJSONArray("messages");if(saved.has("messages")&&stored==null)throw new JournalFailure();
+            JSONArray history=stored==null||stored.length()==0?new JSONArray().put(new JSONObject().put("role","system").put("content",SYSTEM)).put(new JSONObject().put("role","user").put("content",clean(goal,config))):durableHistory(stored,config);
+            RunContextBudget budget=new RunContextBudget(ContextBudgetPolicy.forRun(contextBudgets,control));
+            if(steps>=executionStepCeiling(config,journal))return finish(taskId,"needs_confirmation","原任务操作预算已用完，请核对原范围；主人选择没有派发。",evidence,steps,config,sink);
+            capabilities.beginRun(clean(goal,config),control);lifecycleBegun=true;
+            capabilities.prepareTurn(clean(goal,config),0,steps,control);
+            JSONObject arguments=selected.input();String name="skills_execute";
+            if(!capabilities.supports(name)||!capabilities.sideEffecting(name))throw new SecurityException("原任务没有技能执行能力");
+            capabilities.validate(name,arguments);selected.requireRun(taskId,control);
+            JSONObject refused=capabilities.beforeTool(name,safeJson(arguments,config,false),control);
+            if(refused!=null){if(refused.optBoolean("ok",true)||!Boolean.FALSE.equals(refused.opt("accepted"))||refused.optString("code").isEmpty())throw new SecurityException("前置策略没有给出明确未派发回执");return finish(taskId,"awaiting_user",refused.optString("message","原任务当前不能执行所选技能，请核对后重新选择。"),refused,steps,config,sink);}
+            selected.requireRun(taskId,control);long pause=control.pauseRevision();steps++;
+            JSONObject chosen=new JSONObject().put("kind","owner_skill_selection").put("selection",selected.view()).put("executionAuthorized",false);
+            appendObservation(history,chosen,config,budget);checkpoint(taskId,journal,history,steps,chosen,config,sink,budget);
+            operation=begin(journal,name,arguments,config);control.check();
+            if(control.isPaused()||pause!=control.pauseRevision())throw new UncertainOperation();
+            selected.requireRun(taskId,control);emit(taskId,"tool","running","正在为主人所选脚本准备原任务审阅，尚未批准执行。",name,null,config,sink);
+            dispatchEntered=true;JSONObject receipt=capabilities.execute(name,new JSONObject(arguments.toString()).put("_hostOperationId",operation),control);
+            if(receipt==null)throw new UncertainOperation();completeOperation(journal,operation,receipt,config);recordedOperation=operation;operation=null;confirmedReceipt=new JSONObject(receipt.toString());
+            evidence=new JSONObject(receipt.toString()).put("ownerSelectedSkill",true).put("businessVerified",false).put("automaticReplayAllowed",false).put("operationId",recordedOperation);
+            appendObservation(history,evidence,config,budget);checkpoint(taskId,journal,history,steps,evidence,config,sink,budget);
+            capabilities.afterTool(name,arguments,receipt,control);
+            boolean unknown=receipt.optString("status").equals("unknown")||receipt.optString("code").contains("unknown")||receipt.has("accepted")&&receipt.isNull("accepted");
+            if(unknown)evidence.put("requiresReconciliation",true);
+            String summary=unknown?"原脚本效果仍待核对，请读取原操作回执；不会重跑。":receipt.optBoolean("ok")?"主人所选脚本已返回执行回执，请在原任务核对实际成果；任务目标尚未确认完成。":receipt.optString("message","本次脚本未完成，请核对原任务回执和执行准备，再明确选择下一步。");
+            emit(taskId,"tool",receipt.optBoolean("ok")?"completed":"awaiting_user",summary,name,receipt,config,sink,recordedOperation);
+            return finish(taskId,receipt.optBoolean("ok")&&!receipt.optBoolean("requiresPause")?"needs_confirmation":"awaiting_user",summary,evidence,steps,config,sink);
+        }catch(Exception failure){
+            if(recordedOperation!=null){
+                try{if(confirmedReceipt!=null)evidence=new JSONObject(confirmedReceipt.toString());evidence.put("operationId",recordedOperation).put("ownerSelectedSkill",true).put("receiptRecorded",true).put("postProcessingIncomplete",true).put("businessVerified",false).put("automaticReplayAllowed",false);}catch(Exception retained){/* The journal already owns the original receipt. */}
+                return finishOwnerSkillFailure(taskId,control!=null&&control.isCancelled()?"cancelled":"awaiting_user","原脚本已取得并保存回执，但历史或后续处理未完成。请在原任务核对这一次操作和成果；不会重新执行。",evidence,steps,config,sink);
+            }
+            if(operation!=null){try{evidence.put("operationId",operation).put("status",dispatchEntered?"unknown":"rejected").put("accepted",dispatchEntered?JSONObject.NULL:false).put("nativeDispatchEntered",dispatchEntered).put("requiresReconciliation",dispatchEntered).put("automaticReplayAllowed",false);completeOperation(journal,operation,evidence,config);}catch(Exception retained){/* The original prepared/native receipt stays query-only. */}}
+            String message=operation!=null?dispatchEntered?"所选脚本的原操作需要核对；保留既有回执，不会自动重试。":"所选脚本没有进入派发；请在原任务核对已登记的操作，不会自动重试。":"主人所选技能或原任务条件已变化，尚未派发；请核对后重新选择。";
+            return finishOwnerSkillFailure(taskId,control!=null&&control.isCancelled()?"cancelled":"awaiting_user",message,evidence,steps,config,sink);
+        }
+    }
+
+    /** Finalization failure must not erase which original native operation needs checking. */
+    private static RunOutcome finishOwnerSkillFailure(String taskId,String status,String summary,JSONObject evidence,int steps,
+                                                      ModelConfig config,EventSink sink) {
+        try{return finish(taskId,status,summary,evidence,steps,config,sink);}
+        catch(Exception failedToRecord){
+            JSONObject retained=new JSONObject();
+            try{retained=safeJson(evidence,config,true);}catch(Exception unavailable){
+                // Keep only native receipt facts if sanitizing the full receipt is unavailable.
+                for(String key:new String[]{"operationId","status","accepted","nativeDispatchEntered","requiresReconciliation","receiptRecorded","postProcessingIncomplete","ownerSelectedSkill"})
+                    try{if(evidence.has(key))retained.put(key,evidence.get(key));}catch(Exception ignored){}
+            }
+            try{retained.put("steps",steps).put("verification","user_required").put("automaticallyVerified",false)
+                    .put("automaticReplayAllowed",false).put("ownerResultFinalizationIncomplete",true);}catch(Exception ignored){}
+            return new RunOutcome(status,summary,retained);
+        }
+    }
+
     private RunOutcome runBound(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,java.util.List<String> ownedServiceOperations) {
         JSONObject evidence = new JSONObject();
         JSONArray history = null;
@@ -199,6 +274,14 @@ public final class AgentRunner {
         StepModelRouting.Session stepRouting=StepModelRouting.open(config,control,journal!=null);
         OwnerIntent intent=new OwnerIntent(goal);
         PhoneRouteSession routes=null;
+        java.util.concurrent.atomic.AtomicBoolean historyTurnPrepared=new java.util.concurrent.atomic.AtomicBoolean();
+        RecentScreenHistory screens=phone==null||control==null?null:new RecentScreenHistory(control,()->{
+            if(phone instanceof AdaptivePhonePort)((AdaptivePhonePort)phone).requireHistoryCurrent(control);
+            // Initial/resumed observation precedes admission of this turn's capability snapshot.
+            // Physical phone authority stays live; only an already prepared reference can expire.
+            if(historyTurnPrepared.get()&&capabilities!=null&&!capabilities.responseCurrent(control))throw new SecurityException("历史画面来源已撤回");
+        },()->System.nanoTime()/1_000_000,phone instanceof AdaptivePhonePort&&((AdaptivePhonePort)phone).appPolicyBound()?()->((AdaptivePhonePort)phone).appPolicyRevision():null);
+        java.util.List<String> recalledScreens=new java.util.ArrayList<>();
         ContextCompactor compactor=new ContextCompactor(journal,journal==null?null:journal.compaction(),runBudgets);
         long[] pauseSeen = new long[]{control == null ? 0 : control.pauseRevision()};
         try {
@@ -245,7 +328,7 @@ public final class AgentRunner {
             JSONObject latest = phone==null||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink);
             evidence = latest;
             if (!latest.optBoolean("ok", true)) return finish(taskId, "awaiting_user", latest.optString("message", "无法观察当前手机，请检查页面和操作权限后继续。"), evidence, steps, config, sink);
-            appendObservation(history, latest, config, contextBudget);
+            appendCapturedObservation(history, latest, config, contextBudget,screens,control);
             checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
             if(capabilities!=null&&!lifecycleBegun){capabilities.beginRun(clean(goal,config),control);lifecycleBegun=true;}
             String lastFeedback=saved.optString("feedback");
@@ -256,8 +339,11 @@ public final class AgentRunner {
             int firstRound=originalModelRounds;
             modelTurns: for (int round = firstRound; round <= executionStepCeiling(config,journal); round++) {
                 originalModelRounds=round+1;
+                // Retire old uploads against the old admission before prepareTurn replaces it.
+                withdrawHistoricalImages(screens,history,control);
+                historyTurnPrepared.set(false);
                 JSONObject resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
-                if (resumed != null) { stepRouting.ownerBoundary(); latest = resumed; evidence = resumed; appendObservation(history, resumed, config, contextBudget); }
+                if (resumed != null) { stepRouting.ownerBoundary(); latest = resumed; evidence = resumed; appendCapturedObservation(history, resumed, config, contextBudget,screens,control); }
                 control.check();
                 if(journal!=null){JSONObject live=journal.restore();String liveFeedback=live.optString("feedback");
                     recovery=RecoveryProjection.fromJournal(taskId,live.optJSONArray("operationResults"),config.apiKey);
@@ -277,7 +363,7 @@ public final class AgentRunner {
                 if(intent.deviceReadAllowed()&&phone!=null&&!phone.isConnected())return finish(taskId,"awaiting_user","请先开启手机操作权限，再继续任务。",evidence,steps,config,sink);
                 requireIntentImageInput(intent,config);
                 if(intent.deviceReadAllowed()&&phone!=null&&control.phoneSurfaceActive()&&latest.optBoolean("noDeviceObservation")){
-                    latest=observe(taskId,config,control,sink);evidence=latest;appendObservation(history,latest,config,contextBudget);
+                    latest=observe(taskId,config,control,sink);evidence=latest;appendCapturedObservation(history,latest,config,contextBudget,screens,control);
                 }
                 // One final model response may summarize the last receipt; the dispatch budget below
                 // still rejects every additional tool effect once the cumulative ceiling is reached.
@@ -292,6 +378,7 @@ public final class AgentRunner {
                 if(control.phoneSurfaceActive()&&phone instanceof AdaptivePhonePort)addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 JSONArray outcomeTools=RunOutcomeTools.tools();for(int i=0;i<outcomeTools.length();i++)tools.put(outcomeTools.getJSONObject(i));
                 if(routes!=null&&control.phoneSurfaceActive()){JSONArray routeTools=routes.tools();for(int i=0;i<routeTools.length();i++)tools.put(routeTools.getJSONObject(i));}
+                if(screens!=null&&control.phoneSurfaceActive()&&config.sendScreenshots&&imageInputAvailable(config)){JSONArray oldScreens=RecentScreenHistory.tools();for(int i=0;i<oldScreens.length();i++)tools.put(oldScreens.getJSONObject(i));}
                 if(capabilities!=null){
                     JSONObject prepared=capabilities.prepareTurn(clean(recallIntent,config),round,steps,control);
                     JSONArray extra=prepared.getJSONArray("tools");java.util.Set<String> names=new java.util.HashSet<>();for(int i=0;i<tools.length();i++)names.add(tools.getJSONObject(i).getJSONObject("function").getString("name"));
@@ -302,7 +389,9 @@ public final class AgentRunner {
                     String context=clean(reference.optString("context"),config);
                     if(!context.isEmpty())nativeReference=context+(nativeReference.isEmpty()?"":"\n\n"+nativeReference);
                 }
+                historyTurnPrepared.set(true);
                 tools=intent.filter(tools,this::intentEffecting);
+                withdrawHistoricalImages(screens,history,control);
                 // This is the existing request-only host-reference lane. Never checkpoint a second
                 // copy of SQL arguments/scope/receipts, or label recovery data as owner input.
                 if(!nativeReference.isEmpty()){
@@ -372,6 +461,10 @@ public final class AgentRunner {
                     dev.pocketengine.runtime.usage.InferenceCapture.Target originalMain=journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,"");
                     if(currentRoutes!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->currentRoutes.requireCurrentSources(control));
                     if(stepRouting.selectedLight())originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,stepRouting::requireLightCurrent);
+                    if(screens!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->{
+                        if(!historyTurnPrepared.get())throw new ModelGateway.RequestRefreshRequired();
+                        try{screens.requireUploads(nativeProvenance,control);}catch(SecurityException withdrawn){throw new ModelGateway.RequestRefreshRequired();}
+                    });
                     final JSONArray originalHistory=history,retryProjection=requestHistory;final JSONArray[] retryOwnerInputs={null};final boolean retryAfterContextRepair=!contextRecoveryUsed;
                     // Each physical call gets a fresh target/receipt and rechecks the original native
                     // task/epoch/scope. No tool has been admitted from this incomplete response.
@@ -440,7 +533,8 @@ public final class AgentRunner {
                 if (resumed != null) {
                     stepRouting.ownerBoundary();
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
-                    latest = resumed; evidence = resumed; appendObservation(history, resumed, config, contextBudget);
+                    withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
+                    latest = resumed; evidence = resumed; appendCapturedObservation(history, resumed, config, contextBudget,screens,control);
                     continue; // Discard a decision made against the pre-pause screen.
                 }
                 control.check();
@@ -480,7 +574,7 @@ public final class AgentRunner {
                     evidence.put("modelSummary", clean(answer, config));
                     int finalAnswerIndex=history.length();JSONObject finalMessage=new JSONObject().put("role","assistant").put("content",clean(answer,config));if(response.optJSONObject("provider_data")!=null)finalMessage.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));history.put(finalMessage);
                     if(memoryDependency!=null){finalMessage.put("memoryContext",memoryDependency);evidence.put("memoryContext",memoryDependency);}if(memoryReference!=null){finalMessage.put("memoryReference",memoryReference);evidence.put("memoryReference",memoryReference);}
-                    appendObservation(history, evidence, config, contextBudget);
+                    appendCapturedObservation(history, evidence, config, contextBudget,screens,control);
                     checkpoint(taskId, journal, history, steps, evidence, config, sink, contextBudget);
                     if(ownerInputs!=null&&!requestedOwnerIds.isEmpty())ownerInputs.completed(new OwnerReply(taskId,clean(answer,config),requestedOwnerIds,control,memoryReference,memoryDependency),control);
                     // Queue means next owner turn, not cancellation of the current tool batch.
@@ -530,6 +624,7 @@ public final class AgentRunner {
                     }
                     resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
                     if (resumed != null) {
+                        withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
                         latest=resumed;evidence=resumed;observed=true;sequenceMayContinue=false;
                         for(int stale=index;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),failure("stale_observation","机主已暂停或接管，这批尚未派发的旧决定已全部丢弃；请依据新现场重新规划。"),config));
                         break;
@@ -569,6 +664,7 @@ public final class AgentRunner {
                         if(activeStep!=null)activeStep.requireCurrent(control);
                         if(RunOutcomeTools.supports(name))RunOutcomeTools.validate(name,args);
                         else if(PhoneRouteSession.supports(name)){if(routes==null||!control.phoneSurfaceActive())throw new IllegalArgumentException("route_unavailable");PhoneRouteSession.validate(name,args);}
+                        else if(RecentScreenHistory.supports(name)){if(screens==null||!control.phoneSurfaceActive()||!config.sendScreenshots||!imageInputAvailable(config))throw new IllegalArgumentException("history_unavailable");RecentScreenHistory.validate(name,args);}
                         else if(capabilities!=null&&capabilities.supports(name))capabilities.validate(name,args);else{if(phone==null||"phone_observation_help".equals(name)&&!(phone instanceof AdaptivePhonePort))throw new IllegalArgumentException("Unavailable tool");validate(name,args,latest);}
                     } catch(PhoneRouteSession.SourceUnavailable unavailable){throw unavailable;} catch (Exception badArguments) {
                         stepRouting.reset("tool_arguments_or_authority_rejected");
@@ -585,6 +681,7 @@ public final class AgentRunner {
                     emit(taskId, "tool", "running", capabilities!=null&&capabilities.supports(name)?"正在调用已授权的能力工具。":toolLabel(name), name, null, config, sink);
                     resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
                     if (resumed != null) {
+                        withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
                         latest = resumed; evidence = resumed; observed = true;sequenceMayContinue=false;
                         receipt = failure("stale_observation", "暂停后页面已重新观察，这批尚未派发的旧决定已全部丢弃。");
                         for(int stale=index;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),receipt,config));
@@ -619,6 +716,13 @@ public final class AgentRunner {
                         evidence.put("blocked",safeJson(RunOutcomeTools.declaration(args),config,false));return finish(taskId,args.getBoolean("recoverable")?"awaiting_user":"failed",clean(RunOutcomeTools.summary(args),config),evidence,steps,config,sink);
                     }else if(routes!=null&&PhoneRouteSession.supports(name)){
                         receipt=routes.execute(name,args,latest,call.getString("id"),control);
+                    }else if(RecentScreenHistory.supports(name)){
+                        if(RecentScreenHistory.LIST.equals(name))receipt=new JSONObject().put("ok",true).put("screens",screens.index(control)).put("historicalOnly",true).put("coordinateAuthority",false);
+                        else if(RecentScreenHistory.FORGET.equals(name))receipt=new JSONObject().put("ok",true).put("removed",screens.forget(args.getString("screenId"),control)).put("screenId",args.getString("screenId"));
+                        else{contextBudget.requireImageInput(config);String screenId=args.getString("screenId");JSONObject recalled=screens.recall(screenId,control);
+                            if(recalled==null)receipt=new JSONObject().put("ok",false).put("code","screenshot_not_found").put("message","此原运行历史画面已过期、撤回或未保存；没有读取其他图片。").put("deviceActionFailed",false);
+                            else if(recalledScreens.size()>=MAX_IMAGES)receipt=new JSONObject().put("ok",false).put("code","history_image_batch_limit").put("deviceActionFailed",false);
+                            else{recalledScreens.add(screenId);receipt=new JSONObject().put("ok",true).put("screenId",screenId).put("sha256",recalled.getString("sha256")).put("imageQueuedForNextRequest",true).put("actualImageAttached",false).put("historicalOnly",true).put("coordinateAuthority",false);}}
                     }else if(RunOutcomeTools.OBSTACLE.equals(name)){
                         receipt=RunOutcomeTools.obstacle(args);
                     }else if ("phone_request_user".equals(name)) {
@@ -723,6 +827,15 @@ public final class AgentRunner {
                     }
                     if (phone!=null&&control.phoneSurfaceActive()&&(changesScreen(name) || "phone_wait".equals(name))) {
                         control.checkpoint();
+                        if(control.pauseRevision()!=pauseSeen[0]){
+                            withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
+                            resumed=afterPause(taskId,config,control,sink,pauseSeen,intent,history,journal,goal);
+                            if(resumed==null)throw new SecurityException("原手机恢复观察缺失");
+                            latest=resumed;evidence=resumed;observed=true;sequenceMayContinue=false;
+                            for(int stale=index+1;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),failure("stale_observation","原动作回执已保留；暂停后的旧批次余项未派发，请依据新现场重新规划。"),config));
+                            if(routes!=null)routes.disableLearning();
+                            break;
+                        }
                         latest = observe(taskId, config, control, sink);
                         evidence = latest;
                         observed = true;
@@ -734,7 +847,9 @@ public final class AgentRunner {
                     }
                 }
                 // All tool_call_ids are resolved before any native user image/new step is added.
-                if (observed) appendObservation(history, latest, config, contextBudget);observed=false;
+                if (observed) appendCapturedObservation(history, latest, config, contextBudget,screens,control);observed=false;
+                if(sequenceMayContinue)for(String screenId:recalledScreens){JSONObject recalled=screens.recall(screenId,control);if(recalled!=null){appendHistoricalObservation(history,recalled,config,contextBudget);screens.nativeUpload(history.getJSONObject(history.length()-1),recalled,control);}}
+                recalledScreens.clear();
                 for(var image:nativeImages)try{if(sequenceMayContinue){JSONObject actual=image.metadata().put("imageBase64",image.base64(control)).put("imageMimeType",image.mimeType());appendObservation(history,actual,config,contextBudget);emit(taskId,"tool_observation","completed","已将本次真实图片加入下一轮模型上下文。",null,new JSONObject().put("actualImageAttached",true).put("coordinateAuthority",false),config,sink);}}
                     finally{image.close();}nativeImages.clear();
                 checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
@@ -743,7 +858,7 @@ public final class AgentRunner {
                 try{activeStep=activePlan.next(control);}catch(PhoneRouteSession.SourceUnavailable unavailable){throw unavailable;}catch(Exception stale){control.check();activePlan.close();emit(taskId,"native_sequence","failed","短序列的下一步目标已变化或无法唯一核对；余下步骤没有派发。",null,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,sink);break;}
                 if(activeStep==null){activePlan.close();break;}
                 if(steps>=executionStepCeiling(config,journal)){activePlan.close();return finish(taskId,"needs_confirmation","已达到本次操作步数上限；短序列余下步骤未派发。",nativeStepLimitEvidence(evidence,control),steps,config,sink);}
-                JSONObject fresh=activeStep.observation();if(fresh!=null){latest=fresh;evidence=fresh;appendObservation(history,fresh,config,contextBudget);}
+                JSONObject fresh=activeStep.observation();if(fresh!=null){latest=fresh;evidence=fresh;appendCapturedObservation(history,fresh,config,contextBudget,screens,control);}
                 JSONObject nativeCall=new JSONObject().put("id","native_"+java.util.UUID.randomUUID()).put("type","function").put("function",new JSONObject().put("name",activeStep.tool.name).put("arguments",activeStep.arguments().toString()));
                 calls=new JSONArray().put(nativeCall);history.put(new JSONObject().put("role","assistant").put("tool_calls",new JSONArray(calls.toString())));
                 checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget);
@@ -813,6 +928,8 @@ public final class AgentRunner {
             return finishQuietly(taskId, "failed", ModelGateway.safeMessage(error, config), evidence, steps, config, sink);
         } finally {
             if(routes!=null)routes.close();
+            if(screens!=null)screens.close();
+            recalledScreens.clear();
             for(var plan:nativePlans){
                 plan.close();JSONObject progress=nativeSequenceProgress.get(plan);
                 if(progress!=null)try{int entered=progress.getInt("dispatchEnteredSteps"),remaining=plan.size()-entered;if(remaining>0)emit(taskId,"native_sequence","not_dispatched","短序列剩余 "+remaining+" 步没有派发，请核对当前结果后再规划。",plan.parentTool(),new JSONObject(progress.toString()).put("remainingSteps",remaining).put("firstNotDispatchedStep",entered+1).put("automaticReplay",false).put("executionAuthorized",false),config,sink);}
@@ -963,7 +1080,7 @@ public final class AgentRunner {
 
     /** This hint only removes tools; the original scope/grant/sensitive-step gates still run. */
     private boolean intentEffecting(String name){
-        if(RunOutcomeTools.supports(name))return false;
+        if(RunOutcomeTools.supports(name)||RecentScreenHistory.supports(name))return false;
         if(PhoneRouteSession.supports(name))return !PhoneRouteSession.LIST.equals(name);
         if("phone_prepare_sequence".equals(name)||"browser_task_prepare_sequence".equals(name))return true;
         return capabilities!=null&&capabilities.supports(name)?capabilities.sideEffecting(name):sideEffecting(name);
@@ -1017,7 +1134,12 @@ public final class AgentRunner {
     private static boolean currentReferenceReceipt(String name,String body,JSONObject validation){
         try{
             if(validation==null)return false;JSONObject result=new JSONObject(body);
+            if(name.startsWith("skills_")&&validation.has("skillScopeFingerprint")){
+                String scope=validation.getString("skillScopeFingerprint");
+                if(!scope.matches("[a-f0-9]{64}")||!scope.equals(result.optString("skillScopeFingerprint")))return false;
+            }
             if(name.equals("skills_read"))return currentReference(result,validation.optJSONArray("skills"),true);
+            if(name.equals("memory_recall")&&"retained_history".equals(result.optString("readMode")))return dev.pocketengine.features.memory.TaskMemoryUse.historicalReceiptCurrent(result,validation.optJSONArray("historicalMemory"));
             JSONArray rows=result.optJSONArray(name.startsWith("memory_")?"records":"skills"),live=validation.optJSONArray(name.startsWith("memory_")?"memory":"skills");
             if(rows==null||live==null)return false;
             for(int i=0;i<rows.length();i++)if(!currentReference(rows.getJSONObject(i),live,name.startsWith("skills_")))return false;
@@ -1028,7 +1150,7 @@ public final class AgentRunner {
     }
     private static boolean currentReference(JSONObject row,JSONArray live,boolean skill)throws Exception{
         if(live==null||row.optString("id").isEmpty()||!(row.opt("revision") instanceof Number)||row.getLong("revision")<1)return false;
-        for(int i=0;i<live.length();i++){JSONObject current=live.getJSONObject(i);if(row.getString("id").equals(current.optString("id"))&&row.getLong("revision")==current.optLong("revision")&&(!skill||!row.optString("digest").isEmpty()&&row.getString("digest").equals(current.optString("digest"))))return true;}return false;
+        for(int i=0;i<live.length();i++){JSONObject current=live.getJSONObject(i);if(row.getString("id").equals(current.optString("id"))&&row.getLong("revision")==current.optLong("revision")&&(!skill||!row.optString("digest").isEmpty()&&row.getString("digest").equals(current.optString("digest"))&&row.optLong("executionGeneration",0)==current.optLong("executionGeneration",0)&&row.optString("skillScopeFingerprint").equals(current.optString("skillScopeFingerprint"))))return true;}return false;
     }
 
     /** These host-generated opaque identities are not prose. Redacting arbitrary substrings would
@@ -1239,7 +1361,8 @@ public final class AgentRunner {
         if (first == null || first.length() != 2 || !"text".equals(first.optString("type"))
                 || !(first.opt("text") instanceof String)) return;
         String body = first.getString("text");
-        if (!body.startsWith(OBSERVATION_PREFIX)) return;
+        String prefix=body.startsWith(OBSERVATION_PREFIX)?OBSERVATION_PREFIX:body.startsWith(RecentScreenHistory.PREFIX)?RecentScreenHistory.PREFIX:null;
+        if (prefix==null) return;
         for (int i = 1; i < parts.length(); i++) {
             JSONObject part = parts.optJSONObject(i);
             if (part == null || !("image_url".equals(part.optString("type")) || "text".equals(part.optString("type"))
@@ -1247,7 +1370,7 @@ public final class AgentRunner {
         }
         JSONObject data;
         try {
-            org.json.JSONTokener parser = new org.json.JSONTokener(body.substring(OBSERVATION_PREFIX.length()));
+            org.json.JSONTokener parser = new org.json.JSONTokener(body.substring(prefix.length()));
             Object value = parser.nextValue();
             if (!(value instanceof JSONObject) || parser.nextClean() != 0) return;
             data = (JSONObject) value;
@@ -1256,10 +1379,32 @@ public final class AgentRunner {
         if (data.getBoolean("actualImageAttached") || !(data.opt("visionNotice") instanceof String)
                 || data.getString("visionNotice").isBlank()) {
             data.put("actualImageAttached", false).put("visionNotice", "历史截图未附在当前上下文；只依据保留的控件树文字。");
-            first.put("text", OBSERVATION_PREFIX + data);
+            first.put("text", prefix + data);
         }
     }
 
+    private static boolean imageInputAvailable(ModelConfig config){return config.usesAccount()?ModelGateway.accountSupportsImageInput(config.accountModel):config.supportsImageInput;}
+    private static void withdrawHistoricalImages(RecentScreenHistory screens,JSONArray history,RunControl original)throws Exception {
+        if(screens!=null)for(JSONObject withdrawn:screens.withdrawnUploads(history,original))removeNativeImage(withdrawn,"此原手机图片已过期、遗忘或来源已撤回；未发送图片。");
+    }
+    private static void appendCapturedObservation(JSONArray history,JSONObject observation,ModelConfig config,RunContextBudget budget,RecentScreenHistory screens,RunControl original)throws Exception {
+        if(screens!=null&&config.sendScreenshots&&imageInputAvailable(config))screens.retain(observation,original);
+        int before=history.length();
+        appendObservation(history,observation,config,budget);
+        if(screens!=null&&history.length()>before)screens.nativeUpload(history.getJSONObject(history.length()-1),observation,original);
+    }
+    private static void removeNativeImage(JSONObject message,String notice)throws Exception {
+        markObservationWithoutImage(message);JSONArray parts=message.optJSONArray("content"),replacement=new JSONArray();
+        for(int i=0;parts!=null&&i<parts.length();i++){JSONObject part=parts.optJSONObject(i);if(part!=null&&!"image_url".equals(part.optString("type")))replacement.put(part);}
+        replacement.put(new JSONObject().put("type","text").put("text",notice));message.put("content",replacement);
+    }
+    private static void appendHistoricalObservation(JSONArray history,JSONObject observation,ModelConfig config,RunContextBudget budget)throws Exception {
+        // The payload has no observationId, nodeId or coordinates; it cannot replace the current action surface.
+        appendObservation(history,observation,config,budget);
+        JSONObject first=history.getJSONObject(history.length()-1).getJSONArray("content").getJSONObject(0);
+        String text=first.getString("text");if(!text.startsWith(OBSERVATION_PREFIX))throw new SecurityException("historical_image_envelope_missing");
+        first.put("text",RecentScreenHistory.PREFIX+text.substring(OBSERVATION_PREFIX.length()));
+    }
     private static void appendObservation(JSONArray history, JSONObject observation, ModelConfig config, RunContextBudget contextBudget) throws Exception {
         if(observation.optBoolean("noDeviceObservation"))return;
         JSONObject nativeData=dev.pocketengine.features.memory.TaskMemoryHistory.observationData(observation);

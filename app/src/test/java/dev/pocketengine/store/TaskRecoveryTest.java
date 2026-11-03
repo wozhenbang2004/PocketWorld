@@ -85,20 +85,22 @@ public final class TaskRecoveryTest {
         assertThrows(SecurityException.class,()->store.checkCapability(id,task.getString("runId"),task.getInt("coordinatorEpoch"),"workspace_read",control));
     }
     @Test public void sshUncertaintySurvivesRestartAndBlocksAccountAliasesUntilOwnerReconciles()throws Exception{
-        TaskStore store=new TaskStore(context());String id="ssh-original";JSONObject input=new JSONObject().put("profileId","first").put("_resourceId","same-account");
+        TaskStore store=new TaskStore(context());String id="ssh-original";JSONObject input=new JSONObject().put("profileId","first").put("_resourceId","1".repeat(64)).put("_profileBinding","2".repeat(64)).put("command","pwd");
         store.beginExternal("ssh","exec",id,input);store.updateExternal(id,new JSONObject().put("runId",id).put("status","running"));
         TaskStore restarted=new TaskStore(context());assertEquals("reconciling",restarted.get(id,false).getString("status"));
-        JSONObject alias=new JSONObject().put("profileId","alias").put("_resourceId","same-account");
-        assertThrows(IllegalStateException.class,()->restarted.beginExternal("ssh","writeFile","blocked",alias));
-        assertNotNull(restarted.beginExternal("ssh","readFile","inspection",alias));
-        restarted.updateExternal("inspection",new JSONObject().put("status","completed"));
+        JSONObject alias=new JSONObject(input.toString()).put("profileId","alias").put("_profileBinding","3".repeat(64));
+        JSONObject write=new JSONObject(alias.toString()).put("path","fixture.txt").put("content","fixture").put("expectedVersion","absent").put("acceptCooperativeWrite",true);
+        assertThrows(IllegalStateException.class,()->restarted.beginExternal("ssh","writeFile","blocked",write));
+        assertThrows(IllegalStateException.class,()->restarted.beginExternal("ssh","inspectFile","inspection",new JSONObject(alias.toString()).put("path","fixture.txt")));
+        assertNotNull("Unknown effects are inspected through the original run, never an alias task",restarted.requireExternalRun(id,id,"ssh",false));
+        assertEquals(1,restarted.list().length());
         restarted.reconcileExternalTask(id,"occurred","已检查远端进程结束和文件状态");
         restarted.updateExternal(id,new JSONObject().put("runId",id).put("status","unknown"));
         assertEquals("needs_confirmation",restarted.get(id,false).getString("status"));
         assertNotNull(restarted.beginExternal("ssh","exec","next",alias));
     }
     @Test public void lateSshRunningDoesNotClearUnknownAndOldTerminalRunCannotDispatch()throws Exception{
-        TaskStore store=new TaskStore(context());String id="ssh-unknown";store.beginExternal("ssh","openPty",id,new JSONObject().put("_resourceId","account"));
+        TaskStore store=new TaskStore(context());String id="ssh-unknown";store.beginExternal("ssh","openPty",id,new JSONObject().put("_resourceId","4".repeat(64)));
         store.updateExternal(id,new JSONObject().put("runId",id).put("status","unknown"));
         store.updateExternal(id,new JSONObject().put("runId",id).put("status","running"));assertEquals("reconciling",store.get(id,false).getString("status"));
         assertThrows(SecurityException.class,()->store.requireExternalRun(id,id,"ssh",true));
@@ -114,7 +116,10 @@ public final class TaskRecoveryTest {
         assertThrows(SecurityException.class,()->store.prepareTeamChild(request,new JSONObject(binding.toString()).put("profileId","another-computer")));
         store.updateExternal(operation,new JSONObject().put("status","awaiting_approval").put("pendingApprovals",new JSONArray().put(new JSONObject().put("requestId","actual-request"))));
         assertEquals("queued",store.get(operation,false).getString("status")); // Identity-less positive notices are not job receipts.
-        store.updateExternal(operation,new JSONObject().put("operationId",operation).put("id","actual-job").put("profileId","computer").put("serviceBase","https://computer.example").put("status","awaiting_approval").put("pendingApprovals",new JSONArray().put(new JSONObject().put("requestId","actual-request"))));
+        JSONObject actualReceipt=new JSONObject().put("operationId",operation).put("id","actual-job").put("profileId","computer").put("serviceBase","https://computer.example").put("environmentId","workspace").put("worker","codex_app_server").put("status","awaiting_approval").put("pendingApprovals",new JSONArray().put(new JSONObject().put("requestId","actual-request")));
+        assertThrows(SecurityException.class,()->store.updateExternal(operation,new JSONObject(actualReceipt.toString()).put("environmentId","another-workspace")));
+        assertThrows(SecurityException.class,()->store.updateExternal(operation,new JSONObject(actualReceipt.toString()).put("worker","another-worker")));
+        store.updateExternal(operation,actualReceipt);
         assertEquals("awaiting_user",store.get(operation,false).getString("status"));
         store.requestCancel(parent,parent);request.put("operationId",java.util.UUID.randomUUID().toString());assertThrows(SecurityException.class,()->store.prepareTeamChild(request,binding));
     }

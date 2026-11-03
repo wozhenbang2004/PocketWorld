@@ -42,7 +42,8 @@ public final class AndroidSemanticCancellationTest {
             PhoneAccessibilityService service=Robolectric.buildService(PhoneAccessibilityService.class).create().get();serviceField().set(null,service);
             control.bindHostRun("original-task","original-run",1);platform=new AndroidSemanticPlatform(RuntimeEnvironment.getApplication(),service,()->{});
             request=SemanticRequest.parse(new JSONObject().put("kind","web").put("url","https://example.org/"));
-            target=new SemanticPlatform.Target(new JSONObject().put("component","example.browser/example.browser.Main").put("packageName","example.browser"),"fixture","browser");
+            target=new SemanticPlatform.Target(new JSONObject().put("component","example.browser/example.browser.Main").put("packageName","example.browser")
+                    .put("userId",0).put("profileSerial",RuntimeEnvironment.getApplication().getSystemService(android.os.UserManager.class).getSerialNumberForUser(android.os.Process.myUserHandle())),"fixture","browser");
         }
         void start() {result=new FutureTask<>(()->platform.dispatch(request,target,control,control::check));worker=new Thread(result,"semantic-cancel-fixture");worker.start();}
         JSONObject completeOnMain() throws Exception {

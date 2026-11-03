@@ -1,9 +1,10 @@
 package dev.pocketengine.runtime.context;
 
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunJournal;
+import dev.pocketengine.features.memory.TaskMemoryHistory;
 import dev.pocketengine.runtime.usage.InferenceCapture;
 import dev.pocketengine.runtime.usage.InferenceReceipt;
 import java.net.InetSocketAddress;
@@ -160,6 +161,23 @@ public final class ContextCompactorTest {
     @Test public void revokedIntermediatePublicationStopsBeforeTheNextSummaryOrAnyMain()throws Exception {
         try(Provider provider=new Provider()){
             Journal journal=new Journal(provider.config());coldHuge(journal);journal.revokeAfterFirstPublication=true;String raw=journal.raw.toString();ContextCompactor compactor=new ContextCompactor(journal,journal,journal.budgets());assertEquals("published_summary_source_changed",assertThrows(CompactionPlan.Unavailable.class,()->request(compactor,journal)).code);assertEquals(1,provider.calls.get());assertEquals(1,journal.publishes);assertEquals(raw,journal.raw.toString());assertEquals(InferenceReceipt.Outcome.COMPLETED,journal.receipts.get(1).outcome);
+        }
+    }
+
+    @Test public void automaticCompactionUsesOnlyOtherOriginalsAfterNativeArgumentsWereRetired()throws Exception {
+        try(Provider provider=new Provider()){
+            Journal journal=new Journal(provider.config());JSONObject retired=journal.raw.getJSONObject(2);
+            retired.put("memoryContextRetired",true).put("content",TaskMemoryHistory.RETIRED);
+            retired.getJSONArray("tool_calls").getJSONObject(0).getJSONObject("function").put("arguments","{\"query\":\"RETIRED_ARGUMENT_OLD_SOURCE\"}");
+            String original=journal.raw.toString();JSONArray visible=TaskMemoryHistory.wireMessages(journal.raw);
+            ContextCompactor compactor=new ContextCompactor(journal,journal,journal.budgets());
+            RunContextBudget.Projection result=compactor.request(journal.raw,visible,CompactionPlanTest.indexes(journal.raw),tools(),journal.config,journal.control,new RunContextBudget(journal.budgets()));
+            assertEquals(1,provider.calls.get());assertEquals(1,journal.publishes);assertTrue(result.diagnostics().getBoolean("summariesGenerated"));assertEquals(original,journal.raw.toString());
+            assertFalse(provider.request.toString().contains("RETIRED_ARGUMENT_OLD_SOURCE"));assertFalse(result.plan().messages().toString().contains("RETIRED_ARGUMENT_OLD_SOURCE"));
+            assertTrue(result.plan().messages().toString().contains("call-0"));assertTrue(result.plan().messages().toString().contains("ERR_IMPORT_0"));
+            JSONArray covered=journal.published.getJSONObject("coverage").getJSONArray("coveredIndexes");for(int i=0;i<covered.length();i++)assertNotEquals(2,covered.getInt(i));
+            assertEquals(InferenceReceipt.Purpose.SUMMARY,journal.receipts.get(1).context.purpose);assertEquals(InferenceReceipt.Outcome.COMPLETED,journal.receipts.get(1).outcome);
+            assertFalse(compactor.request(journal.raw,visible,CompactionPlanTest.indexes(journal.raw),tools(),journal.config,journal.control,new RunContextBudget(journal.budgets())).diagnostics().getBoolean("summariesGenerated"));assertEquals(1,provider.calls.get());
         }
     }
 

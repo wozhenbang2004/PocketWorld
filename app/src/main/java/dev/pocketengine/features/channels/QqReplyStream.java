@@ -62,7 +62,12 @@ final class QqReplyStream implements ModelGateway.StreamSink {
         JSONObject frame=core.reserveQqStreamFrame(id,text,state,receivedDeltas);
         try{
             ChannelHttp.DispatchGuard guard=()->{origin.check();control.check();core.checkQqStreamFrame(id,frame);};
-            JSONObject receipt=http.sendQqStream(profile,credential,event,frame,control,guard);guard.check();core.ackQqStreamFrame(id,frame,receipt);acknowledgedFrames++;lastPostNanos=System.nanoTime();changed.run();
+            JSONObject receipt=http.sendQqStream(profile,credential,event,frame,control,guard);
+            // This ACK describes the original frame already accepted by the platform.
+            // Preserve that effect before a source retirement can stop subsequent frames.
+            // The core still checks the exact pending frame and original delivery identity.
+            core.ackQqStreamFrame(id,frame,receipt);acknowledgedFrames++;lastPostNanos=System.nanoTime();changed.run();
+            origin.check();control.check();
         }catch(Exception unconfirmed){failed("原QQ流分片发送结果未知；保留原index与消息编号，不重放或改发普通消息");throw unconfirmed;}
     }
 

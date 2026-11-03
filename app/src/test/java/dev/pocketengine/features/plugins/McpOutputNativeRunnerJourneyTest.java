@@ -38,7 +38,7 @@ public final class McpOutputNativeRunnerJourneyTest {
     private static String id(){return UUID.randomUUID().toString();}
     private static String fingerprint(String actual)throws Exception{StringBuilder value=new StringBuilder("sha256:");for(byte b:MessageDigest.getInstance("SHA-256").digest(actual.getBytes(StandardCharsets.UTF_8)))value.append(String.format(Locale.ROOT,"%02x",b&255));return value.toString();}
     @Before public void before(){
-        Provider provider=new Provider(PROVIDER,"1","Known test key, not hardware-backed Android"){};
+        Provider provider=new Provider(PROVIDER,1.0,"Known test key, not hardware-backed Android"){};
         provider.put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());Security.addProvider(provider);
         RuntimeEnvironment.getApplication().getSharedPreferences("feature_secrets",Context.MODE_PRIVATE).edit().clear().commit();
     }
@@ -171,6 +171,41 @@ public final class McpOutputNativeRunnerJourneyTest {
             }
         }
     }
+    @Test public void originalRunnerAndBookMaskCredentialCandidatesAndKeepOrdinaryBusinessDataThroughQueryAndRead()throws Exception {
+        try(McpFixture wire=new McpFixture();Peer peer=new Peer(false)){
+            setupWire(wire);wire.result=new JSONObject().put("resultType","complete").put("isError",false)
+                .put("content",new JSONArray().put(new JSONObject().put("type","text").put("text","actual structured business record\nAuthorization: Bearer UNRELATED_RUNNER_BEARER\nBasic dW5yZWxhdGVkOnNlY3JldA==\n-----BEGIN PRIVATE KEY-----\n"))
+                    .put(new JSONObject().put("type","text").put("text","UNRELATED_RUNNER_PEM_BODY\n-----END PRIVATE KEY-----\nordinary tail")))
+                .put("outputProjection",new JSONObject().put("allSecretsDetected",true))
+                .put("structuredContent",new JSONObject().put("document",NEEDLE).put("token","UNRELATED_RUNNER_TOKEN")
+                    .put("authorization",new JSONObject().put("state","reviewed").put("apiKey","UNRELATED_RUNNER_API_KEY").put("echo",TOKEN))
+                    .put("nested",new JSONArray().put(new JSONObject().put("aPi_KeY","UNRELATED_RUNNER_NESTED_KEY")))
+                    .put("private",true).put("tokenCount",17).put("_nativeMcpJob",new JSONObject().put("business","remote-business-field"))
+                    .put("outputProjection",new JSONObject().put("policy","remote business policy"))
+                    .put("modelSecret",MODEL_KEY));
+            try(Domain d=new Domain(wire)){
+                String task=d.tasks.createCapabilityTask("原MCP业务字段保留与凭据脱敏","").getString("id");
+                assertEquals("awaiting_user",run(d,peer,task).status);assertEquals(0,wire.count("tools/call"));approveExactOriginal(d,task);
+                RunOutcome actual=run(d,peer,task);assertEquals(actual.summary,"needs_confirmation",actual.status);assertTrue(peer.failures.toString(),peer.failures.isEmpty());
+                assertTrue(peer.found);assertTrue(peer.actualRawReads>0);assertEquals(1,wire.count("tools/call"));assertEquals(1,d.outputs());
+                String saved=d.retained(peer.reference);JSONObject result=new JSONObject(saved).getJSONObject("result"),business=result.getJSONObject("structuredContent");
+                assertEquals(2,result.getJSONArray("content").length());assertTrue(result.getJSONArray("content").getJSONObject(1).getString("text").contains("ordinary tail"));
+                assertEquals(NEEDLE,business.getString("document"));assertEquals("[凭据已隐藏]",business.getString("token"));
+                assertEquals("[凭据已隐藏]",business.getJSONObject("authorization").getString("state"));
+                assertEquals("[凭据已隐藏]",business.getJSONObject("authorization").getString("apiKey"));assertEquals("[凭据已隐藏]",business.getJSONObject("authorization").getString("echo"));
+                assertEquals("[凭据已隐藏]",business.getJSONArray("nested").getJSONObject(0).getString("aPi_KeY"));
+                assertTrue(business.getBoolean("private"));assertEquals(17,business.getInt("tokenCount"));assertEquals("remote-business-field",business.getJSONObject("_nativeMcpJob").getString("business"));
+                assertEquals("remote business policy",business.getJSONObject("outputProjection").getString("policy"));assertFalse(result.getJSONObject("outputProjection").getBoolean("allSecretsDetected"));
+                assertTrue(result.getJSONObject("outputProjection").getBoolean("mayRedactBusinessValues"));
+                String modelBodies=peer.bodies.toString(),receipts=d.tasks.get(task,false).toString();
+                assertTrue(modelBodies.contains(NEEDLE));assertTrue(modelBodies.contains("remote-business-field"));assertTrue(modelBodies.contains("ordinary tail"));
+                for(String secret:new String[]{TOKEN,MODEL_KEY,"UNRELATED_RUNNER_TOKEN","UNRELATED_RUNNER_API_KEY","UNRELATED_RUNNER_NESTED_KEY","UNRELATED_RUNNER_BEARER","dW5yZWxhdGVkOnNlY3JldA==","UNRELATED_RUNNER_PEM_BODY"}){
+                    assertFalse(saved.contains(secret));assertFalse(modelBodies.contains(secret));assertFalse(receipts.contains(secret));
+                }
+                assertEquals(peer.reference.getString("revision"),fingerprint(saved));assertFalse(d.tasks.get(task,false).toString().contains(TOKEN));
+            }
+        }
+    }
     @Test public void mismatchedRpcAfterActualToolDispatchStaysUnknownWithoutReplayOrCounterfeitStoredRef()throws Exception {
         try(McpFixture wire=new McpFixture();Peer peer=new Peer(false)){
             setupWire(wire);wire.handler=exchange->{if(exchange.method().equals("tools/call"))exchange.raw(200,"application/json",new JSONObject().put("jsonrpc","2.0").put("id","not-the-original-id").put("result",wire.result).toString());else wire.standard(exchange);};
@@ -188,6 +223,110 @@ public final class McpOutputNativeRunnerJourneyTest {
                 d.db.execSQL("CREATE TEMP TRIGGER fixture_output_insert_failure BEFORE INSERT ON task_output_sources BEGIN SELECT RAISE(FAIL,'synthetic output store fault'); END");
                 RunOutcome actual=run(d,peer,task);assertEquals(actual.summary,"needs_confirmation",actual.status);assertEquals(1,wire.count("tools/call"));assertEquals(0,d.outputs());assertFalse(peer.found);assertTrue(peer.failures.toString(),peer.failures.isEmpty());
                 boolean receipt=false;JSONArray operations=d.tasks.get(task,false).getJSONArray("operations");for(int i=0;i<operations.length();i++){JSONObject row=operations.getJSONObject(i);JSONObject value=row.optJSONObject("receipt");if(value!=null&&"response_received".equals(value.optString("status"))){receipt=true;assertEquals("receipt",row.getString("state"));assertEquals("native_output_capture_unavailable",value.getJSONObject("outputCapture").getString("reason"));assertEquals(0,value.getJSONObject("outputCapture").getJSONArray("outputRefs").length());}}assertTrue(receipt);
+            }
+        }
+    }
+    /** The legacy HTTP tool has an original journal receipt, but no MCP output source.
+     * Keep this fixture separate from MCP discovery/capture and exercise the existing Runner. */
+    private static final class HttpOutputJourney implements AutoCloseable {
+        final Context android=RuntimeEnvironment.getApplication();final TaskStore tasks;final SQLiteDatabase db;
+        final PluginsModule plugins;final FeatureHost features;final HttpServer server;
+        final List<JSONObject> toolRequests=new CopyOnWriteArrayList<>(),modelRequests=new CopyOnWriteArrayList<>();
+        final List<Throwable> failures=new CopyOnWriteArrayList<>();volatile JSONObject modelReceipt;String lastRun;
+        HttpOutputJourney()throws Exception {
+            android.deleteDatabase("pocket-world.db");File declarations=new File(android.getFilesDir(),"plugins.json");if(declarations.exists())assertTrue(declarations.delete());
+            tasks=new TaskStore(android);var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);db=(SQLiteDatabase)field.get(tasks);
+            FeatureContext context=new FeatureContext(android,new SettingsStore(android),new SecretVault(android),e->{});
+            plugins=new PluginsModule(context);features=new FeatureHost(e->{},tasks,()->false);features.register(plugins);
+            server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+            server.createContext("/tool",exchange->{try{
+                assertEquals("Bearer "+TOKEN,exchange.getRequestHeaders().getFirst("Authorization"));
+                toolRequests.add(new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8)));
+                JSONObject result=new JSONObject().put("document","HTTP_ORIGINAL_BUSINESS_714").put("apiKey","UNRELATED_HTTP_RUNNER_API_KEY")
+                    .put("token",new JSONArray().put("UNRELATED_HTTP_RUNNER_TOKEN").put(123456))
+                    .put("nested",new JSONArray().put(new JSONObject().put("aPi_KeY","UNRELATED_HTTP_RUNNER_NESTED_KEY")))
+                    .put("text","ordinary before Bearer UNRELATED_HTTP_RUNNER_BEARER\n-----BEGIN PRIVATE KEY-----\nHTTP_RUNNER_PRIVATE_BODY\n-----END PRIVATE KEY-----\nordinary after")
+                    .put("private",true).put("tokenCount",17).put("_nativeMcpJob",new JSONObject().put("business","remote HTTP business object"))
+                    .put("outputProjection",new JSONObject().put("policy","remote HTTP business policy").put("allSecretsDetected",true))
+                    .put("boundEcho",TOKEN).put("modelSecret",MODEL_KEY);
+                byte[] bytes=result.toString().getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+            }catch(Throwable failed){failures.add(failed);try{exchange.sendResponseHeaders(500,0);}catch(Exception ignored){}}finally{exchange.close();}});
+            server.createContext("/v1/chat/completions",exchange->{try{
+                JSONObject request=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));modelRequests.add(request);
+                JSONObject message=respond(request);byte[] bytes=new JSONObject().put("model","controlled-http-output-runner")
+                    .put("choices",new JSONArray().put(new JSONObject().put("index",0).put("message",message).put("finish_reason",message.has("tool_calls")?"tool_calls":"stop")))
+                    .put("usage",new JSONObject().put("prompt_tokens",23).put("completion_tokens",7).put("total_tokens",30)).toString().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+            }catch(Throwable failed){failures.add(failed);try{exchange.sendResponseHeaders(500,0);}catch(Exception ignored){}}finally{exchange.close();}});server.start();
+            JSONObject schema=new JSONObject().put("type","object").put("properties",new JSONObject().put("q",new JSONObject().put("type","string"))).put("required",new JSONArray().put("q")).put("additionalProperties",false);
+            JSONObject tool=new JSONObject().put("name","lookup").put("kind","http").put("effect","write").put("endpoint",base()+"/tool").put("schema",schema);
+            JSONObject installed=plugins.handle("install",new JSONObject().put("manifest",new JSONObject().put("id","http-output-native").put("name","原HTTP结果").put("version","1").put("tools",new JSONArray().put(tool))).put("token",TOKEN));
+            assertFalse(installed.getBoolean("enabled"));assertEquals(0,installed.getJSONArray("grants").length());
+            NativeOwnerWorkflows owner=new NativeOwnerWorkflows(features,context,tasks,new MemorySourceBridge(features,tasks));
+            owner.mcp("setToolGrantReviewed",new JSONObject().put("id",installed.getString("id")).put("expectedInstallationId",installed.getString("installationId")).put("expectedGrantsDigest",installed.getString("grantsDigest")).put("tool","lookup").put("granted",true));
+            owner.mcp("setEnabledReviewed",new JSONObject().put("id",installed.getString("id")).put("expectedInstallationId",installed.getString("installationId")).put("enabled",true));
+        }
+        String base(){return "http://127.0.0.1:"+server.getAddress().getPort();}
+        JSONObject respond(JSONObject request)throws Exception {
+            JSONArray messages=request.getJSONArray("messages");
+            for(int i=0;i<messages.length();i++){JSONObject message=messages.getJSONObject(i);if(!"tool".equals(message.optString("role")))continue;
+                JSONObject receipt;try{receipt=new JSONObject(message.getString("content"));}catch(Exception omitted){continue;}
+                if("response_received".equals(receipt.optString("status"))&&receipt.optJSONObject("toolResult")!=null){modelReceipt=receipt;return new JSONObject().put("role","assistant").put("content","已取得原HTTP回执；实际返回是低信任证据，外部业务效果仍需主人核对，不重复提交。");}}
+            JSONArray tools=request.getJSONArray("tools");String plugin="";for(int i=0;i<tools.length();i++){String name=tools.getJSONObject(i).getJSONObject("function").getString("name");if(name.startsWith("plugin_"))plugin=name;}assertFalse(plugin.isEmpty());
+            return new JSONObject().put("role","assistant").put("content",JSONObject.NULL).put("tool_calls",new JSONArray().put(new JSONObject().put("id",id()).put("type","function").put("function",new JSONObject().put("name",plugin).put("arguments",new JSONObject().put("q","original HTTP business result").toString()))));
+        }
+        RunOutcome run(String task)throws Exception {
+            JSONObject attempt=tasks.startAttempt(task,"capabilities",8);lastRun=attempt.getString("runId");int epoch=attempt.getInt("coordinatorEpoch");RunControl original=new RunControl();original.bindHostRun(task,lastRun,epoch);
+            ToolOutputCapture.Factory factory=tasks.toolOutputFactory(task,lastRun,epoch,original,text->ModelGateway.redact(text,MODEL_KEY));
+            CapabilityPort port=new ToolOutputSourcePort(new HostToolSupervisor(features,tasks,task,lastRun,epoch,true,factory),factory,original);
+            JSONArray tools=port.tools(),names=new JSONArray();for(int i=0;i<tools.length();i++)names.put(tools.getJSONObject(i).getJSONObject("function").getString("name"));tasks.authorizeTools(task,lastRun,names);
+            ContextBudgetPolicy.installHostSource(c->ContextBudgetPolicy.RouteBudget.forRoute(c,new ContextWindow.Budget(128000,1000,1000,2L*1024*1024,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,System.currentTimeMillis()));
+            try{
+                ModelConfig model=new ModelConfig(base()+"/v1",MODEL_KEY,"controlled-http-output-runner",false,8,8,"openai_chat",512);
+                RunOutcome outcome=new AgentRunner(null,port,ContextBudgetPolicy.currentHostSource()).run(task,"调用主人已批的原HTTP工具，核对实际回执；效果未核实或unknown时不重复提交。",model,original,
+                    event->{try{tasks.event(task,lastRun,epoch,event);}catch(Exception failed){throw new IllegalStateException(failed);}},tasks.journal(task,lastRun,epoch,original));
+                tasks.endAttempt(task,lastRun,"needs_confirmation".equals(outcome.status)?"awaiting_user":outcome.status,outcome.summary,outcome.evidence);return outcome;
+            }finally{port.close();}
+        }
+        @Override public void close(){server.stop(0);try{features.close();}finally{db.close();}}
+    }
+    @Test public void originalHttpApprovalReceiptAndFinalModelKeepOrdinaryBusinessDataAndMaskCredentialCandidates()throws Exception {
+        try(HttpOutputJourney d=new HttpOutputJourney()){
+            String task=d.tasks.createCapabilityTask("原HTTP结果投影与单次批准","").getString("id");d.tasks.configureExecutionScope(task,0,System.currentTimeMillis()+300000,8,8);
+            RunOutcome waiting=d.run(task);assertEquals(waiting.summary,"awaiting_user",waiting.status);assertEquals(0,d.toolRequests.size());
+            assertEquals(1,d.tasks.get(task,false).getJSONObject("executionScope").getInt("toolsUsed"));
+            JSONObject pending=null;JSONArray approvals=d.tasks.get(task,false).getJSONArray("approvals");for(int i=0;i<approvals.length();i++)if("pending".equals(approvals.getJSONObject(i).optString("state")))pending=approvals.getJSONObject(i);
+            assertNotNull(pending);assertTrue(pending.getString("tool").startsWith("plugin_"));d.tasks.decideCapabilityApproval(task,pending.getString("id"),true);
+            RunOutcome actual=d.run(task);assertEquals(actual.summary,"needs_confirmation",actual.status);assertTrue(d.failures.toString(),d.failures.isEmpty());assertEquals(1,d.toolRequests.size());
+            JSONObject saved=d.tasks.get(task,false);JSONArray operations=saved.getJSONArray("operations");assertEquals(2,operations.length());
+            JSONObject operation=null;int approvalReceipts=0;
+            for(int i=0;i<operations.length();i++){
+                JSONObject row=operations.getJSONObject(i),fact=row.getJSONObject("receipt");
+                if("approval_required".equals(fact.optString("code"))){
+                    approvalReceipts++;assertEquals("receipt",row.getString("state"));assertEquals(pending.getString("tool"),row.getString("tool"));
+                    assertFalse(fact.getBoolean("ok"));assertFalse(fact.getBoolean("accepted"));assertEquals(pending.getString("id"),fact.getString("approvalId"));
+                    assertNotEquals(d.lastRun,row.getString("runId"));assertEquals("original HTTP business result",row.getJSONObject("arguments").getString("q"));
+                }else{assertNull("Only one original approved HTTP operation may dispatch",operation);operation=row;}
+            }
+            assertEquals(1,approvalReceipts);assertNotNull(operation);JSONObject receipt=operation.getJSONObject("receipt");
+            assertEquals(d.lastRun,operation.getString("runId"));assertEquals("receipt",operation.getString("state"));assertEquals(pending.getString("tool"),operation.getString("tool"));
+            assertEquals(operation.getString("operationId"),d.toolRequests.get(0).getString("operationId"));assertEquals(operation.getString("operationId"),receipt.getString("operationId"));
+            // Original journal attempts consume budget even when approval blocks
+            // dispatch. Two audited attempts must still produce one HTTP POST.
+            assertEquals("original HTTP business result",d.toolRequests.get(0).getJSONObject("arguments").getString("q"));assertEquals(2,saved.getJSONObject("executionScope").getInt("toolsUsed"));assertEquals(8,saved.getJSONObject("executionScope").getInt("toolLimit"));assertFalse(d.tasks.hasUnresolved(task));
+            assertNotNull(d.modelReceipt);for(JSONObject projected:new JSONObject[]{receipt,d.modelReceipt}){
+                assertEquals("response_received",projected.getString("status"));assertFalse(projected.getBoolean("verified"));assertFalse(projected.has("outputCapture"));
+                JSONObject projection=projected.getJSONObject("outputProjection"),business=projected.getJSONObject("toolResult");
+                assertFalse(projection.getBoolean("allSecretsDetected"));assertTrue(projection.getBoolean("mayRedactBusinessValues"));
+                assertEquals("remote HTTP business policy",business.getJSONObject("outputProjection").getString("policy"));assertTrue(business.getJSONObject("outputProjection").getBoolean("allSecretsDetected"));
+                assertEquals("HTTP_ORIGINAL_BUSINESS_714",business.getString("document"));assertTrue(business.getBoolean("private"));assertEquals(17,business.getInt("tokenCount"));
+                assertEquals("remote HTTP business object",business.getJSONObject("_nativeMcpJob").getString("business"));assertTrue(business.getString("text").contains("ordinary after"));
+            }
+            try(Cursor rows=d.db.rawQuery("SELECT count(*) FROM task_output_sources",null)){assertTrue(rows.moveToFirst());assertEquals("HTTP has no counterfeit MCP output source",0,rows.getInt(0));}
+            String retained;try(Cursor rows=d.db.rawQuery("SELECT receipt FROM operations WHERE task_id=? AND run_id=?",new String[]{task,d.lastRun})){assertTrue(rows.moveToFirst());retained=rows.getString(0);assertFalse(rows.moveToNext());}
+            String model=d.modelRequests.toString();assertTrue(model.contains("HTTP_ORIGINAL_BUSINESS_714"));assertTrue(model.contains("remote HTTP business policy"));
+            for(String secret:new String[]{TOKEN,MODEL_KEY,"UNRELATED_HTTP_RUNNER_API_KEY","UNRELATED_HTTP_RUNNER_TOKEN","UNRELATED_HTTP_RUNNER_NESTED_KEY","UNRELATED_HTTP_RUNNER_BEARER","HTTP_RUNNER_PRIVATE_BODY"}){
+                assertFalse(retained.contains(secret));assertFalse(saved.toString().contains(secret));assertFalse(model.contains(secret));
             }
         }
     }
