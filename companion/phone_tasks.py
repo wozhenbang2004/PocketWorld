@@ -251,9 +251,13 @@ def main(argv=None):
             except ClientError:
                 result["currentRead"] = "unavailable"
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        unconfirmed = (result.get("status") == "unknown" or result.get("effectState") == "unknown"
+                       or result.get("currentRead") == "unavailable" or result.get("phoneStateUnconfirmed") is True)
+        if not unconfirmed and (result.get("status") == "rejected" or result.get("accepted") is False):
+            return 4
         if args.action == "run" and args.watch:
             return watch(client, args.phone, params["operationId"])
-        return 3 if result.get("status") == "unknown" or result.get("effectState") == "unknown" else 0
+        return 3 if unconfirmed else 0
     except KeyboardInterrupt:
         print("Stopped local observation. Phone tasks were not cancelled or resubmitted.", file=sys.stderr)
         return 130

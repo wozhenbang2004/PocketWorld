@@ -64,16 +64,26 @@ public final class DeviceTaskCoordinator {
         return task;
     }
     public JSONObject task(PairingCoordinator.Permission permission) throws Exception {
-        return taskSnapshot(requireTask(permission,permission.envelope().arguments().getString("taskId")));
+        return taskSnapshot(requireTask(permission,permission.envelope().arguments().getString("taskId")),permission.callerDeviceId(),permission.authorizationEpoch());
     }
-    public JSONObject task(PairingCoordinator.HistoryPermission permission)throws Exception{return taskSnapshot(requireHistoryTask(permission,permission.envelope().arguments().getString("taskId")));}
-    private JSONObject taskSnapshot(JSONObject task)throws Exception{
+    public JSONObject task(PairingCoordinator.HistoryPermission permission)throws Exception{return taskSnapshot(requireHistoryTask(permission,permission.envelope().arguments().getString("taskId")),permission.callerDeviceId(),permission.authorizationEpoch());}
+    private JSONObject taskSnapshot(JSONObject task,String caller,long authorizationEpoch)throws Exception{
         JSONArray events = task.optJSONArray("events"); long cursor = 0;
         for (int i = 0; events != null && i < events.length(); i++) cursor = Math.max(cursor, events.getJSONObject(i).optLong("seq", i + 1L));
         JSONObject detail = new JSONObject().put("summary", task.optString("summary")).put("origin", task.getJSONObject("origin"))
                 .put("rootTaskId", task.getString("rootTaskId")).put("remoteParentTaskId", task.optString("remoteParentTaskId"))
                 .put("executionKind", task.getString("deviceExecutionKind")).put("transportStateIsNotExecutionState", true);
         DeviceOwnerInputs inputs=host.ordinaryInputs();if(inputs!=null){JSONObject input=inputs.view(task);if(input!=null)detail.put("ownerInput",input);}
+        // Return only this authenticated caller's still-current original lease. Read-only
+        // history under a later authorization epoch cannot recover an old control identity.
+        JSONObject lease=task.optJSONObject("deviceControlLease"),origin=task.getJSONObject("origin");
+        if(lease!=null&&!task.optBoolean("cancelRequested")&&task.optString("status").matches("preparing|running|pausing|paused|awaiting_user")
+                &&caller.equals(origin.optString("callerDeviceId"))&&caller.equals(lease.optString("callerDeviceId"))
+                &&authorizationEpoch==origin.optLong("authorizationEpoch")&&authorizationEpoch==lease.optLong("authorizationEpoch")
+                &&!task.optString("runId").isEmpty()&&task.optString("runId").equals(lease.optString("runId"))
+                &&task.optInt("coordinatorEpoch")>0&&task.optInt("coordinatorEpoch")==lease.optInt("executorEpoch")
+                &&!lease.optString("leaseId").isEmpty()&&lease.optLong("expiresAt")>System.currentTimeMillis())
+            detail.put("controlLease",new JSONObject().put("controlLeaseId",lease.getString("leaseId")).put("expiresAt",lease.getLong("expiresAt")));
         JSONObject resumeRequest=TaskStoreDeviceTasks.resumeRequestView(task);
         if(resumeRequest!=null)detail.put("resumeRequest",resumeRequest);
         JSONObject evidence = task.optJSONObject("evidence");

@@ -122,6 +122,13 @@ public final class PhoneTaskInputsNativeTest {
             JSONObject args=new JSONObject().put("taskId",task).put("runId",run).put("executorEpoch",epoch).put("ttlMs",30000);if(previous!=null)args.put("previousLeaseId",previous);
             return coordinator.acquireControl(permission(request("task.acquireControl",operation,args)));
         }
+        JSONObject snapshot()throws Exception{return coordinator.task(permission(request("task.get","snapshot-"+UUID.randomUUID(),new JSONObject().put("taskId",task))));}
+        void retainedLease(JSONObject lease)throws Exception{
+            // Explicit retained-state negative fixture: change only this original
+            // task's stored lease, then query through real authenticated admission.
+            synchronized(tasks){JSONObject stored;try(Cursor row=sql.rawQuery("SELECT document FROM tasks WHERE task_id=?",new String[]{task})){assertTrue(row.moveToFirst());stored=new JSONObject(row.getString(0));}
+                stored.put("deviceControlLease",new JSONObject(lease.toString()));ContentValues update=new ContentValues();update.put("document",stored.toString());assertEquals(1,sql.update("tasks",update,"task_id=?",new String[]{task}));}
+        }
         JSONObject input(String method,String operation,String lease,String text)throws Exception{
             JSONObject args=new JSONObject().put("taskId",task).put("runId",run).put("executorEpoch",epoch).put("allocationId",allocation).put("controlLeaseId",lease).put("text",text);
             if(method.equals("task.answerQuestion")){JSONObject question=tasks.get(task,false).getJSONObject("evidence").getJSONObject("ownerQuestion");args.put("originalRequestId",question.getString("requestId")).put("waitRevision",question.getLong("waitRevision"));}
@@ -165,6 +172,15 @@ public final class PhoneTaskInputsNativeTest {
     }}
     @Test public void originalLeaseQuestionAndDigestCannotBeReplacedAndDuplicateIsSingleNativeInput()throws Exception{try(Fixture f=new Fixture(4)){
         RunOutcome waiting=f.runOriginal();assertEquals(f.diagnostics(waiting),"awaiting_user",waiting.status);String old=f.acquire("control-old",null).getString("leaseId"),lease=f.acquire("control-new",old).getString("leaseId");f.continueAutomatically=false;
+        JSONObject originalLease=f.tasks.get(f.task,false).getJSONObject("deviceControlLease"),visible=f.snapshot().getJSONObject("result").getJSONObject("controlLease");
+        assertEquals(2,visible.length());assertEquals(lease,visible.getString("controlLeaseId"));assertEquals(originalLease.getLong("expiresAt"),visible.getLong("expiresAt"));
+        try{
+            for(String staleField:new String[]{"callerDeviceId","runId","executorEpoch","authorizationEpoch","expiresAt"}){
+                JSONObject stale=new JSONObject(originalLease.toString());Object obsolete=switch(staleField){case "callerDeviceId"->f.target;case "runId"->UUID.randomUUID().toString();case "executorEpoch"->f.epoch+1;case "authorizationEpoch"->originalLease.getLong("authorizationEpoch")+1;default->System.currentTimeMillis()-1;};
+                stale.put(staleField,obsolete);f.retainedLease(stale);assertFalse("Stale "+staleField+" exposed a control lease",f.snapshot().getJSONObject("result").has("controlLease"));
+            }
+        }finally{f.retainedLease(originalLease);}
+        assertEquals(lease,f.snapshot().getJSONObject("result").getJSONObject("controlLease").getString("controlLeaseId"));
         assertThrows(SecurityException.class,()->f.coordinator.ownerInput(f.permission(f.input("task.answerQuestion","obsolete-lease",old,"first"))));
         JSONObject wrong=f.input("task.answerQuestion","obsolete-allocation",lease,"first");wrong.getJSONObject("arguments").put("allocationId","wrong-allocation");assertThrows(SecurityException.class,()->f.coordinator.ownerInput(f.permission(wrong)));
         JSONObject answer=f.input("task.answerQuestion","single-answer",lease,"FIRST-NATIVE-ANSWER");JSONObject saved=f.coordinator.ownerInput(f.permission(answer));assertTrue(saved.getBoolean("inputSaved"));assertFalse(saved.getBoolean("continuationRequested"));
@@ -172,6 +188,7 @@ public final class PhoneTaskInputsNativeTest {
         assertThrows(SecurityException.class,()->f.coordinator.ownerInput(f.permission(f.input("task.answerQuestion","changed-answer",lease,"SECOND-DIFFERENT-ANSWER"))));
         JSONObject changed=new JSONObject(answer.toString());changed.getJSONObject("arguments").put("text","CHANGED-SAME-OPERATION");assertThrows(SecurityException.class,()->f.coordinator.ownerInput(f.permission(changed)));
         assertEquals(1,f.tasks.get(f.task,false).getJSONArray("ownerInputs").length());assertEquals(1,f.requests.get());assertEquals(1,f.count("runs"));assertTrue(f.original.isPaused());
+        f.tasks.requestCancel(f.task,f.run);f.original.cancel();assertFalse(f.snapshot().getJSONObject("result").has("controlLease"));
     }}
     @Test public void approvalSmugglingPendingApprovalAndMissingNativeSessionNeverAppendOrdinaryText()throws Exception{try(Fixture f=new Fixture(4)){
         RunOutcome waiting=f.runOriginal();assertEquals(f.diagnostics(waiting),"awaiting_user",waiting.status);String lease=f.acquire("control",null).getString("leaseId");
@@ -255,8 +272,11 @@ public final class PhoneTaskInputsNativeTest {
         X509Certificate certificate=new JcaX509CertificateConverter().getCertificate(new JcaX509v3CertificateBuilder(name,new java.math.BigInteger(120,new SecureRandom()).add(java.math.BigInteger.ONE),new Date(now-60000),new Date(now+3600000),name,keys.getPublic()).build(new JcaContentSignerBuilder("SHA256withECDSA").build(keys.getPrivate())));return new Material(keys,certificate);
     }
     private static SSLContext context(Material local,Material peer)throws Exception{
-        KeyStore keys=KeyStore.getInstance("PKCS12");keys.load(null);keys.setKeyEntry("fixture",local.keys.getPrivate(),"fixture-only".toCharArray(),new java.security.cert.Certificate[]{local.cert});KeyManagerFactory km=KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());km.init(keys,"fixture-only".toCharArray());
-        KeyStore trusted=KeyStore.getInstance(KeyStore.getDefaultType());trusted.load(null);trusted.setCertificateEntry("fixture-peer",peer.cert);TrustManagerFactory tm=TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());tm.init(trusted);SSLContext context=SSLContext.getInstance("TLSv1.3");context.init(km.getKeyManagers(),tm.getTrustManagers(),new SecureRandom());return context;
+        // The host fixture uses the JDK TLS stack. Robolectric's default Conscrypt
+        // client needs unavailable java.net reflection on JDK 17; trust is still
+        // restricted to the exact synthetic peer certificate on both endpoints.
+        KeyStore keys=KeyStore.getInstance("PKCS12");keys.load(null);keys.setKeyEntry("fixture",local.keys.getPrivate(),"fixture-only".toCharArray(),new java.security.cert.Certificate[]{local.cert});KeyManagerFactory km=KeyManagerFactory.getInstance("SunX509","SunJSSE");km.init(keys,"fixture-only".toCharArray());
+        KeyStore trusted=KeyStore.getInstance(KeyStore.getDefaultType());trusted.load(null);trusted.setCertificateEntry("fixture-peer",peer.cert);TrustManagerFactory tm=TrustManagerFactory.getInstance("PKIX","SunJSSE");tm.init(trusted);SSLContext context=SSLContext.getInstance("TLSv1.3","SunJSSE");context.init(km.getKeyManagers(),tm.getTrustManagers(),new SecureRandom());return context;
     }
     private static Peers authenticatedPeers()throws Exception{
         Material source=certificate(),target=certificate();SSLContext serverContext=context(target,source),clientContext=context(source,target);var worker=Executors.newSingleThreadExecutor();

@@ -881,7 +881,7 @@ public final class TaskStore {
             if(close&&!pending){mailbox.put("open",false);changed=true;}if(changed)write(task);db.setTransactionSuccessful();return next;
         }finally{db.endTransaction();}
     }
-    /** Same-run mailbox data gate; F03 resumeGoal still validates the original model/source
+    /** Same-run mailbox data gate; resumeGoal still validates the original model/source
      * allocation, remaining source share and canonical grant before the retained host wakes. */
     public synchronized void reopenDeviceOwnerQuestionMailbox(dev.pocketengine.features.devices.DeviceOwnerInputs.Scope original,String messageId)throws Exception {
         db.beginTransaction();try{JSONObject task=deviceOwnerInputTask(original),mailbox=requireDeviceOwnerMailbox(task,original);JSONObject question=task.getJSONObject("evidence").getJSONObject("ownerQuestion");

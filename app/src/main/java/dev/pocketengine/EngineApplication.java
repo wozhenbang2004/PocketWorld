@@ -157,14 +157,14 @@ public final class EngineApplication extends Application implements dev.pocketen
         return new dev.pocketengine.features.devices.DeviceGoalCapabilityPort(scoped,session.admission(),original,()->{dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(session.capturedModel(),settings.currentForCaptured(session.capturedModel()),original);dev.pocketengine.runtime.models.InferenceAudiencePolicy.require(session.capturedModel(),dev.pocketengine.runtime.models.NativeInferenceScope.pairedDeviceGoal(session.modelApproval(),original),original);});
     }
     public dev.pocketengine.features.devices.DeviceOwnerInputs deviceOwnerInputs(){return deviceOwnerInputs;}
-    /** Original Service's sealed runnerFinished proof. This merge adds only the ordinary
+    /** Original Service's sealed runnerFinished proof. This adds only the ordinary
      * question; artifact/mover evidence and original allocations remain authoritative. */
     public synchronized void recordDeviceOrdinaryQuestionWait(dev.pocketengine.features.devices.DeviceGoalSession.Finished finished)throws Exception {
         finished.requireCurrent();var session=finished.originalSession();if(deviceGoalSessions.get(session.taskId())!=session||session.originalControl()!=activeControl||!session.taskId().equals(activeTaskId))throw new SecurityException("普通问题不是当前原设备目标");
         tasks.recordDeviceOrdinaryQuestionWait(finished);deviceOwnerInputs.waiting(finished);
     }
     /** Invoked only after the original controlOperation commit. The Application owner gate
-     * serializes native pause/stop with pickup; F03's public resumeGoal keeps original shares. */
+     * serializes native pause/stop with pickup; resumeGoal keeps original source shares. */
     public synchronized void deviceOwnerInputAccepted(dev.pocketengine.features.devices.DeviceOwnerInputs.Scope original,JSONObject accepted)throws Exception {
         if(!"answer".equals(accepted.optString("inputKind")))return;original.requireContinuationOutsideTasks();
         if(deviceGoalSessions.get(original.taskId())!=original.originalSession()||original.originalControl()!=activeControl||!original.taskId().equals(activeTaskId)||original.originalControl().pauseRevision()!=original.pauseRevision())throw new SecurityException("原设备问题暂停/宿主已变化；回答只保留");

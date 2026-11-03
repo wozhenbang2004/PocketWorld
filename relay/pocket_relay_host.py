@@ -15,6 +15,7 @@ import hashlib
 import importlib.metadata
 import ipaddress
 import json
+import ntpath
 import os
 from pathlib import Path
 import re
@@ -81,6 +82,25 @@ def _json(value):
     return (json.dumps(value, ensure_ascii=True, indent=2) + "\n").encode("ascii")
 
 
+def _windows_backend():
+    # This standalone operator entry shares the original Companion backend; it
+    # never substitutes POSIX mode bits for Windows owner/DACL verification.
+    companion = str(Path(__file__).resolve().parents[1] / "companion")
+    if companion not in sys.path:
+        sys.path.insert(0, companion)
+    from platform_windows import WindowsBackend
+    return WindowsBackend()
+
+
+def _windows_lease_bytes(backend, sid, path):
+    directory, name = ntpath.split(os.fspath(path))
+    if not directory or not name:
+        raise SetupError("Use an explicit existing private native lease file")
+    # Original backend checks local-drive ancestors, exact file handle, SID,
+    # DACL, links/reparse points and size before returning any credential bytes.
+    return backend.read_private_bytes(directory, name, sid, maximum=4096)
+
+
 def create_lease_bundle(service_base, inviter_device_id, output_directory, *, ttl_seconds=900, owner_bucket=""):
     origin = service_origin(service_base)
     if not DEVICE_ID.fullmatch(inviter_device_id):
@@ -113,15 +133,23 @@ def create_lease_bundle(service_base, inviter_device_id, output_directory, *, tt
 
 
 def read_native_lease(path):
-    path = Path(path)
-    _private_directory(path.parent)
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(descriptor, "rb") as source:
-        info = os.fstat(source.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise SetupError("Native relay lease must be an owner-only regular file")
-        raw = source.read(4097)
-    if len(raw) > 4096:
+    if os.name == "nt":
+        backend = _windows_backend()
+        raw = _windows_lease_bytes(backend, backend.logon_context()["userSid"], path)
+    else:
+        path = Path(path)
+        _private_directory(path.parent)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise SetupError("Native relay lease must be an owner-only regular file")
+            raw = source.read(4097)
+    return _parse_native_lease(raw)
+
+
+def _parse_native_lease(raw):
+    if not isinstance(raw, bytes) or len(raw) > 4096:
         raise SetupError("Native relay lease exceeds its fixed bound")
     def unique(pairs):
         result = {}
@@ -144,13 +172,53 @@ def read_native_lease(path):
     return value
 
 
+def _windows_companion_route(lease_path, existing_state_directory):
+    backend = _windows_backend()
+    sid = backend.logon_context()["userSid"]
+    original = _windows_lease_bytes(backend, sid, lease_path)
+    value = _parse_native_lease(original)
+    state = os.fspath(existing_state_directory)
+    # Installed jobs/state may inherit the already-private installation DACL.
+    # Verify its current native owner/allow list; never repair an existing ACL.
+    backend.assert_private_directory(state, sid, require_protected=False)
+    binding = backend.root_binding(state)
+    name = "relay-" + value["routeId"] + "-" + value["side"] + ".token"
+    token = (value["routeToken"] + "\n").encode("ascii")
+
+    def current():
+        if backend.logon_context()["userSid"] != sid:
+            raise SetupError("Original Windows owner session changed")
+        backend.assert_private_directory(state, sid, require_protected=False)
+        if backend.root_binding(state) != binding:
+            raise SetupError("Original Companion state directory changed")
+        if not secrets.compare_digest(original, _windows_lease_bytes(backend, sid, lease_path)):
+            raise SetupError("Original native relay lease changed")
+        _parse_native_lease(original)  # Recheck its short expiry at publication.
+
+    # Hold the existing native directory/ancestor handles during absent-only
+    # publication. Failure, including an unknown rename result, never triggers a
+    # replacement, deletion, retry or a second Companion state directory.
+    with backend.directory(state):
+        current()
+        backend.create_private_snapshot(state, name, token, maximum=512, current=current)
+        current()
+        actual = backend.read_private_bytes(state, name, sid, maximum=512)
+        if not secrets.compare_digest(token, actual):
+            raise SetupError("Original private relay token publication was not confirmed")
+    return value
+
+
 def companion_route(lease_path, peer_device_id, grant_id, existing_state_directory):
     if not DEVICE_ID.fullmatch(peer_device_id) or not IDENTIFIER.fullmatch(grant_id):
         raise SetupError("Use an existing paired peer and its native grant ID")
-    value = read_native_lease(lease_path)
-    state = _private_directory(existing_state_directory)
+    if os.name == "nt":
+        value = _windows_companion_route(lease_path, existing_state_directory)
+    else:
+        value = read_native_lease(lease_path)
+        state = _private_directory(existing_state_directory)
+        name = "relay-" + value["routeId"] + "-" + value["side"] + ".token"
+        _write_new(state, name, (value["routeToken"] + "\n").encode("ascii"))
     name = "relay-" + value["routeId"] + "-" + value["side"] + ".token"
-    _write_new(state, name, (value["routeToken"] + "\n").encode("ascii"))
     # This reachability fragment is consumed by the original native route parser;
     # it contains no grant document and cannot authorize a task or pairing.
     return {"peerDeviceId": peer_device_id, "grantId": grant_id, "expiresAt": value["expiresAt"],

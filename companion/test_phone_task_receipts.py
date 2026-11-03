@@ -179,7 +179,7 @@ class PhoneTaskReceiptTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_control_reads_its_nested_original_receipt_without_replay(self):
         case = self.case
-        for action in ("acquire_control", "answer", "steer", "resume"):
+        for action in ("acquire_control", "answer", "steer", "resume", "cancel"):
             with self.subTest(action=action):
                 operation_id = "lost-" + action
                 params, saved = await self.lose_control_ack(action, operation_id)
@@ -193,6 +193,20 @@ class PhoneTaskReceiptTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIs(True, result["ownerActionRequired"])
                     self.assertEqual(operation_id, result["resumeRequestId"])
                     self.assertEqual(2, result["requestedRevision"])
+                elif action == "cancel":
+                    self.assertIs(False, result["cancellation"]["stopped"])
+                    # The native original-op formatter now returns a fresh typed
+                    # management receipt after the same original runner stops.
+                    # Only the fixed operation.get is repeated, never cancel.
+                    target = copy.deepcopy(saved["cancellation"])
+                    saved["cancellation"]["stopped"] = True
+                    saved["status"] = "succeeded"
+                    writes = sum(item.method == "operation.cancel" for item in case.sent)
+                    result = await case.router.execute("status", self.original(operation_id))
+                    self.assertNotIn("currentRead", result)
+                    self.assertEqual("succeeded", result["status"])
+                    self.assertEqual({**target, "stopped": True}, result["cancellation"])
+                    self.assertEqual(writes, sum(item.method == "operation.cancel" for item in case.sent))
                 else:
                     self.assertIs(True, result["inputSaved"])
                     self.assertEqual("native-message-" + operation_id, result["inputMessageId"])
@@ -201,8 +215,11 @@ class PhoneTaskReceiptTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["operationId"], duplicate["operationId"])
                 self.assertEqual(count, len(case.sent))
                 scope = case.router._row(operation_id)[1]["controlScope"]
-                self.assertEqual({"taskId", "runId", "executorEpoch", "allocationId"} |
-                                 ({"expectedRevision"} if action == "resume" else set()), set(scope))
+                if action == "cancel":
+                    self.assertEqual({"targetOperationId", "targetArgumentsDigest"}, set(scope))
+                else:
+                    self.assertEqual({"taskId", "runId", "executorEpoch", "allocationId"} |
+                                     ({"expectedRevision"} if action == "resume" else set()), set(scope))
         self.assertEqual(1, sum(item.method == "task.submitGoal" for item in case.sent))
         rows = " ".join(row[0] for row in case.db.execute("SELECT details FROM operations"))
         self.assertNotIn("native ordinary answer", rows)

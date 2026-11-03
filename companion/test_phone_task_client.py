@@ -82,6 +82,18 @@ class ClientHttpTests(unittest.TestCase):
         with companion_reply(403,raw=("secret: "+TOKEN).encode()) as (endpoint,calls):
             with self.assertRaises(ClientError) as failure: Client(endpoint,self.path).execute("run",{"operationId":"operation-A"})
             self.assertEqual(403,failure.exception.status); self.assertNotIn(TOKEN,str(failure.exception)); self.assertEqual(1,len(calls))
+    def test_cli_exit_status_distinguishes_native_rejection_unconfirmed_read_and_acceptance(self):
+        cases = [("run", {"status":"rejected","accepted":False,"effectState":"not_dispatched"}, 4),
+                 ("status", {"status":"running","accepted":True,"effectState":"reported","currentRead":"unavailable","phoneStateUnconfirmed":True}, 3),
+                 ("run", {"status":"unknown","accepted":False,"effectState":"unknown"}, 3),
+                 ("run", {"status":"waiting_approval","accepted":True,"effectState":"not_dispatched"}, 0)]
+        for action, receipt, code in cases:
+            result={"operationId":"operation-A","peerDeviceId":PEER,**receipt}
+            with self.subTest(action=action, status=receipt["status"]), companion_reply(result=result) as (endpoint,calls), patch("sys.stdout",new_callable=io.StringIO) as output, patch("sys.stderr",new_callable=io.StringIO):
+                arguments=["--endpoint",endpoint,"--token-file",str(self.path),"--phone",PEER,action]
+                arguments += (["fixture goal","--operation-id","operation-A","--grant","fixture-grant","--resource",'{"screenMode":"capabilities"}',"--capability-version","1.0"] if action=="run" else ["operation-A"])
+                self.assertEqual(code,main(arguments));self.assertEqual(result,json.loads(output.getvalue()))
+                self.assertEqual(1,len(calls));self.assertEqual("operation-A",calls[0][2]["params"]["operationId"])
     def test_wrong_phone_read_and_unsafe_token_are_rejected_without_secret_errors(self):
         with companion_reply(result={"operationId":"operation-A","peerDeviceId":OTHER,"status":"running"}) as (endpoint,_):
             with self.assertRaises(ClientError): Client(endpoint,self.path).execute("status",{"operationId":"operation-A","peerDeviceId":PEER})

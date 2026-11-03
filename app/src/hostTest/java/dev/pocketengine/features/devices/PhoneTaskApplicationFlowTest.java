@@ -11,6 +11,9 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.FeatureHost;
 import dev.pocketengine.features.devices.transport.DeviceConnection;
 import dev.pocketengine.features.devices.transport.LanDeviceListener;
+import dev.pocketengine.runtime.ModelGateway;
+import dev.pocketengine.runtime.models.ModelBinding;
+import dev.pocketengine.runtime.models.ModelFacts;
 import dev.pocketengine.store.SettingsStore;
 import dev.pocketengine.store.TaskStore;
 import dev.pocketengine.store.TaskStoreDeviceTrust;
@@ -72,8 +75,9 @@ import org.robolectric.annotation.SQLiteMode;
 import org.robolectric.shadows.ShadowApplication;
 import static org.junit.Assert.*;
 
-/** Cross-language production chain: Client -> Companion HTTP/router -> native mTLS ingress ->
+/** Cross-language production chain: CLI MCP/Client -> Companion HTTP/router -> native mTLS ingress ->
  * original App owner review -> PhoneRunService/AgentRunner -> same-task query and answer.
+ * The ordinary answer traverses an independent stdio process; Task Desk HTTP MCP reads the same result.
  * Only OS startup, temporary paired identity and model HTTP responses are explicit fixtures.
  * No physical phone, paid model, production credential or public listener is used or claimed. */
 @RunWith(RobolectricTestRunner.class)
@@ -152,6 +156,7 @@ public final class PhoneTaskApplicationFlowTest {
         ContentValues grant=new ContentValues();grant.put("grant_id",nativeGrant.getString("grantId"));grant.put("peer_device_id",DeviceIdentity.id(source.cert));grant.put("local_device_id",DeviceIdentity.id(target.cert));grant.put("authorization_epoch",1);grant.put("expires_at",deadline);grant.put("body_json",nativeGrant.toString());grant.put("revoked",0);sql.insertOrThrow("device_grants",null,grant);
         startModel();
         app.getSharedPreferences("private_settings",0).edit().clear().putString("baseUrl","http://127.0.0.1:"+model.getAddress().getPort()).putString("model","native-phone-fixture").putString("provider","openai_chat").putBoolean("sendScreenshots",false).putInt("maxSteps",8).putInt("requestTimeoutSeconds",20).commit();
+        installSyntheticModelCatalog();
         Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS);
         serviceController=Robolectric.buildService(PhoneRunService.class).create();service=serviceController.get();
         ingressWorkers=Executors.newFixedThreadPool(2);owner=new DeviceWorkspaceNativeOwner(app,trust,ingressWorkers);
@@ -195,6 +200,22 @@ public final class PhoneTaskApplicationFlowTest {
         JSONObject waiting=app.tasks.get(id,false);assertEquals("awaiting_user",waiting.getString("status"));assertTrue(waiting.optString("runId").isEmpty());assertTrue(app.hasPendingDeviceGoal(id));assertEquals(0,modelRequests.get());assertEquals(0,count("runs"));
         return new Scenario(id,DeviceIdentity.id(source.cert),DeviceIdentity.id(target.cert));
     }
+    private void installSyntheticModelCatalog()throws Exception{
+        // Re-enter the same production mounting skipped by the isolated onCreate
+        // shadow: original catalog, owner TaskStore, gateway policy and probe host.
+        var initialize=EngineApplication.class.getDeclaredMethod("initializeModelConnections");initialize.setAccessible(true);initialize.invoke(app);
+        assertNotNull("Original model connection host did not initialize",app.modelConnections);
+        app.modelConnections.connections();
+        app.modelConnections.configure(null,ModelBinding.Format.OPENAI,java.net.URI.create(app.settings.apiConfigForCatalog().baseUrl+"/models"));
+        var selected=app.settings.apiConfigForCatalog();ModelBinding binding=selected.capabilityBinding;
+        // These are explicitly native-owner facts for this synthetic HTTP model,
+        // not a fabricated provider fetch/probe result or a request-policy bypass.
+        app.modelConnections.editField(binding,selected.model,0,ModelFacts.Field.CHAT_OUTPUT_PARAMETER,ModelFacts.OwnerValue.known(ModelFacts.ChatOutputParameter.MAX_TOKENS),false);
+        app.modelConnections.editField(binding,selected.model,1,ModelFacts.Field.TOOL_CALLS,ModelFacts.OwnerValue.known(true),false);
+        assertTrue(app.settings.get().catalogEnforced);assertTrue(app.settings.matchesApiCatalogRoute(app.settings.get()));
+        assertEquals(ModelFacts.Source.OWNER_OVERRIDE,app.modelConnections.resolve(app.settings.get()).facts().toolCalls().source);
+        ModelGateway.validate(app.settings.get());assertEquals(0,modelRequests.get());
+    }
     private Started approve(Scenario scenario)throws Exception{
         // This is the native owner action used by the phone task UI, not a network grant.
         try(NativeDeviceWorkspaceHost.Window window=owner.host().openOwnerWindow()){
@@ -226,6 +247,26 @@ public final class PhoneTaskApplicationFlowTest {
         assertEquals(DeviceProtocol.canonical(actual.getJSONObject("answerReceipt")),DeviceProtocol.canonical(actual.getJSONObject("duplicateAnswerReceipt")));
         assertEquals("phone-api-native-submit",actual.getJSONObject("duplicateReceipt").getString("operationId"));
         assertEquals(scenario.taskId,actual.getJSONObject("duplicateReceipt").getString("taskId"));
+        JSONObject controlled=actual.getJSONObject("controlSnapshot").getJSONObject("task"),projectedLease=controlled.getJSONObject("result").getJSONObject("controlLease"),controlReceipt=actual.getJSONObject("controlReceipt");
+        assertEquals(controlReceipt.getString("controlLeaseId"),projectedLease.getString("controlLeaseId"));assertEquals(controlReceipt.getLong("controlLeaseExpiresAt"),projectedLease.getLong("expiresAt"));
+        assertEquals(scenario.taskId,controlled.getString("taskId"));assertEquals(started.runId,controlled.getString("runId"));assertEquals(started.epoch,controlled.getInt("executorEpoch"));
+        assertEquals(started.allocationId,controlled.getJSONObject("result").getJSONObject("ownerInput").getString("allocationId"));assertTrue(controlled.getLong("revision")>actual.getJSONObject("questionSnapshot").getLong("revision"));
+        assertEquals(DeviceProtocol.canonical(actual.getJSONObject("questionSnapshot").getJSONObject("result").getJSONObject("ownerInput").getJSONObject("ordinaryQuestion")),DeviceProtocol.canonical(controlled.getJSONObject("result").getJSONObject("ownerInput").getJSONObject("ordinaryQuestion")));
+        JSONObject desk=actual.getJSONObject("deskNativeContract");assertEquals("pocketworld.task-desk-native-contract.v1",desk.getString("format"));assertTrue(desk.getBoolean("answerEnabled"));assertTrue(desk.getBoolean("requestMatchesNativeScope"));assertFalse(desk.getBoolean("nativeDispatchPerformed"));assertEquals(1,desk.getInt("capturedAnswerRequests"));
+        JSONObject stdio=actual.getJSONObject("mcpStdio"),http=actual.getJSONObject("mcpHttp"),stdioAnswer=stdio.getJSONObject("result");
+        assertEquals("2025-11-25",stdio.getString("protocolVersion"));assertEquals(stdio.getString("protocolVersion"),http.getString("protocolVersion"));
+        assertEquals(0,stdio.getInt("processExitCode"));assertEquals("phone_task_answer",stdio.getString("tool"));assertEquals("phone_task_status",http.getString("tool"));
+        assertEquals(scenario.targetDeviceId,stdio.getString("selectedPeerDeviceId"));assertEquals(scenario.targetDeviceId,http.getString("selectedPeerDeviceId"));
+        assertEquals(DeviceProtocol.canonical(actual.getJSONObject("answerReceipt")),DeviceProtocol.canonical(stdioAnswer));
+        assertEquals("phone-api-native-answer",stdioAnswer.getString("operationId"));assertEquals("phone-api-native-submit",stdioAnswer.getString("targetOperationId"));
+        assertEquals(scenario.taskId,stdioAnswer.getString("taskId"));assertEquals(started.runId,stdioAnswer.getString("runId"));assertEquals(started.epoch,stdioAnswer.getInt("executorEpoch"));assertEquals(started.allocationId,stdioAnswer.getString("allocationId"));
+        for(JSONObject observed:new JSONObject[]{http.getJSONObject("result"),actual.getJSONObject("finalStatus")}){
+            assertEquals("phone-api-native-submit",observed.getString("operationId"));assertEquals(scenario.targetDeviceId,observed.getString("peerDeviceId"));assertEquals(scenario.taskId,observed.getString("taskId"));
+            JSONObject snapshot=observed.getJSONObject("task");assertEquals(scenario.targetDeviceId,snapshot.getString("executorDeviceId"));assertEquals(actual.getJSONObject("questionSnapshot").getString("instanceId"),snapshot.getString("instanceId"));
+            assertEquals(scenario.taskId,snapshot.getString("taskId"));assertEquals(started.runId,snapshot.getString("runId"));assertEquals(started.epoch,snapshot.getInt("executorEpoch"));
+            assertTrue(snapshot.getJSONObject("result").getString("summary").contains("NATIVE-PHONE-RESULT"));
+        }
+        assertTrue(actual.getBoolean("deskClosedPhoneResultAvailable"));
     }
     @Test public void phoneOwnerDenialAndWrongDeviceCannotLaunchTheAcceptedGoal()throws Exception{
         Scenario scenario=startScenario("owner_denied");
@@ -246,14 +287,23 @@ public final class PhoneTaskApplicationFlowTest {
         while(app.originalDeviceGoalSession(scenario.taskId)!=null&&System.nanoTime()<until){pumpServices();Thread.sleep(10);}
         assertTrue(started.original.isCancelled());assertNull(app.originalDeviceGoalSession(scenario.taskId));
         JSONObject stopped=app.tasks.get(scenario.taskId,false);assertEquals("cancelled",stopped.getString("status"));assertEquals(started.runId,stopped.getString("runId"));assertEquals(0,stopped.getJSONArray("ownerInputs").length());
+        long acceptedCancels=cancelOperations(scenario.taskId);assertEquals(1,acceptedCancels);
+        signal("original-stop-confirmed");phase("cancel_reconciled",30);assertEquals(acceptedCancels,cancelOperations(scenario.taskId));
         try(NativeDeviceWorkspaceHost.Window window=owner.host().openOwnerWindow()){window.revoke(scenario.sourceDeviceId);}
         assertTrue(owner.trust.peer(scenario.sourceDeviceId).getBoolean("revoked"));signal("owner-revoked");
         JSONObject actual=completeReport();sameOriginal(scenario,started,actual);
         assertTrue(actual.getBoolean("wrongPhoneRejected"));assertTrue(actual.getBoolean("answerAfterCancelRejected"));
         assertEquals("unavailable",actual.getJSONObject("offlineStatus").getString("currentRead"));assertEquals("unavailable",actual.getJSONObject("revokedReadStatus").getString("currentRead"));
         assertEquals("phone-api-native-submit",actual.getJSONObject("reconnectedStatus").getString("operationId"));
+        JSONObject firstCancel=actual.getJSONObject("cancelReceipt"),reconciled=actual.getJSONObject("reconciledCancelStatus"),latestCancellation=reconciled.getJSONObject("cancellation");
+        assertEquals("phone-api-native-cancel",reconciled.getString("operationId"));assertEquals(firstCancel.getString("operationId"),reconciled.getString("operationId"));assertEquals(scenario.taskId,reconciled.getString("taskId"));
+        assertEquals(firstCancel.getJSONObject("cancellation").getString("targetOperationId"),latestCancellation.getString("targetOperationId"));assertEquals(firstCancel.getJSONObject("cancellation").getString("targetArgumentsDigest"),latestCancellation.getString("targetArgumentsDigest"));
+        assertEquals(firstCancel.getJSONObject("cancellation").getBoolean("stopped"),actual.getBoolean("cancelAcknowledgementStopped"));assertTrue(latestCancellation.getBoolean("requested"));assertTrue(latestCancellation.getBoolean("stopped"));
         assertEquals("cancelled",actual.getString("actualWireState"));assertEquals(1,modelRequests.get());assertEquals(1,count("runs"));
         assertEquals(1,app.tasks.get(scenario.taskId,false).getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));
+    }
+    private long cancelOperations(String taskId)throws Exception{
+        try(Cursor row=sql.rawQuery("SELECT COUNT(*) FROM device_inbound WHERE local_task_id=? AND method='operation.cancel'",new String[]{taskId})){assertTrue(row.moveToFirst());return row.getLong(0);}
     }
 
     private JSONObject phase(String expected,int timeoutSeconds)throws Exception{

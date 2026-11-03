@@ -11,22 +11,28 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import http.client
 import json
 import os
 from pathlib import Path
+import queue
 import secrets
 import ssl
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
 import time
+from urllib.parse import urlsplit
 
 import device_identity
 import device_protocol as protocol
 import device_transport as transport
 from device_companion import DeviceCompanionService
 from phone_task_client import Client, ClientError, strict_json
+from phone_task_desk import TaskDesk
+from phone_task_mcp import VERSION as MCP_VERSION
 from pocket_companion import CompanionServer, JobManager
 
 FORMAT = "pocketworld.phone-native-fixture.v1"
@@ -163,7 +169,9 @@ class NativeFixture:
         self.server = CompanionServer(("127.0.0.1", 0), self.manager)
         self.server_thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.server_thread.start()
-        self.client = Client("http://127.0.0.1:" + str(self.server.server_port), token_path)
+        self.endpoint = "http://127.0.0.1:" + str(self.server.server_port)
+        self.token_path = token_path
+        self.client = Client(self.endpoint, token_path)
         self.report["transport"] = "Client/CompanionHTTP/PhoneTaskRouter/native_mTLS"
         self.report["sourceDeviceId"] = source.device_id
 
@@ -176,6 +184,157 @@ class NativeFixture:
         require(value.get("taskId") == self.report["taskId"] and value.get("operationId") == OPERATION,
                 "original_task_identity_changed")
         return value
+
+    @staticmethod
+    def mcp_initialize(request_id):
+        return {"jsonrpc": "2.0", "id": request_id, "method": "initialize",
+                "params": {"protocolVersion": MCP_VERSION, "capabilities": {},
+                           "clientInfo": {"name": "phone-native-fixture", "version": "1"}}}
+
+    @staticmethod
+    def mcp_result(response, request_id):
+        require(isinstance(response, dict) and response.get("jsonrpc") == "2.0"
+                and response.get("id") == request_id and "error" not in response
+                and isinstance(response.get("result"), dict), "mcp_response_not_original_result")
+        return response["result"]
+
+    def answer_through_stdio(self, parameters):
+        """An independent CLI process owns the MCP lifecycle and performs this one write."""
+        self.stage = "mcp_stdio_answer"
+        process = subprocess.Popen([sys.executable, "-B", str(Path(__file__).with_name("phone_tasks.py")),
+                                    "--endpoint", self.endpoint, "--token-file", str(self.token_path),
+                                    "--phone", self.spec["targetDeviceId"], "mcp"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        received = queue.Queue()
+
+        def read_frames():
+            try:
+                while True:
+                    raw = process.stdout.readline(65537)
+                    received.put(raw)
+                    if not raw or len(raw) > 65536 or not raw.endswith(b"\n"):
+                        return
+            except OSError:
+                received.put(b"")
+
+        reader = threading.Thread(target=read_frames, name="native-mcp-stdio-fixture", daemon=True)
+        reader.start()
+
+        def send(message):
+            process.stdin.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")
+            process.stdin.flush()
+
+        def receive(request_id):
+            try:
+                raw = received.get(timeout=30)
+            except queue.Empty:
+                raise FixtureError("mcp_stdio_response_timeout") from None
+            require(bool(raw) and len(raw) <= 65536 and raw.endswith(b"\n"), "mcp_stdio_frame_invalid")
+            return self.mcp_result(strict_json(raw), request_id)
+
+        try:
+            send(self.mcp_initialize(1))
+            initialized = receive(1)
+            require(initialized.get("protocolVersion") == MCP_VERSION, "mcp_stdio_version_changed")
+            send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            send({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"name": "phone_task_answer", "arguments": parameters}})
+            process.stdin.close()
+            result = receive(2)
+            require(result.get("isError") is False and isinstance(result.get("structuredContent"), dict),
+                    "mcp_stdio_answer_unconfirmed")
+            exit_code = process.wait(timeout=5)
+            require(exit_code == 0, "mcp_stdio_process_failed")
+            answer = result["structuredContent"]
+            require(answer.get("operationId") == parameters["controlOperationId"]
+                    and answer.get("targetOperationId") == OPERATION
+                    and all(answer.get(key) == parameters[key]
+                            for key in ("peerDeviceId", "taskId", "runId", "executorEpoch", "allocationId")),
+                    "mcp_stdio_answer_identity_changed")
+            self.report["mcpStdio"] = {"protocolVersion": initialized["protocolVersion"],
+                                       "selectedPeerDeviceId": self.spec["targetDeviceId"], "tool": "phone_task_answer",
+                                       "processExitCode": exit_code, "result": answer}
+            return answer
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            reader.join(timeout=1)
+            for stream in (process.stdin, process.stdout):
+                if stream and not stream.closed:
+                    stream.close()
+
+    def verify_desk_question(self, controlled, parameters):
+        # Fetch the five-second signed description immediately before the UI
+        # contract. Its timestamps/grants and the native snapshot stay unchanged.
+        doctor = self.action("doctor", {"peerDeviceId": self.spec["targetDeviceId"]})
+        self.stage = "task_desk_native_contract"
+        completed = subprocess.run(["node", str(Path(__file__).with_name("test_phone_task_desk.cjs")), "--native-contract"],
+                                   input=json.dumps({"doctor": doctor, "status": controlled, "answer": parameters},
+                                                    ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, check=False)
+        require(completed.returncode == 0 and len(completed.stdout) <= 4096, "task_desk_native_contract_failed")
+        proof = strict_json(completed.stdout)
+        require(proof == {"format": "pocketworld.task-desk-native-contract.v1", "answerEnabled": True,
+                          "requestMatchesNativeScope": True, "nativeDispatchPerformed": False,
+                          "capturedAnswerRequests": 1}, "task_desk_native_contract_result_invalid")
+        self.report["deskNativeContract"] = proof
+
+    def require_same_result(self, value, original):
+        require(isinstance(value, dict) and value.get("operationId") == OPERATION
+                and value.get("peerDeviceId") == self.spec["targetDeviceId"]
+                and value.get("taskId") == self.report["taskId"], "mcp_read_changed_original_operation")
+        actual, previous = value.get("task", {}), original["task"]
+        require(all(actual.get(key) == previous[key]
+                    for key in ("executorDeviceId", "instanceId", "taskId", "runId", "executorEpoch", "state"))
+                and actual.get("revision", 0) >= previous["revision"]
+                and actual.get("result", {}).get("summary") == previous["result"]["summary"],
+                "mcp_read_changed_original_result")
+
+    def read_through_task_desk(self, original):
+        """Use the original Desk session over HTTP, then close it without stopping the phone."""
+        self.stage = "mcp_http_status"
+        desk = TaskDesk(self.client, self.spec["targetDeviceId"])
+        try:
+            local_session = urlsplit(desk.start())
+            require(local_session.hostname == "127.0.0.1" and bool(local_session.fragment), "mcp_desk_not_local_session")
+            origin = local_session._replace(path="", fragment="").geturl()
+
+            def exchange(message, expected_status):
+                connection = http.client.HTTPConnection(local_session.hostname, local_session.port, timeout=15)
+                try:
+                    connection.request("POST", "/mcp", json.dumps(message, separators=(",", ":")).encode("utf-8"),
+                                       {"Authorization": "Bearer " + local_session.fragment, "Origin": origin,
+                                        "Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+                                        "Sec-Fetch-Site": "same-origin", "MCP-Protocol-Version": MCP_VERSION})
+                    response = connection.getresponse()
+                    raw = response.read(65537)
+                    require(response.status == expected_status and len(raw) <= 65536, "mcp_http_response_invalid")
+                    return strict_json(raw) if raw else None
+                finally:
+                    connection.close()
+
+            initialized = self.mcp_result(exchange(self.mcp_initialize(1), 200), 1)
+            require(initialized.get("protocolVersion") == MCP_VERSION, "mcp_http_version_changed")
+            require(exchange({"jsonrpc": "2.0", "method": "notifications/initialized"}, 202) is None,
+                    "mcp_http_acknowledgement_invalid")
+            result = self.mcp_result(exchange({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                                               "params": {"name": "phone_task_status", "arguments": {
+                                                   "operationId": OPERATION, "peerDeviceId": self.spec["targetDeviceId"]}}}, 200), 2)
+            require(result.get("isError") is False and isinstance(result.get("structuredContent"), dict),
+                    "mcp_http_read_unconfirmed")
+            observed = result["structuredContent"]
+            self.require_same_result(observed, original)
+            self.report["mcpHttp"] = {"protocolVersion": initialized["protocolVersion"],
+                                      "selectedPeerDeviceId": self.spec["targetDeviceId"], "tool": "phone_task_status",
+                                      "result": observed}
+        finally:
+            desk.close()
+        require(desk.closed and not desk.session_token, "mcp_desk_session_not_closed")
+        after_close = self.status()
+        self.require_same_result(after_close, observed)
+        self.report["deskClosedPhoneResultAvailable"] = True
+        return after_close
 
     def poll(self, predicate, phase):
         deadline = time.monotonic() + 90
@@ -208,7 +367,7 @@ class NativeFixture:
     def finish(self, final):
         self.report["finalStatus"] = final
         self.report["events"] = self.action("events", {"operationId": OPERATION, "peerDeviceId": self.spec["targetDeviceId"],
-                                                       "cursor": "0", "limit": 100})
+                                                       "cursor": "0", "limit": 32})
         self.report.update(phase="complete", actualWireState=final["task"]["state"], taskRunUnchanged=True,
                            duplicateSubmitReceiptUnchanged=True)
         return self.report
@@ -259,6 +418,18 @@ class NativeFixture:
             raise FixtureError("cancelled_original_question_must_not_accept_answer")
         self.finish(final)
         print(json.dumps({"phase": "cancel_verified", "taskId": self.report["taskId"], "operationId": OPERATION}), flush=True)
+        self.owner_barrier("original-stop-confirmed")
+        reconciled = self.action("status", {"operationId": "phone-api-native-cancel", "peerDeviceId": self.spec["targetDeviceId"]})
+        before, after = cancelled["cancellation"], reconciled.get("cancellation", {})
+        require(reconciled.get("operationId") == cancelled["operationId"]
+                and reconciled.get("taskId") == self.report["taskId"]
+                and reconciled.get("peerDeviceId") == self.spec["targetDeviceId"]
+                and all(after.get(key) == before[key] for key in ("targetOperationId", "targetArgumentsDigest"))
+                and after.get("requested") is True and after.get("stopped") is True,
+                "same_cancel_operation_did_not_report_original_native_stop")
+        self.report["reconciledCancelStatus"] = reconciled
+        self.report["cancelAcknowledgementStopped"] = before["stopped"]
+        print(json.dumps({"phase": "cancel_reconciled", "taskId": self.report["taskId"], "operationId": OPERATION}), flush=True)
         self.owner_barrier("owner-revoked")
         revoked = self.status()
         require(revoked.get("currentRead") == "unavailable" and revoked.get("phoneStateUnconfirmed") is True
@@ -303,12 +474,28 @@ class NativeFixture:
         control = self.action("acquire_control", {**common, "controlOperationId": "phone-api-native-control", "ttlMs": 30000})
         self.report["controlReceipt"] = control
         require(control.get("accepted") is True and control.get("controlLeaseId"), "original_control_not_acquired")
-        answer_params = {**common, "controlOperationId": "phone-api-native-answer", "controlLeaseId": control["controlLeaseId"],
-                         "originalRequestId": question["requestId"], "waitRevision": question["waitRevision"],
+        controlled = self.status()
+        current = controlled.get("task", {})
+        owner = current.get("result", {}).get("ownerInput", {})
+        current_question = owner.get("ordinaryQuestion", {})
+        lease = current.get("result", {}).get("controlLease", {})
+        require(all(current.get(key) == task[key] for key in ("executorDeviceId", "instanceId", "taskId", "runId", "executorEpoch"))
+                and current.get("revision", 0) > task["revision"] and owner.get("allocationId") == native["allocationId"]
+                and all(current_question.get(key) == question[key] for key in ("requestId", "waitRevision", "approval", "takeover")),
+                "acquire_status_changed_original_question_scope")
+        require(lease.get("controlLeaseId") == control["controlLeaseId"]
+                and lease.get("expiresAt") == control["controlLeaseExpiresAt"]
+                and lease.get("expiresAt", 0) > self.manager.now(), "original_control_missing_from_real_snapshot")
+        self.report["controlSnapshot"] = controlled
+        # The same published snapshot is what Task Desk reads after acquisition;
+        # do not conceal a missing projection by taking the lease from its receipt.
+        answer_params = {**common, "controlOperationId": "phone-api-native-answer", "controlLeaseId": lease["controlLeaseId"],
+                         "originalRequestId": current_question["requestId"], "waitRevision": current_question["waitRevision"],
                          "text": self.spec.get("answer", "NATIVE-PHONE-EXACT-ANSWER")}
         if self.scenario == "reconnect_cancelled":
             return self.reconnect_then_cancel(answer_params)
-        answered = self.action("answer", answer_params)
+        self.verify_desk_question(controlled, answer_params)
+        answered = self.answer_through_stdio(answer_params)
         self.report["answerReceipt"] = answered
         require(answered.get("accepted") is True and answered.get("inputSaved") is True, "original_answer_not_saved")
         # A second external click returns the original dispatch row and cannot
@@ -325,6 +512,7 @@ class NativeFixture:
                     and "NATIVE-PHONE-RESULT" in final.get("result", {}).get("summary", ""))
 
         final = self.poll(finished, "wait_original_result")
+        final = self.read_through_task_desk(final)
         self.report["duplicateAnswerReceiptUnchanged"] = True
         return self.finish(final)
 

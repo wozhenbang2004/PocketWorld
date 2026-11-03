@@ -27,13 +27,13 @@ function snapshot(operation="goal-A", revision=4, updates={}) {
 function description() { return {deviceId:PEER,instanceId:"boot-A",capturedAt:Date.now()-10,validUntil:Date.now()+60000,
   capabilities:[{id:"agent.goal",version:"1.0",implemented:true,installed:true}],grantReceipts:[{body:{targetInstanceId:"boot-A",grant:{grantId:"grant-A",expiresAt:1893456000000,
     toolBudget:10,modelBudget:10,capabilities:["task.submitGoal","task.acquireControl","task.answerQuestion","task.steer","task.requestResume"],resources:[{screenMode:"main_screen",packageNames:["fixture.app"]}]}}}]}; }
-async function fixture(handler = async () => undefined) {
+async function fixture(handler = async () => undefined, options = {}) {
   const html=fs.readFileSync(path.join(__dirname,"phone_task_desk.html"),"utf8");
   const elements=new Map([...html.matchAll(/<(\w+)[^>]*id="([^"]+)"[^>]*>/g)].map(match=>[match[2],element(match[1])]));
   const calls=[];let serial=0;
   const context=vm.createContext({location:{hash:"#fixture-session"},history:{replaceState(){}},Date,JSON,Map,Set,Number,Error,
     document:{getElementById(id){assert.ok(elements.has(id),id);return elements.get(id);},createElement:element},
-    crypto:{randomUUID:()=>"fixture-write-"+(++serial)},Event:class{constructor(type){this.type=type;}},confirm:()=>true,
+    crypto:{randomUUID:options.randomUUID||(()=>"fixture-write-"+(++serial))},Event:class{constructor(type){this.type=type;}},confirm:()=>true,
     AbortController,setTimeout,clearTimeout,
     fetch:async (_url,options)=>{
       const request=JSON.parse(options.body);calls.push(request);
@@ -145,9 +145,81 @@ async function submissionRechecksScopeAndPreservesCustomBudget() {
   await changed.get("submit").onsubmit({preventDefault(){}});await changed.flush();
   assert.equal(changed.calls.filter(c=>c.action==="run").length,0);assert.match(changed.get("notice").textContent,/scope or this draft changed/);changed.close();
 }
+function contractRequire(condition, code) {
+  if (!condition) { const error=new Error(code);error.contractCode=code;throw error; }
+}
+function canonicalJson(value) {
+  return JSON.stringify(value,function(_key,item){return item&&typeof item==="object"&&!Array.isArray(item)
+    ?Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])):item;});
+}
+function readContractInput() {
+  // Native fixture snapshots are bounded by the production bridge. Keep the
+  // test process bounded too, without including input or authority in errors.
+  const chunks=[];let length=0;
+  for (;;) {
+    const chunk=Buffer.alloc(16384),size=fs.readSync(0,chunk,0,chunk.length,null);
+    if (!size) break;
+    length+=size;contractRequire(length<=262144,"contract_input_too_large");chunks.push(chunk.subarray(0,size));
+  }
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+  catch (_error) { contractRequire(false,"contract_input_invalid_json"); }
+}
+async function nativeAnswerContract(input) {
+  // No snapshot(), description(), or successful mutation fallback is used in
+  // this mode. All authority comes from the real post-acquire native read.
+  const doctor=input?.doctor,status=input?.status,answer=input?.answer;
+  contractRequire(doctor&&status&&answer&&typeof answer==="object"&&!Array.isArray(answer),"contract_input_invalid");
+  const expectedKeys=["peerDeviceId","operationId","controlOperationId","taskId","runId","executorEpoch",
+    "allocationId","controlLeaseId","text","originalRequestId","waitRevision"].sort();
+  contractRequire(canonicalJson(Object.keys(answer).sort())===canonicalJson(expectedKeys),"answer_shape_mismatch");
+  const selected=doctor.description?.deviceId,task=status.task,lease=task?.result?.controlLease;
+  contractRequire(typeof selected==="string"&&/^pw1_[a-f0-9]{64}$/.test(selected)
+    &&status.peerDeviceId===selected&&task?.executorDeviceId===selected&&answer.peerDeviceId===selected,"selected_phone_mismatch");
+  contractRequire(typeof answer.operationId==="string"&&!!answer.operationId&&status.operationId===answer.operationId
+    &&typeof answer.controlOperationId==="string"&&!!answer.controlOperationId,"original_operation_mismatch");
+  contractRequire(typeof answer.text==="string"&&!!answer.text.trim(),"answer_text_absent");
+  contractRequire(typeof lease?.controlLeaseId==="string"&&!!lease.controlLeaseId
+    &&Number.isSafeInteger(lease.expiresAt)&&lease.expiresAt>Date.now(),"native_control_lease_absent_or_expired");
+  let captured=null,unexpected=false;
+  const f=await fixture(async request=>{
+    if (request.action==="selection") return {peerDeviceId:selected};
+    if (request.action==="doctor"&&request.params.peerDeviceId===selected) return doctor;
+    if (request.action==="status"&&request.params.peerDeviceId===selected&&request.params.operationId===answer.operationId) return status;
+    if (request.action==="answer") {
+      captured=request;
+      // Stop before any native dispatch; a real successful answer is submitted
+      // once by the surrounding native fixture through its original MCP path.
+      throw new Error("Native contract capture only; no write dispatched.");
+    }
+    unexpected=true;throw new Error("Unexpected native contract route.");
+  },{randomUUID:()=>answer.controlOperationId});
+  try {
+    await f.connected(answer.operationId);
+    f.get("answer-text").value=answer.text;f.get("answer-text").dispatchEvent({type:"input"});
+    contractRequire(f.get("answer").disabled===false,"answer_not_enabled_by_native_snapshot");
+    f.get("answer").onclick();await f.flush();await f.flush();
+    contractRequire(!unexpected,"unexpected_contract_route");
+    contractRequire(f.calls.filter(call=>call.action==="answer").length===1,"answer_request_count_mismatch");
+    contractRequire(canonicalJson(captured)===canonicalJson({action:"answer",params:answer}),"answer_native_scope_mismatch");
+    contractRequire(f.calls.map(call=>call.action).join(",")==="selection,doctor,status,answer","unexpected_contract_dispatch");
+    return {format:"pocketworld.task-desk-native-contract.v1",answerEnabled:true,requestMatchesNativeScope:true,
+      nativeDispatchPerformed:false,capturedAnswerRequests:1};
+  } finally { f.close(); }
+}
 (async()=>{
+  if (process.argv.length>2) {
+    contractRequire(process.argv.length===3&&process.argv[2]==="--native-contract","unsupported_contract_arguments");
+    process.stdout.write(JSON.stringify(await nativeAnswerContract(readContractInput()))+"\n");return;
+  }
   await changedSelectionDuringWrite(true);await changedSelectionDuringWrite(false);
   process.stdout.write("Desk draft/unknown selection fixture: 2 cases passed\n");
   for(const test of [unknownSubmissionIsNeverResent,duplicateCancellationQueriesItsOriginalWrite,staleSourceAndScopeAreFenced,streamUsesCursorAndRejectsOtherPhone,resumeUsesPostLeaseRevisionAndOnlyRequestsPhoneReview,disconnectStopsWatchingWithoutMutation,submissionRechecksScopeAndPreservesCustomBudget])await test();
   process.stdout.write("Desk mutation, revision, event, cancellation and recovery fixtures: 7 cases passed\n");
-})().catch(error=>{process.stderr.write(error.stack+"\n");process.exitCode=1;});
+})().catch(error=>{
+  // Contract input contains real signed scope and an original answer. Never
+  // include assertion diffs, stacks, leases, or input text in native CI logs.
+  if (process.argv.length>2) process.stderr.write(JSON.stringify({format:"pocketworld.task-desk-native-contract.v1",
+    error:error.contractCode||"contract_execution_failed"})+"\n");
+  else process.stderr.write(error.stack+"\n");
+  process.exitCode=1;
+});

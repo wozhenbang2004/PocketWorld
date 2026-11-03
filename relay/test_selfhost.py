@@ -1,24 +1,102 @@
 """Private synthetic lease/TLS fixtures; never provisions a public service."""
 import asyncio
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import hashlib
+import io
 import json
+import ntpath
+import os
 from pathlib import Path
 import signal
 import socket
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "companion"))
 from device_companion import DeviceCompanionService
 from device_transport import WssByteChannel
 from device_transport_fixtures import certificate, outer_client
 from pocket_companion import JobManager
+from platform_backend import PlatformError
+from platform_windows import local_root, relative_parts
 import device_identity
 
 import pocket_relay
 import pocket_relay_host as host
+
+
+class WindowsImportFixture:
+    """Inert native-backend contract model, never evidence of Win32 ACL execution."""
+    name = "windows"
+    sid = "S-1-5-21-100-200-300-1001"
+    lease = r"C:\fixture\incoming\endpoint-a.json"
+    state = r"C:\fixture\original-companion-state"
+
+    def __init__(self, lease_bytes):
+        self.data = {self.lease: lease_bytes}
+        self.active_sid, self.generation = self.sid, 1
+        self.private, self.lease_private, self.published_private = True, True, True
+        self.reads, self.checks, self.writes = [], [], []
+        self.before_publish, self.lose_publish_ack = None, False
+        self.secret = json.loads(lease_bytes)["routeToken"]
+
+    def logon_context(self):
+        return {"userSid": self.active_sid}
+
+    def root_binding(self, root):
+        root = local_root(root)
+        if root not in {ntpath.dirname(self.lease), self.state}:
+            raise PlatformError("Synthetic existing directory missing", 403)
+        return (root, self.generation)
+
+    @contextmanager
+    def directory(self, root):
+        binding = self.root_binding(root)
+        yield local_root(root), "synthetic-native-handle", binding
+
+    def assert_private_directory(self, root, sid, *, require_protected=True):
+        self.root_binding(root)
+        self.checks.append((root, sid, require_protected))
+        if not self.private or sid != self.sid:
+            raise PlatformError("Synthetic owner/DACL refusal " + self.secret, 403)
+
+    def _path(self, root, relative):
+        self.root_binding(root)
+        return ntpath.join(local_root(root), *relative_parts(relative))
+
+    def read_private_bytes(self, root, relative, sid, *, maximum):
+        path = self._path(root, relative)
+        self.reads.append((path, sid, maximum))
+        if sid != self.sid or not (self.lease_private if path == self.lease else self.published_private):
+            raise PlatformError("Synthetic private-handle refusal " + self.secret, 403)
+        value = self.data[path]
+        if len(value) > maximum:
+            raise PlatformError("Synthetic native bound", 413)
+        return value
+
+    def read_bytes(self, root, relative, maximum=262144):
+        # Existing DeviceCompanionService._secret Windows path, after import.
+        return self.read_private_bytes(root, relative, self.sid, maximum=maximum)
+
+    def create_private_snapshot(self, root, relative, raw, maximum, *, current):
+        if self.before_publish:
+            self.before_publish(self)
+        current()
+        path = self._path(root, relative)
+        if len(raw) > maximum:
+            raise PlatformError("Synthetic publication bound", 413)
+        if path in self.data:
+            raise FileExistsError("Synthetic destination already exists")
+        self.data[path] = raw
+        self.writes.append(path)
+        if self.lose_publish_ack:
+            raise OSError("Synthetic publication ACK lost " + self.secret)
+        return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+                "publication": "original_handle_absent_only_rename"}
 
 
 class NativeRelaySetupTests(unittest.TestCase):
@@ -70,6 +148,25 @@ class NativeRelaySetupTests(unittest.TestCase):
             host.companion_route(result["endpointA"], route["peerDeviceId"], route["grantId"], state)
         self.assertEqual(original_token, next(state.glob("relay-*.token")).read_bytes())
 
+        backend = WindowsImportFixture(Path(result["endpointA"]).read_bytes())
+        # Change only this entry's OS selector. Never pretend chmod is an ACL or
+        # replace the host's real filesystem/Win32 APIs with a success assertion.
+        with patch.object(host, "os", SimpleNamespace(name="nt", fspath=os.fspath)), patch.object(host, "_windows_backend", return_value=backend):
+            self.assertEqual(a, host.read_native_lease(backend.lease))
+            imported = host.companion_route(backend.lease, route["peerDeviceId"], route["grantId"], backend.state)
+            self.assertEqual(route, imported)
+            consumer = SimpleNamespace(manager=SimpleNamespace(platform=backend, state=backend.state))
+            self.assertEqual(a["routeToken"], DeviceCompanionService._secret(consumer, imported["relay"]["routeTokenSecretRef"]))
+            self.assertEqual(1, len(backend.writes))
+            self.assertTrue(backend.checks)
+            self.assertTrue(all(sid == backend.sid and not protected for _, sid, protected in backend.checks))
+            self.assertTrue(any(path == backend.writes[0] and sid == backend.sid and maximum == 512 for path, sid, maximum in backend.reads))
+            before = dict(backend.data)
+            with self.assertRaises(FileExistsError):
+                host.companion_route(backend.lease, route["peerDeviceId"], route["grantId"], backend.state)
+            self.assertEqual(before, backend.data)
+            self.assertEqual(1, len(backend.writes))
+
     def test_check_is_read_only_default_loopback_and_explicit_nonloopback_is_required(self):
         result = self.bundle()
         cert = certificate(self.root, "relay-check")
@@ -113,6 +210,48 @@ class NativeRelaySetupTests(unittest.TestCase):
                                   "--inviter-device", self.inviter, "--output-dir", str(self.root / "rejected")], capture_output=True, timeout=10)
         self.assertEqual(1, process.returncode)
         self.assertNotIn(original["routeToken"].encode(), process.stdout + process.stderr)
+
+        def change_lease(backend):
+            changed = json.loads(backend.data[backend.lease])
+            changed["routeToken"] = "changed" + changed["routeToken"]
+            backend.data[backend.lease] = json.dumps(changed).encode()
+
+        def expire_lease(backend):
+            changed = json.loads(backend.data[backend.lease])
+            changed["expiresAt"] = 1
+            backend.data[backend.lease] = json.dumps(changed).encode()
+
+        cases = [("source_acl", lambda backend: setattr(backend, "lease_private", False)),
+                 ("state_acl", lambda backend: setattr(backend, "private", False)),
+                 ("expired", expire_lease),
+                 ("owner_changed", lambda backend: setattr(backend, "before_publish", lambda actual: setattr(actual, "active_sid", "S-1-5-21-900-800-700-1002"))),
+                 ("root_changed", lambda backend: setattr(backend, "before_publish", lambda actual: setattr(actual, "generation", 2))),
+                 ("lease_changed", lambda backend: setattr(backend, "before_publish", change_lease)),
+                 ("post_publish_acl", lambda backend: setattr(backend, "published_private", False)),
+                 ("lost_publish_ack", lambda backend: setattr(backend, "lose_publish_ack", True)),
+                 ("unc_state", lambda backend: None)]
+        for case, prepare in cases:
+            with self.subTest(windows_import=case):
+                backend = WindowsImportFixture(json.dumps(original).encode())
+                prepare(backend)
+                state = r"\\untrusted\share" if case == "unc_state" else backend.state
+                stdout, stderr = io.StringIO(), io.StringIO()
+                args = ["companion-route", "--lease-file", backend.lease, "--peer", "pw1_" + "b" * 64,
+                        "--grant", "original-reviewed-grant", "--state-dir", state]
+                with patch.object(host, "os", SimpleNamespace(name="nt", fspath=os.fspath)), patch.object(host, "_windows_backend", return_value=backend), redirect_stdout(stdout), redirect_stderr(stderr):
+                    self.assertEqual(1, host.main(args))
+                    self.assertEqual(1 if case in {"post_publish_acl", "lost_publish_ack"} else 0, len(backend.writes))
+                    if case in {"post_publish_acl", "lost_publish_ack"}:
+                        # An unconfirmed native write may exist. No cleanup,
+                        # overwrite, automatic retry or printable route follows.
+                        before = dict(backend.data)
+                        self.assertEqual(1, host.main(args))
+                        self.assertEqual(before, backend.data)
+                        self.assertEqual(1, len(backend.writes))
+                self.assertEqual("", stdout.getvalue())
+                self.assertNotIn(original["routeToken"], stderr.getvalue())
+                self.assertNotIn(backend.lease, stderr.getvalue())
+                self.assertNotIn(backend.state, stderr.getvalue())
 
 
 class NativeRelayTlsTests(unittest.IsolatedAsyncioTestCase):
