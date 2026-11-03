@@ -42,7 +42,7 @@ internal object McpInstallPreviewRules {
         val uri = URI(config.endpoint)
         config.id.matches(Regex("[a-zA-Z][a-zA-Z0-9_.-]{0,79}")) && config.name.isNotBlank() && config.name.length <= 80 &&
             config.endpoint.length <= 2000 && uri.host != null && uri.userInfo == null && uri.query == null && uri.fragment == null &&
-            (uri.scheme.equals("https", true) || uri.scheme.equals("http", true) && uri.host in setOf("localhost", "127.0.0.1", "[::1]")) &&
+            uri.scheme == "https" &&
             config.protocolVersion in setOf(CURRENT, LEGACY)
     } catch (_: Exception) { false }
 
@@ -84,6 +84,19 @@ internal object McpInstallPreviewRules {
         }
     } catch (_: Exception) { null }
 
+    /** Display correlation only. Native installation still consumes the retained discovery. */
+    @JvmStatic fun source(body: JSONObject): JSONObject? = try {
+        val raw = body.optJSONObject("mcpSource")
+        if (raw == null) null else {
+            val checked = dev.pocketengine.features.plugins.PluginRules.mcpSource(raw)
+            val capabilities = body.getJSONObject("serverCapabilities")
+            if (listOf("tools", "resources", "prompts").any { capabilities.has(it) && capabilities.optJSONObject(it) == null } ||
+                capabilities.optJSONObject("resources") == null && capabilities.optJSONObject("prompts") == null ||
+                checked.getString("endpoint") != body.optString("endpoint") || checked.getString("protocolVersion") != body.optString("protocolVersion") ||
+                checked.getString("serverDigest") != body.optString("serverDigest")) null else checked
+        }
+    } catch (_: Exception) { null }
+
     private fun validPreview(discovery: McpInstallDiscovery, body: JSONObject, now: Long): Boolean {
         val config = discovery.config
         if (!validConfig(config) || body.optString("previewId").isBlank() || body.optString("operationId") != discovery.operationId ||
@@ -92,6 +105,7 @@ internal object McpInstallPreviewRules {
             body.optString("expectedInstallationId") != discovery.expectedInstallationId || body.optLong("expiresAt") <= now ||
             body.opt("installed") != false || body.opt("enabledAfterInstall") != false || body.optJSONArray("grantsAfterInstall")?.length() != 0) return false
         val tools = body.optJSONArray("tools") ?: return false
+        if (body.has("mcpSource") && source(body) == null) return false
         if (tools.length() > 96) return false
         val names = mutableSetOf<String>()
         for (index in 0 until tools.length()) {
@@ -112,7 +126,7 @@ internal object McpInstallPreviewRules {
     @JvmStatic fun installPayload(reviewed: McpInstallReviewed?, config: McpInstallConfig, revision: Long, snapshot: JSONObject, envelope: JSONObject?, selected: Set<String>, now: Long): JSONObject {
         val body = current(reviewed, config, revision, snapshot, envelope, now) ?: throw IllegalStateException("预览已变化或过期，请重新发现工具。")
         val supported = objects(body.getJSONArray("tools")).filter { it.optBoolean("supported") }.map { it.getString("name") }.toSet()
-        require(selected.size in 1..12 && supported.containsAll(selected)) { "请选择 1 至 12 个此次预览中支持的工具。" }
+        require(selected.size <= 12 && (selected.isNotEmpty() || source(body) != null) && supported.containsAll(selected)) { "请选择此次支持的工具，或明确安装已发现的资源与提示来源。" }
         return JSONObject().put("previewId", body.getString("previewId")).put("expectedInstallationId", body.getString("expectedInstallationId"))
             .put("tools", JSONArray(selected.sorted()))
     }
@@ -125,9 +139,14 @@ internal object McpInstallPreviewRules {
         else {
             val manifest = plugin.optJSONObject("manifest")
             val tools = manifest?.optJSONArray("tools")
-            val reviewedTools = objects(JSONObject(attempt.reviewed.body).getJSONArray("tools")).associateBy { it.getString("name") }
+            val reviewedBody = JSONObject(attempt.reviewed.body)
+            val reviewedTools = objects(reviewedBody.getJSONArray("tools")).associateBy { it.getString("name") }
+            val reviewedSource = source(reviewedBody)
+            val returnedSource = manifest?.optJSONObject("mcpSource")?.let { dev.pocketengine.features.plugins.PluginRules.mcpSource(it) }
             val rows = objects(tools)
             if (manifest?.optString("id") != plugin.optString("id") || manifest.optString("name") != attempt.reviewed.discovery.config.name ||
+                manifest.has("mcpSource") != reviewedBody.has("mcpSource") || reviewedSource?.let(::digest) != returnedSource?.let(::digest) ||
+                attempt.tools.isEmpty() && reviewedSource == null ||
                 tools == null || rows.size != tools.length() || rows.size != attempt.tools.size || rows.map { it.optString("name") }.toSet() != attempt.tools ||
                 rows.any { digest(it) != reviewedTools[it.optString("name")]?.optJSONObject("declaration")?.let(::digest) }) null
             else JSONObject(plugin.toString())
@@ -184,7 +203,8 @@ internal fun McpInstallPreviewPage(
     requiredTool: String? = null,
     nativeHost: dev.pocketengine.features.NativePluginHost? = null,
     runOAuthWork: ((Runnable) -> Unit)? = null,
-    runOAuthControl: ((Runnable) -> Unit)? = null
+    runOAuthControl: ((Runnable) -> Unit)? = null,
+    onOpenEvidenceTask: ((String) -> Unit)? = null
 ) {
     var localDiscoveryOpen by remember { mutableStateOf(false) }
     var installedOpen by remember { mutableStateOf(requiredPluginId != null) }
@@ -285,7 +305,7 @@ internal fun McpInstallPreviewPage(
         if (attempt != null && envelope.optString("requestId") == attempt.requestId) {
             val receipt = McpInstallPreviewRules.installed(attempt, envelope)
             install = null
-            if (receipt != null) { installed = receipt; message = "已安装，保持停用、零工具授权。启用不会代替逐项工具审批。"; localError = null }
+            if (receipt != null) { installed = receipt; message = if (attempt.tools.isEmpty()) "已保存参考来源，保持停用、零工具和零执行权限。可在已安装服务中明确读取参考内容。" else "已安装，保持停用、零工具授权。启用不会代替逐项工具审批。"; localError = null }
             else { discardPreview(JSONObject(attempt.reviewed.body)); localError = mcpInstallFailure(envelope, "未取得匹配的安装回执，请先核对已安装列表，不要重复提交。") }
         }
     }
@@ -298,7 +318,8 @@ internal fun McpInstallPreviewPage(
             if (receipt != null) {
                 if (installed?.optString("id") == attempt.id) installed = JSONObject(receipt.toString())
                 val requiredGranted = requiredTool != null && (0 until (receipt.optJSONArray("grants")?.length() ?: 0)).any { receipt.optJSONArray("grants")?.optString(it) == "tool:$requiredTool" }
-                message = if (attempt.enabled && requiredGranted) "所需工具已准备。返回原任务明确继续，执行仍按具体参数审批。" else if (attempt.enabled) "已启用此安装版本；仍需逐项授予工具权限，启用不等于工具可执行。" else "已停用此安装版本。已发生的远端效果不会撤回。"
+                val sourceOnly = receipt.optJSONObject("manifest")?.let { it.optJSONObject("mcpSource") != null && it.optJSONArray("tools")?.length() == 0 } == true
+                message = if (attempt.enabled && sourceOnly) "已启用此安装版本。此参考来源没有可执行工具；读取参考内容仍由你明确选择。" else if (attempt.enabled && requiredGranted) "所需工具已准备。返回原任务明确继续，执行仍按具体参数审批。" else if (attempt.enabled) "已启用此安装版本；仍需逐项授予工具权限，启用不等于工具可执行。" else "已停用此安装版本。已发生的远端效果不会撤回。"
                 localError = null
             } else localError = mcpInstallFailure(envelope, "未取得匹配的启停回执，请核对当前安装状态。")
         }
@@ -309,12 +330,12 @@ internal fun McpInstallPreviewPage(
         Column(Modifier.fillMaxSize().imePadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = ::back) { Text("返回") }
-                Text(if (requiredPluginId != null) "任务所需的 MCP 工具" else "添加 MCP 工具", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink, modifier = Modifier.weight(1f))
+                Text(if (requiredPluginId != null) "任务所需的 MCP 工具" else "添加 MCP 服务", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink, modifier = Modifier.weight(1f))
                 TextButton(onClick = { request("snapshot", JSONObject()) }, enabled = !writing && !loading) { Text("刷新", fontSize = 12.sp) }
             }
             HorizontalDivider(color = Line)
             Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(if (current != null) "核对工具，再安装" else if (installed != null) "安装结果" else if (requiredPluginId != null && targetHasTool) "准备这项任务的工具" else "连接你信任的工具服务", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+                Text(if (current != null) "核对服务，再安装" else if (installed != null) "安装结果" else if (requiredPluginId != null && targetHasTool) "准备这项任务的工具" else "连接你信任的服务", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Ink)
                 if (requiredPluginId != null) McpInstallCaption("来自原任务的能力准备：$requiredPluginId · ${requiredTool.orEmpty()}。这里只显示这个服务和所需工具；已有安装可直接核对授权。")
                 McpInstallCaption("发现只读取服务声明，不调用工具。安装后默认停用且不授予任何工具权限。")
                 if (requiredPluginId == null && snapshot.optJSONObject("nativeCapabilities")?.opt("localMcpDiscoveryOwnerOnly") == true) TextButton(onClick = { localDiscoveryOpen = true }, enabled = !busy && !loading) { Text("本机程序发现（先审阅，仅元数据）") }
@@ -331,7 +352,7 @@ internal fun McpInstallPreviewPage(
                     TextButton(onClick = { reconfigureRequired = !reconfigureRequired }, enabled = !busy) { Text(if (reconfigureRequired) "收起服务更新" else "检查新版本或地址", fontSize = 12.sp) }
                 }
                 if (installed == null && showConnectionForm) {
-                    OutlinedTextField(endpoint, { edit { endpoint = it } }, label = { Text("服务地址") }, isError = endpoint.isNotBlank() && !McpInstallPreviewRules.validConfig(McpInstallConfig("check", "检查", endpoint.trim(), McpInstallPreviewRules.CURRENT)), supportingText = { Text("HTTPS 完整地址；不能带账号、密码、查询参数或片段。") }, placeholder = { Text("https://example.com/mcp") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), singleLine = true, enabled = !writing, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(endpoint, { edit { endpoint = it } }, label = { Text("HTTPS 服务地址") }, isError = endpoint.isNotBlank() && !McpInstallPreviewRules.validConfig(McpInstallConfig("check", "检查", endpoint.trim(), McpInstallPreviewRules.CURRENT)), supportingText = { Text("HTTPS 完整地址；不能带账号、密码、查询参数或片段。") }, placeholder = { Text("https://example.com/mcp") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), singleLine = true, enabled = !writing, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(name, { edit { name = it } }, label = { Text("显示名称") }, isError = name.trim().length > 80, supportingText = { if (name.trim().length > 80) Text("名称不能超过 80 个字符。") }, singleLine = true, enabled = !writing, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(id, { edit { id = it } }, label = { Text("插件 ID") }, isError = id.isNotBlank() && !id.trim().matches(Regex("[a-zA-Z][a-zA-Z0-9_.-]{0,79}")), supportingText = { Text("字母开头，可含字母、数字、点、横线及下划线；同 ID 会更新现有安装。") }, singleLine = true, enabled = !writing && requiredPluginId == null, modifier = Modifier.fillMaxWidth())
                     TextButton(onClick = {
@@ -349,7 +370,7 @@ internal fun McpInstallPreviewPage(
                             }
                         }
                         val unsupported = snapshot.optJSONObject("mcpSupport")?.optJSONArray("unsupported")
-                        McpInstallCaption("当前不支持：" + if (unsupported != null) (0 until unsupported.length()).joinToString("、") { unsupported.optString(it) } else "stdio、旧版 HTTP+SSE、资源、提示词、任务及二进制内容；OAuth以当前原生授权入口实际能力为准。")
+                        McpInstallCaption(if (unsupported != null) "当前不支持：" + (0 until unsupported.length()).joinToString("、") { unsupported.optString(it) } else "请先刷新宿主支持范围；未声明的能力不会按已支持处理。")
                     }
                     if (nativeHost != null && runOAuthWork != null && runOAuthControl != null) McpOAuthControls(nativeHost, config, busy, runOAuthWork, runOAuthControl) { selectedConnection -> invalidate(); authorization = selectedConnection; message = "已选择原授权连接；下一步仍只发现工具，不自动安装或授予工具权。" }
                     authorization?.let { selectedConnection -> McpInstallCaption("当前使用已授权原连接 ${selectedConnection.optString("connectionId").take(8)}，仅绑定此准确服务地址/协议。退出或到期会在实际 HTTP 前拒绝。")
@@ -357,7 +378,7 @@ internal fun McpInstallPreviewPage(
                     }
                     if (discovering) {
                         LinearProgressIndicator(Modifier.fillMaxWidth())
-                        McpInstallCaption("正在读取服务信息和工具定义…尚未安装或调用任何工具。")
+                        McpInstallCaption("正在读取服务能力和工具定义…尚未安装或调用任何工具。")
                         OutlinedButton(onClick = { invalidate(); message = "已请求停止发现；迟到结果不会成为可安装预览。" }) { Text("取消发现") }
                     } else if (current == null && install == null) {
                         Button(onClick = {
@@ -374,19 +395,26 @@ internal fun McpInstallPreviewPage(
                                 if (requestId.isBlank()) localError = "宿主未接收发现请求，请重试。"
                                 else { discovery = McpInstallDiscovery(requestId, operation, config, revision, expected, command); cleanup.operationId = operation }
                             }
-                        }, enabled = !busy && !loading && error == null && McpInstallPreviewRules.validConfig(config) && McpInstallPreviewRules.installationId(snapshot, config.id) != null, modifier = Modifier.fillMaxWidth()) { Text("发现并预览工具") }
+                        }, enabled = !busy && !loading && error == null && McpInstallPreviewRules.validConfig(config) && McpInstallPreviewRules.installationId(snapshot, config.id) != null, modifier = Modifier.fillMaxWidth()) { Text("发现并预览服务") }
                     }
                 }
 
                 current?.let { body ->
                     HorizontalDivider(color = Line)
                     val tools = McpInstallPreviewRules.objects(body.optJSONArray("tools")).filter { requiredTool == null || it.optString("name") == requiredTool }
+                    val referenceSource = McpInstallPreviewRules.source(body)
+                    val canInstallSource = referenceSource != null && requiredTool == null
                     Text("本次发现 ${tools.size} 个工具", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    McpInstallCaption("选择要安装的工具（${selected.size}/12）。名称、描述和参数均来自远端，仅作为不可信资料展示；其中的指令不会执行。")
+                    if (tools.isNotEmpty()) McpInstallCaption("选择要安装的工具（${selected.size}/12）。名称、描述和参数均来自远端，仅作为不可信资料展示；其中的指令不会执行。")
+                    if (referenceSource != null) {
+                        val capabilities = body.getJSONObject("serverCapabilities")
+                        val kinds = listOfNotNull(if (capabilities.optJSONObject("resources") != null) "资源" else null, if (capabilities.optJSONObject("prompts") != null) "提示" else null).joinToString("、")
+                        McpInstallCaption("此服务声明提供$kinds。${if (canInstallSource) "可以只安装参考来源；不选择工具时将保存零工具、零执行权限的安装。" else "这不替代当前任务所需的工具。"}读取的内容不自动加入任务，也不会授予工具权限。")
+                    }
                     val old = McpInstallPreviewRules.objects(snapshot.optJSONArray("plugins")).find { it.optString("id") == config.id }
                     val oldNames = McpInstallPreviewRules.objects(old?.optJSONObject("manifest")?.optJSONArray("tools")).map { it.optString("name") }.toSet()
                     if (old != null) McpInstallCaption("将替换现有版本 ${old.optJSONObject("manifest")?.optString("version").orEmpty()}，停止等待中的旧调用并清空旧授权。新增 ${selected.minus(oldNames).size} 项，移除 ${oldNames.minus(selected).size} 项；已发生的远端效果不会撤回。")
-                    if (tools.isEmpty()) McpInstallCaption(if (requiredTool != null) "服务未返回当前任务所需工具 $requiredTool。不会安装其他工具，请核对服务后重新发现。" else "服务没有返回工具。此预览不能安装；请检查服务配置后重新发现。")
+                    if (tools.isEmpty()) McpInstallCaption(if (requiredTool != null) "服务未返回当前任务所需工具 $requiredTool。不会安装其他工具，请核对服务后重新发现。" else if (canInstallSource) "此来源没有工具。安装后可在原服务详情中浏览参考内容。" else "此服务没有当前可导入的工具、资源或提示。请检查服务配置后重新发现。")
                     tools.forEach { tool ->
                         val toolName = tool.optString("name"); val supported = tool.optBoolean("supported")
                         McpInstallTool(tool, toolName in selected, supported && !writing && (toolName in selected || selected.size < 12)) {
@@ -405,7 +433,7 @@ internal fun McpInstallPreviewPage(
                             cleanup.operationId = null; cleanup.previewId = null
                             discovery = null; reviewed = null; selected = emptySet(); localError = null
                         } catch (failure: Exception) { localError = failure.message ?: "无法确认安装，请重新发现。" }
-                    }, enabled = selected.isNotEmpty() && !busy && !loading && error == null, modifier = Modifier.fillMaxWidth()) { Text(if (old == null) "确认安装所选工具" else "确认更新所选工具") }
+                    }, enabled = (selected.isNotEmpty() || canInstallSource) && !busy && !loading && error == null, modifier = Modifier.fillMaxWidth()) { Text(if (selected.isEmpty()) if (old == null) "确认安装参考来源 · 0 个工具" else "确认更新为参考来源 · 0 个工具" else if (old == null) "确认安装所选工具" else "确认更新所选工具") }
                     TextButton(onClick = { invalidate(); message = "已关闭此预览，没有安装工具。" }, enabled = !writing) { Text("放弃此预览") }
                 }
                 if (install != null) { LinearProgressIndicator(Modifier.fillMaxWidth()); McpInstallCaption("正在保存已确认的安装…请等待真实回执，不要重复提交。") }
@@ -422,7 +450,7 @@ internal fun McpInstallPreviewPage(
                 }
 
                 if (requiredPluginId == null || !targetHasTool) {
-                val existing = McpInstallPreviewRules.objects(snapshot.optJSONArray("plugins")).filter { plugin -> (requiredPluginId == null || plugin.optString("id") == requiredPluginId) && McpInstallPreviewRules.objects(plugin.optJSONObject("manifest")?.optJSONArray("tools")).any { it.optString("kind") == "mcp" } }
+                val existing = McpInstallPreviewRules.objects(snapshot.optJSONArray("plugins")).filter { plugin -> (requiredPluginId == null || plugin.optString("id") == requiredPluginId) && (plugin.optJSONObject("manifest")?.optJSONObject("mcpSource") != null || McpInstallPreviewRules.objects(plugin.optJSONObject("manifest")?.optJSONArray("tools")).any { it.optString("kind") == "mcp" }) }
                 HorizontalDivider(color = Line)
                 TextButton(onClick = { installedOpen = !installedOpen }) { Text("${if (installedOpen) "收起" else "查看"}已安装 MCP · ${existing.size}") }
                 if (installedOpen && (requiredPluginId == null || !targetHasTool)) {
@@ -432,8 +460,10 @@ internal fun McpInstallPreviewPage(
                         Text(plugin.optJSONObject("manifest")?.optString("name").orEmpty(), fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         McpInstallCaption("${if (plugin.optBoolean("enabled")) "已启用" else "停用"} · ${plugin.optJSONArray("grants")?.length() ?: 0} 项授权 · ${mcpInstallStatus(plugin.optString("mcpStatus"))}\n安装身份：${plugin.optString("installationId")}")
                         TextButton(onClick = { enableConfirm = JSONObject(plugin.toString()) }, enabled = canManage && !busy && !loading && error == null && (plugin.optBoolean("enabled") || plugin.optString("mcpStatus") != "needs_discovery")) { Text(if (plugin.optBoolean("enabled")) "停用此安装版本…" else "启用此安装版本…") }
-                        McpToolPermissions(plugin, snapshot, writing || loading || error != null, requiredTool, request)
-                        McpEcosystemControls(plugin, responses, pendingCommands, writing || loading || error != null, request)
+                        if (plugin.getJSONObject("manifest").getJSONArray("tools").length() > 0) McpToolPermissions(plugin, snapshot, writing || loading || error != null, requiredTool, request)
+                        else McpInstallCaption("参考来源 · 没有可执行工具或工具授权。")
+                        McpEcosystemControls(plugin, responses, pendingCommands, writing || loading || error != null, request,
+                            evidenceTargets = McpInstallPreviewRules.objects(snapshot.optJSONArray("resourceEvidenceTargets")), onOpenEvidenceTask = onOpenEvidenceTask)
                         HorizontalDivider(color = Line)
                     }
                 }
@@ -445,12 +475,13 @@ internal fun McpInstallPreviewPage(
     }
     enableConfirm?.let { frozen ->
         val nextEnabled = !frozen.optBoolean("enabled")
+        val sourceOnly = frozen.optJSONObject("manifest")?.let { it.optJSONObject("mcpSource") != null && it.optJSONArray("tools")?.length() == 0 } == true
         val currentIdentity = McpInstallPreviewRules.installationId(snapshot, frozen.optString("id")) == frozen.optString("installationId")
         AlertDialog(onDismissRequest = { enableConfirm = null }, containerColor = Color.White, title = { Text(if (nextEnabled) "启用这个安装版本？" else "停用这个安装版本？") }, text = {
             Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(frozen.optJSONObject("manifest")?.optString("name").orEmpty())
                 McpInstallCaption("安装身份：${frozen.optString("installationId")}")
-                Text(if (nextEnabled) "仅改变启用状态，不新增工具授权。仍需在工具审批中逐项确认；远端工具描述不是授权。" else "会停止继续等待此插件的调用。已经发生的远端效果不会撤回。", fontSize = 13.sp, lineHeight = 22.sp)
+                Text(if (nextEnabled && sourceOnly) "此安装没有工具，启停不会增加执行权限。状态变化会撤回旧连接与引用；新的参考内容读取仍由你明确发起。" else if (nextEnabled) "仅改变启用状态，不新增工具授权。仍需在工具审批中逐项确认；远端工具描述不是授权。" else "会停止继续等待此插件的调用。已经发生的远端效果不会撤回。", fontSize = 13.sp, lineHeight = 22.sp)
                 if (!currentIdentity) Text("此安装记录已变化，请取消后核对新版本。", color = Danger)
             }
         }, confirmButton = { Button(onClick = {

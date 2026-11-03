@@ -817,7 +817,12 @@
       "dev.pocketengine.features.plugins.mcp.McpTaskCoordinatorTest",
       "dev.pocketengine.features.plugins.McpOAuthNativeRunnerJourneyTest",
       "dev.pocketengine.features.plugins.mcp.McpOAuthTest",
-      "dev.pocketengine.ui.McpEcosystemStateTest"
+      "dev.pocketengine.ui.McpEcosystemStateTest",
+      "dev.pocketengine.features.plugins.McpSourceManifestTest",
+      "dev.pocketengine.ui.McpInstallPreviewStateTest",
+      "dev.pocketengine.features.plugins.McpResourceEvidenceTest",
+      "dev.pocketengine.features.plugins.McpResourceEvidenceNativeJourneyTest",
+      "dev.pocketengine.features.memory.SavedDocumentMemorySourceNativeTest"
     ],
     "helpers": [
       "dev.pocketengine.features.plugins.McpFixture",

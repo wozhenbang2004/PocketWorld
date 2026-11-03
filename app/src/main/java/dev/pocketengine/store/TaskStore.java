@@ -8533,6 +8533,56 @@ public final class TaskStore {
         ContentValues value=new ContentValues();value.put("state",unknown?"unknown":"receipt");value.put("receipt",sanitize(receipt).toString());if(db.update("operations",value,"task_id=? AND operation_id=?",new String[]{id,operationId})!=1)throw new IllegalArgumentException("执行收据与任务不匹配");
         if(unknown)status(id,"reconciling","动作结果不明，请核对后继续");
     }
+    /** Existing private task/run only; selecting a resource destination starts no task or execution. */
+    public synchronized JSONObject ownerMcpResourceTarget(String taskId)throws Exception {
+        JSONObject task=required(taskId);requireOutputTask(task);
+        String run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");
+        if(!run.matches("[a-f0-9-]{36}")||epoch<1)throw new SecurityException("请选已有原执行记录的私人任务；保存来源不会创建任务或执行代次");
+        try(Cursor row=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{taskId,run,Integer.toString(epoch)})){
+            if(!row.moveToFirst())throw new SecurityException("原任务执行记录已不可核对");
+        }
+        JSONObject pin=new JSONObject().put("taskId",taskId).put("runId",run).put("epoch",epoch).put("actorId",task.getString("actorId")).put("spaceId",task.getString("spaceId")).put("origin",task.opt("origin"));
+        return new JSONObject().put("taskId",taskId).put("runId",run).put("epoch",epoch).put("title",snapshotText(task.optString("goal"),120))
+                .put("targetPin",capabilityFingerprint(pin)).put("metadataOnly",true).put("executionAuthorized",false);
+    }
+    /** A bounded metadata window; never load all task event bodies just to choose a destination. */
+    public synchronized JSONArray ownerMcpResourceTargets()throws Exception {
+        JSONArray result=new JSONArray();
+        try(Cursor rows=db.rawQuery("SELECT task_id FROM tasks WHERE length(CAST(document AS BLOB))<=1048576 ORDER BY updated_at DESC LIMIT 200",null)){
+            while(rows.moveToNext()&&result.length()<64){try{result.put(ownerMcpResourceTarget(rows.getString(0)));}catch(SecurityException unavailable){/* Other source domains and tasks without a run are not destinations. */}}
+        }
+        return result;
+    }
+    /** Original attachment link + exact saved-event reference, atomically; never a tool receipt. */
+    public synchronized JSONObject recordOwnerMcpResourceEvidence(String expectedTaskPin,dev.pocketengine.features.plugins.McpResourceEvidence.Publication publication,RunControl ownerControl)throws Exception {
+        if(publication==null||ownerControl==null||expectedTaskPin==null||!expectedTaskPin.matches("[a-f0-9]{64}"))throw new SecurityException("需要本机取得的原资源快照和所选原任务");
+        ownerControl.check();long ownerPauseRevision=ownerControl.pauseRevision();db.beginTransaction();try{
+            JSONObject target=ownerMcpResourceTarget(publication.taskId());
+            if(!expectedTaskPin.equals(target.getString("targetPin"))||!publication.runId().equals(target.getString("runId"))||publication.epoch()!=target.getInt("epoch"))throw new SecurityException("所选原任务或执行代次已变化，请重新审阅；不会改投另一任务");
+            publication.checkCurrentSource();JSONObject attachment=publication.attachmentReference(),event=publication.indexEvent().put("callId",publication.publicationId());
+            dev.pocketengine.features.plugins.McpResourceEvidence.requireIndexEvent(event);
+            if(outputSources==null||!outputSources.attachmentCurrent(attachment.getString("id"),attachment.getString("sha256"),event.getString("attachmentGeneration")))throw new SecurityException("原资源附件已撤回或改变，不能关联另一原件");
+            long sequence=0;boolean duplicate=false;
+            try(Cursor row=db.rawQuery("SELECT native_seq,event_json FROM task_events WHERE task_id=? AND event_type='mcp_resource_retained' AND call_id=? AND body_bytes<=131072 ORDER BY event_order DESC LIMIT 1",new String[]{publication.taskId(),publication.publicationId()})){
+                if(row.moveToFirst()){
+                    JSONObject original=new JSONObject(row.getString(1));original.remove("seq");original.remove("at");
+                    if(!capabilityFingerprint(original).equals(capabilityFingerprint(event)))throw new SecurityException("原资源发布编号已对应另一份准确来源");
+                    sequence=row.getLong(0);duplicate=true;
+                }
+            }
+            if(!duplicate){
+                linkOwnerAttachment(publication.taskId(),attachment);
+                appendEvent(required(publication.taskId()),event);sequence=TaskAuditStore.lastSequence(db,publication.taskId());
+            }
+            var source=dev.pocketengine.features.memory.TaskSavedEvidence.select(db,publication.taskId(),publication.runId(),sequence,0,24000);
+            ownerControl.check();publication.checkCurrentSource();
+            if(!outputSources.attachmentCurrent(attachment.getString("id"),attachment.getString("sha256"),event.getString("attachmentGeneration")))throw new SecurityException("原资源在提交前已撤回");
+            JSONObject result=new JSONObject().put("taskId",publication.taskId()).put("runId",publication.runId()).put("epoch",publication.epoch()).put("publicationId",publication.publicationId())
+                    .put("attachment",attachment).put("sourceRef",source.toJson()).put("eventSeq",sequence).put("linked",true).put("duplicate",duplicate)
+                    .put("historicalSnapshot",true).put("executionAuthorized",false).put("businessVerified",false).put("automaticConversationInjection",false);
+            ownerControl.dispatchAtPauseRevision(ownerPauseRevision,db::setTransactionSuccessful);return result;
+        }finally{db.endTransaction();}
+    }
     /** Native owner attachment selection. Only immutable references enter the original task, never bytes/URIs. */
     public synchronized JSONObject linkOwnerAttachment(String taskId,JSONObject imported)throws Exception{
         JSONObject task=required(taskId);requirePrivateOwner(task);JSONObject reference=attachmentReference(imported);

@@ -28,9 +28,9 @@ final class McpData {
                 .put("structuredContentSupport","object_only_not_output_schema_validated").put("maxImportedTools",MAX_IMPORTED_TOOLS).put("maxDiscoveredTools",MAX_TOOLS).put("maxSchemaCharacters",16000)
                 .put("contentTypes",new JSONArray().put("text").put("structuredContent"))
                 .put("resources",new JSONObject().put("sourceImplemented",true).put("readOnly",true).put("skillImportRequiresReview",true)
-                        .put("maxPages",8).put("maxResources",96).put("maxSkillCharacters",64000).put("relativeResourceResolver",false))
+                        .put("sourceOnlyInstallation",true).put("maxPages",8).put("maxResources",96).put("maxSkillCharacters",64000).put("relativeResourceResolver",false))
                 .put("prompts",new JSONObject().put("sourceImplemented",true).put("nativeOwnerOnly",true).put("installedOnly",true).put("readOnly",true)
-                        .put("maxPages",8).put("maxPrompts",96).put("maxMessages",64).put("maxTextCharacters",64000).put("automaticConversationInjection",false).put("contentSupport","text_only_with_explicit_omissions"))
+                        .put("sourceOnlyInstallation",true).put("maxPages",8).put("maxPrompts",96).put("maxMessages",64).put("maxTextCharacters",64000).put("automaticConversationInjection",false).put("contentSupport","text_only_with_explicit_omissions"))
                 .put("tasks",new JSONObject().put("protocolVersion",VERSION).put("extension","io.modelcontextprotocol/tasks")
                         .put("sourceImplemented",true).put("hostMountRequired",false).put("hostMounted",true).put("originalTaskStore",true).put("nativeOwnerPollCancel",true).put("coldRecovery",true).put("automaticReplay",false))
                 .put("subscriptions",new JSONObject().put("protocolVersion",VERSION).put("sourceImplemented",true).put("method","subscriptions/listen").put("nativeOwnerOnly",true).put("boundedObservation",true).put("maxEvents",128).put("maxResponseBytes",262144).put("automaticReconnect",false).put("updatesInvalidateSourceRevision",true))
@@ -69,15 +69,34 @@ final class McpData {
     }
 
     static JSONObject manifest(String id,String name,String endpoint,String version,String serverDigest,JSONArray definitions,JSONArray selection)throws Exception {
-        if(selection.length()<1||selection.length()>MAX_IMPORTED_TOOLS)throw new IllegalArgumentException("请选择1至"+MAX_IMPORTED_TOOLS+"个支持的MCP工具");
+        return manifest(id,name,endpoint,version,serverDigest,definitions,selection,null);
+    }
+
+    /** Only the live discovery owner supplies these server facts; an empty tool selection must
+     * retain a usable resource/prompt source, never create an empty arbitrary plugin. */
+    static JSONObject manifest(String id,String name,String endpoint,String version,String serverDigest,JSONArray definitions,JSONArray selection,JSONObject serverInfo,JSONObject serverCapabilities)throws Exception {
+        JSONObject source=sourceDescriptor(endpoint,version,serverDigest,serverInfo,serverCapabilities);
+        if(selection.length()>0&&serverCapabilities.optJSONObject("tools")==null)throw new IllegalArgumentException("此服务未声明tools能力，不能导入工具");
+        return manifest(id,name,endpoint,version,serverDigest,definitions,selection,source);
+    }
+    static JSONObject sourceDescriptor(String endpoint,String version,String serverDigest,JSONObject serverInfo,JSONObject serverCapabilities)throws Exception {
+        if(serverInfo==null||serverCapabilities==null||!digest(serverInfo).equals(serverDigest))throw new SecurityException("MCP来源缺少此次真实发现的准确服务身份");
+        for(String capability:new String[]{"tools","resources","prompts"})if(serverCapabilities.has(capability)&&serverCapabilities.optJSONObject(capability)==null)throw new IllegalArgumentException("MCP能力声明格式无效");
+        if(serverCapabilities.optJSONObject("resources")==null&&serverCapabilities.optJSONObject("prompts")==null)return null;
+        return PluginRules.mcpSource(new JSONObject().put("endpoint",endpoint).put("protocolVersion",version).put("serverDigest",serverDigest));
+    }
+    private static JSONObject manifest(String id,String name,String endpoint,String version,String serverDigest,JSONArray definitions,JSONArray selection,JSONObject source)throws Exception {
+        if(selection.length()>MAX_IMPORTED_TOOLS||selection.length()==0&&source==null)throw new IllegalArgumentException("请选择1至"+MAX_IMPORTED_TOOLS+"个支持的MCP工具，或明确安装此次已发现的资源/提示来源");
         JSONArray tools=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
         for(int i=0;i<selection.length();i++){
             String selected=selection.getString(i);if(!seen.add(selected))throw new IllegalArgumentException("工具选择重复");
             JSONObject remote=find(definitions,selected);if(remote==null)throw new IllegalArgumentException("工具不在此次发现结果内");
             tools.put(declaration(remote,endpoint,version,serverDigest));
         }
-        return PluginRules.manifest(new JSONObject().put("id",id).put("name",name)
-                .put("version","mcp-"+digest(tools).substring(0,24)).put("tools",tools));
+        JSONObject manifest=new JSONObject().put("id",id).put("name",name).put("tools",tools);
+        if(source!=null)manifest.put("mcpSource",copy(source));
+        manifest.put("version","mcp-"+digest(source==null?tools:new JSONObject().put("tools",tools).put("mcpSource",source)).substring(0,24));
+        return PluginRules.manifest(manifest);
     }
 
     static JSONObject find(JSONArray definitions,String name)throws Exception {

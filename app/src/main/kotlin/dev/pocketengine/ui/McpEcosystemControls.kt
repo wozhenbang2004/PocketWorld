@@ -29,10 +29,11 @@ internal object McpEcosystemRules {
 
 /** The original installed-service detail; returned text stays visibly separate from task instructions. */
 @Composable
-internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSONObject>, pending: Set<String>, busy: Boolean, request: (String, JSONObject) -> String) {
+internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSONObject>, pending: Set<String>, busy: Boolean, request: (String, JSONObject) -> String, evidenceTargets: List<JSONObject> = emptyList(), onOpenEvidenceTask: ((String) -> Unit)? = null) {
     val installation = plugin.optString("installationId")
     val revision = plugin.optLong("stateRevision", -1)
     val definitions = McpInstallPreviewRules.objects(plugin.optJSONObject("manifest")?.optJSONArray("tools"))
+    val protocol = plugin.optJSONObject("manifest")?.optJSONObject("mcpSource")?.optString("protocolVersion") ?: definitions.firstOrNull()?.optString("protocolVersion")
     val transport = definitions.firstOrNull()?.optString("transport", "streamable_http")
     if (transport == "stdio") { McpInstallCaption("本机程序的连接诊断见原发现任务；资源、提示和远端异步任务当前仅用于 HTTP 安装。"); return }
     var expanded by remember(installation) { mutableStateOf(false) }
@@ -42,10 +43,15 @@ internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSO
     var prompt by remember(installation, revision) { mutableStateOf<JSONObject?>(null) }
     var arguments by remember(installation, revision, prompt?.optString("name")) { mutableStateOf<Map<String, String>>(emptyMap()) }
     var reference by remember(installation, revision) { mutableStateOf<JSONObject?>(null) }
+    var target by remember(installation, revision, reference?.optString("snapshotId")) { mutableStateOf<JSONObject?>(null) }
+    var saved by remember(installation, revision, reference?.optString("snapshotId")) { mutableStateOf<JSONObject?>(null) }
+    var choosingTarget by remember(installation, revision, reference?.optString("snapshotId")) { mutableStateOf(false) }
     var notice by remember(installation) { mutableStateOf<String?>(null) }
     val send by rememberUpdatedState(request)
     val owned = remember(installation) { mutableSetOf<String>() }
     DisposableEffect(installation) { onDispose { owned.toList().forEach { send("cancel", JSONObject().put("operationId", it)) }; owned.clear() } }
+    val resourceSnapshot = reference?.optString("snapshotId")?.takeIf { it.isNotBlank() }
+    DisposableEffect(resourceSnapshot) { onDispose { resourceSnapshot?.let { runCatching { send("discardMcpResourceSnapshot", JSONObject().put("snapshotId", it)) } } } }
     val envelope = attempt?.command?.let(responses::get)
     LaunchedEffect(attempt?.request, envelope?.toString(), revision) {
         val original = attempt ?: return@LaunchedEffect
@@ -62,11 +68,13 @@ internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSO
             "listMcpResources" -> { resources = McpInstallPreviewRules.objects(actual.optJSONArray("resources")); notice = "已取得 ${resources.size} 个资源名称。选择后才读取正文。" }
             "listMcpPrompts" -> { prompts = McpInstallPreviewRules.objects(actual.optJSONArray("prompts")); notice = "已取得 ${prompts.size} 个提示。参数和返回内容只作为参考。" }
             "getMcpResource", "getMcpPrompt" -> { reference = actual; notice = "已取得当前来源的参考内容。" }
+            "saveMcpResource" -> { saved = actual; notice = if (actual.optBoolean("linked")) "已保存为所选原任务的历史来源；没有启动执行或自动加入对话。" else actual.optString("message", "原件已保存，任务关联尚未完成。请核对原文件。") }
             "pingMcp" -> notice = "连接有响应 · ${actual.optLong("roundTripMillis")} ms；这不证明工具业务执行成功。"
             "listenMcpUpdates" -> notice = if (actual.optBoolean("sourceInvalidated")) "服务报告内容已更新，请重新读取目录；旧来源已撤回。" else if (actual.optBoolean("gracefulClose")) "服务已正常结束这次观察。" else "这次观察已结束（${actual.optString("endReason")}）；未自动重连。"
         }
     }
     fun issue(command: String, extra: JSONObject = JSONObject()) {
+        if (attempt != null) return
         val operation = UUID.randomUUID().toString()
         val payload = JSONObject(extra.toString()).put("id", plugin.getString("id")).put("expectedInstallationId", installation).put("expectedStateRevision", revision).put("_operationId", operation)
         try { val id = send(command, payload); check(id.isNotBlank()); owned.add(operation); attempt = McpSourceAttempt(command, id, operation, installation, revision); notice = null }
@@ -74,23 +82,23 @@ internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSO
     }
     TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起连接与参考内容" else "连接、资源与提示…") }
     if (!expanded) return
-    val blocked = busy || attempt != null || pending.any { it in setOf("pingMcp", "listMcpResources", "getMcpResource", "listMcpPrompts", "getMcpPrompt", "listenMcpUpdates") }
+    val blocked = busy || attempt != null || pending.any { it in setOf("pingMcp", "listMcpResources", "getMcpResource", "listMcpPrompts", "getMcpPrompt", "listenMcpUpdates", "saveMcpResource") }
     Column(Modifier.fillMaxWidth().padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { issue("pingMcp") }, enabled = !blocked) { Text("检查连接") }
             TextButton(onClick = { issue("listMcpResources") }, enabled = !blocked) { Text("资源目录") }
             TextButton(onClick = { issue("listMcpPrompts") }, enabled = !blocked) { Text("提示目录") }
         }
-        if (definitions.firstOrNull()?.optString("protocolVersion") == McpInstallPreviewRules.CURRENT) {
+        if (protocol == McpInstallPreviewRules.CURRENT) {
             TextButton(onClick = { issue("listenMcpUpdates", JSONObject().put("filter", JSONObject().put("toolsListChanged", true).put("resourcesListChanged", true).put("promptsListChanged", true))) }, enabled = !blocked) { Text("观察一次服务更新") }
         }
         attempt?.let { active ->
-            Row { CircularProgressIndicator(Modifier.size(16.dp), color = Ink, strokeWidth = 2.dp); TextButton(onClick = { send("cancel", JSONObject().put("operationId", active.operation)); notice = "已请求停止本次读取；未取消其他服务。" }) { Text("停止本次读取") } }
+            Row { CircularProgressIndicator(Modifier.size(16.dp), color = Ink, strokeWidth = 2.dp); TextButton(onClick = { send("cancel", JSONObject().put("operationId", active.operation)); notice = "已请求停止本次操作；已保存的原件仍保留供核对。" }) { Text(if (active.command == "saveMcpResource") "停止本次保存" else "停止本次读取") } }
         }
         notice?.let { McpInstallCaption(it) }
         resources.forEach { resource ->
             TextButton(onClick = { issue("getMcpResource", JSONObject().put("uri", resource.getString("uri")).put("descriptorDigest", resource.getString("descriptorDigest"))) }, enabled = !blocked) { Text(resource.optString("name", resource.optString("uri")), fontSize = 13.sp) }
-            if (definitions.firstOrNull()?.optString("protocolVersion") == McpInstallPreviewRules.CURRENT) TextButton(onClick = { issue("listenMcpUpdates", JSONObject().put("filter", JSONObject().put("resourceSubscriptions", JSONArray().put(resource.getString("uri"))))) }, enabled = !blocked) { Text("观察此资源更新", fontSize = 12.sp) }
+            if (protocol == McpInstallPreviewRules.CURRENT) TextButton(onClick = { issue("listenMcpUpdates", JSONObject().put("filter", JSONObject().put("resourceSubscriptions", JSONArray().put(resource.getString("uri"))))) }, enabled = !blocked) { Text("观察此资源更新", fontSize = 12.sp) }
         }
         prompts.forEach { item -> TextButton(onClick = { prompt = item; reference = null }, enabled = !blocked) { Text(item.optString("name"), fontSize = 13.sp) } }
         prompt?.let { selected ->
@@ -105,7 +113,30 @@ internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSO
                 issue("getMcpPrompt", JSONObject().put("name", selected.getString("name")).put("descriptorDigest", selected.getString("descriptorDigest")).put("arguments", values))
             }, enabled = !blocked && params.all { !it.optBoolean("required") || arguments[it.optString("name")] != null }) { Text("读取这份提示") }
         }
-        reference?.let { content -> McpReferenceText(content) }
+        reference?.let { content ->
+            McpReferenceText(content)
+            resourceSnapshot?.let { snapshotId ->
+                if (saved == null) TextButton(onClick = { choosingTarget = !choosingTarget }, enabled = !blocked) { Text(if (choosingTarget) "收起保存位置" else "保存为原任务来源…") }
+                if (choosingTarget && saved == null) {
+                    McpInstallCaption("选择已有私人任务。保存这次实际取得的文本快照，保留块来源与未读取内容说明；不会创建任务或增加工具权限。")
+                    if (evidenceTargets.isEmpty()) McpInstallCaption("没有已有执行记录的私人任务。请返回原任务后再选择保存位置。")
+                    evidenceTargets.forEach { choice ->
+                        TextButton(onClick = { target = JSONObject(choice.toString()) }, enabled = !blocked) { Text((if (target?.optString("targetPin") == choice.optString("targetPin")) "已选 · " else "") + choice.optString("title", "原任务"), fontSize = 13.sp) }
+                    }
+                    if (evidenceTargets.size == 64) McpInstallCaption("这里展示最近最多 64 个可用私人任务。")
+                    target?.let { selected ->
+                        val current = evidenceTargets.any { it.optString("taskId") == selected.optString("taskId") && it.optString("targetPin") == selected.optString("targetPin") }
+                        TextButton(onClick = { issue("saveMcpResource", JSONObject().put("snapshotId", snapshotId).put("taskId", selected.getString("taskId")).put("expectedTaskPin", selected.getString("targetPin"))) }, enabled = !blocked && current) { Text("保存到这个原任务") }
+                        if (!current) McpInstallCaption("原任务代次已变化，请重新选择。")
+                    }
+                }
+                saved?.let { receipt ->
+                    McpInstallCaption(if (receipt.optBoolean("linked")) "已保存历史来源 · 原文件 ${receipt.optJSONObject("attachment")?.optString("id").orEmpty()}" else "原文件已保留，来源关联未完成；请先核对这次原件。")
+                    if (!receipt.optBoolean("linked")) target?.let { selected -> TextButton(onClick = { issue("saveMcpResource", JSONObject().put("snapshotId", snapshotId).put("taskId", selected.getString("taskId")).put("expectedTaskPin", selected.getString("targetPin"))) }, enabled = !blocked) { Text("核对原保存并完成关联") } }
+                    onOpenEvidenceTask?.let { open -> TextButton(onClick = { open(receipt.getString("taskId")) }, enabled = !blocked) { Text("查看原任务与文件") } }
+                }
+            }
+        }
     }
 }
 

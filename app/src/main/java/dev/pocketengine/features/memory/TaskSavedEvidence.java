@@ -3,6 +3,7 @@ package dev.pocketengine.features.memory;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import dev.pocketengine.features.attachments.documents.DocumentContent;
+import dev.pocketengine.features.plugins.McpResourceEvidence;
 import dev.pocketengine.store.TaskAuditStore;
 import dev.pocketengine.store.TaskStore;
 import java.util.Set;
@@ -41,7 +42,8 @@ public final class TaskSavedEvidence {
     private static JSONObject event(SQLiteDatabase db,String task,String run,long seq)throws Exception{
         try(Cursor row=db.rawQuery("SELECT e.native_seq,e.event_type,e.body_bytes,CASE WHEN e.body_bytes>=0 AND e.body_bytes<=131072 THEN e.event_json END,r.epoch FROM task_events e JOIN runs r ON r.task_id=e.task_id AND r.run_id=? WHERE e.task_id=? AND e.event_order=? AND e.native_seq=?",new String[]{run,task,Long.toString(seq),Long.toString(seq)})){
             if(!row.moveToFirst())return null;if(row.isNull(3))throw new IllegalStateException("原事件超出本次128KiB读取范围，未加载整张审计表");
-            JSONObject event=new JSONObject(row.getString(3));if(seq!=SourceRef.integer(event,"seq",1)||!run.equals(event.optString("runId"))||row.getInt(4)!=event.optInt("epoch")||!row.getString(1).equals(event.optString("type")))throw new SecurityException("原已保存事件的task/run/epoch或序号不一致");return event;
+            JSONObject event=new JSONObject(row.getString(3));if(seq!=SourceRef.integer(event,"seq",1)||!run.equals(event.optString("runId"))||row.getInt(4)!=event.optInt("epoch")||!row.getString(1).equals(event.optString("type"))
+                    ||McpResourceEvidence.EVENT_TYPE.equals(event.optString("type"))&&!task.equals(event.optString("taskId")))throw new SecurityException("原已保存事件的task/run/epoch或序号不一致");return event;
         }
     }
     public static DocumentContent.Request documentRange(JSONObject event)throws Exception{
@@ -52,6 +54,7 @@ public final class TaskSavedEvidence {
         if("attachment_document_read".equals(event.optString("type"))){documentRange(event);return;}
         if("browser_source_retained".equals(event.optString("type"))){dev.pocketengine.browser.BrowserTaskSpace.savedMemoryProjection(event);return;}
         if("app_learning_evidence".equals(event.optString("type"))){appLearningText(event);return;}
+        if(McpResourceEvidence.EVENT_TYPE.equals(event.optString("type"))){McpResourceEvidence.requireIndexEvent(event);return;}
         throw new IllegalStateException("这份原保存事件尚无可核对的安全正文交付定位，不扩大网页保存范围");
     }
     public static String browserText(JSONObject originalEvent)throws Exception{
@@ -99,11 +102,11 @@ public final class TaskSavedEvidence {
     public static JSONObject list(SQLiteDatabase db,String taskId,long before,int limit)throws Exception{
         if(taskId==null||!taskId.matches(UUID)||before<0||limit<1||limit>20)throw new IllegalArgumentException("请选择原task与最多20条保存来源");if(task(db,taskId)==null)throw new SecurityException("原私人task已不可读");
         JSONArray entries=new JSONArray();long next=before==0?Long.MAX_VALUE:before,used=0;boolean more=false;
-        try(Cursor rows=db.rawQuery("SELECT event_order,native_seq,event_type,body_bytes,CASE WHEN body_bytes>=0 AND body_bytes<=131072 THEN event_json END FROM task_events WHERE task_id=? AND event_order<? AND event_type IN ('attachment_document_read','browser_source_retained','app_learning_evidence') ORDER BY event_order DESC LIMIT ?",new String[]{taskId,Long.toString(next),Integer.toString(limit+1)})){
+        try(Cursor rows=db.rawQuery("SELECT event_order,native_seq,event_type,body_bytes,CASE WHEN body_bytes>=0 AND body_bytes<=131072 THEN event_json END FROM task_events WHERE task_id=? AND event_order<? AND event_type IN ('attachment_document_read','browser_source_retained','app_learning_evidence','mcp_resource_retained') ORDER BY event_order DESC LIMIT ?",new String[]{taskId,Long.toString(next),Integer.toString(limit+1)})){
             while(rows.moveToNext()){
                 if(entries.length()==limit){more=true;break;}long seq=rows.getLong(1),bytes=rows.getLong(3);next=rows.getLong(0);JSONObject item=new JSONObject().put("eventSeq",seq).put("eventOrder",next).put("type",rows.getString(2)).put("originalBodyIncluded",false);
                 if(rows.isNull(4)||used+bytes>262144){entries.put(item.put("status","read_limited"));more=true;break;}used+=bytes;JSONObject original=new JSONObject(rows.getString(4));item.put("runId",original.optString("runId")).put("epoch",original.optInt("epoch"));
-                try{requireSupported(original);if(seq<1||seq!=next||!original.optString("runId").matches(UUID))throw new IllegalStateException("原事件不是可核native序号");item.put("status","available").put("coverage",original.optString("coverage")).put("title","attachment_document_read".equals(rows.getString(2))?"原已读取文档的准确范围":"app_learning_evidence".equals(rows.getString(2))?"原限定App动作证据（仅候选）":"原已批准保存的网页证据");}
+                try{requireSupported(original);if(seq<1||seq!=next||!original.optString("runId").matches(UUID))throw new IllegalStateException("原事件不是可核native序号");item.put("status","available").put("coverage",original.optString("coverage")).put("title","attachment_document_read".equals(rows.getString(2))?"原已读取文档的准确范围":"app_learning_evidence".equals(rows.getString(2))?"原限定App动作证据（仅候选）":McpResourceEvidence.EVENT_TYPE.equals(rows.getString(2))?"原已保存MCP文本快照（历史参考）":"原已批准保存的网页证据");}
                 catch(Exception unavailable){item.put("status","source_unavailable").put("reason","native_exact_saved_delivery_pins_unavailable");}
                 entries.put(item);
             }

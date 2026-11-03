@@ -39,7 +39,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
     private volatile String session="";
     private volatile boolean initialized,valid=true,closed;
     private JSONObject serverInfo;
-    private volatile boolean taskSupport,resourceSupport,promptSupport;
+    private volatile boolean taskSupport,toolSupport,resourceSupport,promptSupport;
 
     /** Exact advertised text resources only; URIs never open local files or another HTTP origin. */
     JSONObject resource(String uri,String descriptorDigest,RunControl control)throws Exception {
@@ -118,11 +118,19 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
         if(!(envelope.opt("result") instanceof JSONObject))throw new McpException("MCP ping结果不是JSON对象");
         control.check();checkUsable();return new JSONObject().put("status","responsive").put("protocolVersion",version).put("serverInfo",serverInfo())
             .put("serverDigest",serverDigest()).put("roundTripMillis",Math.max(0,(System.nanoTime()-started)/1_000_000L)).put("observedAt",System.currentTimeMillis())
-            .put("declaredCapabilities",new JSONObject().put("tools",true).put("resources",resourceSupport).put("prompts",promptSupport).put("tasks",supportsTasks()))
+            .put("declaredCapabilities",new JSONObject().put("tools",toolSupport).put("resources",resourceSupport).put("prompts",promptSupport).put("tasks",supportsTasks()))
             .put("pingOnly",true).put("toolExecutionVerified",false).put("responseBodyIncluded",false).put("automaticRetry",false).put("authorityAdded",false);
     }
     String endpoint(){return endpoint;}
     JSONObject serverInfo()throws Exception{return McpData.copy(serverInfo);}
+    /** Only capabilities observed in the native handshake, never owner-supplied manifest data. */
+    JSONObject serverCapabilities()throws Exception {
+        checkUsable();JSONObject result=new JSONObject();
+        if(toolSupport)result.put("tools",new JSONObject());
+        if(resourceSupport)result.put("resources",new JSONObject());
+        if(promptSupport)result.put("prompts",new JSONObject());
+        return result;
+    }
     /** Cold reconciliation needs the original server identity, never a new tools/list snapshot. */
     void connectForTask(JSONObject declaration,RunControl control)throws Exception {
         if(!modern()||!needsDiscovery())throw new SecurityException("原Tasks核对需要新的2026连接");
@@ -148,7 +156,8 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
     }
 
     JSONArray tools(RunControl control)throws Exception {
-        checkUsable();JSONArray all=new JSONArray();Set<String> names=new HashSet<>(),cursors=new HashSet<>();String cursor=null;int totalBytes=0;
+        checkUsable();control.check();JSONArray all=new JSONArray();if(!toolSupport)return all;
+        Set<String> names=new HashSet<>(),cursors=new HashSet<>();String cursor=null;int totalBytes=0;
         for(int page=0;page<8;page++){
             JSONObject params=new JSONObject();if(cursor!=null)params.put("cursor",cursor);
             JSONObject result=requiredResult(rpc("tools/list",params,control));JSONArray tools=result.getJSONArray("tools");
@@ -360,11 +369,13 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
         if(modern()&&!"complete".equals(result.optString("resultType")))throw refresh("MCP未返回complete结果；当前不支持多轮输入或扩展任务");
     }
     private JSONObject identity(JSONObject result)throws Exception {
-        JSONObject extensions=result.getJSONObject("capabilities").optJSONObject("extensions");
+        JSONObject capabilities=result.getJSONObject("capabilities");
+        for(String capability:new String[]{"tools","resources","prompts"})if(capabilities.has(capability)&&!(capabilities.get(capability) instanceof JSONObject))throw refresh("MCP能力声明格式无效");
+        JSONObject extensions=capabilities.optJSONObject("extensions");
         taskSupport=modern()&&extensions!=null&&extensions.optJSONObject(dev.pocketengine.features.plugins.mcp.McpTaskCoordinator.EXTENSION)!=null;
-        resourceSupport=result.getJSONObject("capabilities").optJSONObject("resources")!=null;
-        promptSupport=result.getJSONObject("capabilities").optJSONObject("prompts")!=null;
-        if(result.getJSONObject("capabilities").optJSONObject("tools")==null)throw refresh("MCP服务未声明tools能力");
+        toolSupport=capabilities.optJSONObject("tools")!=null;
+        resourceSupport=capabilities.optJSONObject("resources")!=null;
+        promptSupport=capabilities.optJSONObject("prompts")!=null;
         if(modern()){
             boolean supported=false;JSONArray versions=result.getJSONArray("supportedVersions");
             for(int i=0;i<versions.length();i++)if(version.equals(versions.getString(i)))supported=true;

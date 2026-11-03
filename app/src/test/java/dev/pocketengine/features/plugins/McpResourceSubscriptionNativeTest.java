@@ -30,7 +30,8 @@ import org.robolectric.annotation.Config;
 import org.robolectric.annotation.SQLiteMode;
 import static org.junit.Assert.*;
 
-/** Original owner entry and real HTTP/SSE against a synthetic MCP 2026-07-28 server.
+/** Original native discovery and owner source reads over real loopback HTTP/SSE against a
+ * synthetic MCP 2026-07-28 server. Public HTTPS configuration and device UI are not exercised.
  * No model call, external account, second task store, auto-subscription, or mocked transport. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35, manifest=Config.NONE, application=Application.class)
@@ -47,17 +48,21 @@ public final class McpResourceSubscriptionNativeTest {
         final Context android = RuntimeEnvironment.getApplication();
         final McpFixture server = new McpFixture();
         final FeatureContext context;
-        final TaskStore tasks;
-        final SQLiteDatabase db;
-        final FeatureHost host;
-        final PluginsModule plugins;
-        final NativeOwnerWorkflows owner;
-        JSONObject installation;
+        final boolean sourceOnly;
+        TaskStore tasks;
+        SQLiteDatabase db;
+        FeatureHost host;
+        PluginsModule plugins;
+        NativeOwnerWorkflows owner;
+        JSONObject installation, preview;
         volatile String resourceDescription = "original resource", subscriptionMode = "graceful";
         volatile boolean emptyCursor, cursorLoop, nullCursor, binaryPart;
         volatile CountDownLatch firstEntered, bothEntered, release;
+        volatile CountDownLatch readEntered, readRelease;
 
-        Fixture() throws Exception {
+        Fixture() throws Exception { this(false); }
+        Fixture(boolean sourceOnly) throws Exception {
+            this.sourceOnly = sourceOnly;
             android.deleteDatabase("pocket-world.db");
             File manifests = new File(android.getFilesDir(), "plugins/manifests.json");
             if (manifests.exists()) assertTrue(manifests.delete());
@@ -69,10 +74,18 @@ public final class McpResourceSubscriptionNativeTest {
                 try { respond(exchange); }
                 catch (AssertionError failed) { server.failures.add(failed); exchange.error(500, -32603); }
             };
-            JSONObject preview = plugins.handle("discoverMcp", new JSONObject().put("id", "source-native").put("name", "原资源与更新来源")
-                    .put("endpoint", server.endpoint()).put("protocolVersion", McpData.VERSION));
-            installation = plugins.handle("installMcp", new JSONObject().put("previewId", preview.getString("previewId"))
-                    .put("expectedInstallationId", preview.getString("expectedInstallationId")).put("tools", new JSONArray().put("lookup")));
+            preview = plugins.handle("discoverMcp", new JSONObject().put("id", "source-native").put("name", "原资源与更新来源")
+                    .put("endpoint", server.endpoint()).put("protocolVersion", McpData.VERSION).put("_operationId", id()));
+            installation = owner.mcp("installMcp", new JSONObject().put("previewId", preview.getString("previewId"))
+                    .put("expectedInstallationId", preview.getString("expectedInstallationId"))
+                    .put("tools", sourceOnly ? new JSONArray() : new JSONArray().put("lookup")));
+        }
+
+        void reopen() throws Exception {
+            host.close(); db.close(); tasks = new TaskStore(android);
+            var field = TaskStore.class.getDeclaredField("db"); field.setAccessible(true); db = (SQLiteDatabase) field.get(tasks);
+            plugins = new PluginsModule(context); host = new FeatureHost(event -> {}, tasks, () -> false); host.register(plugins);
+            owner = new NativeOwnerWorkflows(host, context, tasks, new MemorySourceBridge(host, tasks)); refresh();
         }
 
         JSONObject resource(String uri) throws Exception {
@@ -84,11 +97,16 @@ public final class McpResourceSubscriptionNativeTest {
             switch (exchange.method()) {
                 case "server/discover": {
                     JSONObject discovery = server.discovery();
-                    discovery.getJSONObject("capabilities").put("tools", new JSONObject().put("listChanged", true))
+                    JSONObject capabilities = discovery.getJSONObject("capabilities");
+                    capabilities
                             .put("resources", new JSONObject().put("subscribe", true).put("listChanged", true))
                             .put("prompts", new JSONObject().put("listChanged", true));
+                    if (sourceOnly) capabilities.remove("tools");
+                    else capabilities.put("tools", new JSONObject().put("listChanged", true));
                     exchange.json(discovery); break;
                 }
+                case "tools/list": case "tools/call":
+                    assertFalse("A source-only server has no tools endpoint", sourceOnly); server.standard(exchange); break;
                 case "resources/list": {
                     boolean cursorPresent = exchange.body.getJSONObject("params").has("cursor");
                     JSONObject result = new JSONObject().put("resultType", "complete");
@@ -104,6 +122,8 @@ public final class McpResourceSubscriptionNativeTest {
                     assertEquals("resources/read", exchange.requestHeaders.get("mcp-method"));
                     assertEquals(SKILL, exchange.requestHeaders.get("mcp-name"));
                     assertEquals(SKILL, exchange.body.getJSONObject("params").getString("uri"));
+                    if (readEntered != null) readEntered.countDown();
+                    if (readRelease != null && !readRelease.await(4, TimeUnit.SECONDS)) throw new IllegalStateException("Fixture resource read was not released");
                     JSONArray contents = new JSONArray().put(new JSONObject().put("uri", SKILL).put("mimeType", "text/markdown").put("text", SKILL_TEXT));
                     if (binaryPart) contents.put(new JSONObject().put("uri", "https://never-follow.invalid/blob").put("mimeType", "application/octet-stream").put("blob", "AQID"));
                     exchange.json(new JSONObject().put("resultType", "complete").put("contents", contents)); break;
@@ -190,10 +210,87 @@ public final class McpResourceSubscriptionNativeTest {
             owner.mcp("setToolGrantReviewed", args(id()).put("expectedGrantsDigest", installation.getString("grantsDigest")).put("tool", "lookup").put("granted", true));
             owner.mcp("setEnabledReviewed", args(id()).put("enabled", true)); refresh();
         }
-        @Override public void close() throws Exception { if (release != null) release.countDown(); try { host.close(); } finally { db.close(); server.close(); } }
+        @Override public void close() throws Exception { if (release != null) release.countDown(); if (readRelease != null) readRelease.countDown(); try { host.close(); } finally { db.close(); server.close(); } }
     }
 
     private static JSONObject resourceFilter() throws Exception { return new JSONObject().put("resourceSubscriptions", new JSONArray().put(SKILL)); }
+
+    @Test public void sourceOnlyDiscoveryInstallsAndColdRecoversResourcesAndPromptsWithoutToolAuthority() throws Exception {
+        try (Fixture fixture = new Fixture(true)) {
+            assertEquals(0, fixture.preview.getJSONArray("tools").length());
+            JSONObject manifest = fixture.installation.getJSONObject("manifest"), source = manifest.getJSONObject("mcpSource");
+            assertEquals(fixture.server.endpoint(), source.getString("endpoint")); assertEquals(McpData.VERSION, source.getString("protocolVersion"));
+            assertEquals(3, source.length()); assertEquals(0, manifest.getJSONArray("tools").length());
+            assertFalse(fixture.installation.getBoolean("enabled")); assertEquals(0, fixture.installation.getJSONArray("grants").length());
+            String originalInstallation = fixture.installation.getString("installationId"), originalSource = McpData.digest(source);
+            for (int pass = 0; pass < 2; pass++) {
+                if (pass == 1) fixture.reopen();
+                assertEquals(originalInstallation, fixture.installation.getString("installationId"));
+                assertEquals(originalSource, McpData.digest(fixture.installation.getJSONObject("manifest").getJSONObject("mcpSource")));
+                JSONObject resource = fixture.resources().getJSONArray("resources").getJSONObject(0), read = fixture.read(resource);
+                assertEquals(SKILL_TEXT, read.getJSONArray("contents").getJSONObject(0).getString("text"));
+                assertFalse(read.getBoolean("executionAuthorized")); assertFalse(read.getBoolean("automaticConversationInjection"));
+                JSONObject prompt = fixture.owner.mcp("listMcpPrompts", fixture.args(id())).getJSONArray("prompts").getJSONObject(0);
+                JSONObject prompted = fixture.owner.mcp("getMcpPrompt", fixture.args(id()).put("name", prompt.getString("name"))
+                        .put("descriptorDigest", prompt.getString("descriptorDigest")).put("arguments", new JSONObject().put("code", "exact reference")));
+                assertEquals("assistant", prompted.getJSONArray("sourceMessages").getJSONObject(0).getString("sourceRole"));
+                assertFalse(prompted.getBoolean("originalRoleAuthorityAdded")); assertFalse(prompted.getBoolean("automaticConversationInjection"));
+                assertEquals(0, fixture.plugins.toolRegistry().length()); assertEquals(0, fixture.tasks.list().length());
+            }
+            McpSkillSource.Fetched original = fixture.skill(); original.checkCurrent();
+            int reads = fixture.server.count("resources/read"); fixture.server.serverVersion = "different-source-generation";
+            assertThrows(SecurityException.class, fixture::skill); assertEquals(reads, fixture.server.count("resources/read"));
+            assertThrows(SecurityException.class, original::checkCurrent);
+            assertEquals(0, fixture.server.count("tools/list")); assertEquals(0, fixture.server.count("tools/call"));
+            assertTrue(fixture.server.failures.toString(), fixture.server.failures.isEmpty());
+        }
+    }
+
+    @Test public void disablingSourceOnlyInstallationCancelsOldReadsButFreshOwnerReadAddsNoExecutionGrant() throws Exception {
+        try (Fixture fixture = new Fixture(true)) {
+            fixture.installation = fixture.owner.mcp("setEnabledReviewed", fixture.args(id()).put("enabled", true));
+            McpSkillSource.Fetched pin = fixture.skill(); pin.checkCurrent();
+            JSONObject resource = fixture.resources().getJSONArray("resources").getJSONObject(0);
+            JSONObject oldRead = fixture.args(id()).put("uri", resource.getString("uri")).put("descriptorDigest", resource.getString("descriptorDigest"));
+            fixture.readEntered = new CountDownLatch(1); fixture.readRelease = new CountDownLatch(1);
+            ExecutorService worker = Executors.newSingleThreadExecutor(); RunControl original = new RunControl();
+            try {
+                Future<JSONObject> pending = worker.submit(() -> fixture.owner.mcp("getMcpResource", oldRead, original));
+                assertTrue("The original resource read must enter HTTP before disable", fixture.readEntered.await(3, TimeUnit.SECONDS));
+                fixture.installation = fixture.owner.mcp("setEnabledReviewed", fixture.args(id()).put("enabled", false));
+                assertTrue(original.isCancelled()); fixture.readRelease.countDown();
+                assertThrows(ExecutionException.class, () -> pending.get(3, TimeUnit.SECONDS));
+                assertThrows(SecurityException.class, pin::checkCurrent);
+                int requests = fixture.server.received.size();
+                assertThrows(SecurityException.class, () -> fixture.owner.mcp("getMcpResource", new JSONObject(oldRead.toString()).put("_operationId", id())));
+                assertEquals(requests, fixture.server.received.size());
+                JSONObject current = fixture.resources().getJSONArray("resources").getJSONObject(0);
+                JSONObject read = fixture.read(current); assertEquals(SKILL_TEXT, read.getJSONArray("contents").getJSONObject(0).getString("text"));
+                assertFalse(read.getBoolean("executionAuthorized")); assertFalse(fixture.installation.getBoolean("enabled"));
+                assertEquals(0, fixture.installation.getJSONArray("grants").length()); assertEquals(0, fixture.plugins.toolRegistry().length());
+                assertEquals(0, fixture.tasks.list().length()); assertEquals(0, fixture.server.count("tools/list")); assertEquals(0, fixture.server.count("tools/call"));
+                assertTrue(fixture.server.failures.toString(), fixture.server.failures.isEmpty());
+            } finally { fixture.readRelease.countDown(); worker.shutdownNow(); }
+        }
+    }
+
+    @Test public void emptyOrPastedSourceManifestCannotBypassTheOriginalDiscoveryInstallation() throws Exception {
+        try (Fixture fixture = new Fixture(true)) {
+            int requests = fixture.server.received.size();
+            JSONObject empty = new JSONObject().put("id", "ordinary-empty").put("name", "No reviewed source").put("version", "1").put("tools", new JSONArray());
+            assertThrows(IllegalArgumentException.class, () -> fixture.plugins.handle("install", new JSONObject().put("manifest", empty)));
+            JSONObject forged = new JSONObject(fixture.installation.getJSONObject("manifest").toString()).put("id", "pasted-source");
+            assertThrows(IllegalArgumentException.class, () -> fixture.plugins.handle("previewInstall", new JSONObject().put("manifest", forged)));
+            assertThrows(IllegalArgumentException.class, () -> fixture.plugins.handle("install", new JSONObject().put("manifest", forged)));
+            assertThrows(IllegalStateException.class, () -> fixture.owner.mcp("installMcp", new JSONObject().put("previewId", fixture.preview.getString("previewId"))
+                    .put("expectedInstallationId", fixture.preview.getString("expectedInstallationId")).put("tools", new JSONArray())));
+            assertThrows(IllegalArgumentException.class, () -> fixture.owner.mcp("setToolGrantReviewed", fixture.args(id())
+                    .put("expectedGrantsDigest", fixture.installation.getString("grantsDigest")).put("tool", "lookup").put("granted", true)));
+            assertEquals(1, fixture.owner.mcpSnapshot().getJSONArray("plugins").length()); assertEquals(requests, fixture.server.received.size());
+            assertEquals(0, fixture.plugins.toolRegistry().length()); assertEquals(0, fixture.tasks.list().length());
+            assertEquals(0, fixture.server.count("tools/list")); assertEquals(0, fixture.server.count("tools/call"));
+        }
+    }
 
     @Test public void originalOwnerResourceAndPromptReadsUseModernHeadersAndRetainReferenceOnlyAuthority() throws Exception {
         try (Fixture fixture = new Fixture()) {

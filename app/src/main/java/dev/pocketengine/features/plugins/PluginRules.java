@@ -29,7 +29,8 @@ public final class PluginRules {
     public static JSONObject manifest(JSONObject source)throws Exception {
         String id=text(source,"id",80),name=text(source,"name",80),version=text(source,"version",32);
         if(!id.matches("[a-zA-Z][a-zA-Z0-9_.-]{0,79}"))throw new IllegalArgumentException("插件ID格式无效");
-        JSONArray tools=source.getJSONArray("tools");if(tools.length()<1||tools.length()>12)throw new IllegalArgumentException("插件需1至12个工具");
+        JSONObject mcpSource=source.has("mcpSource")?mcpSource(source.getJSONObject("mcpSource")):null;
+        JSONArray tools=source.getJSONArray("tools");if(tools.length()>12||tools.length()==0&&mcpSource==null)throw new IllegalArgumentException("插件需1至12个工具，或原发现核对的MCP资源/提示来源");
         JSONArray normalized=new JSONArray();Set<String> names=new HashSet<>();
         for(int i=0;i<tools.length();i++){
             JSONObject tool=tools.getJSONObject(i);String kind=text(tool,"kind",12),toolName=text(tool,"name",kind.equals("mcp")?128:64);
@@ -43,6 +44,7 @@ public final class PluginRules {
             String transport=kind.equals("mcp")?tool.optString("transport","streamable_http"):"";
             if(kind.equals("mcp")&&(!Set.of("streamable_http","stdio").contains(transport)||tool.has("transport")&&!(tool.opt("transport") instanceof String)))throw new IllegalArgumentException("未知MCP transport；不能把HTTP与本机程序权限混用");
             boolean stdio=transport.equals("stdio");
+            if(mcpSource!=null&&(!kind.equals("mcp")||stdio||!mcpSource.getString("endpoint").equals(tool.opt("endpoint"))||!mcpSource.getString("protocolVersion").equals(tool.opt("protocolVersion"))||!mcpSource.getString("serverDigest").equals(tool.opt("serverDigest"))))throw new IllegalArgumentException("MCP来源与所选工具必须属于同一准确HTTP服务，不能混入其他执行入口");
             if(kind.equals("http")||kind.equals("mcp")&&!stdio){String endpoint=text(tool,"endpoint",2000);validateEndpoint(endpoint);definition.put("endpoint",endpoint);}
             if(kind.equals("mcp")&&tool.has("transport"))definition.put("transport",transport);
             if(kind.equals("mcp")){
@@ -66,7 +68,18 @@ public final class PluginRules {
             if(kind.equals("mcp")){if(stdio)rejectStdioHeaders(schema);else McpHeaders.validate(schema);}
             definition.put("schema",new JSONObject(schema.toString()));normalized.put(definition);
         }
-        return new JSONObject().put("id",id).put("name",name).put("version",version).put("tools",normalized);
+        JSONObject result=new JSONObject().put("id",id).put("name",name).put("version",version).put("tools",normalized);
+        if(mcpSource!=null)result.put("mcpSource",mcpSource);return result;
+    }
+    /** A source descriptor is data, not discovery/install or tool-execution authority. Native
+     * installation still requires the retained live preview, even when its tool list is empty. */
+    public static JSONObject mcpSource(JSONObject source)throws Exception {
+        Set<String> keys=new HashSet<>();source.keys().forEachRemaining(keys::add);
+        if(!keys.equals(Set.of("endpoint","protocolVersion","serverDigest")))throw new IllegalArgumentException("MCP来源只接受准确地址、协议和服务摘要");
+        String endpoint=text(source,"endpoint",2000),version=text(source,"protocolVersion",32),digest=text(source,"serverDigest",64);
+        if(!endpoint.equals(source.get("endpoint"))||!version.equals(source.get("protocolVersion"))||!digest.equals(source.get("serverDigest")))throw new IllegalArgumentException("MCP来源身份不能含未核对的首尾空白");
+        validateEndpoint(endpoint);if(!McpData.supportedVersion(version)||!digest.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("MCP来源协议或服务身份无效");
+        return new JSONObject().put("endpoint",endpoint).put("protocolVersion",version).put("serverDigest",digest);
     }
     /** Remote names remain exact; the model-facing alias is separately installation-bound. */
     static boolean mcpToolName(String name){return name!=null&&name.matches("[a-zA-Z0-9_.-]{1,128}");}
