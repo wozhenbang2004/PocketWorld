@@ -2050,13 +2050,40 @@ class JobManager:
 class CompanionServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    max_tls_handshakes = 16
+    tls_handshake_timeout = 15
 
     def __init__(self, address, manager, gateway_only=False):
         self.manager = manager
         self.gateway_only = gateway_only
+        self._tls_handshake_slots = threading.BoundedSemaphore(self.max_tls_handshakes)
         super().__init__(address, CompanionHandler)
         if not gateway_only:
             manager.harness_gateway.listener_factory = lambda: CompanionServer(("127.0.0.1", 0), manager, gateway_only=True)
+
+    def process_request(self, request, client_address):
+        tls = isinstance(request, ssl.SSLSocket)
+        # Never wait for a handshake or capacity on the listener's accept thread.
+        if tls and not self._tls_handshake_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            if tls:
+                self._tls_handshake_slots.release()
+            raise
+
+    def finish_request(self, request, client_address):
+        if isinstance(request, ssl.SSLSocket):
+            try:
+                request.settimeout(self.tls_handshake_timeout)
+                request.do_handshake()
+            except OSError:
+                return  # The worker's finally closes timed-out and invalid TLS peers.
+            finally:
+                self._tls_handshake_slots.release()
+        super().finish_request(request, client_address)
 
 
 class CompanionHandler(BaseHTTPRequestHandler):
@@ -2370,7 +2397,7 @@ def serve_original_manager(manager):
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.load_cert_chain(config["tlsCert"], config["tlsKey"])
-            server.socket = context.wrap_socket(server.socket, server_side=True)
+            server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
         print("Pocket World Companion listening; authentication required; press Ctrl+C to stop.")
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
