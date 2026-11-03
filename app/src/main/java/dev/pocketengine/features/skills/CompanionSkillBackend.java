@@ -162,7 +162,7 @@ public final class CompanionSkillBackend implements NativeSkillBackend {
     private SkillExecution.Receipt cancelWire(ReceiptRef ref,long until)throws Exception {
         String key=operationKey(ref);try{call("writeFile",workspace().put("operationId","skc_"+key).put("path",cancelPath(key)).put("expectedVersion","absent").put("content",ref.planDigest),until);}catch(Exception markerUnknown){/* The original file-write operation is never reissued under a new identity. */}
         JSONObject job=call("reconcileOperation",base().put("operationId","skj_"+key),until);validateJob(ref,job);
-        call("cancelJob",base().put("jobId",job.getString("id")),until);return receipt(ref,call("getJob",base().put("jobId",job.getString("id")),until));
+        JSONObject target=base().put("jobId",job.getString("id")).put("jobOperationId","skj_"+key);if(job.has("serviceBase"))target.put("serviceBase",job.getString("serviceBase"));call("cancelJob",target,until);return receipt(ref,call("getJob",target,until));
     }
     public static final class Artifact {
         public final String path,sha256;private final byte[] bytes;

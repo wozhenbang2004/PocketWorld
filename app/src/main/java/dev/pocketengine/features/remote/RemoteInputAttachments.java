@@ -255,7 +255,7 @@ public final class RemoteInputAttachments {
             try{tasks.cancelRemoteInputBeforeJob(window.taskId);window.message="原prepared证明未派发，已本机取消；不代表远端文件删除";}
             catch(SecurityException unknown){window.message="创建是否已接收未知，只查询原操作；未声称取消或删除远端副本";}
         }else{
-            profile(scope);JSONObject actual=remote().handle("cancelJob",new JSONObject().put("profileId",scope.getString("profileId")).put("serviceBase",scope.getString("serviceBase")).put("_profileBinding",scope.getString("profileGeneration")).put("jobId",job).put("jobOperationId",scope.getString("jobOperationId")));
+            profile(scope);var stop=tasks.claimOriginalRemoteStop(window.taskId,task.getString("runId"),task.getInt("coordinatorEpoch"),scope.getString("profileGeneration"));JSONObject actual=remote().cancelOriginalPinnedJob(stop);
             tasks.updateExternal(window.taskId,actual);window.message="已请求停止原job；按真实回执判断，已上传或部分副本没有删除保证";
         }
         emit(window.taskId);return response(window);

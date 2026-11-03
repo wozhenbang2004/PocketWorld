@@ -105,11 +105,11 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
             catch(IOException unavailable){return unknown(operation,"无法核对原操作；未提交新任务");}
         }
         private JSONObject jobRequest(JSONObject receipt)throws Exception {
-            return copy(binding).put("jobId",identifier(receipt,"id"));
+            JSONObject target=copy(binding).put("jobId",identifier(receipt,"id")).put("jobOperationId",identifier(receipt,"operationId"));if(receipt.has("serviceBase"))target.put("serviceBase",receipt.getString("serviceBase"));return target;
         }
         private JSONObject stopAndReconcile(JSONObject link,JSONObject receipt,String operation,Consumer<JSONObject> events)throws Exception {
             if(receipt.optString("id").isEmpty())return save(link,unknown(operation,"未取得电脑任务编号，无法确认停止；请按操作编号核对"),events);
-            JSONObject target=jobRequest(receipt);long deadline=System.nanoTime()+5_000_000_000L;
+            JSONObject target=jobRequest(receipt).put("jobOperationId",link.getString("operationId"));long deadline=System.nanoTime()+5_000_000_000L;
             try{
                 receipt=remote.call("cancelJob",target);save(link,receipt,events);
                 while(active(receipt.optString("status"))&&System.nanoTime()<deadline){Thread.sleep(100);receipt=remote.call("getJob",target);save(link,receipt,events);}
