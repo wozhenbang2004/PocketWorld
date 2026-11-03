@@ -5,6 +5,11 @@ import org.json.JSONObject;
 /** Installed only by the original TaskStore target. No HTTP fields can supply this authority. */
 public interface LogicalInferenceAuthority {
     JSONObject begin(String logicalId,String digest,JSONObject routeSnapshot,long requestedDeadline)throws Exception;
+    /** Per-call reduction from a native typed plan, never an expansion of the original SQL budget. */
+    default JSONObject begin(String logicalId,String digest,JSONObject routeSnapshot,long requestedDeadline,int nativeAttempts)throws Exception {
+        if(nativeAttempts!=routeSnapshot.getInt("maxAttempts"))throw new SecurityException("native_dispatch_cap_not_supported");
+        return begin(logicalId,digest,routeSnapshot,requestedDeadline);
+    }
     boolean matchesHistoryOrigin(String physicalCallId,dev.pocketengine.core.ModelConfig candidate,JSONObject providerData)throws Exception;
     boolean reserveRetry(String logicalId,String failedCallId,long waitMillis)throws Exception;
     void reserve(String logicalId,String callId,int attemptNo,String candidateId,String retryReason)throws Exception;

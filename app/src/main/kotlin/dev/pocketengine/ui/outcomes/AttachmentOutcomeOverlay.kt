@@ -35,7 +35,7 @@ internal fun AttachmentOutcomeOverlay(flow:AttachmentOutcomeCoordinator) {
             }else if(state.processingSource!=null&&state.processingInfo!=null){
                 NativeFileProcessComposer(state,flow)
             }else if(state.documentDraft!=null){
-                NativeDocumentComposer(state.documentDraft,state.busy,state.error,state.pendingDocumentTask,flow::createDocument,flow::queryDocument,flow::closeDocumentDraft)
+                NativeDocumentComposer(state.documentDraft,state.busy,state.error,state.pendingDocumentTask,flow::createDocument,flow::queryDocument,flow::closeDocumentDraft,flow::updateDocumentDraft)
             }else if(state.originalFile!=null){
                 NativeOriginalFilePage(state.originalFile,flow::backFromOriginalFile)
             }else if(state.team!=null){

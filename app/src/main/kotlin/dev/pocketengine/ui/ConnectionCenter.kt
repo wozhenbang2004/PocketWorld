@@ -142,6 +142,7 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                                     else -> featureSummary(id, state.feature(if (id == "commitments") "automation" else id))
                                 }
                             }, open = { section = it }, history = controller::openNativeInferenceHistory)
+                            TextButton(onClick = controller::openNativeEvaluation) { Text("任务评测 · 合成场景与回归对照") }
                         } else {
                             state.moduleErrors.filterKeys { it.startsWith(section + ".") }.values.distinct().forEach { Text(it, color = Danger, fontSize = 12.sp, modifier = Modifier.padding(bottom = 10.dp)) }
                             when (section) {

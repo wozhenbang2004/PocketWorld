@@ -1,6 +1,7 @@
 """Independent protocol fixtures; no installed vendor CLI/account/inference claim."""
 import concurrent.futures
 import json
+import selectors
 from pathlib import Path
 import subprocess
 import sys
@@ -103,7 +104,10 @@ for line in sys.stdin:
         if mode=='steer-late-enqueue':late_steer=queued;continue
         if mode=='steer-settled-before-ack':done();queued();continue
         if mode=='steer-missing-ack':
-            steering.append(value['message']);emit({'type':'queue_update','steering':list(steering),'followUp':[]});continue
+            steering.append(value['message']);emit({'type':'queue_update','steering':list(steering),'followUp':[]})
+            # The prompt really ends, but the input ACK is lost. An expired ACK alone
+            # must not masquerade as this native terminal event or shorten its budget.
+            done();continue
         if mode=='steer-wrong-ack':emit({'type':'response','id':'unowned','command':'steer','success':True,'data':{'disposition':'queued'}});continue
         if mode=='steer-handled':reply({'disposition':'handled'});continue
         if mode=='steer-refused':emit({'type':'response','id':rid,'command':'steer','success':False,'error':'PRIVATE_NATIVE_ERROR'});continue
@@ -521,6 +525,57 @@ class PiCompanionTests(unittest.TestCase):
         self.assertTrue(self.manager.get(job['id'])['controls']['inputSteering']);self.assertEqual(deadline,driver.deadline)
         self.assertEqual('1',(self.workspace/'pi-steer-count').read_text());self.assertEqual(1,len(self.manager.jobs))
         self.manager.cancel(job['id']);self.assertTrue(self.finish(job)['nativeQueueEmptyConfirmed'])
+
+    def test_native_owner_fixture_ack_expiry_settles_original_unknown_without_a_new_prompt(self):
+        # This is the exact subprocess/HTTP/marker fixture used by the Android owner journey.
+        # Expiring an input ACK alone is not a native end-of-prompt or stop receipt.
+        with tempfile.TemporaryDirectory(prefix='pocket-pi-owner-ack-') as directory:
+            root=Path(directory);script=Path(__file__).with_name('pi_rpc_fixture_server.py')
+            process=subprocess.Popen([sys.executable,'-B','-u',str(script),directory,'steer-missing-ack'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            try:
+                with selectors.DefaultSelector() as ready:
+                    ready.register(process.stdout,selectors.EVENT_READ)
+                    self.assertTrue(ready.select(5),'Original fixture listener was not announced')
+                base=json.loads(process.stdout.readline())['baseUrl']
+                def api(path,body=None):
+                    request=Request(base+path,data=None if body is None else json.dumps(body).encode(),headers={'Authorization':'Bearer native-pi-no-tools-fixture-token-longer-than-32-characters','Content-Type':'application/json'})
+                    with urlopen(request,timeout=3) as response:
+                        self.assertEqual(200,response.status);value=json.loads(response.read());self.assertTrue(value['ok']);return value['result']
+                environment=api('/v1/environments')['environments'][0]
+                job=api('/v1/jobs',{'operationId':'native-owner-ack-once','environmentId':'workspace','environmentBinding':environment['bindingHash'],'worker':'pi','prompt':'Original owner fixture conversation','timeoutSeconds':30})
+                path='/v1/jobs/'+job['id'];until=time.monotonic()+3
+                while time.monotonic()<until:
+                    job=api(path)
+                    if job['controls']['inputSteering']:break
+                    time.sleep(.01)
+                self.assertTrue(job['controls']['inputSteering'])
+                body=self.input(job);api(path+'/steer',body)
+                (root/'expire-pi-steer-ack').write_text('explicit fixture clock boundary')
+                final=job;until=time.monotonic()+4
+                while time.monotonic()<until:
+                    final=api(path)
+                    if final['status']=='unknown' and final.get('dispatchFenceFinal'):break
+                    time.sleep(.01)
+                receipt=api(path+'/messages/'+body['messageId'])
+                native_end=any(event.get('nativeType')=='agent_settled' for event in final['progress']['events'])
+                self.assertEqual('unknown',final['status'],'Original terminal barrier: native_end='+str(native_end)+', input='+receipt['status']+', expiry_marker='+str((root/'expire-pi-steer-ack').exists()))
+                self.assertTrue(final['dispatchFenceFinal']);self.assertFalse(final['resourcesHeld'])
+                self.assertTrue(final['processCleanupProof']['processGroupStoppedVerified'])
+                self.assertFalse(final['nativeQueueEmptyConfirmed']);self.assertFalse(final['controls']['threadResume']);self.assertFalse(final['controls']['inputSteering'])
+                self.assertTrue(any(event.get('nativeType')=='agent_settled' for event in final['progress']['events']))
+                self.assertEqual('unknown',receipt['status']);self.assertNotIn('turnId',receipt)
+                for key in ('sessionId','threadId','jobOperationId','expectedPromptRequestId','protocol'):self.assertEqual(body[key],receipt[key])
+                self.assertEqual(receipt,api(path+'/messages/'+body['messageId']))
+                self.assertEqual(job['id'],final['id']);self.assertEqual(job['operationId'],final['operationId']);self.assertEqual(job['promptRequestId'],final['promptRequestId'])
+                self.assertEqual('1',(root/'submit-count').read_text());self.assertEqual('1',(root/'steer-count').read_text())
+                self.assertEqual('1',(root/'workspace/pi-prompt-count').read_text());self.assertEqual('1',(root/'workspace/pi-steer-count').read_text())
+                commands=(root/'workspace/pi-command-log').read_text().splitlines();self.assertEqual(1,commands.count('prompt'));self.assertEqual(1,commands.count('steer'));self.assertNotIn('abort',commands);self.assertNotIn('clear_queue',commands)
+                self.assertFalse((root/'expire-pi-steer-ack').exists())
+            finally:
+                if process.poll() is None:process.terminate()
+                process.communicate(timeout=6)
+                cleanup=json.loads((root/'resource-release.json').read_text())
+                self.assertEqual({'listenerClosed':True,'activeProcesses':0,'activeDrivers':0,'resources':0},cleanup)
 
     def test_http_lost_ack_remains_unknown_after_original_process_cleanup_and_restart(self):
         job=self.active('steer-disconnect');body=self.input(job);path='/v1/jobs/'+job['id']+'/steer'

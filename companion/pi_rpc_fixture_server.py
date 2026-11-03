@@ -38,10 +38,14 @@ def main():
                     if (root/marker).exists():
                         (root/marker).unlink();(workspace/marker).touch()
                 if (root/'expire-pi-steer-ack').exists():
-                    (root/'expire-pi-steer-ack').unlink()
+                    applied=False
                     with manager.lock:
                         for driver in manager.drivers.values():
-                            for pending in driver.steer_replies.values():pending['deadline']=time.monotonic()-1
+                            for pending in list(driver.steer_replies.values()):
+                                pending['deadline']=time.monotonic()-1;applied=True
+                    # HTTP enqueue returns before the driver sends the native command.
+                    # Keep this explicit clock marker until an actual pending ACK exists.
+                    if applied:(root/'expire-pi-steer-ack').unlink(missing_ok=True)
                 if (root/'expire-pi-stop').exists():
                     (root/'expire-pi-stop').unlink()
                     with manager.lock:

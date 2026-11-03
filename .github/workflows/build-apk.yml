@@ -1,36 +1,9 @@
 name: Build private debug APK
-run-name: ${{ github.event_name == 'pull_request' && 'Bounded phone and memory host tests' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
+run-name: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'Model quality host tests' || 'Bounded phone/memory host tests') || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
 
 on:
   pull_request:
     branches: [main]
-    paths:
-      - '.github/workflows/build-apk.yml'
-      - 'companion/phone_task*'
-      - 'companion/test_phone_task*'
-      - 'companion/device_*'
-      - 'companion/pocket_companion.py'
-      - 'protocol/device-v1/**'
-      - 'relay/**'
-      - 'app/src/main/java/dev/pocketengine/features/devices/**'
-      - 'app/src/main/java/dev/pocketengine/store/TaskStore*'
-      - 'app/src/main/java/dev/pocketengine/EngineApplication.java'
-      - 'app/src/main/java/dev/pocketengine/PhoneRunService.java'
-      - 'app/src/main/kotlin/dev/pocketengine/ui/DevicePairedTaskControls.kt'
-      - 'app/src/hostTest/java/dev/pocketengine/features/devices/PhoneTask*'
-      - 'app/src/test/java/dev/pocketengine/features/devices/DeviceProtocolTest.java'
-      - 'tools/host-tests*'
-      - 'app/src/main/java/dev/pocketengine/features/memory/**'
-      - 'app/src/main/java/dev/pocketengine/features/HostToolSupervisor.java'
-      - 'app/src/main/java/dev/pocketengine/runtime/AgentRunner.java'
-      - 'app/src/main/java/dev/pocketengine/store/TaskStore.java'
-      - 'app/src/main/kotlin/dev/pocketengine/ui/LearnedMethodApplications.kt'
-      - 'app/src/test/java/dev/pocketengine/features/memory/**'
-      - 'app/src/test/java/dev/pocketengine/runtime/ReferenceHistoryTest.java'
-      - 'app/src/hostTest/java/dev/pocketengine/features/memory/**'
-      - 'app/src/hostTest/java/dev/pocketengine/features/skills/LearnedMethodApplicationsNativeTest.java'
-      - 'app/src/test/resources/memory/**'
-      - 'tools/host-tests.json'
   workflow_dispatch:
     inputs:
       target:
@@ -42,7 +15,7 @@ on:
         description: 'Used only for target=host-tests; deliberately no full-suite option'
         type: choice
         default: device-receiver
-        options: [mcp-local-discovery, mcp-stdio-framing, mcp-prompts, mcp-health, project-file-operations, project-file-search, browser-expression, device-receiver, managed-runtime, gateway-continuation, memory-automatic, memory-assertion-recall, memory-consolidation, memory-learning-assertions, memory-experience, browser-long-page, phone-observation-boundaries, phone-sensitive-owner, agent-preferences, aion-core, aion-mcp-skills, aion-office, aion-conversations, remote-transport, aion-team-catalog, magpie-work-profile, native-operation-event, browser-document-download, browser-native-sequence, retained-development-admission, runtime-health, managed-skills, aion-work-profile-targets, aion-worker-entrypoint, runtime-activity, runtime-thermal-log-policy, aion-mcp-config, aion-capability-observations, aion-team-templates, local-phone-leases, script-artifact-publication, phone-audio-owner, schedule-proposals, native-duplex-pipes, aion-tool-discovery, aion-team-wake, memory-project-namespaces, request-clock, runner-repeat-notice, runner-budget-stream, alma-child-sources, alma-pi-no-tools, native-normal-cleanup, memory-archive-currentness, runtime-preparation-cancel, runtime-log-tail-recovery, managed-skill-private-artifacts, model-capability-probe, runtime-recovery-admission, aion-team-research-read, runtime-diagnostic-metadata, legacy-command-receipt-recovery, browser-owner-interactions, browser-native-input, browser-artifact-upload, browser-network-barriers, memory-recall-quality, memory-evidence-plan, memory-method-quality, runtime-development-continuity, project-git-isolation, phone-task-platform]
+        options: [mcp-local-discovery, mcp-stdio-framing, mcp-prompts, mcp-health, project-file-operations, project-file-search, browser-expression, device-receiver, managed-runtime, gateway-continuation, memory-automatic, memory-assertion-recall, memory-consolidation, memory-learning-assertions, memory-experience, browser-long-page, phone-observation-boundaries, phone-sensitive-owner, agent-preferences, aion-core, aion-mcp-skills, aion-office, aion-conversations, remote-transport, aion-team-catalog, magpie-work-profile, native-operation-event, browser-document-download, browser-native-sequence, retained-development-admission, runtime-health, managed-skills, aion-work-profile-targets, aion-worker-entrypoint, runtime-activity, runtime-thermal-log-policy, aion-mcp-config, aion-capability-observations, aion-team-templates, local-phone-leases, script-artifact-publication, phone-audio-owner, schedule-proposals, native-duplex-pipes, aion-tool-discovery, aion-team-wake, memory-project-namespaces, request-clock, runner-repeat-notice, runner-budget-stream, alma-child-sources, alma-pi-no-tools, native-normal-cleanup, memory-archive-currentness, runtime-preparation-cancel, runtime-log-tail-recovery, managed-skill-private-artifacts, model-capability-probe, runtime-recovery-admission, aion-team-research-read, model-quality-routing, runtime-diagnostic-metadata, legacy-command-receipt-recovery, model-quality-observability, model-evaluation, model-quality-sources, memory-recall-quality, memory-evidence-plan, memory-method-quality, browser-owner-interactions, browser-native-input, browser-artifact-upload, browser-network-barriers, phone-task-platform, runtime-development-continuity, project-git-isolation]
       host_groups:
         description: 'Optional explicit comma-separated batch (max 16); overrides host_group, no full-suite wildcard. Chromium groups use individual mode.'
         type: string
@@ -76,7 +49,7 @@ permissions:
 concurrency:
   # Independent, explicitly selected host groups run on separate runners. Keep
   # serialization within each group and APK build without canceling active work.
-  group: pocketworld-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && (inputs.host_groups != '' && 'host-selected-batch' || format('host-{0}', inputs.host_group)) || 'apk' }}
+  group: pocketworld-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'host-model-quality' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && (inputs.host_groups != '' && 'host-selected-batch' || format('host-{0}', inputs.host_group)) || 'apk' }}
   cancel-in-progress: false
 
 jobs:
@@ -240,17 +213,17 @@ jobs:
           retention-days: 7
 
   host-tests:
-    # Explicit manual selection, or four bounded phone/memory groups on affected private PRs.
-    # This stays separate from APK pushes and never packages or signs a PR build.
-    if: ${{ github.event.repository.private && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests') }}
+    # Manual selections retain their original contract. Three same-repository workpack branches use separate bounded batches.
+    # PR builds are bounded host checks, never APK packaging or signing.
+    if: ${{ github.event.repository.private && (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'pro/workpack-06-model-quality' || github.head_ref == 'pro/workpack-05-memory-quality' || github.head_ref == 'pro/workpack-03-phone-api-cli')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
         shell: bash
     env:
-      HOST_TEST_GROUP: ${{ inputs.host_group }}
-      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && 'phone-task-platform,memory-recall-quality,memory-evidence-plan,memory-method-quality' || inputs.host_groups }}
+      HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing' || github.head_ref == 'pro/workpack-03-phone-api-cli' && 'phone-task-platform' || 'memory-recall-quality') || inputs.host_group }}
+      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,gateway-continuation,runner-budget-stream' || github.head_ref == 'pro/workpack-03-phone-api-cli' && 'phone-task-platform,memory-recall-quality,memory-evidence-plan,memory-method-quality' || 'memory-recall-quality,memory-evidence-plan,memory-method-quality') || inputs.host_groups }}
       POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
     steps:
       - name: Check out selected revision
@@ -401,7 +374,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pocketworld-host-${{ inputs.host_groups != '' && 'batch' || env.HOST_TEST_GROUP }}-${{ github.run_number }}-${{ github.run_attempt }}
+          name: pocketworld-host-${{ env.HOST_TEST_GROUPS != '' && 'batch' || env.HOST_TEST_GROUP }}-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             build-artifacts/host-tests/
             app/build/reports/tests/testDebugUnitTest/

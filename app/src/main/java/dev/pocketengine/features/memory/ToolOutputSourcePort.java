@@ -27,6 +27,7 @@ public final class ToolOutputSourcePort implements CapabilityPort {
     // Keep the original capability/route/source authority's actual false/cancel semantics. A typed
     // soft source refusal must not disappear inside a responseCurrent catch-to-false loop.
     public boolean responseCurrent(RunControl live)throws Exception{current(live);return original.responseCurrent(live);}
+    public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl live)throws Exception{current(live);sources.checkSources(live);boolean current=original.stepReadSourceCurrent(tool,receipt,live);current(live);return current;}
     public void beforeModelRequest(String request,JSONArray messages,RunControl live)throws Exception{current(live);original.beforeModelRequest(request,messages,live);current(live);sources.checkSources(live);}
     public JSONObject afterModelResponse(String request,String answer,RunControl live)throws Exception{current(live);sources.checkSources(live);JSONObject result=original.afterModelResponse(request,answer,live);current(live);sources.checkSources(live);return result;}
     public void modelRequestAbandoned(String request)throws Exception{original.modelRequestAbandoned(request);}
