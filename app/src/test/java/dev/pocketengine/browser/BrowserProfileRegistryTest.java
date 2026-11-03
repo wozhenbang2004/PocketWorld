@@ -26,6 +26,19 @@ public final class BrowserProfileRegistryTest {
         String work=registry.create("工作",stale,true).getString("id");
         assertThrows(IllegalStateException.class,()->registry.select(work,stale,true));assertThrows(IllegalStateException.class,()->registry.requestDelete(original.profileId,stale,true));assertTrue(original.current());assertEquals(original.profileId,registry.selectedId());
     }
+    @Test public void validPreflightDoesNotWriteOrRotateTheOriginalSession()throws Exception {
+        File file=file();BrowserProfileRegistry registry=new BrowserProfileRegistry(file);BrowserProfileRegistry.Session original=managed(registry);long revision=registry.revision();byte[] before=Files.readAllBytes(file.toPath());AtomicInteger closed=new AtomicInteger();original.watch(closed::incrementAndGet);
+        registry.checkSelect(original.profileId,revision,true);registry.checkDelete(original.profileId,revision,true);
+        assertArrayEquals(before,Files.readAllBytes(file.toPath()));assertEquals(revision,registry.revision());assertEquals(original.profileId,registry.selectedId());assertTrue(original.current());assertEquals(0,closed.get());
+        registry.select(original.profileId,revision,true);assertEquals(revision+1,registry.revision());assertFalse(original.current());assertEquals(1,closed.get());
+    }
+    @Test public void aPreflightNeverReplacesTheCommitRevisionOrAvailabilityChecks()throws Exception {
+        BrowserProfileRegistry registry=new BrowserProfileRegistry(file());BrowserProfileRegistry.Session original=managed(registry);long revision=registry.revision();
+        registry.checkSelect(original.profileId,revision,true);registry.checkDelete(original.profileId,revision,true);registry.create("later native change",revision,true);
+        assertThrows(IllegalStateException.class,()->registry.select(original.profileId,revision,true));assertThrows(IllegalStateException.class,()->registry.requestDelete(original.profileId,revision,true));assertTrue(original.current());
+        registry.checkDelete(original.profileId,registry.revision(),true);registry.requestDelete(original.profileId,registry.revision(),true);
+        assertThrows(SecurityException.class,()->registry.select(original.profileId,registry.revision(),true));assertThrows(IllegalStateException.class,()->registry.requestDelete(original.profileId,registry.revision(),true));
+    }
     @Test public void switchingAwayAndBackNeverRevivesAnOldViewOrItsOpenResources()throws Exception {
         BrowserProfileRegistry registry=new BrowserProfileRegistry(file());BrowserProfileRegistry.Session first=registry.openSession(true);AtomicInteger closed=new AtomicInteger();first.watch(closed::incrementAndGet);
         String work=registry.create("工作",registry.revision(),true).getString("id");registry.select(work,registry.revision(),true);registry.openSession(true);registry.select(first.profileId,registry.revision(),true);BrowserProfileRegistry.Session replacement=registry.openSession(true);
