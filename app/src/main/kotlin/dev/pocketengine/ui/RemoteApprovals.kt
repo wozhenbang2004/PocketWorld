@@ -98,6 +98,11 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
     var prompt by remember(taskId) { mutableStateOf("") }
     val coldRecovery = dev.pocketengine.features.remote.RemoteColdRecovery.source(source)
     var useTaskGateway by remember(taskId) { mutableStateOf(false) }
+    val nativeOptions = source.optJSONObject("modelOptions")
+    val optionModels = nativeOptions?.optJSONArray("models").objects()
+    var changeModelSettings by remember(taskId, source.optString("jobOperationId"), nativeOptions?.optString("digest")) { mutableStateOf(false) }
+    var nextModel by remember(taskId, source.optString("jobOperationId"), nativeOptions?.optString("digest")) { mutableStateOf("") }
+    var nextEffort by remember(taskId, source.optString("jobOperationId"), nextModel) { mutableStateOf("") }
     var recoveryAccepted by remember(taskId,source.optString("jobOperationId"),source.optJSONObject("recoveryProof")?.optString("proofId")) { mutableStateOf(false) }
     var recoveryTimeout by remember(taskId) { mutableStateOf("300") }
     var localError by remember(taskId) { mutableStateOf<String?>(null) }
@@ -155,6 +160,14 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
                     else if(!coldRecovery) Text("此旧任务或执行器缺少可核对证据时，仍只读保留；需在原电脑确认并停止原执行，不会自动另建任务。",fontSize=13.sp,color=SecondaryInk)
                 }
                 RemoteAttentionPanel(snapshot, fresh && !busy, controller, ::send)
+                source.optJSONObject("modelRuntime")?.let { runtime ->
+                    Text("原执行器模型与窗口", fontWeight = FontWeight.SemiBold)
+                    Text("请求：${runtime.optString("requestedModel").takeUnless { it == "null" }.orEmpty().ifBlank { "未覆盖" }} / ${runtime.optString("requestedEffort").takeUnless { it == "null" }.orEmpty().ifBlank { "未覆盖档位" }}；原生模型读回：${runtime.optString("reportedModel").takeUnless { it == "null" }.orEmpty().ifBlank { "unknown" }}", fontSize = 13.sp)
+                    Text(if (source.optString("worker") == "claude") "Claude档位已请求不等于生效；普通stream SDK不提供effective effort读回，当前为unknown。" else "原生档位读回：${runtime.optString("reportedEffort").takeUnless { it == "null" }.orEmpty().ifBlank { "unknown" }}；来源 ${runtime.optString("configurationSource").takeUnless { it == "null" }.orEmpty().ifBlank { "unknown" }}", fontSize = 13.sp, color = SecondaryInk)
+                    val window = runtime.optJSONObject("contextWindow")
+                    Text(if (window?.optString("status") == "known") "模型窗口 ${window.optLong("tokens")} tokens · ${window.optString("source")} · ${runtime.optString("runtimeVersion").takeUnless { it == "null" }.orEmpty().ifBlank { "版本unknown" }}" else "当前模型窗口：unknown；未猜128K或记作0。", fontSize = 13.sp)
+                    SshCaption("窗口仅来自该原会话/模型native观察；远端自身压缩、内部模型次数和账单与手机预算分开，不据此补额度。")
+                }
                 RemoteProgressPanel(snapshot)
                 RemoteQuestionPanel(snapshot,busy) { id,hash,answers -> send("answerQuestion",JSONObject().put("requestId",id).put("requestHash",hash).put("answers",answers)) }
                 RemoteResultPanel(snapshot, fresh && !busy) { path -> send("readArtifact", JSONObject().put("path", path)) }
@@ -174,16 +187,35 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
                     Text("继续这个会话", fontWeight = FontWeight.SemiBold)
                     OutlinedButton(onClick=openContinuationInputs,enabled=!busy){Text("选择新文件，在这个会话继续")}
                     OutlinedTextField(prompt, { prompt = it }, label = { Text("本次明确的新要求") }, minLines = 3, maxLines = 7, modifier = Modifier.fillMaxWidth())
+                    if (!coldRecovery && source.optString("worker") in setOf("claude", "codex_app_server") && optionModels.isNotEmpty()) {
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { Checkbox(changeModelSettings, { changeModelSettings = it }, enabled = !busy && !useTaskGateway); Text("这次下一轮另选模型/档位（不修改运行中turn）", fontSize = 13.sp) }
+                        if (changeModelSettings) {
+                            optionModels.take(12).forEach { model -> FilterChip(selected = nextModel == model.optString("id"), onClick = { nextModel = model.optString("id") }, enabled = !busy, label = { Text(model.optString("name", model.optString("id"))) }) }
+                            if (optionModels.size > 12 || nativeOptions?.optBoolean("truncated") == true) SshCaption("这里只展示部分原目录；可填其中任意精确模型ID，未列入原目录的值不会提交。")
+                            OutlinedTextField(nextModel, { nextModel = it }, label = { Text("本次下一轮精确模型ID") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                            val picked = optionModels.singleOrNull { it.optString("id") == nextModel }
+                            picked?.optJSONArray("efforts").objects().take(12).forEach { option -> FilterChip(selected = nextEffort == option.optString("id"), onClick = { nextEffort = option.optString("id") }, enabled = !busy, label = { Text(option.optString("id")) }) }
+                            OutlinedTextField(nextEffort, { nextEffort = it }, label = { Text("精确原生档位（留空=不覆盖执行端既有档位）") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                            SshCaption("只在本次明确续接时提交，与当前目录digest绑定；真实CLI启动后重验，代次变化不会自动改参数。请求≠生效；Claude effective档位仍未知。原CLI及机器managed policy仍按本次已批准执行生效，不新增文件/工具权限或额度。")
+                        }
+                    } else if (!coldRecovery && source.optString("worker") == "claude" && optionModels.isEmpty()) SshCaption("原已批准job尚未返回可核native目录，当前没有可选择档位；不会为此额外启动Claude探测进程。")
                     if(coldRecovery) {
                         OutlinedTextField(recoveryTimeout,{recoveryTimeout=it},label={Text("本次新执行时限（10–900秒）")},supportingText={Text("沿用原电脑、工作区和读写边界；超时会按原监督流程请求停止并核对。每流输出仍有界，内部模型次数、tokens和费用不可硬限；旧未知费用不清零。")},modifier=Modifier.fillMaxWidth())
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) { Checkbox(checked=recoveryAccepted,onCheckedChange={recoveryAccepted=it},enabled=!busy);Text("我明确授权这次新执行及所示时限，理解内部计费未知；不恢复任何旧批准。",fontSize=14.sp,lineHeight=21.sp,modifier=Modifier.weight(1f)) }
                     }
                     if (!coldRecovery && !snapshot.optBoolean("teamRemoteWriter")) Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Checkbox(checked = useTaskGateway, onCheckedChange = { useTaskGateway = it }, enabled = !busy)
+                        Checkbox(checked = useTaskGateway, onCheckedChange = { useTaskGateway = it }, enabled = !busy && !changeModelSettings)
                         Text("这轮使用手机原任务模型网关：先准备，配置后再明确确认执行。", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     }
                     Button(onClick = {
                         val input = JSONObject().put("prompt", prompt)
+                        if (changeModelSettings && !useTaskGateway && !coldRecovery) {
+                            val selection = JSONObject().put("model", nextModel).put("modelOptionsDigest", nativeOptions?.optString("digest"))
+                            if (nextEffort.isNotBlank()) selection.put("effort", nextEffort)
+                            try { dev.pocketengine.features.remote.RemoteModelOptions.select(source, selection) }
+                            catch (failure: Exception) { localError = failure.message ?: "请核对原模型目录"; return@Button }
+                            input.put("modelSelection", selection)
+                        }
                         if(coldRecovery)input.put("timeoutSeconds",recoveryTimeout.toIntOrNull()).put("recoveryOwnerAcknowledged",recoveryAccepted)
                         selectedSnapshot?.let { input.put("snapshotId", it.getString("snapshotId")).put("snapshotVersion", it.getString("snapshotVersion")) }
                         send(if (useTaskGateway && !coldRecovery) "gateway.prepareContinuation" else "continue", input)

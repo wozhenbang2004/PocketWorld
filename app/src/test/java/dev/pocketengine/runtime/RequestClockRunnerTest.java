@@ -37,7 +37,7 @@ public final class RequestClockRunnerTest {
                 String checkpoint=stored[0].getJSONArray("messages").toString();assertTrue(checkpoint.contains("ORIGINAL OWNER GOAL"));assertFalse(checkpoint.contains("native_request_clock"));assertFalse(checkpoint.contains("pocketworld.request-clock.v1"));assertEquals(0,stored[0].getInt("steps"));
             }
             assertEquals(2,requests.size());JSONObject first=clock(requests.get(0).getJSONArray("messages")),second=clock(requests.get(1).getJSONArray("messages"));assertEquals("2026-11-02",first.getString("localDate"));assertEquals("2026-11-03",second.getString("localDate"));assertEquals("native_host_os_clock",second.getString("source"));assertFalse(second.getBoolean("externalTimeVerified"));assertEquals("UTC",second.getString("zoneId"));
-            for(JSONObject request:requests){assertTrue(request.toString().getBytes(StandardCharsets.UTF_8).length<2L*1024*1024);assertFalse(request.toString().contains("own-clock-credential"));assertEquals(0,request.optJSONArray("tools")==null?0:request.getJSONArray("tools").length());}
+            for(JSONObject request:requests){assertTrue(request.toString().getBytes(StandardCharsets.UTF_8).length<2L*1024*1024);assertFalse(request.toString().contains("own-clock-credential"));JSONArray declarations=request.getJSONArray("tools");Set<String> names=new HashSet<>();for(int i=0;i<declarations.length();i++)assertTrue("No duplicate native declaration",names.add(declarations.getJSONObject(i).getJSONObject("function").getString("name")));assertEquals(Set.of("run_handle_obstacle","run_end_not_done","run_ask_user"),names);}
         }finally {server.stop(0);}
     }
 }

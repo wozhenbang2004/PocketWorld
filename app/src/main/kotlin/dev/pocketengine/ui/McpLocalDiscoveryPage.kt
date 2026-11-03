@@ -21,7 +21,7 @@ import org.json.JSONObject
  * A page is an observer: leaving it never turns an unknown process into success or reruns it. */
 @Composable internal fun McpLocalDiscoveryPage(
     snapshot: JSONObject, responses: Map<String, JSONObject>, pendingCommands: Set<String>, loading: Boolean,
-    error: String?, onRequest: (String, JSONObject) -> String, onBack: () -> Unit
+    error: String?, onRequest: (String, JSONObject) -> String, onBack: () -> Unit, onManageInstalled: () -> Unit
 ) {
     val request by rememberUpdatedState(onRequest)
     val pending by rememberUpdatedState(pendingCommands)
@@ -45,8 +45,15 @@ import org.json.JSONObject
     var readRequest by remember { mutableStateOf<String?>(null) }
     var confirmRequest by remember { mutableStateOf<String?>(null) }
     var localError by remember { mutableStateOf<String?>(null) }
+    var installationOpen by remember { mutableStateOf(false) }
+    var recoverTask by remember { mutableStateOf("") }
+    var recoverOpen by remember { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val heldReviews = remember { mutableSetOf<String>() }
+    if (installationOpen && operationId != null) {
+        McpLocalInstallationPage(operationId!!, snapshot, responses, pendingCommands, error, onRequest, onBack, onManageInstalled)
+        return
+    }
     val selection = McpLocalSelection(pluginId.trim(), name.trim(), selectedCheckout, source?.optString("sourceDigest").orEmpty(), executable, argv)
     val current = McpLocalDiscoveryRules.current(reviewed, selection, revision, snapshot, responses["prepareLocalMcpDiscovery"], now)
     val choices = McpLocalDiscoveryRules.result(choicesRequest, responses["localMcpDiscoveryChoices"])
@@ -96,9 +103,14 @@ import org.json.JSONObject
                 error?.let { Text(it, color = Danger, fontSize = 13.sp) }
                 localError?.let { Text(it, color = Danger, fontSize = 13.sp) }
                 if (operationId == null && reviewed == null) {
-                    McpInstallCaption("只发现工具元数据，尚不安装或调用 stdio 工具。此处会运行本机程序，和只读 HTTP 服务发现不同。先选原项目入口，再明确审阅执行范围。")
+                    McpInstallCaption("先发现工具元数据，完整核对进程清场后另行选择工具声明安装；实际调用仍走原任务审批。此处会运行本机程序，和只读 HTTP 服务发现不同。先选原项目入口，再明确审阅执行范围。")
                     if (loading || sourceBusy || preparingBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                     if (choices != null && !runtimeReady) McpInstallCaption("原手机开发运行环境尚未就绪，请从原开发工具入口准备；本页不自动下载、换到电脑或降级执行。")
+                    TextButton(onClick = { recoverOpen = !recoverOpen }, enabled = !preparingBusy) { Text(if (recoverOpen) "收起原操作读取" else "继续核对已有发现操作") }
+                    if (recoverOpen) {
+                        OutlinedTextField(recoverTask, { recoverTask = it.trim() }, label = { Text("原发现任务 ID") }, supportingText = { Text("可从原任务详情复制；只读取同一个操作，不重新启动或借普通任务安装。") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedButton(onClick = { discardReview(); operationId = recoverTask; readRequest = ask("readLocalMcpDiscovery", JSONObject().put("taskId", recoverTask)) }, enabled = recoverTask.matches(Regex("[a-f0-9-]{36}")) && !preparingBusy) { Text("只读取原操作") }
+                    }
                     Text("原项目副本", fontSize = 16.sp, fontWeight = FontWeight.Medium)
                     if (checkouts.isEmpty() && !sourceBusy) McpInstallCaption("还没有可选的普通项目副本。请先回原手机开发工具准备运行环境与源码；此处不自动下载依赖。")
                     checkouts.forEach { row ->
@@ -143,7 +155,8 @@ import org.json.JSONObject
                     val id = operationId.orEmpty(); val actual = operation; val receipt = actual?.optJSONObject("receipt"); val process = receipt?.optJSONObject("processReceipt")
                     SelectionContainer { McpInstallCaption("原操作：$id\n状态：${actual?.optString("status") ?: "尚待原回执，不重复确认"}") }
                     if (!terminal) McpInstallCaption("返回此页只结束观察，不会把原进程写成成功或重跑。可在原任务列表继续核对；未知结果不能新起实例。")
-                    if (actual?.optString("status") == "completed") McpInstallCaption("已取得目录并核对原受控进程会话清场；不等于工具业务成功。stdio 安装与调用仍不可用。")
+                    if (actual?.optString("status") == "completed") McpInstallCaption("已取得目录并核对原受控进程会话清场；不等于工具业务成功。可另行选择工具声明安装，默认停用与零授权；此发现没有授权任何工具调用。")
+                    if (actual?.optString("status") == "completed" && snapshot.optJSONObject("nativeCapabilities")?.opt("localMcpInstallationOwnerOnly") == true) Button(onClick = { installationOpen = true }, modifier = Modifier.fillMaxWidth()) { Text("选择工具声明 · 另行审阅安装") }
                     if (actual?.optString("status") == "failed") McpInstallCaption("本次发现未完整成功。若缺依赖，当前副本未带隐藏配置与缓存，请回原项目按明确范围准备；此页不会自动安装或回读全源。")
                     process?.let { McpInstallCaption("原进程退出：${it.optBoolean("processExited")} · 会话释放：${it.optBoolean("processSessionAbsent")} · 资源释放：${it.optBoolean("resourcesReleased")}\n同 UID 不是 OS 沙箱，不把受控进程会话清场解释为所有脱离会话的后代都已消失。") }
                     val tools = McpInstallPreviewRules.objects(receipt?.optJSONObject("metadata")?.optJSONArray("tools"))

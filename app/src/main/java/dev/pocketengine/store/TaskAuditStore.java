@@ -244,7 +244,7 @@ public final class TaskAuditStore {
                 item.put("bodyBytes",bytes);
                 if(bytes<0||bytes>maxBytes-used){item.put("status","read_limited").put("reason","original_body_exceeds_remaining_page_bytes");limited=true;}
                 else if(events){item.put("status","available").put("event",nativeEvent(db,task,at,bytes));used+=bytes;}
-                else{try(Cursor body=db.rawQuery("SELECT arguments,receipt FROM operations WHERE task_id=? AND operation_id=?",new String[]{task,rows.getString(1)})){if(!body.moveToFirst())throw new IllegalStateException("原操作不可读");item.put("status","available").put("arguments",new JSONTokener(body.getString(0)).nextValue()).put("receipt",body.isNull(1)?JSONObject.NULL:new JSONTokener(body.getString(1)).nextValue());used+=bytes;}}
+                else{try(Cursor body=db.rawQuery("SELECT arguments,receipt FROM operations WHERE task_id=? AND operation_id=?",new String[]{task,rows.getString(1)})){if(!body.moveToFirst())throw new IllegalStateException("原操作不可读");item.put("status","available").put("arguments",NativeMcpPrivateFields.publicArguments(new JSONTokener(body.getString(0)).nextValue())).put("receipt",body.isNull(1)?JSONObject.NULL:new JSONTokener(body.getString(1)).nextValue());used+=bytes;}}
                 entries.put(item);
             }
         }

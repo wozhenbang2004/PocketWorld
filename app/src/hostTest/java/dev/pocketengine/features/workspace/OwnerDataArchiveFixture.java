@@ -16,7 +16,7 @@ import java.nio.file.*;
 
 /** Actual production modules over explicitly separate, fresh test-install roots. */
 final class OwnerDataArchiveFixture implements AutoCloseable {
-    final Context android;final TaskStore tasks;final FeatureHost host;final FeatureContext context;final WorkspaceModule workspace;final LocalModule local;final AttachmentsModule attachments;final MemoryModule memory;final RemoteModule remote;final SshModule ssh;
+    final Context android;final TaskStore tasks;final FeatureHost host;final FeatureContext context;final WorkspaceModule workspace;final LocalModule local;final AttachmentsModule attachments;final MemoryModule memory;final RemoteModule remote;final SshModule ssh;final MemorySourceBridge sources;
     private static final class Install extends ContextWrapper {
         private final File files,cache,databases;private final String preferences;
         Install(Context app,Path directory)throws Exception{super(app);files=Files.createDirectories(directory.resolve("files")).toFile();cache=Files.createDirectories(directory.resolve("cache")).toFile();databases=Files.createDirectories(directory.resolve("databases")).toFile();preferences="c2-install-"+java.util.UUID.nameUUIDFromBytes(directory.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))+"-";}
@@ -28,11 +28,12 @@ final class OwnerDataArchiveFixture implements AutoCloseable {
         @Override public SQLiteDatabase openOrCreateDatabase(String name,int mode,SQLiteDatabase.CursorFactory factory){return SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name),factory);}
         @Override public SQLiteDatabase openOrCreateDatabase(String name,int mode,SQLiteDatabase.CursorFactory factory,DatabaseErrorHandler handler){return SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name).getPath(),factory,handler);}
     }
-    OwnerDataArchiveFixture(Context app,Path directory)throws Exception {
-        android=new Install(app,directory);context=new FeatureContext(android,new SettingsStore(android),new SecretVault(android),event->{});tasks=new TaskStore(android);host=new FeatureHost(event->{},tasks,()->false);workspace=new WorkspaceModule(context);local=new LocalModule(context,workspace,ManagedProjectRuntime.unconfigured(directory.resolve("runtime").toFile()));attachments=new AttachmentsModule(context);memory=new MemoryModule(context);remote=new RemoteModule(context);ssh=new SshModule(context);host.register(workspace);host.register(local);host.register(attachments);host.register(memory);host.register(remote);host.register(ssh);
+    OwnerDataArchiveFixture(Context app,Path directory)throws Exception {this(app,directory,false);}
+    OwnerDataArchiveFixture(Context app,Path directory,boolean nativeProjectSources)throws Exception {
+        android=new Install(app,directory);context=new FeatureContext(android,new SettingsStore(android),new SecretVault(android),event->{});tasks=new TaskStore(android);host=new FeatureHost(event->{},tasks,()->false);workspace=new WorkspaceModule(context);local=new LocalModule(context,workspace,ManagedProjectRuntime.unconfigured(directory.resolve("runtime").toFile()));attachments=new AttachmentsModule(context);host.register(workspace);host.register(local);host.register(attachments);sources=nativeProjectSources?new MemorySourceBridge(host,tasks):null;if(sources!=null)sources.bindWorkspace(workspace);memory=sources==null?new MemoryModule(context):new MemoryModule(context,sources.assertionResolver());remote=new RemoteModule(context);ssh=new SshModule(context);host.register(memory);host.register(remote);host.register(ssh);if(sources!=null){host.register(new dev.pocketengine.features.skills.SkillsModule(context,memory::resolveExperience));host.setMemorySynchronizer(sources::synchronize);}
     }
     @Override public void close()throws Exception {try{host.close();}finally{var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);((SQLiteDatabase)field.get(tasks)).close();}}
-    static void installFixtureVault(){java.security.Security.addProvider(new java.security.Provider("C2ArchiveFixtureVault","1","Own test-only keystore"){{put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());}});}
+    static void installFixtureVault(){java.security.Security.addProvider(new java.security.Provider("C2ArchiveFixtureVault",1.0,"Own test-only keystore"){{put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());}});}
     static void removeFixtureVault(){java.security.Security.removeProvider("C2ArchiveFixtureVault");}
     // Exact synthetic keystore fixture used by original ChannelTaskHostTest; no real account keys.
     public static final class FixtureKeyStore extends java.security.KeyStoreSpi {

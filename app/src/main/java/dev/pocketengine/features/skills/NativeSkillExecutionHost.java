@@ -26,11 +26,16 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
     private final LiveRun live;
     private final Consumer<String> changed;
     private final SkillExecutionConfiguration configuration;
+    private final ManagedScriptCallbackTransport.Factory callbackTransport;
     private final ConcurrentHashMap<String,Review> pending=new ConcurrentHashMap<>();
     private volatile boolean closed;
     public NativeSkillExecutionHost(Context android,SkillsModule skills,EngineModule remote,TaskStore tasks,LiveRun live,Consumer<String> changed){this(android,skills,remote,tasks,live,changed,null);}
     public NativeSkillExecutionHost(Context android,SkillsModule skills,EngineModule remote,TaskStore tasks,LiveRun live,Consumer<String> changed,dev.pocketengine.features.local.LocalModule local){
+        this(android,skills,remote,tasks,live,changed,local,new AndroidManagedScriptCallbackTransport());
+    }
+    NativeSkillExecutionHost(Context android,SkillsModule skills,EngineModule remote,TaskStore tasks,LiveRun live,Consumer<String> changed,dev.pocketengine.features.local.LocalModule local,ManagedScriptCallbackTransport.Factory callbackTransport){
         this.android=java.util.Objects.requireNonNull(android).getApplicationContext();this.local=local;
+        this.callbackTransport=java.util.Objects.requireNonNull(callbackTransport);
         this.skills=java.util.Objects.requireNonNull(skills);this.remote=java.util.Objects.requireNonNull(remote);this.tasks=java.util.Objects.requireNonNull(tasks);
         this.live=java.util.Objects.requireNonNull(live);this.changed=java.util.Objects.requireNonNull(changed);configuration=new SkillExecutionConfiguration(new File(android.getFilesDir(),"skill-execution.json"));
     }
@@ -47,6 +52,8 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
         private final Object decision=new Object();
         private Boolean approved;
         private boolean dispatched,finished;
+        private final java.util.concurrent.atomic.AtomicLong publicationRevision=new java.util.concurrent.atomic.AtomicLong();
+        public long publicationRevision(){return publicationRevision.get();}
         private Review(SkillExecution.Plan plan,SkillExecution.Grant grant,SkillExecutionConfiguration.Selection selected,RunControl control,SkillExecution execution,NativeSkillBackend backend,Set<String> capabilities,dev.pocketengine.core.CapabilitySnapshot.CurrentCheck capabilityCurrent){
             this.plan=plan;this.grant=grant;this.selected=selected;this.control=control;this.execution=execution;this.backend=backend;this.capabilities=Set.copyOf(capabilities);this.capabilityCurrent=capabilityCurrent;
         }
@@ -103,7 +110,7 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
     }
     private void checkSelectedConfiguration(JSONObject view)throws Exception {if("this_phone".equals(view.optString("executionLocation")))checkPhoneConfiguration(view);else checkProfile(view.getJSONObject("deployment"));}
     private NativeSkillBackend backend(SkillExecutionConfiguration.Selection selected,String operation,RunControl original)throws Exception {
-        if(selected.phone()){if(local==null)throw new SkillExecution.Unavailable("原手机托管运行环境不可用");return new ManagedSkillBackend(android,local,tasks,selected.phoneDeployment,operation,original,false);}
+        if(selected.phone()){if(local==null)throw new SkillExecution.Unavailable("原手机托管运行环境不可用");return new ManagedSkillBackend(android,local,tasks,selected.phoneDeployment,operation,original,false,this::publicationChanged,callbackTransport);}
         return new CompanionSkillBackend(remote,selected.deployment,System::currentTimeMillis);
     }
     private NativeSkillBackend receiptBackend(JSONObject record,CompanionSkillBackend.ReceiptRef reference)throws Exception {
@@ -118,6 +125,20 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
     public JSONObject removeConfiguration(OwnerWindow window,long expectedRevision,String observedStateFingerprint)throws Exception {open();if(window==null||window.owner!=this)throw new SecurityException("没有本机配置审阅页面");window.admit(()->configuration.disable(expectedRevision,observedStateFingerprint));invalidatePending();return configuration.snapshot();}
     private void invalidatePending(){for(Review review:pending.values())synchronized(review.decision){review.approved=false;review.decision.notifyAll();if(review.dispatched)try{tasks.cancelSkillExecution(CompanionSkillBackend.ReceiptRef.from(review.plan,review.grant));review.backend.requestCancel(CompanionSkillBackend.ReceiptRef.from(review.plan,review.grant));}catch(Exception unknown){/* Durable original remains query-only. */}}}
     private void open(){if(closed)throw new IllegalStateException("脚本执行宿主已关闭");}
+    private void publicationChanged(String task){Review review=pending.get(task);if(review!=null)review.publicationRevision.incrementAndGet();changed.accept(task);}
+    /** UI invalidation hint only, not a publication fact or a recovered grant.
+     * The subsequent taskSnapshot still reads/rechecks the original private task. */
+    public long privateArtifactRevision(String task){Review review=pending.get(task);return review==null?0:review.publicationRevision.get();}
+    /** Original private task and durable publication only. This cannot import missing/deleted
+     * bytes, revive its original control or obtain a fresh publication slot. */
+    public byte[] readPublishedArtifact(String task,String operation,String attachment,String sha)throws Exception {
+        open();JSONArray publications=tasks.scriptArtifactPublicationsForOwner(task,operation);JSONObject selected=null;
+        for(int i=0;i<publications.length();i++){JSONObject row=publications.getJSONObject(i);if("published".equals(row.optString("state"))&&attachment.equals(row.optString("attachmentId"))&&sha.equals(row.optString("sha256")))selected=row;}
+        if(selected==null)throw new SecurityException("原任务没有这个已确认私有成果");RunControl observation=new RunControl();
+        byte[] bytes=dev.pocketengine.features.attachments.AttachmentRepository.get(android).book.readVerifiedSnapshot(attachment,sha,observation);
+        boolean current=false;JSONArray after=tasks.scriptArtifactPublicationsForOwner(task,operation);for(int i=0;i<after.length();i++){JSONObject row=after.getJSONObject(i);if("published".equals(row.optString("state"))&&attachment.equals(row.optString("attachmentId"))&&sha.equals(row.optString("sha256"))&&bytes.length==row.optLong("bytes",-1))current=true;}
+        if(!current){java.util.Arrays.fill(bytes,(byte)0);throw new SecurityException("原成果引用在读取期间变化");}return bytes;
+    }
     private void checkProfile(JSONObject deployment)throws Exception {
         JSONArray profiles=remote.snapshot().getJSONArray("profiles");for(int i=0;i<profiles.length();i++){JSONObject p=profiles.getJSONObject(i);
             if(deployment.getString("profileId").equals(p.optString("id"))&&deployment.getString("serviceBase").equals(p.optString("baseUrl").replaceAll("/+$","")))return;

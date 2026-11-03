@@ -48,7 +48,7 @@ public final class NativeToolPlan implements AutoCloseable {
     private final int count;private final Resolver resolver;private final RunControl.AuthorityCheck current;
     private boolean taken,closed,resolving;private int next;
     private NativeToolPlan(String parentTool,String parentOperation,RunControl original,RunIdentity identity,int count,Resolver resolver,RunControl.AuthorityCheck current)throws Exception{
-        boolean allowed=identity instanceof Identity&&"phone_prepare_sequence".equals(parentTool)||identity instanceof BrowserIdentity&&"browser_task_prepare_sequence".equals(parentTool);
+        boolean allowed=identity instanceof Identity&&java.util.Set.of("phone_prepare_sequence","phone_replay_route").contains(parentTool)||identity instanceof BrowserIdentity&&"browser_task_prepare_sequence".equals(parentTool);
         if(!allowed||parentOperation==null||parentOperation.isEmpty()||parentOperation.length()>200||count<1||count>4)throw new IllegalArgumentException("native_sequence_invalid");
         this.parentTool=parentTool;this.parentOperation=parentOperation;this.original=Objects.requireNonNull(original);this.identity=Objects.requireNonNull(identity);this.count=count;this.resolver=Objects.requireNonNull(resolver);this.current=Objects.requireNonNull(current);pause=original.pauseRevision();require(original);
     }

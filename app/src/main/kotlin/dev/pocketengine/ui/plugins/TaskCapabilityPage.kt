@@ -30,7 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 
-private data class SkillArtifactExport(val operation: String, val id: String, val sha256: String, val name: String)
+private data class SkillArtifactExport(val operation: String, val id: String, val sha256: String, val name: String, val privatePublication: Boolean = false)
 
 /** Same-task native leaf. Registry, grants, execution and receipt authority remain in their modules. */
 @Composable
@@ -66,6 +66,8 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
     var phoneOutputs by remember(taskId) { mutableStateOf("output/result.txt") }
     var phoneCwd by remember(taskId) { mutableStateOf(".") }
     var phoneDependencies by remember(taskId) { mutableStateOf(false) }
+    var phoneImmediateArtifacts by remember(taskId) { mutableStateOf(false) }
+    var observedArtifactRevision by remember(taskId) { mutableLongStateOf(-1) }
     var logOperation by remember(taskId) { mutableStateOf<String?>(null) }
     var logPage by remember(taskId) { mutableStateOf<JSONObject?>(null) }
     var logCursor by remember(taskId) { mutableLongStateOf(0) }
@@ -84,8 +86,8 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
     }
     fun refresh() {
         currentDigest = null
-        work({ val actual = readSnapshot(); check(actual.optString("taskId") == taskId) { "能力来源不是此任务" }; val pending = host.pendingReview(taskId); Triple(actual, pending, pending?.let(host::validateReview)) }) {
-            (actual, pending, digest) -> snapshot = actual; review = pending; currentDigest = digest
+        work({ val before = host.privateArtifactRevision(taskId); val actual = readSnapshot(); check(actual.optString("taskId") == taskId) { "能力来源不是此任务" }; val pending = host.pendingReview(taskId); Pair(before, Triple(actual, pending, pending?.let(host::validateReview))) }) {
+            (before, state) -> val (actual, pending, digest) = state; snapshot = actual; review = pending; currentDigest = digest; observedArtifactRevision = before
         }
     }
     val pickConfig = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -104,13 +106,13 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
         val selected = export; export = null
         if (uri != null && selected != null) work({
             check(uri.scheme == "content") { "请选择系统文件提供器中的导出位置" }
-            val bytes = readArtifact(selected.operation, selected.id, selected.sha256)
+            val bytes = if (selected.privatePublication) host.readPublishedArtifact(taskId, selected.operation, selected.id, selected.sha256) else readArtifact(selected.operation, selected.id, selected.sha256)
             context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes); it.flush() } ?: throw IllegalStateException("无法打开导出位置")
             bytes.size
         }) { notice = "已导出原任务成果（$it 字节），未自动写入其他项目" }
     }
     LaunchedEffect(taskId) { refresh() }
-    LaunchedEffect(taskId) { while (true) { delay(1000); now = System.currentTimeMillis(); if (!busy && runCatching { host.pendingReview(taskId) !== review }.getOrDefault(false)) refresh() } }
+    LaunchedEffect(taskId) { while (true) { delay(1000); now = System.currentTimeMillis(); if (!busy && runCatching { host.pendingReview(taskId) !== review || host.privateArtifactRevision(taskId) != observedArtifactRevision }.getOrDefault(false)) refresh() } }
     fun leaveReview() { approvalWindow.setForeground(false); showReview = false }
     fun cancelCurrentReview() {
         val retained = review ?: return
@@ -168,6 +170,14 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
                         if (receipt == null && !native.has("claimedAt")) Caption("没有脚本派发记录。原审阅已结束或需核对登记，核对不会恢复批准或运行脚本。")
                         val onPhone = native.optJSONObject("deployment")?.optString("backendId") == "phone-managed-skill-v1"
                         Caption((if (onPhone) "地点：这台手机。" else "地点：电脑 Companion。") + "进程回执和文件成果不等于任务目标完成。未知结果只查询原操作，不会重跑。")
+                        val publications = native.optJSONObject("scriptSharedArtifacts")
+                        publications?.keys()?.asSequence()?.toList()?.sorted()?.forEach { role ->
+                            val published = publications.getJSONObject(role)
+                            if (published.optString("state") == "published") {
+                                Caption("运行中已取得私有成果发布回执 · ${published.optString("path")} · ${published.optLong("bytes")} 字节。文件导出时重核相同 SHA，不代表脚本或任务已完成。")
+                                TextButton(onClick = { export = SkillArtifactExport(operationId, published.getString("attachmentId"), published.getString("sha256"), published.getString("path").substringAfterLast('/'), true); exportFile.launch(export!!.name) }, enabled = !busy) { Text("导出这份私有成果", fontSize = 12.sp) }
+                            } else Caption("私有成果保存结果待核 · ${published.optString("path")}。不会重新导入、重跑脚本或把未知结果当作已分享。")
+                        }
                         if (onPhone && native.has("nativeManagedJob")) TextButton(onClick = { work({ host.readExecutionLog(taskId, operationId, 0, 16000) }) { logOperation = operationId; logPage = it; logCursor = it.optLong("nextCursor", it.optLong("nextSequence", 0)) } }, enabled = !busy) { Text("读取原进程日志") }
                         val availability = operation.optJSONObject("artifactAvailability") ?: JSONObject()
                         when (availability.optString("state")) {
@@ -205,6 +215,7 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
                 val phone = value.optString("executionLocation") == "this_phone"
                 val recovery = value.optJSONObject("configurationRecovery")
                 val recovering = recovery?.optBoolean("required") == true
+                if (phone && value.optJSONObject("nativeExecutionContract")?.optBoolean("immediatePrivateArtifacts") == true) Caption("已选择：本次脚本运行中可将准确输出路径保存为本应用内的私人任务附件；沿原总成果预算，不公开上传，不自动分享其他应用。每次具体脚本仍须再次审阅。")
                 if (recovering) Caption("此次将恢复不可用的执行配置：确认后先在本机留存准确旧字节（${recovery?.optLong("originalBytes")} B，SHA-256 ${recovery?.optString("originalSha256")}），再保存下面的新配置。不会恢复旧脚本批准、重建原进程或改变未知效果；之后运行仍需新的具体审阅。")
                 Text(if (phone) "这台手机 · 原托管运行环境" else "已有电脑连接：${deployment.getString("profileId")}\n${deployment.getString("serviceBase")}", fontSize = 14.sp, lineHeight = 22.sp)
                 Caption("${request.getString("runtimeId")} · ${request.getString("workspaceId")}\n" + if (phone) "原生入口只复制明确输入到单次副本，不自动写回原项目。同 UID 进程仍可能读写应用数据、联网或创建脱离后代；这不是 OS 沙箱。标准输入关闭，具体版本、依赖和预算在每次执行前审阅。" else "网络禁止；空环境；单进程。保存后仍需真实执行端探测，本页不会部署解释器。")
@@ -225,12 +236,13 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
             OutlinedTextField(phoneWrites, { phoneWrites = it }, label = { Text("声明写入范围：每行一项") }, modifier = Modifier.fillMaxWidth(), maxLines = 4, enabled = !busy)
             OutlinedTextField(phoneOutputs, { phoneOutputs = it }, label = { Text("取回成果：每行一个准确文件") }, modifier = Modifier.fillMaxWidth(), maxLines = 4, enabled = !busy)
             if (phoneInterpreter == "python3") Row { Checkbox(phoneDependencies, { phoneDependencies = it }, enabled = !busy); Text("允许准备技能原包 requirements.lock 中精确版本+SHA-256的 PyPI wheel；不跑源码安装脚本。", fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.weight(1f)) }
+            Row { Checkbox(phoneImmediateArtifacts, { phoneImmediateArtifacts = it }, enabled = !busy); Text("允许脚本运行中用 pocketworld share 将上方准确输出文件即刻保存到本应用私人任务；计入原成果预算，不公开上传或自动外发。默认关闭。", fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.weight(1f)) }
             Caption("最多复制 200 文件/2MiB。执行上限 120 秒，具体请求可更短；保留输出/成果最多64KiB。手机环境尚未准备时不会开始执行或自动换地点。")
             if (!phone.optBoolean("available")) Text("请先在项目页准备原手机工具环境，再回此任务重新核对。", color = Danger, fontSize = 13.sp)
         }
     }, confirmButton = { Button(onClick = {
         fun paths(value: String) = org.json.JSONArray(value.lines().map { it.trim() }.filter { it.isNotEmpty() })
-        val selection = JSONObject().put("format", "pocketworld.skill-phone-configuration.v1").put("runtimeId", phoneInterpreter).put("checkoutId", phoneCheckout).put("workingDirectory", phoneCwd.trim()).put("readPaths", paths(phoneReads)).put("writePaths", paths(phoneWrites)).put("outputPaths", paths(phoneOutputs)).put("timeoutSeconds",120).put("maxOutputBytes",65536).put("maxResultChars",12000).put("preparePinnedDependencies",phoneDependencies)
+        val selection = JSONObject().put("format", "pocketworld.skill-phone-configuration.v1").put("runtimeId", phoneInterpreter).put("checkoutId", phoneCheckout).put("workingDirectory", phoneCwd.trim()).put("readPaths", paths(phoneReads)).put("writePaths", paths(phoneWrites)).put("outputPaths", paths(phoneOutputs)).put("timeoutSeconds",120).put("maxOutputBytes",65536).put("maxResultChars",12000).put("preparePinnedDependencies",phoneDependencies).put("immediatePrivateArtifacts",phoneImmediateArtifacts)
         work({ host.inspectPhoneConfiguration(taskId, selection) }) { configReview = it; showPhoneConfiguration = false }
     }, enabled = !busy && snapshot.optJSONObject("phoneExecution")?.optBoolean("available") == true) { Text("核对这份选择") } }, dismissButton = { TextButton(onClick = { showPhoneConfiguration = false }, enabled = !busy) { Text("取消") } })
     logOperation?.let { operation -> AlertDialog(onDismissRequest = { if (!busy) { logOperation = null; logPage = null } }, title = { Text("手机脚本日志") }, text = {
@@ -238,7 +250,8 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
         Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
             Caption("原进程字节日志，有缓存上限；结束状态以原回执为准。读取不会重跑脚本。")
             SelectionContainer { Text(page?.let(::skillLogText) ?: "尚无日志", fontSize = 13.sp, lineHeight = 21.sp) }
-            if (page?.optBoolean("truncated") == true || page?.optBoolean("outputTruncated") == true) Caption("原日志已达缓存或本页范围上限；未将缺失字节当完整输出。")
+            if (page?.optBoolean("logIncompleteTail") == true) Caption("原日志末条未写完整，仅显示此前完整记录；原字节与未知状态保留，未重新运行脚本。")
+            else if (page?.optBoolean("truncated") == true || page?.optBoolean("outputTruncated") == true) Caption("原日志已达缓存或本页范围上限；未将缺失字节当完整输出。")
         }
     }, confirmButton = { TextButton(onClick = { work({ host.readExecutionLog(taskId, operation, logCursor,16000) }) { logPage = it; logCursor = it.optLong("nextCursor",it.optLong("nextSequence",logCursor)) } }, enabled = !busy) { Text("读取下一页") } }, dismissButton = { TextButton(onClick = { logOperation = null; logPage = null }, enabled = !busy) { Text("关闭") } }) }
     removeConfig?.let { observed -> AlertDialog(onDismissRequest = { removeConfig = null }, containerColor = Color.White, title = { Text("停用这个执行配置？") }, text = { Text("将使旧审阅失效，并请求停止仍在执行的原脚本。原任务和已有成果保留，已发生的效果不会撤回。\n所选配置 SHA-256：${observed.optString("digest")}") }, confirmButton = { TextButton(onClick = { work({ host.removeConfiguration(window, observed.getLong("revision"), observed.getString("stateFingerprint")); readSnapshot() }) { snapshot = it; removeConfig = null; notice = "配置已移除，原操作仍可按原收据核对" } }, enabled = !busy) { Text("停用并移除", color = Danger) } }, dismissButton = { TextButton(onClick = { removeConfig = null }) { Text("取消") } }) }

@@ -97,6 +97,28 @@ final class AndroidRuntimePreparation {
     synchronized AutoCloseable beginOwnerStorageMaintenance()throws Exception {
         if(preparing||ownerStorageMaintenance)throw new IllegalStateException("runtime_preparation_or_owner_cleanup_already_running");AutoCloseable lease=environments.beginOwnerMaintenance();ownerStorageMaintenance=true;return ()->{synchronized(AndroidRuntimePreparation.this){try{lease.close();}finally{ownerStorageMaintenance=false;}}};
     }
+    /** Absence/corruption is not proof that every sealed version is old. Keep
+     * publication identity separate from the version/backing pair being deleted:
+     * the first half of a valid paired cleanup legitimately disappears first. */
+    private boolean storageActiveIdentityKnown() {
+        if(active==null)return false;
+        Path pointer=new File(root,"active.json").toPath();
+        try {
+            var before=Files.readAttributes(pointer,java.nio.file.attribute.BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+            if(!before.isRegularFile()||before.fileKey()==null||before.size()>1048576)return false;
+            byte[] bytes;
+            try(InputStream input=Files.newInputStream(pointer,LinkOption.NOFOLLOW_LINKS);java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream()){
+                byte[] buffer=new byte[8192];int count;while((count=input.read(buffer))>=0){if(count==0)continue;if(out.size()+count>1048576)return false;out.write(buffer,0,count);}bytes=out.toByteArray();
+            }
+            var after=Files.readAttributes(pointer,java.nio.file.attribute.BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+            if(!after.isRegularFile()||bytes.length!=before.size()||before.size()!=after.size()||!java.util.Objects.equals(before.fileKey(),after.fileKey())||!before.lastModifiedTime().equals(after.lastModifiedTime()))return false;
+            String text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+            return active.getString("generationIdentity").equals(dev.pocketengine.runtime.providers.ProtocolJson.parse(text).opt("generationIdentity"));
+        }catch(Exception unknown){return false;}
+    }
+    synchronized void requireOwnerStoragePublication()throws Exception {
+        if(!storageActiveIdentityKnown())throw new SecurityException("运行环境发布身份未知，版本和后备保留；请先在原项目核对或修复工具环境，再重新审阅清理");
+    }
     synchronized java.util.List<RuntimeStorage.Target> ownerStorageTargets()throws Exception {
         java.util.List<RuntimeStorage.Target> result=new java.util.ArrayList<>();result.add(new RuntimeStorage.Target("runtime:downloads","运行环境下载缓存","可重新按原固定目录下载；清理不卸载已准备工具",cache,true));result.add(new RuntimeStorage.Target("runtime:temporary","运行临时文件","可能含运行生成的临时数据，先确认不再需要；原项目与回执保留",tmp,true));result.add(new RuntimeStorage.Target("runtime:home","开发环境 HOME","包含用户配置、安装缓存及程序写入的数据；不把整个HOME当缓存删除",home,false));
         result.add(new RuntimeStorage.Target("runtime:npm-cache","HOME 中的 npm 内容缓存","只清理 _cacache，不删除.npmrc或其它HOME配置",new File(home,".npm/_cacache"),true));result.add(new RuntimeStorage.Target("runtime:pip-cache","HOME 中的 pip 下载缓存","不删除已创建的项目venv或HOME其它文件",new File(home,".cache/pip"),true));result.add(new RuntimeStorage.Target("runtime:pnpm-cache","HOME 中的 pnpm 内容缓存","之后依赖安装可能需要按原范围联网重新下载",new File(home,".local/share/pnpm/store"),true));
@@ -105,7 +127,7 @@ final class AndroidRuntimePreparation {
         result.add(new RuntimeStorage.Target("runtime:generation-store-all","全部运行环境（含未知版本）","完整目录逻辑占用，包含下方各版及未识别/损坏项；与分项重叠，不可整目录清理",generations,false));
         result.add(new RuntimeStorage.Target("runtime:link-store-all","全部PRoot文件后备（含未知项）","包含已列同版后备与未识别文件；没有准确归属的后备保留，不按名字猜测可删",new File(root,"link-storage"),false));
         File[] all=generations.listFiles();if(all==null)throw new java.io.IOException("runtime_generation_storage_unreadable");java.util.Arrays.sort(all,java.util.Comparator.comparingLong(File::lastModified).reversed());
-        boolean unresolved=all.length>256;java.util.Set<String> linksInUse=new java.util.HashSet<>();File[] stages=staging.listFiles();if(stages==null)throw new java.io.IOException("runtime_staging_storage_unreadable");
+        boolean publicationKnown=storageActiveIdentityKnown(),unresolved=!publicationKnown||all.length>256;java.util.Set<String> linksInUse=new java.util.HashSet<>();File[] stages=staging.listFiles();if(stages==null)throw new java.io.IOException("runtime_staging_storage_unreadable");
         for(File stage:stages){File owner=new File(stage,"owner.json");try{if(!owner.isFile()||Files.isSymbolicLink(owner.toPath())){unresolved=true;continue;}JSONObject row=RuntimeFiles.read(owner).optJSONObject("linkStorage");if(row==null||!row.optString("id").matches("[a-f0-9]{32}")||!linksInUse.add(row.getString("id")))unresolved=true;}catch(Exception unknown){unresolved=true;}}
         java.util.List<RuntimeStorage.Target> classified=new java.util.ArrayList<>();
         for(int i=0;i<all.length&&i<256;i++){File entry=all[i];String id=entry.getName();if(!id.matches("[a-f0-9]{64}")){unresolved=true;continue;}
@@ -114,7 +136,10 @@ final class AndroidRuntimePreparation {
             }catch(Exception unknown){unresolved=true;}}
         // An unclassified record may still refer to an otherwise valid backing.
         // Preserve all version pairs until that original ownership is understood.
-        for(RuntimeStorage.Target target:classified)result.add(unresolved?new RuntimeStorage.Target(target.id,target.label,target.note+"；另有未识别的版本/安装归属，本轮只计量保留，不清理旧版本或后备",target.file,false):target);
+        for(RuntimeStorage.Target target:classified){
+            String label=publicationKnown?target.label:target.id.startsWith("runtime:generation:")?"保留运行环境 / rootfs（当前归属待核）":"保留运行环境文件后备（当前归属待核）";
+            result.add(unresolved?new RuntimeStorage.Target(target.id,label,target.note+(publicationKnown?"；另有未识别的版本/安装归属，本轮只计量保留，不清理旧版本或后备":"；当前发布指针无法确认，本轮保留所有可能用于恢复的版本和后备，不授予清理"),target.file,false):target);
+        }
         result.add(new RuntimeStorage.Target("runtime:installation-staging","运行环境安装暂存","中断安装保留为原恢复依据，不在普通缓存清理中删除",staging,false));return result;
     }
     synchronized File ownerStorageObservationTarget(JSONObject original)throws Exception {

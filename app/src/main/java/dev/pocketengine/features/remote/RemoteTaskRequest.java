@@ -73,7 +73,7 @@ public final class RemoteTaskRequest {
         return new JSONObject(actual.toString());
     }
     public static JSONObject first(JSONObject input)throws Exception {
-        Set<String> allowed=Set.of("profileId","bindingHash","environmentId","environmentBinding","worker","prompt","argv","model","readOnly","timeoutSeconds");
+        Set<String> allowed=Set.of("profileId","bindingHash","environmentId","environmentBinding","worker","prompt","argv","model","readOnly","timeoutSeconds","effort","modelOptionsDigest");
         for(java.util.Iterator<String> keys=input.keys();keys.hasNext();)if(!allowed.contains(keys.next()))throw new SecurityException("首创任务不接受会话、原任务、凭据或任意路由参数");
         String profile=id(input,"profileId"),environment=id(input,"environmentId"),binding=text(input,"bindingHash",64),environmentBinding=text(input,"environmentBinding",64),worker=text(input,"worker",40);
         if(!binding.matches("[a-f0-9]{64}")||!environmentBinding.matches("[a-f0-9]{64}")||!worker.matches("command|codex_app_server|claude|pi"))throw new IllegalArgumentException("请选择当前已配置的电脑和受支持执行器");
@@ -81,7 +81,7 @@ public final class RemoteTaskRequest {
         if((timeout!=null&&(!(timeout instanceof Number)||((Number)timeout).doubleValue()!=seconds))||seconds<10||seconds>3600)throw new IllegalArgumentException("任务时限需为10至3600秒整数");
         JSONObject result=new JSONObject().put("profileId",profile).put("_profileBinding",binding).put("environmentId",environment).put("environmentBinding",environmentBinding).put("worker",worker).put("timeoutSeconds",seconds);
         if(worker.equals("command")){
-            if(input.has("prompt")||input.has("model")||input.has("readOnly"))throw new IllegalArgumentException("命令任务只接受明确argv，不将自然语言当Shell执行");
+            if(input.has("prompt")||input.has("model")||input.has("readOnly")||input.has("effort")||input.has("modelOptionsDigest"))throw new IllegalArgumentException("命令任务只接受明确argv，不将自然语言当Shell执行");
             JSONArray argv=input.optJSONArray("argv");if(argv==null||argv.length()<1||argv.length()>80)throw new IllegalArgumentException("命令需为1至80个明确参数的JSON数组");
             int bytes=0;for(int i=0;i<argv.length();i++){Object value=argv.get(i);if(!(value instanceof String)||((String)value).length()>12000||((String)value).indexOf('\0')>=0||i==0&&blank((String)value))throw new IllegalArgumentException("命令参数无效");bytes+=((String)value).length();}
             if(bytes>16000)throw new IllegalArgumentException("命令参数总长度超过16000字符");result.put("argv",new JSONArray(argv.toString()));
@@ -91,6 +91,11 @@ public final class RemoteTaskRequest {
             if(input.has("readOnly")&&!(input.opt("readOnly") instanceof Boolean))throw new IllegalArgumentException("readOnly需为明确布尔值");
             boolean readOnly=input.optBoolean("readOnly",worker.equals("codex_app_server"));
             if((worker.equals("claude")||worker.equals("pi"))&&readOnly)throw new SecurityException("CLI工具限制不是操作系统只读沙箱，不能声明只读");
+            if(input.has("effort")||input.has("modelOptionsDigest")){
+                if(!worker.equals("codex_app_server")||!input.has("model"))throw new SecurityException("首创档位只接受当前Codex目录；Claude须先在已批准原job取得native目录再由主人下一轮选择");
+                if(input.has("effort"))result.put("effort",text(input,"effort",80));
+                if(input.has("modelOptionsDigest")){String digest=text(input,"modelOptionsDigest",64);if(!digest.matches("[a-f0-9]{64}"))throw new SecurityException("原目录digest无效");result.put("modelOptionsDigest",digest);}
+            }
             result.put("readOnly",readOnly);
         }
         return result;

@@ -215,6 +215,7 @@ private fun LocalJobDetail(checkoutId: String, ref: LocalJobRef, metadata: JSONO
     if (job.has("transferError")) LocalCaption(job.optString("transferError"))
     if (job.has("exitCode") && !job.isNull("exitCode")) Text("退出码 ${job.optInt("exitCode")}", fontSize = 13.sp)
     if (job.has("outputComplete") && !job.optBoolean("outputComplete")) LocalCaption("输出读取未完整结束，请核对原回执，不视为完整输出。")
+    if (job.optBoolean("logIncompleteTail")) LocalCaption("日志末条未写完整，仅显示此前完整记录；原字节保留，不代表进程已结束或允许重跑。")
     if (job.optBoolean("outputTruncated")) LocalCaption("输出达到上限，以下内容已截断；不能当作完整结果。")
     listOf("stdout" to "标准输出", "stderr" to "错误输出").forEach { (field, label) ->
         if (receipt != null && receipt.has(field)) { LocalHeading(label); LocalCode(receipt.optString(field).ifEmpty { "（空）" }) }

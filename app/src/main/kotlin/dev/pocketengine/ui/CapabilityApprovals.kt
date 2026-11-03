@@ -30,6 +30,7 @@ internal fun CapabilityApprovals(task: UiTask, controller: PocketWorldController
             val tool = approval.optString("tool")
             val arguments = approval.optJSONObject("arguments") ?: JSONObject()
             val capability = approval.optJSONObject("capability") ?: JSONObject()
+            val nativeMcpRisk = McpLocalProgramApprovalText.describe(capability)
             val liveScope = capability.optJSONObject("ownedService")?.takeIf { tool == "project_execute" && it.optBoolean("subsequentSourceExecution") }
             val teamPlan = tool == "teams_start" && capability.optString("command") == "start_parent_plan"
             var reviewedTeamPlan by remember(id, capability.optString("planHash")) { mutableStateOf(false) }
@@ -51,6 +52,7 @@ internal fun CapabilityApprovals(task: UiTask, controller: PocketWorldController
                     }
                 }
                 if (teamPlan) TeamParentPlanApproval(task.id, id, capability, controller) { reviewedTeamPlan = it }
+                if (nativeMcpRisk != null) SelectionContainer { Text(nativeMcpRisk, color = Danger, fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 8.dp)) }
                 if (capability.optString("pluginId").isNotBlank()) Text("插件 " + capability.optString("pluginId") + " · v" + capability.optString("version") + " · 安装 " + capability.optString("installationId").takeLast(8), fontSize = 11.sp, color = SecondaryInk, modifier = Modifier.padding(top = 6.dp))
                 arguments.keys().asSequence().filter { it in setOf("text", "goal", "url", "path", "packageName", "name", "prompt") }.take(4).forEach { key ->
                     SelectionContainer { Text(argumentLabel(key) + "：" + arguments.optString(key).take(800), fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 6.dp)) }
@@ -59,7 +61,7 @@ internal fun CapabilityApprovals(task: UiTask, controller: PocketWorldController
                 if (details) SelectionContainer { Text(tool + "\n" + arguments.toString(2) + if (capability.length() > 0) "\n" + capability.toString(2) else "", fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 18.sp) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { controller.approveCapability(task, id, false) }, enabled = id.isNotBlank() && !pending) { Text("拒绝") }
-                    Button(onClick = { controller.approveCapability(task, id, true) }, enabled = id.isNotBlank() && !pending && (liveScope == null || reviewedLiveScope) && (!teamPlan || reviewedTeamPlan)) { Text(if (pending) "处理中" else if (teamPlan) "批准此计划与可见预算" else if (liveScope != null) "允许启动与限定热改" else "允许这次操作") }
+                    Button(onClick = { controller.approveCapability(task, id, true) }, enabled = id.isNotBlank() && !pending && (liveScope == null || reviewedLiveScope) && (!teamPlan || reviewedTeamPlan)) { Text(if (pending) "处理中" else if (teamPlan) "批准此计划与可见预算" else if (liveScope != null) "允许启动与限定热改" else if (nativeMcpRisk != null) "允许运行本机程序" else "允许这次操作") }
                 }
             }
         }

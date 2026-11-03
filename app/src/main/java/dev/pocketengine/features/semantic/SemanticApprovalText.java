@@ -21,6 +21,12 @@ public final class SemanticApprovalText {
             text.append("\n位置：手机主屏，执行时会切换应用并占用屏幕。\n");
             switch(request.getString("kind")) {
                 case "web":field(text,request,"url","网址");break;
+                case "app_link":
+                    field(text,request,"packageName","准确目标包名");field(text,request,"url","完整 HTTPS 链接");
+                    text.append("链接会交给这个准确App；HTTPS或App Links不保证业务只读，接收方可能立即触发操作。退出不保证撤销；启动后交主人核验，不会自动继续点击。\n");break;
+                case "share_text":
+                    field(text,request,"packageName","准确目标包名");field(text,request,"text","交给目标App的完整纯文本");
+                    text.append("这会将上述文本交给选定App；接收方可能立即处理或转发，不保证只打开草稿。不会替你选择收件人或点击发送；启动后交主人核验，不据此宣称已发送。\n");break;
                 case "map_search":field(text,request,"query","搜索词");break;
                 case "dial":field(text,request,"number","拨号界面中的号码");break;
                 case "email_draft":field(text,request,"to","收件人");field(text,request,"subject","主题");field(text,request,"body","正文");break;

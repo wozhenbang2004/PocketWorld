@@ -90,6 +90,28 @@ public final class ProjectMemoryNamespaces {
         boolean hasSources;synchronized(local){requireCurrent(selected);hasSources=book.projectSourcesForOwner(selected).length()>0;}
         if(hasSources)synchronizeOriginalSources();synchronized(local){requireCurrent(selected);return book.captureProjectConsentForOwner(selected);}
     }
+    /** Body-free archive admission only; no whole-project export or read consent. */
+    public synchronized void requireArchiveSelectionForOwner(Selection selected)throws Exception{synchronized(local){requireCurrent(selected);selected.requireBook(book);}}
+    /** Explicit selected project only; the private/global owner archive remains unchanged. */
+    public synchronized JSONObject archiveForOwner(Selection selected)throws Exception{
+        boolean hasSources;synchronized(local){requireCurrent(selected);hasSources=book.projectSourcesForOwner(selected).length()>0;}if(hasSources)synchronizeOriginalSources();synchronized(local){requireCurrent(selected);return book.projectArchiveForOwner(selected);}
+    }
+    /** Original archive confirmation and settled project map authorize passive placement only.
+     * No management Selection or live task read Consent is issued by restoration. */
+    public synchronized ProjectMemoryArchive.Placement prepareArchivePlacementForOwner(dev.pocketengine.features.workspace.OwnerDataArchives original,dev.pocketengine.features.workspace.OwnerDataArchives.Confirmed confirmed,dev.pocketengine.store.TaskStore.OwnerArchiveProjectMap map,JSONObject input)throws Exception{
+        java.util.Objects.requireNonNull(original).requireConfirmed(java.util.Objects.requireNonNull(confirmed));java.util.Objects.requireNonNull(map);JSONObject archive=ProjectMemoryArchive.checked(input),meta=confirmed.metadata();String source=ProjectMemoryArchive.dataScope(archive).spaceId.substring(8);
+        if(!"memory".equals(meta.getString("phase"))||!meta.getString("sectionDigest").equals(ProjectSources.digest(archive)))throw new SecurityException("项目记忆放置不是这份确切分段的原生恢复确认");
+        if(map.originalPhaseId().isEmpty())throw new UnsupportedOperationException("请先完成这份原包的原项目恢复；不伪造sameUUID映射");JSONObject targets=map.forArchive(meta.getString("archiveSha256"));Object target=targets.opt(source);if(!(target instanceof String)||!((String)target).matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"))throw new UnsupportedOperationException("原项目恢复没有此来源的已结算映射，未放入private或其它项目");
+        synchronized(local){String revision=ProjectSources.digest(workspace.projectIdentityForHost((String)target));ProjectMemoryArchive.Placement placement=new ProjectMemoryArchive.Placement(this,book,original,confirmed,map,archive,(String)target,revision);requireArchivePlacement(placement);return placement;}
+    }
+    void requireArchivePlacement(ProjectMemoryArchive.Placement placement)throws Exception{
+        if(placement==null||placement.issuer!=this||placement.book!=book)throw new SecurityException("项目只读放置不是原Book的native确认");placement.original.requireConfirmed(placement.confirmed);JSONObject meta=placement.confirmed.metadata();if(!"memory".equals(meta.getString("phase"))||!placement.archiveSha.equals(meta.getString("archiveSha256"))||!ProjectSources.digest(new JSONObject(placement.payload)).equals(meta.getString("sectionDigest"))||!placement.targetProject.equals(placement.map.forArchive(placement.archiveSha).optString(placement.sourceSpace.substring(8)))||!placement.targetRevision.equals(ProjectSources.digest(workspace.projectIdentityForHost(placement.targetProject))))throw new SecurityException("原项目映射/确认/目标catalog已变化，未恢复任何读取权限");
+    }
+    /** Same native facade -> Local -> Book admission order; no filesystem callback under Book. */
+    void admitArchivePlacement(ProjectMemoryArchive.Placement placement)throws Exception{if(placement==null||placement.issuer!=this||!Thread.holdsLock(this)||!Thread.holdsLock(local)||placement.confirmed.original().isCancelled()||placement.confirmed.original().isPaused()||System.currentTimeMillis()>=placement.expiresAt)throw new SecurityException("项目档案必须沿当前原生放置准入");}
+    public synchronized JSONObject restoreArchiveForOwner(ProjectMemoryArchive.Placement placement)throws Exception{requireArchivePlacement(placement);synchronized(local){requireArchivePlacement(placement);return book.restoreProjectArchive(placement);}}
+    /** Body-free original restore lookup, not a project read token or retry instruction. */
+    public synchronized JSONObject queryArchiveRestoreForOwner(JSONObject archive,String outerArchiveSha,String nativeAction)throws Exception{return book.queryProjectArchiveRestore(ProjectMemoryArchive.checked(archive),outerArchiveSha,nativeAction);}
     /** Project review never delegates a SourceRef to the unscoped global owner source page. */
     public synchronized JSONObject readFileSourceForOwner(Selection selected,SourceRef ref)throws Exception{
         synchronized(local){requireCurrent(selected);book.requireProjectSourceUseForOwner(selected,ref);}

@@ -17,8 +17,8 @@ public final class ProjectExactPatch {
         Map<String,String> text=ProjectSources.files(snapshot);Map<String,byte[]> all=ProjectSources.byteFiles(snapshot);Map<String,JSONObject> prepared=new TreeMap<>();
         for(int i=0;i<edits.length();i++){
             JSONObject edit=edits.getJSONObject(i);String path=VersionedWorkspace.path(edit.getString("path")),action=edit.optString("action","replace");
-            if(!ProjectSources.sourcePath(path)||!Set.of("replace","create","delete","copy","append").contains(action)||prepared.containsKey(path))throw new IllegalArgumentException("补丁路径重复、不是源码路径或动作无效");
-            boolean exists=all.containsKey(path);if(exists&&!text.containsKey(path))throw new IllegalArgumentException("精确文字补丁不能改写二进制文件："+path);
+            if(!ProjectSources.sourcePath(path)||!Set.of("replace","create","delete","copy","append","hex_overwrite","copy_bytes").contains(action)||prepared.containsKey(path))throw new IllegalArgumentException("补丁路径重复、不是源码路径或动作无效");
+            boolean exists=all.containsKey(path);if(action.equals("copy_bytes")){prepared.put(path,ProjectByteCopy.prepare(path,all,edit));continue;}if(action.equals("hex_overwrite")){if(!exists)throw new SecurityException("原字节覆盖仅用于既有source文件，不创建或扩展文件");prepared.put(path,ProjectHexOverwrite.prepare(path,all.get(path),edit));continue;}if(exists&&!text.containsKey(path))throw new IllegalArgumentException("精确文字补丁不能改写二进制文件："+path);
             String before=text.getOrDefault(path,""),beforeHash=exists?ProjectSources.sha256(all.get(path)):"absent";
             if(!beforeHash.equals(edit.getString("expectedHash")))throw new SecurityException("补丁基准SHA已变化："+path);
             if(!action.equals("copy")&&(action.equals("create")&&exists||!action.equals("create")&&!exists))throw new SecurityException("补丁动作与文件实际存在状态不同："+path);
@@ -78,6 +78,7 @@ public final class ProjectExactPatch {
             if(!"applied".equals(state))continue;
             if(!after.equals(actual.getString("afterHash"))||actual.has("actualAfterHash")&&!after.equals(actual.getString("actualAfterHash")))throw new SecurityException("原applied回执与完整方案不同");
             String currentHash=current.containsKey(path)?ProjectSources.sha256(current.get(path)):"absent";if(!after.equals(currentHash))throw new SecurityException("撤销冲突：后续修改尚在，不覆盖主人新内容："+path);
+            if(encodedBytes(file)){result.put(ProjectByteCopy.matches(file)?ProjectByteCopy.reverse(file,originalOperation):ProjectHexOverwrite.reverse(file,originalOperation));continue;}
             String action=file.getString("action").equals("create")?"delete":file.getString("action").equals("delete")?"create":"replace",before=file.getString("beforeContent");byte[] bytes=encode(before);String target=file.getString("expectedHash");
             result.put(new JSONObject().put("path",path).put("action",action).put("expectedHash",after).put("afterHash",target).put("beforeContent",file.getString("content")).put("content",before).put("beforeBytes",file.getLong("afterBytes")).put("afterBytes",file.getLong("beforeBytes")).put("revertsOperationId",ProjectBuildPlan.identity(originalOperation)).put("changes",new JSONArray().put(new JSONObject().put("kind","restore_original_bytes").put("beforeHash",after).put("afterHash",target).put("restoredBytes",bytes.length))));
         }
@@ -90,5 +91,9 @@ public final class ProjectExactPatch {
         for(int i=0;i<files.length();i++){JSONObject file=files.getJSONObject(i);if("applied".equals(file.getString("state")))selected.put(file.getString("path"));else excluded.put(new JSONObject().put("path",file.getString("path")).put("originalState",file.getString("state")).put("reversalAttempted",false).put("reason","no_confirmed_original_effect"));}
         return new JSONObject().put("selectedPaths",selected).put("excludedFiles",excluded).put("selection","confirmed_applied_only").put("originalStatus",receipt.getString("status"));
     }
+    static boolean encodedBytes(JSONObject file){return file.has("encoding")||file.has("bytePatchContract")||file.has("beforeContentBase64")||file.has("contentBase64");}
+    /** Strict native payload decoding, not a write or scope grant. Legacy UTF8 rows are unchanged.
+     * Encoded rows must be a reviewed exact hex window or a native source-bound copy. */
+    public static byte[] payloadBytes(JSONObject file,boolean before)throws Exception{return encodedBytes(file)?(ProjectByteCopy.matches(file)?ProjectByteCopy.validated(file):ProjectHexOverwrite.validated(file))[before?0:1]:encode(file.getString(before?"beforeContent":"content"));}
     public static byte[] encode(String value)throws Exception {if(value.indexOf('\0')>=0)throw new IllegalArgumentException("文字补丁不能包含空字节");var encoded=StandardCharsets.UTF_8.newEncoder().encode(java.nio.CharBuffer.wrap(value));byte[] bytes=new byte[encoded.remaining()];encoded.get(bytes);return bytes;}
 }

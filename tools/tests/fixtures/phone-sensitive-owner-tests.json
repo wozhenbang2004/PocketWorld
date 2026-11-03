@@ -70,6 +70,101 @@
         "matchedWaitStillDispatchesTheNextClickThroughItsOriginalPreparedJournal",
         "standaloneNativeConditionTimeoutRetainsItsOriginalReadOnlyMeaning"
       ]
+    },
+    {
+      "class": "dev.pocketengine.runtime.routes.PhoneRouteSessionTest",
+      "source": "app/src/test/java/dev/pocketengine/runtime/routes/PhoneRouteSessionTest.java",
+      "methods": [
+        "routeResolvesFreshUniqueTargetWithoutDispatchingOrRestoringOldIds",
+        "versionWithdrawalAndAmbiguousTargetStopBeforeAnyAction",
+        "restoredTaskAndCommitmentControlsNeverCreateReusableRoutes",
+        "originalForwardBackwardScrollDirectionsResolveWithoutIntroducingCoordinateOrGestureAliases",
+        "modifiedDigestOrUnsupportedCachedActionNeverBecomesANativeStep",
+        "afterPageDivergenceKeepsReceiptAndCannotRestartTheRoute"
+      ]
+    },
+    {
+      "class": "dev.pocketengine.store.PhoneRouteSourceNativeTest",
+      "source": "app/src/test/java/dev/pocketengine/store/PhoneRouteSourceNativeTest.java",
+      "methods": [
+        "normalPhoneOwnerConfirmationPublishesOnlyCurrentMetadataAndRecordsTheRealNativeSeq",
+        "modelLikeVerificationEventWithoutTheNativeResultReviewCannotForgeACacheSource",
+        "canonicalBookForgetBlocksAnAlreadyUsedRouteWithoutDeletingTheOriginalTask",
+        "retiredNativeConfirmationSnapshotCannotBeRecreatedFromRetainedGoalOrRawAudit",
+        "temporarySourceIoSuspendsUseButPreservesDataAndRecoversWithoutANewSourceOrGrant",
+        "withdrawalStopsReuseButIsNotAnUnderlyingSourceForget",
+        "sameTaskColdRepositoryStillChecksTheOriginalStickySourceReferences"
+      ]
+    },
+    {
+      "class": "dev.pocketengine.store.PhoneRouteRunnerNativeTest",
+      "source": "app/src/test/java/dev/pocketengine/store/PhoneRouteRunnerNativeTest.java",
+      "methods": [
+        "actualRunnerLearnsOnlyAnUnverifiedCandidateUntilTheOriginalOwnerReviewConfirmsIt",
+        "twoCachedChildrenStillUseFreshTreesOriginalApprovalAndOriginalPreparedReceipts",
+        "originalScrollContractReplaysThroughTheOriginalCapabilityGrantAndPreparedJournal",
+        "routeSuggestionsCannotBypassTheOriginalChildApprovalVeto",
+        "unknownFirstReceiptStopsBeforePreparingAnyOtherCachedChild",
+        "nativeSensitiveSecondRefusalRetainsTheRealPrefixAndNeverDispatchesTheRefusedChild",
+        "postconditionDivergenceRetainsTheFirstEffectAndReturnsToTheOriginalModelWithoutReplaying",
+        "retiredConfirmedSourceAfterOneEffectPausesWithoutPreparingTheSecondOrErasingTheReceipt",
+        "temporaryUnavailableStickySourceStopsBeforeAnyNewMainRequestOrDeviceRead",
+        "sourceRetiredDuringTheRealModelRequestBlocksItsDecisionBeforeAnyChild",
+        "ownerCancellationAfterOneKnownReceiptNeverReadsOrDispatchesTheNextCachedChild",
+        "aRestoredOriginalCheckpointDoesNotAdvertiseOrAutomaticallyReplayTheOldRoute",
+        "pluginCannotClaimTheNativeRouteSchemaOrExecutor"
+      ]
+    },
+    {
+      "class": "dev.pocketengine.store.PhoneRouteAppMountNativeTest",
+      "source": "app/src/test/java/dev/pocketengine/store/PhoneRouteAppMountNativeTest.java",
+      "methods": [
+        "originalAppFactoryUsesInstalledVersionNativeConfirmationAndCanonicalForgetWithoutAnAlternativeLedger"
+      ]
+    },
+    {
+      "class": "dev.pocketengine.features.semantic.SemanticTypedShareRequestTest",
+      "source": "app/src/test/java/dev/pocketengine/features/semantic/SemanticTypedShareRequestTest.java",
+      "methods": [
+        "typedShareAndHttpsPackageLinkPreserveExactContentInTheOriginalDigest",
+        "appLinkCannotBypassTheOriginalHttpsTypedDialOrMailAdmission",
+        "shareRejectsArbitraryIntentExtrasRecipientsFilesAndUnboundedOrMissingBody",
+        "exactPackageIsRequiredForBothAdaptersAndSchemaCannotAdvertiseRawIntentOrCustomSchemes",
+        "nativeApprovalShowsTheEntireBoundedTextAndWarnsRatherThanPromisingDraftOrDelivery",
+        "unknownTypedEntryReceiptFencesNewOperationsAcrossTheSameOriginalSessionPortReconstruction",
+        "acceptedTypedEntryCannotReplayItsDiscoveryThroughANewPortAndAlwaysStopsForTheOwner"
+      ]
+    },
+    {
+      "class": "dev.pocketengine.features.semantic.AndroidTypedShareIntentTest",
+      "source": "app/src/test/java/dev/pocketengine/features/semantic/AndroidTypedShareIntentTest.java",
+      "methods": [
+        "shareIntentContainsOnlyExactPackagePlainTextAndNoRecipientsStreamsChooserOrGrants",
+        "packageLinkUsesTheOriginalHttpsBrowsableContractAndNoArbitraryExtras",
+        "packageManagerCannotSubstituteAnotherPackageEvenWhenItReturnsAMatchingHandler",
+        "httpsPackageLinkStillRequiresOriginalOsAppLinksOrBrowserEligibility",
+        "targetVersionAndSignatureRemainPartOfTheNativeFingerprintAndUnexportedHandlersAreUnavailable"
+      ]
+    },
+    {
+      "class": "dev.pocketengine.features.semantic.SemanticTypedShareRunnerSqlTest",
+      "source": "app/src/test/java/dev/pocketengine/features/semantic/SemanticTypedShareRunnerSqlTest.java",
+      "methods": [
+        "shareNeedsOriginalOwnerApprovalThenOneNativeIntentAndNoAutomaticSendOrFurtherModelTurn",
+        "httpsPackageLinkNeedsOriginalApprovalAndPausesForTheOwnerToVerifyTheActualTarget",
+        "changedShareReceiverVersionWhileOwnerReviewsCannotConsumeOldApprovalOrLaunch",
+        "changedHttpsReceiverVersionWhileOwnerReviewsHasNoLaunchOrBrowserFallback"
+      ]
+    },
+    {
+      "class": "dev.pocketengine.features.semantic.SemanticApplicationJourneyTest",
+      "source": "app/src/test/java/dev/pocketengine/features/semantic/SemanticApplicationJourneyTest.java",
+      "methods": [
+        "originalPhoneServiceApprovalContinuesSameRunAndObservesTheAcceptedIntent",
+        "originalAppServiceSharesOnlyAfterExactOwnerApprovalAndStopsBeforeAnotherModelOrAutomaticSend",
+        "originalAppServiceOpensTheExactHttpsPackageThenStopsForActualOwnerVerification",
+        "actualCombinedPortKeepsNonPhoneCallersDiscoveryOnlyAndRejectsReplacementControl"
+      ]
     }
   ],
   "helpers": [
@@ -85,5 +180,6 @@
       "class": "dev.pocketengine.testutil.HttpServer",
       "source": "app/src/test/java/dev/pocketengine/testutil/HttpServer.java"
     }
-  ]
+  ],
+  "referenceIntegrationCommit": "27a7bf4340d424ed45aa2ff4d3e7f35b33eeec80"
 }

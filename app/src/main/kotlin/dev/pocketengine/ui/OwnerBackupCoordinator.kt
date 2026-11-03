@@ -14,7 +14,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
 
 internal data class OwnerBackupState(
-    val open: Boolean = false, val busy: Boolean = false, val inventory: JSONObject? = null,
+    val open: Boolean = false, val busy: Boolean = false, val presentation: String = "settings", val projectMemoryName: String? = null, val projectMemoryCurrent: Boolean = false, val inventory: JSONObject? = null,
     val selection: JSONObject? = null, val preview: JSONObject? = null, val review: JSONObject? = null,
     val originalAction: String? = null, val originalPhase: JSONObject? = null, val result: JSONObject? = null,
     val experiencePage: JSONObject? = null, val projectAction: String? = null, val notice: String? = null, val error: String? = null
@@ -35,6 +35,8 @@ internal class OwnerBackupCoordinator(
     private var observation: RunControl? = null
     private var future: Future<*>? = null
     private var selected: OwnerDataArchives.Selection? = null
+    // Live native selection only. Bundle/JSON never restores this opaque authority.
+    private var projectMemorySelection: dev.pocketengine.features.memory.ProjectMemoryNamespaces.Selection? = null
     private var pendingReview: OwnerDataArchives.Review? = null
     private var reviewControl: RunControl? = null
     private var picker: JSONObject? = null
@@ -43,9 +45,16 @@ internal class OwnerBackupCoordinator(
     private var receivedPicker = false
     private fun host() = app.features.ownerDataArchives(app)
     private fun owner() { check(!closed && foreground && privateOwner()) { "请在本机私人页面打开备份与迁移" } }
-    fun open() { owner(); state = state.copy(open = true); refresh() }
+    fun open() { owner(); projectMemorySelection = null; state = state.copy(open = true, presentation = "settings", projectMemoryName = null, projectMemoryCurrent = false); refresh() }
+    fun openProjectMemory(selected: dev.pocketengine.features.memory.ProjectMemoryNamespaces.Selection, name: String) {
+        owner(); if (state.busy || pending()) { state = state.copy(error = "请先核对原备份动作；未更换范围。"); return }
+        clearReview(); this.selected = null; projectMemorySelection = selected
+        state = OwnerBackupState(open = true, presentation = "memory_review", projectMemoryName = name, projectMemoryCurrent = true, notice = "仅备份刚才原生显选的项目及其记忆；不会读取主人全局或其它项目记忆。")
+        refresh()
+    }
+    fun leaveMemoryReview() { if (state.presentation == "memory_review") closePage() }
     fun openCache(id: String) {
-        owner(); state = state.copy(open = true)
+        owner(); projectMemorySelection = null; state = state.copy(open = true, presentation = "settings", projectMemoryName = null, projectMemoryCurrent = false)
         if (state.busy || pending()) { state = state.copy(error = "请先核对原恢复动作；当前备份身份没有切换。"); return }
         clearReview()
         work { c -> val actual = host().readLocalCacheForOwner(id, c); val metadata = actual.metadata(); val preview = host().preview(actual, c); { selected = actual; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, notice = "已核对原本机备份缓存；可以明确导出或仅移除此临时副本。") } }
@@ -57,11 +66,18 @@ internal class OwnerBackupCoordinator(
         val meta = reopened?.metadata(); val preview = reopened?.let { host().preview(it, c) }
         return@work { selected = reopened; state = state.copy(inventory = actual, selection = meta ?: pin, preview = preview ?: state.preview) }
     }
-    fun closePage() { cancelRead(); clearReview(); state = state.copy(open = false, busy = false) }
+    fun closePage() { cancelRead(); clearReview(); projectMemorySelection = null; state = state.copy(open = false, busy = false, projectMemoryName = null, projectMemoryCurrent = false) }
     fun create(sections: Set<String>) {
-        owner(); if (state.busy || pending()) return
+        owner(); if (!state.open) { state = state.copy(error = "原备份页面已关闭；没有生成其它范围的备份。"); return }; if (state.busy || pending()) return
+        val project = projectMemorySelection
+        if (state.projectMemoryName != null && (project == null || !state.projectMemoryCurrent)) { state = state.copy(error = "原项目记忆选择已失效；请回原记忆审核页重新显选。未回退全局备份。"); return }
+        if (project != null && sections != setOf("projects", "memory")) { state = state.copy(error = "项目记忆备份仅含此项目、其私人副本和其记忆；没有扩大分区。"); return }
         clearReview()
-        work { c -> val original = host().create(sections, c); val metadata = original.metadata(); val preview = host().preview(original, c); { selected = original; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, notice = "已生成这次范围的完整备份。请导出到你选择的位置；它未加密，用户内容可能含敏感信息。") } }
+        work(onFailure = { if (project != null) { projectMemorySelection = null; state = state.copy(projectMemoryCurrent = false) } }) { c ->
+            val original = if (project != null) host().createProjectMemory(project, c) else host().create(sections, c)
+            val metadata = original.metadata(); val preview = host().preview(original, c)
+            return@work { selected = original; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, originalAction = null, originalPhase = null, projectAction = null, notice = "已生成这次明确范围的完整备份。请导出到你选择的位置；它未加密，用户内容可能含敏感信息。") }
+        }
     }
     fun readExperiencePage(index: Int = 0) {
         owner(); if (state.busy) return
@@ -169,13 +185,14 @@ internal class OwnerBackupCoordinator(
     }
     fun openRestoredAttachment(value: JSONObject) { owner(); if (!state.busy && value.optString("id").isNotEmpty()) { closePage(); openAttachment(value) } }
     fun invalidateExperienceReadings() { experienceRevision++; state = state.copy(experiencePage = null) }
-    fun foreground(visible: Boolean) { invalidateExperienceReadings(); foreground = visible; if (!visible) { cancelRead(); clearReview(); state = state.copy(busy = false, review = null) } else processPicker() }
+    fun foreground(visible: Boolean) { invalidateExperienceReadings(); foreground = visible; if (!visible) { cancelRead(); clearReview(); projectMemorySelection = null; state = state.copy(busy = false, review = null, projectMemoryCurrent = false, notice = if (state.projectMemoryName != null) "原项目记忆选择未在后台保留；生成新备份前请回原审核页重新显选。已有原包仍可只读核对。" else state.notice) } else processPicker() }
     fun detach() { closed = true; cancelRead(); clearReview() }
     fun save(bundle: Bundle) {
         val pin = JSONObject().put("selectionId", state.selection?.optString("selectionId").orEmpty()).put("sha256", state.selection?.optString("archiveSha256").orEmpty()).put("actionId", state.originalAction.orEmpty()).put("projectActionId", state.projectAction.orEmpty())
         bundle.putString("ownerDataArchivePosition", pin.toString()); if (picker != null) bundle.putBoolean("ownerDataArchivePickerPending", true)
     }
     fun restore(bundle: Bundle?) {
+        projectMemorySelection = null; state = state.copy(projectMemoryCurrent = false)
         restoredPicker = bundle?.getBoolean("ownerDataArchivePickerPending") == true
         val raw = bundle?.getString("ownerDataArchivePosition") ?: return
         runCatching { val pin = JSONObject(raw); state = state.copy(selection = pin.optString("selectionId").takeIf { it.isNotEmpty() }?.let { JSONObject().put("selectionId", it).put("archiveSha256", pin.getString("sha256")) }, originalAction = pin.optString("actionId").takeIf { it.isNotEmpty() }, projectAction = pin.optString("projectActionId").takeIf { it.isNotEmpty() }, notice = "只恢复了原备份和动作定位；没有恢复确认、凭据或写权限。请先核对原结果。") }

@@ -554,7 +554,8 @@ public final class ManagedProcessJobs implements AutoCloseable {
             (chunk.getInt("stream")==1?stdout:stderr).write(bytes);
         }
         receipt.put("stdout",stdout.toString(StandardCharsets.UTF_8.name())).put("stderr",stderr.toString(StandardCharsets.UTF_8.name()))
-                .put("summaryOutputOnly",true).put("summaryOutputTruncated",page.getBoolean("hasMore")||receipt.optBoolean("outputTruncated"));
+                .put("summaryOutputOnly",true).put("logIncompleteTail",page.getBoolean("logIncompleteTail"))
+                .put("summaryOutputTruncated",page.getBoolean("hasMore")||page.getBoolean("logIncompleteTail")||receipt.optBoolean("outputTruncated"));
         return receipt;
     }
     public RuntimeReceipt requestCancel(RuntimeExecutionRef ref) throws Exception {
@@ -581,14 +582,20 @@ public final class ManagedProcessJobs implements AutoCloseable {
         Job job=live.get(ref.operationId());Object lock=job==null?this:job;
         synchronized(lock) {
             JSONObject receipt=job==null?RuntimeFiles.read(new File(new File(root,ref.operationId()),"receipt.json")):job.receipt;
-            ref.requireReceipt(receipt);JSONArray chunks=new JSONArray();long next=afterSequence;int total=0;boolean more=false;
+            ref.requireReceipt(receipt);JSONArray chunks=new JSONArray();long next=afterSequence;int total=0;boolean more=false,incompleteTail=false;
             File log=new File(new File(root,ref.operationId()),"output.bin");
-            if(log.isFile()) try(DataInputStream input=new DataInputStream(new FileInputStream(log))) {
+            if(log.isFile()) try(FileInputStream file=new FileInputStream(log);DataInputStream input=new DataInputStream(file)) {
                 while(true) {
-                    long sequence;try {sequence=input.readLong();}catch(EOFException done){break;}
-                    int stream=input.readUnsignedByte(),length=input.readInt();
-                    if((stream!=1 && stream!=2)||length<1||length>8192)throw new java.io.IOException("runtime_log_record_invalid");
-                    byte[] bytes=new byte[length];input.readFully(bytes);
+                    long recordStart=file.getChannel().position(),sequence;int stream,length;byte[] bytes;
+                    try {
+                        sequence=input.readLong();stream=input.readUnsignedByte();length=input.readInt();
+                        if((stream!=1 && stream!=2)||length<1||length>8192)throw new java.io.IOException("runtime_log_record_invalid");
+                        bytes=new byte[length];input.readFully(bytes);
+                    }catch(EOFException end){
+                        // Recover only the complete original prefix. Do not erase or search
+                        // past an incomplete record, infer an exit, or repair the original bytes.
+                        incompleteTail=file.getChannel().position()!=recordStart;break;
+                    }
                     if(sequence<=afterSequence)continue;
                     if(total+length>maxBytes){more=true;break;}
                     chunks.put(new JSONObject().put("sequence",sequence).put("stream",stream).put("bytes",length)
@@ -597,7 +604,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 }
             }
             return new JSONObject().put("operationId",ref.operationId()).put("chunks",chunks).put("nextCursor",next)
-                    .put("hasMore",more).put("outputTruncated",receipt.optBoolean("outputTruncated"));
+                    .put("hasMore",more).put("logIncompleteTail",incompleteTail).put("outputTruncated",receipt.optBoolean("outputTruncated"));
         }
     }
     @Override public void close() throws Exception {

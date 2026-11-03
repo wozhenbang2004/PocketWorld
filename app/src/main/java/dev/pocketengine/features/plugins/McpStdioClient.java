@@ -62,6 +62,7 @@ public final class McpStdioClient implements AutoCloseable {
             JSONObject diagnostics=PluginRules.diagnoseMcpArguments(arguments,actual.getJSONObject("inputSchema"));if(!diagnostics.getBoolean("valid"))throw new IllegalArgumentException("MCP stdio arguments do not match the current reviewed schema");
             JSONObject result=rpc("tools/call",new JSONObject().put("name",actual.getString("name")).put("arguments",arguments));resultReceived=true;return capture==null?McpData.result(result,""):capture.result(result,"");
         }catch(RpcFailure failure){throw new McpClient.CallFailure(failure.toolMayHaveDispatched,!valid,failure.getMessage());}
+        catch(dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable blocked){throw blocked;}
         catch(Exception failure){throw new McpClient.CallFailure(resultReceived,!valid,resultReceived?"MCP stdio returned a tool result but native projection/capture failed; never replay":"MCP stdio tool was not sent; check the original installation, declaration and arguments");}
     }
     private static String identityText(JSONObject object,String field)throws Exception{Object value=object.get(field);if(!(value instanceof String)||((String)value).isEmpty()||((String)value).length()>200)throw new IllegalArgumentException("MCP stdio server identity is invalid");StandardCharsets.UTF_8.newEncoder().encode(java.nio.CharBuffer.wrap((String)value));return (String)value;}

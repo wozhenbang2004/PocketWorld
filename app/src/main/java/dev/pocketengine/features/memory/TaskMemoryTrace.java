@@ -226,7 +226,7 @@ public final class TaskMemoryTrace {
         if(!wanted.task.equals(operation.optString("taskId"))||!wanted.run.equals(operation.optString("runId"))||!wanted.operation.equals(operation.optString("operationId")))
             throw new SecurityException("原操作行不属于这条任务、轮次或来源");
         if(!wanted.revision.equals("sha256:"+digest(operation)))return operationStatus(scope,request,"source_changed","cited_operation_version_changed");
-        String body=operation.toString(2);int offset=wanted.offset;
+        String body=dev.pocketengine.store.NativeMcpPrivateFields.publicOperation(operation).toString(2);int offset=wanted.offset;
         if(offset>body.length()||offset>0&&offset<body.length()&&Character.isHighSurrogate(body.charAt(offset-1))&&Character.isLowSurrogate(body.charAt(offset)))
             throw new IllegalArgumentException("原操作读取位置无效，请从此版本开头读取");
         int end=(int)Math.min((long)body.length(),(long)offset+wanted.maxChars);
@@ -317,7 +317,7 @@ public final class TaskMemoryTrace {
             if(operation==null||!taskId.equals(operation.optString("taskId"))||!runId.equals(operation.optString("runId"))||operation.optString("operationId").isEmpty())throw new SecurityException("原操作行属于不同任务或执行轮次");
             identifier(operation.getString("operationId"));
             String revision=digest(operation);charge(snapshot,"operation",revision);
-            if(request.section.equals("operations"))selected.read(operationCount,operation,entry("operation_receipt","task:"+taskId+":operation:"+operation.getString("operationId"),revision,operationCount)
+            if(request.section.equals("operations"))selected.read(operationCount,dev.pocketengine.store.NativeMcpPrivateFields.publicOperation(operation),entry("operation_receipt","task:"+taskId+":operation:"+operation.getString("operationId"),revision,operationCount)
                     .put("causalState","not_recorded").put("operationId",operation.getString("operationId")).put("state",operation.optString("state")));
             operationCount++;
         }

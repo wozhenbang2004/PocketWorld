@@ -12,6 +12,16 @@ import org.json.JSONObject;
 public final class McpLocalInstallation {
     private McpLocalInstallation() {}
     static Review review(PluginsModule plugins,TaskStore tasks,TaskStore.OwnerMcpDiscoveryCompleted completed,LocalModule local,JSONArray selection,RunControl observation)throws Exception{return new Review(plugins,tasks,completed,local,selection,observation);}
+    /** Read-only projection of the original completed/cleared discovery. Supported declarations
+     * come from the same manifest rules as installation, never a second UI schema validator. */
+    public static JSONObject catalogueForOwner(TaskStore tasks,TaskStore.OwnerMcpDiscoveryCompleted completed)throws Exception {
+        java.util.Objects.requireNonNull(completed).requireCurrentForOwner(tasks);JSONObject source=completed.scopeForOwner(),found=completed.metadataForOwner();JSONArray rows=new JSONArray(),definitions=found.getJSONArray("tools");
+        for(int i=0;i<definitions.length();i++)rows.put(McpStdioData.previewTool(definitions.getJSONObject(i),source.getString("configurationDigest"),found.getString("protocolVersion"),found.getString("serverDigest")));
+        JSONObject view=new JSONObject().put("format","pocketworld.native-stdio-install-catalogue.v1").put("discoveryTaskId",completed.discoveryTaskId()).put("discoveryFactsDigest",completed.factsDigest()).put("id",source.getString("pluginId")).put("name",source.getString("name"));
+        for(String field:new String[]{"configurationDigest","sourceDigest","checkoutId","runtimeIdentity","entryPoint","argvDigest","argvCount","expectedInstallationId","expectedStateRevision"})view.put(field,source.get(field));
+        view.put("protocolVersion",found.getString("protocolVersion")).put("serverDigest",found.getString("serverDigest")).put("tools",rows).put("maxImportedTools",McpData.MAX_IMPORTED_TOOLS).put("sourceRuntimeRevalidationRequired",true).put("programStarted",false).put("executionAuthorized",false).put("installationAuthorized",false).put("untrusted",true);
+        completed.requireCurrentForOwner(tasks);return view.put("catalogueDigest",dev.pocketengine.features.plugins.mcp.McpJson.digest(view));
+    }
     public static final class Review implements AutoCloseable {
         private final PluginsModule plugins;private final TaskStore tasks;private final TaskStore.OwnerMcpDiscoveryCompleted completed;private final LocalModule local;private final RunControl observation;
         private final String id=UUID.randomUUID().toString(),scope,configuration,manifest,metadata,digest;private final long expiresAt=System.currentTimeMillis()+120000;private boolean used,closed;

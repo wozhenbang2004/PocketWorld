@@ -34,7 +34,8 @@ public final class RemotePiOwnerJourneyTest {
         final Path root=Files.createTempDirectory("c3-pi-native-owner-");final Object nativeOwner=new Object();
         final CopyOnWriteArrayList<JSONObject> events=new CopyOnWriteArrayList<>();final java.util.concurrent.atomic.AtomicBoolean failDispatch=new java.util.concurrent.atomic.AtomicBoolean();Process server;BufferedReader output;String base,task;
         TaskStore tasks;FeatureHost host;RemoteModule remote;RemoteOwnerWorkflows owner;
-        Fixture(String mode)throws Exception {try{
+        Fixture(String mode)throws Exception {this(mode,true);}
+        Fixture(String mode,boolean waitForSettlement)throws Exception {try{
             Path repo=Path.of(java.util.Objects.requireNonNull(System.getProperty("pocket.gateway.source"),"pocket.gateway.source is required")).toAbsolutePath().normalize();
             server=new ProcessBuilder(System.getProperty("pocket.gateway.python","python3"),"-B","-u",repo.resolve("companion/pi_rpc_fixture_server.py").toString(),root.toString(),mode).directory(repo.resolve("companion").toFile()).redirectError(root.resolve("server-stderr.log").toFile()).start();
             output=new BufferedReader(new InputStreamReader(server.getInputStream(),StandardCharsets.UTF_8));long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
@@ -47,7 +48,7 @@ public final class RemotePiOwnerJourneyTest {
             assertFalse(Files.exists(root.resolve("workspace/pi-prompt-count")));
             JSONObject first=RemoteTaskRequest.first(new JSONObject().put("profileId","computer").put("bindingHash",remote.profileBindingHash("computer")).put("environmentId","workspace").put("environmentBinding",environment.getString("bindingHash")).put("worker","pi").put("prompt","Explicit native no-tools conversation").put("model","fixture/model-a").put("timeoutSeconds",30));
             String request=UUID.randomUUID().toString();host.request(new JSONObject().put("feature","remote").put("command","submitJob").put("requestId",request).put("payload",first));JSONObject response=null;until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
-            while(response==null&&System.nanoTime()<until){for(JSONObject event:events)if(request.equals(event.optString("requestId")))response=event;Thread.sleep(5);}assertNotNull(events.toString(),response);assertTrue(response.toString(),response.optBoolean("ok"));task=response.getJSONObject("result").getString("hostTaskId");settled(mode.equals("end-only")?"unknown":"completed");
+            while(response==null&&System.nanoTime()<until){for(JSONObject event:events)if(request.equals(event.optString("requestId")))response=event;Thread.sleep(5);}assertNotNull(events.toString(),response);assertTrue(response.toString(),response.optBoolean("ok"));task=response.getJSONObject("result").getString("hostTaskId");if(waitForSettlement)settled(mode.equals("end-only")?"unknown":"completed");
         }catch(Exception|Error failure){try{close();}catch(Exception cleanup){failure.addSuppressed(cleanup);}throw failure;}}
         JSONObject source()throws Exception{return tasks.remoteOwnerTarget(task);}
         void settled(String status)throws Exception{long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);while(System.nanoTime()<until){JSONObject current=source();if(!current.optString("jobId").isEmpty())remote.handle("getJob",current);JSONObject next=source();if(next.optString("executorStatus").equals(status)&&next.optBoolean("dispatchFenceFinal"))return;Thread.sleep(10);}fail(tasks.get(task,false).toString());}

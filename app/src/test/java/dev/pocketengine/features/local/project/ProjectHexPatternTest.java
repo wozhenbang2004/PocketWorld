@@ -1,0 +1,22 @@
+package dev.pocketengine.features.local.project;
+
+import static org.junit.Assert.*;
+import java.nio.channels.SeekableByteChannel;
+import java.nio.file.*;
+import java.util.*;
+import org.junit.*;
+
+/** Matcher algorithm on private byte fixtures, not source permission or a mounted tool claim. */
+public final class ProjectHexPatternTest {
+    private Path file;
+    @Before public void create()throws Exception{file=Files.createTempFile("pw-hex-pattern-",".bin");}
+    @After public void close()throws Exception{Files.deleteIfExists(file);}
+    private ProjectHexPattern.Page find(long at,String pattern,int limit)throws Exception{try(var input=Files.newByteChannel(file,Set.of(StandardOpenOption.READ))){return ProjectHexPattern.find(input,Files.size(file),at,ProjectHexPattern.parse(pattern),limit,()->{});}}
+    @Test public void strictAsciiHexParserAcceptsBothCasesAndRefusesAmbiguousOrUnboundedPatterns(){assertArrayEquals(new byte[]{0,10,(byte)255},ProjectHexPattern.parse("000aFF"));for(String value:new String[]{"","0","0x00","00 01","gg","ｆｆ","00\n","00".repeat(121)})assertThrows(value,IllegalArgumentException.class,()->ProjectHexPattern.parse(value));assertThrows(IllegalArgumentException.class,()->ProjectHexPattern.parse(null));}
+    @Test public void overlappingMatchesPageByNextCandidateStartWithoutSkippingBytes()throws Exception{Files.write(file,new byte[]{0,0,0,0,0});var first=find(0,"0000",2);assertEquals(List.of(0L,1L),first.offsets);assertEquals(2,first.nextOffset);assertFalse(first.complete);var last=find(first.nextOffset,"0000",2);assertEquals(List.of(2L,3L),last.offsets);assertTrue(last.complete);assertEquals(-1,last.nextOffset);assertEquals(3,last.scannedBytes);}
+    @Test public void aPatternCrossingAnIoChunkIsLocatedAtItsRealByteOffset()throws Exception{byte[] bytes=new byte[9000];bytes[4095]=(byte)0xde;bytes[4096]=(byte)0xad;bytes[4097]=(byte)0xbe;bytes[4098]=(byte)0xef;Files.write(file,bytes);assertEquals(List.of(4095L),find(0,"deadbeef",40).offsets);}
+    @Test public void scanBudgetCarriesAnUnfinishedPrefixToTheNextPageWithoutLosingTheBoundaryMatch()throws Exception{byte[] bytes=new byte[ProjectHexPattern.MAX_SCAN_BYTES+8];int start=ProjectHexPattern.MAX_SCAN_BYTES-2;bytes[start]=1;bytes[start+1]=2;bytes[start+2]=3;bytes[start+3]=4;Files.write(file,bytes);var first=find(0,"01020304",40);assertTrue(first.offsets.isEmpty());assertEquals(ProjectHexPattern.MAX_SCAN_BYTES,first.scannedBytes);assertEquals(start,first.nextOffset);assertFalse(first.complete);var next=find(first.nextOffset,"01020304",40);assertEquals(List.of((long)start),next.offsets);assertTrue(next.complete);}
+    @Test public void emptyNoMatchAndEofAreExplicitCompleteWithoutZeroProgressCursors()throws Exception{var empty=find(0,"ff",40);assertTrue(empty.complete);assertTrue(empty.offsets.isEmpty());assertEquals(-1,empty.nextOffset);Files.write(file,new byte[]{1,2,3});var absent=find(0,"0405",40);assertTrue(absent.complete);assertTrue(absent.offsets.isEmpty());assertEquals(3,absent.scannedBytes);assertEquals(0,find(3,"01",40).scannedBytes);assertThrows(IllegalArgumentException.class,()->find(4,"01",40));}
+    @Test public void repeatedPrefixAndUnsignedBytesAgreeWithNaiveByteSearchAcrossEveryPage()throws Exception{Random random=new Random(57120);for(int attempt=0;attempt<30;attempt++){byte[] bytes=new byte[1000],pattern=new byte[3];for(int i=0;i<bytes.length;i++)bytes[i]=(byte)random.nextInt(3);for(int i=0;i<pattern.length;i++)pattern[i]=(byte)random.nextInt(3);Files.write(file,bytes);List<Long> expected=new ArrayList<>();for(int i=0;i<=bytes.length-pattern.length;i++){boolean same=true;for(int j=0;j<pattern.length;j++)same&=bytes[i+j]==pattern[j];if(same)expected.add((long)i);}List<Long> actual=new ArrayList<>();long offset=0;try(var input=Files.newByteChannel(file)){while(true){var page=ProjectHexPattern.find(input,bytes.length,offset,pattern,3,()->{});actual.addAll(page.offsets);if(page.complete)break;assertTrue(page.nextOffset>offset);offset=page.nextOffset;}}assertEquals(expected,actual);}}
+    @Test public void originalCancellationAndPrematureEofDoNotBecomeSuccessfulEmptySearchPages()throws Exception{Files.write(file,new byte[]{0,1,2});try(SeekableByteChannel input=Files.newByteChannel(file)){assertThrows(InterruptedException.class,()->ProjectHexPattern.find(input,3,0,new byte[]{0},40,()->{throw new InterruptedException("original cancelled");}));assertThrows(java.io.EOFException.class,()->ProjectHexPattern.find(input,4,0,new byte[]{4},40,()->{}));}}
+}

@@ -331,6 +331,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     private void initializeModelConnections(){
         try{
             modelConnections=new dev.pocketengine.runtime.models.ModelConnectionService(settings,new java.io.File(getFilesDir(),"model-capabilities.json").toPath(),java.time.Clock.systemUTC());
+            modelConnections.attachOwnerStore(tasks);
             modelConnections.install();
         }catch(Exception unavailable){
             modelConnections=null;
@@ -344,10 +345,24 @@ public final class EngineApplication extends Application implements dev.pocketen
         EngineModule module=features==null?null:features.module("notifications");
         return module instanceof dev.pocketengine.features.notifications.NotificationsModule?(dev.pocketengine.features.notifications.NotificationsModule)module:null;
     }
+    /** Native original phone domain only. A cached route is never a recovered tool grant. */
+    private void installPhoneRouteSources(){
+        dev.pocketengine.runtime.routes.PhoneRouteSession.installFactory((id,original)->{
+            JSONObject task=tasks.get(id,false);
+            if(task==null||!"phone".equals(task.optString("kind"))||task.optJSONObject("origin")!=null||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId")))return null;
+            return new dev.pocketengine.store.TaskStorePhoneRoutes(tasks,id,original,pkg->{
+                android.content.pm.PackageInfo installed=getPackageManager().getPackageInfo(pkg,0);
+                return android.os.Build.VERSION.SDK_INT>=28?installed.getLongVersionCode():installed.versionCode;
+            },new dev.pocketengine.store.TaskStorePhoneRoutes.Sources(){
+                public <T>T current(JSONArray proofs,java.util.concurrent.Callable<T> action)throws Exception{return memorySources.withCurrentPhoneRouteResults(proofs,action);}
+            });
+        });
+    }
     private void initializeFeatures(){
         groupOwnerWorkflows=new dev.pocketengine.features.NativeGroupOwnerWorkflows(this,dev.pocketengine.ui.ComposeActivity.class);
         features=new FeatureHost(this::publish,tasks,()->activeId()!=null,resources);FeatureContext context=new FeatureContext(this,settings,new SecretVault(this),this::publish);
         memorySources=new dev.pocketengine.features.MemorySourceBridge(features,tasks);features.setMemorySynchronizer(memorySources::synchronize);
+        installPhoneRouteSources();
         nativeOwnerWorkflows=new dev.pocketengine.features.NativeOwnerWorkflows(features,context,tasks,memorySources);
         nativeOwnerWorkflows.installAccountInference();
         capabilityWorkers.execute(()->{
@@ -611,15 +626,22 @@ public final class EngineApplication extends Application implements dev.pocketen
     public boolean ownsNativeTaskControl(String task,RunControl original){return ownsRunControl(task,original);}
     /** One native original-task resource owner. Persistent mode remains only in original runs. */
     public static final class GatewayParentRun {
-        private final EngineApplication app;private final String id=java.util.UUID.randomUUID().toString(),task,run;private final int epoch;private final RunControl control;private final long relayRevision;private final String relayDigest;private final java.util.concurrent.atomic.AtomicInteger phase=new java.util.concurrent.atomic.AtomicInteger();private volatile boolean pendingRevoked;private volatile dev.pocketengine.features.RemoteOwnerWorkflows.GatewayParentRunApproval approval;
-        private GatewayParentRun(EngineApplication app,JSONObject attempt,RunControl control,long revision,String digest,dev.pocketengine.features.RemoteOwnerWorkflows.GatewayParentRunApproval approval)throws Exception {this.app=app;task=attempt.getString("id");run=attempt.getString("runId");epoch=attempt.getInt("coordinatorEpoch");this.control=control;relayRevision=revision;relayDigest=digest;this.approval=approval;}
+        private final EngineApplication app;private final String id=java.util.UUID.randomUUID().toString(),task,run;private final int epoch;private final RunControl control;private final long relayRevision;private final String relayDigest;private final dev.pocketengine.features.controlplane.WorkProfileToolSelection profilePolicy;private final dev.pocketengine.features.controlplane.NativeWorkProfileHost.RelaySource profileRelay;private final String profileResolution;private final java.util.concurrent.atomic.AtomicInteger phase=new java.util.concurrent.atomic.AtomicInteger();private volatile boolean pendingRevoked;private volatile dev.pocketengine.features.RemoteOwnerWorkflows.GatewayParentRunApproval approval;
+        private GatewayParentRun(EngineApplication app,JSONObject attempt,RunControl control,long revision,String digest,dev.pocketengine.features.RemoteOwnerWorkflows.GatewayParentRunApproval approval,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection profile)throws Exception {this.app=app;task=attempt.getString("id");run=attempt.getString("runId");epoch=attempt.getInt("coordinatorEpoch");this.control=control;relayRevision=revision;relayDigest=digest;this.approval=approval;profileResolution=profile==null?"":profile.snapshot().getString("resolutionDigest");profilePolicy=profile==null?null:app.workProfileTools(attempt,control,profile);profileRelay=profile==null?null:app.nativeWorkProfiles().relayForRun(app.tasks,task,run,epoch,control);}
         public String id(){return id;}public String task(){return task;}public String run(){return run;}public int epoch(){return epoch;}public RunControl control(){return control;}public boolean active(){return phase.get()==1;}
-        private void selectionCurrent()throws Exception {if(relayRevision!=app.settings.relaySelectionRevision()||!relayDigest.equals(dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(app.settings.captureRelaySelection())))throw new SecurityException("原RELAY选择/凭据代次变化，本轮停止");}
+        private void hostSelectionCurrent()throws Exception {if(relayRevision!=app.settings.relaySelectionRevision()||!relayDigest.equals(dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(app.settings.captureRelaySelection())))throw new SecurityException("原RELAY选择/凭据代次变化，本轮停止");}
+        private void selectionCurrent()throws Exception {if(profilePolicy!=null)profilePolicy.checkCurrent();if(profileRelay!=null)profileRelay.checkCurrent();else hostSelectionCurrent();}
+        /** No control.check or Profile source/module lookup here: this is the original control's own callback. */
+        private void authorityCurrent()throws Exception {
+            int state=phase.get();if(state>1||pendingRevoked||app.capabilityControls.get(task)!=control||control.isCancelled()||control.isPaused())throw new SecurityException("原网关执行控制已变化");
+            if(profilePolicy!=null)app.tasks.checkGatewayWorkProfileBinding(task,run,epoch,profileResolution,control);if(profileRelay==null)hostSelectionCurrent();
+            app.tasks.checkGatewayParentRun(task,run,epoch,state==1);
+        }
         private void preparedCurrent()throws Exception {if(phase.get()!=0||pendingRevoked||app.capabilityControls.get(task)!=control||control.isCancelled()||control.isPaused())throw new SecurityException("原前台服务准备已撤销");selectionCurrent();app.tasks.checkGatewayParentRun(task,run,epoch,false);}
         public void checkCurrent()throws Exception {if(phase.get()!=1||app.capabilityControls.get(task)!=control||control.isCancelled()||control.isPaused())throw new SecurityException("原网关服务控制已结束");selectionCurrent();app.tasks.checkGatewayParentRun(task,run,epoch,true);}
         public void serviceRegistered()throws Exception {preparedCurrent();var approved=approval;if(approved==null)throw new SecurityException("没有原native前台批准");approved.checkWindowCurrent();app.tasks.activateGatewayParentRun(task,run,epoch);if(pendingRevoked||!phase.compareAndSet(0,1))throw new SecurityException("原服务登记期间批准被撤销");approval=null;app.pushTask(task);}
         public void ownerWindowLost(){if(phase.get()==0){pendingRevoked=true;new android.os.Handler(android.os.Looper.getMainLooper()).post(()->app.capabilityWorkers.execute(this::close));}}
-        public JSONObject snapshot()throws Exception{return app.tasks.gatewayParentSessionForUi(task).put("nativeResourceId",id).put("nativeServiceRegistered",phase.get()==1).put("phoneExecution",false).put("toolExecution",false);}
+        public JSONObject snapshot()throws Exception{JSONObject value=app.tasks.gatewayParentSessionForUi(task).put("nativeResourceId",id).put("nativeServiceRegistered",phase.get()==1).put("phoneExecution",false).put("toolExecution",false);if(profilePolicy!=null){JSONObject frozen=app.tasks.workProfileRunSnapshot(task,run,epoch);value.put("workProfile",new JSONObject().put("profileId",frozen.getString("profileId")).put("profileRevision",frozen.getLong("profileRevision")).put("resolutionDigest",frozen.getString("resolutionDigest")).put("relaySourceKind",profileRelay==null?"original_host_RELAY":"frozen_original_work_profile_RELAY").put("configurationApplied",false));}return value;}
         public void close(){if(phase.getAndSet(2)==2)return;pendingRevoked=true;approval=null;try{var module=app.features.module("proxy");if(module instanceof dev.pocketengine.features.proxy.ProxyModule){var bridge=((dev.pocketengine.features.proxy.ProxyModule)module).existingHarnessGateway(task,run);if(bridge!=null)bridge.close();}control.cancel();app.tasks.endGatewayParentRun(task,run,epoch);}catch(Exception unavailable){app.error("本轮网关停止记录未确认；保留原用量，请只核对原任务");}finally{control.cancel();app.capabilityControls.remove(task,control);app.gatewayParentRuns.remove(id,this);app.pushTask(task);}}
     }
     public void refreshGatewayParentProjection(String task){pushTask(task);}
@@ -627,14 +649,37 @@ public final class EngineApplication extends Application implements dev.pocketen
     public GatewayParentRun originalGatewayParentRun(String nativeId){return nativeId==null?null:gatewayParentRuns.get(nativeId);}
     public GatewayParentRun activeGatewayParentRun(String task,String run){for(GatewayParentRun value:gatewayParentRuns.values())if(value.task.equals(task)&&value.run.equals(run))return value;return null;}
     private dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess reviewGatewayParentAccess(String child)throws Exception {
-        if(activeId()!=null||!gatewayParentRuns.isEmpty())throw new SecurityException("原手机/网关执行服务仍有任务，请先处理原服务；此入口不接管");TaskStore.GatewayParentRunReview review=tasks.reviewGatewayParentRun(child);JSONObject facts=review.view();String task=facts.getString("parentTaskId");if(retainedTaskControl(task)!=null)throw new SecurityException("原父任务仍有活动控制，请先核对原执行");JSONObject profileTask=tasks.get(task,false);if(profileTask.optJSONObject("workProfileRef")!=null||profileTask.optJSONObject("workProfileIntent")!=null)throw new SecurityException("这项任务保留工作配置，当前仅网关冷恢复尚未接入该配置；请回原任务工作配置入口恢复，未使用全局RELAY或创建替代run。");long revision=settings.relaySelectionRevision();ModelConfig model=settings.captureRelaySelection();if(revision!=settings.relaySelectionRevision()||model.usesAccount())throw new SecurityException("仅已配置API RELAY可用于外部Harness，不使用ChatGPT账号");SettingsStore.validate(model);dev.pocketengine.runtime.ModelGateway.validate(model);String digest=dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(model);JSONObject shown=new JSONObject(facts.toString()).put("provider",model.provider).put("model",model.model).put("configurationDigest",digest).put("billingBackendVerified",false);
+        if(activeId()!=null||!gatewayParentRuns.isEmpty())throw new SecurityException("原手机/网关执行服务仍有任务，请先处理原服务；此入口不接管");
+        TaskStore.GatewayParentRunReview review=tasks.reviewGatewayParentRun(child);JSONObject facts=review.view();String task=facts.getString("parentTaskId");
+        if(retainedTaskControl(task)!=null)throw new SecurityException("原父任务仍有活动控制，请先核对原执行");
+        var profileReview=nativeWorkProfiles().reviewGatewayParent(tasks,review);ModelConfig requested=profileReview==null?null:profileReview.relayModel();
+        long revision=requested==null?settings.relaySelectionRevision():profileReview.view().getLong("profileRevision");ModelConfig model=requested==null?settings.captureRelaySelection():requested;
+        if(requested==null&&revision!=settings.relaySelectionRevision()||model.usesAccount())throw new SecurityException("仅已配置API RELAY可用于外部Harness，不使用ChatGPT账号");
+        SettingsStore.validate(model);dev.pocketengine.runtime.ModelGateway.validate(model);String digest=dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(model);
+        JSONObject shown=new JSONObject(facts.toString()).put("provider",model.provider).put("model",model.model).put("configurationDigest",digest).put("billingBackendVerified",false)
+            .put("workProfile",profileReview==null?JSONObject.NULL:profileReview.view()).put("relaySourceKind",requested==null?"original_host_RELAY":"frozen_original_work_profile_RELAY");
         return new dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess(){private volatile GatewayParentRun started;
             public TaskStore.GatewayParentRunReview review(){return review;}
             public JSONObject view()throws Exception{return new JSONObject(shown.toString());}
-            public void checkCurrent()throws Exception{if(started!=null){started.preparedCurrent();return;}review.checkCurrent();if(retainedTaskControl(task)!=null||revision!=settings.relaySelectionRevision()||!digest.equals(dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(settings.captureRelaySelection())))throw new SecurityException("原任务控制/RELAY范围已变化");}
-            public void ownerWindowLost(){GatewayParentRun value=started;if(value!=null)value.ownerWindowLost();}
-            public JSONObject start(dev.pocketengine.features.RemoteOwnerWorkflows.GatewayParentRunApproval approval)throws Exception{
-                synchronized(assistantAdmissions){if(!approval.issuedFor(this))throw new SecurityException("不是本原生审阅对象");approval.checkCurrent();if(started!=null)return started.snapshot();RunControl original=new RunControl();GatewayParentRun session=null;try{JSONObject attempt=tasks.startGatewayParentRun(review,approval,original);session=new GatewayParentRun(EngineApplication.this,attempt,original,revision,digest,approval);if(capabilityControls.putIfAbsent(task,original)!=null)throw new SecurityException("原任务已有控制器，不能替代");GatewayParentRun admitted=session;original.setAuthorityCheck(()->{if(capabilityControls.get(task)!=original)throw new SecurityException("原网关control改变");admitted.selectionCurrent();if(admitted.phase.get()==0){if(admitted.pendingRevoked)throw new SecurityException("原待登记批准撤销");tasks.checkGatewayParentRun(task,admitted.run,admitted.epoch,false);}else admitted.checkCurrent();});gatewayParentRuns.put(session.id(),session);started=session;startForegroundService(new Intent(EngineApplication.this,PhoneRunService.class).setAction(PhoneRunService.START_GATEWAY_PARENT).putExtra("gatewayParentResourceId",session.id()));new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(admitted.phase.get()==0)capabilityWorkers.execute(admitted::close);},10_000L);pushTask(task);return session.snapshot().put("serviceRequested",true).put("runtimeVerified",false);}catch(Exception unavailable){if(session!=null)session.close();else if(original.hasHostRun()){original.cancel();tasks.endGatewayParentRun(task,original.hostRunIdentity().runId(),original.hostRunIdentity().epoch());}throw unavailable;}}
+            public void checkCurrent()throws Exception {
+                synchronized(assistantAdmissions){if(started!=null){if(started.phase.get()==0)started.preparedCurrent();else started.checkCurrent();return;}
+                    review.checkCurrent();if(profileReview!=null)profileReview.checkCurrent();
+                    if(retainedTaskControl(task)!=null||requested==null&&(settings.relaySelectionRevision()!=revision||!digest.equals(dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(settings.captureRelaySelection()))))throw new SecurityException("原control或RELAY选择发生变化，请重新审阅");
+                }
+            }
+            public JSONObject start(dev.pocketengine.features.RemoteOwnerWorkflows.GatewayParentRunApproval approval)throws Exception {
+                synchronized(assistantAdmissions){if(!approval.issuedFor(this))throw new SecurityException("不是本原生审阅对象");approval.checkCurrent();if(started!=null)return started.snapshot();
+                    RunControl original=new RunControl();GatewayParentRun session=null;
+                    try{
+                        var selected=profileReview==null?null:profileReview.select(approval,original);
+                        if(selected!=null){nativeWorkProfiles().claimOwnerExecutionStart(selected,original);JSONObject resources=selected.profile().toJson().getJSONObject("resourcePreferences");if(resources.has("maxConcurrentModelCalls"))original.restrictModelConcurrency(resources.getInt("maxConcurrentModelCalls"));}
+                        JSONObject attempt=tasks.startGatewayParentRun(review,approval,original,selected);session=new GatewayParentRun(EngineApplication.this,attempt,original,revision,digest,approval,selected);
+                        if(capabilityControls.putIfAbsent(task,original)!=null)throw new SecurityException("原任务已有控制器，不能替代");GatewayParentRun admitted=session;original.setAuthorityCheck(admitted::authorityCurrent);
+                        gatewayParentRuns.put(session.id(),session);started=session;startForegroundService(new Intent(EngineApplication.this,PhoneRunService.class).setAction(PhoneRunService.START_GATEWAY_PARENT).putExtra("gatewayParentResourceId",session.id()));
+                        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(admitted.phase.get()==0)capabilityWorkers.execute(admitted::close);},10_000L);pushTask(task);
+                        return session.snapshot().put("serviceRequested",true).put("runtimeVerified",false);
+                    }catch(Exception unavailable){if(session!=null)session.close();else if(original.hasHostRun()){original.cancel();tasks.endGatewayParentRun(task,original.hostRunIdentity().runId(),original.hostRunIdentity().epoch());}throw unavailable;}
+                }
             }
         };
     }

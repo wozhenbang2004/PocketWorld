@@ -24,7 +24,7 @@ import org.junit.Test;
 
 /** Host-only archive/authority/lifecycle tests. These do not execute an Android/ARM64 tool. */
 public final class AndroidRuntimePreparationTest {
-    private static JSONObject catalog() throws Exception {
+    static JSONObject catalog() throws Exception {
         JSONObject archive=new JSONObject().put("url","https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz").put("archiveBytes",1).put("archiveSha256","a".repeat(64)).put("unpackedBytes",1000).put("stripComponents",0).put("format","tar.gz");
         JSONObject node=new JSONObject(archive.toString()).put("url","https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-arm64.tar.xz").put("stripComponents",1).put("format","tar.xz");
         JSONArray tools=new JSONArray();for(String name:List.of("sh","node","npm","python3","git"))tools.put(new JSONObject().put("name",name).put("path","/usr/bin/"+name).put("license","fixture-only").put("versionArguments",new JSONArray().put("--version")));

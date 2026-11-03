@@ -24,7 +24,7 @@ public final class SemanticModule implements EngineModule {
     @Override public String id() {return "semantic";}
     @Override public JSONObject snapshot() throws Exception {
         return new JSONObject().put("id",id()).put("commands",new JSONArray(new String[]{"status"})).put("intentDiscoveryImplemented",true)
-                .put("adapters",new JSONArray(new String[]{"web","map_search","dial","email_draft","calendar_draft","alarm","timer"}))
+                .put("adapters",new JSONArray(new String[]{"web","app_link","share_text","map_search","dial","email_draft","calendar_draft","alarm","timer"}))
                 .put("clock",new JSONObject().put("permissionGranted",context.android.checkSelfPermission(AndroidSemanticPlatform.CLOCK_PERMISSION)==PackageManager.PERMISSION_GRANTED)
                         .put("deviceTimeZone",java.util.TimeZone.getDefault().getID()).put("receiverMayApplyImmediately",true).put("actualClockStateVerified",false))
                 .put("dispatchScope","original_owner_phone_main_screen_only").put("backgroundIntentDispatch",false)

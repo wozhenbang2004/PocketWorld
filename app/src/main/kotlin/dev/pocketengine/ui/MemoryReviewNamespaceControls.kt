@@ -23,7 +23,8 @@ internal fun MemoryReviewNamespacePage(
     onSelect: (JSONObject?) -> Unit,
     onOpenSource: (JSONObject) -> Unit,
     onBack: () -> Unit,
-    onDismissSource: () -> Unit
+    onDismissSource: () -> Unit,
+    onProjectArchive: () -> Unit
 ) {
     val status = snapshot.optString("namespaceStatus")
     val scopeKey = status + ":" + snapshot.optJSONObject("scope")?.optString("spaceId").orEmpty()
@@ -60,6 +61,7 @@ internal fun MemoryReviewNamespacePage(
             Text("项目显选不授予团队/群记忆权限；关闭页面后须重新选择。", color = SecondaryInk, fontSize = 12.sp)
         }
         if (status == "project") Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp)) {
+            TextButton(onClick = { try { onProjectArchive() } catch (failure: Exception) { localError = failure.message ?: "原项目备份尚未开始" } }, enabled = !busy) { Text("备份此项目与其记忆…") }
             TextButton(onClick = { choosingFile = !choosingFile; if (choosingFile) filesRead = request("projectFileChoices") }, enabled = !busy) { Text("从此项目原文件建立待审摘录…") }
             if (choosingFile) Column(Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState())) {
                 Text("显选当前正式文件的前4000个UTF-16字符；不调用模型、不自动采用。不读取未提交副本。", color = SecondaryInk, fontSize = 12.sp)

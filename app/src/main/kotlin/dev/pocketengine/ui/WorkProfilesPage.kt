@@ -143,7 +143,7 @@ internal fun WorkProfilesPage(host: NativeWorkProfileHost, runWork: (Runnable) -
                         TextButton(onClick = { picker = purpose }, enabled = !busy && foreground, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("$title · ${target?.optString("groupId", target.optString("modelId")) ?: "请选择原模型"}") }
                     }
                     if (draft.getJSONObject("modelPolicies").has("RELAY")) TextButton(onClick = { editor = WorkProfileDrafts.withoutRelayModel(draft); review = null }, enabled = !busy && foreground) { Text("不指定本任务网关模型，保留原宿主选择") }
-                    Text("选用网关模型只在这项原任务仍活动、原生主人另行批准准确子任务与网关范围时生效；不代表目标配置已应用或读回。冷控制器仍须先回原 Profile 任务恢复。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                    Text("网关模型仅由原生主人批准的准确子任务范围消费，不代表远端配置已修改。控制结束后，可在原电脑任务页审阅同一任务的仅网关恢复，不重启主任务或续给预算。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                     TextButton(onClick = { openOriginal("accounts") }) { Text("账号模型须先在原账号页选择") }
                     val concurrency = draft.getJSONObject("resourcePreferences").optInt("maxConcurrentModelCalls", 0)
                     TextButton(onClick = { picker = "resourcePreferences" }, enabled = !busy && foreground, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("本任务模型并发 · ${if (concurrency == 0) "保留原宿主限制" else "最多 $concurrency 路"}") }

@@ -718,6 +718,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             is MemoryReviewScope.Unavailable -> throw SecurityException(scope.reason)
         }
     }
+    /** Existing owner backup sheet consumes this exact live management selection, not JSON. */
+    fun openProjectMemoryArchive() {
+        check(!closed && ownerDomain == "memoryReview" && privateWorkspaceView()) { "请在本机私人记忆审核页显选项目" }
+        val scope = memoryReviewScope as? MemoryReviewScope.Project ?: throw SecurityException("当前没有原生项目记忆选择；未回退主人全局")
+        ownerArchives.openProjectMemory(scope.selected, scope.label)
+    }
     /** Explicit native owner selection. Old requests/rows are retired before changing the token. */
     fun selectMemoryNamespace(choice: JSONObject?) {
         check(!closed && ownerDomain == "memoryReview") { "请先打开原生记忆审核页" }
@@ -769,7 +775,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (domain == "accounts") { main.removeCallbacks(accountPoll); main.postDelayed(accountPoll, 1500) }
     }
     fun leaveOwnerDomain(domain: String) {
-        if (domain == "memoryReview") { (memoryReviewScope as? MemoryReviewScope.Project)?.let { it.native.revokeForOwner(it.selected) }; memoryReviewScope = MemoryReviewScope.Private }
+        if (domain == "memoryReview") { ownerArchives.leaveMemoryReview(); (memoryReviewScope as? MemoryReviewScope.Project)?.let { it.native.revokeForOwner(it.selected) }; memoryReviewScope = MemoryReviewScope.Private }
         if (domain == "channelMedia") { channelMediaWindow?.close(); channelMediaWindow = null; channelMediaReview = null }
         if (domain == "groups") { groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null }
         if (domain == "remoteTask") { remoteOwnerWindow?.let { app.remoteOwnerWorkflows?.close(it) }; remoteOwnerWindow = null; remoteOwnerTask = null }
@@ -783,6 +789,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         if (domain == "mcp") listOf("discoverMcp", "discoverMcpAuthorized").forEach { discovery -> state.ownerResponses(domain)[discovery]?.optJSONObject("result")?.optString("previewId")?.takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardMcpPreview", JSONObject().put("previewId", it)) } }
         if (domain == "mcp") state.ownerResponses(domain)["prepareLocalMcpDiscovery"]?.optJSONObject("result")?.optString("reviewId")?.takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardLocalMcpReview", JSONObject().put("reviewId", it)) }
+        if (domain == "mcp") state.ownerResponses(domain)["prepareLocalMcpInstall"]?.optJSONObject("result")?.optString("reviewId")?.takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardLocalMcpInstallReview", JSONObject().put("reviewId", it)) }
         if (configPick?.domain == domain) { configPick?.call?.close(); configPick = null }
         state = state.copy(ownerSnapshots = if (domain == "memoryReview") state.ownerSnapshots - domain else state.ownerSnapshots, ownerPending = state.ownerPending.filterNot { it.startsWith("$domain.") }.toSet(), ownerResponses = state.ownerResponses - domain, ownerErrors = state.ownerErrors - domain, groupOwnerReceipts = if (domain == "groups") emptyMap() else state.groupOwnerReceipts, ownerSource = null)
     }
@@ -826,7 +833,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val request = OwnerRequest(UUID.randomUUID().toString(), domain, command, JSONObject(payload.toString()), ownerEpochs[domain] ?: 0, dev.pocketengine.features.proxy.accounts.GatewayCall(60000))
         ownerRequests[key] = request
         state = state.copy(ownerPending = state.ownerPending + key, ownerErrors = state.ownerErrors - domain)
-        val worker = if (command in setOf("cancel", "cancelLogin", "logout", "stopLearningJob", "cancelLocalMcpDiscovery", "discardLocalMcpReview") || command == "setEnabled" && !payload.optBoolean("enabled")) controls else io
+        val worker = if (command in setOf("cancel", "cancelLogin", "logout", "stopLearningJob", "cancelLocalMcpDiscovery", "discardLocalMcpReview", "discardLocalMcpInstallReview") || command == "setEnabled" && !payload.optBoolean("enabled")) controls else io
         try { worker.execute {
             var result: JSONObject? = null
             var snapshot: JSONObject? = null
@@ -885,6 +892,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 if (closed || request.epoch != (ownerEpochs[domain] ?: 0) || ownerRequests[key]?.id != request.id) {
                     if (command in setOf("discoverMcp", "discoverMcpAuthorized") && completed != null) cleanOwnerResult(domain, "discardMcpPreview", JSONObject().put("previewId", completed.optString("previewId")))
                     if (domain == "mcp" && command == "prepareLocalMcpDiscovery" && completed != null) completed.optString("reviewId").takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardLocalMcpReview", JSONObject().put("reviewId", it)) }
+                    if (domain == "mcp" && command == "prepareLocalMcpInstall" && completed != null) completed.optString("reviewId").takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardLocalMcpInstallReview", JSONObject().put("reviewId", it)) }
                     return@post
                 }
                 ownerRequests.remove(key)

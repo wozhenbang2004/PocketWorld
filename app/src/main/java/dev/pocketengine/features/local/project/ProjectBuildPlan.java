@@ -300,6 +300,7 @@ public final class ProjectBuildPlan {
         JSONObject core=ProjectSources.copy(plan);core.remove("planId");core.remove("planDigest");JSONArray steps=core.getJSONArray("steps");
         for(int i=0;i<steps.length();i++)steps.getJSONObject(i).remove("hostAction");
         if(!"pocketworld.project-plan.v1".equals(core.getString("format"))||!ProjectSources.digest(core).equals(plan.getString("planDigest"))||!plan.getString("planId").equals(plan.getString("planDigest"))||!core.getString("sourceDigest").equals(ProjectSources.manifestDigest(core.getJSONArray("sourceManifest"))))throw new SecurityException("计划内容或源码清单已变化，请重新审阅");
+        for(int i=0;i<steps.length();i++){JSONObject step=steps.getJSONObject(i);if(!"patchFiles".equals(step.optString("localCommand")))continue;JSONArray files=step.getJSONObject("payload").getJSONArray("files");for(int f=0;f<files.length();f++)if(ProjectExactPatch.encodedBytes(files.getJSONObject(f))){JSONObject file=files.getJSONObject(f);ProjectExactPatch.payloadBytes(file,false);if(ProjectByteCopy.matches(file))ProjectByteCopy.requirePlanSource(core,steps.getJSONObject(i),file);}}
         if("freeze_package".equals(core.optString("intent")))verifyFreeze(core,steps);
         if("command".equals(core.optString("intent")))verifyCommand(core,steps);
         if("managed_selected_output".equals(core.optString("ecosystem")))verifyManagedOutput(core,steps);

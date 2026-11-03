@@ -226,7 +226,7 @@ public final class NativeOwnerWorkflows {
             default:throw new IllegalArgumentException("此操作不属于原生经验审核");
         }
     }
-    public JSONObject mcpSnapshot()throws Exception{return plugins().snapshot().put("oauthConnections",plugins().mcpOAuthSnapshot()).put("nativeCapabilities",new JSONObject().put("setEnabledReviewed",true).put("setToolGrantReviewed",true).put("mcpOAuthMounted",true).put("pingMcpInstalledReadOnly",true).put("mcpPromptsInstalledReadOnly",true).put("localMcpDiscoveryOwnerOnly",true));}
+    public JSONObject mcpSnapshot()throws Exception{return plugins().snapshot().put("oauthConnections",plugins().mcpOAuthSnapshot()).put("nativeCapabilities",new JSONObject().put("setEnabledReviewed",true).put("setToolGrantReviewed",true).put("mcpOAuthMounted",true).put("pingMcpInstalledReadOnly",true).put("mcpPromptsInstalledReadOnly",true).put("localMcpDiscoveryOwnerOnly",true).put("localMcpInstallationOwnerOnly",true).put("localMcpOriginalTaskInvocation",true));}
     private static long mcpStateRevision(JSONObject payload)throws Exception{
         Object raw=payload.get("expectedStateRevision");if(!(raw instanceof Number))throw new IllegalArgumentException("MCP状态修订需为整数");
         try{return new java.math.BigDecimal(raw.toString()).longValueExact();}catch(NumberFormatException|ArithmeticException invalid){throw new IllegalArgumentException("MCP状态修订需为准确整数",invalid);}
@@ -252,6 +252,7 @@ public final class NativeOwnerWorkflows {
             }
             case "readLocalMcpDiscovery":return host.observeMcpDiscoveryForOwner(payload.getString("taskId"),false);
             case "cancelLocalMcpDiscovery":return host.observeMcpDiscoveryForOwner(payload.getString("taskId"),true);
+            case "readLocalMcpInstallCatalogue":return dev.pocketengine.features.plugins.McpLocalInstallation.catalogueForOwner(tasks,tasks.completedOwnerMcpDiscoveryForInstallForOwner(payload.getString("taskId")));
             case "prepareLocalMcpInstall":{
                 EngineModule selected=host.module("local");if(!(selected instanceof dev.pocketengine.features.local.LocalModule local))throw new SecurityException("原手机开发源码宿主不可用");
                 synchronized(localMcpInstallReviews){for(var iterator=localMcpInstallReviews.entrySet().iterator();iterator.hasNext();){var entry=iterator.next();try{entry.getValue().metadata();}catch(Exception stale){entry.getValue().close();iterator.remove();}}if(localMcpInstallReviews.size()>=4)throw new SecurityException("请先关闭旧的本机MCP安装审阅");var completed=tasks.completedOwnerMcpDiscoveryForInstallForOwner(payload.getString("taskId"));var review=plugins().reviewLocalMcpInstallForOwner(tasks,completed,local,payload.getJSONArray("tools"),new dev.pocketengine.core.RunControl());JSONObject view=review.metadata();localMcpInstallReviews.put(view.getString("reviewId"),review);return view;}

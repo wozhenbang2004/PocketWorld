@@ -221,6 +221,23 @@ public final class WorkProfileResolver {
         JSONObject expected=frozen.getJSONObject("modelPolicies").getJSONObject(purpose);
         if(!WorkProfile.fingerprint(expected).equals(WorkProfile.fingerprint(modelIdentity(captured))))throw new SecurityException("original_work_profile_model_source_changed:"+purpose);
     }
+    /** Original run recovery only: recapture credential-bearing configs from their native stores,
+     * compare all public pins, and keep explicitly omitted targets omitted without probing them. */
+    static Resolution resolveStored(JSONObject frozen,Sources original,RunControl observation)throws Exception {
+        Sources pinned=new Sources(){
+            public ModelConfig model(ModelTargetRef ref,String purpose,RunControl control)throws Exception{ModelConfig captured=original.model(ref,purpose,control);requireStoredModelIdentity(frozen,purpose,captured);return captured;}
+            public void checkModel(ModelConfig captured,String purpose,RunControl control)throws Exception{original.checkModel(captured,purpose,control);}
+            public JSONObject skill(String id,RunControl control)throws Exception{return original.skill(id,control);}
+            public JSONObject plugin(String id,RunControl control)throws Exception{return original.plugin(id,control);}
+            public JSONObject extension(String id,RunControl control)throws Exception{return original.extension(id,control);}
+            public JSONObject team(String id,RunControl control)throws Exception{return original.team(id,control);}
+            public JSONObject target(JSONObject ref,RunControl control)throws Exception{return frozenTarget(original,frozen,ref,control);}
+            public void checkTarget(JSONObject ref,JSONObject binding,RunControl control)throws Exception{original.checkTarget(ref,binding,control);}
+            public Set<String> hostCapabilities()throws Exception{return original.hostCapabilities();}
+        };
+        Resolution restored=resolve(WorkProfile.fromJson(frozen.getJSONObject("definition")),pinned,observation);restored.requireReady();
+        if(!frozen.getString("resolutionDigest").equals(restored.view().getString("resolutionDigest")))throw new SecurityException("original_work_profile_recovery_pins_changed");return restored;
+    }
     private static JSONObject row(String kind, String id, boolean optional, String status, JSONObject binding) throws Exception {
         return new JSONObject().put("kind", kind).put("id", id).put("optional", optional).put("status", status).put("included", "ready".equals(status)).put("binding", binding == null ? JSONObject.NULL : binding);
     }

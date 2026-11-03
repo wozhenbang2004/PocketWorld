@@ -28,6 +28,17 @@ public final class SemanticRequest {
                     throw new IllegalArgumentException("网页入口需要不含账号密码的完整HTTPS地址");
                 action="android.intent.action.VIEW";data=uri.toASCIIString();host=uri.getHost().toLowerCase(java.util.Locale.ROOT);p.put("url",data);break;
             }
+            case "app_link": {
+                SemanticJson.keys(p,Set.of("kind","url","packageName"));checkedPackage(p);
+                // Initial adapter deliberately reuses the original HTTPS contract. Custom
+                // schemes cannot bypass dial/USSD/mail/raw-Intent or browser URL admission.
+                SemanticRequest link=parse(new JSONObject().put("kind","web").put("url",p.opt("url")));
+                action=link.action;data=link.data;host=link.host;p.put("url",data);break;
+            }
+            case "share_text": {
+                SemanticJson.keys(p,Set.of("kind","packageName","text"));checkedPackage(p);SemanticJson.text(p,"text",10000,false);
+                action="android.intent.action.SEND";data="";break;
+            }
             case "map_search":
                 SemanticJson.keys(p,Set.of("kind","query"));String query=SemanticJson.text(p,"query",500,false);
                 action="android.intent.action.VIEW";data="geo:0,0?q="+encode(query);break;
@@ -73,6 +84,10 @@ public final class SemanticRequest {
         }
         return new SemanticRequest(kind,action,data,host,p);
     }
+    private static String checkedPackage(JSONObject p)throws Exception {
+        String pkg=SemanticJson.text(p,"packageName",250,false);
+        if(!pkg.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+"))throw new IllegalArgumentException("入口需要准确应用包名");return pkg;
+    }
     private static String encode(String value) throws java.io.UnsupportedEncodingException { return URLEncoder.encode(value,"UTF-8").replace("+","%20"); }
     private static int clockInteger(JSONObject p,String key,int min,int max) {
         Object value=p.opt(key);if(!(value instanceof Number))throw new IllegalArgumentException("时钟参数需要范围内整数："+key);
@@ -95,10 +110,11 @@ public final class SemanticRequest {
     public JSONObject parameters() throws Exception { return SemanticJson.copy(parameters); }
     public String digest() throws Exception { return SemanticJson.hash(parameters); }
     public String followup() {
-        return switch(kind) { case "web"->"phone_observe_or_authorized_browser_dom";case "dial","email_draft","calendar_draft"->"owner_completes_in_target_app";case "alarm","timer"->"owner_verifies_clock_in_target_app";default->"phone_observe"; };
+        return switch(kind) { case "web"->"phone_observe_or_authorized_browser_dom";case "app_link","share_text"->"owner_verifies_target_app_no_automatic_continuation";case "dial","email_draft","calendar_draft"->"owner_completes_in_target_app";case "alarm","timer"->"owner_verifies_clock_in_target_app";default->"phone_observe"; };
     }
     static JSONObject discoverySchema() throws Exception {
-        JSONObject p=new JSONObject().put("kind",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"web","map_search","dial","email_draft","calendar_draft","alarm","timer"})));
+        JSONObject p=new JSONObject().put("kind",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"web","app_link","share_text","map_search","dial","email_draft","calendar_draft","alarm","timer"})));
+        p.put("packageName",new JSONObject().put("type","string").put("maxLength",250)).put("text",new JSONObject().put("type","string").put("maxLength",10000));
         for(String key:new String[]{"url","query","number","to","subject","body"})
             p.put(key,new JSONObject().put("type","string").put("maxLength",key.equals("body")?4000:key.equals("url")?2048:key.equals("query")?500:key.equals("number")?32:key.equals("to")?254:200));
         for(String key:new String[]{"title","timeZone","location","description"})

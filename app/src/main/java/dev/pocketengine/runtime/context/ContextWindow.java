@@ -83,6 +83,10 @@ public final class ContextWindow {
     }
 
     public record Estimate(long canonicalUtf8Bytes, long estimatedInputTokens, int imageCount) { }
+    /** Native input-charge evidence, separate from exact tokenizer or money facts. */
+    public record UsageCharge(long estimatedTokens,long reportedInputTokens,String callId,int anchoredMessages) {
+        public UsageCharge {if(reportedInputTokens<1||estimatedTokens<reportedInputTokens||anchoredMessages<1||callId==null||callId.isEmpty())throw new IllegalArgumentException("invalid_native_usage_charge");}
+    }
     public record Removed(int index, Eviction reason) { }
     public record Protected(int startIndex, String reason) { }
 
@@ -93,9 +97,14 @@ public final class ContextWindow {
         public final List<Protected> protectedUnits;
         private final String messages;
         private final Budget budget;
+        private final UsageCharge usage;
 
         private Plan(String status, Estimate before, Estimate after, List<Removed> removed,
                      List<Protected> protectedUnits, String messages, Budget budget) {
+            this(status,before,after,removed,protectedUnits,messages,budget,null);
+        }
+        private Plan(String status, Estimate before, Estimate after, List<Removed> removed,
+                     List<Protected> protectedUnits, String messages, Budget budget,UsageCharge usage) {
             this.status = status;
             this.before = before;
             this.after = after;
@@ -103,6 +112,7 @@ public final class ContextWindow {
             this.protectedUnits = List.copyOf(protectedUnits);
             this.messages = messages;
             this.budget = budget;
+            this.usage=usage;
         }
 
         public boolean canSend() { return status.equals("ready"); }
@@ -128,8 +138,9 @@ public final class ContextWindow {
                     .put("outputReserveTokens", budget.tokenWindowKnown ? budget.outputReserve : JSONObject.NULL)
                     .put("maxCanonicalBytes", budget.maxCanonicalBytes)
                     .put("modelWindowKnown", budget.tokenWindowKnown)
-                    .put("estimateMethod", "serialized_utf8_byte_charge_plus_host_image_reserve")
-                    .put("providerReportedInputTokens", JSONObject.NULL).put("providerUsageUsed", false)
+                    .put("estimateMethod", usage==null?"serialized_utf8_byte_charge_plus_host_image_reserve":"provider_input_anchor_plus_conservative_tail_bytes_and_reserve")
+                    .put("providerReportedInputTokens", usage==null?JSONObject.NULL:usage.reportedInputTokens()).put("providerUsageUsed", usage!=null)
+                    .put("usageAnchorCallId",usage==null?JSONObject.NULL:usage.callId()).put("anchoredMessages",usage==null?0:usage.anchoredMessages())
                     .put("tokenizerExact", false).put("automaticReplay", false);
         }
 
@@ -148,6 +159,10 @@ public final class ContextWindow {
      * form one unit. No message body, call arguments, receipt or native provider data is rewritten.
      */
     public static Plan plan(JSONArray history, JSONArray tools, Budget budget, Retention retention) {
+        return plan(history,tools,budget,retention,null);
+    }
+    /** Native usage may price an unchanged exact prefix only; every byte ceiling still applies. */
+    public static Plan plan(JSONArray history, JSONArray tools, Budget budget, Retention retention,UsageCharge usage) {
         Objects.requireNonNull(budget);
         Objects.requireNonNull(retention);
         final List<Unit> units;
@@ -159,7 +174,7 @@ public final class ContextWindow {
         } catch (InvalidRetention invalid) {
             return failed("invalid_retention", budget);
         }
-        Totals totals = new Totals(history, tools, budget);
+        Totals totals = new Totals(history, tools, budget,usage);
         Estimate before = totals.estimate();
         List<Removed> removed = new ArrayList<>();
         List<Protected> protectedUnits = new ArrayList<>();
@@ -183,16 +198,16 @@ public final class ContextWindow {
         }
         Estimate after = totals.estimate();
         if (budget.tokenWindowKnown && after.imageCount() > 0 && budget.tokensPerImage == 0) {
-            return new Plan("image_budget_unknown", before, after, removed, protectedUnits, null, budget);
+            return new Plan("image_budget_unknown", before, after, removed, protectedUnits, null, budget,totals.usage);
         }
         if (!fits(after, budget)) {
-            return new Plan("budget_exceeded", before, after, removed, protectedUnits, null, budget);
+            return new Plan("budget_exceeded", before, after, removed, protectedUnits, null, budget,totals.usage);
         }
         JSONArray selected = new JSONArray();
         for (int index = 0; index < history.length(); index++) {
             if (!omitted.contains(index)) selected.put(history.opt(index));
         }
-        return new Plan("ready", before, after, removed, protectedUnits, selected.toString(), budget);
+        return new Plan("ready", before, after, removed, protectedUnits, selected.toString(), budget,totals.usage);
     }
 
     /** Estimate only; the caller must still use plan() to validate protocol and retention. */
@@ -315,9 +330,14 @@ public final class ContextWindow {
         private final long toolBytes;
         private long messageBytes, textCharge;
         private int count, images;
+        private UsageCharge usage;
 
         Totals(JSONArray history, JSONArray tools, Budget budget) {
+            this(history,tools,budget,null);
+        }
+        Totals(JSONArray history, JSONArray tools, Budget budget,UsageCharge usage) {
             this.budget = budget;
+            this.usage=budget.tokenWindowKnown?usage:null;
             this.toolBytes = utf8(tools == null ? "[]" : tools.toString());
             for (int index = 0; index < history.length(); index++) {
                 JSONObject row = history.optJSONObject(index);
@@ -326,7 +346,7 @@ public final class ContextWindow {
             }
         }
 
-        void remove(JSONObject row) { add(row, -1); }
+        void remove(JSONObject row) { usage=null;add(row, -1); }
 
         private void add(JSONObject row, int sign) {
             long bytes = utf8(row.toString());
@@ -343,6 +363,7 @@ public final class ContextWindow {
             long canonical = framing + toolBytes + messageBytes;
             long estimate = saturatedAdd(framing + toolBytes + textCharge, budget.requestOverheadTokens);
             estimate = saturatedAdd(estimate, saturatedMultiply(images, budget.tokensPerImage));
+            if(usage!=null)estimate=usage.estimatedTokens();
             return new Estimate(canonical, estimate, images);
         }
     }

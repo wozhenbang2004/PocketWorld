@@ -104,6 +104,14 @@ public final class MemorySourceBridge {
         for(int i=0;i<refs.length();i++){SourceRef ref=SourceRef.fromJson(refs.getJSONObject(i));if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId))throw new dev.pocketengine.features.automation.ScheduleSourceState.Unavailable();if(memory.isSourceForgotten(scope,ref))throw new dev.pocketengine.features.automation.ScheduleSourceState.Invalidated(dev.pocketengine.features.automation.ScheduleSourceState.Reason.FORGOTTEN);}
         return action.call();
     }
+    /** Native route use of already owner-confirmed phone results. No body/USER or grant creation.
+     * Same canonical forget monitor; Book locks release before the original Tasks SQL callback. */
+    public synchronized <T>T withCurrentPhoneRouteResults(JSONArray proofs,java.util.concurrent.Callable<T> action)throws Exception{
+        EngineModule selected=host.module("memory");if(!(selected instanceof MemoryModule memory)||proofs==null||proofs.length()<1||proofs.length()>64)throw new IllegalStateException("原路线确认来源当前不可核对");
+        JSONObject scope=new JSONObject().put("ownerId","owner").put("spaceId","private");
+        for(int i=0;i<proofs.length();i++){SourceRef ref=SourceRef.fromJson(proofs.getJSONObject(i).getJSONObject("sourceRef"));if(!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||dev.pocketengine.features.memory.TaskMemoryTrace.sourceTaskId(ref.toJson()).isEmpty())throw new SecurityException("路线只能使用原私人确认结果来源");if(memory.isSourceForgotten(scope,ref))throw new SecurityException("路线原确认来源已遗忘");}
+        return action.call();
+    }
     /** Pure original source currentness, not read authority. Used after a native exact source
      * selection was already read and pinned; it must not warm bytes inside model dispatch. */
     public void requireCurrentReference(SourceRef expected)throws Exception{

@@ -119,6 +119,9 @@ private fun HarnessGatewayContinuationPanel(snapshot: JSONObject, gateway: JSONO
         OutlinedButton(onClick = { send("gateway.reviewParentRun", JSONObject()) }, enabled = enabled) { Text("审阅原任务的仅网关恢复") }
     }
     if (parentScope != null && !uncertain) {
+        parentScope.optJSONObject("workProfile")?.let { profile ->
+            Text("任务工作配置 · 版本 ${profile.optLong("profileRevision")} · ${if (parentScope.optString("relaySourceKind") == "frozen_original_work_profile_RELAY") "冻结网关模型" else "网关沿用原宿主选择"}", color = SecondaryInk, style = MaterialTheme.typography.bodySmall)
+        }
         Text("恢复原任务 ${parentScope.optString("parentTaskId").take(8)}，仅供电脑 ${parentScope.optString("profileId")} / ${parentScope.optString("environmentId")} 使用 ${parentScope.optString("provider")} / ${parentScope.optString("model")}。", style = MaterialTheme.typography.bodyMedium)
         Text("截止 ${until(parentScope.optLong("expiresAt"))}；原累计模型余量 ${parentScope.optInt("remainingModels")} 次。工具权限为空，不清零旧用量。API 标记不是最终计费后台证明。", style = MaterialTheme.typography.bodyMedium)
         Button(onClick = { send("gateway.resumeParentRun", JSONObject().put("acceptedDigest", parentReview.optString("digest"))) }, enabled = enabled && parentReview.optLong("expiresAt") > System.currentTimeMillis()) { Text("确认此范围，仅恢复网关") }

@@ -336,6 +336,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             if(!allowWrites)throw new SecurityException("该执行仅允许读取证据");
             JSONObject capability=approvalCapability;
             if(tool.preset!=null)capability.put("pluginId",tool.preset.getString("id")).put("tool",tool.preset.getString("tool")).put("installationId",tool.preset.getString("expectedInstallationId")).put("version",tool.preset.getString("expectedVersion")).put("expectedExecutionIdentity",tool.preset.getString("expectedExecutionIdentity"));
+            if(tool.preset!=null&&host.module(tool.feature) instanceof PluginsModule plugins){JSONObject program=plugins.localMcpApprovalSummaryForHost(tool.preset);if(program!=null)capability.put("nativeProgram",program);}
             JSONObject approval=tasks.requireCapabilityApproval(taskId,runId,name,args,capability);
             if(!approval.optBoolean("approved")){
                 String id=approval.optString("approvalId"),message="该写入需要主人确认本次具体参数，尚未执行。";
@@ -409,7 +410,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             if(tool.preset!=null){
                 String invocationId=input.getString("_operationId");Runnable cancel=()->{Thread worker=new Thread(()->{try{module.handle("cancel",new JSONObject().put("operationId",invocationId));}catch(Exception ignored){}},"pocket-plugin-cancel");worker.setDaemon(true);worker.start();};
                 control.onCancel(cancel);
-                try{control.check();result=module instanceof PluginsModule?((PluginsModule)module).invokeForHost(input,control,outputCapture,name):module.handle(tool.command,input);}
+                try{control.check();result=module instanceof PluginsModule plugins&&plugins.localMcpForHost(input)?host.invokeLocalMcpForTask(taskId,runId,epoch,name,invocationId,args,input,approvalCapability,consumedApprovalId,control,outputCapture):module instanceof PluginsModule?((PluginsModule)module).invokeForHost(input,control,outputCapture,name):module.handle(tool.command,input);}
                 finally{control.removeCancelAction(cancel);}
             }else result=module instanceof dev.pocketengine.features.remote.RemoteModule?((dev.pocketengine.features.remote.RemoteModule)module).handleForTask(tool.command,input,control):module.handle(tool.command,input);
         }

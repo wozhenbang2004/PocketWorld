@@ -1,5 +1,8 @@
 package dev.pocketengine.runtime;
 
+import dev.pocketengine.runtime.policy.OwnerIntent;
+import dev.pocketengine.runtime.policy.RunOutcomeTools;
+import dev.pocketengine.runtime.routes.PhoneRouteSession;
 import dev.pocketengine.core.EventSink;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.PhonePort;
@@ -190,6 +193,8 @@ public final class AgentRunner {
         RepeatToolNotice repeatedTools=new RepeatToolNotice();
         ContextBudgetPolicy.Source runBudgets=ContextBudgetPolicy.forRun(contextBudgets,control);
         RunContextBudget contextBudget = new RunContextBudget(runBudgets);
+        OwnerIntent intent=new OwnerIntent(goal);
+        PhoneRouteSession routes=null;
         ContextCompactor compactor=new ContextCompactor(journal,journal==null?null:journal.compaction(),runBudgets);
         long[] pauseSeen = new long[]{control == null ? 0 : control.pauseRevision()};
         try {
@@ -198,10 +203,8 @@ public final class AgentRunner {
                 return finish(taskId, "failed", "请填写不超过12000字的明确目标。", evidence, steps, config, sink);
             }
             control.checkpoint();
-            if (phone!=null&&!phone.isConnected()) return finish(taskId, "awaiting_user", "请先开启手机操作权限，再继续任务。", evidence, steps, config, sink);
             // Validate before observing or contacting any endpoint.
             ModelGateway.validate(config);
-            if(phone!=null&&config.usesAccount()&&config.sendScreenshots&&!ModelGateway.accountSupportsImageInput(config.accountModel)&&!(phone instanceof AdaptivePhonePort))throw new ModelGateway.GatewayException("所选 ChatGPT 账号模型没有当前授权版本的图片能力证据；请刷新目录并重新选择，或明确关闭截图使用节点文字模式。");
             if (config.model.isEmpty()) throw new ModelGateway.GatewayException("请先填写模型名称。");
             JSONObject saved = restore(journal);
             JSONArray storedMessages = saved.optJSONArray("messages");
@@ -224,9 +227,18 @@ public final class AgentRunner {
             if (feedback instanceof String && !((String) feedback).trim().isEmpty()&&!hasRecallFeedback(history,clean((String)feedback,config))) history.put(new JSONObject()
                     .put("role", "user").put("content", "机主对上次结果的反馈：\n" + clean((String) feedback, config)).put("ownerRecallFeedback",true));
             RecoveryProjection recovery=RecoveryProjection.fromJournal(taskId,saved.optJSONArray("operationResults"),config.apiKey);
-            emit(taskId, "run", "running", storedMessages == null ? "开始观察手机，准备执行目标。" : "正在恢复任务并重新观察手机。", null, null, config, sink);
+            // Only original native owner inputs can update this narrowing hint, before a read.
+            boolean openingRestoredTurn=storedMessages!=null&&storedMessages.length()>0;
+            routes=PhoneRouteSession.open(taskId,goal,phone,control,openingRestoredTurn);
+            if(routes!=null)routes.requireCurrentSources(control);
+            appendOwnerInputs(history,pollOwnerInputs(history,openingRestoredTurn,false,control),config);
+            intent.update(latestOwnerRecallQuery(history,saved.optString("feedback").isEmpty()?goal:saved.optString("feedback")));
+            if(routes!=null)routes.ownerBoundary(latestOwnerRecallQuery(history,saved.optString("feedback").isEmpty()?goal:saved.optString("feedback")));
+            if(intent.deviceReadAllowed()&&phone!=null&&!phone.isConnected())return finish(taskId,"awaiting_user","请先开启手机操作权限，再继续任务。",evidence,steps,config,sink);
+            requireIntentImageInput(intent,config);
+            emit(taskId, "run", "running", intent.deviceReadAllowed()?(storedMessages == null ? "开始观察手机，准备执行目标。" : "正在恢复任务并重新观察手机。"):"正在按主人讨论范围准备答复；未读取设备。", null, intent.diagnostics(), config, sink);
             if(phone!=null)phone.clearReferences();
-            JSONObject latest = phone==null?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink);
+            JSONObject latest = phone==null||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink);
             evidence = latest;
             if (!latest.optBoolean("ok", true)) return finish(taskId, "awaiting_user", latest.optString("message", "无法观察当前手机，请检查页面和操作权限后继续。"), evidence, steps, config, sink);
             appendObservation(history, latest, config, contextBudget);
@@ -240,21 +252,27 @@ public final class AgentRunner {
             int firstRound=originalModelRounds;
             modelTurns: for (int round = firstRound; round <= executionStepCeiling(config,journal); round++) {
                 originalModelRounds=round+1;
-                JSONObject resumed = afterPause(taskId, config, control, sink, pauseSeen);
+                JSONObject resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
                 if (resumed != null) { latest = resumed; evidence = resumed; appendObservation(history, resumed, config, contextBudget); }
                 control.check();
                 if(journal!=null){JSONObject live=journal.restore();String liveFeedback=live.optString("feedback");
                     recovery=RecoveryProjection.fromJournal(taskId,live.optJSONArray("operationResults"),config.apiKey);
                     if(!liveFeedback.equals(lastFeedback)){
-                    history.put(new JSONObject().put("role","user").put("content","机主的新补充要求：\n"+clean(liveFeedback,config)).put("ownerRecallFeedback",true));
+                    if(!hasRecallFeedback(history,clean(liveFeedback,config)))history.put(new JSONObject().put("role","user").put("content","机主的新补充要求：\n"+clean(liveFeedback,config)).put("ownerRecallFeedback",true));
                     recallIntent=!lastFeedback.isEmpty()&&liveFeedback.startsWith(lastFeedback+"\n")?liveFeedback.substring(lastFeedback.length()+1):liveFeedback;lastFeedback=liveFeedback;
                 }}
-                // Explicit restoration opens a new safe owner turn. Reclaim the existing batch
-                // before its first model request, not after answering once without accepted inputs.
-                boolean openingRestoredTurn=round==firstRound&&storedMessages!=null&&storedMessages.length()>0;
-                JSONArray acceptedInputs=pollOwnerInputs(history,openingRestoredTurn,false,control);appendOwnerInputs(history,acceptedInputs,config);
-                if(acceptedInputs.length()>0)recallIntent=latestOwnerRecallQuery(history,recallIntent);
+                // The restoration boundary was reclaimed before initial observation. Later polls
+                // accept only the original current-turn native steer until its next real boundary.
+                JSONArray acceptedInputs=pollOwnerInputs(history,false,false,control);appendOwnerInputs(history,acceptedInputs,config);
+                recallIntent=latestOwnerRecallQuery(history,recallIntent);
                 repeatedTools.ownerBoundary(history);
+                intent.update(recallIntent);
+                if(routes!=null){routes.ownerBoundary(recallIntent);routes.requireCurrentSources(control);}
+                if(intent.deviceReadAllowed()&&phone!=null&&!phone.isConnected())return finish(taskId,"awaiting_user","请先开启手机操作权限，再继续任务。",evidence,steps,config,sink);
+                requireIntentImageInput(intent,config);
+                if(intent.deviceReadAllowed()&&phone!=null&&control.phoneSurfaceActive()&&latest.optBoolean("noDeviceObservation")){
+                    latest=observe(taskId,config,control,sink);evidence=latest;appendObservation(history,latest,config,contextBudget);
+                }
                 // One final model response may summarize the last receipt; the dispatch budget below
                 // still rejects every additional tool effect once the cumulative ceiling is reached.
                 emit(taskId, "model", "running", "正在决定下一步操作。", null, null, config, sink);
@@ -265,16 +283,19 @@ public final class AgentRunner {
                 if(!recovery.referenceData().isEmpty())nativeReference+="\n\n"+recovery.referenceData();
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
                 if(control.phoneSurfaceActive()&&phone instanceof AdaptivePhonePort)addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
+                JSONArray outcomeTools=RunOutcomeTools.tools();for(int i=0;i<outcomeTools.length();i++)tools.put(outcomeTools.getJSONObject(i));
+                if(routes!=null&&control.phoneSurfaceActive()){JSONArray routeTools=routes.tools();for(int i=0;i<routeTools.length();i++)tools.put(routeTools.getJSONObject(i));}
                 if(capabilities!=null){
                     JSONObject prepared=capabilities.prepareTurn(clean(recallIntent,config),round,steps,control);
                     JSONArray extra=prepared.getJSONArray("tools");java.util.Set<String> names=new java.util.HashSet<>();for(int i=0;i<tools.length();i++)names.add(tools.getJSONObject(i).getJSONObject("function").getString("name"));
-                    for(int i=0;i<extra.length();i++){JSONObject tool=extra.getJSONObject(i);if(!names.add(tool.getJSONObject("function").getString("name")))throw new SecurityException("能力工具与手机工具名称冲突");tools.put(tool);}
+                    for(int i=0;i<extra.length();i++){JSONObject tool=extra.getJSONObject(i);if(PhoneRouteSession.supports(tool.getJSONObject("function").getString("name"))||!names.add(tool.getJSONObject("function").getString("name")))throw new SecurityException("能力工具与原生手机工具名称冲突");tools.put(tool);}
                     JSONObject reference=prepared.optJSONObject("reference");if(reference==null)reference=new JSONObject();
                     memoryDependency=dev.pocketengine.features.memory.TaskMemoryHistory.dependency(reference.optJSONObject("referenceValidation"));
                     refreshReferenceHistory(history,reference.optJSONObject("referenceValidation"));
                     String context=clean(reference.optString("context"),config);
                     if(!context.isEmpty())nativeReference=context+(nativeReference.isEmpty()?"":"\n\n"+nativeReference);
                 }
+                tools=intent.filter(tools,this::intentEffecting);
                 // This is the existing request-only host-reference lane. Never checkpoint a second
                 // copy of SQL arguments/scope/receipts, or label recovery data as owner input.
                 if(!nativeReference.isEmpty()){
@@ -333,6 +354,9 @@ public final class AgentRunner {
                         if(capabilities!=null&&!capabilities.responseCurrent(control))continue modelTurns;
                     }
                     final JSONArray actualModelMessages=finalRequestMessages;final StringBuilder visibleAttempt=new StringBuilder();
+                    final PhoneRouteSession currentRoutes=routes;
+                    dev.pocketengine.runtime.usage.InferenceCapture.Target originalMain=journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,"");
+                    if(currentRoutes!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->currentRoutes.requireCurrentSources(control));
                     final JSONArray originalHistory=history,retryProjection=requestHistory;final JSONArray[] retryOwnerInputs={null};final boolean retryAfterContextRepair=!contextRecoveryUsed;
                     // Each physical call gets a fresh target/receipt and rechecks the original native
                     // task/epoch/scope. No tool has been admitted from this incomplete response.
@@ -340,8 +364,7 @@ public final class AgentRunner {
                         if(event.kind==ModelGateway.StreamKind.STARTED){nativeRequest[0]=event.requestId;if(capabilities!=null)capabilities.beforeModelRequest(event.requestId,actualModelMessages,control);}
                         if(event.kind==ModelGateway.StreamKind.TEXT_DELTA&&visibleAttempt.length()<32768){int count=Math.min(event.text.length(),32768-visibleAttempt.length());if(count>0&&count<event.text.length()&&Character.isHighSurrogate(event.text.charAt(count-1)))count--;visibleAttempt.append(event.text,0,count);}
                         emitStream(taskId,event,config,control,sink);
-                    },journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed()
-                             :journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,""),new ModelGateway.RetryObserver(){
+                    },contextBudget.inferenceTarget(originalMain,actualModelMessages,tools,config),new ModelGateway.RetryObserver(){
                         public void beforeWait(String logical,String failedCall,int retryNumber,long delay)throws Exception {
                             if(!retryAfterContextRepair)throw new ModelGateway.GatewayException("原上下文整理后的唯一请求已结束；本轮没有再次重试。");
                             if(capabilities!=null)capabilities.modelRequestAbandoned(failedCall);
@@ -391,7 +414,7 @@ public final class AgentRunner {
                         if(capabilities!=null&&!capabilities.responseCurrent(control))continue modelTurns;
                     }
                 }
-                resumed = afterPause(taskId, config, control, sink, pauseSeen);
+                resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
                 if (resumed != null) {
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
                     latest = resumed; evidence = resumed; appendObservation(history, resumed, config, contextBudget);
@@ -411,6 +434,7 @@ public final class AgentRunner {
                     emit(taskId,"owner_input","running","已收到主人补充；旧模型决定未派发，正在按原任务重新规划。",null,null,config,sink);
                     continue;
                 }
+                if(routes!=null)routes.requireCurrentSources(control);
                 JSONArray calls = response.optJSONArray("tool_calls");
                 String answer = assistantText(response);
                 JSONObject memoryReference=capabilities==null?null:capabilities.afterModelResponse(nativeRequest[0],java.util.UUID.randomUUID().toString(),control);
@@ -418,8 +442,8 @@ public final class AgentRunner {
                 if(memoryDependency!=null)evidence.put("memoryContext",memoryDependency);
                 if (calls == null || calls.length() == 0) {
                     if (answer.isEmpty()) throw new ModelGateway.GatewayException("模型没有返回文字或工具调用，请换用支持手机工具的模型。");
-                    emit(taskId, "verification", "running", "正在重新观察结果，等待你确认。", null, null, config, sink);
-                    evidence = phone==null?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink);
+                    emit(taskId, "verification", "running", intent.deviceReadAllowed()?"正在重新观察结果，等待你确认。":"已按讨论范围答复；没有读取或操作设备。", null, intent.diagnostics(), config, sink);
+                    evidence = phone==null||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink);
                     evidence.put("modelSummary", clean(answer, config));
                     int finalAnswerIndex=history.length();JSONObject finalMessage=new JSONObject().put("role","assistant").put("content",clean(answer,config));if(response.optJSONObject("provider_data")!=null)finalMessage.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));history.put(finalMessage);
                     if(memoryDependency!=null){finalMessage.put("memoryContext",memoryDependency);evidence.put("memoryContext",memoryDependency);}if(memoryReference!=null){finalMessage.put("memoryReference",memoryReference);evidence.put("memoryReference",memoryReference);}
@@ -446,13 +470,13 @@ public final class AgentRunner {
                     // a current turn. Step/model ceilings may retain an earlier answer as
                     // audit data, but must never turn it into task completion evidence.
                     RunControl.HostRunIdentity finalRun=control.hostRunIdentity();
-                    if(finalRun!=null){evidence.put("nativeFinalAnswer",new JSONObject().put("format","pocketworld.runner-final-answer.v1").put("taskId",taskId).put("runId",finalRun.runId()).put("coordinatorEpoch",finalRun.epoch()).put("messageIndex",finalAnswerIndex).put("historyLength",history.length()).put("answerFingerprint",CompactionPlan.fingerprint(finalMessage.getString("content"))).put("inputBoundaryEmpty",true));checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget);}
-                    String verificationNotice = phone==null?"以下答复基于实际工具结果；外部效果仍以对应收据为准。":evidence.optBoolean("ok", true) ? "模型已结束操作，请核对当前页面。" : "结果页面暂时无法重新读取，请在手机上亲自确认。";
+                    if(finalRun!=null){evidence.put("nativeFinalAnswer",new JSONObject().put("format","pocketworld.runner-final-answer.v1").put("taskId",taskId).put("runId",finalRun.runId()).put("coordinatorEpoch",finalRun.epoch()).put("messageIndex",finalAnswerIndex).put("historyLength",history.length()).put("answerFingerprint",CompactionPlan.fingerprint(finalMessage.getString("content"))).put("inputBoundaryEmpty",true));if(routes!=null){JSONObject candidate=routes.candidate(control);if(candidate!=null)evidence.put("nativePhoneRoute",candidate);}checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget);}
+                    String verificationNotice = !intent.deviceReadAllowed()?"以下仅为讨论答复；没有读取或操作设备。":phone==null?"以下答复基于实际工具结果；外部效果仍以对应收据为准。":evidence.optBoolean("ok", true) ? "模型已结束操作，请核对当前页面。" : "结果页面暂时无法重新读取，请在手机上亲自确认。";
                     return finish(taskId, "needs_confirmation", verificationNotice + "\n" + clean(answer, config), evidence, steps, config, sink);
                 }
                 if (calls.length() > 8) throw new ModelGateway.GatewayException("模型一次请求了过多手机动作，请更换模型或缩短目标。");
                 validateCalls(calls);
-                int preparedPlans=0;for(int i=0;i<calls.length();i++)if(java.util.Set.of("phone_prepare_sequence","browser_task_prepare_sequence").contains(calls.getJSONObject(i).getJSONObject("function").optString("name"))&&++preparedPlans>1)throw new ModelGateway.GatewayException("每批只能准备一个原生短序列；尚未执行本批动作。");
+                int preparedPlans=0;for(int i=0;i<calls.length();i++)if(java.util.Set.of("phone_prepare_sequence","browser_task_prepare_sequence",PhoneRouteSession.REPLAY).contains(calls.getJSONObject(i).getJSONObject("function").optString("name"))&&++preparedPlans>1)throw new ModelGateway.GatewayException("每批只能准备一个原生短序列；尚未执行本批动作。");
                 JSONObject assistant = new JSONObject().put("role", "assistant").put("tool_calls", safeArray(calls, config, false));
                 if(memoryDependency!=null)assistant.put("memoryContext",memoryDependency);if(memoryReference!=null)assistant.put("memoryReference",memoryReference);
                 if(response.optJSONObject("provider_data")!=null)assistant.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));
@@ -470,13 +494,14 @@ public final class AgentRunner {
                         for(int stale=index;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),failure("stale_surface","执行表面已切换；旧批次未派发，请读取新现场。"),config));
                         break;
                     }
-                    resumed = afterPause(taskId, config, control, sink, pauseSeen);
+                    resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
                     if (resumed != null) {
                         latest=resumed;evidence=resumed;observed=true;sequenceMayContinue=false;
                         for(int stale=index;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),failure("stale_observation","机主已暂停或接管，这批尚未派发的旧决定已全部丢弃；请依据新现场重新规划。"),config));
                         break;
                     }
                     control.check(); // No new action is started after stop or while paused.
+                    if(routes!=null)routes.requireCurrentSources(control);
                     JSONArray midBatch=pollOwnerInputs(history,false,false,control);
                     if(midBatch.length()>0){sequenceMayContinue=false;
                         for(int stale=index;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),failure("owner_steered","主人已补充要求；此旧决定尚未派发，不会重放。"),config));
@@ -501,13 +526,17 @@ public final class AgentRunner {
                     JSONObject receipt;
                     String recordedOperation=null;
                     dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired nativeOwnerRequired=null;
+                    JSONObject routeBefore=latest;
                     try {
                         Object raw = call.getJSONObject("function").opt("arguments");
                         if (!(raw instanceof String)) throw new IllegalArgumentException();
                         args = new JSONObject((String) raw);
+                        if(!intent.permits(name,this::intentEffecting))throw new ToolArgumentException("owner_intent_read_only");
                         if(activeStep!=null)activeStep.requireCurrent(control);
-                        if(capabilities!=null&&capabilities.supports(name))capabilities.validate(name,args);else{if(phone==null||"phone_observation_help".equals(name)&&!(phone instanceof AdaptivePhonePort))throw new IllegalArgumentException("Unavailable tool");validate(name,args,latest);}
-                    } catch (Exception badArguments) {
+                        if(RunOutcomeTools.supports(name))RunOutcomeTools.validate(name,args);
+                        else if(PhoneRouteSession.supports(name)){if(routes==null||!control.phoneSurfaceActive())throw new IllegalArgumentException("route_unavailable");PhoneRouteSession.validate(name,args);}
+                        else if(capabilities!=null&&capabilities.supports(name))capabilities.validate(name,args);else{if(phone==null||"phone_observation_help".equals(name)&&!(phone instanceof AdaptivePhonePort))throw new IllegalArgumentException("Unavailable tool");validate(name,args,latest);}
+                    } catch(PhoneRouteSession.SourceUnavailable unavailable){throw unavailable;} catch (Exception badArguments) {
                         String code = badArguments instanceof CapabilityPort.Unavailable?"tool_withdrawn":badArguments instanceof ToolArgumentException ? ((ToolArgumentException) badArguments).code : "invalid_arguments";
                         receipt = failure(code, badArguments instanceof CapabilityPort.Unavailable?"本轮工具已撤销或安装改变，旧决定尚未执行，请重新取得当前工具清单。":capabilities!=null&&capabilities.supports(name)?"此能力工具的参数不符合当前合同，尚未执行。请核对该工具的字段与范围。":"工具参数无效或页面引用已过期，请重新观察后使用当前节点与0到1000坐标。");
                         history.put(toolResult(call, receipt, config));
@@ -519,7 +548,7 @@ public final class AgentRunner {
                     if(imageRequired)try{contextBudget.requireImageInput(config);if(nativeImages.size()>=MAX_IMAGES)throw new IllegalStateException("native_visual_batch_limit");}
                     catch(Exception unavailable){control.check();receipt=failure("image_input_unavailable","当前运行没有允许的图片输入设置、图片预算或本批图片余量；尚未采集或发送图片，请改用文字观察或先核对模型设置。").put("accepted",false).put("nativeDispatched",false);history.put(toolResult(call,receipt,config));checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget);emit(taskId,"tool","failed",receipt.getString("message"),name,receipt,config,sink);sequenceMayContinue=false;if(activeStep!=null)break;continue;}
                     emit(taskId, "tool", "running", capabilities!=null&&capabilities.supports(name)?"正在调用已授权的能力工具。":toolLabel(name), name, null, config, sink);
-                    resumed = afterPause(taskId, config, control, sink, pauseSeen);
+                    resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
                     if (resumed != null) {
                         latest = resumed; evidence = resumed; observed = true;sequenceMayContinue=false;
                         receipt = failure("stale_observation", "暂停后页面已重新观察，这批尚未派发的旧决定已全部丢弃。");
@@ -528,7 +557,7 @@ public final class AgentRunner {
                         emit(taskId, "tool", "failed", receipt.optString("message"), name, receipt, config, sink);
                         break;
                     }
-                    control.check();if(activeStep!=null)activeStep.requireCurrent(control);
+                    control.check();if(routes!=null)routes.requireCurrentSources(control);if(activeStep!=null)activeStep.requireCurrent(control);
                     if(capabilities!=null){
                         JSONObject gate=capabilities.beforeTool(name,safeJson(args,config,false),control);
                         if(gate!=null){
@@ -540,7 +569,23 @@ public final class AgentRunner {
                             sequenceMayContinue=false;if(stale||activeStep!=null)break;continue;
                         }
                     }
-                    if ("phone_request_user".equals(name)) {
+                    if(RunOutcomeTools.terminal(name)){
+                        receipt=new JSONObject().put("ok",true).put("code","model_declared_waiting").put("effectsDispatched",false);history.put(toolResult(call,receipt,config));
+                        for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("terminal_not_dispatched","本批已声明停止，其余调用尚未派发。").put("accepted",false).put("nativeDispatched",false),config));
+                        checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget);
+                        JSONArray newer=pollOwnerInputs(history,true,true,control);
+                        if(newer.length()>0){appendOwnerInputs(history,newer,config);recallIntent=latestOwnerRecallQuery(history,recallIntent);checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget);if(round>=executionStepCeiling(config,journal))return finish(taskId,"awaiting_user","主人新补充已保存到原任务；当前模型预算已用完，请核对后从原任务继续。",evidence,steps,config,sink);continue modelTurns;}
+                        if(RunOutcomeTools.ASK.equals(name)){
+                            RunControl.HostRunIdentity identity=control.hostRunIdentity();String question=clean(args.getString("question"),config);
+                            evidence.put("ownerQuestion",new JSONObject().put("format","pocketworld.owner-question.v1").put("question",question).put("requestId",java.util.UUID.randomUUID().toString()).put("waitRevision",history.length()).put("taskId",taskId).put("runId",identity==null?"":identity.runId()).put("coordinatorEpoch",identity==null?0:identity.epoch()).put("replyKind","answer").put("approval",false).put("takeover",false));
+                            return finish(taskId,"awaiting_user",question,evidence,steps,config,sink);
+                        }
+                        evidence.put("blocked",safeJson(RunOutcomeTools.declaration(args),config,false));return finish(taskId,args.getBoolean("recoverable")?"awaiting_user":"failed",clean(RunOutcomeTools.summary(args),config),evidence,steps,config,sink);
+                    }else if(routes!=null&&PhoneRouteSession.supports(name)){
+                        receipt=routes.execute(name,args,latest,call.getString("id"),control);
+                    }else if(RunOutcomeTools.OBSTACLE.equals(name)){
+                        receipt=RunOutcomeTools.obstacle(args);
+                    }else if ("phone_request_user".equals(name)) {
                         String reason = clean(args.getString("reason"), config);
                         receipt = new JSONObject().put("ok", true).put("message", reason).put("code", "awaiting_user");
                         history.put(toolResult(call, receipt, config));
@@ -594,7 +639,7 @@ public final class AgentRunner {
                     String receiptCode=receipt.optString("code",receipt.optString("error"));
                     boolean projectRunning="project_running".equals(receiptCode),nativeRunning=projectRunning&&nativeProjectRunning(journal,recordedOperation,receipt);
                     if(nativeRunning&&!ownedServiceOperations.contains(recordedOperation))ownedServiceOperations.add(recordedOperation);
-                    history.put(toolResult(call, receipt, config,true));
+                    JSONObject committedToolMessage=toolResult(call,receipt,config,true);history.put(committedToolMessage);
                     if(nativeOwnerRequired!=null)for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("sensitive_handoff_tail_not_dispatched","主人接管前，本批余下旧决定均未派发；交还后重新观察规划。").put("accepted",false).put("nativeDispatched",false),config));
                     checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
                     String toolStatus=projectRunning?nativeRunning?"running":"awaiting_user":receipt.optBoolean("ok",false)?"completed":"failed";
@@ -625,17 +670,18 @@ public final class AgentRunner {
                     // Unknown/approval/pause outcomes stop before any extension code is invoked.
                     if(capabilities!=null&&!control.isPaused()&&pauseSeen[0]==control.pauseRevision())capabilities.afterTool(name,safeJson(args,config,false),safeToolReceipt(name,receipt,config),control);
                     try{repeatedTools.afterTool(name,args,receipt,capabilities!=null&&capabilities.supports(name)&&!capabilities.sideEffecting(name));}catch(RuntimeException unavailable){/* Optional notice never replaces an original receipt. */}
+                    try{contextBudget.completedRead(call,committedToolMessage);}catch(Exception unavailable){/* Optional request projection never replaces a committed receipt. */}
                     // A successful read can still time out with an unmet predicate. Only this
                     // native plan step uses matched as a prerequisite; standalone WAIT is unchanged.
                     String conditionKey=activeStep!=null&&activeStep.tool==dev.pocketengine.core.NativeToolPlan.Tool.BROWSER_WAIT?"conditionMet":"matched";
                     if(!receipt.optBoolean("ok",false)||activeStep!=null&&activeStep.tool.requiresMatched()&&!Boolean.TRUE.equals(receipt.opt(conditionKey)))sequenceMayContinue=false;
-                    if(capabilities!=null&&receipt.optBoolean("ok",false)&&!control.isPaused()&&!control.isCancelled()&&pauseSeen[0]==control.pauseRevision()){
+                    if((capabilities!=null||routes!=null&&PhoneRouteSession.REPLAY.equals(name))&&receipt.optBoolean("ok",false)&&!control.isPaused()&&!control.isCancelled()&&pauseSeen[0]==control.pauseRevision()){
                         String nativeOperation=recordedOperation==null?call.getString("id"):recordedOperation;
                         if(imageRequired){dev.pocketengine.core.NativeToolObservation observation=capabilities.takeToolObservation(name,nativeOperation,control);
                             if(observation!=null)try{nativeImages.add(observation.consume(name,nativeOperation,control));}catch(Exception stale){observation.close();control.check();emit(taskId,"tool_observation","failed","图片已失效，没有作为本轮模型视觉输入。",name,null,config,sink);}
                             else emit(taskId,"tool_observation","failed","未取得可交付的实际图片，本轮没有附图。",name,null,config,sink);
                         }
-                        dev.pocketengine.core.NativeToolPlan proposed=capabilities.takeToolPlan(name,nativeOperation,control);
+                        dev.pocketengine.core.NativeToolPlan proposed=routes!=null&&PhoneRouteSession.REPLAY.equals(name)?routes.take(nativeOperation,control):capabilities==null?null:capabilities.takeToolPlan(name,nativeOperation,control);
                         if(proposed!=null){nativePlans.add(proposed);nativeSequenceProgress.put(proposed,new JSONObject().put("parentOperationId",nativeOperation).put("totalSteps",proposed.size()).put("dispatchEnteredSteps",0));if(activePlan!=null)throw new SecurityException("native_sequence_nested_plan_forbidden");try{proposed.consume(name,nativeOperation,control);activePlan=proposed;}catch(Exception stale){proposed.close();control.check();sequenceMayContinue=false;emit(taskId,"native_sequence","failed","短序列的现场已改变，未派发其中动作。",name,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,sink);}}
                     }
                     if (phone!=null&&control.phoneSurfaceActive()&&(changesScreen(name) || "phone_wait".equals(name))) {
@@ -645,6 +691,10 @@ public final class AgentRunner {
                         observed = true;
                         if (!latest.optBoolean("ok", true)) return finish(taskId, "awaiting_user", "操作后无法重新观察，请检查手机权限并接管。", evidence, steps, config, sink);
                     }
+                    if(routes!=null){
+                        try{routes.after(name,args,receipt,routeBefore,latest,recordedOperation,control);}catch(PhoneRouteSession.SourceUnavailable unavailable){throw unavailable;}catch(InterruptedException stopped){throw stopped;}catch(Exception ineligible){routes.disableLearning();}
+                        if(!routes.replayPostcondition(name,receipt,latest)){sequenceMayContinue=false;emit(taskId,"native_route","diverged","本步实际回执保留，但回读页面与成功路线锚点不同；余下步骤未派发，交回原模型。",name,new JSONObject().put("executedReceiptRetained",true).put("remainingNotDispatched",true).put("automaticReplay",false),config,sink);}
+                    }
                 }
                 // All tool_call_ids are resolved before any native user image/new step is added.
                 if (observed) appendObservation(history, latest, config, contextBudget);observed=false;
@@ -653,7 +703,7 @@ public final class AgentRunner {
                 checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget);
                 if(activePlan==null)break;
                 if(!sequenceMayContinue){activePlan.close();break;}
-                try{activeStep=activePlan.next(control);}catch(Exception stale){control.check();activePlan.close();emit(taskId,"native_sequence","failed","短序列的下一步目标已变化或无法唯一核对；余下步骤没有派发。",null,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,sink);break;}
+                try{activeStep=activePlan.next(control);}catch(PhoneRouteSession.SourceUnavailable unavailable){throw unavailable;}catch(Exception stale){control.check();activePlan.close();emit(taskId,"native_sequence","failed","短序列的下一步目标已变化或无法唯一核对；余下步骤没有派发。",null,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,sink);break;}
                 if(activeStep==null){activePlan.close();break;}
                 if(steps>=executionStepCeiling(config,journal)){activePlan.close();return finish(taskId,"needs_confirmation","已达到本次操作步数上限；短序列余下步骤未派发。",nativeStepLimitEvidence(evidence,control),steps,config,sink);}
                 JSONObject fresh=activeStep.observation();if(fresh!=null){latest=fresh;evidence=fresh;appendObservation(history,fresh,config,contextBudget);}
@@ -664,6 +714,11 @@ public final class AgentRunner {
                 }while(true);
             }
             return finish(taskId, "needs_confirmation", "已达到本次模型调用上限，请查看当前结果。", evidence, steps, config, sink);
+        } catch(PhoneRouteSession.SourceUnavailable unavailable){
+            unresolved(evidence,openOperation);
+            if(control!=null&&(control.isCancelled()||Thread.currentThread().isInterrupted()))return finishQuietly(taskId,"cancelled","已停止后续操作；已经发生的操作不会自动撤销。",evidence,steps,config,sink);
+            try{evidence.put("phoneRouteSource",new JSONObject().put("status","source_current_unavailable").put("originalReceiptsRetained",true).put("automaticReplay",false));}catch(Exception ignored){}
+            return finishQuietly(taskId,"awaiting_user",unavailable.getMessage(),evidence,steps,config,sink);
         } catch (dev.pocketengine.core.NativeReadContextRepair.Unavailable unavailable) {
             unresolved(evidence,openOperation);
             if(control!=null&&(control.isCancelled()||Thread.currentThread().isInterrupted()))return finishQuietly(taskId,"cancelled","已停止后续操作；已经发生的操作不会自动撤销。",evidence,steps,config,sink);
@@ -720,6 +775,7 @@ public final class AgentRunner {
             if (openOperation != null) return finishQuietly(taskId, "awaiting_user", "能力操作已登记但没有确认回执，已停止自动执行。请核对结果后再恢复，勿直接重试。", evidence, steps, config, sink);
             return finishQuietly(taskId, "failed", ModelGateway.safeMessage(error, config), evidence, steps, config, sink);
         } finally {
+            if(routes!=null)routes.close();
             for(var plan:nativePlans){
                 plan.close();JSONObject progress=nativeSequenceProgress.get(plan);
                 if(progress!=null)try{int entered=progress.getInt("dispatchEnteredSteps"),remaining=plan.size()-entered;if(remaining>0)emit(taskId,"native_sequence","not_dispatched","短序列剩余 "+remaining+" 步没有派发，请核对当前结果后再规划。",plan.parentTool(),new JSONObject(progress.toString()).put("remainingSteps",remaining).put("firstNotDispatchedStep",entered+1).put("automaticReplay",false).put("executionAuthorized",false),config,sink);}
@@ -866,6 +922,17 @@ public final class AgentRunner {
         }
         if(rows.length()>4)message.append("；其余原执行见收尾证据");
         return message.append("。模型上文的运行中描述只代表收尾前观察，不代表这些服务此刻仍在运行，也不代表业务验证成功。").toString();
+    }
+
+    /** This hint only removes tools; the original scope/grant/sensitive-step gates still run. */
+    private boolean intentEffecting(String name){
+        if(RunOutcomeTools.supports(name))return false;
+        if(PhoneRouteSession.supports(name))return !PhoneRouteSession.LIST.equals(name);
+        if("phone_prepare_sequence".equals(name)||"browser_task_prepare_sequence".equals(name))return true;
+        return capabilities!=null&&capabilities.supports(name)?capabilities.sideEffecting(name):sideEffecting(name);
+    }
+    private void requireIntentImageInput(OwnerIntent intent,ModelConfig config)throws Exception {
+        if(intent.deviceReadAllowed()&&phone!=null&&config.usesAccount()&&config.sendScreenshots&&!ModelGateway.accountSupportsImageInput(config.accountModel)&&!(phone instanceof AdaptivePhonePort))throw new ModelGateway.GatewayException("所选 ChatGPT 账号模型没有当前授权版本的图片能力证据；请刷新目录并重新选择，或明确关闭截图使用节点文字模式。");
     }
 
     private static boolean sideEffecting(String name) {
@@ -1043,7 +1110,8 @@ public final class AgentRunner {
     private static final class JournalFailure extends Exception { }
     private static final class UncertainOperation extends Exception { }
 
-    private JSONObject afterPause(String taskId, ModelConfig config, RunControl control, EventSink sink, long[] pauseSeen) throws Exception {
+    private JSONObject afterPause(String taskId, ModelConfig config, RunControl control, EventSink sink, long[] pauseSeen,
+                                  OwnerIntent intent,JSONArray history,RunJournal journal,String goal) throws Exception {
         control.check();
         if (!control.isPaused() && pauseSeen[0] == control.pauseRevision()) return null;
         for(;;){
@@ -1051,7 +1119,15 @@ public final class AgentRunner {
             control.checkpoint();
             if(phone!=null)phone.clearReferences();
             pauseSeen[0] = control.pauseRevision();
-            emit(taskId, "run", "running", "已继续，正在重新观察当前页面。", null, null, config, sink);
+            // Native steer accepted while paused narrows the hint before any fresh device read.
+            String feedback="";
+            if(journal!=null){Object value=journal.restore().opt("feedback");if(value!=null&&value!=JSONObject.NULL&&!(value instanceof String))throw new JournalFailure();feedback=value instanceof String?(String)value:"";}
+            if(!feedback.isEmpty()&&!hasRecallFeedback(history,clean(feedback,config)))history.put(new JSONObject().put("role","user").put("content","机主的新补充要求：\n"+clean(feedback,config)).put("ownerRecallFeedback",true));
+            appendOwnerInputs(history,pollOwnerInputs(history,false,false,control),config);
+            intent.update(latestOwnerRecallQuery(history,feedback.isEmpty()?goal:feedback));
+            emit(taskId, "run", "running", intent.deviceReadAllowed()?"已继续，正在重新观察当前页面。":"已继续讨论；未读取设备。", null, intent.diagnostics(), config, sink);
+            if(!intent.deviceReadAllowed())return new JSONObject().put("noDeviceObservation",true);
+            requireIntentImageInput(intent,config);
             if(phone!=null&&control.phoneSurfaceActive())return observe(taskId, config, control, sink);
             if(capabilities!=null&&capabilities.supports("browser_task_observe")){
                 // This native query returns data only for the exact owner-return nonce registered
@@ -1232,7 +1308,7 @@ public final class AgentRunner {
     private static void coordinate(JSONObject args, String key) throws Exception { integer(args, key, 0, 1000); }
 
     private static boolean changesScreen(String name) {
-        return !dev.pocketengine.phone.observation.PhoneTreeQuery.supports(name) && !"phone_list_apps".equals(name) && !"phone_observe".equals(name) && !"phone_observation_help".equals(name) && !"phone_request_user".equals(name);
+        return !RunOutcomeTools.supports(name)&&!dev.pocketengine.phone.observation.PhoneTreeQuery.supports(name) && !"phone_list_apps".equals(name) && !"phone_observe".equals(name) && !"phone_observation_help".equals(name) && !"phone_request_user".equals(name);
     }
 
     private static String assistantText(JSONObject response) {

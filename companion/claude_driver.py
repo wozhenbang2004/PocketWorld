@@ -5,6 +5,7 @@ A resumed session is an explicit new invocation, never a replay of an unknown on
 """
 from contextlib import nullcontext
 import json
+import hashlib
 from pathlib import Path
 import queue
 import re
@@ -34,7 +35,7 @@ def session_uuid(value):
     return value
 
 
-def command(session_id, write_allowed=False, model=None, resume=False):
+def command(session_id, write_allowed=False, model=None, resume=False, effort=None):
     tools = "Read,Glob,Grep,AskUserQuestion,Edit,Write,Bash" if write_allowed else "Read,Glob,Grep,AskUserQuestion"
     args = ["claude", "--safe-mode", "--restricted", "--settings",
             '{"permissions":{"ask":["Edit","Write","Bash","AskUserQuestion"]}}', "-p", "--input-format", "stream-json",
@@ -45,6 +46,8 @@ def command(session_id, write_allowed=False, model=None, resume=False):
             "--resume" if resume else "--session-id", session_uuid(session_id)]
     if model:
         args += ["--model", model]
+    if effort is not None:
+        args += ["--effort", effort]
     return args
 
 
@@ -55,7 +58,8 @@ def inspect_cli(version, help_text):
     return {"cliVersion": match.group(0) if match else None, "cliFlagsVerified": compatible,
             "missingFlags": missing, "protocolVerified": False, "accountConfigured": None,
             "modelInferenceVerified": False, "available": compatible,
-            "message": "Local CLI version/help checked only; account, stream protocol and inference remain unverified"}
+            "effortFlagVerified": "--effort" in help_text,
+            "message": "Local CLI version/help checked only; account, stream protocol, model/effort catalog and inference remain unverified; no new initialize probe was started"}
 
 
 class ClaudeStreamDriver:
@@ -94,6 +98,10 @@ class ClaudeStreamDriver:
         self.assistant_error = False
         self.event_count = 0
         self.reported_model = None
+        self.runtime_version = None
+        self.requested_model = self.requested_effort = None
+        self.model_options = None
+        self.context_window = self.context_source = None
         self.reader = threading.Thread(target=self._read, daemon=True, name="pocket-claude-jsonl")
         self.reader.start()
 
@@ -121,7 +129,7 @@ class ClaudeStreamDriver:
                          for entry in self.pending.values()]
             receipts = [dict(value) for value in self.approval_receipts]
         questions, answers = self.questions.snapshot()
-        self.on_state({"protocol": "claude_stream_json", "sessionId": self.session_id,
+        self.on_state({"modelOptions": self.model_options, "modelRuntime": self._model_runtime(), "protocol": "claude_stream_json", "sessionId": self.session_id,
                        "threadId": self.session_id, "protocolVerified": self.protocol_verified,
                        "sessionIdentityConfirmed": self.protocol_verified,
                        "controlProtocolVerified": self.initialized, "promptRequestId": self.prompt_id,
@@ -315,15 +323,83 @@ class ClaudeStreamDriver:
         except (ValueError, queue.Full) as error:
             raise DriverError(str(error))
 
-    def run(self, prompt, thread_id=None, model=None):
+    @staticmethod
+    def _option_text(value, maximum=200):
+        return isinstance(value, str) and 0 < len(value) <= maximum and value == value.strip() and not any(ord(c) < 32 for c in value)
+
+    def _read_model_options(self, initialized):
+        version = initialized.get("claude_code_version")
+        self.runtime_version = version if isinstance(version, str) and re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", version) else None
+        raw = initialized.get("models")
+        if raw is None:
+            return  # Original older control handshake remains usable, but no model/effort support is invented.
+        if not isinstance(raw, list) or len(raw) > 100:
+            raise DriverError("Claude model options are malformed or exceed the explicit bound")
+        models = []
+        for row in raw:
+            if not isinstance(row, dict) or not self._option_text(row.get("value")):
+                raise DriverError("Claude model option identity is malformed")
+            raw_efforts = row.get("supportedEffortLevels")
+            efforts = []
+            if raw_efforts is not None:
+                if not isinstance(raw_efforts, list) or len(raw_efforts) > 32 or any(not self._option_text(value, 80) for value in raw_efforts) or len(set(raw_efforts)) != len(raw_efforts):
+                    raise DriverError("Claude native effort enumeration is unsupported")
+                if row.get("supportsEffort") is True:
+                    efforts = [{"id": value, "description": "Native advertised effort; effective stream readback unavailable"} for value in raw_efforts]
+            model = {"id": row["value"], "name": row["displayName"][:200] if isinstance(row.get("displayName"), str) else row["value"],
+                     "efforts": efforts, "effortCapability": "advertised" if raw_efforts is not None and row.get("supportsEffort") is True else "not_reported"}
+            if self._option_text(row.get("resolvedModel")):
+                model["resolvedModel"] = row["resolvedModel"]
+            models.append(model)
+        if len({row["id"] for row in models}) != len(models):
+            raise DriverError("Claude native model enumeration is ambiguous")
+        source = {"protocol": "claude_initialize_model_options_v1", "runtimeVersion": self.runtime_version,
+                  "models": models, "truncated": False, "changeModes": ["settled_continuation"],
+                  "runningTurnChanges": False, "observation": "existing_owner_approved_job_initialize_not_a_readonly_startup_probe"}
+        source["digest"] = hashlib.sha256(json.dumps(source, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        self.model_options = source
+
+    def _model_runtime(self):
+        return {"protocol": "native_model_runtime_v1", "worker": "claude", "runtimeVersion": self.runtime_version,
+                "sessionId": self.session_id, "promptRequestId": self.prompt_id,
+                "requestedModel": self.requested_model, "requestedEffort": self.requested_effort,
+                "reportedModel": self.reported_model, "reportedEffort": None,
+                "modelReadback": "known" if self.reported_model else "unknown",
+                "configurationSource": "system/init.model" if self.reported_model else None,
+                "effortReadback": "unknown_stream_sdk_omits_effective_effort",
+                "effortRequestSource": "original_cli_session_flag" if self.requested_effort else None,
+                "contextWindow": {"status": "known" if self.context_window else "unknown", "tokens": self.context_window,
+                                  "reportedModel": self.reported_model, "source": self.context_source,
+                                  "scope": "original_native_model_not_phone_budget_or_invoice"}}
+
+    def _read_context_window(self, result):
+        # A result's usage can mix parent/child/fallback models. Never borrow one model's window.
+        self.context_window = self.context_source = None
+        rows = result.get("modelUsage")
+        if not self.reported_model or not isinstance(rows, dict) or set(rows) != {self.reported_model}:
+            return
+        actual = rows[self.reported_model]
+        window = actual.get("contextWindow") if isinstance(actual, dict) else None
+        if type(window) is int and 0 < window <= 100_000_000:
+            self.context_window, self.context_source = window, "result.modelUsage.exact_native_model.contextWindow"
+
+    def run(self, prompt, thread_id=None, model=None, effort=None, model_options_digest=None):
         if thread_id is not None and thread_id != self.session_id:
             raise DriverError("Claude continuation does not match its launch session")
+        self.requested_model, self.requested_effort = model, effort
         self._control(self.init_id, {"subtype": "initialize", "hooks": None})
         reply = self._next()
         response = reply.get("response") if isinstance(reply, dict) else None
         if not isinstance(response, dict) or reply.get("type") != "control_response" or response.get("request_id") != self.init_id or response.get("subtype") != "success" or not isinstance(response.get("response"), dict):
             raise DriverError("Claude control handshake was not confirmed; no prompt was sent")
         self.initialized = True
+        self._read_model_options(response["response"])
+        if model_options_digest is not None and (self.model_options is None or self.model_options["digest"] != model_options_digest):
+            raise DriverError("Claude native CLI/model options changed since owner review; no prompt was sent")
+        if effort is not None or model_options_digest is not None:
+            selected = next((row for row in self.model_options["models"] if model in {row["id"], row.get("resolvedModel")}), None) if self.model_options else None
+            if selected is None or effort is not None and not any(row["id"] == effort for row in selected["efforts"]):
+                raise DriverError("Claude model/effort is not advertised by this actual native initialize; no prompt was sent")
         with self.dispatch_guard():
             if self.stopped():
                 raise DriverError("Claude stopped before prompt dispatch")
@@ -362,7 +438,10 @@ class ClaudeStreamDriver:
                 if not isinstance(tools, list) or any(not isinstance(tool, str) or tool not in allowed for tool in tools) or event.get("mcp_servers"):
                     raise DriverError("Claude advertised tools outside the requested tool scope")
                 self.protocol_verified = True
-                self.reported_model = event.get("model") if isinstance(event.get("model"), str) else None
+                self.reported_model = event.get("model") if self._option_text(event.get("model")) else None
+                version = event.get("claude_code_version")
+                if self.runtime_version and version is not None and version != self.runtime_version:
+                    raise DriverError("Claude runtime version changed after initialization; prior prompt outcome is unverified")
             elif kind == "control_request":
                 self._permission(event)
             elif kind == "control_cancel_request":
@@ -427,6 +506,7 @@ class ClaudeStreamDriver:
                 denied = event.get("permission_denials", [])
                 if not isinstance(denied, list):
                     raise DriverError("Claude permission denial result is invalid")
+                self._read_context_window(event)
                 self.finished = True
                 self.questions.finish()
                 self.progress.add("turn", "result", self.prompt_id, status=subtype)
@@ -438,7 +518,7 @@ class ClaudeStreamDriver:
                 final = {"status": "cancelled" if self.interrupt_acknowledged else "failed" if event["is_error"] or self.assistant_error else "completed",
                          "resultSubtype": subtype, "permissionDenialCount": len(denied),
                          "message": "Claude returned a structured result; inspect output and actual changes"}
-                return {**final, "protocol": "claude_stream_json", "sessionId": self.session_id,
+                return {**final, "modelOptions": self.model_options, "modelRuntime": self._model_runtime(), "protocol": "claude_stream_json", "sessionId": self.session_id,
                         "threadId": self.session_id, "sessionIdentityConfirmed": True,
                         "protocolVerified": True, "controlProtocolVerified": True,
                         "reportedModel": self.reported_model, "promptRequestId": self.prompt_id,

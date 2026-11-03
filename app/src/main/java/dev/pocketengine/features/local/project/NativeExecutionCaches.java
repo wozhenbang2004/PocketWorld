@@ -7,11 +7,11 @@ import java.nio.file.*;
 import java.util.*;
 import org.json.*;
 
-/** Owner-reviewed cleanup of two existing, finite native execution-copy roots.
+/** Owner-reviewed cleanup of existing, finite native execution-copy roots.
  * TaskStore remains the only authority; this class has no persistent ledger,
  * job runner, auto eviction or ability to select an arbitrary native path. */
 public final class NativeExecutionCaches {
-    private static final Map<String,String> ROOTS=Map.of("git_intake","git-source-intakes","skill_copy","skill-execution-copies");
+    private static final Map<String,String> ROOTS=Map.of("git_intake","git-source-intakes","skill_copy","skill-execution-copies","mcp_copy","mcp-discovery-copies");
     private final File localRoot;private final TaskStore tasks;
     public NativeExecutionCaches(File originalLocalRoot,TaskStore originalTasks){localRoot=Objects.requireNonNull(originalLocalRoot).getAbsoluteFile();tasks=Objects.requireNonNull(originalTasks);}
     private File path(String kind,String operation)throws Exception {
@@ -21,12 +21,12 @@ public final class NativeExecutionCaches {
     public JSONArray inventory(RunControl original)throws Exception {
         JSONArray rows=new JSONArray();
         for(String kind:new TreeSet<>(ROOTS.keySet())){
-            File parent=new File(localRoot,ROOTS.get(kind));String label=kind.equals("git_intake")?"Git读取暂存":"本机Skill执行副本";
+            File parent=new File(localRoot,ROOTS.get(kind));String label=kind.equals("git_intake")?"Git读取暂存":kind.equals("mcp_copy")?"本机MCP执行副本":"本机Skill执行副本";
             if(Files.isSymbolicLink(parent.toPath())){rows.put(new JSONObject().put("id","native_cache:"+kind+":unknown").put("label",label).put("cleanable",false).put("usage",new JSONObject().put("complete",false).put("reason","原目录身份不可核对，保留未知范围")));continue;}
             File[] candidates=parent.listFiles();if(candidates==null){if(parent.exists())rows.put(new JSONObject().put("id","native_cache:"+kind+":unknown").put("label",label).put("cleanable",false).put("usage",new JSONObject().put("complete",false).put("reason","原缓存目录不可完整读取，未按0字节或空目录处理")));continue;}
             if(candidates.length>64){rows.put(new JSONObject().put("id","native_cache:"+kind+":unknown").put("label",label).put("cleanable",false).put("usage",new JSONObject().put("complete",false).put("reason","缓存目录超过64个原生条目，保留并核对，不用截断列表授予删除")));continue;}
             Arrays.sort(candidates,Comparator.comparing(File::getName));
-            for(File candidate:candidates){original.checkpoint();String id=candidate.getName();JSONObject row=new JSONObject().put("id","native_cache:"+kind+":"+id).put("label",label+" · "+id.substring(0,Math.min(8,id.length()))).put("cleanable",false).put("note",kind.equals("git_intake")?"删除本次下载暂存及尚未发布的源码、历史；已创建项目和原任务回执保留。确认即撤回这份缓存的后续发布资格。":"删除原脚本、输入与未固定输出的执行副本；项目、原日志和已固定成果保留。不会重新执行Skill。");
+            for(File candidate:candidates){original.checkpoint();String id=candidate.getName();JSONObject row=new JSONObject().put("id","native_cache:"+kind+":"+id).put("label",label+" · "+id.substring(0,Math.min(8,id.length()))).put("cleanable",false).put("note",kind.equals("git_intake")?"删除本次下载暂存及尚未发布的源码、历史；已创建项目和原任务回执保留。确认即撤回这份缓存的后续发布资格。":kind.equals("mcp_copy")?"删除本次程序、相对写入及未固定临时输出；不自动回写原项目。原项目、安装、Book成果和任务事实收据保留，不启动或重试程序。同UID不是安全沙箱。":"删除原脚本、输入与未固定输出的执行副本；项目、原日志和已固定成果保留。不会重新执行Skill。");
                 try{TaskStore.NativeCacheDisposition authority=tasks.nativeExecutionCacheDispositionForOwner(kind,id);row.put("nativeCache",authority.metadata()).put("cleanable",authority.disposable).put("usage",NativeStorageTree.measure(path(kind,id),original));if(!row.getJSONObject("usage").optBoolean("complete"))row.put("cleanable",false);}
                 catch(Exception unknown){original.checkpoint();row.put("usage",new JSONObject().put("complete",false).put("reason","没有同原账本的完整终态、回收或文件身份，缓存继续保留"));}rows.put(row);
             }

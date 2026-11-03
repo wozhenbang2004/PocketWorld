@@ -314,6 +314,8 @@ class JobManager:
         if "environmentBinding" in request and request["environmentBinding"] != self.environment_binding(request["environmentId"]):
             raise RequestError("Environment configuration or Companion instance changed; probe not started", 409)
         worker = request.get("worker")
+        if "effort" in request and worker != "codex_app_server":
+            raise RequestError("This metadata probe has no native effort catalog for that worker; Claude options come only from an already approved original job initialize", 409)
         group_probe = request.get("inferenceAudience") == "EXTERNAL_GROUP"
         if "inferenceAudience" in request and not group_probe:
             raise RequestError("Unknown native inference audience", 409)
@@ -508,7 +510,7 @@ class JobManager:
             return ["codex", "exec", "--json", "--sandbox", "workspace-write" if write else "read-only", prompt]
         if worker == "claude":
             return claude_command(request.get("_sessionId", str(uuid.uuid4())), write,
-                                  request.get("model"), bool(request.get("threadId")))
+                                  request.get("model"), bool(request.get("threadId")), request.get("effort"))
         if worker == "pi":
             return pi_driver.command(request["_piSession"]["id"], request["_piSession"]["directory"], request["_piSession"].get("file"))
         if worker == "kimi":
@@ -643,8 +645,10 @@ class JobManager:
                     raise RequestError(field + " is unsupported by this worker", 409)
         if "effort" in request:
             text(request["effort"], "effort", 80)
-            if request.get("worker") != "codex_app_server" or not request.get("model"):
-                raise RequestError("Effort currently requires the exact Codex catalog model; unsupported worker/options are not ignored", 409)
+            if request.get("worker") not in {"codex_app_server", "claude"} or not request.get("model"):
+                raise RequestError("Effort requires the exact native Codex/Claude model enumeration; unsupported worker/options are not ignored", 409)
+        if "modelOptionsDigest" in request and (request.get("worker") not in {"codex_app_server", "claude"} or not request.get("model") or not isinstance(request["modelOptionsDigest"], str) or not re.fullmatch(r"[a-f0-9]{64}", request["modelOptionsDigest"])):
+            raise RequestError("Native model selection requires the exact original capability digest and explicit model", 409)
         env = team_member_scope.environment(request, env, RequestError)
         prior = None
         fork_source = None
@@ -679,7 +683,7 @@ class JobManager:
                     raise RequestError("Codex resume cannot change the original tool access boundary", 409)
                 if "model" not in request and prior.get("model"):
                     request["model"] = prior["model"]
-                if "effort" not in request and prior.get("effort"):
+                if "effort" not in request and "modelOptionsDigest" not in request and prior.get("effort"):
                     request["effort"] = prior["effort"]
         elif request.get("worker") == "codex_app_server" and "resumeJobId" in request:
             raise RequestError("resumeJobId requires the exact original threadId", 409)
@@ -701,10 +705,14 @@ class JobManager:
                         raise RequestError("Claude resume cannot change the original tool access boundary", 409)
                     if "model" not in request and prior.get("model"):
                         request["model"] = prior["model"]
+                    if "effort" not in request and "modelOptionsDigest" not in request and prior.get("effort"):
+                        request["effort"] = prior["effort"]
             elif "resumeJobId" in request:
                 raise RequestError("resumeJobId requires the exact original threadId", 409)
             session_id = session_id or str(uuid.uuid4())
             checked = self._inspect_claude(env)
+            if request.get("effort") is not None and not checked.get("effortFlagVerified"):
+                raise RequestError("Claude CLI did not advertise the session-only --effort flag; no job was created", 409)
             if not checked.get("available"):
                 raise RequestError("Claude requires CLI >=2.1.259 and the verified control/session flags; run a worker probe", 409)
         pi_session = None
@@ -780,7 +788,7 @@ class JobManager:
                            resumeJobId=request.get("resumeJobId"), pendingApprovals=[])
             elif request.get("worker") == "claude":
                 job.update(protocol="claude_stream_json", readOnly=not bool(env.get("writeAllowed")),
-                           model=request.get("model"), sessionId=session_id, threadId=session_id,
+                           model=request.get("model"), effort=request.get("effort"), sessionId=session_id, threadId=session_id,
                            resumeJobId=request.get("resumeJobId"), protocolVerified=False, pendingApprovals=[])
             elif request.get("worker") == "pi":
                 job.update(protocol=pi_driver.PROTOCOL, readOnly=False, noTools=True, model=request.get("model"),
@@ -1366,7 +1374,11 @@ class JobManager:
                             raise DriverError("Original fork source changed before protocol dispatch")
                     thread = driver.fork_original_thread(original["threadId"], original["turnId"])
                 arguments = (text(codex["request"].get("prompt"), "prompt"), thread, codex["request"].get("model"))
-                result = driver.run(*arguments, effort=codex["request"].get("effort")) if job.get("worker") == "codex_app_server" else driver.run(*arguments)
+                if job.get("worker") in {"codex_app_server", "claude"}:
+                    result = driver.run(*arguments, effort=codex["request"].get("effort"),
+                                        model_options_digest=codex["request"].get("modelOptionsDigest"))
+                else:
+                    result = driver.run(*arguments)
                 if codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP":
                     result["externalGroupApiRead"] = dict(driver.group_api_facts)
                 with self.lock:

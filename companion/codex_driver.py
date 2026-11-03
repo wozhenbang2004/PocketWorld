@@ -707,12 +707,14 @@ class CodexAppServerDriver:
                 "codex_hooks": False, "plugin_hooks": False, "browser_use": False, "browser_use_external": False,
                 "computer_use": False, "multi_agent": False}, "web_search": "disabled"}
 
-    def run(self, prompt, thread_id=None, model=None, effort=None):
+    def run(self, prompt, thread_id=None, model=None, effort=None, model_options_digest=None):
         self._initialize()
         self.protocol_verified = True
         self.requested_model, self.requested_effort = model, effort
-        if effort is not None or self.runtime_version is not None:
+        if effort is not None or model_options_digest is not None or self.runtime_version is not None:
             models = self._model_catalog()
+            if model_options_digest is not None and (self.model_options["digest"] != model_options_digest or not any(row["id"] == model for row in models)):
+                raise DriverError("Codex native CLI/model options changed since owner review; no turn started")
             if effort is not None and (not model or not self._option_text(effort, 80) or not any(item["id"] == model and any(value["id"] == effort for value in item["efforts"]) for item in models)):
                 raise DriverError("Codex effort requires an exact model and its currently advertised native option; no turn started")
         self._check_group_api_mode()

@@ -202,6 +202,46 @@ public final class PluginsModule implements EngineModule {
         JSONObject approved=java.util.Objects.requireNonNull(review).consumeForHost(this,expectedDigest);
         synchronized(this){recoverMcpSecrets();requireLocalMcpInstallationTargetForOwner(approved.getJSONObject("target"));return install(list(),approved.getJSONObject("input"),null,null,approved.getJSONObject("record"));}
     }
+    /** The original supervisor uses this read-only discriminator; it is not a model command. */
+    public synchronized boolean localMcpForHost(JSONObject nativeInput)throws Exception {
+        JSONObject plugin=localPlugin(nativeInput.getString("id"));if(plugin==null)return false;JSONObject tool=McpData.find(plugin.getJSONObject("manifest").getJSONArray("tools"),nativeInput.getString("tool"));return tool!=null&&"mcp".equals(tool.optString("kind"))&&"stdio".equals(tool.optString("transport"));
+    }
+    private JSONObject localPlugin(String id)throws Exception{JSONArray all=list();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))return all.getJSONObject(i);return null;}
+    /** Private installed-program identity plus existing active/cancel slot. It approves no task:
+     * the original TaskStore must still verify the concrete consumed approval and prepared row. */
+    public static final class LocalMcpProgram implements AutoCloseable {
+        private final PluginsModule issuer;private final RunControl original;private final Invocation active;private final String pluginId,toolName,operation,hostTool,arguments,tool,configuration,summary,executionIdentity;
+        private volatile boolean closed;
+        private LocalMcpProgram(PluginsModule issuer,JSONObject plugin,JSONObject definition,JSONObject args,String operation,String hostTool,RunControl original)throws Exception {
+            this.issuer=issuer;this.original=original;pluginId=plugin.getString("id");toolName=definition.getString("name");this.operation=operation;this.hostTool=hostTool;arguments=args.toString();tool=definition.toString();configuration=plugin.getJSONObject("localMcp").getJSONObject("configuration").toString();summary=localProgramSummary(plugin,definition).toString();executionIdentity=TaskStore.capabilityFingerprint(executionBinding(plugin,definition));active=new Invocation(pluginId,original);
+        }
+        public RunControl originalControl(){return original;}public String operationId(){return operation;}public String hostTool(){return hostTool;}public String remoteToolName(){return toolName;}public String executionIdentity(){return executionIdentity;}
+        public JSONObject arguments()throws Exception{return new JSONObject(arguments);}public JSONObject configurationForHost()throws Exception{return new JSONObject(configuration);}public JSONObject scopeForHost()throws Exception{return new JSONObject(summary);}JSONObject toolForHost()throws Exception{return new JSONObject(tool);}
+        public void requireCurrentForHost()throws Exception {
+            original.check();if(closed||original.isPaused())throw new SecurityException("原本机MCP插件调用已停止或暂停");
+            synchronized(issuer){JSONObject plugin=issuer.localPlugin(pluginId);if(issuer.closed||plugin==null||issuer.active.get(operation)!=active)throw new SecurityException("原本机MCP调用或安装已撤回");JSONObject current=PluginRules.permitted(plugin,toolName,new JSONObject(arguments));if(!executionIdentity.equals(TaskStore.capabilityFingerprint(executionBinding(plugin,current)))||!configuration.equals(plugin.getJSONObject("localMcp").getJSONObject("configuration").toString()))throw new SecurityException("原本机MCP安装、配置或工具授权已变化");localProgramSummary(plugin,current);}
+            original.check();
+        }
+        @Override public void close(){closed=true;synchronized(issuer){issuer.active.remove(operation,active);}}
+    }
+    public LocalMcpProgram localMcpProgramForTask(JSONObject nativeInput,String hostTool,RunControl original)throws Exception {
+        original.check();var binding=original.hostRunIdentity();if(binding==null||!binding.taskId().equals(nativeInput.optString("_taskId"))||!binding.runId().equals(nativeInput.optString("_runId")))throw new SecurityException("本机MCP需要原任务真实控制，不能借JSON任务编号启动");
+        JSONObject args=PluginArguments.snapshot(nativeInput.getJSONObject("arguments"));for(String key:new String[]{"_nativeMcpJob","_hostOperationId","_consumedApprovalId","_nativeApprovalId","_taskId","_runId"})if(args.has(key))throw new SecurityException("模型工具参数不能提供原生任务/批准/进程证明字段");String operation=nativeInput.getString("_operationId");if(!operation.matches("[a-f0-9-]{36}"))throw new SecurityException("缺少原Runner具体prepared动作编号");
+        synchronized(this){if(closed)throw new SecurityException("原插件宿主已关闭");JSONObject plugin=localPlugin(nativeInput.getString("id"));if(plugin==null)throw new SecurityException("原本机MCP安装不存在");JSONObject tool=PluginRules.permitted(plugin,nativeInput.getString("tool"),args);
+            if(!"mcp".equals(tool.optString("kind"))||!"stdio".equals(tool.optString("transport"))||!functionName("plugin:"+plugin.getString("id")+":"+tool.getString("name")).equals(hostTool)||!installationId(plugin).equals(nativeInput.getString("expectedInstallationId"))||!plugin.getJSONObject("manifest").getString("version").equals(nativeInput.getString("expectedVersion"))||!TaskStore.capabilityFingerprint(executionBinding(plugin,tool)).equals(nativeInput.getString("expectedExecutionIdentity")))throw new SecurityException("本机MCP准确安装、工具或原生执行身份不同");
+            localProgramSummary(plugin,tool);if(active.containsKey(operation)||active.size()>=2)throw new SecurityException("原MCP操作仍在执行或原插件并发额度已满；不重派");for(Invocation current:active.values())if(current.pluginId.equals(plugin.getString("id")))throw new SecurityException("此原本机MCP插件已有请求运行，请核对原操作");
+            LocalMcpProgram program=new LocalMcpProgram(this,plugin,tool,args,operation,hostTool,original);active.put(operation,program.active);return program;
+        }
+    }
+    public synchronized JSONObject localMcpApprovalSummaryForHost(JSONObject preset)throws Exception {
+        if(!localMcpForHost(preset))return null;JSONObject plugin=localPlugin(preset.getString("id")),tool=McpData.find(plugin.getJSONObject("manifest").getJSONArray("tools"),preset.getString("tool"));if(!TaskStore.capabilityFingerprint(executionBinding(plugin,tool)).equals(preset.getString("expectedExecutionIdentity")))throw new SecurityException("原本机MCP程序身份已变化，请刷新工具清单");return localProgramSummary(plugin,tool);
+    }
+    private static JSONObject localProgramSummary(JSONObject plugin,JSONObject tool)throws Exception {
+        JSONObject record=plugin.getJSONObject("localMcp"),config=record.getJSONObject("configuration");String digest=dev.pocketengine.features.plugins.mcp.McpJson.digest(config);
+        if(!"pocketworld.native-stdio-installation.v1".equals(record.optString("format"))||!"stdio".equals(tool.optString("transport"))||!digest.equals(record.getString("configurationDigest"))||!digest.equals(tool.getString("configurationDigest"))||!config.getString("expectedSourceDigest").equals(record.getString("sourceDigest"))||!tool.getString("serverDigest").equals(record.getString("serverDigest")))throw new SecurityException("原本机MCP安装的程序与声明身份不一致");
+        JSONObject summary=new JSONObject().put("purpose","native_mcp_invoke").put("pluginId",plugin.getString("id")).put("installationId",installationId(plugin)).put("stateRevision",PluginRevisions.stateRevision(plugin)).put("version",plugin.getJSONObject("manifest").getString("version")).put("tool",tool.getString("name")).put("descriptorDigest",tool.getString("descriptorDigest")).put("configurationDigest",digest).put("sourceDigest",record.getString("sourceDigest")).put("checkoutId",config.getString("checkoutId")).put("runtimeId",config.getString("runtimeId")).put("runtimeIdentity",record.getString("runtimeIdentity")).put("executable",config.getString("executable")).put("entryPoint",config.getJSONArray("argv").getString(0)).put("argvDigest",dev.pocketengine.features.local.project.ProjectSources.digest(new JSONObject().put("argv",config.getJSONArray("argv")))).put("argvCount",config.getJSONArray("argv").length()).put("protocolVersion",config.getString("protocolVersion"));
+        for(String field:new String[]{"executableSha256","entryPointSha256","discoveryTaskId","discoveryFactsDigest","serverDigest"})summary.put(field,record.getString(field));return summary.put("osSandbox",false).put("hiddenFilesIncluded",false).put("dependencyCachesIncluded",false).put("credentialsSupported",false).put("environmentInputsSupported",false).put("risk","这次准确工具操作会独立启动上述本机程序及可见副本；相对文件写入留在本次副本，不自动回写原项目，也不保证跨调用相对目录状态。启动本身可能产生效果，同UID不是OS安全沙箱。仅此原任务准确参数审批，不重启、重发或自动下载依赖。");
+    }
     private JSONObject install(JSONArray all,JSONObject input,String restoredFrom)throws Exception {return install(all,input,restoredFrom,null);}
     private JSONObject install(JSONArray all,JSONObject input,String restoredFrom,dev.pocketengine.features.plugins.mcp.NativeMcpOAuthHost.Credential authorization)throws Exception {
         return install(all,input,restoredFrom,authorization,null);
@@ -430,6 +470,7 @@ public final class PluginsModule implements EngineModule {
         JSONArray all=list();for(int i=0;i<all.length();i++){
             JSONObject plugin=all.getJSONObject(i);if(!id.equals(plugin.getString("id")))continue;
             JSONArray tools=plugin.getJSONObject("manifest").getJSONArray("tools");if(tools.length()==0||!"mcp".equals(tools.getJSONObject(0).optString("kind")))throw new IllegalArgumentException("请选择原生登记的MCP安装");
+            if("stdio".equals(tools.getJSONObject(0).optString("transport"))){if(!installation.equals(installationId(plugin))||stateRevision!=PluginRevisions.stateRevision(plugin))throw new SecurityException("原MCP安装或修订已变化");throw new UnsupportedOperationException("本机stdio程序不能借HTTP只读探测/来源权限启动；此入口仅HTTP，stdio仅原生明确发现与原已审任务工具调用");}
             JSONObject tool=tools.getJSONObject(0),binding=new JSONObject().put("pluginId",id).put("installationId",installation).put("stateRevision",stateRevision)
                     .put("endpointDigest",McpData.digest(tool.getString("endpoint"))).put("protocolVersion",tool.getString("protocolVersion")).put("serverDigest",tool.getString("serverDigest"));
             currentMcpSourceInstallation(binding);
@@ -560,7 +601,7 @@ public final class PluginsModule implements EngineModule {
         JSONArray history=result.optJSONArray("history");result.remove("history");result.put("historyCount",history==null?0:Math.min(history.length(),PluginRevisions.HISTORY_LIMIT));
         JSONArray definitions=plugin.getJSONObject("manifest").getJSONArray("tools");
         for(int i=0;i<definitions.length();i++)if("mcp".equals(definitions.getJSONObject(i).optString("kind"))){
-            if("stdio".equals(definitions.getJSONObject(i).optString("transport"))){result.put("mcpStatus","local_task_invocation_unavailable").put("localProgramExecutionAvailable",false);break;}
+            if("stdio".equals(definitions.getJSONObject(i).optString("transport"))){result.put("mcpStatus","original_task_revalidation_required").put("localTaskInvocationImplemented",true).put("runtimeVerified",false);break;}
             McpClient client=mcpClients.get(installationId(plugin));
             result.put("mcpStatus",client!=null?(client.usable()?"ready":"needs_discovery"):
                     (McpData.VERSION.equals(definitions.getJSONObject(i).optString("protocolVersion"))?"will_revalidate":"needs_discovery"));break;
@@ -579,10 +620,8 @@ public final class PluginsModule implements EngineModule {
                 JSONObject tool=tools.getJSONObject(j);String name=tool.getString("name");boolean allowed=false;
                 if(granted!=null)for(int g=0;g<granted.length();g++)if(("tool:"+name).equals(granted.optString(g)))allowed=true;
                 if(!allowed)continue;
-                if("mcp".equals(tool.optString("kind"))){
-                    // Installation is not execution support. Only the later original-task typed
-                    // runtime bridge may publish a stdio route; never fall through to HTTP.
-                    if("stdio".equals(tool.optString("transport")))continue;
+                if("mcp".equals(tool.optString("kind"))&&"stdio".equals(tool.optString("transport")))localProgramSummary(plugin,tool);
+                if("mcp".equals(tool.optString("kind"))&&!"stdio".equals(tool.optString("transport"))){
                     McpClient client=mcpClients.get(installationId(plugin));
                     if(client!=null&&!client.usable()&&!client.needsDiscovery())continue;
                     if(client==null&&McpData.LEGACY.equals(tool.optString("protocolVersion")))continue;
@@ -600,7 +639,7 @@ public final class PluginsModule implements EngineModule {
         JSONObject binding=new JSONObject().put("pluginId",plugin.getString("id")).put("installationId",installationId(plugin))
                 .put("stateRevision",PluginRevisions.stateRevision(plugin)).put("version",plugin.getJSONObject("manifest").getString("version"))
                 .put("grantsDigest",PluginRules.grantsDigest(plugin.optJSONArray("grants"))).put("definition",JsonFiles.copy(tool));
-        if(plugin.optJSONObject("mcpAuthorization")!=null)binding.put("mcpAuthorization",JsonFiles.copy(plugin.getJSONObject("mcpAuthorization")));return binding;
+        if(plugin.optJSONObject("mcpAuthorization")!=null)binding.put("mcpAuthorization",JsonFiles.copy(plugin.getJSONObject("mcpAuthorization")));if(plugin.optJSONObject("localMcp")!=null)binding.put("localProgram",localProgramSummary(plugin,tool));return binding;
     }
     private static String installationId(JSONObject plugin){return PluginRevisions.installationId(plugin);}
     private static String functionName(String id)throws Exception{byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest(id.getBytes(java.nio.charset.StandardCharsets.UTF_8));StringBuilder name=new StringBuilder("plugin_");for(int i=0;i<12;i++)name.append(String.format(java.util.Locale.ROOT,"%02x",hash[i]));return name.toString();}

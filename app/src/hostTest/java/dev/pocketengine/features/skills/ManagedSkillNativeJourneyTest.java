@@ -43,17 +43,21 @@ public final class ManagedSkillNativeJourneyTest {
         @Override public SQLiteDatabase openOrCreateDatabase(String name,int mode,SQLiteDatabase.CursorFactory factory){return SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name),factory);}
         @Override public SQLiteDatabase openOrCreateDatabase(String name,int mode,SQLiteDatabase.CursorFactory factory,DatabaseErrorHandler handler){return SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name).getPath(),factory,handler);}
     }
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final Path temporary=Files.createTempDirectory("c2-native-skill-");final Install android=new Install(org.robolectric.RuntimeEnvironment.getApplication(),temporary.resolve("install"));
         final dev.pocketengine.features.local.runtime.RuntimeEnvironment.Package pack;final Map<String,RuntimeTool> tools=new LinkedHashMap<>();
         final EngineModule remote=new EngineModule(){public String id(){return "remote";}public JSONObject snapshot()throws Exception{return new JSONObject().put("profiles",new JSONArray());}public JSONObject handle(String name,JSONObject input){throw new AssertionError("Phone Skill must never call Companion: "+name);}};
         final AtomicReference<Exception> callbackFailure=new AtomicReference<>();final java.util.concurrent.atomic.AtomicInteger callbacks=new java.util.concurrent.atomic.AtomicInteger();final RunControl control=new RunControl();
         ManagedProjectRuntime runtime;WorkspaceModule workspace;LocalModule local;TaskStore tasks;SkillsModule skills;NativeSkillExecutionHost host;NativeSkillExecutionHost.OwnerWindow window;
-        final String project,checkout;final JSONObject task,installed,input;CompletableFuture<JSONObject> work;
+        final String project,checkout;final JSONObject task,installed,input;CompletableFuture<JSONObject> work;final ManagedScriptCallbackTransport.Factory callbackTransport;
         Fixture(String interpreter,String script,String... arguments)throws Exception {
             this(interpreter,script,Map.of(),false,arguments);
         }
         Fixture(String interpreter,String script,Map<String,String> extraResources,boolean prepareDependencies,String... arguments)throws Exception {
+            this(interpreter,script,extraResources,prepareDependencies,false,null,arguments);
+        }
+        Fixture(String interpreter,String script,Map<String,String> extraResources,boolean prepareDependencies,boolean immediateArtifacts,ManagedScriptCallbackTransport.Factory callbackTransport,String... arguments)throws Exception {
+            this.callbackTransport=callbackTransport;
             byte[] marker="self-owned Skill fixture environment; host interpreter is not redistributed\n".getBytes(StandardCharsets.UTF_8);ByteArrayOutputStream bytes=new ByteArrayOutputStream();try(ZipOutputStream zip=new ZipOutputStream(bytes)){zip.putNextEntry(new ZipEntry("share/fixture.txt"));zip.write(marker);zip.closeEntry();}byte[] archive=bytes.toByteArray();
             pack=new dev.pocketengine.features.local.runtime.RuntimeEnvironment.Package(new JSONObject().put("id","c2-managed-skill-host-fixture").put("revision","1").put("license","CC0-1.0 own marker; host tools not redistributed").put("abi","linux-x64-host-only").put("archiveSha256",ProjectSources.sha256(archive)).put("archiveBytes",archive.length).put("files",new JSONArray().put(new JSONObject().put("path","share/fixture.txt").put("bytes",marker.length).put("sha256",ProjectSources.sha256(marker)))));
             File python=Path.of(Objects.requireNonNull(System.getProperty("a25.python"),"exact actual host Python required")).toRealPath().toFile();tools.put("python3",tool("python3",python,List.of("--version")));tools.put("sh",tool("sh",new File("/bin/sh"),List.of("-c","printf own-shell-probe")));
@@ -63,14 +67,15 @@ public final class ManagedSkillNativeJourneyTest {
             String path=interpreter.equals("sh")?"scripts/main.sh":"scripts/main.py";
             installed=skills.handle("import",new JSONObject().put("source","own:managed-phone-native-fixture").put("manifest","---\nname: own-phone-skill\ndescription: 原手机托管脚本与原任务成果\n---\n只用于明确的自有验证脚本。\n").put("resources",new JSONObject(extraResources).put(path,script))).getJSONObject("skill");skills.handle("setEnabled",new JSONObject().put("id",installed.getString("id")).put("enabled",true).put("confirmed",true).put("acceptedDigest",installed.getString("digest")));
             task=tasks.startAttempt(tasks.createCapabilityTask("在手机原托管环境运行明确的自有Skill，生成并核对45.00结果","").getString("id"),"capabilities",30);control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));tasks.authorizeTools(task.getString("id"),task.getString("runId"),new JSONArray().put("skills_execute"));connectHost();
-            window=host.openOwnerWindow();window.setForeground(true);JSONObject configuration=configuration(interpreter).put("preparePinnedDependencies",prepareDependencies);var reviewed=host.inspectPhoneConfiguration(task.getString("id"),configuration);host.installConfiguration(window,reviewed,reviewed.digest);
+            window=host.openOwnerWindow();window.setForeground(true);JSONObject configuration=configuration(interpreter).put("preparePinnedDependencies",prepareDependencies);if(immediateArtifacts)configuration.put("immediatePrivateArtifacts",true);var reviewed=host.inspectPhoneConfiguration(task.getString("id"),configuration);host.installConfiguration(window,reviewed,reviewed.digest);
             input=new JSONObject().put("id",installed.getString("id")).put("revision",installed.getInt("revision")).put("digest",installed.getString("digest")).put("scriptPath",path).put("arguments",new JSONArray(arguments)).put("timeoutSeconds",20).put("maxOutputBytes",65536);String operation=tasks.journal(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control).beginOperation("skills_execute",input);input.put("_hostOperationId",operation);
         }
         static RuntimeTool tool(String name,File file,List<String> probe)throws Exception{file=file.getCanonicalFile();return new RuntimeTool(name,file,ProjectSources.sha256(Files.readAllBytes(file.toPath())),"explicit-host-skill-fixture","host installed binary, not redistributed",List.of(),probe);}
         JSONObject configuration(String runtime)throws Exception{return new JSONObject().put("format",ManagedSkillPolicy.FORMAT).put("runtimeId",runtime).put("checkoutId",checkout).put("workingDirectory",".").put("readPaths",new JSONArray().put("input/data.txt")).put("writePaths",new JSONArray().put("output/")).put("outputPaths",new JSONArray().put("output/result.bin")).put("timeoutSeconds",30).put("maxOutputBytes",65536).put("maxResultChars",12000).put("preparePinnedDependencies",false);}
         void connectHost()throws Exception {
             var projectHost=new TaskStoreProjectHost(tasks,local,id->control,event->{});local.setProjectHost(projectHost);local.setProjectReceiptSink(actual->{try{projectHost.recordBackendReceipt(actual);callbacks.incrementAndGet();}catch(Exception failed){callbackFailure.compareAndSet(null,failed);}});
-            host=new NativeSkillExecutionHost(android,skills,remote,tasks,(id,run,epoch,original)->{if(original!=control||!original.matchesHostRun(id,run,epoch))throw new SecurityException("not original Skill control");original.check();},id->{},local);
+            NativeSkillExecutionHost.LiveRun live=(id,run,epoch,original)->{if(original!=control||!original.matchesHostRun(id,run,epoch))throw new SecurityException("not original Skill control");original.check();};
+            host=callbackTransport==null?new NativeSkillExecutionHost(android,skills,remote,tasks,live,id->{},local):new NativeSkillExecutionHost(android,skills,remote,tasks,live,id->{},local,callbackTransport);
         }
         String id()throws Exception{return task.getString("id");}String operation()throws Exception{return input.getString("_hostOperationId");}
         CompletableFuture<JSONObject> execute(){work=CompletableFuture.supplyAsync(()->{try{return host.execute(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),input,Set.of("skills_execute"),control);}catch(Exception failed){throw new CompletionException(failed);}});return work;}

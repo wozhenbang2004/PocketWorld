@@ -187,10 +187,11 @@ internal fun McpInstallPreviewPage(
     runOAuthControl: ((Runnable) -> Unit)? = null
 ) {
     var localDiscoveryOpen by remember { mutableStateOf(false) }
+    var installedOpen by remember { mutableStateOf(requiredPluginId != null) }
     if (localDiscoveryOpen) {
         // Leave the original owner domain too: its epoch invalidates an in-flight prepare,
         // so a review arriving after this page closes is discarded by the Controller.
-        McpLocalDiscoveryPage(snapshot, responses, pendingCommands, loading, error, onRequest, onBack)
+        McpLocalDiscoveryPage(snapshot, responses, pendingCommands, loading, error, onRequest, onBack, onManageInstalled = { localDiscoveryOpen = false; installedOpen = true })
         return
     }
     var authorization by remember { mutableStateOf<JSONObject?>(null) }
@@ -209,7 +210,6 @@ internal fun McpInstallPreviewPage(
     var pickRequest by remember { mutableStateOf<String?>(null) }
     var pickRevision by remember { mutableLongStateOf(0L) }
     var advanced by remember { mutableStateOf(false) }
-    var installedOpen by remember { mutableStateOf(requiredPluginId != null) }
     var reconfigureRequired by remember(requiredPluginId) { mutableStateOf(false) }
     var exitConfirm by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -501,5 +501,6 @@ private fun mcpInstallStatus(status: String): String = when (status) {
     "ready" -> "会话就绪"
     "will_revalidate" -> "调用前将重新核对服务身份"
     "needs_discovery" -> "会话已失效，需要重新发现"
+    "original_task_revalidation_required" -> "本机 stdio · 原任务调用前核对程序与源码"
     else -> "连接状态待核对"
 }

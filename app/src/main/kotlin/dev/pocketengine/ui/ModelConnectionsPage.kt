@@ -104,6 +104,7 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
                 Text("${api.optString("provider")} · ${api.optString("baseUrl").ifBlank { "请先在设置中保存 API 连接" }}", fontSize = 12.sp, color = secondary)
                 ConnectionInferenceStatus(snapshot.optJSONObject("inferenceObservation"), api.optJSONObject("capabilityBinding")?.toString().orEmpty() + "|" + api.optString("model"))
                 TextButton(onClick = { execute { service.snapshot() } }, enabled = !busy) { Text("读取最新本地调用记录（不请求模型）") }
+                ModelDiagnosticsControls(service, snapshot, runOnWorker, { execute { service.snapshot() } }, busy)
                 Text("目录读取不会发送聊天。标准 /models 通常只提供模型名称，缺失的上下文、图片、工具和推理能力会显示未知；能力声明不等于模型效果已实测。", fontSize = 12.sp, lineHeight = 20.sp, color = secondary)
                 if (snapshot.optString("activeRoute") == "account") Text("以下价目只属于保留的 API 模型，不用于 ChatGPT 套餐。", style = MaterialTheme.typography.bodySmall)
                 ModelPriceControls(snapshot.optJSONObject("pricing") ?: JSONObject(), busy, error) { expected, model, revision, values, clear, saved ->

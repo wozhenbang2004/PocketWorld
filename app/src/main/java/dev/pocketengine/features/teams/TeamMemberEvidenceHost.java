@@ -42,7 +42,22 @@ public final class TeamMemberEvidenceHost implements TeamCoordinator.EvidenceFac
             EngineModule skills=features.module("skills");if(skills instanceof dev.pocketengine.features.skills.SkillsModule)value.put("skills",((dev.pocketengine.features.skills.SkillsModule)skills).catalogueForHost(ownerScope()).getJSONArray("skills"));
             JSONArray resources=new JSONArray();EngineModule attachments=features.module("attachments");if(attachments!=null){JSONArray rows=attachments.handle("list",new JSONObject()).getJSONArray("attachments");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);String mime=row.optString("mimeType");if(row.optLong("size")>65536||!mime.startsWith("text/"))continue;resources.put(new JSONObject().put("kind","attachment").put("id",row.getString("id")).put("name",row.optString("name")).put("sha256",row.getString("sha256")));}}
             EngineModule workspace=features.module("workspace");if(workspace!=null){JSONArray rows=workspace.handle("listArtifacts",new JSONObject()).getJSONArray("artifacts");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!row.optString("kind").equals("text_file"))continue;resources.put(new JSONObject().put("kind","workspace_artifact").put("id",row.getString("id")).put("name",row.optString("path")).put("sha256",row.getString("sha256")));}}
+            boolean research=researchReadAvailable(coordinator.memberScopePlan(run,member));value.put("researchReadAvailable",research);
+            if(research&&workspace instanceof dev.pocketengine.features.workspace.WorkspaceModule)value.put("researchProjects",workspace.snapshot().getJSONArray("projects"));
             require();return value.put("resources",resources).put("accountsAndCredentialsSelectable",false);
+        }
+        private boolean researchReadAvailable(TeamCoordinator.MemberScopePlan plan)throws Exception {
+            require();plan.checkCurrent();JSONObject actual=coordinator.get(run),who=plan.view();
+            return TeamCoordinator.RESEARCH_FORMAT.equals(actual.optString("researchExecutionFormat"))&&run.equals(who.getString("teamRunId"))&&"model".equals(who.getJSONObject("member").optString("runner","model"));
+        }
+        /** Owner-page metadata only. This list neither shares files nor creates a member read. */
+        public JSONObject researchProjectFiles(String projectId)throws Exception {
+            require();if(!researchReadAvailable(coordinator.memberScopePlan(run,member)))throw new SecurityException("此成员没有原持续研究读取口，未开放网页/项目范围");
+            if(projectId==null||!projectId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("请从原项目列表选择项目");
+            dev.pocketengine.features.workspace.WorkspaceModule module=workspace();if(module==null)throw new SecurityException("原项目模块不可用");
+            JSONArray source=module.handle("list",new JSONObject().put("projectId",projectId)).getJSONArray("files"),files=new JSONArray();
+            for(int i=0;i<source.length();i++){JSONObject row=source.getJSONObject(i);if(!row.optBoolean("deleted")&&"text".equals(row.optString("kind"))&&row.optLong("sizeBytes",Long.MAX_VALUE)<=2L*1024*1024)files.put(new JSONObject(row.toString()).put("projectId",projectId));}
+            require();return new JSONObject().put("projectId",projectId).put("files",files).put("selectionOnly",true).put("executionAuthorized",false);
         }
         public synchronized TaskStore.TeamMemberMaterialReview review(JSONObject input)throws Exception{
             require();pendingShared=null;sharedSelections=null;selected=capture(this,coordinator.memberScopePlan(run,member),input);pending=tasks.reviewTeamMemberMaterials(window,selected);return pending;
@@ -51,6 +66,7 @@ public final class TeamMemberEvidenceHost implements TeamCoordinator.EvidenceFac
         public synchronized TaskStore.TeamMemberMaterialReview reviewRenewal()throws Exception {
             require();pendingShared=null;sharedSelections=null;JSONObject old=current();if(!"active".equals(old.optString("state"))||old.optLong("revision")<1)throw new SecurityException("没有可续审的原有效分享版本；撤回或换材料请重新选择");
             TeamCoordinator.MemberScopePlan plan=coordinator.memberScopeRenewalPlan(run,member);JSONObject value=plan.view();for(String key:new String[]{"allowedRecords","allowedSources","skills","resources"})value.put(key,new JSONArray(old.getJSONArray(key).toString()));
+            if(old.has("researchReadAccess"))value.put("researchReadAccess",TeamResearchReadScope.checked(old.getJSONObject("researchReadAccess")));
             selected=new Selection(TeamMemberEvidenceHost.this,this,plan,value,old);selected.verifyMaterialsCurrent();pending=tasks.reviewTeamMemberMaterials(window,selected);return pending;
         }
         public synchronized TaskStore.TeamMemberMaterialGroupReview reviewTogether(JSONObject input)throws Exception {
@@ -76,14 +92,21 @@ public final class TeamMemberEvidenceHost implements TeamCoordinator.EvidenceFac
         private ReadAudience ownerAudience()throws Exception{JSONObject selected=view();return new ReadAudience(){public String ownerId(){return "owner";}public String spaceId(){return "private";}public String audienceId(){return "native-owner-review";}public long revision(){return 1;}public JSONArray allowedRecords()throws Exception{return new JSONArray(selected.getJSONArray("allowedRecords").toString());}public JSONArray allowedSources()throws Exception{return new JSONArray(selected.getJSONArray("allowedSources").toString());}public void checkCurrent()throws Exception{Selection.this.checkCurrent();}};}
     }
     private Selection capture(Page page,TeamCoordinator.MemberScopePlan plan,JSONObject input)throws Exception{
-        plan.checkCurrent();for(var keys=input.keys();keys.hasNext();)if(!Set.of("allowedRecords","allowedSources","skills","resources").contains(keys.next()))throw new SecurityException("分享选择不能携带工具授权/账号/密钥/登录状态");
+        plan.checkCurrent();for(var keys=input.keys();keys.hasNext();)if(!Set.of("allowedRecords","allowedSources","skills","resources","researchReadAccess").contains(keys.next()))throw new SecurityException("分享选择不能携带工具授权/账号/密钥/登录状态");
         JSONArray records=ReadAudience.checkedRecords(input.getJSONArray("allowedRecords")),sourceRows=ReadAudience.checkedSources(input.getJSONArray("allowedSources"),"owner","private"),skills=new JSONArray(),resources=new JSONArray();
         JSONArray requested=input.getJSONArray("skills");if(requested.length()>16)throw new IllegalArgumentException("一次最多显选16个准确技能版本");java.util.Set<String> selectedIds=new java.util.HashSet<>();
         for(int i=0;i<requested.length();i++){JSONObject chosen=requested.getJSONObject(i);if(!Set.of("id","revision","digest","paths").equals(keys(chosen))||!selectedIds.add(chosen.getString("id")))throw new SecurityException("技能须显选唯一id/版本/digest与资源路径");JSONArray paths=chosen.getJSONArray("paths");if(paths.length()<1||paths.length()>16)throw new SecurityException("技能资源路径需1至16项");JSONObject copy=new JSONObject(chosen.toString());for(int n=0;n<paths.length();n++)dev.pocketengine.features.workspace.VersionedWorkspace.path(paths.getString(n));skills.put(copy);}
         requested=input.getJSONArray("resources");if(requested.length()>32)throw new IllegalArgumentException("一次最多分享32个准确资料范围");for(int i=0;i<requested.length();i++){JSONObject chosen=requested.getJSONObject(i);if(!Set.of("kind","id","sha256","offset","chars").equals(keys(chosen)))throw new SecurityException("资料只接原冻结文件/附件的准确标识与范围");JSONObject actual=resource(chosen);String text=actual.getString("text");int offset=integer(chosen,"offset",0,Integer.MAX_VALUE),chars=integer(chosen,"chars",1,24000);int end=end(text,offset,chars);resources.put(new JSONObject(chosen.toString()).put("selectionId",java.util.UUID.randomUUID().toString()).put("chars",end-offset).put("textHash",TeamWorkFiles.hash(text)).put("totalChars",text.length()));}
-        JSONObject value=plan.view().put("allowedRecords",records).put("allowedSources",sourceRows).put("skills",skills).put("resources",resources);page.require();plan.checkCurrent();Selection selected=new Selection(this,page,plan,value);selected.verifyMaterialsCurrent();return selected;
+        JSONObject value=plan.view().put("allowedRecords",records).put("allowedSources",sourceRows).put("skills",skills).put("resources",resources);
+        if(input.has("researchReadAccess")){
+            JSONObject requestedRead=input.getJSONObject("researchReadAccess");
+            if((requestedRead.getJSONArray("webOrigins").length()>0||requestedRead.getJSONArray("projectFiles").length()>0)&&!page.researchReadAvailable(plan))throw new SecurityException("仅原持续研究模型成员可显选网页/项目读取；不支持的成员请单独选择原资料");
+            value.put("researchReadAccess",TeamResearchReadAccess.capture(requestedRead,workspace()));
+        }
+        page.require();plan.checkCurrent();Selection selected=new Selection(this,page,plan,value);selected.verifyMaterialsCurrent();return selected;
     }
     void checkMaterials(JSONObject selected,ReadAudience audience)throws Exception{
+        TeamResearchReadAccess.check(selected.optJSONObject("researchReadAccess"),workspace());
         if(audience!=null)audience.checkCurrent();EngineModule memory=features.module("memory");JSONArray records=selected.getJSONArray("allowedRecords");if(records.length()>0&&memory==null)throw new SecurityException("原记忆模块不可用");for(int i=0;i<records.length();i++){JSONObject expected=records.getJSONObject(i),actual=memory.handle("get",new JSONObject().put("scope",ownerScope()).put("id",expected.getString("id"))).getJSONObject("record");if(actual.getLong("revision")!=expected.getLong("revision")||!actual.optBoolean("active"))throw new SecurityException("所选记忆已换版/撤回/失效，不替换为当前全文");}
         JSONArray skillRows=selected.getJSONArray("skills");EngineModule skills=features.module("skills");for(int i=0;i<skillRows.length();i++){JSONObject expected=skillRows.getJSONObject(i);if(!(skills instanceof dev.pocketengine.features.skills.SkillsModule))throw new SecurityException("原技能模块不可用");JSONObject actual=skills.handle("get",new JSONObject().put("scope",ownerScope()).put("id",expected.getString("id"))).getJSONObject("skill");if(actual.optInt("revision")!=expected.getInt("revision")||!actual.optString("digest").equals(expected.getString("digest"))||!actual.optBoolean("enabled"))throw new SecurityException("已显选技能换版/停用，不继承旧选择");}
         JSONArray refs=selected.getJSONArray("resources");for(int i=0;i<refs.length();i++){JSONObject expected=refs.getJSONObject(i),actual=resource(expected);if(!expected.getString("textHash").equals(TeamWorkFiles.hash(actual.getString("text"))))throw new SecurityException("所选资料内容身份改变");}
@@ -97,6 +120,7 @@ public final class TeamMemberEvidenceHost implements TeamCoordinator.EvidenceFac
     void checkMaterialMetadata(JSONObject selected,ReadAudience audience)throws Exception {
         if(Thread.holdsLock(tasks))throw new IllegalStateException("来源元数据复核不能持Tasks锁进入Book或模块");
         if(sourceCurrent==null)throw new SecurityException("原生来源当前性校验未挂载");
+        TeamResearchReadAccess.check(selected.optJSONObject("researchReadAccess"),workspace());
         audience.checkCurrent();EngineModule memory=features.module("memory");
         if(!(memory instanceof dev.pocketengine.features.memory.MemoryModule)){
             if(audience.allowedRecords().length()>0||audience.allowedSources().length()>0)throw new SecurityException("原记忆模块未挂载");
@@ -112,6 +136,8 @@ public final class TeamMemberEvidenceHost implements TeamCoordinator.EvidenceFac
         if(kind.equals("workspace_artifact")){EngineModule module=features.module("workspace");if(module==null)throw new SecurityException("原文件成果模块不可用");value=module.handle("readArtifact",new JSONObject().put("artifactId",id));if(!sha.equals(value.getString("sha256"))||!value.optString("kind").equals("text_file"))throw new SecurityException("原冻结文字成果身份已变化");return new JSONObject().put("text",value.getString("content"));}
         throw new SecurityException("此分享不能选择私有账号、密钥、登录状态、远端会话或任意文件路径");
     }
+    private dev.pocketengine.features.workspace.WorkspaceModule workspace(){EngineModule module=features.module("workspace");return module instanceof dev.pocketengine.features.workspace.WorkspaceModule?(dev.pocketengine.features.workspace.WorkspaceModule)module:null;}
+    JSONObject researchRead(JSONObject scope,String name,JSONObject args,dev.pocketengine.core.RunControl original,dev.pocketengine.core.RunControl.AuthorityCheck current)throws Exception{return TeamResearchReadAccess.read(scope,name,args,workspace(),original,current);}
     static Set<String> keys(JSONObject value){java.util.HashSet<String> keys=new java.util.HashSet<>();value.keys().forEachRemaining(keys::add);return keys;}
     static int integer(JSONObject value,String key,int min,int max)throws Exception{Object raw=value.get(key);if(!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<min||((Number)raw).longValue()>max)throw new IllegalArgumentException("准确整数范围无效："+key);return ((Number)raw).intValue();}
     static int end(String text,int offset,int chars){if(offset<0||offset>text.length()||chars<1)throw new IllegalArgumentException("原文范围越界");int end=(int)Math.min(text.length(),(long)offset+chars);if(offset>0&&offset<text.length()&&Character.isLowSurrogate(text.charAt(offset))&&Character.isHighSurrogate(text.charAt(offset-1)))throw new IllegalArgumentException("原文起点不能拆Unicode字符");if(end>offset&&end<text.length()&&Character.isHighSurrogate(text.charAt(end-1))&&Character.isLowSurrogate(text.charAt(end)))end--;if(end==offset&&offset<text.length())throw new IllegalArgumentException("所选范围不足容纳一个完整Unicode字符");return end;}

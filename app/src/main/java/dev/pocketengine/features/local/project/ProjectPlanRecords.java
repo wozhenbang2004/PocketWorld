@@ -45,7 +45,10 @@ public final class ProjectPlanRecords {
     public static void requireInline(JSONObject args)throws Exception {
         if(args.has("planRef")||args.has("planDigest"))throw new IllegalArgumentException("inline plan与原生planRef不可混用");if(!args.has("plan"))throw new IllegalArgumentException("需要原完整plan或planRef");
         if(args.toString().length()>30000||!lossless(args))throw new IllegalArgumentException("旧inline方案超过原journal可无损记录的30k参数/12k字符串/200项数组范围；请用project_plan返回的原生planRef，不会裁剪后执行");
-        ProjectBuildPlan.verified(args.getJSONObject("plan"));
+        JSONObject plan=ProjectBuildPlan.verified(args.getJSONObject("plan"));
+        // Byte plans retain full before/after bodies only in the original native record.
+        // Do not re-attach a small encoded body through the legacy inline compatibility path.
+        JSONArray steps=plan.getJSONArray("steps");for(int i=0;i<steps.length();i++){JSONArray files=steps.getJSONObject(i).getJSONObject("payload").optJSONArray("files");if(files!=null)for(int n=0;n<files.length();n++)if(ProjectExactPatch.encodedBytes(files.getJSONObject(n)))throw new IllegalArgumentException("原字节补丁需使用同任务的原生planRef与planDigest，不回传整文件Base64 inline方案");}
     }
     private static boolean lossless(Object value)throws Exception {
         if(value instanceof String)return ((String)value).length()<=12000;
@@ -63,7 +66,7 @@ public final class ProjectPlanRecords {
         if(ProjectManagedOutput.selection(payload.optJSONObject("artifactSelection"))){JSONObject selected=payload.getJSONObject("artifactSelection");payload.remove("artifactSelection");payload.put("generatedFile",ProjectManagedOutput.summary(selected));}
         if(Integer.valueOf(1).equals(payload.opt("gitProtocolVersion"))){JSONObject git=ProjectGit.semantic(payload);payload.remove("gitRequest");payload.put("git",git);}
         for(String key:new String[]{"beforeContent","afterContent"})if(payload.has(key)){Object text=payload.remove(key);if(text instanceof String)result.put(key+"Bytes",((String)text).getBytes(StandardCharsets.UTF_8).length);}
-        JSONArray files=payload.optJSONArray("files");if(files!=null){JSONArray review=new JSONArray();for(int i=0;i<files.length();i++){JSONObject file=new JSONObject(files.getJSONObject(i).toString());file.remove("content");file.remove("beforeContent");review.put(file);}payload.put("files",review);}
+        JSONArray files=payload.optJSONArray("files");if(files!=null){JSONArray review=new JSONArray();for(int i=0;i<files.length();i++){JSONObject file=new JSONObject(files.getJSONObject(i).toString());file.remove("content");file.remove("beforeContent");file.remove("contentBase64");file.remove("beforeContentBase64");review.put(file);}payload.put("files",review);}
         return result.put("request",payload).put("fullContentOmitted",true);
     }
 }

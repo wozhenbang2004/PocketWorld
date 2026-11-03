@@ -97,7 +97,8 @@ internal fun NativeProjectTerminal(task: UiTask) {
                     val page = withContext(Dispatchers.IO) { original.read(cursor) }
                     nativeStatus = page.optString("nativeStatus", "unknown")
                     if (nativeStatus != "running" || page.optBoolean("inputUncertain")) takingInput = false
-                    if (page.optBoolean("outputTruncated")) { incomplete = true; takingInput = false; notice = "原日志已达8MiB上限，屏幕不是完整当前输出；已关闭输入，请在原任务明确停止并核对。" }
+                    if (page.optBoolean("logIncompleteTail")) { incomplete = true; takingInput = false; notice = "原日志末条未写完整，仅显示此前完整记录；原字节保留，已关闭输入，请核对原任务回执。" }
+                    else if (page.optBoolean("outputTruncated")) { incomplete = true; takingInput = false; notice = "原日志已达8MiB上限，屏幕不是完整当前输出；已关闭输入，请在原任务明确停止并核对。" }
                     web?.display(page)
                     if (page.optBoolean("terminal") && !page.optBoolean("hasMore") && page.getJSONArray("chunks").length() == 0) break
                 }

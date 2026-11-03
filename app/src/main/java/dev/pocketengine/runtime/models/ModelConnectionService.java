@@ -26,6 +26,8 @@ public final class ModelConnectionService {
     private final CatalogHttpClient http;
     private final Clock clock;
     private final ConnectionInferenceObservations inferenceObservations;
+    private volatile dev.pocketengine.store.TaskStore ownerTasks;
+    private JSONObject lastProbe;
     private Attempt attempt;
     private record Attempt(ModelBinding binding, ModelCatalog.Ticket ticket, long started, String status, String code) { }
 
@@ -65,6 +67,26 @@ public final class ModelConnectionService {
                     fact.source==ModelFacts.Source.OWNER_OVERRIDE?ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE:ContextBudgetPolicy.SourceKind.PROVIDER_METADATA,
                     Math.max(1,view.ownerRevision()),Math.max(1,fact.observedAtMillis));
         });
+    }
+
+    /** Native owner mounting only. Never accepts a replacement for the original TaskStore. */
+    public synchronized void attachOwnerStore(dev.pocketengine.store.TaskStore tasks){
+        Objects.requireNonNull(tasks);if(ownerTasks!=null&&ownerTasks!=tasks)throw new SecurityException("original_model_probe_store_required");ownerTasks=tasks;
+    }
+    public JSONObject probe(ModelBinding expected,boolean image,RunControl control)throws Exception {
+        dev.pocketengine.store.TaskStore tasks=ownerTasks;if(tasks==null)throw new IllegalStateException("原模型诊断账本尚未挂载");
+        final ModelConfig captured;final long selection;
+        synchronized(settings){captured=requireProbeConfig(expected);selection=settings.apiSelectionRevision();synchronized(this){lastProbe=null;}}
+        try(var usage=tasks.beginModelCapabilityProbe(java.util.UUID.randomUUID().toString(),control,image)){
+            var nativeTarget=usage.target();
+            dev.pocketengine.runtime.models.InferenceAudiencePolicy.require(captured,NativeInferenceScope.ownerApp("owner","private",nativeTarget.context.taskId,nativeTarget.context.runId,nativeTarget.context.epoch,control),control);
+            var target=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(nativeTarget,()->{control.check();synchronized(settings){if(settings.apiSelectionRevision()!=selection||!settings.matchesApiCatalogRoute(captured))throw new SecurityException("原模型配置已变化，探测已停止");requireProbeConfig(expected);}});
+            try{JSONObject result=ModelCapabilityProbe.run(captured,image,control,target);control.check();
+                synchronized(settings){if(settings.apiSelectionRevision()!=selection||!settings.matchesApiCatalogRoute(captured))throw new SecurityException("原模型配置已变化，旧探测未用于当前模型");requireProbeConfig(expected);}
+                result.put("selectionRevision",selection);JSONObject ref=usage.reference();tasks.event(ref.getString("taskId"),ref.getString("runId"),ref.getInt("epoch"),new JSONObject().put("type","model_capability_probe").put("probe",result));
+                JSONObject retained=new JSONObject(result.toString()).put("selectionRevision",selection).put("inferenceReference",ref);synchronized(this){lastProbe=retained;}usage.finish("completed");return new JSONObject(retained.toString());
+            }catch(Exception failure){usage.finish(control.isCancelled()||failure instanceof InterruptedException?"cancelled":"failed");throw failure;}
+        }
     }
 
     public ModelCatalog.View resolve(ModelConfig selected) throws Exception {
@@ -109,6 +131,14 @@ public final class ModelConnectionService {
                     .put("modelGroups",settings.modelGroupsSnapshot()).put("catalogEnabled",binding!=null).put("connections",settings.apiConnectionsSnapshot()).put("maxCatalogAgeMillis",MAX_CATALOG_AGE_MILLIS)
                     .put("modelsEndpoint",binding==null?defaultEndpoint(current):binding.modelsEndpoint().toASCIIString())
                     .put("catalogFormat",binding==null?ModelCatalogRoutes.defaultFormat(current.provider).name():binding.format().name());
+            out.put("probeSelectionRevision",settings.apiSelectionRevision());
+            synchronized(this){if(lastProbe!=null&&current.capabilityBinding!=null
+                    &&settings.matchesApiCatalogRoute(current)
+                    &&lastProbe.optLong("selectionRevision",-1)==settings.apiSelectionRevision()
+                    &&current.capabilityBinding.equals(ModelBinding.fromJson(lastProbe.getJSONObject("binding")))
+                    &&current.model.equals(lastProbe.optString("model"))
+                    &&ModelRoutePlan.configurationDigest(current).equals(lastProbe.optString("configurationDigest")))
+                out.put("capabilityProbe",new JSONObject(lastProbe.toString()));}
             try{ModelConfig active=settings.get();out.put("activeRoute",active.usesAccount()?"account":"api_key").put("nativeSelection",active.publicJson());}catch(Exception unavailable){out.put("selectionUnavailable",true).put("selectionMessage","所选模型组或原连接已变化；请重新核对用途选择。没有回退。");}
             JSONArray models=new JSONArray();
             if(binding!=null){
@@ -191,6 +221,12 @@ public final class ModelConnectionService {
         }
     }
 
+    /** Diagnostics bind the selected API profile even when metadata lookup was never enabled. */
+    private ModelConfig requireProbeConfig(ModelBinding expected) throws Exception {
+        ModelConfig current=settings.apiConfigForCatalog();
+        if(expected==null||!expected.equals(current.capabilityBinding)||!settings.matchesApiCatalogRoute(current))throw new ModelRequestPolicy.Rejected("stale_model_binding","原API连接、密钥或配置修订已变化，探测未继续；没有改换模型。");
+        return current;
+    }
     private void requireBinding(ModelBinding expected) throws Exception {
         if(expected==null||!expected.equals(settings.apiCatalogBinding())||!settings.matchesApiCatalogRoute(settings.apiConfigForCatalog()))throw new ModelRequestPolicy.Rejected("stale_model_binding","模型目录、连接或密钥修订已变化，请刷新；没有使用旧能力或切换模型。");
     }

@@ -9,22 +9,34 @@ if (selected.isEmpty() || selected.any { !registry.containsKey(it) }) {
 }
 def entries = selected.collect { registry[it] }
 def classes = entries.collectMany { [it['class']] + (it.additionalClasses ?: []) }.unique()
-def sources = (classes + entries.collectMany { it.helpers }).unique().collect { it.replace('.', '/') + '.java' }
 def sourceRoots = ['src/hostTest/java', 'src/test/java']
-sources.each { path ->
-    if (sourceRoots.count { file(it + '/' + path).isFile() } != 1) {
-        throw new GradleException('Expected one exact registered host-test source: ' + path)
+def kotlinSourceRoots = ['src/test/kotlin']
+def sources = []
+def kotlinSources = []
+(classes + entries.collectMany { it.helpers }).unique().each { name ->
+    def relative = name.replace('.', '/')
+    def javaPath = relative + '.java'
+    def kotlinPath = relative + '.kt'
+    def javaCount = sourceRoots.count { file(it + '/' + javaPath).isFile() }
+    def kotlinCount = kotlinSourceRoots.count { file(it + '/' + kotlinPath).isFile() }
+    if (javaCount + kotlinCount != 1) {
+        throw new GradleException('Expected one exact registered host-test source: ' + name)
     }
+    if (javaCount == 1) sources.add(javaPath)
+    else kotlinSources.add(kotlinPath)
 }
 // Do not compile the unrelated ordinary test matrix or all hostTest classes.
 // The shared Android-compatible HTTP helper lives in src/test; exact includes
 // below still exclude every unrelated ordinary test (and helper tests do not run).
 android.sourceSets.test.java.setSrcDirs(sourceRoots)
 android.sourceSets.test.java.setIncludes(sources as Set)
-// Kotlin has its own conventional test roots; the registered host sources are Java.
-// Keep unrelated ordinary Compose/state test sources out of this selected compile.
+// Only the explicitly registered Kotlin classes enter the common test source set.
+// Variant-specific and unrelated ordinary Compose/state roots remain excluded.
 kotlin.sourceSets.matching { it.name in ['test', 'testDebug', 'testRelease'] }.configureEach {
-    kotlin.setSrcDirs([])
+    if (name == 'test' && !kotlinSources.isEmpty()) {
+        kotlin.setSrcDirs(kotlinSourceRoots)
+        kotlin.setIncludes(kotlinSources as Set)
+    } else kotlin.setSrcDirs([])
 }
 
 tasks.withType(Test).configureEach {
@@ -58,6 +70,7 @@ tasks.withType(Test).configureEach {
         new File(report, 'classpath.txt').text = classpath.files.collect { it.absolutePath }.join(System.lineSeparator()) + System.lineSeparator()
         new File(report, 'gradle-selection.json').text = JsonOutput.prettyPrint(JsonOutput.toJson([
             groups: selected, classes: classes, sources: sources, sourceRoots: sourceRoots,
+            kotlinSources: kotlinSources, kotlinSourceRoots: kotlinSourceRoots,
             dependencyLock: 'app/gradle.lockfile', testTask: path,
             workingDirectory: workingDir.absolutePath, gatewaySource: systemProperties['pocket.gateway.source'],
             junitXmlDirectory: reports.junitXml.outputLocation.get().asFile.absolutePath,

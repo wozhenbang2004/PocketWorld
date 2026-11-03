@@ -29,6 +29,10 @@ public final class RemoteTaskRequestTest {
         assertThrows(SecurityException.class,()->RemoteTaskRequest.first(coding().put("worker","pi").put("readOnly",true)));assertThrows(IllegalArgumentException.class,()->RemoteTaskRequest.first(coding().put("worker","pi").put("argv",new JSONArray().put("pi").put("--tools").put("bash"))));
         assertThrows(SecurityException.class,()->RemoteTaskRequest.first(coding().put("worker","pi").put("sessionFile","/private/unreviewed.jsonl")));
     }
+    @Test public void firstCodexCanPinActualEffortButClaudeWaitsForOriginalApprovedSessionCatalog()throws Exception {
+        JSONObject actual=RemoteTaskRequest.first(coding().put("model","fixture-model").put("effort","ultra").put("modelOptionsDigest","c".repeat(64)));assertEquals("ultra",actual.getString("effort"));assertEquals("c".repeat(64),actual.getString("modelOptionsDigest"));
+        assertThrows(SecurityException.class,()->RemoteTaskRequest.first(coding().put("worker","claude").put("model","fixture-model").put("effort","high")));assertThrows(SecurityException.class,()->RemoteTaskRequest.first(coding().put("effort","ultra")));assertThrows(SecurityException.class,()->RemoteTaskRequest.first(coding().put("model","fixture-model").put("modelOptionsDigest","not-a-digest")));
+    }
     @Test public void duplicateOrUnavailableNativeEnvironmentIsNeverGuessed()throws Exception {
         JSONObject env=new JSONObject().put("id","project").put("workers",new JSONArray().put(new JSONObject().put("id","codex_app_server").put("available",true)));
         assertEquals("project",RemoteTaskRequest.environment(new JSONObject().put("environments",new JSONArray().put(env)),"project","codex_app_server").getString("id"));

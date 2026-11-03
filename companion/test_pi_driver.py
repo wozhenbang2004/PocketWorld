@@ -16,7 +16,7 @@ from pocket_companion import JobManager, RequestError, worker_capabilities
 
 TOKEN = "pi-fixture-only-not-a-real-companion-credential-123456789"
 FIXTURE = r'''
-import json, sys, time
+import json, sys, time, threading
 from pathlib import Path
 mode=sys.argv[1];args=sys.argv[2:]
 def emit(v):print(json.dumps(v,ensure_ascii=False),flush=True)
@@ -74,6 +74,12 @@ for line in sys.stdin:
         if mode=='tool':emit({'type':'tool_execution_start','toolCallId':'bad','toolName':'bash','args':{'command':'DO_NOT_EXECUTE'}});continue
         if mode=='tool-message':emit({'type':'message_end','message':{'role':'assistant','content':[{'type':'toolCall','name':'bash','arguments':{'command':'DO_NOT_EXECUTE'}}],'stopReason':'toolUse'}});continue
         if mode=='extension-ui':emit({'type':'extension_ui_request','id':'ui','method':'confirm','message':'not approval'});continue
+        if mode=='wait-success':
+            def release_after_explicit_fixture_marker():
+                while not Path('release-pi-turn').exists():time.sleep(.01)
+                done()
+            threading.Thread(target=release_after_explicit_fixture_marker,daemon=True).start()
+            continue
         if mode in {'wait','abort-ack-only'}:continue
         done()
     elif kind=='abort':

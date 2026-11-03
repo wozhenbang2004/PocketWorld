@@ -18,10 +18,18 @@ import org.json.JSONObject;
 /** One original read-only research child: native audience, SQL journal and compactor.
  * It neither instantiates another agent loop nor exposes owner memory/history defaults. */
 public final class TeamResearchContext implements AutoCloseable {
-    private static final java.util.List<String> ORDERED_READS=java.util.List.of("team_materials","memory_search","memory_recall","team_read_source","team_read_material","skills_list","skills_read","team_send_message",TaskStoreMemoryReader.RAW_QUERY,TaskStoreMemoryReader.RAW_READ);
+    private static final java.util.List<String> ORDERED_READS=java.util.List.of("team_materials","memory_search","memory_recall","team_read_source","team_read_material","skills_list","skills_read","team_send_message",TaskStoreMemoryReader.RAW_QUERY,TaskStoreMemoryReader.RAW_READ,TeamResearchReadAccess.WEB,TeamResearchReadAccess.FILES,TeamResearchReadAccess.READ);
     private static final Set<String> READS=Set.copyOf(ORDERED_READS);
     public static boolean readTool(String tool){return READS.contains(tool);}
+    /** Data-only role catalogue. A run still needs its exact native material scope below. */
     public static JSONArray toolNames(){JSONArray names=new JSONArray();for(String name:ORDERED_READS)names.put(name);return names;}
+    /** Only the native frozen material scope may add the three optional read tools. */
+    public static JSONArray toolNames(JSONObject materials)throws Exception {
+        JSONObject selected=dev.pocketengine.features.teams.TeamResearchReadScope.checked(materials.optJSONObject("researchReadAccess"));
+        java.util.HashSet<String> optional=new java.util.HashSet<>();JSONArray extra=TeamResearchReadAccess.tools(selected);
+        for(int i=0;i<extra.length();i++)optional.add(extra.getJSONObject(i).getJSONObject("function").getString("name"));
+        JSONArray names=new JSONArray();for(String name:ORDERED_READS)if(!TeamResearchReadAccess.supports(name)||optional.contains(name))names.put(name);return names;
+    }
     private final CapabilityPort port;private final RunJournal journal;
     private TeamResearchContext(CapabilityPort port,RunJournal journal){this.port=port;this.journal=journal;}
     CapabilityPort port(){return port;}

@@ -107,8 +107,11 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                                     onOpenArtifact = controller::openGroupArtifact,
                                     onReviewTask = { selection -> controller.focusTask(selection.taskId) })
                             }
-                            "memoryReview" -> MemoryReviewNamespacePage(snapshot, responses, pending, error,
-                                { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, controller::selectMemoryNamespace, controller::openOwnerSource, { section = null }, controller::dismissOwnerSource)
+                            "memoryReview" -> {
+                                MemoryReviewNamespacePage(snapshot, responses, pending, error,
+                                    { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, controller::selectMemoryNamespace, controller::openOwnerSource, { section = null }, controller::dismissOwnerSource, controller::openProjectMemoryArchive)
+                                NativeOwnerDataArchives(controller.ownerArchives, showLauncher = false)
+                            }
                             "mcp" -> McpInstallPreviewPage(snapshot, responses, pending, "snapshot" in pending, error,
                                 { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, controller::pickMcpConfig,
                                 { val task = controller.taskMcpPreparation?.optString("taskId"); if (!task.isNullOrBlank()) { controller.focusTask(task); close() } else section = null }, controller.taskMcpPreparation?.optString("pluginId"), controller.taskMcpPreparation?.optString("tool"), nativeHost = controller.pluginExecutionHost(), runOAuthWork = controller::runPluginCatalogWork, runOAuthControl = controller::runEcosystemControlWork)

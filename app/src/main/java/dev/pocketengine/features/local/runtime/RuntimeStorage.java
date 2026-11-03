@@ -31,7 +31,12 @@ public final class RuntimeStorage {
     public static final class Maintenance implements AutoCloseable {private final RuntimeStorage issuer;private final AutoCloseable original;private boolean closed;private Maintenance(RuntimeStorage issuer,AutoCloseable original){this.issuer=issuer;this.original=original;}@Override public synchronized void close()throws Exception{if(!closed){closed=true;original.close();}}}
     public Maintenance beginMaintenance()throws Exception {return new Maintenance(this,android==null?environments.beginOwnerMaintenance():android.beginOwnerStorageMaintenance());}
     public void requireCurrent(Entry entry,RunControl original)throws Exception {if(entry==null||entry.issuer!=this||!entry.runtimeIdentity.equals(runtime.identity()))throw new SecurityException("原存储审阅不是当前运行环境");boolean retained=false;for(Target current:targets())if(current.id.equals(entry.target.id)&&current.cleanable&&current.file.equals(entry.target.file))retained=true;if(!retained)throw new SecurityException("原存储范围已成为当前环境或身份变化");entry.snapshot.requireCurrent(original);}
-    public JSONObject clean(Entry entry,Maintenance held,RunControl original)throws Exception {if(entry==null||entry.issuer!=this||held==null||held.issuer!=this||held.closed||!entry.runtimeIdentity.equals(runtime.identity()))throw new SecurityException("没有原运行环境的当前清理租约");return entry.snapshot.delete(original).put("id",entry.target.id).put("projectFilesDeleted",false).put("runtimeHomeDeleted",false);}
+    public JSONObject clean(Entry entry,Maintenance held,RunControl original)throws Exception {if(entry==null||entry.issuer!=this||held==null||held.issuer!=this||held.closed||!entry.runtimeIdentity.equals(runtime.identity()))throw new SecurityException("没有原运行环境的当前清理租约");
+        // Do not repeat the full pair inventory here: an earlier member of this
+        // same approved pair may already be gone. Recheck only its independent
+        // active publication fence before the original exact-snapshot deletion.
+        if(android!=null&&(entry.target.id.startsWith("runtime:generation:")||entry.target.id.startsWith("runtime:links:")))android.requireOwnerStoragePublication();
+        return entry.snapshot.delete(original).put("id",entry.target.id).put("projectFilesDeleted",false).put("runtimeHomeDeleted",false);}
     public JSONObject observeFromOriginal(JSONObject nativeScope,RunControl original)throws Exception {
         original.checkpoint();String id=nativeScope.getString("id");File target;
         if(id.equals("runtime:temporary"))target=tmp;

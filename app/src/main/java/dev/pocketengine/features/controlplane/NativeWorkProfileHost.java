@@ -38,6 +38,30 @@ public final class NativeWorkProfileHost {
         if(captured.usesAccount())throw new SecurityException("CHATGPT_PLAN_APP_ONLY");
         RelaySource selected=new RelaySource(this,tasks,task,run,epoch,original,frozen,captured);selected.checkCurrent();return selected;
     }
+    /** Read-only source review for the existing native gateway-only continuation. No fake owner
+     * Page, new task or execution authority is created; selection requires its actual native approval. */
+    public GatewayReview reviewGatewayParent(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.store.TaskStore.GatewayParentRunReview review)throws Exception {
+        if(review==null||!review.issuedBy(tasks))throw new SecurityException("original_gateway_profile_review_required");review.checkCurrent();JSONObject scope=review.view(),task=tasks.get(scope.getString("parentTaskId"),false);
+        if(task.optJSONObject("workProfileRef")==null){if(task.optJSONObject("workProfileIntent")!=null)throw new SecurityException("待启动工作配置须先回原任务入口审阅；仅网关恢复不能创建首次授权");return null;}
+        JSONObject frozen=tasks.workProfileRunSnapshot(scope.getString("parentTaskId"),scope.getString("previousParentRunId"),scope.getInt("previousParentEpoch"));RunControl observation=new RunControl();
+        GatewayReview inspected=new GatewayReview(this,tasks,review,frozen,WorkProfileResolver.resolveStored(frozen,sources,observation),observation);inspected.checkCurrent();return inspected;
+    }
+    public static final class GatewayReview {
+        private final NativeWorkProfileHost issuer;private final dev.pocketengine.store.TaskStore tasks;private final dev.pocketengine.store.TaskStore.GatewayParentRunReview review;
+        private final String frozen,fingerprint;private final WorkProfileResolver.Resolution resolution;private final RunControl observation;private boolean selected;
+        private GatewayReview(NativeWorkProfileHost issuer,dev.pocketengine.store.TaskStore tasks,dev.pocketengine.store.TaskStore.GatewayParentRunReview review,JSONObject frozen,WorkProfileResolver.Resolution resolution,RunControl observation)throws Exception{this.issuer=issuer;this.tasks=tasks;this.review=review;this.frozen=frozen.toString();fingerprint=WorkProfile.fingerprint(frozen);this.resolution=resolution;this.observation=observation;}
+        public void checkCurrent()throws Exception {
+            review.checkCurrent();JSONObject saved=new JSONObject(frozen);JSONObject current=tasks.workProfileRunSnapshot(saved.getString("taskId"),saved.getString("runId"),saved.getInt("epoch"));
+            if(!fingerprint.equals(WorkProfile.fingerprint(current)))throw new SecurityException("original_gateway_profile_snapshot_changed");resolution.checkCurrent(observation);
+        }
+        public ModelConfig relayModel()throws Exception{checkCurrent();return resolution.models().get("RELAY");}
+        public JSONObject view()throws Exception{checkCurrent();JSONObject saved=new JSONObject(frozen);return new JSONObject().put("profileId",saved.getString("profileId")).put("profileRevision",saved.getLong("profileRevision")).put("resolutionDigest",saved.getString("resolutionDigest")).put("relaySourceKind",resolution.models().containsKey("RELAY")?"frozen_original_work_profile_RELAY":"original_host_RELAY").put("configurationApplied",false).put("executionAuthorized",false);}
+        public Selection select(dev.pocketengine.features.RemoteOwnerWorkflows.GatewayParentRunApproval approval,RunControl original)throws Exception {
+            if(approval==null||!approval.issuedBy(tasks)||approval.review()!=review||original==null||original.hasHostRun())throw new SecurityException("native_gateway_profile_approval_required");
+            approval.checkCurrent();checkCurrent();original.check();JSONObject saved=new JSONObject(frozen);
+            synchronized(this){if(selected)throw new SecurityException("gateway_profile_review_already_selected");selected=true;return new Selection(issuer,resolution,original,new TaskReview(saved.getString("taskId"),saved.getString("runId"),saved.getInt("epoch"),fingerprint));}
+        }
+    }
     /** Opaque source from this host + verified original TaskStore snapshot. No constructor or JSON
      * factory is exposed; the original gateway owner still approves the exact child/target scope. */
     public static final class RelaySource implements dev.pocketengine.features.proxy.LoopbackRelay.ConfigSource {

@@ -87,6 +87,7 @@ internal fun SkillExecutionReviewPage(
                     ExecutionReviewValue(if (phone) "复制进副本的输入路径" else "可读取的工作区路径", executionReviewLines(request.getJSONArray("readPaths")))
                     ExecutionReviewValue(if (phone) "声明的输出写入范围（非 OS 限制）" else "可写入的工作区路径", executionReviewLines(request.getJSONArray("writePaths")))
                     ExecutionReviewValue("输出目标", executionReviewLines(request.getJSONArray("outputPaths")))
+                    if (phone && request.optJSONObject("nativeExecutionContract")?.optBoolean("immediatePrivateArtifacts") == true) ExecutionReviewValue("运行中私有成果", "允许仅把上述准确输出文件用 pocketworld share 保存到本应用的原私人任务，累计不超过本次成果预算。不是公开上传或跨应用分享，不表示任务完成；暂停、停止或原进程未知后不接受迟到发布。")
                     Text("不以 / 结尾的范围仅包含该文件；以 / 结尾的范围包含该目录及子目录。", fontSize = 13.sp, lineHeight = 21.sp)
                     ExecutionReviewValue("网络与输入", if (phone) "网络可能可达；标准输入关闭；使用独立最小环境。技能副本仅尝试设置只读权限，同 UID 进程可以自行改变该权限。" else "网络禁止；标准输入关闭。技能包只读挂载。")
                     ExecutionReviewValue("执行与输出上限", "${request.getInt("timeoutSeconds")} 秒；保留输出/成果 ${request.getInt("maxOutputBytes")} 字节；回执 ${request.getInt("maxResultChars")} 字符。")

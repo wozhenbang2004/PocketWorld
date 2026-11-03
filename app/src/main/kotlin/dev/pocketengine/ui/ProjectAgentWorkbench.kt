@@ -293,7 +293,17 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
             if (nativeReview != null) WorkbenchCaption("只执行本次列出的步骤。请展开核对文件内容与参数后批准。")
             step?.optJSONObject("payload")?.let { payload ->
                 if (payload.has("path")) WorkbenchCaption(payload.optString("path"))
-                payload.optJSONArray("files").objects().forEach { file -> WorkbenchCaption("${when (file.optString("action")) { "create" -> "创建"; "delete" -> "删除"; else -> "精确修改" }} ${file.optString("path")}") }
+                payload.optJSONArray("files").objects().forEach { file ->
+                    val encoded = file.optString("encoding") == "base64"
+                    val copyDirection = if (encoded) file.optString("copyDirection") else ""
+                    val label = if (encoded) when (copyDirection) { "forward" -> "复制原字节为新文件"; "revert" -> "删除原复制的新文件"; else -> "原字节覆盖（非文字）" } else when (file.optString("action")) { "create" -> "创建"; "delete" -> "删除"; else -> "精确修改" }
+                    WorkbenchCaption("$label ${file.optString("path")}")
+                    if (encoded) WorkbenchCaption(when (copyDirection) {
+                        "forward" -> "只复制原清单中固定源文件的完整字节，目标必须不存在；请核对copiedFrom路径、大小与原SHA。支持二进制，不转换原件；不含运行、导出或分享授权。"
+                        "revert" -> "只删除这次原操作新复制且afterSHA仍未变化的目标，源文件保留；后续变化时拒绝，不自动撤销或恢复其它文件。"
+                        else -> "仅列明的等长hex范围，可能破坏文件格式；请展开核对旧/新字节、byteOffset和原SHA。不插入、扩展或截断；不是执行许可。"
+                    })
+                }
                 if (step?.optString("localCommand") == "patchFiles") WorkbenchCaption("文件逐个保存；中途失败时，已保存的文件不会自动回滚。后续修改与撤销冲突时会保留新内容。")
                 if (payload.has("executable")) SelectionContainer { Text(payload.optString("executable") + " " + payload.optJSONArray("argv"), fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
                 TextButton(onClick = { reviewed = !reviewed }) { Text(if (reviewed) "收起具体内容" else "核对具体文件与参数") }

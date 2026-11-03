@@ -27,9 +27,10 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
     var goal by rememberSaveable(profileId, binding) { mutableStateOf("") }
     var argv by rememberSaveable(profileId, binding) { mutableStateOf("[\"git\",\"status\",\"--short\"]") }
     var model by rememberSaveable(profileId, binding, worker) { mutableStateOf("") }
+    var effort by rememberSaveable(profileId, binding, environmentId, worker, model) { mutableStateOf("") }
     var readOnly by rememberSaveable(profileId, binding, worker) { mutableStateOf(true) }
     var timeout by rememberSaveable(profileId, binding) { mutableStateOf("300") }
-    var probeRequest by rememberSaveable(profileId, binding, environmentId, worker, model) { mutableStateOf<String?>(null) }
+    var probeRequest by rememberSaveable(profileId, binding, environmentId, worker, model, effort) { mutableStateOf<String?>(null) }
     var operation by rememberSaveable(profileId, binding) { mutableStateOf<String?>(null) }
     var submittedRequest by rememberSaveable(profileId, binding) { mutableStateOf<String?>(null) }
     var review by remember { mutableStateOf<JSONObject?>(null) }
@@ -93,13 +94,20 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
             OutlinedButton(onClick = {
                 val input = JSONObject().put("profileId", profileId).put("_profileBinding", binding).put("environmentId", environmentId).put("environmentBinding", selected.optString("bindingHash")).put("worker", worker)
                 if (model.isNotBlank()) input.put("model", model.trim())
+                if (worker == "codex_app_server" && effort.isNotBlank()) input.put("effort", effort)
                 probeRequest = controller.requestFeature("remote", "probeWorker", input)
             }, enabled = canProbe) { Text(if (probing) "正在核对执行器" else "核对执行器与模型能力") }
             probe?.let { checked ->
                 SshCaption(checked.optString("message", "执行器探测已返回") + "；未发起模型任务。")
-                if (checked.optBoolean("modelsTruncated") || (checked.optJSONArray("models")?.length() ?: 0) > 12) SshCaption("这里只展示部分已配置模型；仍可填写完整精确模型ID。目录不证明账号、推理或费用已核实。")
+                if (checked.optBoolean("modelsTruncated") || checked.optBoolean("modelCatalogTruncated") || checked.optJSONObject("modelOptions")?.optBoolean("truncated") == true || (checked.optJSONArray("models")?.length() ?: 0) > 12) SshCaption("这里只展示部分已配置模型；仍可填写完整精确模型ID。目录不证明账号、推理或费用已核实。")
                 checked.optJSONArray("models").objects().take(12).forEach { available -> TextButton(onClick = { model = available.optString("id") }, enabled = !registered) { Text(available.optString("name", available.optString("id")), fontSize = 12.sp) } }
             }
+            if (worker == "codex_app_server") {
+                val selectedOptions = probe?.optJSONArray("models").objects().singleOrNull { it.optString("id") == model.trim() }
+                if (model.isNotBlank()) OutlinedTextField(effort, { effort = it }, label = { Text("请求档位（可留空，须在原生目录中）") }, singleLine = true, enabled = !registered, modifier = Modifier.fillMaxWidth())
+                selectedOptions?.optJSONArray("efforts").objects().take(12).forEach { option -> FilterChip(selected = effort == option.optString("id"), onClick = { effort = option.optString("id") }, enabled = !registered, label = { Text(option.optString("id")) }) }
+                SshCaption("仅传本次Codex原生枚举值；改变模型或档位后须重新核对。请求值不等于执行端实际读回，不改变工具或预算。")
+            } else if (worker == "claude") SshCaption("此处不会为读取目录额外启动Claude。首次没有native目录时不提供档位选项；已批准原任务取得目录后，可在原会话页选择下一轮。")
         }
         OutlinedTextField(timeout, { timeout = it.filter(Char::isDigit).take(4) }, label = { Text("任务时限（秒，10–3600）") }, singleLine = true, enabled = !registered)
         Button(onClick = {
@@ -108,6 +116,8 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
                 if (worker == "command") request.put("argv", JSONArray(argv)) else {
                     request.put("prompt", goal).put("readOnly", worker == "codex_app_server" && readOnly)
                     if (model.isNotBlank()) request.put("model", model.trim())
+                    if (worker == "codex_app_server" && effort.isNotBlank()) request.put("effort", effort)
+                    if (worker == "codex_app_server" && model.isNotBlank()) probe?.optJSONObject("modelOptions")?.optString("digest")?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }?.let { request.put("modelOptionsDigest", it) }
                 }
                 review = RemoteTaskRequest.first(request); localError = null
             } catch (failure: Exception) { localError = failure.message ?: "请核对任务参数" }
@@ -149,11 +159,12 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
     inputRequest?.let { RemoteInputDialog(it, "", controller) { inputRequest = null } }
     projectRequest?.let { RemoteProjectStartDialog(it,controller){projectRequest=null} }
     review?.let { captured ->
-        val current = profile.optString("bindingHash") == captured.optString("_profileBinding") && environment?.optString("bindingHash") == captured.optString("environmentBinding")
+        val current = profile.optString("bindingHash") == captured.optString("_profileBinding") && environment?.optString("bindingHash") == captured.optString("environmentBinding") && (!captured.has("modelOptionsDigest") || probe?.optJSONObject("modelOptions")?.optString("digest") == captured.optString("modelOptionsDigest"))
         AlertDialog(onDismissRequest = { review = null }, title = { Text("确认在所选电脑创建工作") }, text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(profile.optString("name") + "\n" + profile.optString("baseUrl") + "\n" + environment?.optString("workspace").orEmpty())
                 Text(remoteWorkerLabel(captured.optString("worker")) + " · " + captured.optString("model").ifBlank { "执行端默认模型" }, fontSize = 13.sp)
+                if (captured.has("effort")) SshCaption("本次请求档位：${captured.optString("effort")}；真实读回在原任务另列，未因此增加额度或工具权限。")
                 SelectionContainer { Text(captured.optString("prompt", captured.optJSONArray("argv")?.toString().orEmpty()), fontSize = 12.sp) }
                 Text(if (captured.optString("worker") == "pi") "本次仅为Pi无工具对话，不授权项目工具、命令或扩展；不提供逐工具审批，不宣称操作系统隔离。原设置可能重试/压缩，费用与次数未知。" else if (captured.optBoolean("readOnly")) "本次为Codex只读分析。" else "本次可能修改所选工作区。工具审批另按原任务逐次核对。", fontSize = 12.sp)
             }

@@ -4,7 +4,7 @@ import org.json.JSONObject;
 
 /** Content-free, native-origin evidence. This receipt grants no task or tool authority. */
 public final class InferenceReceipt {
-    public enum Purpose { MAIN, SUMMARY, MEMBER, TOOL, CONNECTION_TEST, VOICE_TURN, REALTIME, REALTIME_TRANSCRIPTION, RELAY, SKILL_DRAFT, UNATTRIBUTED }
+    public enum Purpose { MAIN, SUMMARY, MEMBER, TOOL, CONNECTION_TEST, MODEL_CAPABILITY_PROBE, VOICE_TURN, REALTIME, REALTIME_TRANSCRIPTION, RELAY, SKILL_DRAFT, UNATTRIBUTED }
     public enum Outcome { STARTED, COMPLETED, FAILED, CANCELLED }
     public enum BindingKind { HOST_RUN, EXTERNAL_TASK_RUN, UNATTRIBUTED }
     /** Native coordinator identity; it describes a call site and grants no execution authority. */

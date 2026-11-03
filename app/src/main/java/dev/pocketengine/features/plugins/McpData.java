@@ -18,6 +18,10 @@ final class McpData {
 
     static JSONObject support()throws Exception {
         return new JSONObject().put("protocolVersion",VERSION).put("legacyProtocolVersion",LEGACY).put("transport","streamable_http").put("automaticDowngrade",false)
+                .put("transports",new JSONArray().put("streamable_http").put("stdio"))
+                .put("stdio",new JSONObject().put("sourceImplemented",true).put("nativeOwnerDiscovery",true).put("separateOwnerInstallationReview",true).put("originalTaskInvocation",true).put("protocolVersion",McpStdioClient.VERSION)
+                        .put("executables",new JSONArray().put("node").put("python3")).put("executionWorkspace","per_operation_visible_copy").put("runtimeVerified",false).put("osSandbox",false).put("environmentInputs",false).put("credentials",false)
+                        .put("serverLifetime","one_original_tool_operation").put("relativeWritesPublishedBack",false).put("relativeStateAcrossCalls",false).put("packageInstallation",false).put("crossTaskServerPool",false).put("automaticRestart",false).put("resources",false).put("prompts",false).put("oauth",false).put("mcpTasks",false))
                 .put("schemaDialect","https://json-schema.org/draft/2020-12/schema")
                 .put("validationKeywords",new JSONArray(new String[]{"type","properties","required","additionalProperties","items","maxItems","maxLength","enum","minimum","maximum"}))
                 .put("annotationKeywords",new JSONArray(new String[]{"title","description","$comment","default","examples","deprecated","readOnly","writeOnly"})).put("headerKeyword","x-mcp-header")
@@ -31,7 +35,7 @@ final class McpData {
                         .put("sourceImplemented",true).put("hostMountRequired",true).put("automaticReplay",false))
                 .put("oauth",new JSONObject().put("sourceImplemented",true).put("hostMountRequired",true).put("clientType","public_pkce_s256")
                         .put("registration","pre_registered_or_existing_cimd").put("automaticRefresh",false))
-                .put("unsupported",new JSONArray().put("stdio").put("legacy HTTP+SSE")
+                .put("unsupported",new JSONArray().put("stdio environment/credential input").put("stdio pnpm/automatic package installation").put("stdio resources/prompts/OAuth/tasks").put("legacy HTTP+SSE")
                         .put("SSE reconnect/resumption").put("GET subscriptions").put("legacy experimental tasks").put("sampling").put("elicitation")
                         .put("roots").put("resource subscriptions").put("prompt subscriptions/completion").put("multimodal prompt content").put("tasks/update input").put("binary content"));
     }

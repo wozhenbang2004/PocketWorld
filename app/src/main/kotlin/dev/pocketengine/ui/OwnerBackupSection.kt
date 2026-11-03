@@ -17,11 +17,12 @@ import org.json.JSONObject
 
 /** Low-frequency native owner tool, not an always-open settings catalogue. */
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable internal fun NativeOwnerDataArchives(flow: OwnerBackupCoordinator) {
+@Composable internal fun NativeOwnerDataArchives(flow: OwnerBackupCoordinator, showLauncher: Boolean = true) {
     val state = flow.state
-    TextButton(onClick = flow::open, modifier = Modifier.testTag("owner_data_backup_open")) { Text("备份与迁移") }
-    if (!state.open) return
-    var selected by remember { mutableStateOf(setOf("projects", "artifacts", "memory", "remoteConnections", "sshConnections")) }
+    if (showLauncher) TextButton(onClick = flow::open, modifier = Modifier.testTag("owner_data_backup_open")) { Text("备份与迁移") }
+    if (!state.open || state.presentation != (if (showLauncher) "settings" else "memory_review")) return
+    val projectOnly = state.projectMemoryName != null
+    var selected by remember(projectOnly) { mutableStateOf(if (projectOnly) setOf("projects", "memory") else setOf("projects", "artifacts", "memory", "remoteConnections", "sshConnections")) }
     var confirmed by remember(state.review?.optString("actionId")) { mutableStateOf(false) }
     var details by remember { mutableStateOf(false) }
     var discard by remember { mutableStateOf(false) }
@@ -35,8 +36,9 @@ import org.json.JSONObject
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp).navigationBarsPadding().imePadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("备份与迁移", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             Caption("先核对范围，再导出或分区恢复。恢复创建新的身份，不覆盖现有项目，也不恢复旧任务的执行权限。")
-            labels.forEach { (key, label) -> Row(Modifier.fillMaxWidth()) { Checkbox(key in selected, { yes -> selected = if (yes) selected + key else selected - key }, enabled = !state.busy && state.review == null); Text(label, Modifier.weight(1f).padding(top = 13.dp), fontSize = 13.sp) } }
-            Button(onClick = { flow.create(selected) }, enabled = selected.isNotEmpty() && !state.busy && state.review == null, modifier = Modifier.fillMaxWidth().testTag("owner_data_backup_capture")) { Text(if (state.busy) "核对中…" else "生成所选范围的备份") }
+            if (projectOnly) Caption("范围：${state.projectMemoryName}。仅此项目的保留版本、已停止私人副本及其记忆；不含主人全局或其它项目。恢复时须先明确恢复项目，再将记忆按原映射放为只读档案，不恢复读取同意。")
+            else labels.forEach { (key, label) -> Row(Modifier.fillMaxWidth()) { Checkbox(key in selected, { yes -> selected = if (yes) selected + key else selected - key }, enabled = !state.busy && state.review == null); Text(label, Modifier.weight(1f).padding(top = 13.dp), fontSize = 13.sp) } }
+            Button(onClick = { flow.create(selected) }, enabled = selected.isNotEmpty() && (!projectOnly || state.projectMemoryCurrent) && !state.busy && state.review == null, modifier = Modifier.fillMaxWidth().testTag("owner_data_backup_capture")) { Text(if (state.busy) "核对中…" else if (projectOnly) "生成此项目与其记忆的备份" else "生成所选范围的备份") }
             OutlinedButton(onClick = flow::chooseImport, enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("owner_data_backup_read")) { Text("选择备份，只读核对…") }
             TextButton(onClick = { details = !details }) { Text(if (details) "收起范围说明" else "包含什么，不包含什么") }
             if (details) {
@@ -53,7 +55,7 @@ import org.json.JSONObject
                 val sections = state.preview?.optJSONObject("review")
                 labels.forEach { (key, label) -> sections?.optJSONObject(key)?.let { part ->
                     Text(label, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                    val summary = when (key) { "projects" -> "${part.optInt("projects")} 个项目 / ${part.optInt("checkouts")} 个活动副本"; "artifacts" -> "${part.optInt("workspaceFiles")} 个文件版本 / ${part.optInt("projectPackages")} 个项目包 / ${part.optInt("attachments")} 个原件"; "memory" -> "原记忆、删除屏障与候选历史保存为档案；不进入活动记忆或待审队列"; "experiences" -> "原经历按确切版本、时间和hash保存；缺失/撤回原件明确列为缺口，不恢复执行权"; else -> "${part.optJSONArray("profiles")?.length() ?: 0} 项配置，恢复后仍须重新配置凭据或确认主机" }
+                    val summary = when (key) { "projects" -> "${part.optInt("projects")} 个项目 / ${part.optInt("checkouts")} 个活动副本"; "artifacts" -> "${part.optInt("workspaceFiles")} 个文件版本 / ${part.optInt("projectPackages")} 个项目包 / ${part.optInt("attachments")} 个原件"; "memory" -> if (part.optString("scopeMode") == "project_only") "原项目记忆：须先恢复同包项目，再按原映射放置只读数据；不会恢复旧读取同意或执行权限" else "原记忆、删除屏障与候选历史保存为档案；不进入活动记忆或待审队列"; "experiences" -> "原经历按确切版本、时间和hash保存；缺失/撤回原件明确列为缺口，不恢复执行权"; else -> "${part.optJSONArray("profiles")?.length() ?: 0} 项配置，恢复后仍须重新配置凭据或确认主机" }
                     Caption(summary)
                     if (key == "experiences") TextButton(onClick = { flow.readExperiencePage() }, enabled = !state.busy) { Text("打开只读原经历…") }
                     TextButton(onClick = { flow.reviewPhase(key) }, enabled = !state.busy && state.review == null, modifier = Modifier.testTag("owner_data_backup_review_$key")) { Text("审阅恢复这一分区") }
@@ -78,6 +80,7 @@ import org.json.JSONObject
             state.review?.let { review ->
                 HorizontalDivider()
                 Text("确认恢复：${labels[review.optString("phase")]}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                if (review.optJSONObject("nativeScope")?.optString("scopeMode") == "project_only") Caption("来源：${review.getJSONObject("nativeScope").optString("originalSpaceId")}；仅放到同包已结算项目映射。归档正文不可直接进入 Agent 上下文；读取范围必须重新显选。")
                 Caption("只按这份备份的固定分区创建新数据；恢复不启动项目、不连接电脑、不上传、不恢复凭据或执行授权。原件未确认的发布不会自动重试。")
                 Row(Modifier.fillMaxWidth()) { Checkbox(confirmed, { confirmed = it }); Text("我已核对该分区，并明确恢复到这台设备", Modifier.weight(1f).padding(top = 13.dp), fontSize = 13.sp) }
                 Button(onClick = flow::confirmPhase, enabled = confirmed && !state.busy, modifier = Modifier.fillMaxWidth().testTag("owner_data_backup_confirm_phase")) { Text("仅恢复这个分区") }

@@ -197,7 +197,10 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             if(reviewedCatalog==null||!profile.catalogIdentity().equals(reviewedCatalog.optString("catalogIdentity")))throw new SecurityException("runtime_reviewed_download_catalog_required");
             if(!ProjectSources.canonical(reviewedCatalog).equals(ProjectSources.canonical(profile.describe(jobs.available()).getJSONObject("preparationEffects"))))throw new SecurityException("runtime_reviewed_download_catalog_changed");
             RuntimeReceipt previous=jobs.existing(invocation.executionRef());if(previous!=null)return previous;
-            jobs.requireEnvironmentIdle(profile.catalogIdentity());AutoCloseable preparation=profile.beginPreparation();
+            // With no loaded active generation, a cached old job belongs to its
+            // generation SHA, not this catalog SHA. Do not start a new preparation
+            // worker while that original owner/cleanup remains unresolved.
+            jobs.requireEnvironmentIdle(profile.ready()?profile.catalogIdentity():null);AutoCloseable preparation=profile.beginPreparation();
             return jobs.startPreparation(invocation,profile.catalogIdentity(),profile::prepare,preparation);
         }
         List<String> command;Map<String,String> environment;File cwd;long timeout;AutoCloseable lease;

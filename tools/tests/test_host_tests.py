@@ -41,17 +41,51 @@ class HostTestEntrypointTest(unittest.TestCase):
         for name in [entry['class']] + entry['additionalClasses']:
             self.assertTrue((HOST.ROOT / 'app/src/hostTest/java' / (name.replace('.', '/') + '.java')).is_file())
 
+    def test_private_skill_callback_group_is_explicit_and_keeps_real_unix_assertions(self):
+        entry = REGISTRY['managed-skill-private-artifacts']
+        self.assertTrue(entry['native'])
+        self.assertTrue(entry['robolectric'])
+        self.assertEqual('dev.pocketengine.features.skills.ManagedScriptCallbackNativeJourneyTest', entry['class'])
+        self.assertEqual(3, len(entry['additionalClasses']))
+        self.assertIn('dev.pocketengine.features.skills.ManagedScriptCallbackClientPeerTest', entry['additionalClasses'])
+        self.assertIn('dev.pocketengine.features.skills.ManagedScriptCallbackTestSupport', entry['helpers'])
+        helper = (HOST.ROOT / 'app/src/test/java/dev/pocketengine/features/skills/ManagedScriptCallbackTestSupport.java').read_text()
+        self.assertIn('System.getProperty("pocket.gateway.source")', helper)
+        self.assertIn('System.getProperty("pocketworldHostClasspath"', helper)
+        self.assertIn('tools/host-fixtures/SkillCallbackUnixTransport.java', helper)
+        fixture = HOST.ROOT / 'tools/host-fixtures/SkillCallbackUnixTransport.java'
+        self.assertTrue(fixture.is_file())
+        self.assertIn('StandardProtocolFamily.UNIX', fixture.read_text())
+        self.assertIn('ExtendedSocketOptions.SO_PEERCRED', fixture.read_text())
+        self.assertIn('ProcessHandle.current().pid()', fixture.read_text())
+        self.assertTrue((HOST.ROOT / 'tools/host-fixtures/skill_callback_client_fixture.py').is_file())
+        self.assertEqual(['managed-skill-private-artifacts'], HOST.select(REGISTRY, [], [entry['class']]))
+
+    def test_runtime_recovery_admission_is_explicit_and_keeps_actual_native_boundary(self):
+        entry = REGISTRY['runtime-recovery-admission']
+        self.assertTrue(entry['native'])
+        self.assertEqual(['runtime-recovery-admission'], HOST.select(REGISTRY, [], [entry['class']]))
+        source = (HOST.ROOT / 'app/src/hostTest/java' / (entry['class'].replace('.', '/') + '.java')).read_text()
+        self.assertEqual(5, len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', source)))
+        self.assertIn('new NativeProcessSupervisor().available()', source)
+        self.assertIn('f.coldObserver.requireCheckoutWritable(NEW_CHECKOUT)', source)
+        self.assertIn('f.coldJobs.existing(next.executionRef())', source)
+        self.assertIn('own_fixture_download_not_opened', source)
+        self.assertNotIn('@Ignore', source)
+        self.assertIn('dev.pocketengine.features.local.runtime.AndroidRuntimePreparationTest', entry['helpers'])
+
     def test_registered_real_sources_and_helpers_exist(self):
         for entry in REGISTRY.values():
-            for name in [entry['class']] + entry['helpers']:
-                relative = name.replace('.', '/') + '.java'
-                found = [HOST.ROOT / root / relative for root in ('app/src/hostTest/java', 'app/src/test/java')
-                         if (HOST.ROOT / root / relative).is_file()]
+            for name in list(dict.fromkeys([entry['class']] + entry.get('additionalClasses', []) + entry['helpers'])):
+                relative = name.replace('.', '/')
+                found = [HOST.ROOT / root / (relative + extension)
+                         for root, extension in (('app/src/hostTest/java', '.java'), ('app/src/test/java', '.java'), ('app/src/test/kotlin', '.kt'))
+                         if (HOST.ROOT / root / (relative + extension)).is_file()]
                 self.assertEqual(1, len(found), 'expected one exact registered source for ' + name)
-                if name == entry['class']:
+                if name in [entry['class']] + entry.get('additionalClasses', []):
                     self.assertIn('@Test', found[0].read_text())
 
-    def test_phone_sensitive_owner_registers_exact_sources_and_fifty_original_methods(self):
+    def test_phone_sensitive_owner_registers_exact_sources_and_preserves_fifty_original_methods(self):
         # This is an entry/source inventory contract, not execution of these product bodies.
         manifest = json.loads((HOST.ROOT / 'tools/tests/fixtures/phone-sensitive-owner-tests.json').read_text())
         self.assertEqual(1, manifest['schemaVersion'])
@@ -70,14 +104,15 @@ class HostTestEntrypointTest(unittest.TestCase):
                   for path in (HOST.ROOT / root).rglob('*.java')
                   if path.relative_to(HOST.ROOT / root).as_posix() in includes}
         self.assertEqual(expected, actual)
-        self.assertEqual(6, len(actual))
+        self.assertEqual(len(manifest['classes']) + len(manifest['helpers']), len(actual))
         for item in manifest['classes']:
             source = (HOST.ROOT / item['source']).read_text()
             methods = re.findall(r'@Test\s+public\s+void\s+(\w+)\s*\(', source)
             self.assertEqual(len(methods), len(set(methods)), item['class'])
             self.assertEqual(sorted(item['methods']), sorted(methods), item['class'])
             self.assertNotIn('@Ignore', source)
-        self.assertEqual([12, 30, 8], [len(item['methods']) for item in manifest['classes']])
+        self.assertEqual([12, 30, 8], [len(item['methods']) for item in manifest['classes'][:3]])
+        self.assertEqual([6, 7, 13, 1, 7, 5, 4, 4], [len(item['methods']) for item in manifest['classes'][3:]])
 
     def test_phone_sensitive_owner_explicit_group_does_not_expand_the_shared_native_class(self):
         group = 'phone-sensitive-owner'
@@ -93,7 +128,7 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertEqual(['browser-native-sequence'], HOST.select(REGISTRY, [], [helper]))
         self.assertEqual([group], HOST.select(REGISTRY, [group], []))
 
-    def test_phone_sensitive_owner_cli_keeps_only_its_fifty_xml_cases_and_original_task(self):
+    def test_phone_sensitive_owner_cli_keeps_all_exact_xml_cases_and_original_task(self):
         # Explicit fake process/XML boundary only; no Gradle, JVM or App body is run here.
         manifest = json.loads((HOST.ROOT / 'tools/tests/fixtures/phone-sensitive-owner-tests.json').read_text())
         classes = [item['class'] for item in manifest['classes']]
@@ -126,7 +161,7 @@ class HostTestEntrypointTest(unittest.TestCase):
             self.assertEqual([manifest['group']], invocation['groups'])
             self.assertEqual(classes, invocation['classes'])
             self.assertEqual(counts, json.loads((runs[0] / 'result.json').read_text())['executed'])
-            self.assertEqual(50, sum(counts.values()))
+            self.assertEqual(97, sum(counts.values()))
 
     def test_gateway_uses_exact_android_compatible_http_helper_and_byte_io(self):
         entry = REGISTRY['gateway-continuation']
@@ -271,6 +306,40 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn('android.sourceSets.test.java.setIncludes(sources as Set)', registration)
         self.assertIn("it.name in ['test', 'testDebug', 'testRelease']", registration)
         self.assertIn('kotlin.setSrcDirs([])', registration)
+        self.assertIn("def kotlinSourceRoots = ['src/test/kotlin']", registration)
+        self.assertIn("if (name == 'test' && !kotlinSources.isEmpty())", registration)
+        self.assertIn('kotlin.setIncludes(kotlinSources as Set)', registration)
+        self.assertIn('if (javaCount + kotlinCount != 1)', registration)
+
+    def test_aion_research_and_pi_register_exact_kotlin_bodies_and_native_helpers(self):
+        research = REGISTRY['aion-team-research-read']
+        self.assertEqual(6, 1 + len(research['additionalClasses']))
+        self.assertTrue(research['robolectric'])
+        self.assertFalse(research.get('native', False))
+        self.assertEqual(['dev.pocketengine.testutil.HttpServer'], research['helpers'])
+        expected = {
+            'dev.pocketengine.features.teams.TeamResearchScopedReadNativeJourneyTest': 4,
+            'dev.pocketengine.features.teams.TeamResearchReadAccessTest': 2,
+            'dev.pocketengine.features.teams.TeamResearchReadScopeTest': 3,
+            'dev.pocketengine.features.teams.TeamResearchSelectionPageTest': 2,
+            'dev.pocketengine.ui.ResearchReadAccessDraftTest': 3,
+            'dev.pocketengine.ui.ResearchReadAccessMountedNativeTest': 5,
+            'dev.pocketengine.features.remote.RemotePiDraftOwnerJourneyTest': 4,
+            'dev.pocketengine.features.remote.RemoteInputDeliveryTest': 8,
+            'dev.pocketengine.features.remote.RemoteTaskDraftsTest': 3,
+            'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest': 8,
+            'dev.pocketengine.features.automation.AutomationIntervalTest': 4,
+        }
+        for name, count in expected.items():
+            self.assertEqual(1, len(HOST.select(REGISTRY, [], [name])), name)
+            relative = name.replace('.', '/')
+            source = next((HOST.ROOT / root / (relative + extension)).read_text()
+                          for root, extension in (('app/src/hostTest/java', '.java'), ('app/src/test/java', '.java'), ('app/src/test/kotlin', '.kt'))
+                          if (HOST.ROOT / root / (relative + extension)).is_file())
+            self.assertEqual(count, len(re.findall(r'@Test\b', source)), name)
+            self.assertNotIn('@Ignore', source, name)
+        self.assertTrue(REGISTRY['alma-pi-no-tools']['python'])
+        self.assertTrue(REGISTRY['alma-pi-no-tools']['robolectric'])
 
     def test_android_resource_paths_use_module_cwd_and_gateway_keeps_repository_root(self):
         registration = (HOST.ROOT / 'tools/host-tests.gradle').read_text()

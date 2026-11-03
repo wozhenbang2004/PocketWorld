@@ -50,16 +50,18 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
         control.check();requireClockPermission(request);PackageManager pm=context.getPackageManager();
         List<ResolveInfo> matches=pm.queryIntentActivities(intent(request),PackageManager.MATCH_DEFAULT_ONLY|PackageManager.GET_RESOLVED_FILTER);
         List<Target> targets=new ArrayList<>();Set<String> seen=new HashSet<>();int visited=0;
+        String selectedPackage=request.kind.equals("app_link")||request.kind.equals("share_text")?request.parameters().getString("packageName"):"";
         for(ResolveInfo match:matches) {
             control.check();if(++visited>256)break;ActivityInfo a=match.activityInfo;
             if(a==null||!a.exported||!a.enabled||a.applicationInfo==null||!a.applicationInfo.enabled||context.getPackageName().equals(a.packageName)
+                    ||!selectedPackage.isEmpty()&&!selectedPackage.equals(a.packageName)
                     ||a.permission!=null&&!a.permission.isEmpty()&&context.checkSelfPermission(a.permission)!=PackageManager.PERMISSION_GRANTED)continue;
             String component=new ComponentName(a.packageName,a.name).flattenToString();if(!seen.add(component))continue;
             try {
                 PackageInfo pkg=pm.getPackageInfo(a.packageName,PackageManager.GET_SIGNING_CERTIFICATES);
                 if(pkg.signingInfo==null)continue;Signature[] signatures=pkg.signingInfo.getApkContentsSigners();if(signatures==null||signatures.length==0)continue;
                 ArrayList<String> certificates=new ArrayList<>();for(Signature signature:signatures)certificates.add(SemanticJson.hash(signature.toByteArray()));certificates.sort(String::compareTo);
-                String route=request.kind.equals("web")?webRoute(match,request.host):"official_intent";
+                String route=request.kind.equals("web")||request.kind.equals("app_link")?webRoute(match,request.host):"official_intent";
                 // Explicit components bypass normal App Links routing, so unapproved non-browser
                 // handlers are deliberately not offered as eligible HTTPS targets.
                 if(route==null)continue;
@@ -95,6 +97,8 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
         } catch(PackageManager.NameNotFoundException|SecurityException unavailable) {return null;}
     }
     static Intent intent(SemanticRequest request) throws Exception {
+        if(request.kind.equals("share_text")){JSONObject p=request.parameters();return new Intent(Intent.ACTION_SEND).setType("text/plain").setPackage(p.getString("packageName")).putExtra(Intent.EXTRA_TEXT,p.getString("text"));}
+        if(request.kind.equals("app_link"))return new Intent(Intent.ACTION_VIEW,Uri.parse(request.data)).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(request.parameters().getString("packageName"));
         if(request.clock()) {
             JSONObject p=request.parameters();Intent intent=new Intent(request.kind.equals("alarm")?AlarmClock.ACTION_SET_ALARM:AlarmClock.ACTION_SET_TIMER)
                     .putExtra(AlarmClock.EXTRA_SKIP_UI,false);
