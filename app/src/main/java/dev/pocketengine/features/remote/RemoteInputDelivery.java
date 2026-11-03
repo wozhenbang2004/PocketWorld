@@ -26,16 +26,18 @@ public final class RemoteInputDelivery {
         boolean live=Set.of("running","awaiting_approval").contains(status);
         boolean settled=Set.of("completed","failed","cancelled").contains(status);
         boolean notStopped=Boolean.FALSE.equals(source.opt("cancelRequested"))&&!yes(source,"steeringUnknown");
-        JSONObject current=mode(codex?"original_turn_steer":"not_mounted",nativeObserved&&codex,
-                nativeObserved&&notStopped&&codex&&live&&present(source,"turnId")&&yes(controls,"inputSteering"))
-                .put("requiresExactTurn",true).put("acceptanceProvesModelUse",false);
+        boolean piQueue=nativeObserved&&pi&&yes(source,"inputSteeringVerified")&&!source.has("turnId");
+        JSONObject current=mode(codex?"original_turn_steer":piQueue?"original_prompt_queue":"not_mounted",nativeObserved&&codex||piQueue,
+                nativeObserved&&notStopped&&live&&(codex&&present(source,"turnId")||piQueue)&&yes(controls,"inputSteering"))
+                .put("requiresExactTurn",codex).put("requiresExactPrompt",piQueue).put("acceptanceProvesModelUse",false);
+        if(piQueue)current.put("delivery","native_queue").put("consumed","unknown").put("noToolsSessionOnly",true);
         boolean next=nativeObserved&&notStopped&&settled&&yes(controls,"threadResume");
-        if(pi){JSONObject cleanup=source.optJSONObject("processCleanupProof");next&=yes(source,"nativeSettled")&&Boolean.FALSE.equals(source.opt("resourcesHeld"))&&yes(cleanup,"processGroupStoppedVerified");}
+        if(pi){JSONObject cleanup=source.optJSONObject("processCleanupProof");next&=yes(source,"nativeSettled")&&Boolean.FALSE.equals(source.opt("resourcesHeld"))&&yes(cleanup,"processGroupStoppedVerified");if(yes(source,"inputSteeringVerified"))next&=yes(source,"nativeQueueEmptyConfirmed");}
         JSONObject continuation=mode("settled_original_session",nativeObserved,next)
                 .put("requiresNativeSettlement",true).put("requiresOriginalOwnerDispatch",true)
                 .put("automaticallySent",false).put("addsBudget",false);
         if(pi)continuation.put("noToolsSessionOnly",true);
-        String stopping=settled?"native_cleanup_only":codex?"turn_interrupt":claude?"prompt_interrupt":pi?"agent_abort":"not_mounted";
+        String stopping=settled?"native_cleanup_only":codex?"turn_interrupt":claude?"prompt_interrupt":pi?piQueue?"agent_clear_queue_abort":"agent_abort":"not_mounted";
         JSONObject interrupt=mode(stopping,nativeObserved,nativeObserved&&yes(controls,"cancel"))
                 .put("requestIsStopProof",false).put("requiresNativeAcknowledgement",true)
                 .put("reversesCompletedEffects",false);

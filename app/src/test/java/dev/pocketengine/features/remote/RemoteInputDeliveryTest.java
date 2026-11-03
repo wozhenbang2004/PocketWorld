@@ -11,7 +11,7 @@ public final class RemoteInputDeliveryTest {
                 .put("executorStatus","running").put("controls",new JSONObject().put("inputSteering",true).put("threadResume",false).put("cancel",true));
         if(worker.equals("claude"))value.put("controlProtocolVerified",true).put("sessionIdentityConfirmed",true).put("sessionId","session-1").put("promptRequestId","prompt-1");return value;
     }
-    private static JSONObject pi()throws Exception{return source("pi","pi_rpc_v1").put("noTools",true).put("sessionId","session-1").put("promptRequestId","prompt-1");}
+    private static JSONObject pi()throws Exception{JSONObject value=source("pi","pi_rpc_v1").put("noTools",true).put("sessionId","session-1").put("promptRequestId","prompt-1");value.remove("turnId");return value;}
     private static boolean available(JSONObject shown,String mode)throws Exception{return shown.getJSONObject(mode).getBoolean("observedAvailable");}
 
     @Test public void codexOnlyReportsAnActuallyAvailableExactTurnSteer()throws Exception {
@@ -62,6 +62,31 @@ public final class RemoteInputDeliveryTest {
         assertTrue(available(shown,"interrupt"));assertEquals("native_cleanup_only",stop.getString("mode"));
         assertFalse(stop.getBoolean("requestIsStopProof"));assertFalse(stop.getBoolean("reversesCompletedEffects"));
         raw.put("executorStatus","unknown");assertEquals("turn_interrupt",RemoteInputDelivery.describe(raw).getJSONObject("interrupt").getString("mode"));
+    }
+    @Test public void piQueueBindsOriginalPromptAndDoesNotInventATurnOrConsumption()throws Exception {
+        JSONObject source=pi().put("inputSteeringVerified",true),shown=RemoteInputDelivery.describe(source);
+        assertTrue(available(shown,"currentTurn"));assertEquals("original_prompt_queue",shown.getJSONObject("currentTurn").getString("mode"));
+        assertFalse(shown.getJSONObject("currentTurn").getBoolean("requiresExactTurn"));assertTrue(shown.getJSONObject("currentTurn").getBoolean("requiresExactPrompt"));
+        assertFalse(shown.getJSONObject("currentTurn").getBoolean("acceptanceProvesModelUse"));
+        assertEquals("agent_clear_queue_abort",shown.getJSONObject("interrupt").getString("mode"));
+        JSONObject target=RemoteMessageTarget.observed(source);assertEquals("prompt-1",target.getString("expectedPromptRequestId"));assertFalse(target.has("turnId"));assertFalse(target.has("expectedTurnId"));
+        JSONObject receipt=new JSONObject(target.toString()).put("status","accepted").put("disposition","queued").put("delivery","native_queue").put("consumed","unknown");
+        assertTrue(RemoteMessageTarget.receiptMatches(target,receipt));
+        for(JSONObject wrong:new JSONObject[]{new JSONObject(receipt.toString()).put("expectedPromptRequestId","another"),new JSONObject(receipt.toString()).put("sessionId","another"),new JSONObject(receipt.toString()).put("disposition","handled"),new JSONObject(receipt.toString()).put("delivery","turn"),new JSONObject(receipt.toString()).put("consumed",true)})assertFalse(RemoteMessageTarget.receiptMatches(target,wrong));
+        assertThrows(SecurityException.class,()->RemoteMessageTarget.receiptMatches(target,new JSONObject(receipt.toString()).put("turnId","invented")));
+        assertThrows(SecurityException.class,()->RemoteMessageTarget.copy(new JSONObject(target.toString()).put("expectedTurnId","invented"),new JSONObject()));
+    }
+    @Test public void piQueueClosesOnStopUnknownAndMissingNativeObservation()throws Exception {
+        for(JSONObject source:new JSONObject[]{pi(),pi().put("inputSteeringVerified","true"),pi().put("inputSteeringVerified",true).put("cancelRequested",true),pi().put("inputSteeringVerified",true).put("steeringUnknown",true),pi().put("inputSteeringVerified",true).put("executorStatus","completed"),pi().put("inputSteeringVerified",true).put("turnId","invented")})assertFalse(available(RemoteInputDelivery.describe(source),"currentTurn"));
+        JSONObject source=pi().put("inputSteeringVerified",true);source.getJSONObject("controls").put("inputSteering",false);assertFalse(available(RemoteInputDelivery.describe(source),"currentTurn"));
+        assertThrows(SecurityException.class,()->RemoteMessageTarget.observed(pi()));
+        assertThrows(SecurityException.class,()->RemoteMessageTarget.observed(pi().put("inputSteeringVerified",true).put("noTools",false)));
+    }
+    @Test public void queueCapablePiContinuationNeedsNativeEmptyQueueReadback()throws Exception {
+        JSONObject source=pi().put("inputSteeringVerified",true).put("executorStatus","completed").put("nativeSettled",true).put("resourcesHeld",false)
+                .put("processCleanupProof",new JSONObject().put("processGroupStoppedVerified",true));source.getJSONObject("controls").put("threadResume",true);
+        assertFalse(available(RemoteInputDelivery.describe(source),"nextTurn"));source.put("nativeQueueEmptyConfirmed",true);assertTrue(available(RemoteInputDelivery.describe(source),"nextTurn"));
+        source.put("nativeQueueEmptyConfirmed","true");assertFalse(available(RemoteInputDelivery.describe(source),"nextTurn"));
     }
     @Test public void describingNeverMutatesTheSourceCopiesSecretsOrIssuesAuthority()throws Exception {
         JSONObject raw=source("codex_app_server","codex_app_server").put("apiKey","PRIVATE_SENTINEL_NOT_COPIED");String before=raw.toString();JSONObject shown=RemoteInputDelivery.describe(raw);
