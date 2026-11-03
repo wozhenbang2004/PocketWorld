@@ -92,7 +92,7 @@ public final class RecentScreenRunnerTest {
             RunOutcome result=new AgentRunner(phone,capabilities).run("history-task","在手机界面完成点击并核对现场",config("http://127.0.0.1:"+server.getAddress().getPort()),control,event->{
                 if(!pausedAfterReceipt[0]&&"tool".equals(event.optString("type"))&&"completed".equals(event.optString("status"))&&"phone_click_node".equals(event.optString("tool"))){pausedAfterReceipt[0]=true;control.pause();control.resume();}
             });
-            assertNull("actual request violation: "+failure.get(),failure.get());assertEquals(result.summary,"completed",result.status);assertEquals(2,requests.size());assertEquals(2,prepares[0]);assertEquals(1,effects[0]);assertEquals(3,observations[0]);
+            assertNull("actual request violation: "+failure.get(),failure.get());assertEquals(result.summary,"needs_confirmation",result.status);assertEquals("user_required",result.evidence.getString("verification"));assertFalse(result.evidence.getBoolean("automaticallyVerified"));assertEquals(2,requests.size());assertEquals(2,prepares[0]);assertEquals(1,effects[0]);assertEquals(3,observations[0]);
         }finally{control.cancel();server.stop(0);}
     }
     private static void journey(boolean revoke)throws Exception {

@@ -96,7 +96,26 @@ public final class SemanticTypedShareRunnerSqlTest {
             JSONArray operations=after.getJSONArray("operations");assertEquals(2,operations.length());JSONObject receipt=operations.getJSONObject(1).getJSONObject("receipt");
             if(lane==Lane.BACKGROUND_UNKNOWN){assertTrue(receipt.isNull("accepted"));assertTrue(tasks.hasUnresolved(id));assertTrue(receipt.getBoolean("requiresReconciliation"));assertTrue(receipt.getJSONObject("nativeResult").isNull("accepted"));JSONObject duplicate=resumed.execute(SemanticCapabilityPort.DISPATCH,new JSONObject(exact[0].toString()).put("_hostOperationId",receipt.getString("operationId")),control);assertTrue(duplicate.isNull("accepted"));assertEquals(1,SemanticBackgroundDisplayFixture.dispatches);return;}
             assertFalse(tasks.hasUnresolved(id));assertTrue(receipt.getBoolean("accepted"));assertFalse(receipt.getBoolean("externalDeliveryVerified"));assertFalse(receipt.getBoolean("automaticContinuation"));assertTrue(receipt.getBoolean("requiresOwnerCompletion"));assertFalse(receipt.getBoolean("verifiedBusinessSuccess"));assertTrue(receipt.getBoolean("requiresPause"));assertFalse(receipt.getBoolean("automaticFallback"));
-            if(background){JSONObject nativeResult=receipt.getJSONObject("nativeResult");assertEquals(lane!=Lane.BACKGROUND_WRONG_USER,nativeResult.getBoolean("actualUserVerified"));assertEquals(lane!=Lane.BACKGROUND_WRONG_USER,nativeResult.getBoolean("targetLandingVerified"));assertFalse(nativeResult.getBoolean("verifiedBusinessSuccess"));if(lane==Lane.BACKGROUND_WRONG_USER){assertTrue(control.isPaused());assertTrue(nativeResult.getBoolean("requiresReconciliation"));}JSONObject duplicate=resumed.execute(SemanticCapabilityPort.DISPATCH,new JSONObject(exact[0].toString()).put("_hostOperationId",receipt.getString("operationId")),control);assertFalse(duplicate.getBoolean("accepted"));assertEquals(1,SemanticBackgroundDisplayFixture.dispatches);}
+            if(background){
+                JSONObject nativeResult=receipt.getJSONObject("nativeResult");
+                assertEquals(lane!=Lane.BACKGROUND_WRONG_USER,nativeResult.getBoolean("actualUserVerified"));
+                assertEquals(lane!=Lane.BACKGROUND_WRONG_USER,nativeResult.getBoolean("targetLandingVerified"));
+                assertFalse(nativeResult.getBoolean("verifiedBusinessSuccess"));
+                if(lane==Lane.BACKGROUND_WRONG_USER){assertTrue(control.isPaused());assertTrue(nativeResult.getBoolean("requiresReconciliation"));}
+                String operationId=receipt.getString("operationId"),recordedReceipt=receipt.toString();
+                JSONObject duplicate=resumed.execute(SemanticCapabilityPort.DISPATCH,new JSONObject(exact[0].toString()).put("_hostOperationId",operationId),control);
+                // Re-entering an already claimed operation returns the original conservative
+                // reconciliation response. It must neither dispatch again nor replace its SQL receipt.
+                assertSame(JSONObject.NULL,duplicate.get("accepted"));assertEquals("semantic_effect_unknown",duplicate.getString("code"));
+                assertEquals("unknown",duplicate.getString("status"));assertEquals(operationId,duplicate.getString("operationId"));
+                assertTrue(duplicate.getBoolean("requiresReconciliation"));assertFalse(duplicate.getBoolean("automaticFallback"));
+                assertEquals(1,SemanticBackgroundDisplayFixture.dispatches);
+                assertNull(Shadows.shadowOf(app).getNextStartedActivityForResult());assertNull(Shadows.shadowOf(app).getNextStartedActivity());
+                JSONArray retained=tasks.get(id,false).getJSONArray("operations");assertEquals(2,retained.length());
+                JSONObject settled=retained.getJSONObject(1);assertEquals(operationId,settled.getString("operationId"));assertEquals("receipt",settled.getString("state"));
+                assertEquals(recordedReceipt,settled.getJSONObject("receipt").toString());assertTrue(settled.getJSONObject("receipt").getBoolean("accepted"));
+                assertFalse(tasks.hasUnresolved(id));
+            }
         }finally{control.cancel();module.close();if(display!=null)display.close();worker.shutdownNow();worker.awaitTermination(2,TimeUnit.SECONDS);if(server!=null)server.stop(0);instance.set(null,null);Field db=TaskStore.class.getDeclaredField("db");db.setAccessible(true);((SQLiteDatabase)db.get(tasks)).close();}
     }
     private static RunOutcome await(Future<RunOutcome> result)throws Exception{long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(25);while(!result.isDone()&&System.nanoTime()<until){Shadows.shadowOf(Looper.getMainLooper()).idle();Thread.sleep(5);}return result.get(1,TimeUnit.SECONDS);}
