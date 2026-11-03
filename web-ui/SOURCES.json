@@ -1,0 +1,2530 @@
+{
+  "schema_version": 1,
+  "purpose": "Selected UI source provenance. Source availability, actual integration, business connection, and validation are tracked separately. This file is not an assertion of shipping completeness.",
+  "selection": {
+    "primary_component_groups": 42,
+    "backup_groups": 7,
+    "status": "approved selection; implementation in progress"
+  },
+  "sources": {
+    "Grok": {
+      "id": "Grok",
+      "url": "https://github.com/Coiggahou2002/grokbot-web",
+      "commit": "616c1dd451f105a10a903e01eed8f82370968681",
+      "license": "BSD-3-Clause",
+      "snapshot": "components/grokbot-avatar-20261101"
+    },
+    "A": {
+      "id": "A",
+      "url": null,
+      "commit": "0e69029b0f617de3e4d40d3241dd9cdd1d50abc4",
+      "license": "Library-maintained independent implementation; upstream portions retain their own licenses; not official Pro source",
+      "snapshot": "affectui-interactive-family-20261031/interactive-components-source.zip",
+      "snapshot_sha256": "cc7f9c7b8a0e0d07e4b9f74a1b8255c92bd63a61e3c798f892eaf2ef4b0dbe82",
+      "scope": "Entry source files are traced individually; transitive source dependencies must be recorded by the implementation owner."
+    },
+    "U": {
+      "id": "U",
+      "url": "https://github.com/flohoeller/affectui",
+      "commit": "37b91fa302dea59e28ce1eb2ba7acd7ce23296be",
+      "license": "MIT",
+      "snapshot": "affectui-interactive-family-20261031/official-free-source-37b91fa.zip",
+      "snapshot_sha256": "e97490b8b33a27ec7f5b223a69ea43c659ca301cfbe2a1ec96a851c690876734",
+      "scope": "Entry source files are traced individually; transitive source dependencies must be recorded by the implementation owner."
+    },
+    "B": {
+      "id": "B",
+      "url": "https://github.com/BoardUI/boardui",
+      "commit": "ec5c5eb3e29c2441be63b9422cd54f411ef23466",
+      "license": "MIT",
+      "snapshot": "boardui-allo-stageshow-20261101/boardui-upstream.zip",
+      "snapshot_sha256": "21a1ebd48539e1c0c19ac9bf929843a7ee52456ab4aefaec9e8e4e35dc4eebd7",
+      "scope": "Entry source files are traced individually; transitive source dependencies must be recorded by the implementation owner."
+    },
+    "BO": {
+      "id": "BO",
+      "url": "https://www.boardui.com/r/",
+      "commit": null,
+      "license": "MIT for selected official free registry components; overlay compatibility changes are separate",
+      "snapshot": "boardui-allo-stageshow-20261101/independent-overlay.zip",
+      "snapshot_sha256": "6f8bd37074e093a563427a6e4c5b1ac9672fad594240cc3e2bcb4d3185702434",
+      "scope": "Entry source files are traced individually; transitive source dependencies must be recorded by the implementation owner."
+    },
+    "Vaul": {
+      "id": "Vaul",
+      "url": "https://github.com/emilkowalski/vaul",
+      "commit": "3e97aac6a38e4481bade71d7233ed6002e80f9b0",
+      "license": "MIT",
+      "snapshot": "components/drawer-vaul/upstream-3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    "Ovio": {
+      "id": "Ovio",
+      "url": "https://github.com/JanaSundar/ovio",
+      "commit": "81a1bcb6737356038163728b3b2a657c9dcffa32",
+      "license": "MIT",
+      "snapshot": "components/ovio-81a1bcb"
+    },
+    "Tree": {
+      "id": "Tree",
+      "url": "https://github.com/MrLightful/shadcn-tree-view",
+      "commit": "41624def7189c141553e7a164c117b44178d5b3a",
+      "license": "MIT",
+      "snapshot": "components/tree-mrlightful/upstream-41624def7189c141553e7a164c117b44178d5b3a"
+    },
+    "Switch": {
+      "id": "Switch",
+      "url": null,
+      "commit": null,
+      "license": "Library-maintained independent reference reproduction; not Animate UI source",
+      "snapshot": "components/switch-press-stretch/review-2026-10-09-1703"
+    },
+    "Josh": {
+      "id": "Josh",
+      "url": "https://www.joshwcomeau.com/animation/3d-button/",
+      "commit": null,
+      "license": "Author tutorial code, copyable as recorded; no separate SPDX declared; do not label MIT",
+      "snapshot": "components/button-pushable/review-2026-10-09-josh-neutral"
+    },
+    "Nick": {
+      "id": "Nick",
+      "url": null,
+      "commit": null,
+      "license": "Library-maintained independent video-reference reproduction; original media rights are separate",
+      "snapshot": "components/agent-subagent-stepper"
+    },
+    "Sonner": {
+      "id": "Sonner",
+      "url": "https://github.com/emilkowalski/sonner",
+      "commit": "8e4662b39255120b62138312058f5d77c0139a5e",
+      "license": "MIT",
+      "snapshot": "implementation_transfer/source-staging/sonner-8e4662b",
+      "version": "2.0.8",
+      "restoration_receipt": "implementation_transfer/source-staging/sonner-source-receipt.json"
+    }
+  },
+  "components": [
+    {
+      "id": "PW-01",
+      "name": "GrokBot 动态头像",
+      "source_group": "Grok",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "web-original/src/react.tsx",
+          "bytes": 4456,
+          "sha256": "4f050b2f10fcaae00a458eefab463f7e3b2eb8e67e25d5cff1ee296710a3cef5"
+        },
+        {
+          "path": "web-original/src/engine.ts",
+          "bytes": 19416,
+          "sha256": "30395af7bea75d7d97b3624fbce75b3e0bd21acb5fa860fa279a3e403ba1f3c3"
+        },
+        {
+          "path": "web-original/src/painter.ts",
+          "bytes": 6541,
+          "sha256": "6962454c28c632b29da87fefc6558b5e8cfb1d1e9eb22932ed52e44ea7bdb6e6"
+        },
+        {
+          "path": "web-original/src/geometry.ts",
+          "bytes": 5289,
+          "sha256": "01b04100a1503c3c4d8d627299202fc8317d983238f687916cc44792f026bab4"
+        }
+      ],
+      "source_locator": "web-original/src/；demo/vendor/grokbot.js",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; product JSX present",
+        "files": [
+          {
+            "path": "web-ui/src/library/identity.tsx",
+            "bytes": 1599,
+            "sha256": "39fcc1cb60ef18a588b622a411a2f45540064b4d2a818189a5b1d45fc92fe86a"
+          },
+          {
+            "path": "web-ui/src/library/upstream/grokbot/react.tsx",
+            "bytes": 4456,
+            "sha256": "4f050b2f10fcaae00a458eefab463f7e3b2eb8e67e25d5cff1ee296710a3cef5"
+          },
+          {
+            "path": "web-ui/src/library/upstream/grokbot/engine.ts",
+            "bytes": 19416,
+            "sha256": "30395af7bea75d7d97b3624fbce75b3e0bd21acb5fa860fa279a3e403ba1f3c3"
+          },
+          {
+            "path": "web-ui/src/library/upstream/grokbot/painter.ts",
+            "bytes": 6541,
+            "sha256": "6962454c28c632b29da87fefc6558b5e8cfb1d1e9eb22932ed52e44ea7bdb6e6"
+          }
+        ],
+        "changes": [
+          "Actual Grok geometry/springs/blink and visibility lifecycle; controlled neutral theme and stable agent identity. Main-agent alias mismatch is tracked separately until resolved."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "presentation only: actual main-agent state is supplied, with stable ID/accessible-label alias issue tracked; runtime pending",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "source_note": "GrokBot is selected as a separate open-source renderer. The myLeaf reference video is now attributed to Aora/EmotionBall; no same-source claim is made.",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "AgentAvatar": 5
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-02",
+      "name": "Affect Chat Composer",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-a/chat.tsx",
+          "bytes": 15108,
+          "sha256": "8d32708b2a3b32410204569ae42cb6502a20480acdc40b139a2bcfeb67a60696"
+        },
+        {
+          "path": "src/demos/components-a/common.tsx",
+          "bytes": 6384,
+          "sha256": "271a0bcf71e90a18a22fcc494968279db2ad856ca2ad7c2bfe238a44a7a091de"
+        }
+      ],
+      "source_locator": "src/demos/components-a/chat.tsx::ChatComposer",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; product JSX present",
+        "files": [
+          {
+            "path": "web-ui/src/library/composer.tsx",
+            "bytes": 8183,
+            "sha256": "4b62f0484555db08095542a1fdd65350c676d90cf2af28c5959587614ca97e5b"
+          }
+        ],
+        "changes": [
+          "Selected library ChatComposer structure; host-owned draft/IME/attachments/send/stop/voice callbacks; no simulated sending."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "ChatComposer": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-03",
+      "name": "Affect Model Picker",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-b/tools.tsx",
+          "bytes": 33811,
+          "sha256": "b3e383910e0ec43bbc28e8d1d634735bc795db48ab42d21c993673d3c3532bcb"
+        }
+      ],
+      "source_locator": "src/demos/components-b/tools.tsx::ModelPickerDemo",
+      "implementation": {
+        "status": "source-adapted; product JSX present; not runtime or visually validated",
+        "files": [
+          {
+            "path": "web-ui/src/library/composer.tsx",
+            "bytes": 8183,
+            "sha256": "4b62f0484555db08095542a1fdd65350c676d90cf2af28c5959587614ca97e5b"
+          }
+        ],
+        "changes": [
+          "Current App mounts the selected ModelPicker with real model directory rows; selection calls models.review({modelId}), shows explicit PermissionReview, then models.select({reviewHandle})."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "Implemented static review/select host contract; task/busy/capability/binding gates are present. Successful model switching, stale-ticket handling and actual owner receipts remain unverified.",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "current App static call-site inspection only; no runtime rendering evidence",
+        "path": "web-ui/src/App.tsx",
+        "inspected_at_utc": "2026-11-02T11:38:45.710402+00:00",
+        "symbol_occurrences": {
+          "ModelPicker": 1
+        },
+        "hash_status": "No source or product hashes re-run in this metadata update; earlier implementation-file hashes belong to the prior provenance checkpoint."
+      }
+    },
+    {
+      "id": "PW-04",
+      "name": "Affect Agent Steering",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-a/agents.tsx",
+          "bytes": 28739,
+          "sha256": "e73e8f5dc075c66ebc4db69da41bbe122a58a8d8f5822e6ac9f6536d398f2617"
+        }
+      ],
+      "source_locator": "src/demos/components-a/agents.tsx::AgentSteering",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; product JSX present",
+        "files": [
+          {
+            "path": "web-ui/src/library/composer.tsx",
+            "bytes": 8183,
+            "sha256": "4b62f0484555db08095542a1fdd65350c676d90cf2af28c5959587614ca97e5b"
+          }
+        ],
+        "changes": [
+          "Selected steering source receives pending rows only after exact clientMessageId association to a real user message submission with content; receipts/query/return and eligible locally-unsent retry remain separate."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "partial: pending identity/text mismatch has a static mapping fix, but complete queued/adopted/edit/withdraw/steer owner UX and device validation remain open; no completion claim",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "AgentSteering": 1
+            }
+          }
+        ],
+        "current_status_note": "App pending rows are now explicitly mapped; previous recorded App hash is a historical checkpoint, not current integration evidence."
+      }
+    },
+    {
+      "id": "PW-05",
+      "name": "Affect AI Answer",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-a/chat.tsx",
+          "bytes": 15108,
+          "sha256": "8d32708b2a3b32410204569ae42cb6502a20480acdc40b139a2bcfeb67a60696"
+        }
+      ],
+      "source_locator": "src/demos/components-a/chat.tsx::AIAnswer",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; product JSX present",
+        "files": [
+          {
+            "path": "web-ui/src/library/composer.tsx",
+            "bytes": 8183,
+            "sha256": "4b62f0484555db08095542a1fdd65350c676d90cf2af28c5959587614ca97e5b"
+          },
+          {
+            "path": "web-ui/src/library/MarkdownBody.tsx",
+            "bytes": 4952,
+            "sha256": "0fb751336b9ee77e3f0c2d21cec6c08f416e45804d8f62a18afeb8445fd12cd2"
+          }
+        ],
+        "changes": [
+          "Selected answer surface consumes actual message content and actual busy state; mature Markdown/GFM parser instead of a new parser or synthetic streaming clock."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "AIAnswer": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-06",
+      "name": "Affect Message Actions Clean",
+      "source_group": "U",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/message-actions-clean.tsx",
+          "bytes": 34625,
+          "sha256": "5a9f9c7d325ab69257f52e3ba2ddc57d07c0058c9de11b234344df86d64050ee"
+        }
+      ],
+      "source_locator": "components/message-actions-clean.tsx",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; product JSX present",
+        "files": [
+          {
+            "path": "web-ui/src/library/message.tsx",
+            "bytes": 2799,
+            "sha256": "1d9045d5f91dfda7ce34032f5750204390da201a296fad9e208a601e00952277"
+          },
+          {
+            "path": "web-ui/src/library/adapted/message-actions-clean.tsx",
+            "bytes": 34068,
+            "sha256": "3d525b0ce215e4b743a10472dbf06a965b815cb7f6735713d718b2b46622f8f1"
+          }
+        ],
+        "changes": [
+          "Actual official action-bar source; copy awaits completion and speech is host-controlled; unavailable actions omitted."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "MessageActions": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-07",
+      "name": "Affect Cited Answer",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-b/context.tsx",
+          "bytes": 19767,
+          "sha256": "66a0cdc06352c3225156ea00f9501ce7052ee769c090bf1bd68bd44f794707fe"
+        }
+      ],
+      "source_locator": "src/demos/components-b/context.tsx::CitedAnswerDemo",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; product JSX present",
+        "files": [
+          {
+            "path": "web-ui/src/library/context.tsx",
+            "bytes": 8976,
+            "sha256": "660c93d1e84b41e606a41ceb85404c7160d23b007727e3214f83cb9abd0e1f1a"
+          },
+          {
+            "path": "web-ui/src/library/MarkdownBody.tsx",
+            "bytes": 4952,
+            "sha256": "0fb751336b9ee77e3f0c2d21cec6c08f416e45804d8f62a18afeb8445fd12cd2"
+          }
+        ],
+        "changes": [
+          "Selected source/reference structure and actual message source IDs/excerpts; controlled source-opening callback and parsed text citation extension."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "CitedAnswer": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-08",
+      "name": "Affect Tool Call Card Clean",
+      "source_group": "U",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/tool-call-card-clean.tsx",
+          "bytes": 32633,
+          "sha256": "93f758484bf5521e2a1316d94c28ad7dd8e55aacc44a11795bc57939a12d0d96"
+        }
+      ],
+      "source_locator": "components/tool-call-card-clean.tsx",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; product JSX present",
+        "files": [
+          {
+            "path": "web-ui/src/library/message.tsx",
+            "bytes": 2799,
+            "sha256": "1d9045d5f91dfda7ce34032f5750204390da201a296fad9e208a601e00952277"
+          },
+          {
+            "path": "web-ui/src/library/adapted/tool-call-card-clean.tsx",
+            "bytes": 32776,
+            "sha256": "b06af7ae0ac8d4e6e7669410b610d303e67b14e6fccdd8162d0e07408b34d522"
+          }
+        ],
+        "changes": [
+          "Actual official disclosure/JSON/copy/status source; state and duration are supplied facts, without local completion clock."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Task tool records use the bounded TaskAuditStore operation schema through task-presentation.ts. Read-model contract tests are separate from rendered and native acceptance."
+      },
+      "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "ToolCall": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-09",
+      "name": "Nick 主子步骤器",
+      "source_group": "Nick",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "agent-stepper.js",
+          "bytes": 19436,
+          "sha256": "66af7b6b74b508f14f94c0d06023f6107f9a7e135624dc046b3f434cafad36a2"
+        }
+      ],
+      "source_locator": "agent-stepper.js",
+      "implementation": {
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
+        "files": [
+          {
+            "path": "web-ui/src/library/execution.tsx",
+            "bytes": 629,
+            "sha256": "19ee59f6a73b07dfa48fd43b3b3056fb707ec1c458568ad10ce4f49351ef505c"
+          },
+          {
+            "path": "web-ui/src/library/execution-stepper.js",
+            "bytes": 15152,
+            "sha256": "d8d71cd0c303626b48e533ffd99d7caca9299d5050278e48d78c7fb666511e68"
+          }
+        ],
+        "changes": [
+          "Existing library Web Component DOM/CSS/measured spine retained; demo timeline/play/seek and auto-completion removed, task/run scope controls owner reset."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. Ordinary task.raw does not provide steps/workPlan/executionTree; inferred fixture steps are removed from the main task flow. Real Team WorkPlan owner-window binding remains open."
+      },
+      "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "ExecutionSteps": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-10",
+      "name": "Affect Agent Tree",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-b/agents.tsx",
+          "bytes": 32179,
+          "sha256": "a32bd7872bd158f86f9902b0c6e53ae44d024307fd8ec1236cb5cf3521e0e899"
+        }
+      ],
+      "source_locator": "src/demos/components-b/agents.tsx::AgentTreeDemo",
+      "implementation": {
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
+        "files": [
+          {
+            "path": "web-ui/src/library/agents.tsx",
+            "bytes": 10628,
+            "sha256": "bed33c7fe5c4f4ffb135a3253b5d0cc6d9367c61e5f6cc5c51d3cc9a015b23e5"
+          },
+          {
+            "path": "web-ui/src/library/adapted/agent-motion.tsx",
+            "bytes": 5789,
+            "sha256": "ae2f82ad319aec12384fff0f68c29c63e1e8ec6b3b6066bae39080cefca4bf63"
+          }
+        ],
+        "changes": [
+          "Selected source nodes/connectors and exact library FLIP helper; conditional raw.executionTree mapping, with runtime data-shape compatibility still unverified."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. Ordinary task.raw does not provide a real multi-agent tree; real team-domain ownership and member/run projection remain open."
+      },
+      "business_connection": "conditional read-only task raw.executionTree rendering; actual host data shape and action coverage not established",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "AgentTree": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-11",
+      "name": "Affect Agent Handoff",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-a/agents.tsx",
+          "bytes": 28739,
+          "sha256": "e73e8f5dc075c66ebc4db69da41bbe122a58a8d8f5822e6ac9f6536d398f2617"
+        }
+      ],
+      "source_locator": "src/demos/components-a/agents.tsx::AgentHandoff",
+      "implementation": {
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
+        "files": [
+          {
+            "path": "web-ui/src/library/agents.tsx",
+            "bytes": 10628,
+            "sha256": "bed33c7fe5c4f4ffb135a3253b5d0cc6d9367c61e5f6cc5c51d3cc9a015b23e5"
+          }
+        ],
+        "changes": [
+          "Selected source route/material structure; conditional raw.handoffs rendering only; no fixture route or synthetic ACK completion."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. Ordinary task.raw handoffs are not a production contract; real team handoff review integration remains open."
+      },
+      "business_connection": "conditional read-only task raw.handoffs rendering; actual host data shape and action coverage not established",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "AgentHandoff": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-12",
+      "name": "Affect Agent Findings",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-a/agents.tsx",
+          "bytes": 28739,
+          "sha256": "e73e8f5dc075c66ebc4db69da41bbe122a58a8d8f5822e6ac9f6536d398f2617"
+        }
+      ],
+      "source_locator": "src/demos/components-a/agents.tsx::AgentFindings",
+      "implementation": {
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
+        "files": [
+          {
+            "path": "web-ui/src/library/agents.tsx",
+            "bytes": 10628,
+            "sha256": "bed33c7fe5c4f4ffb135a3253b5d0cc6d9367c61e5f6cc5c51d3cc9a015b23e5"
+          }
+        ],
+        "changes": [
+          "Selected source member filters/finding/evidence surface; conditional raw.findings rendering, no local reviewed completion."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. Ordinary task.raw findings are not a production contract; actual team finding/output references remain open."
+      },
+      "business_connection": "conditional read-only task raw.findings rendering; actual host data shape and review callback coverage not established",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "AgentFindings": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-13",
+      "name": "Affect Memory Panel",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-b/context.tsx",
+          "bytes": 19767,
+          "sha256": "66a0cdc06352c3225156ea00f9501ce7052ee769c090bf1bd68bd44f794707fe"
+        }
+      ],
+      "source_locator": "src/demos/components-b/context.tsx::MemoryPanelDemo",
+      "implementation": {
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
+        "files": [
+          {
+            "path": "web-ui/src/library/context.tsx",
+            "bytes": 8976,
+            "sha256": "660c93d1e84b41e606a41ceb85404c7160d23b007727e3214f83cb9abd0e1f1a"
+          }
+        ],
+        "changes": [
+          "Selected category/search/detail/edit structure; conditional task raw.memory data, with no mutation callbacks in current product call."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. A synthetic task.raw memory panel is not a production memory projection; actual memory-domain binding remains open."
+      },
+      "business_connection": "partial read-only task raw.memory view; memory create/save/forget/source callbacks are not passed by the product call",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "MemoryPanel": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-14",
+      "name": "Affect Context Window",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-b/context.tsx",
+          "bytes": 19767,
+          "sha256": "66a0cdc06352c3225156ea00f9501ce7052ee769c090bf1bd68bd44f794707fe"
+        }
+      ],
+      "source_locator": "src/demos/components-b/context.tsx::ContextWindowDemo",
+      "implementation": {
+        "status": "source-adapted; retained source identity preserved; ordinary-task fixture binding rejected; real-domain integration pending",
+        "files": [
+          {
+            "path": "web-ui/src/library/context.tsx",
+            "bytes": 8976,
+            "sha256": "660c93d1e84b41e606a41ceb85404c7160d23b007727e3214f83cb9abd0e1f1a"
+          }
+        ],
+        "changes": [
+          "Selected compact cells/segment disclosure; conditional task raw.contextWindow data, totals/ratios must come from host facts."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint",
+        "production_binding_note": "Adapter retained. A synthetic task.raw contextWindow is not a production context-budget projection; actual usage/context owner binding remains open."
+      },
+      "business_connection": "conditional read-only task raw.contextWindow view; actual capacity/segment facts not established by source inspection",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "ContextWindow": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-15",
+      "name": "Vaul Drawer",
+      "source_group": "Vaul",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "src/index.tsx",
+          "bytes": 38337,
+          "sha256": "1bc911d9909c75e475cccd7a685eae65459849941981837327367666ad5222ee"
+        },
+        {
+          "path": "src/style.css",
+          "bytes": 6078,
+          "sha256": "f1eb8b59701a7c89bc0444c9d6660d56cde5bf01690671a6d5b01d2d74391c78"
+        },
+        {
+          "path": "src/use-snap-points.ts",
+          "bytes": 10133,
+          "sha256": "c763c9c613eba8579da93cad3f5878f795e8dbb5c5098cf852838cae3511ecc8"
+        },
+        {
+          "path": "src/use-prevent-scroll.ts",
+          "bytes": 11419,
+          "sha256": "b1c208298e26baa5f371467065c65b097dec3c96529e28769151842624a228ef"
+        },
+        {
+          "path": "src/use-scale-background.ts",
+          "bytes": 2332,
+          "sha256": "71c55aa27a71b73608456f523cb32de3ba2332343ed64f8205b64cfe9923f135"
+        }
+      ],
+      "source_locator": "src/index.tsx；use-prevent-scroll.ts；use-snap-points.ts",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/adapted/vaul/src/index.tsx",
+            "bytes": 38337,
+            "sha256": "1bc911d9909c75e475cccd7a685eae65459849941981837327367666ad5222ee"
+          }
+        ],
+        "changes": [
+          "Source complete graph; no original drag/focus/scroll algorithm replacement; neutral product surfaces, shouldScaleBackground=false"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: allWork, task detail, phone/voice review, create project/file, chat attachment picker",
+        "host_fields": [
+          "tasks",
+          "projects",
+          "composer",
+          "phoneDraft",
+          "chatAttachmentPickerOpen"
+        ],
+        "host_actions": [
+          "tasks.open",
+          "tasks.close",
+          "tasks.review",
+          "phone.prepare",
+          "phone.start",
+          "voice.review",
+          "voice.accept",
+          "voice.discard",
+          "attachments.openPicker",
+          "attachments.closePicker"
+        ]
+      }
+    },
+    {
+      "id": "PW-16",
+      "name": "BoardUI DashboardSidebar",
+      "source_group": "B",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/application/dashboard/dashboard-sidebar.tsx",
+          "bytes": 21836,
+          "sha256": "b4e7bc7740cf9fef982d11edba7af4df82fd765aee29ba2f7c7b2f476a479ee9"
+        }
+      ],
+      "source_locator": "components/application/dashboard/dashboard-sidebar.tsx",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/WorkSidebar.tsx",
+            "bytes": 3862,
+            "sha256": "688aea4e843b6d83776fb4e7f519e739956044399b358be894771eaebcf5bbae"
+          }
+        ],
+        "changes": [
+          "Retain source NavItem + Collapsible; real controlled nav; remove sample account/team/support/theme menus, gradient to gray"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: 全部工作 > main work navigation",
+        "host_fields": [
+          "conversationId",
+          "conversations",
+          "projectId",
+          "projects"
+        ],
+        "host_actions": [
+          "conversation.new",
+          "conversation.select"
+        ]
+      }
+    },
+    {
+      "id": "PW-17",
+      "name": "Ovio Liquid Tabs · minimal",
+      "source_group": "Ovio",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "upstream/components/ovio/liquid-tabs/liquid-tabs.tsx",
+          "bytes": 3385,
+          "sha256": "985a29cd727ce78aeaa1d7d1df13afd6ed0a3a391381ce7692c200c1059f67fa"
+        },
+        {
+          "path": "upstream/components/ovio/liquid-tabs/worlds/minimal.tsx",
+          "bytes": 846,
+          "sha256": "49e0d5e7aa9f8e3c7fc1aa1b37a7a5bc11b458681c2a7df865511b78fda421be"
+        }
+      ],
+      "source_locator": "upstream/components/ovio/liquid-tabs/liquid-tabs.tsx；worlds/minimal.tsx",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/adapted/ovio/components/ovio/liquid-tabs/liquid-tabs.tsx",
+            "bytes": 3392,
+            "sha256": "c0a07bc89bb6e087fbaeecb064adbac01eb652f1dc61a6c05aad7c6bd116ce0e"
+          },
+          {
+            "path": "web-ui/src/shell-library/adapted/ovio/components/ovio/liquid-tabs/worlds/minimal.tsx",
+            "bytes": 842,
+            "sha256": "98ec69d4dc5a451319e3292d04cbfbff862fa2f3810cffb500b47ecf6abc7546"
+          }
+        ],
+        "changes": [
+          "Real upstream minimal variant, relative import graph, compact neutral tokens; preview remains separate native isolated content"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified; project preview content-host migration remains separately tracked, not excused as business-native UI",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: projects > 工作 / 预览",
+        "host_fields": [
+          "projectId",
+          "files",
+          "filePath",
+          "fileVersion"
+        ],
+        "host_actions": [
+          "projects.preview"
+        ]
+      }
+    },
+    {
+      "id": "PW-18",
+      "name": "BoardUI Underline Tabs",
+      "source_group": "B",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/base/tabs/tabs.tsx",
+          "bytes": 6487,
+          "sha256": "343761c69bd612a8a9c5f8aa1ef8aabdc32deda23e7870b5722c40623e325f0b"
+        }
+      ],
+      "source_locator": "components/base/tabs/tabs.tsx",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/adapted/boardui/components/base/tabs/tabs.tsx",
+            "bytes": 6487,
+            "sha256": "90f7ffd09094f5e6a0283f64c7e98ad69651ffa6dfe863141f58f200b5e7d3ef"
+          }
+        ],
+        "changes": [
+          "Original React Aria underline tabs; controlled real filters and local view"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: task filter and projects file/tree navigation",
+        "host_fields": [
+          "tasks",
+          "files"
+        ],
+        "host_actions": []
+      }
+    },
+    {
+      "id": "PW-19",
+      "name": "BoardUI Popover",
+      "source_group": "BO",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "vendor/boardui-registry-20261101/popover.json",
+          "bytes": 11599,
+          "sha256": "438ad1d775a44ab23b2bdc73fb6077122f8c4492983096b788d33df3e9a5cb32"
+        },
+        {
+          "path": "components/base/popover/popover.tsx",
+          "bytes": 7013,
+          "sha256": "b712f37a2153d42ee40ad7ec329f184ef0ab3186cd7c7f3fd111047a26ff178e"
+        }
+      ],
+      "source_locator": "components/base/popover/popover.tsx",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/adapted/boardui/components/base/popover/popover.tsx",
+            "bytes": 7005,
+            "sha256": "bbcb7cea04b1ac08045fa062081baff5aa0f79c641f1c598da58649bb3b66603"
+          }
+        ],
+        "changes": [
+          "Original registry source; aliases localized; controlled real actions, no fixture data"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "source_note": "The selected free component was added from official public registry snapshots captured 2026-11-01; it is not present in the older ec5c Git archive. Overlay code may include compatibility changes.",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: composer input intent, queue/steer semantics, per-message source/actions",
+        "host_fields": [
+          "chatBusy",
+          "chatSendMode",
+          "composer",
+          "phoneDraft",
+          "messages"
+        ],
+        "host_actions": [
+          "composer.intent",
+          "composer.mode",
+          "speech.speak",
+          "speech.stop"
+        ]
+      }
+    },
+    {
+      "id": "PW-20",
+      "name": "BoardUI ContextMenu",
+      "source_group": "BO",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "vendor/boardui-registry-20261101/context-menu.json",
+          "bytes": 22576,
+          "sha256": "62a7ad99e9f9fe6490052f83731c4d241451db3ff512f8f493d8a59e98ba460c"
+        },
+        {
+          "path": "components/base/context-menu/context-menu.tsx",
+          "bytes": 15885,
+          "sha256": "86111bcef4db65f7207384ce80c00e71563f2486e0ec2b6cc700098f0a53da3b"
+        }
+      ],
+      "source_locator": "components/base/context-menu/context-menu.tsx",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/adapted/boardui/components/base/context-menu/context-menu.tsx",
+            "bytes": 15843,
+            "sha256": "d2f616b2acdfb102805cde3a9708c37e643ec28a6a327c9faa1a9c02ff473fc5"
+          },
+          {
+            "path": "web-ui/src/shell-library/FilesBrowser.tsx",
+            "bytes": 3904,
+            "sha256": "5d46d279065968b3db415f5b6f4d9dc876f3346a551163c3af4bd9db7f433bd7"
+          }
+        ],
+        "changes": [
+          "Registry original keyboard/long press/menu behavior; expose existing openFrom to visible button, no synthetic events; copy exact path only"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "source_note": "The selected free component was added from official public registry snapshots captured 2026-11-01; it is not present in the older ec5c Git archive. Overlay code may include compatibility changes.",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: projects > file list > visible object more / long press",
+        "host_fields": [
+          "projectId",
+          "files"
+        ],
+        "host_actions": [
+          "projects.open"
+        ]
+      }
+    },
+    {
+      "id": "PW-21",
+      "name": "Affect Command Menu",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-a/inputs.tsx",
+          "bytes": 31876,
+          "sha256": "2973ad4104527909f1ea77dd865dcfbb1a3b39eed6829ddc38edc5040bd08830"
+        }
+      ],
+      "source_locator": "src/demos/components-a/inputs.tsx::CommandMenu",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/CommandMenu.tsx",
+            "bytes": 2881,
+            "sha256": "a815c3af6e8a4e3f88f038b43f62c9af5f96f77d3b96c829b72bf80ddf689260"
+          }
+        ],
+        "changes": [
+          "Keep source grouping/search/keyboard; controlled loaded objects; remove sample commands and fake opened completion"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: 全部工作 > 搜索已加载的工作与功能",
+        "host_fields": [
+          "conversations",
+          "projects"
+        ],
+        "host_actions": [
+          "conversation.select",
+          "projects.select"
+        ]
+      }
+    },
+    {
+      "id": "PW-22",
+      "name": "Affect Files / Folder",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/screens/workspace.tsx",
+          "bytes": 17513,
+          "sha256": "7b35b5f25b28b8f8f4ddb80119ae8a8d23cf14dcd7f751002b6b49f87d320832"
+        }
+      ],
+      "source_locator": "src/demos/screens/workspace.tsx::Files/Folder",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/FilesBrowser.tsx",
+            "bytes": 3904,
+            "sha256": "5d46d279065968b3db415f5b6f4d9dc876f3346a551163c3af4bd9db7f433bd7"
+          }
+        ],
+        "changes": [
+          "Source FileArt/FileCard and files region; remove seed folders/documents/people; default compact list, real path filtering; type illustration is not content preview"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: projects > 文件列表",
+        "host_fields": [
+          "projectId",
+          "files",
+          "filePath"
+        ],
+        "host_actions": [
+          "projects.open"
+        ]
+      }
+    },
+    {
+      "id": "PW-23",
+      "name": "MrLightful TreeView",
+      "source_group": "Tree",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "src/tree-view.tsx",
+          "bytes": 18840,
+          "sha256": "3402620bb01da941cc052ae4b0667c071d17962d6dc0eadd39ef1b8b084728d5"
+        },
+        {
+          "path": "src/lib/utils.ts",
+          "bytes": 169,
+          "sha256": "d1f1e0d62cb8d8d1e04c26e14de842d8a151f75812d81b046c65b5d1fe8e4b27"
+        }
+      ],
+      "source_locator": "src/tree-view.tsx；src/lib/utils.ts",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/adapted/tree/src/tree-view.tsx",
+            "bytes": 19067,
+            "sha256": "b8f0f010af5edb88b8f9f2e01a71611c76363cf97e51170666f204ef33924f38"
+          }
+        ],
+        "changes": [
+          "Original source keyboard/accordion tree; controlled selectedItemId; no fabricated drag mutations"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: projects > 目录层级",
+        "host_fields": [
+          "projectId",
+          "files",
+          "filePath"
+        ],
+        "host_actions": [
+          "projects.open"
+        ]
+      }
+    },
+    {
+      "id": "PW-24",
+      "name": "Affect Inline Diff",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-c/pro-more.tsx",
+          "bytes": 23085,
+          "sha256": "3bb78793f7b6b30244bad8802f2817c19ba28bcbb3276a295ff8a02c339db199"
+        }
+      ],
+      "source_locator": "src/demos/components-c/pro-more.tsx::InlineDiffDemo",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/InlineDiff.tsx",
+            "bytes": 1539,
+            "sha256": "d07041faa1354d253157acd37c3468f71ce9eb9b218dee68752dca6037db7d9e"
+          }
+        ],
+        "changes": [
+          "Keep original diff structure; real before/after entire file; remove sample hunks, timed/fake accept/reject/Undo; save guarded by exact original version"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: projects > open file > 查看修改",
+        "host_fields": [
+          "projectId",
+          "filePath",
+          "fileContent",
+          "fileBaseline",
+          "fileVersion",
+          "fileSaving"
+        ],
+        "host_actions": [
+          "projects.edit",
+          "projects.save"
+        ]
+      }
+    },
+    {
+      "id": "PW-25",
+      "name": "Permission Request + Review Center",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/components-b/tools.tsx",
+          "bytes": 33811,
+          "sha256": "b3e383910e0ec43bbc28e8d1d634735bc795db48ab42d21c993673d3c3532bcb"
+        },
+        {
+          "path": "src/demos/components-c/pro.tsx",
+          "bytes": 26075,
+          "sha256": "beeb8bc3c94b7f401155d5dc57e1634ddf70cb01b39abc4a84e8d4305e062c0b"
+        }
+      ],
+      "source_locator": "src/demos/components-b/tools.tsx::PermissionRequestDemo；src/demos/components-c/pro.tsx::ReviewCenterDemo",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/Review.tsx",
+            "bytes": 3095,
+            "sha256": "f4aee7fdafd104a31b0fc5b17282f65080877b65fe9cd149c62bbcc98bb0afca"
+          }
+        ],
+        "changes": [
+          "Retain original queue/detail + request heading/reason/scope/action hierarchy; remove fixture requests/confidence/auto-grants/implicit Enter/fake Undo; one-use original host reviewHandle"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: attention task drawer + phone goal/range review",
+        "host_fields": [
+          "tasks.id/raw",
+          "phoneDraft"
+        ],
+        "host_actions": [
+          "tasks.review",
+          "tasks.confirm",
+          "tasks.approve",
+          "tasks.resolve",
+          "tasks.resume",
+          "tasks.scope",
+          "phone.prepare",
+          "phone.start"
+        ]
+      }
+    },
+    {
+      "id": "PW-26",
+      "name": "Affect Decision Inbox",
+      "source_group": "U",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/decision-inbox-clean.tsx",
+          "bytes": 14466,
+          "sha256": "ee16580722d7aa5ce9a2319aa030c88cfa7bf119a9a18d31a71a181b1961880e"
+        }
+      ],
+      "source_locator": "components/decision-inbox-clean.tsx；库适配upstream/decision-inbox*.tsx",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; static product route mapped",
+        "files": [
+          {
+            "path": "web-ui/src/shell-library/DecisionInbox.tsx",
+            "bytes": 14637,
+            "sha256": "916963f684fcc590c1e86f667b4d917457121af9ccaf7bccb81f9007ebb36f86"
+          }
+        ],
+        "changes": [
+          "Original source retained; controlled host task settlement; deleted 1100ms fake answer/fold timer; viewing a task never marks it resolved"
+        ],
+        "origin_map": "web-ui/src/shell-library/source-manifest.json",
+        "retained_original_check": "59 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "host fields/actions are present in static route mapping; actual bridge runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static source/JSX mapping plus owner handoff; no runtime rendering evidence",
+        "file": {
+          "path": "web-ui/src/App.tsx",
+          "bytes": 54208,
+          "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901"
+        },
+        "route": "App: tasks > all > real attention task inbox",
+        "host_fields": [
+          "tasks"
+        ],
+        "host_actions": [
+          "tasks.open"
+        ]
+      }
+    },
+    {
+      "id": "PW-27",
+      "name": "BoardUI Input / Textarea",
+      "source_group": "B",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/base/input/input.tsx",
+          "bytes": 10133,
+          "sha256": "27ec5110b6356fdc7093b5ea986366fea046ee6f9d1ee2b23ac326c8480ff61d"
+        },
+        {
+          "path": "components/base/textarea/textarea.tsx",
+          "bytes": 10662,
+          "sha256": "7916841c3474f0242bd9adb2300eb9fa3f62aefe2aaa7cb4120f7247acf05f14"
+        }
+      ],
+      "source_locator": "components/base/input/input.tsx；textarea/textarea.tsx",
+      "implementation": {
+        "status": "source-adapted; source-entry and retained-original hashes reviewed",
+        "files": [
+          {
+            "path": "web-ui/src/forms-library/index.tsx",
+            "bytes": 4279,
+            "sha256": "ea61b1a0a614645b158c96e62e3e2f618253e95a63b70aefffe59ebff172bd21"
+          },
+          {
+            "path": "web-ui/src/forms-library/boardui/components/base/input/input.tsx",
+            "bytes": 11032,
+            "sha256": "384446b2a1de45c08a5577c71b05c1817a03321c9b2017b85d0cca5dd9f72691"
+          },
+          {
+            "path": "web-ui/src/forms-library/boardui/components/base/textarea/textarea.tsx",
+            "bytes": 10624,
+            "sha256": "4a62a97b9cb0dbd4bf8497d92644f2ca60cbec2568710aa04e45ce891eb33e60"
+          }
+        ],
+        "changes": [
+          "actual BoardUI Input/Textarea + controlled JSX usage"
+        ],
+        "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
+        "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
+      },
+      "business_connection": "partial: capability-gated existing typed handlers; complete owner mutation/deep-review coverage remains pending per private coverage record",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX route mapping, not runtime evidence",
+        "path": "web-ui/src/Secondary.tsx",
+        "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+        "symbol_occurrences": {
+          "TextField": 15,
+          "TextAreaField": 2
+        }
+      }
+    },
+    {
+      "id": "PW-28",
+      "name": "按住轻伸展 Switch",
+      "source_group": "Switch",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "review-original.html",
+          "bytes": 4265,
+          "sha256": "1b75a3e0aa4f755c0eff19acd9f0aa5ad0cedc3f854bf86fb105951677fc395a"
+        },
+        {
+          "path": "offline.html",
+          "bytes": 4758,
+          "sha256": "074abffe6523e16bb4fb27ffb4fb2b178bd7947bc7ab9aeb80874259754734ea"
+        },
+        {
+          "path": "SOURCE.json",
+          "bytes": 1781,
+          "sha256": "caa009dd1ed4680e10cdc45e9440aa1bcdd4d595aa8905c68f120f5ba0161985"
+        }
+      ],
+      "source_locator": "review-original.html；offline.html",
+      "implementation": {
+        "status": "source-adapted; source-entry and retained-original hashes reviewed",
+        "files": [
+          {
+            "path": "web-ui/src/forms-library/StretchSwitch.tsx",
+            "bytes": 3171,
+            "sha256": "a3a6ee672e200ef806868322dd10d4c30ec3fe55c816fb9be9be7017e1a4dd9e"
+          }
+        ],
+        "changes": [
+          "approved switch port with exact spring/event mechanism; real snapshot controls value"
+        ],
+        "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
+        "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
+      },
+      "business_connection": "partial: capability-gated existing typed handlers; complete owner mutation/deep-review coverage remains pending per private coverage record",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX route mapping, not runtime evidence",
+        "path": "web-ui/src/Secondary.tsx",
+        "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+        "symbol_occurrences": {
+          "StretchSwitch": 3
+        }
+      }
+    },
+    {
+      "id": "PW-29",
+      "name": "BoardUI Select",
+      "source_group": "B",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/base/select/select.tsx",
+          "bytes": 7056,
+          "sha256": "3e601115ff7f4caf637cf1f6fc07a6997b486ef0eee8fda0911ae4121c08da8e"
+        }
+      ],
+      "source_locator": "components/base/select/select.tsx",
+      "implementation": {
+        "status": "source-adapted; source-entry and retained-original hashes reviewed",
+        "files": [
+          {
+            "path": "web-ui/src/forms-library/index.tsx",
+            "bytes": 4279,
+            "sha256": "ea61b1a0a614645b158c96e62e3e2f618253e95a63b70aefffe59ebff172bd21"
+          },
+          {
+            "path": "web-ui/src/forms-library/boardui/components/base/select/select.tsx",
+            "bytes": 7048,
+            "sha256": "eefbd902996e46229b63edbf6622a3c5da3705de43528854880df948a3714415"
+          }
+        ],
+        "changes": [
+          "actual BoardUI Select in model/SSH forms"
+        ],
+        "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
+        "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
+      },
+      "business_connection": "partial: capability-gated existing typed handlers; complete owner mutation/deep-review coverage remains pending per private coverage record",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX route mapping, not runtime evidence",
+        "path": "web-ui/src/Secondary.tsx",
+        "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+        "symbol_occurrences": {
+          "SelectField": 2
+        }
+      }
+    },
+    {
+      "id": "PW-30",
+      "name": "BoardUI Combobox",
+      "source_group": "BO",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "vendor/boardui-registry-20261101/combobox.json",
+          "bytes": 13715,
+          "sha256": "3f0a0b4a491d2483d06052004fac22a4cb65277c9ed588489b2f4091f4c0e4ea"
+        },
+        {
+          "path": "components/base/combobox/combobox.tsx",
+          "bytes": 7362,
+          "sha256": "97f015b55f1d9bf933e160452494e2508a88bc7bd2e501eece95c68828069653"
+        }
+      ],
+      "source_locator": "components/base/combobox/combobox.tsx",
+      "implementation": {
+        "status": "source-adapted; source-entry and retained-original hashes reviewed",
+        "files": [
+          {
+            "path": "web-ui/src/forms-library/index.tsx",
+            "bytes": 4279,
+            "sha256": "ea61b1a0a614645b158c96e62e3e2f618253e95a63b70aefffe59ebff172bd21"
+          },
+          {
+            "path": "web-ui/src/forms-library/boardui/components/base/combobox/combobox.tsx",
+            "bytes": 7288,
+            "sha256": "d7a6d34f46229faa31aa7339149f321f2b72bc8581df213ba26264780fe73576"
+          }
+        ],
+        "changes": [
+          "actual registry ComboBox with controlled model selection"
+        ],
+        "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
+        "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
+      },
+      "business_connection": "partial: capability-gated existing typed handlers; complete owner mutation/deep-review coverage remains pending per private coverage record",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "source_note": "The selected free component was added from official public registry snapshots captured 2026-11-01; it is not present in the older ec5c Git archive. Overlay code may include compatibility changes.",
+      "rendered_usage": {
+        "status": "static JSX route mapping, not runtime evidence",
+        "path": "web-ui/src/Secondary.tsx",
+        "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+        "symbol_occurrences": {
+          "ComboBoxField": 1
+        }
+      }
+    },
+    {
+      "id": "PW-31",
+      "name": "BoardUI SearchField",
+      "source_group": "BO",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "vendor/boardui-registry-20261101/search-field.json",
+          "bytes": 8214,
+          "sha256": "4379640624dd71ae71045c547a0b731a2fee6a6916fd5bad2b031c19609edc7b"
+        },
+        {
+          "path": "components/base/search-field/search-field.tsx",
+          "bytes": 5588,
+          "sha256": "0eab68a5bf81ee93bfdcb1f1a0e8561aa696989749b72c63ba45f62b96b6c670"
+        }
+      ],
+      "source_locator": "components/base/search-field/search-field.tsx",
+      "implementation": {
+        "status": "source-adapted; source-entry and retained-original hashes reviewed",
+        "files": [
+          {
+            "path": "web-ui/src/forms-library/boardui/components/base/search-field/search-field.tsx",
+            "bytes": 5498,
+            "sha256": "b1b2b67c163445d893d10a45604e8a886876301eb3dc00799bec58bdab869947"
+          }
+        ],
+        "changes": [
+          "actual registry SearchField for explicitly local loaded filtering"
+        ],
+        "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
+        "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
+      },
+      "business_connection": "partial: capability-gated existing typed handlers; complete owner mutation/deep-review coverage remains pending per private coverage record",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "source_note": "The selected free component was added from official public registry snapshots captured 2026-11-01; it is not present in the older ec5c Git archive. Overlay code may include compatibility changes.",
+      "rendered_usage": {
+        "status": "static JSX route mapping, not runtime evidence",
+        "path": "web-ui/src/Secondary.tsx",
+        "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+        "symbol_occurrences": {
+          "SearchField": 2
+        }
+      }
+    },
+    {
+      "id": "PW-32",
+      "name": "BoardUI RadioGroup",
+      "source_group": "B",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/base/radio/radio.tsx",
+          "bytes": 5741,
+          "sha256": "13e0787ddd31198bf7035d754140c27bcddb59fe07807873bb572c346ed18287"
+        }
+      ],
+      "source_locator": "components/base/radio/radio.tsx",
+      "implementation": {
+        "status": "source-adapted; source-entry and retained-original hashes reviewed",
+        "files": [
+          {
+            "path": "web-ui/src/forms-library/index.tsx",
+            "bytes": 4279,
+            "sha256": "ea61b1a0a614645b158c96e62e3e2f618253e95a63b70aefffe59ebff172bd21"
+          },
+          {
+            "path": "web-ui/src/forms-library/boardui/components/base/radio/radio.tsx",
+            "bytes": 5748,
+            "sha256": "b8719fbfcc48b869370eeacc4b98a5bef16a9c8ff7e78f19ae3ec08ba3c507ff"
+          }
+        ],
+        "changes": [
+          "actual BoardUI RadioGroup in reminder draft"
+        ],
+        "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
+        "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
+      },
+      "business_connection": "partial: capability-gated existing typed handlers; complete owner mutation/deep-review coverage remains pending per private coverage record",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX route mapping, not runtime evidence",
+        "path": "web-ui/src/Secondary.tsx",
+        "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+        "symbol_occurrences": {
+          "RadioOptions": 1
+        }
+      }
+    },
+    {
+      "id": "PW-33",
+      "name": "BoardUI Checkbox",
+      "source_group": "B",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/base/checkbox/checkbox.tsx",
+          "bytes": 2196,
+          "sha256": "59faad3d5885077822d00ba983fc88acf2848cb21faad7ed2aebc0eaa2282834"
+        }
+      ],
+      "source_locator": "components/base/checkbox/checkbox.tsx",
+      "implementation": {
+        "status": "source-adapted; source-entry and retained-original hashes reviewed",
+        "files": [
+          {
+            "path": "web-ui/src/forms-library/boardui/components/base/checkbox/checkbox.tsx",
+            "bytes": 2203,
+            "sha256": "5f6cd8524192f4f4fadef1b8b21fee60c8b86e8c00bdc2583453e4fb6964cbe5"
+          }
+        ],
+        "changes": [
+          "actual BoardUI Checkbox in model capability and archive/storage selections"
+        ],
+        "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
+        "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
+      },
+      "business_connection": "partial: capability-gated existing typed handlers; complete owner mutation/deep-review coverage remains pending per private coverage record",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX route mapping, not runtime evidence",
+        "path": "web-ui/src/Secondary.tsx",
+        "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+        "symbol_occurrences": {
+          "CheckboxField": 2
+        }
+      }
+    },
+    {
+      "id": "PW-34",
+      "name": "BoardUI SettingsModal + Accordion",
+      "source_group": "B",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/application/settings/settings-modal.tsx",
+          "bytes": 15222,
+          "sha256": "ac55bff6655cbf45fd98fb27505cb56b9805f56a4dcef9372207d3d0d97b26d4"
+        }
+      ],
+      "source_locator": "components/application/settings/settings-modal.tsx；components/base/accordion/accordion.tsx",
+      "implementation": {
+        "status": "source-adapted; source-entry and retained-original hashes reviewed",
+        "files": [
+          {
+            "path": "web-ui/src/forms-library/SettingsDialog.tsx",
+            "bytes": 3189,
+            "sha256": "66a2c5bda52c925ac03594c94bd55a30ed49fc4888df0f9bab04b215bb827238"
+          },
+          {
+            "path": "web-ui/src/forms-library/boardui/components/base/accordion/accordion.tsx",
+            "bytes": 6812,
+            "sha256": "30474b4d2816ab97736b45f8d6aace1e1a23bd31d02890d48095d82665c09d4b"
+          }
+        ],
+        "changes": [
+          "controlled actual SettingsModal animation/layout port and actual registry Accordion"
+        ],
+        "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
+        "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
+      },
+      "business_connection": "partial: capability-gated existing typed handlers; complete owner mutation/deep-review coverage remains pending per private coverage record",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "additional_sources": [
+        {
+          "source_group": "BO",
+          "path": "vendor/boardui-registry-20261101/accordion.json",
+          "bytes": 11231,
+          "sha256": "55e4fc8bc520208f79799483ce317bae5a1dbc155ef26f7d64e8aa72b62ef058",
+          "identity": "official public registry source captured 2026-11-01"
+        },
+        {
+          "source_group": "BO",
+          "path": "components/base/accordion/accordion.tsx",
+          "bytes": 6805,
+          "sha256": "762786dd6ba88e1df5311d2b80d9ea6ede93f2878dcda44357ef1b9905186312",
+          "identity": "official public registry source captured 2026-11-01"
+        }
+      ],
+      "rendered_usage": {
+        "status": "Historical static JSX snapshot only; not a current call count or runtime evidence",
+        "path": "web-ui/src/Secondary.tsx",
+        "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+        "symbol_occurrences": {
+          "SettingsDialog": 3,
+          "Accordion": 1,
+          "AccordionItem": 1
+        }
+      },
+      "current_consumer_usage": {
+        "paths": [
+          "web-ui/src/App.tsx",
+          "web-ui/src/Secondary.tsx"
+        ],
+        "usage": [
+          "Task process: read-only available event bodies in original window order, with limited-read and pagination boundaries",
+          "Model settings: advanced configuration disclosure and original settings review dialogs"
+        ],
+        "source_changes": "No change to the retained BoardUI Accordion implementation or animation",
+        "validation": "New task event-window expansion and mobile returning flow await current GitHub capture"
+      }
+    },
+    {
+      "id": "PW-35",
+      "name": "BoardUI DataTable",
+      "source_group": "B",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/application/data-table/data-table.tsx",
+          "bytes": 22248,
+          "sha256": "620275fafbb48f743477cfc5d18421a3088c7c803b204fc70575ddc5c099a0db"
+        }
+      ],
+      "source_locator": "components/application/data-table/data-table.tsx",
+      "implementation": {
+        "status": "source-adapted; source-entry and retained-original hashes reviewed",
+        "files": [
+          {
+            "path": "web-ui/src/forms-library/ObjectTable.tsx",
+            "bytes": 3173,
+            "sha256": "021176f2f52e212f9149bbad72281758178b467b4df3483df13561a06c584a3c"
+          },
+          {
+            "path": "web-ui/src/forms-library/boardui/components/base/table/table.tsx",
+            "bytes": 1882,
+            "sha256": "9f9f598ea84ae5dd27573fbfa040bca0859b55a611b07dc5ef5679369e3d10b4"
+          }
+        ],
+        "changes": [
+          "host-driven TanStack/React Aria table adaptation; no seeded customer data"
+        ],
+        "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
+        "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
+      },
+      "business_connection": "partial: capability-gated existing typed handlers; complete owner mutation/deep-review coverage remains pending per private coverage record",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX route mapping, not runtime evidence",
+        "path": "web-ui/src/Secondary.tsx",
+        "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+        "symbol_occurrences": {
+          "ObjectTable": 1
+        }
+      }
+    },
+    {
+      "id": "PW-36",
+      "name": "FileUpload + Composer Attachments",
+      "source_group": "B",
+      "source_identity": "原码+库内版",
+      "entry_files": [
+        {
+          "path": "components/base/file-upload/file-upload.tsx",
+          "bytes": 13054,
+          "sha256": "27b1c26a2383c83a068a31c2415f5eaab35a8ee91c6bd391f481b67ee7ea17b3"
+        }
+      ],
+      "source_locator": "components/base/file-upload/file-upload.tsx；Composer .afa-filechips",
+      "implementation": {
+        "status": "source-adapted; source-entry and retained-original hashes reviewed",
+        "files": [
+          {
+            "path": "web-ui/src/forms-library/HostFileUpload.tsx",
+            "bytes": 3363,
+            "sha256": "fb92898d1df9b314db0387544070f1e776adfd52f1e53f384be9669bad2a8111"
+          }
+        ],
+        "changes": [
+          "Actual selected HostFileUpload now calls mcp.pickConfig and follows the host owner response for config-read status; reading configuration is not installation. Skills/plugins do not offer fabricated picker actions."
+        ],
+        "origin_map": "web-ui/src/forms-library/SOURCE-map.json",
+        "retained_original_check": "28 original-source entries match their declared hashes; no missing adapted leaf at this checkpoint"
+      },
+      "business_connection": "partial: MCP config selection/read contract is statically wired through ownerPending and ownerResponses; config review/install, skills/plugins pickers and actual host/runtime validation remain open",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "additional_sources": [
+        {
+          "source_group": "A",
+          "path": "src/demos/components-a/chat.tsx",
+          "symbol": "ChatComposer/.afa-filechips",
+          "identity": "library-maintained independent implementation"
+        }
+      ],
+      "rendered_usage": {
+        "status": "static JSX route mapping, not runtime evidence",
+        "path": "web-ui/src/Secondary.tsx",
+        "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+        "symbol_occurrences": {
+          "HostFileUpload": 1
+        },
+        "current_status_note": "Latest Secondary/HostFileUpload source has MCP picker wiring; retained earlier file hashes are historical and were not refreshed in this status-only update."
+      }
+    },
+    {
+      "id": "PW-37",
+      "name": "Josh 中性 comfort 按压",
+      "source_group": "Josh",
+      "source_identity": "原码二开",
+      "entry_files": [
+        {
+          "path": "josh-original.html",
+          "bytes": 1814,
+          "sha256": "338d47d45c87cdb75471da4f0262e71e1d5af2ff624a262b7a537752e9ce2479"
+        },
+        {
+          "path": "review-approved.html",
+          "bytes": 11137,
+          "sha256": "11ed2af51eaf6cdd78f4f880045517b0823898bc8cc363158f82f2db6a37cb7e"
+        },
+        {
+          "path": "SOURCE.json",
+          "bytes": 1554,
+          "sha256": "1fc46d33fd14158fe2f36a568359ebe58a8fc4dc6a7e6e657fb80236c2ab4d12"
+        }
+      ],
+      "source_locator": "review-approved.html::move；josh-original.html",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; product JSX present",
+        "files": [
+          {
+            "path": "web-ui/src/library/press.tsx",
+            "bytes": 5140,
+            "sha256": "00b8431728d4f0adf2590fbd54a3c5b059cfdda293f079b32d7b1d771a480357"
+          }
+        ],
+        "changes": [
+          "Actual approved tutorial shadow/base/edge/front/material stack and timing curves; compact travel and neutral product styling, controlled pointer/keyboard cleanup."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "PressButton": 9
+            }
+          },
+          {
+            "path": "web-ui/src/Secondary.tsx",
+            "bytes": 56851,
+            "sha256": "3836d0e668a3221654b513bead8af2e750138ea8109e7204d10947f69c34d077",
+            "symbol_occurrences": {
+              "PressButton": 3
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-38",
+      "name": "Affect Thinking Loader Clean",
+      "source_group": "U",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "components/thinking-loader-clean.tsx",
+          "bytes": 13168,
+          "sha256": "459869b68f0b163262cb183b5d1b1261d3fe621c3551826c06aae136e7047d76"
+        }
+      ],
+      "source_locator": "components/thinking-loader-clean.tsx::ThinkingLoader",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; product JSX present",
+        "files": [
+          {
+            "path": "web-ui/src/library/feedback.tsx",
+            "bytes": 3150,
+            "sha256": "10d448b77edcaccc0330106f4c9fc9c48a9f0cb6051aef4a754335613d4a1b40"
+          },
+          {
+            "path": "web-ui/src/library/adapted/thinking-loader-clean.tsx",
+            "bytes": 12419,
+            "sha256": "d477b295b5990c116dd6d60bd8218888369d1c3d8569b3904eb79fc5bbe73a6a"
+          }
+        ],
+        "changes": [
+          "Actual official width-fit/spinner/blur/rolling label; host-selected single phase, no automatic stage or fabricated elapsed duration."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "ThinkingLoader": 5
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PW-39",
+      "name": "Affect Shimmer Loader",
+      "source_group": "U",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "motion/shimmer-loader.tsx",
+          "bytes": 4171,
+          "sha256": "5020de3b09845d14492bf157a093edca0e8b2110eeaef5a5394f0306891172de"
+        }
+      ],
+      "source_locator": "motion/shimmer-loader.tsx::Skeleton/ShimmerText",
+      "implementation": {
+        "status": "source-adapted; product JSX present; not runtime or visually validated",
+        "files": [
+          {
+            "path": "web-ui/src/library/feedback.tsx",
+            "bytes": 3150,
+            "sha256": "10d448b77edcaccc0330106f4c9fc9c48a9f0cb6051aef4a754335613d4a1b40"
+          },
+          {
+            "path": "web-ui/src/library/adapted/shimmer-loader.tsx",
+            "bytes": 4264,
+            "sha256": "200e1a50519fd1ac5d9d104c1b2627984142e221fdaf3f31dac6abef02b67616"
+          }
+        ],
+        "changes": [
+          "Actual official Skeleton/ShimmerText are mounted for host handshake recovery, file loading and model directory reads."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "Presentation wired to actual loading states; animation, accessibility and device behavior not yet verified.",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "current App static call-site inspection only; no runtime rendering evidence",
+        "path": "web-ui/src/App.tsx",
+        "inspected_at_utc": "2026-11-02T11:38:45.710402+00:00",
+        "symbol_occurrences": {
+          "Skeleton": 10,
+          "ShimmerText": 3
+        },
+        "hash_status": "No source or product hashes re-run in this metadata update; earlier implementation-file hashes belong to the prior provenance checkpoint."
+      }
+    },
+    {
+      "id": "PW-40",
+      "name": "Sonner 叠层通知 2.0.8",
+      "source_group": "Sonner",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "src/index.tsx",
+          "bytes": 30900,
+          "sha256": "7b9c1a51f422899d823854d724a60d26a18374d4c67595262b4c619b24c03e8a"
+        },
+        {
+          "path": "src/styles.css",
+          "bytes": 17681,
+          "sha256": "8de8bfdfd239eacd5fbdbac152096735dc8e9dac32da5fcf7ddae6dd08e54a80"
+        },
+        {
+          "path": "src/state.ts",
+          "bytes": 12149,
+          "sha256": "bba086163faaee1fc8936aba2ea818fd2e6f0d336837b6802b3ba1ab665aac91"
+        },
+        {
+          "path": "src/hooks.tsx",
+          "bytes": 440,
+          "sha256": "b23d537b70618ae63072732607582f9ae88b3b5143e039339ca3dd0b75273626"
+        },
+        {
+          "path": "src/assets.tsx",
+          "bytes": 3004,
+          "sha256": "5fa1ab681eb5198bba92b5fc94703a4698e54a40f4d8aa6a1d39ce73aec4ebc7"
+        },
+        {
+          "path": "src/types.ts",
+          "bytes": 5243,
+          "sha256": "3ba0a8cfa967ec512fe93c8f1d252917e27208030a6c5479ce2a1fb13383590c"
+        }
+      ],
+      "source_locator": "src/index.tsx；src/styles.css；src/state.ts；hooks/assets/types",
+      "implementation": {
+        "status": "source-adapted; product JSX present; not runtime or visually validated",
+        "files": [
+          {
+            "path": "web-ui/src/library/feedback.tsx",
+            "bytes": 3150,
+            "sha256": "10d448b77edcaccc0330106f4c9fc9c48a9f0cb6051aef4a754335613d4a1b40"
+          }
+        ],
+        "changes": [
+          "Actual published Sonner Toaster is mounted; toast calls reflect bridge rejection and actual clipboard success paths."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "Transient presentation wiring exists. No persistent task result or command acknowledgement is counted as completed work; actual error/copy/swipe/focus behavior remains unverified.",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "current App static call-site inspection only; no runtime rendering evidence",
+        "path": "web-ui/src/App.tsx",
+        "inspected_at_utc": "2026-11-02T11:38:45.710402+00:00",
+        "symbol_occurrences": {
+          "Toaster": 1
+        },
+        "hash_status": "No source or product hashes re-run in this metadata update; earlier implementation-file hashes belong to the prior provenance checkpoint."
+      }
+    },
+    {
+      "id": "PW-41",
+      "name": "BoardUI Progress · 环/细线",
+      "source_group": "BO",
+      "source_identity": "原码",
+      "entry_files": [
+        {
+          "path": "vendor/boardui-registry-20261101/progress.json",
+          "bytes": 10621,
+          "sha256": "ebca608fecd53d2ffe574f66dfe90483cb91bc990b5a812fe14783e905eea929"
+        },
+        {
+          "path": "components/base/progress/progress.tsx",
+          "bytes": 7732,
+          "sha256": "ff4ade7942d51231568b750637f90a4e7230b92c5657346cc0673448e3c21c32"
+        }
+      ],
+      "source_locator": "components/base/progress/progress.tsx",
+      "implementation": {
+        "status": "source-adapted; product JSX present; not runtime or visually validated",
+        "files": [
+          {
+            "path": "web-ui/src/library/feedback.tsx",
+            "bytes": 3150,
+            "sha256": "10d448b77edcaccc0330106f4c9fc9c48a9f0cb6051aef4a754335613d4a1b40"
+          },
+          {
+            "path": "web-ui/src/library/adapted/boardui-progress.tsx",
+            "bytes": 7944,
+            "sha256": "182f3a65b3eaeefb211aaecfec32232f07351fbcd4108a68a33d880d873044e7"
+          }
+        ],
+        "changes": [
+          "Actual registry ProgressBar/ProgressCircle are mounted for chatBusy, fileSaving and attachmentImporting with indeterminate state; no invented percent."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "Presentation receives real host busy states; progress interaction/accessibility and runtime rendering remain unverified.",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "source_note": "The selected free component was added from official public registry snapshots captured 2026-11-01; it is not present in the older ec5c Git archive. Overlay code may include compatibility changes.",
+      "rendered_usage": {
+        "status": "current App static call-site inspection only; no runtime rendering evidence",
+        "path": "web-ui/src/App.tsx",
+        "inspected_at_utc": "2026-11-02T11:38:45.710402+00:00",
+        "symbol_occurrences": {
+          "ProgressBar": 2,
+          "ProgressCircle": 1
+        },
+        "hash_status": "No source or product hashes re-run in this metadata update; earlier implementation-file hashes belong to the prior provenance checkpoint."
+      }
+    },
+    {
+      "id": "PW-42",
+      "name": "Affect Blur Crossfade",
+      "source_group": "A",
+      "source_identity": "库内版",
+      "entry_files": [
+        {
+          "path": "src/demos/blocks-motion/motion.tsx",
+          "bytes": 9706,
+          "sha256": "aee9f3376daf6db2eca5bf1849df91116f35795abffce9d057efe4ba05fe8946"
+        }
+      ],
+      "source_locator": "src/demos/blocks-motion/motion.tsx::BlurCrossfade",
+      "implementation": {
+        "status": "source-adapted; retained originals verified; product JSX present",
+        "files": [
+          {
+            "path": "web-ui/src/library/feedback.tsx",
+            "bytes": 3150,
+            "sha256": "10d448b77edcaccc0330106f4c9fc9c48a9f0cb6051aef4a754335613d4a1b40"
+          }
+        ],
+        "changes": [
+          "Saved source measured-height outgoing/incoming blur choreography for title identity only; editors/WebViews/executing owner surfaces remain outside."
+        ],
+        "origin_map": "web-ui/src/library/PROVENANCE.json",
+        "adaptation_notes": "web-ui/src/library/ADAPTATIONS.md",
+        "retained_original_check": "52 registered original source/notice files match their declared SHA-256 at this checkpoint"
+      },
+      "business_connection": "controlled host fields/callbacks are present in product JSX; actual host runtime and full owner/receipt contracts remain unverified",
+      "runtime_validation": "not-performed",
+      "visual_validation": "not-performed",
+      "rendered_usage": {
+        "status": "static JSX call sites only; no runtime rendering evidence",
+        "files": [
+          {
+            "path": "web-ui/src/App.tsx",
+            "bytes": 54208,
+            "sha256": "85570c815e003d7878916e687ab81b828bee0492d2854ffb939f7dbd7cb6f901",
+            "symbol_occurrences": {
+              "BlurCrossfade": 1
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "source_entries_missing": [],
+  "fonts": {
+    "repository": "https://github.com/google/fonts",
+    "commit": "6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec",
+    "license": "SIL Open Font License 1.1",
+    "files": [
+      {
+        "family": "Inter",
+        "file": "Inter-variable.ttf",
+        "source": "ofl/inter/Inter[opsz,wght].ttf",
+        "bytes": 876576,
+        "git_blob_sha1": "047c92f6e2212473dc436020afed689527076d44"
+      },
+      {
+        "family": "Noto Sans SC",
+        "file": "NotoSansSC-variable.ttf",
+        "source": "ofl/notosanssc/NotoSansSC[wght].ttf",
+        "bytes": 17772300,
+        "git_blob_sha1": "fb0637bafbcd804fe32152370a1225990745b4bc"
+      },
+      {
+        "family": "JetBrains Mono",
+        "file": "JetBrainsMono-variable.ttf",
+        "source": "ofl/jetbrainsmono/JetBrainsMono[wght].ttf",
+        "bytes": 187208,
+        "git_blob_sha1": "aa310be8b717fe3774f9444dd89d5f4101cc6d10"
+      }
+    ],
+    "preparation": "scripts/prepare-fonts.mjs",
+    "validation": "Configuration checked; actual byte/glyph validation is performed by preparation in CI. Catalogue specimen subsets are not used.",
+    "receipt": "public/fonts/sources.json",
+    "license_files": [
+      {
+        "family": "Inter",
+        "file": "Inter-OFL.txt",
+        "source": "ofl/inter/OFL.txt",
+        "bytes": 4377,
+        "git_blob_sha1": "21f6aff961064c2e429f570995e446bcdd555422"
+      },
+      {
+        "family": "Noto Sans SC",
+        "file": "NotoSansSC-OFL.txt",
+        "source": "ofl/notosanssc/OFL.txt",
+        "bytes": 4388,
+        "git_blob_sha1": "1c9f43281b8f216c5461fe9ac729afbade7724e4"
+      },
+      {
+        "family": "JetBrains Mono",
+        "file": "JetBrainsMono-OFL.txt",
+        "source": "ofl/jetbrainsmono/OFL.txt",
+        "bytes": 4399,
+        "git_blob_sha1": "821a3dac22aff15a1f1c9689a1d79c45bb58ca39"
+      }
+    ]
+  },
+  "dependency_licenses": {
+    "collector": "scripts/collect-licenses.mjs",
+    "manifest": "public/licenses/dependencies.json",
+    "status": "CI19 needs-license-review: 10 legal bodies missing; 8 exact-version official upstream supplements prepared; client-only0.0.1 and react-remove-scroll-bar2.3.8 remain unresolved; actual collector rerun awaits CI20",
+    "upstream_supplement_map": "licenses/upstream-supplements.json",
+    "supplement_policy": "Only when no npm legal file was found and exact installed package/version/declared license and pinned original/evidence hashes all match; source receipt is retained in APK license manifest."
+  },
+  "supporting_runtime_sources": [
+    {
+      "name": "react-markdown",
+      "repository": "https://github.com/remarkjs/react-markdown",
+      "tag": "10.1.0",
+      "commit": "44d2e4a44b37461ab7778d6870c1a9eb36393ad2",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "package.json",
+          "git_blob_sha": "35fe1fa93ff7c77457323752e40665b8f01afed3",
+          "chars": 5042
+        },
+        {
+          "path": "readme.md",
+          "git_blob_sha": "ecdd661bfba0d1308931efc17c4c0ee8286684c6",
+          "chars": 26234
+        },
+        {
+          "path": "license",
+          "git_blob_sha": "f552fc95706b283bba87db2d89ef8d42996ed36f",
+          "chars": 1079
+        },
+        {
+          "path": "lib/index.js",
+          "git_blob_sha": "b6f5ed00a2ca9b653f0c85734d9aa31e0e76e859",
+          "chars": 12792
+        }
+      ]
+    },
+    {
+      "name": "remark-gfm",
+      "repository": "https://github.com/remarkjs/remark-gfm",
+      "tag": "4.0.1",
+      "commit": "109972e8a773bf5dac1d6d2da0776557f36971aa",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "package.json",
+          "git_blob_sha": "bb536e513cabd67ecfda24294b91f098df07ed81",
+          "chars": 2984
+        },
+        {
+          "path": "readme.md",
+          "git_blob_sha": "98ca7de7fad0c58dc071136a22c3b2272616b825",
+          "chars": 15439
+        },
+        {
+          "path": "license",
+          "git_blob_sha": "bc8f165a62768a19de38901d81ac662c51ff29db",
+          "chars": 1094
+        },
+        {
+          "path": "lib/index.js",
+          "git_blob_sha": "ee1cca2459792a0ae24518470163f6244f23a06a",
+          "chars": 1277
+        }
+      ]
+    }
+  ],
+  "source_port_review": {
+    "scope": "Retained-source SHA-256 checks, adapted-file identities and static product call-site/route mapping only; no browser/device or aesthetic acceptance",
+    "reviewed_at_utc": "2026-11-02T11:09:30.152766+00:00",
+    "component_groups_with_reviewed_source_port": 42,
+    "retained_original_checks": {
+      "library": {
+        "original_files_checked": 52,
+        "mismatches": [],
+        "manifest": {
+          "path": "web-ui/src/library/PROVENANCE.json",
+          "bytes": 12321,
+          "sha256": "8b040848e101e715fa85a1536df2c590da02b2c1a9e741f1c04295eb72e28f84"
+        }
+      },
+      "shell-library": {
+        "original_files_checked": 59,
+        "mismatches": [],
+        "manifest": {
+          "path": "web-ui/src/shell-library/source-manifest.json",
+          "bytes": 26825,
+          "sha256": "58ccaf0196546a59f5ddb22908d68a8ecfd4425839670264c8ba183b3c644e4f"
+        }
+      },
+      "forms-library": {
+        "original_files_checked": 28,
+        "mismatches": [],
+        "manifest": {
+          "path": "web-ui/src/forms-library/SOURCE-map.json",
+          "bytes": 12364,
+          "sha256": "e271c78af744a5c5d54d5151b0c68101ecb121998f196a7cab29f4992b841e20"
+        }
+      }
+    },
+    "shared_product_style_files": [
+      {
+        "path": "web-ui/src/library.css",
+        "bytes": 12190,
+        "sha256": "31e68fb3b5b41893af9260936bdc68915a15c7da277aae5347e1640539edb6ec"
+      },
+      {
+        "path": "web-ui/src/library/adapted/affect-source.css",
+        "bytes": 199204,
+        "sha256": "99ebdb2c9f18ce7a5bc6d9601ef8d36f16eca79238ecf518a1eeda630a9fe46b"
+      },
+      {
+        "path": "web-ui/src/app.css",
+        "bytes": 20297,
+        "sha256": "24985f9f4623a605cfb013b4c069928c3f0b645bf94fd48a31b5e70d7cf6c516"
+      },
+      {
+        "path": "web-ui/src/secondary.css",
+        "bytes": 9756,
+        "sha256": "8b16892380a72935857633759fb4acd625f6cd5321d2cbd9162c4a6a300fe3b1"
+      }
+    ],
+    "runtime_validation": "not performed by this provenance review",
+    "visual_validation": "not performed; no score-based acceptance claim",
+    "integration_status_updated_at_utc": "2026-11-02T11:38:45.710402+00:00",
+    "current_integration_status": "PW-03/39/40/41 are now mounted in App. Source availability, product call sites, real function/owner contracts, runtime behavior and visual acceptance remain independent; no component is declared complete by this update.",
+    "open_integration_items": [
+      "PW-03 actual review/select execution and stale-state journeys await validation",
+      "PW-04 complete steering/queued-input owner journeys remain partial",
+      "PW-36 MCP read does not establish install; skills/plugins pickers remain open",
+      "21 secondary structured domains still have incomplete typed mutations/deep review and unverified owner runtime"
+    ],
+    "hash_checkpoint_note": "All retained-source and adapted/product SHA records remain from their earlier provenance checkpoint. This update changes integration metadata only and does not claim a fresh hash verification."
+  },
+  "product_composition_review": {
+    "baseline_commit": "337a863bec0a5f7b8aee90bd62b4c82392c688ce",
+    "baseline_disposition": "CI20 assembly rejected in whole-product review despite bounded source visual checks passing",
+    "current_scope": "Mobile work-to-task-to-review-to-return flow; single project identity and local view control; model list-to-object-to-editor; shared consumer skin",
+    "source_policy_head": "20261102T105020Z-ef79c367",
+    "source_components": "Previously selected actual-source controls are retained; no new component family or native replacement introduced",
+    "consumer_paths": [
+      "src/App.tsx",
+      "src/app.css",
+      "src/Secondary.tsx",
+      "src/secondary.css",
+      "src/product.css",
+      "src/product-skin-sources.md",
+      "src/task-presentation.ts"
+    ],
+    "acceptance": "Implementation pending integration build and current-rendered whole-journey review; not approved by source/component count",
+    "remaining": "Complete 21-domain action migration, PW09-14 real domain projections and Android runtime acceptance remain open",
+    "state_recovery_followup": "CI35 found detached-scroll cleanup resetting the source reading anchor and a stale task error toast obscuring the review footer; bounded fixes require a new current-rendered journey before acceptance",
+    "process_history_followup": "Execution process retains original read-only event and operation windows. Actual historyEventPage events use existing approved BoardUI Accordion; no inferred plan steps, completion percentage, duration or synthetic operation is introduced."
+  }
+}

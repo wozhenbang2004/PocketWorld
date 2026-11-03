@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "policy": "Supplement legal text only when installed package has no detected legal file, exact package+version+declared license match, and all retained source/evidence hashes verify. Never infer a license from another dependency.",
+  "entries": [
+    {
+      "package": "@radix-ui/react-compose-refs",
+      "version": "1.1.2",
+      "declared_license": "MIT",
+      "file": "radix-primitives-46235ece/LICENSE.txt",
+      "bytes": 1063,
+      "sha256": "0e80a2d229d2fd4fc7e8636142ec5d0ff0bc031f14c15b682e2ac01dfd5b5138",
+      "git_blob_sha1": "a18858fb7b014098cba85703e66609be66a26ef5",
+      "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/LICENSE",
+      "repository": "https://github.com/radix-ui/primitives",
+      "commit": "46235ece78931b198e6908a2cec0b66798d55c79",
+      "release_identity": "Official New release commit 2025-04-08; each package.json at this commit matches the installed package/version",
+      "copyright": "Copyright (c) 2022 WorkOS",
+      "version_evidence": {
+        "file": "radix-primitives-46235ece/evidence/compose-refs.package.json",
+        "sha256": "c27156985833109b23aa9eba4626dfee813e2efa9849521d498b9522e2b2caa9",
+        "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/packages/react/compose-refs/package.json"
+      }
+    },
+    {
+      "package": "@radix-ui/react-context",
+      "version": "1.1.2",
+      "declared_license": "MIT",
+      "file": "radix-primitives-46235ece/LICENSE.txt",
+      "bytes": 1063,
+      "sha256": "0e80a2d229d2fd4fc7e8636142ec5d0ff0bc031f14c15b682e2ac01dfd5b5138",
+      "git_blob_sha1": "a18858fb7b014098cba85703e66609be66a26ef5",
+      "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/LICENSE",
+      "repository": "https://github.com/radix-ui/primitives",
+      "commit": "46235ece78931b198e6908a2cec0b66798d55c79",
+      "release_identity": "Official New release commit 2025-04-08; each package.json at this commit matches the installed package/version",
+      "copyright": "Copyright (c) 2022 WorkOS",
+      "version_evidence": {
+        "file": "radix-primitives-46235ece/evidence/context.package.json",
+        "sha256": "c2eb74c13db3348ce1fb9c88625baad41f49112993efdf9770378e167c7b01d8",
+        "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/packages/react/context/package.json"
+      }
+    },
+    {
+      "package": "@radix-ui/react-direction",
+      "version": "1.1.1",
+      "declared_license": "MIT",
+      "file": "radix-primitives-46235ece/LICENSE.txt",
+      "bytes": 1063,
+      "sha256": "0e80a2d229d2fd4fc7e8636142ec5d0ff0bc031f14c15b682e2ac01dfd5b5138",
+      "git_blob_sha1": "a18858fb7b014098cba85703e66609be66a26ef5",
+      "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/LICENSE",
+      "repository": "https://github.com/radix-ui/primitives",
+      "commit": "46235ece78931b198e6908a2cec0b66798d55c79",
+      "release_identity": "Official New release commit 2025-04-08; each package.json at this commit matches the installed package/version",
+      "copyright": "Copyright (c) 2022 WorkOS",
+      "version_evidence": {
+        "file": "radix-primitives-46235ece/evidence/direction.package.json",
+        "sha256": "5ed723dd05227ce7981f7017d55738c64cd51dc56f567e71339ca790dd7e84a1",
+        "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/packages/react/direction/package.json"
+      }
+    },
+    {
+      "package": "@radix-ui/react-id",
+      "version": "1.1.1",
+      "declared_license": "MIT",
+      "file": "radix-primitives-46235ece/LICENSE.txt",
+      "bytes": 1063,
+      "sha256": "0e80a2d229d2fd4fc7e8636142ec5d0ff0bc031f14c15b682e2ac01dfd5b5138",
+      "git_blob_sha1": "a18858fb7b014098cba85703e66609be66a26ef5",
+      "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/LICENSE",
+      "repository": "https://github.com/radix-ui/primitives",
+      "commit": "46235ece78931b198e6908a2cec0b66798d55c79",
+      "release_identity": "Official New release commit 2025-04-08; each package.json at this commit matches the installed package/version",
+      "copyright": "Copyright (c) 2022 WorkOS",
+      "version_evidence": {
+        "file": "radix-primitives-46235ece/evidence/id.package.json",
+        "sha256": "6ecaca9f4f8021a3d46e83118df8cb584aa4753b22c01c80b09628f9fb56080e",
+        "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/packages/react/id/package.json"
+      }
+    },
+    {
+      "package": "@radix-ui/react-use-callback-ref",
+      "version": "1.1.1",
+      "declared_license": "MIT",
+      "file": "radix-primitives-46235ece/LICENSE.txt",
+      "bytes": 1063,
+      "sha256": "0e80a2d229d2fd4fc7e8636142ec5d0ff0bc031f14c15b682e2ac01dfd5b5138",
+      "git_blob_sha1": "a18858fb7b014098cba85703e66609be66a26ef5",
+      "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/LICENSE",
+      "repository": "https://github.com/radix-ui/primitives",
+      "commit": "46235ece78931b198e6908a2cec0b66798d55c79",
+      "release_identity": "Official New release commit 2025-04-08; each package.json at this commit matches the installed package/version",
+      "copyright": "Copyright (c) 2022 WorkOS",
+      "version_evidence": {
+        "file": "radix-primitives-46235ece/evidence/use-callback-ref.package.json",
+        "sha256": "f1a346ae472f39595edd9eed2e166eb9d5b918cd8e10a6ebd0a184949c471b14",
+        "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/packages/react/use-callback-ref/package.json"
+      }
+    },
+    {
+      "package": "@radix-ui/react-use-escape-keydown",
+      "version": "1.1.1",
+      "declared_license": "MIT",
+      "file": "radix-primitives-46235ece/LICENSE.txt",
+      "bytes": 1063,
+      "sha256": "0e80a2d229d2fd4fc7e8636142ec5d0ff0bc031f14c15b682e2ac01dfd5b5138",
+      "git_blob_sha1": "a18858fb7b014098cba85703e66609be66a26ef5",
+      "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/LICENSE",
+      "repository": "https://github.com/radix-ui/primitives",
+      "commit": "46235ece78931b198e6908a2cec0b66798d55c79",
+      "release_identity": "Official New release commit 2025-04-08; each package.json at this commit matches the installed package/version",
+      "copyright": "Copyright (c) 2022 WorkOS",
+      "version_evidence": {
+        "file": "radix-primitives-46235ece/evidence/use-escape-keydown.package.json",
+        "sha256": "51cbe6df8582dd0ca9b68b8bec7e0a1b60ba566363086326c3516e20e1a7d35b",
+        "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/packages/react/use-escape-keydown/package.json"
+      }
+    },
+    {
+      "package": "@radix-ui/react-use-layout-effect",
+      "version": "1.1.1",
+      "declared_license": "MIT",
+      "file": "radix-primitives-46235ece/LICENSE.txt",
+      "bytes": 1063,
+      "sha256": "0e80a2d229d2fd4fc7e8636142ec5d0ff0bc031f14c15b682e2ac01dfd5b5138",
+      "git_blob_sha1": "a18858fb7b014098cba85703e66609be66a26ef5",
+      "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/LICENSE",
+      "repository": "https://github.com/radix-ui/primitives",
+      "commit": "46235ece78931b198e6908a2cec0b66798d55c79",
+      "release_identity": "Official New release commit 2025-04-08; each package.json at this commit matches the installed package/version",
+      "copyright": "Copyright (c) 2022 WorkOS",
+      "version_evidence": {
+        "file": "radix-primitives-46235ece/evidence/use-layout-effect.package.json",
+        "sha256": "a88cfeffac04cc8d6ef40d52789135acaf8b4720fcc71f4123aacb75fc833bbe",
+        "source_url": "https://raw.githubusercontent.com/radix-ui/primitives/46235ece78931b198e6908a2cec0b66798d55c79/packages/react/use-layout-effect/package.json"
+      }
+    },
+    {
+      "package": "@remixicon/react",
+      "version": "4.9.0",
+      "declared_license": "Remix Icon License 1.0",
+      "file": "remixicon-4.9.0/License.txt",
+      "bytes": 7198,
+      "sha256": "6f2f21c5f8db34635d31848e9ff831d5dc421bb83ffc9d37f82651364047ae58",
+      "git_blob_sha1": "996917ee688557176a34e369fa1a37a0a4ef77a2",
+      "source_url": "https://raw.githubusercontent.com/Remix-Design/RemixIcon/019480ec14b97959a1ad35c3de302a224714b068/License",
+      "repository": "https://github.com/Remix-Design/RemixIcon",
+      "commit": "019480ec14b97959a1ad35c3de302a224714b068",
+      "release_identity": "Official v4.9.0 tag resolves to this commit; installed @remixicon/react4.9.0 declares this repository and Remix Icon License1.0",
+      "copyright": "Copyright (c) 2017–2026 Remix Design"
+    }
+  ],
+  "unresolved": [
+    {
+      "package": "client-only",
+      "version": "0.0.1",
+      "reason": "No exact official release identity/legal body established; retain missing."
+    },
+    {
+      "package": "react-remove-scroll-bar",
+      "version": "2.3.8",
+      "reason": "Repository master package version is2.3.7, so its MIT text was not substituted for installed2.3.8; retain missing."
+    }
+  ]
+}

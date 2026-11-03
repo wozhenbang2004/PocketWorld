@@ -20,7 +20,7 @@ on:
         required: false
         default: ''
   push:
-    branches: [main]
+    branches: [main, 'uiux/**']
     # Keep the production-input contract in tools/tests/test_apk_workflow_paths.py in sync.
     paths:
       - '.github/workflows/build-apk.yml'
@@ -40,21 +40,27 @@ on:
       - 'tools/build-android-runtime.py'
       - 'tools/tests/test_apk_workflow_paths.py'
       - 'tools/tests/fixtures/apk-build-paths.json'
+      - '.github/workflows/ui-capture-web.yml'
+      - 'web-ui/**'
+      - 'tools/ci/**'
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  # Independent, explicitly selected host groups run on separate runners. Keep
-  # serialization within each group and APK build without canceling active work.
+  # Keep selected host groups independent and do not cancel their active work.
+  # Only obsolete UI-branch APK builds are superseded by a newer revision.
   group: pocketworld-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && (inputs.host_groups != '' && 'host-selected-batch' || format('host-{0}', inputs.host_group)) || 'apk' }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/uiux/') && (github.event_name != 'workflow_dispatch' || inputs.target != 'host-tests') }}
 
 jobs:
   apk:
     if: ${{ github.event.repository.private && (github.event_name != 'workflow_dispatch' || inputs.target != 'host-tests') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    outputs:
+      web_visual_outcome: ${{ steps.web_visual.outcome }}
     defaults:
       run:
         shell: bash
@@ -77,6 +83,54 @@ jobs:
 
       - name: Check production build trigger contract
         run: python3 -B -m unittest discover -s tools/tests -p test_apk_workflow_paths.py -v
+
+      - name: Set up pinned Node for the library Web UI
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.0'
+
+      - name: Build and check the selected Web components
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts
+          # The first source publication produces a reviewable lock artifact.
+          # Subsequent commits retain it and use npm ci without updating versions.
+          if [ ! -f web-ui/package-lock.json ]; then
+            npm install --prefix web-ui --package-lock-only --ignore-scripts 2>&1 | tee build-artifacts/web-lock.log
+          fi
+          npm ci --prefix web-ui 2>&1 | tee build-artifacts/web-install.log
+          npm run build --prefix web-ui 2>&1 | tee build-artifacts/web-build.log
+          npm test --prefix web-ui 2>&1 | tee build-artifacts/web-tests.log
+
+      - name: Preserve the dependency lock and Web build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-web-build-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            web-ui/package-lock.json
+            web-ui/public/licenses/
+            app/src/main/assets/pocket-ui/
+            build-artifacts/web-*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Capture the actual Web components with isolated host fixtures
+        id: web_visual
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          npm exec --prefix web-ui -- playwright install --with-deps chromium
+          node tools/ci/capture-library-web.mjs
+
+      - name: Preserve Web component visual and motion evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-library-web-visual-${{ github.run_number }}-${{ github.run_attempt }}
+          path: build-artifacts/library-web-visual/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Prepare pinned Android and native toolchains
         run: |
@@ -111,6 +165,9 @@ jobs:
           with open(os.environ['GITHUB_PATH'], 'a') as path:
               path.write(str(home / 'bin') + '\n')
           PY
+
+      - name: Verify the exact-task review boundaries
+        run: bash tools/ci/test-web-bridge.sh
 
       - name: Assemble installable debug APK
         run: |
@@ -239,6 +296,17 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Set up pinned Node for the host fixture Web UI
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.0'
+
+      - name: Build the Web UI required by Android host fixtures
+        run: |
+          set -euo pipefail
+          npm ci --prefix web-ui
+          npm run build --prefix web-ui
+
       - name: Check lightweight build and host CLI contracts
         run: |
           set -euo pipefail
@@ -360,3 +428,21 @@ jobs:
             app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: error
           retention-days: 7
+
+  web_visual_result:
+    name: Report Web component visual failures
+    needs: apk
+    if: ${{ always() && needs.apk.outputs.web_visual_outcome == 'failure' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail the visual check after preserving the APK
+        run: |
+          echo "Web visual capture failed. Inspect the pocketworld-library-web-visual artifact; this is not a visual pass." >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+  ui_capture:
+    needs: apk
+    if: ${{ startsWith(github.ref, 'refs/heads/uiux/') }}
+    uses: ./.github/workflows/ui-capture-web.yml
+    with:
+      apk_run_id: ${{ format('{0}', github.run_id) }}

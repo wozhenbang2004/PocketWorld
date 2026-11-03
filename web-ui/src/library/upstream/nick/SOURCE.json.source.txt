@@ -1,0 +1,21 @@
+{
+  "source_url": "https://x.com/n___vc/status/2115869056582795401",
+  "author": "nick (@n___vc)",
+  "source_text": "agents & it's subagents 🤖",
+  "published_at_utc": "Thu Oct 29 18:11:08 +0000 2026",
+  "observed_on": "2026-10-30",
+  "media_url": "https://video.twimg.com/amplify_video/2115868877770915841/vid/avc1/976x720/QVjhVSxzJfEQ1S0y.mp4?tag=29",
+  "metadata_endpoint": "https://api.fxtwitter.com/n___vc/status/2115869056582795401",
+  "media_duration_seconds": 23.833333,
+  "retained_media_dimensions": [
+    976,
+    720
+  ],
+  "upstream_code_obtained": false,
+  "implementation_kind": "Independent reference reproduction explicitly requested by the user",
+  "observation": "Viewed 24 sequential 1-second samples spanning the clip and enlarged 8.5s/17s frames; no source runtime executed. Motion curves and exact timings estimated from footage.",
+  "license": "Original footage retained as personal research reference; no redistribution or product-media license inferred. Independent implementation is separate from original media.",
+  "user_request": "学习这个组件，这个视频里的。复现做出来，放到我们审美库里面去。",
+  "approval_scope": "Original reference selected and reproduction/archive requested. New implementation has not yet received user experience acceptance.",
+  "version": "1.0.0-reference-reproduction"
+}
