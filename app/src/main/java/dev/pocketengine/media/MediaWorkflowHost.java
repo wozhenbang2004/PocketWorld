@@ -14,6 +14,7 @@ import org.json.JSONObject;
 public final class MediaWorkflowHost implements AutoCloseable {
     private static final Set<String> SUBMIT=Set.of("submitWorkflow","generateImage","generateVideo","editImage","synthesizeSpeech");
     private static final Set<String> ORIGINAL=Set.of("getOperation","getJob","reconcileOperation","fetchResults","cancelJob");
+    private static final Set<String> OWNER_DOWNLOAD=Set.of("reviewResultDownload","confirmResultDownload");
     private final TaskStore tasks;
     // Only revocable in-flight waits live here. All identities, approvals and outcomes live in TaskStore.
     private final ConcurrentHashMap<String,Active> active=new ConcurrentHashMap<>();
@@ -25,7 +26,7 @@ public final class MediaWorkflowHost implements AutoCloseable {
     public JSONObject continuationSnapshot()throws Exception{JSONArray operations=new JSONArray();for(ReadContinuation waiting:continuedReads.values())operations.put(new JSONObject().put("taskId",waiting.task).put("runId",waiting.run).put("operationId",waiting.operation).put("providerJobId",waiting.job).put("expiresAt",waiting.until));return new JSONObject().put("applicationAlivePolling",reads!=null).put("activeOriginalReadContinuations",continuedReads.size()).put("operations",operations).put("osBackgroundGuaranteed",false).put("coldAutomaticResume",false).put("readLimit",60).put("maxDurationMillis",300000).put("scope","confirmed_original_comfyui_job_only;original_approval_expiry;no_new_POST");}
 
     public static boolean isSubmission(String command){return SUBMIT.contains(command);}
-    public static boolean isOriginalCommand(String command){return ORIGINAL.contains(command);}
+    public static boolean isOriginalCommand(String command){return ORIGINAL.contains(command)||OWNER_DOWNLOAD.contains(command);}
     public RunControl currentControl(String taskId){for(Active entry:active.values())if(entry.task.equals(taskId))return entry.control;for(ReadContinuation waiting:continuedReads.values())if(waiting.task.equals(taskId))return waiting.control;return null;}
 
     /** Routing guard: these tasks must never enter the generic assistant/model resume loop. */
@@ -123,11 +124,16 @@ public final class MediaWorkflowHost implements AutoCloseable {
 
     /** Explicit owner recovery: GET/query, import original artifacts or targeted cancellation; never submit. */
     public JSONObject handleOriginal(MediaModule module,String command,JSONObject payload)throws Exception{
-        return handleOriginal(module,command,payload,null);
+        return handleOriginal(module,command,payload,null,true);
     }
     /** The UI control can stop this read/fetch without cancelling a newer execution of the same task. */
     public JSONObject handleOriginal(MediaModule module,String command,JSONObject payload,RunControl caller)throws Exception{
-        requireOpen();if(!ORIGINAL.contains(command))throw new IllegalArgumentException("不是原媒体操作查询或控制命令");
+        return handleOriginal(module,command,payload,caller,false);
+    }
+    private JSONObject handleOriginal(MediaModule module,String command,JSONObject payload,RunControl caller,boolean explicitOwner)throws Exception{
+        requireOpen();boolean ownerDownload=OWNER_DOWNLOAD.contains(command);
+        if(ownerDownload&&!explicitOwner)throw new SecurityException("一次原结果下载必须从原任务的主人审阅按钮确认，查询或模型入口不能授权");
+        if(!ORIGINAL.contains(command)&&!ownerDownload)throw new IllegalArgumentException("不是原媒体操作查询或控制命令");
         String operation=payload.getString("operationId");
         if(command.equals("cancelJob")){JSONObject stopped=cancelLocalWait(operation);if(stopped!=null)return stopped;}
         final Active entry;final JSONObject input;
@@ -136,18 +142,22 @@ public final class MediaWorkflowHost implements AutoCloseable {
             synchronized(tasks){
                 String taskId=tasks.operationTask("media",operation);if(taskId==null)throw new SecurityException("原媒体操作不在宿主任务日志中");
                 JSONObject task=requiredTask(taskId),op=operation(task,operation),source=tasks.ownerMediaOperationSource(taskId,operation);
-                checkSupplied(payload,task,op,source.getInt("epoch"));
+                JSONObject binding=new JSONObject(payload.toString());
+                if(ownerDownload)binding.remove("downloadReview");
+                checkSupplied(binding,task,op,source.getInt("epoch"));
+                if(ownerDownload&&command.equals("reviewResultDownload")&&payload.has("downloadReview"))throw new SecurityException("请先读取原结果，不能指定下载审阅内容");
+                if(ownerDownload)requireOwnerDownloadApproval(task,op);
                 String revision=op.getJSONObject("arguments").getString("configurationRevision");
                 RunControl control=new RunControl();control.bindHostRun(taskId,op.getString("runId"),source.getInt("epoch"));
                 entry=new Active(taskId,op.getString("runId"),source.getInt("epoch"),operation,op.getString("tool"),revision,op.getJSONObject("arguments"),control,true,task.optBoolean("cancelRequested"));
-                active.put(operation,entry);control.setAuthorityCheck(()->check(entry));input=new JSONObject(payload.toString());bind(input,entry);
+                active.put(operation,entry);control.setAuthorityCheck(()->{check(entry);if(ownerDownload)synchronized(tasks){JSONObject actual=current(entry);requireOwnerDownloadApproval(actual,operation(actual,entry.operation));}});input=new JSONObject(payload.toString());bind(input,entry);
             }
         }
         Runnable cancelled=entry.control::cancel;if(caller!=null)caller.onCancel(cancelled);
         try{
             if(caller!=null)caller.check();
-            entry.control.check();JSONObject receipt=module.handleForHost(command,input,entry.control);
-            persist(entry,receipt,true);return withHost(receipt,entry);
+            entry.control.check();JSONObject receipt=ownerDownload?module.originalResultDownloadForOwner(command,input,entry.control):module.handleForHost(command,input,entry.control);
+            persist(entry,receipt,!command.equals("reviewResultDownload"));return withHost(receipt,entry);
         }finally{if(caller!=null)caller.removeCancelAction(cancelled);active.remove(operation,entry);}
     }
 
@@ -270,6 +280,16 @@ public final class MediaWorkflowHost implements AutoCloseable {
             String raw=receipt.optString("status"),status=raw.matches("unknown|prepared|submitting|not_found")?"reconciling":raw.equals("response_received")?"needs_confirmation":raw.matches("failed|cancelled")?raw:"awaiting_user";
             tasks.endAttempt(entry.task,entry.run,status,receipt.optString("message","原媒体回执已保存；远端活动和本机执行分别显示，请检查原任务"),new JSONObject(receipt.toString()).put("automaticallyVerified",false));
         }
+    }
+    private static void requireOwnerDownloadApproval(JSONObject task,JSONObject op)throws Exception{
+        JSONObject args=op.getJSONObject("arguments"),approvedArgs=new JSONObject(args.toString());
+        if(!"owner".equals(args.optString("actorId"))||!"private".equals(args.optString("spaceId"))||!args.optString("command").matches("generateImage|editImage")||args.optString("approvalId").isEmpty())throw new SecurityException("缺少原主人媒体提交的准确授权来源");
+        for(String field:new String[]{"approvalId","actorId","spaceId"})approvedArgs.remove(field);
+        JSONArray approvals=task.optJSONArray("approvals");for(int i=0;approvals!=null&&i<approvals.length();i++){
+            JSONObject approval=approvals.getJSONObject(i),capability=approval.optJSONObject("capability");
+            if(args.getString("approvalId").equals(approval.optString("id"))&&op.getString("runId").equals(approval.optString("runId"))&&op.getString("tool").equals(approval.optString("tool"))&&"consumed".equals(approval.optString("state"))&&TaskStore.capabilityFingerprint(approvedArgs).equals(approval.optString("argumentsHash"))&&capability!=null&&args.getString("configurationRevision").equals(capability.optString("configurationRevision")))return;
+        }
+        throw new SecurityException("原主人媒体提交授权已缺失或被替换，不能授予结果下载");
     }
     private static void validateReceipt(Active entry,JSONObject receipt)throws Exception{
         if(!entry.operation.equals(receipt.optString("operationId"))||!entry.task.equals(receipt.optString("taskId"))||!entry.run.equals(receipt.optString("runId"))||!entry.revision.equals(receipt.optString("configurationRevision")))throw new SecurityException("媒体回执不属于原操作、执行代次或配置");

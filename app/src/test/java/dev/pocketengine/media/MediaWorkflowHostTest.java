@@ -92,6 +92,37 @@ public final class MediaWorkflowHostTest {
         assertEquals("queued",host.handleOriginal(media,"getOperation",new JSONObject().put("operationId",operation)).getString("status"));
         tasks.startAttempt(taskId.get(),"capabilities",1);assertThrows(SecurityException.class,()->host.handleOriginal(media,"getJob",new JSONObject().put("operationId",operation)));assertEquals(0,queries.get());
     }
+    @Test public void ownerDownloadsOnlyThePaidOriginalAfterPolicyToggleWithExactTaskStoreProof()throws Exception{
+        String url="https://cdn.example.test/original.png?signed_secret=owner-fixture";
+        server.createContext("/v1/images/generations",exchange->{posts.incrementAndGet();exchange.getRequestBody().readAllBytes();respond(exchange,new JSONObject().put("data",new JSONArray().put(new JSONObject().put("url",url))));});
+        server.createContext("/original.png",exchange->{assertEquals("GET",exchange.getRequestMethod());assertEquals("signed_secret=owner-fixture",exchange.getRequestURI().getRawQuery());downloads.incrementAndGet();exchange.sendResponseHeaders(200,PNG.length);exchange.getResponseBody().write(PNG);exchange.close();});
+        JSONObject configuration=new JSONObject().put("provider","openai_compatible").put("baseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/v1").put("imageModel","fixture-model").put("allowResultUrls",false);
+        media.handle("configure",configuration);JSONObject args=new JSONObject().put("configurationRevision",media.snapshot().getString("configurationRevision")).put("prompt","exact fixture owner input");
+        JSONObject prepared=host.prepareFromOwner(media,"generateImage",args);taskId.set(prepared.getString("taskId"));JSONObject receipt=host.submitFromOwner(media,"generateImage",new JSONObject(args.toString()).put("taskId",taskId.get()));String operation=receipt.getString("operationId");
+        assertEquals("owner_download_policy_required",receipt.getString("resultStatus"));assertEquals(1,posts.get());assertEquals(0,downloads.get());
+        configuration.remove("apiKey");configuration.put("allowResultUrls",true);media.handle("configure",configuration);
+        JSONObject binding=new JSONObject().put("operationId",operation).put("taskId",taskId.get()).put("runId",receipt.getString("runId")).put("epoch",receipt.getInt("hostEpoch")).put("configurationRevision",receipt.getString("configurationRevision"));
+        assertThrows(SecurityException.class,()->host.handleOriginal(media,"fetchResults",binding));
+        assertThrows(SecurityException.class,()->host.handleOriginal(media,"reviewResultDownload",binding,new dev.pocketengine.core.RunControl()));
+        assertThrows(SecurityException.class,()->media.handle("reviewResultDownload",binding));
+        assertThrows(SecurityException.class,()->host.handleOriginal(media,"reviewResultDownload",new JSONObject(binding.toString()).put("epoch",999)));
+        java.lang.reflect.Field database=TaskStore.class.getDeclaredField("db");database.setAccessible(true);SQLiteDatabase db=(SQLiteDatabase)database.get(tasks);String originalDocument;
+        try(Cursor row=db.rawQuery("SELECT document FROM tasks WHERE task_id=?",new String[]{taskId.get()})){assertTrue(row.moveToFirst());originalDocument=row.getString(0);}
+        JSONObject denied=new JSONObject(originalDocument);denied.getJSONArray("approvals").getJSONObject(0).put("state","denied");db.execSQL("UPDATE tasks SET document=? WHERE task_id=?",new Object[]{denied.toString(),taskId.get()});
+        assertThrows(SecurityException.class,()->host.handleOriginal(media,"reviewResultDownload",binding));db.execSQL("UPDATE tasks SET document=? WHERE task_id=?",new Object[]{originalDocument,taskId.get()});
+        JSONObject reviewed=host.handleOriginal(media,"reviewResultDownload",binding),review=reviewed.getJSONObject("resultDownloadReview");assertFalse(reviewed.toString().contains("signed_secret"));assertEquals(0,downloads.get());
+        JSONObject confirmation=new JSONObject(binding.toString()).put("downloadReview",review);
+        assertThrows(SecurityException.class,()->host.handleOriginal(media,"confirmResultDownload",confirmation,new dev.pocketengine.core.RunControl()));
+        assertThrows(SecurityException.class,()->host.handleOriginal(media,"confirmResultDownload",new JSONObject(confirmation.toString()).put("url","https://attacker.example/new")));
+        JSONObject tampered=new JSONObject(confirmation.toString());tampered.getJSONObject("downloadReview").put("providerResponseSha256","c".repeat(64));assertThrows(SecurityException.class,()->host.handleOriginal(media,"confirmResultDownload",tampered));
+        try(MediaResultLoopbackFixture network=new MediaResultLoopbackFixture(url,"http://127.0.0.1:"+server.getAddress().getPort())){
+            JSONObject fetched=host.handleOriginal(media,"confirmResultDownload",confirmation);assertEquals("saved",fetched.getString("resultStatus"));assertEquals(1,downloads.get());assertEquals(1,posts.get());assertNull(network.auth.get(0));assertEquals(java.util.List.of(url),network.requested);
+            JSONObject artifact=fetched.getJSONObject("attachment");assertArrayEquals(PNG,Files.readAllBytes(AttachmentRepository.get(app).book.file(artifact.getString("id")).toPath()));assertEquals(operation,artifact.getJSONObject("source").getString("operationId"));
+            assertThrows(SecurityException.class,()->host.handleOriginal(media,"confirmResultDownload",confirmation));assertEquals(1,downloads.get());
+        }
+        JSONObject task=tasks.get(taskId.get(),false);assertEquals(1,rows("tasks"));assertEquals(1,rows("runs"));assertEquals(1,rows("operations"));assertEquals("consumed",task.getJSONArray("approvals").getJSONObject(0).getString("state"));assertEquals(operation,task.getJSONArray("operations").getJSONObject(0).getString("operationId"));assertEquals("needs_confirmation",task.getString("status"));assertNull(eventFailure.get());
+    }
+
     @Test public void fullProviderJournalSettlesUnsentOwnerOperationWithoutLosingOldReceipts()throws Exception{
         JSONObject input=prepared(args());media.close();
         JSONObject receipts=new JSONObject();for(int i=0;i<dev.pocketengine.media.jobs.MediaJobJournal.MAX_RECEIPTS;i++)receipts.put("old-"+i,new JSONObject().put("operationId","old-"+i).put("status","unknown").put("dispatched",true));
