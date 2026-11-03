@@ -285,6 +285,13 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
     scroll: LazyListState, observedMessage: String, observeMessage: (String) -> Unit, newReplies: Boolean, setNewReplies: (Boolean) -> Unit, readingReady:Boolean, missingReadingAnchor:Boolean) {
     var chatTools by remember { mutableStateOf(false) }
     var composerDetails by remember { mutableStateOf(false) }
+    var modelPickerOpen by remember { mutableStateOf(false) }
+    val modelConnections = controller.nativeModelConnections()
+    if (modelPickerOpen && modelConnections != null) ComposerModelPicker(modelConnections,
+        controller::runModelConnectionWork, controller::modelConnectionChanged,
+        { modelPickerOpen = false; controller.openConnection("models") },
+        { modelPickerOpen = false; controller.openConnection("accounts") },
+        { modelPickerOpen = false })
     ChatAttachmentChooser(state,controller)
     var taskMemoryReference by remember { mutableStateOf<JSONObject?>(null) }
     taskMemoryReference?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
@@ -414,7 +421,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                         onClick = { if(phone) controller.pickAttachments() else controller.openChatAttachmentPicker() },
                         enabled = !state.attachmentImporting && !state.chatSubmitting)
                     Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                        TextButton(onClick = settings, modifier = Modifier.widthIn(max = 156.dp),
+                        TextButton(onClick = { if (modelConnections != null) modelPickerOpen = true else settings() }, modifier = Modifier.widthIn(max = 156.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp)) {
                             AffectGlyph("spark", Modifier.size(16.dp), SecondaryInk)
                             Spacer(Modifier.width(5.dp))

@@ -9,6 +9,7 @@ import androidx.compose.ui.unit.dp
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.runtime.models.ModelBinding
 import dev.pocketengine.runtime.models.ModelConnectionService
+import dev.pocketengine.runtime.models.ModelProbeDeadline
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
 
@@ -44,7 +45,9 @@ internal fun ModelDiagnosticsControls(
             worker(Runnable {
                 var problem: String? = null
                 try { service.probe(binding, includeImage, original) }
-                catch (stopped: InterruptedException) {
+                catch (deadline: ModelProbeDeadline.Exceeded) {
+                    problem = "整体诊断期限已到（${probeStage(deadline.stage)}）；已停止当前连接及后续阶段。原配置和已发生的请求用量均保留。"
+                } catch (stopped: InterruptedException) {
                     Thread.currentThread().interrupt()
                     problem = "探测已停止；已经发生的请求用量仍保留。"
                 } catch (_: SecurityException) {
@@ -68,6 +71,7 @@ internal fun ModelDiagnosticsControls(
         if (expanded) {
             Text("只测试这项保留的 API 模型，不使用 ChatGPT 账号。最多2次模型请求；勾选合成图片后最多3次，会消耗该连接额度。", style = MaterialTheme.typography.bodySmall)
             Text("仅发送随机合成内容和一个声明但不执行的测试函数，不使用聊天历史或手机画面。离开此页会停止后续探测。", style = MaterialTheme.typography.bodySmall)
+            Text("所有阶段共用原连接的 ${snapshot.optJSONObject("api")?.optInt("requestTimeoutSeconds", 60) ?: 60} 秒期限；等待与后续阶段不会重新计时。", style = MaterialTheme.typography.bodySmall)
             Row {
                 Checkbox(image, { image = it }, enabled = !busy && !ownerBusy)
                 Text("增加一张合成图片（不读取屏幕）", style = MaterialTheme.typography.bodySmall)
@@ -81,12 +85,19 @@ internal fun ModelDiagnosticsControls(
             result?.let {
                 Text("文本：${probeStatus(it.optString("text"))} · 工具：${probeStatus(it.optString("tools"))} · 图片：${probeStatus(it.optString("image"))}", style = MaterialTheme.typography.bodySmall)
                 Text("${it.optString("model")} · 本次精确连接修订的独立观察", style = MaterialTheme.typography.labelSmall)
+                val diagnostics = it.optJSONArray("diagnostics")
+                if (diagnostics != null) for (index in 0 until diagnostics.length()) {
+                    val detail = diagnostics.optJSONObject(index) ?: continue
+                    Text("${probeStage(detail.optString("stage"))}：${detail.optString("message")}", style = MaterialTheme.typography.bodySmall)
+                }
             }
             Text("通过只说明本次基础合成结构，不能证明所有工具、JSON schema 或模型质量。未证实不表示永久不支持，也不会覆盖目录声明。", style = MaterialTheme.typography.bodySmall)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
     }
 }
+
+private fun probeStage(value: String) = when (value) { "text" -> "文本"; "tools" -> "工具结构"; "image" -> "合成图片"; else -> "当前阶段" }
 
 private fun probeStatus(value: String) = when (value) {
     "passed" -> "本次通过"

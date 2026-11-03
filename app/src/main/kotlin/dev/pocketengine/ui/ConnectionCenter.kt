@@ -120,7 +120,8 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                                 { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, { section = null },
                                 onOpenInferenceRecord = { reference -> controller.focusTask(reference.getString("taskId")) })
                             "accounts" -> AccountConnectionsPage(snapshot, responses, pending, "snapshot" in pending, error,
-                                { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, controller::openAccountAuthorization, controller::selectAccountModel, { section = null })
+                                { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, controller::openAccountAuthorization, controller::selectAccountModel, { section = null },
+                                controller.nativeModelConnections(), controller::runModelConnectionWork)
                         }
                     }
                 } else {

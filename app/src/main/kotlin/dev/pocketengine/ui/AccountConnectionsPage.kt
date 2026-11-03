@@ -1,5 +1,7 @@
 package dev.pocketengine.ui
 
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -16,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import dev.pocketengine.features.proxy.accounts.ChatGptRecovery
+import dev.pocketengine.runtime.models.ModelConnectionService
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -216,7 +219,9 @@ internal fun AccountConnectionsPage(
     onRequest: (command: String, payload: JSONObject) -> String,
     onOpenAuthorization: (authorizationSessionId: String) -> Unit,
     onSelectModel: (nativeModelReference: JSONObject) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    modelService: ModelConnectionService? = null,
+    modelWorker: ((Runnable) -> Unit)? = null
 ) {
     val uriHandler = LocalUriHandler.current
     var openedSessions by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -232,6 +237,31 @@ internal fun AccountConnectionsPage(
     var modelQuery by remember(expandedId) { mutableStateOf("") }
     var modelOptions by remember { mutableStateOf<Pair<JSONObject, JSONObject>?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var modelPreferences by remember(modelService) { mutableStateOf(JSONObject()) }
+    var preferenceBusy by remember(modelService) { mutableStateOf(false) }
+    var preferenceError by remember(modelService) { mutableStateOf<String?>(null) }
+    val preferencesAlive = remember(modelService) { java.util.concurrent.atomic.AtomicBoolean(true) }
+    val preferenceGeneration = remember(modelService) { java.util.concurrent.atomic.AtomicLong() }
+    val preferencesMain = remember { Handler(Looper.getMainLooper()) }
+    DisposableEffect(modelService) { onDispose { preferencesAlive.set(false) } }
+    fun updateModelPreferences(accountId: String, action: () -> JSONObject) {
+        val worker = modelWorker ?: return
+        if (!preferencesAlive.get()) return
+        val generation = preferenceGeneration.incrementAndGet()
+        preferenceBusy = true; preferenceError = null
+        try { worker(Runnable {
+            val result = runCatching(action)
+            preferencesMain.post { if (preferencesAlive.get() && preferenceGeneration.get() == generation) {
+                preferenceBusy = false
+                if (expandedId == accountId) result.fold({ modelPreferences = it }, { preferenceError = "模型收藏记录暂不可保存，原账号选择和授权保持不变。" })
+            } }
+        }) } catch (_: Exception) { preferenceBusy = false; preferenceError = "本机工作线程暂不可用，请重新打开账号页。" }
+    }
+    LaunchedEffect(modelService, expandedId, responses["models"]) {
+        modelPreferences = JSONObject()
+        val id = expandedId; val service = modelService
+        if (id != null && service != null) updateModelPreferences(id) { service.accountModelPreferences(id) }
+    }
     val rows = accountConnectionsRows(snapshot)
     val login = snapshot.optJSONObject("login")
     val activeLogin = login?.optString("status") in setOf("pending", "exchanging")
@@ -386,18 +416,30 @@ internal fun AccountConnectionsPage(
                             val models = catalog.getJSONArray("models")
                             Text("服务商可用模型", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
                             AccountConnectionsCaption(if (snapshot.optBoolean("mainInferenceAvailable")) "选择后使用此账号模型的 ChatGPT 套餐。图片依当前目录证据和机主授权决定；不自动授权工具或执行手机任务。" else "选择后交由原生宿主重新核对，用于账号连接验证。尚未接入主模型推理，不会自动授权工具或执行手机任务。")
+                            if (modelService != null) AccountConnectionsCaption("收藏优先，其后按实际成功调用排序；收藏不刷新授权，也不选择或测试模型。")
+                            preferenceError?.let { AccountConnectionsCaption(it) }
                             if (models.length() > 8) OutlinedTextField(value = modelQuery, onValueChange = { modelQuery = it }, label = { Text("筛选模型") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                            val stored = modelPreferences.optJSONArray("models")
+                            val preferences = (0 until (stored?.length() ?: 0)).mapNotNull { stored?.optJSONObject(it) }.associateBy { it.optString("modelId") }
                             val visibleModels = (0 until models.length()).mapNotNull { models.optJSONObject(it) }.filter { modelQuery.isBlank() || it.optString("displayName").contains(modelQuery, true) || it.optString("id").contains(modelQuery, true) }
+                                .sortedWith(compareByDescending<JSONObject> { preferences[it.optString("id")]?.optBoolean("favorite") == true }.thenByDescending { preferences[it.optString("id")]?.optLong("lastUsedAt") ?: 0L }.thenBy { it.optString("id") })
                             if (models.length() == 0) AccountConnectionsCaption("服务商没有返回可用模型。请核对套餐权限，或稍后重新读取。")
                             else if (visibleModels.isEmpty()) AccountConnectionsCaption("没有匹配的模型，试试其他名称。")
                             visibleModels.forEach { model ->
                                 val modelId = model.optString("id")
                                 val ref = accountConnectionsModelReference(modelRequest, modelEnvelope, snapshot, modelId, now)
+                                val preference = preferences[modelId]
                                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Column(Modifier.weight(1f)) { Text(model.optString("displayName").ifBlank { modelId }, fontSize = 14.sp, color = Ink); AccountConnectionsCaption(modelId)
                                         val image = model.optJSONObject("imageInput")
                                         AccountConnectionsCaption(if (image?.optBoolean("known") == true) { if (image.optBoolean("value")) "图片输入：目录支持" else "图片输入：目录不支持" } else "图片输入：未知，不发送图片")
+                                        if ((preference?.optLong("lastUsedAt") ?: 0L) > 0) AccountConnectionsCaption("最近成功调用：${modelTime(preference!!.getLong("lastUsedAt"))}")
                                         if (ref == null) AccountConnectionsCaption("缺少有效原生引用，不能选择。") }
+                                    if (modelService != null && modelWorker != null) TextButton(onClick = {
+                                        accountConnectionsModelReference(modelRequest, modelEnvelope, snapshot, modelId, System.currentTimeMillis())?.let { current ->
+                                            updateModelPreferences(id) { modelService.favoriteAccountModel(current.getString("accountId"), current.getString("modelId"), preference?.optBoolean("favorite") != true) }
+                                        }
+                                    }, enabled = ref != null && !busy && !closed && !preferenceBusy && modelPreferences.optBoolean("preferencesAvailable", true)) { Text(if (preference?.optBoolean("favorite") == true) "已收藏" else "收藏") }
                                     TextButton(onClick = {
                                         accountConnectionsModelReference(modelRequest, modelEnvelope, snapshot, modelId, System.currentTimeMillis())?.let {
                                             modelOptions = JSONObject(model.toString()) to it
