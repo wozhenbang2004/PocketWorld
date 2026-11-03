@@ -32,11 +32,13 @@ final class QuickPanelSurface implements AutoCloseable {
         void cancelPreview();
         void send(String note);
         void queryReceipt();
+        void noteChanged(String note);
+        void clearDraft();
         void openOriginalTask();
         void close();
     }
 
-    private enum Phase { READY, CAPTURING, REVIEW, SENDING, UNKNOWN, SAVED, ERROR }
+    private enum Phase { LOADING, BLOCKED, READY, CAPTURING, REVIEW, SENDING, UNKNOWN, SAVED, ERROR }
     private final Context context;
     private final WindowManager windows;
     private final Actions actions;
@@ -50,12 +52,16 @@ final class QuickPanelSurface implements AutoCloseable {
     private boolean hidden;
     private boolean includeScreenshot;
     private boolean querying;
+    private boolean draftWritable = true;
     private String note = "";
     private String message;
     private PreviewContent preview;
+    private PreviewContent noteReviewedFor;
+    private String reviewedNote = "";
     private Bitmap image;
     private EditText noteInput;
     private AlertDialog noteDialog;
+    private String draftStatus = "草稿只保存在本机，不会自动发送。";
     private LinearLayout body, footer;
 
     QuickPanelSurface(Context context, String goal, String location, Actions actions) {
@@ -99,14 +105,21 @@ final class QuickPanelSurface implements AutoCloseable {
         windows.addView(root, layout); attached = true;
     }
 
-    void capturing() { mainOnly(); clearPreview(); note = ""; phase = Phase.CAPTURING; message = null; expanded = true; render(); }
-    void preview(PreviewContent content) { mainOnly(); if (preview != content) { clearPreview(); note = ""; } preview = content; phase = Phase.REVIEW; message = null; expanded = true; render(); }
+    void loadingDraft() { mainOnly(); draftWritable = false; phase = Phase.LOADING; message = null; render(); }
+    void restoreDraft(String text) { mainOnly(); draftWritable = true; note = text; noteReviewedFor = null; phase = Phase.READY; message = text.isEmpty() ? null : "已恢复这个原任务的未发送说明；请重新捕获并核对来源后再发送。"; render(); }
+    void draftUnavailable(String detail) { mainOnly(); phase = Phase.BLOCKED; message = detail; expanded = true; render(); }
+    void draftNotice(String detail) { mainOnly(); draftStatus = detail; TextView shown = root.findViewWithTag("quick_panel_draft_status"); if (shown != null) shown.setText(detail); if (noteDialog != null) { TextView editorStatus = noteDialog.findViewById(android.R.id.message); if (editorStatus != null) editorStatus.setText(detail); } }
+    void draftFailure(String detail) { mainOnly(); draftWritable = false; draftNotice(detail); Button send = root.findViewWithTag("quick_panel_send"); if (send != null) send.setEnabled(false); Button capture = root.findViewWithTag("quick_panel_capture"); if (capture != null) capture.setEnabled(false); }
+    void draftStored() { mainOnly(); boolean blocked = !draftWritable; draftWritable = true; draftNotice("已保存这个原任务的本机草稿；收起或关闭后可继续编辑。"); if (blocked && noteDialog == null) render(); }
+    void draftCleared() { mainOnly(); note = ""; noteReviewedFor = null; draftStatus = "本机未发送说明已清除；没有撤回任何已登记输入。"; render(); }
+    void capturing() { mainOnly(); clearPreview(); phase = Phase.CAPTURING; message = null; expanded = true; render(); }
+    void preview(PreviewContent content) { mainOnly(); if (preview != content) clearPreview(); preview = content; phase = Phase.REVIEW; message = null; expanded = true; render(); }
     void sending() { mainOnly(); phase = Phase.SENDING; message = null; render(); }
     void unknown(String detail) { mainOnly(); querying = false; phase = Phase.UNKNOWN; message = detail; render(); }
     void querying() { mainOnly(); querying = true; render(); }
     void saved(String detail) { mainOnly(); querying = false; clearPreview(); note = ""; phase = Phase.SAVED; message = detail; render(); }
     void error(String detail) { mainOnly(); phase = Phase.ERROR; message = detail; expanded = true; render(); }
-    void ready() { mainOnly(); clearPreview(); note = ""; phase = Phase.READY; message = null; render(); }
+    void ready() { mainOnly(); clearPreview(); phase = Phase.READY; message = null; render(); }
 
     void captureHidden(boolean value) {
         mainOnly(); hidden = value; if (value) closeNoteEditor();
@@ -143,7 +156,10 @@ final class QuickPanelSurface implements AutoCloseable {
             footer = new LinearLayout(context); footer.setTag("quick_panel_phase_actions"); footer.setOrientation(LinearLayout.VERTICAL); root.addView(footer, new LinearLayout.LayoutParams(-1, -2));
             TextView target = text(goal, 14, 0xff222428); target.setMaxLines(3); target.setEllipsize(android.text.TextUtils.TruncateAt.END); body.addView(target);
             body.addView(text("原任务执行位置 · " + location, 12, 0xff72777f));
-            if (phase == Phase.CAPTURING || phase == Phase.SENDING) {
+            if (phase == Phase.LOADING || phase == Phase.BLOCKED) {
+                body.addView(text(phase == Phase.LOADING ? "正在读取这个原任务的本机草稿…" : message, 13, 0xff72777f));
+                footer.addView(button("查看原任务", actions::openOriginalTask, false));
+            } else if (phase == Phase.CAPTURING || phase == Phase.SENDING) {
                 ProgressBar progress = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal);
                 progress.setIndeterminate(true); body.addView(progress, new LinearLayout.LayoutParams(-1, dp(4)));
                 body.addView(text(phase == Phase.CAPTURING ? "正在读取你刚才明确选择的手机主屏…" : "正在登记这份固定内容，未自动继续任务…", 13, 0xff72777f));
@@ -163,9 +179,10 @@ final class QuickPanelSurface implements AutoCloseable {
             } else {
                 if (message != null) body.addView(text(message, 13, 0xffa3443d));
                 body.addView(text("先切到需要的 App。仅在你点下方按钮时读取手机主屏，不会持续监看。", 13, 0xff72777f));
+                renderDraftActions();
                 CheckBox screenshot = new CheckBox(context); screenshot.setText("这次同时捕获截图"); screenshot.setTextSize(13);
                 screenshot.setMinHeight(dp(48)); screenshot.setChecked(includeScreenshot); screenshot.setOnCheckedChangeListener((v, checked) -> includeScreenshot = checked); body.addView(screenshot);
-                footer.addView(button("捕获并预览", () -> actions.capture(includeScreenshot), true));
+                Button capture = button("捕获并预览", () -> actions.capture(includeScreenshot), true); capture.setTag("quick_panel_capture"); capture.setEnabled(draftWritable); footer.addView(capture);
                 footer.addView(button("查看原任务", actions::openOriginalTask, false));
             }
         }
@@ -190,39 +207,54 @@ final class QuickPanelSurface implements AutoCloseable {
         source.setTextIsSelectable(true); source.setTag("quick_panel_source"); body.addView(source);
         if (message != null) body.addView(text(message, 13, 0xffa3443d));
         body.addView(text("只登记到原任务，不更换执行位置或原有审批。", 12, 0xff72777f));
+        if (!note.isEmpty() && !noteReviewed()) body.addView(text("已保留未发送说明。请打开编辑器核对它是否适用于这份新来源，再点“保存说明”；不会把旧说明自动带入另一份捕获。", 12, 0xffa3443d));
         Button edit = button(note.isEmpty() ? "添加说明（可选）" : "编辑说明（" + note.length() + "字）", this::editNote, false);
         edit.setTag("quick_panel_edit_note"); footer.addView(edit);
+        renderDraftStatus();
+        if (!note.isEmpty()) footer.addView(button("清除未发送说明", actions::clearDraft, false));
         LinearLayout actionsRow = row();
         actionsRow.addView(button("取消这份内容", this::dismissPreview, false), new LinearLayout.LayoutParams(0, -2, 1));
         Button send = button("发送到原任务", () -> {
             if (note.length() > 1500) { message = "补充说明最多1500字，请编辑后再发送。"; render(); return; }
+            if (!note.isEmpty() && !noteReviewed()) { message = "请先核对这份捕获对应的说明；尚未发送。"; render(); return; }
             actions.send(note);
         }, true);
-        send.setEnabled((!content.text.isBlank() || image != null) && (content.imageBytes == null || image != null));
+        send.setEnabled(canSendNote() && (!content.text.isBlank() || image != null) && (content.imageBytes == null || image != null));
         send.setTag("quick_panel_send"); actionsRow.addView(send, new LinearLayout.LayoutParams(0, -2, 1)); footer.addView(actionsRow);
     }
 
     private void editNote() {
         mainOnly();
-        if (!attached || hidden || preview == null || phase != Phase.REVIEW && phase != Phase.ERROR) return;
+        if (!attached || hidden || phase != Phase.READY && phase != Phase.REVIEW && phase != Phase.ERROR) return;
         closeNoteEditor(); final PreviewContent expected = preview;
         EditText editor = new EditText(context); editor.setText(note); editor.setTextSize(14); editor.setMinLines(2); editor.setMaxLines(4);
         editor.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        editor.setHint("只给这份捕获补充一句说明"); editor.setContentDescription("这份固定捕获的补充说明；保存不发送"); editor.setTag("quick_panel_note");
+        editor.setHint("原任务的未发送说明"); editor.setContentDescription("原任务本机草稿；编辑、保存和关闭都不发送"); editor.setTag("quick_panel_note");
         LinearLayout content = new LinearLayout(context); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(dp(16), dp(4), dp(16), dp(8));
-        content.addView(text("来源 · " + expected.appLabel + "。保存说明不会发送或重新捕获。", 12, 0xff72777f)); content.addView(editor);
+        content.addView(text(expected == null ? "原任务说明；发送前仍需重新捕获并核对页面来源。" : "来源 · " + expected.appLabel + "。核对说明与这份捕获一致，再点“保存说明”；不会发送或重新捕获。", 12, 0xff72777f)); content.addView(editor);
+        TextView status = text(draftStatus, 12, 0xff72777f); status.setId(android.R.id.message); content.addView(status);
         ScrollView scroll = new ScrollView(context); scroll.addView(content);
-        AlertDialog dialog = new AlertDialog.Builder(context).setTitle("补充说明").setView(scroll).setPositiveButton("保存说明", null).setNegativeButton("取消", null).create();
+        AlertDialog dialog = new AlertDialog.Builder(context).setTitle("补充说明").setView(scroll).setPositiveButton("保存说明", null).setNegativeButton("收起，保留草稿", null).create();
         noteDialog = dialog; noteInput = editor;
+        final android.text.TextWatcher watcher = new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
+            public void onTextChanged(CharSequence value, int start, int before, int count) { }
+            public void afterTextChanged(android.text.Editable value) {
+                if (noteInput != editor || noteDialog != dialog) return;
+                note = value.toString(); noteReviewedFor = null; draftNotice("正在保存本机草稿…"); actions.noteChanged(note);
+                if (note.length() > 1500) editor.setError("发送说明最多1500字；草稿仍保留，请缩短后发送。");
+            }
+        };
+        editor.addTextChangedListener(watcher);
         dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY);
         dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE | WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
-        dialog.setOnDismissListener(ignored -> clearNoteEditor(dialog, editor));
+        dialog.setOnDismissListener(ignored -> { editor.removeTextChangedListener(watcher); clearNoteEditor(dialog, editor); });
         try {
             dialog.show(); dialog.getWindow().setLayout(Math.max(1, Math.min(dp(380), context.getResources().getDisplayMetrics().widthPixels - dp(24))), -2);
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
-                if (!attached || hidden || preview != expected || phase != Phase.REVIEW && phase != Phase.ERROR) { closeNoteEditor(); return; }
+                if (!attached || hidden || preview != expected || phase != Phase.READY && phase != Phase.REVIEW && phase != Phase.ERROR) { closeNoteEditor(); return; }
                 String text = editor.getText().toString(); if (text.length() > 1500) { editor.setError("补充说明最多1500字"); return; }
-                note = text; closeNoteEditor(); render();
+                note = text; noteReviewedFor = expected; reviewedNote = text; closeNoteEditor(); render();
             });
             editor.requestFocus(); editor.post(() -> {
                 if (noteDialog == dialog && dialog.isShowing()) { InputMethodManager ime = context.getSystemService(InputMethodManager.class); if (ime != null) ime.showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT); }
@@ -235,8 +267,18 @@ final class QuickPanelSurface implements AutoCloseable {
         InputMethodManager ime = context.getSystemService(InputMethodManager.class);
         if (ime != null && editor.getWindowToken() != null) ime.hideSoftInputFromWindow(editor.getWindowToken(), 0);
         editor.setText(""); editor.clearFocus();
+        Button send = root.findViewWithTag("quick_panel_send"); if (send != null) send.setEnabled(canSendNote() && preview != null && (!preview.text.isBlank() || image != null) && (preview.imageBytes == null || image != null));
         if (noteInput == editor) noteInput = null;
         if (noteDialog == expected) noteDialog = null;
+    }
+
+    private void renderDraftActions() {
+        Button edit = button(note.isEmpty() ? "添加未发送说明" : "编辑未发送说明（" + note.length() + "字）", this::editNote, false);
+        edit.setTag("quick_panel_edit_note"); footer.addView(edit); renderDraftStatus();
+        if (!note.isEmpty()) footer.addView(button("清除未发送说明", actions::clearDraft, false));
+    }
+    private void renderDraftStatus() {
+        TextView status = text(draftStatus, 12, 0xff72777f); status.setTag("quick_panel_draft_status"); body.addView(status);
     }
     private void closeNoteEditor() {
         AlertDialog current = noteDialog; EditText editor = noteInput; noteDialog = null; noteInput = null;
@@ -269,7 +311,9 @@ final class QuickPanelSurface implements AutoCloseable {
         return Math.max(1, height - dp(expanded ? 36 : 88));
     }
 
-    private void clearPreview() { if (preview != null) preview.close(); preview = null; }
+    private boolean noteReviewed() { return preview != null && noteReviewedFor == preview && reviewedNote.equals(note); }
+    private boolean canSendNote() { return draftWritable && note.length() <= 1500 && (note.isEmpty() || noteReviewed()); }
+    private void clearPreview() { if (preview != null) preview.close(); preview = null; noteReviewedFor = null; reviewedNote = ""; }
     private LinearLayout row() { LinearLayout row = new LinearLayout(context); row.setGravity(Gravity.CENTER_VERTICAL); return row; }
     private TextView text(String value, int size, int color) { TextView view = new TextView(context); view.setText(value); view.setTextSize(size); view.setTextColor(color); view.setPadding(0, dp(4), 0, dp(4)); return view; }
     private Button button(String label, Runnable action, boolean primary) {

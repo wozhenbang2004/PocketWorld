@@ -17,6 +17,12 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     private final Handler main;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final QuickPanelSurface surface;
+    private final QuickPanelDraftStore drafts;
+    private final Object draftState = new Object();
+    private volatile boolean draftReady;
+    private boolean draftSaveQueued;
+    private String latestNote = "";
+    private long editGeneration;
     private final Object captureState = new Object();
     private OwnerScreenContext capture;
     private OwnerScreenContext.Preview preview;
@@ -32,10 +38,27 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         this.service = service; this.host = host; this.main = service.mainHandler();
         expected = new JSONObject().put("taskId", task.getString("id")).put("runId", task.getString("runId"))
                 .put("epoch", task.getInt("coordinatorEpoch")).put("executionMode", task.getString("executionMode"));
+        drafts = new QuickPanelDraftStore(service.getFilesDir(), expected.getString("taskId"), expected.getString("runId"), expected.getInt("epoch"));
         surface = new QuickPanelSurface(service, task.getString("goal"), location, this);
     }
 
-    void show() { surface.show(); }
+    void show() {
+        surface.loadingDraft(); surface.show();
+        worker.execute(() -> {
+            try {
+                QuickPanelDraftStore.State saved = drafts.load();
+                main.post(() -> {
+                    if (closed) return;
+                    synchronized (draftState) { latestNote = saved.note; }
+                    draftReady = true; surface.restoreDraft(saved.note);
+                    if (!saved.pendingClient.isEmpty()) {
+                        clientMessageId = saved.pendingClient;
+                        surface.unknown("这份原补充的登记结果仍待核对。已恢复发送身份与草稿，不会重新发送；请查询原回执。");
+                    }
+                });
+            } catch (Exception failed) { main.post(() -> { if (!closed) surface.draftUnavailable(detail(failed, "原草稿暂不可读取；未清空、捕获或发送。")); }); }
+        });
+    }
     void captureHidden(boolean hidden) { surface.captureHidden(hidden); }
     boolean visible() { return surface.visible(); }
     android.view.View view() { return surface.view(); }
@@ -43,7 +66,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     @Override public void capture(boolean includeScreenshot) {
         final int pending;
         synchronized (captureState) {
-            if (closed || sending || preparingCapture || capture != null) return;
+            if (closed || !draftReady || sending || clientMessageId != null || preparingCapture || capture != null) return;
             pending = ++request; preparingCapture = true;
         }
         surface.capturing();
@@ -99,7 +122,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         final OwnerScreenContext local; final OwnerScreenContext.Preview selected;
         synchronized (captureState) {
             local = capture; selected = preview;
-            if (closed || sending || local == null || selected == null || clientMessageId != null) return;
+            if (closed || !draftReady || sending || local == null || selected == null || clientMessageId != null) return;
         }
         if (note.length() > 1500) { surface.error("补充说明最多1500字，请编辑后再发送。"); return; }
         clientMessageId = UUID.randomUUID().toString(); sending = true;
@@ -107,16 +130,64 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         final String client = clientMessageId; surface.sending();
         worker.execute(() -> {
             try {
+                drafts.prepareSubmission(note, client);
                 JSONObject receipt = host.submitOwnerScreenContext(local, selected, client, note);
                 main.post(() -> { if (!closed && client.equals(clientMessageId)) receive(receipt); });
             } catch (OwnerScreenContextHost.Rejected refused) {
-                main.post(() -> { if (!closed && client.equals(clientMessageId)) { sending = false; clientMessageId = null; surface.error(detail(refused, "内容未登记，请核对原任务。")); } });
+                try {
+                    drafts.rejectedBeforeDispatch(client);
+                    main.post(() -> { if (!closed && client.equals(clientMessageId)) { sending = false; clientMessageId = null; surface.error(detail(refused, "内容未登记，请核对原任务；本机草稿仍保留。")); } });
+                } catch (Exception saveUnknown) {
+                    main.post(() -> { if (!closed && client.equals(clientMessageId)) { sending = false; surface.unknown("输入被拒绝，但原草稿状态保存未确认；内容保留，未重发。请回原任务核对。"); } });
+                }
             } catch (Exception uncertain) {
                 main.post(() -> { if (!closed && client.equals(clientMessageId)) { sending = false; surface.unknown("输入登记结果暂不可确认，请查询原回执。原任务与这份内容的身份已保留。"); } });
             } finally {
                 synchronized (captureState) { submitting = false; }
                 releaseClosedCapture(local);
             }
+        });
+    }
+
+    /** Coalesce typing into the existing bounded lifecycle worker; closing never discards queued saves. */
+    @Override public void noteChanged(String note) {
+        synchronized (draftState) {
+            if (closed || !draftReady || clientMessageId != null) return;
+            latestNote = note;
+            editGeneration++;
+            if (draftSaveQueued) return;
+            draftSaveQueued = true;
+        }
+        worker.execute(() -> {
+            while (true) {
+                final String text;
+                synchronized (draftState) { text = latestNote; }
+                try {
+                    drafts.saveNote(text);
+                    synchronized (draftState) {
+                        if (!text.equals(latestNote)) continue;
+                        draftSaveQueued = false;
+                    }
+                    main.post(() -> { if (!closed && clientMessageId == null) { synchronized (draftState) { if (!text.equals(latestNote)) return; } surface.draftStored(); } });
+                    return;
+                } catch (Exception failed) {
+                    draftReady = failed instanceof IllegalArgumentException;
+                    synchronized (draftState) { draftSaveQueued = false; }
+                    main.post(() -> { if (!closed) surface.draftFailure(detail(failed, "草稿保存未确认；请保留当前输入，未发送。")); });
+                    return;
+                }
+            }
+        });
+    }
+
+    @Override public void clearDraft() {
+        if (closed || !draftReady || sending || clientMessageId != null) return;
+        final long generation;
+        synchronized (draftState) { latestNote = ""; generation = ++editGeneration; }
+        worker.execute(() -> {
+            synchronized (draftState) { if (generation != editGeneration) return; }
+            try { drafts.saveNote(""); main.post(() -> { if (!closed && clientMessageId == null) { synchronized (draftState) { if (generation != editGeneration) return; } surface.draftCleared(); } }); }
+            catch (Exception failed) { draftReady = false; main.post(() -> { if (!closed) surface.draftFailure(detail(failed, "原草稿清除未确认，未声称已清除。")); }); }
         });
     }
 
@@ -152,10 +223,22 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
                 && expected.optString("runId").equals(receipt.optString("runId"))
                 && expected.optInt("epoch") == receipt.optInt("epoch")
                 && receipt.optString("status").matches("accepted|queued|consumed")) {
-            final OwnerScreenContext previous;
-            synchronized (captureState) { previous = capture; capture = null; preview = null; }
-            if (previous != null) previous.close(); clientMessageId = null;
-            surface.saved(receipt.optString("status").equals("consumed") ? "原任务已采用这份补充。" : "补充已登记到原任务；暂停中的任务由你明确继续。");
+            final String client = clientMessageId; sending = true;
+            worker.execute(() -> {
+                try {
+                    drafts.accepted(client);
+                    main.post(() -> {
+                        if (closed || !client.equals(clientMessageId)) return;
+                        final OwnerScreenContext previous;
+                        synchronized (captureState) { previous = capture; capture = null; preview = null; }
+                        if (previous != null) previous.close(); clientMessageId = null; sending = false;
+                        synchronized (draftState) { latestNote = ""; }
+                        surface.saved(receipt.optString("status").equals("consumed") ? "原任务已采用这份补充。" : "补充已登记到原任务；暂停中的任务由你明确继续。");
+                    });
+                } catch (Exception failed) {
+                    main.post(() -> { if (!closed && client.equals(clientMessageId)) { sending = false; surface.unknown("原回执已证明输入登记，但本机草稿清理未确认；未重新发送。请核对原任务。"); } });
+                }
+            });
         } else surface.unknown("原回执尚未证明这份内容已登记。请继续查询或到原任务核对，避免重复发送。");
     }
 

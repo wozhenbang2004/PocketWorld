@@ -23,14 +23,14 @@ public final class TeamOutputReadTest {
     @Test public void synthesisCanReadTheOriginalTailByItsStableTurnId()throws Exception {
         File file=new File(Files.createTempDirectory("team-output-read-").toFile(),"runs.json");AtomicInteger summaries=new AtomicInteger();String tail="原文末尾的反证必须进入整合";
         try(TeamCoordinator coordinator=new TeamCoordinator(file,(model,messages,tools,control)->{
-            if(!messages.getJSONObject(0).getString("content").contains("团队Leader"))return new JSONObject().put("content",model.model.equals("a")?"甲".repeat(8000)+tail:"乙的独立核验");
-            if(summaries.incrementAndGet()==1){String preview=messages.getJSONObject(1).getString("content");assertFalse(preview.contains(tail));JSONArray outputs=new JSONArray(preview.substring(preview.indexOf('[')));return readCall(outputs.getJSONObject(0).getString("turnId"),8000);}
-            JSONObject read=new JSONObject(messages.getJSONObject(messages.length()-1).getString("content"));assertEquals(tail,read.getString("content"));assertEquals(8000,read.getInt("offset"));assertEquals("a",read.getString("memberId"));
+            if(!messages.getJSONObject(0).getString("content").contains("团队Leader"))return new JSONObject().put("content",model.model.equals("a")?"甲".repeat(16000)+tail:"乙的独立核验");
+            if(summaries.incrementAndGet()==1){String preview=messages.getJSONObject(1).getString("content");assertFalse(preview.contains(tail));JSONArray outputs=new JSONArray(preview.substring(preview.indexOf('[')));JSONObject original=outputs.getJSONObject(0);assertEquals(16000+tail.length(),original.getInt("originalChars"));assertEquals(8000,original.getInt("returnedChars"));assertTrue(original.getBoolean("truncated"));assertEquals(TeamWorkFiles.hash("甲".repeat(16000)+tail),original.getString("sha256"));return readCall(original.getJSONObject("readRef").getString("turnId"),16000);}
+            JSONObject read=new JSONObject(messages.getJSONObject(messages.length()-1).getString("content"));assertEquals(tail,read.getString("content"));assertEquals(16000,read.getInt("offset"));assertEquals("a",read.getString("memberId"));
             assertFalse(read.optBoolean("externalEffect"));assertEquals(0,read.getJSONArray("grantsAdded").length());return new JSONObject().put("content","共同结论已核对原文："+read.getString("content"));
         },event->{})){
             String id=coordinator.start(team(),"核对长产出再整合",1,config()).getString("id");JSONObject run=terminal(coordinator,id);
             assertEquals("The coordinator must support reading its actual member output", "completed",run.getString("status"));assertTrue(run.getString("summary").contains(tail));assertEquals(2,summaries.get());
-            JSONObject receipt=run.getJSONArray("synthesisReads").getJSONObject(0);assertEquals("a",receipt.getString("memberId"));assertEquals(8000,receipt.getInt("offset"));assertEquals(tail.length(),receipt.getInt("characters"));assertFalse(receipt.has("content"));assertFalse(run.getBoolean("businessVerified"));
+            JSONObject receipt=run.getJSONArray("synthesisReads").getJSONObject(0);assertEquals("a",receipt.getString("memberId"));assertEquals(16000,receipt.getInt("offset"));assertEquals(tail.length(),receipt.getInt("characters"));assertFalse(receipt.has("content"));assertFalse(run.getBoolean("businessVerified"));
         }
         try(TeamCoordinator restored=new TeamCoordinator(file,(m,p,c)->{throw new AssertionError("Read receipts never authorize automatic work");},event->{})){
             JSONObject saved=restored.list().getJSONObject(0);assertEquals(1,saved.getJSONArray("synthesisReads").length());assertTrue(saved.getString("summary").contains(tail));
