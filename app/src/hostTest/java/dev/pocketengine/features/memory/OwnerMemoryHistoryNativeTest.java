@@ -149,7 +149,7 @@ public final class OwnerMemoryHistoryNativeTest {
             assertEquals(acceptedId,f.owner.memory("acceptCandidate",input).getJSONObject("record").getString("id"));assertEquals("unverified",row.getJSONObject("learningRationale").getString("validationStatus"));
             f.owner.memory("archiveCandidates",new JSONObject().put("selections",exactRefs(new JSONArray().put(accepted.getJSONObject("candidate")))));
             assertEquals(explanation,f.read(row).getJSONObject("record").getJSONObject("learningRationale").getString("reason"));assertFalse(f.owner.memory("listCandidateHistory",new JSONObject()).toString().contains(explanation));
-            MemoryArchive.checked(f.memory.ownerArchive(scope()));
+            MemoryArchive.checked(f.memory.ownerArchive(scope()),scope());
             assertThrows(SecurityException.class,()->f.save(new JSONObject().put("text","伪造说明").put("learningRationale",row.getJSONObject("learningRationale"))));
         }
         try(Fixture cold=new Fixture(false)){

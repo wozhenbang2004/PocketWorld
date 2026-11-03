@@ -21,7 +21,7 @@ import static org.junit.Assert.*;
 @Config(sdk=35,manifest=Config.NONE,application=Application.class)
 @ConscryptMode(ConscryptMode.Mode.OFF)
 public final class QqC2CStreamJourneyTest {
-    @Before public void vault(){java.security.Security.addProvider(new java.security.Provider("QqStreamFixtureVault","1","Synthetic owner-keystore"){{put("KeyStore.AndroidKeyStore",ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    @Before public void vault(){java.security.Security.addProvider(new java.security.Provider("QqStreamFixtureVault",1.0,"Synthetic owner-keystore"){{put("KeyStore.AndroidKeyStore",ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     @After public void release(){java.security.Security.removeProvider("QqStreamFixtureVault");}
     private static void accept(QqOwnerImageJourneyTest.Fixture f,JSONObject event)throws Exception {var method=ChannelsModule.class.getDeclaredMethod("handleAccepted",JSONObject.class,JSONObject.class);method.setAccessible(true);try{method.invoke(f.module,f.core.profile("bot"),new JSONObject().put("duplicate",false).put("event",event).put("route",event.getJSONObject("route")));}catch(java.lang.reflect.InvocationTargetException failure){throw(Exception)failure.getCause();}}
     private static final class Transport {

@@ -21,7 +21,7 @@ import static org.junit.Assert.*;
 @Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
 @ConscryptMode(ConscryptMode.Mode.OFF)
 public final class EngineMemorySendAdmissionTest {
-    @org.junit.Before public void keys(){java.security.Security.addProvider(new java.security.Provider("MemoryJourneyKeyStore","1","Explicit test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    @org.junit.Before public void keys(){java.security.Security.addProvider(new java.security.Provider("MemoryJourneyKeyStore",1.0,"Explicit test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     @org.junit.After public void reset(){java.security.Security.removeProvider("MemoryJourneyKeyStore");InferenceCapture.installPresentationObserver(new InferenceCapture.Sink(){public void started(InferenceReceipt r){}public void finished(InferenceReceipt r){}});}
     @Test public void originalApplicationShortcutRejectsForgottenParentsAfterStartedBeforeHttp()throws Exception {
         EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();MemoryModule memory=(MemoryModule)app.features.module("memory");JSONObject scope=new JSONObject().put("ownerId","owner").put("spaceId","private");JSONArray selected=new JSONArray();

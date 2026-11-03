@@ -35,7 +35,7 @@ import static org.junit.Assert.*;
 public final class SourceLearningAttemptBudgetNativeTest {
     private static final String SOURCE="SINGLE_BATCH_ORIGINAL_SOURCE_71: only this selected result may be sent.";
     private static final String MODEL="single-attempt-memory-fixture";
-    @Before public void keys(){java.security.Security.addProvider(new java.security.Provider("SourceLearningAttemptKeyStore","1","Explicit test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    @Before public void keys(){java.security.Security.addProvider(new java.security.Provider("SourceLearningAttemptKeyStore",1.0,"Explicit test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     @After public void reset(){java.security.Security.removeProvider("SourceLearningAttemptKeyStore");InferenceCapture.installPresentationObserver(new InferenceCapture.Sink(){public void started(InferenceReceipt receipt){}public void finished(InferenceReceipt receipt){}});}
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
 
