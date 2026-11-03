@@ -175,8 +175,8 @@ internal fun WorkProfilesPage(host: NativeWorkProfileHost, runWork: (Runnable) -
                     TextButton(onClick = { openOriginal("pluginCatalog") }) { Text("在原目录管理安装、MCP 与源码审批") }
                 }
                 SettingsSurface("预检后，再明确启动", "预检只核原来源，不运行工具，不代表配置已应用或目标已连通。此入口接入主任务、摘要、任务指导参考及已支持的技能与工具选用。") {
-                    Text("本机成员模型沿原团队计划与主人审批生效；须选择真实原项目副本。本主任务入口不应用运行目标；Codex/Claude 的准确目标配置请到原电脑任务页单独预览、确认与读回，其他目标仍未接入。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
-                    Text("原电脑任务页可把所选任务指导/Skill 的完整准确版本投射为文本参考；另行审阅内容差异后才写入目标。原 frontmatter、脚本和工具声明不会成为目标权限或可执行配置。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                    Text("本机成员模型沿原团队计划与主人审批生效；须选择真实原项目副本。本主任务入口不应用运行目标。Codex/Claude 的准确配置及 Pi 1.4.0（POSIX、无工具）的模型配置请到原电脑任务页单独预览、确认与读回；其他目标仍未接入。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                    Text("Codex/Claude 的原电脑任务页可把所选任务指导/Skill 的完整准确版本投射为文本参考；另行审阅内容差异后才写入目标。原 frontmatter、脚本和工具声明不会成为目标权限或可执行配置。Pi 暂不支持此类内容投射。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                     if (reviewProject != null) TextButton(onClick = {
                         val observing = RunControl(); control = observing; review = null; consent = false
                         work({ val project = reviewProject(); Triple(project, project.view(), page.choices(observing, project)) }) {

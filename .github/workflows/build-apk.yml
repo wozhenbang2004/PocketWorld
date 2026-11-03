@@ -218,7 +218,7 @@ jobs:
   host-tests:
     # Preserve each same-repository workpack's explicit batch and the original manual selection.
     # Preserve Workpack 04 batches; takeover adds exact project/runtime checks. PRs never package an APK.
-    if: ${{ github.event.repository.private && (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'pro/operit-full-takeover-20261103' || github.head_ref == 'pro/workpack-04-mcp-skills' || github.head_ref == 'pro/dsh-runtime-continuity' || github.head_ref == 'pro/workpack-06-model-quality' || github.head_ref == 'pro/workpack-05-memory-quality' || github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'pro/mika-full-takeover-20261103' || github.head_ref == 'integrate/pr8-pr15-20261103' || github.head_ref == 'pro/memory-full-report-takeover')) }}
+    if: ${{ github.event.repository.private && (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'pro/operit-full-takeover-20261103' || github.head_ref == 'pro/workpack-04-mcp-skills' || github.head_ref == 'pro/dsh-runtime-continuity' || github.head_ref == 'pro/workpack-06-model-quality' || github.head_ref == 'pro/workpack-05-memory-quality' || github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/magpie-core-closure-20261103' || github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'pro/mika-full-takeover-20261103' || github.head_ref == 'integrate/pr8-pr15-20261103' || github.head_ref == 'pro/memory-full-report-takeover')) }}
     name: Host tests (${{ matrix.batch }})
     strategy:
       fail-fast: false
@@ -230,14 +230,41 @@ jobs:
       run:
         shell: bash
     env:
-      HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/operit-full-takeover-20261103' && (matrix.batch == 'project-files' && 'project-file-search' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup' || 'mcp-ecosystem') || github.head_ref == 'pro/workpack-04-mcp-skills' && (matrix.batch == 'model-compatibility' && 'model-quality-routing' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup' || 'mcp-ecosystem') || github.head_ref == 'pro/dsh-runtime-continuity' && 'native-normal-cleanup' || (github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'integrate/pr8-pr15-20261103') && 'phone-setup-recovery' || github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing' || github.head_ref == 'pro/workpack-03-phone-api-cli' && 'phone-task-platform' || 'memory-recall-quality') || inputs.host_group }}
-      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'pro/memory-full-report-takeover' && 'memory-assertion-recall' || github.head_ref == 'pro/mika-full-takeover-20261103' && 'phone-setup-recovery,phone-input-extensions,phone-semantic-profile,phone-access-history,phone-observation-boundaries,phone-sensitive-owner,local-phone-leases,phone-audio-owner,phone-task-platform,aion-conversations,memory-recall-quality,memory-evidence-plan,memory-method-quality,model-quality-routing,model-quality-sources,gateway-continuation' || github.head_ref == 'pro/operit-full-takeover-20261103' && (matrix.batch == 'project-files' && 'project-file-search,project-file-operations' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup,native-duplex-pipes,runtime-preparation-cancel,runtime-development-continuity,runtime-output-display,request-clock' || 'mcp-ecosystem,mcp-local-discovery,mcp-stdio-framing,mcp-prompts,mcp-health,aion-mcp-skills,managed-skills,managed-skill-private-artifacts,magpie-work-profile,aion-work-profile-targets,memory-recall-quality,memory-evidence-plan,memory-method-quality,phone-task-platform,gateway-continuation,project-git-isolation') || github.head_ref == 'pro/workpack-04-mcp-skills' && (matrix.batch == 'model-compatibility' && 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,runner-budget-stream' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup,native-duplex-pipes,runtime-preparation-cancel,runtime-development-continuity,runtime-output-display,request-clock' || 'mcp-ecosystem,mcp-local-discovery,mcp-stdio-framing,mcp-prompts,mcp-health,aion-mcp-skills,managed-skills,managed-skill-private-artifacts,magpie-work-profile,aion-work-profile-targets,memory-recall-quality,memory-evidence-plan,memory-method-quality,phone-task-platform,gateway-continuation,project-git-isolation') || github.head_ref == 'pro/dsh-runtime-continuity' && 'native-normal-cleanup,runtime-development-continuity,runtime-preparation-cancel,runtime-recovery-admission,native-duplex-pipes,runtime-activity,runtime-thermal-log-policy,runtime-diagnostic-metadata,request-clock,runtime-output-display,runtime-health,script-artifact-publication,managed-skill-private-artifacts,runner-repeat-notice,runtime-log-tail-recovery,legacy-command-receipt-recovery' || (github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'integrate/pr8-pr15-20261103') && 'phone-setup-recovery,phone-input-extensions,phone-semantic-profile,phone-access-history,phone-observation-boundaries,phone-sensitive-owner,local-phone-leases,phone-audio-owner,phone-task-platform,aion-conversations,model-quality-routing,model-quality-sources,gateway-continuation,runner-budget-stream,request-clock,runtime-output-display' || github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,gateway-continuation,runner-budget-stream' || github.head_ref == 'pro/workpack-03-phone-api-cli' && 'phone-task-platform,memory-recall-quality,memory-evidence-plan,memory-method-quality' || 'memory-recall-quality,memory-evidence-plan,memory-method-quality') || inputs.host_groups }}
+      HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/operit-full-takeover-20261103' && (matrix.batch == 'project-files' && 'project-file-search' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup' || 'mcp-ecosystem') || github.head_ref == 'pro/workpack-04-mcp-skills' && (matrix.batch == 'model-compatibility' && 'model-quality-routing' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup' || 'mcp-ecosystem') || github.head_ref == 'pro/dsh-runtime-continuity' && 'native-normal-cleanup' || (github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'integrate/pr8-pr15-20261103') && 'phone-setup-recovery' || github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing' || (github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/magpie-core-closure-20261103') && 'phone-task-platform' || 'memory-recall-quality') || inputs.host_group }}
+      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'pro/memory-full-report-takeover' && 'memory-assertion-recall' || github.head_ref == 'pro/mika-full-takeover-20261103' && 'phone-setup-recovery,phone-input-extensions,phone-semantic-profile,phone-access-history,phone-observation-boundaries,phone-sensitive-owner,local-phone-leases,phone-audio-owner,phone-task-platform,aion-conversations,memory-recall-quality,memory-evidence-plan,memory-method-quality,model-quality-routing,model-quality-sources,gateway-continuation' || github.head_ref == 'pro/operit-full-takeover-20261103' && (matrix.batch == 'project-files' && 'project-file-search,project-file-operations' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup,native-duplex-pipes,runtime-preparation-cancel,runtime-development-continuity,runtime-output-display,request-clock' || 'mcp-ecosystem,mcp-local-discovery,mcp-stdio-framing,mcp-prompts,mcp-health,aion-mcp-skills,managed-skills,managed-skill-private-artifacts,magpie-work-profile,aion-work-profile-targets,memory-recall-quality,memory-evidence-plan,memory-method-quality,phone-task-platform,gateway-continuation,project-git-isolation') || github.head_ref == 'pro/workpack-04-mcp-skills' && (matrix.batch == 'model-compatibility' && 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,runner-budget-stream' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup,native-duplex-pipes,runtime-preparation-cancel,runtime-development-continuity,runtime-output-display,request-clock' || 'mcp-ecosystem,mcp-local-discovery,mcp-stdio-framing,mcp-prompts,mcp-health,aion-mcp-skills,managed-skills,managed-skill-private-artifacts,magpie-work-profile,aion-work-profile-targets,memory-recall-quality,memory-evidence-plan,memory-method-quality,phone-task-platform,gateway-continuation,project-git-isolation') || github.head_ref == 'pro/dsh-runtime-continuity' && 'native-normal-cleanup,runtime-development-continuity,runtime-preparation-cancel,runtime-recovery-admission,native-duplex-pipes,runtime-activity,runtime-thermal-log-policy,runtime-diagnostic-metadata,request-clock,runtime-output-display,runtime-health,script-artifact-publication,managed-skill-private-artifacts,runner-repeat-notice,runtime-log-tail-recovery,legacy-command-receipt-recovery' || (github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'integrate/pr8-pr15-20261103') && 'phone-setup-recovery,phone-input-extensions,phone-semantic-profile,phone-access-history,phone-observation-boundaries,phone-sensitive-owner,local-phone-leases,phone-audio-owner,phone-task-platform,aion-conversations,model-quality-routing,model-quality-sources,gateway-continuation,runner-budget-stream,request-clock,runtime-output-display' || github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,gateway-continuation,runner-budget-stream' || (github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/magpie-core-closure-20261103') && 'phone-task-platform,memory-recall-quality,memory-evidence-plan,memory-method-quality' || 'memory-recall-quality,memory-evidence-plan,memory-method-quality') || inputs.host_groups }}
       POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
     steps:
       - name: Check out selected revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Include original Harness journeys for affected private PRs
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'pro/magpie-core-closure-20261103' }}
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib, subprocess
+          changed = subprocess.check_output(['git', 'diff', '--name-only', os.environ['PR_BASE_SHA'], 'HEAD', '--'], text=True).splitlines()
+          prefixes = ('companion/harness_', 'companion/test_harness_', 'companion/gateway_fixture_',
+                      'app/src/main/java/dev/pocketengine/features/remote/NativeHarness',
+                      'app/src/main/kotlin/dev/pocketengine/ui/Harness',
+                      'app/src/hostTest/java/dev/pocketengine/features/remote/RemotePi')
+          exact = {'companion/pocket_companion.py', 'companion/pi_driver.py', 'companion/test_pi_driver.py',
+                   'app/src/main/java/dev/pocketengine/store/TaskStore.java',
+                   'app/src/main/java/dev/pocketengine/features/remote/RemoteModule.java',
+                   'app/src/test/java/dev/pocketengine/features/remote/WorkProfileRemoteTargetFactsNativeTest.java',
+                   'app/src/hostTest/java/dev/pocketengine/GatewayContinuationAppJourneyTest.java'}
+          if any(path in exact or path.startswith(prefixes) for path in changed):
+              groups = list(dict.fromkeys(os.environ['HOST_TEST_GROUPS'].split(',') + ['gateway-continuation', 'alma-pi-no-tools', 'aion-work-profile-targets']))
+              with pathlib.Path(os.environ['GITHUB_ENV']).open('a') as output:
+                  output.write('HOST_TEST_GROUPS=' + ','.join(groups) + '\n')
+          print('Source head:', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
+          PY
 
       - name: Set up Java 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
@@ -376,8 +403,18 @@ jobs:
           set -euo pipefail
           (
             cd companion
-            python3 -B -m unittest test_pi_driver -v
+            python3 -B -m unittest test_pi_driver test_harness_config_pi -v
           ) 2>&1 | tee build-artifacts/host-tests/companion-pi-no-tools.log
+
+      - name: Verify original Harness configuration and gateway transactions
+        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'gateway-continuation') }}
+        run: |
+          set -euo pipefail
+          (
+            cd companion
+            python3 -B -m unittest test_harness_config test_harness_config_http test_harness_config_windows \
+              test_harness_reference_assets test_harness_gateway test_harness_gateway_owner -v
+          ) 2>&1 | tee build-artifacts/host-tests/companion-harness-transactions.log
 
       - name: Verify public child lineage and exact JSON connection closure
         if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'alma-child-sources') }}

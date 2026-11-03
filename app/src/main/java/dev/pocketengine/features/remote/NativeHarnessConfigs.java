@@ -163,12 +163,33 @@ public final class NativeHarnessConfigs {
         if(!request.getString("environmentId").equals(plan.optString("environmentId"))||!request.getString("profileDigest").equals(plan.optString("profileDigest"))||!request.getString("endpointLeaseRef").equals(plan.optString("endpointLeaseRef"))||!"GATEWAY_ACCESS".equals(plan.optString("credentialRefType")))throw new SecurityException("计划模型Profile或gateway引用不同");
         if(request.has("gatewayOwnerBinding")&&(!plan.has("gatewayOwnerBinding")||!TaskStore.capabilityFingerprint(request.getJSONObject("gatewayOwnerBinding")).equals(TaskStore.capabilityFingerprint(plan.getJSONObject("gatewayOwnerBinding")))))throw new SecurityException("计划未冻结原父子双身份");
         JSONObject gateway=plan.getJSONObject("gatewayScope");if(!gateway.optString("audience").equals("OWNER_PRIVATE")||!gateway.optString("purpose").equals("EXTERNAL_RELAY")||gateway.opt("billingBackendVerified")!=Boolean.FALSE)throw new SecurityException("配置计划不能变成群API-only计费证明或APP_OWNER权限");
-        String expected=identity.getString("family").equals("codex")?"config.toml":identity.getString("family").equals("claude")?"settings.json":"";
+        String family=identity.getString("family");
+        String expected=family.equals("codex")?"config.toml":family.equals("claude")||family.equals("pi")?"settings.json":"";
         if(expected.isEmpty()||!expected.equals(plan.getJSONArray("filePlans").getJSONObject(0).optString("pathRef")))throw new SecurityException("计划文件不属于已知adapter");
-        JSONArray files=plan.getJSONArray("filePlans");if(!request.has("referenceAssets")&&files.length()!=1)throw new SecurityException("未选文本参考不能额外写文件");
+        JSONArray files=plan.getJSONArray("filePlans");
+        if(family.equals("pi")){
+            if(request.has("referenceAssets")||files.length()!=2||!files.getJSONObject(1).optString("pathRef").equals("models.json"))throw new SecurityException("Pi无工具配置必须完整审阅settings.json与models.json；不接受额外文件或文本投射");
+            if(!identity.optString("version").matches("(?:pi\\s+)?v?1\\.4\\.0")||!identity.optString("configSchemaVersion").equals("pi-settings-models-v1")||!TaskStore.capabilityFingerprint(identity).equals(TaskStore.capabilityFingerprint(record.getJSONObject("target").getJSONObject("identity"))))throw new SecurityException("Pi计划不是刚探测的准确1.4.0双文件schema与目标身份");
+            boolean restoring=!plan.isNull("restoreOf")&&!plan.optString("restoreOf").isEmpty();
+            for(int i=0;i<files.length();i++)if(!files.getJSONObject(i).optString("beforeDigest").matches("[a-f0-9]{64}|absent")||!files.getJSONObject(i).optString("afterDigest").matches(restoring?"[a-f0-9]{64}|absent":"[a-f0-9]{64}"))throw new SecurityException("Pi双文件计划缺少准确前后摘要");
+        }else if(!request.has("referenceAssets")&&files.length()!=1)throw new SecurityException("未选文本参考不能额外写文件");
         if(request.has("referenceAssets")){if(!dev.pocketengine.features.controlplane.NativeWorkProfileHost.harnessReferenceDigest(request.getJSONObject("referenceAssets")).equals(plan.optString("referenceAssetsDigest"))||files.length()<2||files.length()>200)throw new SecurityException("文本投射计划没有冻结完整原版本");String instructions=identity.getString("family").equals("codex")?"AGENTS.md":"CLAUDE.md";java.util.Set<String> seen=new java.util.HashSet<>();
             for(int i=1;i<files.length();i++){String path=files.getJSONObject(i).getString("pathRef");if(!seen.add(path)||!path.equals(instructions)&&!path.matches("skills/pw-[a-f0-9]{32}/(?:SKILL\\.md|\\.pocketworld-source\\.json|references/[0-9]{3}-[a-f0-9]{64}\\.txt)"))throw new SecurityException("文本计划越出准确adapter参考目录或重复路径");}}
         if(plan.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>262144)throw new SecurityException("配置计划超出256KiB有界审阅，请明确减选；未截断内容");
+    }
+    /** Both Pi configuration files belong to one original operation. A top-level
+     * success flag cannot stand in for either file's actual target readback. */
+    public static void validateConfigurationReadback(JSONObject plan,JSONObject receipt)throws Exception {
+        if(!"pi".equals(plan.getJSONObject("identity").optString("family"))||!"COMMITTED".equals(receipt.optString("state")))return;
+        JSONArray files=receipt.optJSONArray("files");
+        if(files==null||files.length()!=2)throw new SecurityException("Pi原配置回执缺少完整双文件读回");
+        Set<String> expected=Set.of("settings.json","models.json");java.util.Set<String> observed=new java.util.HashSet<>();
+        JSONArray planned=plan.getJSONArray("filePlans");
+        for(int i=0;i<files.length();i++){
+            JSONObject file=files.getJSONObject(i);String path=file.optString("pathRef");
+            String digest="";for(int n=0;n<planned.length();n++)if(path.equals(planned.getJSONObject(n).optString("pathRef")))digest=planned.getJSONObject(n).optString("afterDigest");
+            if(!expected.contains(path)||!observed.add(path)||file.opt("matchesPlan")!=Boolean.TRUE||!file.optString("state").matches("READBACK_VERIFIED|COMMITTED")||!digest.matches("[a-f0-9]{64}|absent")||!digest.equals(file.optString("actualDigest")))throw new SecurityException("Pi原配置双文件尚未全部按准确计划读回；保持未决");
+        }
     }
     private JSONObject response(Window window)throws Exception {
         JSONObject result=new JSONObject().put("windowId",window.id).put("taskId",window.task).put("configurationOnly",true).put("executionAuthorized",false).put("runtimeVerified",false)
