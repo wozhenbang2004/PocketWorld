@@ -85,7 +85,7 @@ public final class NativeNormalCleanupTest {
     }
     @Test public void exactHistoricalContractsRemainValidWithoutRelabellingThemAsTheNewAlgorithm()throws Exception {
         assertNotEquals(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT);
-        for(String contract:List.of(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.DRAIN_V2_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT)){
+        for(String contract:List.of(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.DRAIN_V2_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.PRE_FORMAT_OWNER_V3_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT)){
             assertTrue(NativeProcessSupervisor.knownOrdinaryExitContract(contract));JSONObject proof=new JSONObject().put("nativeResultContract",contract).put("launchPhase","no_child_created").put("noChildCreated",true).put("processLaunched",false).put("processExited",false).put("exitCode",-1).put("terminationSignal",0).put("launchErrno",4).put("timedOut",false).put("processGroupAbsent",true).put("outputComplete",true);
             assertTrue(NativeProcessSupervisor.validatesNoChildReceipt(proof));assertEquals(contract,proof.getString("nativeResultContract"));assertFalse(NativeProcessSupervisor.validatesNoChildReceipt(new JSONObject(proof.toString()).put("processGroupAbsent",false)));assertFalse(NativeProcessSupervisor.validatesNoChildReceipt(new JSONObject(proof.toString()).put("nativeResultContract",contract+"-unknown")));
         }
@@ -97,13 +97,24 @@ public final class NativeNormalCleanupTest {
         var git=dev.pocketengine.features.local.project.ProjectGitImport.class.getDeclaredMethod("drainedSuccess",JSONObject.class);git.setAccessible(true);
         String task=UUID.randomUUID().toString(),run=UUID.randomUUID().toString(),operation=UUID.randomUUID().toString();
         var reference=new dev.pocketengine.features.skills.CompanionSkillBackend.ReceiptRef("owner","private",task,run,1,operation,"a".repeat(64),"b".repeat(64),"original_installation","original_workspace","original_revision",4096,4096);
-        for(String contract:List.of(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.DRAIN_V2_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT)){
+        for(String contract:List.of(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.DRAIN_V2_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.PRE_FORMAT_OWNER_V3_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT)){
             JSONObject row=new JSONObject().put("id",operation).put("status","completed").put("receiptReceived",true).put("processExited",true).put("resourcesReleased",true).put("processGroupAbsent",true).put("outputComplete",true).put("exitCode",0).put("nativeResultContract",contract)
                     .put("projectExecution",new JSONObject().put("taskId",task).put("runId",run).put("coordinatorEpoch",1).put("planDigest",reference.planDigest).put("intent",dev.pocketengine.features.skills.ManagedSkillBackend.INTENT));
             assertEquals(Boolean.TRUE,cache.invoke(null,row));assertEquals(Boolean.TRUE,git.invoke(null,row));assertTrue(RuntimeActivity.describe(operation,row,null,false).getBoolean("processTerminal"));
             assertEquals(dev.pocketengine.features.skills.SkillExecution.Status.COMPLETED,dev.pocketengine.features.skills.ManagedSkillBackend.receipt(reference,row).status);
             JSONObject unknown=new JSONObject(row.toString()).put("nativeResultContract",contract+"-unknown");assertEquals(Boolean.FALSE,cache.invoke(null,unknown));assertEquals(Boolean.FALSE,git.invoke(null,unknown));assertFalse(RuntimeActivity.describe(operation,unknown,null,false).getBoolean("processTerminal"));assertEquals(dev.pocketengine.features.skills.SkillExecution.Status.UNKNOWN,dev.pocketengine.features.skills.ManagedSkillBackend.receipt(reference,unknown).status);
             JSONObject held=new JSONObject(row.toString()).put("resourcesReleased",false);assertEquals(Boolean.FALSE,cache.invoke(null,held));assertEquals(Boolean.FALSE,git.invoke(null,held));assertFalse(RuntimeActivity.describe(operation,held,null,false).getBoolean("processTerminal"));assertEquals(dev.pocketengine.features.skills.SkillExecution.Status.UNKNOWN,dev.pocketengine.features.skills.ManagedSkillBackend.receipt(reference,held).status);assertEquals(contract,row.getString("nativeResultContract"));
+            // These are original unreleased facts, not a forged released receipt. The Skill adapter
+            // deliberately relies on upstream resourcesReleased; it is not a second cleanup verifier.
+            for(String missing:new String[]{"processGroupAbsent","outputComplete"}){
+                JSONObject incomplete=new JSONObject(row.toString()).put(missing,false).put("resourcesReleased",false);
+                assertEquals(dev.pocketengine.features.skills.SkillExecution.Status.UNKNOWN,dev.pocketengine.features.skills.ManagedSkillBackend.receipt(reference,incomplete).status);
+            }
+            JSONObject lostWait=new JSONObject(row.toString()).put("processExited",false).put("processGroupAbsent",false).put("outputComplete",false).put("resourcesReleased",false).put("exitCode",-1);
+            assertEquals(Boolean.FALSE,cache.invoke(null,lostWait));assertEquals(Boolean.FALSE,git.invoke(null,lostWait));assertEquals(dev.pocketengine.features.skills.SkillExecution.Status.UNKNOWN,dev.pocketengine.features.skills.ManagedSkillBackend.receipt(reference,lostWait).status);
+            JSONObject wrongIdentity=new JSONObject(row.toString()).put("id",UUID.randomUUID().toString());
+            assertThrows(SecurityException.class,()->dev.pocketengine.features.skills.ManagedSkillBackend.receipt(reference,wrongIdentity));
+
         }
     }
 }

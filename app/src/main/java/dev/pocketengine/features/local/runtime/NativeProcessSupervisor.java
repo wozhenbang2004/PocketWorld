@@ -9,9 +9,11 @@ import org.json.JSONObject;
 /** Own process-group transport. This has no task, approval, retry or model authority. */
 public final class NativeProcessSupervisor {
     /** Bound to the bundled process_supervisor.cpp ordinary protocol3 algorithm, not arbitrary JSON.
-     * Source SHA256 1c6845c201fde62f4435084b24e7763c10f1806c1797139b42b5d3a0c7dff47a.
+     * Source SHA256 3c8967680617531a1e3592eaf6078dc76093036b676bcd54785daa9ffd9a9c88.
      * Lost native wait ownership cannot establish group absence or invent a successful exit. */
-    public static final String EXIT_RESULT_CONTRACT="pocketworld.posix-exit7-owner-v3:1c6845c201fde62f4435084b24e7763c10f1806c1797139b42b5d3a0c7dff47a";
+    public static final String EXIT_RESULT_CONTRACT="pocketworld.posix-exit7-owner-v3:3c8967680617531a1e3592eaf6078dc76093036b676bcd54785daa9ffd9a9c88";
+    // Same v3 cleanup semantics, retained solely for receipts emitted by the pre-format source.
+    public static final String PRE_FORMAT_OWNER_V3_EXIT_RESULT_CONTRACT="pocketworld.posix-exit7-owner-v3:1c6845c201fde62f4435084b24e7763c10f1806c1797139b42b5d3a0c7dff47a";
     public static final String DRAIN_V2_EXIT_RESULT_CONTRACT="pocketworld.posix-exit7-drain-v2:102484ca83ac7225c45df1c1d8bc25a357e944017aea3eb24ccfe4957fc472d1";
     public static final String LEGACY_EXIT_RESULT_CONTRACT="pocketworld.posix-exit7-no-child-v1:cb2abfe8465e654402d1344d11345bb7f43047fecb3dd0220fed44e07ef0571f";
     public static final String PTY_EXIT_RESULT_CONTRACT="pocketworld.posix-pty-exit8-v1:f9132cee828fcbafd4252e71a139cb7c21839b1336111e1a762fab0afe487524";
@@ -69,7 +71,7 @@ public final class NativeProcessSupervisor {
     private static boolean integer(Object value,long expected){return (value instanceof Integer||value instanceof Long)&&((Number)value).longValue()==expected;}
     private static boolean positiveInteger(Object value){return (value instanceof Integer||value instanceof Long)&&((Number)value).longValue()>0&&((Number)value).longValue()<=Integer.MAX_VALUE;}
     /** Exact historical native contracts only. Callers still prove original host/job ownership. */
-    public static boolean knownOrdinaryExitContract(String contract){return EXIT_RESULT_CONTRACT.equals(contract)||DRAIN_V2_EXIT_RESULT_CONTRACT.equals(contract)||LEGACY_EXIT_RESULT_CONTRACT.equals(contract);}
+    public static boolean knownOrdinaryExitContract(String contract){return EXIT_RESULT_CONTRACT.equals(contract)||PRE_FORMAT_OWNER_V3_EXIT_RESULT_CONTRACT.equals(contract)||DRAIN_V2_EXIT_RESULT_CONTRACT.equals(contract)||LEGACY_EXIT_RESULT_CONTRACT.equals(contract);}
     private static final class Library {
         static final Throwable ERROR;
         static {
