@@ -49,6 +49,20 @@ class ComposeActivity : ComponentActivity() {
         controller.completeExport(if (result.resultCode == Activity.RESULT_OK) result.data?.data else null, exportPath)
         exportPath = null
     }
+    private val workingFilePickers = linkedMapOf<String, androidx.activity.result.ActivityResultLauncher<Array<String>>>()
+    internal fun cancelProjectWorkingFile(nonce: String) { workingFilePickers.remove(nonce)?.unregister() }
+    internal fun pickProjectWorkingFile(nonce: String) {
+        require(nonce.matches(Regex("[a-f0-9-]{36}")))
+        var delivered = false
+        val launcher = activityResultRegistry.register("owner_working_file_$nonce", ActivityResultContracts.OpenDocument()) { uri ->
+            delivered = true
+            workingFilePickers.remove(nonce)?.unregister()
+            controller.projectFileImports.result(nonce, uri)
+        }
+        if (delivered) { launcher.unregister(); return }
+        workingFilePickers[nonce] = launcher
+        try { launcher.launch(arrayOf("*/*")) } catch (failed: RuntimeException) { workingFilePickers.remove(nonce)?.unregister(); throw failed }
+    }
     private val projectSourceTreePicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> controller.projectPackages.importResult(uri) }
     internal fun pickProjectSourceDirectory() {
         try { projectSourceTreePicker.launch(null) }
@@ -86,8 +100,8 @@ class ComposeActivity : ComponentActivity() {
         deliverAccountEntry(intent)
         deliverCompatibilityChat(intent)
     }
-    override fun onResume() { super.onResume(); if (::webHost.isInitialized) webHost.resume(); if (::controller.isInitialized) controller.notificationPreviewsForeground(true); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.foreground(true); controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
-    override fun onPause() { if (::webHost.isInitialized) webHost.pause(); if (::controller.isInitialized) controller.notificationPreviewsForeground(false); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.projectGitImports.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
+    override fun onResume() { super.onResume(); if (::webHost.isInitialized) webHost.resume(); if (::controller.isInitialized) controller.notificationPreviewsForeground(true); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.foreground(true); controller.projectFileImports.foreground(true);controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
+    override fun onPause() { if (::webHost.isInitialized) webHost.pause(); if (::controller.isInitialized) controller.notificationPreviewsForeground(false); (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectFileImports.foreground(false);controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.projectGitImports.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
     override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); if (::controller.isInitialized) controller.notificationPreviewsFocus(hasFocus) }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent); deliverAccountEntry(intent); deliverCompatibilityChat(intent) }
     private fun deliverCompatibilityChat(intent: Intent?) {
@@ -179,5 +193,5 @@ class ComposeActivity : ComponentActivity() {
         controller.projectGitImports.save(outState)
         super.onSaveInstanceState(outState)
     }
-    override fun onDestroy() { if (::webHost.isInitialized) webHost.close(); if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }
+    override fun onDestroy() { if (::webHost.isInitialized) webHost.close(); workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }
 }
