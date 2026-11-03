@@ -160,6 +160,12 @@
     "helpers": [],
     "description": "Actual selected checkout reads, SHA-pinned native literal/glob search and bounded merged context windows; no Android filesystem/provider/SAF/SSH/device acceptance. Explicit source-file hex/ASCII read windows keep byte offsets and whole-file SHA, at most2KiB per page; no binary write authority or decoder claim. Exact-source binary pattern search uses bounded streaming KMP, overlap-safe byte cursors and explicit scan/result budgets, not AST/text decoding or file writes. Explicit exclude glob filters relative file paths before content/hash read, consumes the original2000-entry enumeration bound and is cursor-bound; omitted/empty masks preserve legacy query identity. No hidden/cache/provider permission changes. Direct physical source directory metadata listing includes empty directories and ordinary files, no body/hash read or recursive walk. Two bounded <=2000-entry scans pin metadata digest/cursor, <=40 entries and12KiB/page; hidden/dependency/build exclusions spend enumeration budget, links/specials never followed and omissions explicit. No cross-provider or atomic content-version claim."
   },
+  "browser-owner-admission": {
+    "class": "dev.pocketengine.browser.BrowserTaskHostAdmissionTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Targeted original App/TaskStore monitor-order and same-run private-owner browser admission races; no model, device or renderer acceptance."
+  },
   "browser-expression": {
     "class": "dev.pocketengine.browser.BrowserPageProgramsTest",
     "additionalClasses": [
