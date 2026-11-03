@@ -754,7 +754,7 @@ public final class AssistantModule implements EngineModule {
         });
     }
     private JSONArray list()throws Exception{
-        if(durable())return historyRepository.read(()->historyRepository.list("",20).getJSONArray("conversations"));
+        if(durable())return historyRepository.ownerOrganization("list",new JSONObject().put("limit",20).put("archive","all")).getJSONArray("conversations");
         synchronized(storage){healthy();JSONArray rows=new JSONArray();for(int i=0;i<conversations.length();i++){JSONObject c=conversations.getJSONObject(i);rows.put(new JSONObject().put("conversationId",c.getString("conversationId")).put("title",c.optString("title")).put("updatedAt",c.optLong("updatedAt",c.optLong("createdAt"))));}return rows;}
     }
     private JSONObject newMessage(String conversationId,String role,String text,ModelConfig config)throws Exception{

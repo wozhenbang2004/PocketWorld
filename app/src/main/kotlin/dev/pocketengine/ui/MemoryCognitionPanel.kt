@@ -74,40 +74,42 @@ import org.json.JSONObject
 private fun cognitionRows(rows: JSONArray?): List<JSONObject> = if (rows == null) emptyList() else (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
 
 /** Same existing inline fields/buttons/selection hierarchy, inside the private cognition review. */
-@Composable private fun MemoryOwnerHistorySearch(
+@Composable internal fun MemoryOwnerHistorySearch(
     responses: Map<String, JSONObject>, evidenceVersion: String, enabled: Boolean,
     request: (String, JSONObject) -> String, onClearEvidence: () -> Unit,
-    onEvidence: (JSONObject) -> Unit, onSubject: (String) -> Unit
+    onEvidence: ((JSONObject) -> Unit)?, onSubject: ((String) -> Unit)?,
+    displayedScope: JSONObject? = null, onOriginalSource: ((JSONObject) -> Unit)? = null
 ) {
-    var query by remember { mutableStateOf("") }
-    var requestedQuery by remember { mutableStateOf("") }
-    var reading by remember { mutableStateOf<String?>(null) }
-    var recordReading by remember { mutableStateOf<String?>(null) }
-    var page by remember { mutableStateOf<JSONObject?>(null) }
-    var header by remember { mutableStateOf<JSONObject?>(null) }
-    var record by remember { mutableStateOf<JSONObject?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val live = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
+    val scopeKey = (displayedScope?.optString("ownerId") ?: "owner") + ":" + (displayedScope?.optString("spaceId") ?: "private")
+    var query by remember(scopeKey) { mutableStateOf("") }
+    var requestedQuery by remember(scopeKey) { mutableStateOf("") }
+    var reading by remember(scopeKey) { mutableStateOf<String?>(null) }
+    var recordReading by remember(scopeKey) { mutableStateOf<String?>(null) }
+    var page by remember(scopeKey) { mutableStateOf<JSONObject?>(null) }
+    var header by remember(scopeKey) { mutableStateOf<JSONObject?>(null) }
+    var record by remember(scopeKey) { mutableStateOf<JSONObject?>(null) }
+    var error by remember(scopeKey) { mutableStateOf<String?>(null) }
+    val live = remember(scopeKey) { java.util.concurrent.atomic.AtomicBoolean(true) }
     val currentEvidence by rememberUpdatedState(evidenceVersion)
-    DisposableEffect(Unit) { onDispose { live.set(false) } }
+    DisposableEffect(scopeKey) { onDispose { live.set(false) } }
     fun clear() { reading = null; recordReading = null; page = null; header = null; record = null; error = null; onClearEvidence() }
     fun send(command: String, input: JSONObject): String? = try { request(command, input) } catch (failed: Exception) { error = failed.message ?: "原生旧事查阅未开始"; null }
     fun search(cursor: String) { requestedQuery = query.trim(); error = null; header = null; record = null; recordReading = null; onClearEvidence(); reading = send("searchHistory", JSONObject().put("query", requestedQuery).put("cursor", cursor).put("limit", 12)) }
-    LaunchedEffect(evidenceVersion) { clear() }
+    LaunchedEffect(evidenceVersion, scopeKey) { clear() }
     LaunchedEffect(responses) {
         reading?.let { id -> MemoryLearningReviewGuard.exactEnvelope(id, responses["searchHistory"])?.let { envelope ->
-            page = MemoryHistoryReviewGuard.page(id, requestedQuery, envelope)
+            page = MemoryHistoryReviewGuard.page(id, requestedQuery, envelope, displayedScope)
             error = if (!envelope.optBoolean("ok")) envelope.optString("error", "旧事来源暂不可核，请稍后重搜") else if (page == null) "旧事结果已过期或不属于本次搜索，请重新读取。" else null
             reading = null
         } }
         recordReading?.let { id -> MemoryLearningReviewGuard.exactEnvelope(id, responses["readHistoryRecord"])?.let { envelope ->
-            record = MemoryHistoryReviewGuard.record(id, header, envelope)
+            record = MemoryHistoryReviewGuard.record(id, header, envelope, displayedScope)
             error = if (!envelope.optBoolean("ok")) envelope.optString("error", "确切旧版本不可读") else if (record == null) "旧事版本已变化，请重新搜索。" else null
             recordReading = null
         } }
     }
     Text("查旧事只读仍保留、原来源可核的版本，不改变当前认知；存储摘要不是原始证据。", fontSize = 12.sp)
-    OutlinedTextField(query, { query = it; clear() }, label = { Text("旧事关键词 / 记载日期，如2023-04-06") }, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(query, { query = it; clear() }, label = { Text("旧事关键词 / 记载日期（UTC），如2023-04-06") }, modifier = Modifier.fillMaxWidth())
     val capturedQuery = query.trim(); val capturedEvidence = evidenceVersion
     TextButton(onClick = { if (live.get() && enabled && currentEvidence == capturedEvidence && query.trim() == capturedQuery) search("") }, enabled = enabled && reading == null && query.length <= 500) { Text("查旧事（只读）") }
     if (reading != null || recordReading != null) Text("正在核对旧版本与原来源…", fontSize = 12.sp)
@@ -138,10 +140,13 @@ private fun cognitionRows(rows: JSONArray?): List<JSONObject> = if (rows == null
         Text("记载事件：" + historyDate(assertion?.opt("eventTime")) + " · 保存：" + historyDate(selected.opt("createdAt")), fontSize = 11.sp)
         val spans = cognitionRows(assertion?.optJSONArray("evidenceSpans"))
         if (spans.isEmpty()) Text("未附确切原文span；本页只能证明保存了这段记忆，不能把摘要当原件。", fontSize = 12.sp)
-        spans.forEach { span ->
-            TextButton(onClick = { if (live.get() && enabled && currentEvidence == capturedEvidence && query.trim() == requestedQuery && record?.optString("id") == selected.optString("id") && record?.optLong("revision") == selected.optLong("revision")) onEvidence(JSONObject(span.toString())) }, enabled = enabled) { Text("回读这条旧事的确切原句与hash") }
+        if (onEvidence != null) spans.forEach { span ->
+            TextButton(onClick = { if (live.get() && enabled && currentEvidence == capturedEvidence && query.trim() == requestedQuery && record?.optString("id") == selected.optString("id") && record?.optLong("revision") == selected.optLong("revision")) onEvidence?.invoke(JSONObject(span.toString())) }, enabled = enabled) { Text("回读这条旧事的确切原句与hash") }
         }
-        assertion?.optString("subjectId")?.takeIf { it.isNotBlank() }?.let { id -> TextButton(onClick = { if (live.get() && enabled && currentEvidence == capturedEvidence && query.trim() == requestedQuery && record?.optString("id") == selected.optString("id") && record?.optLong("revision") == selected.optLong("revision")) onSubject(id) }, enabled = enabled) { Text("查看此主体当前与历史的对照") } }
+        if (onOriginalSource != null) cognitionRows(selected.optJSONArray("sourceRefs")).forEach { source ->
+            TextButton(onClick = { if (live.get() && enabled && currentEvidence == capturedEvidence && query.trim() == requestedQuery && record?.optString("id") == selected.optString("id") && record?.optLong("revision") == selected.optLong("revision")) onOriginalSource(JSONObject(source.toString())) }, enabled = enabled) { Text("回读原选来源范围（非原话认证）") }
+        }
+        if (onSubject != null) assertion?.optString("subjectId")?.takeIf { it.isNotBlank() }?.let { id -> TextButton(onClick = { if (live.get() && enabled && currentEvidence == capturedEvidence && query.trim() == requestedQuery && record?.optString("id") == selected.optString("id") && record?.optLong("revision") == selected.optLong("revision")) onSubject?.invoke(id) }, enabled = enabled) { Text("查看此主体当前与历史的对照") } }
     }
 }
 private fun historyStatus(value: String): String = when (value) { "historical" -> "历史版本（不是现在的事实）"; "current" -> "当前记录（只读查阅）"; "pending_conflict" -> "冲突待核（不选作现实答案）"; else -> "主体 / 发生时间未记载" }

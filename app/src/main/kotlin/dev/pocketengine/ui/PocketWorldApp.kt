@@ -79,6 +79,10 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
     var selectedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     var taskMemorySearch by remember { mutableStateOf(false) }
     var conversationPicker by rememberSaveable { mutableStateOf(false) }
+    var conversationRename by remember { mutableStateOf<ConversationHistory.Item?>(null) }
+    var conversationRenameBusy by remember { mutableStateOf(false) }
+    var conversationManageMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(controller.conversationOrganizationOwnerVisible) { if (!controller.conversationOrganizationOwnerVisible) { conversationRename = null; conversationRenameBusy = false; conversationManageMessage = null } }
     var projectDialog by rememberSaveable { mutableStateOf(false) }
     var fileDialog by rememberSaveable { mutableStateOf(false) }
     var phoneDraft by rememberSaveable { mutableStateOf("") }
@@ -241,9 +245,19 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
         if (state.backgroundSetupOpen) BackgroundPhoneSetup(state, controller)
         if (conversationPicker) ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = { conversationPicker = false }, containerColor = Color.White) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp).navigationBarsPadding()) {
-                ConversationHistoryBrowser(state.conversations.map { ConversationHistory.Item(it.id, it.title, it.updatedAt) }, state.conversationId, state.chatBusy || state.chatSubmitting,
-                    { controller.openConversation(it); conversationPicker = false }, { controller.newConversation(); conversationPicker = false }, allowReadWhenBlocked = true)
+                ConversationHistoryBrowser(state.conversations.map(controller::conversationOrganizationItem), state.conversationId, state.chatBusy || state.chatSubmitting,
+                    { controller.openConversation(it); conversationPicker = false }, { controller.newConversation(); conversationPicker = false }, allowReadWhenBlocked = true,
+                    onRename = { conversationManageMessage = null; conversationRename = it },
+                    onPin = { item -> conversationManageMessage = null; controller.organizeConversation(item.id, item.organizationRevision, null, item.pinOrder <= 0) { _, error -> conversationManageMessage = error ?: if (item.pinOrder > 0) "已取消置顶；没有启动任务。" else "已置顶；没有启动任务。" } },
+                    managementBusy = !controller.conversationOrganizationOwnerVisible || state.moduleBusy.any { it.startsWith("assistant.organization:") })
+                conversationManageMessage?.let { Text(it, fontSize = 12.sp, color = SecondaryInk) }
             }
+        }
+        conversationRename?.let { item ->
+            EditableNameDialog("修改对话名称", "对话名称", item.title, { if (!conversationRenameBusy) conversationRename = null }, { title ->
+                conversationRenameBusy = true; conversationManageMessage = null
+                controller.organizeConversation(item.id, item.organizationRevision, title, null) { _, error -> conversationRenameBusy = false; conversationManageMessage = error; if (error == null) conversationRename = null }
+            }, initial = item.title, confirmLabel = "保存名称", busy = conversationRenameBusy, error = conversationManageMessage, maxChars = 120)
         }
         if (projectDialog) NameDialog("新建项目", "项目名称", "例如：我的小工具", { projectDialog = false }) { name -> controller.createProject(name); projectDialog = false }
         if (fileDialog) NameDialog("新建文件", "项目内路径", "例如：src/main.py", { fileDialog = false }) { name -> controller.newFile(name); fileDialog = false }
@@ -1048,7 +1062,13 @@ private fun EmptyState(title: String, subtitle: String) { Column(Modifier.fillMa
 @Composable
 private fun CompactTask(task: UiTask, open: () -> Unit) { Column(Modifier.fillMaxWidth().clip(Rounded).background(Soft).clickable(onClick = open).padding(14.dp)) { Text(taskStatus(task.status), color = SecondaryInk, fontSize = 11.sp); Text(task.goal, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp)) } }
 @Composable
-private fun NameDialog(title: String, label: String, example: String, close: () -> Unit, save: (String) -> Unit) { var value by rememberSaveable { mutableStateOf("") }; AlertDialog(onDismissRequest = close, containerColor = Color.White, title = { Text(title) }, text = { OutlinedTextField(value, { value = it }, label = { Text(label) }, placeholder = { Text(example) }, singleLine = true, shape = RoundedCornerShape(13.dp)) }, confirmButton = { Button(onClick = { save(value) }, enabled = value.isNotBlank()) { Text("创建") } }, dismissButton = { TextButton(onClick = close) { Text("取消") } }) }
+private fun NameDialog(title: String, label: String, example: String, close: () -> Unit, save: (String) -> Unit) = EditableNameDialog(title, label, example, close, save)
+
+@Composable
+internal fun EditableNameDialog(title: String, label: String, example: String, close: () -> Unit, save: (String) -> Unit, initial: String = "", confirmLabel: String = "创建", busy: Boolean = false, error: String? = null, maxChars: Int = Int.MAX_VALUE) {
+    var value by rememberSaveable(initial) { mutableStateOf(initial) }
+    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text(title) }, text = { Column { OutlinedTextField(value, { if (it.length <= maxChars) value = it }, label = { Text(label) }, placeholder = { Text(example) }, singleLine = true, enabled = !busy, shape = RoundedCornerShape(13.dp)); error?.let { Text(it, fontSize = 12.sp, color = Danger) } } }, confirmButton = { Button(onClick = { save(value) }, enabled = !busy && value.isNotBlank() && value.length <= maxChars) { Text(if (busy) "保存中" else confirmLabel) } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
+}
 @Composable
 private fun TaskImage(task: UiTask) { val url = task.raw.optJSONObject("evidence")?.optString("imageDataUrl").orEmpty(); val bitmap = remember(url) { try { if (!url.startsWith("data:image/jpeg;base64,") && !url.startsWith("data:image/png;base64,")) null else { val data = Base64.decode(url.substringAfter(','), Base64.DEFAULT); if (data.size > 4_000_000) null else BitmapFactory.decodeByteArray(data, 0, data.size) } } catch (_: Exception) { null } }; if (bitmap != null) { Text("结果截图", fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(top = 22.dp, bottom = 10.dp)); androidx.compose.foundation.Image(bitmap.asImageBitmap(), contentDescription = "本任务保存的结果截图", modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp).clip(Rounded)) } }
 @Composable

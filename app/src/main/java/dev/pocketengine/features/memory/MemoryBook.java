@@ -1261,14 +1261,20 @@ public final class MemoryBook {
     }
     /** Native owner review only. Historical inspection never enters active recall or a task grant. */
     synchronized JSONObject searchHistoryForOwner(String query,String cursor,int limit)throws Exception {
-        Scope scope=Scope.from(ownerScopeValue());long now=System.currentTimeMillis();Set<String> eligible=historyEligible(scope,now);Map<String,String> statuses=MemoryAssertion.statuses(records.values(),eligible,now,assertionFences);
+        return searchHistoryForScope(Scope.from(ownerScopeValue()),query,cursor,limit);
+    }
+    private JSONObject searchHistoryForScope(Scope scope,String query,String cursor,int limit)throws Exception {
+        long now=System.currentTimeMillis();Set<String> eligible=historyEligible(scope,now);Map<String,String> statuses=MemoryAssertion.statuses(records.values(),eligible,now,assertionFences);
         List<JSONObject> rows=new ArrayList<>();int archives=0;for(JSONObject row:records.values())if(scope.matches(row)){if(row.optBoolean("archiveOnly"))archives++;if(eligible.contains(row.getString("id")))rows.add(row);}
         JSONObject result=MemoryHistoryPage.search(rows,statuses,query,cursor,limit);Set<String> current=historyEligible(scope,System.currentTimeMillis());Map<String,String> actual=MemoryAssertion.statuses(records.values(),current,System.currentTimeMillis(),assertionFences);JSONArray matches=result.getJSONArray("matches");
         for(int i=0;i<matches.length();i++){JSONObject hit=matches.getJSONObject(i),row=records.get(hit.getString("id"));if(row==null||!scope.matches(row)||!current.contains(hit.getString("id"))||row.getLong("revision")!=hit.getLong("revision")||!hit.getString("temporalStatus").equals(actual.getOrDefault(hit.getString("id"),"untyped_time_unknown")))throw new SecurityException("旧事来源或版本在读取期间已变化，请重新搜索");}
-        return result.put("scope",ownerScopeValue()).put("unverifiedArchiveRecords",archives).put("archiveOnlyActivated",false).put("sourceCurrentChecked",true);
+        return result.put("scope",newScope(scope.ownerId,scope.spaceId)).put("unverifiedArchiveRecords",archives).put("archiveOnlyActivated",false).put("sourceCurrentChecked",true);
     }
     synchronized JSONObject readHistoryRecordForOwner(String id,long revision)throws Exception {
-        Scope scope=Scope.from(ownerScopeValue());JSONObject row=require(scope,id);if(row.getLong("revision")!=revision)throw new IllegalStateException("旧事版本已变化，请重新搜索");
+        return readHistoryRecordForScope(Scope.from(ownerScopeValue()),id,revision);
+    }
+    private JSONObject readHistoryRecordForScope(Scope scope,String id,long revision)throws Exception {
+        JSONObject row=require(scope,id);if(row.getLong("revision")!=revision)throw new IllegalStateException("旧事版本已变化，请重新搜索");
         long now=System.currentTimeMillis();Set<String> eligible=historyEligible(scope,now);String status=MemoryAssertion.statuses(records.values(),eligible,now,assertionFences).getOrDefault(id,"untyped_time_unknown");
         if(!eligible.contains(id)||!MemoryHistoryPage.inspectable(status))throw new SecurityException("旧事缺少当前可核原来源，未从旧摘要或归档恢复读取权");JSONObject result=viewRecord(row).put("temporalStatus",status).put("readOnlyHistory",true).put("memoryTextIsOriginalEvidence",false);
         long checkedAt=System.currentTimeMillis();Set<String> current=historyEligible(scope,checkedAt);String actual=MemoryAssertion.statuses(records.values(),current,checkedAt,assertionFences).getOrDefault(id,"untyped_time_unknown");
@@ -1930,6 +1936,15 @@ public final class MemoryBook {
             case "snapshot":return new JSONObject().put("available",true).put("scope",new JSONObject(scope.toString())).put("records",list(scope)).put("candidates",listCandidates(scope)).put("cognitionRevision",cognitionRevision(scope)).put("automaticLearning",false).put("taskContextSupported",false).put("nativeCapabilities",new JSONObject().put("acceptCandidate",true).put("candidateCapacity",true).put("listCandidateHistory",true).put("archiveCandidates",true).put("reconsiderRejected",true).put("forgetReviewed",true).put("openSource",true).put("projectModelConsolidation",false)).put("executionAuthorized",false);
             case "list":return new JSONObject().put("records",list(scope));
             case "search":return new JSONObject().put("records",search(scope,input.optString("query"),Math.max(1,Math.min(100,input.optInt("limit",20)))));
+            case "searchHistory":{
+                for(var keys=input.keys();keys.hasNext();)if(!Set.of("query","cursor","limit").contains(keys.next()))throw new SecurityException("项目旧事只接受检索条件，原生选择不是JSON权限");
+                long limit=input.has("limit")?SourceRef.integer(input,"limit",1):12;if(limit>20)throw new IllegalArgumentException("旧事每页最多20条");
+                return searchHistoryForScope(Scope.from(scope),input.optString("query",""),input.optString("cursor",""),(int)limit);
+            }
+            case "readHistoryRecord":{
+                for(var keys=input.keys();keys.hasNext();)if(!Set.of("id","revision").contains(keys.next()))throw new SecurityException("项目旧事回读只能选择原记录及确切版本");
+                return readHistoryRecordForScope(Scope.from(scope),input.getString("id"),SourceRef.integer(input,"revision",1));
+            }
             case "get":return new JSONObject().put("record",get(scope,input.getString("id")));
             case "candidateCapacity":return candidateCapacity(scope);
             case "listCandidateHistory":return new JSONObject().put("history",listCandidateHistory(scope));
