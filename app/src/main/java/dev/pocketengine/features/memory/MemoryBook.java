@@ -1018,6 +1018,18 @@ public final class MemoryBook {
         JSONObject state=sources.get(ref.key());
         return sourceForgotten(scope,ref,state);
     }
+    /** Native answer navigation must not evade an old exact-range forget fence by choosing a
+     * different range of the same retained event. This reads the original tombstones only. */
+    public synchronized boolean isSavedEventForgotten(JSONObject authenticatedScope,String task,String run,long sequence,String eventRevision)throws Exception {
+        Scope scope=learningScope(authenticatedScope);
+        if(!"owner".equals(scope.ownerId)||!"private".equals(scope.spaceId)||!TaskStoreMemoryQuery.validTaskId(task)||!TaskStoreMemoryQuery.validTaskId(run)||sequence<1||eventRevision==null||!eventRevision.matches("[a-f0-9]{64}"))throw new SecurityException("原保存事件遗忘查询身份无效");
+        String prefix="task:"+task+":run:"+run+":saved:"+sequence+":"+eventRevision+":range:";
+        for(JSONObject state:sources.values()){
+            SourceRef ref=SourceRef.fromJson(state);
+            if("task_evidence".equals(ref.kind)&&scope.acceptsSource(ref)&&ref.revision==sequence&&ref.sourceId.startsWith(prefix)&&sourceForgotten(scope,ref,state))return true;
+        }
+        return false;
+    }
     /** Native passive archive projection only. Absence is unknown, never a fresh source grant. */
     public synchronized boolean isOwnerExperienceSourceBlocked(JSONObject authenticatedScope,SourceRef ref)throws Exception {
         Scope scope=learningScope(authenticatedScope);if(ref==null||!ref.belongsTo(scope))throw new SecurityException("原经历来源不能跨空间查询");

@@ -985,5 +985,51 @@
       "dev.pocketengine.features.local.project.ProjectGitNativeJourneyTest",
       "dev.pocketengine.features.local.project.ProjectGitPolicyTest"
     ]
+  },
+  "model-quality-routing": {
+    "class": "dev.pocketengine.store.StepModelRoutingNativeJourneyTest",
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "description": "Original native SettingsStore/catalog, SQL TaskStore, AgentRunner and Gateway with actual loopback physical requests: opt-in, source revision, rejected risky proposal, revoked callback, definite failure, interrupted stream and duplicate owner request. No device acceptance.",
+    "robolectric": true
+  },
+  "model-quality-observability": {
+    "class": "dev.pocketengine.store.NativeDiagnosticsJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.usage.UsageTrendProjectionTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original SQL physical-receipt trends with owner scope, unknown values and timezones; default-off redacted diagnostics, bounded private storage, generation invalidation, actual loopback OTLP partial/cancel/duplicate export. No live collector or device acceptance."
+  },
+  "model-evaluation": {
+    "class": "dev.pocketengine.features.evaluation.EvaluationNativeJourneyTest",
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "native": false,
+    "description": "Original TaskStore/Runner/Gateway synthetic evaluation with independent file/operation probes, tune-holdout separation, fixed identity, source revisions, cancel/stale/duplicate requests, false success and unknown effects. Loopback model fixture, not provider or real-app acceptance."
+  },
+  "model-quality-sources": {
+    "class": "dev.pocketengine.browser.FinalAnswerSourcesNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.memory.FinalAnswerSourceReadCancellationTest",
+      "dev.pocketengine.browser.BrowserStepReadSourceCurrentTest",
+      "dev.pocketengine.features.memory.FinalAnswerSourcesBoundaryTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserSemanticReadSqlTest",
+      "dev.pocketengine.browser.BrowserSemanticReadTest",
+      "dev.pocketengine.browser.BrowserTaskPersistenceTest",
+      "dev.pocketengine.browser.BrowserTaskSpaceTest",
+      "dev.pocketengine.browser.BrowserProfileCapabilityBindingTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original Runner/HTTP gateway/browser source port/SQL/native owner reader: exact retained text across old runs, forget and revision fences, partial sources, stale or cancelled callbacks, frame identity, unknown operations and output ranges. Controlled DOM/phone/model fixtures, not device or live website proof. Original final-answer boundary accepts only the exact native post-answer observation envelope and rejects new owner/tool/unknown tails."
   }
 }

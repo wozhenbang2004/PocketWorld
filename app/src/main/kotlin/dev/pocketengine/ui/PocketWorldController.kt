@@ -574,6 +574,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun closePluginCatalogPage(page: dev.pocketengine.features.NativePluginHost.Page) { page.close(); if (pluginCatalogPage === page) pluginCatalogPage = null }
     fun runPluginCatalogWork(work: Runnable) { if (closed) throw java.util.concurrent.RejectedExecutionException(); io.execute(work) }
+    /** Read-only native source navigation; callers use the existing bounded IO worker. */
+    fun readFinalAnswerSources(request: JSONObject, control: dev.pocketengine.core.RunControl): JSONObject {
+        if (closed) throw java.util.concurrent.RejectedExecutionException()
+        control.check()
+        return app.nativeOwnerWorkflows.answerSources(request, control)
+    }
     fun preparePluginRuntime() {
         if (closed || pluginRuntime.optString("status") == "preparing") return
         pluginRuntime = JSONObject().put("status", "preparing").put("message", "正在核对已安装WebView和隔离能力。")
@@ -618,6 +624,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     var groupTaskReady by mutableStateOf(false)
         private set
     fun enterGroupTask(taskId: String): String {
+        closeNativeEvaluation()
         projectGit.deactivate()
         projectFileImports.deactivate()
         projectPackages.leavePrivate()
@@ -798,7 +805,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun enterOwnerDomain(domain: String) {
         if (domain !in setOf("memoryReview", "taskMemory", "mcp", "accounts", "learning", "groups", "channelMedia")) return
-        if (domain == "groups") { projectGit.deactivate();projectFileImports.deactivate();projectPackages.leavePrivate(); closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null) }
+        if (domain == "groups") { closeNativeEvaluation();projectGit.deactivate();projectFileImports.deactivate();projectPackages.leavePrivate(); closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null) }
         ownerDomain = domain
         if (domain == "channelMedia") { channelMediaWindow?.close(); channelMediaReview = null; channelMediaWindow = nativeChannelModule().openOwnerMediaWindow(activity) }
         if (domain == "groups") try { groupOwnerWindow = app.groupOwnerWorkflows.open(activity) } catch (error: Exception) { state = state.copy(ownerErrors = state.ownerErrors + (domain to message(error))) }
@@ -1139,7 +1146,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun attach() { app.addObserver(observer);loadOwnerComposer(); refresh() }
     /** Native owner action; the host resolves the existing original control, never payload authority. */
 
-    fun detach() { projectFileImports.detach();synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
+    fun detach() { projectFileImports.detach();synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeEvaluation();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
     fun refresh() { authorizationOpening = null; ownerDomain?.let { requestOwnerDomain(it, "snapshot") }; native("getState"); native("getFeatures"); native("rescheduleAutomation"); feature("assistant", "list") }
     fun suggestInput(text: String, phoneTask: Boolean? = null) {
         if (text.isNotBlank()) state = state.copy(suggestedInputRevision = state.suggestedInputRevision + 1, suggestedInput = text, suggestedPhoneTask = phoneTask)
@@ -1214,6 +1221,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun speak(text: String) { if (voiceInput.active()||voiceInput.leaseHeld()||realtimeOwnsAudio()) state = state.copy(error = "语音正在使用音频，请先结束后再朗读") else activity.media.speak(text) }
     fun stopSpeaking() { activity.media.stopSpeaking() }
     fun realtimeForeground(visible: Boolean) {
+        if (!visible) closeNativeEvaluation()
         voiceForeground=visible;if(!visible)voiceInputModeChanged()
         (app.features.module("channels") as? dev.pocketengine.features.channels.ChannelsModule)?.setNativeOwnerForeground(activity, visible)
         if (!visible && channelMediaWindow != null) leaveOwnerDomain("channelMedia")
@@ -2144,10 +2152,36 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         native("featureRequest", JSONObject().put("feature", feature).put("command", command).put("payload", payload).put("requestId", id))
         return id
     }
+    internal var nativeEvaluationOpen by mutableStateOf(false)
+        private set
+    private var nativeEvaluationPage: dev.pocketengine.features.evaluation.NativeEvaluationHost.Page? = null
+    private var nativeEvaluationEpoch = 0L
+    fun openNativeEvaluation() {
+        if (closed || !privateWorkspaceView()) return
+        nativeEvaluationPage?.close()
+        nativeEvaluationPage = app.nativeEvaluations().openPage()
+        nativeEvaluationEpoch++; nativeEvaluationOpen = true
+    }
+    fun closeNativeEvaluation() { nativeEvaluationEpoch++; nativeEvaluationOpen = false; nativeEvaluationPage?.close(); nativeEvaluationPage = null }
+    internal fun evaluationCommand(command: String, input: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        val page = nativeEvaluationPage ?: return
+        val epoch = nativeEvaluationEpoch
+        if (closed || !nativeEvaluationOpen || !privateWorkspaceView()) return
+        try {
+            (if (command == "cancel") controls else io).execute {
+                val result = runCatching { page.command(command, JSONObject(input.toString())) }
+                main.post {
+                    if (!closed && nativeEvaluationOpen && nativeEvaluationPage === page && epoch == nativeEvaluationEpoch && privateWorkspaceView())
+                        result.fold({ done(it, null) }, { done(null, message(it)) })
+                }
+            }
+        } catch (failure: Exception) { done(null, message(failure)) }
+    }
     internal var nativeInferenceHistoryOpen by mutableStateOf(false)
         private set
+    internal val modelDiagnostics by lazy { ModelDiagnosticsUi(app.nativeDiagnostics(),io,main) { !closed && nativeInferenceHistoryOpen && privateWorkspaceView() } }
     fun openNativeInferenceHistory(){if(!closed&&privateWorkspaceView())nativeInferenceHistoryOpen=true}
-    fun closeNativeInferenceHistory(){nativeInferenceHistoryOpen=false}
+    fun closeNativeInferenceHistory(){nativeInferenceHistoryOpen=false;modelDiagnostics.close()}
     internal fun readNativeInferenceHistory(cursor:String,done:(JSONObject?,String?)->Unit){
         if(closed||!privateWorkspaceView())return
         io.execute{val result=runCatching{app.tasks.nativeInferenceUsagePage(cursor,40)};main.post{if(!closed&&nativeInferenceHistoryOpen&&privateWorkspaceView())result.fold({done(it,null)},{done(null,message(it))})}}

@@ -198,6 +198,10 @@ public final class HostToolSupervisor implements CapabilityPort {
         String expected=admittedReferences;long generation=admittedMemoryRevision;boolean temporary=admittedWorkingMemory;JSONObject current=contextSnapshot(referenceQuery);memorySelection=originalSelection;
         return temporary==admittedWorkingMemory&&generation==host.memoryContextRevision()&&expected.equals(TaskStore.capabilityFingerprint(current.getJSONObject("referenceValidation")));
     }
+    @Override public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl original)throws Exception{
+        if(original==null||!original.matchesHostRun(taskId,runId,epoch))return false;original.check();
+        return nativeDevicePort!=null&&nativeDevicePort.supports(tool)&&nativeDevicePort.stepReadSourceCurrent(tool,receipt,original);
+    }
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl original)throws Exception{
         if(workProfile!=null)workProfile.checkCurrent();host.checkTeamResearchParentInputs(taskId,runId,epoch,original);
         validateToolMemorySelections(original);

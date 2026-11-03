@@ -500,7 +500,9 @@ class HostTestEntrypointTest(unittest.TestCase):
         host_job = workflow.split('  host-tests:\n', 1)[1]
         self.assertIn("github.event_name == 'workflow_dispatch'", host_job)
         self.assertIn("inputs.target == 'host-tests'", host_job)
-        self.assertNotIn('matrix:', host_job)
+        # Manual selection remains a single job; only this explicit PR has two bounded batches.
+        self.assertEqual(1, host_job.count('      matrix:'))
+        self.assertIn("batch: ${{ fromJSON(github.event_name == 'pull_request' && github.head_ref == 'pro/workpack-04-mcp-skills' && '[\"ecosystem\",\"model-compatibility\"]' || '[\"selected\"]') }}", host_job)
         self.assertIn('        default: apk', workflow)
         title = next(line for line in workflow.splitlines() if line.startswith('run-name:'))
         self.assertIn("inputs.target == 'host-tests'", title)
