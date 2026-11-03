@@ -89,6 +89,7 @@ class DriverDispatchPipeTests(unittest.TestCase):
                 self.blocked_prompt(worker, .2, cancel=False)
 
 
+@unittest.skipIf(os.name == 'nt', 'POSIX descriptor checks; Windows native API contracts have separate tests')
 class PipeWriterTicketTests(unittest.TestCase):
     def setUp(self):
         self.read_fd, fd = os.pipe()
