@@ -540,6 +540,7 @@ internal fun MemoryLearningReviewPage(
                     val frozen = editing!!
                     val canSave = !busy && !detailStale && MemoryLearningReviewGuard.sameReview(frozen, detail)
                     MemoryLearningCaption("修改只保存到待审候选，不会立即写入正式记忆。来源保持不变。")
+                    if (frozen.has("assertion")) MemoryLearningCaption("修改正文会撤下旧的主体、关系和原话标注，避免把新文稿错归给旧主体；原来源引用仍保留，不会猜测新的结构化事实。")
                     OutlinedTextField(editorText, { editorText = it }, label = { Text("候选正文") }, supportingText = { Text("${editorText.length} / 4000") }, minLines = 4, maxLines = 12, enabled = !busy, modifier = Modifier.fillMaxWidth())
                     MemoryLearningLayerPicker(editorLayer, !busy) { editorLayer = it }
                     OutlinedTextField(editorReason, { editorReason = it }, label = { Text("为什么值得记住") }, minLines = 2, maxLines = 6, enabled = !busy, modifier = Modifier.fillMaxWidth())

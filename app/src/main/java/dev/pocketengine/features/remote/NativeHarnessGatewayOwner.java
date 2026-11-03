@@ -26,6 +26,8 @@ public final class NativeHarnessGatewayOwner {
     public interface Host {
         default void stopParent(String task,String run)throws Exception {throw new SecurityException("原App停止宿主未就绪");}
         default ParentAccess parentResume(String child)throws Exception {throw new SecurityException("原App网关恢复宿主未就绪");}
+        default JSONArray parentProfileChoices(String child)throws Exception {throw new SecurityException("原保存工作配置入口尚未接入");}
+        default ParentAccess parentResumeProfile(String child,String profile,long revision)throws Exception {throw new SecurityException("原保存工作配置入口尚未接入");}
         Access capture(String parentTask,String parentRun,String remoteTask)throws Exception;
         JSONObject existing(String parentTask,String parentRun)throws Exception;
         JSONObject query(String parentTask,String parentRun,String lease)throws Exception;
@@ -52,6 +54,8 @@ public final class NativeHarnessGatewayOwner {
     public NativeHarnessGatewayOwner(TaskStore tasks,Supplier<RemoteModule> remote,Host host){this.tasks=tasks;this.remote=remote;this.host=host;}
     public boolean windowCurrent(Page page){try{page.fence.check();return true;}catch(Exception stale){return false;}}
     public ParentAccess parentResume(String child)throws Exception{return host.parentResume(child);}
+    public JSONArray parentProfileChoices(String child)throws Exception{return host.parentProfileChoices(child);}
+    public ParentAccess parentResumeProfile(String child,String profile,long revision)throws Exception{return host.parentResumeProfile(child,profile,revision);}
     public void stopContinuation(String child)throws Exception {JSONObject parent=tasks.gatewayParentTarget(child);host.stopParent(parent.getString("parentTaskId"),parent.getString("parentRunId"));}
     /** Capture only the existing real parent control; this creates neither run nor gateway. */
     public Access captureContinuation(String child)throws Exception {JSONObject parent=tasks.gatewayParentTarget(child);Access access=host.capture(parent.getString("parentTaskId"),parent.getString("parentRunId"),child);access.checkCurrent();JSONObject budget=access.view().getJSONObject("budget");if(!budget.optBoolean("scopePresent")||budget.optInt("modelCallsRemaining")<1)throw new SecurityException("请先在原任务执行范围确认真实模型额度；网关不补造预算");return access;}
@@ -104,6 +108,16 @@ public final class NativeHarnessGatewayOwner {
     private static boolean hasTarget(JSONObject env,String binding,String worker)throws Exception {JSONArray list=env.optJSONArray("harnesses");int matches=0;for(int i=0;list!=null&&i<list.length();i++)if(binding.equals(list.getJSONObject(i).optString("bindingId"))&&family(worker).equals(list.getJSONObject(i).optString("family")))matches++;return matches==1;}
     private JSONObject original(Page page,String lease,boolean stopping)throws Exception {JSONObject value=host.existing(page.parent.getString("parentTaskId"),page.parent.getString("parentRunId"));if(value==null||!lease.equals(value.optString("leaseId")))throw new SecurityException("此原生进程没有该准确旧租约；只能看原SQL，不能重建或补发");JSONObject bound=value.optJSONObject("configurationOwner");if(bound==null||!page.task.equals(bound.optString("taskId"))||!stopping&&(!page.source.getString("runId").equals(bound.optString("runId"))||page.source.getInt("coordinatorEpoch")!=bound.optInt("epoch")))throw new SecurityException("旧租约不属于本页原配置子任务代次");if(stopping)return value;JSONObject target=value.getJSONObject("target");for(String key:new String[]{"profileId","serviceBase","environmentId"})if(!target.get(key).equals(page.source.get(key)))throw new SecurityException("旧租约不属于本页原电脑目标");if(!page.profileBinding.equals(target.getString("_profileBinding")))throw new SecurityException("旧租约的原连接代次已变化");return value;}
     public TaskStore.HarnessGatewayConfiguration configuration(Page page,JSONObject input)throws Exception {if(input.length()!=3||!input.has("windowId")||!input.has("taskId")||!input.has("leaseId"))throw new SecurityException("配置入口只接受原租约引用");current(page);original(page,input.getString("leaseId"),false);return host.configuration(page.parent.getString("parentTaskId"),page.parent.getString("parentRunId"),page.task,input.getString("leaseId"));}
+    /** Source recheck stays outside TaskStore's SQL/approval callbacks. This object cannot
+     * issue a config claim; it only tightens the existing plan's original live source. */
+    public final class ConfigurationSource {
+        private final Page page;private final Access access;private final String lease;private final TaskStore.HarnessGatewayConfiguration configuration;private final String profile;
+        private ConfigurationSource(Page page,String lease,TaskStore.HarnessGatewayConfiguration configuration)throws Exception {this.page=page;this.access=page.access;this.lease=lease;this.configuration=configuration;JSONObject model=access.view();JSONObject source=model.optJSONObject("workProfileRelaySource");profile=source==null?null:source.toString();}
+        public TaskStore.HarnessGatewayConfiguration configuration(){return configuration;}
+        public JSONObject profileView()throws Exception{return profile==null?null:new JSONObject(profile);}
+        public void checkCurrent()throws Exception {current(page);if(page.access!=access)throw new SecurityException("原配置来源审阅已被替换");access.checkCurrent();original(page,lease,false);configuration.checkCurrent();}
+    }
+    public ConfigurationSource configurationSource(Page page,JSONObject input)throws Exception {var configuration=configuration(page,input);if(page.access==null){page.access=host.capture(page.parent.getString("parentTaskId"),page.parent.getString("parentRunId"),page.task);page.access.checkCurrent();}ConfigurationSource source=new ConfigurationSource(page,input.getString("leaseId"),configuration);source.checkCurrent();return source;}
     private static boolean forChild(JSONObject value,String child){return value!=null&&value.optJSONObject("configurationOwner")!=null&&child.equals(value.optJSONObject("configurationOwner").optString("taskId"));}
     public void observe(Page page)throws Exception {page.fence.check();page.parent=parent(page);page.source=tasks.remoteOwnerTarget(page.task);page.profileBinding=remote.get().profileBindingHash(page.source.getString("profileId"));}
     /** Local-only discovery for the original page. No capture, target fetch, service or review. */

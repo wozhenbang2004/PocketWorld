@@ -393,10 +393,14 @@ public final class MemoryBook {
         checkLearningTime(now);Scope scope=learningScope(authenticatedScope);JSONObject old=requireCandidate(scope,id);requirePending(old,revision);
         checkDraftKeys(changes);JSONObject merged=draftOf(old);
         for(java.util.Iterator<String> keys=changes.keys();keys.hasNext();){String key=keys.next();merged.put(key,changes.get(key));}
-        JSONObject content=checkedDraft(merged);MemoryAssertion.requireEvidence(content.optJSONObject("assertion"),old.getJSONArray("sourceRefs"));requireAssertionSourceProof(content);if(old.has("appKnowledge"))checkAppDraft(content);JSONArray refs=old.getJSONArray("sourceRefs");verifyCandidateSources(scope,old,now);
+        JSONObject content=checkedDraft(merged);
+        // A body-only owner edit is not review of the old subject/object or an original quote.
+        // Keep the exact source lineage, but do not invent replacement typed meaning from prose.
+        if(old.has("assertion")&&!changes.has("assertion")&&!old.getString("text").equals(content.getString("text")))content.remove("assertion");
+        MemoryAssertion.requireEvidence(content.optJSONObject("assertion"),old.getJSONArray("sourceRefs"));requireAssertionSourceProof(content);if(old.has("appKnowledge"))checkAppDraft(content);JSONArray refs=old.getJSONArray("sourceRefs");verifyCandidateSources(scope,old,now);
         String key=candidateKey(content,refs,old.optJSONArray("recordRefs"));if(old.has("appKnowledge"))key=TaskMemoryUse.digest(key+old.getJSONObject("appKnowledge").toString());
         if(findCandidate(scope,key,id)!=null)throw new IllegalStateException("相同来源已有这条候选，请审阅已有候选");
-        JSONObject value=copy(old);for(java.util.Iterator<String> fields=content.keys();fields.hasNext();){String field=fields.next();value.put(field,content.get(field));}
+        JSONObject value=copy(old);if(!content.has("assertion"))value.remove("assertion");for(java.util.Iterator<String> fields=content.keys();fields.hasNext();){String field=fields.next();value.put(field,content.get(field));}
         value.put("contentKey",key).put("revision",Math.addExact(revision,1)).put("updatedAt",now);
         Map<String,JSONObject> beforeCandidates=new LinkedHashMap<>(learningCandidates);
         if(value.has("assertion"))assertionFormat=true;learningCandidates.put(id,value);persistOrRollback(new LinkedHashMap<>(records),new LinkedHashMap<>(sources),beforeCandidates);
@@ -664,8 +668,9 @@ public final class MemoryBook {
         for(int i=0;i<refs.length();i++){
             SourceRef ref=SourceRef.fromJson(refs.getJSONObject(i));JSONObject state=sources.get(ref.key());
             if(state==null)return "source_unavailable";
-            if(sourceForgotten(Scope.stored(candidate),ref,state))return "forgotten";
+            // The original deletion receipt is the more precise cause; its forget floor still fences reuse.
             if(state.getBoolean("deleted"))return "source_deleted";
+            if(sourceForgotten(Scope.stored(candidate),ref,state))return "forgotten";
             if(ref.revision!=state.getLong("revision"))return "source_changed";
         }return "";
     }
@@ -801,6 +806,9 @@ public final class MemoryBook {
         if(old!=null&&!checkedRefs(s,old.opt("sourceRefs")).toString().equals(refs.toString()))
             throw new IllegalArgumentException("修改外部来源请建立新记忆，不能抹去已有来源链");
         JSONObject assertion=input.has("assertion")?MemoryAssertion.checked(input.getJSONObject("assertion")):old!=null&&old.has("assertion")?MemoryAssertion.checked(old.getJSONObject("assertion")):null;
+        if(!nativeCorrection&&old!=null&&old.has("assertion")&&!old.getString("text").equals(text)
+                &&MemoryArchive.canonical(assertion).equals(MemoryArchive.canonical(old.getJSONObject("assertion"))))
+            throw new IllegalArgumentException("带主体或原话标注的正式记忆不能只改正文并保留旧事实；请走原生纠正，或明确重新核对结构化声明");
         MemoryAssertion.requireEvidence(assertion,refs);if(assertion!=null)requireAssertionSourceProof(new JSONObject().put("assertion",assertion).put("text",text));
         Map<String,SourceRef> evidence=new LinkedHashMap<>();collectRefs(refs,evidence);
         Set<String> visited=new HashSet<>();for(int i=0;i<checked.length();i++)collectEvidence(require(s,checked.getString(i)),evidence,visited);

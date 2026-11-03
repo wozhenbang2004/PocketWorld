@@ -30,4 +30,8 @@ public final class LocalWorkbenchGuardTest {
     @Test public void termuxUnknownAndStopRequestAreNotTerminalSuccess() {
         assertFalse(LocalWorkbenchGuard.terminal("unknown",true));assertFalse(LocalWorkbenchGuard.terminal("awaiting_result",true));assertFalse(LocalWorkbenchGuard.terminal("stopping",true));assertTrue(LocalWorkbenchGuard.terminal("failed",true));assertTrue(LocalWorkbenchGuard.terminal("cancelled",false));
     }
+    @Test public void nativeColdUnknownOrInterruptedDoesNotPermitTreatingTheOriginalWorkspaceAsReleased() {
+        assertFalse(LocalWorkbenchGuard.terminal("unknown",false));assertFalse(LocalWorkbenchGuard.terminal("interrupted",false));assertFalse(LocalWorkbenchGuard.terminal("stopping",false));assertTrue(LocalWorkbenchGuard.terminal("completed",false));assertTrue(LocalWorkbenchGuard.terminal("failed",false));
+        assertFalse(LocalWorkbenchGuard.pollable("unknown",false));assertFalse(LocalWorkbenchGuard.pollable("interrupted",false));assertTrue(LocalWorkbenchGuard.pollable("running",false));assertTrue(LocalWorkbenchGuard.pollable("unknown",true));
+    }
 }

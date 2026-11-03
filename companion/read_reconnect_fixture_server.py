@@ -10,6 +10,8 @@ import time
 from pocket_companion import CompanionHandler, CompanionServer, JobManager
 from test_remote_interactions import CODEX, CLAUDE
 
+CODEX_VERSION = "0.109.0"
+
 
 def main():
     root = Path(sys.argv[1]).resolve()
@@ -23,7 +25,7 @@ def main():
     for name, source in (("codex", codex), ("claude", CLAUDE)):
         header = "#!" + sys.executable + "\nimport sys\n"
         if name == "codex":
-            header += "if '--version' in sys.argv: print('codex-cli 0.109.0 (synthetic read fixture)');sys.exit()\nif '--help' in sys.argv: print('app-server --model');sys.exit()\n"
+            header += "if '--version' in sys.argv: print('codex-cli " + CODEX_VERSION + " (synthetic read fixture)');sys.exit()\nif '--help' in sys.argv: print('app-server --model');sys.exit()\n"
         header += "sys.argv=[sys.argv[0],'normal',*sys.argv[1:]]\n"
         path = executables / name
         path.write_text(header + source)

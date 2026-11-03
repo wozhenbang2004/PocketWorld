@@ -16,7 +16,9 @@ public final class AndroidPhoneDiagnostics {
     public static PhoneDiagnosticReport.Report preview(Context android,DisplayModule display)throws Exception {
         JSONObject version=packagedVersion(android);
         JSONObject platform=new JSONObject().put("sdkInt",Build.VERSION.SDK_INT).put("abi",Build.SUPPORTED_ABIS==null||Build.SUPPORTED_ABIS.length==0?"":Build.SUPPORTED_ABIS[0]);
-        return PhoneDiagnosticReport.create(version,platform,display==null?null:display.snapshot(),AndroidPhoneReadiness.snapshot(android,display));
+        JSONObject background=null;
+        if(display!=null)try{background=display.snapshot();}catch(Exception unavailable){/* Keep main readiness; never include the raw helper failure or invent a successful sample. */}
+        return PhoneDiagnosticReport.create(version,platform,background,AndroidPhoneReadiness.snapshot(android,display));
     }
     private static JSONObject packagedVersion(Context android)throws Exception {
         JSONObject version=new JSONObject();

@@ -318,14 +318,28 @@ public final class ConversationRepository {
         db.insertWithOnConflict("assistant_sources",null,v,SQLiteDatabase.CONFLICT_REPLACE);
         if(source.getBoolean("deleted")){ContentValues erased=new ContentValues();erased.putNull("body");erased.put("body_bytes",0);erased.put("body_sha","");db.update("assistant_messages",erased,"generation=? AND source_id=?",new String[]{gen,ref.sourceId});}
     }
-    public void saveConversation(JSONObject conversation)throws Exception{saveConversation(activeGeneration(),conversation);}
-    private void saveConversation(String gen,JSONObject conversation)throws Exception{JSONObject header=new JSONObject(conversation.toString());header.remove("messages");header.remove("messagePage");ContentValues v=new ContentValues();v.put("header_json",header.toString());v.put("updated_at",header.optLong("updatedAt",header.optLong("createdAt")));
+    public void saveConversation(JSONObject conversation)throws Exception{synchronized(monitor){saveConversation(activeGeneration(),conversation);}}
+    private void saveConversation(String gen,JSONObject conversation)throws Exception{synchronized(monitor){JSONObject header=new JSONObject(conversation.toString());header.remove("messages");header.remove("messagePage");header.remove("nativeUserTitle");
+        // Same original monitor/transaction as owner metadata writes; an old reply/ACK header cannot overwrite a newer manual title.
+        try(Cursor size=db.rawQuery("SELECT length(CAST(header_json AS BLOB)) FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0 LIMIT 1",new String[]{gen,header.getString("conversationId")})){
+            if(size.moveToFirst()&&size.getLong(0)>MAX_BYTES)throw new ReadLimited("original_conversation_header_exceeds_inline_budget");
+        }
+        try(Cursor prior=db.rawQuery("SELECT header_json FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0 LIMIT 1",new String[]{gen,header.getString("conversationId")})){
+            if(prior.moveToFirst()){
+                JSONObject current=new JSONObject(prior.getString(0));Object owned=current.opt("nativeUserTitle");
+                if(owned!=null&&owned!=JSONObject.NULL){
+                    if(!(owned instanceof String)||((String)owned).isBlank()||((String)owned).length()>120||!StandardCharsets.UTF_8.newEncoder().canEncode((String)owned))throw new IllegalStateException("原手工会话标题状态无法核对，未用旧回复覆盖");
+                    header.put("title",owned).put("nativeUserTitle",owned);
+                }
+            }
+        }
+        ContentValues v=new ContentValues();v.put("header_json",header.toString());v.put("updated_at",header.optLong("updatedAt",header.optLong("createdAt")));
         // REPLACE would reset independent owner metadata during an ordinary reply/ACK save.
         if(db.update("assistant_conversations",v,"generation=? AND conversation_id=? AND deleted=0",new String[]{gen,header.getString("conversationId")})==0){
             v.put("generation",gen);v.put("conversation_id",header.getString("conversationId"));v.put("deleted",0);v.put("delete_reason","");db.insertOrThrow("assistant_conversations",null,v);
         }
         ConversationOrganization.changed(db,gen);
-    }
+    }}
     public void saveMessage(String conversation,JSONObject message)throws Exception{saveMessage(activeGeneration(),conversation,message,-1);}
     private void saveMessage(String gen,String conversation,JSONObject message,long importedSequence)throws Exception{
         String id=message.getString("id");JSONObject state=source(gen,id);if(state==null||state.getBoolean("deleted")||!conversation.equals(state.getString("conversationId"))||integer(message,"revision",1)!=state.getLong("revision")||!message.getString("role").equals(state.getString("role")))throw new SecurityException("原消息/来源修订不一致，未保存副本");

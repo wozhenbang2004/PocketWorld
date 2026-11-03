@@ -57,7 +57,8 @@ internal object LocalWorkbenchGuard {
         require(args.size <= 39 && args.all { it.length <= 2048 && !it.contains('\u0000') }) { "参数过多或过长" }
         return JSONArray().put(executable).also { array -> args.forEach { array.put(it) } }
     }
-    @JvmStatic fun terminal(status: String, termux: Boolean): Boolean = if (termux) status in setOf("completed", "failed") else status in setOf("completed", "failed", "cancelled", "timed_out", "interrupted", "unknown")
+    @JvmStatic fun terminal(status: String, termux: Boolean): Boolean = if (termux) status in setOf("completed", "failed") else status in setOf("completed", "failed", "cancelled", "timed_out")
+    @JvmStatic fun pollable(status: String, termux: Boolean): Boolean = if (termux) !terminal(status, true) else status in setOf("queued", "running", "stopping")
 }
 
 private data class LocalJobRef(val id: String, val termux: Boolean)
@@ -81,6 +82,9 @@ internal fun NativeLocalWorkbench(state: PocketUiState, controller: PocketWorldC
     LaunchedEffect(materialized) { materialized?.optString("id")?.takeIf { it.isNotBlank() }?.let { selectedId = it; switching = false; mode = 1; selectedJob = null; materializeRequest = null } }
     val selected = checkouts.firstOrNull { it.optString("id") == selectedId }
     LocalCaption("先选项目副本，再执行与核对。修改只有在审阅差异后才导回原项目；这里不自动运行高权限 Shell。")
+    local.optJSONObject("legacyReceiptRecovery")?.let { recovery ->
+        if (recovery.optBoolean("originalInventoryUnconfirmed") || recovery.optInt("coldUnconfirmedRecords") > 0) LocalCaption(recovery.optString("message"))
+    }
     if (selected != null) {
         Text(selected.optString("name"), fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
         LocalCaption("副本 ${selected.optString("id").take(8)} · 原项目 ${state.projects.find { it.id == selected.optString("projectId") }?.name ?: selected.optString("projectId").take(8)}" + if (selected.has("collectionOperationId")) " · Termux 取回结果" else "")
@@ -143,7 +147,7 @@ private fun LocalCommands(checkoutId: String, state: PocketUiState, controller: 
     val jobs = local.optJSONArray("termuxJobs").objects().filter { it.optString("checkoutId") == checkoutId }
     val ready = jobs.any { it.optString("kind") == "project_stage" && it.optString("status") == "completed" }
     val pending = jobs.any { !LocalWorkbenchGuard.terminal(it.optString("status"), true) }
-    val nativePending = local.optJSONArray("jobs").objects().any { it.optString("checkoutId") == checkoutId && !LocalWorkbenchGuard.terminal(it.optString("status"), false) }
+    val nativePending = local.optJSONObject("legacyReceiptRecovery")?.optBoolean("originalInventoryUnconfirmed") == true || local.optJSONArray("jobs").objects().any { it.optString("checkoutId") == checkoutId && !LocalWorkbenchGuard.terminal(it.optString("status"), false) }
     val submitting = state.moduleBusy.any { it in setOf("local.run", "local.termux.run", "local.termux.prepare", "local.termux.collect", "local.termux.probe") }
     val request = submitted
     val receipt = request?.let { LocalWorkbenchGuard.result(state.moduleResults["local.${it.first}"], state.moduleResultInputs["local.${it.first}"], it.second) }
@@ -203,7 +207,7 @@ private fun LocalJobDetail(checkoutId: String, ref: LocalJobRef, metadata: JSONO
         while (true) {
             delay(1500)
             val current = latestMetadata
-            if (current != null && LocalWorkbenchGuard.terminal(current.optString("status"), ref.termux)) break
+            if (current != null && !LocalWorkbenchGuard.pollable(current.optString("status"), ref.termux)) break
             if (lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) != false && "local.getJob" !in latest.moduleBusy) refresh()
         }
     }
@@ -227,7 +231,7 @@ private fun LocalJobDetail(checkoutId: String, ref: LocalJobRef, metadata: JSONO
     }
     Row {
         TextButton(onClick = { refresh() }, enabled = "local.getJob" !in state.moduleBusy) { Text("刷新原回执") }
-        if (!LocalWorkbenchGuard.terminal(job.optString("status"), ref.termux)) TextButton(onClick = { controller.requestFeature("local", "cancelJob", JSONObject().put("jobId", ref.id).put("termux", ref.termux)); refresh() }, enabled = "local.cancelJob" !in state.moduleBusy) { Text(if (ref.termux) "登记停止要求" else "停止进程", color = Danger) }
+        if (if (ref.termux) !LocalWorkbenchGuard.terminal(job.optString("status"), true) else job.optString("status") in setOf("queued", "running", "stopping")) TextButton(onClick = { controller.requestFeature("local", "cancelJob", JSONObject().put("jobId", ref.id).put("termux", ref.termux)); refresh() }, enabled = "local.cancelJob" !in state.moduleBusy) { Text(if (ref.termux) "登记停止要求" else "停止进程", color = Danger) }
     }
     val task = state.tasks.firstOrNull { it.raw.optString("feature") == "local" && (it.raw.optString("runId") == ref.id || it.raw.optString("operationId") == ref.id || it.raw.optString("externalId") == ref.id) }
     if (task != null) TextButton(onClick = { controller.focusTask(task.id) }) { Text("查看同一任务记录") }

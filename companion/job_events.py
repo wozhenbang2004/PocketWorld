@@ -17,9 +17,11 @@ def capability(worker):
             "filter": FILTER, "maxPageEvents": MAX_PAGE, "retainedEvents": 64,
             "retainedEventBytes": 24576, "cursorPersistedByClient": True,
             "delivery": "bounded_cursor_get_not_sse", "completeProviderHistory": False,
-            "childSourceProtocol": "claude_complete_child_v1" if worker == "claude" else None,
-            "childSourceDelivery": "received_complete_public_blocks_only" if worker == "claude" else "unsupported",
-            "childTokenStreaming": False, "childSessionControl": False}
+            "childSourceProtocol": "claude_complete_child_v1" if worker == "claude" else "codex_public_child_v1" if worker == "codex_app_server" else None,
+            "childSourceDelivery": "received_complete_public_blocks_only" if worker == "claude" else "received_public_events_only_with_observed_native_parent_link" if worker == "codex_app_server" else "unsupported",
+            "childTokenStreaming": False, "childSessionControl": False,
+            "maxChildSources": 16 if worker == "codex_app_server" else None,
+            "childNativeVersion": "0.166.0-alpha.1" if worker == "codex_app_server" else None}
 
 
 def _integer(query, key, default, maximum, error):
@@ -60,11 +62,19 @@ def read(manager, jobid, query, error):
         base = {"protocol": PROTOCOL, "filter": FILTER, "id": jobid, "operationId": job["operationId"],
                 "environmentId": stored["environmentId"], "worker": stored["worker"],
                 "nativeProtocol": stored.get("protocol", ""),
-                **{key: stored[key] for key in ("threadId", "sessionId", "promptRequestId") if key in stored},
+                **{key: stored[key] for key in ("threadId", "sessionId", "promptRequestId", "turnId") if key in stored},
                 "requestedGeneration": generation, "requestedAfter": after, "requestedHead": head,
                 "events": [], "hasMore": False, "gap": None, "liveStreaming": False,
                 "completeHistory": False, "executionAuthorized": False,
                 "observation": "durably_saved_normalized_driver_events_not_provider_transcript"}
+        runtime = stored.get("modelRuntime")
+        if (stored.get("worker") == "codex_app_server" and isinstance(runtime, dict)
+                and runtime.get("protocol") == "native_model_runtime_v1"
+                and runtime.get("worker") == "codex_app_server"
+                and runtime.get("threadId") == stored.get("threadId")
+                and runtime.get("turnId") == stored.get("turnId")
+                and runtime.get("runtimeVersion") == "0.166.0-alpha.1"):
+            base["nativeRuntimeVersion"] = runtime["runtimeVersion"]
         if not progress:
             return {**base, "status": "not_available", "generation": "", "headSequence": 0,
                     "nextSequence": 0, "lastSequence": 0, "retainedFromSequence": 0}
