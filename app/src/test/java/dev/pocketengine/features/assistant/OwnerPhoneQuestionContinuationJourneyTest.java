@@ -75,6 +75,7 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
     private ServiceController<PhoneRunService> serviceController;
     private PhoneRunService service;
     private ExecutorService worker;
+    private Thread originalWorker;
     private OwnerQuestionReplyReceiver receiver;
     private HttpServer model;
     private String taskId,runId;
@@ -83,6 +84,7 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
     private Physical physical;
     private final AtomicInteger calls=new AtomicInteger();
     private final AtomicReference<Throwable> modelFailure=new AtomicReference<>();
+    private final AtomicReference<Throwable> workerFailure=new AtomicReference<>();
     private final List<JSONObject> requests=new CopyOnWriteArrayList<>();
     private final CountDownLatch releaseWorker=new CountDownLatch(1),secondRequest=new CountDownLatch(1),releaseSecondResponse=new CountDownLatch(1);
 
@@ -99,7 +101,10 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
         accessibilityController=Robolectric.buildService(PhoneAccessibilityService.class).create();
         var connect=PhoneAccessibilityService.class.getDeclaredMethod("onServiceConnected");connect.setAccessible(true);connect.invoke(accessibilityController.get());
         serviceController=Robolectric.buildService(PhoneRunService.class).create();service=serviceController.get();
-        worker=(ExecutorService)get(service,"worker");Thread originalWorker=worker.submit(Thread::currentThread).get(5,TimeUnit.SECONDS);
+        worker=(ExecutorService)get(service,"worker");originalWorker=worker.submit(Thread::currentThread).get(5,TimeUnit.SECONDS);
+        originalWorker.setUncaughtExceptionHandler((thread,failure)->workerFailure.compareAndSet(null,failure));
+        JSONObject stop=dev.pocketengine.phone.AndroidPhoneReadiness.snapshot(service,null).getJSONObject("stopControl");
+        assertTrue("the actual notification stop route must be ready before START: "+stop,stop.getBoolean("ready"));
         // Config.NONE has no manifest receivers. Register the exact production receiver
         // only for this in-process OS fixture; its dispatch and goAsync body stay real.
         receiver=new OwnerQuestionReplyReceiver();IntentFilter filter=new IntentFilter(OwnerQuestionReply.ACTION);filter.addDataScheme("pocketworld-task-action");
@@ -108,13 +113,14 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
         taskId=app.start("只读观察当前手机页面，先询问我选择哪一项，再结合我的回答说明结果。",true,"main_screen");
         JSONObject admitted=app.tasks.get(taskId,false);runId=admitted.getString("runId");epoch=admitted.getInt("coordinatorEpoch");original=app.control(taskId);
         assertNotNull(original);assertTrue(original.matchesHostRun(taskId,runId,epoch));ModelConfig captured=app.config(taskId);
+        assertEquals("ordinary-phone-continuation-fixture",captured.model);assertFalse(captured.sendScreenshots);assertFalse(captured.localCaptureAllowed);assertFalse(captured.localOcrAllowed);
         physical=new Physical(accessibilityController.get().observationSessionId(),originalWorker);
         // Substitute hardware only. App.start has already admitted the real scope/run/lease;
         // START still owns every Service flag and creates the actual Runner itself.
         set(service,"heldPort",physical);
         Intent start=shadowOf(app).getNextStartedService();assertNotNull(start);assertEquals(PhoneRunService.START,start.getAction());assertEquals(taskId,start.getStringExtra("taskId"));
         service.onStartCommand(start,0,1);shadowOf(Looper.getMainLooper()).idleFor(750,TimeUnit.MILLISECONDS);
-        await(()->ordinaryHold()!=null);
+        await("original ordinary question hold",()->ordinaryHold()!=null);
         worker.submit(()->{}).get(5,TimeUnit.SECONDS);
 
         OwnerPhoneQuestions.Held held=ordinaryHold();assertNotNull(held);held.requireOriginal();
@@ -150,7 +156,7 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
         assertEquals(clock,app.tasks.get(taskId,false).getJSONArray("ownerInputs").getJSONObject(0).getJSONObject("inputOriginClock").toString());
         assertEquals(1,count("SELECT count(*) FROM task_events WHERE task_id=? AND event_type='owner_phone_question_answer_saved'",taskId));
 
-        releaseWorker.countDown();queueBarrier.get(5,TimeUnit.SECONDS);await(()->secondRequest.getCount()==0);
+        releaseWorker.countDown();queueBarrier.get(5,TimeUnit.SECONDS);await("second original HTTP request",()->secondRequest.getCount()==0);
         JSONObject continuing=app.tasks.get(taskId,false);assertEquals(2,calls.get());assertFalse(original.isPaused());
         assertSame(original,app.control(taskId));assertSame(physical,get(app,"activePort"));assertNull(get(service,"heldPort"));
         assertEquals(runId,continuing.getString("runId"));assertEquals(epoch,continuing.getInt("coordinatorEpoch"));
@@ -161,7 +167,7 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
         assertTrue(requests.get(1).getJSONArray("messages").toString().contains(ANSWER));assertFalse(requests.get(0).toString().contains(ANSWER));
         assertEquals(1,checkpointAnswerCount(message));assertNull(ordinaryHold());
 
-        releaseSecondResponse.countDown();await(()->app.activeId()==null&&get(service,"runningId")==null);
+        releaseSecondResponse.countDown();await("original Service and App release",()->app.activeId()==null&&get(service,"runningId")==null);
         worker.submit(()->{}).get(5,TimeUnit.SECONDS);assertNull(String.valueOf(modelFailure.get()),modelFailure.get());
         JSONObject finished=app.tasks.get(taskId,false);assertEquals("needs_confirmation",finished.getString("status"));
         assertEquals(runId,finished.getString("runId"));assertEquals(epoch,finished.getInt("coordinatorEpoch"));assertTrue(finished.getString("summary").contains(RESULT));
@@ -239,7 +245,7 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
         BroadcastReceiver.PendingResult previous=shadowOf(receiver).getOriginalPendingResult();
         Intent delivered=new Intent(shadowOf(action.actionIntent).getSavedIntent());Bundle answer=new Bundle();answer.putCharSequence(OwnerQuestionReply.KEY,ANSWER);
         RemoteInput.addResultsToIntent(action.getRemoteInputs(),delivered,answer);action.actionIntent.send(app,0,delivered);
-        await(()->shadowOf(receiver).getOriginalPendingResult()!=null&&shadowOf(receiver).getOriginalPendingResult()!=previous);
+        await("actual notification receiver dispatch",()->shadowOf(receiver).getOriginalPendingResult()!=null&&shadowOf(receiver).getOriginalPendingResult()!=previous);
         assertTrue(shadowOf(receiver).wentAsync());shadowOf(shadowOf(receiver).getOriginalPendingResult()).getFuture().get(5,TimeUnit.SECONDS);
     }
     private void assertOriginalInferenceAudit()throws Exception {
@@ -261,10 +267,36 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
     private String scalar(String sql,String...args)throws Exception{try(var rows=db.rawQuery(sql,args)){assertTrue(rows.moveToFirst());return rows.getString(0);}}
     private long count(String sql,String...args)throws Exception{return Long.parseLong(scalar(sql,args));}
     @FunctionalInterface private interface Condition{boolean ready()throws Exception;}
-    private void await(Condition condition)throws Exception {
+    private void await(String phase,Condition condition)throws Exception {
         long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(12);
-        do{shadowOf(Looper.getMainLooper()).idle();assertNull(String.valueOf(modelFailure.get()),modelFailure.get());if(condition.ready())return;Thread.sleep(5);}while(System.nanoTime()<until);
-        fail("original phone journey did not reach its bounded native phase; HTTP calls="+calls.get());
+        do{shadowOf(Looper.getMainLooper()).idle();
+            if(workerFailure.get()!=null)throw new AssertionError("original Service worker failed before "+phase+"; "+diagnostic(),workerFailure.get());
+            assertNull(String.valueOf(modelFailure.get()),modelFailure.get());if(condition.ready())return;Thread.sleep(5);
+        }while(System.nanoTime()<until);
+        fail("original phone journey did not reach "+phase+" within its unchanged bound; "+diagnostic());
+    }
+    /** Only this synthetic journey's bounded native state; never dump task bodies, grants,
+     * credentials, request payloads, arbitrary threads or another task's audit. */
+    private String diagnostic(){
+        try{
+            JSONObject out=new JSONObject().put("httpCalls",calls.get()).put("physicalReads",physical==null?0:physical.observations.get())
+                    .put("physicalEffects",physical==null?0:physical.effects.get()).put("controlPresent",original!=null)
+                    .put("paused",original!=null&&original.isPaused()).put("cancelled",original!=null&&original.isCancelled());
+            if(taskId!=null){JSONObject task=app.tasks.get(taskId,false);String summary=task.optString("summary");
+                JSONObject evidence=task.optJSONObject("evidence");out.put("taskStatus",task.optString("status")).put("taskSummary",summary.substring(0,Math.min(240,summary.length())))
+                        .put("sameRun",runId.equals(task.optString("runId"))&&epoch==task.optInt("coordinatorEpoch"))
+                        .put("ordinaryQuestionPresent",OwnerPhoneQuestions.reference(task)!=null)
+                        .put("evidenceCode",evidence==null?"":evidence.optString("error",evidence.optString("code")));
+            }
+            if(service!=null)out.put("serviceTaskMatches",taskId!=null&&taskId.equals(get(service,"runningId")))
+                    .put("serviceWaiting",get(service,"waitingForUser")).put("sameHeldPort",physical!=null&&physical==get(service,"heldPort"))
+                    .put("stopControl",dev.pocketengine.phone.AndroidPhoneReadiness.snapshot(service,null).getJSONObject("stopControl"));
+            if(originalWorker!=null){JSONArray frames=new JSONArray();StackTraceElement[] stack=originalWorker.getStackTrace();
+                for(int i=0;i<Math.min(8,stack.length);i++)frames.put(stack[i].getClassName()+"."+stack[i].getMethodName());
+                out.put("workerState",originalWorker.getState().name()).put("workerFrames",frames);
+            }
+            return out.toString();
+        }catch(Exception unavailable){return "native_fixture_diagnostic_unavailable:"+unavailable.getClass().getSimpleName();}
     }
     private static Object get(Object target,String name)throws Exception{Field field=target.getClass().getDeclaredField(name);field.setAccessible(true);return field.get(target);}
     private static void set(Object target,String name,Object value)throws Exception{Field field=target.getClass().getDeclaredField(name);field.setAccessible(true);field.set(target,value);}
