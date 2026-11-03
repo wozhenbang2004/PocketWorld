@@ -3,12 +3,31 @@ package dev.pocketengine.ui
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Display-only projection of an original bounded TaskStore window. Never settles or replays work. */
+/** Display-only projection of original TaskStore records. Never settles or replays work. */
 internal object TaskExecutionPresentation {
     enum class Tone { RUNNING, WAITING, UNCERTAIN, ERROR, RETURNED, STOPPED, NEUTRAL }
     enum class Target { NONE, PROCESS, APPROVAL, RECONCILIATION, RESULT, FEEDBACK }
     data class Current(val title: String, val detail: String, val tone: Tone, val target: Target = Target.NONE, val action: String = "")
     data class Record(val key: String, val title: String, val label: String, val tone: Tone, val at: Long, val runId: String, val arguments: String, val receipt: String, val limited: Boolean, val bodyBytes: Long, val projectExecutionId: String? = null, val outputNotes: List<String> = emptyList(), val jobTaskId: String? = null, val jobOperationId: String? = null, val jobEpoch: Int? = null, val relatedTaskId: String? = null)
+
+    /** Browser activity reads a full chronological journal; other paged views keep their bounds. */
+    data class RecentOperations(val records: List<Record>, val omittedEarlierCount: Int) {
+        val expandLabel: String get() = if (omittedEarlierCount > 0) "最近 ${records.size} 条" else "全部 ${records.size} 条"
+        fun summary(expanded: Boolean): String? {
+            if (omittedEarlierCount > 0) return if (expanded)
+                "仅显示最近 ${records.size} 条原调用；另有 $omittedEarlierCount 条较早调用未在此处展示。"
+            else "显示最近 ${minOf(records.size, 3)} 条原调用；展开可查看最近 ${records.size} 条。另有 $omittedEarlierCount 条较早调用未在此处展示。"
+            return if (!expanded && records.size > 3) "显示最近 3 条原调用；展开可回查更早记录。" else null
+        }
+    }
+
+    /** Select the tail before projection, without changing the journal or other shared views. */
+    fun recentOperations(operations: JSONArray?): RecentOperations {
+        val count = operations?.length() ?: 0
+        val start = maxOf(0, count - 40)
+        val records = (start until count).mapNotNull { operations?.optJSONObject(it) }.map(::operation)
+        return RecentOperations(records, start)
+    }
 
     /** A read locator only. The native factory rechecks the original SQL plan, receipt and owner. */
     fun projectExecutionObservationId(row: JSONObject): String? = row.optString("operationId").takeIf {
