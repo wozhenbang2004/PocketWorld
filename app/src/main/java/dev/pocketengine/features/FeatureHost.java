@@ -381,10 +381,26 @@ public final class FeatureHost implements AutoCloseable {
             String id=task.getJSONArray("relatedTasks").getJSONObject(i).getString("taskId");JSONObject child=tasks.get(id,false);if(child==null||!child.optString("status").matches("preparing|queued|running|paused|awaiting_user|stopping"))continue;
             String feature=child.optString("feature");JSONObject input=new JSONObject();String command;
             if(feature.equals("teams")){command="cancel";input.put("runId",child.getString("runId"));}
-            else if(feature.equals("remote")&&!child.optString("externalId").isEmpty()){command="cancelJob";input.put("profileId",child.getJSONObject("externalRefs").getString("profileId")).put("jobId",child.getString("externalId"));}
+            else if(feature.equals("remote")&&!child.optString("externalId").isEmpty()){
+                String originalRun=child.getString("runId");int originalEpoch=child.getInt("coordinatorEpoch");
+                workers.execute(()->{try{cancelOriginalRemoteTask(id,originalRun,originalEpoch,null);}catch(Exception unknown){events.emit(json("type","error","message","原电脑子任务停止结果尚未确认；没有停止新执行，请查询原任务"));}});cancelRelatedTasks(id);continue;
+            }
             else continue;
             tasks.requestCancel(id,child.optString("runId"));request(json("feature",feature,"command",command,"payload",input));cancelRelatedTasks(id);
         }}catch(Exception error){events.emit(json("type","error","message","子任务停止状态尚未确认，请查看原任务"));}
+    }
+    private JSONObject cancelOriginalRemoteTask(String id,String run,int epoch,String generation)throws Exception {
+        EngineModule selected=module("remote");if(tasks==null||!(selected instanceof dev.pocketengine.features.remote.RemoteModule remote))throw new SecurityException("没有原电脑任务的原生停止宿主");
+        JSONObject task=tasks.get(id,false);if(task==null||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch",-1))throw new SecurityException("原电脑执行已变化");
+        String profile=task.getJSONObject("externalRefs").getString("profileId");
+        var claim=tasks.claimOriginalRemoteStop(id,run,epoch,generation==null?remote.profileBindingHash(profile):generation);JSONObject actual=remote.cancelOriginalPinnedJob(claim);emitTask(id);return actual;
+    }
+    private JSONObject cancelOriginalRemoteRequest(JSONObject input)throws Exception {
+        String id=tasks.externalTask("remote",input.getString("jobId"),input.getString("profileId"),input.optString("serviceBase"));
+        if(id==null)throw new SecurityException("没有唯一的原SQL电脑任务；未发送停止");JSONObject task=tasks.get(id,false);
+        if(!input.getString("jobId").equals(task.optString("externalId"))||!input.getString("jobOperationId").equals(task.optString("operationId")))throw new SecurityException("停止请求不是原电脑job/operation；不会改停当前新执行");
+        String run=input.has("runId")?input.getString("runId"):task.getString("runId");int epoch=input.has("coordinatorEpoch")?input.getInt("coordinatorEpoch"):task.getInt("coordinatorEpoch");
+        return cancelOriginalRemoteTask(id,run,epoch,input.has("_profileBinding")?input.getString("_profileBinding"):null);
     }
     public void request(JSONObject request){
         String feature=request.optString("feature"),command=request.optString("command"),requestId=request.optString("requestId");
@@ -475,7 +491,7 @@ public final class FeatureHost implements AutoCloseable {
                 }
                 String reviewedTeamTask=null;
                 if(tasks!=null&&feature.equals("teams")&&command.matches("resume|continueMessages|reviseAssignment|continueOutcome")&&(input.has("expectedRevision")||input.has("expectedGeneration")))reviewedTeamTask=tasks.requireReviewedTeamControl(input);
-                JSONObject result=module.handle(command,input);
+                JSONObject result=tasks!=null&&feature.equals("remote")&&command.equals("cancelJob")?cancelOriginalRemoteRequest(input):module.handle(command,input);
                 if(result==null)result=new JSONObject();
                 if(tracked!=null){JSONObject receipt=new JSONObject(result.toString());if(feature.equals("browser")){if(!trackedRun.equals(result.optString("runId"))||!tracked.equals(result.optString("taskId"))||!result.optBoolean("active")||!resources.ownsBrowser(trackedRun))throw new SecurityException("浏览器没有返回本次执行的有效租约");tasks.requireExternalRun(tracked,trackedRun,feature,false);receipt.put("status","running");}updateTask(tracked,receipt);result.put("hostTaskId",tracked);}
                 if(teamConversation!=null&&tracked!=null)result.put("conversationId",teamConversationId).put("taskId",tracked).put("conversationLinkStatus",appendTeamTaskLink(teamConversation,teamConversationId,tracked));

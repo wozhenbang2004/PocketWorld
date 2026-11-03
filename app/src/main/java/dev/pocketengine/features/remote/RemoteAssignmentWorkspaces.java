@@ -125,7 +125,7 @@ public final class RemoteAssignmentWorkspaces {
     }
     public JSONObject cancel(NativeHost host,Execution execution,String preparedOperation,RunControl original)throws Exception {
         check(host,execution);JSONObject scope=executionScope(host,execution).put("arguments",new JSONObject());TaskStore.TeamRemoteClaim claim=host.claim(TaskStore.TeamRemoteAction.CANCEL,preparedOperation,scope,original);if(!claim.canDispatch())return claim.view();JSONObject input=wire(claim.view());JSONObject actual;
-        try{actual=module.cancelAssignmentJob(input,()->host.beforeDispatch(claim,original));}catch(java.io.IOException unavailable){actual=notice(input,"unknown");}host.record(claim,actual);return actual;
+        try{actual=module.cancelAssignmentJob(claim,()->host.beforeDispatch(claim,original));}catch(java.io.IOException unavailable){actual=notice(input,"unknown");}host.record(claim,actual);return actual;
     }
     public Contribution freeze(NativeHost host,Execution execution,String preparedOperation,RunControl original)throws Exception {
         check(host,execution);JSONObject latest=inspect(host,execution);if(!latest.optString("status").matches("completed|failed|cancelled")||!latest.optBoolean("dispatchFenceFinal"))throw new SecurityException("原job尚未最终结算，不能冻结贡献");JSONObject scope=executionScope(host,execution).put("arguments",new JSONObject());TaskStore.TeamRemoteClaim claim=host.claim(TaskStore.TeamRemoteAction.FREEZE,preparedOperation,scope,original);if(!claim.canDispatch())return new Contribution(this,host.context(),execution,preparedOperation,claim.view());JSONObject input=wire(claim.view()),actual;

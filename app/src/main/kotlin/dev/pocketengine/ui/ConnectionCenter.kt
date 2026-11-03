@@ -224,7 +224,7 @@ private fun RemoteConnections(state: PocketUiState, controller: PocketWorldContr
             state.tasks.firstOrNull { it.raw.optString("feature") == "remote" && it.raw.optString("externalId") == job.optString("id") && it.raw.optJSONObject("externalRefs")?.optString("profileId") == id }?.let { task ->
                 TextButton(onClick = { controller.focusTask(task.id) }) { Text("打开本机原任务与补充回执", fontSize = 12.sp) }
             }
-            if (job.optString("status") in setOf("queued", "running", "stopping", "awaiting_approval", "awaiting_input")) TextButton(onClick = { controller.requestFeature("remote", "cancelJob", JSONObject().put("profileId", id).put("jobId", job.optString("id"))) }) { Text("请求停止", fontSize = 12.sp) }
+            if (job.optString("status") in setOf("queued", "running", "stopping", "awaiting_approval", "awaiting_input")) TextButton(onClick = { controller.requestFeature("remote", "cancelJob", JSONObject().put("profileId", id).put("jobId", job.optString("id")).put("jobOperationId", job.optString("operationId")).put("serviceBase", job.optString("serviceBase"))) }) { Text("请求停止", fontSize = 12.sp) }
         }
     }
     editing?.let { profile -> RemoteProfileDialog(profile, state, controller) { editing = null } }
