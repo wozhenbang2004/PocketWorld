@@ -82,7 +82,10 @@ public class McpModuleTest {
             JSONObject second=install(m,discover(m,f,McpData.VERSION));assertNotEquals(first.getString("installationId"),second.getString("installationId"));assertFalse(second.getBoolean("enabled"));assertEquals(0,m.toolRegistry().length());
             authorize(m);try{m.handle("invoke",invocation(first));fail();}catch(SecurityException expected){}assertEquals(0,f.count("tools/call"));
             try{m.handle("install",new JSONObject().put("manifest",second.getJSONObject("manifest")));fail();}catch(IllegalArgumentException expected){}
-            try{m.handle("rollback",new JSONObject().put("id","remote").put("expectedInstallationId",second.getString("installationId")).put("expectedStateRevision",second.getLong("stateRevision")).put("targetInstallationId",first.getString("installationId")));fail();}catch(IllegalArgumentException expected){}
+            // authorize() legitimately advances stateRevision. Use the current CAS reference so
+            // this assertion reaches the separate prohibition on restoring MCP declarations.
+            JSONObject current=m.snapshot().getJSONArray("plugins").getJSONObject(0);assertEquals(second.getString("installationId"),current.getString("installationId"));
+            try{m.handle("rollback",new JSONObject().put("id","remote").put("expectedInstallationId",second.getString("installationId")).put("expectedStateRevision",current.getLong("stateRevision")).put("targetInstallationId",first.getString("installationId")));fail();}catch(IllegalArgumentException expected){}
             assertEquals(second.getString("installationId"),m.snapshot().getJSONArray("plugins").getJSONObject(0).getString("installationId"));
         }finally{m.close();}
     }

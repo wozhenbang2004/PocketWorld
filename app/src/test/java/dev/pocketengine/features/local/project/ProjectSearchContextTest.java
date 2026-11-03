@@ -12,8 +12,8 @@ public final class ProjectSearchContextTest {
     private static final String CHECKOUT="11111111-1111-1111-1111-111111111111";
     @Before public void create()throws Exception{root=Files.createTempDirectory("project-search-context-");}
     @After public void close()throws Exception{try(var paths=Files.walk(root)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}
-    private void file(String path,String text)throws Exception{Path target=root.resolve(path);Files.createDirectories(target.getParent());Files.writeString(target,text);}
-    private JSONObject query(){return new JSONObject().put("mode","text").put("query","needle").put("contextBefore",1).put("contextAfter",1);}
+    private void file(String path,String text)throws Exception{Path target=root.resolve(path);Files.createDirectories(target.getParent());writeUtf8(target,text);}
+    private JSONObject query()throws Exception{return new JSONObject().put("mode","text").put("query","needle").put("contextBefore",1).put("contextAfter",1);}
     private JSONObject search(JSONObject input)throws Exception{return ProjectFileQueries.search(root.toFile(),CHECKOUT,input,()->{});}
 
     @Test public void overlappingWindowsMergeWithoutDroppingOriginalMatches()throws Exception{
@@ -47,9 +47,9 @@ public final class ProjectSearchContextTest {
         assertFalse(result.getBoolean("contextComplete"));assertTrue(result.getBoolean("contextTruncated"));assertTrue(result.getInt("contextResultBytes")<=12000);
         assertEquals(result.getJSONArray("contextBlocks").toString().getBytes(StandardCharsets.UTF_8).length,result.getInt("contextResultBytes"));
         assertTrue(result.toString().getBytes(StandardCharsets.UTF_8).length<30000);
-        for(Object raw:result.getJSONArray("contextBlocks"))for(Object row:((JSONObject)raw).getJSONArray("lines")){
+        JSONArray blocks=result.getJSONArray("contextBlocks");for(int b=0;b<blocks.length();b++){JSONArray lines=blocks.getJSONObject(b).getJSONArray("lines");for(int l=0;l<lines.length();l++){Object row=lines.get(l);
             String value=((JSONObject)row).getString("text");assertTrue(StandardCharsets.UTF_8.newEncoder().canEncode(value));
-        }
+        }}
     }
     @Test public void cancellationDuringAdditionalContextReadStillPropagates()throws Exception{
         file("a.txt","before\nneedle\nafter\n");java.util.concurrent.atomic.AtomicInteger baseline=new java.util.concurrent.atomic.AtomicInteger();
@@ -69,4 +69,6 @@ public final class ProjectSearchContextTest {
         file("a.txt","other\n");JSONObject none=search(query());assertEquals(0,none.getJSONArray("contextBlocks").length());assertTrue(none.getBoolean("contextComplete"));
         JSONObject plain=search(new JSONObject().put("mode","text").put("query","other"));assertFalse(plain.has("contextBlocks"));
     }
+    private static java.nio.file.Path writeUtf8(java.nio.file.Path path,String text)throws java.io.IOException{return Files.write(path,text.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+
 }

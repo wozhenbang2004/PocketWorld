@@ -48,13 +48,21 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
     /** The original conversation owns this page. Native foreground review, never a model command. */
     public final class WorkPlanPage implements AutoCloseable {
         private final TeamCoordinator coordinator;private final String run;private final TaskStore.TeamWorkWindow window;private final CurrentModel models;private volatile boolean alive=true;
-        private TeamCoordinator.WorkPlanSource source;private TaskStore.TeamWorkReview pending;private TeamWorkItems.Plan projectPlan;
+        private TeamCoordinator.WorkPlanSource source;private TaskStore.TeamWorkReview pending;private TeamWorkItems.Plan projectPlan;private TaskStore.TeamWakePolicyReview pendingWake;
         private TeamCoordinator.WorkMutationSource mutation;private TaskStore.TeamWorkRevisionReview pendingRevision;private JSONObject revisionOptions;private TeamWorkHandoff.Plan handoffPlan;private TaskStore.TeamIntegrationBudgetReview pendingIntegrationBudget;private TaskStore.TeamIntegratorScopeReview pendingIntegratorScope;private TeamProjectWorkspaces.IntegratorScopeCapture pendingIntegratorCapture;
         private WorkPlanPage(TeamCoordinator coordinator,String run,CurrentModel models)throws Exception{this.coordinator=coordinator;this.run=run;this.models=java.util.Objects.requireNonNull(models);window=tasks.openTeamWorkWindow(run);}
         public void setForeground(boolean foreground){window.setForeground(alive&&foreground);}
         private void require(){if(!alive)throw new SecurityException("原工作计划窗口已关闭");}
         public JSONObject snapshot()throws Exception{require();return tasks.teamWorkPlanSnapshot(run).put("executionTree",tasks.teamExecutionTreeForOwner(run,16));}
         public JSONObject parent()throws Exception{require();return tasks.teamWorkPlanParent(run);}
+        public synchronized JSONObject wakePolicyStatus()throws Exception{require();return tasks.teamWakeStateForOwner(window);}
+        public synchronized TaskStore.TeamWakePolicyReview reviewWakePolicy(long expectedRevision,boolean enabled,int perRound,int cumulative,long expiresAt)throws Exception{
+            require();pendingWake=null;pendingWake=tasks.prepareTeamWakePolicy(window,expectedRevision,new TeamWakeQueue.OwnerPolicy(enabled,java.util.Set.of(TeamWakeQueue.SourceKind.AUTHORIZED_CONTROL),perRound,cumulative,expiresAt));return pendingWake;
+        }
+        /** Saving changes only this original policy, never starts a child or refills the parent pool. */
+        public synchronized JSONObject approveWakePolicy(TaskStore.TeamWakePolicyReview exact,String digest)throws Exception{
+            require();if(exact==null||exact!=pendingWake)throw new SecurityException("请先审阅本页原父消息唤醒策略");JSONObject saved=tasks.approveTeamWakePolicy(exact,digest);pendingWake=null;changed.accept(run);return saved;
+        }
         public synchronized JSONObject integrationBudgetStatus()throws Exception{require();return tasks.teamIntegrationBudgetStatus(window,coordinator.workMutationSource(run));}
         public synchronized TaskStore.TeamIntegrationBudgetReview reviewIntegrationBudget(int newModelLimit)throws Exception{require();pendingIntegrationBudget=tasks.reviewTeamIntegrationBudget(window,coordinator.workMutationSource(run),newModelLimit);return pendingIntegrationBudget;}
         public synchronized JSONObject approveIntegrationBudget(TaskStore.TeamIntegrationBudgetReview exact,String digest)throws Exception {

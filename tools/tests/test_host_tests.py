@@ -22,7 +22,7 @@ class HostTestEntrypointTest(unittest.TestCase):
         block = re.search(r'(?ms)^concurrency:\n(.*?)(?=^jobs:)', workflow).group(1)
         self.assertIn("github.event_name == 'workflow_dispatch'", block)
         self.assertIn("inputs.target == 'host-tests'", block)
-        self.assertIn("format('host-{0}', inputs.host_group) || 'apk'", block)
+        self.assertIn("(inputs.host_groups != '' && 'host-selected-batch' || format('host-{0}', inputs.host_group)) || 'apk'", block)
         self.assertIn('github.ref', block)
         self.assertIn('cancel-in-progress: false', block)
 
@@ -325,7 +325,7 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn('        default: apk', workflow)
         title = next(line for line in workflow.splitlines() if line.startswith('run-name:'))
         self.assertIn("inputs.target == 'host-tests'", title)
-        self.assertIn("format('Host tests · {0}', inputs.host_group)", title)
+        self.assertIn("format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group)", title)
         self.assertIn("|| 'Debug APK'", title)
         self.assertIn('github.ref_name', title)
         self.assertIn('github.run_number', title)

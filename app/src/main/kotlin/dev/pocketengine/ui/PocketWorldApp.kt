@@ -504,6 +504,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             if (pairedTask || task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private") DeviceTaskHistoryControls(task, controller.nativeDeviceWorkspace(), controller::runDeviceWorkspaceWork, controller.deviceWorkspaceRevision, controller::deviceWorkspaceChanged)
             if (pairedTask) DevicePairedTaskControls(task, controller.nativeDeviceWorkspace(), controller::runDeviceWorkspaceWork, controller::runDeviceWorkspaceControlWork, controller.deviceWorkspaceRevision, controller::deviceWorkspaceChanged) { controller.openConnection("models"); close() }
             if (!pairedTask && !teamChild && !groupTask && !mediaTask && !memoryConsolidationTask) ExecutionScopeControls(task,controller)
+            WorkProfileTaskRecoveryControls(task, controller)
             if (assistantTask && task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.status !in setOf("completed", "cancelled", "failed", "stopping", "reconciling")) OwnerProjectEditScopeControls(task.id, controller::openOwnerEditScopePage, controller::runDeviceWorkspaceWork)
             if (!pairedTask && !groupTask && !mediaTask && !memoryConsolidationTask && task.raw.optJSONObject("origin") == null && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optString("kind") in setOf("phone", "assistant") && task.status !in setOf("completed", "cancelled", "failed", "interrupted", "reconciling")) DeviceTaskScopeEntry(task, controller.nativeDeviceTaskScope(), controller::runDeviceWorkspaceWork) { controller.deviceTaskWorkspaceChanged(task.id) }
             if (!groupTask && !mediaTask && !memoryConsolidationTask && (phoneTask || assistantTask) && teamRunReferences(task).isEmpty()) TaskExecutionProcess(task, controller) { target ->
@@ -617,7 +618,8 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             if (!pairedTask && !teamChild && task.status != "completed" && !groupTask && !memoryConsolidationTask && !mediaTask) {
                 OutlinedTextField(value = feedback, onValueChange = { feedback = it }, label = { Text("补充要求") }, placeholder = { Text("补充目标或说明你刚处理了什么…") }, modifier = Modifier.fillMaxWidth().padding(top = 22.dp), minLines = 2, maxLines = 5, shape = RoundedCornerShape(14.dp))
                 if (assistantExecuting) Text("先停止当前执行，再将补充保存并继续原任务。", fontSize = 11.sp, color = SecondaryInk, modifier = Modifier.padding(top = 8.dp))
-                Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedButton(onClick = { controller.updateTask(task.id, feedback) }, enabled = feedback.isNotBlank() && !assistantExecuting) { Text("保存补充") }; if (!active && !assistantExecuting && (phoneTask || assistantTask)) Button(onClick = { resumeConsent = true }, enabled = unknown.isEmpty() && pendingCapabilityApprovals(task).isEmpty() && task.status != "reconciling" && task.status != "stopping") { Text("继续此任务") } }
+                Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedButton(onClick = { controller.updateTask(task.id, feedback) }, enabled = feedback.isNotBlank() && !assistantExecuting) { Text("保存补充") }; if (!active && !assistantExecuting && (phoneTask || assistantTask) && !WorkProfileDrafts.originalOwnerTask(task.raw)) Button(onClick = { resumeConsent = true }, enabled = unknown.isEmpty() && pendingCapabilityApprovals(task).isEmpty() && task.status != "reconciling" && task.status != "stopping") { Text("继续此任务") } }
+                if (WorkProfileDrafts.originalOwnerTask(task.raw)) Text("此任务保留准确工作配置。保存补充后，请从上方“原任务工作配置”重新核对并继续，不改用全局默认模型。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
             }
             if (!phoneTask && !assistantTask && !mediaTask) Text(if (task.raw.optString("feature") == "remote") "原电脑会话与本次授权可从上方入口核对；未知结果仅查询，不会重提任务。" else "这是${executionLocation(task.executionMode)}任务，后续操作请回到对应能力入口；此处保留执行结果与记录。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 14.dp))
             if (!pairedTask && sourceLearningTask) dev.pocketengine.ui.memory.SourceLearningJobPanel(task.raw, controller) { close(); controller.openConnection("memoryReview") }
@@ -959,6 +961,9 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                 if (settingsSection == 1) SettingsSurface("任务偏好", "回复详略与普通操作节奏") {
                     AgentPreferencesControls(state.agentPreferences, state.agentPreferencesSaving, state.agentPreferencesError, controller::saveAgentPreferences)
                 }
+                if (settingsSection == 1) SettingsSurface("记忆候选", "由你选择范围，继续沿原记忆审核入口") {
+                    AutomaticUserLearningControls(controller)
+                }
                 if (settingsSection == 1) SettingsSurface("手机执行", "授权与后台任务入口") {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地按需取图", fontSize = 14.sp); Text("独立于云截图发送；关闭后不会为 OCR 采集像素。更改用于后续运行。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localCaptureAllowed, { controller.saveLocalObservation(it, state.localOcrAllowed) }) }
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地 OCR", fontSize = 14.sp); Text("优先本地识字。像素不外发，但识别文字会作为有来源的上下文发送给所选推理服务。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localOcrAllowed, { controller.saveLocalObservation(state.localCaptureAllowed, it) }) }
@@ -996,7 +1001,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
 // (reference 0e69029b, public-preview independent implementation; not paid upstream TSX).
 // One content surface per task group; rows and field explanations stay on that same plane.
 @Composable
-private fun SettingsSurface(title: String, detail: String, content: @Composable ColumnScope.() -> Unit) {
+internal fun SettingsSurface(title: String, detail: String, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 4.dp).pocketDepth(PocketDepth.CONTENT, 18.dp)
         .clip(RoundedCornerShape(18.dp)).background(Color.White).border(.5.dp, Line, RoundedCornerShape(18.dp)).padding(16.dp)) {
         Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium)

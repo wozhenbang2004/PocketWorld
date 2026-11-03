@@ -32,6 +32,8 @@ public final class NativeOwnerWorkflows {
     private volatile AccountGateway accounts;
     private final Map<String,String> authorizationUrls=new HashMap<>();
     private final Map<String,JSONObject> catalogs=new HashMap<>();
+    private final Map<String,dev.pocketengine.features.plugins.McpLocalDiscovery.Review> localMcpReviews=new HashMap<>();
+    private final Map<String,dev.pocketengine.features.plugins.McpLocalInstallation.Review> localMcpInstallReviews=new HashMap<>();
     private JSONObject selectedModel;
     private long accountSnapshotRevision;
     private volatile boolean accountInferenceInstalled;
@@ -96,11 +98,18 @@ public final class NativeOwnerWorkflows {
         if(accounts==null)accounts=new AccountGateway(new File(context.android.getFilesDir(),"accounts/chatgpt.json"),new SecretVaultAdapter(context.secrets),"owner/private");
         return accounts;
     }
+    /** Native owner screen only; neither a TeamSelection nor its JSON metadata grants this token. */
+    public dev.pocketengine.features.memory.ProjectMemoryNamespaces projectMemoryForOwner(){
+        EngineModule local=host.module("local"),workspace=host.module("workspace");
+        if(!(local instanceof dev.pocketengine.features.local.LocalModule)||!(workspace instanceof dev.pocketengine.features.workspace.WorkspaceModule))throw new IllegalStateException("原项目记忆宿主暂不可用");
+        return memory().projectNamespacesForOwner((dev.pocketengine.features.local.LocalModule)local,(dev.pocketengine.features.workspace.WorkspaceModule)workspace,sources);
+    }
     public JSONObject memorySnapshot()throws Exception{
         host.synchronizeMemory(ownerScope());
         return memory().snapshot().put("nativeCapabilities",new JSONObject().put("acceptCandidate",true).put("candidateCapacity",true).put("listCandidateHistory",true).put("archiveCandidates",true).put("reconsiderRejected",true).put("forgetReviewed",true).put("openSource",true));
     }
     public JSONObject memory(String command,JSONObject payload)throws Exception{
+        dev.pocketengine.features.memory.ProjectMemoryNamespaces.rejectNamespaceArguments(payload);
         MemoryModule module=memory();JSONObject scope=ownerScope();host.synchronizeMemory(scope);
         switch(command){
             case "snapshot":return memorySnapshot();
@@ -217,10 +226,45 @@ public final class NativeOwnerWorkflows {
             default:throw new IllegalArgumentException("此操作不属于原生经验审核");
         }
     }
-    public JSONObject mcpSnapshot()throws Exception{return plugins().snapshot().put("oauthConnections",plugins().mcpOAuthSnapshot()).put("nativeCapabilities",new JSONObject().put("setEnabledReviewed",true).put("setToolGrantReviewed",true).put("mcpOAuthMounted",true));}
+    public JSONObject mcpSnapshot()throws Exception{return plugins().snapshot().put("oauthConnections",plugins().mcpOAuthSnapshot()).put("nativeCapabilities",new JSONObject().put("setEnabledReviewed",true).put("setToolGrantReviewed",true).put("mcpOAuthMounted",true).put("pingMcpInstalledReadOnly",true).put("mcpPromptsInstalledReadOnly",true).put("localMcpDiscoveryOwnerOnly",true));}
+    private static long mcpStateRevision(JSONObject payload)throws Exception{
+        Object raw=payload.get("expectedStateRevision");if(!(raw instanceof Number))throw new IllegalArgumentException("MCP状态修订需为整数");
+        try{return new java.math.BigDecimal(raw.toString()).longValueExact();}catch(NumberFormatException|ArithmeticException invalid){throw new IllegalArgumentException("MCP状态修订需为准确整数",invalid);}
+    }
     public JSONObject mcp(String command,JSONObject payload)throws Exception{
         switch(command){
             case "snapshot":return mcpSnapshot();
+            case "localMcpDiscoveryChoices":{
+                EngineModule selected=host.module("local");if(!(selected instanceof dev.pocketengine.features.local.LocalModule local))throw new SecurityException("原手机开发副本宿主不可用");return new JSONObject().put("checkouts",local.managedSkillCheckoutsForHost()).put("runtime",local.projectRuntimeForHost(dev.pocketengine.features.local.runtime.ManagedProjectRuntime.RUNTIME_ID)).put("metadataOnly",true).put("executionAuthorized",false).put("credentialsSupported",false);
+            }
+            case "describeLocalMcpWorkspace":{
+                EngineModule selected=host.module("local");if(!(selected instanceof dev.pocketengine.features.local.LocalModule local))throw new SecurityException("原手机开发副本宿主不可用");String checkout=payload.getString("checkoutId");boolean ordinary=false;JSONArray allowed=local.managedSkillCheckoutsForHost();for(int i=0;i<allowed.length();i++)if(checkout.equals(allowed.getJSONObject(i).getString("checkoutId")))ordinary=true;if(!ordinary)throw new SecurityException("请选择原主人普通副本");return local.describeMcpWorkspaceForOwner(checkout,new dev.pocketengine.core.RunControl());
+            }
+            case "prepareLocalMcpDiscovery":{
+                EngineModule selected=host.module("local");if(!(selected instanceof dev.pocketengine.features.local.LocalModule local))throw new SecurityException("原手机开发副本宿主不可用");
+                synchronized(localMcpReviews){for(var iterator=localMcpReviews.entrySet().iterator();iterator.hasNext();){var entry=iterator.next();try{entry.getValue().metadata();}catch(Exception stale){entry.getValue().close();iterator.remove();}}if(localMcpReviews.size()>=4)throw new SecurityException("请先关闭旧的本机MCP程序审阅");var review=local.reviewMcpForOwner(payload.getJSONObject("configuration"),new dev.pocketengine.core.RunControl()).bindPluginTarget(plugins());JSONObject view=review.metadata();String id=view.getString("actionId");localMcpReviews.put(id,review);return view.put("reviewId",id).put("previewOnly",true).put("programStarted",false);}
+            }
+            case "confirmLocalMcpDiscovery":{
+                dev.pocketengine.features.plugins.McpLocalDiscovery.Review review;synchronized(localMcpReviews){review=localMcpReviews.remove(payload.getString("reviewId"));}if(review==null)throw new SecurityException("请在此原生窗口重新完整审阅本机程序，不能从JSON恢复批准");try{return host.submitMcpDiscoveryForOwner(review.confirm(payload.getString("planDigest")));}finally{review.close();}
+            }
+            case "discardLocalMcpReview":{
+                dev.pocketengine.features.plugins.McpLocalDiscovery.Review review;synchronized(localMcpReviews){review=localMcpReviews.remove(payload.getString("reviewId"));}if(review!=null)review.close();return new JSONObject().put("discarded",review!=null).put("programStarted",false).put("taskCancelled",false);
+            }
+            case "readLocalMcpDiscovery":return host.observeMcpDiscoveryForOwner(payload.getString("taskId"),false);
+            case "cancelLocalMcpDiscovery":return host.observeMcpDiscoveryForOwner(payload.getString("taskId"),true);
+            case "prepareLocalMcpInstall":{
+                EngineModule selected=host.module("local");if(!(selected instanceof dev.pocketengine.features.local.LocalModule local))throw new SecurityException("原手机开发源码宿主不可用");
+                synchronized(localMcpInstallReviews){for(var iterator=localMcpInstallReviews.entrySet().iterator();iterator.hasNext();){var entry=iterator.next();try{entry.getValue().metadata();}catch(Exception stale){entry.getValue().close();iterator.remove();}}if(localMcpInstallReviews.size()>=4)throw new SecurityException("请先关闭旧的本机MCP安装审阅");var completed=tasks.completedOwnerMcpDiscoveryForInstallForOwner(payload.getString("taskId"));var review=plugins().reviewLocalMcpInstallForOwner(tasks,completed,local,payload.getJSONArray("tools"),new dev.pocketengine.core.RunControl());JSONObject view=review.metadata();localMcpInstallReviews.put(view.getString("reviewId"),review);return view;}
+            }
+            case "confirmLocalMcpInstall":{
+                dev.pocketengine.features.plugins.McpLocalInstallation.Review review;synchronized(localMcpInstallReviews){review=localMcpInstallReviews.remove(payload.getString("reviewId"));}if(review==null)throw new SecurityException("请在此原生窗口重新审阅本机MCP安装；JSON不是批准");try{return plugins().installLocalMcpForOwner(review,payload.getString("reviewDigest"));}finally{review.close();}
+            }
+            case "discardLocalMcpInstallReview":{
+                dev.pocketengine.features.plugins.McpLocalInstallation.Review review;synchronized(localMcpInstallReviews){review=localMcpInstallReviews.remove(payload.getString("reviewId"));}if(review!=null)review.close();return new JSONObject().put("discarded",review!=null).put("programStarted",false).put("installationChanged",false);
+            }
+            case "pingMcp":return plugins().pingMcpInstallation(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),new dev.pocketengine.core.RunControl(),payload.getString("_operationId"));
+            case "listMcpPrompts":return plugins().listMcpPrompts(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),new dev.pocketengine.core.RunControl(),payload.getString("_operationId"));
+            case "getMcpPrompt":return plugins().getMcpPrompt(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),payload.getString("name"),payload.getString("descriptorDigest"),payload.getJSONObject("arguments"),new dev.pocketengine.core.RunControl(),payload.getString("_operationId"));
             case "setEnabledReviewed":return plugins().setEnabledReviewed(payload.getString("id"),payload.getString("expectedInstallationId"),payload.getBoolean("enabled"));
             case "setToolGrantReviewed":return plugins().setToolGrantReviewed(payload.getString("id"),payload.getString("expectedInstallationId"),payload.getString("expectedGrantsDigest"),payload.getString("tool"),payload.getBoolean("granted"));
             case "discoverMcp":{

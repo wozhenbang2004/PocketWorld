@@ -13,10 +13,13 @@ MAX_PAGE = 32
 
 
 def capability(worker):
-    return {"protocol": PROTOCOL, "supported": worker in {"codex_app_server", "claude"},
+    return {"protocol": PROTOCOL, "supported": worker in {"codex_app_server", "claude", "pi"},
             "filter": FILTER, "maxPageEvents": MAX_PAGE, "retainedEvents": 64,
             "retainedEventBytes": 24576, "cursorPersistedByClient": True,
-            "delivery": "bounded_cursor_get_not_sse", "completeProviderHistory": False}
+            "delivery": "bounded_cursor_get_not_sse", "completeProviderHistory": False,
+            "childSourceProtocol": "claude_complete_child_v1" if worker == "claude" else None,
+            "childSourceDelivery": "received_complete_public_blocks_only" if worker == "claude" else "unsupported",
+            "childTokenStreaming": False, "childSessionControl": False}
 
 
 def _integer(query, key, default, maximum, error):

@@ -26,6 +26,13 @@ public final class RecoveryProjectionTest {
         JSONObject unknown=operation(1).put("state","unknown").put("receipt",new JSONObject().put("accepted",JSONObject.NULL).put("status","unknown"));JSONObject live=operation(2).put("state","project_running").put("receipt",new JSONObject().put("accepted",true).put("terminal",false));JSONObject resolved=operation(3).put("state","resolved").put("receipt",new JSONObject().put("source","owner_reconciliation").put("outcome","not_occurred"));JSONArray rows=facts(RecoveryProjection.fromJournal("task-original",new JSONArray().put(unknown).put(live).put(resolved),"")).getJSONArray("records");
         assertEquals("not_occurred",rows.getJSONObject(0).getJSONObject("receiptFacts").getString("ownerReconciliation"));assertFalse(rows.getJSONObject(0).getJSONObject("receiptFacts").getBoolean("independentlyVerified"));assertFalse(rows.getJSONObject(1).getJSONObject("receiptFacts").getBoolean("terminal"));assertTrue(rows.getJSONObject(2).getJSONObject("receiptFacts").isNull("accepted"));
     }
+    @Test public void topLevelOrUnresolvedOwnerMarkersCannotMintResolvedReceiptFacts()throws Exception{
+        JSONObject misplaced=operation(1).put("state","resolved").put("source","owner_reconciliation").put("outcome","occurred");misplaced.remove("receipt");
+        JSONObject unresolved=operation(2).put("state","unknown").put("receipt",new JSONObject().put("source","owner_reconciliation").put("outcome","occurred"));
+        JSONObject metadata=facts(RecoveryProjection.fromJournal("task-original",new JSONArray().put(misplaced).put(unresolved),""));
+        for(int i=0;i<metadata.getJSONArray("records").length();i++){JSONObject row=metadata.getJSONArray("records").getJSONObject(i);assertFalse(row.has("receiptFacts"));assertFalse(row.toString().contains("ownerReconciliation"));}
+        assertFalse(metadata.getBoolean("executionAuthorized"));assertFalse(metadata.getBoolean("automaticReplay"));
+    }
     @Test public void neverRedactsAnIdentityIntoASyntheticUsableLocator()throws Exception{
         JSONArray source=new JSONArray().put(operation(1).put("operationId","native-secret-id")).put(operation(2).put("tool","native_secret_tool"));RecoveryProjection view=RecoveryProjection.fromJournal("task-original",source,"secret");JSONObject data=facts(view);assertFalse(view.referenceData().contains("secret"));assertEquals(1,data.getInt("shownRows"));assertTrue(data.getInt("redactedFields")>0);assertTrue(data.getJSONArray("records").getJSONObject(0).isNull("tool"));
     }

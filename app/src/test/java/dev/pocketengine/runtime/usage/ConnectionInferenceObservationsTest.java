@@ -4,6 +4,8 @@ import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.runtime.models.ConnectionInferenceObservations;
 import dev.pocketengine.runtime.models.ModelBinding;
+import dev.pocketengine.runtime.providers.ProviderCompatProfile;
+import dev.pocketengine.runtime.providers.ProviderCompatibility;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
@@ -27,6 +29,52 @@ public final class ConnectionInferenceObservationsTest {
         capture.dispatch();if(outcome!=InferenceReceipt.Outcome.COMPLETED)capture.failure(InferenceFailure.http(429,List.of("120"),List.of(),AT));capture.finish(outcome);return result[0];
     }
     private ConnectionInferenceObservations observations(){return new ConnectionInferenceObservations(Clock.fixed(Instant.ofEpochMilli(AT),ZoneOffset.UTC));}
+    private ModelBinding cacheBinding(long installation)throws Exception{return new ModelBinding("cache-connection","provider",ModelBinding.Protocol.ANTHROPIC,ModelBinding.Format.ANTHROPIC,URI.create("https://models.fixture/v1/models"),"credential",1,"installation",installation,false);}
+    private InferenceReceipt cacheReceipt(ModelBinding binding,boolean supported,JSONObject usage)throws Exception {
+        ModelConfig config=new ModelConfig("https://models.fixture/v1","fixture-private-key","cache-model",false,4,10,"anthropic",512).withApiConnection(binding);
+        JSONObject policy=new JSONObject().put("cacheMode","EPHEMERAL");if(supported)policy.put("cacheSupport","SUPPORTED");
+        config=config.withProviderCompatibility(ProviderCompatProfile.reviewed(policy,"anthropic","cache-model",null));
+        JSONArray history=new JSONArray().put(new JSONObject().put("role","system").put("content","stable native source")).put(new JSONObject().put("role","user").put("content","Inspect"));
+        JSONObject ordinary=new JSONObject().put("model","cache-model").put("max_tokens",512).put("system",new JSONArray().put(new JSONObject().put("type","text").put("text","stable native source"))).put("messages",new JSONArray().put(new JSONObject().put("role","user").put("content","Inspect")));
+        JSONObject wire=ProviderCompatibility.project(config,history,null,ordinary);
+        InferenceReceipt[] result={null};InferenceCapture capture=new InferenceCapture(config,new RunControl(),new InferenceCapture.Target(InferenceReceipt.Context.unattributed(),new InferenceCapture.Sink(){public void started(InferenceReceipt r){}public void finished(InferenceReceipt r){result[0]=r;}}));
+        capture.requestProjection(wire);capture.dispatch();if(usage!=null)capture.usage.observe(new JSONObject().put("usage",usage),ProviderUsage.Stage.FINAL);capture.finish(InferenceReceipt.Outcome.COMPLETED);return result[0];
+    }
+    @Test public void committedCacheHintsAndProviderCountsAreSeparateReadOnlyObservations()throws Exception {
+        ModelBinding binding=cacheBinding(1);InferenceReceipt receipt=cacheReceipt(binding,true,new JSONObject().put("cache_read_input_tokens",5).put("cache_creation_input_tokens",2));String original=receipt.toJson().toString();
+        ConnectionInferenceObservations observations=observations();observations.committed(receipt);JSONObject cache=observations.snapshot(binding,"cache-model").getJSONObject("lastCall").getJSONObject("cacheObservation");
+        assertTrue(cache.getBoolean("hintPrepared"));assertTrue(cache.getBoolean("dispatchAttempted"));assertEquals("unknown",cache.getString("hintDelivery"));assertFalse(cache.has("hintSent"));
+        assertTrue(cache.getBoolean("usageReported"));assertEquals("provider_reported",cache.getJSONObject("counters").getJSONObject("CACHE_READ").getString("source"));assertEquals(5,cache.getJSONObject("counters").getJSONObject("CACHE_READ").getLong("value"));assertEquals(2,cache.getJSONObject("counters").getJSONObject("CACHE_WRITE").getLong("value"));
+        assertFalse(cache.getBoolean("inputIncludesCacheRead"));assertFalse(cache.getBoolean("inputIncludesCacheWrite"));assertFalse(cache.getBoolean("cacheHitInferred"));assertEquals("provider_counters_not_a_bill",cache.getString("usageMeaning"));
+        assertFalse(cache.toString().contains("fixture-private-key"));assertFalse(cache.toString().contains("stable native source"));assertEquals(original,receipt.toJson().toString());
+        cache.getJSONObject("counters").getJSONObject("CACHE_READ").put("value",999);assertEquals(5,observations.snapshot(binding,"cache-model").getJSONObject("lastCall").getJSONObject("cacheObservation").getJSONObject("counters").getJSONObject("CACHE_READ").getLong("value"));
+    }
+    @Test public void missingUsageAndUnknownCacheSupportStayExplicitlyUnknown()throws Exception {
+        ModelBinding binding=cacheBinding(1);ConnectionInferenceObservations observations=observations();observations.committed(cacheReceipt(binding,false,null));JSONObject cache=observations.snapshot(binding,"cache-model").getJSONObject("lastCall").getJSONObject("cacheObservation");
+        assertFalse(cache.getBoolean("hintPrepared"));assertEquals("not_requested",cache.getString("hintDelivery"));assertFalse(cache.getBoolean("usageReported"));assertFalse(cache.getBoolean("cacheHitInferred"));
+        for(String key:List.of("CACHE_READ","CACHE_WRITE","CACHE_WRITE_5M","CACHE_WRITE_1H")){JSONObject counter=cache.getJSONObject("counters").getJSONObject(key);assertTrue(counter.has("value"));assertTrue(counter.isNull("value"));assertEquals("unknown",counter.getString("source"));assertTrue(counter.isNull("sourcePath"));}
+    }
+    @Test public void explicitProviderZeroIsRetainedAndDoesNotFillMissingCacheCounters()throws Exception {
+        ModelBinding binding=cacheBinding(1);ConnectionInferenceObservations observations=observations();observations.committed(cacheReceipt(binding,false,new JSONObject().put("cache_read_input_tokens",0).put("cache_creation",new JSONObject().put("ephemeral_5m_input_tokens",3).put("ephemeral_1h_input_tokens",4))));
+        JSONObject counts=observations.snapshot(binding,"cache-model").getJSONObject("lastCall").getJSONObject("cacheObservation").getJSONObject("counters");
+        assertEquals(0,counts.getJSONObject("CACHE_READ").getLong("value"));assertEquals("provider_reported",counts.getJSONObject("CACHE_READ").getString("source"));assertTrue(counts.getJSONObject("CACHE_WRITE").isNull("value"));
+        assertEquals(3,counts.getJSONObject("CACHE_WRITE_5M").getLong("value"));assertEquals(4,counts.getJSONObject("CACHE_WRITE_1H").getLong("value"));
+    }
+    @Test public void cacheEvidenceRequiresOriginalTerminalCommitAndCurrentExactRoute()throws Exception {
+        ModelBinding binding=cacheBinding(1);ConnectionInferenceObservations observations=observations();InferenceCapture.installPresentationObserver(new InferenceCapture.Sink(){public void started(InferenceReceipt r){}public void finished(InferenceReceipt r)throws Exception{observations.committed(r);}});
+        InferenceCapture failed=new InferenceCapture(new ModelConfig("https://models.fixture/v1","fixture-private-key","cache-model",false,4,10,"anthropic",512).withApiConnection(binding),new RunControl(),new InferenceCapture.Target(InferenceReceipt.Context.unattributed(),new InferenceCapture.Sink(){public void started(InferenceReceipt r){}public void finished(InferenceReceipt r)throws Exception{throw new java.io.IOException("original durable sink failed");}}));
+        failed.dispatch();failed.usage.observe(new JSONObject().put("usage",new JSONObject().put("cache_read_input_tokens",5)),ProviderUsage.Stage.FINAL);assertFalse(observations.snapshot(binding,"cache-model").getBoolean("observed"));assertThrows(java.io.IOException.class,()->failed.finish(InferenceReceipt.Outcome.COMPLETED));assertFalse(observations.snapshot(binding,"cache-model").getBoolean("observed"));
+        cacheReceipt(binding,true,new JSONObject().put("cache_read_input_tokens",5));assertTrue(observations.snapshot(binding,"cache-model").getBoolean("observed"));
+        assertFalse(observations.snapshot(cacheBinding(2),"cache-model").getBoolean("observed"));assertFalse(observations.snapshot(binding,"other-model").getBoolean("observed"));assertFalse(observations().snapshot(binding,"cache-model").getBoolean("observed"));
+    }
+    @Test public void cacheProjectionRejectsMalformedClaimsAndNeverCopiesUnexpectedMetadata()throws Exception {
+        ModelBinding binding=cacheBinding(1);InferenceReceipt original=cacheReceipt(binding,true,new JSONObject().put("cache_read_input_tokens",5).put("cache_creation_input_tokens",2));JSONObject raw=original.toJson(),route=raw.getJSONObject("route"),usage=raw.getJSONObject("usage");
+        route.getJSONObject("providerProjection").put("prompt","never-export-native-prompt").put("hintPrepared","true").put("hintDelivery","delivered").put("apiKey","never-export-key");
+        usage.getJSONObject("counters").getJSONObject("CACHE_READ").put("value","0");usage.getJSONObject("counters").getJSONObject("CACHE_WRITE").put("sourcePath","never-export-key");
+        InferenceReceipt malformed=new InferenceReceipt(original.callId,original.context,original.outcome,original.startedAt,original.finishedAt,original.elapsedNanos,route,usage);ConnectionInferenceObservations observations=observations();observations.committed(malformed);
+        JSONObject cache=observations.snapshot(binding,"cache-model").getJSONObject("lastCall").getJSONObject("cacheObservation");assertFalse(cache.toString().contains("never-export"));assertTrue(cache.isNull("hintPrepared"));assertEquals("unknown",cache.getString("hintDelivery"));
+        for(String key:List.of("CACHE_READ","CACHE_WRITE")){assertTrue(cache.getJSONObject("counters").getJSONObject(key).isNull("value"));assertEquals("unknown",cache.getJSONObject("counters").getJSONObject(key).getString("source"));}
+    }
     @Test public void nativeFailedReceiptIsExactConnectionCredentialInstallationAndModelNotGlobalHealth()throws Exception {
         ModelBinding binding=binding("connection",1,1);ConnectionInferenceObservations observations=observations();InferenceReceipt receipt=receipt(binding,"model-a",InferenceReceipt.Outcome.FAILED);observations.committed(receipt);
         JSONObject row=observations.snapshot(binding,"model-a");assertTrue(row.getBoolean("observed"));assertEquals(receipt.callId,row.getJSONObject("lastCall").getString("callId"));assertEquals("FAILED",row.getJSONObject("lastCall").getString("outcome"));assertFalse(row.getBoolean("healthVerified"));assertFalse(row.getBoolean("automaticRetry"));assertFalse(row.getBoolean("quotaKnown"));

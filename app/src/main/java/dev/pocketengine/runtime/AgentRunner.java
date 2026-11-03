@@ -63,6 +63,7 @@ public final class AgentRunner {
     }
     private final RequestProjection requestProjection;
     private final OwnerInputs ownerInputs;
+    private final RequestClockContext requestClock;
     /** Installed only by the native owner host retaining this exact Runner/port/control. */
     public interface DevelopmentContinuation { boolean retainAfterTurn() throws Exception; }
     private DevelopmentContinuation developmentContinuation;
@@ -92,6 +93,12 @@ public final class AgentRunner {
     }
     public AgentRunner(PhonePort phone,CapabilityPort capabilities,ContextBudgetPolicy.Source contextBudgets,
                        RequestProjection requestProjection,OwnerInputs ownerInputs){
+        this(phone,capabilities,contextBudgets,requestProjection,ownerInputs,RequestClockContext.system());
+    }
+    /** Native package seam for deterministic clock tests, never model/owner JSON configuration. */
+    AgentRunner(PhonePort phone,CapabilityPort capabilities,ContextBudgetPolicy.Source contextBudgets,
+                RequestProjection requestProjection,OwnerInputs ownerInputs,RequestClockContext requestClock){
+        this.requestClock=java.util.Objects.requireNonNull(requestClock);
         if(phone==null&&capabilities==null)throw new IllegalArgumentException("An actual executor port is required");
         this.phone=phone;this.capabilities=capabilities;
         this.contextBudgets=java.util.Objects.requireNonNull(contextBudgets);
@@ -180,6 +187,7 @@ public final class AgentRunner {
         java.util.Map<dev.pocketengine.core.NativeToolPlan,JSONObject> nativeSequenceProgress=new java.util.IdentityHashMap<>();
         java.util.List<dev.pocketengine.core.NativeToolObservation.Image> nativeImages=new java.util.ArrayList<>();
         int steps = 0;
+        RepeatToolNotice repeatedTools=new RepeatToolNotice();
         ContextBudgetPolicy.Source runBudgets=ContextBudgetPolicy.forRun(contextBudgets,control);
         RunContextBudget contextBudget = new RunContextBudget(runBudgets);
         ContextCompactor compactor=new ContextCompactor(journal,journal==null?null:journal.compaction(),runBudgets);
@@ -246,12 +254,15 @@ public final class AgentRunner {
                 boolean openingRestoredTurn=round==firstRound&&storedMessages!=null&&storedMessages.length()>0;
                 JSONArray acceptedInputs=pollOwnerInputs(history,openingRestoredTurn,false,control);appendOwnerInputs(history,acceptedInputs,config);
                 if(acceptedInputs.length()>0)recallIntent=latestOwnerRecallQuery(history,recallIntent);
+                repeatedTools.ownerBoundary(history);
                 // One final model response may summarize the last receipt; the dispatch budget below
                 // still rejects every additional tool effect once the cumulative ceiling is reached.
                 emit(taskId, "model", "running", "正在决定下一步操作。", null, null, config, sink);
                 JSONArray requestHistory=history;
                 JSONObject memoryDependency=null;
-                String nativeReference=recovery.referenceData();
+                String nativeReference=clean(requestClock.referenceData(),config);
+                String repeatNotice=repeatedTools.referenceData();if(!repeatNotice.isEmpty())nativeReference+="\n\n"+repeatNotice;
+                if(!recovery.referenceData().isEmpty())nativeReference+="\n\n"+recovery.referenceData();
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
                 if(control.phoneSurfaceActive()&&phone instanceof AdaptivePhonePort)addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 if(capabilities!=null){
@@ -613,6 +624,7 @@ public final class AgentRunner {
                     // The real operation receipt and text checkpoint already committed above.
                     // Unknown/approval/pause outcomes stop before any extension code is invoked.
                     if(capabilities!=null&&!control.isPaused()&&pauseSeen[0]==control.pauseRevision())capabilities.afterTool(name,safeJson(args,config,false),safeToolReceipt(name,receipt,config),control);
+                    try{repeatedTools.afterTool(name,args,receipt,capabilities!=null&&capabilities.supports(name)&&!capabilities.sideEffecting(name));}catch(RuntimeException unavailable){/* Optional notice never replaces an original receipt. */}
                     // A successful read can still time out with an unmet predicate. Only this
                     // native plan step uses matched as a prerequisite; standalone WAIT is unchanged.
                     String conditionKey=activeStep!=null&&activeStep.tool==dev.pocketengine.core.NativeToolPlan.Tool.BROWSER_WAIT?"conditionMet":"matched";

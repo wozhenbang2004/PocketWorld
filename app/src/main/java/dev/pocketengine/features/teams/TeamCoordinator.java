@@ -336,7 +336,7 @@ public final class TeamCoordinator implements AutoCloseable {
     private static final long ARCHIVE_BYTE_LIMIT=32L*1024*1024;
     private final ExecutorService coordinator=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"pocket-team-owner");t.setDaemon(true);return t;});
     private final ExecutorService members=Executors.newFixedThreadPool(2,r->{Thread t=new Thread(r,"pocket-team-member");t.setDaemon(true);return t;});
-    private boolean closed;
+    private volatile boolean closed;
     /** The existing initial policy, shared with native scope capture; NOT the later 64/32 resume caps. */
     public static JSONObject initialBudget(int memberCount,int rounds)throws Exception {
         if(memberCount<1||memberCount>4||rounds<1||rounds>2)throw new IllegalArgumentException("原团队预算计划无效");
@@ -517,6 +517,26 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
             if(permanent&&target.isEmpty())return cancel(run.json.getString("id"));pause(run.json.getString("id"),target);
             for(int i=0;i<roster(run).length();i++){JSONObject slot=roster(run).getJSONObject(i);if(!target.isEmpty()&&!target.equals(slot.getString("id")))continue;slot.put("parentPause",new JSONObject().put("parentTaskId",parent).put("memberGeneration",slot.getInt("generation")).put("permanent",permanent));if(permanent)slot.put("status","cancelled");}
             activity(run,permanent?"parent_cancel_requested":"parent_pause_requested",permanent?"父代理请求停止指定原成员；实际退出与未知效果另行核对":"父代理暂停原成员；仅可在本scope和实际剩余预算内继续",target);save(run);return JsonFiles.copy(run.json);}
+    }
+    /** Read-only native safe-point facts. This object cannot grant a continuation or be restored from JSON. */
+    public static final class WakeSource {
+        private final TeamCoordinator issuer;private final Run run;private final RunControl control;private final int generation;private final long revision;private final String data;private final boolean paused,cancelled;
+        private WakeSource(TeamCoordinator issuer,Run run,JSONObject data){this.issuer=issuer;this.run=run;control=run.control;generation=run.generation;revision=run.nativeRevision;this.data=data.toString();paused=control!=null&&control.isPaused();cancelled=control!=null&&control.isCancelled();}
+        public void checkCurrent(){if(issuer.closed||run.control!=control||run.generation!=generation||run.nativeRevision!=revision||control!=null&&(paused!=control.isPaused()||cancelled!=control.isCancelled()))throw new SecurityException("原wake安全点、成员或执行代次已改变");}
+        public JSONObject view()throws Exception{checkCurrent();return new JSONObject(data);}
+    }
+    public synchronized WakeSource wakeSource(String teamRun,String memberId,String itemId)throws Exception{
+        Run run=required(teamRun);if(run.json.optJSONObject("workPlan")==null)throw new SecurityException("此自动wake只接原制作workItem，不猜研究或新任务");JSONObject item=TeamWorkItems.find(run.json.getJSONObject("workPlan").getJSONArray("items"),itemId),slot=member(run,memberId);
+        if(!memberId.equals(item.getString("memberId")))throw new SecurityException("原wake工作项成员已改派");
+        boolean paused=run.paused||slot.optBoolean("paused")||run.control!=null&&run.control.isPaused(),stopped=run.control==null||run.control.isCancelled()||run.json.optString("status").equals("cancelled")||slot.optBoolean("exited");
+        return new WakeSource(this,run,new JSONObject().put("teamRunId",teamRun).put("memberId",memberId).put("workItemId",itemId).put("itemRevision",item.getInt("itemRevision")).put("ownerGeneration",item.getInt("ownerGeneration")).put("assignmentId",item.getString("assignmentId")).put("identityRevision",slot.optInt("identityRevision",1)).put("runGeneration",run.generation).put("memberGeneration",slot.getInt("generation")).put("paused",paused).put("stopped",stopped).put("safeIdle",!paused&&!stopped&&!run.children.containsKey(memberId)&&slot.optString("status").matches("awaiting_user|awaiting_input|interrupted")));
+    }
+    /** Same work-item scheduler; only a real SQL owner-policy admission can use this route.
+     * SQL separately proves pending questions/approvals and unknown effects are absent. */
+    public synchronized JSONObject continueForWake(dev.pocketengine.store.TaskStore.TeamWakeAdmission admission,JSONObject input,ModelConfig model)throws Exception{
+        if(admission==null||!admission.hasCandidate())throw new SecurityException("没有原生wake策略准入");WakeSource source=admission.originalSource();if(source.issuer!=this)throw new SecurityException("原wake不是此原协调器安全点");source.checkCurrent();JSONObject exact=source.view();
+        if(!exact.getBoolean("safeIdle")||exact.getBoolean("paused")||exact.getBoolean("stopped")||!exact.getString("teamRunId").equals(input.getString("runId"))||!exact.getString("memberId").equals(input.getString("memberId"))||!exact.getString("workItemId").equals(input.getString("workItemId")))throw new SecurityException("原wake不属于此安全成员/工作项");
+        Run run=required(input.getString("runId"));reviewedSnapshot(run,input);return continueWorkItem(run.json.getString("id"),exact.getString("workItemId"),admission::claimOriginalContinuation,model);
     }
     public JSONObject continueForParent(dev.pocketengine.store.TaskStore.TeamParentOrigin original,JSONObject input,WorkItemContinuation continuation,ModelConfig model,boolean messageContinuation)throws Exception{
         original.checkCurrent();synchronized(this){Run run=required(input.getString("runId"));reviewedSnapshot(run,input);String itemId=input.getString("workItemId"),parent=original.view().getString("parentTaskId");JSONObject item=TeamWorkItems.find(run.json.getJSONObject("workPlan").getJSONArray("items"),itemId),slot=member(run,item.getString("memberId")),pause=slot.optJSONObject("parentPause");if(!item.getString("memberId").equals(input.getString("memberId")))throw new SecurityException("原工作项已改派，不按旧成员猜最新assignment");

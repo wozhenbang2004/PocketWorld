@@ -53,7 +53,7 @@ public final class AndroidRuntimePreparationTest {
         Path root=Files.createTempDirectory("runtime-tar-valid-");try {
             File archive=archive(root,tar->{link(tar,"usr/bin/hard","usr/bin/tool",true);file(tar,"usr/bin/tool","real bytes",0755);link(tar,"bin","/usr/bin",false);});
             Path output=Files.createDirectory(root.resolve("out"));RuntimeTarExtractor.extract(archive,"tar.gz",output.toFile(),0,1000,()->{},(p,n,t)->{});
-            assertEquals("real bytes",Files.readString(output.resolve("bin/tool")));assertFalse(Files.readSymbolicLink(output.resolve("bin")).isAbsolute());
+            assertEquals("real bytes",new String(Files.readAllBytes(output.resolve("bin/tool")),StandardCharsets.UTF_8));assertFalse(Files.readSymbolicLink(output.resolve("bin")).isAbsolute());
             assertTrue(Files.isSameFile(output.resolve("usr/bin/tool"),output.resolve("usr/bin/hard")));assertTrue(Files.getPosixFilePermissions(output.resolve("usr/bin/tool")).contains(PosixFilePermission.OWNER_EXECUTE));
         }finally{cleanup(root);}
     }
@@ -62,14 +62,14 @@ public final class AndroidRuntimePreparationTest {
             File archive=archive(root,tar->{link(tar,"usr/bin/alias2","usr/bin/alias1",true);link(tar,"usr/bin/alias1","usr/bin/tool",true);file(tar,"usr/bin/tool","real bytes",0755);file(tar,"usr/lib/loader","loader bytes",0755);link(tar,"lib","/usr/lib",false);});
             Path output=Files.createDirectory(root.resolve("out")),backing=root.resolve("backing");AtomicInteger effects=new AtomicInteger();
             RuntimeTarExtractor.extract(archive,"tar.gz",output.toFile(),0,1000,()->{},(p,n,t)->{},(path,target)->{
-                assertEquals("loader bytes",Files.readString(output.resolve("lib/loader")));
+                assertEquals("loader bytes",new String(Files.readAllBytes(output.resolve("lib/loader")),StandardCharsets.UTF_8));
                 assertEquals(output.resolve("usr/bin/tool"),target);
                 // Simulate a trusted backend converting the original to a backing
                 // link. All archive validation must already be complete at this point.
                 if(effects.getAndIncrement()==0){Files.move(target,backing);Files.createSymbolicLink(target,backing);}
                 Files.createSymbolicLink(path,backing);
             });
-            assertEquals(2,effects.get());assertEquals("real bytes",Files.readString(output.resolve("usr/bin/alias2")));assertTrue(Files.isSameFile(output.resolve("usr/bin/alias1"),output.resolve("usr/bin/tool")));
+            assertEquals(2,effects.get());assertEquals("real bytes",new String(Files.readAllBytes(output.resolve("usr/bin/alias2")),StandardCharsets.UTF_8));assertTrue(Files.isSameFile(output.resolve("usr/bin/alias1"),output.resolve("usr/bin/tool")));
         }finally{cleanup(root);}
     }
     @Test public void hardLinkCyclesAndSymbolicTargetsAreRejectedBeforeAnyDelegatedEffect() throws Exception {
@@ -86,9 +86,9 @@ public final class AndroidRuntimePreparationTest {
     @Test public void stableBackingSurvivesGenerationRenameAndRejectsPolicyPathOwnerOrCatalogChanges() throws Exception {
         Path root=Files.createTempDirectory("runtime-link-storage-");try {
             RuntimeLinkStorage storage=new RuntimeLinkStorage(root.toFile());String catalog="a".repeat(64);JSONObject binding=storage.allocate(catalog);Path backing=storage.require(binding,catalog).toPath();
-            Path staging=Files.createDirectory(root.resolve("staging")),rootfs=Files.createDirectory(staging.resolve("rootfs")),data=Files.writeString(backing.resolve(".l2s.fixture0001.0002"),"same data");
+            Path staging=Files.createDirectory(root.resolve("staging")),rootfs=Files.createDirectory(staging.resolve("rootfs")),data=Files.write(backing.resolve(".l2s.fixture0001.0002"),("same data").getBytes(StandardCharsets.UTF_8));
             Files.createSymbolicLink(rootfs.resolve("original"),data);Files.createSymbolicLink(rootfs.resolve("alias"),data);Path generation=root.resolve("generation");Files.move(staging,generation);
-            assertEquals(backing,new RuntimeLinkStorage(root.toFile()).require(binding,catalog).toPath());assertEquals("same data",Files.readString(generation.resolve("rootfs/alias")));assertTrue(Files.isSameFile(generation.resolve("rootfs/original"),generation.resolve("rootfs/alias")));
+            assertEquals(backing,new RuntimeLinkStorage(root.toFile()).require(binding,catalog).toPath());assertEquals("same data",new String(Files.readAllBytes(generation.resolve("rootfs/alias")),StandardCharsets.UTF_8));assertTrue(Files.isSameFile(generation.resolve("rootfs/original"),generation.resolve("rootfs/alias")));
             assertThrows(SecurityException.class,()->storage.require(null,catalog));
             assertThrows(SecurityException.class,()->storage.require(new JSONObject(binding.toString()).put("policy","old"),catalog));
             assertThrows(SecurityException.class,()->storage.require(new JSONObject(binding.toString()).put("hostPath",root.toString()),catalog));
@@ -106,31 +106,38 @@ public final class AndroidRuntimePreparationTest {
     @Test public void preparedLaunchUsesTheSameStableBackingAndLegacyGenerationRequiresNonDestructiveRepair() throws Exception {
         Path root=Files.createTempDirectory("runtime-link-launch-");try {
             Path home=Files.createDirectory(root.resolve("home")),tmp=Files.createDirectory(root.resolve("tmp")),nativeLib=Files.createDirectory(root.resolve("native"));
-            Path proot=Files.writeString(nativeLib.resolve("libproot.so"),"fixture engine"),loader=Files.writeString(nativeLib.resolve("libloader.so"),"fixture loader");proot.toFile().setExecutable(true);loader.toFile().setExecutable(true);
+            Path proot=Files.write(nativeLib.resolve("libproot.so"),("fixture engine").getBytes(StandardCharsets.UTF_8)),loader=Files.write(nativeLib.resolve("libloader.so"),("fixture loader").getBytes(StandardCharsets.UTF_8));proot.toFile().setExecutable(true);loader.toFile().setExecutable(true);
             JSONObject descriptor=catalog();descriptor.getJSONObject("engine").put("prootSha256",RuntimeFiles.sha256(proot.toFile())).put("loaderSha256",RuntimeFiles.sha256(loader.toFile()));AndroidRuntimeCatalog approved=new AndroidRuntimeCatalog(descriptor);
             RuntimeEnvironment environment=new RuntimeEnvironment(root.toFile(),identity->{});Path androidRoot=Files.createDirectory(root.resolve("android-runtime"));RuntimeLinkStorage storage=new RuntimeLinkStorage(androidRoot.toFile());JSONObject binding=storage.allocate(approved.identity);Path backing=storage.require(binding,approved.identity).toPath();
             // A host-only synthetic seal exercises the real loader/launch guards;
             // none of these fixture bytes are passed to execve or called a tool probe.
             JSONObject seal=new JSONObject().put("schema","pocketworld.runtime-generation.v1").put("catalogIdentity",approved.identity).put("catalog",descriptor).put("linkStorage",binding);JSONArray tools=new JSONArray();
-            for(String name:List.of("sh","node","npm","python3","git")){Path file=Files.writeString(backing.resolve(".l2s."+name+"0001.0001"),"fixture "+name);tools.put(new JSONObject().put("name",name).put("path","/usr/bin/"+name).put("sha256",RuntimeFiles.sha256(file.toFile())).put("bytes",Files.size(file)).put("modifiedAt",file.toFile().lastModified()));}
+            for(String name:List.of("sh","node","npm","python3","git")){Path file=Files.write(backing.resolve(".l2s."+name+"0001.0001"),("fixture "+name).getBytes(StandardCharsets.UTF_8));tools.put(new JSONObject().put("name",name).put("path","/usr/bin/"+name).put("sha256",RuntimeFiles.sha256(file.toFile())).put("bytes",Files.size(file)).put("modifiedAt",file.toFile().lastModified()));}
             seal.put("tools",tools);String identity=ProjectSources.digest(seal);seal.put("generationIdentity",identity);Path generation=Files.createDirectory(environment.generationStorage().toPath().resolve(identity)),rootfs=Files.createDirectories(generation.resolve("rootfs/usr/bin"));
             for(int i=0;i<tools.length();i++){String name=tools.getJSONObject(i).getString("name");Files.createSymbolicLink(rootfs.resolve(name),backing.resolve(".l2s."+name+"0001.0001"));}
             RuntimeFiles.write(generation.resolve("generation.json").toFile(),seal);RuntimeFiles.write(androidRoot.resolve("active.json").toFile(),new JSONObject().put("generationIdentity",identity));
             AndroidRuntimePreparation preparation=new AndroidRuntimePreparation(root.toFile(),nativeLib.toFile(),approved,environment,home.toFile(),tmp.toFile());assertTrue(preparation.describe(true).getBoolean("canExecute"));
+            // A damaged optional progress cache must not turn a valid original
+            // active generation into an unconfigured runtime or erase evidence.
+            Path progress=androidRoot.resolve("preparation.json");Files.write(progress,("{damaged-original-progress").getBytes(StandardCharsets.UTF_8));
+            AndroidRuntimePreparation recoveredView=new AndroidRuntimePreparation(root.toFile(),nativeLib.toFile(),approved,environment,home.toFile(),tmp.toFile());
+            assertTrue(recoveredView.ready());assertTrue(recoveredView.describe(true).getBoolean("canExecute"));
+            assertEquals("observation",recoveredView.describe(true).getJSONObject("health").getJSONObject("preparation").getString("failureCategory"));
+            assertEquals("{damaged-original-progress",new String(Files.readAllBytes(progress),StandardCharsets.UTF_8));
             assertEquals(backing.toString(),preparation.hostEnvironment(identity).get("PROOT_L2S_DIR"));List<String> command=preparation.command(null,".",List.of("/usr/bin/sh","-c","true"));assertTrue(command.contains("--link2symlink"));assertTrue(command.contains(backing+":"+backing));
             assertThrows(SecurityException.class,()->preparation.hostEnvironment("b".repeat(64)));
             JSONObject legacy=new JSONObject(seal.toString());legacy.remove("generationIdentity");legacy.remove("linkStorage");String oldIdentity=ProjectSources.digest(legacy);legacy.put("generationIdentity",oldIdentity);Path old=Files.createDirectory(environment.generationStorage().toPath().resolve(oldIdentity));Files.createDirectories(old.resolve("rootfs"));RuntimeFiles.write(old.resolve("generation.json").toFile(),legacy);RuntimeFiles.write(androidRoot.resolve("active.json").toFile(),new JSONObject().put("generationIdentity",oldIdentity));
-            AndroidRuntimePreparation repair=new AndroidRuntimePreparation(root.toFile(),nativeLib.toFile(),approved,environment,home.toFile(),tmp.toFile());assertFalse(repair.ready());assertEquals("repair_required",repair.describe(true).getJSONObject("preparation").getString("phase"));assertTrue(Files.isDirectory(old));assertTrue(Files.exists(generation.resolve("rootfs/usr/bin/sh")));assertEquals("fixture sh",Files.readString(generation.resolve("rootfs/usr/bin/sh")));
+            AndroidRuntimePreparation repair=new AndroidRuntimePreparation(root.toFile(),nativeLib.toFile(),approved,environment,home.toFile(),tmp.toFile());assertFalse(repair.ready());assertEquals("repair_required",repair.describe(true).getJSONObject("preparation").getString("phase"));assertTrue(Files.isDirectory(old));assertTrue(Files.exists(generation.resolve("rootfs/usr/bin/sh")));assertEquals("fixture sh",new String(Files.readAllBytes(generation.resolve("rootfs/usr/bin/sh")),StandardCharsets.UTF_8));
         }finally{cleanup(root);}
     }
     @Test public void traversalSymlinkWritesAndSpecialFilesCannotEscapeStaging() throws Exception {
         Path root=Files.createTempDirectory("runtime-tar-invalid-");try {
-            Path sentinel=Files.writeString(root.resolve("sentinel"),"retained");
+            Path sentinel=Files.write(root.resolve("sentinel"),("retained").getBytes(StandardCharsets.UTF_8));
             File traversal=archive(root,tar->file(tar,"../sentinel","changed",0644));Path out=Files.createDirectory(root.resolve("a"));assertThrows(SecurityException.class,()->RuntimeTarExtractor.extract(traversal,"tar.gz",out.toFile(),0,1000,()->{},(p,n,t)->{}));
             File linkEscape=archive(root,tar->{link(tar,"escape","../../",false);file(tar,"escape/sentinel","changed",0644);});Path out2=Files.createDirectory(root.resolve("b"));assertThrows(SecurityException.class,()->RuntimeTarExtractor.extract(linkEscape,"tar.gz",out2.toFile(),0,1000,()->{},(p,n,t)->{}));
             File throughLink=archive(root,tar->{link(tar,"a","/usr",false);file(tar,"a/x","data",0644);});Path out3=Files.createDirectory(root.resolve("c"));assertThrows(SecurityException.class,()->RuntimeTarExtractor.extract(throughLink,"tar.gz",out3.toFile(),0,1000,()->{},(p,n,t)->{}));
             File special=archive(root,tar->{TarArchiveEntry fifo=new TarArchiveEntry("fifo",TarConstants.LF_FIFO);tar.putArchiveEntry(fifo);tar.closeArchiveEntry();});Path out4=Files.createDirectory(root.resolve("d"));assertThrows(SecurityException.class,()->RuntimeTarExtractor.extract(special,"tar.gz",out4.toFile(),0,1000,()->{},(p,n,t)->{}));
-            assertEquals("retained",Files.readString(sentinel));
+            assertEquals("retained",new String(Files.readAllBytes(sentinel),StandardCharsets.UTF_8));
         }finally{cleanup(root);}
     }
     @Test public void expansionBudgetCancellationAndStripComponentsAreEnforced() throws Exception {
@@ -138,7 +145,7 @@ public final class AndroidRuntimePreparationTest {
             File archive=archive(root,tar->file(tar,"node-v24/bin/node","fixture",0755));Path a=Files.createDirectory(root.resolve("a"));
             assertThrows(SecurityException.class,()->RuntimeTarExtractor.extract(archive,"tar.gz",a.toFile(),1,1,()->{},(p,n,t)->{}));
             Path b=Files.createDirectory(root.resolve("b"));assertThrows(InterruptedException.class,()->RuntimeTarExtractor.extract(archive,"tar.gz",b.toFile(),1,100,()->{throw new InterruptedException("stopped");},(p,n,t)->{}));
-            Path c=Files.createDirectory(root.resolve("c"));RuntimeTarExtractor.extract(archive,"tar.gz",c.toFile(),1,100,()->{},(p,n,t)->{});assertEquals("fixture",Files.readString(c.resolve("bin/node")));
+            Path c=Files.createDirectory(root.resolve("c"));RuntimeTarExtractor.extract(archive,"tar.gz",c.toFile(),1,100,()->{},(p,n,t)->{});assertEquals("fixture",new String(Files.readAllBytes(c.resolve("bin/node")),StandardCharsets.UTF_8));
         }finally{cleanup(root);}
     }
     @Test public void generationLeaseBlocksOnlyThatGenerationAndReleasesExactlyOnce() throws Exception {
@@ -148,7 +155,7 @@ public final class AndroidRuntimePreparationTest {
         }finally{cleanup(root);}
     }
     private static RuntimeInvocation invocation(Path root,String operation) throws Exception {
-        JSONObject source=RuntimeContractsTest.source();Files.writeString(root.resolve("Main.java"),"class Main {}\n");JSONObject exact=RuntimeContractsTest.exact(source,"termux.prepare",null);
+        JSONObject source=RuntimeContractsTest.source();Files.write(root.resolve("Main.java"),("class Main {}\n").getBytes(StandardCharsets.UTF_8));JSONObject exact=RuntimeContractsTest.exact(source,"termux.prepare",null);
         return new RuntimeInvocation(exact,RuntimeContractsTest.binding(operation),source,RuntimeContractsTest.original(),()->{},new RuntimeWorkspace(root.toFile(),"project",RuntimeContractsTest.CHECKOUT));
     }
     @Test public void preparationFailureAndCancellationUseOriginalReceiptsWithoutNativeDispatch() throws Exception {
@@ -169,25 +176,22 @@ public final class AndroidRuntimePreparationTest {
             try(ManagedProjectRuntime runtime=ManagedProjectRuntime.unconfigured(contextDirectory.getCanonicalFile())){assertFalse(runtime.describe().getBoolean("canExecute"));assertTrue(Files.isDirectory(actual.resolve("development-runtime/managed-process")));}
         }finally{cleanup(root);}
     }
-    private static final class HttpFixture extends java.net.HttpURLConnection {
-        final byte[] body;final long start,total;final boolean range;
-        HttpFixture(java.net.URL url,byte[] body,long start,long total,boolean range){super(url);this.body=body;this.start=start;this.total=total;this.range=range;}
-        @Override public int getResponseCode(){return range?206:200;}
-        @Override public String getHeaderField(String name){return name.equals("Content-Range")?"bytes "+start+"-"+(total-1)+"/"+total:null;}
-        @Override public long getContentLengthLong(){return body.length;}
-        @Override public java.io.InputStream getInputStream(){return new java.io.ByteArrayInputStream(body);}
-        @Override public void connect(){}@Override public void disconnect(){}@Override public boolean usingProxy(){return false;}
+    private static final class HttpFixture implements okhttp3.Interceptor {
+        final byte[] body;final long start,total;final boolean range;okhttp3.Request request;
+        HttpFixture(byte[] body,long start,long total,boolean range){this.body=body;this.start=start;this.total=total;this.range=range;}
+        @Override public okhttp3.Response intercept(okhttp3.Interceptor.Chain chain){request=chain.request();okhttp3.Response.Builder response=new okhttp3.Response.Builder().request(request).protocol(okhttp3.Protocol.HTTP_1_1).code(range?206:200).message("fixture").body(okhttp3.ResponseBody.create(body,okhttp3.MediaType.get("application/octet-stream")));if(range)response.header("Content-Range","bytes "+start+"-"+(total-1)+"/"+total);return response.build();}
+        okhttp3.Call call(okhttp3.Request request){return new okhttp3.OkHttpClient.Builder().addInterceptor(this).build().newCall(request);}
     }
     @Test public void controlledDownloadResumesBytesVerifiesFullHashAndPreservesUserHomeOnFailure() throws Exception {
         Path root=Files.createTempDirectory("runtime-http-fixture-");ManagedProcessJobs jobs=null;try {
-            Path active=Files.createDirectory(root.resolve("active")),home=Files.createDirectory(root.resolve("home")),tmp=Files.createDirectory(root.resolve("tmp")),nativeLib=Files.createDirectory(root.resolve("native"));Files.writeString(home.resolve("user.txt"),"retained");
+            Path active=Files.createDirectory(root.resolve("active")),home=Files.createDirectory(root.resolve("home")),tmp=Files.createDirectory(root.resolve("tmp")),nativeLib=Files.createDirectory(root.resolve("native"));Files.write(home.resolve("user.txt"),("retained").getBytes(StandardCharsets.UTF_8));
             byte[] bytes="pinned archive bytes".getBytes(StandardCharsets.UTF_8);JSONObject descriptor=catalog();JSONObject artifact=descriptor.getJSONObject("rootfs").put("archiveBytes",bytes.length).put("archiveSha256",ProjectSources.sha256(bytes));
             jobs=new ManagedProcessJobs(root.toFile(),new NativeProcessSupervisor());RuntimeEnvironment environment=new RuntimeEnvironment(root.toFile(),jobs::requireEnvironmentIdle);
-            List<HttpFixture> connections=new ArrayList<>();AndroidRuntimePreparation preparation=new AndroidRuntimePreparation(root.toFile(),nativeLib.toFile(),new AndroidRuntimeCatalog(descriptor),environment,home.toFile(),tmp.toFile(),url->{HttpFixture connection=new HttpFixture(url,java.util.Arrays.copyOfRange(bytes,6,bytes.length),6,bytes.length,true);connections.add(connection);return connection;});
+            List<HttpFixture> connections=new ArrayList<>();AndroidRuntimePreparation preparation=new AndroidRuntimePreparation(root.toFile(),nativeLib.toFile(),new AndroidRuntimeCatalog(descriptor),environment,home.toFile(),tmp.toFile(),request->{HttpFixture connection=new HttpFixture(java.util.Arrays.copyOfRange(bytes,6,bytes.length),6,bytes.length,true);connections.add(connection);return connection.call(request);});
             Path cache=root.resolve("android-runtime/downloads");Files.write(cache.resolve(artifact.getString("archiveSha256")+".part"),java.util.Arrays.copyOf(bytes,6));RuntimeInvocation resumed=invocation(active,"resumed");
-            jobs.startPreparation(resumed,"a".repeat(64),context->{File downloaded=preparation.download(artifact,context);assertArrayEquals(bytes,Files.readAllBytes(downloaded.toPath()));return new JSONObject();},()->{});assertEquals("completed",await(jobs,resumed).status());assertEquals("bytes=6-",connections.get(0).getRequestProperty("Range"));assertFalse(Files.exists(cache.resolve(artifact.getString("archiveSha256")+".part")));
-            JSONObject badDescriptor=catalog();JSONObject bad=badDescriptor.getJSONObject("rootfs").put("archiveBytes",bytes.length).put("archiveSha256","f".repeat(64));AndroidRuntimePreparation invalid=new AndroidRuntimePreparation(root.toFile(),nativeLib.toFile(),new AndroidRuntimeCatalog(badDescriptor),environment,home.toFile(),tmp.toFile(),url->new HttpFixture(url,bytes,0,bytes.length,false));RuntimeInvocation failed=invocation(active,"bad-hash");
-            jobs.startPreparation(failed,"b".repeat(64),context->{invalid.download(bad,context);return new JSONObject();},()->{});RuntimeReceipt receipt=await(jobs,failed);assertEquals("failed",receipt.status());assertEquals("runtime_package_hash_mismatch",receipt.json().getString("error"));assertEquals("not_dispatched",receipt.json().getString("effectStatus"));assertFalse(Files.exists(cache.resolve("f".repeat(64)+".part")));assertEquals("retained",Files.readString(home.resolve("user.txt")));
+            jobs.startPreparation(resumed,"a".repeat(64),context->{File downloaded=preparation.download(artifact,context);assertArrayEquals(bytes,Files.readAllBytes(downloaded.toPath()));return new JSONObject();},()->{});assertEquals("completed",await(jobs,resumed).status());assertEquals("bytes=6-",connections.get(0).request.header("Range"));assertFalse(Files.exists(cache.resolve(artifact.getString("archiveSha256")+".part")));
+            JSONObject badDescriptor=catalog();JSONObject bad=badDescriptor.getJSONObject("rootfs").put("archiveBytes",bytes.length).put("archiveSha256","f".repeat(64));AndroidRuntimePreparation invalid=new AndroidRuntimePreparation(root.toFile(),nativeLib.toFile(),new AndroidRuntimeCatalog(badDescriptor),environment,home.toFile(),tmp.toFile(),request->new HttpFixture(bytes,0,bytes.length,false).call(request));RuntimeInvocation failed=invocation(active,"bad-hash");
+            jobs.startPreparation(failed,"b".repeat(64),context->{invalid.download(bad,context);return new JSONObject();},()->{});RuntimeReceipt receipt=await(jobs,failed);assertEquals("failed",receipt.status());assertEquals("runtime_package_hash_mismatch",receipt.json().getString("error"));assertEquals("not_dispatched",receipt.json().getString("effectStatus"));assertFalse(Files.exists(cache.resolve("f".repeat(64)+".part")));assertEquals("retained",new String(Files.readAllBytes(home.resolve("user.txt")),StandardCharsets.UTF_8));
         }finally{if(jobs!=null)jobs.close();cleanup(root);}
     }
     private static RuntimeReceipt await(ManagedProcessJobs jobs,RuntimeInvocation invocation) throws Exception {long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);while(System.nanoTime()<end){RuntimeReceipt actual=jobs.query(invocation.executionRef());if(actual.json().optBoolean("receiptReceived")&&actual.json().has("finishedAt"))return actual;Thread.sleep(5);}throw new AssertionError("preparation did not settle");}

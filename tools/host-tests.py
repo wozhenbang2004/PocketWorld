@@ -167,7 +167,7 @@ def run(args):
         source = ROOT / 'app/src/main/java/dev/pocketengine/features/local/runtime/native'
         command = [executable(args.cxx, 'C++17 compiler'), '-std=c++17', '-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror',
                    '-I' + str(java_home / 'include'), '-I' + str(java_home / 'include/linux'),
-                   str(source / 'process_supervisor.cpp'), str(source / 'pty_supervisor.cpp'), '-o', str(native / 'libpocketprocess.so')]
+                   str(source / 'process_supervisor.cpp'), str(source / 'pty_supervisor.cpp'), str(source / 'pipe_supervisor.cpp'), '-o', str(native / 'libpocketprocess.so')]
         print('Building actual desktop JNI from project sources.', flush=True)
         subprocess.run(command, cwd=ROOT, env=env, check=True)
         props['pocketworldHostNativeDir'] = str(native)

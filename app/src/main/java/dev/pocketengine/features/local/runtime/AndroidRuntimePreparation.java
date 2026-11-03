@@ -4,8 +4,6 @@ import dev.pocketengine.features.local.project.ProjectSources;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -15,13 +13,25 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import okhttp3.Call;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Android's one glibc/PRoot profile. Sources come exclusively from the release-controlled APK catalog. */
 final class AndroidRuntimePreparation {
-    interface ConnectionOpener {HttpURLConnection open(URL url) throws Exception;}
-    private final ConnectionOpener connections;
+    private static final OkHttpClient DOWNLOADS=new OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
+            .connectTimeout(15,TimeUnit.SECONDS).readTimeout(10,TimeUnit.SECONDS).writeTimeout(10,TimeUnit.SECONDS).build();
+    private final Call.Factory downloads;
+    static Call downloadCall(Request request) {
+        AtomicBoolean exchanged=new AtomicBoolean();
+        return DOWNLOADS.newBuilder().addNetworkInterceptor(chain->{if(!exchanged.compareAndSet(false,true))throw new java.io.IOException("runtime_download_second_exchange_rejected");return chain.proceed(chain.request());}).build().newCall(request);
+    }
     private final AndroidRuntimeCatalog catalog;
     private final RuntimeEnvironment environments;
     private final RuntimeLinkStorage links;
@@ -31,11 +41,11 @@ final class AndroidRuntimePreparation {
     private boolean preparing,ownerStorageMaintenance;
     AndroidRuntimePreparation(File privateDirectory,File nativeLibraryDirectory,AndroidRuntimeCatalog catalog,
             RuntimeEnvironment environments,File home,File tmp) throws Exception {
-        this(privateDirectory,nativeLibraryDirectory,catalog,environments,home,tmp,url->(HttpURLConnection)url.openConnection());
+        this(privateDirectory,nativeLibraryDirectory,catalog,environments,home,tmp,AndroidRuntimePreparation::downloadCall);
     }
     AndroidRuntimePreparation(File privateDirectory,File nativeLibraryDirectory,AndroidRuntimeCatalog catalog,
-            RuntimeEnvironment environments,File home,File tmp,ConnectionOpener connections) throws Exception {
-        this.connections=java.util.Objects.requireNonNull(connections);
+            RuntimeEnvironment environments,File home,File tmp,Call.Factory downloads) throws Exception {
+        this.downloads=java.util.Objects.requireNonNull(downloads);
         this.catalog=catalog;this.environments=environments;this.home=home;this.tmp=tmp;
         root=RuntimeFiles.directory(privateDirectory,"android-runtime");cache=RuntimeFiles.directory(root,"downloads");
         links=new RuntimeLinkStorage(root);
@@ -45,8 +55,18 @@ final class AndroidRuntimePreparation {
         for(int i=0;i<servers.length();i++)nameservers.append("nameserver ").append(servers.getString(i)).append('\n');
         writeRegular(dns,nameservers.toString());
         String activeProblem="";File pointer=new File(root,"active.json");if(pointer.isFile()) {try{JSONObject saved=RuntimeFiles.read(pointer);active=loadGeneration(saved.getString("generationIdentity"));}catch(Exception invalid){activeProblem="runtime_active_generation_invalid_repair_required";}}
-        File status=new File(root,"preparation.json");if(status.isFile()) {progress=RuntimeFiles.read(status);if(!progress.optString("phase").matches("ready|failed|cancelled"))progress.put("phase","interrupted").put("resumableDownload",true).put("previousProcessObservation","query_original_operation_before_retry");}
-        if(!activeProblem.isEmpty())progress.put("phase","repair_required").put("error",activeProblem).put("existingGenerationRetained",true);
+        File status=new File(root,"preparation.json");if(status.isFile()) {
+            try{progress=RuntimeFiles.read(status);if(!progress.optString("phase").matches("ready|failed|cancelled"))progress.put("phase","interrupted").put("resumableDownload",true).put("previousProcessObservation","query_original_operation_before_retry");}
+            catch(Exception unreadable){
+                // This is an observation cache, not active.json, the generation
+                // seal or TaskStore. Keep the damaged bytes and original jobs;
+                // a broken progress view must not disable a valid environment.
+                progress=new JSONObject().put("phase","observation_unavailable").put("catalogIdentity",catalog.identity)
+                        .put("error","runtime_preparation_state_unreadable").put("failure",RuntimeHealth.failure(new java.io.IOException("runtime_preparation_state_unreadable")))
+                        .put("originalStateRetained",true).put("previousProcessObservation","query_original_operation_before_retry");
+            }
+        }
+        if(!activeProblem.isEmpty())progress.put("phase","repair_required").put("error",activeProblem).put("failure",RuntimeHealth.failure(new SecurityException(activeProblem))).put("existingGenerationRetained",true);
     }
     synchronized String identity() {return active==null?catalog.identity:active.optString("generationIdentity");}
     String catalogIdentity() {return catalog.identity;}
@@ -67,7 +87,8 @@ final class AndroidRuntimePreparation {
                 .put("tools",tools).put("abi",catalog.abi).put("hostLibc","bionic").put("guestLibc","glibc")
                 .put("generationIdentity",active==null?JSONObject.NULL:active.getString("generationIdentity"))
                 .put("toolProbeRequired",!canExecute).put("integrityPolicy","archive_sha256_at_download;sealed_tool_hashes_at_install;tool_metadata_before_execution;tool_sha256_on_repair")
-                .put("projectFilesRetained",true).put("activeGenerationMutatedByUpgrade",false);
+                .put("projectFilesRetained",true).put("activeGenerationMutatedByUpgrade",false)
+                .put("health",RuntimeHealth.android(catalog,active,tools,progress,engine,supervisorAvailable,canExecute));
     }
     synchronized AutoCloseable beginPreparation() throws Exception {
         if(preparing||ownerStorageMaintenance)throw new IllegalStateException("runtime_preparation_or_owner_cleanup_already_running");preparing=true;
@@ -107,7 +128,10 @@ final class AndroidRuntimePreparation {
     }
     JSONObject prepare(ManagedProcessJobs.PreparationContext context) throws Exception {
         context.check();if(!engineVerified())throw new SecurityException("runtime_apk_engine_missing_or_changed");
-        synchronized(this) {if(active!=null&&catalog.identity.equals(active.optString("catalogIdentity"))) {try{verifyTools(active,true);return preparedResult(active);}catch(SecurityException changed){/* Repair builds a fresh generation, never mutates or deletes this one. */}}}
+        synchronized(this) {if(active!=null&&catalog.identity.equals(active.optString("catalogIdentity"))) {
+            boolean unchanged=true;try{verifyTools(active,true);}catch(SecurityException changed){unchanged=false;/* Repair builds a fresh generation, never mutates or deletes this one. */}
+            if(unchanged){context.check();return preparedResult(active);}
+        }}
         // A new layout never reuses a pre-L2S partially extracted rootfs. Old staging
         // and generations are retained, not silently deleted or modified by repair.
         File candidate=RuntimeFiles.directory(staging,catalog.identity+"-l2s-v1");File marker=new File(candidate,"owner.json");
@@ -173,6 +197,7 @@ final class AndroidRuntimePreparation {
                 phase(context,"probing_hardlinks_after_activation",0,1);
                 run(context,new File(target,"rootfs"),null,List.of("/usr/bin/python3","-c","import os; p='/var/tmp/pocketworld-link-probe'; a=p+'/original'; b=p+'/alias'; assert open(a).read()=='before-activation'; assert os.stat(a).st_ino==os.stat(b).st_ino and os.stat(b).st_nlink==2; os.unlink(a); assert open(b).read()=='before-activation'; os.unlink(b); os.rmdir(p)"),60000);
                 loadGeneration(generation);
+                context.check();
                 RuntimeFiles.write(new File(root,"active.json"),new JSONObject().put("generationIdentity",generation).put("catalogIdentity",catalog.identity));
                 active=loadGeneration(generation);
             }
@@ -181,7 +206,7 @@ final class AndroidRuntimePreparation {
             RuntimeFiles.write(new File(root,"preparation.json"),progress);return preparedResult(seal);
         } catch(Exception|LinkageError failed) {
             progress=new JSONObject().put("phase",failed instanceof InterruptedException?"cancelled":"failed").put("catalogIdentity",catalog.identity)
-                    .put("error",failed.getMessage()==null?"runtime_preparation_failed":failed.getMessage()).put("resumableDownload",true).put("existingGenerationRetained",true);
+                    .put("error",failed.getMessage()==null?"runtime_preparation_failed":failed.getMessage()).put("failure",RuntimeHealth.failure(failed)).put("resumableDownload",true).put("existingGenerationRetained",true);
             RuntimeFiles.write(new File(root,"preparation.json"),progress);throw failed;
         }
     }
@@ -205,28 +230,29 @@ final class AndroidRuntimePreparation {
     File download(JSONObject artifact,ManagedProcessJobs.PreparationContext context) throws Exception {
         String hash=artifact.getString("archiveSha256");long expected=artifact.getLong("archiveBytes");File complete=new File(cache,hash+".archive"),partial=new File(cache,hash+".part");
         if(Files.isSymbolicLink(complete.toPath()))throw new SecurityException("runtime_download_cache_symlink");
-        if(complete.isFile()) {phase(context,"verifying_download",0,expected);if(complete.length()==expected&&RuntimeFiles.sha256(complete).equals(hash))return complete;Files.delete(complete.toPath());}
+        if(complete.isFile()) {phase(context,"verifying_download",0,expected);if(complete.length()==expected&&RuntimeFiles.sha256(complete).equals(hash)){context.check();return complete;}Files.delete(complete.toPath());}
         if(Files.isSymbolicLink(partial.toPath()))throw new SecurityException("runtime_download_cache_symlink");
         if(partial.length()>expected)Files.delete(partial.toPath());long offset=partial.isFile()?partial.length():0;
         if(offset<expected) {
-            context.check();HttpURLConnection connection=connections.open(new URL(artifact.getString("url")));
-            connection.setInstanceFollowRedirects(false);connection.setConnectTimeout(15000);connection.setReadTimeout(10000);connection.setRequestProperty("Accept-Encoding","identity");
-            if(offset>0)connection.setRequestProperty("Range","bytes="+offset+"-");
-            try {
-                int status=connection.getResponseCode();
+            context.check();Request.Builder request=new Request.Builder().url(artifact.getString("url")).header("Accept-Encoding","identity");
+            if(offset>0)request.header("Range","bytes="+offset+"-");Call call=downloads.newCall(request.build());
+            // Cancel this exact Call rather than synchronously closing a body reader.
+            // HttpURLConnection.disconnect can block the phone's stop caller on body reads.
+            try(AutoCloseable cancellation=context.cancelIoOnStop(call::cancel);Response response=call.execute()) {
+                context.check();int status=response.code();
                 if(status==200)offset=0;
-                else if(status!=206||offset==0||!("bytes "+offset+"-"+(expected-1)+"/"+expected).equals(connection.getHeaderField("Content-Range")))throw new java.io.IOException("runtime_download_http_"+status);
-                long declared=connection.getContentLengthLong();if(declared>=0&&declared!=expected-offset)throw new SecurityException("runtime_download_content_length_mismatch");
+                else if(status!=206||offset==0||!("bytes "+offset+"-"+(expected-1)+"/"+expected).equals(response.header("Content-Range")))throw new java.io.IOException("runtime_download_http_"+status);
+                ResponseBody body=response.body();if(body==null)throw new java.io.IOException("runtime_download_body_missing");long declared=body.contentLength();if(declared>=0&&declared!=expected-offset)throw new SecurityException("runtime_download_content_length_mismatch");
                 phase(context,"downloading",offset,expected);long copied=offset;
-                try(InputStream input=connection.getInputStream();FileOutputStream out=new FileOutputStream(partial,offset>0)) {
+                try(InputStream input=body.byteStream();FileOutputStream out=new FileOutputStream(partial,offset>0)) {
                     byte[] buffer=new byte[65536];int n;while((n=input.read(buffer))!=-1) {context.check();if(n==0)continue;copied+=n;if(copied>expected)throw new SecurityException("runtime_download_size_mismatch");out.write(buffer,0,n);context.progress("downloading",copied,expected);progress=new JSONObject().put("phase","downloading").put("completedBytes",copied).put("totalBytes",expected).put("catalogIdentity",catalog.identity);}
                     out.getFD().sync();
                 }
-            } finally {connection.disconnect();}
+            }catch(java.io.IOException failed){context.check();throw failed;}finally{call.cancel();}
         }
         context.check();phase(context,"verifying_download",partial.length(),expected);
         if(partial.length()!=expected||!RuntimeFiles.sha256(partial).equals(hash)) {Files.deleteIfExists(partial.toPath());throw new SecurityException("runtime_package_hash_mismatch");}
-        Files.move(partial.toPath(),complete.toPath(),StandardCopyOption.ATOMIC_MOVE);return complete;
+        context.check();Files.move(partial.toPath(),complete.toPath(),StandardCopyOption.ATOMIC_MOVE);return complete;
     }
     synchronized AutoCloseable acquire() throws Exception {if(active==null)throw new IllegalStateException("runtime_environment_not_prepared");verifyTools(active,false);return environments.acquireGeneration(active.getString("generationIdentity"));}
     synchronized List<String> command(RuntimeWorkspace workspace,String relative,List<String> guestCommand) throws Exception {if(active==null)throw new IllegalStateException("runtime_environment_not_prepared");return command(rootfs(active),workspace,relative,guestCommand);}

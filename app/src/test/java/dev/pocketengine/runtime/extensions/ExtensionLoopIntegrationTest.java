@@ -70,7 +70,7 @@ public final class ExtensionLoopIntegrationTest {
     @Test public void realLoopExecutesJsToolContextAndGateBeforeAnySqliteIntentOrApproval()throws Exception {
         TaskStore tasks=store();JSONObject task=attempt(tasks);RunControl control=control(task);AtomicInteger writes=new AtomicInteger();AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(List.of(program()));
         AtomicInteger ended=new AtomicInteger();
-        try(FeatureHost features=new FeatureHost(event->{});ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,()->new ExtensionRuntime.Evaluator(){
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,()->new ExtensionRuntime.Evaluator(){
             final ExtensionRuntimeTest.Node actual=new ExtensionRuntimeTest.Node();
             public String evaluate(byte[] source,JSONObject request,int budget,RunControl live,ExtensionRuntime.CurrentCheck check)throws Exception{if(request.optString("method").equals("event")&&request.getJSONObject("input").optString("type").equals("run_end"))ended.incrementAndGet();return actual.evaluate(source,request,budget,live,check);}
             public void close(){actual.close();}
@@ -92,7 +92,7 @@ public final class ExtensionLoopIntegrationTest {
 
     @Test public void revocationDuringActualModelCallDiscardsOldDecisionAndWithdrawsNextRequestTools()throws Exception {
         TaskStore tasks=store();JSONObject task=attempt(tasks);RunControl control=control(task);AtomicInteger writes=new AtomicInteger();AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(List.of(program()));
-        try(FeatureHost features=new FeatureHost(event->{});ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new)){
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new)){
             features.register(workspace(writes));CapabilityPort port=extensions.bind(combined(tasks,features,task,control,null),binding(task),control);
             try(Server server=new Server((request,index)->{
                 if(index==0){selected.set(List.of());extensions.invalidate(INSTALL);return call("old-decision","workspace_write",new JSONObject().put("projectId","fixture").put("path","notes.txt").put("content","not written").put("expectedVersion",0));}
@@ -106,7 +106,7 @@ public final class ExtensionLoopIntegrationTest {
 
     @Test public void stopDuringExitHookCannotBeOverwrittenByTheDeferredSuccessfulResult()throws Exception {
         TaskStore tasks=store();JSONObject task=attempt(tasks);RunControl control=control(task);AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(List.of(program()));
-        try(FeatureHost features=new FeatureHost(event->{});ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,()->new ExtensionRuntime.Evaluator(){
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,()->new ExtensionRuntime.Evaluator(){
             final ExtensionRuntimeTest.Node actual=new ExtensionRuntimeTest.Node();
             public String evaluate(byte[] source,JSONObject request,int budget,RunControl live,ExtensionRuntime.CurrentCheck check)throws Exception{if(request.optString("method").equals("event")&&request.getJSONObject("input").optString("type").equals("run_end"))control.cancel();return actual.evaluate(source,request,budget,live,check);}
             public void close(){actual.close();}
@@ -123,7 +123,7 @@ public final class ExtensionLoopIntegrationTest {
         EngineModule nativePort=new EngineModule(){public String id(){return "attachments";}public JSONObject snapshot()throws Exception{return actual.snapshot();}public JSONObject handle(String command,JSONObject input)throws Exception{JSONObject result=actual.handle(command,input);if(command.equals("createText")){writes.incrementAndGet();created.set(result);control.cancel();}return result;}};
         JSONObject args=new JSONObject().put("name","receipt.txt").put("mimeType","text/plain").put("content","kept after stop");JSONObject capability=new JSONObject().put("feature","attachments").put("command","createText").put("hostTaskId",id).put("projectId","");
         JSONObject approval=tasks.requireCapabilityApproval(id,run,"attachments_create_text",args,capability);tasks.decideCapabilityApproval(id,approval.getString("approvalId"),true);
-        try(FeatureHost features=new FeatureHost(event->{});ExtensionHost extensions=ExtensionHost.disabled(tasks);Server server=new Server((request,index)->call("create","attachments_create_text",args))){
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=ExtensionHost.disabled(tasks);Server server=new Server((request,index)->call("create","attachments_create_text",args))){
             features.register(actual);CapabilityPort port=extensions.bind(combined(tasks,features,task,control,nativePort),binding(task),control);
             RunOutcome result=new AgentRunner(null,port).run(id,task.getString("goal"),server.config(),control,event->{},tasks.journal(id,run,epoch,control));
             assertEquals("cancelled",result.status);assertEquals(1,writes.get());assertEquals(1,server.requests.size());JSONArray operations=tasks.get(id,false).getJSONArray("operations");assertEquals(1,operations.length());JSONObject operation=operations.getJSONObject(0);assertEquals("receipt",operation.getString("state"));assertEquals("created",operation.getJSONObject("receipt").getString("status"));assertEquals(created.get().getString("id"),operation.getJSONObject("receipt").getJSONObject("data").getString("id"));assertEquals("kept after stop",actual.handle("readText",new JSONObject().put("id",created.get().getString("id"))).getString("text"));assertFalse(tasks.hasUnresolved(id));
@@ -135,12 +135,12 @@ public final class ExtensionLoopIntegrationTest {
         EngineModule plugins=new EngineModule(){public String id(){return "plugins";}public JSONObject snapshot(){return new JSONObject();}public JSONObject handle(String command,JSONObject args)throws Exception{
             if(command.equals("registry")){
                 JSONObject schema=new JSONObject().put("type","object").put("properties",new JSONObject().put("query",new JSONObject().put("type","string"))).put("required",new JSONArray().put("query")).put("additionalProperties",false);
-                JSONObject definition=new JSONObject().put("name",name).put("pluginId","fixture").put("tool","query").put("installationId",installation.get()).put("version",installation.get()).put("effect","read").put("description",installation.get()).put("schema",schema);
+                JSONObject definition=new JSONObject().put("name",name).put("pluginId","fixture").put("tool","query").put("installationId",installation.get()).put("version",installation.get()).put("effect","read").put("description",installation.get()).put("schema",schema).put("executionBinding",new JSONObject().put("installationId",installation.get()).put("version",installation.get()));
                 return new JSONObject().put("tools",new JSONArray().put(definition));
             }
             dispatched.incrementAndGet();return new JSONObject().put("ok",true);
         }};
-        try(FeatureHost features=new FeatureHost(event->{});ExtensionHost extensions=ExtensionHost.disabled(tasks)){
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=ExtensionHost.disabled(tasks)){
             features.register(plugins);CapabilityPort port=extensions.bind(combined(tasks,features,task,control,null),binding(task),control);
             try(Server server=new Server((request,index)->{if(index==0){installation.set("installation-two");return call("old-install",name,new JSONObject().put("query","not dispatched"));}return new JSONObject().put("content","Only current metadata was refreshed.");})){
                 RunOutcome result=new AgentRunner(null,port).run(task.getString("id"),task.getString("goal"),server.config(),control,event->{},tasks.journal(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control));
@@ -157,7 +157,7 @@ public final class ExtensionLoopIntegrationTest {
                 .put("requiredCapabilities",new JSONArray().put(wire))).getJSONObject("skill");
         skills.handle("setEnabled",new JSONObject().put("id",skill.getString("id")).put("enabled",true).put("confirmed",true).put("acceptedDigest",skill.getString("digest")));
         AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(List.of(selectedProgram));
-        try(FeatureHost features=new FeatureHost(event->{});ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new);Server server=new Server((request,index)->new JSONObject().put("content","Only reference discovery inspected; no method execution claimed."))){
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new);Server server=new Server((request,index)->new JSONObject().put("content","Only reference discovery inspected; no method execution claimed."))){
             features.register(skills);CapabilityPort port=extensions.bind(combined(tasks,features,task,control,null),binding(task),control);
             new AgentRunner(null,port).run(task.getString("id"),task.getString("goal"),server.config(),control,event->{},tasks.journal(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control));
             assertEquals(1,server.requests.size());assertTrue(server.requests.get(0).getJSONArray("tools").toString().contains(wire));
@@ -173,7 +173,7 @@ public final class ExtensionLoopIntegrationTest {
                 .put("requiredCapabilities",new JSONArray().put(semantic))).getJSONObject("skill");
         skills.handle("setEnabled",new JSONObject().put("id",skill.getString("id")).put("enabled",true).put("confirmed",true).put("acceptedDigest",skill.getString("digest")));
         AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(List.of(one));String previousWire=null;JSONObject task=first;
-        try(FeatureHost features=new FeatureHost(event->{});ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new)){
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new)){
             features.register(skills);
             for(int attempt=0;attempt<2;attempt++){
                 RunControl control=control(task);CapabilityPort port=extensions.bind(combined(tasks,features,task,control,null),binding(task),control);
@@ -187,6 +187,79 @@ public final class ExtensionLoopIntegrationTest {
                 }
                 if(attempt==0){control.cancel();byte[] source=SOURCE.getBytes(StandardCharsets.UTF_8);selected.set(List.of(new ExtensionProgram(one.id,"2","44444444-4444-4444-4444-444444444444",2,source,ExtensionProgram.sha256(source),2000)));task=tasks.startAttempt(task.getString("id"),"capabilities",10);}
             }
+        }
+    }
+
+    private static List<ExtensionProgram> discoveryPrograms()throws Exception {
+        List<ExtensionProgram> result=new ArrayList<>();
+        for(int packageIndex=0;packageIndex<2;packageIndex++){
+            StringBuilder source=new StringBuilder("defineExtension({tools:[");
+            for(int tool=0;tool<8;tool++){if(tool>0)source.append(',');source.append("{name:'calc_").append(tool).append("',description:'Deferred arithmetic operation ").append(tool).append("',parameters:{type:'object',properties:{n:{type:'integer'}},required:['n'],additionalProperties:false},execute(args){return {value:args.n*2};}}");}
+            byte[] bytes=source.append("]});").toString().getBytes(StandardCharsets.UTF_8);
+            result.add(new ExtensionProgram("fixture.discovery"+packageIndex,"1",packageIndex==0?INSTALL:"44444444-4444-4444-4444-444444444444",1,bytes,ExtensionProgram.sha256(bytes),2000));
+        }
+        return List.copyOf(result);
+    }
+    private static JSONArray definitionNames(JSONArray tools)throws Exception {JSONArray names=new JSONArray();for(int i=0;i<tools.length();i++)names.put(tools.getJSONObject(i).getJSONObject("function").getString("name"));return names;}
+    private static boolean hasTool(JSONObject request,String name)throws Exception {JSONArray names=definitionNames(request.getJSONArray("tools"));for(int i=0;i<names.length();i++)if(name.equals(names.getString(i)))return true;return false;}
+
+    @Test public void deferredSchemasPublishOnlyAfterOriginalRunnerCheckpointAndActualNextRequest()throws Exception {
+        TaskStore tasks=store();JSONObject task=attempt(tasks);RunControl control=control(task);AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(discoveryPrograms());AtomicInteger writes=new AtomicInteger();
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new)){
+            features.register(workspace(writes));CapabilityPort port=extensions.bind(combined(tasks,features,task,control,null),binding(task),control);
+            try(Server server=new Server((request,index)->{
+                if(index==0){assertNull(extensionName(request));assertTrue(hasTool(request,"tools_search"));assertTrue(hasTool(request,"workspace_write"));assertTrue(request.getJSONArray("messages").toString().contains("pocketworld.tool-catalog-summary.v1"));return call("discover","tools_search",new JSONObject().put("query","Deferred arithmetic").put("limit",1));}
+                if(index==1){String name=extensionName(request);assertNotNull(name);JSONObject restored=tasks.journal(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control).restore();assertTrue(restored.getJSONArray("messages").toString().contains("pocketworld.tool-discovery.v1"));tasks.checkCapability(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),name,control);return call("calculate",name,new JSONObject().put("n",21));}
+                return new JSONObject().put("content","The discovered exact approved extension returned its pure result.");
+            })){
+                RunOutcome outcome=new AgentRunner(null,port).run(task.getString("id"),task.getString("goal"),server.config(),control,event->{},tasks.journal(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control));
+                assertEquals(outcome.summary,3,server.requests.size());assertEquals("needs_confirmation",outcome.status);assertTrue(server.requests.get(2).getJSONArray("messages").toString().contains("\\\"output\\\":42"));assertEquals(0,writes.get());assertEquals(0,tasks.get(task.getString("id"),false).getJSONArray("operations").length());
+                assertFalse(port.supports("tools_search"));
+            }
+        }
+    }
+
+    @Test public void unpublishedSchemaIsRefusedAtBothNativeGatesAndReceiptCannotActivateCurrentRequest()throws Exception {
+        TaskStore tasks=store();JSONObject task=attempt(tasks);RunControl control=control(task);AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(discoveryPrograms());
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new)){
+            CapabilityPort port=extensions.bind(combined(tasks,features,task,control,null),binding(task),control);
+            try{port.beginRun("discover",control);JSONObject first=port.prepareTurn("arithmetic",1,0,control);assertNull(extensionName(first));String hidden=extensionName(new JSONObject().put("tools",port.tools()));assertNotNull(hidden);
+                assertThrows(SecurityException.class,()->port.beforeTool(hidden,new JSONObject().put("n",21),control));assertThrows(SecurityException.class,()->port.execute(hidden,new JSONObject().put("n",21),control));
+                JSONObject receipt=port.execute("tools_search",new JSONObject().put("query","Deferred arithmetic").put("limit",1),control);port.afterTool("tools_search",new JSONObject(),receipt,control);
+                String activated=receipt.getJSONArray("tools").getJSONObject(0).getString("toolName");assertThrows(SecurityException.class,()->port.execute(activated,new JSONObject().put("n",21),control));
+                JSONObject next=port.prepareTurn("arithmetic",2,1,control);assertTrue(hasTool(next,activated));assertEquals(42,port.execute(activated,new JSONObject().put("n",21),control).getInt("output"));
+                assertThrows(SecurityException.class,()->port.afterTool("tools_search",new JSONObject(),receipt,control));
+            }finally{port.close();}
+        }
+    }
+
+    @Test public void frozenOriginalToolScopeWithoutSearchKeepsEveryApprovedSchemaResident()throws Exception {
+        TaskStore tasks=store();String id=tasks.createCapabilityTask("bounded extension discovery","").getString("id");tasks.initializeExecutionScope(id,20);JSONObject task=tasks.startAttempt(id,"capabilities",10);RunControl control=control(task);AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(discoveryPrograms());
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new)){
+            CapabilityPort port=extensions.bind(combined(tasks,features,task,control,null),binding(task),control);
+            try{port.beginRun("native frozen scope",control);JSONArray original=definitionNames(port.tools());tasks.authorizeTools(id,task.getString("runId"),original);JSONObject scope=tasks.executionScopeSnapshot(id,task.getString("runId"),task.getInt("coordinatorEpoch"),control);tasks.extendExecutionToolsForOwner(id,task.getString("runId"),task.getInt("coordinatorEpoch"),scope.getLong("revision"),new JSONArray());
+                JSONObject prepared=port.prepareTurn("arithmetic",1,0,control);assertFalse(hasTool(prepared,"tools_search"));assertEquals(original.length(),prepared.getJSONArray("tools").length());JSONObject after=tasks.executionScopeSnapshot(id,task.getString("runId"),task.getInt("coordinatorEpoch"),control);assertEquals(original.toString(),after.getJSONArray("tools").toString());
+            }finally{port.close();}
+        }
+    }
+
+    @Test public void revokedSelectedPackageCannotActivateAnAlreadyReturnedDiscoveryReceipt()throws Exception {
+        TaskStore tasks=store();JSONObject task=attempt(tasks);RunControl control=control(task);AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(discoveryPrograms());
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new)){
+            CapabilityPort port=extensions.bind(combined(tasks,features,task,control,null),binding(task),control);
+            try{port.beginRun("discover",control);port.prepareTurn("arithmetic",1,0,control);JSONObject receipt=port.execute("tools_search",new JSONObject().put("query","Deferred arithmetic").put("limit",1),control);selected.set(List.of());extensions.invalidate(INSTALL);assertThrows(SecurityException.class,()->port.afterTool("tools_search",new JSONObject(),receipt,control));JSONObject current=port.prepareTurn("revoked",2,1,control);assertNull(extensionName(current));assertFalse(hasTool(current,"tools_search"));assertFalse(port.supports(receipt.getJSONArray("tools").getJSONObject(0).getString("toolName")));
+            }finally{port.close();}
+        }
+    }
+
+    @Test public void originalHundredToolCeilingKeepsTheCompleteSurfaceWithoutAddingSearchOrTruncation()throws Exception {
+        TaskStore tasks=store();JSONObject task=attempt(tasks);RunControl control=control(task);AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(discoveryPrograms());
+        JSONArray baseTools=new JSONArray();for(int i=0;i<84;i++)baseTools.put(new JSONObject().put("type","function").put("function",new JSONObject().put("name","native_"+i).put("description","Original resident definition").put("parameters",new JSONObject().put("type","object"))));
+        CapabilityPort base=new CapabilityPort(){public JSONArray tools()throws Exception{return new JSONArray(baseTools.toString());}public boolean supports(String name){return name.startsWith("native_");}public boolean sideEffecting(String name){return false;}public JSONObject execute(String name,JSONObject args,RunControl original)throws Exception{throw new AssertionError("No native effect is used by this surface test");}};
+        try(ExtensionHost extensions=new ExtensionHost(catalogue(selected),tasks,ExtensionRuntimeTest.Node::new)){
+            CapabilityPort port=extensions.bind(base,binding(task),control);
+            try{port.beginRun("bounded discovery",control);JSONObject prepared=port.prepareTurn("arithmetic",1,0,control);assertEquals(100,prepared.getJSONArray("tools").length());assertFalse(hasTool(prepared,"tools_search"));assertNotNull(extensionName(prepared));assertThrows(SecurityException.class,()->tasks.checkCapability(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),"tools_search",control));
+            }finally{port.close();}
         }
     }
 

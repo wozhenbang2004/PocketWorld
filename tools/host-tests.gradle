@@ -51,6 +51,8 @@ tasks.withType(Test).configureEach {
     if (library != null) systemProperty 'java.library.path', library
     testLogging { events 'passed', 'skipped', 'failed'; exceptionFormat 'full'; showStandardStreams = true }
     doFirst {
+        // Explicit JNI subprocess fixtures use this same locked test closure, never a guessed JDK/App path.
+        systemProperty 'pocketworldHostClasspath', classpath.asPath
         def report = file(providers.gradleProperty('pocketworldHostReport').get())
         report.mkdirs()
         new File(report, 'classpath.txt').text = classpath.files.collect { it.absolutePath }.join(System.lineSeparator()) + System.lineSeparator()

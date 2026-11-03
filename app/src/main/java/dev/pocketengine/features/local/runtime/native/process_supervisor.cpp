@@ -51,6 +51,9 @@ void child_error(int fd,int error) {
 }
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_ordinaryProtocol(JNIEnv*,jclass) { return 2; }
+
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
         JNIEnv* env,jclass,jobjectArray command,jobjectArray environment,jbyteArray directory,
@@ -96,6 +99,7 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
     bool stopped=entry_cancelled,timed_out=false,io_complete=true,leader_done=false,kill_sent=false,start_notified=false;
     long long start=now_ms(),stop_at=0,leader_at=0;
     int status=0;
+    bool leader_reaped=false;
     if(pid>0) {
         for(auto& pair:pipes) nonblocking(pair[0]);
         while(true) {
@@ -173,12 +177,33 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
         }
         // Even detached stdout does not make a background member an owned persistent job.
         kill(-pid,SIGKILL);
-        while(waitpid(pid,&status,0)<0) { if(errno!=EINTR) {io_complete=false;break;} }
+        while(true) {
+            const pid_t waited=waitpid(pid,&status,0);
+            if(waited==pid) {leader_reaped=true;break;}
+            if(waited<0&&errno==EINTR) continue;
+            io_complete=false;break;
+        }
     }
     for(auto& pair:pipes) {close_fd(pair[0]);close_fd(pair[1]);}
-    bool group_absent=pid<=0 || (kill(-pid,0)<0 && errno==ESRCH);
-    const jlong result[7]={pid>0 && WIFEXITED(status)?WEXITSTATUS(status):-1,
-        pid>0 && WIFSIGNALED(status)?WTERMSIG(status):0,launch_error,
+    bool group_absent=pid<=0;
+    if(pid>0&&leader_reaped) {
+        // The leader is now reaped: NEVER signal this numeric PID/PGID again.
+        // A terminated descendant may briefly await its actual parent's reap.
+        // Observe ESRCH only, within the same already established drain deadline.
+        // A reused group number can only keep this unknown, never receive a signal.
+        const long long drain_deadline=leader_at+grace_ms+2000;
+        while(true) {
+            if(kill(-pid,0)<0) {
+                if(errno==ESRCH) {group_absent=true;break;}
+                if(errno!=EINTR) break; // EPERM is not absence.
+            }
+            const long long remaining=drain_deadline-now_ms();
+            if(remaining<=0) break;
+            poll(nullptr,0,static_cast<int>(remaining<10?remaining:10));
+        }
+    }
+    const jlong result[7]={leader_reaped && WIFEXITED(status)?WEXITSTATUS(status):-1,
+        leader_reaped && WIFSIGNALED(status)?WTERMSIG(status):0,launch_error,
         stopped?1:0,timed_out?1:0,group_absent?1:0,io_complete?1:0};
     jlongArray array=env->NewLongArray(7);
     if(array) env->SetLongArrayRegion(array,0,7,result);

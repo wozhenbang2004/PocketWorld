@@ -699,9 +699,8 @@ public final class TaskStoreDeviceTasks {
                 if (expires <= now || admission.kind()==DeviceExecutionAdmission.Kind.DEVICE_TOOLS&&scope.getInt("toolLimit")<1 || admission.kind() == DeviceExecutionAdmission.Kind.GOAL && scope.getInt("modelCallLimit") < 1)
                     throw new SecurityException("设备执行条件或预算不足");
                 boolean phone = !admission.executionMode().equals("capabilities");
-                if (phone) try (Cursor lease = db.rawQuery("SELECT run_id FROM leases WHERE resource_id='phone.local'", null)) {
-                    if (lease.moveToFirst()) throw new SecurityException("手机仍有原执行租约；到期不等于旧执行器已停止");
-                }
+                if(phone)try{owner.requireExclusivePhoneLeaseFree();}
+                catch(IllegalStateException held){throw new SecurityException("手机仍有原执行租约；到期不等于旧执行器已停止",held);}
                 String run = UUID.randomUUID().toString(); int epoch = current.optInt("coordinatorEpoch") + 1;
                 JSONObject permission = new JSONObject().put("principalId", admission.principalId()).put("spaceId", admission.spaceId())
                         .put("nativePairedDevice", true).put("grantId", admission.request().grantId()).put("authorizationEpoch", admission.request().authorizationEpoch())
@@ -733,9 +732,7 @@ public final class TaskStoreDeviceTasks {
             if (!permission.optBoolean("nativePairedDevice") || !permission.optString("principalId").equals(current.getString("actorId"))
                     || !permission.optString("spaceId").equals(current.getString("spaceId")) || permission.optLong("expiresAt") <= System.currentTimeMillis()
                     || permission.optLong("deviceScopeRevision") != scope.getLong("revision")) throw new SecurityException("设备原生授权已失效");
-            if (!current.getString("executionMode").equals("capabilities")) try (Cursor lease = db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id='phone.local'", null)) {
-                if (!lease.moveToFirst() || !run.equals(lease.getString(0)) || epoch != lease.getInt(1) || lease.getLong(2) <= System.currentTimeMillis()) throw new SecurityException("本机输入资源已被撤回");
-            }
+            if(!current.getString("executionMode").equals("capabilities"))owner.requireExclusivePhoneLeaseCurrent(run,epoch);
         }
     }
     public void checkCapability(String id, String run, int epoch, String tool) throws Exception {

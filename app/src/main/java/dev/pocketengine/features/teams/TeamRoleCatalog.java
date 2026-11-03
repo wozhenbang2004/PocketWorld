@@ -61,6 +61,19 @@ public final class TeamRoleCatalog {
         return shown.put("executionAuthorized",false).put("dataOnly",true);
     }
     public static JSONObject template(JSONObject stored,String id,int version,String expectedHash)throws Exception{JSONObject row=find(catalog(stored).getJSONArray("templates"),id(id),true);exact(row,version,expectedHash);return new JSONObject(row.toString()).put("executionAuthorized",false);}
+    public static JSONObject role(JSONObject stored,String id,int version,String expectedHash)throws Exception{JSONObject row=find(catalog(stored).getJSONArray("roles"),id(id),true);exact(row,version,expectedHash);return new JSONObject(row.toString()).put("executionAuthorized",false);}
+    public static long catalogRevision(JSONObject stored)throws Exception{return catalog(stored).getLong("revision");}
+    /** Canonical data identity only; the original TaskStore still owns execution admission. */
+    static String dataHash(JSONObject value)throws Exception{return hash(value);}
+    static String dataText(JSONObject value)throws Exception{return canonical(value);}
+    static JSONObject templateAvailability(JSONObject stored,JSONObject template,JSONArray capabilities,JSONArray readTools)throws Exception{
+        JSONObject catalog=catalog(stored);JSONArray prerequisites=new JSONArray();boolean available=!template.getBoolean("archived");
+        JSONArray pins=template.getJSONArray("members");for(int i=0;i<pins.length();i++){
+            JSONObject pin=pins.getJSONObject(i),role=pin.getJSONObject("role"),current=find(catalog.getJSONArray("roles"),role.getString("id"),false);
+            JSONObject condition=availability(role,capabilities,readTools);boolean active=current!=null&&!current.getBoolean("archived");condition.put("catalogRoleActive",active);available&=active&&condition.getBoolean("available");
+            prerequisites.put(new JSONObject().put("memberId",pin.getString("memberId")).put("roleId",role.getString("id")).put("roleVersion",role.getInt("version")).put("roleHash",role.getString("hash")).put("condition",condition));
+        }return new JSONObject().put("available",available).put("prerequisites",prerequisites).put("executionAuthorized",false);
+    }
     /** Produces ordinary save input only. The original save/start/scope/budget gates still apply. */
     public static JSONObject definitionProposal(JSONObject stored,String templateId,int version,String expectedHash,String name,JSONArray nativeCapabilities,JSONArray nativeReadTools)throws Exception {
         JSONObject catalog=catalog(stored),template=find(catalog.getJSONArray("templates"),id(templateId),true);exact(template,version,expectedHash);if(template.getBoolean("archived"))throw new SecurityException("已归档模板不能再创建团队");if(name==null||name.trim().isEmpty()||name.length()>80)throw new IllegalArgumentException("新团队名称无效");JSONArray members=new JSONArray(),pins=template.getJSONArray("members");
@@ -77,7 +90,12 @@ public final class TeamRoleCatalog {
         boolean runner=false,probe=false;for(int i=0;i<capabilities.length();i++){JSONObject c=capabilities.getJSONObject(i);if(role.getString("runner").equals(c.optString("id"))){runner=c.optBoolean("available");probe=role.getString("runner").equals("model")||c.optBoolean("probeVerified");}}
         boolean active=!role.getBoolean("archived");return new JSONObject().put("available",active&&runner&&probe&&missing.length()==0).put("runnerAvailable",runner).put("probeVerified",probe).put("missingReadTools",missing).put("archived",!active).put("connectionVerified",false).put("executionAuthorized",false);
     }
-    private static JSONObject catalog(JSONObject stored)throws Exception{JSONObject catalog=stored.optJSONObject(KEY);if(catalog==null)return new JSONObject().put("format",FORMAT).put("revision",0).put("roles",new JSONArray()).put("templates",new JSONArray());if(!FORMAT.equals(catalog.getString("format"))||catalog.getLong("revision")<0)throw new SecurityException("角色目录版本不可核对，保留原数据");return new JSONObject(catalog.toString());}
+    private static JSONObject catalog(JSONObject stored)throws Exception{
+        JSONObject catalog=stored.optJSONObject(KEY);if(catalog==null){if(stored.has(KEY))throw new SecurityException("角色目录原数据格式不可核对，未覆盖");return new JSONObject().put("format",FORMAT).put("revision",0).put("roles",new JSONArray()).put("templates",new JSONArray());}
+        if(!FORMAT.equals(catalog.getString("format")))throw new SecurityException("角色目录版本不可核对，保留原数据");revision(catalog,"revision",0);
+        for(String list:new String[]{"roles","templates"}){JSONArray rows=catalog.getJSONArray(list);if(rows.length()>(list.equals("roles")?MAX_ROLES:MAX_TEMPLATES))throw new SecurityException("原角色目录超过有界范围");Set<String> ids=new HashSet<>();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!ids.add(id(row.getString("id")))||row.getInt("version")<1)throw new SecurityException("原角色目录身份重复或版本无效");JSONObject content=new JSONObject(row.toString());content.remove("hash");if(!hash(content).equals(row.getString("hash")))throw new SecurityException("原角色或模板正文不匹配固定hash");}}
+        return new JSONObject(catalog.toString());
+    }
     private static JSONArray replace(JSONArray rows,JSONObject next,int max)throws Exception{JSONArray out=new JSONArray();boolean replaced=false;for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(next.getString("id").equals(row.getString("id"))){out.put(next);replaced=true;}else out.put(row);}if(!replaced){if(out.length()>=max)throw new IllegalStateException("角色或模板目录已满，未覆盖旧内容");out.put(next);}return out;}
     private static JSONObject find(JSONArray rows,String id,boolean required)throws Exception{for(int i=0;i<rows.length();i++)if(id.equals(rows.getJSONObject(i).getString("id")))return rows.getJSONObject(i);if(required)throw new SecurityException("原角色或模板已不存在");return null;}
     private static void exact(JSONObject value,int version,String hash)throws Exception{if(version!=value.getInt("version")||!hash.equals(value.getString("hash")))throw new IllegalStateException("角色或模板准确版本已变化");}
@@ -86,7 +104,7 @@ public final class TeamRoleCatalog {
     private static JSONArray subset(JSONArray needs,JSONArray allowed)throws Exception{if(needs.length()>16)throw new IllegalArgumentException("角色只读工具需求过多");Set<String> available=strings(allowed),seen=new HashSet<>();JSONArray out=new JSONArray();for(int i=0;i<needs.length();i++){String name=needs.getString(i);if(!available.contains(name)||!seen.add(name))throw new SecurityException("角色需求不是原宿主只读子集");out.put(name);}return out;}
     private static Set<String> strings(JSONArray values)throws Exception{Set<String> out=new HashSet<>();for(int i=0;i<values.length();i++)out.add(values.getString(i));return out;}
     private static String id(String id){if(!id.matches("[A-Za-z][A-Za-z0-9_-]{0,63}"))throw new IllegalArgumentException("角色/模板稳定ID无效");return id;}
-    private static String text(JSONObject input,String key,int max,boolean required)throws Exception{Object value=input.get(key);if(!(value instanceof String))throw new IllegalArgumentException("角色文字类型无效");String text=(String)value;if(text.length()>max||required&&text.trim().isEmpty())throw new IllegalArgumentException("角色文字为空或过长："+key);return text;}
+    private static String text(JSONObject input,String key,int max,boolean required)throws Exception{Object value=input.get(key);if(!(value instanceof String))throw new IllegalArgumentException("角色文字类型无效");String text=(String)value;if(text.length()>max||required&&text.trim().isEmpty())throw new IllegalArgumentException("角色文字为空或过长："+key);StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).encode(java.nio.CharBuffer.wrap(text));return text;}
     private static long revision(JSONObject input,String key,long minimum)throws Exception{Object value=input.get(key);if(!(value instanceof Integer||value instanceof Long)||((Number)value).longValue()<minimum)throw new IllegalArgumentException("目录修订需准确整数");return ((Number)value).longValue();}
     private static void fields(JSONObject input,Set<String> allowed){for(var keys=input.keys();keys.hasNext();)if(!allowed.contains(keys.next()))throw new SecurityException("模板数据不能夹带权限、秘密、预算、脚本或私有上下文");}
     private static String hash(JSONObject value)throws Exception{byte[] digest=MessageDigest.getInstance("SHA-256").digest(canonical(value).getBytes(StandardCharsets.UTF_8));StringBuilder out=new StringBuilder();for(byte b:digest)out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}

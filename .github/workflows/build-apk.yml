@@ -1,5 +1,5 @@
 name: Build private debug APK
-run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
 
 on:
   workflow_dispatch:
@@ -13,7 +13,12 @@ on:
         description: 'Used only for target=host-tests; deliberately no full-suite option'
         type: choice
         default: device-receiver
-        options: [project-file-operations, project-file-search, browser-expression, device-receiver, managed-runtime, gateway-continuation, memory-automatic, memory-learning-assertions, memory-experience, browser-long-page, phone-observation-boundaries, phone-sensitive-owner, agent-preferences, aion-core, aion-mcp-skills, aion-office, aion-conversations, remote-transport, aion-team-catalog, magpie-work-profile, native-operation-event, browser-document-download, browser-native-sequence, retained-development-admission]
+        options: [mcp-local-discovery, mcp-stdio-framing, mcp-prompts, mcp-health, project-file-operations, project-file-search, browser-expression, device-receiver, managed-runtime, gateway-continuation, memory-automatic, memory-assertion-recall, memory-consolidation, memory-learning-assertions, memory-experience, browser-long-page, phone-observation-boundaries, phone-sensitive-owner, agent-preferences, aion-core, aion-mcp-skills, aion-office, aion-conversations, remote-transport, aion-team-catalog, magpie-work-profile, native-operation-event, browser-document-download, browser-native-sequence, retained-development-admission, runtime-health, managed-skills, aion-work-profile-targets, aion-worker-entrypoint, runtime-activity, aion-mcp-config, aion-capability-observations, aion-team-templates, local-phone-leases, script-artifact-publication, phone-audio-owner, schedule-proposals, native-duplex-pipes, aion-tool-discovery, aion-team-wake, memory-project-namespaces, request-clock, runner-repeat-notice, runner-budget-stream, alma-child-sources, alma-pi-no-tools, native-normal-cleanup, memory-archive-currentness, runtime-preparation-cancel]
+      host_groups:
+        description: 'Optional explicit comma-separated batch (max 16); overrides host_group, no full-suite wildcard. Chromium groups use individual mode.'
+        type: string
+        required: false
+        default: ''
   push:
     branches: [main]
     # Keep the production-input contract in tools/tests/test_apk_workflow_paths.py in sync.
@@ -42,7 +47,7 @@ permissions:
 concurrency:
   # Independent, explicitly selected host groups run on separate runners. Keep
   # serialization within each group and APK build without canceling active work.
-  group: pocketworld-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('host-{0}', inputs.host_group) || 'apk' }}
+  group: pocketworld-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && (inputs.host_groups != '' && 'host-selected-batch' || format('host-{0}', inputs.host_group)) || 'apk' }}
   cancel-in-progress: false
 
 jobs:
@@ -215,6 +220,7 @@ jobs:
         shell: bash
     env:
       HOST_TEST_GROUP: ${{ inputs.host_group }}
+      HOST_TEST_GROUPS: ${{ inputs.host_groups }}
       POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
     steps:
       - name: Check out selected revision
@@ -261,11 +267,12 @@ jobs:
           {
             java -version
             python3 --version
-            if [[ "$HOST_TEST_GROUP" == managed-runtime ]]; then node --version; c++ --version; fi
+            if command -v node >/dev/null; then node --version; fi
+            if command -v c++ >/dev/null; then c++ --version; fi
           } > build-artifacts/host-tests/tool-versions.txt 2>&1
 
       - name: Require actual Chromium for bounded DOM expression tests
-        if: ${{ inputs.host_group == 'browser-expression' }}
+        if: ${{ inputs.host_groups == '' && inputs.host_group == 'browser-expression' }}
         run: |
           set -euo pipefail
           CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
@@ -274,13 +281,19 @@ jobs:
           "$CHROME_BIN" --version >> build-artifacts/host-tests/tool-versions.txt
 
       - name: Run the selected original host test bodies
+        id: selected_host_tests
         run: |
           set -euo pipefail
-          python3 -B tools/host-tests.py --group "$HOST_TEST_GROUP" --online \
+          python3 -B tools/host-selection.py --single "$HOST_TEST_GROUP" --batch "$HOST_TEST_GROUPS" \
+            --output "$RUNNER_TEMP/pocketworld-selected-host-groups.txt"
+          mapfile -t HOST_GROUPS < "$RUNNER_TEMP/pocketworld-selected-host-groups.txt"
+          HOST_ARGS=()
+          for group in "${HOST_GROUPS[@]}"; do HOST_ARGS+=(--group "$group"); done
+          python3 -B tools/host-tests.py "${HOST_ARGS[@]}" --online \
             --output build-artifacts/host-tests 2>&1 | tee build-artifacts/host-tests/host-tests.log
 
       - name: Prepare official isolated Chromium fixture runtime
-        if: ${{ inputs.host_group == 'browser-long-page' }}
+        if: ${{ inputs.host_groups == '' && inputs.host_group == 'browser-long-page' }}
         run: |
           set -euo pipefail
           export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/pocketworld-playwright-browsers"
@@ -294,7 +307,7 @@ jobs:
           npm --version
 
       - name: Check out fixed pre-fix source for the real Chromium red case
-        if: ${{ inputs.host_group == 'browser-long-page' }}
+        if: ${{ inputs.host_groups == '' && inputs.host_group == 'browser-long-page' }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: afba870564e83034339ad084c2e7247260ea0c9c
@@ -302,18 +315,46 @@ jobs:
           persist-credentials: false
 
       - name: Run original emitted long-DOM Chromium red and green fixtures
-        if: ${{ inputs.host_group == 'browser-long-page' }}
+        if: ${{ inputs.host_groups == '' && inputs.host_group == 'browser-long-page' }}
         run: |
           set -euo pipefail
           python3 -B tools/browser-long-page.py --report-root build-artifacts/host-tests \
             --baseline-source .browser-long-page-baseline/app/src/main/java/dev/pocketengine/browser/BrowserSemanticRead.java \
             2>&1 | tee build-artifacts/host-tests/browser-long-page.log
 
+      - name: Verify pinned Pi no-tools protocol and native process receipts
+        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'alma-pi-no-tools') }}
+        run: |
+          set -euo pipefail
+          (
+            cd companion
+            python3 -B -m unittest test_pi_driver -v
+          ) 2>&1 | tee build-artifacts/host-tests/companion-pi-no-tools.log
+
+      - name: Verify public child lineage and exact JSON connection closure
+        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'alma-child-sources') }}
+        run: |
+          set -euo pipefail
+          (
+            cd companion
+            python3 -B -m unittest test_claude_driver test_job_events test_http_connection_close -v
+          ) 2>&1 | tee build-artifacts/host-tests/companion-child-sources.log
+
+      - name: Verify original Companion process-group ownership and recovery
+        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'remote-transport') }}
+        run: |
+          set -euo pipefail
+          (
+            cd companion
+            python3 -B -m unittest test_companion_process_groups test_companion test_codex_driver \
+              test_claude_driver test_assignment_workspaces test_cold_session test_codex_model_options -v
+          ) 2>&1 | tee build-artifacts/host-tests/companion-process-groups.log
+
       - name: Retain selected host results, exact classpath and failure log
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pocketworld-host-${{ inputs.host_group }}-${{ github.run_number }}-${{ github.run_attempt }}
+          name: pocketworld-host-${{ inputs.host_groups != '' && 'batch' || inputs.host_group }}-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             build-artifacts/host-tests/
             app/build/reports/tests/testDebugUnitTest/

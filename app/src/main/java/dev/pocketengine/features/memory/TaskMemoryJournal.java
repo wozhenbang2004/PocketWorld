@@ -22,18 +22,19 @@ public final class TaskMemoryJournal {
         if(selected==null)throw new IllegalArgumentException("缺少原生记忆选择");JSONObject metadata=selected.metadata();
         requireBinding(metadata,task);
         JSONObject diagnostics=MemoryRecallBudget.checked(metadata.getJSONObject("selectionDiagnostics"),metadata.getJSONArray("records"));
-        JSONObject args=task.toJson().put("format",2).put("requestId",requestId).put("selectionId",metadata.getString("selectionId"))
+        boolean project=metadata.has("memoryNamespace");JSONObject args=task.toJson().put("format",project?3:2).put("requestId",requestId).put("selectionId",metadata.getString("selectionId"))
                 .put("contextDigest",metadata.getString("contextDigest")).put("records",metadata.getJSONArray("records"))
                 .put("selectionDiagnostics",diagnostics).put("diagnosticsDigest",TaskMemoryUse.digest(canonical(diagnostics)));
+        if(project)args.put("memoryNamespace",metadata.getJSONObject("memoryNamespace"));
         // Validate the exact body-free shape through the same typed projection validator.
-        new TaskMemoryUse.Provided(new TaskMemoryUse.ReceiptRef(task,requestId,"unconfirmed"),args.getString("selectionId"),args.getString("contextDigest"),1,false,args.getJSONArray("records"),diagnostics);
+        new TaskMemoryUse.Provided(new TaskMemoryUse.ReceiptRef(task,requestId,"unconfirmed"),args.getString("selectionId"),args.getString("contextDigest"),1,false,args.getJSONArray("records"),diagnostics,args.optJSONObject("memoryNamespace"));
         return new Intent(operationId,task,requestId,args);
     }
     /** Called only by the dedicated native completion path after an actual completed model response. */
     public static JSONObject completed(Intent intent,String nativeAnswerId,long at)throws Exception{
         if(intent==null||at<=0)throw new IllegalArgumentException("缺少原生发送意图或时间");requireId(nativeAnswerId);
         JSONObject args=intent.arguments();return new TaskMemoryUse.ReceiptRef(intent.task,intent.requestId,nativeAnswerId).toJson()
-                .put("format",2).put("selectionId",args.getString("selectionId")).put("contextDigest",args.getString("contextDigest")).put("diagnosticsDigest",args.getString("diagnosticsDigest"))
+                .put("format",args.getInt("format")).put("selectionId",args.getString("selectionId")).put("contextDigest",args.getString("contextDigest")).put("diagnosticsDigest",args.getString("diagnosticsDigest"))
                 .put("providedAt",at).put("executionAuthorized",false).put("modelUseVerified",false);
     }
     /** Requires a row from TaskStore.get's native operations projection, never a task event/model JSON. */
@@ -47,15 +48,15 @@ public final class TaskMemoryJournal {
             JSONObject receipt=operation.optJSONObject("receipt"),args=operation.optJSONObject("arguments");
             if(receipt==null||args==null||!expected.requestId.equals(receipt.optString("requestId"))||!expected.answerId.equals(receipt.optString("answerId")))continue;
             long format=SourceRef.integer(args,"format",1);checkKeys(args,argumentKeys(format));
-            Set<String> receiptKeys=new java.util.HashSet<>(Set.of("format","taskId","runId","coordinatorEpoch","ownerId","spaceId","requestId","answerId","selectionId","contextDigest","providedAt","executionAuthorized","modelUseVerified"));if(format==2)receiptKeys.add("diagnosticsDigest");checkKeys(receipt,receiptKeys);
+            Set<String> receiptKeys=new java.util.HashSet<>(Set.of("format","taskId","runId","coordinatorEpoch","ownerId","spaceId","requestId","answerId","selectionId","contextDigest","providedAt","executionAuthorized","modelUseVerified"));if(format>=2)receiptKeys.add("diagnosticsDigest");checkKeys(receipt,receiptKeys);
             if(SourceRef.integer(receipt,"format",1)!=format||!expected.requestId.equals(args.optString("requestId")))throw new SecurityException("原生记忆日志格式或请求不匹配");
             requireBinding(args,expected.task);requireBinding(receipt,expected.task);
             if(!args.getString("selectionId").equals(receipt.getString("selectionId"))||!args.getString("contextDigest").equals(receipt.getString("contextDigest"))
                     ||!Boolean.FALSE.equals(receipt.opt("executionAuthorized"))||!Boolean.FALSE.equals(receipt.opt("modelUseVerified")))throw new SecurityException("原生记忆日志不能自证执行或模型采用");
             if(found!=null)throw new SecurityException("同一原请求/答案存在重复记忆证明，请核对原日志");
-            JSONObject diagnostics=format==2?MemoryRecallBudget.checked(args.getJSONObject("selectionDiagnostics"),args.getJSONArray("records")):null;
-            if(format==2&&(!args.getString("diagnosticsDigest").equals(TaskMemoryUse.digest(canonical(diagnostics)))||!args.getString("diagnosticsDigest").equals(receipt.getString("diagnosticsDigest"))))throw new SecurityException("原始记忆选择说明指纹不匹配");
-            found=new TaskMemoryUse.Provided(expected,args.getString("selectionId"),args.getString("contextDigest"),SourceRef.integer(receipt,"providedAt",1),REVOKED.equals(state),args.getJSONArray("records"),diagnostics);
+            JSONObject diagnostics=format>=2?MemoryRecallBudget.checked(args.getJSONObject("selectionDiagnostics"),args.getJSONArray("records")):null;
+            if(format>=2&&(!args.getString("diagnosticsDigest").equals(TaskMemoryUse.digest(canonical(diagnostics)))||!args.getString("diagnosticsDigest").equals(receipt.getString("diagnosticsDigest"))))throw new SecurityException("原始记忆选择说明指纹不匹配");
+            found=new TaskMemoryUse.Provided(expected,args.getString("selectionId"),args.getString("contextDigest"),SourceRef.integer(receipt,"providedAt",1),REVOKED.equals(state),args.getJSONArray("records"),diagnostics,args.optJSONObject("memoryNamespace"));
         }return found;
     }
     /** Recover original epoch from the dedicated native row, rather than trusting an epoch in UI input. */
@@ -78,9 +79,9 @@ public final class TaskMemoryJournal {
         if(!canonical(expected).equals(canonical(storedArguments)))throw new SecurityException("发送意图已改变，不能确认旧记忆提供记录");
     }
     private static Set<String> argumentKeys(long format){
-        if(format!=1&&format!=2)throw new SecurityException("不支持的原生记忆日志版本");
+        if(format!=1&&format!=2&&format!=3)throw new SecurityException("不支持的原生记忆日志版本");
         Set<String> keys=new java.util.HashSet<>(Set.of("format","taskId","runId","coordinatorEpoch","ownerId","spaceId","requestId","selectionId","contextDigest","records"));
-        if(format==2){keys.add("selectionDiagnostics");keys.add("diagnosticsDigest");}return keys;
+        if(format>=2){keys.add("selectionDiagnostics");keys.add("diagnosticsDigest");}if(format==3)keys.add("memoryNamespace");return keys;
     }
     private static void requireBinding(JSONObject value,TaskMemoryUse.TaskRef task)throws Exception{
         if(!task.taskId.equals(value.opt("taskId"))||!task.runId.equals(value.opt("runId"))||task.coordinatorEpoch!=SourceRef.integer(value,"coordinatorEpoch",0)

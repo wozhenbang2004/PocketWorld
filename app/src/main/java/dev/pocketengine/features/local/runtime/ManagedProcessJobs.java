@@ -31,20 +31,38 @@ public final class ManagedProcessJobs implements AutoCloseable {
     private static final class Job {
         final RuntimeInvocation invocation;final File directory;final AutoCloseable lease;final String id;
         JSONObject receipt;Thread thread;volatile boolean cancel;
+        final java.util.concurrent.CopyOnWriteArrayList<PreparationIo> preparationIo=new java.util.concurrent.CopyOnWriteArrayList<>();
         long sequence,storedBytes,receivedBytes;
+        long startedNanos,lastOutputNanos; // Live-owner observation only, never restored as process authority.
         final java.util.concurrent.locks.ReentrantReadWriteLock sourceWrites=new java.util.concurrent.locks.ReentrantReadWriteLock();
         volatile ProjectDevSession devSession;
         final RuntimePtyInput terminalInput;
+        final NativePipeAdmission pipeAdmission;final RuntimePipeInput pipeInput;
         final java.util.Set<String> publishedInputs=new java.util.HashSet<>();
         Job(RuntimeInvocation invocation,File directory,JSONObject receipt,AutoCloseable lease) throws Exception {
-            this.invocation=invocation;this.directory=directory;this.receipt=receipt;this.lease=lease;
+            this(invocation,directory,receipt,lease,null);
+        }
+        Job(RuntimeInvocation invocation,File directory,JSONObject receipt,AutoCloseable lease,NativePipeAdmission pipeAdmission) throws Exception {
+            this.invocation=invocation;this.directory=directory;this.receipt=receipt;this.lease=lease;this.pipeAdmission=pipeAdmission;
+            pipeInput=pipeAdmission==null?null:new RuntimePipeInput(pipeAdmission.byteBudget);
             id=invocation.executionRef().operationId();
             JSONObject exact=invocation.exact(),payload=exact.getJSONObject("payload");
             boolean pty="pty".equals(payload.optString("terminalMode"));
+            if(pty&&pipeInput!=null)throw new SecurityException("runtime_pipe_cannot_use_pty");
             if(pty){if(!"command".equals(exact.optString("intent")))throw new SecurityException("runtime_pty_requires_explicit_command_plan");dev.pocketengine.features.local.project.ProjectCommandSpec.fromPayload(payload);terminalInput=new RuntimePtyInput(payload.getLong("inputByteLimit"));}
             else terminalInput=null;
         }
     }
+    /** A scoped cancellation handle of this exact live Job, not restorable receipt authority.
+     * Invoke only outside the jobs/Job/lease monitors; the action must be non-blocking. */
+    private static final class PreparationIo implements Runnable,AutoCloseable {
+        final Job job;final Runnable action;final java.util.concurrent.atomic.AtomicBoolean invoked=new java.util.concurrent.atomic.AtomicBoolean();
+        volatile boolean closed;
+        PreparationIo(Job job,Runnable action){this.job=job;this.action=java.util.Objects.requireNonNull(action);}
+        @Override public void run(){if(!closed&&invoked.compareAndSet(false,true))try{action.run();}catch(RuntimeException ignored){/* Original worker still owns its receipt and lease. */}}
+        @Override public void close(){closed=true;job.preparationIo.remove(this);job.invocation.originalControl().removeCancelAction(this);}
+    }
+    private static void cancelPreparationIo(Job job){for(PreparationIo io:job.preparationIo)io.run();}
     /** Only the actual live queue/native writer creates this typed evidence. Not restorable JSON. */
     public static final class ProcessInputReceipt {
         private final RuntimeExecutionRef execution;private final dev.pocketengine.core.RunControl original;private final JSONObject result;
@@ -74,6 +92,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
     /** Metadata-only accounting over the original logs/receipts; never a generic cache-delete entry. */
     public JSONObject ownerStorageUsage(dev.pocketengine.core.RunControl original)throws Exception{return dev.pocketengine.features.local.project.NativeStorageTree.measure(root,original);}
     public boolean ptyAvailable(){return supervisor.ptyAvailable()&&inputSinkReady;}
+    public boolean pipesAvailable(){return supervisor.pipesAvailable();}
     public void setProcessInputSink(java.util.function.Consumer<ProcessInputReceipt> nativeSink){inputSink=java.util.Objects.requireNonNull(nativeSink);inputSinkReady=true;}
     public void setReceiptSink(java.util.function.Consumer<JSONObject> nativeSink) {receiptSink=java.util.Objects.requireNonNull(nativeSink);}
     public synchronized void requireEnvironmentIdle(String identity) throws Exception {
@@ -87,6 +106,13 @@ public final class ManagedProcessJobs implements AutoCloseable {
     }
     public RuntimeReceipt start(RuntimeInvocation invocation,List<String> command,
             Map<String,String> environment,File directory,long timeoutMillis,AutoCloseable lease) throws Exception {
+        return start(invocation,command,environment,directory,timeoutMillis,lease,null);
+    }
+    RuntimeReceipt startPipes(RuntimeInvocation invocation,List<String> command,Map<String,String> environment,File directory,long timeoutMillis,AutoCloseable lease,NativePipeAdmission admission)throws Exception {
+        if(admission.invocation!=invocation)throw new SecurityException("runtime_pipe_original_invocation_required");
+        return start(invocation,command,environment,directory,timeoutMillis,lease,admission);
+    }
+    private RuntimeReceipt start(RuntimeInvocation invocation,List<String> command,Map<String,String> environment,File directory,long timeoutMillis,AutoCloseable lease,NativePipeAdmission pipeAdmission)throws Exception {
         AutoCloseable ownedLease=java.util.Objects.requireNonNull(lease);
         boolean workerOwnsLease=false;Throwable primaryFailure=null;
         try {
@@ -106,10 +132,11 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 .put("processExited",false).put("resourcesReleased",false).put("cancelRequested",false)
                 .put("stdout","").put("stderr","").put("outputTruncated",false).put("logCursor",0)
                 .put("timeoutMillis",timeoutMillis).put("runMode",ref.exact().getJSONObject("payload").optString("runMode","foreground"));
-            Job job=new Job(invocation,jobDirectory,receipt,ownedLease);
+            Job job=new Job(invocation,jobDirectory,receipt,ownedLease,pipeAdmission);
             JSONObject reviewed=invocation.exact().getJSONObject("payload");
-            if("command".equals(invocation.exact().optString("intent"))||dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())||dev.pocketengine.features.skills.ManagedSkillBackend.exact(invocation.exact())||dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())){JSONArray requested=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(reviewed):dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGitImport.arguments(reviewed):reviewed.getJSONArray("argv");receipt.remove("argv");receipt.remove("requestedArgv");receipt.put("argvCount",requested.length()).put("argvDigest",ProjectSources.digest(new JSONObject().put("argv",requested))).put("argumentValuesIncluded",false).put("workingDirectory",reviewed.getString("workingDirectory")).put("terminalMode",reviewed.getString("terminalMode"));}
+            if("command".equals(invocation.exact().optString("intent"))||NativePipeAdmission.exact(invocation.exact())||dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())||dev.pocketengine.features.skills.ManagedSkillBackend.exact(invocation.exact())||dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())){JSONArray requested=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(reviewed):dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGitImport.arguments(reviewed):reviewed.getJSONArray("argv");receipt.remove("argv");receipt.remove("requestedArgv");receipt.put("argvCount",requested.length()).put("argvDigest",ProjectSources.digest(new JSONObject().put("argv",requested))).put("argumentValuesIncluded",false).put("workingDirectory",reviewed.getString("workingDirectory")).put("terminalMode",reviewed.getString("terminalMode"));}
             if(job.terminalInput!=null)receipt.put("terminalNativeContract",reviewed.getString("terminalNativeContract")).put("terminalOutputMerged",true).put("inputByteLimit",reviewed.getLong("inputByteLimit")).put("terminalRows",reviewed.getInt("terminalRows")).put("terminalColumns",reviewed.getInt("terminalColumns")).put("cleanupScope","owned_session_and_observed_descendants").put("allDescendantsTerminated",false).put("unobservedDetachedDescendantsPossible",true);
+            if(pipeAdmission!=null)receipt.put("nativeDuplexPipes",true).put("pipeNativeContract",NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT).put("nativePipeBindingDigest",ProjectSources.digest(pipeAdmission.binding())).put("inputByteLimit",pipeAdmission.byteBudget).put("cleanupScope","owned_session_and_observed_descendants").put("allDescendantsTerminated",false).put("unobservedDetachedDescendantsPossible",true);
             List<String> frozenCommand=java.util.Collections.unmodifiableList(new ArrayList<>(command));
             Map<String,String> frozenEnvironment=java.util.Collections.unmodifiableMap(new HashMap<>(environment));
             job.thread=new Thread(()->execute(job,frozenCommand,frozenEnvironment,directory,timeoutMillis),"project-process-"+id);
@@ -120,7 +147,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 receipt.put("checkoutSequence",nextCheckoutSequence(ref.checkoutId()));
                 RuntimeReceipt admitted=RuntimeReceipt.fromBackend(ref,receipt);
                 RuntimeFiles.write(record,receipt);live.put(id,job);
-                try {job.thread.start();} catch(RuntimeException|Error error) {
+                try {if(pipeAdmission!=null)pipeAdmission.attach(new PipeHandle(job,pipeAdmission));job.thread.start();} catch(RuntimeException|Error error) {
                     live.remove(id);receipt.put("status","not_launched").put("error","runtime_worker_start_failed")
                             .put("resourcesReleased",true);
                     RuntimeFiles.write(record,receipt);throw error;
@@ -148,6 +175,10 @@ public final class ManagedProcessJobs implements AutoCloseable {
         private String lastPhase="";private long lastProgressAt,lastProgressBytes;
         private PreparationContext(Job job) {this.job=job;}
         public void check() throws Exception {if(job.cancel)throw new InterruptedException("runtime_preparation_cancelled");job.invocation.checkCurrent();}
+        AutoCloseable cancelIoOnStop(Runnable nonBlockingCancel)throws Exception {
+            check();PreparationIo scope=new PreparationIo(job,nonBlockingCancel);job.preparationIo.add(scope);job.invocation.originalControl().onCancel(scope);
+            try{check();return scope;}catch(Exception|Error stopped){scope.close();throw stopped;}
+        }
         public void output(int stream,byte[] bytes) throws Exception {append(job,stream,bytes);}
         public void progress(String phase,long completed,long total) throws Exception {
             check();long now=System.currentTimeMillis();boolean persist=!phase.equals(lastPhase)||completed==total||now-lastProgressAt>500||completed-lastProgressBytes>1048576;
@@ -168,7 +199,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
             lastStdout=captured.toString(StandardCharsets.UTF_8.name());
             nativeObservationUnknown=!lastExit.groupAbsent;
             synchronized(job) {job.receipt.put("processLaunched",lastExit.launchErrno==0).put("processExited",lastExit.exitCode>=0||lastExit.signal>0).put("processGroupAbsent",lastExit.groupAbsent).put("launchErrno",lastExit.launchErrno).put("terminationSignal",lastExit.signal).put("outputComplete",lastExit.outputComplete)
-                    .put("nativeResultContract",NativeProcessSupervisor.EXIT_RESULT_CONTRACT).put("noChildCreated",lastExit.noChildCreated).put("launchPhase",lastExit.noChildCreated?"no_child_created":lastExit.exitCode>=0||lastExit.signal>0?"exit_observed":"unknown").put("timedOut",lastExit.timedOut);}
+                    .put("nativeResultContract",lastExit.resultContract).put("noChildCreated",lastExit.noChildCreated).put("launchPhase",lastExit.noChildCreated?"no_child_created":lastExit.exitCode>=0||lastExit.signal>0?"exit_observed":"unknown").put("timedOut",lastExit.timedOut);}
             return lastExit;
         }
     }
@@ -212,11 +243,12 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 if(job.cancel)return false;
                 if(job.receipt.optBoolean("nativeStartObserved"))return true;
                 long now=System.currentTimeMillis();String ack=ProjectSources.digest(new JSONObject().put("execution",job.invocation.executionRef().executionLink()).put("observedAt",now).put("nonce",java.util.UUID.randomUUID().toString()));
+                job.startedNanos=System.nanoTime();
                 job.receipt.put("nativeStartObserved",true).put("nativeStartAt",now).put("launchAckIdentity",ack).put("processLaunched",true).put("ownedWorkerLive",true).put("status","running");
                 RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);observed=ProjectSources.copy(job.receipt);
             }
             // A native observation only; no job/lease/map lock crosses the original host callback.
-            if("owned_service".equals(observed.optString("runMode")))receiptSink.accept(summary(job.invocation.executionRef(),observed));
+            if("owned_service".equals(observed.optString("runMode")))deliverReceipt(job,summary(job.invocation.executionRef(),observed));
             return true;
         }catch(Exception failed){return false;}
     }
@@ -249,7 +281,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 job.receipt.put("finishedAt",System.currentTimeMillis());RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);
             }catch(Exception ignored){}}
             synchronized(this) {live.remove(job.id);notifyAll();}
-            try {JSONObject actual;synchronized(job){actual=ProjectSources.copy(job.receipt);}receiptSink.accept(summary(job.invocation.executionRef(),actual));}catch(Exception ignored){}
+            try {JSONObject actual;synchronized(job){actual=ProjectSources.copy(job.receipt);}deliverReceipt(job,summary(job.invocation.executionRef(),actual));}catch(Exception ignored){}
         }
     }
     private static JSONObject initial(RuntimeExecutionRef ref) throws Exception {
@@ -302,8 +334,17 @@ public final class ManagedProcessJobs implements AutoCloseable {
                         }
                     };
             JSONObject terminal=job.invocation.exact().getJSONObject("payload");
-            NativeProcessSupervisor.Exit exit=job.terminalInput==null?supervisor.execute(command,environment,directory,timeoutMillis,500,observer):supervisor.executePty(command,environment,directory,timeoutMillis,500,terminal.getInt("terminalRows"),terminal.getInt("terminalColumns"),observer);
-            groupAbsent=exit.groupAbsent&&(job.terminalInput==null||exit.sessionAbsent);finalStatus=!groupAbsent?"unknown":exit.exitCode==0&&exit.launchErrno==0&&!exit.cancelled&&!exit.timedOut?"completed":"failed";
+            NativeProcessSupervisor.Exit exit;
+            if(job.pipeInput!=null)exit=supervisor.executePipes(command,environment,directory,timeoutMillis,500,new NativeProcessSupervisor.PipeObserver(){
+                public boolean started(){return observer.started();}
+                public boolean cancelled(){try{job.pipeAdmission.checkCurrent();return observer.cancelled();}catch(Exception stale){job.cancel=true;return true;}}
+                public byte[] nextStdinCommand(){return job.pipeInput.next();}
+                public boolean stdinCommandCurrent(long sequence){try{job.pipeAdmission.checkCurrent();return !job.cancel&&job.pipeInput.current(sequence);}catch(Exception stale){job.cancel=true;return false;}}
+                public void stdinCommandResult(long sequence,int written,int error,boolean effects){try{job.pipeInput.observed(sequence,written,error,effects);}catch(Exception invalid){throw new IllegalStateException("runtime_pipe_native_ack_invalid",invalid);}}
+                public boolean output(int stream,byte[] bytes){try{return observer.output(stream,bytes)&&job.pipeAdmission.bytes(stream,bytes);}catch(Exception stale){job.cancel=true;return false;}}
+            });
+            else exit=job.terminalInput==null?supervisor.execute(command,environment,directory,timeoutMillis,500,observer):supervisor.executePty(command,environment,directory,timeoutMillis,500,terminal.getInt("terminalRows"),terminal.getInt("terminalColumns"),observer);
+            groupAbsent=exit.groupAbsent&&((job.terminalInput==null&&job.pipeInput==null)||exit.sessionAbsent);finalStatus=!groupAbsent?"unknown":exit.exitCode==0&&exit.launchErrno==0&&!exit.cancelled&&!exit.timedOut?"completed":"failed";
             synchronized(job) {
                 job.receipt.put("processLaunched",exit.launchErrno==0).put("processExited",exit.exitCode>=0||exit.signal>0)
                         .put("exitCode",exit.exitCode).put("terminationSignal",exit.signal)
@@ -312,7 +353,8 @@ public final class ManagedProcessJobs implements AutoCloseable {
                         .put("outputComplete",exit.outputComplete).put("receiptReceived",true)
                         .put("nativeResultContract",exit.resultContract).put("noChildCreated",exit.noChildCreated).put("launchPhase",exit.noChildCreated?"no_child_created":exit.exitCode>=0||exit.signal>0?"exit_observed":"unknown")
                         .put("resourcesReleased",false).put("status","awaiting_resource_release");
-                if(job.terminalInput!=null)job.receipt.put("processSessionAbsent",exit.sessionAbsent).put("terminalNativeContract",exit.resultContract);
+                if(job.terminalInput!=null||job.pipeInput!=null)job.receipt.put("processSessionAbsent",exit.sessionAbsent);
+                if(job.terminalInput!=null)job.receipt.put("terminalNativeContract",exit.resultContract);
                 if(exit.launchErrno>0)job.receipt.put("error",exit.noChildCreated?"runtime_process_not_created":"runtime_process_launch_failed").put("message",exit.noChildCreated?"原生执行已确认未创建子进程；请核对启动错误，资源释放后才能明确修改或继续":"原子进程启动工具失败；请核对原生错误码和真实退出回执，不自动重试");
             }
         } catch(Exception|LinkageError error) {
@@ -326,9 +368,10 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 boolean leaseClosed=false;
                 // An unconfirmed PTY session may retain foreground/background groups or an observed
                 // escaped descendant. Keep its real environment lease, not merely a JSON flag.
-                if(job.terminalInput==null||groupAbsent)try {job.lease.close();leaseClosed=true;} catch(Exception error) {synchronized(job){try{job.receipt.put("leaseError",true).put("error","runtime_resource_release_unconfirmed");}catch(Exception ignored){}}}
-                if(job.terminalInput!=null&&!leaseClosed)synchronized(this){unresolvedPtyLeases.put(job.id,job);}
+                if((job.terminalInput==null&&job.pipeInput==null)||groupAbsent)try {job.lease.close();leaseClosed=true;} catch(Exception error) {synchronized(job){try{job.receipt.put("leaseError",true).put("error","runtime_resource_release_unconfirmed");}catch(Exception ignored){}}}
+                if((job.terminalInput!=null||job.pipeInput!=null)&&!leaseClosed)synchronized(this){unresolvedPtyLeases.put(job.id,job);}
                 if(job.terminalInput!=null)try{pendingInputs=job.terminalInput.closeAndObserveNeverDequeued();}catch(Exception failed){synchronized(job){try{job.receipt.put("terminalInputCloseUnknown",true);}catch(Exception ignored){}}}
+                if(job.pipeInput!=null)job.pipeInput.close();
                 synchronized(job) {
                     try {job.receipt.put("ownedWorkerLive",false).put("resourcesReleased",leaseClosed&&groupAbsent).put("status",leaseClosed?finalStatus:"unknown").put("finishedAt",System.currentTimeMillis());if(job.devSession!=null)job.receipt.put("devMarkerCacheCleanupComplete",markerClean);RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);}
                     catch(Exception error) {try{job.receipt.put("receiptPersistence","failed");}catch(Exception ignored){}}
@@ -340,13 +383,45 @@ public final class ManagedProcessJobs implements AutoCloseable {
             // receipt for the original operation, not a new Task/Run or a retry dispatch.
             try {
                 JSONObject actual;synchronized(job){actual=ProjectSources.copy(job.receipt);}
-                receiptSink.accept(summary(job.invocation.executionRef(),actual));
+                deliverReceipt(job,summary(job.invocation.executionRef(),actual));
             } catch(Exception error) {
                 synchronized(job) {try {
                     job.receipt.put("hostReceiptDelivery","failed");
                     RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);
                 }catch(Exception ignored){}}
             }
+        }
+    }
+    private void deliverReceipt(Job job,JSONObject actual)throws Exception {
+        if(job.pipeAdmission==null)receiptSink.accept(actual);
+        else job.pipeAdmission.receipt(RuntimeReceipt.fromBackend(job.invocation.executionRef(),actual));
+    }
+    /** Original object identity + private generation, never a PID/FD reconstructed from JSON. */
+    public final class PipeHandle {
+        private final Job job;private final NativePipeAdmission admission;private final String generation=java.util.UUID.randomUUID().toString();
+        private PipeHandle(Job job,NativePipeAdmission admission){this.job=job;this.admission=admission;}
+        public RuntimeExecutionRef reference(){return job.invocation.executionRef();}
+        public JSONObject identity()throws Exception{return admission.binding().put("pipeInstanceId",generation).put("nativePipeBindingDigest",ProjectSources.digest(admission.binding()));}
+        private void current(dev.pocketengine.core.RunControl original)throws Exception {
+            if(original!=job.invocation.originalControl())throw new SecurityException("runtime_pipe_original_control_required");
+            synchronized(ManagedProcessJobs.this){if(live.get(job.id)!=job)throw new SecurityException("runtime_pipe_original_handle_not_live");}
+            original.check();admission.checkCurrent();if(job.cancel)throw new SecurityException("runtime_pipe_original_job_stopping");
+        }
+        private JSONObject send(dev.pocketengine.core.RunControl original,String operation,byte[] bytes,boolean eof,ProjectRuntime.LiveGate gate,long waitMillis)throws Exception {
+            if(waitMillis<1||waitMillis>20000)throw new IllegalArgumentException("runtime_pipe_wait_budget_invalid");
+            current(original);java.util.Objects.requireNonNull(gate).check();
+            RuntimePipeInput.Ticket ticket=job.pipeInput.offer(operation,bytes,eof,()->{current(original);gate.check();});
+            return job.pipeInput.await(ticket,original,waitMillis).put("executionId",job.id).put("pipeInstanceId",generation);
+        }
+        public JSONObject write(dev.pocketengine.core.RunControl original,String operation,byte[] bytes,ProjectRuntime.LiveGate gate,long waitMillis)throws Exception{return send(original,operation,bytes,false,gate,waitMillis);}
+        public JSONObject eof(dev.pocketengine.core.RunControl original,String operation,ProjectRuntime.LiveGate gate,long waitMillis)throws Exception{return send(original,operation,new byte[0],true,gate,waitMillis);}
+        public JSONObject originalInput(String operation)throws Exception{return job.pipeInput.query(operation).put("executionId",job.id).put("pipeInstanceId",generation);}
+        public JSONObject query()throws Exception{return ManagedProcessJobs.this.query(reference()).json();}
+        public void requestCancel(dev.pocketengine.core.RunControl original)throws Exception {
+            if(original!=job.invocation.originalControl())throw new SecurityException("runtime_pipe_original_control_required");
+            JSONObject bound=reference().binding();if(!original.matchesHostRun(bound.getString("taskId"),bound.getString("runId"),bound.getInt("coordinatorEpoch")))throw new SecurityException("runtime_pipe_original_run_changed");
+            // Mutate only the held original Job object, never a fresh lookup by operation/PID/FD.
+            job.cancel=true;
         }
     }
     private void publishInput(Job job,JSONObject actual)throws Exception {
@@ -384,6 +459,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
     }
     private static void append(Job job,int stream,byte[] data) throws Exception {
         synchronized(job) {
+            if(data.length>0)job.lastOutputNanos=System.nanoTime();
             job.receivedBytes+=data.length;
             int count=(int)Math.min(data.length,MAX_LOG_BYTES-job.storedBytes);
             if(count<data.length) job.receipt.put("outputTruncated",true);
@@ -409,6 +485,15 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 receipt.put("status","unknown").put("observation","owner_process_restarted_no_replay");
         }
         ref.requireReceipt(receipt);
+        Long silence=null;boolean outputObserved=false;
+        if(job!=null)synchronized(job){
+            outputObserved=job.receivedBytes>0;
+            if(Boolean.TRUE.equals(job.receipt.opt("nativeStartObserved"))){
+                long elapsed=System.nanoTime()-(outputObserved?job.lastOutputNanos:job.startedNanos);
+                if(elapsed>=0)silence=java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(elapsed);
+            }
+        }
+        receipt.put("activity",RuntimeActivity.describe(ref.operationId(),receipt,silence,outputObserved));
         return RuntimeReceipt.fromBackend(ref,summary(ref,receipt));
     }
     /** Retained native currentness only: no Control/TaskStore/LocalModule callback or lease lock. */
@@ -472,8 +557,9 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 .put("summaryOutputOnly",true).put("summaryOutputTruncated",page.getBoolean("hasMore")||receipt.optBoolean("outputTruncated"));
         return receipt;
     }
-    public synchronized RuntimeReceipt requestCancel(RuntimeExecutionRef ref) throws Exception {
-        RuntimeReceipt observed=query(ref);Job job=live.get(ref.operationId());
+    public RuntimeReceipt requestCancel(RuntimeExecutionRef ref) throws Exception {
+        RuntimeReceipt observed;Job job;
+        synchronized(this){observed=query(ref);job=live.get(ref.operationId());
         if(job==null) {
             // A stale/unknown transport record is not a PID or authority to kill.
             if(!observed.terminal()) {
@@ -483,9 +569,10 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 return RuntimeReceipt.fromBackend(ref,receipt);
             }
             return observed;
-        }
+        }}
         job.cancel=true;
-        synchronized(job) {job.receipt.put("cancelRequested",true);RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);}
+        try{synchronized(job) {job.receipt.put("cancelRequested",true);RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);}}
+        finally{cancelPreparationIo(job);}
         return query(ref);
     }
     /** Bounded raw-byte pages; sequence cursor avoids UTF-8 corruption at pipe chunk boundaries. */
@@ -516,6 +603,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
     @Override public void close() throws Exception {
         List<Job> jobs;
         synchronized(this) {closing=true;jobs=new ArrayList<>(live.values());for(Job job:jobs)job.cancel=true;}
+        for(Job job:jobs)cancelPreparationIo(job);
         long until=System.currentTimeMillis()+5000;
         for(Job job:jobs) {long remaining=until-System.currentTimeMillis();if(remaining>0)job.thread.join(remaining);}
         synchronized(this) {if(!live.isEmpty()||!unresolvedPtyLeases.isEmpty())throw new IllegalStateException("runtime_process_drain_unconfirmed");}

@@ -36,11 +36,11 @@ public final class RemoteEventCursorJourneyTest {
         Process server;BufferedReader output;String base,task,worker;
         TaskStore tasks;FeatureHost host;RemoteModule remote;RemoteOwnerWorkflows owner;
         Fixture(String worker)throws Exception {this.worker=worker;try{
-            Path repo=Path.of(System.getProperty("user.dir"));
-            server=new ProcessBuilder("/usr/bin/python3","-B","-u",repo.resolve("companion/event_replay_fixture_server.py").toString(),root.toString()).directory(repo.resolve("companion").toFile()).redirectError(root.resolve("server-stderr.log").toFile()).start();
+            Path repo=Path.of(System.getProperty("pocket.gateway.source",System.getProperty("user.dir"))).toAbsolutePath().normalize();
+            server=new ProcessBuilder(System.getProperty("pocket.gateway.python","python3"),"-B","-u",repo.resolve("companion/event_replay_fixture_server.py").toString(),root.toString()).directory(repo.resolve("companion").toFile()).redirectError(root.resolve("server-stderr.log").toFile()).start();
             output=new BufferedReader(new InputStreamReader(server.getInputStream(),StandardCharsets.UTF_8));
             long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);while(!output.ready()&&server.isAlive()&&System.nanoTime()<until)Thread.sleep(5);
-            assertTrue(Files.readString(root.resolve("server-stderr.log")),output.ready());base=new JSONObject(output.readLine()).getString("baseUrl");boot(true);
+            assertTrue(readUtf8(root.resolve("server-stderr.log")),output.ready());base=new JSONObject(output.readLine()).getString("baseUrl");boot(true);
             String request=UUID.randomUUID().toString();
             host.request(new JSONObject().put("feature","remote").put("command","submitJob").put("requestId",request).put("payload",new JSONObject().put("profileId","computer").put("environmentId","workspace").put("worker",worker).put("prompt","Controlled original read reconnection, no repeated creation").put("timeoutSeconds",45)));
             JSONObject response=null;until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
@@ -65,15 +65,16 @@ public final class RemoteEventCursorJourneyTest {
         JSONObject action(JSONObject review)throws Exception{return new JSONObject().put("windowId",review.getString("windowId")).put("taskId",task).put("reviewId",review.getString("reviewId"));}
         JSONObject refresh(JSONObject review)throws Exception{return owner.handle(nativeOwner,"refresh",action(review)).getJSONObject("snapshot");}
         void approve(JSONObject review)throws Exception {String id=review.getJSONObject("source").getJSONArray("pendingApprovals").getJSONObject(0).getString("requestId");owner.handle(nativeOwner,"approve",action(review).put("requestId",id).put("decision","accept"));}
-        int count(String name)throws Exception {return Files.exists(root.resolve(name))?Integer.parseInt(Files.readString(root.resolve(name))):0;}
-        void marker(String name)throws Exception{Files.writeString(root.resolve(name),"controlled fixture fault only");}
+        static String readUtf8(Path path)throws Exception{return new String(Files.readAllBytes(path),StandardCharsets.UTF_8);}
+        int count(String name)throws Exception {return Files.exists(root.resolve(name))?Integer.parseInt(readUtf8(root.resolve(name))):0;}
+        void marker(String name)throws Exception{Files.write(root.resolve(name),"controlled fixture fault only".getBytes(StandardCharsets.UTF_8));}
         void remove(String name)throws Exception{Files.deleteIfExists(root.resolve(name));}
         void waitFile(String name)throws Exception{long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);while(!Files.exists(root.resolve(name))&&System.nanoTime()<until)Thread.sleep(5);assertTrue(name,Files.exists(root.resolve(name)));}
         void reopen()throws Exception{owner.setForeground(nativeOwner,false);remote.close();host.close();boot(false);}
         public void close()throws Exception {
             if(owner!=null)owner.setForeground(nativeOwner,false);if(remote!=null)remote.close();if(host!=null)host.close();
             if(server!=null){server.destroy();if(!server.waitFor(6,TimeUnit.SECONDS)){server.destroyForcibly();server.waitFor(2,TimeUnit.SECONDS);}assertFalse(server.isAlive());
-                JSONObject released=new JSONObject(Files.readString(root.resolve("resource-release.json")));assertTrue(released.getBoolean("listenerClosed"));assertEquals(0,released.getInt("activeProcesses"));}
+                JSONObject released=new JSONObject(readUtf8(root.resolve("resource-release.json")));assertTrue(released.getBoolean("listenerClosed"));assertEquals(0,released.getInt("activeProcesses"));}
             if(output!=null)output.close();
         }
     }
@@ -111,6 +112,13 @@ public final class RemoteEventCursorJourneyTest {
             JSONObject wrongTask=new JSONObject(source.toString()).put("taskId",UUID.randomUUID().toString());var page=f.remote.readOriginalJobEvents(wrongTask,binding,before,()->{});
             assertThrows(SecurityException.class,()->f.tasks.recordOriginalRemoteEventPage(f.task,page));assertTrue(RemoteJobEvents.same(before,f.tasks.originalRemoteEventRead(f.task)));
             int reads=f.count("event-get-count");assertThrows(SecurityException.class,()->f.remote.readOriginalJobEvents(source,"0".repeat(64),before,()->{}));assertEquals(reads,f.count("event-get-count"));assertEquals(1,f.count("submit-count"));assertEquals(0,f.count("approval-post-count"));assertEquals(0,f.count("question-post-count"));
+        }
+    }
+    @Test public void actualOriginalOwnerReadPersistsTwoPublicChildSourcesAcrossReopenWithoutChangingQuestionsOrGrant()throws Exception{
+        try(Fixture f=new Fixture("claude")){
+            JSONObject view=drain(f,f.open()),cache=view.getJSONObject("eventRead"),source=view.getJSONObject("source");String job=source.getString("jobId"),run=source.getString("runId"),question=source.getJSONArray("pendingQuestions").getJSONObject(0).getString("requestHash");java.util.Set<String> children=new java.util.HashSet<>();int childRows=0;JSONArray rows=cache.getJSONArray("events");
+            for(int i=0;i<rows.length();i++){JSONObject event=rows.getJSONObject(i),lineage=RemoteJobEvents.sourceView(event,cache.getJSONObject("scope"));if(!"child".equals(lineage.getString("kind")))continue;childRows++;children.add(lineage.getString("parentToolUseId"));assertEquals(source.getString("sessionId"),lineage.getString("parentSessionId"));assertFalse(lineage.getBoolean("executionAuthorized"));assertFalse(lineage.getBoolean("childSessionControl"));}
+            assertEquals(6,childRows);assertEquals(java.util.Set.of("toolu_child_a","toolu_child_b"),children);assertFalse(cache.toString().contains("NEVER_EXPOSE_CHILD_THINKING"));long cursor=cache.getLong("nextSequence");f.reopen();JSONObject restored=drain(f,f.open());assertEquals(cursor,restored.getJSONObject("eventRead").getLong("nextSequence"));assertTrue(RemoteJobEvents.same(cache.getJSONObject("scope"),restored.getJSONObject("eventRead").getJSONObject("scope")));assertEquals(job,restored.getJSONObject("source").getString("jobId"));assertEquals(run,restored.getJSONObject("source").getString("runId"));assertEquals(question,restored.getJSONObject("source").getJSONArray("pendingQuestions").getJSONObject(0).getString("requestHash"));assertEquals(1,f.count("submit-count"));assertEquals(0,f.count("approval-post-count"));assertEquals(0,f.count("question-post-count"));
         }
     }
 }

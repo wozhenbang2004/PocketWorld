@@ -80,6 +80,28 @@ for line in sys.stdin:
               'event':{'type':'content_block_delta','delta':{'type':'text_delta','text':'streamed '}}})
         emit({'type':'stream_event','session_id':session,'parent_tool_use_id':'child-tool',
               'event':{'type':'content_block_delta','delta':{'type':'text_delta','text':'child private'}}})
+        if mode == 'child-complete':
+            for suffix in ('a','b'):
+                child={'type':'assistant','session_id':session,'uuid':'event-child-'+suffix,
+                       'parent_tool_use_id':'toolu_child_'+suffix,'agent_id':'agent-'+suffix,
+                       'error':'rate_limit' if suffix=='a' else None,
+                       'message':{'id':'message-child-'+suffix,'role':'assistant','content':[
+                           {'type':'text','text':'same public child text'},
+                           {'type':'thinking','thinking':'PRIVATE_INTERNAL_THINKING','signature':'private'},
+                           {'type':'tool_use','id':'same-tool-id','name':'Read','input':{'unsafe':'not copied'}}]}}
+                emit(child);emit(child)
+                emit({'type':'user','session_id':session,'uuid':'result-child-'+suffix,
+                      'parent_tool_use_id':'toolu_child_'+suffix,'agent_id':'agent-'+suffix,
+                      'message':{'content':[{'type':'tool_result','tool_use_id':'same-tool-id',
+                                            'content':'same public tool result','is_error':suffix=='a'}]}})
+            emit({'type':'assistant','session_id':session,'uuid':'event-long-child',
+                  'parent_tool_use_id':'toolu_child_a',
+                  'message':{'content':[{'type':'text','text':'x'*6000}]}})
+        if mode in {'child-malformed','child-missing-session','child-invalid-agent'}:
+            emit({'type':'assistant','session_id':None if mode=='child-missing-session' else session,
+                  'parent_tool_use_id':'bad\\nidentity' if mode=='child-malformed' else 'toolu_child_a',
+                  'agent_id':{} if mode=='child-invalid-agent' else 'agent-a',
+                  'message':{'content':[{'type':'text','text':'must not attach'}]}})
         if mode == 'output-limit':
             emit({'type':'stream_event','session_id':session,'parent_tool_use_id':None,
                   'event':{'type':'content_block_delta','delta':{'type':'text_delta','text':'x'*210000}}})
@@ -193,6 +215,43 @@ class ClaudeDriverTests(unittest.TestCase):
                     driver.run("Must not dispatch")
                 self.assertFalse(driver.turn_dispatched)
         self.assertFalse((self.root / "claude-prompt-count").exists())
+
+    def test_complete_public_child_blocks_keep_exact_sources_without_changing_parent_outcome_or_tools(self):
+        driver, states = self.driver("child-complete")
+        result = driver.run("Read the project")
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("真实 fixture response", result["output"])
+        self.assertNotIn("child private", json.dumps(states))  # Unsupported child partial stream remains ignored.
+        self.assertNotIn("PRIVATE_INTERNAL_THINKING", json.dumps(states))
+        self.assertNotIn("not copied", json.dumps(states))
+        rows = result["progress"]["events"]
+        text = [row for row in rows if row["kind"] == "child_text"]
+        self.assertEqual(3, len(text))
+        self.assertEqual(["toolu_child_a", "toolu_child_b"], [row["parentToolUseId"] for row in text[:2]])
+        self.assertEqual(text[0]["text"], text[1]["text"])
+        self.assertEqual(4000, len(text[2]["text"]))
+        self.assertTrue(text[2]["textTruncated"])
+        tools = [row for row in rows if row["kind"] == "tool"]
+        self.assertEqual(2, len(tools))
+        self.assertEqual(["same-tool-id"] * 2, [row["itemId"] for row in tools])
+        results = [row for row in rows if row["kind"] == "tool_result"]
+        self.assertEqual(["failed", "completed"], [row["status"] for row in results])
+        for row in text + tools + results:
+            self.assertEqual("claude_complete_child_v1", row["childSourceProtocol"])
+            self.assertEqual(driver.session_id, row["parentSessionId"])
+            self.assertEqual(driver.prompt_id, row["parentPromptRequestId"])
+        self.assertEqual([], result["pendingQuestions"])
+        self.assertEqual([], result["pendingApprovals"])
+        self.assertEqual("1", (self.root / "claude-prompt-count").read_text())
+
+    def test_missing_or_malformed_child_lineage_fails_without_attaching_it_to_parent_or_replaying(self):
+        for mode in ["child-malformed", "child-missing-session", "child-invalid-agent"]:
+            with self.subTest(mode=mode):
+                driver, states = self.driver(mode)
+                with self.assertRaises(DriverError):
+                    driver.run("Read only")
+                self.assertNotIn("must not attach", json.dumps(states))
+        self.assertEqual("111", (self.root / "claude-prompt-count").read_text())
 
     def test_mismatched_identity_and_unconfirmed_permissions_never_become_success(self):
         for mode in ["wrong-session", "session-result", "wrong-mode", "wrong-tools", "invalid-json", "large-frame", "disconnect"]:

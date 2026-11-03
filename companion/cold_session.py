@@ -10,6 +10,7 @@ import re
 import uuid
 
 PROTOCOL = "codex_stored_turn_recovery_v1"
+GROUP_PROTOCOL = "original_posix_process_group_v1"
 CONFIG_KEYS = ("kind", "root", "host", "user", "port", "writeAllowed", "workers", "commands", "knownHosts", "identityFile", "sshConfig")
 
 
@@ -37,23 +38,41 @@ def _scope(job, env):
             "environmentConfigHash": _digest({key: env.get(key) for key in CONFIG_KEYS})}
 
 
-def capture(job, env, process):
-    """Called only with the Popen created by the original _run, before its first running save."""
-    if os.name == "nt" or env.get("kind", "local") != "local" or job.get("worker") != "codex_app_server" or job.get("assignmentWorkspace") or job.get("inputState"):
-        return None
+def _capture_group(job, env, process, protocol):
     try:
         identity = _stat(process.pid)
         if identity["pid"] != process.pid or identity["pgid"] != process.pid or identity["sessionId"] != process.pid or identity["uid"] != os.getuid():
             return None
-        return {"format": PROTOCOL, "bootId": _boot(), "pidNamespace": [os.stat("/proc/self/ns/pid").st_dev, os.stat("/proc/self/ns/pid").st_ino], "process": identity, "scope": _scope(job, env)}
+        return {"format": protocol, "bootId": _boot(), "pidNamespace": [os.stat("/proc/self/ns/pid").st_dev, os.stat("/proc/self/ns/pid").st_ino], "process": identity, "scope": _scope(job, env)}
     except (OSError, ValueError, IndexError):
         return None
 
 
+def capture(job, env, process):
+    """Called only with the Popen created by the original _run, before its first running save."""
+    if os.name == "nt" or env.get("kind", "local") != "local" or job.get("worker") != "codex_app_server" or job.get("assignmentWorkspace") or job.get("inputState"):
+        return None
+    return _capture_group(job, env, process, PROTOCOL)
+
+
+def capture_process_group(job, env, process):
+    """Containment facts only. This never grants stored-turn inspection/resume/fork."""
+    if os.name == "nt" or env.get("kind", "local") != "local" or job.get("assignmentWorkspace") or job.get("inputState"):
+        return None
+    return _capture_group(job, env, process, GROUP_PROTOCOL)
+
+
+def original_process_group_stopped(job, env):
+    return _captured_group_stopped(job.get("_originalProcessGroup"), GROUP_PROTOCOL, job, env, require_absent=True)
+
+
 def process_stopped(job, env):
     """Fail closed. Never signal a cold PID/group, and never call a reused PID our worker."""
-    captured = job.get("_coldProcess")
-    if not isinstance(captured, dict) or captured.get("format") != PROTOCOL or captured.get("scope") != _scope(job, env):
+    return _captured_group_stopped(job.get("_coldProcess"), PROTOCOL, job, env)
+
+
+def _captured_group_stopped(captured, protocol, job, env, require_absent=False):
+    if not isinstance(captured, dict) or captured.get("format") != protocol or captured.get("scope") != _scope(job, env):
         return False
     try:
         original = captured["process"]
@@ -75,6 +94,8 @@ def process_stopped(job, env):
             return True
         except OSError:
             return False
+        if require_absent:
+            return False  # A cold generic group needs ESRCH, never a racing empty proc scan.
         entries = [path for path in Path("/proc").iterdir() if path.name.isdigit()]
         if len(entries) > 4096:
             return False

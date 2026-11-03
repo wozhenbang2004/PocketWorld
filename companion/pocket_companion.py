@@ -40,8 +40,11 @@ import group_input_audience
 import input_files
 import harness_config
 import harness_gateway
+import cc_switch_import
 import job_events
+import worker_executable_identity
 import team_member_scope
+import pi_driver
 from codex_driver import CodexAppServerDriver, DriverError
 from claude_driver import ClaudeStreamDriver, command as claude_command, inspect_cli as inspect_claude_cli, session_uuid
 
@@ -49,20 +52,22 @@ MAX_BODY = 65_536
 MAX_OUTPUT = 196_608
 MAX_ARTIFACT = 262_144
 TERMINAL = {"completed", "failed", "cancelled", "interrupted", "unknown", "blocked"}
-WORKERS = {"codex_app_server": "codex", "codex": "codex", "claude": "claude", "kimi": "kimi"}
+WORKERS = {"codex_app_server": "codex", "codex": "codex", "claude": "claude", "pi": "pi", "kimi": "kimi"}
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 
 
 def worker_capabilities(worker):
     native = worker == "codex_app_server"
     claude = worker == "claude"
-    return {"protocol": "codex_app_server" if native else "claude_stream_json" if claude else "process_exit", "modelSelection": native or claude,
-            "threadResume": native or claude, "interactiveApprovals": native or claude, "turnInterrupt": native or claude,
+    pi = worker == "pi"
+    return {"protocol": "codex_app_server" if native else "claude_stream_json" if claude else pi_driver.PROTOCOL if pi else "process_exit", "modelSelection": native or claude or pi,
+            "threadResume": native or claude or pi, "interactiveApprovals": native or claude, "turnInterrupt": native or claude or pi,
             "inputSteering": False, "sessionReattach": False, "readOnlySandbox": native,
             "conversationForkProtocol": "thread/fork" if native else "unavailable_without_verified_new_session_before_prompt", "forkCapabilityRequiresActualReceipt": True, "forkRestoresFiles": False,
             "operationReconciliation": True, "protocolVerified": False, "modelInferenceVerified": False,
-            "structuredUserInput": native or claude, "questionCapability": "validated_when_original_runtime_emits_request",
-            "questionAnswerScope": "original_job_native_owner_only", "progressSnapshot": native or claude, "liveStreaming": False,
+            "structuredUserInput": native or claude, "questionCapability": "unsupported_no_tools_conversation" if pi else "validated_when_original_runtime_emits_request",
+            "questionAnswerScope": "original_job_native_owner_only", "progressSnapshot": native or claude or pi, "liveStreaming": False,
+            **({"noTools": True, "codingToolsSupported": False, "toolPermissionMode": "unavailable_no_tools_conversation"} if pi else {}),
             "originalJobEvents": job_events.capability(worker)}
 
 
@@ -147,6 +152,7 @@ class JobManager:
         self.closed = False
         self.environments = self._environments(config.get("environments", []))
         self.harness_configs = harness_config.HarnessConfigs(self)
+        self.cc_switch_imports = cc_switch_import.CCSwitchImports(self)
         self.harness_gateway = harness_gateway.HarnessGateway(self)
         self.harness_endpoint_finished = self.harness_gateway.job_finished
         self.harness_endpoint_job_bound = self.harness_gateway.bind_job
@@ -180,6 +186,10 @@ class JobManager:
                 elif ambiguous_approvals:
                     atomic_json(path, job)
                 self.jobs[job["id"]] = job
+                if os.name != "nt" and job.get("resourcesHeld") is True:
+                    # Restore only the original resource fence. Never reconstruct
+                    # a Popen, replay an operation or signal a cold numeric PID.
+                    self.resources.add(job["resourceId"])
                 if job.get("operationId") and job.get("fingerprint"):
                     self.ledger.execute("INSERT OR IGNORE INTO operations(operation_id,fingerprint,job_id,last_status,updated_at) VALUES (?, ?, ?, ?, ?)",
                                         (job["operationId"], job["fingerprint"], job["id"], job["status"], job.get("updatedAt", self.now())))
@@ -252,6 +262,11 @@ class JobManager:
             commands = item.get("commands", {})
             if not isinstance(commands, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in commands.items()):
                 raise ValueError("commands maps allowed command names to executable paths")
+            if "ccSwitchSources" in item:
+                try:
+                    cc_switch_import.source_definitions_identity(item)
+                except cc_switch_import.ImportErrorState as error:
+                    raise ValueError(str(error)) from None
             result[eid] = item
         return result
 
@@ -269,7 +284,7 @@ class JobManager:
                 else:
                     resolved = shutil.which(executable)
                     available = bool(resolved) and (os.name != "nt" or Path(resolved).suffix.lower() == ".exe")
-                workers.append({"id": worker, "available": available, "availability": "unverified_remote" if available is None else "installed" if available else "missing", "autonomousTools": worker == "kimi", "capabilities": worker_capabilities(worker)})
+                workers.append({"id": worker, "available": available, "availability": "unverified_remote" if available is None else "installed" if available else "missing", "autonomousTools": worker == "kimi", "capabilities": worker_capabilities(worker), **worker_executable_identity.inspect(item, worker)})
             entries.append({"id": eid, "label": item.get("label", eid), "kind": item.get("kind", "local"), "workers": workers,
                             "writeAllowed": bool(item.get("writeAllowed", False)), "sandboxed": False,
                             "bindingHash": self.environment_binding(eid), "workspace": item["root"],
@@ -289,6 +304,8 @@ class JobManager:
         # an unsubmitted review; accepted operations still reconcile by their original ID.
         scope = {key: item.get(key) for key in ("kind", "root", "host", "user", "port", "writeAllowed", "workers", "commands", "knownHosts", "identityFile", "sshConfig", "harnesses", "commandOutputEncoding")}
         scope.update({key: item[key] for key in ("codexHome", "codexProviderVariables") if key in item})
+        if "ccSwitchSources" in item:
+            scope["ccSwitchSourceDefinitions"] = cc_switch_import.source_definitions_identity(item)
         scope.update(instance=self.instance_id, environmentId=eid)
         return hashlib.sha256(json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -303,13 +320,19 @@ class JobManager:
         if group_probe and worker != "codex_app_server":
             raise RequestError("Actual API-key mode is not verified for this worker; private/DM mode is unchanged", 409)
         if worker == "claude":
-            return {**self._inspect_claude(env), "environmentId": request["environmentId"], "worker": worker,
-                    "capabilities": worker_capabilities(worker), "selectedModelAvailable": None}
+            identity = worker_executable_identity.inspect(env, worker)
+            result = self._inspect_claude(env)
+            return {**result, "environmentId": request["environmentId"], "worker": worker,
+                    "capabilities": worker_capabilities(worker), "selectedModelAvailable": None,
+                    **worker_executable_identity.finish_probe(identity, worker_executable_identity.inspect(env, worker))}
+        if worker == "pi":
+            return self._probe_pi(request, env)
         if worker != "codex_app_server":
             raise RequestError("A native interactive adapter is not implemented for this worker", 409)
         model = text(request["model"], "model", 200) if "model" in request else None
         argv = self._worker_argv({"worker": worker, "prompt": "Protocol capability probe"}, env)
         launch, cwd = self._launch(env, argv)
+        identity = worker_executable_identity.inspect(env, worker, launch)
         if not self.probe_slots.acquire(blocking=False):
             raise RequestError("Worker capability probes are busy", 429)
         process = None
@@ -322,17 +345,19 @@ class JobManager:
                 child_env = group_input_audience.child_environment(env, child_env)
             process = self._spawn(env, launch, cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=child_env)
             driver = CodexAppServerDriver(process, env["root"], False, lambda _state: None, lambda: self.closed, 10)
-            result = driver.probe(model)
+            result = driver.probe(model, text(request["effort"], "effort", 80) if "effort" in request else None)
             if group_probe:
                 facts = driver.require_group_api_mode(group_generation, lambda: group_input_audience.generation(self, env))
                 result["externalGroupApiMode"] = group_input_audience.issue(self, request["environmentId"], group_generation, facts)
             result.update(environmentId=request["environmentId"], worker=worker, readOnly=True,
-                          capabilities={**worker_capabilities(worker), "protocolVerified": True, "inputSteering": result["inputSteeringVerified"]})
+                          capabilities={**worker_capabilities(worker), "protocolVerified": True, "inputSteering": result["inputSteeringVerified"]},
+                          **worker_executable_identity.finish_probe(identity, worker_executable_identity.inspect(env, worker, launch)))
             return result
         except (OSError, ValueError, DriverError, PlatformError, group_input_audience.Unavailable):
             return {"environmentId": request["environmentId"], "worker": worker, "available": False,
                     "protocolVerified": False, "accountConfigured": False, "modelInferenceVerified": False,
-                    "capabilities": worker_capabilities(worker), "message": "Codex protocol/account probe failed; inspect its installed version and account on the computer"}
+                    "capabilities": worker_capabilities(worker), "message": "Codex protocol/account probe failed; inspect its installed version and account on the computer",
+                    **worker_executable_identity.finish_probe(identity, worker_executable_identity.inspect(env, worker, launch))}
         finally:
             try:
                 if process is not None:
@@ -344,6 +369,67 @@ class JobManager:
                         process.close()
             finally:
                 self.probe_slots.release()
+
+    def _inspect_pi(self, env):
+        if "pi" not in env.get("workers", []) or env.get("kind", "local") != "local" or os.name == "nt":
+            raise RequestError("Pi no-tools adapter requires an explicitly enabled local POSIX Companion worker", 409)
+        if not self.probe_slots.acquire(blocking=False):
+            raise RequestError("Worker capability probes are busy", 429)
+        try:
+            return pi_driver.inspect_cli(self._cli_text(env, ["pi", *pi_driver.SAFE_FLAGS, "--version"]),
+                                         self._cli_text(env, ["pi", *pi_driver.SAFE_FLAGS, "--help"]))
+        except (RequestError, OSError, ValueError, PlatformError):
+            return {"available": False, "cliFlagsVerified": False, "protocolVerified": False,
+                    "accountConfigured": None, "modelInferenceVerified": False,
+                    "message": "Pi requires the pinned 1.4.0 CLI and verified no-tools/resource flags; no inference started"}
+        finally:
+            self.probe_slots.release()
+
+    def _probe_pi(self, request, env):
+        checked = self._inspect_pi(env)
+        result = {**checked, "environmentId": request["environmentId"], "worker": "pi",
+                  "capabilities": worker_capabilities("pi")}
+        if not checked.get("available"):
+            return result
+        launch, cwd = self._launch(env, pi_driver.command())
+        identity = worker_executable_identity.inspect(env, "pi", launch)
+        if not self.probe_slots.acquire(blocking=False):
+            raise RequestError("Worker capability probes are busy", 429)
+        process, driver = None, None
+        try:
+            child_env = dict(os.environ)
+            child_env.pop("POCKETENGINE_COMPANION_TOKEN", None)
+            process = self._spawn(env, launch, cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, env=child_env)
+            driver = pi_driver.PiRpcDriver(process, lambda _state: None, lambda: self.closed, 10)
+            result.update(driver.probe(text(request["model"], "model", 200) if "model" in request else None))
+            result["capabilities"]["protocolVerified"] = True
+        except (OSError, ValueError, DriverError, PlatformError):
+            result.update(available=False, protocolVerified=False,
+                          message="Pi no-tools RPC/model catalog probe failed; no inference started")
+        finally:
+            try:
+                if driver is not None:
+                    driver.close_steering()
+                if process is not None:
+                    proof = self._terminate(process)
+                    for stream in (process.stdin, process.stdout):
+                        if stream is not None:
+                            stream.close()
+                    if isinstance(process, WindowsJobProcess) and proof.get("processGroupStoppedVerified"):
+                        process.close()
+            finally:
+                self.probe_slots.release()
+        return {**result, **worker_executable_identity.finish_probe(identity, worker_executable_identity.inspect(env, "pi", launch))}
+
+    def _pi_session_current(self, job):
+        value = job.get("_piSession")
+        if not isinstance(value, dict) or job.get("resourcesHeld") or not job.get("nativeSettled") or not job.get("processCleanupProof", {}).get("processGroupStoppedVerified"):
+            return False
+        try:
+            return value.get("proof") == pi_driver.session_stamp(value["file"], value["directory"])
+        except (OSError, ValueError, KeyError, DriverError):
+            return False
 
     def _inspect_claude(self, env):
         if "claude" not in env.get("workers", ["command"]):
@@ -423,6 +509,8 @@ class JobManager:
         if worker == "claude":
             return claude_command(request.get("_sessionId", str(uuid.uuid4())), write,
                                   request.get("model"), bool(request.get("threadId")))
+        if worker == "pi":
+            return pi_driver.command(request["_piSession"]["id"], request["_piSession"]["directory"], request["_piSession"].get("file"))
         if worker == "kimi":
             if not env.get("allowAutonomousWorkers", False):
                 raise RequestError("Autonomous Kimi tools have not been enabled", 403)
@@ -551,8 +639,12 @@ class JobManager:
         for field in ("model", "threadId"):
             if field in request:
                 text(request[field], field, 200)
-                if request.get("worker") not in {"codex_app_server", "claude"}:
+                if request.get("worker") not in {"codex_app_server", "claude", "pi"}:
                     raise RequestError(field + " is unsupported by this worker", 409)
+        if "effort" in request:
+            text(request["effort"], "effort", 80)
+            if request.get("worker") != "codex_app_server" or not request.get("model"):
+                raise RequestError("Effort currently requires the exact Codex catalog model; unsupported worker/options are not ignored", 409)
         env = team_member_scope.environment(request, env, RequestError)
         prior = None
         fork_source = None
@@ -587,6 +679,8 @@ class JobManager:
                     raise RequestError("Codex resume cannot change the original tool access boundary", 409)
                 if "model" not in request and prior.get("model"):
                     request["model"] = prior["model"]
+                if "effort" not in request and prior.get("effort"):
+                    request["effort"] = prior["effort"]
         elif request.get("worker") == "codex_app_server" and "resumeJobId" in request:
             raise RequestError("resumeJobId requires the exact original threadId", 409)
         session_id = None
@@ -599,6 +693,8 @@ class JobManager:
                     raise RequestError(str(error), 409)
                 with self.lock:
                     prior = self.jobs.get(identifier(request.get("resumeJobId"), "resumeJobId"))
+                    if prior is not None and prior.get("ccSwitchImport"):
+                        raise RequestError("Imported Claude configuration requires a new explicit reviewed job; provider/session continuation is unavailable", 409)
                     if prior is None or prior.get("worker") != "claude" or prior.get("sessionId") != session_id or not prior.get("protocolVerified") or prior.get("status") not in {"completed", "failed", "cancelled"} or prior.get("resourceId") != self.resource_id(env):
                         raise RequestError("Claude resume requires a settled original job in the same workspace; unknown effects must be reconciled", 409)
                     if prior.get("readOnly") != (not bool(env.get("writeAllowed"))):
@@ -611,13 +707,35 @@ class JobManager:
             checked = self._inspect_claude(env)
             if not checked.get("available"):
                 raise RequestError("Claude requires CLI >=2.1.259 and the verified control/session flags; run a worker probe", 409)
+        pi_session = None
+        if request.get("worker") == "pi":
+            if native_device_admission is not None or set(request) - {"operationId", "environmentId", "environmentBinding", "worker", "prompt", "model", "readOnly", "timeoutSeconds", "threadId", "resumeJobId"}:
+                raise RequestError("Pi first slice is only an explicit no-tools private conversation; attachments/config imports/tools are unsupported", 409)
+            text(request.get("prompt"), "prompt")
+            if env.get("kind", "local") != "local" or os.name == "nt":
+                raise RequestError("Pi managed sessions are currently available only in local POSIX environments", 409)
+            if request.get("threadId"):
+                with self.lock:
+                    prior = self.jobs.get(identifier(request.get("resumeJobId"), "resumeJobId"))
+                    if prior is None or prior.get("worker") != "pi" or prior.get("threadId") != request["threadId"] or not self._can_resume(prior) or prior.get("resourceId") != self.resource_id(env):
+                        raise RequestError("Pi requires the latest exact settled original managed session and real process cleanup", 409)
+                    pi_session = json.loads(json.dumps(prior["_piSession"]))
+                    if "model" not in request and prior.get("model"):
+                        request["model"] = prior["model"]
+            elif "resumeJobId" in request:
+                raise RequestError("resumeJobId requires the exact original threadId", 409)
+            else:
+                native_id = str(uuid.uuid4())
+                pi_session = {"id": native_id, "directory": str(self.state / "pi-sessions" / native_id)}
+            if not self._inspect_pi(env).get("available"):
+                raise RequestError("Pi requires exactly CLI 1.4.0 with verified no-tools/resource flags; run a worker probe", 409)
         with self.lock:
             if prior is not None and prior.get("workspaceIdentity") and prior["workspaceIdentity"] != self.workspace_identity(env):
                 raise RequestError("Original continuation physical workspace changed", 409)
             self._check_snapshot_continuation(request, prior, env)
             if input_state is not None and request.get("inputContinuationProtocol"):
                 input_files.check_continuation(self, prior, request, RequestError)
-        argv = self._worker_argv({**request, "_sessionId": session_id}, env) if session_id else self._worker_argv(request, env)
+        argv = self._worker_argv({**request, "_piSession": pi_session}, env) if pi_session else self._worker_argv({**request, "_sessionId": session_id}, env) if session_id else self._worker_argv(request, env)
         timeout = request.get("timeoutSeconds", 300)
         if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 3600:
             raise RequestError("timeoutSeconds must be 1–3600")
@@ -636,7 +754,7 @@ class JobManager:
                 self._snapshot_environment(fork_source)
                 if not self._can_resume(fork_source):
                     raise RequestError("Original branch source is no longer settled/current", 409)
-            if request.get("worker") in {"claude", "codex_app_server"} and request.get("threadId"):
+            if request.get("worker") in {"claude", "codex_app_server", "pi"} and request.get("threadId"):
                 # Recheck atomically with reservation: another submitted invocation
                 # (including an unknown one) must not be bypassed via an older job.
                 source = self.jobs.get(request["resumeJobId"])
@@ -658,12 +776,16 @@ class JobManager:
                            assignmentWriteSandboxVerified=False, osReadIsolationVerified=False, commandAllowlistEnforced=False)
             if request.get("worker") == "codex_app_server":
                 job.update(protocol="codex_app_server", readOnly=not bool(env.get("writeAllowed")),
-                           model=request.get("model"), threadId=request.get("threadId"),
+                           model=request.get("model"), effort=request.get("effort"), threadId=request.get("threadId"),
                            resumeJobId=request.get("resumeJobId"), pendingApprovals=[])
             elif request.get("worker") == "claude":
                 job.update(protocol="claude_stream_json", readOnly=not bool(env.get("writeAllowed")),
                            model=request.get("model"), sessionId=session_id, threadId=session_id,
                            resumeJobId=request.get("resumeJobId"), protocolVerified=False, pendingApprovals=[])
+            elif request.get("worker") == "pi":
+                job.update(protocol=pi_driver.PROTOCOL, readOnly=False, noTools=True, model=request.get("model"),
+                           sessionId=pi_session["id"], threadId=pi_session["id"], resumeJobId=request.get("resumeJobId"),
+                           protocolVerified=False, nativeSettled=False, pendingApprovals=[], _piSession=pi_session)
             if request.get("resultSnapshotId"):
                 job.update(resultSnapshotId=request["resultSnapshotId"], resultSnapshotVersion=request["resultSnapshotVersion"], snapshotPrelaunchVerified=False)
             if fork_source is not None:
@@ -672,6 +794,14 @@ class JobManager:
                 job.update(projectHistoryScope=history_scope, projectEnvironmentBinding=request["environmentBinding"], projectEnvironmentConfigHash=cold_session._scope(job, self._environment(eid))["environmentConfigHash"])
             if input_state is not None:
                 input_files.bind_job(self, job, request, input_state, RequestError)
+            try:
+                # Pure reviewed-selection check precedes any original Harness lease effect.
+                self.cc_switch_imports.job_environment(job, request, env, bind=False)
+            except cc_switch_import.ImportErrorState as error:
+                raise RequestError(str(error), error.status) from None
+            if "ccSwitchImport" in request:
+                job["_ccSwitchImportRequest"] = json.loads(json.dumps({key: request[key] for key in
+                    ("operationId", "environmentId", "environmentBinding", "worker", "ccSwitchImport")}))
             try:
                 self.harness_configs.job_environment(job, request, env)
             except harness_config.ConfigError as error:
@@ -693,7 +823,7 @@ class JobManager:
             self._save(job)
             self._prune()
             if input_state is None:
-                self.pool.submit(self._run, job["id"], launch, cwd, timeout, env.get("kind") == "ssh", {"request": request, "environment": env, "sessionId": session_id} if request.get("worker") in {"codex_app_server", "claude"} else None)
+                self.pool.submit(self._run, job["id"], launch, cwd, timeout, env.get("kind") == "ssh", {"request": request, "environment": env, "sessionId": session_id} if request.get("worker") in {"codex_app_server", "claude", "pi"} else None)
             return self._public(job)
 
     def _prune(self):
@@ -748,7 +878,7 @@ class JobManager:
                 raise
 
     def _public(self, job):
-        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_harnessConfigRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer"}}
+        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer", "_piSession"}}
         result.pop("_inputPersistenceUnconfirmed", None)
         if job.get("_inputPersistenceUnconfirmed"):
             result.pop("inputState", None)
@@ -770,7 +900,9 @@ class JobManager:
         driver = self.drivers.get(job.get("id"))
         result.pop("coldRecoveryRead", None)
         result["coldRecovery"] = {"protocol": cold_session.PROTOCOL, "supportedForOriginalJob": cold_session.eligible(job), "requiresNativeOwnerReview": True, "readOnlyInspection": True, "lastInspection": json.loads(json.dumps(job.get("coldRecoveryRead", {"status": "not_checked"}))), "reason": "Original process identity and exact latest stored terminal Codex turn are both required; old jobs/Claude/SSH/private input staging have no cold continuation proof"}
-        result["controls"] = {"readSessionRecovery": cold_session.eligible(job), "cancel": job.get("status") not in TERMINAL,
+        retained = self.processes.get(job.get("id"))
+        original_stop = retained is not None and getattr(retained, "_pocket_worker_finished", False) and job.get("resourcesHeld") is True
+        result["controls"] = {"readSessionRecovery": cold_session.eligible(job), "cancel": job.get("status") not in TERMINAL or original_stop,
                               "approve": live and bool(job.get("pendingApprovals")),
                               "answerQuestion": live and not job.get("assignmentWorkspace") and any(value.get("canAnswer") for value in job.get("pendingQuestions", [])),
                               "threadResume": self._can_resume(job), "threadFork": native and self._can_resume(job) and job.get("status") in {"completed", "failed", "cancelled"},
@@ -783,13 +915,17 @@ class JobManager:
     def _can_resume_without_child(self, job, exact_child):
         if job.get("assignmentWorkspace"):
             return False  # Team follow-up needs native assignment/reservation, not private continuation.
+        if job.get("ccSwitchImport"):
+            return False  # This explicit new-job import has no reviewed provider/session continuation contract.
         worker = job.get("worker")
         recovered = cold_session.proof_matches(job, self.environments.get(job.get("environmentId"), {})) if job.get("status") == "interrupted" else False
-        if worker not in {"claude", "codex_app_server"} or job.get("status") not in {"completed", "failed", "cancelled"} and not recovered or not job.get("threadId"):
+        if worker not in {"claude", "codex_app_server", "pi"} or job.get("status") not in {"completed", "failed", "cancelled"} and not recovered or not job.get("threadId"):
             return False
         if any(value.get("status") in {"queued", "sending", "unknown"} for value in job.get("questionReceipts", [])):
             return False
         if worker == "claude" and not job.get("protocolVerified") or worker == "codex_app_server" and job.get("protocol") != "codex_app_server":
+            return False
+        if worker == "pi" and (not job.get("protocolVerified") or not self._pi_session_current(job)):
             return False
         if worker == "codex_app_server":
             if job.get("steeringUnknown"):
@@ -799,6 +935,8 @@ class JobManager:
                     return False
         env = self.environments.get(job.get("environmentId"))
         if env is None or self.resource_id(env) != job.get("resourceId"):
+            return False
+        if worker == "pi" and ("pi" not in env.get("workers", []) or env.get("kind", "local") != "local" or os.name == "nt"):
             return False
         if job.get("workspaceIdentity"):
             try:
@@ -812,6 +950,7 @@ class JobManager:
 
     def get(self, jobid):
         identifier(jobid, "jobId")
+        self._reconcile_original_process(jobid)
         with self.lock:
             if jobid not in self.jobs:
                 raise RequestError("Job not found", 404)
@@ -843,20 +982,141 @@ class JobManager:
             return proof
 
     @staticmethod
+    def _leader_exit_observed(process):
+        if process.returncode is not None:
+            return True
+        if os.name == "nt" or not hasattr(os, "waitid") or not hasattr(os, "WNOWAIT"):
+            return process.poll() is not None
+        try:
+            # Keep the original zombie/child identity reserved until its group is
+            # observed gone. A reaped numeric PID is never fresh signal authority.
+            return os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        except ChildProcessError:
+            return None  # Its child identity was lost; no new numeric-PID signal authority.
+        except OSError:
+            return None
+
+    @staticmethod
+    def _observe_process_group(process):
+        """Read-only proof about this retained Popen's ORIGINAL group; no PID from a request.
+
+        A reaped leader is not an absent process group. ESRCH is proof of current
+        absence; EPERM, an unreadable proc entry or an unsupported observation is
+        unknown. Detached sessions remain outside this original group boundary.
+        """
+        exited = JobManager._leader_exit_observed(process)
+        proof = {"leaderReaped": process.returncode is not None, "leaderExitObserved": exited is True,
+                 "processGroupStoppedVerified": False, "containmentKind": "original_process_group",
+                 "detachedDescendantIsolationVerified": False}
+        if exited is None:
+            return proof | {"observationUnknown": True, "verificationMethod": "original_child_wait_unavailable"}
+        if os.name == "nt" or not exited:
+            return proof
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return proof | {"processGroupStoppedVerified": True, "verificationMethod": "original_pgid_esrch"}
+        except OSError:
+            return proof | {"observationUnknown": True, "verificationMethod": "original_pgid_query_unavailable"}
+        proc = Path("/proc")
+        if not proc.is_dir():
+            return proof | {"observationUnknown": True, "verificationMethod": "original_pgid_still_exists"}
+        try:
+            entries = [path for path in proc.iterdir() if path.name.isdigit()]
+            if len(entries) > 4096:
+                return proof | {"observationUnknown": True, "verificationMethod": "process_scan_bound_exceeded"}
+            for path in entries:
+                try:
+                    tail = (path / "stat").read_text().rsplit(")", 1)[1].split()
+                    pgid, state = int(tail[2]), tail[0]
+                except FileNotFoundError:
+                    continue  # This process disappeared during the observation.
+                except (OSError, ValueError, IndexError):
+                    return proof | {"observationUnknown": True, "verificationMethod": "process_membership_unreadable"}
+                if pgid == process.pid and state not in {"Z", "X"}:
+                    return proof | {"verificationMethod": "original_pgid_live_member_observed"}
+            return proof | {"processGroupStoppedVerified": True, "verificationMethod": "original_pgid_no_live_proc_members"}
+        except OSError:
+            return proof | {"observationUnknown": True, "verificationMethod": "process_membership_unreadable"}
+
+    def _reconcile_original_process(self, jobid):
+        """An explicit GET settles original ownership only; never effects or execution authority.
+        Live references use their exact Popen. A cold fence is read-only and needs
+        the original boot/namespace/scope/process identity, not a request PID.
+        """
+        with self.lock:
+            original = self.jobs.get(jobid)
+            if original is None or original.get("resourcesHeld") is not True:
+                return
+            process = self.processes.get(jobid)
+            if isinstance(process, WindowsJobProcess) or process is not None and not getattr(process, "_pocket_worker_finished", False):
+                return
+            operation, fingerprint = original["operationId"], original["fingerprint"]
+            snapshot = json.loads(json.dumps(original))
+            env = dict(self.environments.get(original["environmentId"], {}))
+        if process is None:
+            if os.name == "nt" or not cold_session.original_process_group_stopped(snapshot, env):
+                return
+            observed = {"processGroupStoppedVerified": True, "verificationMethod": "original_boot_namespace_scope_read_only",
+                        "containmentKind": "original_process_group", "detachedDescendantIsolationVerified": False}
+        else:
+            observed = self._observe_process_group(process)
+        with self.resource_changed:
+            job = self.jobs.get(jobid)
+            if self.processes.get(jobid) is not process or job is None or job["operationId"] != operation or job["fingerprint"] != fingerprint or job.get("resourcesHeld") is not True:
+                return
+            if process is not None and not getattr(process, "_pocket_worker_finished", False):
+                return
+            previous = job.get("processCleanupProof", {})
+            job["processCleanupProof"] = previous | observed
+            if observed.get("processGroupStoppedVerified") is True:
+                if process is not None:
+                    try:
+                        process.wait(timeout=0)
+                    except subprocess.TimeoutExpired:
+                        return
+                    job["processCleanupProof"]["leaderReaped"] = True
+                # Keep interrupted Codex eligible for its separate read-only
+                # stored-turn inspection. Group absence is never a completed task.
+                status = "interrupted" if job.get("status") == "interrupted" else "unknown"
+                job.update(resourcesHeld=False, dispatchFenceFinal=True, status=status,
+                           message="Original process group is now confirmed stopped; prior effects remain unverified, no command was replayed", updatedAt=self.now())
+                self._save(job)
+                self.processes.pop(jobid, None)
+                if not any(other["id"] != jobid and other.get("resourceId") == job["resourceId"] and other.get("resourcesHeld") is True for other in self.jobs.values()):
+                    self.resources.discard(job["resourceId"])
+                self.stopping.discard(jobid)
+                if job.get("harnessConfigOperationId"):
+                    self.harness_configs.settle_job(job, True)
+                self.cc_switch_imports.settle_job(job, True)
+                self.resource_changed.notify_all()
+            else:
+                job.update(status="unknown", dispatchFenceFinal=False, resourcesHeld=True)
+                self._save(job)
+
+    @staticmethod
     def _terminate_group(process, hard=False):
         if isinstance(process, WindowsJobProcess):
             return get_backend().terminate(process, hard=hard)
         proof = {"terminationRequested": True, "leaderReaped": False, "processGroupKillAttempted": False, "processGroupStoppedVerified": False}
+        if os.name != "nt":
+            exited = JobManager._leader_exit_observed(process)
+            if process.returncode is not None:
+                # A later call cannot signal a potentially reused pgid after this
+                # Popen was reaped. It may only observe original group absence.
+                return proof | JobManager._observe_process_group(process) | {"terminationRequested": False}
+            if exited is None:
+                return proof | {"terminationRequested": False, "observationUnknown": True,
+                                "verificationMethod": "original_child_identity_unavailable"}
         try:
             if os.name == "nt":
                 subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
             else:
                 if not hard:
                     os.killpg(process.pid, signal.SIGTERM)
-                    try:
-                        process.wait(timeout=1)
-                    except subprocess.TimeoutExpired:
-                        pass
+                    grace = time.monotonic() + 1
+                    while time.monotonic() < grace and JobManager._leader_exit_observed(process) is False:
+                        time.sleep(.01)
                 proof["processGroupKillAttempted"] = True
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
@@ -873,39 +1133,13 @@ class JobManager:
             except OSError:
                 pass
             proof["leaderReaped"] = process.poll() is not None
-        if os.name != "nt" and proof["leaderReaped"]:
-            try:
-                os.killpg(process.pid, 0)
-            except ProcessLookupError:
-                proof["processGroupStoppedVerified"] = True
-            except OSError:
-                pass
-            else:
-                proc = Path("/proc")
-                if proc.is_dir():
-                    # SIGKILL is a request: descendants may remain runnable for
-                    # a scheduler tick after the leader was reaped. Observe the
-                    # SAME original pgid for a bounded interval, never send a
-                    # second kill to a possibly reused PID/pgid to fake proof.
-                    settled_by = time.monotonic() + .5
-                    while True:
-                        entries = [path for path in proc.iterdir() if path.name.isdigit()]
-                        if len(entries) > 4096:
-                            break
-                        live = False
-                        for path in entries:
-                            try:
-                                tail = (path / "stat").read_text().rsplit(")", 1)[1].split()
-                                if int(tail[2]) == process.pid and tail[0] not in {"Z", "X"}:
-                                    live = True
-                                    break
-                            except (OSError, ValueError, IndexError):
-                                continue
-                        proof["processGroupStoppedVerified"] = not live
-                        proof["verificationMethod"] = "original_pgid_no_live_proc_members"
-                        if not live or time.monotonic() >= settled_by:
-                            break
-                        time.sleep(.01)
+        if os.name != "nt":
+            observed = JobManager._observe_process_group(process)
+            settled_by = time.monotonic() + .5
+            while not observed.get("processGroupStoppedVerified") and not observed.get("observationUnknown") and time.monotonic() < settled_by:
+                time.sleep(.01)
+                observed = JobManager._observe_process_group(process)
+            proof.update(observed)
         return proof
 
     def cancel(self, jobid):
@@ -930,7 +1164,9 @@ class JobManager:
             if input_files.cancel_before_worker(self, job):
                 self.harness_configs.settle_job(job, job.get("notStartedConfirmed") is True)
                 return self._public(job)
-            if job["status"] in TERMINAL:
+            retained = self.processes.get(jobid)
+            retained = retained is not None and getattr(retained, "_pocket_worker_finished", False) and job.get("resourcesHeld")
+            if job["status"] in TERMINAL and not retained:
                 return self._public(job)
             self.stopping.add(jobid)
             job.update(status="stopping", message="Stopping transport/process; prior effects are retained", updatedAt=self.now())
@@ -940,10 +1176,9 @@ class JobManager:
             driver = self.drivers.get(jobid)
         if process is not None and (driver is None or job.get("assignmentWorkspace")):
             proof = self._terminate(process, hard=bool(job.get("assignmentWorkspace")))
-            if job.get("assignmentWorkspace") or job.get("nativeDeviceOperation"):
-                with self.lock:
-                    self.jobs[jobid]["processCleanupProof"] = proof
-                    self._save(self.jobs[jobid])
+            with self.lock:
+                self.jobs[jobid]["processCleanupProof"] = proof
+                self._save(self.jobs[jobid])
         return self.get(jobid)
 
     def _run(self, jobid, argv, cwd, timeout, remote, codex=None):
@@ -985,6 +1220,18 @@ class JobManager:
                     original = self.jobs.get(codex["request"].get("resumeJobId"))
                     self._check_snapshot_continuation(codex["request"], original, self._environment(job["environmentId"]))
                     job.update(snapshotPrelaunchVerified=True, snapshotBaseVerifiedAt=self.now())
+                if job.get("worker") == "pi":
+                    source = self.jobs.get(job.get("resumeJobId"))
+                    if job.get("resumeJobId") and (source is None or not self._can_resume_without_child(source, jobid)):
+                        raise RequestError("Pi original session changed before native launch; no prompt was dispatched", 409)
+                    directory = Path(job["_piSession"]["directory"])
+                    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    try:
+                        canonical = directory.resolve() == directory
+                    except (OSError, RuntimeError):
+                        canonical = False
+                    if not canonical or directory.is_symlink() or os.name != "nt" and directory.stat().st_mode & 0o077:
+                        raise RequestError("Pi managed session directory is not private/current", 409)
                 if job.get("inputState"):
                     input_files.verify(self, job, RequestError)
                 self.resources.add(resource)
@@ -1019,14 +1266,21 @@ class JobManager:
                     child_env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
                 if native_admission is not None:
                     child_env = native_admission.child_environment(child_env)
+                try:
+                    child_env = self.cc_switch_imports.child_environment(job, job.get("_ccSwitchImportRequest", {}), actual_env, child_env)
+                except cc_switch_import.ImportErrorState as error:
+                    raise RequestError(str(error), error.status) from None
                 process = self._spawn(actual_env, argv, cwd, stdin=subprocess.PIPE if codex else subprocess.DEVNULL,
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL if codex else subprocess.STDOUT, env=child_env)
                 process._pocket_cleanup_lock = threading.Lock()
                 self.processes[jobid] = process
-                job.update(status="running", processStarted=True, dispatchFenceFinal=False, message="Remote SSH process started" if remote else "Process started", updatedAt=self.now())
+                job.update(status="running", processStarted=True, resourcesHeld=True, dispatchFenceFinal=False, message="Remote SSH process started" if remote else "Process started", updatedAt=self.now())
                 identity = cold_session.capture(job, actual_env, process)
                 if identity is not None:
                     job["_coldProcess"] = identity
+                group_origin = cold_session.capture_process_group(job, actual_env, process)
+                if group_origin is not None:
+                    job["_originalProcessGroup"] = group_origin
                 if job.get("inputState"):
                     job["inputState"].update(phase="running", workerStarted=True)
                     job["notStartedConfirmed"] = False
@@ -1055,7 +1309,10 @@ class JobManager:
                 def state(value):
                     with self.lock:
                         # Raw protocol diagnostics and account credentials never enter receipts.
-                        safe = json.loads(self.harness_configs.redact(json.dumps(value)).replace(self.token, "[token hidden]"))
+                        safe = json.loads(self.harness_configs.redact(json.dumps(self.cc_switch_imports.redact_value(value))).replace(self.token, "[token hidden]"))
+                        provenance = self.cc_switch_imports.model_provenance(self.jobs[jobid], value.get("reportedModel"))
+                        if provenance is not None:
+                            safe["ccSwitchModelProvenance"] = provenance
                         if jobid in self.stopping and safe.get("status") in {"running", "awaiting_approval", "awaiting_input"}:
                             safe["status"] = "stopping"
                         self.jobs[jobid].update(safe, updatedAt=self.now())
@@ -1067,6 +1324,10 @@ class JobManager:
                 if job.get("worker") == "claude":
                     driver = ClaudeStreamDriver(process, codex["sessionId"], state, stopped, timeout,
                                                 lambda: self.lock, codex["environment"]["root"], bool(codex["environment"].get("writeAllowed")))
+                elif job.get("worker") == "pi":
+                    value = job["_piSession"]
+                    driver = pi_driver.PiRpcDriver(process, state, stopped, timeout, lambda: self.lock,
+                                                    value["id"], value["directory"], value.get("file"))
                 else:
                     driver = CodexAppServerDriver(process, codex["environment"]["root"], bool(codex["environment"].get("writeAllowed")), state, stopped, timeout, codex["request"].get("readOnly") is True, lambda: self.lock,
                                                   assignment_write=assignment, output_limit=job.get("externalJobLimits", {}).get("maxOutputBytes", MAX_OUTPUT),
@@ -1104,11 +1365,18 @@ class JobManager:
                         if original is None or not self._can_resume(original) or original.get("turnId") != codex["request"]["forkSource"]["turnId"]:
                             raise DriverError("Original fork source changed before protocol dispatch")
                     thread = driver.fork_original_thread(original["threadId"], original["turnId"])
-                result = driver.run(text(codex["request"].get("prompt"), "prompt"), thread, codex["request"].get("model"))
+                arguments = (text(codex["request"].get("prompt"), "prompt"), thread, codex["request"].get("model"))
+                result = driver.run(*arguments, effort=codex["request"].get("effort")) if job.get("worker") == "codex_app_server" else driver.run(*arguments)
                 if codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP":
                     result["externalGroupApiRead"] = dict(driver.group_api_facts)
                 with self.lock:
-                    self.jobs[jobid].update(json.loads(self.harness_configs.redact(json.dumps(result)).replace(self.token, "[token hidden]")), updatedAt=self.now())
+                    safe = json.loads(self.harness_configs.redact(json.dumps(self.cc_switch_imports.redact_value(result))).replace(self.token, "[token hidden]"))
+                    provenance = self.cc_switch_imports.model_provenance(self.jobs[jobid], result.get("reportedModel"))
+                    if provenance is not None:
+                        safe["ccSwitchModelProvenance"] = provenance
+                    if job.get("worker") == "pi" and result.get("reportedModel"):
+                        safe["model"] = result["reportedModel"]
+                    self.jobs[jobid].update(safe, updatedAt=self.now())
                     self._save(self.jobs[jobid])
                 cleanup = self._terminate(process, hard=assignment)
                 return
@@ -1116,20 +1384,36 @@ class JobManager:
             reader = threading.Thread(target=self._read_output, args=(jobid, process, reader_stop), daemon=True)
             reader.start()
             deadline = time.monotonic() + timeout
-            while process.poll() is None or isinstance(process, WindowsJobProcess) and process.tree_active_count() != 0:
+            while True:
+                if isinstance(process, WindowsJobProcess):
+                    if process.poll() is not None and process.tree_active_count() == 0:
+                        break
+                elif self._leader_exit_observed(process) is not False:
+                    observed = self._observe_process_group(process)
+                    if observed.get("processGroupStoppedVerified"):
+                        # Final cleanup signals the SAME still-reserved owned
+                        # group before reaping its leader; a proc scan alone is
+                        # not a barrier against a descendant forking mid-scan.
+                        cleanup = self._terminate(process, hard=True)
+                        break
+                    if observed.get("observationUnknown"):
+                        cleanup = observed
+                        break  # Keep unknown/lease, not an unbounded worker or a false exit.
                 if native_admission is not None:
                     native_admission.check_current()
                 with self.lock:
                     stopping = jobid in self.stopping or self.closed
                 if stopping or time.monotonic() >= deadline:
                     timed_out = not stopping
-                    self._terminate(process)
+                    cleanup = self._terminate(process)
                     break
                 time.sleep(0.05)
-            try:
-                code = process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                code = None
+            code = None
+            if isinstance(process, WindowsJobProcess) or (cleanup or {}).get("processGroupStoppedVerified"):
+                try:
+                    code = process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
             reader.join(timeout=2)
             reader_stop.set()
             reader.join(timeout=0.3)
@@ -1148,6 +1432,10 @@ class JobManager:
                     job["processCleanupProof"] = cleanup
                     if not cleanup.get("processGroupStoppedVerified"):
                         status, message = "unknown", "Original Windows Job Object did not confirm zero active processes; effects/resource remain unverified"
+                if not isinstance(process, WindowsJobProcess):
+                    job["processCleanupProof"] = cleanup
+                    if not (cleanup or {}).get("processGroupStoppedVerified"):
+                        status, message = "unknown", "Original process-group stop unconfirmed; original process and workspace resource stay held"
                 job.update(status=status, exitCode=code, message=message, updatedAt=self.now(), timedOut=timed_out)
                 self._save(job)
         except (OSError, ValueError, sqlite3.Error, DriverError, RequestError, PlatformError) as error:
@@ -1176,7 +1464,11 @@ class JobManager:
                         self.jobs[jobid].update(status="unknown", message="Steering receipt could not be persisted; inspect the original operation before continuing")
             if isinstance(process, WindowsJobProcess) and cleanup is None:
                 cleanup = self._terminate(process, hard=True)
-            if self.jobs[jobid].get("projectHistoryScope") and process is not None and start_failure is None and process.poll() is not None:
+            if self.jobs[jobid].get("projectHistoryScope") and process is not None and not (cleanup or {}).get("processGroupStoppedVerified"):
+                with self.lock:
+                    self.jobs[jobid]["projectHistory"].update(comparisonStatus="unknown_process_group", reason="Original process group is not confirmed stopped; no final project comparison was captured")
+                    self._save(self.jobs[jobid])
+            if self.jobs[jobid].get("projectHistoryScope") and process is not None and start_failure is None and (cleanup or {}).get("processGroupStoppedVerified") and process.poll() is not None:
                 try:
                     project_history.after(self, self.jobs[jobid], RequestError)
                 except (OSError, ValueError, sqlite3.Error, RequestError):
@@ -1230,13 +1522,29 @@ class JobManager:
                     job["dispatchFenceFinal"] = stopped
                     self.harness_configs.settle_job(job, stopped)
                     self._save(job)
-                unverified_start = start_failure is not None and not (cleanup or {}).get("processGroupStoppedVerified")
-                if not unverified_start:
+                stop_verified = process is None or (cleanup or {}).get("processGroupStoppedVerified") is True
+                job.update(resourcesHeld=process is not None and not stop_verified, dispatchFenceFinal=stop_verified)
+                if process is not None:
+                    job["processCleanupProof"] = cleanup or {"processGroupStoppedVerified": False, "observationUnknown": True}
+                    process._pocket_worker_finished = True
+                    if not stop_verified:
+                        job.update(status="unknown", message="Original process-group stop unconfirmed; original process and workspace resource stay held")
+                elif job.get("ccSwitchImport"):
+                    job["processCleanupProof"] = {"notStartedConfirmed": True, "processGroupStoppedVerified": True}
+                if job.get("worker") == "pi" and stop_verified and job.get("nativeSettled") and driver is not None and driver.session_file:
+                    try:
+                        job["_piSession"].update(file=driver.session_file,
+                            proof=pi_driver.session_stamp(driver.session_file, job["_piSession"]["directory"]))
+                    except (OSError, ValueError, DriverError):
+                        job["_piSession"].pop("proof", None)  # Known turn can stay settled, but continuation stays unavailable.
+                self._save(job)
+                if stop_verified:
+                    self.cc_switch_imports.settle_job(job, True)
                     self.processes.pop(jobid, None)
                 self.drivers.pop(jobid, None)
                 self.native_device_admissions.pop(jobid, None)
                 self.stopping.discard(jobid)
-                if acquired_resource is not None and not ((assignment or group_input or isinstance(process, WindowsJobProcess) or start_failure is not None) and process is not None and not (cleanup or {}).get("processGroupStoppedVerified")):
+                if acquired_resource is not None and stop_verified:
                     self.resources.discard(acquired_resource)
                 self.resource_changed.notify_all()
             if process is not None and process.stdout is not None:
@@ -1632,10 +1940,21 @@ class JobManager:
         with self.lock:
             unsettled = list({id(p): p for p in [*self._unsettled_native_starts, *self.processes.values()]}.values())
         for process in unsettled:
-            self._terminate(process, hard=True)
+            proof = self._terminate(process, hard=True)
+            with self.lock:
+                for jobid, job in self.jobs.items():
+                    if self.processes.get(jobid) is process and job.get("ccSwitchImport"):
+                        job["processCleanupProof"] = proof
+                        try:
+                            self._save(job)
+                        except (OSError, ValueError, sqlite3.Error):
+                            pass  # Retain redaction on uncertain persistence; still close the other native handles.
+                        else:
+                            self.cc_switch_imports.settle_job(job, proof.get("processGroupStoppedVerified") is True)
             if isinstance(process, WindowsJobProcess):
                 process.close()  # KILL_ON_JOB_CLOSE is a request, not new proof.
         self.harness_configs.close()
+        self.cc_switch_imports.close()
         with self.lock:
             self.ledger.close()
 
@@ -1664,11 +1983,13 @@ class CompanionHandler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, status, value):
+        self.close_connection = True  # Every JSON response ends this native request socket.
         body = json.dumps(value, ensure_ascii=False).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -1712,6 +2033,14 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 result = manager.list_environments()
             elif len(parts) >= 2 and parts[:2] in (["v1", "harnesses"], ["v1", "harness-config"]):
                 result = harness_config.route(manager, parts, post, request, {key: values[0] for key, values in parse_qs(url.query).items()}, RequestError)
+            elif post and parts == ["v1", "cc-switch", "review"]:
+                if set(request) != {"environmentId", "environmentBinding", "sourceId", "providerId"}:
+                    raise RequestError("CC Switch review requires only the exact explicit owner selection")
+                try:
+                    with manager.lock:
+                        result = manager.cc_switch_imports.review(request)
+                except cc_switch_import.ImportErrorState as error:
+                    raise RequestError(str(error), error.status) from None
             elif len(parts) >= 2 and parts[:2] == ["v1", "gateway"]:
                 # Same process / JobManager / authenticated phone transport / original DB.
                 # TLS remains on the remote listener. Only the CLI endpoint is HTTP-loopback.

@@ -134,10 +134,9 @@ class ComposeActivity : ComponentActivity() {
             intent?.removeExtra("automationGoal")
             return
         }
-        intent?.getStringExtra("automationGoal")?.takeIf { it.isNotBlank() }?.let {
-            controller.suggestInput(it, true)
-            intent.removeExtra("automationGoal")
-        }
+        // Old/foreign PendingIntent body is not source authority. Only the original
+        // occurrence route above may retrieve a current, still-authorized goal.
+        intent?.removeExtra("automationGoal")
     }
     internal fun pickMcpConfig(requestId: String) {
         if (mcpPickRequestId != null) { controller.completeMcpConfig(requestId, null); return }

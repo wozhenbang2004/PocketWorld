@@ -823,15 +823,16 @@ public final class RemoteModule implements EngineModule {
         if(source==null)throw new IllegalStateException("请先查询原电脑任务，核对最新续接控制；没有提交新任务");
         if(!service.equals(source.optString("serviceBase"))||!original.equals(source.optString("operationId"))
                 ||prior!=null&&(!"job_submit".equals(prior.optString("kind","job_submit"))||!profileId.equals(prior.optString("profileId"))||!service.equals(prior.optString("serviceBase"))||!jobId.equals(prior.optString("jobId"))))throw new SecurityException("续接来源与原电脑地址、任务或操作不一致");
-        String worker=body.getString("worker"),protocol=worker.equals("claude")?"claude_stream_json":"codex_app_server";
-        if(!worker.matches("claude|codex_app_server")||!worker.equals(source.optString("worker"))||!protocol.equals(source.optString("protocol"))
+        String worker=body.getString("worker"),protocol=worker.equals("claude")?"claude_stream_json":worker.equals("pi")?"pi_rpc_v1":"codex_app_server";
+        if(!worker.matches("claude|codex_app_server|pi")||!worker.equals(source.optString("worker"))||!protocol.equals(source.optString("protocol"))
                 ||!body.getString("environmentId").equals(source.optString("environmentId"))||!body.getString("threadId").equals(source.optString("threadId")))throw new SecurityException("续接执行环境、协议或原会话身份已变化");
         if(worker.equals("claude")&&(!source.optBoolean("protocolVerified")||!body.getString("threadId").equals(source.optString("sessionId"))))throw new SecurityException("Claude尚未确认原会话身份，不能按线程别名续接");
+        if(worker.equals("pi")&&(!source.optBoolean("protocolVerified")||source.opt("noTools")!=Boolean.TRUE||source.opt("nativeSettled")!=Boolean.TRUE||source.opt("resourcesHeld")!=Boolean.FALSE||!body.getString("threadId").equals(source.optString("sessionId"))||source.optString("promptRequestId").isEmpty()||source.optJSONObject("processCleanupProof")==null||source.getJSONObject("processCleanupProof").opt("processGroupStoppedVerified")!=Boolean.TRUE))throw new SecurityException("Pi须原无工具会话已native settled且真实原进程树已清理；未知不续接");
         JSONObject controls=source.optJSONObject("controls");
         boolean recovered=RemoteColdRecovery.receipt(source);
         if(!source.optString("status").matches("completed|failed|cancelled")&&!recovered||controls==null||!controls.optBoolean("threadResume")||source.optBoolean("steeringUnknown"))throw new IllegalStateException("原任务尚未核对终止或不允许续接；未知效果只能查询，不会重新提交");
         if(recovered&&(!source.getJSONObject("recoveryProof").getString("proofId").equals(body.optString("recoveryProofId"))||body.opt("recoveryOwnerAcknowledged")!=Boolean.TRUE||body.optInt("timeoutSeconds")<10||body.optInt("timeoutSeconds")>900))throw new SecurityException("冷中断续接缺少原proof及本次新时限/费用风险确认");
-        if(body.has("readOnly")&&(worker.equals("claude")&&body.getBoolean("readOnly")||worker.equals("codex_app_server")&&body.getBoolean("readOnly")!=source.optBoolean("readOnly")))throw new SecurityException("不能改变原工具访问边界；Claude不提供强制只读沙箱");
+        if(body.has("readOnly")&&((worker.equals("claude")||worker.equals("pi"))&&body.getBoolean("readOnly")||worker.equals("codex_app_server")&&body.getBoolean("readOnly")!=source.optBoolean("readOnly")))throw new SecurityException("不能改变原工具访问边界；Claude不提供强制只读沙箱");
         for(int i=0;i<operations.length();i++){
             JSONObject op=operations.getJSONObject(i);
             if(!profileId.equals(op.optString("profileId"))||!service.equals(op.optString("serviceBase")))continue;
@@ -872,7 +873,65 @@ public final class RemoteModule implements EngineModule {
         if(recent.size()>=30&&!recent.containsKey(job.optString("profileId")+":"+job.optString("id"))){String oldest=null;long time=Long.MAX_VALUE;for(Map.Entry<String,JSONObject> item:recent.entrySet()){long at=item.getValue().optLong("updatedAt");if(at<time){time=at;oldest=item.getKey();}}if(oldest!=null)recent.remove(oldest);}
         recent.put(job.optString("profileId")+":"+job.getString("id"),metadata(job).put("serviceBase",job.optString("serviceBase")));
     }
-    private static JSONObject metadata(JSONObject job)throws Exception {JSONObject value=new JSONObject();for(String key:new String[]{"id","profileId","serviceBase","operationId","environmentId","worker","status","message","createdAt","updatedAt","exitCode","outputTruncated","timedOut","archived","lastKnownStatus","path","version","previousVersion","desiredVersion","verified","protocol","protocolVerified","controlProtocolVerified","sessionIdentityConfirmed","sessionId","promptRequestId","threadId","turnId","pendingApprovals","approvalReceipts","pendingQuestions","questionReceipts","progress","promptResultIdentity","diffTruncated","model","reportedModel","readOnly","readOnlyConfirmed","externalToolsDisabled","teamReadOnlyTools","capabilities","controls","inputSteeringVerified","steeringUnknown","lastSteerMessage","interruptAcknowledged","turnStartAcknowledged","resumeJobId","sourceServiceBase","remoteEffectsVerified","eventCount","resultSubtype","permissionDenialCount","messageId","jobId","jobOperationId","expectedTurnId","dispatched","errorCode","resultSnapshotId","resultSnapshotVersion","snapshotPrelaunchVerified","snapshotBaseVerifiedAt","workspaceIdentity","assignmentWorkspace","externalJobLimits","inferenceUsage","modelCallHardCapSupported","tokenHardCapSupported","costHardCapSupported","wallTimeHardCapSupported","wallTimeEnforcement","detachedDescendantIsolationVerified","assignmentWriteSandboxVerified","osReadIsolationVerified","commandAllowlistEnforced","processStarted","dispatchFenceFinal","notStartedConfirmed","processCleanupProof","outputLimitExceeded","inputState","recoveryProof","coldRecovery","projectHistory","sessionBranchSource","sessionBranch","inferenceAudience","groupInputSource","externalGroupApiMode","externalGroupApiRead"})if(job.has(key))value.put(key,job.get(key));return new JSONObject(value.toString());}
+    private static JSONObject metadata(JSONObject job)throws Exception {JSONObject value=new JSONObject();for(String key:new String[]{"id","profileId","serviceBase","operationId","environmentId","worker","status","message","createdAt","updatedAt","exitCode","outputTruncated","timedOut","archived","lastKnownStatus","path","version","previousVersion","desiredVersion","verified","protocol","protocolVerified","controlProtocolVerified","sessionIdentityConfirmed","sessionId","promptRequestId","threadId","turnId","pendingApprovals","approvalReceipts","pendingQuestions","questionReceipts","progress","promptResultIdentity","diffTruncated","model","reportedModel","readOnly","readOnlyConfirmed","externalToolsDisabled","teamReadOnlyTools","capabilities","controls","inputSteeringVerified","steeringUnknown","lastSteerMessage","interruptAcknowledged","turnStartAcknowledged","resumeJobId","sourceServiceBase","remoteEffectsVerified","eventCount","resultSubtype","permissionDenialCount","messageId","jobId","jobOperationId","expectedTurnId","dispatched","errorCode","resultSnapshotId","resultSnapshotVersion","snapshotPrelaunchVerified","snapshotBaseVerifiedAt","workspaceIdentity","assignmentWorkspace","externalJobLimits","inferenceUsage","modelCallHardCapSupported","tokenHardCapSupported","costHardCapSupported","wallTimeHardCapSupported","wallTimeEnforcement","detachedDescendantIsolationVerified","assignmentWriteSandboxVerified","osReadIsolationVerified","noTools","nativeSettled","resourcesHeld","commandAllowlistEnforced","processStarted","dispatchFenceFinal","notStartedConfirmed","processCleanupProof","outputLimitExceeded","inputState","recoveryProof","coldRecovery","projectHistory","sessionBranchSource","sessionBranch","inferenceAudience","groupInputSource","externalGroupApiMode","externalGroupApiRead"})if(job.has(key))value.put(key,job.get(key));return new JSONObject(value.toString());}
+    /** Native WorkProfile source inspection only. Not reachable through handle or model commands. */
+    public JSONObject workProfileTargetFacts(JSONObject reference,dev.pocketengine.core.RunControl observation)throws Exception {
+        workProfileReference(reference);java.util.Objects.requireNonNull(observation).check();
+        String worker=reference.getString("worker");
+        if(!worker.matches("codex_app_server|claude"))return new JSONObject().put("supported",false).put("sourceEvidence",new JSONObject().put("sourceState","unsupported").put("reasonCode","worker_adapter_unimplemented"));
+        JSONObject binding=workProfileCurrentBinding(reference,observation),entrypoint=(JSONObject)binding.remove("_entrypointObservation");
+        JSONObject query=new JSONObject().put("profileId",binding.getString("profileId")).put("_profileBinding",binding.getString("profileBinding"));
+        JSONObject body=new JSONObject().put("environmentId",binding.getString("environmentId")).put("environmentBinding",binding.getString("environmentBinding")).put("worker",worker);
+        JSONObject probe=request(query,"/v1/workers/probe",body,15,observation);workProfileProfileCurrent(reference,observation);
+        if(!binding.getString("environmentId").equals(probe.optString("environmentId"))||!worker.equals(probe.optString("worker")))throw new SecurityException("原Harness探测返回了另一环境或执行器");
+        JSONObject after=workProfileExecutableObservation(probe);boolean identityCurrent=Boolean.TRUE.equals(entrypoint.opt("executableIdentityVerified"))&&Boolean.TRUE.equals(after.opt("executableIdentityVerified"))&&entrypoint.getString("executableIdentity").equals(after.getString("executableIdentity"));
+        boolean codex=worker.equals("codex_app_server"),available=Boolean.TRUE.equals(probe.opt("available"));
+        boolean protocol=codex&&Boolean.TRUE.equals(probe.opt("protocolVerified")),config=codex&&protocol&&Boolean.TRUE.equals(probe.opt("configReadVerified"));
+        boolean supported=identityCurrent&&available&&(codex?protocol&&config&&Boolean.TRUE.equals(probe.opt("accountConfigured")):Boolean.TRUE.equals(probe.opt("cliFlagsVerified")));
+        String mode=probe.optString("authMode");if(!java.util.Set.of("apiKey","chatgpt","amazonBedrock","gcp").contains(mode)||!protocol)mode="unknown";
+        String version=probe.optString("cliVersion");if(!version.matches("[0-9]+(?:\\.[0-9]+){1,3}(?:[-+][A-Za-z0-9._-]+)?")||version.length()>80)version="unknown";
+        JSONObject evidence=new JSONObject().put("sourceState",supported?"source_ready":"unavailable").put("reasonCode",supported?"original_binding_and_probe_observed":!identityCurrent?"worker_entrypoint_identity_unverified_or_changed":!available?"worker_unavailable":codex?"worker_protocol_account_or_config_unverified":"worker_cli_flags_unverified")
+                .put("workerAvailable",available).put("protocolSupported",true).put("protocolVerified",codex?workProfileBoolean(probe,"protocolVerified"):JSONObject.NULL)
+                .put("accountConfigured",protocol?workProfileBoolean(probe,"accountConfigured"):JSONObject.NULL).put("accountMode",mode).put("configReadVerified",protocol?workProfileBoolean(probe,"configReadVerified"):JSONObject.NULL)
+                .put("workerVersion",version).put("connectionVerified",false).put("configurationApplied",false).put("runtimeVerified",false);
+        JSONObject identity=identityCurrent?after:workProfileExecutableObservation(new JSONObject());for(var keys=identity.keys();keys.hasNext();){String key=keys.next();evidence.put(key,identity.get(key));}
+        observation.check();return binding.put("supported",supported).put("sourceEvidence",evidence);
+    }
+    /** Revalidate native identity and current remote metadata without spawning another CLI probe. */
+    public void checkWorkProfileTargetCurrent(JSONObject reference,JSONObject capturedPublicBinding,dev.pocketengine.core.RunControl observation)throws Exception {
+        workProfileReference(reference);java.util.Objects.requireNonNull(capturedPublicBinding);
+        for(String key:new String[]{"kind","profileId","profileBinding","environmentId","environmentBinding","worker"})if(!reference.get(key).equals(capturedPublicBinding.opt(key)))throw new SecurityException("工作Profile不是原冻结电脑目标");
+        // Frozen Resolver bindings retain exact tuple/evidence, not the initial support decision.
+        JSONObject before=workProfileExecutableObservation(capturedPublicBinding.optJSONObject("sourceEvidence")),after=workProfileCurrentBinding(reference,observation).getJSONObject("_entrypointObservation");
+        if(capturedPublicBinding.has("supported")&&!Boolean.TRUE.equals(capturedPublicBinding.opt("supported"))||!Boolean.TRUE.equals(before.opt("executableIdentityVerified"))||!Boolean.TRUE.equals(after.opt("executableIdentityVerified"))||!before.getString("executableIdentity").equals(after.getString("executableIdentity")))throw new SecurityException("原CLI入口身份未知或已变化；旧探测不再可用，请重新审阅");
+        observation.check();
+    }
+    /** Entry-point stat only: never binary content, installed version or a launcher-chain proof. */
+    private static JSONObject workProfileExecutableObservation(JSONObject actual)throws Exception {
+        String digest=actual==null?"":actual.optString("executableIdentity");
+        boolean observed=actual!=null&&"native_file_stat_v1".equals(actual.optString("executableIdentityKind"))&&digest.matches("[a-f0-9]{64}")&&Boolean.TRUE.equals(actual.opt("executableIdentityVerified"))&&Boolean.FALSE.equals(actual.opt("versionContentVerified"))&&Boolean.FALSE.equals(actual.opt("executionChainVerified"));
+        return new JSONObject().put("executableIdentity",observed?digest:JSONObject.NULL).put("executableIdentityKind",observed?"native_file_stat_v1":"unverified").put("executableIdentityVerified",observed).put("versionContentVerified",false).put("executionChainVerified",false);
+    }
+    private static Object workProfileBoolean(JSONObject value,String key){Object actual=value.opt(key);return actual instanceof Boolean?actual:JSONObject.NULL;}
+    private static void workProfileReference(JSONObject reference)throws Exception {
+        if(reference==null)throw new SecurityException("缺少原电脑目标引用");
+        for(var keys=reference.keys();keys.hasNext();)if(!java.util.Set.of("kind","profileId","profileBinding","environmentId","environmentBinding","worker","optional").contains(keys.next()))throw new SecurityException("电脑目标不能携带任务、权限、凭据或任意路径");
+        if(!"remote_harness".equals(reference.optString("kind")))throw new SecurityException("不是原电脑Harness目标");
+        identifier(reference,"profileId");identifier(reference,"environmentId");identifier(reference,"worker");
+        for(String key:new String[]{"profileBinding","environmentBinding"})if(!(reference.opt(key) instanceof String)||!reference.getString(key).matches("[a-f0-9]{64}"))throw new SecurityException("电脑目标缺少原绑定版本");
+        if(reference.has("optional")&&!(reference.opt("optional") instanceof Boolean))throw new SecurityException("目标optional必须为布尔值");
+    }
+    private synchronized JSONObject workProfileProfileCurrent(JSONObject reference,dev.pocketengine.core.RunControl observation)throws Exception {
+        java.util.Objects.requireNonNull(observation).check();if(closed)throw new SecurityException("原电脑模块已关闭");return requireProfileBinding(reference.getString("profileId"),reference.getString("profileBinding"));
+    }
+    private JSONObject workProfileCurrentBinding(JSONObject reference,dev.pocketengine.core.RunControl observation)throws Exception {
+        JSONObject profile=workProfileProfileCurrent(reference,observation);String worker=reference.getString("worker");if(!worker.matches("codex_app_server|claude"))throw new SecurityException("此Harness适配器尚未实现");
+        JSONObject query=new JSONObject().put("profileId",profile.getString("id")).put("_profileBinding",profile.getString("bindingHash"));
+        JSONObject environment=RemoteTaskRequest.environment(handleForTask("environments",query,observation),reference.getString("environmentId"),worker);profile=workProfileProfileCurrent(reference,observation);
+        String environmentBinding=environment.optString("bindingHash");if(!environmentBinding.matches("[a-f0-9]{64}")||!reference.getString("environmentBinding").equals(environmentBinding))throw new SecurityException("原环境绑定已变化，未应用旧工作Profile");
+        JSONObject installed=null;JSONArray workers=environment.getJSONArray("workers");for(int i=0;i<workers.length();i++){JSONObject item=workers.getJSONObject(i);if(worker.equals(item.optString("id")))installed=item;}
+        return new JSONObject().put("kind","remote_harness").put("profileId",profile.getString("id")).put("profileBinding",profile.getString("bindingHash")).put("environmentId",environment.getString("id")).put("environmentBinding",environmentBinding).put("worker",worker).put("_entrypointObservation",workProfileExecutableObservation(installed));
+    }
     /** Opaque native config/credential generation; contains no token or token-derived digest. */
     public synchronized JSONObject requireProfileBinding(String id,String expected)throws Exception {
         JSONObject current=requireProfileRevision(id,expected);if(!current.optBoolean("hasToken"))throw new SecurityException("电脑访问密钥尚未配置");return current;

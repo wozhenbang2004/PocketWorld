@@ -31,8 +31,46 @@ public final class OwnerExperienceProjection {
     public static JSONObject audit(SQLiteDatabase db,ConversationRepository originals,Gate gate,String task,String section,String cursor,RunControl control)throws Exception {
         JSONObject header=privateHeader(db,task);requireRuns(db,originals,gate,task,header.optString("conversationId"),control);
         JSONObject page=section.equals("events")?TaskAuditStore.eventPage(db,task,cursor,20,131072):section.equals("operations")?TaskAuditStore.operationPage(db,task,cursor,20,131072):null;
-        if(page==null)throw new IllegalArgumentException("只读取原事件或操作页");page=visibleAudit(page);requireRuns(db,originals,gate,task,header.optString("conversationId"),control);return page;
+        if(page==null)throw new IllegalArgumentException("只读取原事件或操作页");page=visibleAudit(page);
+        if(section.equals("operations")){
+            JSONArray rows=page.getJSONArray("entries"),gaps=page.optJSONArray("gaps");if(gaps==null)gaps=new JSONArray();
+            for(int i=0;i<rows.length();i++){JSONObject original=rows.getJSONObject(i),projected=projectNativeLearningDraft(original,gate::blocked);rows.put(i,projected);
+                if(projected!=original)gaps.put(new JSONObject().put("operationId",projected.getString("operationId")).put("reason","withdrawn_native_learning_draft_excluded").put("occurrenceRetained",true));}
+            if(gaps.length()>0)page.put("gaps",gaps);
+        }
+        requireRuns(db,originals,gate,task,header.optString("conversationId"),control);return page;
     }
+    /** This is a read-side restriction for one native operation contract, never an authority
+     * inferred from arbitrary nested JSON. The original SQL operation/call remains untouched. */
+    @FunctionalInterface public interface LearningSourceBarrier {boolean blocked(SourceRef source)throws Exception;}
+    public static JSONObject projectNativeLearningDraft(JSONObject operation,LearningSourceBarrier barrier)throws Exception {
+        if(!SourceLearningJob.TOOL.equals(operation.optString("tool")))return operation;
+        JSONObject receipt=operation.optJSONObject("receipt");if(receipt==null||!"native_source_learning_draft".equals(receipt.optString("kind")))return operation;
+        JSONObject arguments=operation.getJSONObject("arguments"),input=SourceLearningJob.checkedInputs(new JSONArray().put(arguments.getJSONObject("input"))).getJSONObject(0);
+        if(!"receipt".equals(operation.optString("state"))||!"model_draft_received".equals(receipt.optString("outcome"))
+                ||!operation.optString("operationId").matches("[a-f0-9-]{36}")||!operation.getString("operationId").equals(arguments.optString("operationId"))
+                ||!operation.optString("runId").matches("[a-f0-9-]{36}")||!operation.getString("runId").equals(arguments.optString("runId"))
+                ||!arguments.optString("manifestHash").matches("[a-f0-9]{64}")||nativeInteger(arguments,"epoch",1)>Integer.MAX_VALUE
+                ||nativeInteger(arguments,"index",0)>=SourceLearningJob.MAX_INPUTS||nativeInteger(arguments,"index",0)!=nativeInteger(receipt,"index",0)||!receipt.optString("callId").matches("[a-f0-9-]{36}")
+                ||!receipt.optString("draftFingerprint").matches("[a-f0-9]{64}")||!receipt.optString("candidateBindingKey").matches("[a-f0-9]{64}")
+                ||!Boolean.FALSE.equals(receipt.opt("formalMemorySaved")))throw new SecurityException("原学习操作的身份/模型回执不完整，未把嵌套JSON当原来源");
+        SourceRef source=SourceRef.fromJson(input.getJSONObject("sourceRef"));boolean retired=Boolean.TRUE.equals(receipt.opt("recordedDraftRetired"));
+        if(retired){
+            if(receipt.has("recordedDraft")||!"source_withdrawn".equals(operation.optString("status"))||!Boolean.FALSE.equals(operation.opt("derivedBodyIncluded"))
+                    ||!source.equals(SourceRef.fromJson(receipt.getJSONObject("sourceRef")))||!input.getString("sourceFingerprint").equals(receipt.optString("sourceFingerprint")))throw new SecurityException("已退役学习正文不能携带替代draft或来源");
+            return operation; // A passive archive never revives a previously retired body.
+        }
+        JSONObject recorded=receipt.getJSONObject("recordedDraft");
+        if(recorded.length()!=4||!recorded.has("draft")||!"pocketworld.source-learning-draft.v1".equals(recorded.optString("format"))
+                ||!source.equals(SourceRef.fromJson(recorded.getJSONObject("sourceRef")))||!input.getString("sourceFingerprint").equals(recorded.optString("sourceFingerprint"))
+                ||!TaskStore.capabilityFingerprint(recorded).equals(receipt.getString("draftFingerprint")))throw new SecurityException("原学习draft与原操作输入/hash不一致");
+        if(!barrier.blocked(source))return operation;
+        JSONObject projected=new JSONObject(operation.toString()),redacted=projected.getJSONObject("receipt");redacted.remove("recordedDraft");
+        redacted.put("recordedDraftRetired",true).put("sourceRef",source.toJson()).put("sourceFingerprint",input.getString("sourceFingerprint"))
+                .put("retirementReason","known_source_barrier").put("originalDraftFingerprintRetained",true);
+        return projected.put("status","source_withdrawn").put("derivedBodyIncluded",false).put("occurrenceRetained",true).put("sourceCurrent",false);
+    }
+    private static long nativeInteger(JSONObject value,String key,long minimum)throws Exception {Object raw=value.opt(key);if(!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<minimum)throw new SecurityException("原学习操作整数身份无效");return ((Number)raw).longValue();}
     public static JSONObject outputs(SQLiteDatabase db,ConversationRepository originals,Gate gate,String task,String cursor,RunControl control)throws Exception {
         JSONObject header=privateHeader(db,task);requireRuns(db,originals,gate,task,header.optString("conversationId"),control);if(cursor==null||!cursor.isEmpty()&&!cursor.matches("[0-9a-f-]{36}:[0-9]{1,8}"))throw new IllegalArgumentException("原工具输出游标无效");
         String id="",chunk="-1";if(!cursor.isEmpty()){int split=cursor.lastIndexOf(':');id=cursor.substring(0,split);chunk=cursor.substring(split+1);}

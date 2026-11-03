@@ -43,6 +43,14 @@ import org.json.JSONObject
     var shown by remember(page) { mutableStateOf(JSONObject()) }
     var accepted by remember(pending, pendingRevision) { mutableStateOf(false) }
     var notice by remember(page) { mutableStateOf<String?>(null) }
+    var wakeStatus by remember(page) { mutableStateOf<JSONObject?>(null) }
+    var wakeReview by remember(page) { mutableStateOf<TaskStore.TeamWakePolicyReview?>(null) }
+    var wakeShown by remember(page) { mutableStateOf(JSONObject()) }
+    var wakeEnabled by rememberSaveable(runId) { mutableStateOf(false) }
+    var wakePerRound by rememberSaveable(runId) { mutableStateOf("1") }
+    var wakeTotal by rememberSaveable(runId) { mutableStateOf("1") }
+    var wakeMinutes by rememberSaveable(runId) { mutableStateOf("15") }
+    var wakeAccepted by remember(wakeReview) { mutableStateOf(false) }
     var integrationBudget by remember(page) { mutableStateOf<JSONObject?>(null) }
     var integrationBudgetReview by remember(page) { mutableStateOf<TaskStore.TeamIntegrationBudgetReview?>(null) }
     var integrationBudgetShown by remember(page) { mutableStateOf(JSONObject()) }
@@ -75,6 +83,13 @@ import org.json.JSONObject
         busy = true; notice = null
         try { runWork(Runnable { val outcome = runCatching(action); main.post { if (alive) { busy = false; outcome.fold(accept) { notice = it.message ?: "原工作项未改变，请核对后重试" } } } }) }
         catch (_: Exception) { busy = false; notice = "原任务工作队列不可用，未提交" }
+    }
+    fun showWakeStatus(value: JSONObject) {
+        wakeStatus = value; wakeReview = null
+        val policy = value.optJSONObject("policy")
+        wakeEnabled = policy?.optBoolean("enabled") ?: false
+        wakePerRound = (policy?.optInt("perRoundLimit", 1) ?: 1).toString()
+        wakeTotal = (policy?.optInt("cumulativeLimit", 1) ?: 1).toString()
     }
     LaunchedEffect(page, run.optLong("revision")) { work({ page.snapshot() }) { result = it } }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -207,6 +222,45 @@ import org.json.JSONObject
             Button(onClick = { work({ page.approveRevision(exact, shown.getString("digest")) }) { pendingRevision = null; result = JSONObject().put("workPlan", it.getJSONObject("workPlan")).put("parentBudget", it.optJSONObject("parentBudget")); notice = "原工作项新修订已排入；保留未变贡献，等待本版真实制作及新独审。" } }, enabled = accepted && !busy && !shown.optBoolean("parentBudgetIncreaseRequired")) { Text(if (busy) "正在保存…" else "批准并沿这些原工作项继续") }
             TextButton(onClick = { pendingRevision = null }, enabled = !busy) { Text("暂不修订，保留当前成果") }
         }
+        if (plan != null && run.optJSONObject("productionScope")?.has("projectSelection") != true) {
+            TextButton(onClick = { work({ page.wakePolicyStatus() }, ::showWakeStatus) }, enabled = !busy) { Text("审阅原父控制消息的自动唤醒策略") }
+            wakeStatus?.let { current ->
+                val policy = current.optJSONObject("policy")
+                val observedAt = current.getLong("observedAt")
+                val active = policy?.optBoolean("enabled") == true && policy.optLong("expiresAt") > observedAt
+                TeamCaption("当前策略：${if (active) "已启用" else "未启用或已到期"}；策略版本 ${current.optLong("policyRevision")}。同原父预算的实际自动续接累计 ${current.optJSONObject("nativeClaims")?.optInt("total") ?: 0}，保存或关闭策略不清零。")
+                policy?.let { TeamCaption("当前策略有效至 ${java.util.Date(it.getLong("expiresAt"))}；每轮最多 ${it.getInt("perRoundLimit")} 次，累计最多 ${it.getInt("cumulativeLimit")} 次。") }
+                TeamCaption("仅允许原父任务已授权的控制消息，继续已创建的本机本地工作项。消息不是主人批准；peer、后台、研究、远端和完整项目均不从这里开启。暂停、停止、待答问题、待审批、未知效果、原授权到期或原预算不足仍阻止继续。")
+                Row { Checkbox(wakeEnabled, { wakeEnabled = it; wakeReview = null }, enabled = !busy); Text("明确允许以上安全范围内的自动续接") }
+                OutlinedTextField(wakePerRound, { wakePerRound = it; wakeReview = null }, label = { Text("本策略每轮自动续接上限（1–8）") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(wakeTotal, { wakeTotal = it; wakeReview = null }, label = { Text("原父预算下累计自动续接上限（每轮上限–64）") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(wakeMinutes, { wakeMinutes = it; wakeReview = null }, label = { Text("本次策略有效分钟（1–1440，不延长原权限）") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                val validWake = wakePerRound.toIntOrNull()?.let { per -> per in 1..8 && wakeTotal.toIntOrNull()?.let { total -> total in per..64 } == true } == true && wakeMinutes.toLongOrNull()?.let { it in 1L..1440L } == true
+                TextButton(onClick = { work({ page.reviewWakePolicy(current.optLong("policyRevision"), wakeEnabled, wakePerRound.toInt(), wakeTotal.toInt(), Math.addExact(System.currentTimeMillis(), Math.multiplyExact(wakeMinutes.toLong(), 60000L))) }) { wakeReview = it; wakeShown = it.view(); wakeAccepted = false } }, enabled = !busy && validWake) { Text("核对本次准确策略（不启动）") }
+                wakeReview?.let { exact ->
+                    val proposed = wakeShown.getJSONObject("policy")
+                    TeamCaption("本次${if (proposed.getBoolean("enabled")) "启用" else "关闭"}；仅原父控制消息，每轮 ${proposed.getInt("perRoundLimit")} 次，原父累计 ${proposed.getInt("cumulativeLimit")} 次；已真实续接 ${wakeShown.getJSONObject("originalClaims").getInt("total")} 次。策略截至 ${java.util.Date(proposed.getLong("expiresAt"))}，此审阅截至 ${java.util.Date(wakeShown.getLong("reviewExpiresAt"))}。")
+                    TeamCaption("保存不启动、不补预算、不扩大工具/文件/资源权限。修改或重审保存不会重新采用旧消息；旧意图与原未知回执保留。切出前台、来源或策略换版后请重新读取并审阅，不重投消息。")
+                    Row { Checkbox(wakeAccepted, { wakeAccepted = it }, enabled = !busy); Text("我明确确认上述来源、次数与期限，仅保存本次策略") }
+                    Button(onClick = { work({ page.approveWakePolicy(exact, wakeShown.getString("digest")); page.wakePolicyStatus() }) { showWakeStatus(it); notice = "策略已保存；未启动成员、未增加预算。仅后续新消息可在原安全点核对后续接。" } }, enabled = !busy && wakeAccepted) { Text("仅保存唤醒策略（不启动）") }
+                }
+                val intents = current.optJSONArray("intents").objects()
+                if (intents.isNotEmpty()) {
+                    TeamCaption("保留 ${intents.size} 条原意图；下方显示最近 ${minOf(8, intents.size)} 条（不删除其他记录）。截至 ${java.util.Date(observedAt)}，真实派发仍双检原安全点。")
+                    intents.takeLast(8).forEach { intent ->
+                        val status = intent.optString("status")
+                        val reason = if (status in setOf("queued", "blocked")) when {
+                            policy?.optBoolean("enabled") != true -> "policy_disabled"
+                            intent.optLong("policyRevision") != current.optLong("policyRevision") -> "policy_revision_changed"
+                            policy.optLong("expiresAt") <= observedAt -> "expired"
+                            else -> intent.optString("reason")
+                        } else intent.optString("reason")
+                        Text("${memberName(intent.getJSONObject("binding").getJSONObject("target").getString("memberId"))} · $status · ${teamWakeReason(reason)}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                TextButton(onClick = { work({ page.wakePolicyStatus() }, ::showWakeStatus) }, enabled = !busy) { Text("重新读取策略与阻止原因（不重投）") }
+            }
+        }
         if (plan != null && run.optJSONObject("productionScope")?.has("projectSelection") == true) {
             TextButton(onClick = { work({ page.integratorScopeStatus() }) { integratorScopeStatus = it; integratorScopeReview = null } }, enabled = !busy) { Text("审阅唯一整合者的续接范围与期限") }
             integratorScopeStatus?.let { status ->
@@ -237,4 +291,23 @@ import org.json.JSONObject
         }
         notice?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
+}
+
+private fun teamWakeReason(reason: String): String = when (reason) {
+    "policy_disabled" -> "策略已关闭；原消息保留"
+    "policy_revision_changed" -> "策略已换版；旧消息不会重新采用"
+    "expired" -> "策略已到期；请重新审阅，仅新消息可触发"
+    "source_not_allowed" -> "此来源未获该策略允许"
+    "owner_paused" -> "主人已暂停，不自动恢复"
+    "owner_stopped" -> "原任务已停止，不自动恢复"
+    "not_safe_idle" -> "尚非安全空闲点，或仍待回答/审批"
+    "original_effect_unknown", "original_outcome_unknown_query_only" -> "原效果未知，只核对原回执，不重投"
+    "original_continuation_active_or_unknown" -> "同成员原续接仍活跃或未知"
+    "stale_parent_run_epoch", "stale_target_identity_run_epoch" -> "父执行或目标身份已换代，不采用旧消息"
+    "source_revoked", "source_currentness_unknown" -> "原消息来源已撤回或无法核对"
+    "original_budget_exhausted" -> "原预算不足，不自动补额"
+    "cumulative_wake_limit", "round_wake_limit" -> "已达本次明确的自动续接次数"
+    "original_completed" -> "已核对原续接真实完成"
+    "original_failed", "original_cancelled" -> "原续接失败或取消，不自动重试"
+    else -> reason
 }

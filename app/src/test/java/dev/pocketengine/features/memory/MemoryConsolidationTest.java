@@ -40,7 +40,7 @@ public final class MemoryConsolidationTest {
         assertFalse(r.getBoolean("core"));assertEquals("unverified",r.getString("validationStatus"));assertEquals("reviewed_consolidation",r.getString("formation"));
         assertEquals(2,r.getJSONArray("sourceIds").length());assertEquals(2,r.getJSONArray("parentRevisions").length());
         assertEquals(r.getString("id"),open().acceptCandidate(scope(),c.getString("id"),1,now).getJSONObject("record").getString("id"));
-        assertEquals(4,new JSONObject(Files.readString(file().toPath())).getInt("version"));
+        assertEquals(4,new JSONObject(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8)).getInt("version"));
     }
 
     @Test public void parentSelectionsRejectAmbiguousRevisionForeignScopeAndOverBudgetWithoutWrites()throws Exception {
@@ -61,7 +61,7 @@ public final class MemoryConsolidationTest {
         JSONObject c=book.proposeConsolidation(scope(),draft("不应保留的推断"),selection,3);
         book.save(scope(),new JSONObject(a.toString()).put("text","新地址"),4);
         JSONObject invalid=book.getCandidate(scope(),c.getString("id"));assertEquals("invalidated",invalid.getString("status"));assertFalse(invalid.has("text"));assertFalse(invalid.has("reason"));
-        assertFalse(Files.readString(file().toPath()).contains("不应保留的推断"));
+        assertFalse(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8).contains("不应保留的推断"));
         rejected(()->book.proposeConsolidation(scope(),draft("迟到输出"),selection,5));rejected(()->book.acceptCandidate(scope(),c.getString("id"),1,5));
         assertEquals("invalidated",open().getCandidate(scope(),c.getString("id")).getString("status"));
     }
@@ -71,7 +71,7 @@ public final class MemoryConsolidationTest {
         JSONObject c=book.proposeConsolidation(scope(),draft("已批准但应删除的结论"),refs(a,b),3),summary=book.acceptCandidate(scope(),c.getString("id"),1,4).getJSONObject("record");
         book.save(scope(),record("下游也应删除").put("sourceIds",new JSONArray().put(summary.getString("id"))),5);
         book.save(scope(),new JSONObject(a.toString()).put("text","纠正偏好"),6);
-        assertEquals(2,book.list(scope()).length());assertFalse(Files.readString(file().toPath()).contains("应删除"));assertEquals("invalidated",open().getCandidate(scope(),c.getString("id")).getString("status"));
+        assertEquals(2,book.list(scope()).length());assertFalse(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8).contains("应删除"));assertEquals("invalidated",open().getCandidate(scope(),c.getString("id")).getString("status"));
     }
 
     @Test public void coreIsExplicitAndMetadataChangeFencesPendingButPreservesAcceptedContent()throws Exception {
@@ -106,14 +106,14 @@ public final class MemoryConsolidationTest {
         JSONObject c=book.proposeConsolidation(scope(),d,selection,3),r=book.acceptCandidate(scope(),c.getString("id"),1,4).getJSONObject("record");book.forgetReviewed(scope(),r.getString("id"),1);
         MemoryBook reopened=open();rejected(()->reopened.proposeConsolidation(scope(),d,selection,5));JSONObject duplicate=reopened.getCandidate(scope(),c.getString("id"));assertEquals("invalidated",duplicate.getString("status"));assertFalse(duplicate.has("text"));
         reopened.archiveCandidates(scope(),refs(duplicate),6);rejected(()->open().proposeConsolidation(scope(),d,selection,7));
-        assertEquals(0,open().listCandidateHistory(scope()).length());assertEquals(5,new JSONObject(Files.readString(file().toPath())).getInt("version"));assertFalse(Files.readString(file().toPath()).contains("遗忘的唯一摘要"));
+        assertEquals(0,open().listCandidateHistory(scope()).length());assertEquals(5,new JSONObject(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8)).getInt("version"));assertFalse(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8).contains("遗忘的唯一摘要"));
     }
 
     @Test public void forgettingAlreadyArchivedManualSummaryRetainsOnlyDurableParentVersionBarriers()throws Exception {
         MemoryBook book=open();JSONObject a=book.save(scope(),record("手工一"),1),b=book.save(scope(),record("手工二"),2),d=draft("已归档摘要");JSONArray selection=refs(a,b);
         JSONObject c=book.proposeConsolidation(scope(),d,selection,3),accepted=book.acceptCandidate(scope(),c.getString("id"),1,4),r=accepted.getJSONObject("record");
         book.archiveCandidates(scope(),refs(accepted.getJSONObject("candidate")),5);book.forgetReviewed(scope(),r.getString("id"),1);
-        rejected(()->open().proposeConsolidation(scope(),d,selection,6));assertEquals(0,open().listCandidateHistory(scope()).length());assertFalse(Files.readString(file().toPath()).contains("已归档摘要"));
+        rejected(()->open().proposeConsolidation(scope(),d,selection,6));assertEquals(0,open().listCandidateHistory(scope()).length());assertFalse(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8).contains("已归档摘要"));
     }
 
     @Test public void rejectedManualConsolidationKeepsExactContentBarrierAndCanBeExplicitlyReconsidered()throws Exception {
@@ -130,7 +130,7 @@ public final class MemoryConsolidationTest {
         MemoryBook book=open();JSONObject a=book.save(scope(),record("父一"),1),b=book.save(scope(),record("父二"),2);JSONArray selection=refs(a,b);byte[] before=Files.readAllBytes(file().toPath());File block=new File(file()+".new");assertTrue(block.mkdir());
         try{book.proposeConsolidation(scope(),draft("失败候选"),selection,3);fail();}catch(IOException expected){}
         assertEquals(0,book.listCandidates(scope()).length());assertArrayEquals(before,Files.readAllBytes(file().toPath()));assertTrue(block.delete());
-        book.save(scope(),record("普通保存"),4);assertEquals(2,new JSONObject(Files.readString(file().toPath())).getInt("version"));
+        book.save(scope(),record("普通保存"),4);assertEquals(2,new JSONObject(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8)).getInt("version"));
         JSONObject c=book.proposeConsolidation(scope(),draft("成功候选"),selection,5);assertTrue(block.mkdir());
         try{book.acceptCandidate(scope(),c.getString("id"),1,6);fail();}catch(IOException expected){}
         assertEquals("pending",book.getCandidate(scope(),c.getString("id")).getString("status"));assertEquals(3,book.list(scope()).length());assertTrue(block.delete());
@@ -155,12 +155,12 @@ public final class MemoryConsolidationTest {
             start.countDown();approve.get(5,TimeUnit.SECONDS);correct.get(5,TimeUnit.SECONDS);
         }finally{workers.shutdownNow();}
         assertEquals(2,book.list(scope()).length());assertEquals(0,book.search(scope(),"过时的综合推断",10).length());assertEquals("invalidated",book.getCandidate(scope(),c.getString("id")).getString("status"));
-        assertFalse(Files.readString(file().toPath()).contains("过时的综合推断"));assertEquals(2,open().list(scope()).length());
+        assertFalse(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8).contains("过时的综合推断"));assertEquals(2,open().list(scope()).length());
     }
 
     @Test public void malformedHierarchicalFormatFailsClosedWithoutOverwritingOriginalFile()throws Exception {
         MemoryBook book=open();JSONObject a=book.save(scope(),record("父一"),1),b=book.save(scope(),record("父二"),2);book.proposeConsolidation(scope(),draft("待审"),refs(a,b),3);
-        JSONObject saved=new JSONObject(Files.readString(file().toPath()));saved.put("learningVersion",1);saved.remove("candidateHistory");Files.writeString(file().toPath(),saved.toString());byte[] before=Files.readAllBytes(file().toPath());
+        JSONObject saved=new JSONObject(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8));saved.put("learningVersion",1);saved.remove("candidateHistory");Files.write(file().toPath(),saved.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));byte[] before=Files.readAllBytes(file().toPath());
         rejected(this::open);assertArrayEquals(before,Files.readAllBytes(file().toPath()));
     }
 
@@ -180,7 +180,7 @@ public final class MemoryConsolidationTest {
         JSONObject sibling=book.save(scope(),record("不应保留的同源派生").put("sourceIds",new JSONArray().put(a.getString("id"))),6);
         JSONObject pending=book.proposeConsolidation(scope(),draft("同源待审改写"),refs(sibling,other),7);
         final JSONArray[] removed={null};book.forgetReviewed(scope(),summary.getString("id"),1,refs->removed[0]=refs);
-        assertEquals(2,removed[0].length());assertEquals("invalidated",book.getCandidate(scope(),pending.getString("id")).getString("status"));assertFalse(Files.readString(file().toPath()).contains("不应保留的同源派生"));
+        assertEquals(2,removed[0].length());assertEquals("invalidated",book.getCandidate(scope(),pending.getString("id")).getString("status"));assertFalse(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8).contains("不应保留的同源派生"));
         JSONObject core=book.setCore(scope(),a.getString("id"),1,true,8);assertTrue(book.get(scope(),a.getString("id")).getBoolean("consolidationBlocked"));
         rejected(()->open().proposeConsolidation(scope(),draft("换core逃避"),refs(core,other),9));
         JSONObject explicitDerived=book.save(scope(),record("机主手工保留的派生").put("sourceIds",new JSONArray().put(core.getString("id"))),9);
@@ -203,8 +203,8 @@ public final class MemoryConsolidationTest {
         MemoryBook book=open();JSONObject a=book.save(scope(),record("私人事实甲"),1),b=book.save(scope(),record("私人事实乙"),2);
         JSONObject group=new JSONObject().put("ownerId","owner").put("spaceId","qq:group:1"),g1=book.save(group,record("群事实甲"),3),g2=book.save(group,record("群事实乙"),4);
         JSONObject summary=book.consolidate(scope(),record("旧入口手工摘要").put("sourceIds",new JSONArray().put(a.getString("id")).put(b.getString("id"))),5);
-        assertEquals(2,new JSONObject(Files.readString(file().toPath())).getInt("version"));book.forgetReviewed(scope(),summary.getString("id"),1);
-        MemoryBook reopened=open();assertEquals(5,new JSONObject(Files.readString(file().toPath())).getInt("version"));rejected(()->reopened.proposeConsolidation(scope(),draft("旧材料的改写"),refs(a,b),6));
+        assertEquals(2,new JSONObject(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8)).getInt("version"));book.forgetReviewed(scope(),summary.getString("id"),1);
+        MemoryBook reopened=open();assertEquals(5,new JSONObject(new String(Files.readAllBytes(file().toPath()), java.nio.charset.StandardCharsets.UTF_8)).getInt("version"));rejected(()->reopened.proposeConsolidation(scope(),draft("旧材料的改写"),refs(a,b),6));
         assertEquals("pending",reopened.proposeConsolidation(group,draft("群自己的知识"),refs(g1,g2),6).getString("status"));assertFalse(reopened.get(group,g1.getString("id")).getBoolean("consolidationBlocked"));
     }
 

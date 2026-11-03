@@ -41,11 +41,11 @@ public final class RemoteTaskCapabilities implements CapabilityPort {
     private static JSONObject string(int max)throws Exception{return new JSONObject().put("type","string").put("minLength",1).put("maxLength",max);}
     private static JSONArray definitions()throws Exception {
         JSONObject properties=new JSONObject().put("profileId",string(80)).put("bindingHash",string(64)).put("environmentId",string(80)).put("environmentBinding",string(64))
-                .put("worker",new JSONObject().put("type","string").put("enum",new JSONArray().put("codex_app_server").put("claude").put("command")))
+                .put("worker",new JSONObject().put("type","string").put("enum",new JSONArray().put("codex_app_server").put("claude").put("pi").put("command")))
                 .put("prompt",string(12000)).put("model",string(200)).put("readOnly",new JSONObject().put("type","boolean"))
                 .put("argv",new JSONObject().put("type","array").put("minItems",1).put("maxItems",80).put("items",new JSONObject().put("type","string").put("maxLength",12000)))
                 .put("timeoutSeconds",new JSONObject().put("type","integer").put("minimum",10).put("maximum",3600));
-        return new JSONArray().put(definition(START,"在当前私人任务下准备一次全新电脑工作。先用remote_profiles/remote_environments读取真实profile bindingHash及environment bindingHash，再给Codex/Claude目标或明确命令argv。只在主人对本次环境、权限和参数单次批准后经原TaskStore登记/派发。没有导入thread/resume，不重提未知操作；不是手机本地执行。",properties,new JSONArray().put("profileId").put("bindingHash").put("environmentId").put("environmentBinding").put("worker")))
+        return new JSONArray().put(definition(START,"在当前私人任务下准备一次全新电脑工作。先用remote_profiles/remote_environments读取真实profile bindingHash及environment bindingHash，再给Codex/Claude目标、Pi无工具对话或明确命令argv。Pi不提供编程工具、逐工具审批或只读沙箱。只在主人对本次环境、权限和参数单次批准后经原TaskStore登记/派发。没有导入thread/resume，不重提未知操作；不是手机本地执行。",properties,new JSONArray().put("profileId").put("bindingHash").put("environmentId").put("environmentBinding").put("worker")))
                 .put(definition(READ,"按原子任务编号查询本私人任务已登记的电脑工作和实际output/diff；只查原操作，不提交、重试、续接或代答工具审批。",new JSONObject().put("operationId",string(80)),new JSONArray().put("operationId")));
     }
     private static JSONObject definition(String name,String description,JSONObject properties,JSONArray required)throws Exception {
@@ -72,7 +72,7 @@ public final class RemoteTaskCapabilities implements CapabilityPort {
             JSONObject probeInput=new JSONObject(query.toString()).put("environmentId",payload.getString("environmentId")).put("environmentBinding",payload.getString("environmentBinding")).put("worker",payload.getString("worker"));
             if(payload.has("model"))probeInput.put("model",payload.getString("model"));
             JSONObject probe=remote.handle("probeWorker",probeInput);if(!probe.optBoolean("available"))throw new SecurityException("所选执行器的实际探测未通过，尚未提交电脑任务");
-            JSONObject checked=new JSONObject();for(String key:new String[]{"worker","environmentId","available","protocolVerified","cliVersion","cliFlagsVerified","accountConfigured","configReadVerified","selectedModelAvailable","capabilities"})if(probe.has(key))checked.put(key,probe.get(key));proof.put("workerProbe",checked);
+            JSONObject checked=new JSONObject();for(String key:new String[]{"worker","environmentId","available","protocolVerified","cliVersion","cliFlagsVerified","accountConfigured","configReadVerified","selectedModelAvailable","noTools","autoCompactionEnabled","capabilities"})if(probe.has(key))checked.put(key,probe.get(key));proof.put("workerProbe",checked);
         }
         remote.requireProfileBinding(payload.getString("profileId"),payload.getString("_profileBinding"));return proof;
     }

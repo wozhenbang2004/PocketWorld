@@ -37,8 +37,10 @@ public final class MemoryConsolidationWorkflow {
         final Object result=parsed;
         return fence.admit(()->{
             control.check();memory.consolidationSnapshot(scope,selected); // Exact parents and live external evidence, even for null.
-            if(result==JSONObject.NULL)return new JSONObject().put("proposed",false).put("reason","来源不足或存在未消解冲突");
+            if(result==JSONObject.NULL)return new JSONObject().put("proposed",false).put("reason","来源不足或存在未消解冲突").put("outcome","no_candidate").put("formalMemorySaved",false).put("reviewRequired",false);
             JSONObject staged=memory.proposeConsolidation(scope,(JSONObject)result,selected);
+            double retained=staged.getJSONObject("candidate").getDouble("confidence"),proposed=((JSONObject)result).optDouble("confidence",retained);
+            if(proposed!=retained)staged.put("confidenceReconciliation",new JSONObject().put("policy","no_automatic_reinforcement_or_review_overwrite").put("modelProposed",proposed).put("retainedCandidate",retained).put("factVerified",false));
             boolean pending="pending".equals(staged.getJSONObject("candidate").getString("status"));
             return staged.put("proposed",pending).put("formalMemorySaved",false).put("reviewRequired",pending)
                     .put("outcome",pending?"awaiting_review":"existing_candidate_barrier");

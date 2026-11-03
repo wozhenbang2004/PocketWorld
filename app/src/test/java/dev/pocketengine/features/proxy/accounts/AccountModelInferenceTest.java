@@ -117,6 +117,34 @@ public final class AccountModelInferenceTest {
             assertEquals(1,rig.fake.responses.get());assertEquals(0,rig.fake.refreshes.get());
         }
     }
+    @Test public void frozenTaskFenceQueuesBeforeRealAccountTransportAndCancellationReturnsBothNativeSlots()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            String id=rig.connect();bind(rig);ModelConfig selected=config(rig,id);rig.fake.stream=textStream();rig.fake.allowResponse=new CountDownLatch(1);
+            RunControl original=new RunControl();original.restrictModelConcurrency(1);ExecutorService workers=Executors.newFixedThreadPool(2);
+            var field=ModelGateway.class.getDeclaredField("MODEL_CALLS");field.setAccessible(true);Object fence=field.get(null);
+            var queued=fence.getClass().getDeclaredMethod("waitingCount");queued.setAccessible(true);
+            var active=fence.getClass().getDeclaredMethod("activeCount");active.setAccessible(true);
+            try{
+                Future<JSONObject> first=workers.submit(()->ModelGateway.complete(selected,messages(),null,original));
+                assertTrue("Real AccountGateway must enter the original loopback provider",rig.fake.responseEntered.await(2,TimeUnit.SECONDS));
+                Future<JSONObject> second=workers.submit(()->ModelGateway.complete(selected,messages(),null,original));
+                long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);
+                while((int)queued.invoke(fence)==0&&!second.isDone()&&System.nanoTime()<deadline)Thread.sleep(5);
+                assertEquals("The second request must wait before reaching real AccountGateway",1,(int)queued.invoke(fence));
+                assertEquals(1,rig.fake.responses.get());assertEquals(1,(int)active.invoke(fence));assertFalse(second.isDone());
+                original.cancel();
+                for(Future<JSONObject> stopped:java.util.List.of(first,second))try{stopped.get(3,TimeUnit.SECONDS);fail("Cancelled original must not return a model decision");}
+                catch(java.util.concurrent.ExecutionException expected){assertTrue(expected.getCause() instanceof InterruptedException);}
+                assertEquals("Queued cancellation must not send another account inference",1,rig.fake.responses.get());
+                assertEquals(0,(int)queued.invoke(fence));assertEquals(0,(int)active.invoke(fence));
+                var slots=AccountGateway.class.getDeclaredField("networkSlots");slots.setAccessible(true);
+                assertEquals("The existing account-only two-slot policy is unchanged and fully released",2,((java.util.concurrent.Semaphore)slots.get(rig.gateway)).availablePermits());
+                rig.fake.allowResponse.countDown();RunControl next=new RunControl();next.restrictModelConcurrency(1);
+                assertEquals("实际结果",ModelGateway.complete(selected,messages(),null,next).getString("content"));
+                assertEquals(2,rig.fake.responses.get());assertEquals(0,(int)active.invoke(fence));
+            }finally{original.cancel();rig.fake.allowResponse.countDown();workers.shutdownNow();assertTrue(workers.awaitTermination(3,TimeUnit.SECONDS));}
+        }
+    }
     @Test public void accountConfigNeverContainsSavedKeyAndCannotBeForgedViaGenericSettings()throws Exception {
         try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
             ModelConfig config=config(rig,rig.connect());assertEquals("",config.apiKey);assertEquals("",config.baseUrl);assertFalse(config.publicJson().toString().contains("api-key-must-not-cross"));assertSame(config.accountModel,config.withStepCeiling(80).accountModel);

@@ -15,6 +15,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -59,6 +61,13 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
     var practicePackage by remember { mutableStateOf("") }
     var practiceField by remember { mutableStateOf("") }
     var forget by remember { mutableStateOf(false) }
+    var audioBusy by remember { mutableStateOf(false) }
+    var audioEnabled by remember { mutableStateOf(display.optBoolean("audioSilenceEnabled", false)) }
+    var audioReceipt by remember { mutableStateOf<String?>(null) }
+    var audioError by remember { mutableStateOf<String?>(null) }
+    val audioAvailable = display.opt("audioSilenceEnabled") is Boolean
+    LaunchedEffect(display.opt("audioSilenceEnabled")) { if (audioAvailable) audioEnabled = display.getBoolean("audioSilenceEnabled") }
+    LaunchedEffect(controller.backgroundAudioOwnerVisible) { if (!controller.backgroundAudioOwnerVisible) { audioBusy = false; audioReceipt = null; audioError = null } }
     LaunchedEffect(mode, connection.wirelessAvailable) { if (mode == "wireless_adb" && connection.wirelessAvailable && !connection.taskOwned) controller.display("adb.discover") }
     Dialog(onDismissRequest = controller::closeBackgroundSetup, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
@@ -94,6 +103,32 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
                         OutlinedTextField(practiceField, { practiceField = it }, label = { Text("可安全测试的输入框标签") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         if (connection.helperConnected) OutlinedButton(onClick = { controller.startPhonePractice(practicePackage, practiceField, "background") }, enabled = !state.phoneSubmitting) { Text("明确开始后台演练") }
                         OutlinedButton(onClick = { controller.startPhonePractice(practicePackage, practiceField, "main_screen") }, enabled = !state.phoneSubmitting) { Text("明确使用主屏演练（占用屏幕）") }
+                    }
+                    if (controller.backgroundAudioOwnerVisible) {
+                        SetupHeading("后台应用声音")
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("打开应用前静音", modifier = Modifier.weight(1f), fontSize = 14.sp)
+                            Switch(audioEnabled, { next ->
+                                audioBusy = true; audioError = null; audioReceipt = null
+                                controller.setBackgroundAudioSilence(next) { actual, failure ->
+                                    actual?.opt("enabled")?.let { if (it is Boolean) audioEnabled = it }
+                                    audioBusy = false; audioError = failure
+                                }
+                            }, modifier = Modifier.semantics { contentDescription = "打开应用前静音" }, enabled = audioAvailable && !audioBusy && (!connection.taskOwned || audioEnabled) && !connection.busy)
+                        }
+                        SetupCaption("默认关闭。仅改变本机原后台启动用户的指定应用音频模式，不改全局音量。先保存原模式，接管或结束时尝试恢复；关闭只阻止后续静音。")
+                        SetupCaption("查询后设置不是系统原子操作。已观察到主人更改的模式不会覆盖；恢复未确认时保留原记录，不当作成功。此开关不会授予系统或Shizuku权限。")
+                        OutlinedButton(onClick = {
+                            audioBusy = true; audioError = null; audioReceipt = null
+                            controller.restoreBackgroundAudio { actual, failure ->
+                                audioBusy = false; audioError = failure
+                                if (actual != null) audioReceipt = "已核实恢复 ${actual.optInt("restored")} 项；仍有 ${actual.optInt("pending")} 项原记录待核对。"
+                            }
+                        }, enabled = !audioBusy && !connection.taskOwned && !connection.busy && connection.helperConnected) { Text("按原记录恢复声音") }
+                        if (!audioAvailable) SetupCaption("尚未读取到真实音频策略，请刷新后再修改。")
+                        if (audioBusy) SetupCaption("正在核对原音频回执…")
+                        audioReceipt?.let { SetupCaption(it) }
+                        audioError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
                     }
                     if (connection.taskOwned) {
                         SetupCaption("原手机任务正在持有执行资源。此处只能查看状态；更改连接前，请回原任务停止并等待资源释放。")

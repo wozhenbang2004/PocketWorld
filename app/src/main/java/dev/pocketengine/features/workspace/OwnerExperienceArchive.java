@@ -16,7 +16,7 @@ public final class OwnerExperienceArchive implements OwnerDataArchives.ObjectSec
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
     public OwnerExperienceArchive(TaskStore original,MemoryModule book){
         tasks=Objects.requireNonNull(original);memory=Objects.requireNonNull(book);
-        gate=new OwnerExperienceProjection.Gate(){public boolean blocked(SourceRef source)throws Exception{return memory.isSourceForgotten(scope(),source)||"message".equals(source.kind)&&tasks.conversationRepository().ownerExperienceBlocked(source);}public ToolOutputStore.Sources outputSources(){return tasks.toolOutputSources();}public boolean dependencyKnownBlocked(JSONObject dependency)throws Exception{return tasks.ownerExperienceKnownAttachmentBlocked(dependency);}};
+        gate=new OwnerExperienceProjection.Gate(){public boolean blocked(SourceRef source)throws Exception{return memory.isOwnerExperienceSourceBlocked(scope(),source)||"message".equals(source.kind)&&tasks.conversationRepository().ownerExperienceBlocked(source);}public ToolOutputStore.Sources outputSources(){return tasks.toolOutputSources();}public boolean dependencyKnownBlocked(JSONObject dependency)throws Exception{return tasks.ownerExperienceKnownAttachmentBlocked(dependency);}};
     }
     public JSONObject export(RunControl original){throw new IllegalStateException("原经历必须经过原备份的分页对象写入器");}
     public OwnerDataArchives.SectionReview review(JSONObject exact,String action,RunControl original){throw new IllegalStateException("原经历审阅必须保留已核ZIP对象读取器");}
@@ -99,7 +99,7 @@ public final class OwnerExperienceArchive implements OwnerDataArchives.ObjectSec
         // before filtering, so neither this projection nor its caller can rewrite the archive.
         JSONObject section=checked(input);validatePages(section,reader,original);JSONObject page=page(section,index,reader,original),data=new JSONObject(page.getJSONObject("data").toString());JSONArray entries=data.getJSONArray("entries"),out=new JSONArray();
         for(int i=0;i<entries.length();i++){
-            original.checkpoint();JSONObject row=entries.getJSONObject(i);boolean blocked=false;
+            original.checkpoint();JSONObject row=OwnerExperienceProjection.projectNativeLearningDraft(entries.getJSONObject(i),source->packageBlocked(section,source)||gate.blocked(source));boolean blocked=false;
             if("imported_message".equals(row.optString("kind"))){JSONObject locator=row.getJSONObject("importedLocator");blocked=packageImportedBlocked(section,locator)||tasks.conversationRepository().ownerImportedExperienceBlocked(locator);}
             if(row.has("sourceRef")){SourceRef source=SourceRef.fromJson(row.getJSONObject("sourceRef"));blocked=packageBlocked(section,source)||gate.blocked(source);}
             if(row.has("dependencies")){JSONArray dependencies=row.getJSONArray("dependencies");for(int d=0;d<dependencies.length();d++)if(gate.dependencyKnownBlocked(dependencies.getJSONObject(d)))blocked=true;}

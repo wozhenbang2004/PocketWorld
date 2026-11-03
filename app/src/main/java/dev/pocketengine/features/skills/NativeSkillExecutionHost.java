@@ -79,8 +79,9 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
             JSONObject original=new JSONObject(row.getJSONObject("arguments").getJSONObject("nativeSkill").toString());if(row.optJSONObject("receipt")!=null)original.put("receipt",row.getJSONObject("receipt"));
             executions.put(row.put("artifactAvailability",SkillExecutionRecords.artifactAvailability(original)));
         }}
-        return new JSONObject().put("taskId",taskId).put("goal",task.optString("goal")).put("configuration",configuration.snapshot()).put("skills",related).put("pluginNeeds",needs)
-                .put("executions",executions).put("reviewPending",pendingReview(taskId)!=null).put("scriptPreparationRelevant",scriptsRelevant||pendingReview(taskId)!=null||executions.length()>0).put("matching","lexical-v1").put("phoneExecution",phonePreparation()).put("executionAuthorized",false).put("businessVerified",false);
+        JSONObject configState=configuration.snapshot();
+        return new JSONObject().put("taskId",taskId).put("goal",task.optString("goal")).put("configuration",configState).put("skills",related).put("pluginNeeds",needs)
+                .put("executions",executions).put("reviewPending",pendingReview(taskId)!=null).put("scriptPreparationRelevant",scriptsRelevant||pendingReview(taskId)!=null||executions.length()>0||configState.optBoolean("recoveryRequired")).put("matching","lexical-v1").put("phoneExecution",phonePreparation()).put("executionAuthorized",false).put("businessVerified",false);
     }
     private JSONObject phonePreparation()throws Exception {
         if(local==null)return new JSONObject().put("available",false).put("message","原手机托管环境未接入");
@@ -113,7 +114,8 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
     public JSONObject installConfiguration(OwnerWindow window,SkillExecutionConfiguration.Review review,String digest)throws Exception {
         open();JSONObject view=review.view();checkSelectedConfiguration(view);if(window==null||window.owner!=this)throw new SecurityException("没有本机配置审阅页面");window.admit(()->configuration.install(review,digest));invalidatePending();return configuration.snapshot();
     }
-    public JSONObject removeConfiguration(OwnerWindow window,long expectedRevision)throws Exception {open();if(window==null||window.owner!=this)throw new SecurityException("没有本机配置审阅页面");window.admit(()->configuration.disable(expectedRevision));invalidatePending();return configuration.snapshot();}
+    @Deprecated public JSONObject removeConfiguration(OwnerWindow window,long expectedRevision)throws Exception {throw new SecurityException("请重新读取原执行配置，停用需带原观察状态指纹");}
+    public JSONObject removeConfiguration(OwnerWindow window,long expectedRevision,String observedStateFingerprint)throws Exception {open();if(window==null||window.owner!=this)throw new SecurityException("没有本机配置审阅页面");window.admit(()->configuration.disable(expectedRevision,observedStateFingerprint));invalidatePending();return configuration.snapshot();}
     private void invalidatePending(){for(Review review:pending.values())synchronized(review.decision){review.approved=false;review.decision.notifyAll();if(review.dispatched)try{tasks.cancelSkillExecution(CompanionSkillBackend.ReceiptRef.from(review.plan,review.grant));review.backend.requestCancel(CompanionSkillBackend.ReceiptRef.from(review.plan,review.grant));}catch(Exception unknown){/* Durable original remains query-only. */}}}
     private void open(){if(closed)throw new IllegalStateException("脚本执行宿主已关闭");}
     private void checkProfile(JSONObject deployment)throws Exception {

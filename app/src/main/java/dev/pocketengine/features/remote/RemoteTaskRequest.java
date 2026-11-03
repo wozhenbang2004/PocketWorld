@@ -76,7 +76,7 @@ public final class RemoteTaskRequest {
         Set<String> allowed=Set.of("profileId","bindingHash","environmentId","environmentBinding","worker","prompt","argv","model","readOnly","timeoutSeconds");
         for(java.util.Iterator<String> keys=input.keys();keys.hasNext();)if(!allowed.contains(keys.next()))throw new SecurityException("首创任务不接受会话、原任务、凭据或任意路由参数");
         String profile=id(input,"profileId"),environment=id(input,"environmentId"),binding=text(input,"bindingHash",64),environmentBinding=text(input,"environmentBinding",64),worker=text(input,"worker",40);
-        if(!binding.matches("[a-f0-9]{64}")||!environmentBinding.matches("[a-f0-9]{64}")||!worker.matches("command|codex_app_server|claude"))throw new IllegalArgumentException("请选择当前已配置的电脑和受支持执行器");
+        if(!binding.matches("[a-f0-9]{64}")||!environmentBinding.matches("[a-f0-9]{64}")||!worker.matches("command|codex_app_server|claude|pi"))throw new IllegalArgumentException("请选择当前已配置的电脑和受支持执行器");
         Object timeout=input.opt("timeoutSeconds");int seconds=input.optInt("timeoutSeconds",300);
         if((timeout!=null&&(!(timeout instanceof Number)||((Number)timeout).doubleValue()!=seconds))||seconds<10||seconds>3600)throw new IllegalArgumentException("任务时限需为10至3600秒整数");
         JSONObject result=new JSONObject().put("profileId",profile).put("_profileBinding",binding).put("environmentId",environment).put("environmentBinding",environmentBinding).put("worker",worker).put("timeoutSeconds",seconds);
@@ -90,7 +90,7 @@ public final class RemoteTaskRequest {
             result.put("prompt",text(input,"prompt",12000));if(input.has("model"))result.put("model",text(input,"model",200));
             if(input.has("readOnly")&&!(input.opt("readOnly") instanceof Boolean))throw new IllegalArgumentException("readOnly需为明确布尔值");
             boolean readOnly=input.optBoolean("readOnly",worker.equals("codex_app_server"));
-            if(worker.equals("claude")&&readOnly)throw new SecurityException("Claude工具限制不是操作系统只读沙箱，不能声明只读");
+            if((worker.equals("claude")||worker.equals("pi"))&&readOnly)throw new SecurityException("CLI工具限制不是操作系统只读沙箱，不能声明只读");
             result.put("readOnly",readOnly);
         }
         return result;

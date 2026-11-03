@@ -78,6 +78,14 @@ final class DisplayEngine {
     JSONObject handle(JSONObject request) throws Exception {
         String cmd=request.optString("command");
         if("hello".equals(cmd)||"status".equals(cmd))return status();
+        if("audio_recovery.get".equals(cmd)||"audio_recovery.set".equals(cmd))return onMain(()->{
+            requirePrivilegedEnvironment();android.app.KeyguardManager keyguard=context.getSystemService(android.app.KeyguardManager.class);
+            if(keyguard==null||keyguard.isDeviceLocked()||keyguard.isKeyguardLocked())throw new Failure("screen_locked","请先由机主解锁手机。",false);
+            // Expiry is not release. The original native cleanup must have removed every
+            // retained lease/display before a cold owner undo can touch appops.
+            if(lease!=null||display!=null||reader!=null)throw new Failure("audio_recovery_busy","原后台屏尚未证实释放，音频恢复记录已保留。",false);
+            return DisplayAudioCommands.handle(cmd.endsWith(".get")?"audio.get":"audio.set",request);
+        });
         if("create".equals(cmd))return create(request);
         LeasePolicy current=lease;
         if(current==null||!current.accepts(request.optString("sessionId"),request.optInt("displayId",-1),SystemClock.uptimeMillis()))
@@ -90,6 +98,10 @@ final class DisplayEngine {
         else if("frame".equals(cmd))result=frame(current,request);
         else if("launch".equals(cmd))result=launch(current,request);
         else if("apps".equals(cmd))result=apps();
+        else if("audio.get".equals(cmd)||"audio.set".equals(cmd)){
+            valid(current);if(request.optInt("userId",-1)!=context.getApplicationInfo().uid/100000)throw new Failure("audio_profile_mismatch","音频资料不是原本机启动用户。",false);
+            result=DisplayAudioCommands.handle(cmd,request);
+        }
         else if("ownership".equals(cmd)){valid(current);JSONObject facts=DisplayOwnershipSnapshot.parse(taskDump(),current.display());
             facts.put("taskTopology",taskTopology.read());valid(current);result=ok().put("ownership",facts);}
         else if("tap".equals(cmd)||"swipe".equals(cmd))result=gesture(current,request,"swipe".equals(cmd));

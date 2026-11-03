@@ -24,7 +24,7 @@ public final class MemoryOwnerArchiveTest {
     private static JSONObject own()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
     private static JSONObject record(String text)throws Exception{return new JSONObject().put("layer","fact").put("text",text).put("source","主人明确保存");}
     private static JSONObject draft(String text)throws Exception{return new JSONObject().put("layer","fact").put("text",text).put("reason","来自原生实际选定材料，仍需主人审阅").put("applicability","");}
-    private static String bytes(File file)throws Exception{return Files.readString(file.toPath(),StandardCharsets.UTF_8);}
+    private static String bytes(File file)throws Exception{return new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8);}
     private static JSONObject copy(JSONObject value)throws Exception{return new JSONObject(value.toString());}
     private static void refused(Checked call)throws Exception{try{call.run();fail("archive scope/version/content must fail closed");}catch(IllegalArgumentException|IllegalStateException|SecurityException expected){}}
     private JSONObject one(String text)throws Exception{MemoryBook book=new MemoryBook(new File(temp.newFolder(),"source.json"));book.save(own(),record(text).put("core",true),1);return book.ownerArchive(own());}
@@ -47,7 +47,8 @@ public final class MemoryOwnerArchiveTest {
         source.save(new JSONObject().put("ownerId","owner").put("spaceId","group:one"),record("群空间不应导出"),9);
         source.save(new JSONObject().put("ownerId","another").put("spaceId","private"),record("另一个主体不应导出"),10);
         JSONObject archive=source.ownerArchive(own()),counts=archive.getJSONObject("counts");
-        assertEquals(2,counts.getInt("records"));assertEquals(2,counts.getInt("learningCandidates"));assertEquals(1,counts.getInt("pendingCandidates"));assertEquals(1,counts.getInt("sourceTombstones"));assertEquals(1,counts.getInt("recordTombstones"));assertEquals(1,counts.getInt("candidateHistory"));assertEquals(3,counts.getInt("restoreRecordSlots"));
+        // The surviving ancestor and the exact removed child both retain body-free version fences.
+        assertEquals(2,counts.getInt("records"));assertEquals(2,counts.getInt("learningCandidates"));assertEquals(1,counts.getInt("pendingCandidates"));assertEquals(1,counts.getInt("sourceTombstones"));assertEquals(2,counts.getInt("recordTombstones"));assertEquals(1,counts.getInt("candidateHistory"));assertEquals(3,counts.getInt("restoreRecordSlots"));
         assertFalse(archive.toString().contains("群空间不应导出"));assertFalse(archive.toString().contains("另一个主体不应导出"));assertFalse(archive.toString().contains("应退休的候选正文"));
         AtomicInteger resolverCalls=new AtomicInteger();File targetFile=new File(temp.newFolder(),"target.json");MemoryBook target=new MemoryBook(targetFile,(s,k,id)->{resolverCalls.incrementAndGet();throw new AssertionError("archive must not resolve or revive old sources");});
         JSONObject receipt=target.restoreOwnerArchive(own(),archive,"reviewed:archive-one");assertEquals(3,receipt.getInt("restoredRecordCount"));assertEquals(0,receipt.getInt("formalMemoryActivated"));assertEquals(0,receipt.getInt("pendingCandidatesActivated"));assertEquals(0,receipt.getInt("currentSourcesRestored"));assertFalse(receipt.getBoolean("executionAuthorized"));
@@ -72,8 +73,8 @@ public final class MemoryOwnerArchiveTest {
     @Test public void ordinaryEditCannotActivateArchiveOrStripItsDurableImportFence()throws Exception {
         File file=new File(temp.newFolder(),"target.json");MemoryBook target=new MemoryBook(file);JSONObject result=target.restoreOwnerArchive(own(),one("需重新核来源的档案"),"edit:one");String id=result.getJSONArray("records").getJSONObject(0).getString("newId");
         JSONObject edited=target.save(own(),target.get(own(),id).put("text","主人编辑后的档案原文"),2);assertTrue(edited.getBoolean("archiveOnly"));assertEquals(2,edited.getLong("revision"));refused(()->target.setCore(own(),id,2,true,3));refused(()->target.save(own(),target.get(own(),id).put("core",true),3));
-        MemoryBook cold=new MemoryBook(file);assertFalse(cold.get(own(),id).getBoolean("active"));assertEquals("",cold.recall(own(),"档案",16).getString("context"));String good=bytes(file);JSONObject tampered=new JSONObject(good),row=tampered.getJSONArray("records").getJSONObject(0);row.remove("archiveOnly");row.remove("importedFrom");row.remove("archiveEvidence");row.put("formation","explicit_save");Files.writeString(file.toPath(),tampered.toString(),StandardCharsets.UTF_8);
-        refused(()->new MemoryBook(file));assertEquals(tampered.toString(),bytes(file));Files.writeString(file.toPath(),good,StandardCharsets.UTF_8);
+        MemoryBook cold=new MemoryBook(file);assertFalse(cold.get(own(),id).getBoolean("active"));assertEquals("",cold.recall(own(),"档案",16).getString("context"));String good=bytes(file);JSONObject tampered=new JSONObject(good),row=tampered.getJSONArray("records").getJSONObject(0);row.remove("archiveOnly");row.remove("importedFrom");row.remove("archiveEvidence");row.put("formation","explicit_save");Files.write(file.toPath(),tampered.toString().getBytes(StandardCharsets.UTF_8));
+        refused(()->new MemoryBook(file));assertEquals(tampered.toString(),bytes(file));Files.write(file.toPath(),good.getBytes(StandardCharsets.UTF_8));
         JSONObject exportAgain=cold.ownerArchive(own());MemoryBook next=new MemoryBook(new File(temp.newFolder(),"next.json"));next.restoreOwnerArchive(own(),exportAgain,"edit:next-install");assertEquals(0,next.search(own(),"档案",10).length());assertEquals(1,next.ownerArchive(own()).getJSONArray("priorImports").length());
     }
 
@@ -98,7 +99,7 @@ public final class MemoryOwnerArchiveTest {
     @Test public void capacityCheckDoesNotEvictOrPartiallyImportIntoTheOriginalThousandRecordBook()throws Exception {
         JSONObject archive=one("超过剩余容量的档案");File file=new File(temp.newFolder(),"target.json");JSONArray rows=new JSONArray();JSONObject template=archive.getJSONArray("records").getJSONObject(0);
         for(int i=0;i<1000;i++)rows.put(copy(template).put("id",UUID.randomUUID().toString()).put("text","原本的第"+i+"条记录").put("core",false));
-        JSONObject precondition=new JSONObject().put("version",2).put("records",rows).put("sources",new JSONArray());Files.writeString(file.toPath(),precondition.toString(),StandardCharsets.UTF_8);MemoryBook target=new MemoryBook(file);String before=bytes(file);
+        JSONObject precondition=new JSONObject().put("version",2).put("records",rows).put("sources",new JSONArray());Files.write(file.toPath(),precondition.toString().getBytes(StandardCharsets.UTF_8));MemoryBook target=new MemoryBook(file);String before=bytes(file);
         assertEquals(1000,target.list(own()).length());refused(()->target.restoreOwnerArchive(own(),archive,"capacity:one"));assertEquals(before,bytes(file));assertEquals(1000,new MemoryBook(file).list(own()).length());assertEquals("unknown",target.queryOwnerArchiveRestore(own(),archive.getString("sectionDigest"),"capacity:one").getString("status"));
     }
 }

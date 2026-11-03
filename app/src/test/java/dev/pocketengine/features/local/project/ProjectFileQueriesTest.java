@@ -11,7 +11,7 @@ public final class ProjectFileQueriesTest {
     private Path root;private static final String CHECKOUT="11111111-1111-1111-1111-111111111111";
     @Before public void create()throws Exception{root=Files.createTempDirectory("c2-native-file-query-");}
     @After public void close()throws Exception{try(var paths=Files.walk(root)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}
-    private void file(String path,String text)throws Exception{Path target=root.resolve(path);Files.createDirectories(target.getParent());Files.writeString(target,text);}
+    private void file(String path,String text)throws Exception{Path target=root.resolve(path);Files.createDirectories(target.getParent());writeUtf8(target,text);}
     private JSONObject read(JSONObject input)throws Exception{return ProjectFileQueries.read(root.toFile(),CHECKOUT,input,()->{});}
     private JSONObject search(JSONObject input)throws Exception{return ProjectFileQueries.search(root.toFile(),CHECKOUT,input,()->{});}
     @Test public void rangedReadKeepsWholeFileShaWithoutLoadingWholeBodyIntoResult()throws Exception{
@@ -68,5 +68,7 @@ public final class ProjectFileQueriesTest {
     @Test public void multilineLiteralIsExplicitlyRejectedAndEmptyIncludeMeansNoExtraFilter()throws Exception{
         file("src/NAME.js","first needle\nsecond\n");assertThrows(IllegalArgumentException.class,()->search(new JSONObject().put("mode","text").put("query","needle\nsecond")));assertEquals(1,search(new JSONObject().put("mode","text").put("query","needle").put("include","")).getJSONArray("matches").length());assertEquals(1,search(new JSONObject().put("mode","path").put("query","**/name.js").put("caseSensitive",false)).getJSONArray("matches").length());
     }
+
+    private static java.nio.file.Path writeUtf8(java.nio.file.Path path,String text)throws java.io.IOException{return Files.write(path,text.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
 
 }

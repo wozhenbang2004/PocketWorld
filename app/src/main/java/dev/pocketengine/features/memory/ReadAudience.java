@@ -37,13 +37,16 @@ public interface ReadAudience {
 
     /** A selected SourceRef permits this span only, not arbitrary/full original text. */
     static JSONArray checkedSources(JSONArray supplied,String owner,String space)throws Exception{
-        MemoryBook.Scope scope=MemoryBook.Scope.from(new JSONObject().put("ownerId",owner).put("spaceId",space));
+        return checkedSources(supplied,MemoryBook.Scope.from(new JSONObject().put("ownerId",owner).put("spaceId",space)));
+    }
+    /** Internal native capture only. A target namespace never remints the original SourceRef. */
+    static JSONArray checkedSources(JSONArray supplied,MemoryBook.Scope scope)throws Exception{
         if(supplied==null||supplied.length()>MAX_SOURCES)throw new IllegalArgumentException("成员原文范围清单缺失或超过64项");
         JSONArray result=new JSONArray();Set<String> spans=new HashSet<>();
         for(int i=0;i<supplied.length();i++){
             JSONObject row=supplied.getJSONObject(i);keys(row,Set.of("sourceRef","offset","chars","unit"));
             JSONObject raw=row.getJSONObject("sourceRef");keys(raw,"workspace_file".equals(raw.optString("kind"))?Set.of("kind","sourceId","revision","ownerId","spaceId","workspace"):Set.of("kind","sourceId","revision","ownerId","spaceId"));SourceRef source=SourceRef.fromJson(raw);
-            if(!source.belongsTo(scope)||!"UTF-16".equals(row.opt("unit")))throw new SecurityException("成员原文来源不能更换认证空间或字符单位");
+            if(!scope.acceptsSource(source)||!"UTF-16".equals(row.opt("unit")))throw new SecurityException("成员原文来源不能更换认证空间或字符单位");
             long offset=SourceRef.integer(row,"offset",0),chars=SourceRef.integer(row,"chars",1);
             if(offset>Integer.MAX_VALUE||chars>MAX_SOURCE_CHARS||offset+chars>Integer.MAX_VALUE)throw new IllegalArgumentException("成员原文范围超过可核对上限");
             String key=source.key()+"\n"+source.revision+"\n"+offset+"\n"+chars;if(!spans.add(key))throw new IllegalArgumentException("成员原文范围不能重复");

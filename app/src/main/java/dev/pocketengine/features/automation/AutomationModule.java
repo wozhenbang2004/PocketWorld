@@ -27,7 +27,7 @@ public final class AutomationModule implements EngineModule {
     private static final long HOST_QUERY_TIMEOUT=1000,HOST_DUE_TIMEOUT=3000,MIN_HOST_WAKE_DELAY=60000;
 
     /** Implement on the Application; return null until its dependencies are fully initialized. */
-    public interface AlarmHostProvider { AlarmHost automationAlarmHost(); }
+    public interface AlarmHostProvider { AlarmHost automationAlarmHost(); default AutomationModule originalReminderModule(){return null;} }
     /**
      * Existing-host hook, not another scheduler or an authorization source. No model/network/
      * phone work here. Both methods run on a bounded worker, outside all book locks. Derive
@@ -40,6 +40,7 @@ public final class AutomationModule implements EngineModule {
     }
     private final FeatureContext context;
     private final AutomationBook book;
+    private final AutomationBook.GoalTaskResolver nativeScheduleSources;
     private final CommitmentBook commitments;
     private final AutomationConditions.Source conditions;
     public AutomationModule(FeatureContext context)throws Exception {this(context,null);}
@@ -51,13 +52,14 @@ public final class AutomationModule implements EngineModule {
         this(context,evidenceResolver,goalTasks,new AndroidAutomationConditions(context.android));
     }
     public AutomationModule(FeatureContext context,CommitmentBook.EvidenceResolver evidenceResolver,AutomationBook.GoalTaskResolver goalTasks,AutomationConditions.Source conditions)throws Exception {
-        this.context=context;this.conditions=conditions;book=new AutomationBook(new File(context.android.getFilesDir(),"automation/rules.json"),goalTasks,conditions);
+        this.context=context;this.conditions=conditions;this.nativeScheduleSources=goalTasks;book=new AutomationBook(new File(context.android.getFilesDir(),"automation/rules.json"),goalTasks,conditions);
         commitments=new CommitmentBook(new File(context.android.getFilesDir(),"automation/commitments.json"),evidenceResolver,conditions,goalTasks);
         // Do not enter Application callbacks while its module field is still being assigned.
         restore(context.android,false);
     }
     @Override public String id(){return "automation";}
     @Override public JSONObject snapshot()throws Exception {
+        reconcileNativeScheduleSources();
         NotificationManager manager=context.android.getSystemService(NotificationManager.class);
         NotificationChannel channel=manager==null?null:manager.getNotificationChannel(CHANNEL);
         return new JSONObject().put("available",true).put("rules",book.rules()).put("nextAt",book.nextAt())
@@ -83,6 +85,7 @@ public final class AutomationModule implements EngineModule {
         if(command.equals("getGoalState"))return goalState(input.getString("occurrenceId"));
         if(command.equals("createPlan")||command.equals("listPlans")||command.equals("getPlan")||command.equals("cancelPlan"))return handlePlan(command,input);
         if(command.endsWith("Commitment")||command.equals("listCommitments")||command.equals("dueCommitments"))return handleCommitment(command,input);
+        if(command.matches("list|receipts|save|setEnabled|delete|checkDue"))reconcileNativeScheduleSources();
         JSONObject result;
         switch(command){
             case "list":return new JSONObject().put("rules",book.rules());
@@ -95,15 +98,41 @@ public final class AutomationModule implements EngineModule {
                 if(manager!=null)for(int i=0;i<removed.length();i++)manager.cancel(notificationId(removed.getJSONObject(i).getString("id")));
                 result=new JSONObject().put("deleted",true);break;
             }
-            case "checkDue":result=new JSONObject().put("receipts",deliver(context.android,book));break;
+            case "checkDue":result=new JSONObject().put("receipts",deliver(context.android,book,this));break;
             default:throw new IllegalArgumentException("未知定时操作");
         }
         schedule(context.android,book);context.emit(id(),new JSONObject().put("event","automation_changed").put("snapshot",snapshot()));return result;
     }
+    /** Native private conversation/owner glue only, not exposed by generic module tools. */
+    public JSONObject proposeScheduleForTask(JSONObject nativeOrigin,String operation,JSONObject draft)throws Exception{return book.proposeSchedule(nativeOrigin,operation,draft,System.currentTimeMillis());}
+    public JSONArray scheduleProposalsForTask(String task)throws Exception{return book.scheduleProposals(task);}
+    @FunctionalInterface public interface OriginalProposalSource {JSONObject call(java.util.concurrent.Callable<JSONObject> originalBookAction)throws Exception;}
+    /** Source/Tasks scopes end before touching alarms or the native scheduling host. */
+    public JSONObject approveScheduleProposalForOwner(String id,String digest,OriginalProposalSource source)throws Exception{JSONObject result=java.util.Objects.requireNonNull(source).call(()->book.approveScheduleProposal(id,digest,System.currentTimeMillis()));reschedule(context.android);return result;}
     /** Native supervisor validates this exact occurrence before admitting its own persistent task. */
-    public JSONObject taskRequest(String occurrenceId)throws Exception{return book.taskRequest(occurrenceId,System.currentTimeMillis());}
+    public JSONObject taskRequest(String occurrenceId)throws Exception {
+        JSONObject origin=book.receiptNativeOrigin(occurrenceId);if(origin==null)return book.taskRequest(occurrenceId,System.currentTimeMillis());final Exception[] bookFailure={null};
+        try{return withNativeScheduleSource(origin,()->{book.nativeScheduleSourcePending(origin,false,System.currentTimeMillis());try{return book.taskRequest(occurrenceId,System.currentTimeMillis());}catch(Exception rejected){bookFailure[0]=rejected;throw rejected;}});}
+        catch(Exception unavailable){if(unavailable!=bookFailure[0]){if(unavailable instanceof ScheduleSourceState.Invalidated)book.revokeNativeScheduleOrigin(origin,System.currentTimeMillis());else book.nativeScheduleSourcePending(origin,true,System.currentTimeMillis());clearSourceNotifications();}throw unavailable;}
+    }
+    private JSONObject withNativeScheduleSource(JSONObject origin,java.util.concurrent.Callable<JSONObject> action)throws Exception {if(nativeScheduleSources==null)throw new ScheduleSourceState.Unavailable();return nativeScheduleSources.withOriginalScheduleSource(origin,action);}
+    /** Native source reconciliation only; no scheduler, model, helper or execution grant. */
+    public JSONObject reconcileNativeScheduleSources()throws Exception {
+        int revoked=0,pending=0;JSONArray origins=book.nativeScheduleOrigins();for(int i=0;i<origins.length();i++){JSONObject origin=origins.getJSONObject(i);try{withNativeScheduleSource(origin,()->new JSONObject());book.nativeScheduleSourcePending(origin,false,System.currentTimeMillis());}
+            catch(ScheduleSourceState.Invalidated known){revoked+=book.revokeNativeScheduleOrigin(origin,System.currentTimeMillis()).getInt("revokedRows");}
+            catch(Exception unavailable){book.nativeScheduleSourcePending(origin,true,System.currentTimeMillis());pending++;}}
+        JSONObject cleared=clearSourceNotifications();return cleared.put("revokedRows",revoked).put("sourceChecksPending",pending).put("executionAuthorized",false);
+    }
+
+    private JSONObject clearSourceNotifications()throws Exception {return clearSourceNotifications(context.android,book);}
+    private static JSONObject clearSourceNotifications(Context context,AutomationBook book)throws Exception {
+        JSONArray pending=book.sourceNotificationClears(),cleared=new JSONArray();NotificationManager manager=context.getSystemService(NotificationManager.class);
+        for(int i=0;i<pending.length();i++){String id=pending.getString(i);try{if(manager==null)continue;manager.cancel(notificationId(id));PendingIntent old=PendingIntent.getActivity(context,notificationId(id),notificationIntent(context,id),PendingIntent.FLAG_NO_CREATE|PendingIntent.FLAG_IMMUTABLE);if(old!=null)old.cancel();cleared.put(id);}catch(RuntimeException unknown){/* Original body-free pending row is retained; never claim a confirmed clear. */}}
+        if(cleared.length()>0)book.sourceNotificationsCleared(cleared);return new JSONObject().put("notificationCancelApiAccepted",cleared.length()).put("notificationClearPending",pending.length()-cleared.length()).put("visualRemovalVerified",false);
+    }
+
     /** Read-only original-task projection; it cannot start or authorize execution. */
-    public JSONObject goalState(String occurrenceId)throws Exception{return book.goalState(occurrenceId);}
+    public JSONObject goalState(String occurrenceId)throws Exception{reconcileNativeScheduleSources();return book.goalState(occurrenceId);}
     /** Native owner UI hook. Observation does not authorize a phone/model/tool action. */
     public JSONObject conditionsSnapshot()throws Exception{return AutomationConditions.read(conditions,System.currentTimeMillis()).json();}
     /** Draft calendar preview only; no rule write, alarm, reservation, TaskStore or event. */
@@ -222,17 +251,20 @@ public final class AutomationModule implements EngineModule {
      */
     public static void reschedule(Context context)throws Exception {schedule(context.getApplicationContext(),open(context.getApplicationContext()));}
     static JSONArray deliver(Context context)throws Exception {
-        return deliver(context,open(context.getApplicationContext()));
+        Context app=context.getApplicationContext();AutomationModule mounted=app instanceof AlarmHostProvider?((AlarmHostProvider)app).originalReminderModule():null;return deliver(app,mounted==null?open(app):mounted.book,mounted);
     }
-    private static JSONArray deliver(Context context,AutomationBook book)throws Exception {
-        Context app=context.getApplicationContext();recover(book);ensureChannel(app);
+    private static JSONArray deliver(Context context,AutomationBook book,AutomationModule mounted)throws Exception {
+        Context app=context.getApplicationContext();recover(book);ensureChannel(app);if(mounted!=null)mounted.reconcileNativeScheduleSources();
         JSONArray results=new JSONArray();
         try{
             book.recheckConditions(System.currentTimeMillis());
             JSONArray claimed=book.claimDue(System.currentTimeMillis(),10);
             for(int i=0;i<claimed.length();i++){
                 String id=claimed.getJSONObject(i).getString("id");
-                results.put(book.dispatchReceipt(id,receipt->postNotification(app,receipt),System.currentTimeMillis()));
+                JSONObject origin=book.receiptNativeOrigin(id);if(origin!=null){try{if(mounted==null)throw new ScheduleSourceState.Unavailable();mounted.withNativeScheduleSource(origin,()->new JSONObject());}catch(Exception unavailable){if(unavailable instanceof ScheduleSourceState.Invalidated)book.revokeNativeScheduleOrigin(origin,System.currentTimeMillis());else{book.nativeScheduleSourcePending(origin,true,System.currentTimeMillis());book.deferSourceUnavailableReceipt(id,System.currentTimeMillis());}clearSourceNotifications(app,book);continue;}}
+                book.dispatchReceipt(id,receipt->postNotification(app,receipt),System.currentTimeMillis());
+                if(mounted!=null)mounted.reconcileNativeScheduleSources();
+                JSONArray retained=book.receipts();for(int j=0;j<retained.length();j++)if(id.equals(retained.getJSONObject(j).getString("id"))){results.put(retained.getJSONObject(j));break;}
             }
         }finally{
             // Legacy notification failures must not bypass the host pass or final reschedule.
@@ -274,17 +306,14 @@ public final class AutomationModule implements EngineModule {
         NotificationManager manager=context.getSystemService(NotificationManager.class);
         if(manager!=null)manager.createNotificationChannel(new NotificationChannel(CHANNEL,"私人提醒",NotificationManager.IMPORTANCE_DEFAULT));
     }
+    private static Intent notificationIntent(Context context,String id){Intent open=context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());if(open==null)open=new Intent().setClassName(context.getPackageName(),context.getPackageName()+".MainActivity");return open.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP).setData(Uri.parse("pocketengine://automation/"+id));}
     private static JSONObject postNotification(Context context,JSONObject receipt)throws Exception {
         ensureChannel(context);NotificationManager manager=context.getSystemService(NotificationManager.class);
         NotificationChannel channel=manager==null?null:manager.getNotificationChannel(CHANNEL);
         if(manager==null||!manager.areNotificationsEnabled()||channel==null||channel.getImportance()==NotificationManager.IMPORTANCE_NONE)
             return new JSONObject().put("status","blocked_notifications").put("message","通知权限或提醒渠道已关闭；提醒已记入应用，未执行手机目标");
         String id=receipt.getString("id"),kind=receipt.getString("kind");
-        Intent open=context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
-        if(open==null)open=new Intent().setClassName(context.getPackageName(),context.getPackageName()+".MainActivity");
-        open.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .setData(Uri.parse("pocketengine://automation/"+id)).putExtra("automationRuleId",receipt.getString("ruleId"))
-                .putExtra("automationOccurrence",id).putExtra("automationGoal",receipt.getString("goal"));
+        Intent open=notificationIntent(context,id).putExtra("automationRuleId",receipt.getString("ruleId")).putExtra("automationOccurrence",id);
         PendingIntent tap=PendingIntent.getActivity(context,notificationId(id),open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         boolean phoneGoal=kind.equals("phone_goal");String text=phoneGoal?"目标已到时间。点此查看并由你开始手机操作。":"点击回到私人助手查看提醒。";
         Notification notification=new Notification.Builder(context,CHANNEL).setSmallIcon(context.getApplicationInfo().icon)

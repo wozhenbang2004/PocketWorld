@@ -48,6 +48,7 @@ public final class ModelGateway {
             .retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).cache(null).build();
 
     private ModelGateway() { }
+    private static final ModelCallAdmission MODEL_CALLS=new ModelCallAdmission();
     @FunctionalInterface public interface ModelGroupAdmission {void check(ModelRoutePlan plan,String candidateId,ModelConfig candidate)throws Exception;}
     private static volatile ModelGroupAdmission modelGroupAdmission;
     /** Original native SettingsStore owner only; snapshots never freeze revocation. */
@@ -259,6 +260,7 @@ public final class ModelGateway {
         });
     }
     private static JSONObject executeLogical(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,String ingress,String nativeDigest,PhysicalAttempt physical,CandidateAdmission preflight)throws Exception {
+        InferenceCapture.requireOriginalContext(control,target);
         config=config.forPurpose(target.context.purpose.name());
         control.check();LogicalInferenceAuthority authority=target.logical;
         if(config.routePlan!=null&&authority==null)throw new SecurityException("模型组需要原TaskStore逻辑请求准入；没有调用未归因通路");
@@ -279,12 +281,15 @@ public final class ModelGateway {
             physical.rejected(logical,config);
             if(authority!=null)authority.finish(logical,"FAILED","failed","none");if(rejection!=null)throw controlled(rejection,authority!=null);throw new GatewayException("模型组没有可用候选；请在模型页核对原连接和用途。没有回退到其他账号。");
         }
-        int candidateIndex=0,switches=0;String retryReason="initial_ordered_candidate";long waited=0;boolean semantic=false;
+        int candidateIndex=0,switches=0;String retryReason="initial_ordered_candidate";long waited=0;boolean semantic=false,anyDispatched=false;
         try { for(int attempt=1;attempt<=maximum;attempt++){
             control.check();if(System.currentTimeMillis()>=deadline){if(authority!=null)authority.finish(logical,"FAILED","unknown","none");throw controlled(localFailure("模型请求总期限已到，等待与重试没有重置期限。",InferenceFailure.Kind.TIMEOUT),authority!=null);}
-            ModelRoutePlan.Candidate chosen=eligible.get(candidateIndex);ModelConfig selected=chosen.config();checkGroup(plan,chosen);preflight.check(selected);
-            InferenceCapture capture=new InferenceCapture(selected,control,InferenceCapture.withAdmission(target,()->checkGroup(plan,chosen)));
-            if(authority!=null){capture.logical(logical,attempt,chosen.candidateId(),plan.requestedAlias,ingress,retryReason,deadline);authority.reserve(logical,capture.callId,attempt,chosen.candidateId(),retryReason);}
+            ModelRoutePlan.Candidate chosen=eligible.get(candidateIndex);ModelConfig selected=chosen.config();
+            RunControl.HostRunIdentity originalRun=control.hostRunIdentity();String originalTask=originalRun==null?target.context.taskId:originalRun.taskId();
+            ModelCallAdmission.Permit permit=MODEL_CALLS.enter(control,originalTask,deadline);InferenceCapture capture;
+            try{checkGroup(plan,chosen);preflight.check(selected);capture=new InferenceCapture(selected,control,InferenceCapture.withAdmission(target,()->checkGroup(plan,chosen)));capture.limitDeadlineAt(deadline);
+                if(authority!=null){capture.logical(logical,attempt,chosen.candidateId(),plan.requestedAlias,ingress,retryReason,deadline);authority.reserve(logical,capture.callId,attempt,chosen.candidateId(),retryReason);}
+            }catch(Exception|Error refused){permit.close();throw refused;}
             final boolean[] committed={false};SemanticCommit commit=(call,sequence)->{control.check();checkGroup(plan,chosen);if(!capture.callId.equals(call))throw new SecurityException("semantic_call_identity_changed");if(!committed[0]){if(authority!=null)authority.commit(logical,call,sequence);committed[0]=true;}};
             try{
                 JSONObject result=physical.run(selected,capture,commit);control.check();commit.beforeFlush(capture.callId,1);
@@ -292,6 +297,7 @@ public final class ModelGateway {
                 if(authority!=null){authority.attemptEnded(logical,capture.callId,capture.wasDispatched(),"complete");authority.finish(logical,"SUCCEEDED","complete","complete");JSONObject metadata=result.optJSONObject("provider_data");if(metadata!=null&&!selected.usesAccount())metadata.put("originCallId",capture.callId);}
                 return result;
             }catch(Exception failure){
+                permit.close();anyDispatched|=capture.wasDispatched();
                 semantic|=committed[0];boolean cancelled=failure instanceof InterruptedException||failure instanceof java.util.concurrent.CancellationException||control.isCancelled();
                 observeFailure(capture,failure,physical.receivedText(),cancelled);capture.failed(cancelled?InferenceReceipt.Outcome.CANCELLED:InferenceReceipt.Outcome.FAILED,failure);physical.failed(failure);
                 if(authority!=null)try{authority.attemptEnded(logical,capture.callId,capture.wasDispatched(),cancelled?"cancelled":semantic?"partial":"failed");}catch(Exception storage){failure.addSuppressed(storage);throw controlled(failure,true);}
@@ -305,11 +311,13 @@ public final class ModelGateway {
                 // Explicit transient 429 never changes RouteKey. Unknown 429 is not retryable.
                 if(facts.httpStatus!=429&&switches<plan.maxRouteSwitches&&candidateIndex+1<eligible.size()){candidateIndex++;switches++;retryReason="transient_failure_next_candidate";}else retryReason="transient_failure_same_route";
                 physical.beforeWait(logical,capture.callId,attempt,delay);waited+=delay;control.sleep(delay);control.check();physical.afterWait();
-            }
+            }finally{permit.close();}
         }
         throw new IllegalStateException("logical_attempt_loop_exhausted");
         }catch(Exception stopped){
-            if(authority!=null)try{authority.finish(logical,stopped instanceof InterruptedException||control.isCancelled()?"CANCELLED":semantic?"PARTIAL":"UNKNOWN","unknown",semantic?"partial":"none");}catch(Exception storage){stopped.addSuppressed(storage);}
+            boolean knownNotDispatched=stopped instanceof ModelCallAdmission.Refused&&!anyDispatched;
+            if(authority!=null)try{authority.finish(logical,stopped instanceof InterruptedException||control.isCancelled()?"CANCELLED":semantic?"PARTIAL":knownNotDispatched?"FAILED":"UNKNOWN",knownNotDispatched?"failed":"unknown",semantic?"partial":"none");}catch(Exception storage){stopped.addSuppressed(storage);}
+            if(stopped instanceof ModelCallAdmission.Refused capacity)stopped=localFailure(capacity.getMessage(),capacity.deadline?InferenceFailure.Kind.TIMEOUT:InferenceFailure.Kind.LOCAL_REFUSAL);
             throw controlled(stopped,authority!=null);
         }
     }

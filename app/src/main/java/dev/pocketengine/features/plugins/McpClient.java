@@ -39,7 +39,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
     private volatile String session="";
     private volatile boolean initialized,valid=true,closed;
     private JSONObject serverInfo;
-    private volatile boolean taskSupport,resourceSupport;
+    private volatile boolean taskSupport,resourceSupport,promptSupport;
 
     public McpClient(String endpoint,String token)throws Exception {this(endpoint,token,McpData.VERSION);}
     public McpClient(String endpoint,String token,String version)throws Exception {this(endpoint,token,version,ignored->{},HTTP);}
@@ -60,6 +60,17 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
     boolean needsDiscovery(){return !initialized&&valid&&!closed;}
     public boolean supportsTasks(){return usable()&&modern()&&taskSupport;}
     public boolean supportsResources(){return usable()&&resourceSupport;}
+    public boolean supportsPrompts(){return usable()&&promptSupport;}
+    /** One matched JSON-RPC liveness response. Never executes a tool, retries, or forwards body text. */
+    public JSONObject ping(RunControl control)throws Exception {
+        checkUsable();control.check();long started=System.nanoTime();JSONObject envelope=rpc("ping",new JSONObject(),control);
+        if(envelope.has("error"))throw new McpException("MCP ping返回JSON-RPC错误（"+envelope.getJSONObject("error").getInt("code")+"）");
+        if(!(envelope.opt("result") instanceof JSONObject))throw new McpException("MCP ping结果不是JSON对象");
+        control.check();checkUsable();return new JSONObject().put("status","responsive").put("protocolVersion",version).put("serverInfo",serverInfo())
+            .put("serverDigest",serverDigest()).put("roundTripMillis",Math.max(0,(System.nanoTime()-started)/1_000_000L)).put("observedAt",System.currentTimeMillis())
+            .put("declaredCapabilities",new JSONObject().put("tools",true).put("resources",resourceSupport).put("prompts",promptSupport).put("tasks",supportsTasks()))
+            .put("pingOnly",true).put("toolExecutionVerified",false).put("responseBodyIncluded",false).put("automaticRetry",false).put("authorityAdded",false);
+    }
     String endpoint(){return endpoint;}
     JSONObject serverInfo()throws Exception{return McpData.copy(serverInfo);}
 
@@ -137,6 +148,28 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
         try{McpSkillSource.sha256(text);}catch(java.nio.charset.CharacterCodingException invalid){throw new McpException("技能资源包含无效Unicode，未替换或导入原文字节");}
         if(McpData.containsSecret(text,token,0))throw new McpException("技能资源包含当前凭据，已拒绝导入");
         return text;
+    }
+
+    /** Only protocol declarations; no prompt is selected, injected, installed, or executed here. */
+    JSONArray prompts(RunControl control)throws Exception {
+        checkUsable();if(!promptSupport)throw new McpException("此MCP服务未声明prompts能力");JSONArray all=new JSONArray();Set<String> names=new HashSet<>(),cursors=new HashSet<>();String cursor="";int bytes=0;
+        for(int page=0;page<8;page++){
+            JSONObject params=new JSONObject();if(!cursor.isEmpty())params.put("cursor",cursor);JSONObject result=requiredResult(rpc("prompts/list",params,control));JSONArray prompts=result.getJSONArray("prompts");
+            if(all.length()+prompts.length()>McpPromptData.MAX_PROMPTS)throw new McpException("MCP提示目录超过96项");
+            for(int i=0;i<prompts.length();i++){
+                JSONObject prompt=prompts.getJSONObject(i);McpPromptData.definition(prompt);if(!names.add(prompt.getString("name")))throw new McpException("MCP提示名称重复，未静默选择一个");
+                if(McpData.containsSecret(prompt,token,0))throw new McpException("MCP提示声明包含当前凭据，已拒绝投影");bytes+=prompt.toString().getBytes(StandardCharsets.UTF_8).length;if(bytes>MAX_BYTES)throw new McpException("MCP提示目录超过256KiB");McpPromptData.digest(prompt);all.put(McpData.copy(prompt));
+            }
+            if(!result.has("nextCursor"))return all;Object next=result.get("nextCursor");if(!(next instanceof String)||((String)next).isEmpty()||((String)next).length()>4096||!cursors.add((String)next))throw new McpException("MCP提示分页游标无效或循环");cursor=(String)next;
+        }
+        throw new McpException("MCP提示目录超过8页，请在服务端缩小范围");
+    }
+    JSONObject prompt(String name,String expectedDescriptorDigest,JSONObject arguments,RunControl control)throws Exception {
+        if(name==null||name.isEmpty()||name.length()>256||expectedDescriptorDigest==null||!expectedDescriptorDigest.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("请先读取准确提示名称与descriptorDigest");
+        JSONObject selected=null;JSONArray definitions=prompts(control);for(int i=0;i<definitions.length();i++)if(name.equals(definitions.getJSONObject(i).getString("name")))selected=definitions.getJSONObject(i);
+        if(selected==null)throw new McpException("提示不在此MCP安装当前目录内");if(!expectedDescriptorDigest.equals(McpPromptData.digest(selected)))throw new McpException("MCP提示声明已变化，请重新读取再选择");
+        JSONObject supplied=McpPromptData.arguments(selected,arguments);JSONObject result=requiredResult(rpc("prompts/get",new JSONObject().put("name",name).put("arguments",supplied),control));
+        control.check();return McpPromptData.result(result,token).put("name",name).put("descriptorDigest",expectedDescriptorDigest).put("argumentsEchoed",false).put("toolExecutionVerified",false).put("authorityAdded",false);
     }
 
     JSONObject call(JSONObject declaration,JSONObject arguments,RunControl control)throws CallFailure {
@@ -256,6 +289,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
         JSONObject extensions=result.getJSONObject("capabilities").optJSONObject("extensions");
         taskSupport=modern()&&extensions!=null&&extensions.optJSONObject(dev.pocketengine.features.plugins.mcp.McpTaskCoordinator.EXTENSION)!=null;
         resourceSupport=result.getJSONObject("capabilities").optJSONObject("resources")!=null;
+        promptSupport=result.getJSONObject("capabilities").optJSONObject("prompts")!=null;
         if(result.getJSONObject("capabilities").optJSONObject("tools")==null)throw refresh("MCP服务未声明tools能力");
         if(modern()){
             boolean supported=false;JSONArray versions=result.getJSONArray("supportedVersions");
@@ -287,6 +321,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
     }
     private JSONObject send(JSONObject message,String id,RunControl control,boolean initializing,JSONObject schema)throws Exception {
         control.check();if(closed||!valid)throw new McpException("MCP会话不可用，请重新发现");
+        boolean promptRead=message.optString("method").startsWith("prompts/");
         Request.Builder builder=request();
         if(modern()){
             builder.header("Mcp-Method",message.getString("method"));
@@ -313,7 +348,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
                 if(response.code()<200||response.code()>=300){
                     if(modern()&&id!=null&&(response.code()==400||response.code()==404)&&response.body()!=null&&
                             response.header("Content-Type","").split(";",2)[0].trim().equalsIgnoreCase("application/json")){
-                        JSONObject error=accept(parse(read(response.body().byteStream(),MAX_BYTES,control)),id,control);
+                        JSONObject error=accept(parse(read(response.body().byteStream(),MAX_BYTES,control)),id,control,promptRead);
                         if(error!=null&&error.has("error")){
                             int code=error.getJSONObject("error").getInt("code");
                             if(code==-32022||code==-32020)valid=false;
@@ -328,9 +363,9 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
                 String type=response.header("Content-Type","").split(";",2)[0].trim().toLowerCase(java.util.Locale.ROOT);
                 JSONObject result;
                 if(type.equals("application/json")){
-                    result=accept(parse(read(response.body().byteStream(),MAX_BYTES,control)),id,control);
+                    result=accept(parse(read(response.body().byteStream(),MAX_BYTES,control)),id,control,promptRead);
                     if(result==null)throw new McpException("MCP JSON回复缺少匹配的请求结果");
-                }else if(type.equals("text/event-stream"))result=sse(response.body().byteStream(),id,control);
+                }else if(type.equals("text/event-stream"))result=sse(response.body().byteStream(),id,control,promptRead);
                 else throw new McpException("MCP回复类型不支持");
                 control.check();return result;
             }
@@ -348,7 +383,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
             if(initializing)session=next;else if(!next.equals(session))throw refresh("MCP会话标识发生变化，请重新发现");
         }
     }
-    private JSONObject accept(JSONObject envelope,String expected,RunControl control)throws Exception {
+    private JSONObject accept(JSONObject envelope,String expected,RunControl control,boolean promptRead)throws Exception {
         if(!"2.0".equals(envelope.optString("jsonrpc")))throw refresh("MCP JSON-RPC版本无效");
         if(envelope.has("method")){
             if(envelope.has("result")||envelope.has("error")||!(envelope.get("method") instanceof String))throw refresh("MCP请求格式无效");
@@ -361,6 +396,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
                 else reply.put("error",new JSONObject().put("code",-32601).put("message","Client capability not supported"));
                 send(reply,null,control,false,null);
             }else if(method.equals("notifications/tools/list_changed"))throw refresh("MCP工具清单已更新，请重新发现并授权");
+            else if(promptRead&&method.equals("notifications/prompts/list_changed"))throw refresh("MCP提示目录已更新，请重新读取并选择");
             // Logging, progress and unknown notifications carry no client authority and are not injected into prompts.
             return null;
         }
@@ -372,7 +408,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
         }else envelope.getJSONObject("result");
         return envelope;
     }
-    private JSONObject sse(InputStream input,String expected,RunControl control)throws Exception {
+    private JSONObject sse(InputStream input,String expected,RunControl control,boolean promptRead)throws Exception {
         PushbackInputStream in=new PushbackInputStream(input,1);StringBuilder data=new StringBuilder();String event="";
         int[] budget={0};int messages=0;boolean first=true;
         while(true){
@@ -382,7 +418,7 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
                 if(data.length()>0){
                     if(++messages>MAX_MESSAGES)throw new McpException("MCP SSE事件过多");
                     if(event.isEmpty()||event.equals("message")){
-                        JSONObject value=accept(parse(data.toString()),expected,control);if(value!=null)return value;
+                        JSONObject value=accept(parse(data.toString()),expected,control,promptRead);if(value!=null)return value;
                     }
                 }
                 data.setLength(0);event="";continue;

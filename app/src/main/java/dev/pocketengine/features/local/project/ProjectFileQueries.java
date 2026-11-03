@@ -63,7 +63,10 @@ public final class ProjectFileQueries {
         FileInfo after=describe(root,info.path,current);if(!info.sha.equals(after.sha)||info.bytes!=after.bytes)throw new SecurityException("读取期间文件SHA变化，未返回跨版本内容");
     }
     public static JSONObject read(File root,String checkout,JSONObject input,Current current)throws Exception {
-        String relative=VersionedWorkspace.path(input.getString("path"));current.check();FileInfo info=describe(root,relative,current);
+        String relative=VersionedWorkspace.path(input.getString("path"));current.check();
+        if(input.has("metadataOnly")&&!(input.opt("metadataOnly") instanceof Boolean))throw new IllegalArgumentException("metadataOnly需明确布尔值");
+        if(input.optBoolean("metadataOnly"))return metadata(root,checkout,relative,input,current);
+        FileInfo info=describe(root,relative,current);
         if(input.has("expectedHash")&&!info.sha.equals(input.getString("expectedHash")))throw new SecurityException("文件SHA已变化，请明确重新读取当前版本");
         JSONObject result=info.json().put("checkoutId",checkout).put("untrusted",true).put("source","active_checkout_bytes").put("atomicReadFence",false);
         if(info.binary)return result.put("contentOmitted",true).put("reason","binary_not_utf8_text").put("complete",false).put("nextOffset",JSONObject.NULL);
@@ -88,6 +91,30 @@ public final class ProjectFileQueries {
             end=start+text.length();result.put("offset",start).put("nextOffset",end<info.chars?end:JSONObject.NULL).put("complete",end==info.chars).put("rangeMode",mode);if(mode.equals("lines"))result.put("startLine",requestedLine).put("returnedLineBreaks",seenLines);
         }
         unchanged(root,info,current);return result.put("content",text.toString()).put("rangeMode",mode).put("returnedChars",text.length());
+    }
+    /** Only ENOENT is absence. AccessDenied/IO/cancellation remain failures, never empty files. */
+    private static JSONObject metadata(File root,String checkout,String relative,JSONObject input,Current current)throws Exception {
+        for(String range:new String[]{"rangeMode","offset","maxChars","startLine","maxLines","maxBytes"})if(input.has(range))throw new IllegalArgumentException("metadataOnly不能混合正文分页范围");
+        Path path=NativeCommandExecutor.within(root,relative).toPath();BasicFileAttributes before;
+        try{before=Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);}
+        catch(java.nio.file.NoSuchFileException absent){
+            current.check();try{Files.readAttributes(NativeCommandExecutor.within(root,relative).toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);throw new SecurityException("原路径在元数据观测期间出现，请重新读取");}catch(java.nio.file.NoSuchFileException confirmed){/* Two actual ENOENT observations; still not a create permission. */}
+            if(input.has("expectedHash")&&!"absent".equals(input.getString("expectedHash")))throw new SecurityException("原路径不存在，不能满足指定内容SHA");
+            return metadataView(checkout,relative).put("exists",false).put("entryKind","missing").put("bytes",JSONObject.NULL).put("sha256",JSONObject.NULL).put("hashAvailable",false).put("reason","not_found");
+        }
+        if(before.isSymbolicLink())throw new SecurityException("元数据不跟随项目链接");
+        FileInfo info=before.isRegularFile()&&before.size()<=ProjectSources.MAX_FILE_BYTES?describe(root,relative,current):null;
+        current.check();BasicFileAttributes after=Files.readAttributes(NativeCommandExecutor.within(root,relative).toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(before.isRegularFile()!=after.isRegularFile()||before.isDirectory()!=after.isDirectory()||before.isOther()!=after.isOther()||after.isSymbolicLink()||before.size()!=after.size()||!before.lastModifiedTime().equals(after.lastModifiedTime())||!java.util.Objects.equals(before.fileKey(),after.fileKey()))throw new SecurityException("原文件类型或元数据在读取期间变化，请重新观测");
+        if(input.has("expectedHash")&&(info==null||!info.sha.equals(input.getString("expectedHash"))))throw new SecurityException("原项无法确认指定内容SHA，未把缺失hash当匹配");
+        JSONObject result=metadataView(checkout,relative).put("exists",true).put("entryKind",after.isRegularFile()?"regular_file":after.isDirectory()?"directory":"special")
+            .put("lastModifiedMillis",after.lastModifiedTime().toMillis()).put("bytes",after.isRegularFile()?after.size():JSONObject.NULL).put("recursiveSizeComputed",false).put("sha256",JSONObject.NULL).put("hashAvailable",info!=null);
+        if(info!=null){JSONObject facts=info.json();for(java.util.Iterator<String> keys=facts.keys();keys.hasNext();){String key=keys.next();result.put(key,facts.get(key));}}
+        else result.put("hashUnavailableReason",after.isRegularFile()?"over_2MiB_hash_limit":"not_a_regular_file");return result;
+    }
+    private static JSONObject metadataView(String checkout,String relative)throws Exception {
+        return new JSONObject().put("checkoutId",checkout).put("path",relative).put("metadataOnly",true).put("metadataComplete",true).put("complete",false).put("contentOmitted",true).put("contentEvidence",false).put("nextOffset",JSONObject.NULL)
+            .put("mimeType",JSONObject.NULL).put("mimeSource","not_probed").put("source","active_checkout_native_metadata").put("untrusted",true).put("atomicReadFence",false).put("authorityAdded",false);
     }
     private static boolean hidden(String path){for(String part:path.split("/"))if(part.startsWith("."))return true;return false;}
     /** A glob is not a Java regular expression. Two bounded DP rows prevent exponential backtracking. */

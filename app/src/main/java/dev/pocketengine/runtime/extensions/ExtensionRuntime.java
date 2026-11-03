@@ -101,6 +101,13 @@ public final class ExtensionRuntime implements AutoCloseable {
         for(Entry entry:entrySnapshot())requireCurrent(entry,control,control.pauseRevision());Map<String,String> result=new LinkedHashMap<>();
         synchronized(this){ensureOpen();for(Tool tool:tools.values())if(!tool.entry.retired){String alias=semanticCapability(tool.entry.program.id,tool.localName);if(result.put(alias,tool.name)!=null)throw new SecurityException("稳定扩展能力身份冲突");}}return Map.copyOf(result);
     }
+    /** Read-only pins from these actual approved registrations, never caller metadata. */
+    Map<String,dev.pocketengine.core.ScopedToolCatalog.SourcePin> discoverySources(RunControl control)throws Exception {
+        for(Entry entry:entrySnapshot())requireCurrent(entry,control,control.pauseRevision());Map<String,dev.pocketengine.core.ScopedToolCatalog.SourcePin> result=new LinkedHashMap<>();
+        synchronized(this){ensureOpen();for(Tool tool:tools.values())if(!tool.entry.retired){ExtensionProgram program=tool.entry.program;
+            result.put(tool.name,new dev.pocketengine.core.ScopedToolCatalog.SourcePin(dev.pocketengine.core.ScopedToolCatalog.SourceKind.EXTENSION,program.installationId,program.version,dev.pocketengine.core.ScopedToolCatalog.fingerprint(program.identity())));
+        }}return Map.copyOf(result);
+    }
     public void validate(String name,JSONObject arguments)throws Exception {Tool tool=tool(name);PluginRules.validateArguments(copy(arguments,32768),tool.schema);}
 
     /** Pure JS output is untrusted data, never a receipt proving an external effect. */

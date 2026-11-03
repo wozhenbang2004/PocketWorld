@@ -249,6 +249,7 @@ public final class PhoneRunService extends Service {
                 if(!(app.features.module("display") instanceof DisplayModule))throw new SecurityException("本机后台屏helper未安装");
                 DisplayModule display=(DisplayModule)app.features.module("display");display.prepare(original);background=new BackgroundPhonePort(display);port=background;
             }else port=new AndroidPhonePort(this);
+            if(background!=null)background.bindLifecycle(this,id,run,runningEpoch,original);
             taskBackgroundPort=background;if(!app.attachPort(id,port,original))throw new SecurityException("原PhonePort未获本机准入");
             requireDeviceToolsReady(admission.executionMode(),original);
             deviceTools=new dev.pocketengine.features.devices.DeviceToolsRuntime(admission.request().targetDeviceId(),admission,original,port,app.tasks.deviceTasks(),this::requireDeviceToolsReady,app.deviceObservedImageSink());
@@ -305,6 +306,7 @@ public final class PhoneRunService extends Service {
                 if(!(app.features.module("display") instanceof DisplayModule))throw new IllegalStateException("后台助手不可用");
                 DisplayModule display=(DisplayModule)app.features.module("display");display.prepare(control);backgroundPort=new BackgroundPhonePort(display);port=backgroundPort;
             }else if(port==null)port=new AndroidPhonePort(this);
+            if(backgroundPort!=null)backgroundPort.bindLifecycle(this,id,runId,epoch,control);
             taskBackgroundPort=backgroundPort;
             if(!app.attachPort(id,port,control)){if(backgroundPort!=null)backgroundPort.closeSession();throw new InterruptedException("Task stopped before phone admission");}
             if(manualOnly){
@@ -339,7 +341,9 @@ public final class PhoneRunService extends Service {
         finally{if(backgroundPort!=null)backgroundPort.closeSession();releaseWakeLock();app.features.sendState();}
     }
     private void holdForOwner(String id,PhonePort port,RunControl control,RunOutcome outcome)throws Exception{
-        control.pause();port.clearReferences();heldPort=port;waitingForUser=true;
+        control.pause();port.clearReferences();
+        if(port instanceof BackgroundPhonePort)try{outcome.evidence.put("audioRestore",((BackgroundPhonePort)port).restoreTaskAudio());}catch(Exception pending){outcome.evidence.put("audioRestore",new JSONObject().put("status","audio_recovery_pending").put("pending",true));}
+        heldPort=port;waitingForUser=true;
         boolean unresolved=app.tasks.hasUnresolved(id);String status=unresolved?"reconciling":outcome.status;
         app.tasks.finish(id,status,outcome.summary,outcome.evidence);app.pushTask(id);
         app.publish(EngineApplication.json("type","owner_takeover","taskId",id,"manualAllowed",!unresolved,"status",status));

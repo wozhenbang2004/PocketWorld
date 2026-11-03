@@ -28,6 +28,9 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
     private final TaskStore tasks;
     private final CurrentControl controls;
     private final PlanArtifactVerifier artifactVerifier;
+    @FunctionalInterface public interface ProposalSources {JSONObject call(JSONArray nativeUserRefs,java.util.concurrent.Callable<JSONObject> action)throws Exception;}
+    private volatile ProposalSources proposalSources;
+    public synchronized void bindProposalSources(ProposalSources original){if(proposalSources!=null&&proposalSources!=original)throw new SecurityException("原计划来源桥不能替换");proposalSources=java.util.Objects.requireNonNull(original);}
     private volatile dev.pocketengine.features.channels.ChannelsModule businessModule;private volatile dev.pocketengine.features.automation.ChannelBusinessWaits businessEvents;
     private final java.util.concurrent.atomic.AtomicInteger planCursor=new java.util.concurrent.atomic.AtomicInteger();
     private final String snapshotProcess=java.util.UUID.randomUUID().toString();
@@ -40,11 +43,30 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
     public static boolean handles(String command){return COMMANDS.contains(command);}
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
 
+    private JSONObject withProposalSource(JSONObject source,java.util.concurrent.Callable<JSONObject> action)throws Exception {
+        ProposalSources guard=proposalSources;if(guard==null)throw new dev.pocketengine.features.automation.ScheduleSourceState.Unavailable();String task=source.getString("taskId"),run=source.getString("runId"),conversation=source.getString("conversationId");int epoch=source.getInt("epoch");JSONArray refs=tasks.scheduleProposalUserRefs(task,run,epoch,conversation);
+        return guard.call(refs,()->tasks.withScheduleProposalSourceCurrent(task,run,epoch,conversation,refs,action));
+    }
+    @Override public JSONObject withOriginalScheduleSource(JSONObject origin,java.util.concurrent.Callable<JSONObject> originalBookAction)throws Exception {return withProposalSource(origin,originalBookAction);}
+    /** The model can only write an inert draft under its original prepared operation. */
+    public JSONObject proposeScheduleForTask(AutomationModule module,String task,String run,int epoch,String operation,JSONObject draft,RunControl original)throws Exception {
+        tasks.requireScheduleProposalPrepared(task,run,epoch,operation,draft,original);JSONObject current=tasks.get(task,false);privateOwner(current);if(current.optJSONObject("origin")!=null||current.optString("conversationId").isBlank())throw new SecurityException("仅原私人对话能提出计划");
+        JSONObject origin=new JSONObject().put("ownerId","owner").put("spaceId","private").put("taskId",task).put("conversationId",current.getString("conversationId")).put("runId",run).put("epoch",epoch);
+        JSONObject result=withProposalSource(origin,()->{tasks.requireScheduleProposalPrepared(task,run,epoch,operation,draft,original);return new JSONObject().put("proposal",module.proposeScheduleForTask(origin,operation,draft)).put("reviewRequired",true).put("scheduled",false).put("executionAuthorized",false);});tasks.requireScheduleProposalPrepared(task,run,epoch,operation,draft,original);return result;
+    }
+    public JSONObject scheduleProposalsForTask(AutomationModule module,String task,String run,int epoch,RunControl original)throws Exception {
+        tasks.checkCapability(task,run,epoch,"schedule_list",original);JSONObject current=tasks.get(task,false);privateOwner(current);JSONObject origin=new JSONObject().put("taskId",task).put("conversationId",current.getString("conversationId")).put("runId",run).put("epoch",epoch);
+        return withProposalSource(origin,()->{JSONArray rows=module.scheduleProposalsForTask(task),result=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i),from=row.getJSONObject("origin");if(run.equals(from.optString("runId"))&&epoch==from.optInt("epoch")&&origin.getString("conversationId").equals(from.optString("conversationId")))result.put(row);}return new JSONObject().put("proposals",result).put("executionAuthorized",false);});
+    }
     /** Native owner surface only; these operations are deliberately absent from handles/feature tools. */
     public JSONObject ownerCommand(AutomationModule module,String command,JSONObject input)throws Exception{
         JSONObject result=new JSONObject().put("command",command);String id=input.optString("id");
         switch(command){
             case "snapshot":break;
+            case "approveSchedule":{
+                JSONObject proposal=null;JSONArray rows=module.scheduleProposalsForTask(null);for(int i=0;i<rows.length();i++)if(id.equals(rows.getJSONObject(i).getString("id")))proposal=rows.getJSONObject(i);if(proposal==null)throw new IllegalArgumentException("原计划草案不存在");AutomationBook.reviewedProposalForDisplay(proposal);JSONObject source=proposal.getJSONObject("origin");
+                result.put("schedule",module.approveScheduleProposalForOwner(id,input.getString("digest"),bookAction->withProposalSource(source,bookAction)));break;
+            }
             case "create":result.put("plan",handle(module,"createPlan",new JSONObject().put("plan",input.getJSONObject("plan")),true).getJSONObject("plan"));break;
             case "approve":{JSONObject plan=module.handle("getPlan",new JSONObject().put("scope",scope()).put("id",id)).getJSONObject("plan");validateRemoteWaitPlan(plan);validateBusinessWaitPlan(plan);result.put("plan",module.approvePlanExecution(scope(),id,input.getLong("revision"),input.getJSONObject("settings")));break;}
             case "start":result.put("plan",module.startPlanExecution(scope(),id,input.getLong("revision")));break;
@@ -72,7 +94,10 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         for(int i=0;i<plans.length();i++){JSONObject plan=executionView(module,plans.getJSONObject(i));plans.put(i,plan);plan.put("requirements",controls==null?new JSONObject().put("allowed",false).put("reason","native_host_unavailable"):controls.requirementsForPlan(plan));
             JSONObject next=plan.optJSONObject("nextStep");if(plan.optJSONObject("execution")!=null&&next!=null)plan.put("runtimeDecision",module.inspectPlanTask(scope(),plan.getString("id"),next.getString("id")));
         }
-        return new JSONObject().put("plans",plans).put("remoteWaitCandidates",tasks.automationRemoteWaitCandidates(20)).put("businessWaitCandidates",businessWaitCandidates()).put("businessWaitSourceAvailable",businessEvents!=null).put("conditions",module.conditionsSnapshot()).put("taskAuthority","TaskStore").put("workerState","not_inferred_from_plan_state").put("snapshotProcess",snapshotProcess).put("snapshotSequence",snapshotSequence.incrementAndGet());
+        return new JSONObject().put("plans",plans).put("scheduleProposals",proposalSnapshot(module)).put("remoteWaitCandidates",tasks.automationRemoteWaitCandidates(20)).put("businessWaitCandidates",businessWaitCandidates()).put("businessWaitSourceAvailable",businessEvents!=null).put("conditions",module.conditionsSnapshot()).put("taskAuthority","TaskStore").put("workerState","not_inferred_from_plan_state").put("snapshotProcess",snapshotProcess).put("snapshotSequence",snapshotSequence.incrementAndGet());
+    }
+    private JSONArray proposalSnapshot(AutomationModule module)throws Exception {
+        JSONArray rows=module.scheduleProposalsForTask(null),result=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);try{AutomationBook.reviewedProposalForDisplay(row);result.put(withProposalSource(row.getJSONObject("origin"),()->new JSONObject(row.toString()).put("sourceAvailable",true)));}catch(Exception unavailable){boolean invalidated=row.optBoolean("sourceInvalidated")||unavailable instanceof dev.pocketengine.features.automation.ScheduleSourceState.Invalidated;result.put(new JSONObject().put("id",row.optString("id")).put("status",invalidated?"source_invalidated":"source_check_pending").put("sourceInvalidated",invalidated).put("sourceAvailable",false).put("executionAuthorized",false));}}return result;
     }
     private JSONObject executionView(AutomationModule module,JSONObject plan)throws Exception{
         if(plan.optJSONObject("execution")==null)return plan;JSONArray steps=plan.getJSONArray("steps");

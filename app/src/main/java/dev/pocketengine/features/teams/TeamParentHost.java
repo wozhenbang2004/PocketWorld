@@ -93,7 +93,8 @@ public final class TeamParentHost {
             JSONObject receipt=new JSONObject();for(String key:new String[]{"questionId","answerId","state","continuationState","awaitingContinuation","duplicate","reservationId","continuationReason","executionAuthorized"})if(result.has(key))receipt.put(key,result.get(key));
             changed.accept(id);return status(source,id).put("answerReceipt",receipt).put("delivery",args.optString("delivery","queue"));
         }
-        nativeInput.put("mode","queue");JSONObject sent=coordinator.sendParentMessage(source,nativeInput,input->tasks.queueTeamParentInput(source,input));
+        boolean wakePolicy=args.optString("delivery","queue").equals("queue")&&args.has("workItemId")&&tasks.teamWakePolicyConfigured(source,id);
+        nativeInput.put("mode","queue");JSONObject sent=coordinator.sendParentMessage(source,nativeInput,input->tasks.queueTeamParentInput(source,input,wakePolicy?coordinator.wakeSource(id,args.getString("memberId"),args.getString("workItemId")):null));
         if(args.optString("delivery","queue").equals("continue")){
             if(!args.has("workItemId")&&!args.has("researchRound"))throw new IllegalArgumentException("显式continue需原workItem或准确研究阶段，普通queue不唤醒");JSONObject now=coordinator.get(id);nativeInput.put("expectedRevision",now.getLong("revision")).put("expectedGeneration",now.getInt("generation"));JSONObject slot=TeamWorkPlan.find(now.getJSONArray("members"),args.getString("memberId"));nativeInput.put("expectedMemberGeneration",slot.getInt("generation"));
             // A native continuation may already have queued its original worker before a later
@@ -103,6 +104,14 @@ public final class TeamParentHost {
             if(args.has("researchRound"))coordinator.continueResearchForParent(source,nativeInput,()->{tasks.admitTeamResearchParentContinuation(source,id,args.getString("memberId"),args.getInt("researchRound"));return new JSONObject();},models.get(),true);
             else coordinator.continueForParent(source,nativeInput,(nextRun,nextMember)->tasks.continueTeamParentItem(source,id,args.getString("workItemId"),args.getInt("itemRevision"),args.getInt("ownerGeneration"),nextRun,nextMember),models.get(),true);
             sent.getJSONObject("messageReceipt").put("continuationState","queued").put("budgetIncreased",false);
+        }
+        if(wakePolicy)sent.getJSONObject("messageReceipt").put("automaticWake",false);
+        if(wakePolicy&&!sent.getJSONObject("messageReceipt").optBoolean("duplicate")){
+            var nativeWake=coordinator.wakeSource(id,args.getString("memberId"),args.getString("workItemId"));var admission=tasks.prepareTeamParentWake(source,nativeWake);
+            if(admission!=null){sent.getJSONObject("messageReceipt").put("wake",admission.view()).put("automaticWake",false);if(admission.hasCandidate()){
+                JSONObject now=coordinator.get(id);nativeInput.put("expectedRevision",now.getLong("revision")).put("expectedGeneration",now.getInt("generation")).put("expectedMemberGeneration",TeamWorkPlan.find(now.getJSONArray("members"),args.getString("memberId")).getInt("generation"));
+                coordinator.continueForWake(admission,nativeInput,models.get());sent.getJSONObject("messageReceipt").put("automaticWake",true).put("continuationState","queued").put("budgetIncreased",false);
+            }}
         }
         changed.accept(id);return status(source,id).put("messageReceipt",sent.getJSONObject("messageReceipt")).put("delivery",args.optString("delivery","queue"));
     }

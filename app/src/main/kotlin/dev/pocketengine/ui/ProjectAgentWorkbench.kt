@@ -36,6 +36,7 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
     val pythonProject = ProjectWorkbenchGuard.pythonProject(inspection)
     val nodeProject = ProjectWorkbenchGuard.nodeProject(inspection)
     val draftSession = remember(controller, id) { controller.projectWorkbench.agent(id) }
+    DisposableEffect(controller, id) { onDispose { controller.releaseProjectStartConsent(draftSession.client.value) } }
     var goal by draftSession.goal
     var client by draftSession.client
     var request by draftSession.request
@@ -43,6 +44,7 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
     var unconfirmedSubmission by draftSession.unconfirmedSubmission
     var submissionQuery by draftSession.submissionQuery
     var runtimeId by draftSession.runtimeId
+    var useProjectMemory by remember(id, client) { mutableStateOf(false) }
     var showRuntime by remember(id) { mutableStateOf(false) }
     var newTask by draftSession.newTask
     val selectedTaskId = controller.projectWorkbench.selectedTask(id)
@@ -60,6 +62,7 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
     val tasks = ProjectWorkbenchGuard.projectTasks(state.tasks, id, checkout.getString("projectId"))
     val task = ProjectWorkbenchGuard.selectedTask(tasks, selectedTaskId)
     fun acceptedProjectTask(taskId: String) {
+        controller.releaseProjectStartConsent(client)
         controller.projectWorkbench.selectTask(id, taskId); controller.getTask(taskId)
         if (originalSubmission?.clears(goal) == true) goal = ""
         request = null; originalSubmission = null; unconfirmedSubmission = null; submissionQuery = null; client = UUID.randomUUID().toString(); newTask = false
@@ -164,8 +167,8 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
     fun startProjectTask(text: String, runtime: String, consumeGoalDraft: Boolean) {
         if (unconfirmedSubmission != null || originalSubmission != null) return
         val frozen = JSONObject().put("checkoutId", id).put("projectId", checkout.getString("projectId")).put("expectedSourceDigest", inspection!!.getString("sourceDigest")).put("runtime", runtime).put("goal", text.trim()).put("clientMessageId", client)
-        originalSubmission = ProjectGoalSubmission(client, frozen.toString(), if (consumeGoalDraft) text else null)
-        request = controller.requestOwnerAction("startDevelopmentTask", JSONObject(frozen.toString()))
+        originalSubmission = ProjectGoalSubmission(client, frozen.toString(), if (consumeGoalDraft) text else null, useProjectMemory)
+        request = controller.requestProjectStart(JSONObject(frozen.toString()), useProjectMemory)
     }
     if (agentSurface) {
     var goalExamples by remember(checkout.optString("id")) { mutableStateOf(false) }
@@ -183,13 +186,20 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
             originalSubmission?.let { original ->
                 TextButton(onClick = {
                     unconfirmedSubmission = null; submissionQuery = null
-                    request = controller.requestOwnerAction("startDevelopmentTask", original.input())
+                    request = controller.requestProjectStart(original.input(), original.useProjectMemory, retryOriginal = true)
                 }, enabled = request == null && "owner.startDevelopmentTask" !in state.moduleBusy, modifier = Modifier.testTag("project_retry_original_submission")) { Text("按原内容重试这次登记") }
                 WorkbenchCaption("只核对这次提交；后续新写的草稿不会随之发送。")
             }
         }
     }
     if (task == null || newTask) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("这次只读取本项目记忆", fontSize = 14.sp, color = Ink)
+                WorkbenchCaption(if (useProjectMemory) "开始时冻结当前最多64条已审阅项目记忆及其原来源，供本次云模型读取；不混入主人全局记忆。忘记或撤回会立即停止旧片段继续使用。" else "默认仍使用主人全局私人记忆。开启后仅选本项目；不授予团队或群记忆权限。")
+            }
+            Switch(useProjectMemory, { useProjectMemory = it }, enabled = request == null && originalSubmission == null && unconfirmedSubmission == null && "owner.startDevelopmentTask" !in state.moduleBusy, modifier = Modifier.testTag("project_memory_opt_in"))
+        }
         AffectComposerFrame(
             modifier = Modifier.padding(top = 12.dp),
             editor = {

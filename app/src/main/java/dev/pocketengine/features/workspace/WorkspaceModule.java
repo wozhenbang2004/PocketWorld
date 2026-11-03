@@ -7,6 +7,7 @@ import org.json.JSONObject;
 public final class WorkspaceModule implements EngineModule {
     private final VersionedWorkspace workspace;
     private final WorkspaceArtifacts artifacts;
+    private volatile boolean nativeClosed;
     public WorkspaceModule(FeatureContext context){workspace=new VersionedWorkspace(new File(context.android.getFilesDir(),"workspace"));artifacts=new WorkspaceArtifacts(new File(context.android.getFilesDir(),"workspace-artifacts"),workspace);}
     @Override public String id(){return "workspace";}
     /** Typed native active-file route; generic feature JSON cannot supply a Frozen object or host path. */
@@ -20,10 +21,16 @@ public final class WorkspaceModule implements EngineModule {
     /** Native callers retain their original TaskStore admission; these observations add no authority. */
     public VersionedWorkspace.FileSnapshot fileSnapshotForHost(String project,String path,int version)throws Exception{return workspace.snapshot(project,path,version);}
     public VersionedWorkspace.ProjectSnapshot projectSnapshotForHost(String project)throws Exception{return workspace.snapshotProject(project);}
+    /** Native catalog identity only; no file bodies, source read permission or restored token. */
+    public JSONObject projectIdentityForHost(String project)throws Exception{
+        if(nativeClosed)throw new IllegalStateException("原工作区已关闭");org.json.JSONArray all=workspace.projects();
+        for(int i=0;i<all.length();i++){JSONObject row=all.getJSONObject(i);if(project.equals(row.optString("id")))return new JSONObject(row.toString());}
+        throw new SecurityException("所选原项目已不存在或不可确认");
+    }
     public VersionedWorkspace.HeadObservation refreshFileHeadForHost(String project,String path)throws Exception{return workspace.refreshFileHeadForHost(project,path);}
     /** Strict no-lock/no-IO native source currentness projection; not a model command/grant. */
     public VersionedWorkspace.HeadObservation currentFileHeadForHost(String project,String path){return workspace.currentFileHeadForHost(project,path);}
-    @Override public void close(){workspace.closeNativeHeadsForHost();}
+    @Override public void close(){nativeClosed=true;workspace.closeNativeHeadsForHost();}
     public VersionedWorkspace.FileSnapshot writeBytesForHost(VersionedWorkspace.FileSnapshot expected,byte[] actualBytes)throws Exception{return workspace.writeBytes(expected,actualBytes);}
     public VersionedWorkspace.FileSnapshot deleteForHost(VersionedWorkspace.FileSnapshot expected)throws Exception{return workspace.delete(expected);}
     public WorkspaceArtifacts.ArtifactRef freezeFileForHost(VersionedWorkspace.FileSnapshot original,String nativeOperationId,String taskId,String runId)throws Exception{return artifacts.freezeFile(original,nativeOperationId,taskId,runId);}

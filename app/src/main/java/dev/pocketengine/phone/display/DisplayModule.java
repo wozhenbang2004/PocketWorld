@@ -58,7 +58,8 @@ public final class DisplayModule implements EngineModule {
                 .put("authorizationBackend",backend()).put("requiresAdbBootstrap","adb".equals(backend())).put("shizuku",shizuku.snapshot()).put("adb",adb.snapshot())
                 .put("onDeviceAdbSupported",Build.VERSION.SDK_INT>=34).put("bootstrapBusy",bootstrapBusy())
                 .put("backgroundOnly",true).put("minimumSdk",34).put("supportedAndroid",Build.VERSION.SDK_INT>=34)
-                .put("readyForTask",hasSession()).put("taskOwned",!ownerTaskId.isEmpty()).put("deviceVerified",false).put("message",message);
+                .put("readyForTask",hasSession()).put("taskOwned",!ownerTaskId.isEmpty()).put("deviceVerified",false).put("message",message)
+                .put("audioSilenceEnabled",dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(context.android));
     }
     public synchronized void pinOwner(String taskId){
         if(taskId==null||taskId.isEmpty()||taskId.length()>200)throw new IllegalArgumentException("无效手机任务身份");
@@ -246,6 +247,25 @@ public final class DisplayModule implements EngineModule {
             dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
         JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
         return request("tap",pinned,control,expectedRevision,false,java.util.Objects.requireNonNull(admission));
+    }
+    /** Native ledger calls only. Active mutations retain the original admitted wire write;
+     * cleanup is limited to the pinned original session and its still-pinned task. */
+    synchronized JSONObject audioForTask(String command,JSONObject payload,String task,String expectedSession,int expectedDisplay,RunControl control,long revision,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+        JSONObject current=session();if(!java.util.Set.of("audio.get","audio.set").contains(command)||!ownedBy(task)||expectedDisplay!=current.optInt("displayId",-1)||!expectedSession.equals(current.optString("sessionId")))throw new SecurityException("original_audio_session_required");
+        if(control!=null&&(control.hostRunIdentity()==null||!task.equals(control.hostRunIdentity().taskId())||admission==null))throw new SecurityException("original_audio_admission_required");
+        JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
+        return request(command,pinned,control,revision,false,control==null?null:admission);
+    }
+    /** Explicit native owner undo; no model tool exposes it and no live session is displaced. */
+    public synchronized JSONObject audioRecovery(String command,JSONObject payload)throws Exception {
+        if(!java.util.Set.of("audio.get","audio.set").contains(command)||!ownerTaskId.isEmpty()||bootstrapBusy()||!isConnected())throw new SecurityException("owner_audio_recovery_unavailable");
+        JSONObject answer=client().call("audio_recovery."+command.substring("audio.".length()),new JSONObject(payload.toString()),null);requireOk(answer);return answer;
+    }
+    /** Native private-owner settings only; deliberately not added to handle/model tools. */
+    public synchronized JSONObject setAudioPolicyForOwner(boolean enabled)throws Exception {
+        if(enabled&&(!ownerTaskId.isEmpty()||bootstrapBusy()))throw new SecurityException("stop_phone_task_before_enabling_audio_policy");
+        dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.setOwnerSilenceEnabled(context.android,enabled);
+        return new JSONObject().put("enabled",dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(context.android)).put("persisted",true).put("systemPermissionGranted",false).put("audioMutation",false);
     }
     private JSONObject request(String command,JSONObject payload,RunControl control,long expectedRevision,boolean ownerTakeover,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
         if(command.startsWith("owner_handoff_")&&(!ownerTakeover||control==null||!control.isPaused()))throw new SecurityException("应用移屏仅供原生主人接管");

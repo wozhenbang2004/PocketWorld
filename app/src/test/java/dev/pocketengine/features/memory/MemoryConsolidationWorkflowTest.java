@@ -12,9 +12,14 @@ import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 
 /** Calls real MemoryModule/MemoryBook and the actual single-call workflow, with no Android service. */
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk=35,manifest=Config.NONE,application=android.app.Application.class)
 public final class MemoryConsolidationWorkflowTest {
     @Rule public final TemporaryFolder temp=new TemporaryFolder();
     private static final class Fence implements MemoryHostFence {
@@ -64,7 +69,7 @@ public final class MemoryConsolidationWorkflowTest {
 
     @Test public void insufficientEvidenceIsExplicitNoOpAndModelFailuresAreNeverRetried()throws Exception {
         MemoryModule memory=module();JSONArray selected=refs(save(memory,"一"),save(memory,"二"));AtomicInteger calls=new AtomicInteger();
-        JSONObject result=new MemoryConsolidationWorkflow(memory,(messages,control)->reply("null")).propose(scope(),selected,new RunControl(),new Fence());assertFalse(result.getBoolean("proposed"));assertEquals(0,count(memory));
+        JSONObject result=new MemoryConsolidationWorkflow(memory,(messages,control)->reply("null")).propose(scope(),selected,new RunControl(),new Fence());assertFalse(result.getBoolean("proposed"));assertEquals("no_candidate",result.getString("outcome"));assertFalse(result.getBoolean("formalMemorySaved"));assertFalse(result.getBoolean("reviewRequired"));assertEquals(0,count(memory));
         MemoryConsolidationWorkflow failed=new MemoryConsolidationWorkflow(memory,(messages,control)->{calls.incrementAndGet();throw new IOException("network interrupted");});
         try{failed.propose(scope(),selected,new RunControl(),new Fence());fail();}catch(IOException expected){}assertEquals(1,calls.get());assertEquals(0,count(memory));
     }
@@ -99,5 +104,12 @@ public final class MemoryConsolidationWorkflowTest {
         JSONObject first=workflow.propose(scope(),selected,new RunControl(),new Fence()),candidate=first.getJSONObject("candidate");
         memory.handle("rejectCandidate",new JSONObject().put("scope",scope()).put("id",candidate.getString("id")).put("revision",candidate.getLong("revision")).put("reason","证据不足"));
         JSONObject repeated=workflow.propose(scope(),selected,new RunControl(),new Fence());assertFalse(repeated.getBoolean("proposed"));assertFalse(repeated.getBoolean("reviewRequired"));assertEquals("rejected",repeated.getJSONObject("candidate").getString("status"));assertEquals(1,count(memory));
+    }
+    @Test public void nativeReconciliationDistinguishesModelEstimateFromRetainedCandidateWithoutAnotherCall()throws Exception {
+        File root=temp.getRoot();Context android=new ContextWrapper(null){@Override public Context getApplicationContext(){return this;}@Override public File getFilesDir(){return root;}};
+        SourceRef same=new SourceRef("message","one-native-source",1,"owner","private");MemoryModule memory=new MemoryModule(new FeatureContext(android,null,null,event->{}),(identity,kind,id)->new SourceRef.State(same,false));JSONArray selected=new JSONArray();
+        for(String text:new String[]{"同源甲","同源乙"}){JSONObject row=memory.handle("save",new JSONObject().put("scope",scope()).put("record",new JSONObject().put("text",text).put("confidence",0.4).put("sourceRefs",new JSONArray().put(same.toJson())))).getJSONObject("record");selected.put(new JSONObject().put("id",row.getString("id")).put("revision",row.getLong("revision")));}
+        AtomicInteger calls=new AtomicInteger();JSONObject result=new MemoryConsolidationWorkflow(memory,(messages,control)->{calls.incrementAndGet();return reply(new JSONObject(draft()).put("confidence",0.99).toString());}).propose(scope(),selected,new RunControl(),new Fence());
+        assertEquals(1,calls.get());assertEquals(0.4,result.getJSONObject("candidate").getDouble("confidence"),0.0);assertEquals(0.99,result.getJSONObject("confidenceReconciliation").getDouble("modelProposed"),0.0);assertFalse(result.getJSONObject("confidenceReconciliation").getBoolean("factVerified"));assertTrue(result.getBoolean("reviewRequired"));
     }
 }

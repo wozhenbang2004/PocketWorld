@@ -95,6 +95,15 @@ public final class MemorySourceBridge {
         AssistantModule module=assistant;
         return kind.equals("message")&&module!=null?module.resolveSource(scope,sourceId):null;
     }
+    /** Native metadata use in this SAME canonical forget/correct domain. No user body is read.
+     * The supplied Tasks transaction must separately recheck native repo versions/retirement;
+     * this monitor alone does not serialize direct repository deletion or context retirement. */
+    public synchronized <T>T withCurrentUserSources(JSONArray refs,java.util.concurrent.Callable<T> action)throws Exception {
+        EngineModule selected=host.module("memory");if(!(selected instanceof MemoryModule memory)||refs==null||refs.length()<1||refs.length()>64)throw new dev.pocketengine.features.automation.ScheduleSourceState.Unavailable();
+        JSONObject scope=new JSONObject().put("ownerId","owner").put("spaceId","private");
+        for(int i=0;i<refs.length();i++){SourceRef ref=SourceRef.fromJson(refs.getJSONObject(i));if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId))throw new dev.pocketengine.features.automation.ScheduleSourceState.Unavailable();if(memory.isSourceForgotten(scope,ref))throw new dev.pocketengine.features.automation.ScheduleSourceState.Invalidated(dev.pocketengine.features.automation.ScheduleSourceState.Reason.FORGOTTEN);}
+        return action.call();
+    }
     /** Pure original source currentness, not read authority. Used after a native exact source
      * selection was already read and pinned; it must not warm bytes inside model dispatch. */
     public void requireCurrentReference(SourceRef expected)throws Exception{
@@ -171,6 +180,12 @@ public final class MemorySourceBridge {
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);return mutate(scope,memory,true,receipt->memory.forgetReviewed(scope,id,revision,receipt));
     }
+    /** Native owner namespace use only; private task identity and global source key are unchanged. */
+    public synchronized JSONObject forgetProjectReviewed(dev.pocketengine.features.memory.ProjectMemoryNamespaces nativeScope,dev.pocketengine.features.memory.ProjectMemoryNamespaces.Selection selected,String id,long revision)throws Exception{
+        EngineModule original=host.module("memory");if(!Thread.holdsLock(nativeScope)||!(original instanceof MemoryModule)||!((MemoryModule)original).ownsProjectNamespacesForHost(nativeScope))throw new SecurityException("项目遗忘不是原Book/Bridge的native准入");final JSONObject[] retired={null};
+        JSONObject result;synchronized(tasks){result=nativeScope.forgetWithRetirementForHost(selected,id,revision,removed->{retired[0]=tasks.invalidateProjectMemoryContexts(selected,removed);JSONArray ids=retired[0].getJSONArray("taskIds");for(int i=0;i<ids.length();i++)host.clearTaskWorkingMemory(ids.getString(i));});}
+        return result.put("contextRetirement",retired[0]==null?new JSONObject():retired[0]).put("executionAuthorized",false);
+    }
     public synchronized JSONObject correctReviewed(JSONObject scope,String id,long revision,String text)throws Exception{
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);return mutate(scope,memory,false,"owner_correction",receipt->memory.correctReviewed(scope,id,revision,text,receipt));
@@ -225,8 +240,10 @@ public final class MemorySourceBridge {
                 result.put("contextRetirement",contextRetirement[0]).put("contextInvalidated",contextRetirement[0].getBoolean("contextInvalidated"))
                     .put("futureRecallBlocked",blocked).put("revocationPending",!blocked);
             }
+            EngineModule automation=host.module("automation");if(automation instanceof dev.pocketengine.features.automation.AutomationModule schedules)result.put("scheduleSourceRevocation",schedules.reconcileNativeScheduleSources());
             return result;
         }catch(Exception failure){
+            try{EngineModule automation=host.module("automation");if(automation instanceof dev.pocketengine.features.automation.AutomationModule schedules)schedules.reconcileNativeScheduleSources();}catch(Exception pending){failure.addSuppressed(pending);}
             for(String id:cleanups)try{JSONObject state=tasks.get(id,false);if(state!=null&&!java.util.Set.of("completed","failed").contains(state.optString("status")))tasks.status(id,"reconciling","原记忆变更或派生清理尚未核对；未重放原操作");}catch(Exception ignored){}
             throw failure;
         }
@@ -240,7 +257,14 @@ public final class MemorySourceBridge {
     static JSONArray boundedCleanupRefs(JSONObject scope,JSONArray removed,boolean eraseSnapshots)throws Exception{
         JSONArray bounded=new JSONArray();
         for(int i=0;i<removed.length();i++){
-            JSONObject ref=removed.getJSONObject(i);requireScope(scope,ref);
+            JSONObject ref=removed.getJSONObject(i);
+            // These are exact native Book removal rows, never a JSON authority input. Project
+            // skills are unsupported, so only retire their original Task context above; do not
+            // reinterpret their namespace as a private Skill cleanup or remint SourceRef keys.
+            if("owner".equals(scope.optString("ownerId"))&&"private".equals(scope.optString("spaceId"))&&"owner".equals(ref.optString("ownerId"))&&ref.optString("spaceId").matches("project:[a-f0-9-]{36}")){
+                JSONArray attached=ref.optJSONArray("sourceRefs");for(int j=0;attached!=null&&j<attached.length();j++){SourceRef source=SourceRef.fromJson(attached.getJSONObject(j));if(!"owner".equals(source.ownerId)||!"private".equals(source.spaceId)||source.workspace==null||!ref.getString("spaceId").equals("project:"+source.workspace.projectId))throw new SecurityException("项目退休行不是原同项目来源");}continue;
+            }
+            requireScope(scope,ref);
             JSONArray evidence=eraseSnapshots?ref.optJSONArray("sourceRefs"):null;
             int size=evidence==null?0:evidence.length();
             for(int offset=0;offset<Math.max(1,size);offset+=100){

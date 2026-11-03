@@ -104,6 +104,8 @@ public final class NativePluginHost implements AutoCloseable {
         for(ExecutablePluginCatalog.ApprovedSource source:executable.approvedSources(observation))refs.put(TaskExtensionSelection.reference(source).put("enabled",true).put("approved",true));
         observation.check();return refs;
     }
+    /** Original native catalog metadata, including inactive installs; never evaluates or approves source. */
+    public JSONObject extensionCatalogMetadata(RunControl observation)throws Exception {open();observation.check();JSONObject metadata=executable.snapshot();observation.check();return metadata;}
     public TaskSelection newTaskSelection(String taskId) {open();if(taskId==null||!taskId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("需要原任务身份");return new TaskSelection(taskId);}
     /** Native same-task page; JSON/model routes cannot manufacture a selection confirmation. */
     public final class TaskSelection implements AutoCloseable {

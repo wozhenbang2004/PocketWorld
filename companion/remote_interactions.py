@@ -236,6 +236,10 @@ class Progress:
             elif value is None or isinstance(value, (bool, int)):
                 row[key] = value
         key = kind + ":" + row["nativeType"] + ":" + row["itemId"]
+        if row.get("childSourceProtocol") == "claude_complete_child_v1":
+            # Same text/tool IDs in two original children are not the same observation.
+            # This is a read-only deduplication key, never a child session or permission.
+            key += ":" + fingerprint({k: row.get(k) for k in ("parentSessionId", "parentPromptRequestId", "parentToolUseId")})
         digest = fingerprint(row)
         if self.last.get(key) == digest:
             return

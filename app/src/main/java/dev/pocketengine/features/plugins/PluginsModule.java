@@ -21,6 +21,7 @@ public final class PluginsModule implements EngineModule {
     private final Map<String,Invocation> active=new LinkedHashMap<>();
     private final Map<String,McpPreview> mcpPreviews=new LinkedHashMap<>();
     private final Map<String,McpClient> mcpClients=new LinkedHashMap<>();
+    private final McpConfigImportAdapter configurationImports=new McpConfigImportAdapter();
     private static final long MCP_PREVIEW_TTL=10*60*1000L;
     private boolean closed;
     private dev.pocketengine.features.plugins.mcp.NativeMcpOAuthHost oauthHost;
@@ -46,7 +47,48 @@ public final class PluginsModule implements EngineModule {
     @Override public synchronized JSONObject snapshot()throws Exception {
         recoverMcpSecrets();pruneMcpPreviews();JSONArray all=list();for(int i=0;i<all.length();i++)all.put(i,publicPlugin(all.getJSONObject(i)));
         JSONArray pending=new JSONArray();for(Map.Entry<String,Invocation> entry:active.entrySet())pending.put(new JSONObject().put("operationId",entry.getKey()).put("pluginId",entry.getValue().pluginId).put("status",entry.getValue().control.isCancelled()?"stopping":"running"));
-        return new JSONObject().put("plugins",all).put("active",pending).put("execution","declarative_echo_https_or_mcp").put("mcpSupport",nativeMcpSupport()).put("arbitraryCode",false).put("commands",new JSONArray().put("discoverMcp").put("installMcp").put("discardMcpPreview").put("install").put("previewInstall").put("history").put("previewRollback").put("rollback").put("enable").put("grant").put("remove").put("invoke").put("validateArguments").put("cancel").put("registry"));
+        return new JSONObject().put("plugins",all).put("active",pending).put("execution","declarative_echo_https_or_mcp").put("mcpSupport",nativeMcpSupport()).put("nativeMcpConfigurationImport",new JSONObject().put("source","selected_saf_document").put("readOnly",true).put("maxBytes",McpConfigImportAdapter.MAX_BYTES).put("credentialsImported",false)).put("arbitraryCode",false).put("commands",new JSONArray().put("discoverMcp").put("installMcp").put("discardMcpPreview").put("install").put("previewInstall").put("history").put("previewRollback").put("rollback").put("enable").put("grant").put("remove").put("invoke").put("validateArguments").put("cancel").put("registry"));
+    }
+    /** Opaque native result, not reconstructible from feature/model JSON or an arbitrary URI string. */
+    public static final class SelectedMcpConfigurationDocument {
+        private final PluginsModule issuer;private final android.net.Uri uri;
+        private SelectedMcpConfigurationDocument(PluginsModule issuer,android.net.Uri uri){this.issuer=issuer;this.uri=uri;}
+    }
+    /** Original Activity result bridge only. Intent flags alone never create URI permission. */
+    public SelectedMcpConfigurationDocument selectedMcpConfigurationDocument(int resultCode,android.content.Intent nativeResult)throws Exception {
+        if(resultCode!=android.app.Activity.RESULT_OK||nativeResult==null||nativeResult.getData()==null||(nativeResult.getFlags()&android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)==0||nativeResult.getClipData()!=null&&nativeResult.getClipData().getItemCount()!=1)throw new McpConfigImportAdapter.Rejected("selected_document_required");
+        android.net.Uri uri=nativeResult.getData();McpConfigImportAdapter.Source.selectedSaf(uri.toString());checkMcpDocumentPermission(uri);return new SelectedMcpConfigurationDocument(this,uri);
+    }
+    private void checkMcpDocumentPermission(android.net.Uri uri){
+        if(context.android.checkUriPermission(uri,android.os.Process.myPid(),android.os.Process.myUid(),android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)!=android.content.pm.PackageManager.PERMISSION_GRANTED)throw new McpConfigImportAdapter.Rejected("selected_document_permission_required");
+    }
+    /** Native owner file-picker data path only; model/feature commands cannot open a configuration URI. */
+    public McpConfigImportAdapter.Preview previewMcpConfigurationImport(SelectedMcpConfigurationDocument selected,McpConfigImportAdapter.Format format,McpConfigImportAdapter.Preview previous,RunControl original)throws Exception {
+        if(selected==null||selected.issuer!=this||original==null)throw new McpConfigImportAdapter.Rejected("selected_document_required");android.net.Uri selectedDocument=selected.uri;
+        McpConfigImportAdapter.Source source=McpConfigImportAdapter.Source.selectedSaf(selectedDocument.toString());JSONArray installed=configurationImportReferences();original.check();checkMcpDocumentPermission(selectedDocument);
+        java.io.InputStream stream;
+        try{stream=context.android.getContentResolver().openInputStream(selectedDocument);}catch(Exception unavailable){throw new McpConfigImportAdapter.Rejected("selected_document_unavailable");}
+        if(stream==null)throw new McpConfigImportAdapter.Rejected("selected_document_unavailable");Runnable cancel=()->{try{stream.close();}catch(Exception ignored){}};original.onCancel(cancel);
+        boolean completed=false;
+        try{McpConfigImportAdapter.Preview result=configurationImports.inspect(source,format,stream,installed,previous,original);original.check();checkMcpDocumentPermission(selectedDocument);completed=true;return result;}
+        catch(java.io.IOException unavailable){original.check();throw new McpConfigImportAdapter.Rejected("selected_document_unavailable");}
+        finally{
+            boolean closeFailed=false;
+            try{stream.close();}catch(Exception unavailable){closeFailed=true;}finally{original.removeCancelAction(cancel);}
+            // Never attach provider diagnostics to a parser rejection, cancellation or interruption.
+            if(completed){original.check();if(closeFailed)throw new McpConfigImportAdapter.Rejected("selected_document_unavailable");}
+        }
+    }
+    /** Produces public discovery input only. No imported token, process, request, installation or grant. */
+    public synchronized JSONObject mcpConfigurationDiscoveryInput(McpConfigImportAdapter.Preview preview,int item,String acceptedDigest,String targetId,String displayName,String protocol)throws Exception {
+        if(closed)throw new IllegalStateException("原插件宿主已关闭");JSONObject result=configurationImports.discoveryInput(preview,item,acceptedDigest,targetId,displayName,protocol);
+        String actual="";long revision=-1;JSONArray installed=list();for(int i=0;i<installed.length();i++){JSONObject plugin=installed.getJSONObject(i);if(targetId.equals(plugin.getString("id"))){actual=installationId(plugin);revision=PluginRevisions.stateRevision(plugin);}}
+        if(!actual.equals(preview.expectedInstallation(targetId))||revision!=preview.expectedRevision(targetId))throw new McpConfigImportAdapter.Rejected("installation_changed_since_preview");return result;
+    }
+    private synchronized JSONArray configurationImportReferences()throws Exception {
+        if(closed)throw new IllegalStateException("原插件宿主已关闭");JSONArray references=new JSONArray(),installed=list();
+        for(int i=0;i<installed.length();i++){JSONObject plugin=installed.getJSONObject(i);references.put(new JSONObject().put("id",plugin.getString("id")).put("installationId",installationId(plugin)).put("stateRevision",PluginRevisions.stateRevision(plugin)).put("version",plugin.getJSONObject("manifest").getString("version")).put("enabled",plugin.optBoolean("enabled")).put("grantsDigest",PluginRules.grantsDigest(plugin.optJSONArray("grants"))));}
+        return references;
     }
     @Override public JSONObject handle(String command,JSONObject input)throws Exception {
         if(command.equals("invoke"))return invoke(input);
@@ -147,8 +189,24 @@ public final class PluginsModule implements EngineModule {
             JsonFiles.write(file,new JSONObject().put("plugins",all));cancelPlugin(id);return publicPlugin(plugin);
         }throw new IllegalArgumentException("原插件安装不存在");
     }
+    /** Native owner only. The private original ledger carrier, not caller JSON, proves discovery. */
+    public McpLocalInstallation.Review reviewLocalMcpInstallForOwner(TaskStore tasks,TaskStore.OwnerMcpDiscoveryCompleted completed,dev.pocketengine.features.local.LocalModule local,JSONArray selected,RunControl observation)throws Exception {
+        synchronized(this){if(closed)throw new IllegalStateException("原插件宿主已关闭");}return McpLocalInstallation.review(this,tasks,completed,local,selected,observation);
+    }
+    synchronized void requireLocalMcpInstallationTargetForOwner(JSONObject scope)throws Exception {
+        if(closed)throw new IllegalStateException("原插件宿主已关闭");JSONObject current=null;JSONArray all=list();for(int i=0;i<all.length();i++)if(scope.getString("pluginId").equals(all.getJSONObject(i).getString("id")))current=all.getJSONObject(i);
+        String expected=scope.getString("expectedInstallationId");if(current==null){if(!expected.isEmpty()||!scope.isNull("expectedStateRevision"))throw new SecurityException("原本机MCP目标安装已移除或变化");}
+        else if(!expected.equals(installationId(current))||scope.isNull("expectedStateRevision")||PluginRevisions.stateRevision(current)!=scope.getLong("expectedStateRevision"))throw new SecurityException("原本机MCP目标安装或启停/授权状态已变化，请重新发现");
+    }
+    public JSONObject installLocalMcpForOwner(McpLocalInstallation.Review review,String expectedDigest)throws Exception {
+        JSONObject approved=java.util.Objects.requireNonNull(review).consumeForHost(this,expectedDigest);
+        synchronized(this){recoverMcpSecrets();requireLocalMcpInstallationTargetForOwner(approved.getJSONObject("target"));return install(list(),approved.getJSONObject("input"),null,null,approved.getJSONObject("record"));}
+    }
     private JSONObject install(JSONArray all,JSONObject input,String restoredFrom)throws Exception {return install(all,input,restoredFrom,null);}
     private JSONObject install(JSONArray all,JSONObject input,String restoredFrom,dev.pocketengine.features.plugins.mcp.NativeMcpOAuthHost.Credential authorization)throws Exception {
+        return install(all,input,restoredFrom,authorization,null);
+    }
+    private JSONObject install(JSONArray all,JSONObject input,String restoredFrom,dev.pocketengine.features.plugins.mcp.NativeMcpOAuthHost.Credential authorization,JSONObject nativeLocalConfiguration)throws Exception {
         JSONObject manifest=PluginRules.manifest(input.getJSONObject("manifest"));String id=manifest.getString("id");JSONArray next=new JSONArray();JSONObject old=null;
         for(int i=0;i<all.length();i++){JSONObject previous=all.getJSONObject(i);if(id.equals(previous.getString("id")))old=previous;else next.put(previous);}
         PluginRevisions.checkExpected(old,input,false);
@@ -156,6 +214,7 @@ public final class PluginsModule implements EngineModule {
         String token=input.optString("token");if(token.length()>4096||token.contains("\r")||token.contains("\n"))throw new IllegalArgumentException("工具凭据格式无效");
         // Each installation owns a distinct credential slot. A failed manifest write cannot replace the old endpoint's token.
         JSONObject plugin=new JSONObject().put("id",id).put("manifest",manifest).put("installationId",UUID.randomUUID().toString()).put("stateRevision",0).put("enabled",false).put("grants",new JSONArray()).put("installedAt",System.currentTimeMillis());
+        if(nativeLocalConfiguration!=null){if(authorization!=null||!token.isEmpty())throw new SecurityException("本机MCP首版没有凭据通道");plugin.put("localMcp",JsonFiles.copy(nativeLocalConfiguration));}
         if(authorization!=null){JSONObject nativeIdentity=authorization.identity();JSONArray nativeTools=manifest.getJSONArray("tools");for(int n=0;n<nativeTools.length();n++){JSONObject tool=nativeTools.getJSONObject(n);if(!tool.optString("kind").equals("mcp")||!nativeIdentity.getString("resource").equals(tool.getString("endpoint"))||!nativeIdentity.getString("protocolVersion").equals(tool.getString("protocolVersion")))throw new SecurityException("原OAuth连接不属于此次工具安装的准确地址/协议");authorization.check(tool.getString("endpoint"));}plugin.put("mcpAuthorization",nativeIdentity);}
         plugin.put("history",PluginRevisions.archive(old,System.currentTimeMillis()));
         if(restoredFrom!=null)plugin.put("restoredFromInstallationId",restoredFrom);
@@ -198,6 +257,7 @@ public final class PluginsModule implements EngineModule {
                     throw new SecurityException("插件执行身份已变化或缺失，请重新取得当前工具清单并审批");
             }
             if(tool.getString("kind").equals("echo"))return new JSONObject().put("operationId",operationId).put("status","completed").put("ok",true).put("kind","echo").put("value",args).put("verified",true);
+            if("mcp".equals(tool.getString("kind"))&&"stdio".equals(tool.optString("transport")))throw new SecurityException("本机MCP已安装但原已审任务调用桥尚未可用；不会借HTTP或普通命令启动程序");
             if(active.size()>=2)throw new IllegalStateException("已有两个工具请求运行，请等待或停止后重试");
             String ref=plugin.optString("credentialRef");dev.pocketengine.features.plugins.mcp.NativeMcpOAuthHost.Credential authorization=plugin.optJSONObject("mcpAuthorization")==null?null:oauth().credential(plugin.getJSONObject("mcpAuthorization"));token=authorization!=null||ref.isEmpty()?"":context.secrets.get(ref);
             if("mcp".equals(tool.getString("kind"))){
@@ -329,9 +389,44 @@ public final class PluginsModule implements EngineModule {
         }
         throw new SecurityException("MCP技能来源安装已移除");
     }
+    /** Same exact native installation and source connection; liveness adds no install/grant authority. */
+    public JSONObject pingMcpInstallation(String id,String expectedInstallationId,long expectedStateRevision,RunControl original)throws Exception {
+        return pingMcpInstallation(id,expectedInstallationId,expectedStateRevision,original,UUID.randomUUID().toString());
+    }
+    /** The native caller chooses a known operation reference so the existing cancel route can stop I/O. */
+    public JSONObject pingMcpInstallation(String id,String expectedInstallationId,long expectedStateRevision,RunControl original,String operationId)throws Exception {
+        if(original==null||expectedStateRevision<0||operationId==null||!UUID.fromString(operationId).toString().equals(operationId))throw new IllegalArgumentException("MCP健康检查需要原控制、准确安装修订和原生操作身份");
+        original.check();try(McpSourceConnection source=openMcpSource(id,expectedInstallationId,expectedStateRevision,original,operationId)){
+            source.discover();original.check();synchronized(this){currentMcpSourceInstallation(source.binding);}
+            long identityObservedAt=System.currentTimeMillis();JSONObject result=source.client.ping(original);original.check();JSONObject installed;
+            synchronized(this){installed=currentMcpSourceInstallation(source.binding);}
+            return result.put("source",McpData.copy(source.binding)).put("operationId",operationId).put("identityVerification","fresh_discovery_before_ping").put("identityObservedAt",identityObservedAt)
+                .put("installationEnabled",installed.optBoolean("enabled")).put("installationChanged",false).put("toolGrantsChanged",false).put("installedOnly",true);
+        }
+    }
+    /** Native owner catalogue for an already reviewed installation; selecting metadata adds no grant. */
+    public JSONObject listMcpPrompts(String id,String expectedInstallationId,long expectedStateRevision,RunControl original,String operationId)throws Exception {
+        if(original==null||expectedStateRevision<0||operationId==null||!UUID.fromString(operationId).toString().equals(operationId))throw new IllegalArgumentException("MCP提示目录需要原控制、准确安装修订和原生操作身份");
+        original.check();try(McpSourceConnection source=openMcpSource(id,expectedInstallationId,expectedStateRevision,original,operationId)){
+            source.discover();JSONArray definitions=source.client.prompts(original);original.check();synchronized(this){currentMcpSourceInstallation(source.binding);}
+            return new JSONObject().put("source",McpData.copy(source.binding)).put("operationId",operationId).put("prompts",McpPromptData.catalogue(definitions)).put("untrustedReference",true).put("metadataOnly",true).put("toolGrantsChanged",false).put("automaticConversationInjection",false).put("authorityAdded",false);
+        }
+    }
+    /** Exact current declaration/arguments only. Returned user/assistant roles remain reference data. */
+    public JSONObject getMcpPrompt(String id,String expectedInstallationId,long expectedStateRevision,String name,String expectedDescriptorDigest,JSONObject arguments,RunControl original,String operationId)throws Exception {
+        if(original==null||expectedStateRevision<0||operationId==null||!UUID.fromString(operationId).toString().equals(operationId))throw new IllegalArgumentException("MCP提示读取需要原控制、准确安装修订和原生操作身份");
+        original.check();try(McpSourceConnection source=openMcpSource(id,expectedInstallationId,expectedStateRevision,original,operationId)){
+            source.discover();JSONObject result=source.client.prompt(name,expectedDescriptorDigest,arguments,original);original.check();synchronized(this){currentMcpSourceInstallation(source.binding);}
+            return result.put("source",McpData.copy(source.binding)).put("operationId",operationId).put("toolGrantsChanged",false).put("installedOnly",true);
+        }
+    }
     private synchronized McpSourceConnection openMcpSource(String id,String installation,long stateRevision,RunControl control)throws Exception {
+        return openMcpSource(id,installation,stateRevision,control,UUID.randomUUID().toString());
+    }
+    private synchronized McpSourceConnection openMcpSource(String id,String installation,long stateRevision,RunControl control,String operation)throws Exception {
         control.check();if(closed)throw new IllegalStateException("原MCP插件宿主已关闭");recoverMcpSecrets();
         if(active.size()>=2)throw new IllegalStateException("已有两个工具或来源请求运行，请等待或停止后重试");
+        if(active.containsKey(operation))throw new SecurityException("原MCP操作引用已在使用，不替换或接管现有调用");
         JSONArray all=list();for(int i=0;i<all.length();i++){
             JSONObject plugin=all.getJSONObject(i);if(!id.equals(plugin.getString("id")))continue;
             JSONArray tools=plugin.getJSONObject("manifest").getJSONArray("tools");if(tools.length()==0||!"mcp".equals(tools.getJSONObject(0).optString("kind")))throw new IllegalArgumentException("请选择原生登记的MCP安装");
@@ -341,7 +436,7 @@ public final class PluginsModule implements EngineModule {
             dev.pocketengine.features.plugins.mcp.NativeMcpOAuthHost.Credential authorization=plugin.optJSONObject("mcpAuthorization")==null?null:oauth().credential(plugin.getJSONObject("mcpAuthorization"));
             String ref=plugin.optString("credentialRef"),token=authorization!=null||ref.isEmpty()?"":context.secrets.get(ref);
             McpClient client=authorization==null?mcpFactory.create(tool.getString("endpoint"),token,tool.getString("protocolVersion"),ignored->{}):authorization.client(tool.getString("protocolVersion"),control);
-            String operation=UUID.randomUUID().toString();active.put(operation,new Invocation(id,control));return new McpSourceConnection(operation,binding,client,control);
+            active.put(operation,new Invocation(id,control));return new McpSourceConnection(operation,binding,client,control);
         }
         throw new IllegalArgumentException("MCP安装不存在");
     }
@@ -355,6 +450,16 @@ public final class PluginsModule implements EngineModule {
     private JSONObject discoverMcp(JSONObject input,dev.pocketengine.features.plugins.mcp.NativeMcpOAuthHost.Credential authorization)throws Exception {
         String id=input.getString("id").trim(),name=input.getString("name").trim(),endpoint=input.getString("endpoint").trim();
         String version=input.optString("protocolVersion",McpData.VERSION),token=input.optString("token");
+        boolean pinnedInstallation=input.has("expectedInstallationId"),pinnedState=input.has("expectedStateRevision");
+        if(pinnedInstallation!=pinnedState)throw new IllegalArgumentException("MCP发现需要完整的安装身份和状态版本");
+        String reviewedInstallation=null;long reviewedState=-1;
+        if(pinnedInstallation){
+            Object identity=input.get("expectedInstallationId"),revision=input.get("expectedStateRevision");
+            if(!(identity instanceof String)||!(revision instanceof Number))throw new IllegalArgumentException("MCP发现安装身份或状态版本无效");
+            reviewedInstallation=(String)identity;
+            try{reviewedState=new java.math.BigDecimal(revision.toString()).longValueExact();}catch(Exception invalid){throw new IllegalArgumentException("MCP发现安装身份或状态版本无效");}
+            if(reviewedState< -1)throw new IllegalArgumentException("MCP发现安装身份或状态版本无效");
+        }
         if(!id.matches("[a-zA-Z][a-zA-Z0-9_.-]{0,79}")||name.isEmpty()||name.length()>80)throw new IllegalArgumentException("插件ID或名称无效");
         PluginRules.validateEndpoint(endpoint);McpClient.validateToken(token);
         if(!token.isEmpty()&&(id.contains(token)||name.contains(token)||endpoint.contains(token)))throw new IllegalArgumentException("配置名称或地址不得包含凭据");
@@ -365,7 +470,8 @@ public final class PluginsModule implements EngineModule {
             if(closed)throw new IllegalStateException("插件执行器已关闭");recoverMcpSecrets();pruneMcpPreviews();
             if(active.size()>=2||mcpPreviews.size()+active.size()>=4)throw new IllegalStateException("请先结束请求或关闭旧的MCP导入预览");
             if(active.containsKey(operationId))throw new IllegalStateException("发现请求仍在运行");
-            JSONArray all=list();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))expected=installationId(all.getJSONObject(i));
+            long currentState=-1;JSONArray all=list();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id"))){expected=installationId(all.getJSONObject(i));currentState=PluginRevisions.stateRevision(all.getJSONObject(i));}
+            if(pinnedInstallation&&(!expected.equals(reviewedInstallation)||currentState!=reviewedState)){client.close();throw new IllegalStateException("插件安装或状态已变化，请刷新后重新审阅MCP配置");}
             if(!token.isEmpty()){
                 previewSlots.add(ref);persistPreviewSlots();
                 try{context.secrets.put(ref,token);}catch(Exception failure){
@@ -450,9 +556,11 @@ public final class PluginsModule implements EngineModule {
     private static Object arguments(JSONObject input)throws Exception{return input.has("arguments")?input.get("arguments"):new JSONObject();}
     private JSONObject publicPlugin(JSONObject plugin)throws Exception {
         JSONObject result=JsonFiles.copy(plugin);String ref=result.optString("credentialRef");result.remove("credentialRef");
+        JSONObject local=result.optJSONObject("localMcp");if(local!=null)local.remove("configuration"); // private exact argv stays in the original manifest store, not generic snapshots.
         JSONArray history=result.optJSONArray("history");result.remove("history");result.put("historyCount",history==null?0:Math.min(history.length(),PluginRevisions.HISTORY_LIMIT));
         JSONArray definitions=plugin.getJSONObject("manifest").getJSONArray("tools");
         for(int i=0;i<definitions.length();i++)if("mcp".equals(definitions.getJSONObject(i).optString("kind"))){
+            if("stdio".equals(definitions.getJSONObject(i).optString("transport"))){result.put("mcpStatus","local_task_invocation_unavailable").put("localProgramExecutionAvailable",false);break;}
             McpClient client=mcpClients.get(installationId(plugin));
             result.put("mcpStatus",client!=null?(client.usable()?"ready":"needs_discovery"):
                     (McpData.VERSION.equals(definitions.getJSONObject(i).optString("protocolVersion"))?"will_revalidate":"needs_discovery"));break;
@@ -472,6 +580,9 @@ public final class PluginsModule implements EngineModule {
                 if(granted!=null)for(int g=0;g<granted.length();g++)if(("tool:"+name).equals(granted.optString(g)))allowed=true;
                 if(!allowed)continue;
                 if("mcp".equals(tool.optString("kind"))){
+                    // Installation is not execution support. Only the later original-task typed
+                    // runtime bridge may publish a stdio route; never fall through to HTTP.
+                    if("stdio".equals(tool.optString("transport")))continue;
                     McpClient client=mcpClients.get(installationId(plugin));
                     if(client!=null&&!client.usable()&&!client.needsDiscovery())continue;
                     if(client==null&&McpData.LEGACY.equals(tool.optString("protocolVersion")))continue;

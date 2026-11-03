@@ -24,6 +24,11 @@ public final class RemoteTaskRequestTest {
         assertThrows(SecurityException.class,()->RemoteTaskRequest.first(coding().put("worker","claude").put("readOnly",true)));
         assertFalse(RemoteTaskRequest.first(coding().put("worker","claude")).getBoolean("readOnly"));
     }
+    @Test public void piOnlyAcceptsTheOriginalPrivateNoToolsRequestAndNeverClaimsOsSandbox()throws Exception {
+        JSONObject value=RemoteTaskRequest.first(coding().put("worker","pi").put("model","fixture/model-a"));assertEquals("pi",value.getString("worker"));assertFalse(value.getBoolean("readOnly"));assertEquals("fixture/model-a",value.getString("model"));
+        assertThrows(SecurityException.class,()->RemoteTaskRequest.first(coding().put("worker","pi").put("readOnly",true)));assertThrows(IllegalArgumentException.class,()->RemoteTaskRequest.first(coding().put("worker","pi").put("argv",new JSONArray().put("pi").put("--tools").put("bash"))));
+        assertThrows(SecurityException.class,()->RemoteTaskRequest.first(coding().put("worker","pi").put("sessionFile","/private/unreviewed.jsonl")));
+    }
     @Test public void duplicateOrUnavailableNativeEnvironmentIsNeverGuessed()throws Exception {
         JSONObject env=new JSONObject().put("id","project").put("workers",new JSONArray().put(new JSONObject().put("id","codex_app_server").put("available",true)));
         assertEquals("project",RemoteTaskRequest.environment(new JSONObject().put("environments",new JSONArray().put(env)),"project","codex_app_server").getString("id"));

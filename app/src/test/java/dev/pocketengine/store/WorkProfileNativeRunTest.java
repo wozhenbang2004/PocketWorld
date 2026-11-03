@@ -33,11 +33,11 @@ public final class WorkProfileNativeRunTest {
     private JSONObject definition;
     private Sources sources;
     private final class Sources implements WorkProfileResolver.Sources {
-        boolean active = true;
+        boolean active = true, pauseDuringCheck;
         public ModelConfig model(ModelTargetRef r, String p, RunControl c) { throw new AssertionError("No model selected"); }
         public void checkModel(ModelConfig m, String p, RunControl c) { throw new AssertionError(); }
         public JSONObject skill(String id, RunControl c) throws Exception {
-            assertFalse("TaskStore cannot enter source/module locks while holding its monitor", Thread.holdsLock(tasks));
+            assertFalse("TaskStore cannot enter source/module locks while holding its monitor", Thread.holdsLock(tasks)); if(pauseDuringCheck){c.pause();c.resume();}
             return new JSONObject().put("id", "skill-a").put("revision", 1).put("digest", "a".repeat(64)).put("executionGeneration", 1).put("expiresAt", JSONObject.NULL).put("requiredCapabilities", new JSONArray()).put("contentVerified", true).put("active", active).put("status", active ? "active" : "inactive");
         }
         public JSONObject plugin(String id, RunControl c) { throw new AssertionError(); }
@@ -104,4 +104,33 @@ public final class WorkProfileNativeRunTest {
         assertTrue(original.isCancelled()); try (var count = db().rawQuery("SELECT COUNT(*) FROM runs WHERE task_id=?", new String[]{created.getString("id")})) { assertTrue(count.moveToFirst()); assertEquals(0, count.getInt(0)); }
         db().execSQL("DROP TRIGGER reject_profile_run"); assertThrows(SecurityException.class, () -> start(created, original, selected));
     }
+    @Test public void pauseResumeDuringSourceLookupInvalidatesAdmissionBeforeTheSqlRunExists() throws Exception {
+        RunControl original = new RunControl(); var selected = selection(original); JSONObject created = task(); sources.pauseDuringCheck = true;
+        assertThrows(SecurityException.class, () -> start(created, original, selected));
+        try (var count = db().rawQuery("SELECT COUNT(*) FROM runs WHERE task_id=?", new String[]{created.getString("id")})) { assertTrue(count.moveToFirst()); assertEquals(0, count.getInt(0)); }
+    }
+    @Test public void profileTaskNeverInheritsEnabledJsAndManualSelectionDriftInvalidatesItsRun() throws Exception {
+        RunControl original = new RunControl(); JSONObject run = start(task(), original, selection(original)); String id=run.getString("id"),runId=run.getString("runId");int epoch=run.getInt("coordinatorEpoch");
+        JSONObject selected=tasks.extensionSelectionTarget(id).getJSONObject("selection");assertEquals("explicit",selected.getString("mode"));assertEquals(0,selected.getJSONArray("programs").length());
+        JSONObject before=tasks.get(id,false);before.getJSONObject("extensionSelection").put("revision",selected.getLong("revision")+1);android.content.ContentValues changed=new android.content.ContentValues();changed.put("document",before.toString());db().update("tasks",changed,"task_id=?",new String[]{id});
+        String digest=tasks.workProfileRunSnapshot(id,runId,epoch).getString("resolutionDigest");assertThrows(SecurityException.class,()->tasks.checkWorkProfileRun(id,runId,epoch,digest,original));
+    }
+
+    @Test public void pendingGoalCannotContinueWithDefaultsAndCanBeExplicitlyReviewedWithoutItsReusableDefinition()throws Exception {
+        RunControl original=new RunControl();var selected=selection(original);JSONObject created=tasks.createCapabilityTaskWithWorkProfile("Original pending goal","",selected,original);String id=created.getString("id");
+        assertEquals("",created.optString("runId"));assertEquals(0,tasks.get(id,false).getJSONArray("operations").length());assertFalse(tasks.pendingWorkProfileTaskSnapshot(id).getBoolean("executionAuthorized"));assertThrows(SecurityException.class,()->tasks.startAttempt(id,"capabilities",4));settings.removeWorkProfile(definition.getString("profileId"),1);
+        var review=page.reviewForTask(tasks,id,"",created.optInt("coordinatorEpoch"),new RunControl());RunControl next=new RunControl();var recovered=page.select(review,review.digest,next);tasks.requireWorkProfileTaskSelection(id,recovered);tasks.initializeExecutionScope(id,4);JSONObject run=start(created,next,recovered);assertFalse(run.has("workProfileIntent"));assertEquals(1,tasks.workProfileRunSnapshot(id,run.getString("runId"),run.getInt("coordinatorEpoch")).getInt("profileRevision"));
+    }
+    @Test public void oneSelectionCannotCreateTwoPendingGoalsOrSwitchItsGoalAtAdmission()throws Exception {
+        RunControl original=new RunControl();var selected=selection(original);JSONObject created=tasks.createCapabilityTaskWithWorkProfile("First pending goal","",selected,original);int count=tasks.list().length();assertThrows(SecurityException.class,()->tasks.createCapabilityTaskWithWorkProfile("Second must roll back","",selected,original));assertEquals(count,tasks.list().length());
+        JSONObject other=task();assertThrows(SecurityException.class,()->start(other,original,selected));assertEquals("",tasks.get(created.getString("id"),false).optString("runId"));assertEquals("",tasks.get(other.getString("id"),false).optString("runId"));
+    }
+    @Test public void reusableGlobalReviewCannotOverwriteAnExistingOriginalProfileRun()throws Exception {
+        RunControl first=new RunControl();JSONObject run=start(task(),first,selection(first));String id=run.getString("id"),old=run.getString("runId");tasks.endAttempt(id,old,"paused","Original pause",new JSONObject());RunControl next=new RunControl();var global=selection(next);assertThrows(SecurityException.class,()->start(run,next,global));assertEquals(old,tasks.get(id,false).getString("runId"));assertTrue(next.isCancelled());
+    }
+
+    @Test public void originalFrozenSqlCanRebuildOnlyTheToolFilterWithoutRecapturingModels()throws Exception {
+        RunControl original=new RunControl();JSONObject run=start(task(),original,selection(original));String id=run.getString("id"),runId=run.getString("runId");int epoch=run.getInt("coordinatorEpoch");var policy=host.toolSelectionForRun(tasks,id,runId,epoch,original);policy.checkCurrent();sources.active=false;assertThrows(SecurityException.class,policy::checkCurrent);assertEquals(runId,tasks.get(id,false).getString("runId"));assertFalse(tasks.workProfileRunSnapshot(id,runId,epoch).getBoolean("executionAuthorized"));
+    }
+
 }

@@ -49,6 +49,33 @@ public final class NativeModelGroupJourneyTest {
     private JSONObject input(String path,String model,String key)throws Exception{return new JSONObject().put("baseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/"+path+"/v1").put("provider","openai_chat").put("model",model).put("apiKey",key).put("sendScreenshots",false);}
     private void start()throws Exception{task=tasks.startAttempt(tasks.createCapabilityTask("original native group request","conversation").getString("id"),"capabilities",12);original=new RunControl();original.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));journal=tasks.journal(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),original);}
     private SQLiteDatabase db()throws Exception{var f=TaskStore.class.getDeclaredField("db");f.setAccessible(true);return (SQLiteDatabase)f.get(tasks);}
+    // Pinned current TaskStore.Database v9: v6 logical inference, v7 gateway, v8 devices, v9 conversation organization.
+    // Do not infer the expected version from the DB under test: a skipped migration must fail here.
+    private static final List<String> AFTER_VERSION_FIVE_TABLES=List.of(
+        "inference_requests","harness_gateway_leases","harness_gateway_claims",
+        "device_peers","device_grants","device_pairing_invites","device_revocation_acks",
+        "device_outgoing_grants","device_identity_rotations","device_pairing_candidates",
+        "device_inbound","device_child_budget","device_child_links");
+    private static final List<String> VERSION_NINE_COLUMNS=List.of(
+        "organization_revision","pin_order","archived_at","manual_unread","read_watermark","group_id");
+    private static void removeVersionNineFixtureSchema(SQLiteDatabase old){
+        old.execSQL("DROP INDEX IF EXISTS assistant_conversations_organized");
+        old.execSQL("DROP TABLE IF EXISTS assistant_conversation_groups");
+        Set<String> present=new HashSet<>();try(var rows=old.rawQuery("PRAGMA table_info(assistant_conversations)",null)){while(rows.moveToNext())present.add(rows.getString(1));}
+        for(String column:VERSION_NINE_COLUMNS)if(present.contains(column))old.execSQL("ALTER TABLE assistant_conversations DROP COLUMN "+column);
+    }
+    private void assertVersionNineSchema()throws Exception {
+        assertEquals(9,db().getVersion());
+        for(String table:AFTER_VERSION_FIVE_TABLES)try(var row=db().rawQuery("SELECT sql FROM sqlite_master WHERE type='table' AND name=?",new String[]{table})){
+            assertTrue("Required v6-v8 table missing after original migration: "+table,row.moveToFirst());
+            assertFalse("Migrated table must have a concrete schema: "+table,row.getString(0).isBlank());
+        }
+        Set<String> columns=new HashSet<>();try(var rows=db().rawQuery("PRAGMA table_info(assistant_conversations)",null)){while(rows.moveToNext())columns.add(rows.getString(1));}
+        assertTrue("All v9 original conversation organization fields must be migrated",columns.containsAll(VERSION_NINE_COLUMNS));
+        List<String> index=new ArrayList<>();try(var rows=db().rawQuery("PRAGMA index_info(assistant_conversations_organized)",null)){while(rows.moveToNext())index.add(rows.getString(2));}
+        assertEquals(List.of("generation","deleted","archived_at","group_id","pin_order","updated_at","conversation_id"),index);
+        try(var row=db().rawQuery("SELECT sql FROM sqlite_master WHERE type='table' AND name='assistant_conversation_groups'",null)){assertTrue("Original v9 conversation groups table must exist",row.moveToFirst());}
+    }
     @After public void close()throws Exception{if(original!=null)original.cancel();if(server!=null)server.stop(0);if(tasks!=null)db().close();}
     private JSONArray messages()throws Exception{return new JSONArray().put(new JSONObject().put("role","user").put("content","Original native request"));}
     private JSONObject group(int attempts,int switches)throws Exception {
@@ -113,7 +140,9 @@ public final class NativeModelGroupJourneyTest {
         tasks.event(task.getString("id"),new JSONObject().put("type","fixture_original_event").put("message","preserved v5 evidence"));
         String operation=UUID.randomUUID().toString();ContentValues pending=new ContentValues();pending.put("operation_id",operation);pending.put("task_id",task.getString("id"));pending.put("run_id",task.getString("runId"));pending.put("tool","fixture_unknown_effect");pending.put("arguments","{}");pending.put("state","unknown");pending.put("created_at",System.currentTimeMillis());db().insertOrThrow("operations",null,pending);
         RunControl realtimeControl=new RunControl();TaskStore.NativeInferenceSession realtime=tasks.beginNativeInference(TaskStore.NativeInferenceKind.REALTIME,"migration-fixture",realtimeControl);InferenceCapture capture=InferenceCapture.realtime(settings.get(),1,realtimeControl,realtime.target());capture.observedServerResponse("response_fixture");capture.finish(InferenceReceipt.Outcome.COMPLETED);realtime.finish("completed");String realtimeId=realtime.taskId,receiptBefore=tasks.inferenceUsage(realtimeId).getJSONArray("receipts").toString();
-        db().execSQL("DROP TABLE inference_requests");db().setVersion(5);db().close();tasks=new TaskStore(app);assertEquals(6,db().getVersion());assertTrue(tasks.hasUnresolved(task.getString("id")));assertTrue(tasks.get(task.getString("id"),false).getJSONArray("events").toString().contains("preserved v5 evidence"));assertEquals(receiptBefore,tasks.inferenceUsage(realtimeId).getJSONArray("receipts").toString());assertEquals(0,aPosts.get());assertEquals(0,bPosts.get());
+        // A genuine v5 fixture cannot retain tables/fields introduced by the later v6-v9 migrations.
+        for(String table:AFTER_VERSION_FIVE_TABLES)db().execSQL("DROP TABLE "+table);removeVersionNineFixtureSchema(db());
+        db().setVersion(5);db().close();tasks=new TaskStore(app);assertVersionNineSchema();assertTrue(tasks.hasUnresolved(task.getString("id")));assertTrue(tasks.get(task.getString("id"),false).getJSONArray("events").toString().contains("preserved v5 evidence"));assertEquals(receiptBefore,tasks.inferenceUsage(realtimeId).getJSONArray("receipts").toString());assertEquals(0,aPosts.get());assertEquals(0,bPosts.get());
     }
     @Test public void processLossLeavesOriginalLogicalAttemptUnknownAndNeverResubmits()throws Exception {
         ModelConfig selected=select(group(1,0));InferenceCapture.Target target=journal.inferenceTarget(InferenceReceipt.Purpose.MAIN,"");String id=UUID.randomUUID().toString();JSONObject plan=selected.routePlan.toJson();target.logical.begin(id,"a".repeat(64),plan,System.currentTimeMillis()+30_000);String call=UUID.randomUUID().toString();target.logical.reserve(id,call,1,"first","initial_ordered_candidate");db().close();tasks=new TaskStore(app);JSONObject recovered=tasks.inferenceUsage(task.getString("id")).getJSONArray("logicalRequests").getJSONObject(0);assertEquals(id,recovered.getString("logicalRequestId"));assertEquals("UNKNOWN",recovered.getString("state"));assertEquals("unknown",recovered.getJSONObject("control").getString("completionOutcome"));assertEquals(0,aPosts.get());assertEquals(0,bPosts.get());assertEquals(call,recovered.getJSONObject("control").getJSONArray("attempts").getJSONObject(0).getString("callId"));
@@ -168,12 +197,12 @@ public final class NativeModelGroupJourneyTest {
                 old.execSQL("CREATE TABLE runs(run_id TEXT PRIMARY KEY,task_id TEXT NOT NULL,epoch INTEGER NOT NULL,status TEXT NOT NULL,checkpoint TEXT NOT NULL,grant_json TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(task_id,epoch))");old.execSQL("CREATE TABLE leases(resource_id TEXT PRIMARY KEY,run_id TEXT NOT NULL,epoch INTEGER NOT NULL,expires_at INTEGER NOT NULL)");
                 JSONObject document=new JSONObject().put("id",id).put("kind","assistant").put("status","reconciling").put("goal","legacy original task").put("actorId","owner").put("spaceId","private").put("events",new JSONArray().put(new JSONObject().put("type","legacy_original").put("seq",42).put("message","keep original 🧭 v"+version)));
                 ContentValues row=new ContentValues();row.put("task_id",id);row.put("document",document.toString());row.put("updated_at",42);old.insertOrThrow("tasks",null,row);old.execSQL("INSERT INTO operations(operation_id,task_id,run_id,tool,arguments,state,created_at) VALUES(?,?,?,?,?,?,?)",new Object[]{operation,id,run,"unknown_original_effect","{}","unknown",42});
-                if(version>=2)dev.pocketengine.features.assistant.ConversationRepository.createSchema(old);
+                if(version>=2){dev.pocketengine.features.assistant.ConversationRepository.createSchema(old);removeVersionNineFixtureSchema(old);}
                 if(version>=3){TaskAuditStore.createSchema(old);TaskAuditStore.migrateLegacy(old);}
                 if(version>=4){dev.pocketengine.features.local.project.ProjectPlanRecords.createSchema(old);var schema=TaskStore.class.getDeclaredMethod("createTeamParentSchema",SQLiteDatabase.class);schema.setAccessible(true);schema.invoke(null,old);}
                 old.setVersion(version);
             }
-            tasks=new TaskStore(app);assertEquals(6,db().getVersion());assertTrue(tasks.hasUnresolved(id));JSONObject restored=tasks.get(id,false);assertEquals("keep original 🧭 v"+version,restored.getJSONArray("events").getJSONObject(0).getString("message"));assertEquals(42,restored.getJSONArray("events").getJSONObject(0).getLong("seq"));assertEquals(operation,restored.getJSONArray("operations").getJSONObject(0).getString("operationId"));assertEquals(0,tasks.inferenceUsage(id).getJSONArray("logicalRequests").length());
+            tasks=new TaskStore(app);assertVersionNineSchema();assertTrue(tasks.hasUnresolved(id));JSONObject restored=tasks.get(id,false);assertEquals("keep original 🧭 v"+version,restored.getJSONArray("events").getJSONObject(0).getString("message"));assertEquals(42,restored.getJSONArray("events").getJSONObject(0).getLong("seq"));assertEquals(operation,restored.getJSONArray("operations").getJSONObject(0).getString("operationId"));assertEquals(0,tasks.inferenceUsage(id).getJSONArray("logicalRequests").length());
         }
         assertEquals(0,aPosts.get());assertEquals(0,bPosts.get());
     }

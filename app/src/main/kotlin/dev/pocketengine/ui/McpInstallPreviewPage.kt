@@ -186,6 +186,13 @@ internal fun McpInstallPreviewPage(
     runOAuthWork: ((Runnable) -> Unit)? = null,
     runOAuthControl: ((Runnable) -> Unit)? = null
 ) {
+    var localDiscoveryOpen by remember { mutableStateOf(false) }
+    if (localDiscoveryOpen) {
+        // Leave the original owner domain too: its epoch invalidates an in-flight prepare,
+        // so a review arriving after this page closes is discarded by the Controller.
+        McpLocalDiscoveryPage(snapshot, responses, pendingCommands, loading, error, onRequest, onBack)
+        return
+    }
     var authorization by remember { mutableStateOf<JSONObject?>(null) }
     var id by remember(requiredPluginId) { mutableStateOf(requiredPluginId.orEmpty()) }
     var name by remember { mutableStateOf("") }
@@ -310,6 +317,7 @@ internal fun McpInstallPreviewPage(
                 Text(if (current != null) "核对工具，再安装" else if (installed != null) "安装结果" else if (requiredPluginId != null && targetHasTool) "准备这项任务的工具" else "连接你信任的工具服务", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Ink)
                 if (requiredPluginId != null) McpInstallCaption("来自原任务的能力准备：$requiredPluginId · ${requiredTool.orEmpty()}。这里只显示这个服务和所需工具；已有安装可直接核对授权。")
                 McpInstallCaption("发现只读取服务声明，不调用工具。安装后默认停用且不授予任何工具权限。")
+                if (requiredPluginId == null && snapshot.optJSONObject("nativeCapabilities")?.opt("localMcpDiscoveryOwnerOnly") == true) TextButton(onClick = { localDiscoveryOpen = true }, enabled = !busy && !loading) { Text("本机程序发现（先审阅，仅元数据）") }
                 if (loading) { LinearProgressIndicator(Modifier.fillMaxWidth()); McpInstallCaption("正在读取当前安装状态…") }
                 error?.let { Text(it, color = Danger, fontSize = 13.sp, lineHeight = 22.sp) }
                 localError?.let { Text(it, color = Danger, fontSize = 13.sp, lineHeight = 22.sp) }
@@ -456,7 +464,7 @@ internal fun McpInstallPreviewPage(
     if (exitConfirm) AlertDialog(onDismissRequest = { exitConfirm = false }, containerColor = Color.White, title = { Text("返回插件管理？") }, text = { Text("已提交的安装或启停请求不会因返回而撤销。请在插件管理中核对实际结果，避免重复安装。") }, confirmButton = { TextButton(onClick = { exitConfirm = false; leave() }) { Text("返回并稍后核对") } }, dismissButton = { TextButton(onClick = { exitConfirm = false }) { Text("继续等待") } })
 }
 
-@Composable private fun McpInstallCaption(text: String) { Text(text, color = SecondaryInk, fontSize = 13.sp, lineHeight = 22.sp) }
+@Composable internal fun McpInstallCaption(text: String) { Text(text, color = SecondaryInk, fontSize = 13.sp, lineHeight = 22.sp) }
 @Composable private fun McpInstallTool(tool: JSONObject, selected: Boolean, enabled: Boolean, onToggle: () -> Unit) {
     var expanded by remember(tool.toString()) { mutableStateOf(false) }
     val supported = tool.optBoolean("supported")

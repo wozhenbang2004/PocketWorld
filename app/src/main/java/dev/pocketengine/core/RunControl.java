@@ -31,6 +31,13 @@ public final class RunControl {
     private final CopyOnWriteArrayList<AuthorityCheck> retainedAuthorityChecks=new CopyOnWriteArrayList<>();
     private volatile String boundTask;
     private volatile HostRun hostRun;
+    // Native frozen request only. No setting here can enlarge a grant, budget or host limit.
+    private final java.util.concurrent.atomic.AtomicInteger modelConcurrencyLimit=new java.util.concurrent.atomic.AtomicInteger(Integer.MAX_VALUE);
+    public int modelConcurrencyLimit(){return modelConcurrencyLimit.get();}
+    public void restrictModelConcurrency(int requested)throws InterruptedException {
+        if(requested<1||requested>2)throw new IllegalArgumentException("Invalid profile model concurrency");check();
+        synchronized(this){if(hostRun!=null||cancelled.get()||paused)throw new SecurityException("Model resource preference must precede the original run admission");modelConcurrencyLimit.accumulateAndGet(requested,Math::min);}
+    }
     /** Native only. A retained live check, never a model-supplied grant or a cached boolean. */
     public void setAuthorityCheck(AuthorityCheck check){authorityCheck=java.util.Objects.requireNonNull(check);}
     /** Native invocation scope adds live authority without replacing the original source's check. */

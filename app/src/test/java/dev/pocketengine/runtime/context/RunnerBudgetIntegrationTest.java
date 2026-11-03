@@ -1,7 +1,6 @@
 package dev.pocketengine.runtime.context;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.PhonePort;
@@ -13,7 +12,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -126,8 +124,17 @@ public final class RunnerBudgetIntegrationTest {
             ModelConfig config=config(wire,4);
             RunOutcome result=new AgentRunner(null,new TestPort(true,effects),known(config,10000)).run("bad-stream","不要猜测执行",config,new RunControl(),events::add,journal);
             assertEquals("failed",result.status);assertEquals(0,effects.get());assertEquals(0,journal.begins.get());assertEquals(1,wire.requests.size());
-            assertTrue(events.stream().anyMatch(e->isDraftDiscard(e,"failed")));
-            assertFalse(journal.saved.toString().contains("partial"));
+            assertEquals(0,journal.finishes.get());
+            // Current presentation contract preserves an interrupted visible prefix as explicitly
+            // provisional audit, not a canonical answer. Cancellation still clears its exact draft.
+            JSONObject failed=null,interrupted=null;String requestId="";
+            for(JSONObject event:events){JSONObject stream=event.optJSONObject("stream");
+                if(stream!=null){assertFalse(stream.getBoolean("taskCompleted"));if("started".equals(stream.optString("kind")))requestId=stream.getString("requestId");if("failed".equals(stream.optString("kind"))){assertNull(failed);failed=stream;}assertNotEquals("completed",stream.optString("kind"));}
+                if("model_attempt_interrupted".equals(event.optString("type"))){assertNull(interrupted);interrupted=event.getJSONObject("receipt");}
+            }
+            assertFalse(requestId.isEmpty());assertNotNull(failed);assertEquals(requestId,failed.getString("requestId"));assertFalse(failed.getBoolean("discardDraft"));assertEquals("stream_failed",failed.getString("code"));
+            assertNotNull(interrupted);assertEquals(requestId,interrupted.getString("callId"));assertTrue(interrupted.getBoolean("provisional"));assertFalse(interrupted.getBoolean("attemptCompleted"));assertEquals(0,interrupted.getInt("offset"));assertEquals("临时文字",interrupted.getString("text"));assertEquals(32768,interrupted.getInt("displayPrefixLimit"));
+            assertFalse(journal.saved.toString().contains("partial"));assertFalse(journal.saved.toString().contains("临时文字"));assertPaired(journal.saved.getJSONArray("messages"));
         }
     }
 
@@ -163,21 +170,36 @@ public final class RunnerBudgetIntegrationTest {
                 .put(new JSONObject().put("role","assistant").put("tool_calls",new JSONArray().put(function("old-read","effect_fixture","{}"))));
         journal.saved=new JSONObject().put("messages",restored).put("steps",1);
         journal.feedback="之前动作已核对，不要重发";
-        journal.actualReceipts.put(new JSONObject().put("operationId","prior-operation").put("outcome","occurred").put("source","owner_reconciliation"));
+        // Actual TaskStore operation shape: owner reconciliation is in the original resolved
+        // operation's receipt, not a top-level marker or an invented successful native receipt.
+        journal.actualReceipts.put(new JSONObject().put("operationId","prior-operation").put("runId","original-run").put("tool","effect_fixture").put("state","resolved")
+                .put("arguments",new JSONObject().put("scope","PRIVATE ORIGINAL SCOPE"))
+                .put("receipt",new JSONObject().put("outcome","occurred").put("source","owner_reconciliation").put("at",123456L)));
+        String originalAudit=journal.actualReceipts.toString();
         AtomicInteger effects=new AtomicInteger();
         try(Wire wire=new Wire((request,n)->json(answer("核对当前结果")))) {
             ModelConfig config=config(wire,4);
             RunOutcome result=new AgentRunner(null,new TestPort(true,effects),known(config,10000)).run("restored-budget","原目标",config,new RunControl(),e->{},journal);
             assertEquals("needs_confirmation",result.status);assertEquals(0,effects.get());assertEquals(0,journal.begins.get());
-            String history=wire.requests.get(0).getJSONArray("messages").toString();
-            assertTrue(history.contains("not_replayed"));assertTrue(history.contains("owner_reconciliation"));assertTrue(history.contains("不要重发"));
-            assertPaired(wire.requests.get(0).getJSONArray("messages"));
+            assertEquals(1,wire.requests.size());assertEquals(0,journal.finishes.get());JSONArray messages=wire.requests.get(0).getJSONArray("messages");String history=messages.toString();
+            assertTrue(history.contains("not_replayed"));assertTrue(history.contains("不要重发"));assertFalse(history.contains("PRIVATE ORIGINAL SCOPE"));
+            JSONObject facts=recoveryFacts(messages),record=facts.getJSONArray("records").getJSONObject(0),receipt=record.getJSONObject("receiptFacts");
+            assertFalse(facts.getBoolean("executionAuthorized"));assertFalse(facts.getBoolean("automaticReplay"));assertFalse(facts.getBoolean("argumentsIncluded"));assertFalse(facts.getBoolean("receiptBodyIncluded"));
+            assertEquals(1,facts.getInt("shownRows"));assertEquals("prior-operation",record.getString("operationId"));assertEquals("original-run",record.getString("runId"));assertEquals("effect_fixture",record.getString("tool"));assertEquals("resolved",record.getString("state"));
+            assertEquals("occurred",receipt.getString("ownerReconciliation"));assertFalse(receipt.getBoolean("independentlyVerified"));assertFalse(receipt.has("accepted"));assertFalse(receipt.has("source"));assertFalse(receipt.has("at"));
+            assertFalse(journal.saved.toString().contains("<native_recovery_facts>"));assertFalse(journal.saved.toString().contains("PRIVATE ORIGINAL SCOPE"));assertEquals(originalAudit,journal.actualReceipts.toString());
+            assertPaired(messages);assertPaired(journal.saved.getJSONArray("messages"));
         }
     }
 
     private static boolean isDraftDiscard(JSONObject event,String kind) {
         JSONObject stream=event.optJSONObject("stream");return event.optString("type").equals("model_stream")&&stream!=null
                 &&stream.optString("kind").equals(kind)&&stream.optBoolean("discardDraft")&&!stream.optBoolean("taskCompleted");
+    }
+    private static JSONObject recoveryFacts(JSONArray messages)throws Exception {
+        String open="<native_recovery_facts>\n",close="\n</native_recovery_facts>";JSONObject found=null;
+        for(int i=0;i<messages.length();i++){JSONObject row=messages.getJSONObject(i);String content=row.optString("content");int start=content.indexOf(open);if(start>=0){assertNull("one request-only recovery frame",found);assertEquals("user",row.getString("role"));assertFalse(row.has("ownerMessageId"));assertFalse(row.has("hostObservation"));found=new JSONObject(content.substring(start+open.length(),content.indexOf(close,start)));}}
+        assertNotNull("actual provider request recovery projection",found);return found;
     }
     private static ModelConfig config(Wire wire,int steps){return new ModelConfig(wire.url(),"fixture-secret","fixture-model",false,steps,10,"openai_chat",1000);}
     private static ContextBudgetPolicy.Source known(ModelConfig config,long byteCeiling) {
@@ -243,7 +265,7 @@ public final class RunnerBudgetIntegrationTest {
             server.createContext("/v1/chat/completions",exchange->{try {
                 JSONObject request=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));requests.add(request);
                 Response response=reply.answer(request,requests.size());byte[] bytes=response.body.getBytes(StandardCharsets.UTF_8);
-                exchange.getResponseHeaders().set("Content-Type",response.contentType);exchange.sendResponseHeaders(200,bytes.length);
+                exchange.getResponseHeaders().add("Content-Type",response.contentType);exchange.sendResponseHeaders(200,bytes.length);
                 exchange.getResponseBody().write(bytes);
             }catch(Exception failure){try{exchange.sendResponseHeaders(500,-1);}catch(Exception ignored){} }
             finally{exchange.close();}});server.start();

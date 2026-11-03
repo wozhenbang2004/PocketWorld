@@ -1,0 +1,38 @@
+package dev.pocketengine.features.plugins.mcp;
+
+import static org.junit.Assert.*;
+import android.app.Application;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Random;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
+
+/** Actual strict Android JSON parsing over arbitrarily split wire bytes; no process/server claimed. */
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk=35,manifest=Config.NONE,application=Application.class)
+public final class McpStdioFramesTest {
+    private static JSONObject request()throws Exception{return new JSONObject().put("jsonrpc","2.0").put("id","original").put("method","tools/call").put("params",new JSONObject().put("name","probe").put("arguments",new JSONObject().put("text","中文🙂\nnext")));}
+    private static byte[] wire(String value){return value.getBytes(StandardCharsets.UTF_8);}
+    private static void refuse(byte[] bytes)throws Exception{McpStdioFrames.Decoder decoder=new McpStdioFrames.Decoder();assertThrows(Exception.class,()->decoder.acceptStdout(bytes,0,bytes.length,value->fail("invalid stdout reached protocol sink")));byte[] valid=McpStdioFrames.encode(request());assertThrows(McpStdioFrames.FrameException.class,()->decoder.acceptStdout(valid,0,valid.length,value->fail("poisoned stream resumed")));}
+    @Test public void outboundIsOneUtf8JsonObjectAndOneLfWithEscapedContentNewlines()throws Exception{byte[] bytes=McpStdioFrames.encode(request());assertEquals('\n',bytes[bytes.length-1]);assertEquals(1,new String(bytes,StandardCharsets.UTF_8).chars().filter(c->c=='\n').count());List<JSONObject> found=new ArrayList<>();new McpStdioFrames.Decoder().acceptStdout(bytes,0,bytes.length,found::add);assertEquals("中文🙂\nnext",found.get(0).getJSONObject("params").getJSONObject("arguments").getString("text"));}
+    @Test public void everyByteIncludingFourByteUnicodeMayArriveSeparately()throws Exception{byte[] bytes=McpStdioFrames.encode(request());McpStdioFrames.Decoder decoder=new McpStdioFrames.Decoder();List<JSONObject> found=new ArrayList<>();for(int i=0;i<bytes.length;i++){decoder.acceptStdout(bytes,i,1,found::add);assertEquals(i==bytes.length-1?1:0,found.size());}decoder.endOfStream();assertEquals("original",found.get(0).getString("id"));}
+    @Test public void randomizedChunksRetainExactlyTheOriginalFrameOrder()throws Exception{byte[] bytes=wire(new String(McpStdioFrames.encode(request()),StandardCharsets.UTF_8).repeat(23));McpStdioFrames.Decoder decoder=new McpStdioFrames.Decoder();List<JSONObject> found=new ArrayList<>();Random random=new Random(721);for(int i=0;i<bytes.length;){int count=Math.min(1+random.nextInt(97),bytes.length-i);decoder.acceptStdout(bytes,i,count,found::add);i+=count;}decoder.endOfStream();assertEquals(23,found.size());for(JSONObject value:found)assertEquals("original",value.getString("id"));}
+    @Test public void crlfIsAcceptedButAnIncompleteFrameAtEofIsNeverDelivered()throws Exception{McpStdioFrames.Decoder decoder=new McpStdioFrames.Decoder();byte[] bytes=wire("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\r\n{\"jsonrpc\":");List<JSONObject> found=new ArrayList<>();assertEquals(1,decoder.acceptStdout(bytes,0,bytes.length,found::add));assertThrows(McpStdioFrames.FrameException.class,decoder::endOfStream);assertEquals(1,found.size());}
+    @Test public void utf8BomAndMalformedEncodingCannotBecomeProtocolMessages()throws Exception{refuse(wire("\ufeff{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}\n"));refuse(new byte[]{'{','"',(byte)0xc3,(byte)0x28,'"',':','1','}','\n'});}
+    @Test public void duplicateKeysTrailingJsonBatchAndStdoutLogsAreRejected()throws Exception{for(String bad:new String[]{"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"method\":\"tools/call\"}","{\"jsonrpc\":\"2.0\",\"method\":\"ping\"} {}","[]","server started",""})refuse(wire(bad+"\n"));}
+    @Test public void escapedLoneSurrogateIsNotAcceptedAsValidUnicode()throws Exception{refuse(wire("{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"params\":{\"value\":\"\\ud800\"}}\n"));assertThrows(Exception.class,()->McpStdioFrames.encode(request().put("params",new JSONObject().put("value","\udc00"))));}
+    @Test public void malformedRpcShapesDoNotGrantALateResponseAuthority()throws Exception{for(JSONObject bad:new JSONObject[]{request().put("result",new JSONObject()),request().put("id",JSONObject.NULL),request().put("id",1.5),request().put("id",new java.math.BigDecimal("1e300")),request().put("params",new JSONArray()),new JSONObject().put("jsonrpc","2.0").put("id","x").put("result",new JSONObject()).put("error",new JSONObject()),new JSONObject().put("jsonrpc","2.0").put("id","x").put("result",new JSONArray())})assertThrows(Exception.class,()->McpStdioFrames.encode(bad));}
+    @Test public void matchingJsonRpcResponsesAndNotificationsUseTheSameFraming()throws Exception{JSONObject reply=new JSONObject().put("jsonrpc","2.0").put("id",7).put("result",new JSONObject()),error=new JSONObject().put("jsonrpc","2.0").put("id","x").put("error",new JSONObject().put("code",-32601).put("message","unsupported")),notification=new JSONObject().put("jsonrpc","2.0").put("method","notifications/progress");for(JSONObject value:new JSONObject[]{reply,error,notification}){List<JSONObject> found=new ArrayList<>();byte[] bytes=McpStdioFrames.encode(value);assertEquals(1,new McpStdioFrames.Decoder().acceptStdout(bytes,0,bytes.length,found::add));assertEquals(McpJson.digest(value),McpJson.digest(found.get(0)));}}
+    @Test public void oversizedOutboundIsRefusedBeforeThereIsAnyPipeTicket()throws Exception{JSONObject value=request().put("params",new JSONObject().put("text","x".repeat(McpStdioFrames.MAX_OUTBOUND_BYTES)));assertThrows(McpStdioFrames.FrameException.class,()->McpStdioFrames.encode(value));}
+    @Test public void inboundFrameBudgetIsMeasuredInRawBytesAcrossChunks()throws Exception{McpStdioFrames.Decoder decoder=new McpStdioFrames.Decoder();byte[] bytes=new byte[McpStdioFrames.MAX_FRAME_BYTES];Arrays.fill(bytes,(byte)' ');assertEquals(0,decoder.acceptStdout(bytes,0,bytes.length,value->fail()));assertThrows(McpStdioFrames.FrameException.class,()->decoder.acceptStdout(new byte[]{'x'},0,1,value->fail()));}
+    @Test public void excessiveFramesStopAfterTheBudgetWithoutAcceptingFrame129()throws Exception{byte[] frame=McpStdioFrames.encode(request()),bytes=wire(new String(frame,StandardCharsets.UTF_8).repeat(129));List<JSONObject> found=new ArrayList<>();assertThrows(McpStdioFrames.FrameException.class,()->new McpStdioFrames.Decoder().acceptStdout(bytes,0,bytes.length,found::add));assertEquals(128,found.size());}
+    @Test public void sinkCancellationIsPreservedAndCannotReplayTheConsumedFrame()throws Exception{McpStdioFrames.Decoder decoder=new McpStdioFrames.Decoder();byte[] bytes=McpStdioFrames.encode(request());java.io.InterruptedIOException original=new java.io.InterruptedIOException("original cancellation");assertSame(original,assertThrows(java.io.InterruptedIOException.class,()->decoder.acceptStdout(bytes,0,bytes.length,value->{throw original;})));assertThrows(McpStdioFrames.FrameException.class,()->decoder.acceptStdout(bytes,0,bytes.length,value->fail()));}
+    @Test public void aClosedReaderCannotAcceptANewProcessOrPretendToResume()throws Exception{McpStdioFrames.Decoder decoder=new McpStdioFrames.Decoder();decoder.endOfStream();byte[] bytes=McpStdioFrames.encode(request());assertThrows(McpStdioFrames.FrameException.class,()->decoder.acceptStdout(bytes,0,bytes.length,value->fail()));}
+}

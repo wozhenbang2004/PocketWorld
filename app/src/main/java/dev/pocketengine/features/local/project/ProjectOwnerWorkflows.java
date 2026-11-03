@@ -37,6 +37,26 @@ public final class ProjectOwnerWorkflows {
             return ack;
         }finally{selection.remove();}
     }
+    /** Typed native owner submission, not JSON or a ThreadLocal authorization carrier. */
+    public static final class NativeStart {
+        private final ProjectOwnerWorkflows issuer;private final String context;
+        private final dev.pocketengine.features.memory.ProjectMemoryAccess.Consent memory;
+        private NativeStart(ProjectOwnerWorkflows issuer,JSONObject context,dev.pocketengine.features.memory.ProjectMemoryAccess.Consent memory){this.issuer=issuer;this.context=context.toString();this.memory=memory;}
+    }
+    public JSONObject start(JSONObject ownerInput,dev.pocketengine.features.memory.ProjectMemoryAccess.Consent memory)throws Exception{
+        java.util.Objects.requireNonNull(memory);String checkout=ProjectBuildPlan.identity(ownerInput.getString("checkoutId")),project=ProjectBuildPlan.identity(ownerInput.getString("projectId"));
+        String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=ownerInput.getString("goal").trim(),runtime=ownerInput.getString("runtime");local.projectRuntimeForHost(runtime);
+        if(!digest.matches("[a-f0-9]{64}")||!client.matches("[a-fA-F0-9-]{36}")||goal.isEmpty()||goal.length()>12000)throw new IllegalArgumentException("请选择真实项目及有界目标");
+        JSONObject consent=memory.metadata();if(!project.equals(consent.getString("projectId"))||!checkout.equals(consent.getString("checkoutId")))throw new SecurityException("原生记忆同意不属于此实际项目副本");
+        JSONObject context=new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",checkout).put("runtime",runtime).put("initialSourceDigest",digest).put("clientMessageId",client).put("filesAreUntrusted",true).put("authorityAdded",false);
+        JSONObject prior=null;try{prior=assistant.handle("getSubmission",new JSONObject().put("clientMessageId",client));}catch(IllegalArgumentException absent){}
+        if(prior!=null){verifyAcknowledgement(prior,context);JSONObject task=requireTask(prior.getString("taskId")),original=task.optJSONObject("projectMemoryRead");if(original==null||!consent.getString("consentId").equals(original.optString("consentId")))throw new SecurityException("原提交的记忆选择不同；只核对原任务，未恢复或替换旧权限");return prior;}
+        JSONObject actual=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout)));if(!project.equals(actual.getString("projectId"))||!digest.equals(actual.getString("sourceDigest")))throw new SecurityException("项目源码已变化，请重新核对开始");
+        JSONObject ack=assistant.sendProjectForOwner(new JSONObject().put("clientMessageId",client).put("message",goal).put("mode","queue"),new NativeStart(this,context,memory));if(ack.optString("status").matches("accepted|queued"))verifyAcknowledgement(ack,context);return ack;
+    }
+    public dev.pocketengine.features.memory.ProjectMemoryAccess bindMemoryAttempt(JSONObject task,RunControl original,dev.pocketengine.core.ModelConfig model,NativeStart selected)throws Exception{
+        if(selected==null||selected.issuer!=this)throw new SecurityException("项目启动不是此原生主人选择");JSONObject context=new JSONObject(selected.context);tasks.bindDevelopmentContext(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),original,context);return selected.memory.bindForRun(tasks,task.getString("id"),original);
+    }
     /** Native opaque result review only. JSON owner/model actions cannot mint this selection. */
     public JSONObject startTeamRound(dev.pocketengine.features.teams.TeamProjectRoundHost.Admission admitted)throws Exception {
         java.util.Objects.requireNonNull(admitted);JSONObject input=admitted.ownerRequest(),prior=null;try{prior=assistant.handle("getSubmission",new JSONObject().put("clientMessageId",input.getString("clientMessageId")));}catch(IllegalArgumentException absent){}

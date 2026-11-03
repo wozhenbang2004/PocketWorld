@@ -62,11 +62,17 @@ public final class ProxyModule implements EngineModule {
         return prepareHarnessGateway(tasks,original,remote,target,expiresAt,configurationOwner,null);
     }
     public synchronized NativeHarnessGatewayBridge prepareHarnessGateway(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.core.RunControl original,dev.pocketengine.features.remote.RemoteModule remote,JSONObject target,long expiresAt,dev.pocketengine.store.TaskStore.HarnessGatewayConfigurationOwner configurationOwner,NativeHarnessGatewayBridge.StartupFence startup)throws Exception {
+        return prepareHarnessGateway(tasks,original,remote,target,expiresAt,configurationOwner,startup,null);
+    }
+    /** Only a verified original Profile run can replace the existing SettingsStore RELAY source. */
+    public synchronized NativeHarnessGatewayBridge prepareHarnessGateway(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.core.RunControl original,dev.pocketengine.features.remote.RemoteModule remote,JSONObject target,long expiresAt,dev.pocketengine.store.TaskStore.HarnessGatewayConfigurationOwner configurationOwner,NativeHarnessGatewayBridge.StartupFence startup,dev.pocketengine.features.controlplane.NativeWorkProfileHost.RelaySource profileRelay)throws Exception {
         if(harnessGateway!=null&&harnessGateway.running())throw new IllegalStateException("请先停止原远端模型网关");
         if(target.length()!=8)throw new SecurityException("准确原电脑目标必需，不接收群来源或替代授权字段");
         for(String key:new String[]{"profileId","_profileBinding","serviceBase","environmentId","environmentBinding","bindingId","profileDigest","taskId"})if(!target.has(key))throw new SecurityException("准确原电脑目标不完整");
         var identity=original.hostRunIdentity();if(identity==null||!identity.taskId().equals(target.getString("taskId")))throw new SecurityException("不是当前原任务native控制器");
-        harnessGateway=NativeHarnessGatewayBridge.forTask(tasks,original,new LoopbackRelay.ConfigSource(){public ModelConfig get()throws Exception{return context.settings.captureRelaySelection();}public long selectionRevision()throws Exception{return context.settings.relaySelectionRevision();}},remote.harnessGatewayTransport(target),target.getString("environmentId"),target.getString("environmentBinding"),target.getString("bindingId"),target.getString("profileDigest"),expiresAt,configurationOwner,startup);
+        if(profileRelay!=null)profileRelay.requireOriginal(tasks,original);
+        LoopbackRelay.ConfigSource selected=profileRelay==null?new LoopbackRelay.ConfigSource(){public ModelConfig get()throws Exception{return context.settings.captureRelaySelection();}public long selectionRevision()throws Exception{return context.settings.relaySelectionRevision();}}:profileRelay;
+        harnessGateway=NativeHarnessGatewayBridge.forTask(tasks,original,selected,remote.harnessGatewayTransport(target),target.getString("environmentId"),target.getString("environmentBinding"),target.getString("bindingId"),target.getString("profileDigest"),expiresAt,configurationOwner,startup);
         harnessGatewayTarget=new JSONObject(target.toString());return harnessGateway;
     }
     public synchronized NativeHarnessGatewayBridge originalHarnessGateway(String lease){return harnessGateway!=null&&harnessGateway.leaseId().equals(lease)?harnessGateway:null;}

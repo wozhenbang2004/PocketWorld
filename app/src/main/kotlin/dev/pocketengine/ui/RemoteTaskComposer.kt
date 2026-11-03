@@ -40,7 +40,7 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
         .takeIf { environmentRequest != null && state.moduleResultInputs["remote.environments"]?.optString("_requestId") == environmentRequest }
         ?.optJSONArray("environments").objects()
     val environment = environments.singleOrNull { it.optString("id") == environmentId }
-    val workers = environment?.optJSONArray("workers").objects().filter { it.optString("id") in setOf("codex_app_server", "claude", "command") }
+    val workers = environment?.optJSONArray("workers").objects().filter { it.optString("id") in setOf("codex_app_server", "claude", "pi", "command") }
     val actualWorker = workers.singleOrNull { it.optString("id") == worker }
     val probe = state.moduleResults["remote.probeWorker"]
         .takeIf { probeRequest != null && state.moduleResultInputs["remote.probeWorker"]?.optString("_requestId") == probeRequest }
@@ -84,11 +84,12 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
             OutlinedTextField(argv, { argv = it }, label = { Text("明确参数JSON数组（不是Shell文本）") }, minLines = 2, maxLines = 5, enabled = !registered, modifier = Modifier.fillMaxWidth())
             SshCaption("仅运行电脑端allowlist中的命令；不会把自然语言或拼接字符串交给Shell。")
         } else {
-            OutlinedTextField(goal, { goal = it }, label = { Text("希望在此工作区完成什么") }, minLines = 3, maxLines = 7, enabled = !registered, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(goal, { goal = it }, label = { Text(if (worker == "pi") "希望进行什么无工具对话" else "希望在此工作区完成什么") }, minLines = 3, maxLines = 7, enabled = !registered, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(model, { model = it }, label = { Text("请求模型ID（可留空）") }, singleLine = true, enabled = !registered, modifier = Modifier.fillMaxWidth())
             if (worker == "codex_app_server") {
                 Row { Checkbox(readOnly, { readOnly = it }, enabled = !registered); Text("只读分析，不授权修改文件", fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp)) }
-            } else SshCaption("Claude使用受限工具配置，不提供操作系统只读沙箱；模型和账号是否可用仍须真实运行确认。")
+            } else if (worker == "pi") SshCaption("Pi 1.4.0 · 无工具对话：不提供项目读写、命令、扩展或MCP工具，不提供逐工具审批，也不是操作系统只读沙箱。仅本机POSIX已接入；账号/推理需实际运行，原设置可能自动重试或压缩，费用与次数未知。")
+            else SshCaption("Claude使用受限工具配置，不提供操作系统只读沙箱；模型和账号是否可用仍须真实运行确认。")
             OutlinedButton(onClick = {
                 val input = JSONObject().put("profileId", profileId).put("_profileBinding", binding).put("environmentId", environmentId).put("environmentBinding", selected.optString("bindingHash")).put("worker", worker)
                 if (model.isNotBlank()) input.put("model", model.trim())
@@ -96,6 +97,7 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
             }, enabled = canProbe) { Text(if (probing) "正在核对执行器" else "核对执行器与模型能力") }
             probe?.let { checked ->
                 SshCaption(checked.optString("message", "执行器探测已返回") + "；未发起模型任务。")
+                if (checked.optBoolean("modelsTruncated") || (checked.optJSONArray("models")?.length() ?: 0) > 12) SshCaption("这里只展示部分已配置模型；仍可填写完整精确模型ID。目录不证明账号、推理或费用已核实。")
                 checked.optJSONArray("models").objects().take(12).forEach { available -> TextButton(onClick = { model = available.optString("id") }, enabled = !registered) { Text(available.optString("name", available.optString("id")), fontSize = 12.sp) } }
             }
         }
@@ -110,7 +112,7 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
                 review = RemoteTaskRequest.first(request); localError = null
             } catch (failure: Exception) { localError = failure.message ?: "请核对任务参数" }
         }, enabled = canCreate, modifier = Modifier.padding(top = 10.dp)) { Text("核对并创建这次工作") }
-        if (worker != "command" && selected.optJSONObject("projectHistoryCapabilities")?.optBoolean("supported") == true) {
+        if (worker in setOf("codex_app_server", "claude") && selected.optJSONObject("projectHistoryCapabilities")?.optBoolean("supported") == true) {
             OutlinedButton(onClick = {
                 try {
                     val request=JSONObject().put("profileId",profileId).put("bindingHash",binding).put("environmentId",environmentId).put("environmentBinding",selected.optString("bindingHash")).put("worker",worker).put("timeoutSeconds",timeout.toIntOrNull()?:0).put("prompt",goal).put("readOnly",worker=="codex_app_server"&&readOnly)
@@ -119,7 +121,7 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
                 }catch(failure:Exception){localError=failure.message}
             },enabled=canCreate&&goal.isNotBlank()){Text("先保留项目基线，再创建这次工作")}
         }
-        if (worker != "command") {
+        if (worker in setOf("codex_app_server", "claude")) {
             OutlinedButton(onClick = {
                 try {
                     RemoteTaskRequest.requireInputCapability(selected)
@@ -153,7 +155,7 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
                 Text(profile.optString("name") + "\n" + profile.optString("baseUrl") + "\n" + environment?.optString("workspace").orEmpty())
                 Text(remoteWorkerLabel(captured.optString("worker")) + " · " + captured.optString("model").ifBlank { "执行端默认模型" }, fontSize = 13.sp)
                 SelectionContainer { Text(captured.optString("prompt", captured.optJSONArray("argv")?.toString().orEmpty()), fontSize = 12.sp) }
-                Text(if (captured.optBoolean("readOnly")) "本次为Codex只读分析。" else "本次可能修改所选工作区。工具审批另按原任务逐次核对。", fontSize = 12.sp)
+                Text(if (captured.optString("worker") == "pi") "本次仅为Pi无工具对话，不授权项目工具、命令或扩展；不提供逐工具审批，不宣称操作系统隔离。原设置可能重试/压缩，费用与次数未知。" else if (captured.optBoolean("readOnly")) "本次为Codex只读分析。" else "本次可能修改所选工作区。工具审批另按原任务逐次核对。", fontSize = 12.sp)
             }
         }, confirmButton = { Button(onClick = {
             val identity = UUID.randomUUID().toString(); operation = identity
@@ -163,7 +165,7 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
     }
 }
 
-internal fun remoteWorkerLabel(worker: String): String = when (worker) { "codex_app_server" -> "Codex"; "claude" -> "Claude"; "command" -> "明确命令"; else -> worker }
+internal fun remoteWorkerLabel(worker: String): String = when (worker) { "codex_app_server" -> "Codex"; "claude" -> "Claude"; "pi" -> "Pi · 无工具对话"; "command" -> "明确命令"; else -> worker }
 
 @Composable
 internal fun SshTaskComposer(profile: JSONObject, state: PocketUiState, controller: PocketWorldController) {

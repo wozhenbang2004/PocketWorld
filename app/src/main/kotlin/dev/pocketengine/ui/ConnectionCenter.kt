@@ -32,8 +32,8 @@ import org.json.JSONObject
 @Composable
 internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldController, initialSection: String? = null, onOpenTask: ((String, String) -> Unit)? = null, close: () -> Unit) {
     var section by rememberSaveable { mutableStateOf(initialSection) }
-    val titles = mapOf("devices" to "我的设备", "models" to "API 模型与能力", "accounts" to "ChatGPT 账号", "remote" to "电脑与服务器", "ssh" to "SSH 连接", "local" to "手机开发环境", "memory" to "私人记忆", "memoryReview" to "记忆学习审核", "automation" to "提醒与主动任务", "commitments" to "承诺与跟进", "channels" to "消息渠道", "skills" to "技能", "learning" to "经验技能", "plugins" to "插件", "pluginCatalog" to "我的插件目录", "mcp" to "MCP 工具导入", "teams" to "协作团队", "groups" to "群协作", "media" to "生图与语音文件", "realtime" to "实时音视频", "proxy" to "本机模型服务")
-    val nativePage = section in setOf("devices", "models", "memoryReview", "mcp", "accounts", "learning", "pluginCatalog", "groups")
+    val titles = mapOf("workProfiles" to "工作配置", "devices" to "我的设备", "models" to "API 模型与能力", "accounts" to "ChatGPT 账号", "remote" to "电脑与服务器", "ssh" to "SSH 连接", "local" to "手机开发环境", "memory" to "私人记忆", "memoryReview" to "记忆学习审核", "automation" to "提醒与主动任务", "commitments" to "承诺与跟进", "channels" to "消息渠道", "skills" to "技能", "learning" to "经验技能", "plugins" to "插件", "pluginCatalog" to "我的插件目录", "mcp" to "MCP 工具导入", "teams" to "协作团队", "groups" to "群协作", "media" to "生图与语音文件", "realtime" to "实时音视频", "proxy" to "本机模型服务")
+    val nativePage = section in setOf("workProfiles", "devices", "models", "memoryReview", "mcp", "accounts", "learning", "pluginCatalog", "groups")
     LaunchedEffect(initialSection, state.requestedConnectionRevision) { if (initialSection != null) section = initialSection }
     DisposableEffect(section) {
         val domain = section
@@ -79,6 +79,16 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                                     TextButton(onClick = { section = null }) { Text("返回连接中心") }
                                 }
                             }
+                            "workProfiles" -> {
+                                val profileHost = remember(controller) { runCatching { controller.nativeWorkProfiles() } }.getOrNull()
+                                if (profileHost != null) WorkProfilesPage(profileHost, controller::runWorkProfileWork, controller::runWorkProfileControl,
+                                    controller::startOwnerWorkProfile, { id -> controller.focusTask(id); close() }, { section = it }, { section = null })
+                                else Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Text("工作配置暂不可用", style = MaterialTheme.typography.titleMedium)
+                                    Text("原生来源宿主未能读取，旧定义没有重置。请稍后重新打开。", style = MaterialTheme.typography.bodySmall)
+                                    TextButton(onClick = { section = null }) { Text("返回连接中心") }
+                                }
+                            }
                             "pluginCatalog" -> {
                                 val page = remember(controller) { controller.openPluginCatalogPage() }
                                 DisposableEffect(page) { onDispose { controller.closePluginCatalogPage(page) } }
@@ -97,8 +107,8 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                                     onOpenArtifact = controller::openGroupArtifact,
                                     onReviewTask = { selection -> controller.focusTask(selection.taskId) })
                             }
-                            "memoryReview" -> MemoryLearningReviewPage(snapshot, responses, pending, "snapshot" in pending, error,
-                                { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, controller::openOwnerSource, { section = null }, controller::dismissOwnerSource)
+                            "memoryReview" -> MemoryReviewNamespacePage(snapshot, responses, pending, error,
+                                { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, controller::selectMemoryNamespace, controller::openOwnerSource, { section = null }, controller::dismissOwnerSource)
                             "mcp" -> McpInstallPreviewPage(snapshot, responses, pending, "snapshot" in pending, error,
                                 { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, controller::pickMcpConfig,
                                 { val task = controller.taskMcpPreparation?.optString("taskId"); if (!task.isNullOrBlank()) { controller.focusTask(task); close() } else section = null }, controller.taskMcpPreparation?.optString("pluginId"), controller.taskMcpPreparation?.optString("tool"), nativeHost = controller.pluginExecutionHost(), runOAuthWork = controller::runPluginCatalogWork, runOAuthControl = controller::runEcosystemControlWork)
@@ -120,6 +130,7 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                         if (section == null) {
                             ConnectionCatalog(titles, description = { id ->
                                 when (id) {
+                                    "workProfiles" -> "组合原模型、技能与工具，预检后明确启动"
                                     "devices" -> "连接你的手机与电脑，管理设备任务和权限"
                                     "accounts" -> "账号授权与主模型选择"
                                     "memoryReview" -> "核对学习候选、查看来源与管理遗忘"

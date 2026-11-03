@@ -49,7 +49,7 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
     var showReview by remember(taskId) { mutableStateOf(false) }
     var configReview by remember(taskId) { mutableStateOf<SkillExecutionConfiguration.Review?>(null) }
     var configAcknowledged by remember(configReview) { mutableStateOf(false) }
-    var removeConfig by remember { mutableStateOf(false) }
+    var removeConfig by remember(taskId) { mutableStateOf<JSONObject?>(null) }
     var script by remember { mutableStateOf<String?>(null) }
     var scriptDigest by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -152,11 +152,11 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
                     if (snapshot.optBoolean("scriptPreparationRelevant")) {
                     HorizontalDivider(color = Line); Heading("脚本执行位置")
                     val phone = snapshot.optJSONObject("phoneExecution") ?: JSONObject()
-                    Caption(when { !configuration.optBoolean("configured") -> "可在这台手机独立执行 Python / Shell Skill，也可使用电脑隔离执行端。先选择地点，每次具体脚本仍须你审阅。"; configuration.optString("executionLocation") == "this_phone" -> "当前地点：这台手机。已保存固定解释器与输入输出选择；不提供同 UID 文件/网络 OS 沙箱。"; else -> "当前地点：电脑 Companion · ${configuration.optJSONObject("deployment")?.optString("profileId")}。每次运行仍核对原隔离证据。" })
+                    Caption(when { configuration.optBoolean("recoveryRequired") -> if(configuration.optBoolean("recoveryAvailable")) "原执行配置损坏，脚本执行未启用；原字节仍保留。可从下方重新准备手机或读取电脑配置，审阅确认后先留存旧文件再替换；不会恢复旧批准或重跑原任务。" else "原执行配置不能安全读取或留存，脚本未启用；请核对原配置文件。原任务回执保留，不会删除文件、切换电脑或恢复旧批准。"; !configuration.optBoolean("configured") -> "可在这台手机独立执行 Python / Shell Skill，也可使用电脑隔离执行端。先选择地点，每次具体脚本仍须你审阅。"; configuration.optString("executionLocation") == "this_phone" -> "当前地点：这台手机。已保存固定解释器与输入输出选择；不提供同 UID 文件/网络 OS 沙箱。"; else -> "当前地点：电脑 Companion · ${configuration.optJSONObject("deployment")?.optString("profileId")}。每次运行仍核对原隔离证据。" })
                     OutlinedButton(onClick = { showPhoneConfiguration = true }, enabled = !busy) { Text("准备手机 Python / Shell") }
                     if (!phone.optBoolean("available")) Caption("手机工具尚未可执行。请到项目页的工具准备中核对原环境；这里不会自动下载或改用电脑。")
                     TextButton(onClick = { pickConfig.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("读取电脑隔离端配置") }
-                    if (configuration.optBoolean("configured")) TextButton(onClick = { removeConfig = true }, enabled = !busy) { Text("停用并移除执行配置", color = Danger, fontSize = 12.sp) }
+                    if (configuration.optBoolean("configured")) TextButton(onClick = { removeConfig = JSONObject(configuration.toString()) }, enabled = !busy) { Text("停用并移除执行配置", color = Danger, fontSize = 12.sp) }
                     }
                     if (jsHost != null) TaskJsSelectionControls(taskId, jsHost, runWork)
                     val executions = snapshot.optJSONArray("executions").objects()
@@ -203,10 +203,13 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
         AlertDialog(onDismissRequest = { if (!busy) configReview = null }, containerColor = Color.White, title = { Text("审阅固定执行配置") }, text = {
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 val phone = value.optString("executionLocation") == "this_phone"
+                val recovery = value.optJSONObject("configurationRecovery")
+                val recovering = recovery?.optBoolean("required") == true
+                if (recovering) Caption("此次将恢复不可用的执行配置：确认后先在本机留存准确旧字节（${recovery?.optLong("originalBytes")} B，SHA-256 ${recovery?.optString("originalSha256")}），再保存下面的新配置。不会恢复旧脚本批准、重建原进程或改变未知效果；之后运行仍需新的具体审阅。")
                 Text(if (phone) "这台手机 · 原托管运行环境" else "已有电脑连接：${deployment.getString("profileId")}\n${deployment.getString("serviceBase")}", fontSize = 14.sp, lineHeight = 22.sp)
                 Caption("${request.getString("runtimeId")} · ${request.getString("workspaceId")}\n" + if (phone) "原生入口只复制明确输入到单次副本，不自动写回原项目。同 UID 进程仍可能读写应用数据、联网或创建脱离后代；这不是 OS 沙箱。标准输入关闭，具体版本、依赖和预算在每次执行前审阅。" else "网络禁止；空环境；单进程。保存后仍需真实执行端探测，本页不会部署解释器。")
                 SelectionContainer { Text("读取：${request.getJSONArray("readPaths")}\n写入：${request.getJSONArray("writePaths")}\n成果：${request.getJSONArray("outputPaths")}\n配置 SHA-256：${retained.digest}", fontSize = 12.sp, lineHeight = 20.sp) }
-                Row { Checkbox(configAcknowledged, { configAcknowledged = it }, enabled = !busy); Text(if (phone) "我了解同 UID / 网络可达风险；只选择手机执行地点，仍需逐次审阅具体 Skill" else "我信任所选连接与固定部署配置；保存配置不批准任何任务脚本", fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.weight(1f)) }
+                Row { Checkbox(configAcknowledged, { configAcknowledged = it }, enabled = !busy); Text((if (recovering) "我确认先留存原配置，再保存新配置；" else "") + if (phone) "我了解同 UID / 网络可达风险；只选择手机执行地点，仍需逐次审阅具体 Skill" else "我信任所选连接与固定部署配置；保存配置不批准任何任务脚本", fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.weight(1f)) }
             }
         }, confirmButton = { Button(onClick = { work({ host.installConfiguration(window, retained, retained.digest); readSnapshot() }) { snapshot = it; configReview = null; notice = "执行地点与范围已保存；实际脚本仍需本次具体审阅" } }, enabled = !busy && configAcknowledged) { Text("保存此配置") } }, dismissButton = { TextButton(onClick = { configReview = null }, enabled = !busy) { Text("取消") } })
     }
@@ -238,7 +241,7 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
             if (page?.optBoolean("truncated") == true || page?.optBoolean("outputTruncated") == true) Caption("原日志已达缓存或本页范围上限；未将缺失字节当完整输出。")
         }
     }, confirmButton = { TextButton(onClick = { work({ host.readExecutionLog(taskId, operation, logCursor,16000) }) { logPage = it; logCursor = it.optLong("nextCursor",it.optLong("nextSequence",logCursor)) } }, enabled = !busy) { Text("读取下一页") } }, dismissButton = { TextButton(onClick = { logOperation = null; logPage = null }, enabled = !busy) { Text("关闭") } }) }
-    if (removeConfig) AlertDialog(onDismissRequest = { removeConfig = false }, containerColor = Color.White, title = { Text("停用这个执行配置？") }, text = { Text("将使旧审阅失效，并请求停止仍在执行的原脚本。原任务和已有成果保留，已发生的效果不会撤回。") }, confirmButton = { TextButton(onClick = { val revision = snapshot.getJSONObject("configuration").getLong("revision"); work({ host.removeConfiguration(window, revision); readSnapshot() }) { snapshot = it; removeConfig = false; notice = "配置已移除，原操作仍可按原收据核对" } }, enabled = !busy) { Text("停用并移除", color = Danger) } }, dismissButton = { TextButton(onClick = { removeConfig = false }) { Text("取消") } })
+    removeConfig?.let { observed -> AlertDialog(onDismissRequest = { removeConfig = null }, containerColor = Color.White, title = { Text("停用这个执行配置？") }, text = { Text("将使旧审阅失效，并请求停止仍在执行的原脚本。原任务和已有成果保留，已发生的效果不会撤回。\n所选配置 SHA-256：${observed.optString("digest")}") }, confirmButton = { TextButton(onClick = { work({ host.removeConfiguration(window, observed.getLong("revision"), observed.getString("stateFingerprint")); readSnapshot() }) { snapshot = it; removeConfig = null; notice = "配置已移除，原操作仍可按原收据核对" } }, enabled = !busy) { Text("停用并移除", color = Danger) } }, dismissButton = { TextButton(onClick = { removeConfig = null }) { Text("取消") } }) }
 }
 
 @Composable private fun Caption(text: String) { Text(text, color = SecondaryInk, fontSize = 13.sp, lineHeight = 21.sp) }

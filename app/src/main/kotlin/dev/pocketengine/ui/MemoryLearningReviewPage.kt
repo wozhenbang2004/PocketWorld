@@ -226,6 +226,7 @@ internal fun MemoryLearningReviewPage(
     onBack: () -> Unit,
     onDismissSource: () -> Unit = {}
 ) {
+    val projectNamespace = snapshot.optJSONObject("scope")?.optString("spaceId")?.startsWith("project:") == true
     var choosing by remember { mutableStateOf(false) }
     var recordRows by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var recordsRead by remember { mutableStateOf<MemoryLearningRead?>(null) }
@@ -484,7 +485,7 @@ internal fun MemoryLearningReviewPage(
                 }
                 (localError ?: error)?.let { Text(it, color = Danger, fontSize = 13.sp, lineHeight = 22.sp) }
                 message?.let { MemoryLearningCaption(it) }
-                if (selectedId == null && !choosing) MemoryCognitionPanel(responses, pendingCommands, snapshot.optString("cognitionRevision"), onRequest)
+                if (!projectNamespace && selectedId == null && !choosing) MemoryCognitionPanel(responses, pendingCommands, snapshot.optString("cognitionRevision"), onRequest)
                 if (choosing && selectedId == null) {
                     Text(if (consolidationBusy) "归纳中，仍由你把关" else "先选择值得一起归纳的记忆", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                     MemoryLearningCaption("选择依据 → 模型归纳 → 由你审阅。只使用你明确选择的当前版本；不会覆盖原记忆、自动接受、选择核心记忆或生成可执行技能。")
@@ -516,7 +517,7 @@ internal fun MemoryLearningReviewPage(
                 } else if (selectedId == null) {
                     Text("由你决定，什么值得记住", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                     MemoryLearningCaption("候选只是带来源的推测。核对并接受后才会成为普通记忆；不会自动成为核心记忆或可执行技能。")
-                    OutlinedButton(onClick = { choosing = true; selectedRecords = emptyList(); proposalBarrier = null; recordsLoaded = false; localError = null; message = null; recordsRead = request("list") }, enabled = !busy, shape = Rounded, modifier = Modifier.fillMaxWidth()) { Text("从真实记忆归纳候选") }
+                    if (!projectNamespace) OutlinedButton(onClick = { choosing = true; selectedRecords = emptyList(); proposalBarrier = null; recordsLoaded = false; localError = null; message = null; recordsRead = request("list") }, enabled = !busy, shape = Rounded, modifier = Modifier.fillMaxWidth()) { Text("从真实记忆归纳候选") }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(selected = !showProcessed, onClick = { showProcessed = false }, label = { Text("待审阅") })
                         FilterChip(selected = showProcessed, onClick = { showProcessed = true }, label = { Text("已处理") })

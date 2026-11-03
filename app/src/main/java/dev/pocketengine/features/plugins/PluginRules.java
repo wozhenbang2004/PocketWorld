@@ -40,9 +40,17 @@ public final class PluginRules {
             if(!effect.equals("read")&&!effect.equals("write"))throw new IllegalArgumentException("工具effect需为read或write");
             definition.put("effect",effect);
             if(definition.getString("description").length()>1000)throw new IllegalArgumentException("工具描述过长");
-            if(kind.equals("http")||kind.equals("mcp")){String endpoint=text(tool,"endpoint",2000);validateEndpoint(endpoint);definition.put("endpoint",endpoint);}
+            String transport=kind.equals("mcp")?tool.optString("transport","streamable_http"):"";
+            if(kind.equals("mcp")&&(!Set.of("streamable_http","stdio").contains(transport)||tool.has("transport")&&!(tool.opt("transport") instanceof String)))throw new IllegalArgumentException("未知MCP transport；不能把HTTP与本机程序权限混用");
+            boolean stdio=transport.equals("stdio");
+            if(kind.equals("http")||kind.equals("mcp")&&!stdio){String endpoint=text(tool,"endpoint",2000);validateEndpoint(endpoint);definition.put("endpoint",endpoint);}
+            if(kind.equals("mcp")&&tool.has("transport"))definition.put("transport",transport);
             if(kind.equals("mcp")){
                 if(!McpData.supportedVersion(tool.optString("protocolVersion")))throw new IllegalArgumentException("当前仅支持MCP 2026-07-28或2025-11-25");
+                if(stdio){
+                    if(!McpStdioClient.VERSION.equals(tool.optString("protocolVersion"))||tool.has("endpoint"))throw new IllegalArgumentException("本机stdio仅支持实际协商的2025-11-25，不接受HTTP endpoint");
+                    String configuration=text(tool,"configurationDigest",64);if(!configuration.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("本机MCP配置身份摘要无效");definition.put("configurationDigest",configuration);
+                }
                 String digest=text(tool,"descriptorDigest",64);if(!digest.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("MCP工具身份摘要无效");
                 String serverDigest=text(tool,"serverDigest",64);if(!serverDigest.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("MCP服务身份摘要无效");
                 definition.put("protocolVersion",tool.getString("protocolVersion")).put("serverDigest",serverDigest).put("descriptorDigest",digest).put("effect","write");
@@ -55,10 +63,16 @@ public final class PluginRules {
             validateSchema(schema,0,new int[]{0,0},kind.equals("mcp"));
             if(schema.toString().length()>16000)throw new IllegalArgumentException("工具参数定义过大");
             if(!schema.optString("type","object").equals("object"))throw new IllegalArgumentException("工具参数根类型需为object");
-            if(kind.equals("mcp"))McpHeaders.validate(schema);
+            if(kind.equals("mcp")){if(stdio)rejectStdioHeaders(schema);else McpHeaders.validate(schema);}
             definition.put("schema",new JSONObject(schema.toString()));normalized.put(definition);
         }
         return new JSONObject().put("id",id).put("name",name).put("version",version).put("tools",normalized);
+    }
+    private static void rejectStdioHeaders(JSONObject schema)throws Exception {
+        // Follow only actual subschemas already bounded by validateSchema, not arbitrary example data.
+        if(schema.has("x-mcp-header"))throw new IllegalArgumentException("本机stdio没有HTTP header输入通道");
+        JSONObject properties=schema.optJSONObject("properties");if(properties!=null)for(var keys=properties.keys();keys.hasNext();)rejectStdioHeaders(properties.getJSONObject(keys.next()));
+        JSONObject items=schema.optJSONObject("items");if(items!=null)rejectStdioHeaders(items);
     }
     public static void validateEndpoint(String endpoint)throws Exception {
         URI uri=new URI(endpoint);String scheme=uri.getScheme();

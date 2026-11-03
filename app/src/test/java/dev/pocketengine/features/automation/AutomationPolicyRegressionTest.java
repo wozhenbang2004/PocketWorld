@@ -78,11 +78,16 @@ public final class AutomationPolicyRegressionTest {
         assertEquals(first.getString("id"),book.receipts().getJSONObject(0).getString("id"));
     }
     @Test public void missedDailyWindowSkipsOneCoalescedOccurrenceAndKeepsFutureSchedule()throws Exception {
+        JSONObject defaults=AutomationPolicy.rule(null,"UTC");assertEquals("skip",defaults.getString("misfire"));assertEquals("buffer_one",defaults.getString("overlap"));
         AutomationBook book=new AutomationBook(file());long now=at("2026-10-01T00:00:00Z");
         book.save(new JSONObject().put("title","每日核对").put("schedule",new JSONObject().put("type","daily").put("time","09:00").put("zone","UTC"))
-                .put("policy",new JSONObject().put("maxLatenessMillis",60000)),now);
+                .put("policy",new JSONObject().put("maxLatenessMillis",60000).put("misfire","coalesce")),now);
         long later=at("2026-10-10T12:00:00Z");assertEquals(0,book.claimDue(later,10).length());
-        assertEquals("missed_window",book.receipts().getJSONObject(0).getString("status"));assertTrue(book.nextAt()>later);
+        // Coalesced audit rows remain durable. The window assertion belongs to the
+        // current native calendar occurrence, not the first historical row.
+        org.json.JSONArray history=book.receipts();JSONObject current=null;long currentAt=at("2026-10-10T09:00:00Z");AtomicInteger effects=new AtomicInteger();assertTrue(history.length()>1);
+        for(int i=0;i<history.length();i++){JSONObject row=history.getJSONObject(i);if(row.getLong("occurrenceAt")==currentAt){assertNull(current);current=row;}else assertEquals("coalesced",row.getString("status"));assertTrue(row.isNull("occurrenceNumber"));book.dispatchReceipt(row.getString("id"),r->{effects.incrementAndGet();return new JSONObject().put("status","notified").put("message","This fixture must not dispatch");},later);}
+        assertNotNull(current);assertEquals("missed_window",current.getString("status"));assertTrue(book.nextAt()>later);assertEquals(0,effects.get());
         assertEquals(0,book.rules().getJSONObject(0).getLong("claimedCount"));
     }
     @Test public void currentQuietPolicyIsRecheckedAtExplicitTaskAdmission()throws Exception {

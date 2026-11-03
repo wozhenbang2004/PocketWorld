@@ -21,7 +21,9 @@ public final class WorkProfileResolver {
         JSONObject extension(String id, RunControl observation) throws Exception;
         JSONObject team(String id, RunControl observation) throws Exception;
         JSONObject target(JSONObject exactOriginalReference, RunControl observation) throws Exception;
-        Set<String> hostCapabilities();
+        default void checkTarget(JSONObject exactOriginalReference, JSONObject capturedPublicBinding, RunControl observation) throws Exception { throw new SecurityException("target_current_guard_not_mounted"); }
+        default JSONObject choices(RunControl observation) throws Exception { observation.check(); return new JSONObject().put("available", false).put("reasonCode", "native_choice_source_not_mounted"); }
+        Set<String> hostCapabilities() throws Exception;
     }
     public static final class Resolution {
         private final WorkProfile definition;
@@ -46,13 +48,49 @@ public final class WorkProfileResolver {
                 public JSONObject plugin(String id, RunControl control) throws Exception { return sources.plugin(id, control); }
                 public JSONObject extension(String id, RunControl control) throws Exception { return sources.extension(id, control); }
                 public JSONObject team(String id, RunControl control) throws Exception { return sources.team(id, control); }
-                public JSONObject target(JSONObject reference, RunControl control) throws Exception { return sources.target(reference, control); }
-                public Set<String> hostCapabilities() { return sources.hostCapabilities(); }
+                public JSONObject target(JSONObject reference, RunControl control) throws Exception {
+                    return frozenTarget(sources, view(), reference, control);
+                }
+                public void checkTarget(JSONObject reference, JSONObject captured, RunControl control) throws Exception { sources.checkTarget(reference, captured, control); }
+                public Set<String> hostCapabilities() throws Exception { return sources.hostCapabilities(); }
             };
             Resolution current = resolve(definition, frozenModels, observation); current.requireReady();
-            if (!view().getString("resolutionDigest").equals(current.view().getString("resolutionDigest"))) throw new SecurityException("work_profile_sources_changed");
+            JSONObject expected = view(), actual = current.view(); JSONArray previousItems = expected.getJSONArray("items"), currentItems = actual.getJSONArray("items");
+            // An explicitly omitted target remains omitted for this run; later installation cannot add it.
+            for (int i = 0; i < previousItems.length(); i++) { JSONObject item = previousItems.getJSONObject(i); if (item.getString("kind").startsWith("target:") && item.getBoolean("optional") && !item.getBoolean("included")) currentItems.put(i, new JSONObject(item.toString())); }
+            actual.remove("resolutionDigest"); if (!expected.getString("resolutionDigest").equals(WorkProfile.fingerprint(actual))) throw new SecurityException("work_profile_sources_changed");
             observation.check();
         }
+    }
+    private static JSONObject frozenTarget(Sources sources, JSONObject frozen, JSONObject reference, RunControl control) throws Exception {
+        String key = WorkProfile.targetKey(reference); JSONArray items = frozen.getJSONArray("items");
+        for (int i = 0; i < items.length(); i++) { JSONObject item = items.getJSONObject(i);
+            if (key.equals(item.getString("id")) && item.getString("kind").startsWith("target:")) {
+                if (!item.getBoolean("included")) throw new Missing(item.getString("status"));
+                JSONObject captured = new JSONObject(item.getJSONObject("binding").toString()); if (item.has("sourceEvidence")) captured.put("sourceEvidence", item.getJSONObject("sourceEvidence"));
+                sources.checkTarget(new JSONObject(reference.toString()), new JSONObject(captured.toString()), control); return new JSONObject(captured.toString()).put("supported", true);
+            }
+        }
+        throw new SecurityException("frozen_profile_target_missing");
+    }
+    /** Original SQL snapshots can rebuild a removal-only tool policy without recapturing models or probing CLIs.
+     * Model request identity/authorization stays in the already captured config and original Gateway. */
+    static void checkStoredAssetSourcesCurrent(JSONObject frozen, Sources sources, RunControl control) throws Exception {
+        JSONObject definition = frozen.getJSONObject("definition"); WorkProfile assets = WorkProfile.fromJson(new JSONObject(definition.toString()).put("modelPolicies", new JSONObject()));
+        Sources originalAssets = new Sources() {
+            public ModelConfig model(ModelTargetRef ref, String purpose, RunControl observation) { throw new SecurityException("tool_policy_cannot_recapture_models"); }
+            public void checkModel(ModelConfig captured, String purpose, RunControl observation) { throw new SecurityException("tool_policy_cannot_recapture_models"); }
+            public JSONObject skill(String id, RunControl observation) throws Exception { return sources.skill(id, observation); }
+            public JSONObject plugin(String id, RunControl observation) throws Exception { return sources.plugin(id, observation); }
+            public JSONObject extension(String id, RunControl observation) throws Exception { return sources.extension(id, observation); }
+            public JSONObject team(String id, RunControl observation) throws Exception { return sources.team(id, observation); }
+            public JSONObject target(JSONObject ref, RunControl observation) throws Exception { return frozenTarget(sources, frozen, ref, observation); }
+            public Set<String> hostCapabilities() throws Exception { return sources.hostCapabilities(); }
+        };
+        Resolution observed = resolve(assets, originalAssets, control); observed.requireReady(); JSONArray expected = new JSONArray(), actual = observed.view().getJSONArray("items"), original = frozen.getJSONArray("items");
+        for (int i = 0; i < original.length(); i++) if (!"model".equals(original.getJSONObject(i).getString("kind"))) expected.put(original.getJSONObject(i));
+        for (int i = 0; i < expected.length(); i++) { JSONObject item = expected.getJSONObject(i); if (item.getString("kind").startsWith("target:") && item.getBoolean("optional") && !item.getBoolean("included")) actual.put(i, new JSONObject(item.toString())); }
+        if (!WorkProfile.fingerprint(expected).equals(WorkProfile.fingerprint(actual))) throw new SecurityException("original_work_profile_asset_sources_changed"); control.check();
     }
     private interface Read { JSONObject get() throws Exception; }
     private interface Check { JSONObject verify(JSONObject actual) throws Exception; }
@@ -60,6 +98,8 @@ public final class WorkProfileResolver {
     public static Resolution resolve(WorkProfile profile, Sources sources, RunControl observation) throws Exception {
         java.util.Objects.requireNonNull(profile); java.util.Objects.requireNonNull(sources); observation.check();
         JSONObject definition = profile.toJson(), capturedModels = new JSONObject(); JSONArray rows = new JSONArray();
+        Set<String> availableCapabilities=sources.hostCapabilities();
+        Set<String> selectedPluginCapabilities = new java.util.HashSet<>();JSONArray pluginRefs=definition.getJSONArray("pluginRefs");for(int i=0;i<pluginRefs.length();i++){JSONObject plugin=pluginRefs.getJSONObject(i);JSONArray tools=plugin.getJSONArray("tools");for(int n=0;n<tools.length();n++)selectedPluginCapabilities.add("plugin:"+plugin.getString("id")+":"+tools.getString(n));}
         Map<String, ModelConfig> models = new LinkedHashMap<>();
         JSONObject policies = definition.getJSONObject("modelPolicies");
         for (String purpose : WorkProfile.keys(policies)) {
@@ -80,7 +120,7 @@ public final class WorkProfileResolver {
                             exact(actual, ref, "id", "revision", "digest");
                             if (!actual.optBoolean("contentVerified") || !actual.optBoolean("active") || !"active".equals(actual.optString("status"))) throw new Missing("skill_not_active");
                             JSONArray required = actual.getJSONArray("requiredCapabilities");
-                            for (int n = 0; n < required.length(); n++) if (!sources.hostCapabilities().contains(required.getString(n))) throw new Missing("host_capability_missing");
+                            for (int n = 0; n < required.length(); n++){String capability=required.getString(n);if(!availableCapabilities.contains(capability))throw new Missing("host_capability_missing");if(capability.startsWith("plugin:")&&!selectedPluginCapabilities.contains(capability))throw new Missing("required_plugin_not_selected");}
                             return pick(actual, "id", "revision", "digest", "executionGeneration", "expiresAt");
                         }));
             }
@@ -122,12 +162,18 @@ public final class WorkProfileResolver {
         JSONArray targets = definition.getJSONArray("targetBindings");
         for (int i = 0; i < targets.length(); i++) {
             JSONObject ref = targets.getJSONObject(i); String id = WorkProfile.targetKey(ref), kind = ref.getString("kind");
-            rows.put(inspect("target:" + kind, id, ref, observation, () -> sources.target(new JSONObject(ref.toString()), observation), actual -> {
-                if (!actual.optBoolean("supported")) throw new Missing("target_not_supported");
+            JSONObject actual = null, item;
+            try {
+                observation.check(); actual = sources.target(new JSONObject(ref.toString()), observation); observation.check();
+                if (actual == null) throw new Missing("source_missing");
+                if (actual.opt("supported") != Boolean.TRUE) throw new Missing("target_not_supported");
                 JSONObject binding = new JSONObject();
                 for (String field : WorkProfile.keys(ref)) if (!field.equals("optional")) { exact(actual, ref, field); binding.put(field, ref.get(field)); }
-                return binding;
-            }));
+                item = row("target:" + kind, id, ref.getBoolean("optional"), "ready", binding);
+            } catch (Missing unavailable) { observation.check(); item = row("target:" + kind, id, ref.getBoolean("optional"), unavailable.code, null); }
+            catch (Exception unavailable) { observation.check(); item = row("target:" + kind, id, ref.getBoolean("optional"), "source_unavailable", null); }
+            if (actual != null && actual.optJSONObject("sourceEvidence") != null) item.put("sourceEvidence", targetEvidence(actual.getJSONObject("sourceEvidence")));
+            rows.put(item);
         }
         boolean ready = true; int omitted = 0;
         for (int i = 0; i < rows.length(); i++) { JSONObject row = rows.getJSONObject(i); if (!"ready".equals(row.getString("status"))) { if (row.getBoolean("optional")) omitted++; else ready = false; } }
@@ -143,6 +189,24 @@ public final class WorkProfileResolver {
         catch (Missing unavailable) { observation.check(); return row(kind, id, optional, unavailable.code, null); }
         catch (Exception unavailable) { observation.check(); return row(kind, id, optional, "source_unavailable", null); }
     }
+    /** Stable public support facts only. Observation time and raw CLI/network output never enter run digests. */
+    private static JSONObject targetEvidence(JSONObject source) throws Exception {
+        JSONObject result = new JSONObject();
+        for (String field : new String[]{"sourceState", "reasonCode", "workerVersion", "accountMode"}) if (source.has(field)) {
+            Object value = source.get(field); if (value == JSONObject.NULL) result.put(field, JSONObject.NULL);
+            else { if (!(value instanceof String text) || text.length() > 120 || !text.matches("[A-Za-z0-9_.:/ +()@-]*")) throw new SecurityException("invalid_public_target_fact"); result.put(field, text); }
+        }
+        for (String field : new String[]{"workerAvailable", "protocolSupported", "protocolVerified", "accountConfigured", "configReadVerified", "cliFlagsVerified", "hostKeyTrusted", "credentialsConfigured", "connectionVerified", "configurationApplied", "runtimeVerified", "executableIdentityVerified", "versionContentVerified", "executionChainVerified"}) if (source.has(field)) {
+            Object value = source.get(field); if (!(value instanceof Boolean) && value != JSONObject.NULL) throw new SecurityException("invalid_public_target_fact"); result.put(field, value);
+        }
+        if (source.has("executableIdentity")) {
+            if (source.isNull("executableIdentity")) result.put("executableIdentity", JSONObject.NULL); else result.put("executableIdentity", WorkProfile.digest(source, "executableIdentity"));
+        }
+        if (source.has("executableIdentityKind")) {
+            Object kind = source.get("executableIdentityKind"); if (kind != JSONObject.NULL && (!(kind instanceof String text) || !Set.of("native_file_stat_v1", "unverified").contains(text))) throw new SecurityException("invalid_public_executable_identity_kind"); result.put("executableIdentityKind", kind);
+        }
+        return result;
+    }
     private static JSONObject modelIdentity(ModelConfig captured) throws Exception {
         JSONObject result = new JSONObject().put("model", captured.model).put("configurationDigest", ModelRoutePlan.configurationDigest(captured));
         if (captured.capabilityBinding != null) result.put("binding", captured.capabilityBinding.toJson());
@@ -151,6 +215,11 @@ public final class WorkProfileResolver {
             JSONObject route = captured.routePlan.toJson(); route.remove("snapshotId"); result.put("route", route);
         }
         return result;
+    }
+    /** Reopening a native route uses the original SQL pin, not a newly selected default or JSON config. */
+    static void requireStoredModelIdentity(JSONObject frozen,String purpose,ModelConfig captured)throws Exception {
+        JSONObject expected=frozen.getJSONObject("modelPolicies").getJSONObject(purpose);
+        if(!WorkProfile.fingerprint(expected).equals(WorkProfile.fingerprint(modelIdentity(captured))))throw new SecurityException("original_work_profile_model_source_changed:"+purpose);
     }
     private static JSONObject row(String kind, String id, boolean optional, String status, JSONObject binding) throws Exception {
         return new JSONObject().put("kind", kind).put("id", id).put("optional", optional).put("status", status).put("included", "ready".equals(status)).put("binding", binding == null ? JSONObject.NULL : binding);

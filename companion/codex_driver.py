@@ -1,5 +1,7 @@
 """Codex app-server JSON-RPC adapter, authored from official protocol contracts."""
 import json
+import hashlib
+import re
 import os
 from contextlib import nullcontext
 from pathlib import Path
@@ -58,6 +60,14 @@ class CodexAppServerDriver:
         self.output = ""
         self.diff = ""
         self.reported_file_changes = set()
+        self.runtime_version = None
+        self.model_options = None
+        self.requested_model = self.requested_effort = None
+        self.reported_model = self.reported_effort = None
+        self.configuration_source = None
+        self.context_window = None
+        self.context_source = None
+        self.context_model_ambiguous = False
         self.fork_dispatched = self.fork_refused = False
         self.fork_proof = None
         self.group_generation = self.group_expected_generation = self.group_runtime_generation = None
@@ -389,8 +399,23 @@ class CodexAppServerDriver:
                 lines = [str(step.get("step", ""))[:500] + " [" + str(step.get("status", "unknown"))[:40] + "]" for step in plan[:20] if isinstance(step, dict)]
                 self.progress.add("plan", method, summary="\n".join(lines), explanation=params.get("explanation") if isinstance(params.get("explanation"), str) else "")
                 self._state()
+        elif method == "thread/settings/updated" and params.get("threadId") == self.thread_id:
+            actual = params.get("threadSettings")
+            if isinstance(actual, dict):
+                self._read_configuration(actual, "thread/settings/updated")
+                self._state()
+        elif method == "model/rerouted" and (params.get("threadId"), params.get("turnId")) == (self.thread_id, self.turn_id):
+            if self._option_text(params.get("toModel")):
+                self.context_model_ambiguous = True
+                self.context_window = self.context_source = None
+                self._read_configuration({"model": params["toModel"]}, "model/rerouted")
+                self._state()
         elif method == "thread/tokenUsage/updated":
             usage = params.get("tokenUsage")
+            if isinstance(usage, dict) and self.reported_model and not self.context_model_ambiguous and self.thread_id and self.turn_id and (params.get("threadId"), params.get("turnId")) == (self.thread_id, self.turn_id):
+                window = usage.get("modelContextWindow")
+                self.context_window = window if type(window) is int and 0 < window <= 100_000_000 else None
+                self.context_source = "thread/tokenUsage/updated.tokenUsage.modelContextWindow" if self.context_window else None
             if isinstance(usage, dict):
                 total = usage.get("total")
                 counters = {key: total[key] for key in ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens") if isinstance(total, dict) and isinstance(total.get(key), int) and not isinstance(total.get(key), bool) and 0 <= total[key] <= 10**15}
@@ -474,7 +499,7 @@ class CodexAppServerDriver:
         with self.lock:
             approvals = [{key: value for key, value in entry.items() if key != "wireId"} for entry in self.pending.values()]
         questions, answers = self.questions.snapshot()
-        self.on_state({"protocol": "codex_app_server", "protocolVerified": self.protocol_verified, "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "pendingApprovals": approvals, "approvalReceipts": [dict(value) for value in self.approval_receipts], "pendingQuestions": questions, "questionReceipts": answers, "progress": self.progress.snapshot(), "output": self.output, "diff": self.diff, "reportedFileChanges": sorted(self.reported_file_changes), "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "inputSteeringVerified": self.input_steering_verified, "steeringUnknown": self.steering_unknown, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "status": "awaiting_approval" if approvals else "awaiting_input" if any(value.get("isBlocking") for value in questions) else "running"})
+        self.on_state({"modelRuntime": self._model_runtime(), "modelOptions": self.model_options, "reportedModel": self.reported_model, "protocol": "codex_app_server", "protocolVerified": self.protocol_verified, "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "pendingApprovals": approvals, "approvalReceipts": [dict(value) for value in self.approval_receipts], "pendingQuestions": questions, "questionReceipts": answers, "progress": self.progress.snapshot(), "output": self.output, "diff": self.diff, "reportedFileChanges": sorted(self.reported_file_changes), "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "inputSteeringVerified": self.input_steering_verified, "steeringUnknown": self.steering_unknown, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "status": "awaiting_approval" if approvals else "awaiting_input" if any(value.get("isBlocking") for value in questions) else "running"})
 
     def _question_live(self):
         return self.protocol_verified and self.turn_dispatched and self.thread_id is not None and self.turn_id is not None and self.completed is None and not self.closed and not self.interrupt_sent and not self.stopped() and not self.assignment_write
@@ -503,7 +528,10 @@ class CodexAppServerDriver:
     def _initialize(self):
         if self.initialized:
             return
-        self._request("initialize", {"clientInfo": {"name": "pocket_world", "title": "Pocket World", "version": "0.3.0"}})
+        actual = self._request("initialize", {"clientInfo": {"name": "pocket_world", "title": "Pocket World", "version": "0.3.0"}})
+        agent = actual.get("userAgent")
+        version = re.search(r"(?<![0-9])(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?![0-9])", agent) if isinstance(agent, str) else None
+        self.runtime_version = version.group(1) if version else None
         self._send({"method": "initialized", "params": {}})
         self.initialized = True
 
@@ -523,7 +551,71 @@ class CodexAppServerDriver:
             raise DriverError("Latest stored turn differs or is not terminal; no old turn/answer/approval was replayed")
         return {"threadId": thread_id, "turnId": turn_id, "status": data[0]["status"], "threadStatus": thread["status"]["type"], "readOnlyInspection": True}
 
-    def probe(self, model=None):
+    @staticmethod
+    def _option_text(value, maximum=200):
+        return isinstance(value, str) and 0 < len(value) <= maximum and value == value.strip() and not any(ord(c) < 32 for c in value)
+
+    def _model_catalog(self):
+        catalog = self._request("model/list", {"limit": 100, "includeHidden": False})
+        if not isinstance(catalog.get("data"), list) or len(catalog["data"]) > 100:
+            raise DriverError("Codex model discovery has an unsupported shape")
+        models = []
+        for item in catalog["data"]:
+            if not isinstance(item, dict) or not self._option_text(item.get("model")):
+                raise DriverError("Codex model discovery identity is invalid")
+            choices = item.get("supportedReasoningEfforts")
+            efforts = []
+            if choices is not None:
+                if not isinstance(choices, list) or len(choices) > 32:
+                    raise DriverError("Codex advertised effort options exceed the explicit bound")
+                for choice in choices:
+                    if not isinstance(choice, dict) or not self._option_text(choice.get("reasoningEffort"), 80):
+                        raise DriverError("Codex effort options are malformed")
+                    efforts.append({"id": choice["reasoningEffort"], "description": str(choice.get("description", ""))[:160]})
+                if len({value["id"] for value in efforts}) != len(efforts):
+                    raise DriverError("Codex advertised ambiguous effort identities")
+            default = item.get("defaultReasoningEffort")
+            models.append({"id": item["model"], "name": str(item.get("displayName", item["model"]))[:200],
+                           "isDefault": item.get("isDefault") is True, "efforts": efforts,
+                           "effortCapability": "advertised" if choices is not None else "not_reported",
+                           "defaultEffort": default if any(value["id"] == default for value in efforts) else None})
+        if len({item["id"] for item in models}) != len(models):
+            raise DriverError("Codex advertised ambiguous model identities")
+        source = {"protocol": "codex_model_options_v1", "runtimeVersion": self.runtime_version,
+                  "models": models, "truncated": bool(catalog.get("nextCursor")),
+                  "changeModes": ["new_job", "settled_continuation"], "runningTurnChanges": False}
+        source["digest"] = hashlib.sha256(json.dumps(source, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        self.model_options = source
+        return models
+
+    def _read_configuration(self, value, source):
+        model, effort = value.get("model"), value.get("reasoningEffort", value.get("effort"))
+        if not self._option_text(model):
+            self.reported_model = self.reported_effort = self.configuration_source = None
+            self.context_window = self.context_source = None
+            return
+        if model != self.reported_model:
+            if self.turn_dispatched and self.reported_model is not None:
+                self.context_model_ambiguous = True
+            self.context_window = self.context_source = None
+        self.reported_model = model
+        self.reported_effort = effort if self._option_text(effort, 80) else None
+        self.configuration_source = source
+
+    def _model_runtime(self):
+        return {"protocol": "native_model_runtime_v1", "worker": "codex_app_server",
+                "runtimeVersion": self.runtime_version, "threadId": self.thread_id, "turnId": self.turn_id,
+                "requestedModel": self.requested_model, "requestedEffort": self.requested_effort,
+                "reportedModel": self.reported_model, "reportedEffort": self.reported_effort,
+                "configurationSource": self.configuration_source,
+                "modelReadback": "known" if self.reported_model else "unknown",
+                "effortReadback": "known" if self.reported_effort else "unknown",
+                "contextWindow": {"status": "known" if self.context_window else "unknown", "tokens": self.context_window,
+                                  "reportedModel": self.reported_model, "source": self.context_source,
+                                  "unknownReason": "model_changed_within_turn_usage_has_no_model_tag" if self.context_model_ambiguous else "not_reported" if self.context_window is None else None,
+                                  "scope": "original_native_model_not_phone_budget_or_invoice"}}
+
+    def probe(self, model=None, effort=None):
         """Read protocol/account/catalog only. Never creates a thread or starts a turn."""
         self._initialize()
         self._probe_steering()
@@ -533,18 +625,13 @@ class CodexAppServerDriver:
             raise DriverError("Codex account response has an unsupported shape")
         identity = account.get("account")
         configured = not account["requiresOpenaiAuth"] or isinstance(identity, dict) and identity.get("type") in {"apiKey", "chatgpt", "amazonBedrock", "gcp"}
-        catalog = self._request("model/list", {"limit": 100, "includeHidden": False})
-        if not isinstance(catalog.get("data"), list):
-            raise DriverError("Codex model discovery has an unsupported shape")
-        models = []
-        for item in catalog["data"][:100]:
-            if isinstance(item, dict) and isinstance(item.get("model"), str) and 0 < len(item["model"]) <= 200:
-                models.append({"id": item["model"], "name": str(item.get("displayName", item["model"]))[:200], "isDefault": item.get("isDefault") is True})
+        models = self._model_catalog()
         model_available = bool(models) if model is None else any(item["id"] == model for item in models)
-        return {"available": configured and model_available, "protocolVerified": True, "accountConfigured": configured, "authMode": identity.get("type", "unknown") if isinstance(identity, dict) and identity.get("type") in {"apiKey", "chatgpt", "amazonBedrock", "gcp"} else "unknown", "authModeObservedFrom": "original_app_server_account_read", "billingBackendVerified": False,
-                "modelInferenceVerified": False, "configReadVerified": True, "inputSteeringVerified": self.input_steering_verified, "models": models, "modelCatalogTruncated": bool(catalog.get("nextCursor")),
+        effort_available = effort is None or any(item["id"] == model and any(value["id"] == effort for value in item["efforts"]) for item in models)
+        return {"available": configured and model_available and effort_available, "protocolVerified": True, "accountConfigured": configured, "authMode": identity.get("type", "unknown") if isinstance(identity, dict) and identity.get("type") in {"apiKey", "chatgpt", "amazonBedrock", "gcp"} else "unknown", "authModeObservedFrom": "original_app_server_account_read", "billingBackendVerified": False,
+                "modelInferenceVerified": False, "configReadVerified": True, "inputSteeringVerified": self.input_steering_verified, "models": models, "modelCatalogTruncated": self.model_options["truncated"], "modelOptions": self.model_options, "selectedEffortAvailable": effort_available if effort is not None else None,
                 "selectedModelAvailable": model_available,
-                "message": "Protocol and configured account/catalog checked; no model turn was executed" if configured and model_available else "Configure the Codex account and select a model advertised by its catalog"}
+                "message": "The selected effort is not advertised for this exact native model; no turn was executed" if not effort_available else "Protocol and configured account/catalog checked; no model turn was executed" if configured and model_available else "Configure the Codex account and select a model advertised by its catalog"}
 
     def require_group_api_mode(self, expected_generation, current_generation, runtime_generation=None):
         self.group_expected_generation, self.group_generation = expected_generation, current_generation
@@ -620,9 +707,14 @@ class CodexAppServerDriver:
                 "codex_hooks": False, "plugin_hooks": False, "browser_use": False, "browser_use_external": False,
                 "computer_use": False, "multi_agent": False}, "web_search": "disabled"}
 
-    def run(self, prompt, thread_id=None, model=None):
+    def run(self, prompt, thread_id=None, model=None, effort=None):
         self._initialize()
         self.protocol_verified = True
+        self.requested_model, self.requested_effort = model, effort
+        if effort is not None or self.runtime_version is not None:
+            models = self._model_catalog()
+            if effort is not None and (not model or not self._option_text(effort, 80) or not any(item["id"] == model and any(value["id"] == effort for value in item["efforts"]) for item in models)):
+                raise DriverError("Codex effort requires an exact model and its currently advertised native option; no turn started")
         self._check_group_api_mode()
         self._probe_steering()
         params = {"cwd": self.cwd, "approvalPolicy": "unlessTrusted", "sandbox": "workspaceWrite" if self.write_allowed else "readOnly"}
@@ -635,6 +727,8 @@ class CodexAppServerDriver:
                 params["config"]["sandbox_workspace_write"] = {"writable_roots": [self.cwd], "network_access": False, "exclude_tmpdir_env_var": True, "exclude_slash_tmp": True}
         if model:
             params["model"] = model
+        if effort is not None:
+            params.setdefault("config", {})["model_reasoning_effort"] = effort
         if thread_id:
             params["threadId"] = thread_id
             params["excludeTurns"] = True
@@ -645,6 +739,9 @@ class CodexAppServerDriver:
         if thread_id is not None and thread["id"] != thread_id:
             raise DriverError("Codex resumed a different thread; no turn was started")
         self.thread_id = thread["id"]
+        self._read_configuration(admitted, "thread/resume.response" if thread_id else "thread/start.response")
+        if effort is not None and (self.reported_model != model or self.reported_effort != effort):
+            raise DriverError("Codex did not read back the exact requested model/effort; no turn was started")
         self._state()
         if self.restricted_read_only or self.assignment_write:
             sandbox = admitted.get("sandbox")
@@ -661,7 +758,12 @@ class CodexAppServerDriver:
         policy = {"type": "workspaceWrite", "writableRoots": [self.cwd], "networkAccess": False} if self.write_allowed else {"type": "readOnly"}
         if self.assignment_write:
             policy.update(excludeTmpdirEnvVar=True, excludeSlashTmp=True)
-        turn = self._start_turn({"threadId": self.thread_id, "input": [{"type": "text", "text": prompt}], "cwd": self.cwd, "approvalPolicy": "unlessTrusted", "sandboxPolicy": policy})
+        turn_request = {"threadId": self.thread_id, "input": [{"type": "text", "text": prompt}], "cwd": self.cwd, "approvalPolicy": "unlessTrusted", "sandboxPolicy": policy}
+        if model:
+            turn_request["model"] = model
+        if effort is not None:
+            turn_request["effort"] = effort
+        turn = self._start_turn(turn_request)
         if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
             raise DriverError("Codex did not confirm the turn identity; do not replay")
         if self.turn_id is not None and self.turn_id != turn["id"]:
@@ -684,4 +786,4 @@ class CodexAppServerDriver:
                 self.group_api_facts = {"authMode": "unknown", "postTurnAccountReadVerified": False,
                                         "billingBackendVerified": False, "internalTokensKnown": False,
                                         "internalCostKnown": False}
-        return {"status": "unknown" if self.group_api_revoked else "completed" if status == "completed" else "cancelled" if status == "interrupted" else "failed", "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "output": self.output, "diff": self.diff, "reportedFileChanges": sorted(self.reported_file_changes), "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "message": "Codex returned a final turn receipt; inspect its actual changes", "protocol": "codex_app_server", "protocolVerified": True, "approvalReceipts": self.approval_receipts, "pendingApprovals": [], "pendingQuestions": [], "questionReceipts": self.questions.snapshot()[1], "progress": self.progress.snapshot()}
+        return {"modelRuntime": self._model_runtime(), "modelOptions": self.model_options, "reportedModel": self.reported_model, "status": "unknown" if self.group_api_revoked else "completed" if status == "completed" else "cancelled" if status == "interrupted" else "failed", "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "output": self.output, "diff": self.diff, "reportedFileChanges": sorted(self.reported_file_changes), "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "message": "Codex returned a final turn receipt; inspect its actual changes", "protocol": "codex_app_server", "protocolVerified": True, "approvalReceipts": self.approval_receipts, "pendingApprovals": [], "pendingQuestions": [], "questionReceipts": self.questions.snapshot()[1], "progress": self.progress.snapshot()}

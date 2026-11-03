@@ -125,7 +125,7 @@ public final class NativeSkillExecutionHostTest {
             String task=f.task.getString("id"),operation=f.input.getString("_hostOperationId");
             assertEquals("not_retrieved",f.host.taskSnapshot(task,Set.of("skills_execute"),new JSONObject()).getJSONArray("executions").getJSONObject(0).getJSONObject("artifactAvailability").getString("state"));
             f.tasks.journal(task,f.task.getString("runId"),f.task.getInt("coordinatorEpoch"),f.control).finishOperation(operation,result);
-            f.host.removeConfiguration(f.window,f.host.configuration().getLong("revision"));f.skills.handle("delete",new JSONObject().put("id",f.installed.getString("id")));f.control.cancel();f.failArtifactReads=false;
+            f.host.removeConfiguration(f.window,f.host.configuration().getLong("revision"),f.host.configuration().getString("stateFingerprint"));f.skills.handle("delete",new JSONObject().put("id",f.installed.getString("id")));f.control.cancel();f.failArtifactReads=false;
             try(NativeSkillExecutionHost reopened=new NativeSkillExecutionHost(f.android,f.skills,f.wire,f.tasks,(id,run,epoch,c)->{throw new SecurityException("no restarted live executor");},id->{})){
                 assertFalse(reopened.configuration().getBoolean("configured"));assertNull(reopened.pendingReview(task));
                 JSONObject actual=reopened.retrieveArtifacts(task,operation);assertEquals("available",actual.getJSONObject("artifactAvailability").getString("state"));assertFalse(actual.getBoolean("replayAllowed"));
@@ -185,7 +185,7 @@ public final class NativeSkillExecutionHostTest {
     }
     @Test public void configurationRemovalWhileWaitingRejectsBeforeRemoteStaging()throws Exception {
         try(Fixture f=new Fixture()){
-            var work=f.execute();var review=f.review();long revision=f.host.configuration().getLong("revision");f.host.removeConfiguration(f.window,revision);
+            var work=f.execute();var review=f.review();long revision=f.host.configuration().getLong("revision");f.host.removeConfiguration(f.window,revision,f.host.configuration().getString("stateFingerprint"));
             assertEquals("rejected",work.get(5,TimeUnit.SECONDS).getString("status"));assertEquals(0,f.posts.get());assertEquals(0,f.markers());assertFalse(f.host.configuration().getBoolean("configured"));
             assertThrows(SecurityException.class,()->f.host.decide(f.window,review,review.plan.digest,true));
         }

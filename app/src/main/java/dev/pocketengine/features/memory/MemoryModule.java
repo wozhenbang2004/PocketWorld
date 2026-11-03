@@ -9,6 +9,7 @@ import org.json.JSONObject;
 public final class MemoryModule implements EngineModule {
     private final FeatureContext context;
     private final MemoryBook book;
+    private ProjectMemoryNamespaces projectNamespaces;
     private final AutomaticMemoryPolicy automaticLearning;
     private final boolean sourceVerification;
     public MemoryModule(FeatureContext context)throws Exception {this(context,null);}
@@ -23,6 +24,15 @@ public final class MemoryModule implements EngineModule {
         catch(Exception invalidBook){retrieval.close();throw invalidBook;}
     }
     @Override public String id(){return "memory";}
+    /** Native owner UI composition only. Not exposed by handle() or the model tools. */
+    public synchronized ProjectMemoryNamespaces projectNamespacesForOwner(dev.pocketengine.features.local.LocalModule local,dev.pocketengine.features.workspace.WorkspaceModule workspace){
+        if(projectNamespaces==null)projectNamespaces=new ProjectMemoryNamespaces(book,local,workspace);return projectNamespaces;
+    }
+
+    public synchronized ProjectMemoryNamespaces projectNamespacesForOwner(dev.pocketengine.features.local.LocalModule local,dev.pocketengine.features.workspace.WorkspaceModule workspace,dev.pocketengine.features.MemorySourceBridge originalSources){
+        ProjectMemoryNamespaces result=projectNamespacesForOwner(local,workspace);result.bindOriginalSources(originalSources);return result;
+    }
+    public boolean ownsProjectNamespacesForHost(ProjectMemoryNamespaces expected){return expected!=null&&projectNamespaces==expected;}
     /** Native owner settings only; intentionally absent from handle/model routes. */
     public JSONObject automaticLearningPolicy()throws Exception{return automaticLearning.snapshot();}
     public JSONObject setAutomaticLearningPolicyForOwner(long revision,boolean enabled,int maximum)throws Exception{return automaticLearning.setForOwner(revision,enabled,maximum);}
@@ -30,6 +40,7 @@ public final class MemoryModule implements EngineModule {
 
     /** Native owner archive UI only; intentionally absent from handle/model command routes. */
     public JSONObject ownerExperienceBarriers(JSONObject scope)throws Exception{return book.ownerExperienceBarriers(scope);}
+    public boolean isOwnerExperienceSourceBlocked(JSONObject scope,SourceRef source)throws Exception{return book.isOwnerExperienceSourceBlocked(scope,source);}
     public JSONObject ownerArchive(JSONObject scope)throws Exception{return book.ownerArchive(scope);}
     public JSONObject restoreOwnerArchive(JSONObject scope,JSONObject archive,String nativeImportId)throws Exception{return book.restoreOwnerArchive(scope,archive,nativeImportId);}
     public JSONObject ownerArchiveRestoration(JSONObject scope,String nativeImportId)throws Exception{return book.ownerArchiveRestoration(scope,nativeImportId);}
@@ -64,6 +75,7 @@ public final class MemoryModule implements EngineModule {
                 .put("commands",new JSONArray(new String[]{"cognitionProjection","list","search","get","save","delete","consolidate","recall","setCore","contextSnapshot","importFromSources","sourceUpdated","sourceDeleted","forget","listCandidates","getCandidate","editCandidate","rejectCandidate"}));
     }
     @Override public JSONObject handle(String command,JSONObject input)throws Exception {
+        ProjectMemoryNamespaces.rejectNamespaceArguments(input);
         JSONObject scope=input.optJSONObject("scope");
         if(scope==null){
             // New contextual APIs never infer an owner/space from absent or malformed input.
@@ -145,6 +157,7 @@ public final class MemoryModule implements EngineModule {
 
     /** Same book; native task/send/source read ports only, never a model/handle command. */
     public TaskMemoryUse taskMemoryUse(TaskMemoryUse.HostReader host,TaskMemoryUse.SourceReader sources){return new TaskMemoryUse(book,host,sources);}
+    public TaskMemoryUse taskMemoryUse(TaskMemoryUse.HostReader host,TaskMemoryUse.SourceReader source,ProjectMemoryAccess access){return new TaskMemoryUse(book,host,source,java.util.Objects.requireNonNull(access));}
     /** Host-only exact-version consolidation input, intentionally absent from raw JSON/model dispatch. */
     public JSONObject consolidationSnapshot(JSONObject authenticatedScope,JSONArray selections)throws Exception {
         return book.consolidationSnapshot(authenticatedScope,selections,System.currentTimeMillis());

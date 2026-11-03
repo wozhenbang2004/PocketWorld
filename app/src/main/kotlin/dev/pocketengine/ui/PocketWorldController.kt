@@ -595,6 +595,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private val ownerRequests = mutableMapOf<String, OwnerRequest>()
     private val ownerEpochs = java.util.concurrent.ConcurrentHashMap<String, Int>()
     private var ownerDomain: String? = null
+    /** In-process owner choice only. Metadata in snapshots is never deserialized into this token. */
+    private sealed class MemoryReviewScope {
+        data object Private : MemoryReviewScope()
+        data object Changing : MemoryReviewScope()
+        data class Unavailable(val reason: String) : MemoryReviewScope()
+        data class Project(val native: dev.pocketengine.features.memory.ProjectMemoryNamespaces, val selected: dev.pocketengine.features.memory.ProjectMemoryNamespaces.Selection, val label: String) : MemoryReviewScope()
+    }
+    private var memoryReviewScope: MemoryReviewScope = MemoryReviewScope.Private
+
     private var groupOwnerWindow: String? = null
     private var groupTaskWindow: String? = null
     private var groupTaskPage: String? = null
@@ -658,9 +667,98 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun runDeviceWorkspaceControlWork(work: Runnable) { check(!closed); controls.execute(work) }
     fun deviceTaskWorkspaceChanged(id: String) { if (!closed) io.execute { app.pushTask(id) }; deviceWorkspaceChanged() }
     fun deviceWorkspaceChanged() { if (!closed) app.publish(JSONObject().put("type", "device_workspace_changed")) }
+    fun nativeWorkProfiles(): dev.pocketengine.features.controlplane.NativeWorkProfileHost = app.nativeWorkProfiles()
+    fun runWorkProfileWork(work: Runnable) { check(!closed); io.execute(work) }
+    fun runWorkProfileControl(work: Runnable) { check(!closed); controls.execute(work) }
+    fun startOwnerWorkProfile(goal: String, selected: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection, control: dev.pocketengine.core.RunControl, complete: (Result<JSONObject>) -> Unit) {
+        check(!closed)
+        app.runOwnerWorkProfileAsync(goal, "", null, null, selected, control) { value, failure ->
+            complete(if (failure != null) Result.failure(failure) else if (value != null) Result.success(value) else Result.failure(IllegalStateException("原工作配置任务回执缺失")))
+        }
+    }
+    fun reviewOriginalTaskWorkProfile(page: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Page, id: String, run: String, epoch: Int, control: dev.pocketengine.core.RunControl): dev.pocketengine.features.controlplane.NativeWorkProfileHost.Review = page.reviewForTask(app.tasks, id, run, epoch, control)
+    fun originalTaskWorkProfileSnapshot(id: String, run: String, epoch: Int): JSONObject = if (run.isEmpty()) app.tasks.pendingWorkProfileTaskSnapshot(id) else app.tasks.workProfileRunSnapshot(id, run, epoch)
+    fun continueOwnerWorkProfile(id: String, selected: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection, control: dev.pocketengine.core.RunControl, complete: (Result<JSONObject>) -> Unit) {
+        check(!closed)
+        app.continueOwnerWorkProfileAsync(id, selected, control) { value, failure ->
+            complete(if (failure != null) Result.failure(failure) else if (value != null) Result.success(value) else Result.failure(IllegalStateException("原工作配置任务回执缺失")))
+        }
+    }
     fun nativeModelConnections(): dev.pocketengine.runtime.models.ModelConnectionService? = app.modelConnections
     fun runModelConnectionWork(work: Runnable) { check(!closed); io.execute(work) }
     fun modelConnectionChanged() { if (!closed) io.execute { app.sendState() } }
+    private fun unavailableMemoryScope(reason: String) = JSONObject().put("available", false).put("namespaceStatus", "unavailable").put("message", reason)
+    private fun memoryReviewSnapshot(scope: MemoryReviewScope): JSONObject = when (scope) {
+        MemoryReviewScope.Private -> app.memoryOwnerSnapshot().put("namespaceStatus", "private").put("scopeName", "主人全局 · 私人")
+        is MemoryReviewScope.Project -> scope.native.handleForOwner(scope.selected, "snapshot", JSONObject()).put("namespaceStatus", "project").put("scopeName", scope.label)
+        MemoryReviewScope.Changing -> throw SecurityException("正在核对原生记忆范围，尚未授权读取；没有回退全局空间")
+        is MemoryReviewScope.Unavailable -> throw SecurityException(scope.reason)
+    }
+    private fun memoryReviewCommand(scope: MemoryReviewScope, command: String, payload: JSONObject, original: dev.pocketengine.core.RunControl): JSONObject {
+        if (command == "namespaceChoices") return JSONObject().put("choices", app.nativeOwnerWorkflows.projectMemoryForOwner().choicesForOwner())
+        if (command == "snapshot") return memoryReviewSnapshot(scope)
+        return when (scope) {
+            MemoryReviewScope.Private -> when (command) {
+                "openSource" -> app.nativeOwnerWorkflows.source(payload)
+                "proposeConsolidation" -> app.proposeMemoryConsolidation(payload.getJSONArray("selections"), original)
+                "projectFileChoices", "proposeProjectFile" -> throw SecurityException("请先明确选择原生项目记忆范围")
+                else -> app.nativeOwnerWorkflows.memory(command, payload)
+            }
+            is MemoryReviewScope.Project -> when (command) {
+                "openSource" -> scope.native.readFileSourceForOwner(scope.selected, dev.pocketengine.features.memory.SourceRef.fromJson(payload))
+                "projectFileChoices" -> JSONObject().put("files", scope.native.fileChoicesForOwner(scope.selected))
+                "proposeProjectFile" -> {
+                    require(payload.keys().asSequence().toSet() == setOf("path", "version", "revisionId", "sha256", "offset", "chars")) { "项目原文只接受所选文件版本和范围；namespace不是JSON权限" }
+                    original.check()
+                    scope.native.proposeFileForOwner(scope.selected, payload.getString("path"), payload.getInt("version"), payload.getString("revisionId"), payload.getString("sha256"), payload.getInt("offset"), payload.getInt("chars"))
+                }
+                else -> scope.native.handleForOwner(scope.selected, command, payload)
+            }
+            MemoryReviewScope.Changing -> throw SecurityException("原生记忆范围尚在核对，未读取或写入任何空间")
+            is MemoryReviewScope.Unavailable -> throw SecurityException(scope.reason)
+        }
+    }
+    /** Explicit native owner selection. Old requests/rows are retired before changing the token. */
+    fun selectMemoryNamespace(choice: JSONObject?) {
+        check(!closed && ownerDomain == "memoryReview") { "请先打开原生记忆审核页" }
+        check(memoryReviewScope != MemoryReviewScope.Changing) { "正在核对原生范围，请等待真实回执" }
+        val selected = choice?.let { JSONObject(it.toString()) }
+        if (selected != null) require(selected.opt("available") == true) { "此项目尚未支持主人记忆授权" }
+        leaveOwnerDomain("memoryReview"); ownerDomain = "memoryReview"
+        memoryReviewScope = MemoryReviewScope.Changing
+        val epoch = ownerEpochs["memoryReview"] ?: 0
+        val pending = "memoryReview.selectNamespace"
+        state = state.copy(ownerSnapshots = state.ownerSnapshots + ("memoryReview" to JSONObject().put("available", false).put("namespaceStatus", "changing")), ownerPending = state.ownerPending + pending)
+        try { io.execute {
+            var target: MemoryReviewScope = MemoryReviewScope.Private
+            var snapshot: JSONObject? = null
+            var failure: Exception? = null
+            try {
+                check(!closed && epoch == (ownerEpochs["memoryReview"] ?: 0)) { "原记忆页面已关闭" }
+                if (selected != null) {
+                    val native = app.nativeOwnerWorkflows.projectMemoryForOwner()
+                    val token = native.selectForOwner(selected.getString("checkoutId"), selected.getString("projectId"), selected.getString("revision"))
+                    target = MemoryReviewScope.Project(native, token, selected.optString("name", "项目"))
+                }
+                snapshot = memoryReviewSnapshot(target)
+            } catch (error: Exception) { failure = error }
+            val completed = target; val actual = snapshot; val error = failure
+            main.post {
+                if (closed || ownerDomain != "memoryReview" || epoch != (ownerEpochs["memoryReview"] ?: 0)) {
+                    if (completed is MemoryReviewScope.Project) completed.native.revokeForOwner(completed.selected)
+                    return@post
+                }
+                if (error != null && completed is MemoryReviewScope.Project) completed.native.revokeForOwner(completed.selected)
+                memoryReviewScope = if (error == null) completed else MemoryReviewScope.Unavailable(message(error))
+                state = state.copy(ownerPending = state.ownerPending - pending,
+                    ownerSnapshots = state.ownerSnapshots + ("memoryReview" to (actual ?: unavailableMemoryScope(message(error ?: IllegalStateException("范围回执缺失"))))),
+                    ownerErrors = if (error == null) state.ownerErrors - "memoryReview" else state.ownerErrors + ("memoryReview" to message(error)))
+            }
+        } } catch (rejected: java.util.concurrent.RejectedExecutionException) {
+            memoryReviewScope = MemoryReviewScope.Unavailable("页面已关闭，请重新选择记忆范围")
+            state = state.copy(ownerPending = state.ownerPending - pending, ownerSnapshots = state.ownerSnapshots + ("memoryReview" to unavailableMemoryScope("页面已关闭，请重新选择记忆范围")))
+        }
+    }
     fun enterOwnerDomain(domain: String) {
         if (domain !in setOf("memoryReview", "taskMemory", "mcp", "accounts", "learning", "groups", "channelMedia")) return
         if (domain == "groups") { projectGit.deactivate();projectPackages.leavePrivate(); closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null) }
@@ -671,6 +769,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (domain == "accounts") { main.removeCallbacks(accountPoll); main.postDelayed(accountPoll, 1500) }
     }
     fun leaveOwnerDomain(domain: String) {
+        if (domain == "memoryReview") { (memoryReviewScope as? MemoryReviewScope.Project)?.let { it.native.revokeForOwner(it.selected) }; memoryReviewScope = MemoryReviewScope.Private }
         if (domain == "channelMedia") { channelMediaWindow?.close(); channelMediaWindow = null; channelMediaReview = null }
         if (domain == "groups") { groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null }
         if (domain == "remoteTask") { remoteOwnerWindow?.let { app.remoteOwnerWorkflows?.close(it) }; remoteOwnerWindow = null; remoteOwnerTask = null }
@@ -683,8 +782,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             if (domain == "mcp" && request.command in setOf("discoverMcp", "discoverMcpAuthorized")) cleanOwnerResult("mcp", "cancel", JSONObject().put("operationId", request.payload.optString("_operationId")))
         }
         if (domain == "mcp") listOf("discoverMcp", "discoverMcpAuthorized").forEach { discovery -> state.ownerResponses(domain)[discovery]?.optJSONObject("result")?.optString("previewId")?.takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardMcpPreview", JSONObject().put("previewId", it)) } }
+        if (domain == "mcp") state.ownerResponses(domain)["prepareLocalMcpDiscovery"]?.optJSONObject("result")?.optString("reviewId")?.takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardLocalMcpReview", JSONObject().put("reviewId", it)) }
         if (configPick?.domain == domain) { configPick?.call?.close(); configPick = null }
-        state = state.copy(ownerPending = state.ownerPending.filterNot { it.startsWith("$domain.") }.toSet(), ownerResponses = state.ownerResponses - domain, ownerErrors = state.ownerErrors - domain, groupOwnerReceipts = if (domain == "groups") emptyMap() else state.groupOwnerReceipts, ownerSource = null)
+        state = state.copy(ownerSnapshots = if (domain == "memoryReview") state.ownerSnapshots - domain else state.ownerSnapshots, ownerPending = state.ownerPending.filterNot { it.startsWith("$domain.") }.toSet(), ownerResponses = state.ownerResponses - domain, ownerErrors = state.ownerErrors - domain, groupOwnerReceipts = if (domain == "groups") emptyMap() else state.groupOwnerReceipts, ownerSource = null)
     }
     private fun cleanOwnerResult(domain: String, command: String, payload: JSONObject) {
         try { app.features.nativeOwnerCleanup { try {
@@ -705,6 +805,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             groupOwnerWindow?.let { app.groupOwnerWorkflows.leaveMaterials(it) }
             return "native-material-page-revoked"
         }
+        val capturedMemoryScope = memoryReviewScope
+        if (domain == "memoryReview" && command != "namespaceChoices" && (capturedMemoryScope is MemoryReviewScope.Changing || capturedMemoryScope is MemoryReviewScope.Unavailable)) throw SecurityException("当前记忆范围尚未确认，请明确重新选择；没有回退全局空间")
         val key = "$domain.$command"
         if (domain == "groups" && groupOwnerWindow == null) try { groupOwnerWindow = app.groupOwnerWorkflows.open(activity) } catch (_: Exception) { /* Worker returns a real denied-window receipt. */ }
         if (domain == "learning" && command == "cancelLearning") return cancelLearning(payload.optString("requestId"))
@@ -714,7 +816,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (domain == "accounts" && (command in setOf("beginLogin", "cancelLogin", "logout") || command in setOf("setEnabled", "setAppLearningPolicy") && !payload.optBoolean("enabled"))) authorizationOpening = null
         ownerRequests[key]?.let { previous ->
             if (previous.payload.toString() == payload.toString()) return previous.id
-            if (command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "cognitionProjection", "readAssertionEvidence", "models", "openSource", "prepareLearningSource", "discoverMcp", "discoverMcpAuthorized", "searchTaskMemoryTasks", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "getLearningJob", "listLearningJobs", "searchOwnerOriginals", "readOwnerOriginalSearchHit", "selectOwnerOriginalReference")) throw IllegalStateException("这项操作仍在处理中，请等待真实回执")
+            if (command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "namespaceChoices", "projectFileChoices", "cognitionProjection", "readAssertionEvidence", "models", "openSource", "prepareLearningSource", "discoverMcp", "discoverMcpAuthorized", "searchTaskMemoryTasks", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "getLearningJob", "listLearningJobs", "searchOwnerOriginals", "readOwnerOriginalSearchHit", "selectOwnerOriginalReference")) throw IllegalStateException("这项操作仍在处理中，请等待真实回执")
             previous.control.cancel(); previous.call.cancel(); originalSourceStages.remove(previous.id)
             if (domain == "mcp" && command in setOf("discoverMcp", "discoverMcpAuthorized")) cleanOwnerResult(domain, "cancel", JSONObject().put("operationId", previous.payload.optString("_operationId")))
         }
@@ -724,7 +826,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val request = OwnerRequest(UUID.randomUUID().toString(), domain, command, JSONObject(payload.toString()), ownerEpochs[domain] ?: 0, dev.pocketengine.features.proxy.accounts.GatewayCall(60000))
         ownerRequests[key] = request
         state = state.copy(ownerPending = state.ownerPending + key, ownerErrors = state.ownerErrors - domain)
-        val worker = if (command in setOf("cancel", "cancelLogin", "logout", "stopLearningJob") || command == "setEnabled" && !payload.optBoolean("enabled")) controls else io
+        val worker = if (command in setOf("cancel", "cancelLogin", "logout", "stopLearningJob", "cancelLocalMcpDiscovery", "discardLocalMcpReview") || command == "setEnabled" && !payload.optBoolean("enabled")) controls else io
         try { worker.execute {
             var result: JSONObject? = null
             var snapshot: JSONObject? = null
@@ -733,11 +835,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 request.call.check()
                 result = when (domain) {
                     "taskMemory" -> app.nativeOwnerWorkflows.taskMemory(command, request.payload, request.control)
-                    "memoryReview" -> when (command) {
-                        "openSource" -> app.nativeOwnerWorkflows.source(request.payload)
-                        "proposeConsolidation" -> app.proposeMemoryConsolidation(request.payload.getJSONArray("selections"), request.control)
-                        else -> app.nativeOwnerWorkflows.memory(command, request.payload)
-                    }
+                    "memoryReview" -> memoryReviewCommand(capturedMemoryScope, command, request.payload, request.control)
                     "mcp" -> app.nativeOwnerWorkflows.mcp(command, request.payload)
                     "learning" -> when (command) {
                         "getAppLearningPolicy", "setAppLearningPolicy" -> app.appLearningCommand(command, request.payload, request.control)
@@ -771,7 +869,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
             try {
                 snapshot = when (domain) {
-                    "memoryReview" -> app.memoryOwnerSnapshot()
+                    "memoryReview" -> memoryReviewSnapshot(capturedMemoryScope)
                     "mcp" -> app.nativeOwnerWorkflows.mcpSnapshot()
                     "accounts" -> app.nativeOwnerWorkflows.accountSnapshot()
                     "learning" -> app.nativeOwnerWorkflows.learningSnapshot()
@@ -786,6 +884,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 val sourceStage=originalSourceStages.remove(request.id)
                 if (closed || request.epoch != (ownerEpochs[domain] ?: 0) || ownerRequests[key]?.id != request.id) {
                     if (command in setOf("discoverMcp", "discoverMcpAuthorized") && completed != null) cleanOwnerResult(domain, "discardMcpPreview", JSONObject().put("previewId", completed.optString("previewId")))
+                    if (domain == "mcp" && command == "prepareLocalMcpDiscovery" && completed != null) completed.optString("reviewId").takeIf { it.isNotBlank() }?.let { cleanOwnerResult(domain, "discardLocalMcpReview", JSONObject().put("reviewId", it)) }
                     return@post
                 }
                 ownerRequests.remove(key)
@@ -803,6 +902,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     model.editSources(target.key,target.revision,dev.pocketengine.features.assistant.OwnerSourceReferences.checked(refs));publishComposer();scheduleComposerSave()
                     receipt.put("draftStaged",true);state=state.copy(notice="原文精确范围已加入原私聊草稿，尚未发送；发送时会再次核对来源")
                 }catch(staging:Exception){envelope.put("ok",false).put("error",message(staging));state=state.copy(error=message(staging))}
+                if (domain == "memoryReview" && error != null && command == "snapshot") {
+                    if (capturedMemoryScope is MemoryReviewScope.Project && !capturedMemoryScope.selected.metadata().optBoolean("selectionCurrent")) memoryReviewScope = MemoryReviewScope.Unavailable(message(error))
+                    state = state.copy(ownerSnapshots = state.ownerSnapshots + (domain to unavailableMemoryScope(message(error))))
+                }
                 val responses = state.ownerResponses(domain) + (command to envelope)
                 if (domain == "groups" && command == "material.return.copy" && error == null && completed != null) {
                     try {
@@ -968,7 +1071,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun attach() { app.addObserver(observer);loadOwnerComposer(); refresh() }
     /** Native owner action; the host resolves the existing original control, never payload authority. */
 
-    fun detach() { projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
+    fun detach() { synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear() }
     fun refresh() { authorizationOpening = null; ownerDomain?.let { requestOwnerDomain(it, "snapshot") }; native("getState"); native("getFeatures"); native("rescheduleAutomation"); feature("assistant", "list") }
     fun suggestInput(text: String, phoneTask: Boolean? = null) {
         if (text.isNotBlank()) state = state.copy(suggestedInputRevision = state.suggestedInputRevision + 1, suggestedInput = text, suggestedPhoneTask = phoneTask)
@@ -1569,6 +1672,38 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         native(action, JSONObject(input.toString()), id)
         return id
     }
+    private data class ProjectStartMemoryRequest(val retryOriginal: Boolean)
+    private data class PendingProjectMemoryStart(val input: String, val consent: dev.pocketengine.features.memory.ProjectMemoryAccess.Consent)
+    private val pendingProjectMemoryStarts = java.util.concurrent.ConcurrentHashMap<String, PendingProjectMemoryStart>()
+    @Volatile private var projectMemoryStartClosed = false
+    /** Native project composer only. No JSON field, restored checkbox or model route mints consent. */
+    fun requestProjectStart(input: JSONObject, useProjectMemory: Boolean, retryOriginal: Boolean = false): String {
+        if (projectMemoryStartClosed || !privateWorkspaceView()) throw SecurityException("请从主人私人项目页明确选择记忆范围")
+        if (!useProjectMemory) return requestOwnerAction("startDevelopmentTask", input)
+        val id = UUID.randomUUID().toString(); val key = "owner.startDevelopmentTask"
+        state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
+        native("startDevelopmentTask", JSONObject(input.toString()), id, ProjectStartMemoryRequest(retryOriginal)); return id
+    }
+    fun releaseProjectStartConsent(clientMessageId: String) { pendingProjectMemoryStarts.remove(clientMessageId)?.consent?.closeIfUnbound() }
+    private fun startProjectWithReviewedMemory(input: JSONObject, request: ProjectStartMemoryRequest): JSONObject {
+        if (projectMemoryStartClosed || !privateWorkspaceView()) throw SecurityException("原主人项目窗口已关闭，未启用项目记忆")
+        val client = input.getString("clientMessageId"); val frozen = input.toString()
+        var pending = pendingProjectMemoryStarts[client]
+        if (pending == null) {
+            if (request.retryOriginal) throw SecurityException("这次原提交的记忆同意已不在当前窗口；请只核对原提交，未从metadata恢复或回退全局")
+            val scopes = app.nativeOwnerWorkflows.projectMemoryForOwner()
+            val choices = scopes.choicesForOwner(); val choice = (0 until choices.length()).map { choices.getJSONObject(it) }.firstOrNull { it.optBoolean("available") && it.optString("checkoutId") == input.getString("checkoutId") && it.optString("projectId") == input.getString("projectId") } ?: throw SecurityException("此项目副本没有当前可用的原生记忆范围")
+            val selected = scopes.selectForOwner(choice.getString("checkoutId"), choice.getString("projectId"), choice.getString("revision"))
+            val consent = try { scopes.captureTaskConsentForOwner(selected) } finally { scopes.revokeForOwner(selected) }
+            synchronized(pendingProjectMemoryStarts) {
+                if (projectMemoryStartClosed || !privateWorkspaceView()) { consent.close(); throw SecurityException("原项目窗口已关闭，未新建记忆读取权限") }
+                pending = PendingProjectMemoryStart(frozen, consent); pendingProjectMemoryStarts[client] = pending!!
+            }
+        }
+        val original = pending ?: throw SecurityException("原生项目记忆同意没有确定回执")
+        if (original.input != frozen) throw SecurityException("同一原提交不能更换内容或扩展冻结的项目记忆范围")
+        return app.startProjectWithMemoryForOwner(input, original.consent)
+    }
     fun openTeam(runId: String) { state = state.copy(teamRunId = runId,teamAssignmentFocus=null); feature("teams", "get", JSONObject().put("runId", runId)) }
     fun closeTeam() { state = state.copy(teamRunId = null,teamAssignmentFocus=null) }
     fun startTeam(teamId: String, goal: String, rounds: Int): String {
@@ -1612,6 +1747,39 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         native("approveCapability", input.put("approvalId", approvalId).put("approved", approved))
     }
     fun display(command: String) { feature("display", command) }
+    internal val backgroundAudioOwnerVisible get() = privateWorkspaceView()
+    /** Private native owner action, never a generic feature/model command. */
+    internal fun setBackgroundAudioSilence(enabled: Boolean, done: (JSONObject?, String?) -> Unit) {
+        if (!privateWorkspaceView()) return
+        io.execute {
+            if (!privateWorkspaceView()) return@execute
+            val result = runCatching {
+                val module = app.features.module("display") as? dev.pocketengine.phone.display.DisplayModule ?: error("原后台手机模块尚未挂载")
+                module.setAudioPolicyForOwner(enabled).also { try { app.features.sendState() } catch (_: Exception) { } }
+            }
+            main.post {
+                if (!privateWorkspaceView()) return@post
+                result.fold({ done(it, null) }, { failure ->
+                    val actual = runCatching { JSONObject().put("enabled",dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(app)).put("persisted",false) }.getOrNull()
+                    done(actual, message(failure))
+                })
+            }
+        }
+    }
+    /** Ledger -> short Module command, never Module monitor -> ledger. Explicit undo only. */
+    internal fun restoreBackgroundAudio(done: (JSONObject?, String?) -> Unit) {
+        if (!privateWorkspaceView()) return
+        io.execute {
+            if (!privateWorkspaceView()) return@execute
+            val result = runCatching {
+                val module = app.features.module("display") as? dev.pocketengine.phone.display.DisplayModule ?: error("原后台手机模块尚未挂载")
+                dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withCommands(module::audioRecovery) {
+                    dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.get(app).restoreAll()
+                }.also { try { app.features.sendState() } catch (_: Exception) { } }
+            }
+            main.post { if (privateWorkspaceView()) result.fold({ done(it, null) }, { done(null, message(it)) }) }
+        }
+    }
     fun openBackgroundSetup() { state = state.copy(backgroundSetupOpen = true); refreshBackgroundSetup() }
     fun startPhonePractice(packageName: String, field: String, mode: String) {
         if (!packageName.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")) || field.isBlank()) { state = state.copy(error = "请填写实际应用包名和一个可安全测试的普通输入框名称"); return }
@@ -1796,6 +1964,28 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             } catch (error: Exception) { main.post { if (!closed) state = state.copy(modelSaving = false, error = message(error)) } }
         }
     }
+    /** Native private settings only; no feature/model command and no implicit opt-in. */
+    internal fun readAutomaticUserLearningPolicy(done: (JSONObject?, String?) -> Unit) {
+        if (closed || !privateWorkspaceView()) return
+        io.execute {
+            val actual = runCatching { check(privateWorkspaceView()) { "仅本机私人工作区可读取自动原话设置" }; app.automaticUserLearningPolicy() }
+            main.post { if (!closed && privateWorkspaceView()) actual.fold({ done(it, null) }, { done(null, message(it)) }) }
+        }
+    }
+    internal fun saveAutomaticUserLearningPolicy(revision: Long, enabled: Boolean, maximum: Int, confirmedModelUse: Boolean, done: (JSONObject?, String?) -> Unit) {
+        if (closed || !privateWorkspaceView()) return
+        io.execute {
+            val actual = runCatching {
+                check(privateWorkspaceView()) { "仅本机私人工作区可修改自动原话设置" }
+                require(revision >= 0 && maximum in 1..5)
+                app.setAutomaticUserLearningPolicy(revision, enabled, maximum, confirmedModelUse)
+            }
+            // A native write may have committed before a later cancellation/reporting error.
+            // Read back once instead of retrying, or presenting an unknown setting as off.
+            val observed = actual.getOrNull() ?: runCatching { check(privateWorkspaceView()); app.automaticUserLearningPolicy() }.getOrNull()
+            main.post { if (!closed && privateWorkspaceView()) done(observed, actual.exceptionOrNull()?.let(::message)) }
+        }
+    }
     fun saveAgentPreferences(enabled: Boolean, detail: String, pace: String, expectedRevision: Long) {
         if (state.agentPreferencesSaving) return
         state = state.copy(agentPreferencesSaving = true, agentPreferencesError = null)
@@ -1881,7 +2071,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             } catch (error: Exception) { main.post { if (!closed) done(null, message(error)) } }
         }
     }
-    private fun native(action: String, input: JSONObject = JSONObject(), ownerRequestId: String? = null) {
+    private fun native(action: String, input: JSONObject = JSONObject(), ownerRequestId: String? = null, projectMemoryRequest: ProjectStartMemoryRequest? = null) {
         val viewerEpoch = inspectionEpoch
         val targetTask = input.optString("taskId")
         val taskAction = targetTask.takeIf { it.isNotBlank() && action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask", "configureTaskExecutionScope") }
@@ -1892,7 +2082,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val urgent = action == "automationPlan" && input.optString("command") in setOf("pause", "resume", "cancel") || action in setOf("stopRun", "pauseRun", "resumeRun", "stopTask", "takeoverTask") || action == "featureRequest" && input.optString("command") in setOf("cancel", "release", "stop", "adb.cancel", "termux.cancel", "project.cancel", "project.stopService", "cancelJob", "steerJob", "getSteerMessage", "qq.stop", "weixin.stop", "weixin.login.cancel") || action == "featureRequest" && input.optString("feature") == "teams" && input.optString("command") in setOf("pause", "resume", "feedback", "continueMessages", "sendMessage", "answerAssignment")
         (if (urgent) controls else io).execute {
             try {
-                val result = if (needsGroupOwner) app.groupOwnerWorkflows.call(groupWindow ?: throw SecurityException("请在当前原群任务详情重新建立本机审核窗口")) { app.dispatchOwnerAction(action, reviewedInput) }
+                val result = if (projectMemoryRequest != null) startProjectWithReviewedMemory(input, projectMemoryRequest)
+                    else if (needsGroupOwner) app.groupOwnerWorkflows.call(groupWindow ?: throw SecurityException("请在当前原群任务详情重新建立本机审核窗口")) { app.dispatchOwnerAction(action, reviewedInput) }
                     else app.dispatchOwnerAction(action, input)
                 main.post {
                     if (closed) return@post

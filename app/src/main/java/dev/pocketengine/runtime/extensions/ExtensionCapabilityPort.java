@@ -2,6 +2,7 @@ package dev.pocketengine.runtime.extensions;
 
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.core.ScopedToolCatalog;
 import dev.pocketengine.features.plugins.PluginRules;
 import dev.pocketengine.store.TaskStore;
 import java.util.LinkedHashMap;
@@ -31,6 +32,7 @@ final class ExtensionCapabilityPort implements CapabilityPort {
     private volatile boolean stale=true;
     private JSONArray admittedBaseNames=new JSONArray();
     private dev.pocketengine.core.CapabilitySnapshot capabilitySnapshot;
+    private ToolDiscoverySession discovery;
 
     ExtensionCapabilityPort(ExtensionHost host,CapabilityPort existing,TaskStore tasks,ExtensionRuntime.Binding binding,RunControl original){this.host=host;this.existing=existing;this.tasks=tasks;this.binding=binding;this.original=original;}
 
@@ -47,6 +49,12 @@ final class ExtensionCapabilityPort implements CapabilityPort {
         JSONArray expectedBase=existing.tools(),extensionTools=runtime==null?new JSONArray():runtime.tools(original),expectedAll=merge(expectedBase,extensionTools);
         Set<String> capabilities=new HashSet<>();JSONArray expectedNames=names(expectedAll);for(int i=0;i<expectedNames.length();i++)capabilities.add(expectedNames.getString(i));
         if(runtime!=null)capabilities.addAll(runtime.semanticCapabilities(original).keySet());
+        // One page or less stays on the original transport. Only exact approved
+        // extension registrations can be deferred; unknown base/plugin sources stay resident.
+        boolean defer=extensionTools.length()>ScopedToolCatalog.MAX_PAGE_TOOLS&&!capabilities.contains(ScopedToolCatalog.SEARCH_TOOL)
+                &&ToolDiscoverySession.shouldDefer(expectedAll.length(),capabilities.size())&&nativeSearchTransportAllowed();
+        if(defer)capabilities.add(ScopedToolCatalog.SEARCH_TOOL);
+        else if(discovery!=null){discovery.close();discovery=null;}
         String baseFingerprint=toolFingerprint(expectedBase);List<ExtensionProgram> selected=List.copyOf(mounted.values());
         if(capabilitySnapshot!=null)capabilitySnapshot.invalidate();
         capabilitySnapshot=new dev.pocketengine.core.CapabilitySnapshot(binding.taskId,binding.runId,binding.epoch,original,capabilities,()->{
@@ -69,9 +77,16 @@ final class ExtensionCapabilityPort implements CapabilityPort {
         capabilitySnapshot.check();
         for(int i=0;i<extensionTools.length();i++){JSONObject function=extensionTools.getJSONObject(i).getJSONObject("function");next.put(function.getString("name"),new JSONObject(function.getJSONObject("parameters").toString()));}
         // One existing DB grant set, not a second extension grant registry. No source JSON is authority.
-        synchronized(tasks){check(control);tasks.authorizeTools(binding.taskId,binding.runId,names(all));}
+        synchronized(tasks){check(control);tasks.authorizeTools(binding.taskId,binding.runId,names(defer?merge(all,new JSONArray().put(ScopedToolCatalog.searchDefinition())):all));if(defer)tasks.checkCapability(binding.taskId,binding.runId,binding.epoch,ScopedToolCatalog.SEARCH_TOOL,original);}
         admitted.clear();admitted.putAll(next);admittedBaseNames=names(base);admittedFingerprint=fingerprint;admittedBaseFingerprint=toolFingerprint(base);stale=false;
-        return new JSONObject().put("tools",all).put("reference",reference).put("extensionSnapshot",fingerprint);
+        JSONArray published=all;
+        if(defer){
+            if(discovery==null)discovery=new ToolDiscoverySession(binding.taskId,binding.runId,binding.epoch,original);
+            Map<String,ScopedToolCatalog.SourcePin> sources=new LinkedHashMap<>();for(int i=0;i<base.length();i++)sources.put(base.getJSONObject(i).getJSONObject("function").getString("name"),ScopedToolCatalog.SourcePin.unknown());sources.putAll(runtime.discoverySources(original));
+            discovery.beginRequest(capabilitySnapshot,all,sources,ToolDiscoverySession.DEFAULT_RESIDENT,original);published=discovery.requestTools(original);
+            reference.put("context",reference.optString("context")+"\n原任务已授权工具的只读发现摘要；不是新增权限，下一请求仅能使用原回执checkpoint后发布的准确schema：\n<tool_discovery_reference>\n"+discovery.summary(original)+"\n</tool_discovery_reference>");
+        }
+        return new JSONObject().put("tools",published).put("reference",reference).put("extensionSnapshot",fingerprint);
         }catch(Exception failure){capabilitySnapshot.invalidate();stale=true;throw failure;}
     }
     @Override public void prepareTurnSurface(RunControl control)throws Exception {check(control);existing.prepareTurnSurface(control);check(control);}
@@ -86,6 +101,7 @@ final class ExtensionCapabilityPort implements CapabilityPort {
     @Override public JSONObject beforeTool(String name,JSONObject arguments,RunControl control)throws Exception {
         check(control);String fingerprint=sync(false);
         if(stale||!admittedFingerprint.equals(fingerprint)||!admittedBaseFingerprint.equals(toolFingerprint(existing.tools()))){stale=true;if(capabilitySnapshot!=null)capabilitySnapshot.invalidate();return refused("stale_extension_context","能力、扩展启停、审批或源码已变化；旧决定未执行，请按当前现场重新规划。");}
+        if(discovery!=null&&(admitted.containsKey(name)||ScopedToolCatalog.SEARCH_TOOL.equals(name)))discovery.requirePublished(name,control);
         if(admitted.containsKey(name)&&(runtime==null||!runtime.supports(name)))return refused("tool_withdrawn","本次请求的扩展工具已撤销，尚未执行。");
         JSONObject originalGate=existing.beforeTool(name,new JSONObject(arguments.toString()),control);if(originalGate!=null)return originalGate;
         if(runtime!=null){ExtensionRuntime.Decision gate=runtime.beforeTool(name,arguments,original);if(!gate.allowed)return refused("extension_blocked","扩展 "+gate.extensionId+" 拒绝了本次工具："+gate.reason);}
@@ -94,21 +110,27 @@ final class ExtensionCapabilityPort implements CapabilityPort {
     @Override public void afterTool(String name,JSONObject arguments,JSONObject receipt,RunControl control)throws Exception {
         check(control);existing.afterTool(name,arguments,receipt,control);
         if(runtime!=null&&admittedFingerprint.equals(sync(false)))runtime.event("tool_result",new JSONObject().put("name",name).put("arguments",eventData(arguments)).put("receipt",eventData(receipt)),original);
+        if(discovery!=null)discovery.afterTool(name,receipt,control);
     }
     @Override public void endRun(RunControl control)throws Exception {
         if(!begun)return;check(control);existing.endRun(control);if(runtime!=null&&admittedFingerprint.equals(sync(false)))runtime.event("run_end",new JSONObject().put("driverExited",true).put("taskCompletionClaimed",false),original);
     }
     /** Before first beginRun this is ordinary combined metadata only; no unapproved code is run. */
-    @Override public JSONArray tools()throws Exception {return merge(existing.tools(),runtime==null?new JSONArray():runtime.tools(original));}
+    @Override public JSONArray tools()throws Exception {JSONArray all=merge(existing.tools(),runtime==null?new JSONArray():runtime.tools(original));return discovery==null?all:merge(all,new JSONArray().put(ScopedToolCatalog.searchDefinition()));}
     @Override public JSONObject contextSnapshot(String query)throws Exception {return existing.contextSnapshot(query);}
-    @Override public boolean supports(String name){return !closed&&(admitted.containsKey(name)||runtime!=null&&runtime.supports(name)||existing.supports(name));}
-    @Override public boolean sideEffecting(String name){return admitted.containsKey(name)||runtime!=null&&runtime.supports(name)?false:existing.sideEffecting(name);}
+    @Override public boolean supports(String name){return !closed&&(discovery!=null&&ScopedToolCatalog.SEARCH_TOOL.equals(name)||admitted.containsKey(name)||runtime!=null&&runtime.supports(name)||existing.supports(name));}
+    @Override public boolean sideEffecting(String name){return discovery!=null&&ScopedToolCatalog.SEARCH_TOOL.equals(name)||admitted.containsKey(name)||runtime!=null&&runtime.supports(name)?false:existing.sideEffecting(name);}
     @Override public void validate(String name,JSONObject arguments)throws Exception {
+        if(discovery!=null&&ScopedToolCatalog.SEARCH_TOOL.equals(name)){discovery.validateSearch(arguments,original);return;}
         JSONObject schema=admitted.get(name);if(schema!=null)PluginRules.validateArguments(arguments,schema);else existing.validate(name,arguments);
     }
     @Override public JSONObject execute(String name,JSONObject arguments,RunControl control)throws Exception {
         if(closed||control!=original||!control.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("执行控制器不属于本轮能力");
         if(stale)return refused("tool_withdrawn","本轮能力参考已撤销，尚未进入原执行器。");
+        if(discovery!=null&&(admitted.containsKey(name)||ScopedToolCatalog.SEARCH_TOOL.equals(name))){
+            discovery.requirePublished(name,control);
+            if(ScopedToolCatalog.SEARCH_TOOL.equals(name)){check(control);tasks.checkCapability(binding.taskId,binding.runId,binding.epoch,name,original);return discovery.search(arguments,control);}
+        }
         // Do NOT put the read-side no-prepared fence or a post-control check around W08.
         // Its native effect already has the original journal intent and may return a real receipt after stop.
         if(!admitted.containsKey(name))return existing.execute(name,arguments,control);
@@ -129,9 +151,19 @@ final class ExtensionCapabilityPort implements CapabilityPort {
         check(original);return ExtensionProgram.sha256(fingerprint.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private static boolean same(ExtensionProgram a,ExtensionProgram b){return a.id.equals(b.id)&&a.version.equals(b.version)&&a.installationId.equals(b.installationId)&&a.approvalRevision==b.approvalRevision&&a.sourceSha256.equals(b.sourceSha256)&&a.maxMillis==b.maxMillis;}
+    /** Only removes a metadata transport when the original frozen scope did not admit it.
+     * JSON is not authority: authorizeTools/checkCapability still perform the original grant checks. */
+    private boolean nativeSearchTransportAllowed()throws Exception {
+        synchronized(tasks){check(original);JSONObject task=tasks.get(binding.taskId,false),scope=task.optJSONObject("executionScope");
+            if(scope!=null&&(scope.optBoolean("toolsPinned")||!"preparing".equals(task.optString("status"))||scope.optInt("toolsUsed")!=0||scope.optInt("modelCallsUsed")!=0)&&!contains(scope.optJSONArray("tools"),ScopedToolCatalog.SEARCH_TOOL))return false;
+            JSONObject continued=task.optJSONObject("teamRoundBudgetContinuation");return continued==null||!binding.runId.equals(continued.optString("toRunId"))||contains(continued.optJSONArray("allowedTools"),ScopedToolCatalog.SEARCH_TOOL);
+        }
+    }
+    private static boolean contains(JSONArray names,String name)throws Exception{if(names!=null)for(int i=0;i<names.length();i++)if(name.equals(names.getString(i)))return true;return false;}
     void invalidate(String installationId){stale=true;if(capabilitySnapshot!=null)capabilitySnapshot.invalidate();ExtensionRuntime current=runtime;if(current!=null)current.unmount(installationId);}
     @Override public void close(){
         if(cleanupComplete)return;closed=true;if(capabilitySnapshot!=null)capabilitySnapshot.invalidate();RuntimeException failure=null;
+        if(discovery!=null)discovery.close();
         try{ExtensionRuntime current=runtime;if(current!=null)current.close();}catch(RuntimeException error){failure=error;}
         if(!admitted.isEmpty())try{
             synchronized(tasks){JSONObject task=tasks.get(binding.taskId,false);if(task!=null&&binding.runId.equals(task.optString("runId"))&&binding.epoch==task.optInt("coordinatorEpoch"))tasks.authorizeTools(binding.taskId,binding.runId,admittedBaseNames);}

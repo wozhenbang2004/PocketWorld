@@ -93,7 +93,7 @@ public final class PluginRevisions {
             JSONObject next=tools.getJSONObject(i),old=tool(oldTools,next.getString("name"));
             if(old==null){added.put(copy(next));continue;}
             JSONArray fields=new JSONArray();
-            for(String field:new String[]{"kind","endpoint","effect","schema","description","protocolVersion","descriptorDigest","serverDigest","annotations","outputSchema"})
+            for(String field:new String[]{"kind","transport","endpoint","configurationDigest","effect","schema","description","protocolVersion","descriptorDigest","serverDigest","annotations","outputSchema"})
                 if(!same(old.opt(field),next.opt(field)))fields.put(field);
             if(fields.length()>0)changed.put(new JSONObject().put("name",next.getString("name"))
                     .put("fields",fields).put("before",copy(old)).put("after",copy(next)));

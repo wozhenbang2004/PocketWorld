@@ -58,6 +58,25 @@ public final class SshModule implements EngineModule {
                 .put("ptyImplemented",true).put("deviceVerified",false).put("remotePersistentJobs",false).put("posixShellOnly",true)
                 .put("strongAtomicCas",false).put("binaryFileTransfers",fileArtifacts!=null).put("maxBinaryTransferBytes",DirectSshClient.MAX_TRANSFER).put("binaryBodiesInJson",false).put("automaticTransferResume",false).put("ownerOnly",true).put("library","com.github.mwiede:jsch:2.28.8");
     }
+    /** Private native WorkProfile source only: reads no credential bytes and makes no SSH connection. */
+    public synchronized JSONObject workProfileTargetFacts(JSONObject reference,RunControl observation)throws Exception {
+        java.util.Objects.requireNonNull(observation).check();if(closed)throw new SecurityException("原SSH模块已关闭");
+        if(reference==null)throw new SecurityException("缺少原SSH目标引用");
+        for(var keys=reference.keys();keys.hasNext();)if(!java.util.Set.of("kind","profileId","bindingHash","optional").contains(keys.next()))throw new SecurityException("SSH目标不能携带命令、凭据、路径或执行许可");
+        if(!"ssh".equals(reference.optString("kind"))||!(reference.opt("bindingHash") instanceof String)||!reference.getString("bindingHash").matches("[a-f0-9]{64}"))throw new SecurityException("SSH目标缺少原绑定版本");
+        if(reference.has("optional")&&!(reference.opt("optional") instanceof Boolean))throw new SecurityException("目标optional必须为布尔值");
+        SshProfile selected=profile(SshProfile.text(reference,"profileId",80));selected.requireBinding(reference.getString("bindingHash"));
+        boolean trusted=!selected.pinnedKey.isEmpty(),configured=context.secrets.contains(selected.credentialSlot()),supported=trusted&&configured;observation.check();
+        JSONObject evidence=new JSONObject().put("sourceState",supported?"source_ready":"unavailable").put("reasonCode",!trusted?"host_key_untrusted":!configured?"credentials_unconfigured":"original_ssh_binding_available")
+                .put("hostKeyTrusted",trusted).put("credentialsConfigured",configured).put("connectionVerified",false).put("configurationApplied",false).put("runtimeVerified",false);
+        return new JSONObject().put("kind","ssh").put("profileId",selected.id).put("bindingHash",selected.bindingHash()).put("supported",supported).put("sourceEvidence",evidence);
+    }
+    public synchronized void checkWorkProfileTargetCurrent(JSONObject reference,JSONObject capturedPublicBinding,RunControl observation)throws Exception {
+        java.util.Objects.requireNonNull(capturedPublicBinding);
+        JSONObject current=workProfileTargetFacts(reference,observation);
+        for(String key:new String[]{"kind","profileId","bindingHash"})if(!current.get(key).equals(capturedPublicBinding.opt(key)))throw new SecurityException("工作Profile不是原冻结SSH目标");
+        if(!current.getBoolean("supported"))throw new SecurityException("原SSH主机信任或凭据配置已撤回");observation.check();
+    }
     @Override public JSONObject handle(String command,JSONObject input)throws Exception {
         if(closed)throw new IllegalStateException("SSH模块已关闭");if(input==null)input=new JSONObject();
         switch(command){

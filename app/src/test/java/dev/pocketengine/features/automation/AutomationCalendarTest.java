@@ -48,7 +48,9 @@ public final class AutomationCalendarTest {
         JSONObject fall=daily("01:30","America/New_York");long first=AutomationBook.nextDaily(fall,at("2027-11-07T04:00:00Z"));assertEquals(at("2027-11-08T06:30:00Z"),AutomationBook.nextDaily(fall,first+1));
     }
     @Test public void previewMatchesDurableActualOccurrencesAndRestartWithoutStartingPhoneWork()throws Exception {
-        File file=new File(temp.getRoot(),"weekly.json");AutomationBook book=new AutomationBook(file);JSONObject schedule=weekly("09:00","UTC",1,5);long start=at("2026-11-01T00:00:00Z");JSONArray preview=AutomationSchedule.preview(schedule,start,3).getJSONArray("occurrences");book.save(rule(schedule),start);AtomicInteger effects=new AtomicInteger();
+        // This fixture verifies independent calendar/notification occurrences, not
+        // permission to run phones concurrently. Native task admission remains false.
+        File file=new File(temp.getRoot(),"weekly.json");AutomationBook book=new AutomationBook(file);JSONObject schedule=weekly("09:00","UTC",1,5);long start=at("2026-11-01T00:00:00Z");JSONArray preview=AutomationSchedule.preview(schedule,start,3).getJSONArray("occurrences");book.save(rule(schedule).put("policy",new JSONObject().put("overlap","allow")),start);AtomicInteger effects=new AtomicInteger();assertEquals("allow",book.rules().getJSONObject(0).getJSONObject("policy").getString("overlap"));
         for(int i=0;i<preview.length();i++){
             long planned=preview.getJSONObject(i).getLong("at");book=new AutomationBook(file);assertEquals(planned,book.rules().getJSONObject(0).getLong("scheduledAt"));JSONObject receipt=book.claimDue(planned,10).getJSONObject(0);assertEquals(planned,receipt.getLong("occurrenceAt"));
             JSONObject result=book.dispatchReceipt(receipt.getString("id"),r->{effects.incrementAndGet();return new JSONObject().put("status","awaiting_user").put("message","机主决定是否执行");},planned);assertEquals("awaiting_user",result.getString("status"));assertFalse(book.taskRequest(receipt.getString("id"),planned).getBoolean("executionAuthorized"));

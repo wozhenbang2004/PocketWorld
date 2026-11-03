@@ -45,10 +45,12 @@ internal fun HarnessGatewayPanel(gateway: JSONObject?, enabled: Boolean, send: (
         }
         if (review != null) {
             val model = review.optJSONObject("model")
+            val profile = model?.optJSONObject("workProfileRelaySource")
+            Text(if (profile == null) "原宿主 RELAY 选择" else "任务工作配置 · 版本 ${profile.optLong("profileRevision")}", color = SecondaryInk, style = MaterialTheme.typography.bodySmall)
             Text("将为 ${model?.optString("provider")} / ${model?.optString("model")} 启用，截止 ${until(review.optLong("expiresAt"))}。期限不超过原任务授权与十分钟。", style = MaterialTheme.typography.bodyMedium)
             val budget = model?.optJSONObject("budget")
             Text(if (budget?.optBoolean("scopePresent") == true) "原任务剩余模型调用 ${budget.optInt("modelCallsRemaining")} 次；未知和失败不自动退款。" else "仍受原 TaskStore 预算约束；本页未提供剩余数，不表示无限或免费。", style = MaterialTheme.typography.bodyMedium)
-            Text("只启动模型网关；不会更改 CLI 配置、批准 CLI 运行或重做原请求。显示 API 模式也不是最终计费后台的证明。", color = SecondaryInk, style = MaterialTheme.typography.bodySmall)
+            Text("仅选择模型，未修改远端配置；不会批准 CLI 运行或重做原请求。显示 API 模式也不是最终计费后台的证明。", color = SecondaryInk, style = MaterialTheme.typography.bodySmall)
             Button(onClick = { send("gateway.enable", JSONObject().put("acceptedDigest", gateway?.optString("reviewDigest").orEmpty())) }, enabled = enabled && (gateway?.optLong("reviewExpiresAt") ?: 0) > System.currentTimeMillis()) { Text("确认仅为此原任务启用") }
         } else if (status?.optBoolean("running") != true && !uncertain) {
             OutlinedButton(onClick = { send("gateway.inspect", JSONObject()) }, enabled = enabled) { Text("核对本次网关范围") }

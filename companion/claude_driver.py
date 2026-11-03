@@ -17,6 +17,7 @@ from remote_interactions import QuestionMailbox, Progress, question
 
 MAX_EVENT = 1_048_576
 MAX_OUTPUT = 196_608
+CHILD_SOURCE_PROTOCOL = "claude_complete_child_v1"
 REQUIRED_FLAGS = ("--safe-mode", "--restricted", "--settings", "--input-format", "--output-format", "--verbose",
                   "--include-partial-messages", "--permission-prompts", "--permission-prompt-tool",
                   "--permission-mode", "--tools", "--allowedTools", "--disallowedTools",
@@ -137,6 +138,30 @@ class ClaudeStreamDriver:
             raise DriverError("Claude text delta is invalid")
         self.truncated |= len(self.output) + len(value) > MAX_OUTPUT
         self.output = (self.output + value)[:MAX_OUTPUT]
+
+    def _child_source(self, event):
+        """Only complete, session-confirmed public blocks carry native child lineage.
+
+        Agent SDK docs expose parent_tool_use_id on complete assistant/user messages,
+        not child token streams. No Agent tool, child session, resume or grant is added.
+        """
+        parent = event.get("parent_tool_use_id")
+        if parent is None:
+            return {}
+        if not self.protocol_verified or event.get("session_id") != self.session_id:
+            raise DriverError("Child observation lacks its confirmed original parent session")
+        def identifier(value):
+            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}", value):
+                raise DriverError("Child observation identity is unsupported; not attached to the parent")
+            return value
+        source = {"childSourceProtocol": CHILD_SOURCE_PROTOCOL, "parentToolUseId": identifier(parent),
+                  "parentSessionId": self.session_id, "parentPromptRequestId": self.prompt_id}
+        message = event.get("message")
+        for key, value in (("nativeAgentId", event.get("agent_id")), ("nativeEventId", event.get("uuid")),
+                           ("nativeMessageId", message.get("id") if isinstance(message, dict) else None)):
+            if value is not None:
+                source[key] = identifier(value)
+        return source
 
     def _send(self, value):
         data = (json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8")
@@ -364,20 +389,26 @@ class ClaudeStreamDriver:
                     if isinstance(delta, dict) and delta.get("type") == "text_delta":
                         self._append(delta.get("text"))
             elif kind in {"assistant", "user"}:
-                if kind == "assistant" and event.get("error"):
+                child = self._child_source(event)
+                if kind == "assistant" and event.get("error") and not child:
                     self.assistant_error = True
                 message = event.get("message")
                 content = message.get("content") if isinstance(message, dict) else None
-                for block in content[:100] if isinstance(content, list) else []:
+                for index, block in enumerate(content[:100] if isinstance(content, list) else []):
                     if not isinstance(block, dict):
                         continue
-                    if block.get("type") == "tool_use":
-                        self.progress.add("tool", "assistant/tool_use", block.get("id", ""), tool=str(block.get("name", "unknown")), status="started")
+                    if child and block.get("type") == "text":
+                        if not isinstance(block.get("text"), str):
+                            raise DriverError("Child public text block is invalid")
+                        observation = child.get("nativeEventId") or child.get("nativeMessageId") or "observation-" + str(self.event_count)
+                        self.progress.add("child_text", kind + "/text", observation + ":" + str(index), text=block["text"], role=kind, **child)
+                    elif block.get("type") == "tool_use":
+                        self.progress.add("tool", "assistant/tool_use", block.get("id", ""), tool=str(block.get("name", "unknown")), status="started", **child)
                     elif block.get("type") == "tool_result":
                         tool_id = block.get("tool_use_id")
-                        if tool_id in self.question_tools:
+                        if not child and tool_id in self.question_tools:
                             self.questions.resolve(self.question_tools[tool_id], "tool_result")
-                        self.progress.add("tool_result", "user/tool_result", tool_id or "", status="failed" if block.get("is_error") else "completed", text=block.get("content") if isinstance(block.get("content"), str) else "Structured tool result; no full payload displayed")
+                        self.progress.add("tool_result", "user/tool_result", tool_id or "", status="failed" if block.get("is_error") else "completed", text=block.get("content") if isinstance(block.get("content"), str) else "Structured tool result; no full payload displayed", **child)
             elif kind == "tool_progress":
                 self.progress.add("tool", kind, event.get("tool_use_id", ""), tool=str(event.get("tool_name", "unknown")), status="running")
             elif kind == "result":

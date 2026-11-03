@@ -42,6 +42,17 @@ public final class SourceRef {
         if(workspace!=null)value.put("workspace",workspace.toJson());return value;
     }
     String key(){return new JSONArray().put(ownerId).put(spaceId).put(kind).put(sourceId).toString();}
+    /** Conservative provenance family, not proof of statistical independence or a read grant.
+     * Splitting one file/task into spans or summaries cannot manufacture corroboration. */
+    String evidenceFamilyKey()throws Exception {
+        JSONArray family=new JSONArray().put(ownerId).put(spaceId).put(kind);
+        if(workspace!=null)return family.put(workspace.projectId).put(workspace.path).toString();
+        if("task_evidence".equals(kind)){
+            if(TaskSavedEvidence.matches(sourceId))return family.put("task").put(TaskSavedEvidence.address(sourceId).taskId).toString();
+            if(sourceId.matches("task:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}:verified_result"))return family.put("task").put(sourceId.substring(5,41)).toString();
+        }
+        return family.put(sourceId).toString();
+    }
     boolean belongsTo(MemoryBook.Scope scope){return ownerId.equals(scope.ownerId)&&spaceId.equals(scope.spaceId);}
     static long integer(JSONObject value,String key,long minimum) {
         Object number=value.opt(key);

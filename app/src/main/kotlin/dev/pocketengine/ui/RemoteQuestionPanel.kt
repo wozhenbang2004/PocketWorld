@@ -69,7 +69,14 @@ import org.json.JSONObject
     val progress=committed?:snapshot.optJSONObject("result")?.optJSONObject("progress")?:return
     if(committed==null&&!progress.optBoolean("available"))return
     val events=progress.optJSONArray("events").objects()
-    var expanded by remember(snapshot.optString("taskId"),progress.optString("generation")){mutableStateOf(false)}
+    val originalSource=committed?.optJSONObject("scope")?:snapshot.optJSONObject("source")?:JSONObject()
+    val sourced=events.mapNotNull { event -> runCatching { event to dev.pocketengine.features.remote.RemoteJobEvents.sourceView(event,originalSource) }.getOrNull() }
+    val children=sourced.map{it.second}.filter{it.optString("kind")=="child"}.distinctBy{it.getString("key")}
+    var sourceFilter by remember(snapshot.optString("taskId"),originalSource.optString("jobOperationId"),progress.optString("generation")){mutableStateOf("*")}
+    var sourceMenu by remember(snapshot.optString("taskId"),progress.optString("generation")){mutableStateOf(false)}
+    var expanded by remember(snapshot.optString("taskId"),progress.optString("generation"),sourceFilter){mutableStateOf(false)}
+    fun sourceLabel(source:JSONObject)=if(source.optString("kind")=="child")"子来源 ${source.optString("nativeAgentId",source.optString("parentToolUseId")).take(24)}" else "主／未标记来源"
+    val visible=sourced.filter{sourceFilter=="*"||it.second.getString("key")==sourceFilter}
     HorizontalDivider()
     Text(if(committed!=null&&readStatus!="confirmed")"已保存的执行进度"else if(snapshot.optBoolean("fresh"))"本次读取的执行进度"else"上次读取的执行进度",fontWeight=FontWeight.SemiBold,fontSize=15.sp)
     if(committed!=null){
@@ -79,11 +86,26 @@ import org.json.JSONObject
         progress.optJSONArray("gaps").objects().forEach { gap -> Text(if(gap.optString("reason")=="retention_gap")"事件 ${gap.optLong("fromSequence")}–${gap.optLong("throughSequence")} 已不在电脑保留窗口，无法补回；原job当前状态另行读取，未虚构遗漏内容。" else "事件来源代次已变化，旧代遗漏范围无法确认；未继续旧执行或重发操作。",fontSize=13.sp,color=MaterialTheme.colorScheme.error) }
         if(progress.optLong("locallyDiscardedEvents")>0)Text("本机只保留最近64条／24KiB事件；更早已读记录未常驻缓存。",fontSize=13.sp,color=SecondaryInk)
     }else Text("原job最近事件快照，由查询更新，不是实时直播或完整历史。已省略${progress.optInt("droppedCount")}条，当前保留序号${progress.optLong("retainedFromSequence")}–${progress.optLong("lastSequence")}。",fontSize=13.sp,color=SecondaryInk)
+    if(children.isNotEmpty()||sourceFilter!="*") {
+        Text("仅按原完整公开消息的原生parent tool-use来源分看；不是可操作子会话，不新增权限、用量或恢复能力。只显示CLI已提供内容，无子token直播、隐藏thinking或完整transcript保证。",fontSize=13.sp,color=SecondaryInk)
+        Box {
+            OutlinedButton(onClick={sourceMenu=true}) { Text(if(sourceFilter=="*")"全部原来源"else if(sourceFilter=="main_or_unspecified")"主／未标记来源"else children.firstOrNull{it.getString("key")==sourceFilter}?.let(::sourceLabel)?:"已移出保留窗口的子来源") }
+            DropdownMenu(expanded=sourceMenu,onDismissRequest={sourceMenu=false}) {
+                DropdownMenuItem(text={Text("全部原来源")},onClick={sourceFilter="*";sourceMenu=false})
+                DropdownMenuItem(text={Text("主／未标记来源")},onClick={sourceFilter="main_or_unspecified";sourceMenu=false})
+                children.forEach { child -> DropdownMenuItem(text={Text(sourceLabel(child))},onClick={sourceFilter=child.getString("key");sourceMenu=false}) }
+            }
+        }
+    }
+    if(sourced.size<events.size)Text("${events.size-sourced.size}条观察的来源无法核对，未混入父或子来源显示；原记录与游标保留。",fontSize=13.sp,color=MaterialTheme.colorScheme.error)
     if(events.isEmpty())Text("尚无可显示的已保存事件。",fontSize=14.sp)
-    (if(expanded)events else events.takeLast(6)).forEach { event->
+    if(events.isNotEmpty()&&visible.isEmpty())Text("当前保留窗口没有此来源的可核对记录；可切换其他来源，不会补造或重发。",fontSize=13.sp,color=SecondaryInk)
+    (if(expanded)visible else visible.takeLast(6)).forEach { (event,lineage)->
+        if(lineage.optString("kind")=="child")Text("${sourceLabel(lineage)} · parent tool-use ${lineage.getString("parentToolUseId")} · 只读",fontSize=12.sp,color=SecondaryInk)
+        else if(children.isNotEmpty())Text("主／未标记来源（旧事件未声明子归属）",fontSize=12.sp,color=SecondaryInk)
         Text(listOf(event.optString("tool",event.optString("kind")),event.optString("status")).filter{it.isNotBlank()}.joinToString(" · "),fontSize=14.sp,fontWeight=FontWeight.Medium)
         for(key in listOf("summary","command","text","explanation","counters"))event.optString(key).takeIf{it.isNotBlank()}?.let { text->SelectionContainer{Text(text,fontSize=14.sp)};if(event.optBoolean(key+"Truncated"))Text("本段已截断，不能视作完整输出。",fontSize=13.sp,color=SecondaryInk) }
         if(event.optString("kind")=="usage")Text("供应商原thread累计观察，不作本job请求计数、硬预算或账单，不逐快照累加。",fontSize=10.sp,color=SecondaryInk)
     }
-    if(events.size>6)TextButton(onClick={expanded=!expanded}){Text(if(expanded)"收起早前记录"else"查看当前保留的${events.size}条")}
+    if(visible.size>6)TextButton(onClick={expanded=!expanded}){Text(if(expanded)"收起早前记录"else"查看该来源当前保留的${visible.size}条")}
 }

@@ -17,15 +17,16 @@ public final class WorkProfileTest {
     private JSONObject skillRef(boolean optional) throws Exception { return new JSONObject().put("id", "skill-a").put("revision", 2).put("digest", A).put("optional", optional); }
     private JSONObject skill() throws Exception { return new JSONObject().put("id", "skill-a").put("revision", 2).put("digest", A).put("executionGeneration", 4L).put("expiresAt", JSONObject.NULL).put("active", true).put("status", "active").put("contentVerified", true).put("requiredCapabilities", new JSONArray()); }
     private static final class Sources implements WorkProfileResolver.Sources {
-        final Map<String, JSONObject> skills = new HashMap<>(), plugins = new HashMap<>(), extensions = new HashMap<>();
-        Set<String> capabilities = Set.of(); boolean allowFrozen, revoked; int modelCaptures; ModelConfig config = new ModelConfig("https://fixture.invalid/v1", "fixture-secret-never-serialize", "model", false, 4, 30);
+        final Map<String, JSONObject> skills = new HashMap<>(), plugins = new HashMap<>(), extensions = new HashMap<>(), targets = new HashMap<>();
+        Set<String> capabilities = Set.of(); boolean allowFrozen, revoked, targetRevoked; int modelCaptures, targetReads, targetChecks; ModelConfig config = new ModelConfig("https://fixture.invalid/v1", "fixture-secret-never-serialize", "model", false, 4, 30);
         public ModelConfig model(ModelTargetRef ref, String purpose, RunControl c) { modelCaptures++; return config; }
         public void checkModel(ModelConfig captured, String purpose, RunControl c) { if (revoked || !allowFrozen && captured != config) throw new SecurityException("fixture_revoked"); }
         public JSONObject skill(String id, RunControl c) { return skills.get(id); }
         public JSONObject plugin(String id, RunControl c) { return plugins.get(id); }
         public JSONObject extension(String id, RunControl c) { return extensions.get(id); }
         public JSONObject team(String id, RunControl c) { return null; }
-        public JSONObject target(JSONObject reference, RunControl c) throws Exception { return new JSONObject().put("supported", false); }
+        public JSONObject target(JSONObject reference, RunControl c) throws Exception { targetReads++; JSONObject actual = targets.get(WorkProfile.targetKey(reference)); return actual == null ? new JSONObject().put("supported", false) : new JSONObject(actual.toString()); }
+        public void checkTarget(JSONObject reference, JSONObject captured, RunControl c) { targetChecks++; if (targetRevoked) throw new SecurityException("fixture_target_generation_revoked"); }
         public Set<String> hostCapabilities() { return capabilities; }
     }
     @Test public void unknownSecretsGrantsAndExecutableFieldsAreRejected() throws Exception {
@@ -117,6 +118,34 @@ public final class WorkProfileTest {
         WorkProfile value = WorkProfile.fromJson(profile().put("targetBindings", new JSONArray().put(ssh).put(runtime)));
         assertEquals("ssh:ssh-a", WorkProfile.targetKey(value.toJson().getJSONArray("targetBindings").getJSONObject(0)));
         assertThrows(IllegalArgumentException.class, () -> WorkProfile.fromJson(profile().put("targetBindings", new JSONArray().put(new JSONObject(ssh.toString()).put("host", "unreviewed.invalid")))));
+    }
+
+    @Test public void targetDispatchGuardsNeverRepeatTheOwnerReviewCliProbe() throws Exception {
+        Sources sources = new Sources(); JSONObject ref = new JSONObject().put("kind", "ssh").put("profileId", "ssh-a").put("bindingHash", A).put("optional", false);
+        sources.targets.put("ssh:ssh-a", new JSONObject(ref.toString()).put("supported", true).put("sourceEvidence", new JSONObject().put("sourceState", "configured").put("hostKeyTrusted", true).put("credentialsConfigured", true).put("protocolVerified", JSONObject.NULL).put("connectionVerified", false).put("runtimeVerified", false).put("observedAt", 123).put("rawOutput", "must-not-project")));
+        var resolution = WorkProfileResolver.resolve(WorkProfile.fromJson(profile().put("targetBindings", new JSONArray().put(ref))), sources, new RunControl()); resolution.requireReady();
+        for (int i = 0; i < 3; i++) resolution.checkCurrent(new RunControl()); assertEquals(1, sources.targetReads); assertEquals(3, sources.targetChecks);
+        String snapshot = resolution.view().toString(); assertFalse(snapshot.contains("observedAt")); assertFalse(snapshot.contains("must-not-project")); assertFalse(resolution.view().getBoolean("runtimeVerified"));
+        sources.targetRevoked = true; assertThrows(SecurityException.class, () -> resolution.checkCurrent(new RunControl())); assertEquals(1, sources.targetReads);
+    }
+    @Test public void omittedOptionalTargetStaysOmittedWithoutAHiddenReprobeOrPermissionExpansion() throws Exception {
+        Sources sources = new Sources(); JSONObject ref = new JSONObject().put("kind", "ssh").put("profileId", "ssh-a").put("bindingHash", A).put("optional", true);
+        sources.targets.put("ssh:ssh-a", new JSONObject(ref.toString()).put("supported", false).put("sourceEvidence", new JSONObject().put("sourceState", "not_configured").put("reasonCode", "credential_missing")));
+        var resolution = WorkProfileResolver.resolve(WorkProfile.fromJson(profile().put("targetBindings", new JSONArray().put(ref))), sources, new RunControl()); resolution.requireReady();
+        sources.targets.get("ssh:ssh-a").put("supported", true); resolution.checkCurrent(new RunControl()); assertEquals(1, sources.targetReads); assertEquals(0, sources.targetChecks); assertEquals(1, resolution.view().getInt("optionalOmissions"));
+    }
+
+    @Test public void cheapExecutableIdentityFactsRemainStatEvidenceNotVersionContentOrRuntimeProof() throws Exception {
+        Sources sources = new Sources(); JSONObject ref = new JSONObject().put("kind", "ssh").put("profileId", "ssh-a").put("bindingHash", A).put("optional", false);
+        sources.targets.put("ssh:ssh-a", new JSONObject(ref.toString()).put("supported", true).put("sourceEvidence", new JSONObject().put("executableIdentity", B).put("executableIdentityKind", "native_file_stat_v1").put("executableIdentityVerified", true).put("versionContentVerified", false).put("executionChainVerified", false).put("runtimeVerified", false)));
+        var resolution=WorkProfileResolver.resolve(WorkProfile.fromJson(profile().put("targetBindings",new JSONArray().put(ref))),sources,new RunControl());resolution.requireReady();JSONObject facts=resolution.view().getJSONArray("items").getJSONObject(0).getJSONObject("sourceEvidence");assertEquals(B,facts.getString("executableIdentity"));assertTrue(facts.getBoolean("executableIdentityVerified"));assertFalse(facts.getBoolean("versionContentVerified"));assertFalse(facts.getBoolean("executionChainVerified"));assertFalse(resolution.view().getBoolean("runtimeVerified"));
+        sources.targets.get("ssh:ssh-a").getJSONObject("sourceEvidence").put("executableIdentity","not-a-public-stat-digest");assertThrows(IllegalArgumentException.class,()->WorkProfileResolver.resolve(WorkProfile.fromJson(profile().put("targetBindings",new JSONArray().put(ref))),sources,new RunControl()));
+    }
+
+    @Test public void skillDependencyOnAGloballyAvailablePluginStillRequiresItsExactProfileSelection()throws Exception {
+        Sources sources=new Sources();sources.capabilities=Set.of("plugin:plugin-a:read");sources.skills.put("skill-a",skill().put("requiredCapabilities",new JSONArray().put("plugin:plugin-a:read")));JSONObject value=profile().put("skillRefs",new JSONArray().put(skillRef(false)));
+        var blocked=WorkProfileResolver.resolve(WorkProfile.fromJson(value),sources,new RunControl());assertFalse(blocked.view().getBoolean("ready"));assertEquals("required_plugin_not_selected",blocked.view().getJSONArray("items").getJSONObject(0).getString("status"));
+        JSONObject manifest=new JSONObject().put("tools",new JSONArray().put(new JSONObject().put("name","read").put("kind","mcp").put("endpoint","https://fixture.invalid/mcp")));sources.plugins.put("plugin-a",new JSONObject().put("id","plugin-a").put("installationId","install-a").put("stateRevision",1).put("enabled",true).put("manifest",manifest).put("grants",new JSONArray().put("tool:read")).put("grantsDigest",A));value.getJSONArray("pluginRefs").put(new JSONObject().put("id","plugin-a").put("installationId","install-a").put("stateRevision",1).put("manifestDigest",WorkProfile.fingerprint(manifest)).put("tools",new JSONArray().put("read")).put("optional",false));WorkProfileResolver.resolve(WorkProfile.fromJson(value),sources,new RunControl()).requireReady();
     }
 
 }

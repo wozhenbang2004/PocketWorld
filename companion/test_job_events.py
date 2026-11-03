@@ -88,6 +88,37 @@ class EventReplayTests(unittest.TestCase):
         query = {"jobOperationId": job["operationId"], "filter": job_events.FILTER, "generation": progress.generation, "after": "0", "head": "0", "limit": "32"}
         return manager, job, progress, query, config
 
+    def test_actual_claude_child_sources_survive_authenticated_original_persisted_pages_without_actions(self):
+        with tempfile.TemporaryDirectory(prefix="alma-original-child-events-") as directory:
+            root = Path(directory); request = self.start(root)
+            job = request("/v1/jobs", {"operationId": "original-child-source", "environmentId": "workspace", "worker": "claude", "prompt": "Read original public observations", "timeoutSeconds": 40})
+            until = time.monotonic() + 6
+            while time.monotonic() < until:
+                job = request("/v1/jobs/" + job["id"])
+                if job.get("pendingQuestions"): break
+                time.sleep(.01)
+            self.assertTrue(job.get("pendingQuestions"), job)
+            query = {"jobOperationId": job["operationId"], "filter": job_events.FILTER, "generation": "", "after": 0, "head": 0, "limit": 32}
+            url = "/v1/jobs/" + job["id"] + "/events?"; rows = []
+            while True:
+                page = request(url + urlencode(query)); rows.extend(page["events"])
+                self.assertFalse(page["executionAuthorized"])
+                if not page["hasMore"]: break
+                query.update(generation=page["generation"], after=page["nextSequence"], head=page["headSequence"])
+            children = [row for row in rows if "childSourceProtocol" in row]
+            self.assertEqual(6, len(children))
+            self.assertEqual({"toolu_child_a", "toolu_child_b"}, {row["parentToolUseId"] for row in children})
+            for row in children:
+                self.assertEqual(job["sessionId"], row["parentSessionId"])
+                self.assertEqual(job["promptRequestId"], row["parentPromptRequestId"])
+            self.assertNotIn("NEVER_EXPOSE_CHILD_THINKING", json.dumps(page))
+            stored = json.loads((root / "state" / ("job-" + job["id"] + ".json")).read_text())
+            self.assertEqual(children, [row for row in stored["progress"]["events"] if "childSourceProtocol" in row])
+            self.assertEqual("1", (root / "submit-count").read_text())
+            self.assertFalse((root / "approval-post-count").exists()); self.assertFalse((root / "question-post-count").exists())
+            self.assertEqual(job["pendingQuestions"], request("/v1/jobs/" + job["id"])["pendingQuestions"])
+            self.doCleanups()
+
     def test_fixed_head_retention_gap_generation_and_invalid_cursor_are_explicit(self):
         manager, job, progress, query, _ = self.synthetic()
         page = job_events.read(manager, job["id"], {**query, "after": "10", "head": "20"}, RequestError)

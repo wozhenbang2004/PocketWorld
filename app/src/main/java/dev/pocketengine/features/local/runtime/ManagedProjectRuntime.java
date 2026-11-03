@@ -91,7 +91,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     public long currentCheckoutSequence(String checkout)throws Exception{return jobs.currentCheckoutSequence(checkout);}
     @Override public JSONObject describe() throws Exception {
         if(androidRuntime!=null)return androidRuntime.describe(jobs.available()).put("runtimeId",RUNTIME_ID).put("provider",RUNTIME_ID)
-                .put("ptyAvailable",jobs.ptyAvailable()).put("terminalStreams","pty_merged_stdout_stderr_or_pipe_separate").put("nativeSupervisorAvailable",jobs.available()).put("canonicalProjectOwner","native_active_checkout")
+                .put("duplexPipesAvailable",jobs.pipesAvailable()).put("duplexPipeRequiresTypedNativeAdmission",true).put("ptyAvailable",jobs.ptyAvailable()).put("terminalStreams","pty_merged_stdout_stderr_or_pipe_separate").put("nativeSupervisorAvailable",jobs.available()).put("canonicalProjectOwner","native_active_checkout")
                 .put("requiresHostApproval",true).put("createsTasks",false).put("liveStdout",true).put("logDelivery","raw_byte_cursor_pages").put("ownedServiceLifetime","same_original_host_run").put("ownedServiceNativeStartAck",true).put("serviceReadinessVerified",false).put("persistentServices",false)
                 .put("scopeEnforced",false).put("securityBoundary","same_uid_process_group_not_a_sandbox")
                 .put("cancellationScope","owned_process_group; escaped sessions are outside this boundary")
@@ -104,7 +104,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
                 .put("installed",environment.getBoolean("installed")).put("canExecute",executable).put("configurationProblem",configurationProblem).put("preparationAvailable",false)
                 .put("message",configurationProblem.equals("android_runtime_unsupported_abi")?"这台手机的处理器暂不支持本机开发工具。":configurationProblem.isEmpty()?"本机开发工具尚未配置。":"当前安装包未包含完整、有效的本机开发工具配置，尚未下载或执行。")
                 .put("status",executable?"installed_unprobed":environment.optString("status").equals("not_configured")?"not_configured":"preparation_required")
-                .put("ptyAvailable",jobs.ptyAvailable()).put("terminalStreams","pty_merged_stdout_stderr_or_pipe_separate").put("nativeSupervisorAvailable",jobs.available()).put("environment",environment).put("tools",facts)
+                .put("duplexPipesAvailable",jobs.pipesAvailable()).put("duplexPipeRequiresTypedNativeAdmission",true).put("ptyAvailable",jobs.ptyAvailable()).put("terminalStreams","pty_merged_stdout_stderr_or_pipe_separate").put("nativeSupervisorAvailable",jobs.available()).put("environment",environment).put("tools",facts)
                 .put("toolProbeRequired",true).put("canonicalProjectOwner","native_active_checkout")
                 .put("requiresHostApproval",true).put("createsTasks",false).put("automaticDownload",false)
                 .put("liveStdout",true).put("logDelivery","raw_byte_cursor_pages").put("ownedServiceLifetime","same_original_host_run").put("ownedServiceNativeStartAck",true).put("serviceReadinessVerified",false).put("persistentServices",false)
@@ -112,22 +112,47 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
                 .put("cancellationScope","owned_process_group; escaped sessions are outside this boundary")
                 .put("managedOutputCollectionAvailable",true).put("phases",new JSONArray().put("PROBE").put("STAGE").put("COMMAND"));
     }
+    /** Native TaskStore-approved MCP only. A JSON pipe marker is never a grant or launcher. */
+    public NativePipeAdmission admitPipesForHost(RuntimeInvocation original,JSONObject exactIdentity,NativePipeAdmission.Authorization authorization,NativePipeAdmission.Output output)throws Exception {
+        requirePipeInvocation(original);return NativePipeAdmission.create(this,original,exactIdentity,authorization,output);
+    }
+    public ManagedProcessJobs.PipeHandle dispatchPipesForHost(RuntimeInvocation original,NativePipeAdmission admission)throws Exception {
+        requirePipeInvocation(original);java.util.Objects.requireNonNull(admission).claim(this,original);
+        dispatchOriginal(original,null,admission);return admission.originalHandle();
+    }
+    private void requirePipeInvocation(RuntimeInvocation original)throws Exception {
+        requireProvider(original.executionRef());original.checkCurrent();original.workspace().verify(original);
+        if(original.executionRef().phase()!=RuntimeExecutionRef.Phase.COMMAND||!NativePipeAdmission.exact(original.exact())||!identity().equals(original.exact().getString("runtimeIdentity"))||!jobs.pipesAvailable())throw new SecurityException("runtime_pipe_original_native_invocation_required");
+        JSONObject payload=original.exact().getJSONObject("payload"),spec=dev.pocketengine.features.local.project.ProjectCommandSpec.fromPayload(payload);
+        if(!".".equals(spec.getString("workingDirectory"))||!"pipes".equals(spec.getString("terminalMode"))||!"owned_service".equals(spec.getString("runMode"))||!java.util.Set.of("python3","node").contains(spec.getString("executable")))throw new SecurityException("runtime_pipe_fixed_registered_interpreter_required");
+        // First version runs a real frozen script, not eval, a shell, an arbitrary binary or an implicit package install.
+        JSONArray argv=spec.getJSONArray("argv");int index=0;boolean python="python3".equals(spec.getString("executable"));
+        while(index<argv.length()&&java.util.Set.of("-I","-u","-B","-E","-s","-S").contains(argv.getString(index))){if(!python)throw new SecurityException("runtime_pipe_node_startup_flag_unsupported");index++;}
+        if(index>=argv.length())throw new SecurityException("runtime_pipe_frozen_entry_required");String entry=dev.pocketengine.features.workspace.VersionedWorkspace.path(argv.getString(index));
+        if(!entry.endsWith(python?".py":".js")||!ProjectSources.byteFiles(original.sourceSnapshot()).containsKey(entry))throw new SecurityException("runtime_pipe_entry_not_in_original_source");
+        JSONObject observed=describe();if(!observed.optBoolean("canExecute"))throw new IllegalStateException("runtime_environment_not_prepared");
+        boolean toolReady=false;JSONArray actual=observed.getJSONArray("tools");for(int i=0;i<actual.length();i++){JSONObject row=actual.getJSONObject(i);if(spec.getString("executable").equals(row.optString("name"))&&(row.optBoolean("hashVerified")||row.optBoolean("probeVerified")))toolReady=true;}
+        if(!toolReady)throw new IllegalStateException("runtime_pipe_registered_tool_not_ready");
+    }
     @Override public RuntimeReceipt dispatch(RuntimeInvocation invocation) throws Exception {
+        if(NativePipeAdmission.exact(invocation.exact()))throw new SecurityException("runtime_mcp_native_pipe_admission_required");
         if(dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact()))throw new SecurityException("Git网络导入需要原生主人一次性租约；普通项目命令不能自报该intent");return dispatchOriginal(invocation,null);
     }
     public RuntimeReceipt dispatchGitImport(RuntimeInvocation invocation,dev.pocketengine.features.local.project.ProjectGitImport.ProcessGrant originalGrant)throws Exception {
         java.util.Objects.requireNonNull(originalGrant);boolean entered=false;try{originalGrant.claim(this,invocation);entered=true;return dispatchOriginal(invocation,originalGrant);}finally{if(!entered)originalGrant.close();}
     }
-    private RuntimeReceipt dispatchOriginal(RuntimeInvocation invocation,AutoCloseable nativeImportLease) throws Exception {
+    private RuntimeReceipt dispatchOriginal(RuntimeInvocation invocation,AutoCloseable nativeImportLease) throws Exception {return dispatchOriginal(invocation,nativeImportLease,null);}
+    private RuntimeReceipt dispatchOriginal(RuntimeInvocation invocation,AutoCloseable nativeImportLease,NativePipeAdmission pipeAdmission) throws Exception {
+        if(NativePipeAdmission.exact(invocation.exact())!=(pipeAdmission!=null))throw new SecurityException("runtime_pipe_native_admission_required");
         boolean passedToJobs=false;try{
         requireProvider(invocation.executionRef());invocation.checkCurrent();
         if(dev.pocketengine.features.skills.ManagedSkillBackend.exact(invocation.exact()))dev.pocketengine.features.skills.ManagedSkillBackend.requireProgram(invocation.exact());
         if(dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())){if(nativeImportLease==null||invocation.executionRef().phase()!=RuntimeExecutionRef.Phase.COMMAND)throw new SecurityException("缺少原Git导入的固定命令租约");dev.pocketengine.features.local.project.ProjectGitImport.requireProgram(invocation.exact());}
-        if(androidRuntime!=null){passedToJobs=true;return dispatchAndroid(invocation,nativeImportLease);}
+        if(androidRuntime!=null){passedToJobs=true;return dispatchAndroid(invocation,nativeImportLease,pipeAdmission);}
         if(!identity.equals(invocation.exact().getString("runtimeIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");
         if(!describe().getBoolean("canExecute"))throw new IllegalStateException("runtime_environment_not_prepared");
         RuntimeWorkspace workspace=invocation.workspace();workspace.verify(invocation);
-        JSONObject payload=invocation.exact().getJSONObject("payload");boolean generic="command".equals(invocation.exact().optString("intent"));JSONObject commandSpec=generic?dev.pocketengine.features.local.project.ProjectCommandSpec.fromPayload(payload):null;List<String> command;
+        JSONObject payload=invocation.exact().getJSONObject("payload");boolean generic="command".equals(invocation.exact().optString("intent"))||pipeAdmission!=null;JSONObject commandSpec=generic?dev.pocketengine.features.local.project.ProjectCommandSpec.fromPayload(payload):null;List<String> command;
         if(generic&&"pty".equals(commandSpec.getString("terminalMode"))&&(!jobs.ptyAvailable()||!NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT.equals(payload.optString("terminalNativeContract"))))throw new SecurityException("runtime_reviewed_pty_transport_unavailable_or_changed");
         switch(invocation.executionRef().phase()) {
             case PROBE:
@@ -158,10 +183,10 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         long timeout=payload.optLong("timeoutMillis",300000);
         if(timeout<1 || timeout>86400000)throw new IllegalArgumentException("runtime_timeout_invalid");
         AutoCloseable lease=nativeImportLease==null?environments.acquire(selected):nativeImportLease;
-        passedToJobs=true;return jobs.start(invocation,command,environment,directory,timeout,lease);
+        passedToJobs=true;return pipeAdmission==null?jobs.start(invocation,command,environment,directory,timeout,lease):jobs.startPipes(invocation,command,environment,directory,timeout,lease,pipeAdmission);
         }finally{if(nativeImportLease!=null&&!passedToJobs)nativeImportLease.close();}
     }
-    private RuntimeReceipt dispatchAndroid(RuntimeInvocation invocation,AutoCloseable nativeImportLease) throws Exception {
+    private RuntimeReceipt dispatchAndroid(RuntimeInvocation invocation,AutoCloseable nativeImportLease,NativePipeAdmission pipeAdmission) throws Exception {
         boolean passedToJobs=false;try {
         AndroidRuntimePreparation profile=androidRuntime;
         if(!identity().equals(invocation.exact().getString("runtimeIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");
@@ -179,7 +204,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         synchronized(profile) {
             if(!identity().equals(invocation.exact().getString("runtimeIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");
             if(!profile.describe(jobs.available()).getBoolean("canExecute"))throw new IllegalStateException("runtime_environment_not_prepared");
-            JSONObject payload=invocation.exact().getJSONObject("payload");boolean generic="command".equals(invocation.exact().optString("intent"));JSONObject commandSpec=generic?dev.pocketengine.features.local.project.ProjectCommandSpec.fromPayload(payload):null;List<String> guest=new ArrayList<>();
+            JSONObject payload=invocation.exact().getJSONObject("payload");boolean generic="command".equals(invocation.exact().optString("intent"))||pipeAdmission!=null;JSONObject commandSpec=generic?dev.pocketengine.features.local.project.ProjectCommandSpec.fromPayload(payload):null;List<String> guest=new ArrayList<>();
             if(generic&&"pty".equals(commandSpec.getString("terminalMode"))&&(!jobs.ptyAvailable()||!NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT.equals(payload.optString("terminalNativeContract"))))throw new SecurityException("runtime_reviewed_pty_transport_unavailable_or_changed");
             switch(invocation.executionRef().phase()) {
                 case PROBE:
@@ -195,7 +220,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             Map<String,String> ordinary=new LinkedHashMap<>();if(commandSpec!=null){JSONObject requested=commandSpec.getJSONObject("environment");for(java.util.Iterator<String> keys=requested.keys();keys.hasNext();){String name=keys.next();ordinary.put(name,requested.getString(name));}if("pty".equals(commandSpec.getString("terminalMode")))ordinary.put("TERM","xterm-256color");}
             command=profile.command(workspace,relative,guest,ordinary);environment=profile.hostEnvironment(identity());lease=nativeImportLease==null?profile.acquire():nativeImportLease;
         }
-        passedToJobs=true;return jobs.start(invocation,command,environment,cwd,timeout,lease);
+        passedToJobs=true;return pipeAdmission==null?jobs.start(invocation,command,environment,cwd,timeout,lease):jobs.startPipes(invocation,command,environment,cwd,timeout,lease,pipeAdmission);
         }finally{if(nativeImportLease!=null&&!passedToJobs)nativeImportLease.close();}
     }
     private static void requireProvider(RuntimeExecutionRef ref) throws Exception {

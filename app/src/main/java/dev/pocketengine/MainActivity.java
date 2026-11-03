@@ -103,6 +103,6 @@ public final class MainActivity extends Activity {
         try{requireAdvancedPanel(panel);send(panel.equals("settings")?EngineApplication.json("type","open_settings"):EngineApplication.json("type","open_features","feature",panel));}
         catch(Exception invalid){send(EngineApplication.json("type","error","message","不支持的设置页面"));}
     }
-    private void deliverAutomationGoal(){String goal=getIntent().getStringExtra("automationGoal");if(goal!=null&&!goal.isEmpty()){send(EngineApplication.json("type","automation_goal","goal",goal,"ruleId",getIntent().getStringExtra("automationRuleId")));getIntent().removeExtra("automationGoal");}}
+    private void deliverAutomationGoal(){if(getIntent().hasExtra("automationGoal")){getIntent().removeExtra("automationGoal");send(EngineApplication.json("type","open_features","feature","automation"));}}
     private static String safeMessage(Exception e){String m=e.getMessage();return m==null?"操作失败，请重试":m.length()>250?m.substring(0,250):m;}
 }

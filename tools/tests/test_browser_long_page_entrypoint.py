@@ -47,7 +47,7 @@ class BrowserLongPageEntrypointTest(unittest.TestCase):
                      'Check out fixed pre-fix source for the real Chromium red case',
                      'Run original emitted long-DOM Chromium red and green fixtures']:
             step = workflow.split('      - name: ' + name + '\n', 1)[1].split('\n      - name:', 1)[0]
-            self.assertIn("if: ${{ inputs.host_group == 'browser-long-page' }}", step)
+            self.assertIn("if: ${{ inputs.host_groups == '' && inputs.host_group == 'browser-long-page' }}", step)
         self.assertIn('playwright@1.57.0', workflow)
         self.assertIn('ref: afba870564e83034339ad084c2e7247260ea0c9c', workflow)
         self.assertNotIn('2ca6a58', workflow)

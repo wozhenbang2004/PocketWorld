@@ -43,7 +43,7 @@ public final class MemoryTaskUseTest {
         prove(selected);JSONObject current=use.confirmTaskMemoryUse(scope(),selected,receipt,fence);
         assertEquals("provided_to_request",current.getString("phase"));assertEquals("current",current.getString("status"));assertEquals(1,current.getJSONArray("records").getJSONObject(0).getLong("revision"));
         assertFalse(current.getBoolean("executionAuthorized"));assertFalse(current.getBoolean("modelUseVerified"));
-        assertFalse(selected.metadata().toString().contains("本次任务咖啡偏好"));assertFalse(Files.readString(file().toPath()).contains("request-native"));
+        assertFalse(selected.metadata().toString().contains("本次任务咖啡偏好"));assertFalse(new String(Files.readAllBytes(file().toPath()),java.nio.charset.StandardCharsets.UTF_8).contains("request-native"));
     }
 
     @Test public void forgedDigestPartialOrOtherRequestCannotBecomeUseReceipt()throws Exception{

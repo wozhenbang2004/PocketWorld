@@ -7,6 +7,20 @@ codex_line = next(line for line in original.CODEX.splitlines() if "emit({'method
 original.CODEX = original.CODEX.replace(codex_line, codex_line + "\n        for n in range(96): emit({'method':'item/commandExecution/outputDelta','params':{'threadId':'question-thread','turnId':turn,'itemId':'burst-item','delta':'controlled observed chunk '+str(n)}})", 1)
 claude_line = next(line for line in original.CLAUDE.splitlines() if "emit({'type':'system','subtype':'init'" in line)
 original.CLAUDE = original.CLAUDE.replace(claude_line, claude_line + "\n        for n in range(96): emit({'type':'tool_progress','session_id':session,'tool_use_id':'observed-'+str(n),'tool_name':'Read'})", 1)
+child_blocks = """
+        for suffix in ('a','b'):
+            emit({'type':'assistant','session_id':session,'uuid':'public-child-'+suffix,
+                  'parent_tool_use_id':'toolu_child_'+suffix,'agent_id':'agent-'+suffix,
+                  'message':{'id':'message-child-'+suffix,'content':[
+                      {'type':'text','text':'same public child observation'},
+                      {'type':'thinking','thinking':'NEVER_EXPOSE_CHILD_THINKING'},
+                      {'type':'tool_use','id':'same-child-tool','name':'Read','input':{}}]}})
+            emit({'type':'user','session_id':session,'uuid':'public-result-'+suffix,
+                  'parent_tool_use_id':'toolu_child_'+suffix,
+                  'message':{'content':[{'type':'tool_result','tool_use_id':'same-child-tool','content':'same public result'}]}})
+"""
+burst = next(line for line in original.CLAUDE.splitlines() if "range(96)" in line)
+original.CLAUDE = original.CLAUDE.replace(burst, burst + child_blocks, 1)
 Base = original.CompanionHandler
 
 

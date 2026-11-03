@@ -34,6 +34,7 @@ import org.json.JSONObject
     val result = state.moduleResults[key]
     var snapshot by remember { mutableStateOf<JSONObject?>(null) }
     val plans = snapshot?.optJSONArray("plans").objects()
+    val scheduleProposals = snapshot?.optJSONArray("scheduleProposals").objects()
     val busy = key in state.moduleBusy
     var selected by remember { mutableStateOf<String?>(null) }
     var creating by remember { mutableStateOf(false) }
@@ -80,6 +81,11 @@ import org.json.JSONObject
     val plan = plans.find { it.optString("id") == selected }
     if (plan == null) {
         Button(onClick = { creating = true }, enabled = !busy) { Text("建立一个持续目标") }
+        if (scheduleProposals.isNotEmpty()) {
+            Text("原对话提出的时间草案", fontSize = 16.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 20.dp))
+            PlanCaption("草案没有排程或执行权。核对固定时间、目标和原版本后，只有你在此明确批准才保存提醒；手机等实际执行仍走原授权入口。语义条件监控暂不支持。")
+            scheduleProposals.forEach { row -> OrdinaryScheduleDraft(row, busy) { id, digest -> send("approveSchedule", JSONObject().put("id", id).put("digest", digest)) } }
+        }
         if (plans.isEmpty() && !busy) PlanCaption("从一个明确目标开始，安排成功路径和需要时的失败恢复。文件成果可按你指定的标准自动核验。")
         plans.forEach { row ->
             Column(Modifier.fillMaxWidth().clickable { selected = row.optString("id") }.padding(vertical = 18.dp)) {
@@ -187,6 +193,36 @@ import org.json.JSONObject
     reviewing?.let { frozen -> ExecutionPlanReview(frozen, state, busy, { reviewing = null }) { settings -> dialogRequest = send("approve", planRef(frozen).put("settings", settings)) } }
     editing?.let { (frozen, step) -> ExecutionStepEditor(frozen, step, state, remoteCandidates, businessCandidates, busy, { editing = null }) { patch -> dialogRequest = send("editStep", planRef(frozen).put("stepId", step.getString("id")).put("stepRevision", step.getLong("revision")).put("patch", patch)) } }
     cancelling?.let { frozen -> AlertDialog(onDismissRequest = { cancelling = null }, title = { Text("取消这个目标？") }, text = { Text("保留已核验成果，停止后继准入，并请求停止本目标创建的原任务。在途操作和未知结果仍需核对。" + if (frozen.optJSONArray("steps").objects().any { it.optJSONObject("remoteWait") != null }) " 独立电脑前置不会被此操作停止，需要停止时请打开电脑原任务。" else "") }, confirmButton = { TextButton(onClick = { send("cancel", planRef(frozen)); cancelling = null }) { Text("取消目标", color = Danger) } }, dismissButton = { TextButton(onClick = { cancelling = null }) { Text("保留") } }) }
+}
+
+/** Existing native plan components only. Cached text/digest is never source authority. */
+@Composable private fun OrdinaryScheduleDraft(submitted: JSONObject, busy: Boolean, approve: (String, String) -> Unit) {
+    val checked = if (submitted.optBoolean("sourceAvailable")) runCatching { dev.pocketengine.features.automation.AutomationBook.reviewedProposalForDisplay(submitted) }.getOrNull() else null
+    Column(Modifier.fillMaxWidth().padding(vertical = 16.dp)) {
+        if (checked == null) {
+            val invalidated = submitted.optBoolean("sourceInvalidated")
+            Text(if (invalidated) "原时间草案来源已撤回" else "原时间草案来源待核对", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            PlanCaption(if (invalidated) "原会话、输入版本或来源已有撤回事实。没有显示旧目标，也不能从此旧草案恢复执行；请回原私聊明确重新提出。" else "当前原宿主或来源暂时无法核对，草案正文仍保留、没有重新批准。恢复后可刷新核对；旧来源始终无法证明时，请在原私聊重新提出。")
+        } else {
+            val draft = checked.getJSONObject("draft")
+            val schedule = draft.getJSONObject("schedule")
+            val preview = runCatching { dev.pocketengine.features.automation.AutomationSchedule.preview(schedule, System.currentTimeMillis(), 1).getJSONArray("occurrences") }.getOrNull()
+            val next = preview?.optJSONObject(0)?.optLong("at", -1) ?: -1
+            val zone = runCatching { ZoneId.of(schedule.optString("zone", ZoneId.systemDefault().id)) }.getOrDefault(ZoneId.systemDefault())
+            val displayedTime = if (next >= 0) java.time.Instant.ofEpochMilli(next).atZone(zone).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss XXX VV")) else "该时间已过或日历已耗尽，请重新提出"
+            Text(draft.getString("title"), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            if (draft.optString("kind") == "phone_goal") Text(draft.getString("goal"), fontSize = 14.sp, lineHeight = 22.sp)
+            PlanCaption("下一次实际时间 · $displayedTime")
+            PlanCaption("固定日历定义 · ${schedule}")
+            PlanCaption("原版本 · ${checked.getString("digest")}")
+            if (checked.optString("status") == "pending") {
+                val entered = checked.optBoolean("ruleCreationEntered")
+                if (entered) PlanCaption("原创建已进入但确认未完成；只能核对相同原规则，不会重建缺失或已撤回的规则。")
+                Button(onClick = { approve(checked.getString("id"), checked.getString("digest")) }, enabled = !busy && next >= 0) { Text(if (entered) "核对原创建（不重建）" else "明确保存此提醒（不授权执行）") }
+            } else PlanCaption("已审阅保存。提醒不等于手机或其他动作已获授权，更不代表业务完成。")
+        }
+        HorizontalDivider(color = Line, modifier = Modifier.padding(top = 14.dp))
+    }
 }
 
 @Composable private fun ExecutionPlanEditor(state: PocketUiState, remoteCandidates: List<JSONObject>, businessCandidates: List<JSONObject>, busy: Boolean, close: () -> Unit, save: (JSONObject) -> Unit) {

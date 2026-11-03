@@ -9,8 +9,8 @@ public final class ProjectRegexSearchTest {
     private Path root;
     @Before public void create()throws Exception{root=Files.createTempDirectory("project-regex-search-");}
     @After public void close()throws Exception{try(var paths=Files.walk(root)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}
-    private void file(String path,String text)throws Exception{Path target=root.resolve(path);Files.createDirectories(target.getParent());Files.writeString(target,text);}
-    private JSONObject query(String expression){return new JSONObject().put("mode","text").put("syntax","regex").put("query",expression);}
+    private void file(String path,String text)throws Exception{Path target=root.resolve(path);Files.createDirectories(target.getParent());writeUtf8(target,text);}
+    private JSONObject query(String expression)throws Exception{return new JSONObject().put("mode","text").put("syntax","regex").put("query",expression);}
     private JSONObject search(JSONObject input)throws Exception{return ProjectFileQueries.search(root.toFile(),"11111111-1111-1111-1111-111111111111",input,()->{});}
 
     @Test public void unicodeRegexFindsRealLineAndUtf16MatchRange()throws Exception{
@@ -53,4 +53,6 @@ public final class ProjectRegexSearchTest {
         assertEquals(2,search(query("\\{1000\\}\\{1000\\}")).getJSONArray("matches").getJSONObject(0).getInt("line"));
         assertThrows(IllegalArgumentException.class,()->new ProjectSearchPattern("(?:a{1000}){1000}",true));
     }
+    private static java.nio.file.Path writeUtf8(java.nio.file.Path path,String text)throws java.io.IOException{return Files.write(path,text.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+
 }

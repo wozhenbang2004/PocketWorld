@@ -65,5 +65,61 @@ class AionHostGroups(unittest.TestCase):
         self.assertNotIn(name, [item['class'] for value in FIXTURE.values() for item in value['classes']])
 
 
+    def test_work_profile_targets_are_two_native_modules_with_one_http_helper(self):
+        expected = {
+            'dev.pocketengine.features.remote.WorkProfileRemoteTargetFactsNativeTest': 10,
+            'dev.pocketengine.features.ssh.WorkProfileSshTargetFactsNativeTest': 3,
+            'dev.pocketengine.features.remote.WorkProfileHarnessCompositionNativeTest': 2,
+        }
+        entry = REGISTRY['aion-work-profile-targets']
+        self.assertEqual(list(expected), [entry['class']] + entry['additionalClasses'])
+        self.assertEqual(['dev.pocketengine.testutil.HttpServer'], entry['helpers'])
+        self.assertTrue(entry['robolectric'])
+        original = [item['class'] for value in FIXTURE.values() for item in value['classes']]
+        for name, count in expected.items():
+            source = ROOT / 'app/src/test/java' / (name.replace('.', '/') + '.java')
+            self.assertEqual(count, len(re.findall(r'@Test\s+public\s+void\s+(\w+)\s*\(', source.read_text())), name)
+            self.assertNotIn(name, original)
+
+
+    def test_worker_entrypoint_selects_one_pure_junit_bridge_to_exact_seven_python_tests(self):
+        entry = REGISTRY['aion-worker-entrypoint']
+        name = 'dev.pocketengine.features.remote.WorkerEntrypointCompanionContractTest'
+        self.assertEqual(name, entry['class'])
+        self.assertEqual([], entry['helpers'])
+        self.assertEqual([], entry.get('additionalClasses', []))
+        self.assertTrue(entry['python'])
+        self.assertFalse(entry.get('robolectric', False))
+        source = (ROOT / 'app/src/hostTest/java' / (name.replace('.', '/') + '.java')).read_text()
+        self.assertEqual(1, len(re.findall(r'@Test\s+public\s+void\s+(\w+)\s*\(', source)))
+        self.assertIn('"test_worker_executable_identity"', source)
+        self.assertNotIn('"discover"', source)
+
+
+    def test_original_successor_observation_and_config_groups_are_exact(self):
+        groups = {
+            'aion-capability-observations': ({
+                'dev.pocketengine.features.remote.HarnessCapabilityObservationTest': 10,
+                'dev.pocketengine.runtime.usage.ConnectionInferenceObservationsTest': 12,
+            }, [], False),
+            'aion-team-templates': ({
+                'dev.pocketengine.features.teams.TeamRoleCatalogReadTest': 6,
+                'dev.pocketengine.features.teams.TeamTemplateApplicationTest': 5,
+            }, [], False),
+            'aion-mcp-config': ({
+                'dev.pocketengine.features.plugins.McpConfigImportAdapterTest': 15,
+                'dev.pocketengine.features.plugins.McpConfigImportNativeJourneyTest': 11,
+            }, ['dev.pocketengine.features.plugins.McpFixture', 'dev.pocketengine.testutil.HttpServer'], True),
+        }
+        for group, (classes, helpers, robolectric) in groups.items():
+            entry = REGISTRY[group]
+            self.assertEqual(list(classes), [entry['class']] + entry['additionalClasses'])
+            self.assertEqual(helpers, entry['helpers'])
+            self.assertEqual(robolectric, entry.get('robolectric', False))
+            for name, count in classes.items():
+                source = ROOT / 'app/src/test/java' / (name.replace('.', '/') + '.java')
+                self.assertEqual(count, len(re.findall(r'@Test\s+public\s+void\s+(\w+)\s*\(', source.read_text())), name)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -40,7 +40,9 @@ public final class SQLiteMemoryRetrievalBackendTest {
             MemoryBook book=new MemoryBook(new File(temp.getRoot(),"records.json"),null,index);JSONObject a=book.save(scope(),row("旧咖啡地址"),1);assertEquals(1,book.search(scope(),"咖啡",10).length());
             JSONObject updated=book.save(scope(),new JSONObject(a.toString()).put("text","新茶地址"),2);assertEquals(0,index.status().getInt("indexedCount"));assertEquals(0,book.search(scope(),"咖啡",10).length());assertEquals(1,book.search(scope(),"茶",10).length());
             book.forgetReviewed(scope(),updated.getString("id"),updated.getLong("revision"));assertEquals(0,index.status().getInt("indexedCount"));assertEquals(0,book.search(scope(),"茶",10).length());
-            assertEquals(0,new MemoryBook(new File(temp.getRoot(),"records.json"),null,SQLiteMemoryRetrievalBackend.create()).search(scope(),"茶",10).length());
+            MemoryRetrievalBackend cold=SQLiteMemoryRetrievalBackend.create();try{
+                assertEquals(0,new MemoryBook(new File(temp.getRoot(),"records.json"),null,cold).search(scope(),"茶",10).length());
+            }finally{cold.close();}
         }finally{index.close();}
     }
     @Test public void nativeFts4Bm25LengthNormalizationOutranksARecentLongDocumentBeforeLimit()throws Exception {

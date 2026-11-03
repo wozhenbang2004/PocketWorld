@@ -22,6 +22,62 @@ import static org.junit.Assert.*;
 public final class AutomaticOwnerUtteranceNativeTest {
     @org.junit.Before public void nativeKeyFixture(){java.security.Security.addProvider(new java.security.Provider("AutomaticLearningFixtureKeys",1.0d,"Test-only AndroidKeyStore provider"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     @org.junit.After public void removeNativeKeyFixture(){java.security.Security.removeProvider("AutomaticLearningFixtureKeys");}
+    @Test public void nativeOwnerCapabilityReportsInstalledHostSeparatelyFromEnabledPolicyAndAcceptance()throws Exception {
+        EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();var memory=(dev.pocketengine.features.memory.MemoryModule)app.features.module("memory");
+        try{
+            JSONObject off=app.memoryOwnerSnapshot();assertTrue(off.getJSONObject("nativeCapabilities").getBoolean("automaticLearning"));assertFalse(off.getBoolean("automaticLearning"));assertFalse(off.getJSONObject("nativeCapabilities").getBoolean("automaticAcceptance"));
+            JSONObject policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),true,1,true);JSONObject enabled=app.memoryOwnerSnapshot();assertTrue(enabled.getJSONObject("nativeCapabilities").getBoolean("automaticLearning"));assertTrue(enabled.getBoolean("automaticLearning"));assertEquals("trusted_host_native_only",enabled.getString("candidateAcceptance"));
+            policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);assertFalse(app.memoryOwnerSnapshot().getBoolean("automaticLearning"));
+        }finally{JSONObject policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);((AssistantModule)app.features.module("assistant")).close();memory.close();app.onTerminate();var database=dev.pocketengine.store.TaskStore.class.getDeclaredField("db");database.setAccessible(true);((android.database.sqlite.SQLiteDatabase)database.get(app.tasks)).close();}
+    }
+    @Test public void ownerOptOutAfterPhysicalLearningSendBlocksLateCandidateAndAutomaticReplay()throws Exception {withdrawDuringPhysicalLearning(false);}
+    @Test public void deletingActualUserSourceAfterPhysicalLearningSendBlocksLateCandidateAndAutomaticReplay()throws Exception {withdrawDuringPhysicalLearning(true);}
+    /** A response is held only after the real ModelGateway sent the exact source. Revocation
+     * cannot retract those bytes, but must fence publication and the next native idle wake. */
+    private void withdrawDuringPhysicalLearning(boolean deleteSource)throws Exception {
+        EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();AssistantModule assistant=(AssistantModule)app.features.module("assistant");
+        var memory=(dev.pocketengine.features.memory.MemoryModule)app.features.module("memory");JSONObject scope=new JSONObject().put("ownerId","owner").put("spaceId","private");
+        String words="我希望每个结论都能回到原始证据。";var mainCalls=new java.util.concurrent.atomic.AtomicInteger();var learningCalls=new java.util.concurrent.atomic.AtomicInteger();
+        var received=new java.util.concurrent.CountDownLatch(1);var respond=new java.util.concurrent.CountDownLatch(1);var fixtureFailure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        HttpServer http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        http.createContext("/",exchange->{try{
+            JSONObject request=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));boolean learning=request.getJSONArray("messages").getJSONObject(0).getString("content").contains("记忆候选提炼器");String content;
+            if(learning){learningCalls.incrementAndGet();JSONObject source=new JSONObject(request.getJSONArray("messages").getJSONObject(1).getString("content"));
+                if(!words.equals(source.getString("text")))fixtureFailure.set(new AssertionError("physical request substituted the native USER source"));received.countDown();
+                if(!respond.await(10,TimeUnit.SECONDS))throw new IllegalStateException("withdrawal fixture did not release response");
+                content=new JSONObject().put("layer","preference").put("text","模型改写不得成为原话").put("quote",words).put("reason","逐字原话").put("applicability","").put("confidence",0.5).toString();
+            }else{mainCalls.incrementAndGet();content="原对话已收到，待主人检查。";}
+            JSONObject response=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",new JSONObject().put("role","assistant").put("content",content)).put("finish_reason","stop")));
+            byte[] bytes=response.toString().getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+        }catch(Exception failed){if(respond.getCount()!=0)fixtureFailure.compareAndSet(null,failed);throw failed;}finally{exchange.close();}});http.start();
+        try{
+            app.getSharedPreferences("private_settings",0).edit().putString("baseUrl","http://127.0.0.1:"+http.getAddress().getPort()).putString("provider","openai_chat").putString("model","controlled-withdrawal-fixture").putBoolean("supportsImageInput",false).putBoolean("sendScreenshots",false).putInt("maxSteps",8).commit();
+            JSONObject policy=app.automaticUserLearningPolicy();assertFalse(policy.getBoolean("enabled"));app.setAutomaticUserLearningPolicy(policy.getLong("revision"),true,1,true);
+            JSONObject ack=assistant.handle("send",new JSONObject().put("message",words).put("clientMessageId",UUID.randomUUID().toString()));long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(15);
+            var controls=EngineApplication.class.getDeclaredField("capabilityControls");controls.setAccessible(true);
+            while((assistant.snapshot().optBoolean("running")||((java.util.Map<?,?>)controls.get(app)).containsKey(ack.getString("taskId")))&&System.nanoTime()<until)Thread.sleep(10);
+            JSONObject original=app.tasks.get(ack.getString("taskId"),false);assertTrue(original.optString("summary"),original.getString("status").matches("completed|needs_confirmation"));
+            if("needs_confirmation".equals(original.getString("status")))app.dispatchOwnerAction("confirmResult",new JSONObject().put("taskId",ack.getString("taskId")).put("resultReviewDigest",original.getString("resultReviewDigest")).put("completed",true).put("feedback",""));
+            assertTrue("no physical automatic model request",received.await(10,TimeUnit.SECONDS));assertNull(fixtureFailure.get());
+            JSONArray registered=app.tasks.listSourceLearningJobs("",20).getJSONArray("jobs");assertEquals(1,registered.length());String learningTask=registered.getJSONObject(0).getString("taskId");
+            assertTrue(((java.util.Map<?,?>)controls.get(app)).containsKey(learningTask));assertEquals(0,memory.handle("listCandidates",new JSONObject().put("scope",scope)).getJSONArray("candidates").length());
+            if(deleteSource)assistant.handle("deleteMessage",new JSONObject().put("conversationId",ack.getString("conversationId")).put("messageId",ack.getString("messageId")).put("revision",1));
+            else{policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);}
+            respond.countDown();until=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
+            while(((java.util.Map<?,?>)controls.get(app)).containsKey(learningTask)&&System.nanoTime()<until)Thread.sleep(10);
+            assertFalse("withdrawn original learning control did not release",((java.util.Map<?,?>)controls.get(app)).containsKey(learningTask));
+            JSONObject stopped=app.tasks.sourceLearningJob(learningTask);assertEquals(stopped.toString(),"reconciling",stopped.getString("taskStatus"));assertEquals("unknown",stopped.getJSONObject("active").getString("stage"));assertFalse(stopped.getBoolean("canContinue"));assertTrue(stopped.getBoolean("canSkipBatch"));assertEquals(0,stopped.getJSONObject("job").getInt("nextIndex"));assertEquals(0,stopped.getJSONObject("job").getJSONArray("results").length());
+            // Exercise the same production wake used after release; a started/unknown batch is
+            // retained for explicit owner reconciliation, never treated as unstarted work.
+            var wake=EngineApplication.class.getDeclaredMethod("queueAutomaticLearningIdle");wake.setAccessible(true);wake.invoke(app);
+            var pending=EngineApplication.class.getDeclaredField("automaticLearningIdlePending");pending.setAccessible(true);
+            until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);while(((java.util.concurrent.atomic.AtomicBoolean)pending.get(app)).get()&&System.nanoTime()<until)Thread.sleep(10);
+            assertFalse("original idle metadata did not settle",((java.util.concurrent.atomic.AtomicBoolean)pending.get(app)).get());
+            assertEquals(1,mainCalls.get());assertEquals(1,learningCalls.get());assertNull(fixtureFailure.get());assertEquals(1,app.tasks.listSourceLearningJobs("",20).getJSONArray("jobs").length());
+            assertEquals(0,memory.handle("listCandidates",new JSONObject().put("scope",scope)).getJSONArray("candidates").length());assertEquals(0,memory.handle("list",new JSONObject().put("scope",scope)).getJSONArray("records").length());
+            JSONObject source=app.tasks.conversationRepository().source(ack.getString("messageId"));assertEquals(deleteSource,source.getBoolean("deleted"));assertEquals("completed",app.tasks.get(ack.getString("taskId"),false).getString("status"));
+        }finally{respond.countDown();JSONObject policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);assistant.handle("cancel",new JSONObject());assistant.close();http.stop(0);}
+    }
     @Test public void automaticReaderRequiresActuallyAdoptedCurrentUserRevision()throws Exception{
         EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();
         AssistantModule assistant=(AssistantModule)app.features.module("assistant");

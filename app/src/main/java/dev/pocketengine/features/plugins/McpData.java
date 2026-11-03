@@ -13,6 +13,7 @@ final class McpData {
     static final String VERSION="2026-07-28", LEGACY="2025-11-25";
     static boolean supportedVersion(String version){return VERSION.equals(version)||LEGACY.equals(version);}
     static final int MAX_TOOLS=96;
+    static final int MAX_IMPORTED_TOOLS=12;
     private McpData() { }
 
     static JSONObject support()throws Exception {
@@ -20,17 +21,19 @@ final class McpData {
                 .put("schemaDialect","https://json-schema.org/draft/2020-12/schema")
                 .put("validationKeywords",new JSONArray(new String[]{"type","properties","required","additionalProperties","items","maxItems","maxLength","enum","minimum","maximum"}))
                 .put("annotationKeywords",new JSONArray(new String[]{"title","description","$comment","default","examples","deprecated","readOnly","writeOnly"})).put("headerKeyword","x-mcp-header")
-                .put("structuredContentSupport","object_only_not_output_schema_validated").put("maxImportedTools",12).put("maxDiscoveredTools",MAX_TOOLS).put("maxSchemaCharacters",16000)
+                .put("structuredContentSupport","object_only_not_output_schema_validated").put("maxImportedTools",MAX_IMPORTED_TOOLS).put("maxDiscoveredTools",MAX_TOOLS).put("maxSchemaCharacters",16000)
                 .put("contentTypes",new JSONArray().put("text").put("structuredContent"))
                 .put("resources",new JSONObject().put("sourceImplemented",true).put("readOnly",true).put("skillImportRequiresReview",true)
                         .put("maxPages",8).put("maxResources",96).put("maxSkillCharacters",64000).put("relativeResourceResolver",false))
+                .put("prompts",new JSONObject().put("sourceImplemented",true).put("nativeOwnerOnly",true).put("installedOnly",true).put("readOnly",true)
+                        .put("maxPages",8).put("maxPrompts",96).put("maxMessages",64).put("maxTextCharacters",64000).put("automaticConversationInjection",false).put("contentSupport","text_only_with_explicit_omissions"))
                 .put("tasks",new JSONObject().put("protocolVersion",VERSION).put("extension","io.modelcontextprotocol/tasks")
                         .put("sourceImplemented",true).put("hostMountRequired",true).put("automaticReplay",false))
                 .put("oauth",new JSONObject().put("sourceImplemented",true).put("hostMountRequired",true).put("clientType","public_pkce_s256")
                         .put("registration","pre_registered_or_existing_cimd").put("automaticRefresh",false))
                 .put("unsupported",new JSONArray().put("stdio").put("legacy HTTP+SSE")
                         .put("SSE reconnect/resumption").put("GET subscriptions").put("legacy experimental tasks").put("sampling").put("elicitation")
-                        .put("roots").put("resource subscriptions").put("prompts").put("tasks/update input").put("binary content"));
+                        .put("roots").put("resource subscriptions").put("prompt subscriptions/completion").put("multimodal prompt content").put("tasks/update input").put("binary content"));
     }
 
     static JSONObject previewTool(JSONObject remote,String endpoint,String version,String serverDigest)throws Exception {
@@ -59,7 +62,7 @@ final class McpData {
     }
 
     static JSONObject manifest(String id,String name,String endpoint,String version,String serverDigest,JSONArray definitions,JSONArray selection)throws Exception {
-        if(selection.length()<1||selection.length()>12)throw new IllegalArgumentException("请选择1至12个支持的MCP工具");
+        if(selection.length()<1||selection.length()>MAX_IMPORTED_TOOLS)throw new IllegalArgumentException("请选择1至"+MAX_IMPORTED_TOOLS+"个支持的MCP工具");
         JSONArray tools=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
         for(int i=0;i<selection.length();i++){
             String selected=selection.getString(i);if(!seen.add(selected))throw new IllegalArgumentException("工具选择重复");

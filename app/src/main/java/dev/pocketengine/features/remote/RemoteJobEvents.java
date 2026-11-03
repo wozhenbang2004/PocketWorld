@@ -9,6 +9,7 @@ import org.json.JSONObject;
 /** Original-job observation cursor only. A historical event never grants answer/approval authority. */
 public final class RemoteJobEvents {
     public static final String PROTOCOL="original_job_events_v1", FILTER="normalized_driver_observations_v1";
+    public static final String CHILD_SOURCE_PROTOCOL="claude_complete_child_v1";
     private RemoteJobEvents(){}
     public static final class Page {
         private final JSONObject scope,request,value;
@@ -29,6 +30,20 @@ public final class RemoteJobEvents {
         boolean same=previous!=null&&same(previous.optJSONObject("scope"),scope);
         return new JSONObject().put("generation",same?previous.optString("generation"):"").put("after",same?previous.optLong("nextSequence"):0)
                 .put("head",same&&previous.optBoolean("hasMore")?previous.optLong("headSequence"):0).put("limit",32).put("filter",FILTER);
+    }
+    /** Body-free read projection only. A native parent tool-use ID is NOT a child session handle. */
+    public static JSONObject sourceView(JSONObject event,JSONObject originalSource)throws Exception {
+        boolean marked=false;for(String key:new String[]{"childSourceProtocol","parentToolUseId","parentSessionId","parentPromptRequestId","nativeAgentId","nativeMessageId","nativeEventId"})marked|=event.has(key);
+        JSONObject view=new JSONObject().put("executionAuthorized",false).put("childSessionControl",false).put("completeTranscript",false);
+        if(!marked)return view.put("kind","main_or_unspecified").put("key","main_or_unspecified");
+        if(!CHILD_SOURCE_PROTOCOL.equals(event.optString("childSourceProtocol"))||!"claude".equals(originalSource.optString("worker"))||!"claude_stream_json".equals(originalSource.optString("nativeProtocol",originalSource.optString("protocol"))))throw new SecurityException("child观察缺少原受支持driver来源");
+        String session=originalSource.optString("sessionId",originalSource.optString("threadId")),prompt=originalSource.optString("promptRequestId");
+        if(!session.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")||!prompt.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")||!session.equals(event.optString("parentSessionId"))||!prompt.equals(event.optString("parentPromptRequestId")))throw new SecurityException("child观察不是此原session/prompt，不混入父记录");
+        String kind=event.optString("kind"),nativeType=event.optString("nativeType");
+        if(!(kind.equals("child_text")&&nativeType.matches("assistant/text|user/text")&&event.opt("text") instanceof String||kind.equals("tool")&&nativeType.equals("assistant/tool_use")||kind.equals("tool_result")&&nativeType.equals("user/tool_result")))throw new SecurityException("child观察只接完整公开text/tool block，不接thinking或审批");
+        if(!event.has("parentToolUseId"))throw new SecurityException("child观察没有原parent tool-use身份");for(String key:new String[]{"parentToolUseId","nativeAgentId","nativeMessageId","nativeEventId"})if(event.has(key)&&(!(event.opt(key) instanceof String)||!event.getString(key).matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}")))throw new SecurityException("child原生来源ID无效，未成为可操作会话");
+        String parent=event.getString("parentToolUseId");view.put("kind","child").put("key","child:"+parent).put("sourceProtocol",CHILD_SOURCE_PROTOCOL).put("parentToolUseId",parent).put("parentSessionId",session).put("parentPromptRequestId",prompt);
+        for(String key:new String[]{"nativeAgentId","nativeMessageId","nativeEventId"})if(event.has(key))view.put(key,event.getString(key));return view;
     }
     /** Package-only factory: RemoteModule calls this after the original authenticated GET and fences. */
     static Page received(JSONObject scope,JSONObject request,JSONObject actual)throws Exception {
@@ -51,7 +66,7 @@ public final class RemoteJobEvents {
         long cursor=after;
         if(gap!=null){if(!"retention_gap".equals(gap.optString("reason"))||number(gap,"fromSequence")!=after+1||number(gap,"throughSequence")!=Math.min(first-1,head)||number(gap,"throughSequence")<after+1)throw new SecurityException("事件缺口不能捏造或跳过已保留内容");cursor=number(gap,"throughSequence");}
         else if(after<Math.min(first-1,head))throw new SecurityException("事件页遗漏缺口说明");
-        for(int i=0;i<events.length();i++){JSONObject row=events.getJSONObject(i);if(number(row,"sequence")!=++cursor||cursor<first||cursor>head||!(row.opt("kind") instanceof String)||!(row.opt("nativeType") instanceof String)||number(row,"observedAt")<1)throw new SecurityException("事件序号不连续或不是原观察");}
+        for(int i=0;i<events.length();i++){JSONObject row=events.getJSONObject(i);if(number(row,"sequence")!=++cursor||cursor<first||cursor>head||!(row.opt("kind") instanceof String)||!(row.opt("nativeType") instanceof String)||number(row,"observedAt")<1)throw new SecurityException("事件序号不连续或不是原观察");sourceView(row,scope);}
         if(next!=cursor||next>head||actual.optBoolean("hasMore")!=(next<head)||next<head&&events.length()==0)throw new SecurityException("事件页无进展或游标越界");
         return new Page(scope,request,actual);
     }
