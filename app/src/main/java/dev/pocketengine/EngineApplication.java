@@ -458,7 +458,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         nativeOwnerWorkflows=new dev.pocketengine.features.NativeOwnerWorkflows(features,context,tasks,memorySources);
         nativeOwnerWorkflows.installAccountInference();
         capabilityWorkers.execute(()->{
-            try{if(nativeOwnerWorkflows.warmSelectedAccountMetadata())main.post(()->{try{features.sendState();}catch(Exception ignored){}});}
+            try{if(nativeOwnerWorkflows.warmSelectedAccountMetadata())main.post(()->{try{sendState();features.sendState();}catch(Exception ignored){}});}
             catch(Exception unavailable){error("ChatGPT 账号状态尚未准备，请打开账号页核对；未清空旧状态。");}
         });
         remoteOwnerWorkflows=new dev.pocketengine.features.RemoteOwnerWorkflows(features,tasks,this::publish);
@@ -2428,7 +2428,6 @@ public final class EngineApplication extends Application implements dev.pocketen
         NotificationManager nm=getSystemService(NotificationManager.class);
         JSONObject page=tasks.taskSummaryPage("",40);
         ModelConfig selected=settings.get();
-        if(selected.usesAccount()&&nativeOwnerWorkflows!=null)nativeOwnerWorkflows.warmSelectedAccountMetadata();
         JSONObject configuration=selected.publicJson().put("accountModelAvailable",selected.usesAccount()&&dev.pocketengine.runtime.ModelGateway.accountModelAvailableForDisplay(selected.accountModel));
         return json("type","state","payload",json("config",configuration,"agentPreferences",settings.agentPreferences(),"accessibilityEnabled",PhoneAccessibilityService.get()!=null,"notificationsEnabled",nm!=null&&nm.areNotificationsEnabled(),"phoneReadiness",phoneReadiness(),"tasks",page.getJSONArray("tasks"),"tasksNextCursor",page.getString("nextCursor"),"activeTaskId",activeId()==null?JSONObject.NULL:activeId()));
     }

@@ -55,4 +55,28 @@ public final class AccountModelDisplayReadinessTest {
         });
         assertFalse(ModelGateway.accountModelAvailableForDisplay(ref));
     }
+    @Test public void coldDisplayReadDoesNotInitializeStorageAndWorkerWarmPublishesFreshReadiness()throws Exception {
+        ModelConfig.AccountModelRef ref=ModelConfig.AccountModelRef.fromJson(new JSONObject().put("provider","chatgpt_plan").put("accountId","account-a").put("accountVersion",1).put("modelId","model-a"));
+        ModelConfig selected=new ModelConfig("","","",false,3,10).withAccountModel(ref);
+        var loaded=new java.util.concurrent.atomic.AtomicBoolean();
+        var warmCalls=new java.util.concurrent.atomic.AtomicInteger();
+        var streamCalls=new java.util.concurrent.atomic.AtomicInteger();
+        var publication=new java.util.concurrent.atomic.AtomicReference<Runnable>();
+        var shown=new java.util.concurrent.atomic.AtomicReference<JSONObject>();
+        ModelGateway.installAccountInferencePort(new ModelGateway.AccountInferencePort(){
+            public boolean accountIdentityCurrent(ModelConfig.AccountModelRef actual){assertTrue(ref.matches(actual));return loaded.get();}
+            public AccountCatalogFacts modelFacts(ModelConfig.AccountModelRef actual){assertTrue(loaded.get());return null;}
+            public void stream(ModelConfig.AccountModelRef actual,ResponsesRequest request,GatewayCall call,ChatGptProvider.EventSink sink){streamCalls.incrementAndGet();throw new AssertionError("must not infer");}
+        });
+        java.util.function.Supplier<JSONObject> state=()->selected.publicJson().put("accountModelAvailable",ModelGateway.accountModelAvailableForDisplay(selected.accountModel));
+        shown.set(state.get());assertFalse(shown.get().getBoolean("accountModelAvailable"));assertEquals(0,warmCalls.get());
+        Thread owner=Thread.currentThread();var worker=java.util.concurrent.Executors.newSingleThreadExecutor();
+        try{
+            worker.submit(()->{assertNotSame(owner,Thread.currentThread());warmCalls.incrementAndGet();loaded.set(true);publication.set(()->shown.set(state.get()));}).get(2,java.util.concurrent.TimeUnit.SECONDS);
+            assertFalse(shown.get().getBoolean("accountModelAvailable"));assertNotNull(publication.get());
+            publication.get().run();assertTrue(shown.get().getBoolean("accountModelAvailable"));
+            assertTrue(state.get().getBoolean("accountModelAvailable"));assertEquals(1,warmCalls.get());assertEquals(0,streamCalls.get());
+        }finally{worker.shutdownNow();}
+    }
+
 }
