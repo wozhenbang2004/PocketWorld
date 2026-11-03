@@ -21,7 +21,7 @@ public final class OwnedGroupObservationProbe {
   JSONObject receipt=new JSONObject().put("event","native_exit").put("nonce",nonce).put("cancelled",exit.cancelled).put("groupAbsent",exit.groupAbsent).put("outputComplete",exit.outputComplete).put("exitCode",exit.exitCode).put("signal",exit.signal).put("contract",exit.resultContract).put("elapsedMillis",(System.nanoTime()-began)/1000000);System.out.println(receipt);System.out.flush();
  }
  private static void managed(String python,String nonce,File cwd,String program,String mode)throws Exception {
-  long began=System.nanoTime();java.nio.file.Path active=java.nio.file.Files.createDirectory(cwd.toPath().resolve("active"));java.nio.file.Files.writeString(active.resolve("Main.java"),"class Main {}\n");
+  long began=System.nanoTime();java.nio.file.Path active=java.nio.file.Files.createDirectory(cwd.toPath().resolve("active"));java.nio.file.Files.write(active.resolve("Main.java"),"class Main {}\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
   ManagedProcessJobs jobs=new ManagedProcessJobs(new File(cwd,"runtime"),new NativeProcessSupervisor());
   var closed=new java.util.concurrent.atomic.AtomicInteger();JSONObject source=RuntimeContractsTest.source();boolean preparation="preparation".equals(mode);
   List<String> command=List.of(python,"-I","-c",program,nonce);Map<String,String> environment=Map.of("PATH",new File(python).getParent(),"LANG","C.UTF-8","POCKETWORLD_ENVIRONMENT_IDENTITY","original-environment");

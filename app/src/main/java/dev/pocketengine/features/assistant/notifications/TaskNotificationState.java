@@ -15,6 +15,7 @@ public final class TaskNotificationState {
         String taskId=task.getString("id"),run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");if(!taskId.matches("[a-fA-F0-9-]{36}")||!run.matches("[a-fA-F0-9-]{36}")||epoch<1)return null;
         String anchor=status.equals("completed")||status.equals("needs_confirmation")?"result":status.equals("reconciling")?"reconciliation":status.matches("waiting_approval|awaiting_approval")?"approval":"decision";
         JSONObject value=new JSONObject().put("taskId",taskId).put("runId",run).put("epoch",epoch).put("status",status).put("anchor",anchor).put("conversationId",task.optString("conversationId"));
+        JSONObject question=OwnerQuestionReply.reference(task);if(question!=null)value.put("ownerQuestion",question);
         return value.put("token",TaskStore.capabilityFingerprint(value)).put("executionAuthorized",false).put("deliveryConfirmed",false);
     }
     public static String title(String status){return switch(status){case "completed"->"助手已有新结果";case "needs_confirmation"->"结果待你确认";case "reconciling"->"有一项操作待核对";case "waiting_approval","awaiting_approval"->"有一项操作待授权";default->"助手需要你处理";};}

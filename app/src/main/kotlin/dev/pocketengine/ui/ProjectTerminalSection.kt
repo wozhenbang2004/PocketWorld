@@ -30,45 +30,50 @@ internal fun NativeProjectTerminal(task: UiTask) {
         val actual = row.optJSONObject("receipt")?.optJSONObject("executionReceipt")
         row.optString("tool") == "project_execute" && row.optString("runId") == task.raw.optString("runId") && actual?.optString("terminalMode") == "pty"
     }?.optString("operationId") ?: return
-    NativeProjectExecutionView(task, execution, false)
+    NativeProjectExecutionView(task.id, execution, false)
 }
 
 /** The same original log renderer, without any input/stop capability token. */
 @Composable
 internal fun NativeProjectExecutionObservation(task: UiTask, execution: String) {
-    NativeProjectExecutionView(task, execution, true)
+    NativeProjectExecutionObservation(task.id, execution)
 }
 
 @Composable
-private fun NativeProjectExecutionView(task: UiTask, execution: String, observingOnly: Boolean) {
+internal fun NativeProjectExecutionObservation(taskId: String, execution: String) {
+    NativeProjectExecutionView(taskId, execution, true)
+}
+
+@Composable
+private fun NativeProjectExecutionView(taskId: String, execution: String, observingOnly: Boolean) {
     val context = LocalContext.current
     val app = context.applicationContext as EngineApplication
     val lifecycle = remember(context) { generateSequence(context) { (it as? ContextWrapper)?.baseContext?.takeUnless { next -> next === it } }.filterIsInstance<LifecycleOwner>().firstOrNull()?.lifecycle }
-    var opened by remember(task.id, execution) { mutableStateOf(false) }
-    var session by remember(task.id, execution) { mutableStateOf<ProjectOwnerTerminal.Session?>(null) }
-    var metadata by remember(task.id, execution) { mutableStateOf<JSONObject?>(null) }
-    var logPolicy by remember(task.id, execution) { mutableStateOf<JSONObject?>(null) }
-    var activity by remember(task.id, execution) { mutableStateOf<JSONObject?>(null) }
-    var web by remember(task.id, execution) { mutableStateOf<ProjectTerminalWebView?>(null) }
-    var ready by remember(task.id, execution) { mutableStateOf(false) }
-    var takingInput by remember(task.id, execution) { mutableStateOf(false) }
+    var opened by remember(taskId, execution) { mutableStateOf(false) }
+    var session by remember(taskId, execution) { mutableStateOf<ProjectOwnerTerminal.Session?>(null) }
+    var metadata by remember(taskId, execution) { mutableStateOf<JSONObject?>(null) }
+    var logPolicy by remember(taskId, execution) { mutableStateOf<JSONObject?>(null) }
+    var activity by remember(taskId, execution) { mutableStateOf<JSONObject?>(null) }
+    var web by remember(taskId, execution) { mutableStateOf<ProjectTerminalWebView?>(null) }
+    var ready by remember(taskId, execution) { mutableStateOf(false) }
+    var takingInput by remember(taskId, execution) { mutableStateOf(false) }
     var active by remember(lifecycle) { mutableStateOf(lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) != false) }
-    var cursor by remember(task.id, execution) { mutableLongStateOf(0) }
-    var nativeStatus by remember(task.id, execution) { mutableStateOf("unknown") }
-    var notice by remember(task.id, execution) { mutableStateOf<String?>(null) }
-    var columns by remember(task.id, execution) { mutableStateOf("80") }
-    var rows by remember(task.id, execution) { mutableStateOf("24") }
-    var stopped by remember(task.id, execution) { mutableStateOf(false) }
-    var incomplete by remember(task.id, execution) { mutableStateOf(false) }
+    var cursor by remember(taskId, execution) { mutableLongStateOf(0) }
+    var nativeStatus by remember(taskId, execution) { mutableStateOf("unknown") }
+    var notice by remember(taskId, execution) { mutableStateOf<String?>(null) }
+    var columns by remember(taskId, execution) { mutableStateOf("80") }
+    var rows by remember(taskId, execution) { mutableStateOf("24") }
+    var stopped by remember(taskId, execution) { mutableStateOf(false) }
+    var incomplete by remember(taskId, execution) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val actions = remember(task.id, execution, opened) { Channel<JSONObject>(16) }
+    val actions = remember(taskId, execution, opened) { Channel<JSONObject>(16) }
     fun closeView() { takingInput = false; opened = false; ready = false; web?.release(); web = null; session?.close(); session = null; metadata = null; logPolicy = null; activity = null; cursor = 0; actions.close() }
     fun enqueue(action: JSONObject) {
         if (observingOnly || !takingInput || !active || nativeStatus != "running" || stopped || incomplete) return
         if (!actions.trySend(action).isSuccess) { takingInput = false; notice = "输入队列已满，这次未发送；请核对终端后再明确操作。" }
     }
     DisposableEffect(actions) { onDispose { actions.close() } }
-    DisposableEffect(task.id, execution, lifecycle) {
+    DisposableEffect(taskId, execution, lifecycle) {
         val listener = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) { active = false; closeView() }
             if (event == Lifecycle.Event.ON_START) active = true
@@ -76,17 +81,17 @@ private fun NativeProjectExecutionView(task: UiTask, execution: String, observin
         lifecycle?.addObserver(listener)
         onDispose { lifecycle?.removeObserver(listener); web?.release(); session?.close(); actions.close() }
     }
-    LaunchedEffect(opened, task.id, execution) {
+    LaunchedEffect(opened, taskId, execution) {
         if (!opened) return@LaunchedEffect
         val observation = RunControl()
         try {
-            val original = withContext(Dispatchers.IO) { if (observingOnly) app.features.openProjectExecutionForOwner(task.id, execution, observation) else app.features.openProjectTerminalForOwner(task.id, execution, observation) }
+            val original = withContext(Dispatchers.IO) { if (observingOnly) app.features.openProjectExecutionForOwner(taskId, execution, observation) else app.features.openProjectTerminalForOwner(taskId, execution, observation) }
             if (!opened || !active) { original.close(); return@LaunchedEffect }
             session = original
             metadata = withContext(Dispatchers.IO) { original.metadata() }
             columns = metadata!!.getInt("columns").toString(); rows = metadata!!.getInt("rows").toString(); notice = null; stopped = false; incomplete = false
         } catch (cancelled: CancellationException) { observation.cancel(); throw cancelled }
-        catch (failed: Exception) { observation.cancel(); session?.close(); session = null; metadata = null; notice = failed.message?.take(300) ?: "原终端不可读；没有新建或重放。"; opened = false }
+        catch (failed: Exception) { observation.cancel(); session?.close(); session = null; metadata = null; notice = if (observingOnly && failed is org.json.JSONException) "此原操作暂无可核对的本机进程日志；请查看原批准和操作回执。" else failed.message?.take(300) ?: "原终端不可读；没有新建或重放。"; opened = false }
     }
     LaunchedEffect(session, opened, active) {
         val original = session ?: return@LaunchedEffect
@@ -126,10 +131,10 @@ private fun NativeProjectExecutionView(task: UiTask, execution: String, observin
     OutlinedButton(onClick = { if (opened) closeView() else opened = true }, modifier = Modifier.testTag(if (observingOnly) "project_native_execution_observe_$execution" else "project_native_terminal_open")) { Text(if (observingOnly) { if (opened) "收起原执行日志" else "观察原执行日志" } else if (opened) "收起终端" else "打开交互终端") }
     if (opened && metadata != null) {
         Text("${metadata!!.optString("executable")} · ${metadata!!.optString("workingDirectory")}", style = MaterialTheme.typography.titleSmall)
-        WorkbenchCaption(if (observingOnly) "只读显示同一原执行按接收顺序合并的日志画布；原日志仍保留stdout/stderr来源和cursor。收起或切到后台只关观察，不停止进程；需停止时使用上方原任务停止入口。" else "显示这个原PTY的VT屏幕，标准输出与错误合流。关闭屏幕不会停止任务；输入限原启动批准，不支持密码或令牌。")
+        WorkbenchCaption(if (observingOnly) "只读显示同一原执行按接收顺序合并的日志画布；原日志仍保留stdout/stderr来源和cursor。收起或切到后台只关观察，不停止进程。历史记录可能属于此前执行；需停止时先核对原执行身份与停止范围。" else "显示这个原PTY的VT屏幕，标准输出与错误合流。关闭屏幕不会停止任务；输入限原启动批准，不支持密码或令牌。")
         runtimeActivityCaption(activity, execution)?.let { WorkbenchCaption(it) }
         if (logPolicy?.optBoolean("automaticLogPageReduced") == true) WorkbenchCaption(logPolicy!!.optString("ownerMessage"))
-        key(task.id, execution, metadata) {
+        key(taskId, execution, metadata) {
             AndroidView(factory = { nativeContext ->
                 try { ProjectTerminalWebView.create(nativeContext, metadata!!, object : ProjectTerminalWebView.Events {
                     override fun ready() { ready = true }

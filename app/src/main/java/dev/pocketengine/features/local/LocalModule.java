@@ -158,7 +158,7 @@ public final class LocalModule implements EngineModule {
     }
     public synchronized JSONObject openProjectForOwner(String projectId)throws Exception {
         projects.handle("export",new JSONObject().put("projectId",projectId));JSONObject latest=null;File[] entries=new File(root,"checkouts").listFiles();
-        if(entries!=null)for(File entry:entries){File metadata=new File(entry,"checkout.json");if(!metadata.isFile())continue;JSONObject value=JsonFiles.read(metadata);if(projectId.equals(value.optString("projectId"))&&(latest==null||value.optLong("createdAt")>latest.optLong("createdAt")))latest=value;}
+        if(entries!=null)for(File entry:entries){File metadata=new File(entry,"checkout.json");if(!metadata.isFile())continue;JSONObject value=JsonFiles.read(metadata);if(!value.has("isolatedGit")&&projectId.equals(value.optString("projectId"))&&(latest==null||value.optLong("createdAt")>latest.optLong("createdAt")))latest=value;}
         return latest==null?prepare(projectId):new JSONObject(latest.toString());
     }
     public ManagedProjectRuntime managedRuntimeForOwner(){return projectRuntime instanceof ManagedProjectRuntime?(ManagedProjectRuntime)projectRuntime:null;}
@@ -513,7 +513,8 @@ public final class LocalModule implements EngineModule {
     public synchronized dev.pocketengine.features.local.project.ProjectGit.OwnerRequest reviewGitForOwner(String checkoutId,JSONObject selected)throws Exception {
         if(closed)throw new IllegalStateException("原项目模块已关闭");requireIdle(checkoutId);if(dev.pocketengine.features.local.project.ProjectGit.writes(selected.optString("gitAction")))requireCheckoutWritable(checkoutId);
         JSONObject source=ProjectSources.describe(export(checkoutId)),input=new JSONObject(selected.toString()).put("checkoutId",checkoutId).put("expectedSourceDigest",source.getString("sourceDigest")).put("runtimeId",ManagedProjectRuntime.RUNTIME_ID).put("intent","git");
-        JSONObject plan=dev.pocketengine.features.local.project.ProjectGit.create(this,input),step=dev.pocketengine.features.local.project.ProjectGit.step(plan),exact=ProjectDevelopment.exact(plan,step);
+        boolean isolate="isolate".equals(selected.optString("gitAction"));if(isolate){if(selected.has("targetCheckoutId")||selected.has("privateWorktree"))throw new SecurityException("隔离目标由原生主人入口分配，不接受请求JSON提供");input.put("targetCheckoutId",UUID.randomUUID().toString());}
+        JSONObject plan=isolate?dev.pocketengine.features.local.project.ProjectGit.createIsolationForOwner(this,input):dev.pocketengine.features.local.project.ProjectGit.create(this,input),step=dev.pocketengine.features.local.project.ProjectGit.step(plan),exact=ProjectDevelopment.exact(plan,step);
         return dev.pocketengine.features.local.project.ProjectGit.ownerRequest(plan,projectCapabilityForHost(exact));
     }
     /** Original owner external task already owns the one approval/budget/journal row. No task or run is created here. */
@@ -525,7 +526,12 @@ public final class LocalModule implements EngineModule {
             String checkout=exact.getString("checkoutId");requireIdle(checkout);if(dev.pocketengine.features.local.project.ProjectGit.writes(dev.pocketengine.features.local.project.ProjectGit.action(plan)))requireCheckoutWritable(checkout);JSONObject snapshot=export(checkout);
             if(!exact.getString("sourceDigest").equals(ProjectSources.describe(snapshot).getString("sourceDigest")))throw new SecurityException("原Git审阅之后源码已变化；没有派发");
             original.check();admission.check();target=runtime(ManagedProjectRuntime.RUNTIME_ID);
-            invocation=new RuntimeInvocation(exact,nativeBinding,snapshot,original,admission,new RuntimeWorkspace(content(checkout).getCanonicalFile(),exact.getString("projectId"),checkout));
+            RuntimeWorkspace active;
+            if("isolate".equals(dev.pocketengine.features.local.project.ProjectGit.action(plan))){
+                active=dev.pocketengine.features.local.project.ProjectGitIsolation.allocate(new File(root,"checkouts"),content(checkout).getCanonicalFile(),exact,nativeBinding);
+                JSONObject owner=dev.pocketengine.features.local.project.ProjectGitIsolation.owner(exact,nativeBinding),pending=JsonFiles.copy(snapshot.getJSONObject("checkout"));pending.put("id",owner.getString("targetCheckoutId")).put("name",pending.optString("name")+" · "+owner.getString("branch")).put("createdAt",System.currentTimeMillis()).put("isolatedGit",owner);JsonFiles.write(new File(active.privateGitPoolForHost(),"pending-checkout.json"),pending);original.check();admission.check();
+            }else active=runtimeWorkspace(checkout);
+            invocation=new RuntimeInvocation(exact,nativeBinding,snapshot,original,admission,active);
         } catch(Exception rejected) {throw dev.pocketengine.features.local.project.ProjectGit.rejectedBeforeRuntime(selected,rejected);}
         // Beyond this one boundary, an exception is uncertain; never label it not-dispatched.
         return target.dispatch(invocation).json();
@@ -534,7 +540,29 @@ public final class LocalModule implements EngineModule {
     public synchronized JSONObject observeGitForOwner(JSONObject fullPlan,JSONObject originalBinding,boolean cancel)throws Exception {
         JSONObject plan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(fullPlan);if(!dev.pocketengine.features.local.project.ProjectGit.plan(plan))throw new SecurityException("不是原本机Git操作");
         JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectGit.step(plan)),backend=projectReceiptForHost(exact,originalBinding,cancel);
-        return new JSONObject().put("backend",backend).put("git",dev.pocketengine.features.local.project.ProjectGitResult.observe(exact,backend));
+        JSONObject observed=dev.pocketengine.features.local.project.ProjectGitResult.observe(exact,backend);
+        if("isolate".equals(dev.pocketengine.features.local.project.ProjectGit.action(plan))&&observed.optBoolean("ok"))observed.put("isolatedCheckout",publishGitIsolation(exact,originalBinding,observed.getJSONObject("data")));
+        return new JSONObject().put("backend",backend).put("git",observed);
+    }
+    /** Metadata is published last, only after this exact original process and worktree result drained. */
+    private JSONObject publishGitIsolation(JSONObject exact,JSONObject originalBinding,JSONObject data)throws Exception {
+        var owner=dev.pocketengine.features.local.project.ProjectGitIsolation.owner(exact,originalBinding);if(!ProjectSources.canonical(owner).equals(ProjectSources.canonical(dev.pocketengine.features.local.project.ProjectGitIsolation.ownership(data.getJSONObject("ownership")))))throw new SecurityException("隔离结果不是原创建操作");
+        File pool=dev.pocketengine.features.local.project.ProjectGitIsolation.pool(new File(root,"checkouts"),owner);dev.pocketengine.features.local.project.ProjectGitIsolation.requireReadyFiles(pool,owner);File record=new File(pool,"checkout.json");
+        if(Files.exists(record.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)){if(Files.isSymbolicLink(record.toPath())||!record.isFile())throw new SecurityException("隔离副本登记记录已变化");JSONObject existing=JsonFiles.read(record);if(!owner.getString("targetCheckoutId").equals(existing.getString("id"))||!owner.getString("projectId").equals(existing.getString("projectId"))||!ProjectSources.canonical(owner).equals(ProjectSources.canonical(existing.getJSONObject("isolatedGit"))))throw new SecurityException("隔离副本登记不是原操作；未覆盖");return existing;}
+        File pending=new File(pool,"pending-checkout.json");if(Files.isSymbolicLink(pending.toPath())||!pending.isFile()||pending.length()>1048576)throw new SecurityException("原隔离副本待登记元数据不完整，现场保留");JSONObject metadata=JsonFiles.read(pending);if(!owner.getString("targetCheckoutId").equals(metadata.getString("id"))||!owner.getString("projectId").equals(metadata.getString("projectId"))||!ProjectSources.canonical(owner).equals(ProjectSources.canonical(metadata.getJSONObject("isolatedGit"))))throw new SecurityException("隔离元数据归属不同");
+        JSONObject snapshot=exportDirectory(new File(pool,"files"),metadata),facts=ProjectSources.describe(snapshot);if(!dev.pocketengine.features.local.project.ProjectGitIsolation.sourceStamp(facts).equals(data.getString("sourceStamp"))||facts.getInt("fileCount")!=data.getInt("fileCount"))throw new SecurityException("原隔离结果后的实际源字节变化，未发布副本；现场保留");
+        JsonFiles.write(record,metadata);return metadata;
+    }
+    /** Native selection only; does not move an existing task, create a run, grant or process. */
+    public synchronized JSONObject relatedGitCheckoutForOwner(String current,String target)throws Exception {
+        JSONObject from=checkout(current),to=checkout(target);if(!from.getString("projectId").equals(to.getString("projectId")))throw new SecurityException("隔离选择不跨原项目");JSONObject a=from.optJSONObject("isolatedGit"),b=to.optJSONObject("isolatedGit");
+        if(a!=null&&target.equals(a.getString("sourceCheckoutId"))){runtimeWorkspace(current);return JsonFiles.copy(to);}
+        if(b!=null&&current.equals(b.getString("sourceCheckoutId"))){runtimeWorkspace(target);return JsonFiles.copy(to);}
+        throw new SecurityException("请选择此原副本的已完成私有隔离，或明确返回其来源副本");
+    }
+    private RuntimeWorkspace runtimeWorkspace(String id)throws Exception {
+        JSONObject metadata=checkout(id),owner=metadata.optJSONObject("isolatedGit");File active=content(id).getCanonicalFile();if(owner==null)return new RuntimeWorkspace(active,metadata.getString("projectId"),id);
+        File pool=dev.pocketengine.features.local.project.ProjectGitIsolation.pool(new File(root,"checkouts"),owner);return dev.pocketengine.features.local.project.ProjectGitIsolation.workspace(active,metadata.getString("projectId"),id,pool,owner,false);
     }
     public interface ProjectAdmission extends ProjectRuntime.LiveGate { }
     public synchronized JSONObject projectCapabilityForHost(JSONObject exact)throws Exception {
@@ -549,7 +577,7 @@ public final class LocalModule implements EngineModule {
             JSONObject target=capability.getJSONObject("target");JSONArray actualTools=target.optJSONArray("tools");boolean registered=false;
             for(int i=0;actualTools!=null&&i<actualTools.length();i++){JSONObject tool=actualTools.getJSONObject(i);if(commandSpec.getString("executable").equals(tool.optString("name"))&&(tool.optBoolean("hashVerified")||tool.optBoolean("probeVerified")))registered=true;}
             if(!registered||"pty".equals(commandSpec.getString("terminalMode"))&&!target.optBoolean("ptyAvailable"))throw new ProjectDevelopment.NotDispatched(new JSONObject().put("status","not_dispatched").put("accepted",false).put("code","project_command_tool_unavailable").put("message","所选工具或交互终端接口未实际准备，请核对当前工具清单；本步骤未派发，不切换到其他宿主"));
-            try{File directory=new RuntimeWorkspace(content(exact.getString("checkoutId")).getCanonicalFile(),exact.getString("projectId"),exact.getString("checkoutId")).resolve(commandSpec.getString("workingDirectory"),false);if(!directory.isDirectory())throw new IllegalArgumentException("cwd_missing");}
+            try{File directory=runtimeWorkspace(exact.getString("checkoutId")).resolve(commandSpec.getString("workingDirectory"),false);if(!directory.isDirectory())throw new IllegalArgumentException("cwd_missing");}
             catch(IllegalArgumentException|SecurityException invalid){throw new ProjectDevelopment.NotDispatched(new JSONObject().put("status","not_dispatched").put("accepted",false).put("code","project_command_cwd_unavailable").put("message","工作目录不存在或不可安全使用，请核对项目相对cwd；本步骤未派发"));}
         }
         if(selected.equals(ManagedProjectRuntime.RUNTIME_ID)&&"owned_service".equals(exact.getJSONObject("payload").optString("runMode"))){JSONObject owned=new JSONObject().put("lifetime","same_original_host_run").put("stopSameJob",true).put("stopAndDrainOnRunEnd",true).put("blocksCheckoutWrites",true).put("nativeStartIsBusinessCompletion",false).put("serviceReadyVerified",false).put("timeoutMillis",exact.getJSONObject("payload").optLong("timeoutMillis",300000));
@@ -573,6 +601,7 @@ public final class LocalModule implements EngineModule {
         if(closed||original==null||admission==null)throw new SecurityException("缺少项目原执行控制");
         JSONObject request=new JSONObject(exact.toString()),nativeBinding=new JSONObject(binding.toString()),payload=new JSONObject(request.getJSONObject("payload").toString());
         String command=request.getString("command"),checkout=JsonFiles.text(payload,"checkoutId",80);
+        if(dev.pocketengine.features.local.project.ProjectGit.exact(request)&&"isolate".equals(payload.getJSONObject("gitRequest").optString("action")))throw new SecurityException("隔离创建只由原主人Git操作持有真实目标池，不通过模型prepared执行");
         if(!"local".equals(request.optString("feature"))||!command.matches("writeFile|patchFiles|freezeProjectPackage|collectProjectOutput|(?:termux|project\\.runtime)\\.(probe|prepare|run|collect)")||!checkout.equals(request.getString("checkoutId"))||!ProjectSources.digest(payload).equals(request.getString("requestDigest")))throw new SecurityException("不是已核对的项目命令");
         JSONObject link=new JSONObject(nativeBinding.toString()).put("authority","native_host_operation").put("command",command);
         for(String key:new String[]{"planDigest","stepId","intent","sourceDigest","requestDigest"})link.put(key,request.get(key));
@@ -588,7 +617,7 @@ public final class LocalModule implements EngineModule {
         if(command.startsWith("project.runtime."))requireCheckoutWritable(checkout);
         if(command.equals("termux.run")&&commands.busy(checkout))throw new IllegalStateException("本机命令尚未结束");
         checkProjectControl(original,admission,nativeBinding,pauseRevision);
-        ProjectRuntime selected=runtime(runtimeId(request));return selected.dispatch(new RuntimeInvocation(request,nativeBinding,snapshot,original,admission,new RuntimeWorkspace(content(checkout).getCanonicalFile(),request.getString("projectId"),checkout))).json();
+        ProjectRuntime selected=runtime(runtimeId(request));return selected.dispatch(new RuntimeInvocation(request,nativeBinding,snapshot,original,admission,runtimeWorkspace(checkout))).json();
     }
     /** Native producer for one exact managed build result, not a generic raw-file model tool. */
     public synchronized JSONObject managedOutputSelectionForHost(JSONObject originalBuild,String path,RunControl original,dev.pocketengine.features.capabilities.ModelCapabilityAdapters.Binding currentAdmission)throws Exception {
@@ -596,7 +625,7 @@ public final class LocalModule implements EngineModule {
         if(!original.matchesHostRun(currentAdmission.taskId,currentAdmission.runId,currentAdmission.epoch)||!currentAdmission.taskId.equals(binding.getString("taskId"))||!currentAdmission.projectId.equals(plan.getString("projectId"))||!"build".equals(originalBuild.getString("stepId")))throw new SecurityException("请选择本任务原build执行；当前read scope不能替换");
         original.check();development.handle("project.poll",ProjectSources.copy(originalBuild));String checkout=plan.getString("checkoutId");requireIdle(checkout);requireCheckoutWritable(checkout);ManagedProjectRuntime runtime=ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID);if(!plan.getString("runtimeIdentity").equals(runtime.identity()))throw new SecurityException("原构建工具环境已变化");
         JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,"build")),actual=runtime.query(RuntimeExecutionRef.fromHost(exact,binding)).json();
-        JSONObject selected=dev.pocketengine.features.local.project.ProjectManagedOutput.prepare(new RuntimeWorkspace(content(checkout).getCanonicalFile(),plan.getString("projectId"),checkout),export(checkout),plan,binding,actual,runtime.currentCheckoutSequence(checkout),path,original);requireManagedOutputCurrent(selected,original);return selected;
+        JSONObject selected=dev.pocketengine.features.local.project.ProjectManagedOutput.prepare(runtimeWorkspace(checkout),export(checkout),plan,binding,actual,runtime.currentCheckoutSequence(checkout),path,original);requireManagedOutputCurrent(selected,original);return selected;
     }
     private JSONObject requireManagedOutputCurrent(JSONObject supplied,RunControl original)throws Exception {
         JSONObject selected=dev.pocketengine.features.local.project.ProjectManagedOutput.verified(supplied),plan=selected.getJSONObject("buildPlan");String checkout=selected.getString("checkoutId");requireIdle(checkout);requireCheckoutWritable(checkout);original.check();
@@ -607,7 +636,7 @@ public final class LocalModule implements EngineModule {
         JSONObject selection=dev.pocketengine.features.local.project.ProjectManagedOutput.verified(payload.getJSONObject("artifactSelection"));dev.pocketengine.features.local.project.ProjectManagedOutput.requireCollection(selection,link);
         var book=dev.pocketengine.features.attachments.AttachmentRepository.get(context.android).book;JSONObject prior=dev.pocketengine.features.local.project.ProjectManagedOutput.observe(book,selection,link,original);if("completed".equals(prior.optString("status")))return prior;
         java.util.concurrent.atomic.AtomicBoolean entered=new java.util.concurrent.atomic.AtomicBoolean();try{
-            checkProjectControl(original,admission,binding,pauseRevision);requireManagedOutputCurrent(selection,original);RuntimeWorkspace workspace=new RuntimeWorkspace(content(selection.getString("checkoutId")).getCanonicalFile(),selection.getString("projectId"),selection.getString("checkoutId"));
+            checkProjectControl(original,admission,binding,pauseRevision);requireManagedOutputCurrent(selection,original);RuntimeWorkspace workspace=runtimeWorkspace(selection.getString("checkoutId"));
             return dev.pocketengine.features.local.project.ProjectManagedOutput.publish(book,workspace,selection,link,original,()->{try{checkProjectControl(original,admission,binding,pauseRevision);requireManagedOutputCurrent(selection,original);entered.set(true);}catch(Exception rejected){throw new IllegalStateException("生成文件发布前原批准或构建版本已变化",rejected);}});
         }catch(Exception failure){if(!entered.get())return dev.pocketengine.features.local.project.ProjectManagedOutput.failedBeforePublication(selection,link,failure);throw failure;}
     }
@@ -909,7 +938,10 @@ public final class LocalModule implements EngineModule {
         createCheckout(checkout,files);termux.materialized(operation,id);return checkout;
     }
     private JSONObject export(String id)throws Exception {
-        requireIdle(id);File directory=content(id);JSONArray files=new JSONArray();long[] total={0};
+        requireIdle(id);return exportDirectory(content(id),checkout(id));
+    }
+    private JSONObject exportDirectory(File directory,JSONObject metadata)throws Exception {
+        String id=metadata.getString("id");JSONArray files=new JSONArray();long[] total={0};
         Files.walkFileTree(directory.toPath(),new java.nio.file.SimpleFileVisitor<java.nio.file.Path>(){
             @Override public java.nio.file.FileVisitResult preVisitDirectory(java.nio.file.Path path,java.nio.file.attribute.BasicFileAttributes attrs){return ProjectSources.sourcePath(directory.toPath().relativize(path).toString())?java.nio.file.FileVisitResult.CONTINUE:java.nio.file.FileVisitResult.SKIP_SUBTREE;}
             @Override public java.nio.file.FileVisitResult visitFile(java.nio.file.Path path,java.nio.file.attribute.BasicFileAttributes attrs)throws java.io.IOException {
@@ -922,7 +954,7 @@ public final class LocalModule implements EngineModule {
                 }catch(java.io.IOException error){throw error;}catch(Exception invalid){throw new java.io.IOException(invalid.getMessage(),invalid);}
             }
         });
-        return new JSONObject().put("format","pocketworld.localworkspace.v1").put("checkout",checkout(id)).put("files",files).put("bytes",total[0]);
+        return new JSONObject().put("format","pocketworld.localworkspace.v1").put("checkout",metadata).put("files",files).put("bytes",total[0]);
     }
     private static Map<String,JSONObject> byPath(JSONArray array)throws Exception {Map<String,JSONObject> result=new LinkedHashMap<>();for(int i=0;i<array.length();i++){JSONObject file=array.getJSONObject(i);result.put(file.getString("path"),file);}return result;}
     private static void requireHash(JSONObject input,String actual)throws Exception {if(!actual.equals(JsonFiles.text(input,"expectedHash",80)))throw new IllegalStateException("本地文件已变化，请重新读取并审阅后再保存或导回");}

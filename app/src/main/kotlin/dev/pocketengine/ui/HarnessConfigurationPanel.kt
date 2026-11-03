@@ -16,6 +16,7 @@ import org.json.JSONObject
 internal fun HarnessConfigurationPanel(taskId: String, snapshot: JSONObject, controller: PocketWorldController, busy: Boolean, foreground: Boolean) {
     var expanded by remember(taskId) { mutableStateOf(false) }
     var error by remember(taskId) { mutableStateOf<String?>(null) }
+    var referenceDiff by remember(taskId, snapshot.optJSONObject("plan")?.optString("planDigest")) { mutableStateOf(false) }
     val task = controller.state.tasks.find { it.id == taskId }?.raw
     val operations = task?.optJSONArray("operations").objects().filter { it.optString("tool") == "harness_config" }.takeLast(8)
     // This selection can only be supplied by the original native gateway/Profile owner.
@@ -63,13 +64,21 @@ internal fun HarnessConfigurationPanel(taskId: String, snapshot: JSONObject, con
                 Text("电脑：${config.optJSONObject("source")?.optString("profileId").orEmpty()}\n配置根：${target?.optString("configRoot").orEmpty().ifBlank { scope?.optString("configRoot").orEmpty() }}\n影响范围：${scope?.optString("scope").orEmpty().ifBlank { "待读取准确目标" }}\n原操作：${config.optString("operationId").ifBlank { "尚未准备" }}", fontSize = 12.sp, lineHeight = 20.sp)
             }
             Text(config.optString("risk"), color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp)
+            config.optJSONArray("referenceSelection").objects().forEach { source -> Text("${source.optString("name")} · 版本 ${source.optInt("revision")} · ${source.optInt("files")} 份完整文本", fontSize = 12.sp) }
+            if (config.has("referenceTransmissionNotice")) Text(config.optString("referenceTransmissionNotice"), color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp)
             if (plan == null && config.optString("operationId").isBlank()) OutlinedButton(onClick = { send("previewHarnessConfig") }, enabled = enabled) { Text("读取实际文件并预览差异") }
-            plan?.optJSONArray("filePlans").objects().forEach { file ->
+            val files = plan?.optJSONArray("filePlans").objects()
+            if (files.size > 1) TextButton(onClick = { referenceDiff = !referenceDiff }) { Text(if (referenceDiff) "收起完整参考文件差异" else "展开完整参考文件差异 · ${files.size - 1} 份") }
+            files.filterIndexed { index, _ -> index == 0 || referenceDiff }.forEach { file ->
                 Text(file.optString("pathRef"), fontWeight = FontWeight.Medium, fontSize = 13.sp)
                 file.optJSONArray("operations").objects().forEach { change ->
                     val before = change.optJSONObject("before")
                     val after = change.optJSONObject("after")
-                    fun shown(value: JSONObject?): String = if (value?.optBoolean("absent") == true) "原本不存在" else if (value?.has("value") == true) value.opt("value").toString() else "未确认"
+                    fun shown(value: JSONObject?): String {
+                        if (value?.optBoolean("absent") == true) return "原本不存在"
+                        value?.optJSONArray("chunks")?.let { parts -> return buildString { repeat(parts.length()) { append(parts.getString(it)) } } }
+                        return if (value?.has("value") == true) value.opt("value").toString() else "未确认"
+                    }
                     Text("${change.optString("field")}\n${shown(before)} → ${shown(after)}", fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 19.sp)
                 }
             }
@@ -82,6 +91,7 @@ internal fun HarnessConfigurationPanel(taskId: String, snapshot: JSONObject, con
             }
             if (config.optString("operationId").isNotBlank()) TextButton(onClick = { send("queryHarnessConfig") }, enabled = enabled) { Text("只查询原操作回执") }
             receipt?.let { Text("原事务回执：${it.optString("state")} · 当次文件读回：${if (it.optBoolean("effectiveReadback")) "已核对" else "未确认"} · 模型运行：未验证。原回执不代表此刻文件没有外部变化。", fontSize = 12.sp, lineHeight = 20.sp) }
+            receipt?.optJSONObject("referenceProjection")?.let { Text("所选文本参考：${if (receipt.optString("state") == "COMMITTED" && it.optBoolean("effectiveReadback")) { if (it.optBoolean("restored")) "已按准确原计划恢复并读回" else "准确版本文件已读回" } else "事务未完整确认，不能作为已应用或已恢复"} · 仅文本参考 · 未增加工具或脚本执行权限 · 实际发现/使用以原任务证据为准。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 20.sp) }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
     }

@@ -72,4 +72,23 @@ public final class ProjectExecutionContinuityJourneyTest {
             try(var viewer=host.ownerTerminals().openObservation(task,execution,new RunControl())){assertTrue(viewer.read(0).getBoolean("resourcesReleased"));assertTrue(viewer.metadata().getBoolean("observingOnly"));assertThrows(SecurityException.class,viewer::stop);}
         }finally{original.cancel();worker.shutdownNow();assertTrue(worker.awaitTermination(3,TimeUnit.SECONDS));}
     }
+    @Test public void oldExecutionBeyondRecentWindowReopensFromLimitedOriginalAuditMetadata()throws Exception{
+        JSONObject ended=tool("project_execute",reviewed("process.stdout.write('ORIGINAL-HISTORICAL-LOG',()=>process.exit(7))",1500,5000));
+        assertEquals(ended.toString(),"failed",ended.getString("status"));assertEquals(7,ended.getInt("exitCode"));String execution=ended.getString("operationId");
+        tasks.endAttempt(task,run,"needs_confirmation","Keep the exact failed execution",new JSONObject());JSONObject next=tasks.startAttempt(task,"capabilities",120);assertNotEquals(run,next.getString("runId"));
+        RunControl nextControl=new RunControl();nextControl.bindHostRun(task,next.getString("runId"),next.getInt("coordinatorEpoch"));this.<AtomicReference<RunControl>>field("live").set(nextControl);
+        var database=TaskStore.class.getDeclaredField("db");database.setAccessible(true);SQLiteDatabase db=(SQLiteDatabase)database.get(tasks);
+        // Only pagination fixtures. They carry no dispatch/approval/runtime binding or process proof.
+        for(int i=0;i<26;i++){android.content.ContentValues row=new android.content.ContentValues();row.put("operation_id",java.util.UUID.randomUUID().toString());row.put("task_id",task);row.put("run_id",next.getString("runId"));row.put("tool","audit_fixture");row.put("arguments",new JSONObject().put("fixture","history pagination only").toString());row.put("state","receipt");row.put("created_at",System.currentTimeMillis()+i);db.insertOrThrow("operations",null,row);}
+        JSONArray recent=tasks.getForUi(task,false).getJSONArray("operations");assertEquals(24,recent.length());for(int i=0;i<recent.length();i++)assertNotEquals(execution,recent.getJSONObject(i).getString("operationId"));
+        int before=dispatchedExecutions();long rows;try(Cursor count=db.rawQuery("SELECT COUNT(*) FROM operations WHERE task_id=?",new String[]{task})){assertTrue(count.moveToFirst());rows=count.getLong(0);}
+        String cursor="";JSONObject found=null;int pages=0;
+        do{JSONObject page=tasks.taskHistoryPage(task,"operations",cursor,24,1024);assertFalse(page.getBoolean("executionAuthorized"));pages++;JSONArray entries=page.getJSONArray("entries");for(int i=0;i<entries.length();i++)if(execution.equals(entries.getJSONObject(i).optString("operationId")))found=entries.getJSONObject(i);cursor=page.getString("nextCursor");}while(found==null&&!cursor.isEmpty());
+        assertNotNull(found);assertTrue(pages>1);assertEquals("read_limited",found.getString("status"));assertFalse(found.has("receipt"));assertEquals(run,found.getString("runId"));assertEquals("project_execute",found.getString("tool"));
+        RunControl observation=new RunControl();try(var viewer=host.ownerTerminals().openObservation(task,found.getString("operationId"),observation)){
+            assertEquals(run,viewer.metadata().getString("runId"));assertEquals(epoch,viewer.metadata().getInt("epoch"));assertTrue(viewer.metadata().getBoolean("observingOnly"));JSONObject page=viewer.read(0);StringBuilder output=new StringBuilder();JSONArray chunks=page.getJSONArray("chunks");for(int i=0;i<chunks.length();i++)output.append(new String(Base64.getDecoder().decode(chunks.getJSONObject(i).getString("dataBase64")),StandardCharsets.UTF_8));assertTrue(output.toString().contains("ORIGINAL-HISTORICAL-LOG"));assertTrue(page.getBoolean("terminal"));assertThrows(SecurityException.class,viewer::stop);assertThrows(SecurityException.class,()->viewer.input(new JSONObject().put("action","text").put("text","not-sent")));
+        }
+        assertTrue(observation.isCancelled());assertFalse(original.isCancelled());assertFalse(nextControl.isCancelled());assertEquals(before,dispatchedExecutions());assertEquals(next.getString("runId"),tasks.get(task,false).getString("runId"));assertEquals(next.getInt("coordinatorEpoch"),tasks.get(task,false).getInt("coordinatorEpoch"));
+        try(Cursor count=db.rawQuery("SELECT COUNT(*) FROM operations WHERE task_id=?",new String[]{task})){assertTrue(count.moveToFirst());assertEquals(rows,count.getLong(0));}
+    }
 }

@@ -180,7 +180,7 @@ internal fun TaskAuditPanel(taskId: String, controller: PocketWorldController) {
             Text("这里只读一个窗口。较早记录仍在原任务数据库；回放不会续跑、重发或改变授权。运行中新记录请刷新查看。", color = SecondaryInk, fontSize = 11.sp, lineHeight = 18.sp)
             Row { TextButton(onClick = { load("events", "") }, enabled = !busy) { Text("步骤记录") }; TextButton(onClick = { load("operations", "") }, enabled = !busy) { Text("操作与回执") }; TextButton(onClick = { load(section, "") }, enabled = !busy) { Text("刷新最新") } }
             error?.let { Text(it, color = Danger, fontSize = 12.sp) }
-            page?.optJSONArray("entries").objects().forEach { entry -> key(section, entry.optLong("position")) { TaskAuditEntry(entry) } }
+            page?.optJSONArray("entries").objects().forEach { entry -> key(section, entry.optLong("position")) { TaskAuditEntry(taskId, entry) } }
             if (busy) Text("正在读取有界原记录…", color = SecondaryInk, fontSize = 12.sp)
             val next = page?.optString("nextCursor").orEmpty()
             if (next.isNotEmpty()) TextButton(onClick = { load(section, next) }, enabled = !busy) { Text("较早一页 · 当前正文不会累计保留") }
@@ -190,7 +190,7 @@ internal fun TaskAuditPanel(taskId: String, controller: PocketWorldController) {
 }
 
 @Composable
-private fun TaskAuditEntry(entry: JSONObject) {
+private fun TaskAuditEntry(taskId: String, entry: JSONObject) {
     var details by remember(entry.toString()) { mutableStateOf(false) }
     val event = entry.optJSONObject("event")
     Column(Modifier.fillMaxWidth().padding(vertical = 9.dp)) {
@@ -202,6 +202,7 @@ private fun TaskAuditEntry(entry: JSONObject) {
             TextButton(onClick = { details = !details }) { Text(if (details) "收起本条" else "查看本条原记录", fontSize = 11.sp) }
             if (details) SelectionContainer { Text(auditExcerpt((event ?: entry).toString(2)), fontSize = 11.sp, lineHeight = 18.sp) }
         }
+        if (event == null) TaskExecutionPresentation.projectExecutionObservationId(entry)?.let { NativeProjectExecutionObservation(taskId, it) }
     }; HorizontalDivider(color = Line)
 }
 

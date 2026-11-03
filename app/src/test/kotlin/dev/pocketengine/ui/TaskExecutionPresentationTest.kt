@@ -72,6 +72,8 @@ class TaskExecutionPresentationTest {
         assertEquals("", row.receipt)
         assertEquals(100000L, row.bodyBytes)
         assertEquals(TaskExecutionPresentation.Tone.RUNNING, row.tone)
+        assertEquals("original-operation", row.projectExecutionId)
+        assertEquals("run-a", row.runId)
     }
     @Test fun ownerReconciliationIsNotRelabelledAsAnAutomaticExecutionReceipt() {
         val source = operation("resolved", JSONObject().put("source", "owner_reconciliation").put("outcome", "not_occurred"))
@@ -100,5 +102,16 @@ class TaskExecutionPresentationTest {
         assertTrue(shown.startsWith("🙂".repeat(4)))
         assertFalse(Character.isHighSurrogate(shown[7]))
         assertEquals(60, text.length)
+    }
+    @Test fun originalProjectLocatorCannotBeInventedFromReceiptTitlePositionOrAnotherTool() {
+        val original = operation("unknown", null).put("status", "read_limited").put("runId", "old-run")
+        assertEquals("original-operation", TaskExecutionPresentation.projectExecutionObservationId(original))
+        assertEquals("old-run", TaskExecutionPresentation.records(page(original), "operations").single().runId)
+        for (tool in listOf("project_status", "project_process_input", "remote_work_start", "media_generate", "project_execute "))
+            assertNull(TaskExecutionPresentation.projectExecutionObservationId(JSONObject(original.toString()).put("tool", tool)))
+        for (id in listOf("", "../original-operation", "a".repeat(81)))
+            assertNull(TaskExecutionPresentation.projectExecutionObservationId(JSONObject(original.toString()).put("operationId", id)))
+        original.remove("operationId")
+        assertNull(TaskExecutionPresentation.projectExecutionObservationId(original))
     }
 }

@@ -19,6 +19,7 @@ public final class WorkProfileResolver {
         default ModelConfig globalDefault(RunControl observation) throws Exception { observation.check(); return null; }
         /** Existing source's public native facts, not content from a model or imported Profile. */
         JSONObject skill(String id, RunControl observation) throws Exception;
+        default JSONObject referencePackage(JSONObject exactReference,RunControl observation)throws Exception{throw new SecurityException("原技能文本投射读取未挂载，请保留编辑");}
         JSONObject plugin(String id, RunControl observation) throws Exception;
         JSONObject extension(String id, RunControl observation) throws Exception;
         JSONObject team(String id, RunControl observation) throws Exception;

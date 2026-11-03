@@ -2032,6 +2032,8 @@ class CompanionHandler(BaseHTTPRequestHandler):
             if post:
                 length = self.headers.get("Content-Length", "")
                 body_limit = 2_097_152 if (len(parts) == 4 and parts[:2] == ["v1", "workspaces"] and parts[3] == "file") or parts == ["v1", "assignment-projects"] else MAX_BODY
+                if parts == ["v1", "harness-config", "plans"]:
+                    body_limit = 131072  # Complete native 64-KiB reference manifest plus exact owner/target envelope.
                 if not length.isdigit() or not 0 < int(length) <= body_limit:
                     raise RequestError("Request body is missing or too large", 413)
                 try:

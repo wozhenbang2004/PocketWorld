@@ -90,7 +90,7 @@ internal fun TaskExecutionProcess(task: UiTask, controller: PocketWorldControlle
             error?.let { message -> Text(message, color = MaterialTheme.colorScheme.error, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 8.dp)) }
             val shown = page?.let { TaskExecutionPresentation.records(it, section) }.orEmpty()
             if (shown.isEmpty() && !busy && page != null) Text("本页暂无记录。", fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(vertical = 12.dp))
-            shown.forEachIndexed { index, record -> key(record.key) { TaskExecutionRecord(record, run, index == shown.lastIndex) } }
+            shown.forEachIndexed { index, record -> key(record.key) { TaskExecutionRecord(record, task.id, run, index == shown.lastIndex) } }
             if (busy) Text("正在更新记录…", fontSize = 14.sp, lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
             page?.let { original ->
                 Text("本页 ${shown.size} 条" + if (original.optBoolean("readLimited")) " · 部分较大内容未加载" else " · 当前读取窗口", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -106,7 +106,7 @@ internal fun TaskExecutionProcess(task: UiTask, controller: PocketWorldControlle
 }
 
 @Composable
-private fun TaskExecutionRecord(record: TaskExecutionPresentation.Record, currentRun: String, last: Boolean) {
+private fun TaskExecutionRecord(record: TaskExecutionPresentation.Record, taskId: String, currentRun: String, last: Boolean) {
     if (record.key.startsWith("operation:")) {
         Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             AffectToolCallCard(id = record.key + ":" + record.at, name = record.title,
@@ -116,6 +116,7 @@ private fun TaskExecutionRecord(record: TaskExecutionPresentation.Record, curren
                 modifier = Modifier.testTag("task_execution_record_" + record.key))
             if (record.limited) Text("这条原记录有 ${record.bodyBytes} 字节，本页未展开；原件仍保留。",
                 fontSize = 12.sp, lineHeight = 18.sp, color = SecondaryInk, modifier = Modifier.padding(top = 4.dp))
+            record.projectExecutionId?.let { NativeProjectExecutionObservation(taskId, it) }
             val time = if (record.at > 0) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(record.at)) else "时间未报告"
             Text(time + if (record.runId.isNotEmpty() && record.runId != currentRun) " · 此前执行 ${record.runId.takeLast(8)}" else "",
                 fontSize = 12.sp, lineHeight = 18.sp, color = SecondaryInk, modifier = Modifier.padding(top = 4.dp, start = 2.dp))

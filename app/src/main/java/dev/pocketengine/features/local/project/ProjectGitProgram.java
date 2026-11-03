@@ -23,7 +23,7 @@ MAX_FILES = 2000
 MAX_METADATA_ENTRIES = 20000
 MAX_DIFF_BYTES = 16000
 SOURCE_OMIT = {'.git', 'node_modules', '.venv', 'venv', '__pycache__', '.gradle', '.pocketworld', '.pytest_cache'}
-ACTIONS = {'status', 'history', 'diff', 'init', 'stage', 'unstage', 'resolve', 'commit'}
+ACTIONS = {'status', 'history', 'diff', 'init', 'stage', 'unstage', 'resolve', 'commit', 'isolate'}
 HEX = re.compile(r'^(?:[a-f0-9]{40}|[a-f0-9]{64})$')
 
 class Rejected(Exception):
@@ -153,8 +153,10 @@ def metadata_guard(git):
     own_regular(git / 'index', 8 * 1024 * 1024, True)
 
 class Git:
-    def __init__(self, root, expected_binary):
-        self.root, self.git = root, root / '.git'
+    def __init__(self, root, expected_binary, git_directory=None, common_directory=None, bare=False):
+        self.root, self.git = root, root / '.git' if git_directory is None else git_directory
+        self.common = self.git if common_directory is None else common_directory
+        self.private_owner = None
         binary = shutil.which('git')
         if binary is None:
             raise Rejected('git_tool_unavailable', 'The managed Git tool is not installed.')
@@ -164,7 +166,9 @@ class Git:
             raise Rejected('git_tool_changed', 'Git executable differs from the original reviewed runtime tool.')
         self.environment = {key: os.environ[key] for key in ('PATH', 'HOME', 'TMPDIR', 'LANG') if key in os.environ}
         self.environment.update({'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0', 'GIT_NO_LAZY_FETCH': '1', 'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_PROTOCOL_FROM_USER': '0', 'GIT_ALLOW_PROTOCOL': '', 'LC_ALL': 'C.UTF-8'})
-        self.options = ['--no-pager', '--literal-pathspecs', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.attributesFile=/dev/null', '-c', 'core.excludesFile=/dev/null', '-c', 'core.bare=false', '-c', 'core.pager=cat', '-c', 'diff.orderFile=/dev/null', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'submodule.recurse=false', '-c', 'core.quotePath=false', '-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false', '--git-dir=' + str(self.git), '--work-tree=' + str(root)]
+        self.options = ['--no-pager', '--literal-pathspecs', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.attributesFile=/dev/null', '-c', 'core.excludesFile=/dev/null', '-c', 'core.bare=' + ('true' if bare else 'false'), '-c', 'core.pager=cat', '-c', 'diff.orderFile=/dev/null', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'submodule.recurse=false', '-c', 'core.quotePath=false', '-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false', '--git-dir=' + str(self.git)]
+        if not bare:
+            self.options += ['--work-tree=' + str(root)]
 
     def command(self, args, data=None, index=None, accepted=(0,), identity=None):
         env = dict(self.environment)
@@ -224,7 +228,18 @@ class Git:
                     stream.close()
 
     def guard(self):
-        metadata_guard(self.git)
+        if self.private_owner is None:
+            metadata_guard(self.git)
+        else:
+            pool, actual = private_pool(self.private_owner)
+            expected_admin = pool / 'common/worktrees/files'
+            if self.git != expected_admin or self.common != pool / 'common' or not os.path.samefile(self.root, pool / 'files'):
+                raise Rejected('git_private_pool_changed', 'The original owned checkout/common mapping changed.')
+            metadata_guard(self.common)
+            if own_regular(self.root / '.git', 8192) != ('gitdir: ' + str(expected_admin) + '\\n').encode('utf-8') or own_regular(self.git / 'commondir', 8192) != b'../..\\n' or own_regular(self.git / 'gitdir', 8192) != (str(pool / 'files/.git') + '\\n').encode('utf-8'):
+                raise Rejected('git_private_pool_changed', 'The private gitfile/common/back-reference tuple changed.')
+            if own_regular(self.git / 'HEAD', 4096) != ('ref: refs/heads/' + actual['branch'] + '\\n').encode('ascii'):
+                raise Rejected('git_private_pool_changed', 'The original private worktree branch changed.')
         config = self.command(['config', '--local', '--no-includes', '--null', '--list'])
         for item in config.split(bytes([0])):
             if not item:
@@ -272,7 +287,7 @@ class Git:
         self.guard()
         branch, head, header = self.head()
         index = own_regular(self.git / 'index', 8 * 1024 * 1024, True)
-        config = own_regular(self.git / 'config', 65536)
+        config = own_regular(self.common / 'config', 65536)
         merge = own_regular(self.git / 'MERGE_HEAD', 4096, True)
         before = {'head': head, 'headRef': branch, 'headFileSha256': header, 'indexSha256': 'absent' if index is None else digest(index), 'configSha256': digest(config), 'mergeHeadSha256': 'absent' if merge is None else digest(merge)}
         entries, pins = self.index_entries(), source_pins(self.root)
@@ -305,7 +320,7 @@ class Git:
             records.append(record)
         after_branch, after_head, after_header = self.head()
         current_index = own_regular(self.git / 'index', 8 * 1024 * 1024, True)
-        if (branch, head, header) != (after_branch, after_head, after_header) or before['indexSha256'] != ('absent' if current_index is None else digest(current_index)) or config != own_regular(self.git / 'config', 65536) or merge != own_regular(self.git / 'MERGE_HEAD', 4096, True):
+        if (branch, head, header) != (after_branch, after_head, after_header) or before['indexSha256'] != ('absent' if current_index is None else digest(current_index)) or config != own_regular(self.common / 'config', 65536) or merge != own_regular(self.git / 'MERGE_HEAD', 4096, True):
             raise Rejected('git_state_changed_during_read', 'HEAD or index changed during Git observation; refresh first.')
         if pins != source_pins(self.root):
             raise Rejected('git_worktree_changed_during_read', 'Worktree files changed during Git observation; refresh first.')
@@ -534,6 +549,101 @@ class Git:
                 if (now.st_dev, now.st_ino) == (inode.st_dev, inode.st_ino):
                     index_lock.unlink()
 
+def private_pool(owner=None):
+    value = os.environ.get('POCKETWORLD_PRIVATE_GIT_POOL', '')
+    if not value or not value.startswith('/') or len(value) > 4096:
+        raise Rejected('git_private_pool_not_admitted', 'This private worktree requires its original native pool admission.')
+    pool = Path(value)
+    if not pool.is_dir() or pool.is_symlink() or pool.resolve() != pool:
+        raise Rejected('git_private_pool_changed', 'The original private pool is not a canonical directory.')
+    actual = json.loads(own_regular(pool / 'git-isolation-owner.json', 8192).decode('utf-8'))
+    keys = {'format', 'targetCheckoutId', 'sourceCheckoutId', 'projectId', 'baseCommit', 'branch', 'ownerTaskId', 'ownerRunId', 'ownerOperationId', 'ownerEpoch', 'originPlanDigest', 'originSourceDigest'}
+    if not isinstance(actual, dict) or set(actual) != keys or actual.get('format') != 'pocketworld.private-git-worktree.v1' or actual.get('targetCheckoutId') != pool.name or owner is not None and canonical(actual) != canonical(owner):
+        raise Rejected('git_private_pool_changed', 'The private pool is not owned by this exact original operation.')
+    return pool, actual
+
+def source_stamp(pins):
+    value = ''.join(str(len(path.encode('utf-8'))) + ':' + path + ':' + pin['sha256'] + ':' + str(pin['bytes']) + '\\n' for path, pin in sorted(pins.items(), key=lambda item: item[0].encode('utf-16-be')))
+    return digest(value.encode('utf-8'))
+
+
+def isolate(git, request):
+    expected = request.get('expected')
+    before = git.snapshot()
+    if canonical(expected) != canonical(before['pin']):
+        raise Rejected('git_review_stale', 'Original HEAD/index/worktree changed after isolation review.')
+    base, branch = request.get('baseCommit'), request.get('branch')
+    if not isinstance(base, str) or not HEX.fullmatch(base) or not isinstance(branch, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,79}', branch):
+        raise Rejected('git_isolation_selection_invalid', 'Use an exact local commit and an ordinary new branch name.')
+    git.command(['check-ref-format', 'refs/heads/' + branch])
+    resolved = git.command(['rev-parse', '--verify', '--end-of-options', base + '^{commit}']).decode('ascii').strip()
+    if resolved != base or before['pin']['head'] == 'unborn':
+        raise Rejected('git_isolation_base_invalid', 'The selected exact object is not an existing local commit.')
+    git.command(['merge-base', '--is-ancestor', base, before['pin']['head']])
+    existing = git.command(['for-each-ref', '--format=%(refname)', 'refs/heads/' + branch]).decode('utf-8').splitlines()
+    if 'refs/heads/' + branch in existing:
+        raise Rejected('git_isolation_branch_exists', 'That branch already exists in the source; nothing is overwritten.')
+    tree = git.command(['ls-tree', '-r', '-l', '-z', '--full-tree', base])
+    total, count = 0, 0
+    for record in tree.split(bytes([0])):
+        if not record:
+            continue
+        header, raw_path = record.split(b'\\t', 1)
+        mode, kind, oid, size = header.split()
+        path = path_value(raw_path.decode('utf-8', errors='strict'))
+        if mode not in (b'100644', b'100755') or kind != b'blob' or any(p in SOURCE_OMIT for p in path.split('/')) or path.split('/')[0] in ('build', 'dist'):
+            raise Rejected('git_isolation_tree_unsupported', 'The selected commit includes a symlink, submodule, metadata or excluded cache/output path; no worktree was created.')
+        count += 1; total += int(size)
+        if int(size) > MAX_FILE_BYTES or count > MAX_FILES or total > MAX_TOTAL_BYTES:
+            raise Rejected('git_isolation_tree_limit', 'The selected commit exceeds the original bounded source limits.')
+    pool, owner = private_pool()
+    if owner['targetCheckoutId'] != request.get('targetCheckoutId') or owner['baseCommit'] != base or owner['branch'] != branch:
+        raise Rejected('git_private_pool_changed', 'The original pool does not match the approved branch/base/target.')
+    target, common = pool / 'files', pool / 'common'
+    if target.exists() or target.is_symlink() or common.exists() or common.is_symlink():
+        raise Rejected('git_isolation_target_exists', 'An existing or failed private worktree is never overwritten or replayed.')
+    git.require(expected)
+    entered = False
+    try:
+        target.mkdir(); entered = True
+        private = Git(target, request['gitExecutableSha256'], common, common, True)
+        fmt = git.command(['rev-parse', '--show-object-format']).decode('ascii').strip()
+        private.command(['init', '--bare', '--template=', '--initial-branch=pocketworld-base', '--object-format=' + fmt])
+        # Git enumerates exactly this reviewed commit's reachable object graph. No config,
+        # hooks, remotes, credentials, unrelated refs, hardlinks or network are copied.
+        import resource
+        limits = resource.getrlimit(resource.RLIMIT_FSIZE)
+        hard = limits[1]
+        soft = 64 * 1024 * 1024 if hard == resource.RLIM_INFINITY else min(hard, 64 * 1024 * 1024)
+        try:
+            resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+            pack = git.command(['pack-objects', '--revs', '--delta-base-offset', '--no-reuse-delta', '--window=0', str(common / 'objects/pack/pack')], data=(base + '\\n').encode('ascii')).decode('ascii').strip()
+        finally:
+            resource.setrlimit(resource.RLIMIT_FSIZE, limits)
+        if not HEX.fullmatch(pack):
+            raise Rejected('git_isolation_objects_incomplete', 'Git did not return a complete private object pack identity.')
+        packed = [common / 'objects/pack' / ('pack-' + pack + suffix) for suffix in ('.pack', '.idx')]
+        if sum(p.stat().st_size for p in packed) > 64 * 1024 * 1024:
+            raise Rejected('git_isolation_objects_limit', 'The reachable Git objects exceed the private 64MiB pool budget.')
+        for file in packed:
+            if file.is_symlink() or not file.is_file() or file.stat().st_nlink != 1:
+                raise Rejected('git_isolation_objects_incomplete', 'Only independent ordinary private object files are accepted.')
+        git.require(expected)
+        private.command(['worktree', 'add', '--no-checkout', '-b', branch, '--', str(target), base])
+        active = Git(target, request['gitExecutableSha256'], common / 'worktrees/files', common)
+        active.private_owner = owner
+        active.guard()
+        active.command(['read-tree', '--reset', '-u', base])
+        final = active.snapshot()
+        if final['pin']['head'] != base or final['pin']['headRef'] != 'refs/heads/' + branch:
+            raise Rejected('git_isolation_head_mismatch', 'The created worktree did not retain its exact reviewed commit/branch.')
+        git.require(expected)
+        return {'targetCheckoutId': owner['targetCheckoutId'], 'sourceCheckoutId': owner['sourceCheckoutId'], 'baseCommit': base, 'branch': branch, 'ownership': owner, 'sourceStamp': source_stamp(final['filePins']), 'fileCount': len(final['filePins']), 'pin': final['pin'], 'privateCommonRepository': True, 'directlyLinkedToSourceRepository': False, 'sourceRepositoryWritten': False, 'sourceWorktreeWritten': False, 'networkUsed': False, 'hooksExecuted': False, 'filtersExecuted': False, 'failedPoolAutomaticallyDeleted': False}
+    except Exception as failure:
+        if entered:
+            raise Rejected('git_isolation_incomplete', 'The private pool may contain objects or a partial worktree. The source and current selection are preserved; keep the original operation and failed pool, do not replay or delete it automatically.') from failure
+        raise
+
 def main(request):
     if not isinstance(request, dict) or request.get('version') != 1 or request.get('action') not in ACTIONS:
         raise Rejected('git_request_invalid', 'Only the fixed project Git protocol is accepted.')
@@ -541,6 +651,10 @@ def main(request):
     if root.is_symlink() or root.resolve() != root:
         raise Rejected('git_checkout_not_canonical', 'Original checkout identity is not canonical.')
     git = Git(root, request['gitExecutableSha256'])
+    if request.get('privateWorktree') is not None:
+        pool, owner = private_pool(request['privateWorktree'])
+        git = Git(root, request['gitExecutableSha256'], pool / 'common/worktrees/files', pool / 'common')
+        git.private_owner = owner
     action = request['action']
     if action == 'init':
         if (root / '.git').exists() or (root / '.git').is_symlink():
@@ -568,6 +682,8 @@ def main(request):
             raise Rejected('git_review_stale', 'Status cursor belongs to another HEAD/index/worktree version; refresh first.')
         records = snapshot['records'];end = min(len(records), offset + limit)
         return {'pin': snapshot['pin'], 'gitVersion': snapshot['gitVersion'], 'entries': records[offset:end], 'offset': offset, 'nextOffset': end, 'totalEntries': len(records), 'truncated': end < len(records), 'indexLocked': snapshot['indexLocked'], 'mergeParentIds': snapshot['mergeParents'], 'readOnly': True, 'statusLayers': ['head_index', 'index_worktree'], 'repositoryPresent': True, 'repositoryRoot': 'original_checkout_only', 'atomicFilesystemSnapshot': False}
+    if action == 'isolate':
+        return isolate(git, request)
     if action == 'history':
         return git.history(request)
     if action == 'diff':
@@ -580,10 +696,10 @@ if __name__ == '__main__':
         result = main(request)
         rendered = json.dumps({'format': FORMAT, 'ok': True, 'code': 'git_' + request['action'] + '_observed', 'result': result}, ensure_ascii=False, separators=(',', ':'))
         if len(rendered.encode('utf-8')) > 60000:
-            raise Rejected('git_publication_observation_unknown' if request['action'] in ('init', 'stage', 'unstage', 'resolve', 'commit') else 'git_result_page_limit', 'Original result exceeds this bounded native page. No truncated result is accepted as complete; inspect the original operation without replaying mutations.')
+            raise Rejected('git_publication_observation_unknown' if request['action'] in ('init', 'stage', 'unstage', 'resolve', 'commit', 'isolate') else 'git_result_page_limit', 'Original result exceeds this bounded native page. No truncated result is accepted as complete; inspect the original operation without replaying mutations.')
         print(rendered)
     except Rejected as failure:
-        print(json.dumps({'format': FORMAT, 'ok': False, 'code': failure.code, 'message': failure.message, 'effectStatus': 'unknown' if failure.code == 'git_publication_observation_unknown' else 'not_published'}, ensure_ascii=True, separators=(',', ':')))
+        print(json.dumps({'format': FORMAT, 'ok': False, 'code': failure.code, 'message': failure.message, 'effectStatus': 'unknown' if failure.code in ('git_publication_observation_unknown', 'git_isolation_incomplete') else 'not_published'}, ensure_ascii=True, separators=(',', ':')))
         sys.exit(2)
     except Exception as failure:
         print(json.dumps({'format': FORMAT, 'ok': False, 'code': 'git_observation_failed', 'message': 'Original Git observation failed; no complete or successful result is inferred.', 'exceptionType': type(failure).__name__, 'effectStatus': 'unknown'}, ensure_ascii=True, separators=(',', ':')))

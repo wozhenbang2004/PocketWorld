@@ -71,6 +71,29 @@ def fixture_file(directory, value, *, maximum=65536):
 
 
 class NativeFixture:
+    PROGRESS_STAGES = frozenset({"ordinary_question_wait", "ordinary_question_first_snapshot", "ordinary_question_observed",
+        "original_control_acquired", "reconnect_close_requested", "reconnect_closed", "offline_snapshot_observed",
+        "reconnect_open_requested", "reconnect_opened", "reconnect_snapshot_observed"})
+
+    def progress(self, stage, snapshot=None):
+        """Bounded phase facts only. Never print task text, IDs, leases or raw responses."""
+        require(stage in self.PROGRESS_STAGES, "fixture_progress_stage_invalid")
+        event = {"phase": "diagnostic", "stage": stage}
+        if snapshot is not None:
+            task = snapshot.get("task")
+            task = task if isinstance(task, dict) else {}
+            result = task.get("result", {})
+            owner = result.get("ownerInput", {}) if isinstance(result, dict) else {}
+            owner = owner if isinstance(owner, dict) else {}
+            question = owner.get("ordinaryQuestion", {})
+            state = task.get("state")
+            event.update(taskPresent=bool(task), currentReadUnavailable=snapshot.get("currentRead") == "unavailable",
+                phoneStateUnconfirmed=snapshot.get("phoneStateUnconfirmed") is True,
+                taskState=state if isinstance(state, str) and state in {"preparing", "running", "pausing", "paused", "awaiting_user", "needs_confirmation", "cancelled", "failed", "completed", "expired", "interrupted"} else "unknown",
+                originalSessionPresent=owner.get("originalSessionPresent") is True,
+                ordinaryQuestionPresent=isinstance(question, dict) and bool(question.get("requestId")))
+        print(json.dumps(event, separators=(",", ":")), flush=True)
+
     def __init__(self, manifest_path):
         self.stage = "manifest"
         self.manifest_path = Path(manifest_path).absolute()
@@ -344,8 +367,12 @@ class NativeFixture:
 
     def poll(self, predicate, phase):
         deadline = time.monotonic() + 90
+        first = True
         while time.monotonic() < deadline:
             value = self.status()
+            if first and phase == "wait_original_question":
+                self.progress("ordinary_question_first_snapshot", value)
+            first = False
             self.stage = phase
             if predicate(value):
                 return value
@@ -392,16 +419,22 @@ class NativeFixture:
     def reconnect_then_cancel(self, answer_params):
         service = self.manager.device_companion
         old = self.connection
+        self.progress("reconnect_close_requested")
         asyncio.run_coroutine_threadsafe(old.close(), service.loop).result(timeout=5)
+        self.progress("reconnect_closed")
         offline = self.status()
         require(offline.get("currentRead") == "unavailable" and offline.get("phoneStateUnconfirmed") is True
                 and "task" not in offline, "offline_read_must_keep_original_outcome_unconfirmed")
         self.report["offlineStatus"] = offline
+        self.progress("offline_snapshot_observed", offline)
         # Explicit fixture reconnect to the SAME certificate/device; never a task replay.
+        self.progress("reconnect_open_requested")
         asyncio.run_coroutine_threadsafe(self._connect_original(), service.loop).result(timeout=15)
+        self.progress("reconnect_opened")
         require(self.connection is not old and self.connection.tls.peer.device_id == self.spec["targetDeviceId"],
                 "reconnect_changed_selected_phone")
         recovered = self.status()
+        self.progress("reconnect_snapshot_observed", recovered)
         require(recovered.get("task", {}).get("runId") == self.report["runId"]
                 and recovered["task"]["executorEpoch"] == self.report["executorEpoch"], "reconnect_changed_original_run")
         self.report["reconnectedStatus"] = recovered
@@ -469,7 +502,12 @@ class NativeFixture:
             return (owner.get("originalSessionPresent") is True and question.get("approval") is False
                     and question.get("takeover") is False and bool(question.get("requestId")))
 
+        # The Java outer phase still has its original 45s window in the reconnect
+        # case. These facts locate any time spent in this original 90s poll; they
+        # do not extend either deadline or turn an unavailable read into success.
+        self.progress("ordinary_question_wait")
         waiting = self.poll(ordinary, "wait_original_question")
+        self.progress("ordinary_question_observed", waiting)
         task = waiting["task"]
         native = task["result"]["ownerInput"]
         question = native["ordinaryQuestion"]
@@ -492,6 +530,7 @@ class NativeFixture:
         require(lease.get("controlLeaseId") == control["controlLeaseId"]
                 and lease.get("expiresAt") == control["controlLeaseExpiresAt"]
                 and lease.get("expiresAt", 0) > self.manager.now(), "original_control_missing_from_real_snapshot")
+        self.progress("original_control_acquired", controlled)
         self.report["controlSnapshot"] = controlled
         # The same published snapshot is what Task Desk reads after acquisition;
         # do not conceal a missing projection by taking the lease from its receipt.

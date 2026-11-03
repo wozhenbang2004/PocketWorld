@@ -51,7 +51,7 @@ public final class NativeHarnessConfigs {
     private void current(Window window,long revision)throws Exception {if(window.closed||window.owner==null||foregroundOwner!=window.owner||window.revision!=revision)throw new SecurityException("原配置页面已失效；迟到结果不成为新确认");}
     /** Original native gateway object, never reconstructible from openHarnessConfig JSON. */
     public JSONObject openGateway(Object owner,String id,String task,TaskStore.HarnessGatewayConfiguration gateway)throws Exception {
-        synchronized(this){if(owner==null||foregroundOwner!=owner||!id.matches("[a-f0-9-]{36}")||windows.containsKey(id)||windows.size()>=4)throw new SecurityException("请返回并重开原任务配置页；不覆盖旧操作");gateway.checkCurrent();Window window=new Window(id,task,owner,gateway.view());window.gateway=gateway;window.source=tasks.remoteOwnerTarget(task);windows.put(id,window);return response(window);}
+        synchronized(this){if(owner==null||foregroundOwner!=owner||!id.matches("[a-f0-9-]{36}")||windows.containsKey(id)||windows.size()>=4)throw new SecurityException("请返回并重开原任务配置页；不覆盖旧操作");gateway.checkCurrent();Window window=new Window(id,task,owner,gateway.view());window.gateway=gateway;window.source=tasks.remoteOwnerTarget(task);window.operation=gateway.originalOperation();windows.put(id,window);return response(window);}
     }
     public JSONObject openGateway(Object owner,String id,String task,NativeHarnessGatewayOwner.ConfigurationSource source)throws Exception {
         source.checkCurrent();openGateway(owner,id,task,source.configuration());synchronized(this){Window window=windows.get(id);window.sourceCurrent=source;return response(window);}
@@ -111,14 +111,20 @@ public final class NativeHarnessConfigs {
         else request=new JSONObject(window.selection.toString());
         request.remove("restoreOperationId");for(String key:new String[]{"environmentId","environmentBinding","bindingId"})request.put(key,target.get(key));
         request.put("identityDigest",probe.getString("identityDigest")).put("taskId",window.task).put("runId",source.getString("runId")).put("epoch",source.getInt("coordinatorEpoch"));request.remove("operationId");
-        window.probe=probe;window.record=tasks.prepareHarnessConfigOperation(window.task,source,request,probe,restore,window.gateway);window.operation=window.record.getString("operationId");
-        JSONObject sent=new JSONObject(input.toString()).put("request",window.record.getJSONObject("request"));if(restore!=null)sent.put("restoreOf",restore);
+        var references=restore==null&&window.sourceCurrent!=null?window.sourceCurrent.referenceAssets():null;
+        if(references!=null){if(!probe.getJSONObject("capabilities").optBoolean("assetProjection"))throw new SecurityException("此目标准确版本/平台尚未支持完整文本参考投射，请保留编辑");references.checkCurrent();request.put("referenceAssets",references.view());}
+        window.probe=probe;window.record=tasks.prepareHarnessConfigOperation(window.task,source,request,probe,restore,window.gateway,references);window.operation=window.record.getString("operationId");
+        JSONObject sentRequest=new JSONObject(window.record.getJSONObject("request").toString());if(references!=null)sentRequest.put("referenceAssets",references.view());
+        JSONObject sent=new JSONObject(input.toString()).put("request",sentRequest);if(restore!=null)sent.put("restoreOf",restore);
         JSONObject plan=remote().harnessConfigPlan(sent);current(window,revision);if(window.gateway!=null)window.gateway.checkCurrent();validatePlan(plan,window.record);if(window.gateway!=null)tasks.bindHarnessGatewayConfigurationPlan(window.gateway,window.operation,plan);window.plan=plan;return response(window);
     }
     private JSONObject confirm(Window window,String accepted)throws Exception {
         long revision=window.revision;current(window,revision);if(window.plan==null||!accepted.equals(window.plan.optString("planDigest")))throw new SecurityException("只可确认屏幕上的准确配置计划，不接受不同digest");
         JSONArray conflicts=window.plan.optJSONArray("conflicts");
         if(conflicts==null||conflicts.length()!=0)throw new SecurityException("原配置计划有外部修改冲突或冲突事实未确认；保留原文件，不领取apply，只核对原编号");
+        if(window.record.getJSONObject("request").has("referenceAssets")&&!window.record.has("restoreOf")){
+            if(window.sourceCurrent==null||window.sourceCurrent.referenceAssets()==null||!dev.pocketengine.features.controlplane.NativeWorkProfileHost.harnessReferenceDigest(window.record.getJSONObject("request").getJSONObject("referenceAssets")).equals(dev.pocketengine.features.controlplane.NativeWorkProfileHost.harnessReferenceDigest(window.sourceCurrent.referenceAssets().view())))throw new SecurityException("此页只读取原文本投射操作；确认须回仍活动的原网关入口重新核对同一冻结来源，不重建或补发");
+        }
         if(window.sourceCurrent!=null)window.sourceCurrent.checkCurrent();
         Approval approval=new Approval(this,window);TaskStore.HarnessConfigClaim claim=tasks.claimHarnessConfigOperation(approval);
         if(!claim.canDispatch()){query(window);return response(window);}
@@ -139,22 +145,37 @@ public final class NativeHarnessConfigs {
         window.receipt=actual;
     }
     private static JSONObject unknown(Window window)throws Exception {JSONObject value=new JSONObject().put("operationId",window.operation).put("planDigest",window.plan.getString("planDigest")).put("state","unknown").put("configApplied",false).put("runtimeVerified",false);for(String key:new String[]{"environmentId","environmentBinding","bindingId"})value.put(key,window.record.getJSONObject("request").get(key));return value;}
+    /** Original SQL keeps exact identities, never a second archive of Book/source text.
+     * Full previews are ephemeral native window state; before-images remain only in
+     * the original paired target transaction needed for explicit compensation. */
+    public static JSONObject storageRequest(JSONObject input)throws Exception{
+        JSONObject result=new JSONObject(input.toString()),manifest=result.optJSONObject("referenceAssets");if(manifest!=null){JSONArray assets=manifest.getJSONArray("assets");for(int i=0;i<assets.length();i++){JSONArray files=assets.getJSONObject(i).getJSONArray("files");for(int n=0;n<files.length();n++)files.getJSONObject(n).remove("chunks");}}return result;
+    }
+    public static JSONObject storagePlan(JSONObject input)throws Exception{
+        JSONObject result=new JSONObject(input.toString());if(!result.has("referenceAssetsDigest"))return result;JSONArray files=result.getJSONArray("filePlans");
+        for(int i=1;i<files.length();i++){JSONArray operations=files.getJSONObject(i).getJSONArray("operations");for(int n=0;n<operations.length();n++){JSONObject operation=operations.getJSONObject(n);for(String side:new String[]{"before","after"}){JSONObject value=operation.optJSONObject(side);if(value==null||!value.has("chunks"))continue;StringBuilder text=new StringBuilder();JSONArray chunks=value.getJSONArray("chunks");for(int j=0;j<chunks.length();j++)text.append(chunks.getString(j));byte[] bytes=text.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);StringBuilder hash=new StringBuilder();for(byte b:java.security.MessageDigest.getInstance("SHA-256").digest(bytes))hash.append(String.format(java.util.Locale.ROOT,"%02x",b&255));operation.put(side,new JSONObject().put("sha256",hash.toString()).put("bytes",bytes.length).put("contentRetainedInOriginalTarget",true));}}}return result;
+    }
+    public static JSONObject storageReceipt(JSONObject input)throws Exception{JSONObject result=new JSONObject(input.toString());if(result.optJSONObject("plan")!=null)result.put("plan",storagePlan(result.getJSONObject("plan")));return result;}
     public static void validatePlan(JSONObject plan,JSONObject record)throws Exception {
         JSONObject request=record.getJSONObject("request"),identity=plan.getJSONObject("identity");
-        if(!record.getString("operationId").equals(plan.optString("operationId"))||!plan.optString("planId").matches("[A-Za-z0-9_-]{1,80}")||!plan.optString("planDigest").matches("[a-f0-9]{64}")||!plan.optString("writeConsistency").equals("OPTIMISTIC")||plan.optBoolean("runtimeVerified")||plan.getJSONArray("filePlans").length()!=1)throw new SecurityException("不是受支持的原配置计划");
+        if(!record.getString("operationId").equals(plan.optString("operationId"))||!plan.optString("planId").matches("[A-Za-z0-9_-]{1,80}")||!plan.optString("planDigest").matches("[a-f0-9]{64}")||!plan.optString("writeConsistency").equals("OPTIMISTIC")||plan.optBoolean("runtimeVerified"))throw new SecurityException("不是受支持的原配置计划");
         for(String key:new String[]{"environmentBinding","bindingId"})if(!request.get(key).equals(identity.opt(key)))throw new SecurityException("计划返回了另一准确环境/Harness");
         if(!request.getString("environmentId").equals(plan.optString("environmentId"))||!request.getString("profileDigest").equals(plan.optString("profileDigest"))||!request.getString("endpointLeaseRef").equals(plan.optString("endpointLeaseRef"))||!"GATEWAY_ACCESS".equals(plan.optString("credentialRefType")))throw new SecurityException("计划模型Profile或gateway引用不同");
         if(request.has("gatewayOwnerBinding")&&(!plan.has("gatewayOwnerBinding")||!TaskStore.capabilityFingerprint(request.getJSONObject("gatewayOwnerBinding")).equals(TaskStore.capabilityFingerprint(plan.getJSONObject("gatewayOwnerBinding")))))throw new SecurityException("计划未冻结原父子双身份");
         JSONObject gateway=plan.getJSONObject("gatewayScope");if(!gateway.optString("audience").equals("OWNER_PRIVATE")||!gateway.optString("purpose").equals("EXTERNAL_RELAY")||gateway.opt("billingBackendVerified")!=Boolean.FALSE)throw new SecurityException("配置计划不能变成群API-only计费证明或APP_OWNER权限");
         String expected=identity.getString("family").equals("codex")?"config.toml":identity.getString("family").equals("claude")?"settings.json":"";
         if(expected.isEmpty()||!expected.equals(plan.getJSONArray("filePlans").getJSONObject(0).optString("pathRef")))throw new SecurityException("计划文件不属于已知adapter");
-        if(plan.toString().length()>65536)throw new SecurityException("配置计划超出有界审阅");
+        JSONArray files=plan.getJSONArray("filePlans");if(!request.has("referenceAssets")&&files.length()!=1)throw new SecurityException("未选文本参考不能额外写文件");
+        if(request.has("referenceAssets")){if(!dev.pocketengine.features.controlplane.NativeWorkProfileHost.harnessReferenceDigest(request.getJSONObject("referenceAssets")).equals(plan.optString("referenceAssetsDigest"))||files.length()<2||files.length()>200)throw new SecurityException("文本投射计划没有冻结完整原版本");String instructions=identity.getString("family").equals("codex")?"AGENTS.md":"CLAUDE.md";java.util.Set<String> seen=new java.util.HashSet<>();
+            for(int i=1;i<files.length();i++){String path=files.getJSONObject(i).getString("pathRef");if(!seen.add(path)||!path.equals(instructions)&&!path.matches("skills/pw-[a-f0-9]{32}/(?:SKILL\\.md|\\.pocketworld-source\\.json|references/[0-9]{3}-[a-f0-9]{64}\\.txt)"))throw new SecurityException("文本计划越出准确adapter参考目录或重复路径");}}
+        if(plan.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>262144)throw new SecurityException("配置计划超出256KiB有界审阅，请明确减选；未截断内容");
     }
     private JSONObject response(Window window)throws Exception {
         JSONObject result=new JSONObject().put("windowId",window.id).put("taskId",window.task).put("configurationOnly",true).put("executionAuthorized",false).put("runtimeVerified",false)
             .put("risk","将替换所示目标的有效认证/endpoint字段，仅使用有期限的gateway引用；不复制ChatGPT会话凭据，不授权运行。关闭页面不自动恢复。外部修改会保留并阻止不安全恢复。")
             .put("message",window.receipt==null?"先核对真实目标与逐字段差异，再确认准确计划":"以原operationId查询真实回执，不盲重发");
         if(window.sourceCurrent!=null){JSONObject profile=window.sourceCurrent.profileView();if(profile!=null)result.put("workProfileSource",profile).put("targetConfigurationReadback",window.receipt!=null&&"COMMITTED".equals(window.receipt.optString("state"))&&window.receipt.optBoolean("configApplied")&&window.receipt.optBoolean("effectiveReadback"));}
+        if(window.sourceCurrent!=null&&window.sourceCurrent.referenceAssets()!=null){JSONArray selected=new JSONArray(),assets=window.sourceCurrent.referenceAssets().view().getJSONArray("assets");for(int i=0;i<assets.length();i++){JSONObject asset=assets.getJSONObject(i);selected.put(new JSONObject().put("id",asset.getString("id")).put("name",asset.getString("name")).put("revision",asset.getInt("revision")).put("digest",asset.getString("digest")).put("kinds",asset.getJSONArray("kinds")).put("files",asset.getJSONArray("files").length()));}result.put("referenceSelection",selected).put("referenceTransmissionNotice","读取预览会将这些准确版本的完整文本包发送至本页配对电脑。原始frontmatter与脚本仅作为.txt参考，不复制工具权限、hook或可执行配置。确认后写入该配置根的受管参考目录；保留目标已有内容与优先级，不撤回其既有工具。撤回本机来源会停止原授权使用，但已写远端副本须另行明确恢复；CLI是否实际使用仍需原任务证据。");}
         if(window.source!=null)result.put("source",window.source);if(window.operation!=null)result.put("operationId",window.operation);if(window.record!=null)result.put("operationState",window.record.optString("state"));if(window.probe!=null)result.put("target",window.probe);if(window.plan!=null)result.put("plan",new JSONObject(window.plan.toString()));if(window.receipt!=null)result.put("receipt",new JSONObject(window.receipt.toString()));return new JSONObject().put("snapshot",result);
     }
     private void emit(String task)throws Exception {events.emit(new JSONObject().put("type","task_changed").put("taskId",task));}

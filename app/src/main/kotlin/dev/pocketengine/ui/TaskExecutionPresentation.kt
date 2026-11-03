@@ -8,7 +8,12 @@ internal object TaskExecutionPresentation {
     enum class Tone { RUNNING, WAITING, UNCERTAIN, ERROR, RETURNED, STOPPED, NEUTRAL }
     enum class Target { NONE, PROCESS, APPROVAL, RECONCILIATION, RESULT, FEEDBACK }
     data class Current(val title: String, val detail: String, val tone: Tone, val target: Target = Target.NONE, val action: String = "")
-    data class Record(val key: String, val title: String, val label: String, val tone: Tone, val at: Long, val runId: String, val arguments: String, val receipt: String, val limited: Boolean, val bodyBytes: Long)
+    data class Record(val key: String, val title: String, val label: String, val tone: Tone, val at: Long, val runId: String, val arguments: String, val receipt: String, val limited: Boolean, val bodyBytes: Long, val projectExecutionId: String? = null)
+
+    /** A read locator only. The native factory rechecks the original SQL plan, receipt and owner. */
+    fun projectExecutionObservationId(row: JSONObject): String? = row.optString("operationId").takeIf {
+        row.optString("tool") == "project_execute" && it.matches(Regex("[A-Za-z0-9_-]{1,80}"))
+    }
 
     fun current(task: JSONObject, now: Long): Current {
         val status = task.optString("status")
@@ -83,12 +88,12 @@ internal object TaskExecutionPresentation {
             state == "resolved" && receipt?.optString("source") == "owner_reconciliation" -> { tone = Tone.NEUTRAL; label = when (receipt.optString("outcome")) { "occurred" -> "主人已核对发生 · 非自动验证"; "not_occurred" -> "主人已核对未发生 · 不会自动重试"; else -> "主人已记录核对结论" } }
             state == "prepared" -> { tone = Tone.WAITING; label = "已登记，等待结果" }
             receipt?.optString("status") in setOf("cancelled", "canceled", "stopped") -> { tone = Tone.STOPPED; label = "调用已停止 · 详见原回执" }
-            receipt != null && (receipt.has("ok") && !receipt.optBoolean("ok") || receipt.optString("status") == "failed" || receipt.opt("exitCode") is Number && receipt.optInt("exitCode") != 0) -> { tone = Tone.ERROR; label = "调用出错 · 请核对操作结果" }
+            receipt != null && (receipt.has("ok") && !receipt.optBoolean("ok") || receipt.optString("status") == "failed" || receipt.opt("exitCode") is Number && receipt.optInt("exitCode") != 0) -> { tone = Tone.ERROR; label = "调用出错 · 不等于未执行，请核对操作结果" }
             receipt?.optBoolean("terminal", true) == false -> { tone = Tone.WAITING; label = "已返回部分结果" }
-            receipt != null -> { tone = Tone.RETURNED; label = "已返回 · 结果可展开查看" }
+            receipt != null -> { tone = Tone.RETURNED; label = "已返回 · 目标仍需核对，结果可展开查看" }
             else -> { tone = Tone.NEUTRAL; label = "原状态：" + excerpt(state.ifBlank { "未报告" }, 80) }
         }
-        return Record("operation:" + row.optString("operationId", row.optString("position")), excerpt(row.optString("tool").ifBlank { "原工具调用" }, 120), label, tone, row.optLong("createdAt"), row.optString("runId"), row.optJSONObject("arguments")?.toString().orEmpty(), receipt?.toString().orEmpty(), row.optString("status") == "read_limited", row.optLong("bodyBytes"))
+        return Record("operation:" + row.optString("operationId", row.optString("position")), excerpt(row.optString("tool").ifBlank { "原工具调用" }, 120), label, tone, row.optLong("createdAt"), row.optString("runId"), row.optJSONObject("arguments")?.toString().orEmpty(), receipt?.toString().orEmpty(), row.optString("status") == "read_limited", row.optLong("bodyBytes"), projectExecutionObservationId(row))
     }
 
     private fun uncertain(operation: JSONObject): Boolean {

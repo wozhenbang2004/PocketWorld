@@ -19,7 +19,7 @@ import org.junit.Test;
 public final class ManagedProcessJobsLifecycleTest {
     private Path directory,active;private ManagedProcessJobs jobs;private boolean releaseUnconfirmed;
     @Before public void create()throws Exception {
-        directory=Files.createTempDirectory("c2-owned-process-");active=Files.createDirectory(directory.resolve("active"));Files.writeString(active.resolve("Main.java"),"class Main {}\n");
+        directory=Files.createTempDirectory("c2-owned-process-");active=Files.createDirectory(directory.resolve("active"));Files.write(active.resolve("Main.java"),"class Main {}\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         jobs=new ManagedProcessJobs(directory.toFile(),new NativeProcessSupervisor());assertTrue("load the current host JNI library",jobs.available());
     }
     @After public void close()throws Exception {try{if(releaseUnconfirmed)assertEquals("runtime_process_drain_unconfirmed",assertThrows(IllegalStateException.class,jobs::close).getMessage());else jobs.close();}finally{try(var paths=Files.walk(directory)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}}
