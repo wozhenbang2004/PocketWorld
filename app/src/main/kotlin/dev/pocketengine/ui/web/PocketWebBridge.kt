@@ -255,6 +255,13 @@ internal class PocketWebBridge(
                 controller.reestimateInference(requiredString(args, "taskId"), requiredString(args, "callId")) { result, error -> complete(id, result, error) }
                 return
             }
+            if (action == "chat.cancel") {
+                val expected = JSONObject().put("conversationId", requiredString(args, "conversationId"))
+                    .put("taskId", requiredString(args, "taskId")).put("runId", requiredString(args, "runId"))
+                    .put("epoch", requiredInt(args, "epoch"))
+                controller.cancelChatFromWeb(expected) { result, error -> complete(id, result, error) }
+                return
+            }
             if (action == "tasks.review") {
                 val taskId = requiredString(args, "id")
                 requireTask(taskId)
@@ -341,7 +348,6 @@ internal class PocketWebBridge(
                 require(controller.composerPending.any { it.clientId == client } || controller.state.chatReceipts.containsKey(client)) { "原输入回执身份不可核对" }
                 when (action) { "composer.query" -> controller.queryChatSubmission(client); "composer.retry" -> controller.retryLocallyUnsent(client); else -> controller.returnToPendingComposer(client) }
             }
-            "chat.cancel" -> controller.cancelChat()
             "conversation.new" -> { leaveTask(); leaveConnection(); reviews.clear(); phoneReviews.clear(); controller.newConversation() }
             "conversation.select" -> { leaveTask(); leaveConnection(); reviews.clear(); phoneReviews.clear(); controller.openConversation(requiredString(args, "id")) }
             "conversation.reader.close" -> controller.closeConversationReader()

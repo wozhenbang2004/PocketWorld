@@ -1,4 +1,24 @@
 plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'org.jetbrains.kotlin.plugin.compose' }
+
+// The existing APK workflow supplies its own increasing run number. Other CI/release
+// chains must assign BOTH properties; an explicit release code must exceed every
+// already distributed code. A workflow-local run number cannot order those releases.
+def pocketworldVersionScript = rootProject.layout.projectDirectory.file('tools/app-version.py')
+def pocketworldVersionCommand = ['python3', pocketworldVersionScript.asFile.absolutePath]
+['pocketworldVersionCode': '--version-code', 'pocketworldVersionName': '--version-name'].each { key, flag ->
+    def value = providers.gradleProperty(key)
+    if (value.isPresent()) pocketworldVersionCommand += [flag, value.get()]
+}
+// Also track resolver edits when Gradle's configuration cache is enabled.
+providers.fileContents(pocketworldVersionScript).asText.get()
+def pocketworldVersionProcess = providers.exec {
+    commandLine pocketworldVersionCommand
+    ignoreExitValue true
+}
+if (pocketworldVersionProcess.result.get().exitValue != 0) {
+    throw new GradleException(pocketworldVersionProcess.standardError.asText.get().trim())
+}
+def pocketworldVersion = new groovy.json.JsonSlurper().parseText(pocketworldVersionProcess.standardOutput.asText.get())
 android {
     namespace 'dev.pocketengine'
     compileSdk 35
@@ -10,8 +30,8 @@ android {
         targetSdk 35
         ndk { abiFilters 'arm64-v8a' }
         externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_static' } }
-        versionCode 3
-        versionName '0.3.0-dev'
+        versionCode pocketworldVersion.versionCode
+        versionName pocketworldVersion.versionName
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }

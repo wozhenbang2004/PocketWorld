@@ -78,7 +78,8 @@ import static org.junit.Assert.*;
 /** Cross-language production chain: CLI MCP/Client -> Companion HTTP/router -> native mTLS ingress ->
  * original App owner review -> PhoneRunService/AgentRunner -> same-task query and answer.
  * The ordinary answer traverses an independent stdio process; Task Desk HTTP MCP reads the same result.
- * Only OS startup, temporary paired identity and model HTTP responses are explicit fixtures.
+ * OS startup, temporary paired identity and model HTTP responses are explicit fixtures.
+ * The happy journey discards verified native replies to exercise original-operation recovery.
  * No physical phone, paid model, production credential or public listener is used or claimed. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class,shadows=PhoneTaskApplicationFlowTest.NoUnrelatedStartup.class)
@@ -118,6 +119,10 @@ public final class PhoneTaskApplicationFlowTest {
     private Path temporary;
     private int serviceStartId;
     private String diagnosticTaskId;
+    private boolean databaseWalAtStart;
+    private volatile DeviceConnection diagnosticConnection;
+    private volatile String ingressFailureType="none";
+    private final AtomicInteger ingressEntered=new AtomicInteger(),ingressReturned=new AtomicInteger(),ingressFailed=new AtomicInteger();
     private final BlockingQueue<String> lines=new LinkedBlockingQueue<>();
     private final CopyOnWriteArrayList<String> modelBodies=new CopyOnWriteArrayList<>();
     private final AtomicInteger modelRequests=new AtomicInteger();
@@ -141,7 +146,7 @@ public final class PhoneTaskApplicationFlowTest {
     private record Started(String runId,int epoch,String allocationId,RunControl original){}
     private Scenario startScenario(String scenario)throws Exception{
         app=(EngineApplication)RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");app.tasks=new TaskStore(app);
-        sql=(SQLiteDatabase)get(app.tasks,"db");app.features=new FeatureHost(event->{});app.settings=new SettingsStore(app);
+        sql=(SQLiteDatabase)get(app.tasks,"db");databaseWalAtStart=sql.isWriteAheadLoggingEnabled();app.features=new FeatureHost(event->{});app.settings=new SettingsStore(app);
         // Mirror the original onCreate selector's volatile reads. The public
         // convenience getters take App's monitor, which is forbidden while the
         // original TaskStore invokes this identity lookup under its own monitor.
@@ -155,7 +160,7 @@ public final class PhoneTaskApplicationFlowTest {
         temporary=Files.createTempDirectory("phone-task-native-fixture-");Files.setPosixFilePermissions(temporary,PosixFilePermissions.fromString("rwx------"));
         Material source=certificate(),target=certificate();String sourceInstance=UUID.randomUUID().toString(),targetInstance=UUID.randomUUID().toString();
         installLocalIdentity(target,targetInstance);
-        TaskStoreDeviceTrust trust=new TaskStoreDeviceTrust(sql);
+        TaskStoreDeviceTrust trust=app.tasks.deviceTrust();
         JSONObject binding=new JSONObject().put("screenMode","capabilities");long now=System.currentTimeMillis(),deadline=now+180000;
         JSONObject nativeGrant=new JSONObject().put("grantId","native-phone-fixture-grant").put("peerDeviceId",DeviceIdentity.id(source.cert)).put("localDeviceId",DeviceIdentity.id(target.cert))
                 .put("authorizationEpoch",1).put("issuedAt",now-1000).put("expiresAt",deadline)
@@ -176,11 +181,14 @@ public final class PhoneTaskApplicationFlowTest {
             public void start()throws Exception{
                 listeners[0]=new LanDeviceListener(true,new InetSocketAddress(InetAddress.getLoopbackAddress(),0),tls,DeviceConnection.Lane.CONTROL,socket->new DeviceConnection.Listener(){
                     private DeviceConnection exact;
-                    public void onConnection(DeviceConnection connection,DeviceIdentity.AuthenticatedPeer actual){exact=connection;}
+                    public void onConnection(DeviceConnection connection,DeviceIdentity.AuthenticatedPeer actual){exact=connection;diagnosticConnection=connection;}
                     public void onOnline(DeviceIdentity.AuthenticatedPeer actual){}
                     public void onControl(DeviceIdentity.AuthenticatedPeer actual,byte[] bytes)throws Exception{
-                        JSONObject response=ingress[0].receive(actual,bytes);
-                        if(!exact.sendControl(DeviceProtocol.canonicalBytes(response)))throw new IllegalStateException("Original native response queue is full");
+                        ingressEntered.incrementAndGet();
+                        try{JSONObject response=ingress[0].receive(actual,bytes);
+                            if(!exact.sendControl(DeviceProtocol.canonicalBytes(response)))throw new IllegalStateException("Original native response queue is full");
+                            ingressReturned.incrementAndGet();
+                        }catch(Exception failure){ingressFailed.incrementAndGet();String type=failure.getClass().getSimpleName();ingressFailureType=java.util.Set.of("SecurityException","ProtocolException","IOException","IllegalStateException").contains(type)?type:"other";throw failure;}
                     }
                     public void onChunk(DeviceIdentity.AuthenticatedPeer actual,UUID transfer,long offset,byte[] bytes){throw new AssertionError("Control cannot import artifact bytes");}
                     public void onClosed(DeviceConnection.State state,boolean unknown){}
@@ -303,6 +311,10 @@ public final class PhoneTaskApplicationFlowTest {
         assertEquals("phone-api-native-submit",resultObserved.getString("operationId"));assertEquals(scenario.taskId,resultObserved.getString("taskId"));assertEquals(started.runId,resultObserved.getString("runId"));assertEquals(started.epoch,resultObserved.getInt("executorEpoch"));
         awaitStableOriginalNativeResult(scenario,started);JSONObject actual=completeReport();sameOriginal(scenario,started,actual);
         assertTrue(actual.getBoolean("nativeResultBarrierAcknowledged"));requireOriginalNativeResult(scenario,started);
+        JSONObject recovered=actual.getJSONObject("controlRecovery");
+        assertEquals(1,recovered.getInt("nativeAcquireCalls"));assertTrue(recovered.getInt("originalOperationReads")>=1);assertTrue(recovered.getInt("taskReadsAfterReceipt")>=2);
+        for(String fact:new String[]{"ackDiscarded","ackUnknownObserved","taskReadDiscarded","taskReadUnavailableObserved","recoveredByOriginalOperation"})assertTrue(fact,recovered.getBoolean(fact));
+        requireSingleOriginalControlReceipt(scenario.taskId,actual.getJSONObject("controlReceipt"));
         assertEquals(2,modelRequests.get());assertTrue(modelBodies.get(1).contains("NATIVE-PHONE-EXACT-ANSWER"));
         JSONObject done=app.tasks.get(scenario.taskId,false),result=done.getJSONObject("deviceGoalResult");assertEquals("needs_confirmation",done.getString("status"));assertTrue(result.getBoolean("nativeRunnerExited"));assertTrue(result.getBoolean("nativeDispatchClosed"));assertEquals(started.runId,result.getString("runId"));assertEquals(started.epoch,result.getInt("executorEpoch"));
         assertEquals(2,done.getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));assertEquals(started.allocationId,done.getJSONObject("deviceExecutionScope").getString("allocationId"));assertEquals(1,count("runs"));assertEquals(1,done.getJSONArray("ownerInputs").length());
@@ -368,6 +380,13 @@ public final class PhoneTaskApplicationFlowTest {
     private long cancelOperations(String taskId)throws Exception{
         try(Cursor row=sql.rawQuery("SELECT COUNT(*) FROM device_inbound WHERE local_task_id=? AND method='operation.cancel'",new String[]{taskId})){assertTrue(row.moveToFirst());return row.getLong(0);}
     }
+    private void requireSingleOriginalControlReceipt(String taskId,JSONObject receipt)throws Exception{
+        try(Cursor rows=sql.rawQuery("SELECT i.remote_operation_id,o.state,o.receipt FROM device_inbound i JOIN operations o ON o.task_id=i.local_task_id AND o.operation_id=i.local_operation_id WHERE i.local_task_id=? AND i.method='task.acquireControl'",new String[]{taskId})){
+            assertTrue("The original native control write must exist",rows.moveToFirst());assertEquals("phone-api-native-control",rows.getString(0));assertEquals(rows.getString(0),receipt.getString("operationId"));assertEquals("receipt",rows.getString(1));
+            JSONObject nativeReceipt=new JSONObject(rows.getString(2));assertEquals(nativeReceipt.getString("leaseId"),receipt.getString("controlLeaseId"));assertEquals(nativeReceipt.getLong("expiresAt"),receipt.getLong("controlLeaseExpiresAt"));assertFalse(nativeReceipt.getBoolean("executionMoved"));
+            assertFalse("Recovery must not acquire or renew another native lease",rows.moveToNext());
+        }
+    }
 
     private JSONObject phase(String expected,int timeoutSeconds)throws Exception{
         long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(timeoutSeconds);StringBuilder diagnostic=new StringBuilder();
@@ -383,20 +402,54 @@ public final class PhoneTaskApplicationFlowTest {
         var stages=java.util.Set.of("ordinary_question_wait","ordinary_question_first_snapshot","ordinary_question_observed","original_control_acquired","reconnect_close_requested","reconnect_closed","offline_snapshot_observed","reconnect_open_requested","reconnect_opened","reconnect_snapshot_observed");
         JSONObject safe=new JSONObject().put("phase",phases.contains(event.optString("phase"))?event.optString("phase"):"unrecognized");if(stages.contains(event.optString("stage")))safe.put("stage",event.getString("stage"));
         for(String key:new String[]{"taskPresent","currentReadUnavailable","phoneStateUnconfirmed","originalSessionPresent","ordinaryQuestionPresent"})if(event.opt(key) instanceof Boolean)safe.put(key,event.getBoolean(key));
+        if("failed".equals(event.optString("phase"))){
+            // The original Python fixture emits only these fixed codes. Keep failure
+            // location, never its report body, exception message, IDs or credentials.
+            if(java.util.Set.of("wait_original_question","acquire_control","status").contains(event.optString("stage")))safe.put("stage",event.getString("stage"));
+            if(java.util.Set.of("FixtureError","ClientError","KeyError","TypeError","ValueError","TimeoutError","ConnectionError","OSError","RuntimeError").contains(event.optString("errorType")))safe.put("errorType",event.getString("errorType"));
+            if(java.util.Set.of("original_control_not_acquired","acquire_status_changed_original_question_scope","original_control_missing_from_real_snapshot","original_task_identity_changed").contains(event.optString("code")))safe.put("code",event.getString("code"));
+            Object status=event.opt("httpStatus");if(status instanceof Integer||status instanceof Long){long value=((Number)status).longValue();if(value>=400&&value<=599)safe.put("httpStatus",value);}
+        }
         if(event.has("taskState"))safe.put("taskState",safeTaskState(event.optString("taskState")));return safe;
     }
-    private static String safeTaskState(String state){return java.util.Set.of("preparing","running","pausing","paused","awaiting_user","needs_confirmation","cancelled","failed","completed","expired","interrupted").contains(state)?state:"unknown";}
+    private static String safeTaskState(String state){return DeviceProtocol.TASK_STATES.contains(state)||java.util.Set.of("preparing","running","pausing","paused","awaiting_user","needs_confirmation","cancelled","failed","completed","expired","interrupted").contains(state)?state:"unknown";}
     private String nativeWaitMetadata(){
         // Timeout diagnostics must not try to acquire the very App/SQL monitors
         // being diagnosed, and never include answer text, model config or grants.
         try{
             String task=(String)get(app,"activeTaskId");RunControl control=(RunControl)get(app,"activeControl");
             DeviceGoalSession session=task==null?null:app.originalDeviceGoalSession(task);
+            DeviceConnection connection=diagnosticConnection;
             return new JSONObject().put("pythonAlive",python!=null&&python.isAlive()).put("reportPresent",reportPath!=null&&Files.isRegularFile(reportPath))
                     .put("taskKnown",diagnosticTaskId!=null).put("activeTaskPresent",task!=null).put("activeTaskMatches",diagnosticTaskId!=null&&diagnosticTaskId.equals(task)).put("controlPresent",control!=null)
                     .put("cancelled",control!=null&&control.isCancelled()).put("paused",control!=null&&control.isPaused())
-                    .put("originalSessionPresent",session!=null).put("sameOriginalControl",session!=null&&session.originalControl()==control).toString();
+                    .put("originalSessionPresent",session!=null).put("sameOriginalControl",session!=null&&session.originalControl()==control)
+                    .put("serviceStartConsumed",serviceStartId>0).put("serviceTaskMatches",task!=null&&service!=null&&task.equals(get(service,"runningId")))
+                    .put("serviceSessionMatches",session!=null&&service!=null&&session==get(service,"deviceGoal")).put("databaseWalAtStart",databaseWalAtStart)
+                    .put("connectionState",connection==null?"absent":connection.state().name()).put("ingressEntered",ingressEntered.get()).put("ingressReturned",ingressReturned.get()).put("ingressFailed",ingressFailed.get()).put("ingressFailureType",ingressFailureType)
+                    .put("threadWaitFacts",threadWaitFacts()).toString();
         }catch(Exception unavailable){return "metadata_unavailable";}
+    }
+    private static JSONArray threadWaitFacts()throws Exception{
+        JSONArray facts=new JSONArray();
+        for(var entry:Thread.getAllStackTraces().entrySet()){
+            boolean sqlWait=false,trustRead=false,inference=false,goal=false,ingress=false;
+            for(StackTraceElement frame:entry.getValue()){
+                String type=frame.getClassName(),method=frame.getMethodName();
+                sqlWait|=type.equals("android.database.sqlite.SQLiteConnectionPool")&&method.contains("waitForConnection");
+                trustRead|=type.equals("dev.pocketengine.store.TaskStoreDeviceTrust")&&(method.contains("peer")||method.contains("grant")||method.contains("outgoingGrant"));
+                inference|=type.equals("dev.pocketengine.store.TaskStore")&&method.contains("recordInference");
+                goal|=type.equals("dev.pocketengine.PhoneRunService")&&method.contains("runDeviceGoal");
+                ingress|=type.equals("dev.pocketengine.features.devices.DeviceIngress");
+            }
+            if(sqlWait||trustRead||inference||goal||ingress){
+                // Fixed booleans only: no thread names, IDs, arguments, messages,
+                // task contents or full stack dumps enter the CI artifact.
+                facts.put(new JSONObject().put("state",entry.getKey().getState().name()).put("sqliteConnectionWait",sqlWait).put("trustRead",trustRead).put("inferenceRecord",inference).put("goalWorker",goal).put("nativeIngress",ingress));
+                if(facts.length()>=12)break;
+            }
+        }
+        return facts;
     }
     private void pumpServices()throws Exception{
         Shadows.shadowOf(Looper.getMainLooper()).idle();Intent intent;

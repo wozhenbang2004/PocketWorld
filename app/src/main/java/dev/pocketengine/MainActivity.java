@@ -83,7 +83,15 @@ public final class MainActivity extends Activity {
                 case "getTask":{JSONObject task=app.tasks.get(m.getString("taskId"),true);if(task==null)throw new IllegalArgumentException("任务不存在");send(EngineApplication.json("type","task","task",task));break;}
                 case "confirmResult":case "updateTask":case "resumeTask":case "resolveOperation":app.dispatchOwnerAction(action,m);break;
                 case "inspectScreen":{
-                    if(app.activeId()!=null)throw new IllegalStateException("任务正在使用手机，请先停止任务再单独观察");io.execute(()->{try{JSONObject o=new AndroidPhonePort(this).observe(true,new RunControl());String image=o.optString("imageBase64");if(!image.isEmpty())o.put("imageDataUrl","data:"+o.optString("imageMimeType","image/jpeg")+";base64,"+image);o.remove("imageBase64");send(EngineApplication.json("type","inspection","observation",o));}catch(Exception ex){app.error(safeMessage(ex));}});break;
+                    if(app.activeId()!=null)throw new IllegalStateException("任务正在使用手机，请先停止任务再单独观察");io.execute(()->{try{
+                        RunControl original=new RunControl();var policy=new dev.pocketengine.phone.access.AndroidPhoneAccessStore(this);long revision=policy.current().revision();
+                        var display=app.features.module("display") instanceof dev.pocketengine.phone.display.DisplayModule module?module:null;
+                        dev.pocketengine.phone.access.PhoneAccessBindings.requireOwnerShare(this,display,original);
+                        JSONObject o=new AndroidPhonePort(this).observe(true,original);
+                        if(policy.current().revision()!=revision)throw new SecurityException("画面分享策略已改变，请重新捕获");
+                        dev.pocketengine.phone.access.PhoneAccessBindings.requireOwnerShare(this,display,original);
+                        String image=o.optString("imageBase64");if(!image.isEmpty())o.put("imageDataUrl","data:"+o.optString("imageMimeType","image/jpeg")+";base64,"+image);o.remove("imageBase64");send(EngineApplication.json("type","inspection","observation",o));
+                    }catch(Exception ex){app.error(safeMessage(ex));}});break;
                 }
                 default:app.error("当前版本不支持该操作");
             }

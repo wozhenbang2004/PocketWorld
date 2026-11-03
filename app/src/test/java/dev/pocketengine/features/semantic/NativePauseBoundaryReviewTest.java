@@ -46,7 +46,8 @@ public final class NativePauseBoundaryReviewTest {
         RunControl control=new RunControl();control.bindHostRun("original-task","original-run",1);cancelling=cancel?control:null;safetyCalls.set(0);
         AndroidSemanticPlatform platform=new AndroidSemanticPlatform(app,service,()->{});
         SemanticRequest request=SemanticRequest.parse(new JSONObject().put("kind","web").put("url","https://example.org/"));
-        SemanticPlatform.Target target=new SemanticPlatform.Target(new JSONObject().put("component","example.browser/example.browser.Main").put("packageName","example.browser"),"fixture","browser");
+        SemanticPlatform.Target target=new SemanticPlatform.Target(new JSONObject().put("component","example.browser/example.browser.Main").put("packageName","example.browser")
+                .put("userId",0).put("profileSerial",RuntimeEnvironment.getApplication().getSystemService(android.os.UserManager.class).getSerialNumberForUser(android.os.Process.myUserHandle())),"fixture","browser");
         FutureTask<JSONObject> future=new FutureTask<>(()->platform.dispatch(request,target,control,control::check));Thread worker=new Thread(future,"a26-review-main-dispatch");worker.start();
         long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
         while(!future.isDone()&&System.nanoTime()<deadline){Shadows.shadowOf(Looper.getMainLooper()).idle();Thread.sleep(5);}
