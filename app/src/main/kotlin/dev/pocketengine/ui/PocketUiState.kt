@@ -32,6 +32,7 @@ internal data class PocketUiState(
     val supportsImageInput: Boolean = false,
     val modelProvider: String = "openai_chat",
     val modelRoute: String = "api_key",
+    val accountModelAvailable: Boolean = false,
     val modelCatalogEnabled: Boolean = false,
     val maxOutputTokens: Int = 4096,
     val cleartextConsent: String = "",
