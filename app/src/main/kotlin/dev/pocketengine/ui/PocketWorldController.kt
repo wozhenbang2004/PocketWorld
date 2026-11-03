@@ -855,7 +855,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val request = OwnerRequest(UUID.randomUUID().toString(), domain, command, JSONObject(payload.toString()), ownerEpochs[domain] ?: 0, dev.pocketengine.features.proxy.accounts.GatewayCall(60000))
         ownerRequests[key] = request
         state = state.copy(ownerPending = state.ownerPending + key, ownerErrors = state.ownerErrors - domain)
-        val worker = if (command in setOf("cancel", "cancelLogin", "logout", "stopLearningJob", "cancelLocalMcpDiscovery", "discardLocalMcpReview", "discardLocalMcpInstallReview") || command == "setEnabled" && !payload.optBoolean("enabled")) controls else io
+        val worker = if (command in setOf("cancel", "cancelLogin", "logout", "stopLearningJob", "cancelLocalMcpDiscovery", "cancelMcpTask", "discardLocalMcpReview", "discardLocalMcpInstallReview") || command == "setEnabled" && !payload.optBoolean("enabled")) controls else io
         try { worker.execute {
             var result: JSONObject? = null
             var snapshot: JSONObject? = null
@@ -865,7 +865,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 result = when (domain) {
                     "taskMemory" -> app.nativeOwnerWorkflows.taskMemory(command, request.payload, request.control)
                     "memoryReview" -> memoryReviewCommand(capturedMemoryScope, command, request.payload, request.control)
-                    "mcp" -> app.nativeOwnerWorkflows.mcp(command, request.payload)
+                    "mcp" -> app.nativeOwnerWorkflows.mcp(command, request.payload, request.control)
                     "learning" -> when (command) {
                         "getAppLearningPolicy", "setAppLearningPolicy" -> app.appLearningCommand(command, request.payload, request.control)
                         "proposeLearning" -> app.proposeSourceMemoryLearning(dev.pocketengine.features.memory.SourceRef.fromJson(request.payload.getJSONObject("sourceRef")), request.control)

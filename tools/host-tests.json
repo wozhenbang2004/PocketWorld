@@ -10,12 +10,13 @@
       "dev.pocketengine.features.plugins.McpLocalInvocationNativeTest",
       "dev.pocketengine.features.plugins.McpLocalInstallationPresentationTest",
       "dev.pocketengine.features.plugins.McpLocalCacheNativeTest",
-      "dev.pocketengine.features.plugins.McpLocalStartupFenceNativeTest"
+      "dev.pocketengine.features.plugins.McpLocalStartupFenceNativeTest",
+      "dev.pocketengine.features.plugins.McpLocalPackageNativeTest"
     ],
     "helpers": [],
     "native": true,
     "robolectric": true,
-    "description": "Native owner discovery and separate disabled/no-grant installation from completed original SQL facts; real Python/Node stdio calls through original Supervisor approvals, debited prepared rows, same managed JNI Job, Book9 capture and TaskDetail cancellation. Progressive discovery/catalogue/independent installation presentation consumes the native facts and unchanged manifest support rules. Private exact refs stay out of task/UI/history/model operation projections. Original profile/no-runner/unknown guards preserved; no phone visual acceptance or automatic packages/credentials. Original storage cleanup protects unknown business/process facts and explicitly retires only exact settled MCP copies, including release of the real sixteen-copy ceiling. Same original checkout lease covers both typed purposes and a real delayed-owner-queue/admitted-invoke race; a cleaned business-RPC unknown is not a plugin blacklist."
+    "description": "Native owner discovery and separate disabled/no-grant installation from completed original SQL facts; real Python/Node stdio calls through original Supervisor approvals, debited prepared rows, same managed JNI Job, Book9 capture and TaskDetail cancellation. Progressive discovery/catalogue/independent installation presentation consumes the native facts and unchanged manifest support rules. Private exact refs stay out of task/UI/history/model operation projections. Original profile/no-runner/unknown guards preserved; no phone visual acceptance or automatic packages/credentials. Original storage cleanup protects unknown business/process facts and explicitly retires only exact settled MCP copies, including release of the real sixteen-copy ceiling. Same original checkout lease covers both typed purposes and a real delayed-owner-queue/admitted-invoke race; a cleaned business-RPC unknown is not a plugin blacklist. Explicit exact installed npm11/pnpm10 preparation is separately reviewed, frozen-lock/integrity pinned, no lifecycle scripts, same original managed pipe job; no automatic manager download or Android device claim."
   },
   "mcp-stdio-framing": {
     "class": "dev.pocketengine.features.plugins.mcp.McpStdioFramesTest",
@@ -290,15 +291,20 @@
       "dev.pocketengine.features.plugins.mcp.McpElicitationSchemaTest",
       "dev.pocketengine.features.plugins.McpResourceSkillJourneyTest",
       "dev.pocketengine.features.skills.SkillSourceUpdateTest",
-      "dev.pocketengine.features.skills.SkillCatalogueHostNativeTest"
+      "dev.pocketengine.features.skills.SkillCatalogueHostNativeTest",
+      "dev.pocketengine.features.skills.SkillSourcePolicyTest",
+      "dev.pocketengine.features.skills.SkillSourceModuleJourneyTest",
+      "dev.pocketengine.runtime.ReferenceHistoryTest",
+      "dev.pocketengine.features.skills.OwnerSkillInvocationNativeTest"
     ],
     "helpers": [
       "dev.pocketengine.features.plugins.McpFixture",
       "dev.pocketengine.features.skills.SkillGitProtocolTest",
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.skills.NativeSkillExecutionHostTest"
     ],
     "robolectric": true,
-    "description": "Original MCP resource/source-generation/revocation and Skill source history: five exact classes, 60 tests; actual loopback fixtures, no native elicitation UI or all MCP transport acceptance."
+    "description": "Original MCP/Skill source generation, exact revision pins, source precedence and invocation policy, partial refresh retaining failed items; actual loopback and original TaskStore/HostToolSupervisor. No phone visual or unrestricted protocol claim."
   },
   "aion-office": {
     "class": "dev.pocketengine.features.attachments.creation.StructuredOfficeCreationTest",
@@ -716,7 +722,8 @@
     "additionalClasses": [
       "dev.pocketengine.features.skills.ManagedScriptCallbackNativeGateTest",
       "dev.pocketengine.features.skills.ManagedScriptCallbackProtocolTest",
-      "dev.pocketengine.features.skills.ManagedScriptCallbackClientPeerTest"
+      "dev.pocketengine.features.skills.ManagedScriptCallbackClientPeerTest",
+      "dev.pocketengine.features.skills.OwnerSkillManagedJourneyTest"
     ],
     "helpers": [
       "dev.pocketengine.features.skills.ManagedSkillNativeJourneyTest",
@@ -790,5 +797,25 @@
     "robolectric": true,
     "description": "Twenty-four focused original readonly command checks: damaged original records retain bytes and block unsafe redispatch/writes without disabling readable projects. The same original operation/worker/argv now consumes the existing NativeProcessSupervisor, not ProcessBuilder; only typed native groupAbsent/outputComplete releases busy, cold/unknown scopes remain held. Actual own4s inherited-child late-writer containment, Unicode split/caps/separate streams, original six process/cancel cases and forked real missing-library capability/no-dispatch boundary; no weak fallback, new Runner/TaskStore, shell permission or physical device proof.",
     "native": true
+  },
+  "mcp-ecosystem": {
+    "class": "dev.pocketengine.features.plugins.McpTaskNativeJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.store.TaskStoreMcpTasksTest",
+      "dev.pocketengine.features.plugins.McpResourceSubscriptionNativeTest",
+      "dev.pocketengine.features.plugins.McpOutputNativeRunnerJourneyTest",
+      "dev.pocketengine.features.plugins.McpResultCaptureTest",
+      "dev.pocketengine.features.plugins.mcp.McpTaskCoordinatorTest",
+      "dev.pocketengine.features.plugins.McpOAuthNativeRunnerJourneyTest",
+      "dev.pocketengine.features.plugins.mcp.McpOAuthTest",
+      "dev.pocketengine.ui.McpEcosystemStateTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.plugins.McpFixture",
+      "dev.pocketengine.features.plugins.McpOAuthTlsFixture",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original native owner/Supervisor/TaskStore remote Tasks, resources/subscriptions and synthetic OAuth over real loopback HTTP/TLS; exact identity, unknown no replay, cold result retention, cancellation and stale UI callbacks. Production and selected tests compile against SDK35. No actual account authorization or Android device claim."
   }
 }

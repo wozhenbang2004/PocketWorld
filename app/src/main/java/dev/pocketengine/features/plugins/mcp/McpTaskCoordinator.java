@@ -81,8 +81,9 @@ public final class McpTaskCoordinator {
         check(binding,control,Access.QUERY);JSONObject old=checked(binding,host.load(binding));
         if(!old.has("remoteTaskId"))return old; // Lost creation ACK has no safe lookup handle.
         if(old.optBoolean("resolved"))return old;
-        if(old.has("ttlMs")&&!old.isNull("ttlMs")&&clock.getAsLong()>=Math.addExact(Instant.parse(old.getString("createdAt")).toEpochMilli(),old.getLong("ttlMs")))
-            return old.put("receiptExpired",true).put("message","执行端收据已过期；不能据此重新提交操作");
+        if(old.optBoolean("receiptExpired")||old.has("ttlMs")&&!old.isNull("ttlMs")&&clock.getAsLong()>=Math.addExact(Instant.parse(old.getString("createdAt")).toEpochMilli(),old.getLong("ttlMs"))){
+            old.put("receiptExpired",true).put("message","执行端收据已过期；不能据此重新提交操作");host.save(binding,old);return checked(binding,host.load(binding));
+        }
         if(clock.getAsLong()<old.optLong("nextPollAt"))return old;
         JSONObject result=transport.query(binding.declaration(),old.getString("remoteTaskId"),control);
         JSONObject receipt=record(binding,result,false).put("argumentsDigest",old.getString("argumentsDigest"));

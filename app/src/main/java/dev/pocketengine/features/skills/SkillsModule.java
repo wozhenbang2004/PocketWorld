@@ -26,6 +26,7 @@ public final class SkillsModule implements EngineModule {
             .put("nativeMcpSourceReview",mcpSources!=null).put("mcpSourceAutomaticSync",false)
             .put("nativePackageStreams",true).put("maxPackageArchiveBytes",SkillArchive.MAX_ARCHIVE_BYTES)
             .put("nativeDiscovery",true).put("discoveryMatching","lexical-v1")
+            .put("nativeSourcePolicyReview",true).put("sourcePriority","project_then_user_then_bundled_then_stable_id").put("modelInvocationPolicyEnforced",true)
             .put("nativeExecutionReview",true).put("executionRequiresNativeBackend",true)
             .put("nativeExperienceImport",true).put("experienceResolverAvailable",book.experienceResolverAvailable()).put("experienceExecutionVerified",false)
             .put("commands",new JSONArray(new String[]{"list","get","import","read","setEnabled","delete"}));}
@@ -57,6 +58,12 @@ public final class SkillsModule implements EngineModule {
     /** Trusted management UI only; never inject these inactive/invalid rows into a model catalogue. */
     public JSONObject diagnoseDiscovery(JSONObject authenticatedScope,String query,Set<String> hostCapabilities)throws Exception {
         return book.diagnoseDiscovery(authenticatedScope,query,hostCapabilities,System.currentTimeMillis());
+    }
+    /** Explicit native owner action; not accepted by generic feature or model command JSON. */
+    public JSONObject configureSourceForOwner(JSONObject authenticatedScope,String id,int revision,String digest,long expectedExecutionGeneration,
+            SkillSourcePolicy.Layer layer,SkillSourcePolicy.Invocation invocation)throws Exception {
+        JSONObject result=new JSONObject().put("skill",book.configureSourceForOwner(authenticatedScope,id,revision,digest,expectedExecutionGeneration,layer,invocation,System.currentTimeMillis()));
+        context.emit(id(),new JSONObject().put("event","skills_changed").put("reason","source_policy_changed"));return result;
     }
     public JSONObject readForHost(JSONObject scope,String id,String path,int offset,int length,String expectedDigest,Set<String> hostCapabilities)throws Exception{return book.readForHost(scope,id,path,offset,length,expectedDigest,hostCapabilities,System.currentTimeMillis());}
     public JSONObject readForHost(JSONObject scope,String id,String path,int offset,int length,int expectedRevision,String expectedDigest,Set<String> hostCapabilities)throws Exception{return book.readForHost(scope,id,path,offset,length,expectedRevision,expectedDigest,hostCapabilities,System.currentTimeMillis());}
@@ -205,5 +212,11 @@ public final class SkillsModule implements EngineModule {
     /** Native only. No registered backend/TaskStore adapter means unavailable, never an app-UID shell. */
     public SkillExecution executionForHost(SkillExecution.Backend backend,SkillExecution.HostPort host){
         return new SkillExecution(book,backend,host,System::currentTimeMillis);
+    }
+    SkillBook.OwnerExecutionSelection selectExecutionForOwner(JSONObject scope,String id,int revision,String digest,long generation,Set<String> capabilities)throws Exception {
+        return book.selectExecutionForOwner(scope,id,revision,digest,generation,capabilities,System.currentTimeMillis());
+    }
+    SkillExecution executionForOwner(SkillExecution.Backend backend,SkillExecution.HostPort host,SkillBook.OwnerExecutionSelection selected){
+        return new SkillExecution(book,backend,host,System::currentTimeMillis,java.util.Objects.requireNonNull(selected));
     }
 }

@@ -50,7 +50,7 @@ public final class McpLocalTaskPipe {
                 public void recordOriginalReceipt(RuntimeReceipt receipt)throws Exception{retained.receipt(receipt);}
             },channel);
             // No absence of a disk row/ACK after this point can attest no server startup effects.
-            entered=true;channel.attach(runtime.dispatchPipesForHost(invocation,admission));protocol=new McpStdioClient(channel,original.originalControl());protocol.discover();McpResultCapture output=capture;
+            entered=true;channel.attach(runtime.dispatchPipesForHost(invocation,admission));protocol=McpStdioClient.forOriginalProgram(channel,original.originalControl(),prepared.scopeForHost());protocol.discover();McpResultCapture output=capture;
             try{channel.result=output==null?protocol.call(program.toolForHost(),program.arguments()):protocol.call(program.toolForHost(),program.arguments(),(body,token)->{retained.rpcMayHaveDispatched=true;return output.result(body,token);});channel.rpcMayHaveDispatched=true;}
             catch(McpClient.CallFailure failure){channel.rpcMayHaveDispatched=failure.dispatched;throw failure;}
             if(!Boolean.TRUE.equals(channel.handle.eof(channel.original,UUID.randomUUID().toString(),channel::current,2000).opt("stdinClosed")))throw new IOException("原MCP EOF票尚未确认，不重发；只核对原进程"); // EOF is cleanup, never an RPC business result.

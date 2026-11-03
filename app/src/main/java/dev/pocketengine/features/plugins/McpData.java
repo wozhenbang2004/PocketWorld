@@ -21,7 +21,7 @@ final class McpData {
                 .put("transports",new JSONArray().put("streamable_http").put("stdio"))
                 .put("stdio",new JSONObject().put("sourceImplemented",true).put("nativeOwnerDiscovery",true).put("separateOwnerInstallationReview",true).put("originalTaskInvocation",true).put("protocolVersion",McpStdioClient.VERSION)
                         .put("executables",new JSONArray().put("node").put("python3")).put("executionWorkspace","per_operation_visible_copy").put("runtimeVerified",false).put("osSandbox",false).put("environmentInputs",false).put("credentials",false)
-                        .put("serverLifetime","one_original_tool_operation").put("relativeWritesPublishedBack",false).put("relativeStateAcrossCalls",false).put("packageInstallation",false).put("crossTaskServerPool",false).put("automaticRestart",false).put("resources",false).put("prompts",false).put("oauth",false).put("mcpTasks",false))
+                        .put("serverLifetime","one_original_tool_operation").put("relativeWritesPublishedBack",false).put("relativeStateAcrossCalls",false).put("packageInstallation",true).put("packageManagers",new JSONArray().put("installed_npm_11_exact_version").put("installed_pnpm_10_exact_version")).put("separateDependencyPreparationConsent",true).put("lifecycleScripts",false).put("automaticManagerDownload",false).put("crossTaskServerPool",false).put("automaticRestart",false).put("resources",false).put("prompts",false).put("oauth",false).put("mcpTasks",false))
                 .put("schemaDialect","https://json-schema.org/draft/2020-12/schema")
                 .put("validationKeywords",new JSONArray(new String[]{"type","properties","required","additionalProperties","items","maxItems","maxLength","enum","minimum","maximum"}))
                 .put("annotationKeywords",new JSONArray(new String[]{"title","description","$comment","default","examples","deprecated","readOnly","writeOnly"})).put("headerKeyword","x-mcp-header")
@@ -32,12 +32,13 @@ final class McpData {
                 .put("prompts",new JSONObject().put("sourceImplemented",true).put("nativeOwnerOnly",true).put("installedOnly",true).put("readOnly",true)
                         .put("maxPages",8).put("maxPrompts",96).put("maxMessages",64).put("maxTextCharacters",64000).put("automaticConversationInjection",false).put("contentSupport","text_only_with_explicit_omissions"))
                 .put("tasks",new JSONObject().put("protocolVersion",VERSION).put("extension","io.modelcontextprotocol/tasks")
-                        .put("sourceImplemented",true).put("hostMountRequired",true).put("automaticReplay",false))
+                        .put("sourceImplemented",true).put("hostMountRequired",false).put("hostMounted",true).put("originalTaskStore",true).put("nativeOwnerPollCancel",true).put("coldRecovery",true).put("automaticReplay",false))
+                .put("subscriptions",new JSONObject().put("protocolVersion",VERSION).put("sourceImplemented",true).put("method","subscriptions/listen").put("nativeOwnerOnly",true).put("boundedObservation",true).put("maxEvents",128).put("maxResponseBytes",262144).put("automaticReconnect",false).put("updatesInvalidateSourceRevision",true))
                 .put("oauth",new JSONObject().put("sourceImplemented",true).put("hostMountRequired",true).put("clientType","public_pkce_s256")
                         .put("registration","pre_registered_or_existing_cimd").put("automaticRefresh",false))
-                .put("unsupported",new JSONArray().put("stdio environment/credential input").put("stdio pnpm/automatic package installation").put("stdio resources/prompts/OAuth/tasks").put("legacy HTTP+SSE")
+                .put("unsupported",new JSONArray().put("stdio environment/credential input").put("automatic package manager installation; unreviewed dependencies/lifecycle scripts").put("stdio resources/prompts/OAuth/tasks").put("legacy HTTP+SSE")
                         .put("SSE reconnect/resumption").put("GET subscriptions").put("legacy experimental tasks").put("sampling").put("elicitation")
-                        .put("roots").put("resource subscriptions").put("prompt subscriptions/completion").put("multimodal prompt content").put("tasks/update input").put("binary content"));
+                        .put("roots").put("legacy resource subscriptions").put("prompt completion").put("multimodal prompt content").put("tasks/update input").put("binary content"));
     }
 
     static JSONObject previewTool(JSONObject remote,String endpoint,String version,String serverDigest)throws Exception {
@@ -51,16 +52,18 @@ final class McpData {
 
     static JSONObject declaration(JSONObject remote,String endpoint,String version,String serverDigest)throws Exception {
         if(remote.has("description")&&!(remote.get("description") instanceof String))throw new IllegalArgumentException("工具描述需为文字");
-        if(remote.optJSONObject("execution")!=null&&"required".equals(remote.getJSONObject("execution").optString("taskSupport")))
-            throw new IllegalArgumentException("当前不支持必须通过MCP tasks执行的工具");
+        if(remote.has("execution")&&(!(remote.opt("execution") instanceof JSONObject)||remote.getJSONObject("execution").has("taskSupport")&&!java.util.Set.of("forbidden","optional","required").contains(remote.getJSONObject("execution").optString("taskSupport"))))throw new IllegalArgumentException("MCP工具execution.taskSupport需为明确支持的协议值");
+        if(remote.optJSONObject("execution")!=null&&"required".equals(remote.getJSONObject("execution").optString("taskSupport"))&&!VERSION.equals(version))
+            throw new IllegalArgumentException("旧协议的实验性MCP Tasks未协商，不能导入必须异步执行的工具");
         String remoteName=remote.getString("name");
-        if(!remoteName.matches("[a-zA-Z][a-zA-Z0-9_.-]{0,63}"))throw new IllegalArgumentException("当前工具名仅支持字母开头、最多64个ASCII字母数字或_.-，原名称不会被重写");
+        if(!PluginRules.mcpToolName(remoteName))throw new IllegalArgumentException("当前MCP工具名支持1至128个ASCII字母数字或_.-，原名称不会被重写");
         JSONObject schema=remote.getJSONObject("inputSchema");
         JSONObject tool=new JSONObject().put("name",remote.getString("name")).put("kind","mcp").put("effect","write")
                 .put("description",remote.optString("description",remote.getString("name"))).put("endpoint",endpoint)
                 .put("schema",copy(schema)).put("protocolVersion",version).put("serverDigest",serverDigest).put("descriptorDigest",digest(remote));
         if(remote.has("annotations"))tool.put("annotations",copy(remote.getJSONObject("annotations")));
         if(remote.has("outputSchema"))tool.put("outputSchema",copy(remote.getJSONObject("outputSchema")));
+        if(remote.has("execution"))tool.put("execution",copy(remote.getJSONObject("execution")));
         JSONObject manifest=new JSONObject().put("id","probe").put("name","probe").put("version","probe").put("tools",new JSONArray().put(tool));
         return PluginRules.manifest(manifest).getJSONArray("tools").getJSONObject(0);
     }

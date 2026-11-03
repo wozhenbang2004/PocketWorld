@@ -234,13 +234,14 @@ public final class NativeOwnerWorkflows {
             default:throw new IllegalArgumentException("此操作不属于原生经验审核");
         }
     }
-    public JSONObject mcpSnapshot()throws Exception{return plugins().snapshot().put("oauthConnections",plugins().mcpOAuthSnapshot()).put("nativeCapabilities",new JSONObject().put("setEnabledReviewed",true).put("setToolGrantReviewed",true).put("mcpOAuthMounted",true).put("pingMcpInstalledReadOnly",true).put("mcpPromptsInstalledReadOnly",true).put("localMcpDiscoveryOwnerOnly",true).put("localMcpInstallationOwnerOnly",true).put("localMcpOriginalTaskInvocation",true));}
+    public JSONObject mcpSnapshot()throws Exception{return plugins().snapshot().put("remoteMcpTasks",tasks.mcpTasksForOwner()).put("remoteMcpTasksWindowLimit",64).put("oauthConnections",plugins().mcpOAuthSnapshot()).put("nativeCapabilities",new JSONObject().put("setEnabledReviewed",true).put("setToolGrantReviewed",true).put("mcpOAuthMounted",true).put("pingMcpInstalledReadOnly",true).put("mcpPromptsInstalledReadOnly",true).put("mcpResourcesInstalledReadOnly",true).put("mcpSubscriptionsOwnerObservation",true).put("mcpTaskRecoveryOwnerOnly",true).put("localMcpDiscoveryOwnerOnly",true).put("localMcpInstallationOwnerOnly",true).put("localMcpOriginalTaskInvocation",true));}
     private static long mcpStateRevision(JSONObject payload)throws Exception{
         Object raw=payload.get("expectedStateRevision");if(!(raw instanceof Number))throw new IllegalArgumentException("MCP状态修订需为整数");
         try{return new java.math.BigDecimal(raw.toString()).longValueExact();}catch(NumberFormatException|ArithmeticException invalid){throw new IllegalArgumentException("MCP状态修订需为准确整数",invalid);}
     }
-    public JSONObject mcp(String command,JSONObject payload)throws Exception{
-        switch(command){
+    public JSONObject mcp(String command,JSONObject payload)throws Exception{return mcp(command,payload,new dev.pocketengine.core.RunControl());}
+    public JSONObject mcp(String command,JSONObject payload,dev.pocketengine.core.RunControl observation)throws Exception{
+        observation.check();switch(command){
             case "snapshot":return mcpSnapshot();
             case "localMcpDiscoveryChoices":{
                 EngineModule selected=host.module("local");if(!(selected instanceof dev.pocketengine.features.local.LocalModule local))throw new SecurityException("原手机开发副本宿主不可用");return new JSONObject().put("checkouts",local.managedSkillCheckoutsForHost()).put("runtime",local.projectRuntimeForHost(dev.pocketengine.features.local.runtime.ManagedProjectRuntime.RUNTIME_ID)).put("metadataOnly",true).put("executionAuthorized",false).put("credentialsSupported",false);
@@ -251,6 +252,9 @@ public final class NativeOwnerWorkflows {
             case "prepareLocalMcpDiscovery":{
                 EngineModule selected=host.module("local");if(!(selected instanceof dev.pocketengine.features.local.LocalModule local))throw new SecurityException("原手机开发副本宿主不可用");
                 synchronized(localMcpReviews){for(var iterator=localMcpReviews.entrySet().iterator();iterator.hasNext();){var entry=iterator.next();try{entry.getValue().metadata();}catch(Exception stale){entry.getValue().close();iterator.remove();}}if(localMcpReviews.size()>=4)throw new SecurityException("请先关闭旧的本机MCP程序审阅");var review=local.reviewMcpForOwner(payload.getJSONObject("configuration"),new dev.pocketengine.core.RunControl()).bindPluginTarget(plugins());JSONObject view=review.metadata();String id=view.getString("actionId");localMcpReviews.put(id,review);return view.put("reviewId",id).put("previewOnly",true).put("programStarted",false);}
+            }
+            case "approveLocalMcpPreparation":{
+                synchronized(localMcpReviews){var review=localMcpReviews.get(payload.getString("reviewId"));if(review==null)throw new SecurityException("请重新审阅原本机程序；依赖准备批准不能从JSON恢复");review.approvePreparation(payload.getString("preparationDigest"));return review.metadata().put("reviewId",payload.getString("reviewId")).put("previewOnly",true).put("programStarted",false);}
             }
             case "confirmLocalMcpDiscovery":{
                 dev.pocketengine.features.plugins.McpLocalDiscovery.Review review;synchronized(localMcpReviews){review=localMcpReviews.remove(payload.getString("reviewId"));}if(review==null)throw new SecurityException("请在此原生窗口重新完整审阅本机程序，不能从JSON恢复批准");try{return host.submitMcpDiscoveryForOwner(review.confirm(payload.getString("planDigest")));}finally{review.close();}
@@ -271,9 +275,14 @@ public final class NativeOwnerWorkflows {
             case "discardLocalMcpInstallReview":{
                 dev.pocketengine.features.plugins.McpLocalInstallation.Review review;synchronized(localMcpInstallReviews){review=localMcpInstallReviews.remove(payload.getString("reviewId"));}if(review!=null)review.close();return new JSONObject().put("discarded",review!=null).put("programStarted",false).put("installationChanged",false);
             }
-            case "pingMcp":return plugins().pingMcpInstallation(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),new dev.pocketengine.core.RunControl(),payload.getString("_operationId"));
-            case "listMcpPrompts":return plugins().listMcpPrompts(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),new dev.pocketengine.core.RunControl(),payload.getString("_operationId"));
-            case "getMcpPrompt":return plugins().getMcpPrompt(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),payload.getString("name"),payload.getString("descriptorDigest"),payload.getJSONObject("arguments"),new dev.pocketengine.core.RunControl(),payload.getString("_operationId"));
+            case "pingMcp":return plugins().pingMcpInstallation(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),observation,payload.getString("_operationId"));
+            case "listMcpResources":return plugins().listMcpResources(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),observation,payload.getString("_operationId"));
+            case "getMcpResource":return plugins().getMcpResource(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),payload.getString("uri"),payload.getString("descriptorDigest"),observation,payload.getString("_operationId"));
+            case "listenMcpUpdates":return plugins().listenMcpUpdates(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),payload.getJSONObject("filter"),observation,payload.getString("_operationId"));
+            case "readMcpTask":return plugins().reconcileMcpTaskForOwner(tasks,payload.getString("taskId"),payload.getString("operationId"),false,observation,payload.getString("_operationId"));
+            case "cancelMcpTask":return plugins().reconcileMcpTaskForOwner(tasks,payload.getString("taskId"),payload.getString("operationId"),true,observation,payload.getString("_operationId"));
+            case "listMcpPrompts":return plugins().listMcpPrompts(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),observation,payload.getString("_operationId"));
+            case "getMcpPrompt":return plugins().getMcpPrompt(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),payload.getString("name"),payload.getString("descriptorDigest"),payload.getJSONObject("arguments"),observation,payload.getString("_operationId"));
             case "setEnabledReviewed":return plugins().setEnabledReviewed(payload.getString("id"),payload.getString("expectedInstallationId"),payload.getBoolean("enabled"));
             case "setToolGrantReviewed":return plugins().setToolGrantReviewed(payload.getString("id"),payload.getString("expectedInstallationId"),payload.getString("expectedGrantsDigest"),payload.getString("tool"),payload.getBoolean("granted"));
             case "discoverMcp":{

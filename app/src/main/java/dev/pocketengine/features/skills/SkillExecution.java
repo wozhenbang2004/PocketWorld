@@ -183,13 +183,19 @@ public final class SkillExecution {
     private final Backend backend;
     private final HostPort host;
     private final Clock clock;
-    SkillExecution(SkillBook book,Backend backend,HostPort host,Clock clock){this.book=java.util.Objects.requireNonNull(book);this.backend=backend;this.host=host;this.clock=java.util.Objects.requireNonNull(clock);}
+    private final SkillBook.OwnerExecutionSelection ownerSelection;
+    SkillExecution(SkillBook book,Backend backend,HostPort host,Clock clock){this(book,backend,host,clock,null);}
+    SkillExecution(SkillBook book,Backend backend,HostPort host,Clock clock,SkillBook.OwnerExecutionSelection ownerSelection){this.book=java.util.Objects.requireNonNull(book);this.backend=backend;this.host=host;this.clock=java.util.Objects.requireNonNull(clock);this.ownerSelection=ownerSelection;}
+    private <T>T withSnapshot(Run run,String skillId,int revision,String digest,long now,SkillBook.ExecutionAction<T> action)throws Exception {
+        if(ownerSelection==null)return book.withExecutionSnapshot(run.scope(),skillId,revision,digest,run.capabilities,now,action);
+        ownerSelection.requireRequest(run.scope(),skillId,revision,digest);return book.withOwnerExecutionSnapshot(ownerSelection,run.capabilities,now,action);
+    }
     public Plan prepare(Run run,String skillId,int revision,String packageDigest,Request request,RunControl control)throws Exception {
         checkRun(run,control);if(backend==null||host==null)throw new Unavailable("当前没有可验证隔离且接入任务审批的脚本执行端");
-        long now=clock.now();SkillBook.ExecutionSnapshot snapshot=book.executionSnapshot(run.scope(),skillId,revision,hash(packageDigest),run.capabilities,now);
+        long now=clock.now();SkillBook.ExecutionSnapshot snapshot=withSnapshot(run,skillId,revision,hash(packageDigest),now,value->value);
         if(!snapshot.files.containsKey(request.scriptPath))throw new IllegalArgumentException("当前技能不存在所选脚本资源");
         Environment environment=backend.describe(run,request);if(environment==null)throw new Unavailable("脚本运行时或隔离执行端不可用");environment.require(request);
-        checkRun(run,control);now=clock.now();snapshot=book.executionSnapshot(run.scope(),skillId,revision,packageDigest,run.capabilities,now);return new Plan(run,request,environment,snapshot,now);
+        checkRun(run,control);now=clock.now();snapshot=withSnapshot(run,skillId,revision,packageDigest,now,value->value);return new Plan(run,request,environment,snapshot,now);
     }
     /** Exposes the exact environment fingerprint for the host's backend grant, not a grant itself. */
     public static String environmentBinding(Plan plan){return plan.environmentBinding;}
@@ -197,7 +203,7 @@ public final class SkillExecution {
     /** Refresh the native review page's validity; this does not approve or reserve an operation. */
     public String validateForReview(Plan plan,RunControl control)throws Exception {
         if(backend==null||host==null)throw new Unavailable("脚本执行端不可用");checkRun(plan.run,control);
-        return book.withExecutionSnapshot(plan.run.scope(),plan.skillId,plan.revision,plan.packageDigest,plan.run.capabilities,clock.now(),snapshot->{
+        return withSnapshot(plan.run,plan.skillId,plan.revision,plan.packageDigest,clock.now(),snapshot->{
             requirePackage(plan,snapshot);requireEnvironment(plan);checkRun(plan.run,control);if(clock.now()>=plan.expiresAt)throw new SecurityException("执行审阅已过期");return plan.digest;
         });
     }
@@ -207,10 +213,10 @@ public final class SkillExecution {
         validateCurrent(plan,grant,control);AtomicBoolean called=new AtomicBoolean(),attempted=new AtomicBoolean();Receipt receipt;
         try{receipt=host.dispatchOnce(plan,grant,control,()->{
             if(!called.compareAndSet(false,true))throw new SecurityException("同一操作不能重复派发");
-            return book.withExecutionSnapshot(plan.run.scope(),plan.skillId,plan.revision,plan.packageDigest,plan.run.capabilities,clock.now(),snapshot->{
+            return withSnapshot(plan.run,plan.skillId,plan.revision,plan.packageDigest,clock.now(),snapshot->{
                 validateGrant(plan,grant,control);host.checkCurrent(plan,grant,control);requirePackage(plan,snapshot);requireEnvironment(plan);
                 // A read-only origin resolver is another authority; a probe may outlive its revision.
-                SkillBook.ExecutionSnapshot current=book.executionSnapshot(plan.run.scope(),plan.skillId,plan.revision,plan.packageDigest,plan.run.capabilities,clock.now());
+                SkillBook.ExecutionSnapshot current=withSnapshot(plan.run,plan.skillId,plan.revision,plan.packageDigest,clock.now(),value->value);
                 requirePackage(plan,current);
                 validateGrant(plan,grant,control);host.checkCurrent(plan,grant,control);
                 attempted.set(true);try{return safeReceipt(grant,backend.submit(new Dispatch(plan,grant,current),control));}
@@ -226,7 +232,7 @@ public final class SkillExecution {
     }
     private void validateCurrent(Plan plan,Grant grant,RunControl control)throws Exception {
         if(backend==null||host==null)throw new Unavailable("脚本执行端不可用");
-        book.withExecutionSnapshot(plan.run.scope(),plan.skillId,plan.revision,plan.packageDigest,plan.run.capabilities,clock.now(),snapshot->{validateGrant(plan,grant,control);requirePackage(plan,snapshot);requireEnvironment(plan);return null;});
+        withSnapshot(plan.run,plan.skillId,plan.revision,plan.packageDigest,clock.now(),snapshot->{validateGrant(plan,grant,control);requirePackage(plan,snapshot);requireEnvironment(plan);return null;});
     }
     private void requireEnvironment(Plan plan)throws Exception {Environment current=backend.describe(plan.run,plan.request);if(current==null)throw new Unavailable("脚本执行端已不可用");current.require(plan.request);if(!plan.environmentBinding.equals(digestJson(current.json())))throw new SecurityException("运行时、工作区或执行端已改变，请重新审阅");}
     private static void requirePackage(Plan plan,SkillBook.ExecutionSnapshot snapshot)throws Exception {if(!plan.packageBinding.equals(digestJson(snapshot.binding)))throw new SecurityException("技能批准或来源已改变，请重新审阅");}

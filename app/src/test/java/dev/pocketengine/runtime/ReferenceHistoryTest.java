@@ -18,6 +18,16 @@ public final class ReferenceHistoryTest {
   JSONArray history=history("memory_search",new JSONObject().put("content","retired-body"));AgentRunner.refreshReferenceHistory(history,null);assertFalse(history.toString().contains("retired-body"));
   history=history("workspace_read",new JSONObject().put("content","actual-effect-evidence"));AgentRunner.refreshReferenceHistory(history,null);assertTrue(history.toString().contains("actual-effect-evidence"));
  }
+ @Test public void disableAndReapprovalRetiresSameContentHistoryByExecutionGeneration()throws Exception{
+  JSONObject current=live();current.getJSONArray("skills").getJSONObject(0).put("executionGeneration",7L);
+  for(String tool:new String[]{"skills_read","skills_list"}){
+   JSONObject row=new JSONObject().put("id","s").put("revision",3).put("digest","digest-current").put("executionGeneration",7L).put("content","OLD_APPROVAL_BODY");
+   JSONArray history=history(tool,tool.equals("skills_read")?row:new JSONObject().put("skills",new JSONArray().put(row)));
+   AgentRunner.refreshReferenceHistory(history,current);assertTrue(history.toString().contains("OLD_APPROVAL_BODY"));
+   JSONObject reapproved=new JSONObject(current.toString());reapproved.getJSONArray("skills").getJSONObject(0).put("executionGeneration",9L);
+   AgentRunner.refreshReferenceHistory(history,reapproved);assertFalse(history.toString().contains("OLD_APPROVAL_BODY"));assertTrue(history.toString().contains("reference_expired"));
+  }
+ }
  @Test public void oneStaleMemberClearsWholeRecallInsteadOfLeavingItsTextInContext()throws Exception{
   JSONArray rows=new JSONArray().put(new JSONObject().put("id","r").put("revision",2).put("text","live")).put(new JSONObject().put("id","forgotten").put("revision",1).put("text","forgotten-body"));JSONArray history=history("memory_recall",new JSONObject().put("records",rows).put("context","live + forgotten-body"));AgentRunner.refreshReferenceHistory(history,live());assertFalse(history.toString().contains("forgotten-body"));
  }

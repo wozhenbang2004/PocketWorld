@@ -1960,7 +1960,7 @@ public final class TaskStore {
         if(!id.equals(ref.operationId())||!id.equals(binding.getString("taskId"))||!id.equals(binding.getString("runId"))||binding.getInt("coordinatorEpoch")!=1)throw new SecurityException("原本机MCP安装事实没有绑定原真实任务/运行/动作");
         JSONObject expectedPipe=dev.pocketengine.features.local.runtime.NativePipeAdmission.bindingForHost(dev.pocketengine.features.plugins.McpLocalDiscovery.pipeIdentityForHost(scope),binding,scope.getString("sourceDigest"),dev.pocketengine.features.plugins.McpLocalDiscovery.WRITE_BYTE_LIMIT);
         if(!capabilityFingerprint(expectedPipe).equals(capabilityFingerprint(job.getJSONObject("nativePipeBinding")))||!dev.pocketengine.features.local.project.ProjectSources.digest(expectedPipe).equals(exact.getJSONObject("payload").getString("nativePipeBindingDigest")))throw new SecurityException("原本机MCP管道身份与安装来源不一致");
-        JSONObject payload=exact.getJSONObject("payload"),configuration=new JSONObject().put("id",scope.getString("pluginId")).put("name",scope.getString("name")).put("checkoutId",scope.getString("checkoutId")).put("expectedSourceDigest",scope.getString("sourceDigest")).put("runtimeId",scope.getString("runtimeId")).put("executable",payload.getString("executable")).put("argv",new JSONArray(payload.getJSONArray("argv").toString())).put("workingDirectory",".").put("protocolVersion",scope.getString("protocolVersion"));
+        JSONObject payload=exact.getJSONObject("payload"),configuration=scope.has("packagePreparation")?new JSONObject(payload.getJSONObject("nativeMcpConfiguration").toString()):new JSONObject().put("id",scope.getString("pluginId")).put("name",scope.getString("name")).put("checkoutId",scope.getString("checkoutId")).put("expectedSourceDigest",scope.getString("sourceDigest")).put("runtimeId",scope.getString("runtimeId")).put("executable",payload.getString("executable")).put("argv",new JSONArray(payload.getJSONArray("argv").toString())).put("workingDirectory",".").put("protocolVersion",scope.getString("protocolVersion"));
         JSONObject metadata=receipt.getJSONObject("metadata");if(!scope.getString("configurationDigest").equals(dev.pocketengine.features.plugins.mcp.McpJson.digest(configuration))||!scope.getString("configurationDigest").equals(metadata.optString("configurationDigest"))||!receipt.getString("metadataDigest").equals(dev.pocketengine.features.plugins.mcp.McpJson.digest(metadata))||!metadata.getString("serverDigest").equals(dev.pocketengine.features.plugins.mcp.McpJson.digest(metadata.getJSONObject("server")))||!"stdio".equals(metadata.getJSONObject("server").optString("transport"))||!dev.pocketengine.features.plugins.McpStdioClient.VERSION.equals(metadata.getJSONObject("server").optString("protocolVersion"))||!dev.pocketengine.features.plugins.McpStdioClient.VERSION.equals(metadata.optString("protocolVersion")))throw new SecurityException("原本机MCP源码/配置/服务或目录摘要不匹配");
         return new JSONObject().put("scope",new JSONObject(scope.toString())).put("configuration",configuration).put("metadata",new JSONObject(metadata.toString())).put("receiptDigest",capabilityFingerprint(receipt)).put("nativeJobDigest",capabilityFingerprint(job));
     }
@@ -2037,7 +2037,7 @@ public final class TaskStore {
             JSONObject reconciled=receipt.optJSONObject("ownerReconciliation");boolean ownerSettled=state.equals("resolved")&&"owner_reconciled".equals(receipt.optString("status"))&&reconciled!=null&&"owner_reconciliation".equals(reconciled.optString("source"))&&reconciled.optString("outcome").matches("occurred|not_occurred");
             businessSettled=Boolean.TRUE.equals(nativeReceipt.opt("processSettled"))&&(ownerSettled||state.equals("receipt")&&receipt.optString("status").matches("response_received|failed")&&Boolean.TRUE.equals(nativeReceipt.opt("protocolFinished")));process=nativeReceipt.optJSONObject("processReceipt");
         }
-        String argv=scope.has("program")?scope.getJSONObject("program").getString("argvDigest"):scope.getString("argvDigest");
+        String argv=scope.has("launchArgvDigest")?scope.getString("launchArgvDigest"):scope.has("program")?scope.getJSONObject("program").getString("argvDigest"):scope.getString("argvDigest");
         boolean drained=process!=null&&operation.equals(process.optString("operationId",process.optString("id")))&&Boolean.FALSE.equals(process.opt("argumentValuesIncluded"))&&argv.equals(process.optString("argvDigest"))&&Boolean.TRUE.equals(process.opt("receiptReceived"))&&Boolean.TRUE.equals(process.opt("resourcesReleased"))&&dev.pocketengine.features.local.runtime.NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT.equals(process.optString("nativeResultContract"))&&(dev.pocketengine.features.local.runtime.NativeProcessSupervisor.validatesNoChildReceipt(process)||Boolean.TRUE.equals(process.opt("processExited"))&&Boolean.TRUE.equals(process.opt("processGroupAbsent"))&&Boolean.TRUE.equals(process.opt("processSessionAbsent")));
         boolean settled=businessSettled&&drained;JSONObject pins=new JSONObject().put("kind","mcp_copy").put("operationId",operation).put("taskId",taskId).put("runId",runId).put("operationState",state).put("scopeDigest",capabilityFingerprint(scope)).put("nativeJobDigest",capabilityFingerprint(job)).put("receiptDigest",receipt==null?JSONObject.NULL:capabilityFingerprint(receipt));
         JSONObject retired=task.optJSONObject("nativeMcpCacheRetirements");retired=retired==null?null:retired.optJSONObject(operation);return new NativeCacheDisposition("mcp_copy",operation,taskId,runId,pins,settled,retired==null?"":retired.optString("cleanupActionId"),settled?"原受控MCP进程会话已释放，业务已结或经主人明确核对；可单独审阅丢弃本次副本和未固定相对写入，项目、安装及原事实保留":"原MCP进程、业务或归属仍未知；副本和相对写入继续保护，先核对原操作");
@@ -6238,6 +6238,52 @@ public final class TaskStore {
         JSONObject grant=grant(runId);executionScopeCurrent(task,runId,grant);grant.put("tools",clean);ContentValues v=new ContentValues();v.put("grant_json",grant.toString());db.update("runs",v,"run_id=?",new String[]{runId});
     }
     private boolean toolGranted(String runId,String name)throws Exception{JSONArray names=grant(runId).optJSONArray("tools");if(names!=null)for(int i=0;i<names.length();i++)if(name.equals(names.optString(i)))return true;return false;}
+    private TaskStoreMcpTasks remoteMcpJournal(){return new TaskStoreMcpTasks(this,db,(binding,access,recovery)->{throw new SecurityException("原MCP回执必须由具体运行或主人核对入口准入");});}
+    /** Uses the original prepared operation and consumed budget; this creates no task or grant. */
+    public dev.pocketengine.features.plugins.mcp.McpTaskCoordinator.Host mcpTaskHostForRun(String nativeTool,RunControl original){
+        java.util.Objects.requireNonNull(original);
+        return new TaskStoreMcpTasks(this,db,(binding,access,recovery)->{
+            if(recovery||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("原MCP任务控制身份已变化");
+            checkCapability(binding.taskId,binding.runId,binding.epoch,nativeTool,original);requirePrivateOwner(required(binding.taskId));
+            if(required(binding.taskId).optJSONObject("origin")!=null||hasUnresolvedExcept(binding.taskId,binding.operationId))throw new SecurityException("原MCP任务来源或未决操作不允许派发");
+        }).host(nativeTool,false);
+    }
+    /** Explicit owner recovery uses the historical row; it never borrows a newer run's grant. */
+    public synchronized dev.pocketengine.features.plugins.mcp.McpTaskCoordinator.Binding mcpTaskBindingForOwner(String taskId,String operationId)throws Exception {
+        JSONObject task=required(taskId);requirePrivateOwner(task);if(task.optJSONObject("origin")!=null)throw new SecurityException("仅原私人任务可在此核对MCP执行");return remoteMcpJournal().recover(taskId,operationId);
+    }
+    public synchronized dev.pocketengine.features.plugins.mcp.McpTaskCoordinator.Host mcpTaskHostForOwner(String taskId,String operationId)throws Exception {
+        var expected=mcpTaskBindingForOwner(taskId,operationId);String fingerprint=expected.fingerprint(),nativeTool=remoteMcpJournal().record(taskId,operationId).getJSONObject(TaskStoreMcpTasks.KEY).getString("nativeTool");
+        return new TaskStoreMcpTasks(this,db,(binding,access,recovery)->{
+            if(!recovery||access==dev.pocketengine.features.plugins.mcp.McpTaskCoordinator.Access.DISPATCH||!fingerprint.equals(binding.fingerprint())||!fingerprint.equals(mcpTaskBindingForOwner(taskId,operationId).fingerprint()))throw new SecurityException("只能核对或取消同一原MCP操作，不能重新执行");
+        }).host(nativeTool,true);
+    }
+    public synchronized JSONObject mcpTaskReceiptForOwner(String taskId,String operationId)throws Exception {mcpTaskBindingForOwner(taskId,operationId);return remoteMcpJournal().record(taskId,operationId);}
+    public synchronized JSONObject recordMcpTaskObservationForOwner(String taskId,String operationId,JSONObject delivered)throws Exception {
+        var binding=mcpTaskBindingForOwner(taskId,operationId);JSONObject exact=remoteMcpJournal().preserve(taskId,binding.runId,operationId,sanitize(delivered));
+        ContentValues value=new ContentValues();value.put("receipt",exact.toString());if(db.update("operations",value,"task_id=? AND run_id=? AND operation_id=?",new String[]{taskId,binding.runId,operationId})!=1)throw new SecurityException("原MCP操作已不存在");
+        return remoteMcpJournal().record(taskId,operationId);
+    }
+    public synchronized JSONArray mcpTasksForOwner()throws Exception {return remoteMcpJournal().listForOwner();}
+    /** A native query may retain actual late data in the original output store, without granting inference or dispatch. */
+    public dev.pocketengine.features.memory.ToolOutputCapture.Factory mcpTaskRecoveryOutput(String taskId,String operationId,RunControl observation)throws Exception {
+        final var expected=mcpTaskBindingForOwner(taskId,operationId);final String fingerprint=expected.fingerprint();
+        return new dev.pocketengine.features.memory.ToolOutputCapture.Factory(){
+            public void checkSources(RunControl live)throws Exception {if(live!=observation||!live.matchesHostRun(expected.taskId,expected.runId,expected.epoch))throw new SecurityException("原MCP结果核对控制已变化");live.check();synchronized(TaskStore.this){if(!fingerprint.equals(mcpTaskBindingForOwner(taskId,operationId).fingerprint()))throw new SecurityException("原MCP结果身份已变化");}}
+            public dev.pocketengine.features.memory.ToolOutputCapture.Claim begin(String tool,String prepared,dev.pocketengine.features.memory.ToolOutputCapture.Kind kind,RunControl live)throws Exception {
+                checkSources(live);final dev.pocketengine.features.memory.ToolOutputStore.Call call;
+                synchronized(TaskStore.this){JSONObject record=remoteMcpJournal().record(taskId,operationId);if(!operationId.equals(prepared)||kind!=dev.pocketengine.features.memory.ToolOutputCapture.Kind.MCP_RESULT_JSON||!tool.equals(record.getJSONObject(TaskStoreMcpTasks.KEY).getString("nativeTool")))throw new SecurityException("MCP结果只能保留到同一原操作");requireOutputTask(required(taskId));call=dev.pocketengine.features.memory.ToolOutputStore.issue(TaskStore.this,db,taskId,expected.runId,expected.epoch,tool,operationId,kind);}
+                return new dev.pocketengine.features.memory.ToolOutputCapture.Claim(){private boolean finished;
+                    public synchronized void notDispatched(){finished=true;}
+                    public synchronized dev.pocketengine.features.memory.ToolOutputCapture.Result record(JSONObject safeData,Boolean upstream)throws Exception {
+                        if(finished)throw new SecurityException("原MCP结果已存证");finished=true;
+                        var encoded=dev.pocketengine.features.memory.ToolOutputStore.encode(safeData,upstream,text->text,new JSONArray());
+                        synchronized(TaskStore.this){mcpTaskBindingForOwner(taskId,operationId);requireOutputTask(required(taskId));db.beginTransaction();try{var saved=dev.pocketengine.features.memory.ToolOutputStore.save(db,TaskStore.this,call,encoded);db.setTransactionSuccessful();return saved;}finally{db.endTransaction();}}
+                    }
+                };
+            }
+        };
+    }
     public synchronized void checkCapability(String id,String runId,int epoch,String name,RunControl control)throws Exception{
         control.check();checkCapabilityCurrent(id,runId,epoch,name);
         if(control.isPaused()&&!required(id).optString("kind").equals("teams"))throw new SecurityException("任务已暂停，工具执行权已失效");
@@ -7106,7 +7152,7 @@ public final class TaskStore {
             // A real receipt remains valuable after cancellation; only epoch fencing applies here.
             journalFence(reviewedClaim,id,runId,epoch,null,false);receipt=deviceTasks.preserveOutboundReceipt(id,runId,operationId,receipt);receipt=preserveNativeMcpReceipt(id,runId,operationId,receipt);receipt=projectJournalReceipt(id,runId,operationId,preserveTeamRemoteReceipt(id,runId,operationId,preserveNativeSkillReceipt(id,operationId,receipt)));String code=receipt.optString("code",receipt.optString("error"));boolean unknown=code.contains("unknown")||code.equals("action_timeout")||receipt.optString("status").equals("unknown")||receipt.optString("state").contains("unknown")||receipt.has("accepted")&&receipt.isNull("accepted");
             String nativeState=null;try(Cursor row=db.rawQuery("SELECT state FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool='project_execute'",new String[]{id,runId,operationId})){if(row.moveToFirst()&&row.getString(0).matches("project_running|project_stopping")&&"project_running".equals(receipt.optString("code")))nativeState=row.getString(0);}
-            ContentValues v=new ContentValues();v.put("state",nativeState==null?(unknown?"unknown":"receipt"):nativeState);JSONObject safeReceipt=sanitize(receipt);try(Cursor nativeRow=db.rawQuery("SELECT receipt FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool IN ('team_prepare_remote_workspace','team_submit_remote_job','team_cancel_remote_job','team_freeze_remote_contribution','team_import_remote_contribution')",new String[]{id,runId,operationId})){if(nativeRow.moveToFirst()&&!nativeRow.isNull(0)){JSONObject nativeReceipt=new JSONObject(nativeRow.getString(0));if(nativeReceipt.optJSONObject("teamRemote")!=null)safeReceipt.put("teamRemote",nativeReceipt.getJSONObject("teamRemote"));}}v.put("receipt",safeReceipt.toString());db.beginTransaction();try{if(db.update("operations",v,"operation_id=? AND run_id=?",new String[]{operationId,runId})!=1)throw new IllegalStateException("动作收据不属于当前执行");
+            ContentValues v=new ContentValues();v.put("state",nativeState==null?(unknown?"unknown":"receipt"):nativeState);JSONObject safeReceipt=remoteMcpJournal().preserve(id,runId,operationId,sanitize(receipt));if(safeReceipt.has(TaskStoreMcpTasks.KEY)){unknown="unknown".equals(safeReceipt.optString("status"));v.put("state",unknown?"unknown":"receipt");}try(Cursor nativeRow=db.rawQuery("SELECT receipt FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool IN ('team_prepare_remote_workspace','team_submit_remote_job','team_cancel_remote_job','team_freeze_remote_contribution','team_import_remote_contribution')",new String[]{id,runId,operationId})){if(nativeRow.moveToFirst()&&!nativeRow.isNull(0)){JSONObject nativeReceipt=new JSONObject(nativeRow.getString(0));if(nativeReceipt.optJSONObject("teamRemote")!=null)safeReceipt.put("teamRemote",nativeReceipt.getJSONObject("teamRemote"));}}v.put("receipt",safeReceipt.toString());db.beginTransaction();try{if(db.update("operations",v,"operation_id=? AND run_id=?",new String[]{operationId,runId})!=1)throw new IllegalStateException("动作收据不属于当前执行");
             JSONObject budgetOwner=teamPoolOwnerForChild(required(id));if(budgetOwner!=null){JSONObject pool=teamBudget(budgetOwner);JSONArray reservations=pool.getJSONArray("reservations");for(int r=0;r<reservations.length();r++){JSONObject reserved=reservations.getJSONObject(r);if(reserved.optInt("externalJobs")==1)continue;JSONArray ops=reserved.getJSONArray("operationIds");for(int o=0;o<ops.length();o++)if(operationId.equals(ops.getString(o))){reserved.put("state",unknown||nativeState!=null?"unknown":"settled");JSONArray refs=reserved.getJSONArray("actualReceiptRefs");boolean found=false;for(int x=0;x<refs.length();x++)if(operationId.equals(refs.optString(x)))found=true;if(!found)refs.put(operationId);}}budgetOwner.put("teamReservationPool",pool);write(budgetOwner);}
             appendEvent(required(id),new JSONObject().put("type","operation_receipt").put("operationId",operationId).put("receipt",sanitize(receipt)));db.setTransactionSuccessful();}finally{db.endTransaction();}
         }}
@@ -7585,6 +7631,18 @@ public final class TaskStore {
             JSONObject actual=new JSONObject(row.getString(2));if(actual.optString("status").matches("completed|failed|cancelled|timed_out|rejected"))return actual;
             JSONObject merged=new JSONObject(returned.toString());for(String key:new String[]{"artifacts","missingArtifactPaths","artifactsTruncated"})if(actual.has(key))merged.put(key,actual.get(key));return merged;
         }
+    }
+    /** Foreground exact owner selection starts the original task through its existing budget/grant path.
+     * The selection is memory-only; the audit below cannot restore or replay it after cold recovery. */
+    public synchronized JSONObject startOwnerSkillAttempt(dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation selected,int allocation,RunControl original)throws Exception {
+        java.util.Objects.requireNonNull(selected);JSONObject task=required(selected.taskId());requirePrivateOwner(task);
+        if(task.has("origin")||hasUnresolved(selected.taskId())||!task.optString("kind").equals("assistant"))throw new SecurityException("主人技能选择只属于无未决效果的原私人能力任务");
+        selected.admitOriginalTask(this,task,original);JSONObject started=null;
+        try{
+            started=startAttempt(selected.taskId(),"capabilities",allocation);original.bindHostRun(selected.taskId(),started.getString("runId"),started.getInt("coordinatorEpoch"));
+            selected.bindOriginalRun(this,started,original);appendEvent(required(selected.taskId()),new JSONObject().put("type","owner_skill_selected").put("selection",selected.view()).put("executionAuthorized",false));
+            return get(selected.taskId(),false);
+        }catch(Exception failure){selected.close();if(started!=null)endAttempt(selected.taskId(),started.getString("runId"),original.isCancelled()?"cancelled":"failed","主人选择尚未进入脚本执行，请核对原任务；没有自动重试",new JSONObject());throw failure;}
     }
     /** Native Skill review attaches to the exact effect intent already created by AgentRunner. */
     public synchronized void reserveSkillExecution(dev.pocketengine.features.skills.SkillExecution.Plan plan,dev.pocketengine.features.skills.SkillExecution.Grant grant,JSONObject deployment,RunControl control)throws Exception {
@@ -8178,6 +8236,7 @@ public final class TaskStore {
         }finally{db.endTransaction();}
     }
     public synchronized JSONObject resolveOperation(String id,String operationId,String outcome)throws Exception{
+        try(Cursor row=db.rawQuery("SELECT receipt FROM operations WHERE task_id=? AND operation_id=?",new String[]{id,operationId})){if(row.moveToFirst()&&!row.isNull(0)&&new JSONObject(row.getString(0)).has(TaskStoreMcpTasks.KEY))throw new SecurityException("异步MCP操作须查询或取消原远端任务；不能人工标记成功、未发生或重新发送");}
         LocalMcpInvocationRecord mcp=requireNativeMcpProcessSettledForOwner(id,operationId);
         if(required(id).has("ownerMcpDiscovery"))throw new SecurityException("本机MCP发现只通过原native进程/协议/清场回执核对，不能通用标记已发生或未发生");
         try(Cursor transfer=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND operation_id=? AND tool='native_owner_phone_handoff'",new String[]{id,operationId})){if(transfer.moveToFirst())throw new SecurityException("应用接管只通过原生位置核对取得回执，不能人工猜测已发生");}

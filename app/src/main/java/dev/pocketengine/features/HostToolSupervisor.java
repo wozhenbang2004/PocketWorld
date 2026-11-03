@@ -255,7 +255,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             if(discovery.getJSONArray("skills").length()>0){String text="\n与当前任务相关的已启用技能元数据，仅作参考；按digest读取，不执行脚本或增加授权：\n"+discovery.toString();if(reference.length()+text.length()<=MAX_HOST_REFERENCE_CHARS)reference.append(text);}
             JSONArray current=trusted.catalogueForHost(privateScope()).getJSONArray("skills");Set<String> skillCapabilities=skillCapabilityNames();
             for(int i=0;i<current.length();i++){JSONObject row=current.getJSONObject(i);boolean allowed=true;JSONArray required=row.optJSONArray("requiredCapabilities");for(int j=0;required!=null&&j<required.length();j++)if(!skillCapabilities.contains(required.getString(j)))allowed=false;
-                if(allowed&&(workProfile==null||workProfile.includesReference(row)))skillVersions.put(new JSONObject().put("id",row.getString("id")).put("revision",row.getLong("revision")).put("digest",row.getString("digest")));
+                if(allowed&&(workProfile==null||workProfile.includesReference(row)))skillVersions.put(new JSONObject().put("id",row.getString("id")).put("revision",row.getLong("revision")).put("digest",row.getString("digest")).put("executionGeneration",row.optLong("executionGeneration",0)));
             }
         }
         // Full live version identities only: validation is not limited to the query's top matches,
@@ -428,7 +428,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             if(tool.preset!=null){
                 String invocationId=input.getString("_operationId");Runnable cancel=()->{Thread worker=new Thread(()->{try{module.handle("cancel",new JSONObject().put("operationId",invocationId));}catch(Exception ignored){}},"pocket-plugin-cancel");worker.setDaemon(true);worker.start();};
                 control.onCancel(cancel);
-                try{control.check();result=module instanceof PluginsModule plugins&&plugins.localMcpForHost(input)?host.invokeLocalMcpForTask(taskId,runId,epoch,name,invocationId,args,input,approvalCapability,consumedApprovalId,control,outputCapture):module instanceof PluginsModule?((PluginsModule)module).invokeForHost(input,control,outputCapture,name):module.handle(tool.command,input);}
+                try{control.check();result=module instanceof PluginsModule plugins&&plugins.localMcpForHost(input)?host.invokeLocalMcpForTask(taskId,runId,epoch,name,invocationId,args,input,approvalCapability,consumedApprovalId,control,outputCapture):module instanceof PluginsModule?((PluginsModule)module).invokeForHost(input,control,outputCapture,name,tasks):module.handle(tool.command,input);}
                 finally{control.removeCancelAction(cancel);}
             }else result=module instanceof dev.pocketengine.features.remote.RemoteModule?((dev.pocketengine.features.remote.RemoteModule)module).handleForTask(tool.command,input,control):module.handle(tool.command,input);
         }

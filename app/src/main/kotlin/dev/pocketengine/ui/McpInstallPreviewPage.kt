@@ -433,9 +433,11 @@ internal fun McpInstallPreviewPage(
                         McpInstallCaption("${if (plugin.optBoolean("enabled")) "已启用" else "停用"} · ${plugin.optJSONArray("grants")?.length() ?: 0} 项授权 · ${mcpInstallStatus(plugin.optString("mcpStatus"))}\n安装身份：${plugin.optString("installationId")}")
                         TextButton(onClick = { enableConfirm = JSONObject(plugin.toString()) }, enabled = canManage && !busy && !loading && error == null && (plugin.optBoolean("enabled") || plugin.optString("mcpStatus") != "needs_discovery")) { Text(if (plugin.optBoolean("enabled")) "停用此安装版本…" else "启用此安装版本…") }
                         McpToolPermissions(plugin, snapshot, writing || loading || error != null, requiredTool, request)
+                        McpEcosystemControls(plugin, responses, pendingCommands, writing || loading || error != null, request)
                         HorizontalDivider(color = Line)
                     }
                 }
+                McpTaskRecoveryControls(snapshot, responses, pendingCommands, request)
                 }
                 Spacer(Modifier.height(12.dp))
             }

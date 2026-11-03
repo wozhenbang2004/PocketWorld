@@ -32,8 +32,8 @@ public final class PluginRules {
         JSONArray tools=source.getJSONArray("tools");if(tools.length()<1||tools.length()>12)throw new IllegalArgumentException("插件需1至12个工具");
         JSONArray normalized=new JSONArray();Set<String> names=new HashSet<>();
         for(int i=0;i<tools.length();i++){
-            JSONObject tool=tools.getJSONObject(i);String toolName=text(tool,"name",64),kind=text(tool,"kind",12);
-            if(!toolName.matches("[a-zA-Z][a-zA-Z0-9_.-]{0,63}")||!names.add(toolName))throw new IllegalArgumentException("工具名称无效或重复");
+            JSONObject tool=tools.getJSONObject(i);String kind=text(tool,"kind",12),toolName=text(tool,"name",kind.equals("mcp")?128:64);
+            if(!(kind.equals("mcp")?mcpToolName(toolName):toolName.matches("[a-zA-Z][a-zA-Z0-9_.-]{0,63}"))||!names.add(toolName))throw new IllegalArgumentException("工具名称无效或重复");
             if(!kind.equals("echo")&&!kind.equals("http")&&!kind.equals("mcp"))throw new IllegalArgumentException("当前仅支持echo、http和MCP声明工具");
             JSONObject definition=new JSONObject().put("name",toolName).put("kind",kind).put("description",tool.optString("description",toolName));
             String effect=kind.equals("echo")?"read":tool.optString("effect","write");
@@ -54,7 +54,7 @@ public final class PluginRules {
                 String digest=text(tool,"descriptorDigest",64);if(!digest.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("MCP工具身份摘要无效");
                 String serverDigest=text(tool,"serverDigest",64);if(!serverDigest.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("MCP服务身份摘要无效");
                 definition.put("protocolVersion",tool.getString("protocolVersion")).put("serverDigest",serverDigest).put("descriptorDigest",digest).put("effect","write");
-                for(String field:new String[]{"annotations","outputSchema"})if(tool.has(field)){
+                for(String field:new String[]{"annotations","outputSchema","execution"})if(tool.has(field)){
                     JSONObject metadata=tool.getJSONObject(field);if(metadata.toString().length()>16000)throw new IllegalArgumentException("MCP工具元数据过大");
                     definition.put(field,new JSONObject(metadata.toString()));
                 }
@@ -68,6 +68,8 @@ public final class PluginRules {
         }
         return new JSONObject().put("id",id).put("name",name).put("version",version).put("tools",normalized);
     }
+    /** Remote names remain exact; the model-facing alias is separately installation-bound. */
+    static boolean mcpToolName(String name){return name!=null&&name.matches("[a-zA-Z0-9_.-]{1,128}");}
     private static void rejectStdioHeaders(JSONObject schema)throws Exception {
         // Follow only actual subschemas already bounded by validateSchema, not arbitrary example data.
         if(schema.has("x-mcp-header"))throw new IllegalArgumentException("本机stdio没有HTTP header输入通道");
