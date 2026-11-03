@@ -934,7 +934,8 @@ async function runViewport(origin, viewport) {
       limitation: 'Chromium DOM accessible-name evidence; native uiautomator hint export and TalkBack behavior are separate evidence' });
     await capture(page, viewport, '17-settings', ['.pw-secondary-header', '.pw-settings-frequent', '.pw-settings-groups']);
     await page.getByRole('button', { name: /^模型与连接/ }).click();
-    const sourceModelEntry = page.getByRole('button', { name: '选择模型', exact: true });
+    const sourceModelEntry = page.locator('.pw-settings-groups').getByRole('button', { name: /^选择模型/ });
+    await reachable(sourceModelEntry, { minSize: 44 });
     await sourceModelEntry.click();
     const modelCatalogue = page.locator('.pw-model-list[data-model-layer="list"]');
     const connectionDirectory = page.locator('.pw-model-connections[data-model-layer="connections"]');
