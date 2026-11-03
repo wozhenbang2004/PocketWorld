@@ -951,6 +951,20 @@ public final class AgentRunner {
 
     private static boolean referenceTool(String name){return name.equals("memory_search")||name.equals("memory_recall")||name.equals("skills_list")||name.equals("skills_read");}
     private static JSONObject referenceRetired()throws Exception{return new JSONObject().put("ok",false).put("code","reference_expired").put("untrustedReference",true).put("message","历史参考正文不再保留；如仍需要，请重新读取当前有效版本，不得重放历史动作。");}
+    /** Preserve only the code of a body-free, native pre-dispatch refusal. Rebuild its message
+     * from constants: neither error prose nor extra fields may retain withdrawn source text. */
+    private static JSONObject retiredReferenceReceipt(String body)throws Exception{
+        try{
+            JSONObject result=new JSONObject(body);
+            if(result.length()==3&&Boolean.FALSE.equals(result.opt("ok"))&&result.opt("message") instanceof String){
+                String code=result.optString("code");
+                if(code.equals("invalid_arguments"))return failure(code,"此能力工具的参数不符合当前合同，尚未执行。请核对该工具的字段与范围。");
+                if(code.equals("owner_intent_read_only"))return failure(code,"本次主人意图只允许读取；此调用尚未派发。");
+                if(code.equals("tool_withdrawn"))return failure(code,"本轮工具已撤销或安装改变，旧决定尚未执行，请重新取得当前工具清单。");
+            }
+        }catch(Exception invalid){/* Unknown or malformed receipts still lose every body. */}
+        return referenceRetired();
+    }
     /** Revalidate only host reference-read receipts; never rewrite user input or effect receipts. */
     static void refreshReferenceHistory(JSONArray history,JSONObject validation)throws Exception{
         dev.pocketengine.features.memory.TaskMemoryHistory.retire(history,validation,false);
@@ -960,7 +974,7 @@ public final class AgentRunner {
             if("assistant".equals(row.optString("role"))&&tools!=null)for(int j=0;j<tools.length();j++){
                 JSONObject call=tools.getJSONObject(j);String name=call.getJSONObject("function").optString("name");if(referenceTool(name))calls.put(call.getString("id"),name);else calls.remove(call.getString("id"));
             }
-            if("tool".equals(row.optString("role"))){String name=calls.get(row.optString("tool_call_id"));if(name!=null&&!currentReferenceReceipt(name,row.optString("content"),validation))row.put("content",referenceRetired().toString());}
+            if("tool".equals(row.optString("role"))){String name=calls.get(row.optString("tool_call_id"));if(name!=null&&!currentReferenceReceipt(name,row.optString("content"),validation))row.put("content",retiredReferenceReceipt(row.optString("content")).toString());}
         }
     }
     private static boolean currentReferenceReceipt(String name,String body,JSONObject validation){
@@ -1035,7 +1049,7 @@ public final class AgentRunner {
                 preserveOutputCarrier(original,message,config);
                 if ("tool".equals(role)) {
                     if (!pending.remove(message.optString("tool_call_id")) || !(message.opt("content") instanceof String)) throw new JournalFailure();
-                    if(referenceCalls.containsKey(message.optString("tool_call_id"))){message.put("content",referenceRetired().toString());message.remove("toolOutputCapture");}
+                    if(referenceCalls.containsKey(message.optString("tool_call_id"))){message.put("content",retiredReferenceReceipt(message.optString("content")).toString());message.remove("toolOutputCapture");}
                     else if(historyCalls.containsKey(original.optString("tool_call_id"))){JSONObject body=new JSONObject(original.getString("content"));message.put("content",safeToolReceipt(historyCalls.get(original.getString("tool_call_id")),body,config).toString());}
                     result.put(message);
                     continue;

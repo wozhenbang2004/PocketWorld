@@ -58,4 +58,45 @@ public final class LearnedMethodApplicationsNativeTest {
             JSONObject page=f.page();assertEquals(1,page.getJSONArray("applications").length());assertEquals(1,page.getInt("unavailableNativeProofs"));assertFalse(page.getBoolean("completeHistory"));assertEquals(f.op,page.getJSONArray("applications").getJSONObject(0).getString("operationId"));assertThrows(IllegalArgumentException.class,()->f.tasks.learnedMethodApplications(f.record,3,"a".repeat(2049),20));assertEquals(2,f.tasks.get(f.task,false).getJSONArray("operations").length());
         }
     }
+
+    @Test public void effectEvidenceUsesFrozenRequestAndEnvironmentAndIgnoresLateBackendCallbacks()throws Exception{
+        try(Fixture f=new Fixture()){
+            assertEquals(0,f.page().getJSONObject("effectComparison").getInt("eligibleApplications"));
+            f.claim();f.receipt(SkillExecution.Status.COMPLETED);
+            JSONObject page=f.page(),row=page.getJSONArray("applications").getJSONObject(0),effect=row.getJSONObject("effectEvidence");
+            assertTrue(effect.getBoolean("inputComparable"));assertTrue(effect.getBoolean("environmentComparable"));
+            assertEquals("frozen_skill_request",effect.getString("inputCoverage"));
+            assertEquals("probed_backend_and_workspace_revision",effect.getString("environmentCoverage"));
+            assertEquals(1,page.getJSONObject("effectComparison").getInt("eligibleApplications"));
+            assertEquals(1,page.getJSONObject("effectComparison").getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0).getInt("unreviewed"));
+            JSONObject pack=f.plan.review().getJSONObject("package");
+            String note="Owner checked the original output";
+            JSONObject saved=f.tasks.reviewSkillQuality(f.task,f.op,pack.getString("id"),pack.getInt("revision"),pack.getString("digest"),"verified",note).snapshot();
+            assertEquals(effect.getString("originalReceiptFingerprint"),saved.getString("originalReceiptFingerprint"));
+            assertEquals(saved.getString("originalReceiptFingerprint"),f.tasks.reviewSkillQuality(f.task,f.op,pack.getString("id"),pack.getInt("revision"),pack.getString("digest"),"verified",note).snapshot().getString("originalReceiptFingerprint"));
+            assertEquals(1,f.page().getJSONObject("effectComparison").getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0).getInt("ownerVerifiedResults"));
+            JSONObject legacyOriginal=f.tasks.readSkillExecution(f.task,f.op),legacyFeedback=legacyOriginal.getJSONObject("qualityFeedback");legacyFeedback.remove("originalReceiptFingerprint");
+            assertFalse(SkillQualityReceipt.fromRecordedOriginal(legacyOriginal,legacyFeedback).snapshot().has("originalReceiptFingerprint"));
+            JSONObject legacyProjection=dev.pocketengine.features.memory.LearnedMethodReceipt.project(legacyOriginal,f.record,3,"owner","private");
+            JSONObject legacyComparison=dev.pocketengine.features.memory.MethodEffectComparison.summarize(new JSONArray().put(legacyProjection),false).getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0);
+            assertEquals(0,legacyComparison.getInt("ownerVerifiedResults"));assertEquals(1,legacyComparison.getInt("unboundFeedback"));
+            JSONObject wrongImplementation=f.tasks.readSkillExecution(f.task,f.op);wrongImplementation.getJSONObject("qualityFeedback").put("digest","f".repeat(64));
+            JSONObject wrongReview=dev.pocketengine.features.memory.LearnedMethodReceipt.project(wrongImplementation,f.record,3,"owner","private");
+            JSONObject rejectedReview=dev.pocketengine.features.memory.MethodEffectComparison.summarize(new JSONArray().put(wrongReview),false).getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0);
+            assertEquals(0,rejectedReview.getInt("ownerVerifiedResults"));assertEquals(1,rejectedReview.getInt("invalidFeedback"));
+            JSONObject changedPlan=f.tasks.readSkillExecution(f.task,f.op);changedPlan.getJSONObject("review").getJSONObject("request").put("workingDirectory","changed-input");
+            assertThrows(SecurityException.class,()->dev.pocketengine.features.memory.LearnedMethodReceipt.project(changedPlan,f.record,3,"owner","private"));
+            f.receipt(SkillExecution.Status.RUNNING);f.receipt(SkillExecution.Status.FAILED);
+            JSONObject unchanged=f.page().getJSONArray("applications").getJSONObject(0).getJSONObject("effectEvidence");
+            assertEquals(effect.getString("evidenceFingerprint"),unchanged.getString("evidenceFingerprint"));
+            assertFalse(unchanged.getBoolean("businessSuccessVerified"));assertFalse(unchanged.getBoolean("replayAllowed"));
+            // The existing host may receive updated output under the same terminal status. The
+            // original owner judgement remains readable but cannot verify these different bytes.
+            f.tasks.recordSkillExecution(f.ref,new SkillExecution.Receipt(f.op,"explicit-native-backend-receipt",SkillExecution.Status.COMPLETED,0,"changed original terminal output".getBytes(StandardCharsets.UTF_8),false));
+            JSONObject changed=f.page();assertNotEquals(effect.getString("evidenceFingerprint"),changed.getJSONArray("applications").getJSONObject(0).getJSONObject("effectEvidence").getString("evidenceFingerprint"));
+            JSONObject changedComparison=changed.getJSONObject("effectComparison").getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0);
+            assertEquals(0,changedComparison.getInt("ownerVerifiedResults"));assertEquals(1,changedComparison.getInt("invalidFeedback"));
+            assertThrows(SecurityException.class,()->f.tasks.reviewSkillQuality(f.task,f.op,pack.getString("id"),pack.getInt("revision"),pack.getString("digest"),"verified",note));
+        }
+    }
 }
