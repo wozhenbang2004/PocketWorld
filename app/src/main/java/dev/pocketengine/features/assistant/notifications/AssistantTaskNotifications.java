@@ -26,9 +26,18 @@ public final class AssistantTaskNotifications {
         // Mark before the external binder call. A crash/uncertain return never authorizes a repost.
         if(!tasks.beginOwnerTaskNoticePosting(claim)||!tasks.ownerTaskNoticeCurrent(claim))return;
         Intent target=open(context,view);PendingIntent pending=PendingIntent.getActivity(context,0,target,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        Notification notification=new Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info)
+        Notification.Builder builder=new Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(TaskNotificationState.title(view.getString("status"))).setContentText(TaskNotificationState.summary(view.getString("status")))
-            .setCategory(Notification.CATEGORY_STATUS).setVisibility(Notification.VISIBILITY_PRIVATE).setAutoCancel(true).setOnlyAlertOnce(true).setContentIntent(pending).build();
+            .setCategory(Notification.CATEGORY_STATUS).setVisibility(Notification.VISIBILITY_PRIVATE).setAutoCancel(true).setOnlyAlertOnce(true).setContentIntent(pending);
+        if(view.optJSONObject("ownerQuestion")!=null){
+            PendingIntent reply=PendingIntent.getBroadcast(context,0,OwnerQuestionReply.intent(context,OwnerQuestionReply.ACTION,view),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_MUTABLE);
+            Notification.Action.Builder action=new Notification.Action.Builder(android.R.drawable.ic_menu_send,"回答原问题",reply).addRemoteInput(new RemoteInput.Builder(OwnerQuestionReply.KEY).setLabel("回答这一个普通问题").build()).setAllowGeneratedReplies(false);if(Build.VERSION.SDK_INT>=31)action.setAuthenticationRequired(true);builder.addAction(action.build());
+        }
+        if(view.optString("status").matches("awaiting_user|waiting_approval|awaiting_approval|reconciling|interrupted")){
+            PendingIntent stop=PendingIntent.getBroadcast(context,0,OwnerQuestionReply.intent(context,OwnerQuestionReply.STOP,view),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+            Notification.Action.Builder action=new Notification.Action.Builder(android.R.drawable.ic_media_pause,"停止原任务",stop);if(Build.VERSION.SDK_INT>=31)action.setAuthenticationRequired(true);builder.addAction(action.build());
+        }
+        Notification notification=builder.build();
         try{manager.notify(tag,ID,notification);if(tasks.ownerTaskNoticeCurrent(claim))tasks.ownerTaskNoticePhase(claim,"posted");else manager.cancel(tag,ID);}
         catch(RuntimeException unconfirmed){tasks.ownerTaskNoticePhase(claim,"unconfirmed");throw unconfirmed;}
     }

@@ -208,6 +208,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         for(RuntimeTool tool:tools.values()) {if(path.length()>0)path.append(':');path.append(tool.executableDirectory().getPath());}
         environment.put("PATH",path.toString());environment.put("HOME",home.getPath());environment.put("TMPDIR",tmp.getPath());
         environment.put("LANG","C.UTF-8");environment.put("POCKETWORLD_ENVIRONMENT_IDENTITY",selected.identity);
+        File gitPool=workspace.privateGitPoolForHost();if(gitPool!=null)environment.put(dev.pocketengine.features.local.project.ProjectGitIsolation.ENV,gitPool.getCanonicalPath());
         if(commandSpec!=null){JSONObject ordinary=commandSpec.getJSONObject("environment");for(java.util.Iterator<String> keys=ordinary.keys();keys.hasNext();){String name=keys.next();environment.put(name,ordinary.getString(name));}if("pty".equals(commandSpec.getString("terminalMode")))environment.put("TERM","xterm-256color");}
         long timeout=payload.optLong("timeoutMillis",300000);
         if(timeout<1 || timeout>86400000)throw new IllegalArgumentException("runtime_timeout_invalid");

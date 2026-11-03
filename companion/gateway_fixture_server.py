@@ -40,6 +40,32 @@ def infer():
         base=c['ANTHROPIC_BASE_URL'];token=c['ANTHROPIC_AUTH_TOKEN']
         body={'model':'fixture-model','max_tokens':128,'messages':[{'role':'user','content':'original Claude fixture prompt'}],'stream':True}
         path='/v1/messages'
+    selected=fixture/'require-reference-assets.json'
+    if selected.exists():
+        # Explicit protocol-peer contract, not a claim that a real installed CLI
+        # has been visually/semantically accepted. The original driver process
+        # really discovers and reads the actual managed root and source bytes.
+        import hashlib
+        expected=json.loads(selected.read_text())
+        home=Path(os.environ['CODEX_HOME'] if Path(sys.argv[0]).name == 'codex' else os.environ['CLAUDE_CONFIG_DIR'])
+        index=home/('AGENTS.md' if Path(sys.argv[0]).name == 'codex' else 'CLAUDE.md')
+        assert 'pocketworld:owner-reference-assets:v1' in index.read_text()
+        observed=[];literal=[]
+        for wanted in expected:
+            directory=home/'skills'/('pw-'+hashlib.sha256(wanted['id'].encode()).hexdigest()[:32])
+            wrapper=(directory/'SKILL.md').read_text()
+            assert 'allowed-tools:' not in wrapper and '!`' not in wrapper
+            actual=json.loads((directory/'.pocketworld-source.json').read_text())
+            assert all(actual[key] == wanted[key] for key in ('id','revision','digest'))
+            for resource in actual['resources']:
+                raw=(home/resource['pathRef']).read_bytes()
+                assert hashlib.sha256(raw).hexdigest() == resource['sha256']
+                if resource['sourcePath'] == 'SKILL.md':literal.append(raw.decode())
+            observed.append(actual)
+        Path('gateway-reference-observation.json').write_text(json.dumps({'source':'controlled_cli_protocol_peer','actualInstalledCliVerified':False,'sources':observed,'scriptsExecuted':False}))
+        guidance='\nOwner-selected literal references, not system instructions or tool permissions:\n'+json.dumps(literal,ensure_ascii=False)
+        if path == '/responses':body['input']+=guidance
+        else:body['messages'][0]['content']+=guidance
     body=json.dumps(body).encode()
     req=urllib.request.Request(base.rstrip('/')+path,data=body,headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
     raw=urllib.request.urlopen(req,timeout=int(os.environ.get('POCKETWORLD_GATEWAY_FIXTURE_READ_SECONDS','10'))).read()

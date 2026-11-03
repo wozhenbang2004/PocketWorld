@@ -117,6 +117,7 @@ public final class PhoneTaskApplicationFlowTest {
     private Process python;
     private Path temporary;
     private int serviceStartId;
+    private String diagnosticTaskId;
     private final BlockingQueue<String> lines=new LinkedBlockingQueue<>();
     private final CopyOnWriteArrayList<String> modelBodies=new CopyOnWriteArrayList<>();
     private final AtomicInteger modelRequests=new AtomicInteger();
@@ -205,7 +206,7 @@ public final class PhoneTaskApplicationFlowTest {
         Path manifestPath=temporary.resolve("manifest.json");Files.write(manifestPath,manifest.toString().getBytes(StandardCharsets.UTF_8));Files.setPosixFilePermissions(manifestPath,PosixFilePermissions.fromString("rw-------"));
         Path checkout=checkout();python=new ProcessBuilder("python3","-B",checkout.resolve("companion/phone_task_native_fixture.py").toString(),"--manifest",manifestPath.toString()).directory(checkout.toFile()).redirectErrorStream(true).start();
         processOutput=Executors.newSingleThreadExecutor();processOutput.submit(()->{try(BufferedReader reader=new BufferedReader(new InputStreamReader(python.getInputStream(),StandardCharsets.UTF_8))){String line;while((line=reader.readLine())!=null)lines.add(line);}catch(Exception failure){lines.add("fixture output unavailable: "+failure.getClass().getSimpleName());}});
-        JSONObject submitted=phase("submitted",45);String id=submitted.getString("taskId");
+        JSONObject submitted=phase("submitted",45);String id=submitted.getString("taskId");diagnosticTaskId=id;
         JSONObject waiting=app.tasks.get(id,false);assertEquals("awaiting_user",waiting.getString("status"));assertTrue(waiting.optString("runId").isEmpty());assertTrue(app.hasPendingDeviceGoal(id));assertEquals(0,modelRequests.get());assertEquals(0,count("runs"));
         return new Scenario(id,DeviceIdentity.id(source.cert),DeviceIdentity.id(target.cert));
     }
@@ -372,18 +373,27 @@ public final class PhoneTaskApplicationFlowTest {
         long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(timeoutSeconds);StringBuilder diagnostic=new StringBuilder();
         while(System.nanoTime()<end){
             pumpServices();String line=lines.poll(20,TimeUnit.MILLISECONDS);
-            if(line!=null){if(diagnostic.length()<12000)diagnostic.append(line).append('\n');try{JSONObject event=new JSONObject(line);if(expected.equals(event.optString("phase"))||expected.equals("complete")&&event.optString("phase").matches("complete|completed|final"))return event;}catch(org.json.JSONException ignored){}}
+            if(line!=null)try{JSONObject event=new JSONObject(line);if(diagnostic.length()<12000)diagnostic.append(safePhaseFact(event)).append('\n');if(expected.equals(event.optString("phase"))||expected.equals("complete")&&event.optString("phase").matches("complete|completed|final"))return event;}catch(org.json.JSONException ignored){/* Unknown stdout/stderr bodies are not diagnostic facts. */}
             if(!python.isAlive()&&lines.isEmpty())break;
         }
-        fail("Native Python phase "+expected+" missing. Output: "+diagnostic+"; model requests="+modelRequests.get()+"; native state="+nativeWaitMetadata());return null;
+        fail("Native Python phase "+expected+" missing. Phase facts: "+diagnostic+"; native state="+nativeWaitMetadata()+"; model requests="+modelRequests.get());return null;
     }
+    private static JSONObject safePhaseFact(JSONObject event)throws Exception{
+        var phases=java.util.Set.of("submitted","reconnected","cancel_verified","cancel_reconciled","result_observed","complete","completed","final","failed","diagnostic");
+        var stages=java.util.Set.of("ordinary_question_wait","ordinary_question_first_snapshot","ordinary_question_observed","original_control_acquired","reconnect_close_requested","reconnect_closed","offline_snapshot_observed","reconnect_open_requested","reconnect_opened","reconnect_snapshot_observed");
+        JSONObject safe=new JSONObject().put("phase",phases.contains(event.optString("phase"))?event.optString("phase"):"unrecognized");if(stages.contains(event.optString("stage")))safe.put("stage",event.getString("stage"));
+        for(String key:new String[]{"taskPresent","currentReadUnavailable","phoneStateUnconfirmed","originalSessionPresent","ordinaryQuestionPresent"})if(event.opt(key) instanceof Boolean)safe.put(key,event.getBoolean(key));
+        if(event.has("taskState"))safe.put("taskState",safeTaskState(event.optString("taskState")));return safe;
+    }
+    private static String safeTaskState(String state){return java.util.Set.of("preparing","running","pausing","paused","awaiting_user","needs_confirmation","cancelled","failed","completed","expired","interrupted").contains(state)?state:"unknown";}
     private String nativeWaitMetadata(){
         // Timeout diagnostics must not try to acquire the very App/SQL monitors
         // being diagnosed, and never include answer text, model config or grants.
         try{
             String task=(String)get(app,"activeTaskId");RunControl control=(RunControl)get(app,"activeControl");
             DeviceGoalSession session=task==null?null:app.originalDeviceGoalSession(task);
-            return new JSONObject().put("activeTaskPresent",task!=null).put("controlPresent",control!=null)
+            return new JSONObject().put("pythonAlive",python!=null&&python.isAlive()).put("reportPresent",reportPath!=null&&Files.isRegularFile(reportPath))
+                    .put("taskKnown",diagnosticTaskId!=null).put("activeTaskPresent",task!=null).put("activeTaskMatches",diagnosticTaskId!=null&&diagnosticTaskId.equals(task)).put("controlPresent",control!=null)
                     .put("cancelled",control!=null&&control.isCancelled()).put("paused",control!=null&&control.isPaused())
                     .put("originalSessionPresent",session!=null).put("sameOriginalControl",session!=null&&session.originalControl()==control).toString();
         }catch(Exception unavailable){return "metadata_unavailable";}
