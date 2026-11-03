@@ -45,6 +45,11 @@ public final class AttachmentViewSnapshots {
         JSONObject meta=metadata(token);File blob=new File(root,token+".blob");byte[] bytes=Files.readAllBytes(blob.toPath());
         try{if(!digest(bytes).equals(meta.getString("sha256")))throw new SecurityException("临时查看文件字节已变化");return blob;}finally{Arrays.fill(bytes,(byte)0);}
     }}
+    /** Native view-copy cleanup, including group preparations. It grants no read/delete authority over an original store. */
+    public void discardUnissuedView(Intent prepared)throws Exception {
+        if(prepared==null||prepared.getBooleanExtra(AttachmentOutcomeHost.NATIVE_VIEW_ISSUED,false))throw new SecurityException("已进入外部reader交付的查看副本不能作为未交付请求清理");
+        discardUnsent(prepared.getData());
+    }
     /** Native failed file-chooser preparation; validates the exact expiring-copy URI before removal. */
     public void discardUnsent(Uri uri)throws Exception {
         if(uri==null||!"content".equals(uri.getScheme())||!context.getPackageName().concat(".attachments").equals(uri.getAuthority())||uri.getPathSegments().size()!=2||!"view".equals(uri.getPathSegments().get(0))||uri.getQuery()!=null||uri.getFragment()!=null)throw new SecurityException("只能清理本次未交付的准确原生快照");

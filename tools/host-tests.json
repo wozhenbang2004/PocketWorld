@@ -486,6 +486,12 @@
     "helpers": [],
     "description": "Original immutable document creation, bounded OOXML and known formula source/readback: four exact classes, 18 tests; pure JVM files, not Office renderer or device acceptance."
   },
+  "attachment-external-view-lifecycle": {
+    "class": "dev.pocketengine.ui.AttachmentExternalViewLifecycleTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Exact native coordinator/host/snapshot lifecycle: unissued owner and scoped group copies release quota; issued or unknown Android launches retain the original reader TTL. Explicit lifecycle and Android-launch fixtures, not mounted UI or device acceptance."
+  },
   "aion-office-mounted": {
     "class": "dev.pocketengine.ui.AttachmentOutcomeNativeControllerTest",
     "helpers": [],
