@@ -43,6 +43,24 @@ public final class DocumentFixtures {
         parts.put("ppt/slides/slide1.xml",slide("<a:p><a:r><a:t>Shown second</a:t></a:r></a:p>"));
         parts.put("ppt/slides/slide2.xml",slide("<a:p><a:r><a:t>Shown first</a:t></a:r></a:p><a:tbl><a:tr><a:tc><a:txBody><a:p><a:r><a:t>Table value</a:t></a:r></a:p></a:txBody></a:tc></a:tr></a:tbl>"));return zip(parts);
     }
+    public static byte[] repeatedPresentation(int references,int slideBytes,boolean distinctRelationships)throws Exception {
+        Map<String,String> parts=base("ppt/presentation.xml","presentationml.presentation");
+        StringBuilder ids=new StringBuilder(),rels=new StringBuilder();
+        for(int i=0;i<references;i++) {
+            String id=distinctRelationships?"slide"+i:"slide";
+            ids.append("<p:sldId id=\"").append(256+i).append("\" r:id=\"").append(id).append("\"/>");
+            if(distinctRelationships||i==0)rels.append("<Relationship Id=\"").append(id).append("\" Type=\"").append(R).append("/slide\" Target=\"slides/slide1.xml\"/>");
+        }
+        parts.put("ppt/presentation.xml","<p:presentation xmlns:p=\""+P+"\" xmlns:r=\""+R+"\"><p:sldIdLst>"+ids+"</p:sldIdLst></p:presentation>");
+        parts.put("ppt/_rels/presentation.xml.rels",relationships(rels.toString()));
+        String content=slide("<a:p><a:r><a:t>Repeated slide</a:t></a:r></a:p>");
+        if(slideBytes>0) {
+            int padding=slideBytes-content.length()-7;
+            if(padding<0)throw new IllegalArgumentException("Slide size is too small");
+            content=content.replace("</p:sld>","<!--"+"x".repeat(padding)+"--></p:sld>");
+        }
+        parts.put("ppt/slides/slide1.xml",content);return zip(parts);
+    }
     private static String slide(String content){return "<p:sld xmlns:p=\""+P+"\" xmlns:a=\""+A+"\"><p:cSld><p:spTree>"+content+"</p:spTree></p:cSld></p:sld>";}
     private static Map<String,String> base(String main,String type) {
         Map<String,String> parts=new LinkedHashMap<>();

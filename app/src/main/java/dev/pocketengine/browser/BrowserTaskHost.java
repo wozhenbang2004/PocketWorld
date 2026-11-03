@@ -134,11 +134,29 @@ public final class BrowserTaskHost {
     public JSONObject allowExistingForOwner(String taskId,JSONObject expectedProfile,boolean consent,BrowserReadScope.Consent readConsent,BrowserFrameOrigins.Consent frameOrigins)throws Exception {return allowExistingForOwner(taskId,expectedProfile,consent,readConsent,frameOrigins,BrowserActionScope.disabled());}
     public JSONObject allowExistingForOwner(String taskId,JSONObject expectedProfile,boolean consent,BrowserReadScope.Consent readConsent,BrowserFrameOrigins.Consent frameOrigins,BrowserActionScope.Consent actions)throws Exception {
         worker();BrowserTaskSpace.uuid(taskId);if(!consent)throw new SecurityException("请先确认将本任务网页观察交给原模型");RunControl current=originals.currentControl(taskId);if(current==null)throw new SecurityException("原助手任务已不在运行");current.check();if(current.isPaused())throw new SecurityException("请先处理原任务暂停状态");
-        synchronized(tasks){JSONObject task=tasks.get(taskId,false);JSONObject origin=task==null?null:task.optJSONObject("origin");if(task==null||!task.optString("kind").matches("assistant|phone")||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||!("capabilities".equals(task.optString("executionMode"))||"phone".equals(task.optString("kind"))&&origin==null)||origin!=null&&origin.optString("kind").matches("channel|group")||!current.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch"))||originals.currentControl(taskId)!=current)throw new SecurityException("只能接入当前主人私人助手的原执行");if(tasks.hasUnresolved(taskId))throw new IllegalStateException("请等当前动作取得回执，先核对未知效果后再接入浏览");if(actions.enabled()&&!task.has("executionScope"))throw new SecurityException("此旧任务没有主人任务范围，请先在原任务明确配置；不会默默延长旧授权");}
+        long pauseRevision=current.pauseRevision();JSONObject admitted;
+        synchronized(tasks){admitted=existingOwnerTask(taskId,current,pauseRevision,actions);}
+        String runId=admitted.optString("runId");int epoch=admitted.optInt("coordinatorEpoch");
+        // App pause holds its monitor before TaskStore. Host callbacks must stay outside the store monitor.
+        if(originals.currentControl(taskId)!=current)throw new SecurityException("只能接入当前主人私人助手的原执行");
         JSONObject selected=onMain(()->{JSONObject state=browser.snapshot();requireProfile(state,expectedProfile);JSONObject space=browser.nativeTabs().optJSONObject("taskSpace");if(space!=null&&!space.optString("status").equals("ended"))throw new IllegalStateException("请先结束当前浏览空间");return profileIdentity(state);});
-        if(!plans.isEmpty()||!active.isEmpty())throw new IllegalStateException("已有浏览请求，请先结束或核对");Plan plan=new Plan(taskId,selected,current,readConsent,frameOrigins,null,actions);if(plans.putIfAbsent(taskId,plan)!=null)throw new IllegalStateException("此原任务已有浏览请求");latestTask=taskId;
-        try{synchronized(tasks){JSONObject task=tasks.get(taskId,false),execution=task.optJSONObject("executionScope");if(execution!=null)tasks.extendExecutionToolsForOwner(taskId,task.getString("runId"),task.getInt("coordinatorEpoch"),execution.getLong("revision"),BrowserTaskCapabilityPort.taskToolNames(true).put("task_surface_switch"));}}catch(Exception stale){plans.remove(taskId,plan);throw stale;}
-        tasks.event(taskId,new JSONObject().put("type","browser_research_requested").put("profile",selected).put("extraFrameOrigins",frameOrigins.summary()).put("frameOriginPolicy","same_origin_plus_explicit_native_task_origins").put("phase","pending_original_turn").put("sameRun",true));return new JSONObject().put("taskId",taskId).put("status","pending_original_turn").put("message","已允许原任务在下一轮取得浏览页；未新建任务或替换执行控制");
+        current.check();if(originals.currentControl(taskId)!=current)throw new SecurityException("只能接入当前主人私人助手的原执行");
+        Plan plan=new Plan(taskId,selected,current,readConsent,frameOrigins,null,actions);
+        try{synchronized(tasks){
+            JSONObject task=existingOwnerTask(taskId,current,pauseRevision,actions);
+            if(!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("只能接入当前主人私人助手的原执行");
+            if(!plans.isEmpty()||!active.isEmpty())throw new IllegalStateException("已有浏览请求，请先结束或核对");if(plans.putIfAbsent(taskId,plan)!=null)throw new IllegalStateException("此原任务已有浏览请求");
+            JSONObject execution=task.optJSONObject("executionScope");if(execution!=null)tasks.extendExecutionToolsForOwner(taskId,runId,epoch,execution.getLong("revision"),BrowserTaskCapabilityPort.taskToolNames(true).put("task_surface_switch"));
+            tasks.event(taskId,runId,epoch,new JSONObject().put("type","browser_research_requested").put("profile",selected).put("extraFrameOrigins",frameOrigins.summary()).put("frameOriginPolicy","same_origin_plus_explicit_native_task_origins").put("phase","pending_original_turn").put("sameRun",true));
+        }}catch(Exception stale){plans.remove(taskId,plan);throw stale;}
+        latestTask=taskId;return new JSONObject().put("taskId",taskId).put("status","pending_original_turn").put("message","已允许原任务在下一轮取得浏览页；未新建任务或替换执行控制");
+    }
+    /** Caller holds TaskStore only; no external authority callback or App monitor acquisition here. */
+    private JSONObject existingOwnerTask(String taskId,RunControl current,long pauseRevision,BrowserActionScope.Consent actions)throws Exception {
+        JSONObject task=tasks.get(taskId,false);JSONObject origin=task==null?null:task.optJSONObject("origin");
+        if(task==null||!task.optString("kind").matches("assistant|phone")||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||!("capabilities".equals(task.optString("executionMode"))||"phone".equals(task.optString("kind"))&&origin==null)||origin!=null&&origin.optString("kind").matches("channel|group")||!current.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch"))||current.isCancelled()||current.isPaused()||current.pauseRevision()!=pauseRevision)throw new SecurityException("只能接入当前主人私人助手的原执行");
+        if(tasks.hasUnresolved(taskId))throw new IllegalStateException("请等当前动作取得回执，先核对未知效果后再接入浏览");
+        if(actions.enabled()&&!task.has("executionScope"))throw new SecurityException("此旧任务没有主人任务范围，请先在原任务明确配置；不会默默延长旧授权");return task;
     }
     public JSONArray currentTasksForOwner()throws Exception {return originals.currentTasksForOwner();}
     /** Explicit visible native-owner renewal; never a model command and never a new task/run. */
@@ -170,8 +188,13 @@ public final class BrowserTaskHost {
     private void revokeScope(Scope scope,String reason){try{JSONObject actions=tasks.browserActionsForOwner(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,scope.control);if(actions.optLong("revision",0)>0)tasks.revokeBrowserActions(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,scope.control,actions.getLong("revision"));}catch(Exception staleRun){/* No new authority or other-run revocation. */}String id=scope.readScopeId;if(id.isEmpty())return;try{tasks.revokeBrowserReadScope(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,id,reason);}catch(Exception staleRun){/* Closing an old scope must never revoke a newer original run. */}finally{if(scope.port!=null)scope.port.cancelReadScopeNative(id);}}
     /** Precise native approval branch; null means this is another capability's existing workflow. */
     public JSONObject decideIfWaiting(String taskId,String approvalId,boolean approved)throws Exception {
+        Scope original=active.get(taskId);if(original==null)return null;
+        return decideIfWaiting(taskId,approvalId,approved,original.binding.runId,original.binding.epoch);
+    }
+    public JSONObject decideIfWaiting(String taskId,String approvalId,boolean approved,String expectedRun,int expectedEpoch)throws Exception {
         Scope scope=active.get(taskId);RunControl current=originals.currentControl(taskId);if(scope==null||scope.approvals==null||!scope.approvals.isWaiting(taskId,approvalId,current))return null;
-        JSONObject task=tasks.decideCapabilityApproval(taskId,approvalId,approved);scope.approvals.nativeDecisionChanged(taskId,approvalId,current);emit(taskId,new JSONObject().put("type","browser_approval_decided").put("taskId",taskId).put("approvalId",approvalId));return task;
+        if(!scope.binding.runId.equals(expectedRun)||scope.binding.epoch!=expectedEpoch)throw new SecurityException("原浏览审批执行代次已变化，请重新核对");
+        JSONObject task=tasks.decideCapabilityApproval(taskId,approvalId,approved,expectedRun,expectedEpoch);scope.approvals.nativeDecisionChanged(taskId,approvalId,current);emit(taskId,new JSONObject().put("type","browser_approval_decided").put("taskId",taskId).put("approvalId",approvalId));return task;
     }
     public JSONObject snapshotForOwner()throws Exception {
         worker();JSONObject result=onMain(()->{JSONObject out=browser.snapshot();out.put("profiles",browser.nativeProfiles()).put("pages",browser.nativeTabs()).put("downloads",browser.nativeDownloads());return out;});

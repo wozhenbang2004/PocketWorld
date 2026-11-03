@@ -166,7 +166,9 @@ class JobManager:
         self.harness_gateway = harness_gateway.HarnessGateway(self)
         self.harness_endpoint_finished = self.harness_gateway.job_finished
         self.harness_endpoint_job_bound = self.harness_gateway.bind_job
-        for path in sorted(self.state.glob("job-*.json"))[-500:]:
+        # Retention is a soft bound on settled records, never a reason to lose
+        # an original unresolved job or its cold resource fence before reading it.
+        for path in self.state.glob("job-*.json"):
             try:
                 job = json.loads(path.read_text(encoding="utf-8"))
                 identifier(job["id"])
@@ -686,6 +688,10 @@ class JobManager:
                         raise RequestError("Cold continuation requires the exact original proof and NEW explicit owner walltime/unknown-billing acknowledgement", 409)
                 elif "recoveryProofId" in request or "recoveryOwnerAcknowledged" in request:
                     raise RequestError("Recovery proof cannot be imported into an ordinary settled continuation", 409)
+                try:
+                    self.harness_configs.cold_codex_continuation(prior, request, env)
+                except harness_config.ConfigError as failure:
+                    raise RequestError(str(failure), failure.status) from failure
                 if prior.get("readOnly"):
                     env = {**env, "writeAllowed": False}
                     request["readOnly"] = True
@@ -852,9 +858,21 @@ class JobManager:
         for old in sorted(self.jobs.values(), key=lambda value: value["createdAt"]):
             if len(self.jobs) <= 500:
                 break
-            if old["status"] in TERMINAL:
-                self.jobs.pop(old["id"], None)
-                (self.state / ("job-" + old["id"] + ".json")).unlink(missing_ok=True)
+            if old["status"] not in {"completed", "failed", "cancelled", "blocked"}:
+                continue
+            jobid = old["id"]
+            if (old.get("resourcesHeld") or old.get("dispatchFenceFinal") is not True
+                    or jobid in self.processes or jobid in self.drivers or jobid in self.stopping):
+                continue
+            # Owned copies/private inputs still depend on this original record,
+            # including copies waiting for a child or later contribution lookup.
+            if old.get("assignmentWorkspaces") or old.get("inputState"):
+                continue
+            if old.get("steeringUnknown") or any(receipt.get("status") in {"queued", "sending", "unknown"}
+                    for receipt in old.get("approvalReceipts", []) + old.get("questionReceipts", [])):
+                continue
+            self.jobs.pop(jobid, None)
+            (self.state / ("job-" + jobid + ".json")).unlink(missing_ok=True)
 
     def _save(self, job):
         if job.get("nativeDeviceOperation"):
@@ -898,7 +916,15 @@ class JobManager:
                 raise
 
     def _public(self, job):
-        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer", "_piSession"}}
+        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer", "_piSession"}}
+        if job.get("worker") == "codex_app_server" and job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest")):
+            result.pop("harnessColdRootRetirement", None)
+            try:
+                retired_root = self.harness_configs.cold_root_retirement(job)
+                if retired_root is not None:
+                    result["harnessColdRootRetirement"] = retired_root  # Read the durable outcome; never retire from GET.
+            except harness_config.ConfigError:
+                pass
         result.pop("_inputPersistenceUnconfirmed", None)
         if job.get("_inputPersistenceUnconfirmed"):
             result.pop("inputState", None)
@@ -926,7 +952,8 @@ class JobManager:
         result["coldRecovery"] = {"protocol": cold_session.PROTOCOL, "supportedForOriginalJob": cold_session.eligible(job), "requiresNativeOwnerReview": True, "readOnlyInspection": True, "lastInspection": json.loads(json.dumps(job.get("coldRecoveryRead", {"status": "not_checked"}))), "reason": "Original process identity and exact latest stored terminal Codex turn are both required; old jobs/Claude/SSH/private input staging have no cold continuation proof"}
         retained = self.processes.get(job.get("id"))
         original_stop = retained is not None and getattr(retained, "_pocket_worker_finished", False) and job.get("resourcesHeld") is True
-        result["controls"] = {"readSessionRecovery": cold_session.eligible(job), "cancel": job.get("status") not in TERMINAL or original_stop,
+        cold_root_cancel = native and job.get("status") == "interrupted" and self._can_resume(job) and self.harness_configs.active_cold_root(job) is not None
+        result["controls"] = {"readSessionRecovery": cold_session.eligible(job), "cancel": job.get("status") not in TERMINAL or original_stop or cold_root_cancel,
                               "approve": live and bool(job.get("pendingApprovals")),
                               "answerQuestion": live and not job.get("assignmentWorkspace") and any(value.get("canAnswer") for value in job.get("pendingQuestions", [])),
                               "threadResume": self._can_resume(job), "threadFork": native and self._can_resume(job) and job.get("status") in {"completed", "failed", "cancelled"},
@@ -1172,7 +1199,26 @@ class JobManager:
         if not isinstance(request, dict) or set(request) != {"jobOperationId"}:
             raise RequestError("Original cancellation requires only jobOperationId")
         expected = identifier(request["jobOperationId"], "jobOperationId")
-        result = self.cancel(jobid, expected_operation_id=expected)
+        with self.lock:
+            job = self._original_cancel_job_locked(jobid, expected)
+            configured_cold = job.get("worker") == "codex_app_server" and job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest"))
+            if configured_cold and self.ledger.in_transaction:
+                raise RequestError("Original ledger has an unresolved transaction; no root retirement was attempted", 409)
+        if configured_cold:
+            self._reconcile_original_process(jobid)  # Existing read-only original-group fence, never a cold PID signal.
+        try:
+            with self.lock:
+                job = self._original_cancel_job_locked(jobid, expected)
+                cold_root = configured_cold and job.get("status") == "interrupted" and (self.harness_configs.active_cold_root(job) is not None or self.harness_configs.cold_root_retirement(job) is not None)
+        except harness_config.ConfigError as failure:
+            raise RequestError(str(failure), failure.status) from failure
+        if cold_root:
+            try:
+                result = cold_session.retire_configuration_root(self, jobid, expected, RequestError)
+            except harness_config.ConfigError as failure:
+                raise RequestError(str(failure), failure.status) from failure
+        else:
+            result = self.cancel(jobid, expected_operation_id=expected)
         if result.get("id") != jobid or result.get("operationId") != expected:
             raise RequestError("Original cancellation outcome is unconfirmed; query the original operation", 409)
         result["originalCancellation"] = {"protocol": ORIGINAL_JOB_CANCELLATION_PROTOCOL,
@@ -1332,6 +1378,10 @@ class JobManager:
                     child_env = self.cc_switch_imports.child_environment(job, job.get("_ccSwitchImportRequest", {}), actual_env, child_env)
                 except cc_switch_import.ImportErrorState as error:
                     raise RequestError(str(error), error.status) from None
+                config_pin = cold_session.pin_configuration(self, job, actual_env, argv, cwd, child_env)
+                if config_pin is not None:
+                    job["_coldConfigHome"] = config_pin
+                    argv = [config_pin["executable"], *argv[1:]]
                 process = self._spawn(actual_env, argv, cwd, stdin=subprocess.PIPE if codex else subprocess.DEVNULL,
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL if codex else subprocess.STDOUT, env=child_env)
                 process._pocket_cleanup_lock = threading.Lock()
@@ -1410,7 +1460,7 @@ class JobManager:
                 if codex["request"].get("recoveryProofId"):
                     with self.lock:
                         prior = self.jobs.get(codex["request"].get("resumeJobId"))
-                        if prior is None or codex["request"]["recoveryProofId"] != prior.get("recoveryProof", {}).get("proofId") or not cold_session.proof_matches(prior, actual_env):
+                        if prior is None or codex["request"]["recoveryProofId"] != prior.get("recoveryProof", {}).get("proofId") or not cold_session.proof_matches(prior, actual_env) or not cold_session.same_configuration_home(prior, job):
                             raise DriverError("Original cold recovery proof or process/configuration changed; no new turn was dispatched")
                         original_turn = prior["turnId"]
                     driver.read_original_turn(codex["request"]["threadId"], original_turn)
@@ -2050,13 +2100,40 @@ class JobManager:
 class CompanionServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    max_tls_handshakes = 16
+    tls_handshake_timeout = 15
 
     def __init__(self, address, manager, gateway_only=False):
         self.manager = manager
         self.gateway_only = gateway_only
+        self._tls_handshake_slots = threading.BoundedSemaphore(self.max_tls_handshakes)
         super().__init__(address, CompanionHandler)
         if not gateway_only:
             manager.harness_gateway.listener_factory = lambda: CompanionServer(("127.0.0.1", 0), manager, gateway_only=True)
+
+    def process_request(self, request, client_address):
+        tls = isinstance(request, ssl.SSLSocket)
+        # Never wait for a handshake or capacity on the listener's accept thread.
+        if tls and not self._tls_handshake_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            if tls:
+                self._tls_handshake_slots.release()
+            raise
+
+    def finish_request(self, request, client_address):
+        if isinstance(request, ssl.SSLSocket):
+            try:
+                request.settimeout(self.tls_handshake_timeout)
+                request.do_handshake()
+            except OSError:
+                return  # The worker's finally closes timed-out and invalid TLS peers.
+            finally:
+                self._tls_handshake_slots.release()
+        super().finish_request(request, client_address)
 
 
 class CompanionHandler(BaseHTTPRequestHandler):
@@ -2370,7 +2447,7 @@ def serve_original_manager(manager):
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.load_cert_chain(config["tlsCert"], config["tlsKey"])
-            server.socket = context.wrap_socket(server.socket, server_side=True)
+            server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
         print("Pocket World Companion listening; authentication required; press Ctrl+C to stop.")
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:

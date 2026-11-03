@@ -94,7 +94,12 @@ public final class EngineApplication extends Application implements dev.pocketen
                     teams.put(id,team.originalCancellation(target.getString("runId")));
                 if("remote".equals(target.optString("feature"))){
                     JSONObject remote=target.optString("parentTaskId").isEmpty()?tasks.remoteOwnerTarget(id):tasks.originalRemoteChildStopTarget(target.getString("parentTaskId"),target.getString("parentRunId"),id);
-                    if(remote.optString("jobId").isEmpty())throw new SecurityException("原远端 job 身份尚未确认");remotes.put(id,remote);
+                    if(remote.optString("jobId").isEmpty())throw new SecurityException("原远端 job 身份尚未确认");
+                    if(!remote.has("_profileBinding")){
+                        EngineModule selected=features.module("remote");if(!(selected instanceof dev.pocketengine.features.remote.RemoteModule nativeRemote))throw new SecurityException("原远端停止宿主不可用");
+                        remote.put("_profileBinding",remote.has("nativeGatewayProfileBinding")?remote.getString("nativeGatewayProfileBinding"):nativeRemote.profileBindingHash(remote.getString("profileId")));
+                    }
+                    remotes.put(id,remote);
                 }
             }catch(Exception unavailable){/* The original remains visible as unconfirmed below. */}
         }
@@ -560,7 +565,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         nativeOwnerWorkflows=new dev.pocketengine.features.NativeOwnerWorkflows(features,context,tasks,memorySources);
         nativeOwnerWorkflows.installAccountInference();
         capabilityWorkers.execute(()->{
-            try{if(nativeOwnerWorkflows.warmSelectedAccountMetadata())main.post(()->{try{features.sendState();}catch(Exception ignored){}});}
+            try{if(nativeOwnerWorkflows.warmSelectedAccountMetadata())main.post(()->{try{sendState();features.sendState();}catch(Exception ignored){}});}
             catch(Exception unavailable){error("ChatGPT 账号状态尚未准备，请打开账号页核对；未清空旧状态。");}
         });
         remoteOwnerWorkflows=new dev.pocketengine.features.RemoteOwnerWorkflows(features,tasks,this::publish);
@@ -2409,7 +2414,37 @@ public final class EngineApplication extends Application implements dev.pocketen
                 return json("taskId",continueTask(id,input.optString("feedback"),input.optBoolean("screenConsent"),input.optString("executionMode","background")));
             }
             case "openBrowserResearch":{if(browserTaskHost==null)throw new IllegalStateException("浏览研究工作区暂不可用");String id=input.optString("taskId");if(!id.isEmpty()){JSONObject original=tasks.get(id,false);if(original==null||!"owner".equals(original.optString("actorId"))||!"private".equals(original.optString("spaceId"))||!original.optString("kind").matches("assistant|phone")||groupOrigin(original)||teamWriteOrigin(original)||"channel".equals(original.optJSONObject("origin")==null?"":original.getJSONObject("origin").optString("kind"))||features.ownsMediaTask(id)||memoryConsolidationTask(id))throw new SecurityException("请从原团队、渠道或专用任务继续；私人网页工作区不改变原受众或另开替代执行");}browserTaskHost.openUiForOwner(id);return json("opened",true);}
-            case "approveCapability":{String id=input.getString("taskId");if(memoryConsolidationTask(id))throw new SecurityException("记忆候选只在原生审核页明确采用或拒绝，不走通用工具审批");if(features.ownsMediaTask(id))throw new SecurityException("请回媒体原任务核对并明确提交，不由通用审批重新启动媒体请求");JSONObject reviewed=tasks.get(id,false);boolean group=groupOrigin(reviewed);if(group){groupOwnerWorkflows.check();reviewedGroupAttempt(reviewed,input);}boolean approved=input.getBoolean("approved");JSONObject browserDecision=browserTaskHost==null?null:browserTaskHost.decideIfWaiting(id,input.getString("approvalId"),approved);if(browserDecision!=null){pushTask(id);return browserDecision;}if(teamWriteOrigin(reviewed))tasks.requireTeamOwnerAttempt(input);JSONObject task=tasks.decideCapabilityApproval(id,input.getString("approvalId"),approved);pushTask(id);if(teamWriteOrigin(task))return task.put("originalTeamContinuationRequired",true);if(dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(task)){resumeDeviceExecution(id,input.getString("approvalId"));return tasks.get(id,false).put("continuedOriginalRun",true).put("newGrant",false);}if(approved){if(!group)tasks.feedback(id,"主人已在本机批准审批 "+input.getString("approvalId")+"，仅按宿主已批准的原参数继续。");if(tasks.nativeTeamRoundBudget(id,task.getString("runId"),task.getInt("coordinatorEpoch")))return task.put("requiresNativeRoundBudgetContinuation",true).put("message","原准确审批已保存；请在项目前台明确续接原剩余预算，不自动启动新run");if(task.optString("kind").equals("phone")){RunControl owner=control(id);if(owner!=null&&owner.isPaused())continueTask(id,"",true,task.getString("executionMode"));else throw new IllegalStateException("审批已保存；请先暂停或恢复原手机任务再继续");}else if(task.optString("kind").equals("assistant"))resumeCapabilityTask(id,"");}else if(group&&groupTaskHost!=null)groupTaskHost.publishTaskState(id);else if(channelTaskHost!=null)channelTaskHost.publishTaskState(id);return task;}
+            case "approveCapability":{
+                String id=input.getString("taskId");
+                if(memoryConsolidationTask(id))throw new SecurityException("记忆候选只在原生审核页明确采用或拒绝，不走通用工具审批");
+                if(features.ownsMediaTask(id))throw new SecurityException("请回媒体原任务核对并明确提交，不由通用审批重新启动媒体请求");
+                JSONObject reviewed=tasks.get(id,false);if(reviewed==null)throw new SecurityException("原审批任务不存在");
+                boolean group=groupOrigin(reviewed);if(group){groupOwnerWorkflows.check();reviewedGroupAttempt(reviewed,input);}
+                if(teamWriteOrigin(reviewed))tasks.requireTeamOwnerAttempt(input);
+                // Web/native reviewed callers carry both fields. Legacy native callers capture
+                // the current original here; neither path may silently ignore a supplied half-identity.
+                if(input.has("runId")!=input.has("epoch"))throw new SecurityException("原审批执行身份不完整，请重新核对");
+                String reviewedRun;int reviewedEpoch;
+                if(input.has("runId")){
+                    if(!(input.opt("runId") instanceof String))throw new SecurityException("原审批执行身份无效");
+                    reviewedRun=input.getString("runId");reviewedEpoch=dev.pocketengine.store.TaskExecutionScope.exactInt(input,"epoch",1,Integer.MAX_VALUE);
+                }else{reviewedRun=reviewed.getString("runId");reviewedEpoch=reviewed.getInt("coordinatorEpoch");}
+                boolean approved=input.getBoolean("approved");String approvalId=input.getString("approvalId");
+                JSONObject browserDecision=browserTaskHost==null?null:browserTaskHost.decideIfWaiting(id,approvalId,approved,reviewedRun,reviewedEpoch);
+                if(browserDecision!=null){pushTask(id);return browserDecision;}
+                JSONObject task=tasks.decideCapabilityApproval(id,approvalId,approved,reviewedRun,reviewedEpoch);pushTask(id);
+                if(teamWriteOrigin(task))return task.put("originalTeamContinuationRequired",true);
+                if(dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(task)){resumeDeviceExecution(id,approvalId);return tasks.get(id,false).put("continuedOriginalRun",true).put("newGrant",false);}
+                if(approved){
+                    if(!group)tasks.feedback(id,"主人已在本机批准审批 "+approvalId+"，仅按宿主已批准的原参数继续。");
+                    if(tasks.nativeTeamRoundBudget(id,task.getString("runId"),task.getInt("coordinatorEpoch")))return task.put("requiresNativeRoundBudgetContinuation",true).put("message","原准确审批已保存；请在项目前台明确续接原剩余预算，不自动启动新run");
+                    if(task.optString("kind").equals("phone")){
+                        RunControl owner=control(id);if(owner!=null&&owner.isPaused())continueTask(id,"",true,task.getString("executionMode"));
+                        else throw new IllegalStateException("审批已保存；请先暂停或恢复原手机任务再继续");
+                    }else if(task.optString("kind").equals("assistant"))resumeCapabilityTask(id,"");
+                }else if(group&&groupTaskHost!=null)groupTaskHost.publishTaskState(id);else if(channelTaskHost!=null)channelTaskHost.publishTaskState(id);
+                return task;
+            }
             case "stopTask":{String id=input.getString("taskId");JSONObject originalStopTask=tasks.get(id,false);if(originalStopTask==null)throw new SecurityException("原停止任务不存在");if(originalStopTask.has("sourceLearningJob")){Object run=input.opt("runId"),epoch=input.opt("epoch");if(!(run instanceof String)||!(epoch instanceof Integer||epoch instanceof Long))throw new SecurityException("停止原学习任务须携带所读取的执行身份");return stopSourceLearningJob(id,(String)run,Math.toIntExact(((Number)epoch).longValue()));}String stopRun=input.has("runId")?input.getString("runId"):originalStopTask.optString("runId");int stopEpoch=input.has("epoch")?input.getInt("epoch"):originalStopTask.optInt("coordinatorEpoch");tasks.requireOriginalExecutionStopTarget(json("taskId",id,"runId",stopRun,"epoch",stopEpoch));if(originalStopTask.has("ownerLocalTerminal")){JSONObject stopped=features.localTerminalForOwner(id,true);pushTask(id);return stopped;}if(features.ownsMcpDiscoveryTask(id)){JSONObject stopped=features.observeMcpDiscoveryForOwner(id,true);pushTask(id);return stopped;}if(features.ownsGitImportTask(id)){JSONObject stopped=features.stopGitImportForOwner(id);pushTask(id);return stopped;}if(features.ownsOwnerStorageTask(id)){JSONObject stopped=features.cancelOwnerStorageCleanupForOwner(id);pushTask(id);return stopped;}if(features.ownsOwnerArchiveTask(id)){JSONObject stopped=features.cancelOwnerArchivePhaseForOwner(id);pushTask(id);return stopped;}JSONObject ownerGit=tasks.get(id,false);if(ownerGit!=null&&ownerGit.has("ownerBackupUpload")){JSONObject stopped=features.ownerBackupWebDav(this).cancelUpload(id);pushTask(id);return stopped;}if(ownerGit!=null&&ownerGit.has("ownerGit")){JSONObject stopped=features.projectGitForOwner(id,true);pushTask(id);return stopped;}if(memoryConsolidationTask(id))return cancelMemoryConsolidation(capabilityControls.get(id));if(features.ownsMediaTask(id)){JSONObject stopped=features.cancelOriginalMediaTask(id,stopRun,stopEpoch);pushTask(id);return stopped==null?json("taskId",id,"status","no_local_wait","providerStateConfirmed",false):stopped;}JSONObject task=tasks.get(id,false);JSONObject source=task==null?null:task.optJSONObject("origin");if(teamWriteOrigin(task)){tasks.requireTeamOwnerAttempt(input);tasks.requestCancel(id,input.getString("runId"));RunControl member=features.teamControl(id);if(member!=null)member.cancel();pushTask(id);return tasks.get(id,false);}if(groupOrigin(task)){groupOwnerWorkflows.check();reviewedGroupAttempt(task,input);if(groups==null)throw new IllegalStateException("原生群宿主未就绪");groups.ownerCommand("task.cancel",json("requestId",source.getString("requestId"),"runId",input.getString("runId"),"coordinatorEpoch",input.getInt("epoch")));pushTask(id);return null;}if(source!=null&&source.optString("kind").equals("channel")){
                 if(channelTaskHost!=null)channelTaskHost.stopOriginal(id,stopRun,stopEpoch);
                 else synchronized(tasks){task=tasks.get(id,false);tasks.cancelChannelTask(id,source,stopRun,stopEpoch,capabilityControls.get(id));features.cancelRelatedTasks(id,stopRun,stopEpoch);pushTask(id);}
@@ -2641,7 +2676,9 @@ public final class EngineApplication extends Application implements dev.pocketen
     public JSONObject state()throws Exception {
         NotificationManager nm=getSystemService(NotificationManager.class);
         JSONObject page=tasks.taskSummaryPage("",40);
-        return json("type","state","payload",json("config",settings.get().publicJson(),"agentPreferences",settings.agentPreferences(),"ownerExecutionPolicy",ownerExecutionState(),"taskScreenshotPolicy",taskScreenshotPolicy(),"accessibilityEnabled",PhoneAccessibilityService.get()!=null,"notificationsEnabled",nm!=null&&nm.areNotificationsEnabled(),"phoneReadiness",phoneReadiness(),"tasks",page.getJSONArray("tasks"),"tasksNextCursor",page.getString("nextCursor"),"activeTaskId",activeId()==null?JSONObject.NULL:activeId()));
+        ModelConfig selected=settings.get();
+        JSONObject configuration=selected.publicJson().put("accountModelAvailable",selected.usesAccount()&&dev.pocketengine.runtime.ModelGateway.accountModelAvailableForDisplay(selected.accountModel));
+        return json("type","state","payload",json("config",configuration,"agentPreferences",settings.agentPreferences(),"ownerExecutionPolicy",ownerExecutionState(),"taskScreenshotPolicy",taskScreenshotPolicy(),"accessibilityEnabled",PhoneAccessibilityService.get()!=null,"notificationsEnabled",nm!=null&&nm.areNotificationsEnabled(),"phoneReadiness",phoneReadiness(),"tasks",page.getJSONArray("tasks"),"tasksNextCursor",page.getString("nextCursor"),"activeTaskId",activeId()==null?JSONObject.NULL:activeId()));
     }
     @Override public void onTerminate(){deviceControlWorkers.shutdownNow();deviceStopWorkers.shutdownNow();if(!deviceChildStopPending.isEmpty())error("设备停止通道已关闭；排队或进行中的下游停止结果仍未确认，请在原任务核对");var deviceOwner=deviceWorkspaceOwner;deviceWorkspaceHost=null;deviceTaskScopeHost=null;if(deviceOwner!=null)try{deviceOwner.close();}catch(Exception unavailable){error("设备通道关闭结果尚未确认");}for(GatewayParentRun gateway:gatewayParentRuns.values())gateway.close();if(groupOwnerWorkflows!=null)groupOwnerWorkflows.close();if(groupTaskHost!=null)groupTaskHost.close();if(skillExecutionHost!=null)skillExecutionHost.close();try{if(pluginHost!=null)pluginHost.close();}finally{try{if(localOcr!=null)localOcr.close();}finally{capabilityWorkers.shutdownNow();super.onTerminate();}}}
     public void sendState(){try{publish(state());}catch(dev.pocketengine.store.SettingsStore.PersistenceUncertain uncertain){error(uncertain.getMessage());}catch(Exception e){error("设置或任务记录无法读取，请重新配置模型密钥");}}

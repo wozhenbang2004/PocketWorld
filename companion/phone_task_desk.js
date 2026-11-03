@@ -7,7 +7,7 @@ const mutations = new Set(["run", "cancel", "acquire_control", "answer", "steer"
 const controls = new Set(["acquire_control", "answer", "steer", "resume"]);
 const settled = new Set(["succeeded", "failed", "cancelled", "interrupted", "expired", "rejected"]);
 let peer = null, busy = false, waitPending = false, scopes = [], description = null, currentTask = null;
-let selectedOperation = "", selectionVersion = 0, lockedControl = null, submission = null;
+let selectedOperation = "", selectionVersion = 0, lockedControl = null, submission = null, draftRevision = 0;
 let watchVersion = 0, watchTimer = null, watching = false;
 const inputDrafts = new Map(), cancelRecords = new Map(), eventViews = new Map();
 const show = value => { byId("result").textContent = JSON.stringify(value, null, 2); };
@@ -317,7 +317,8 @@ function startWatching() {
   }
   void tick();
 }
-byId("scope-choice").onchange = selectScope;
+byId("scope-choice").onchange = () => { draftRevision++; selectScope(); };
+for (const id of ["goal","tools","models"]) byId(id).addEventListener("input", () => { draftRevision++; });
 byId("operation").addEventListener("input", () => selectOperation(byId("operation").value.trim()));
 for (const id of ["answer-text","steer-text"]) byId(id).addEventListener("input", refreshInputs);
 for (const action of ["answer","steer","resume"]) byId(action).onclick = () => writeInput(action);
@@ -349,11 +350,14 @@ byId("submit").onsubmit = async event => {
     const index = byId("scope-choice").value, selected = index === "" ? null : scopes[Number(index)];
     const tools = Number(byId("tools").value), models = Number(byId("models").value);
     if (!selected || !Number.isSafeInteger(tools) || !Number.isSafeInteger(models) || tools < 0 || models < 1 || tools > selected.grant.toolBudget || models > selected.grant.modelBudget) throw new Error("Use a budget within the phone-approved scope.");
-    const goal = byId("goal").value, instance = description.instanceId, version = byId("version").value;
+    const goal = byId("goal").value, instance = description.instanceId, version = byId("version").value, revision = draftRevision;
     const selectedScope = canonical(selected);
     busy = true; refreshInputs(); notice("Checking the same phone-approved scope…");
     try {
-      const fresh = await call("doctor", {peerDeviceId:peer}); updateScopes(fresh.description);
+      const fresh = await call("doctor", {peerDeviceId:peer});
+      // User edits invalidate this Start even when the values were changed back.
+      if (revision !== draftRevision) { notice("The phone scope or this draft changed. Review the current selection before starting a task."); return; }
+      updateScopes(fresh.description);
       const replacement = scopes.findIndex(item => canonical(item) === selectedScope);
       if (!scopeFresh() || description.instanceId !== instance || replacement < 0 || version !== byId("version").value
           || selected.grant.expiresAt-Date.now() < 1000 || goal !== byId("goal").value || tools !== Number(byId("tools").value) || models !== Number(byId("models").value)) {

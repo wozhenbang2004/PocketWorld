@@ -27,22 +27,23 @@ import org.json.JSONObject
 
 /** A one-use reference to the exact task that was displayed, never a Web-created approval. */
 internal class PocketWebTaskReviews(private val now: () -> Long = SystemClock::elapsedRealtime) {
-    private data class Reviewed(val task: UiTask, val identity: String, val actions: Set<String>, val expires: Long)
+    private data class Reviewed(val task: UiTask, val identity: String, val actions: Set<String>, val expires: Long, val positiveApprovalIds: Set<String>)
     private val entries = linkedMapOf<String, Reviewed>()
 
-    fun create(task: UiTask, actions: Set<String>): String {
+    fun create(task: UiTask, actions: Set<String>, positiveApprovalIds: Set<String> = emptySet()): String {
         entries.entries.removeAll { it.value.expires <= now() }
         while (entries.size >= 24) entries.remove(entries.keys.first())
         val copy = task.copy(raw = JSONObject(task.raw.toString()))
         val handle = UUID.randomUUID().toString()
-        entries[handle] = Reviewed(copy, identity(copy), actions.toSet(), now() + 120_000L)
+        entries[handle] = Reviewed(copy, identity(copy), actions.toSet(), now() + 120_000L, positiveApprovalIds.toSet())
         return handle
     }
 
-    fun take(handle: String, action: String, current: List<UiTask>): UiTask {
+    fun take(handle: String, action: String, current: List<UiTask>, positiveApprovalId: String? = null): UiTask {
         val reviewed = entries.remove(handle) ?: throw IllegalStateException("原审阅已关闭或已使用，请重新核对原任务")
         check(now() < reviewed.expires) { "原审阅已过期，请重新核对原任务" }
         check(action in reviewed.actions) { "这项操作不在原审阅范围内" }
+        if (positiveApprovalId != null) check(positiveApprovalId in reviewed.positiveApprovalIds) { "尚未读取这项操作的完整范围，请重新核对" }
         val actual = current.firstOrNull { it.id == reviewed.task.id }
         check(actual != null && identity(actual) == reviewed.identity) { "原任务已变化，未沿用旧审阅执行；请重新核对" }
         return reviewed.task
@@ -126,7 +127,7 @@ internal class PocketWebBridge(
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "quickVoice.start", "quickVoice.save", "quickVoice.close",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
-            "tasks.refresh", "tasks.open", "tasks.close", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.answerQuestion", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
+            "tasks.refresh", "tasks.open", "tasks.close", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.close", "usage.reestimate",
@@ -318,6 +319,16 @@ internal class PocketWebBridge(
                 controller.cancelChatFromWeb(expected) { result, error -> complete(id, result, error) }
                 return
             }
+            if (action in PocketWebOwnerQuestions.commands) {
+                val field = if (action == PocketWebOwnerQuestions.CHOOSE) "optionId" else "text"
+                checkedPayload(args, setOf("reviewHandle", field))
+                val task = reviews.take(requiredString(args, "reviewHandle"), action, controller.state.tasks)
+                require(canUseTaskControls(task) && !specialOwnerTask(task)) { "原问题审核窗口已关闭" }
+                PocketWebOwnerQuestions.dispatch(controller, task, action, args) { result, error ->
+                    complete(id, result, error, "outcome_unknown"); publishState()
+                }
+                return
+            }
             if (action == "tasks.review") {
                 val taskId = requiredString(args, "id")
                 requireTask(taskId)
@@ -334,8 +345,27 @@ internal class PocketWebBridge(
                     } else if (error != null || task == null) {
                         complete(id, null, error ?: "任务结果尚未读取，请重试")
                     } else {
-                        try { complete(id, reviewTask(task), null); publishState() }
-                        catch (failure: Exception) { complete(id, null, failure.message ?: "任务结果暂时无法核对") }
+                        val captured = task.copy(raw = JSONObject(task.raw.toString()))
+                        fun finish(approvals: JSONArray) {
+                            val latestNavigation = Triple(controller.state.requestedTaskRevision, controller.state.requestedProjectRevision, controller.state.requestedConnectionRevision)
+                            if (generation != taskReviewGeneration || document != documentId || navigation != latestNavigation) {
+                                complete(id, null, "原任务窗口已关闭，请重新打开后核对")
+                            } else {
+                                complete(id, reviewTask(captured, approvals), null); publishState()
+                            }
+                        }
+                        try {
+                            if (pendingCapabilityApprovals(captured).any(PocketWebApprovals::isTeamPlan)) {
+                                controller.runEcosystemControlWork(Runnable {
+                                    val result = runCatching { PocketWebApprovals.read(captured, controller) }
+                                    main.post {
+                                        if (!closed) result.fold({ approvals ->
+                                            try { finish(approvals) } catch (failure: Exception) { complete(id, null, failure.message ?: "任务结果暂时无法核对") }
+                                        }, { failure -> complete(id, null, failure.message ?: "原计划暂时无法读取") })
+                                    }
+                                })
+                            } else finish(PocketWebApprovals.read(captured, controller))
+                        } catch (failure: Exception) { complete(id, null, failure.message ?: "任务结果暂时无法核对") }
                     }
                 }
                 return
@@ -604,20 +634,17 @@ internal class PocketWebBridge(
                 require(canUseTaskControls(task) && !specialOwnerTask(task) && (isPhoneTask(task) || task.raw.optString("kind") == "assistant")) { "请回这项任务的原能力审核窗口操作" }
                 controller.stopReviewedTask(task)
             }
-            "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.answerQuestion" -> {
-                val answer = if (action == "tasks.answerQuestion") requiredString(args, "text").also { require(it.isNotBlank() && it.length <= 4000) { "请输入1至4000字的回答" } } else ""
-                val task = reviews.take(requiredString(args, "reviewHandle"), action, controller.state.tasks)
+            "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope" -> {
+                val positiveApprovalId = if (action == "tasks.approve" && requiredBoolean(args, "approved")) requiredString(args, "approvalId") else null
+                val task = reviews.take(requiredString(args, "reviewHandle"), action, controller.state.tasks, positiveApprovalId)
                 require(canUseTaskControls(task)) { "原审核窗口已关闭" }
                 when (action) {
-                    "tasks.answerQuestion" -> {
-                        val question = dev.pocketengine.features.assistant.OwnerQuestionInputs.pageQuestion(task.raw) ?: error("原问题已变化，请重新核对")
-                        require(!question.optBoolean("answered")) { "原问题已经回答" }
-                        controller.answerOwnerQuestionFromWeb(question.getJSONObject("identity"), answer)
-                    }
                     "tasks.confirm" -> controller.confirmReviewedTask(task, requiredBoolean(args, "completed"), if (isGroup(task)) "" else args.optString("feedback"))
                     "tasks.approve" -> {
                         val approval = requiredString(args, "approvalId")
-                        require(pendingCapabilityApprovals(task).any { it.optString("approvalId", it.optString("id")) == approval }) { "这项授权不在原审阅中" }
+                        val original = pendingCapabilityApprovals(task).firstOrNull { it.optString("approvalId", it.optString("id")) == approval }
+                            ?: error("这项授权不在原审阅中")
+                        PocketWebApprovals.requireDecision(original, args)
                         controller.approveCapability(task, approval, requiredBoolean(args, "approved"))
                     }
                     "tasks.resolve" -> {
@@ -1037,31 +1064,33 @@ internal class PocketWebBridge(
         }
     }
 
-    private fun reviewTask(task: UiTask): JSONObject {
+    private fun reviewTask(task: UiTask, approvalViews: JSONArray): JSONObject {
         val allowed = linkedMapOf<String, String>()
         val special = specialOwnerTask(task)
         val unknown = unresolvedForReview(task)
         val approvals = pendingCapabilityApprovals(task)
         // Derive this view from the original private native task, never Web-provided identity.
-        val question = runCatching { dev.pocketengine.features.assistant.OwnerQuestionInputs.pageQuestion(task.raw) }.getOrNull()
+        val question = PocketWebOwnerQuestions.view(task.raw)
         val screenshot = task.raw.optJSONObject("evidence")?.optJSONObject("screenshot")
         if (task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" &&
             task.raw.optJSONObject("origin")?.optString("kind") !in setOf("group", "paired_device") &&
             screenshot?.optString("imageId")?.isNotBlank() == true && screenshot.optString("state") != "deleted") allowed["tasks.deleteScreenshot"] = "删除这张本机截图"
         if (canUseTaskControls(task) && !special) {
-            if (question != null && !question.optBoolean("answered")) allowed["tasks.answerQuestion"] = "回答原问题"
+            PocketWebOwnerQuestions.actions(question).forEach { allowed[it] = if (it == PocketWebOwnerQuestions.CHOOSE) "选择原问题答案" else "回答原问题" }
             if (task.status == "needs_confirmation" && task.id != controller.state.activeTaskId) allowed["tasks.confirm"] = "核对结果"
             if (approvals.isNotEmpty()) allowed["tasks.approve"] = "审阅操作授权"
             if (unknown.any { it.optString("operationId", it.optString("id")).isNotBlank() }) allowed["tasks.resolve"] = "核对原操作"
-            if ((isPhoneTask(task) || task.raw.optString("kind") == "assistant") && task.id != controller.state.activeTaskId && task.status in setOf("paused", "awaiting_user", "needs_confirmation", "interrupted") && !task.raw.optBoolean("cancelRequested") && unknown.isEmpty() && approvals.isEmpty()) allowed["tasks.resume"] = "确认继续原任务"
+            if (!PocketWebOwnerQuestions.blocksGenericResume(task.raw) && (isPhoneTask(task) || task.raw.optString("kind") == "assistant") && task.id != controller.state.activeTaskId && task.status in setOf("paused", "awaiting_user", "needs_confirmation", "interrupted") && !task.raw.optBoolean("cancelRequested") && unknown.isEmpty() && approvals.isEmpty()) allowed["tasks.resume"] = "确认继续原任务"
             if (!isGroup(task) && task.raw.optJSONObject("executionScope") != null && task.status !in setOf("completed", "cancelled", "canceled", "failed", "interrupted", "reconciling")) allowed["tasks.scope"] = "调整原任务范围"
         }
-        val handle = reviews.create(task, allowed.keys)
+        val positiveApprovalIds = approvalViews.objects().filter { it.optJSONObject("webReview")?.optBoolean("canApprove") == true }
+            .map { it.optString("approvalId", it.optString("id")) }.filter { it.isNotBlank() }.toSet()
+        val handle = reviews.create(task, allowed.keys, positiveApprovalIds)
         return JSONObject().put("reviewHandle", handle).put("expiresInMs", 120_000)
             .put("task", PocketWebState.task(task, images = true))
-            .put("ownerQuestion", question?.let { JSONObject().put("question", it.getString("question")).put("answered", it.optBoolean("answered")) } ?: JSONObject.NULL)
+            .put("ownerQuestion", question ?: JSONObject.NULL)
             .put("actions", JSONArray().also { out -> allowed.forEach { (action, label) -> out.put(JSONObject().put("action", action).put("label", label)) } })
-            .put("approvals", PocketWebState.publicValue(JSONArray(approvals)))
+            .put("approvals", PocketWebState.publicValue(approvalViews))
             .put("unresolvedOperations", PocketWebState.publicValue(JSONArray(unknown)))
     }
 

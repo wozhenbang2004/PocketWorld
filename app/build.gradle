@@ -62,6 +62,7 @@ dependencyLocking { lockAllConfigurations() }
 def helperTask = tasks.register('buildDisplayHelper', Exec) {
     inputs.dir(rootProject.file('display-helper/src'))
     inputs.file('src/main/java/dev/pocketengine/phone/display/DisplayWire.java')
+    inputs.file('src/main/java/dev/pocketengine/phone/display/PhoneParallelCapabilities.java')
     inputs.file(rootProject.file('tools/build-display-helper.sh'))
     outputs.file(layout.buildDirectory.file('generated/display-helper-assets/pocketengine-display-helper.jar'))
     commandLine 'bash', rootProject.file('tools/build-display-helper.sh').absolutePath, layout.buildDirectory.file('generated/display-helper-assets/pocketengine-display-helper.jar').get().asFile.absolutePath

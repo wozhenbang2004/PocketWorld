@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
@@ -47,8 +46,6 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -987,9 +984,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                 if (settingsSection == 0) SettingsSurface(state.modelName.ifBlank { "选择模型" }, if (state.modelRoute == "account") "ChatGPT 套餐" else "API 连接") {
                     SettingEntry("ChatGPT 账号与模型目录", "连接账号，选择可用模型") { controller.openConnection("accounts") }
                     HorizontalDivider(color = Line)
-                    SettingEntry("API 模型目录", "核对能力与请求参数") { controller.openConnection("models") }
-                    HorizontalDivider(color = Line)
-                    SettingEntry("编辑 API 连接", "选择原连接，再核对接口地址、密钥与输入能力") { controller.openConnection("models") }
+                    SettingEntry("API 连接与模型目录", "按原连接编辑参数、截图发送与输入能力") { controller.openConnection("models") }
                     if (state.modelRoute == "account") {
                         Text("当前账号模型：" + state.modelName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
                         SettingEntry("选择已保存的 API 连接", "选择用于后续任务的连接；正在执行的任务保留原模型") { controller.openConnection("models") }
@@ -1020,7 +1015,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地按需取图", fontSize = 14.sp); Text("独立于云截图发送；关闭后不会为 OCR 采集像素。更改用于后续运行。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localCaptureAllowed, { controller.saveLocalObservation(it, state.localOcrAllowed) }) }
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地 OCR", fontSize = 14.sp); Text("优先本地识字。像素不外发，但识别文字会作为有来源的上下文发送给所选推理服务。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localOcrAllowed, { controller.saveLocalObservation(state.localCaptureAllowed, it) }) }
                     BackgroundConnectionSummary(state, controller, compact = true)
-                    SettingEntry("视觉补充", if (state.screenshots) "已允许按需发送截图，优先读取结构树" else "未允许发送截图，可在模型连接中调整") { controller.openConnection("models") }
+                    SettingEntry("视觉补充", if (state.screenshots) "当前模型允许按需发送截图；在原 API 连接中调整" else "当前模型未允许发送截图；在原 API 连接中调整") { controller.openConnection("models") }
                     HorizontalDivider(color = Line)
                     SettingEntry("其他应用通知预览", "本机选择应用并复核；不会自动发送模型", { close(); controller.openNotificationPreviews() })
                     HorizontalDivider(color = Line)
@@ -1110,4 +1105,3 @@ private fun TaskImage(task: UiTask) { val url = task.raw.optJSONObject("evidence
 @Composable
 private fun LineIcon(kind: Int) { val ink = Ink; Canvas(Modifier.size(22.dp)) { val w = size.width; val h = size.height; val stroke = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round); when (kind) { 0 -> { val p = Path().apply { moveTo(w * .14f, h * .15f); lineTo(w * .86f, h * .15f); lineTo(w * .86f, h * .72f); lineTo(w * .43f, h * .72f); lineTo(w * .22f, h * .9f); lineTo(w * .22f, h * .72f); lineTo(w * .14f, h * .72f); close() }; drawPath(p, ink, style = stroke) }; 1 -> { drawRoundRect(ink, topLeft = androidx.compose.ui.geometry.Offset(w * .2f, h * .13f), size = androidx.compose.ui.geometry.Size(w * .6f, h * .75f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()), style = stroke); val p = Path().apply { moveTo(w * .34f, h * .5f); lineTo(w * .46f, h * .62f); lineTo(w * .68f, h * .37f) }; drawPath(p, ink, style = stroke) }; 2 -> { val p = Path().apply { moveTo(w * .12f, h * .3f); lineTo(w * .4f, h * .3f); lineTo(w * .48f, h * .2f); lineTo(w * .86f, h * .2f); lineTo(w * .86f, h * .82f); lineTo(w * .12f, h * .82f); close() }; drawPath(p, ink, style = stroke) }; else -> { for (y in listOf(.25f, .5f, .75f)) drawLine(ink, androidx.compose.ui.geometry.Offset(w * .15f, h * y), androidx.compose.ui.geometry.Offset(w * .85f, h * y), strokeWidth = 1.7.dp.toPx(), cap = StrokeCap.Round) } } } }
 private fun date(value: Long): String = if (value <= 0) "" else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(value))
- catch (_: Exception) { false }

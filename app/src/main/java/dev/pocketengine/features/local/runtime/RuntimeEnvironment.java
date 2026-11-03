@@ -168,8 +168,13 @@ public final class RuntimeEnvironment {
     }
     synchronized void requireGenerationIdle(String identity) throws Exception {
         if(identity==null||identity.isEmpty())return;
-        if(generationLeases.getOrDefault(identity,0)>0)throw new IllegalStateException("runtime_generation_in_use");
+        requireGenerationUnleased(identity);
         usage.requireIdle(identity);
+    }
+    /** Local publication fence only; the original persisted-job usage check runs outside the profile monitor. */
+    synchronized void requireGenerationUnleased(String identity) {
+        requireNotMaintaining();
+        if(generationLeases.getOrDefault(identity,0)>0)throw new IllegalStateException("runtime_generation_in_use");
     }
     private File location(Package spec) throws Exception {return new File(RuntimeFiles.directory(root,spec.id),spec.identity);}
     private static long expandedBytes(JSONObject descriptor) throws Exception {

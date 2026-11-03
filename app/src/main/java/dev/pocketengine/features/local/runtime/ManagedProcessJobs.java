@@ -450,8 +450,9 @@ public final class ManagedProcessJobs implements AutoCloseable {
             job.invocation.checkCurrent();java.util.Objects.requireNonNull(inputGate).check();
             synchronized(job){ref.requireReceipt(job.receipt);if(job.terminalInput==null||job.cancel||!"running".equals(job.receipt.optString("status"))||!Boolean.TRUE.equals(job.receipt.opt("nativeStartObserved"))||Boolean.TRUE.equals(job.receipt.opt("resourcesReleased")))throw new SecurityException("runtime_pty_input_session_not_live");}
             ticket=job.terminalInput.offer(inputOperation,request,inputGate);
-        }catch(SecurityException|IllegalArgumentException notQueued){
+        }catch(Exception notQueued){
             if(job!=null&&job.terminalInput!=null&&job.terminalInput.hasRequest(inputOperation))throw notQueued;
+            // Includes cancellation and checked gate failures, but only before any ticket exists.
             // This invocation has not entered any native IO queue. This proof is private typed
             // host evidence, not inferred from an external accepted=false or missing PID.
             JSONObject actual=new JSONObject().put("inputOperationId",inputOperation).put("inputDigest",ProjectSources.digest(request)).put("inputSequence",0).put("action",request.getString("action")).put("status","not_dispatched").put("requestedBytes",request.has("text")?dev.pocketengine.features.local.project.ProjectCommandSpec.encode(request.getString("text")).length:request.optString("action").equals("eof")?1:0).put("writtenBytes",0).put("nativeErrno",0).put("rows",0).put("columns",0).put("nativeAcknowledged",false).put("nativeQueueNeverEntered",true).put("inputTextIncluded",false).put("processTerminal",false).put("replayAllowed",false).put("reason",notQueued.getMessage()==null?"runtime_pty_input_rejected_before_queue":notQueued.getMessage());

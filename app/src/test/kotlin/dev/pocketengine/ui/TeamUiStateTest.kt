@@ -91,4 +91,37 @@ class TeamUiStateTest {
         assertEquals("Claude Code", teamRunnerLabel("claude"))
     }
 
+    @Test fun usableAccountModelCanLaunchWithoutAnApiUrl() {
+        val account = PocketUiState(modelRoute = "account", modelName = "account-model", accountModelAvailable = true)
+        assertTrue(account.baseUrl.isEmpty())
+        assertTrue(teamLaunchable(team(slot()), account))
+        assertTrue(teamLaunchable(team(slot().put("model", "account-model")), account))
+        assertFalse(teamLaunchable(team(slot().put("model", "another-model")), account))
+    }
+
+    @Test fun accountRouteNeverBorrowsApiUrlOrAnUnavailableNativeModel() {
+        val account = PocketUiState(modelRoute = "account", modelName = "account-model", accountModelAvailable = true)
+        assertFalse(teamLaunchable(team(slot()), account.copy(accountModelAvailable = false)))
+        assertFalse(teamLaunchable(team(slot()), account.copy(accountModelAvailable = false, baseUrl = "https://old.example/v1")))
+        assertFalse(teamLaunchable(team(slot()), account.copy(modelName = "")))
+        assertFalse(teamLaunchable(team(slot()), account.copy(modelRoute = "invalid", baseUrl = "https://old.example/v1")))
+        assertFalse(teamLaunchable(team(slot()), account.copy(modelRoute = "api_key")))
+        assertFalse(teamLaunchable(team(slot()), PocketUiState(baseUrl = "https://model.example/v1")))
+    }
+
+    @Test fun accountReadinessKeepsProduceAndExactRemoteProbeGates() {
+        val local = slot()
+        val remote = slot("codex_app_server").put("id", "remote")
+        val mixed = team(local).put("members", JSONArray().put(local).put(remote))
+        val account = PocketUiState(modelRoute = "account", modelName = "account-model", accountModelAvailable = true)
+        assertFalse(teamLaunchable(mixed, account))
+        val proof = JSONObject().put("slot", remote.toString()).put("receipt", JSONObject().put("available", true))
+        val verified = account.copy(teamMemberProbes = mapOf("team-a:remote" to proof))
+        assertTrue(teamLaunchable(mixed, verified))
+        assertFalse(teamLaunchable(mixed, verified.copy(accountModelAvailable = false)))
+        assertFalse(teamLaunchable(JSONObject(mixed.toString()).put("mode", "produce"), verified))
+        assertFalse(teamLaunchable(JSONObject(mixed.toString()).put("members", JSONArray()), verified))
+        assertFalse(teamLaunchable(team(slot("kimi")), verified))
+    }
+
 }

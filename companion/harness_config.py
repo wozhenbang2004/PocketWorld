@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import select
+import sqlite3
 import subprocess
 import time
 try:
@@ -1137,6 +1138,8 @@ class HarnessConfigs:
         return {"resourceKey": resource, "restoreAfterRaw": mutation["afterRaw"] if mutation["restoreOf"] is not None else None}
 
     def _cold_restore_proof(self, original, target):
+        if self.db.in_transaction:
+            raise ConfigError("Original ledger has an unresolved transaction; cold root restoration is unconfirmed")
         if target["family"] == "pi":
             partial = self._pi_partial_recovery(original, target, self._read(target))
             if partial:
@@ -1150,7 +1153,10 @@ class HarnessConfigs:
             raise ConfigError("Original configuration receipt/cleanup proof is missing or changed")
         never_started = proof.get("jobNeverBound") is True and proof.get("notStartedConfirmed") is True
         settled = proof.get("jobStatus") in {"completed", "failed", "cancelled", "blocked"} and proof.get("processCleanupProof", {}).get("processGroupStoppedVerified") is True
-        if not (never_started or settled):
+        cold_retired = self._valid_cold_root_retirement(original, proof)
+        cold_form = any(key in proof for key in ("protocol", "retirementId", "explicitOriginalOwnerCancellation", "configurationHomePin", "storedTurnProof", "coldProcess", "originalProcessGroup"))
+        release_verified = cold_retired if cold_form else never_started or settled
+        if not release_verified:
             raise ConfigError("Original process exit was not verified; missing PID does not release the root")
         # No endpoint is registered and no grant/token lifetime is extended here. Only
         # an explicitly reviewed compensation plan may move to the new generation.
@@ -1251,6 +1257,172 @@ class HarnessConfigs:
         if callback is not None:
             callback(plan["request"]["endpointLeaseRef"], job, plan["request"])
         return {SUPPORTED[target["family"]][3]: target["root"]}
+
+    def cold_codex_source(self, job, env):
+        """Read-only source identity, never a live lease or dispatch authorization.
+
+        Restart changes the environment generation. Only stable, previously recorded
+        file/root identities may cross it for a stored-turn read. In particular this
+        must not call job_environment, _lease, _receipt or endpoint callbacks.
+        """
+        operation = identifier(job.get("harnessConfigOperationId"))
+        row = self.db.execute("SELECT private_plan,digest FROM harness_plans WHERE operation_id=?", (operation,)).fetchone()
+        if row is None:
+            raise ConfigError("Original Codex configuration source is missing")
+        plan = json.loads(row[0])
+        receipt = self._operation(operation)
+        if row[1] != plan["planDigest"] or receipt.get("planDigest") != plan["planDigest"] or receipt["state"] != "COMMITTED" or plan["restoreOf"] is not None:
+            raise ConfigError("Original Codex configuration source is not committed/unchanged")
+        _, target = self._target(plan["request"], current=False)
+        identity = plan["identity"]
+        stable = ("family", "root", "rootIdentity", "bindingId", "physicalRootKey", "scope", "executable")
+        if job.get("worker") != "codex_app_server" or target["family"] != "codex" or job.get("environmentId") != target["environmentId"] or any(target.get(key) != plan["target"].get(key) for key in stable):
+            raise ConfigError("Original Codex configuration home/root identity changed")
+        request = {"harnessConfigOperationId": operation, "harnessOwnerBinding": {key: plan["request"][key] for key in ("taskId", "runId", "epoch", "profileDigest", "endpointLeaseRef")}}
+        if job.get("_harnessConfigRequest") != request:
+            raise ConfigError("Original Codex configuration owner/source binding is missing")
+        executable, stamp = self._executable(target)
+        if str(executable) != identity["executable"] or stamp != identity["executableIdentity"] or identity["rootIdentity"] != target["rootIdentity"] or identity["adapterRevision"] != ADAPTER:
+            raise ConfigError("Original Codex configuration executable identity changed")
+        self._overrides(env, target)
+        if self._read(target) != plan["afterRaw"] or not self._references_current(target, plan):
+            raise ConfigError("Original Codex configuration contents changed")
+        return {"format": "codex_config_home_v1", "operationId": operation, "planDigest": plan["planDigest"], "receiptDigest": digest(receipt),
+                "ownerBindingDigest": digest(request), "home": target["root"], "rootIdentity": target["rootIdentity"], "bindingId": target["bindingId"],
+                "executable": str(executable), "executableIdentity": stamp, "configurationDigest": digest(plan["afterRaw"]), "harnessDefinitionsDigest": digest(env.get("harnesses", []))}
+
+    def cold_codex_continuation(self, source, request, env):
+        """A new current owner configuration may continue only the original home.
+
+        This check does not revive the old endpoint or release/rebind its root. The
+        normal job_environment hook still requires and binds the new live lease.
+        """
+        pin = source.get("_coldConfigHome")
+        if not pin and source.get("status") != "interrupted":
+            return  # Legacy ordinary settled continuations retain their existing contract.
+        if not ("harnessConfigOperationId" in source or "_harnessConfigRequest" in source):
+            if source.get("status") == "interrupted" and any(key in request for key in ("harnessConfigOperationId", "harnessOwnerBinding")):
+                raise ConfigError("An unconfigured cold proof cannot switch into a Harness configuration home")
+            return
+        if not isinstance(pin, dict) or pin.get("format") != "codex_config_home_v1" or "harnessConfigOperationId" not in request or "harnessOwnerBinding" not in request:
+            raise ConfigError("Configured Codex continuation requires its pinned home and a NEW current owner configuration")
+        candidate = {"environmentId": source["environmentId"], "worker": "codex_app_server", "harnessConfigOperationId": request["harnessConfigOperationId"],
+                     "_harnessConfigRequest": {key: request[key] for key in ("harnessConfigOperationId", "harnessOwnerBinding")}}
+        current = self.cold_codex_source(candidate, env)
+        if any(current.get(key) != pin.get(key) for key in ("home", "rootIdentity", "bindingId", "executable", "executableIdentity")):
+            raise ConfigError("Configured Codex continuation cannot switch the original home/root/executable")
+
+    def _cold_root_record(self, job):
+        if self.db.in_transaction:
+            raise ConfigError("Original ledger has an unresolved transaction; cold root retirement is unconfirmed")
+        row = self.db.execute("SELECT private_plan FROM harness_plans WHERE operation_id=?", (identifier(job.get("harnessConfigOperationId")),)).fetchone()
+        if row is None:
+            raise ConfigError("Original configuration root operation is missing")
+        plan = json.loads(row[0])
+        lease = self.db.execute("SELECT operation_id,binding_id,job_id,state,proof FROM harness_root_leases WHERE resource_key=?", (plan["target"]["resourceKey"],)).fetchone()
+        return plan, lease
+
+    def active_cold_root(self, job):
+        try:
+            plan, lease = self._cold_root_record(job)
+            if lease is not None and lease[:4] == (plan["operationId"], plan["target"]["bindingId"], job["id"], "ACTIVE"):
+                return (plan["target"]["resourceKey"], *lease)
+        except (ConfigError, ValueError, KeyError, TypeError):
+            pass
+        return None
+
+    def _valid_cold_root_retirement(self, plan, proof):
+        import cold_session
+        try:
+            pin, turn = proof["configurationHomePin"], proof["storedTurnProof"]
+            first, second = proof["coldProcess"], proof["originalProcessGroup"]
+            identity = plan["identity"]
+            owner_request = {"harnessConfigOperationId": plan["operationId"], "harnessOwnerBinding": {key: plan["request"][key] for key in ("taskId", "runId", "epoch", "profileDigest", "endpointLeaseRef")}}
+            return (plan["restoreOf"] is None and identity["family"] == "codex" and proof["protocol"] == cold_session.COLD_ROOT_RETIREMENT and proof["explicitOriginalOwnerCancellation"] is True
+                    and proof["jobStatus"] == "interrupted" and proof["configurationOperationId"] == plan["operationId"] and proof["configReceiptDigest"] == digest(self._operation(plan["operationId"]))
+                    and proof["rootResourceKey"] == plan["target"]["resourceKey"] and proof["physicalRootKey"] == plan["target"]["physicalRootKey"]
+                    and pin["format"] == "codex_config_home_v1" and pin["operationId"] == plan["operationId"] and pin["planDigest"] == plan["planDigest"] and pin["receiptDigest"] == proof["configReceiptDigest"]
+                    and pin["configurationDigest"] == digest(plan["afterRaw"]) and pin["ownerBindingDigest"] == digest(owner_request)
+                    and pin["home"] == plan["target"]["root"] and pin["rootIdentity"] == identity["rootIdentity"] and pin["bindingId"] == identity["bindingId"]
+                    and pin["executable"] == identity["executable"] and pin["executableIdentity"] == identity["executableIdentity"]
+                    and turn["jobId"] == proof["jobId"] and turn["jobOperationId"] == proof["jobOperationId"] and turn["format"] == cold_session.PROTOCOL
+                    and turn["configurationHomeHash"] == cold_session._digest(pin) and first["scope"]["configurationHomeHash"] == turn["configurationHomeHash"]
+                    and first["format"] == cold_session.PROTOCOL and second["format"] == cold_session.GROUP_PROTOCOL and turn["processIdentityHash"] == cold_session._digest(first)
+                    and pin["harnessDefinitionsDigest"] == first["scope"]["harnessDefinitionsHash"]
+                    and all(first["scope"][key] == second["scope"][key] for key in ("jobId", "jobOperationId", "environmentId", "worker", "resourceId", "workspaceIdentity", "requestFingerprint", "environmentConfigHash"))
+                    and all(turn[key] == first["scope"][key] for key in ("jobId", "jobOperationId", "environmentId", "worker", "workspaceIdentity", "environmentConfigHash"))
+                    and turn["storedLatestTurnVerified"] is True and turn["processGroupStoppedVerified"] is True and turn["readOnlyInspection"] is True and turn["turnStartedByInspection"] is False and turn["observedTurnStatus"] in {"completed", "failed", "interrupted"}
+                    and turn["businessSuccessVerified"] is False and turn["internalUsageKnown"] is False and re.fullmatch(r"[a-f0-9-]{36}", proof["retirementId"]) is not None and re.fullmatch(r"[a-f0-9-]{36}", turn["proofId"]) is not None
+                    and all(first[key] == second[key] for key in ("bootId", "pidNamespace"))
+                    and all(first["process"][key] == second["process"][key] for key in ("pid", "pgid", "sessionId", "startTicks", "uid"))
+                    and proof["processCleanupProof"]["processGroupStoppedVerified"] is True and proof["processCleanupProof"]["verificationMethod"] == "original_pgid_esrch"
+                    and proof["oldEndpointRevived"] is False and proof["newExecutionAuthorized"] is False and proof["effectsReversed"] is False)
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _cold_retirement_summary(proof):
+        return {"protocol": proof["protocol"], "status": "retired", "retirementId": proof["retirementId"], "jobId": proof["jobId"], "jobOperationId": proof["jobOperationId"],
+                "configurationOperationId": proof["configurationOperationId"], "readOnlyProofId": proof["storedTurnProof"]["proofId"],
+                "oldEndpointRevived": False, "newExecutionAuthorized": False, "effectsReversed": False}
+
+    def cold_root_retirement(self, job):
+        plan, lease = self._cold_root_record(job)
+        if lease is not None and lease[:4] == (plan["operationId"], plan["target"]["bindingId"], None, "CONFIGURED"):
+            proof = json.loads(lease[4])
+            if self._valid_cold_root_retirement(plan, proof) and proof["jobId"] == job["id"] and proof["jobOperationId"] == job["operationId"]:
+                return self._cold_retirement_summary(proof)
+        previous = job.get("harnessColdRootRetirement")
+        if isinstance(previous, dict) and previous.get("status") == "retired" and previous.get("jobId") == job["id"] and previous.get("jobOperationId") == job["operationId"] and previous.get("configurationOperationId") == plan["operationId"] and (lease is None or lease[0] != plan["operationId"]):
+            return previous  # Acknowledged retirement is history after explicit restoration/reconfiguration.
+        return None
+
+    def retire_cold_root(self, job, expected, evidence):
+        """One exact owner action retires only the old ACTIVE root, never its grant."""
+        plan, lease = self._cold_root_record(job)
+        if (plan["target"]["resourceKey"], *(lease or ())) != expected or self.active_cold_root(job) != expected:
+            raise ConfigError("Original active root changed before explicit retirement")
+        bound = json.loads(lease[4])
+        if bound.get("configurationOperationId") != plan["operationId"] or bound.get("jobId") != job["id"] or bound.get("jobNeverBound") is not False:
+            raise ConfigError("Original active root binding proof changed")
+        proof = {**evidence, "configurationOperationId": plan["operationId"], "configReceiptDigest": digest(self._operation(plan["operationId"])),
+                 "rootResourceKey": plan["target"]["resourceKey"], "physicalRootKey": plan["target"]["physicalRootKey"], "jobNeverBound": False}
+        if not self._valid_cold_root_retirement(plan, proof):
+            raise ConfigError("Original explicit cold root retirement evidence is incomplete")
+        # Never leave an uncertain retirement transaction on the shared ledger:
+        # unrelated job saves must not commit it, and GET/restore must never read
+        # its uncommitted CONFIGURED row as a durable outcome. This connection is
+        # private to this one exact CAS and is always discarded after the attempt.
+        database = next((row[2] for row in self.db.execute("PRAGMA database_list") if row[1] == "main"), None)
+        if database != str(self.manager.state / "operations.sqlite3") or self.db.in_transaction:
+            raise ConfigError("Original ledger identity or committed state is unconfirmed; no root was retired")
+        writer = None
+        try:
+            # mode=rw opens only the existing original database, never creates a
+            # second ledger. Filesystem replacement remains OPTIMISTIC.
+            writer = sqlite3.connect(Path(database).as_uri() + "?mode=rw", uri=True)
+            writer.execute("PRAGMA synchronous=FULL")
+            changed = writer.execute("UPDATE harness_root_leases SET job_id=NULL,state='CONFIGURED',proof=? WHERE resource_key=? AND operation_id=? AND binding_id=? AND job_id=? AND state='ACTIVE' AND proof=?",
+                                     (encoded(proof), expected[0], expected[1], expected[2], expected[3], expected[5])).rowcount
+            if changed != 1:
+                raise ConfigError("Original root changed before retirement; no replacement lease was touched")
+            writer.commit()
+        except Exception as failure:
+            if writer is not None:
+                try:
+                    writer.rollback()
+                except Exception:
+                    pass  # This writer is never used to read/reconcile an outcome.
+            if isinstance(failure, ConfigError):
+                raise
+            raise ConfigError("Original root retirement persistence is unconfirmed; query the original job before retrying") from failure
+        finally:
+            if writer is not None:
+                try:
+                    writer.close()
+                except Exception:
+                    pass  # Do not mask the commit error or reuse this private writer.
+        return self._cold_retirement_summary(proof)
 
     @staticmethod
     def _pi_worker_identity(env, plan):

@@ -49,6 +49,23 @@ class PocketWebTaskReviewsTest {
         reject { clock.reviews.take("forged-review-handle", "tasks.approve", listOf(original)) }
     }
 
+    @Test fun missingOriginalPlanDoesNotAllowPositiveApprovalButStillAllowsRejection() {
+        val clock = Clock(); val original = task()
+        val unread = clock.reviews.create(original, setOf("tasks.approve"))
+        reject { clock.reviews.take(unread, "tasks.approve", listOf(original), "approval-a") }
+        val rejectOnly = clock.reviews.create(original, setOf("tasks.approve"))
+        assertEquals(original.id, clock.reviews.take(rejectOnly, "tasks.approve", listOf(original)).id)
+    }
+
+    @Test fun positiveApprovalCannotBorrowAnotherPlansReadReceipt() {
+        val clock = Clock(); val original = task()
+        val wrongPlan = clock.reviews.create(original, setOf("tasks.approve"), setOf("approval-b"))
+        reject { clock.reviews.take(wrongPlan, "tasks.approve", listOf(original), "approval-a") }
+        val exact = clock.reviews.create(original, setOf("tasks.approve"), setOf("approval-a"))
+        assertEquals(original.id, clock.reviews.take(exact, "tasks.approve", listOf(original), "approval-a").id)
+        reject { clock.reviews.take(exact, "tasks.approve", listOf(original), "approval-a") }
+    }
+
     @Test fun exactUnchangedSnapshotIsReturnedOnceAndDoesNotShareMutableJson() {
         val clock = Clock()
         val original = task()

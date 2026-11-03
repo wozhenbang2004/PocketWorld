@@ -19,6 +19,7 @@ public final class EmitBrowserLongPageRead {
         scripts.put("query",BrowserSemanticRead.script(new JSONObject().put("mode","outline").put("query","长页尾端唯一中文词"),"pw_long_page_fixture","fixture_epoch",nonce,namespace));
         scripts.put("missing",BrowserSemanticRead.script(new JSONObject().put("mode","outline").put("query","全文从未存在的唯一词"),"pw_long_page_fixture","fixture_epoch",nonce,namespace));
         scripts.put("region_table",BrowserSemanticRead.script(new JSONObject().put("mode","table").put("regionRef",namespace+":r1"),"pw_long_page_fixture","fixture_epoch",nonce,namespace));
+        scripts.put("region_list",BrowserSemanticRead.script(new JSONObject().put("mode","list").put("regionRef",namespace+":r1"),"pw_long_page_fixture","fixture_epoch",nonce,namespace));
         scripts.put("region_text",BrowserSemanticRead.script(new JSONObject().put("mode","text").put("regionRef",namespace+":r1"),"pw_long_page_fixture","fixture_epoch",nonce,namespace));
         System.out.print(scripts);
     }

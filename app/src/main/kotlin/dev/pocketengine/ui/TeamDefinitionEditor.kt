@@ -27,7 +27,11 @@ internal data class AgentSlotDraft(val id: String, val name: String, val role: S
 }
 internal fun teamLaunchable(team: JSONObject, state: PocketUiState): Boolean = team.optString("mode") != "produce" && team.optJSONArray("members").objects().let { members -> members.isNotEmpty() && members.all { member ->
     when (member.optString("runner", "model")) {
-        "model" -> state.baseUrl.isNotBlank() && state.modelName.isNotBlank()
+        "model" -> state.modelName.isNotBlank() && when (state.modelRoute) {
+            "account" -> state.accountModelAvailable && member.optString("model").let { it.isBlank() || it == state.modelName }
+            "api_key" -> state.baseUrl.isNotBlank()
+            else -> false
+        }
         "codex_app_server", "claude" -> {
             val saved = state.teamMemberProbes[team.optString("id") + ":" + member.optString("id")]
             saved?.optString("slot") == member.toString() && saved?.optJSONObject("receipt")?.optBoolean("available") == true

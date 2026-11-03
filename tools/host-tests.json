@@ -49,6 +49,18 @@
     "robolectric": true,
     "description": "Exact original-source targeted tests; no complete Android, physical device, external service or UI acceptance."
   },
+  "main-model-selection": {
+    "class": "dev.pocketengine.store.SettingsMainSelectionTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original SettingsStore/SharedPreferences explicit MAIN replacements, preserved groups and other purposes, frozen API admission bindings, profile and legacy selection paths, single-commit service selection and before/after/throwing persistence-failure fences. No live provider, Android device or visual acceptance."
+  },
+  "settings-profile-edit-target": {
+    "class": "dev.pocketengine.store.SettingsProfileEditTargetTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original exact profile editor service/settings transactions: retained A versus active MAIN B with the same model name, frozen id/revision, changed selection, CAS refusal, per-connection screenshot/image/output preferences, credential origin/protocol isolation and previous admission bindings. No mounted Compose, provider request, Android device or visual acceptance."
+  },
   "mika-issue-integration": {
     "class": "dev.pocketengine.features.assistant.OwnerSourceProjectionNativeTest",
     "additionalClasses": [
@@ -159,6 +171,12 @@
     ],
     "helpers": [],
     "description": "Actual selected checkout reads, SHA-pinned native literal/glob search and bounded merged context windows; no Android filesystem/provider/SAF/SSH/device acceptance. Explicit source-file hex/ASCII read windows keep byte offsets and whole-file SHA, at most2KiB per page; no binary write authority or decoder claim. Exact-source binary pattern search uses bounded streaming KMP, overlap-safe byte cursors and explicit scan/result budgets, not AST/text decoding or file writes. Explicit exclude glob filters relative file paths before content/hash read, consumes the original2000-entry enumeration bound and is cursor-bound; omitted/empty masks preserve legacy query identity. No hidden/cache/provider permission changes. Direct physical source directory metadata listing includes empty directories and ordinary files, no body/hash read or recursive walk. Two bounded <=2000-entry scans pin metadata digest/cursor, <=40 entries and12KiB/page; hidden/dependency/build exclusions spend enumeration budget, links/specials never followed and omissions explicit. No cross-provider or atomic content-version claim."
+  },
+  "browser-owner-admission": {
+    "class": "dev.pocketengine.browser.BrowserTaskHostAdmissionTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Targeted original App/TaskStore monitor-order and same-run private-owner browser admission races; no model, device or renderer acceptance."
   },
   "browser-expression": {
     "class": "dev.pocketengine.browser.BrowserPageProgramsTest",
@@ -480,6 +498,12 @@
     "helpers": [],
     "description": "Original immutable document creation, bounded OOXML and known formula source/readback: four exact classes, 18 tests; pure JVM files, not Office renderer or device acceptance."
   },
+  "attachment-external-view-lifecycle": {
+    "class": "dev.pocketengine.ui.AttachmentExternalViewLifecycleTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Exact native coordinator/host/snapshot lifecycle: unissued owner and scoped group copies release quota; issued or unknown Android launches retain the original reader TTL. Explicit lifecycle and Android-launch fixtures, not mounted UI or device acceptance."
+  },
   "aion-office-mounted": {
     "class": "dev.pocketengine.ui.AttachmentOutcomeNativeControllerTest",
     "helpers": [],
@@ -511,6 +535,11 @@
     ],
     "robolectric": true,
     "description": "Original owner conversation storage/migrations/transfer and native title/pin organization. Includes mounted Compose owner rename/cancel/pin/unpin and pinned-history refresh; no physical device or visual-design acceptance. Includes interrupted output history and original private-owner question/notification replies with SQL, controlled HTTP model, one-time answer, old notices, cancellation and canonical forgetting. Includes ordinary phone questions retained by the original physical port/service worker, exact same-run continuation, source/lease/expiry/queue race guards, and existing notification routing. The successful phone journey uses actual App admission, Service START, Runner HTTP, posted RemoteInput/PendingIntent and production receiver, with explicit model/tree fixtures; original call audit, lease and once-only input stay checked. Physical Android/device/visual acceptance remains unverified."
+  },
+  "remote-create-model-options": {
+    "class": "dev.pocketengine.features.remote.RemoteAlternativeCreateBodyTest",
+    "helpers": [],
+    "description": "Pure original final-body serializers preserve frozen model/effort/catalog values for project-baseline and private-input creation. Covers omitted overrides, changed catalog bindings, fixed operation/input envelopes and credential/route exclusion. No native claim, HTTP POST, worker, mounted Compose or provider acceptance."
   },
   "remote-transport": {
     "class": "dev.pocketengine.features.remote.RemoteTransportTest",

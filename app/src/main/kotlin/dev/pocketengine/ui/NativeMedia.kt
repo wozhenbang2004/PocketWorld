@@ -25,6 +25,17 @@ internal object MediaOwnerUi {
         if (receipt.optString("requestHash") != TaskStore.capabilityFingerprint(arguments)) return null
         return JSONObject(arguments.toString()).put("taskId", receipt.getString("taskId"))
     }
+    fun originalDownloadReview(receipt: JSONObject?, metadata: JSONObject?, requestId: String?, binding: JSONObject): JSONObject? {
+        if (requestId.isNullOrBlank() || metadata?.optString("_requestId") != requestId || metadata.optBoolean("_failed") || receipt == null) return null
+        val review = receipt.optJSONObject("resultDownloadReview") ?: return null
+        for (field in listOf("operationId", "taskId", "runId", "configurationRevision")) {
+            if (binding.optString(field).isBlank() || review.optString(field) != binding.optString(field) || receipt.optString(field) != binding.optString(field)) return null
+        }
+        if (binding.optInt("epoch") < 1 || review.optInt("epoch", -1) != binding.optInt("epoch") || receipt.optInt("hostEpoch", -1) != binding.optInt("epoch")) return null
+        if (review.optString("reviewId").isBlank() || review.optLong("expiresAt") <= System.currentTimeMillis() || review.optString("method") != "GET" || review.optInt("maxAttempts") != 1 || review.opt("newGeneration") != false || review.opt("redirects") != false) return null
+        if (!review.optString("providerResponseSha256").matches(Regex("[a-f0-9]{64}")) || !review.optString("resultUrlSha256").matches(Regex("[a-f0-9]{64}"))) return null
+        return JSONObject(review.toString())
+    }
     fun binding(task: JSONObject, operation: JSONObject): JSONObject = JSONObject().put("operationId", operation.getString("operationId"))
         .put("taskId", task.getString("id")).put("runId", operation.getString("runId")).put("epoch", task.getInt("coordinatorEpoch"))
         .put("configurationRevision", operation.getJSONObject("arguments").getString("configurationRevision"))
@@ -158,12 +169,13 @@ internal fun NativeMedia(state: PocketUiState, controller: PocketWorldController
 internal fun MediaTaskPanel(task: UiTask, state: PocketUiState, controller: PocketWorldController, showArtifacts: Boolean = true) {
     val operation = MediaOwnerUi.operation(task.raw)
     var cancelReview by remember(task.id) { mutableStateOf(false) }
+    var downloadReviewRequest by remember(task.id, operation?.optString("operationId")) { mutableStateOf<String?>(null) }
     if (operation == null) { PreparedMediaTask(task, state, controller); return }
     val binding = MediaOwnerUi.binding(task.raw, operation)
     val receipt = operation.optJSONObject("receipt") ?: task.raw.optJSONObject("evidence") ?: JSONObject()
     val providerStatus = receipt.optString("providerStatus", receipt.optString("status", "尚未取得回执"))
     val localWait = state.feature("media").optString("activeOperationId") == operation.optString("operationId")
-    val busy = localWait || state.moduleBusy.any { it in setOf("media.getJob", "media.reconcileOperation", "media.fetchResults", "media.cancelJob") }
+    val busy = localWait || state.moduleBusy.any { it in setOf("media.getJob", "media.reconcileOperation", "media.fetchResults", "media.cancelJob", "media.reviewResultDownload", "media.confirmResultDownload") }
     HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Line)
     val saved=receipt.optJSONArray("attachments").objects()
     if(showArtifacts&&saved.isNotEmpty()){
@@ -180,6 +192,19 @@ internal fun MediaTaskPanel(task: UiTask, state: PocketUiState, controller: Pock
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = { controller.requestFeature("media", "reconcileOperation", binding) }, enabled = !busy) { Text("查询原操作") }
         OutlinedButton(onClick = { controller.requestFeature("media", "fetchResults", binding) }, enabled = !busy) { Text("取回原产物") }
+    }
+    if (receipt.optBoolean("ownerResultDownloadReviewAvailable") || receipt.optString("resultStatus") == "owner_download_policy_required") {
+        if (receipt.optString("resultStatus") != "saved") TextButton(onClick = { downloadReviewRequest = controller.requestFeature("media", "reviewResultDownload", JSONObject(binding.toString())) }, enabled = !busy) { Text("审阅并一次允许取回原结果") }
+    }
+    val downloadReview = MediaOwnerUi.originalDownloadReview(state.moduleResults["media.reviewResultDownload"], state.moduleResultInputs["media.reviewResultDownload"], downloadReviewRequest, binding)
+    downloadReview?.let { frozen ->
+        AlertDialog(onDismissRequest = { downloadReviewRequest = null }, title = { Text("一次取回这个原结果？") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("只 GET 已保存的原地址一次，失败后需重新审阅。不重发生成，不修改全局下载开关；仍仅允许 HTTPS 公有地址、不跟随重定向。")
+                Text("原服务：" + frozen.optString("providerOrigin") + "\n结果来源：" + frozen.optString("resultOrigin"))
+                SelectionContainer { Text("原操作：" + frozen.optString("operationId") + "\n原响应 SHA-256：" + frozen.optString("providerResponseSha256") + "\n原地址 SHA-256：" + frozen.optString("resultUrlSha256"), fontSize = 11.sp) }
+            }
+        }, confirmButton = { Button(onClick = { controller.requestFeature("media", "confirmResultDownload", JSONObject(binding.toString()).put("downloadReview", JSONObject(frozen.toString()))); downloadReviewRequest = null }, enabled = !busy) { Text("仅允许这一次下载") } }, dismissButton = { TextButton(onClick = { downloadReviewRequest = null }) { Text("返回") } })
     }
     if (localWait || continued) TextButton(onClick = { controller.requestFeature("media", "cancel", JSONObject().put("operationId", operation.getString("operationId"))) }) { Text("停止本地等待", color = Danger) }
     else TextButton(onClick = { cancelReview = true }, enabled = !busy) { Text("请求定向取消原服务任务", color = Danger) }

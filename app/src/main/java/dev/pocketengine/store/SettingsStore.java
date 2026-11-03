@@ -208,7 +208,7 @@ public final class SettingsStore {
         String encrypted=c.apiKey.isEmpty()?"":encrypt(c.apiKey);
         SharedPreferences.Editor edit=prefs.edit().putString("modelRoute","api_key").remove("accountModelRef").putString("baseUrl",c.baseUrl).putString("model",c.model).putString("provider",c.provider).putString("cleartextConsent",c.cleartextConsent).putInt("maxOutputTokens",c.maxOutputTokens).putString("encryptedKey",encrypted).putBoolean("sendScreenshots",c.sendScreenshots).putBoolean("supportsImageInput",c.supportsImageInput).putInt("maxSteps",c.maxSteps).putInt("requestTimeoutSeconds",c.requestTimeoutSeconds);
         if(binding!=null){edit.putString("apiCatalogBinding",binding.toJson().toString());if(changed||previous==null||!previous.model.equals(c.model))edit.putString("modelReasoning",ReasoningOptions.DEFAULT.toJson().toString()).putInt("modelImageTokenReserve",0);}
-        commitConfirmed(clearMainBinding(edit));
+        commitConfirmed(selectDefaultMain(edit));
         return getApiKeyConfig();
     }
     /** Native owner opt-in. A failed/missing catalog never changes route or guesses capabilities. */
@@ -249,7 +249,7 @@ public final class SettingsStore {
             profiles.rows.put(row.id(),new ApiConnectionProfile(row.name,Math.addExact(row.revision,1),row.enabled,row.secretSlot,selected));
             commitProfiles(profiles,Math.addExact(profiles.selectionRevision,1),true);return getApiKeyConfig();
         }
-        commitConfirmed(clearMainBinding(prefs.edit().putString("modelRoute","api_key").remove("accountModelRef").putString("model",model).putInt("maxOutputTokens",output).putString("modelReasoning",reasoning.toJson().toString()).putInt("modelImageTokenReserve",imageTokenReserve)));
+        commitConfirmed(selectDefaultMain(prefs.edit().putString("modelRoute","api_key").remove("accountModelRef").putString("model",model).putInt("maxOutputTokens",output).putString("modelReasoning",reasoning.toJson().toString()).putInt("modelImageTokenReserve",imageTokenReserve)));
         return getApiKeyConfig();
     }
     /** Native owner only, after the host checks the current account catalog and version. */
@@ -261,7 +261,7 @@ public final class SettingsStore {
     public synchronized ModelConfig selectAccountModel(JSONObject nativeRef,ReasoningOptions reasoning,int imageReserve,int outputReserve)throws Exception {
         requireConfirmed();ModelConfig.AccountModelRef ref=ModelConfig.AccountModelRef.fromJson(nativeRef);
         new ModelConfig("","","",false,1,10).withAccountModel(ref).withAccountOptions(reasoning,imageReserve,outputReserve);
-        commitConfirmed(clearMainBinding(prefs.edit().putString("modelRoute","account").putString("accountModelRef",ref.toJson().toString())
+        commitConfirmed(selectDefaultMain(prefs.edit().putString("modelRoute","account").putString("accountModelRef",ref.toJson().toString())
                 .putString("accountReasoning",reasoning.toJson().toString()).putInt("accountImageReserve",imageReserve).putInt("accountOutputReserve",outputReserve)));
         return get();
     }
@@ -277,7 +277,7 @@ public final class SettingsStore {
     public synchronized ModelConfig useApiKeyModel() throws Exception {
         Profiles profiles=profiles();if(profiles!=null&&!selectedProfile(profiles).enabled)throw new IllegalStateException("当前API连接已停用，请明确启用或选择另一项");
         ModelConfig config=getApiKeyConfig();validate(config);
-        commitConfirmed(clearMainBinding(prefs.edit().putString("modelRoute","api_key").remove("accountModelRef")));
+        commitConfirmed(selectDefaultMain(prefs.edit().putString("modelRoute","api_key").remove("accountModelRef")));
         return config;
     }
     /** Explicit native owner page entry. Existing API settings are atomically moved, never reset. */
@@ -475,12 +475,17 @@ public final class SettingsStore {
         if(ref!=null)captureModelTarget(ref,purpose,"RELAY".equals(purpose)?"EXTERNAL_RELAY":"APP_OWNER",getSelected());
         JSONObject root=modelGroupsDocument(),bindings=root.getJSONObject("purposeBindings");if(ref==null)bindings.remove(purpose);else bindings.put(purpose,ref.toJson());saveModelGroups(root);
     }
-    private void saveModelGroups(JSONObject root)throws Exception {String raw=root.toString();if(raw.getBytes(StandardCharsets.UTF_8).length>131072)throw new IllegalArgumentException("模型组资料超限");commitConfirmed(prefs.edit().putString("modelGroups",raw).putLong("modelGroupSelectionRevision",Math.addExact(prefs.getLong("modelGroupSelectionRevision",0),1)));}
-    /** Explicit main-model choices supersede MAIN in the same commit; other purpose bindings survive. */
-    private SharedPreferences.Editor clearMainBinding(SharedPreferences.Editor edit)throws Exception{
+    private void saveModelGroups(JSONObject root)throws Exception {commitConfirmed(editModelGroups(prefs.edit(),root));}
+    private SharedPreferences.Editor editModelGroups(SharedPreferences.Editor edit,JSONObject root)throws Exception {
+        String raw=root.toString();if(raw.getBytes(StandardCharsets.UTF_8).length>131072)throw new IllegalArgumentException("模型组资料超限");
+        return edit.putString("modelGroups",raw).putLong("modelGroupSelectionRevision",Math.addExact(prefs.getLong("modelGroupSelectionRevision",0),1));
+    }
+    /** An explicit main-model switch uses the newly selected route in the same transaction.
+     * Only MAIN is replaced; reusable groups, other purposes and captured run plans are retained. */
+    private SharedPreferences.Editor selectDefaultMain(SharedPreferences.Editor edit)throws Exception {
         JSONObject root=modelGroupsDocument(),bindings=root.getJSONObject("purposeBindings");
-        if(bindings.has("MAIN")){bindings.remove("MAIN");edit.putString("modelGroups",root.toString()).putLong("modelGroupSelectionRevision",Math.addExact(prefs.getLong("modelGroupSelectionRevision",0),1));}
-        return edit;
+        if(!bindings.has("MAIN"))return edit;
+        bindings.remove("MAIN");return editModelGroups(edit,root);
     }
     public synchronized ModelTargetRef modelPurposeTarget(String purpose)throws Exception {requireConfirmed();JSONObject bindings=modelGroupsDocument().getJSONObject("purposeBindings");JSONObject value=bindings.optJSONObject(purpose);return value==null?null:ModelTargetRef.fromJson(value);}
     /** Explicit native local-service selection. MAIN/SUMMARY group permission never grants external use. */
@@ -570,7 +575,7 @@ public final class SettingsStore {
     }
     private void commitProfiles(Profiles state,long selectionRevision,boolean useApi)throws Exception{
         SharedPreferences.Editor edit=prefs.edit().putString(API_PROFILES,profilesDocument(state,selectionRevision));
-        if(useApi)clearMainBinding(edit.putString("modelRoute","api_key").remove("accountModelRef"));commitConfirmed(edit);
+        if(useApi)edit=selectDefaultMain(edit.putString("modelRoute","api_key").remove("accountModelRef"));commitConfirmed(edit);
     }
     private void migrateApiConnections()throws Exception{
         if(profiles()!=null)return;

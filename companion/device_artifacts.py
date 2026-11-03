@@ -881,7 +881,9 @@ class WindowsArtifactReceiver:
             names.append((descriptor["transferId"] + ".artifact", descriptor["sha256"], descriptor["bytes"]))
             for name, sha, size in names:
                 result = self.backend.delete_private_snapshot(self.root, name, sha, size, lambda: self.current(descriptor, "remove"))
-                if not isinstance(result, dict) or result.get("deleted") is not True or result.get("verified") is not True:
+                # Missing final files and already-cleared chunks are settled only by the
+                # native backend's verified absence, never by an unconfirmed delete.
+                if not isinstance(result, dict) or result.get("verified") is not True or not (result.get("deleted") is True or result.get("alreadyAbsent") is True):
                     raise ArtifactError("Native cache deletion unconfirmed; original entry retained")
             del index["transfers"][descriptor["transferId"]]; self._save(index, old, descriptor, "remove")
 

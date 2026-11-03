@@ -125,6 +125,7 @@ public final class BrowserTaskSpace {
     private final Map<String,JSONObject> sourceAttempts=new LinkedHashMap<>();
     private final Map<String,JSONObject> readObservations=new LinkedHashMap<>();
     private final Map<String,JSONObject> deliveredStructuredObservations=new LinkedHashMap<>();
+    private final Map<String,JSONObject> deliveredOrdinaryObservations=new LinkedHashMap<>();
     private final Map<String,JSONObject> downloadRefs=new LinkedHashMap<>();
     private final Map<String,Tab> nativeCalls=new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String,BrowserPageDialog.Call> callDialogs=new java.util.concurrent.ConcurrentHashMap<>();
@@ -247,9 +248,14 @@ public final class BrowserTaskSpace {
     }
     public JSONObject sequenceObservation(String tabId)throws Exception {main();checkOriginal(originalControl);Tab tab=required(tabId);JSONObject latest=observations.get(tab.tabId);return latest==null?null:copy(latest);}
     public void finalSequenceObservation(JSONObject args,JSONObject delivered)throws Exception {
-        main();checkOriginal(originalControl);if(args.has("read")||delivered.optBoolean("semanticRead"))return;JSONObject captured=observations.get(args.getString("tabId"));if(captured==null)return;captured.put("runnerDelivered",false);
-        if(!delivered.optString("status").equals("observed")||!delivered.optBoolean("ok")||!captured.getString("observationId").equals(delivered.optString("observationId"))||delivered.optJSONArray("elements")==null)return;
+        main();checkOriginal(originalControl);if(args.has("read")||delivered.optBoolean("semanticRead"))return;String tabId=args.getString("tabId");JSONObject captured=observations.get(tabId);if(captured==null||!captured.getString("observationId").equals(delivered.optString("observationId")))return;captured.put("runnerDelivered",false);deliveredOrdinaryObservations.remove(tabId);
+        if(!delivered.optString("status").equals("observed")||!delivered.optBoolean("ok")||delivered.optJSONArray("elements")==null)return;
         presentedObservation(delivered);captured.put("runnerDelivered",true);
+        if(!delivered.optBoolean("accepted")||!(delivered.opt("text") instanceof String))return;
+        JSONObject expected=required(tabId).identity();for(String key:new String[]{"taskId","runId","epoch","profileId","profileRevision","profileIsolation","browserSessionId","browserSpaceId","tabId","tabGeneration"})if(!String.valueOf(expected.get(key)).equals(String.valueOf(delivered.opt(key))))throw new StalePage("来源交付不属于原任务页");
+        // Only the Runner's final safe text is quotable. Keep native action previews/body private
+        // and retain the original observation's currentness and observedAt, never a fresh read.
+        deliveredOrdinaryObservations.put(tabId,new JSONObject().put("observationId",captured.getString("observationId")).put("text",unicodeClip(delivered.getString("text"),6000)));
     }
     public CompletableFuture<JSONObject> dispatch(String command,JSONObject args,String operationId,Gate gate)throws Exception {
         main();checkOriginal(originalControl);gate.check();CompletableFuture<JSONObject> result=new CompletableFuture<>();
@@ -296,7 +302,7 @@ public final class BrowserTaskSpace {
                 result.whenComplete((value,error)->{if(!callDialogs.containsKey(operationId))nativeCalls.remove(operationId,tab);});
                 if(command.equals("observe"))result.thenAccept(value->{try{if(!ended&&tab.current()&&tabs.get(tab.tabId)==tab){JSONObject page=driver.metadata(tab);
                     if(value.optBoolean("semanticRead")){if(value.optString("status").equals("observed")&&value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("navigation")&&pageMatchesObservation(page,value)){JSONObject read=copy(value).put("tabId",tab.tabId).put("observedAt",System.currentTimeMillis()).put("elementPreviews",new JSONArray());BrowserSemanticRead.sourceFacts(read.getJSONObject("read"));readObservations.put(read.getString("observationId"),read);while(readObservations.size()>8)readObservations.remove(readObservations.keySet().iterator().next());}return;}
-if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("navigation"))observations.put(tab.tabId,new JSONObject().put("url",value.getString("url")).put("title",bounded(value.optString("title"),240)).put("text",bounded(value.getString("text"),12000)).put("elementPreviews",elementPreviews(value.getJSONArray("elements"))).put("observationId",value.getString("observationId")).put("navigation",value.getLong("navigation")).put("observedAt",System.currentTimeMillis()).put("tabId",tab.tabId).put("actionFrame",value.optJSONObject("actionFrame")).put("_nativeInputViewport",value.optJSONObject("_nativeInputViewport")));}}catch(Exception ignored){}});
+if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("navigation")){deliveredOrdinaryObservations.remove(tab.tabId);observations.put(tab.tabId,new JSONObject().put("url",value.getString("url")).put("title",bounded(value.optString("title"),240)).put("text",bounded(value.getString("text"),12000)).put("elementPreviews",elementPreviews(value.getJSONArray("elements"))).put("observationId",value.getString("observationId")).put("navigation",value.getLong("navigation")).put("observedAt",System.currentTimeMillis()).put("tabId",tab.tabId).put("actionFrame",value.optJSONObject("actionFrame")).put("_nativeInputViewport",value.optJSONObject("_nativeInputViewport")));}}}catch(Exception ignored){}});
         }
         return result;
     }
@@ -338,7 +344,8 @@ if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("nav
     }
     /** Native projection boundary only: candidates omitted from the actual model response are not known.
      * Keeps the full private destination/identity preview for the visible refs; no ref reassignment,
-     * action lifetime extension, DOM mutation or authority is introduced. */
+     * action lifetime extension, DOM mutation or authority is introduced. Quotable text is only
+     * registered by the separate final Runner delivery callback. */
     public JSONObject presentedObservation(JSONObject delivered)throws Exception {
         main();checkOriginal(originalControl);
         if(delivered.optBoolean("semanticRead")){Tab tab=required(delivered.getString("tabId"));return driver.presentedObservation(tab,copy(delivered));}
@@ -425,6 +432,7 @@ if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("nav
         if(observation.optBoolean("semanticRead")||observation.optBoolean("advancedRead"))driver.requireObservedFrame(tab,observation);
         JSONObject structured=null;String text=observation.optString("text");
         if(observation.optBoolean("semanticRead")){JSONObject delivered=deliveredStructuredObservations.get(observation.getString("observationId"));if(delivered==null)throw new StalePage("本次模型实际收到的语义内容尚未确认，请重新读取后保留；未改存未交付原文");text=delivered.getString("text");if(Set.of("table","list").contains(observation.getJSONObject("read").getString("mode"))&&!args.has("excerpt")){if(!delivered.has("projection"))throw new StalePage("本次整行超出结构化保存预算，请缩小读取范围或明确保留已读文字摘录");structured=copy(delivered.getJSONObject("projection"));}}
+        else if(!observation.optBoolean("advancedRead")){JSONObject delivered=deliveredOrdinaryObservations.get(tab.tabId);if(delivered==null||!observation.getString("observationId").equals(delivered.optString("observationId")))throw new StalePage("本次模型实际收到的网页文字尚未确认，请重新读取后保留；未改存未交付原文");text=delivered.getString("text");}
         String excerpt=structured==null?args.optString("excerpt",text.substring(0,Math.min(3000,text.length()))):BrowserStructuredSource.excerpt(structured);
         if(excerpt.length()>6000||structured==null&&!text.contains(excerpt))throw new IllegalArgumentException("来源摘录必须出自该页实际交付文字，最多6000字符");
         URI raw=new URI(observation.getString("url"));if(raw.getHost()==null||raw.getUserInfo()!=null||!java.util.Set.of("http","https").contains(raw.getScheme()))throw new SecurityException("来源地址无效");
@@ -497,7 +505,7 @@ if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("nav
         Tab tab=tabs.remove(childId);try{if(tab!=null){recordCurrentPage(tab,"closed");tab.invalidate();}else if(handedOff.containsKey(childId)){JSONObject page=driver.ownerMetadata(childId);String logical=handoffLogical.get(childId);if(logical!=null)logicalPages.put(logical,driver.recoveryRecord(logical,page.optString("url"),page.optString("title"),"closed","owner_adopted"));}}
         finally{handedOff.remove(childId);handoffLogical.remove(childId);popupParents.remove(childId);observations.remove(childId);clearReadObservations(childId);revision++;publishManifest();}
     }
-    public void takeOverNative(String tabId)throws Exception {main();Tab tab=tabs.get(tabId);if(tab==null||ended||!profile.current())throw new SecurityException("原任务页已不再可接管");suspended=true;for(Tab active:tabs.values())active.stopTransfers();tab.invalidate();driver.releaseToOwner(tab);tabs.remove(tabId);handedOff.put(tabId,tab.generation);handoffLogical.put(tabId,tab.logicalPageId);recordCurrentPage(tab,"owner_control");publishManifest();observations.clear();readObservations.clear();deliveredStructuredObservations.clear();revision++;if(events!=null)events.takenOver(binding,originalControl,spaceId,tabId);}
+    public void takeOverNative(String tabId)throws Exception {main();Tab tab=tabs.get(tabId);if(tab==null||ended||!profile.current())throw new SecurityException("原任务页已不再可接管");suspended=true;for(Tab active:tabs.values())active.stopTransfers();tab.invalidate();driver.releaseToOwner(tab);tabs.remove(tabId);handedOff.put(tabId,tab.generation);handoffLogical.put(tabId,tab.logicalPageId);recordCurrentPage(tab,"owner_control");publishManifest();observations.clear();readObservations.clear();deliveredStructuredObservations.clear();deliveredOrdinaryObservations.clear();revision++;if(events!=null)events.takenOver(binding,originalControl,spaceId,tabId);}
     /** Native return confirmation binds the actual post-login document, never an old observation. */
     public JSONObject returnPinNative(String tabId)throws Exception {
         main();if(ended||!suspended||!profile.current()||!originalControl.isPaused()||originalControl.isCancelled()||!originalControl.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("原浏览空间或暂停执行已失效");
@@ -508,7 +516,7 @@ if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("nav
     public JSONObject returnOwnerNative(JSONObject expected,Gate nativeGate)throws Exception {
         main();String tabId=expected.getString("tabId");if(!expected.toString().equals(returnPinNative(tabId).toString()))throw new SecurityException("交还确认后原空间或登录页面已变化，请刷新");nativeGate.check();
         if(!tabId.isEmpty()){if(tabs.size()>=MAX_TASK_TABS)throw new IllegalStateException("任务页已达4个，请先结束或关闭其他任务页");Tab tab=new Tab(tabId,handoffLogical.getOrDefault(tabId,UUID.randomUUID().toString()));driver.returnOwner(tab,nativeGate);tabs.put(tabId,tab);handedOff.remove(tabId);handoffLogical.remove(tabId);recordCurrentPage(tab,"ready");}
-        observations.clear();readObservations.clear();deliveredStructuredObservations.clear();suspended=false;handoffReason="";revision++;publishManifest();return identity().put("tabId",tabId).put("status","returned").put("freshObservationRequired",true).put("verified",false);
+        observations.clear();readObservations.clear();deliveredStructuredObservations.clear();deliveredOrdinaryObservations.clear();suspended=false;handoffReason="";revision++;publishManifest();return identity().put("tabId",tabId).put("status","returned").put("freshObservationRequired",true).put("verified",false);
     }
     /** Called before the resumed Runner can request another model decision. */
     public JSONObject returnObservationPin(JSONObject confirmed)throws Exception {
@@ -528,14 +536,14 @@ if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("nav
     public JSONObject endNative(String reason)throws Exception {
         main();for(Tab tab:tabs.values())recordCurrentPage(tab,"closed");ended=true;suspended=true;publishManifest();invalidateAllTabs();JSONArray closed=new JSONArray(),failed=new JSONArray(),preserved=new JSONArray();
         for(Tab tab:new java.util.ArrayList<>(tabs.values()))try{if(driver.closeOnFinish(tab))closed.put(tab.tabId);else preserved.put(tab.tabId);tabs.remove(tab.tabId);}catch(Exception cleanup){failed.put(tab.tabId);}
-        observations.clear();readObservations.clear();deliveredStructuredObservations.clear();nativeCalls.clear();callDialogs.clear();revision++;originalControl.removeCancelAction(cancelled);JSONObject receipt=identity().put("status",failed.length()==0?"space_closed":"cleanup_required").put("reason",bounded(reason,120)).put("closedTaskTabs",closed).put("unclearedTaskTabs",failed).put("preservedMovedTabs",preserved).put("ownerPagesPreserved",true).put("verified",false);
+        observations.clear();readObservations.clear();deliveredStructuredObservations.clear();deliveredOrdinaryObservations.clear();nativeCalls.clear();callDialogs.clear();revision++;originalControl.removeCancelAction(cancelled);JSONObject receipt=identity().put("status",failed.length()==0?"space_closed":"cleanup_required").put("reason",bounded(reason,120)).put("closedTaskTabs",closed).put("unclearedTaskTabs",failed).put("preservedMovedTabs",preserved).put("ownerPagesPreserved",true).put("verified",false);
         driver.ended();if(events!=null)events.ended(binding,originalControl,spaceId,receipt);return receipt;
     }
     public void abortNative(JSONObject args,CompletableFuture<JSONObject> pending){main();suspended=true;Tab tab=tabs.get(args.optString("tabId"));if(tab!=null)driver.abort(tab,pending);}
     public void pageGoneNative(String tabId){main();Tab tab=tabs.remove(tabId);if(tab!=null){recordCurrentPage(tab,"renderer_gone");tab.invalidate();publishManifest();}observations.remove(tabId);clearReadObservations(tabId);suspended=true;revision++;}
     public void navigationChangedNative(String tabId){main();Tab tab=tabs.get(tabId);if(tab!=null)tab.stopTransfers();observations.remove(tabId);clearReadObservations(tabId);}
     private void invalidateAllTabs(){synchronized(tabs){for(Tab tab:tabs.values())tab.invalidate();}}
-    private void clearReadObservations(String tabId){readObservations.values().removeIf(value->tabId.equals(value.optString("tabId")));deliveredStructuredObservations.values().removeIf(value->tabId.equals(value.optString("tabId")));}
+    private void clearReadObservations(String tabId){deliveredOrdinaryObservations.remove(tabId);readObservations.values().removeIf(value->tabId.equals(value.optString("tabId")));deliveredStructuredObservations.values().removeIf(value->tabId.equals(value.optString("tabId")));}
     private JSONObject recoveryPage(String id,String url)throws Exception {if(recoveryPages==null)throw new StalePage("此原任务没有可重建的逻辑页清单");JSONObject row=BrowserResearchPages.required(recoveryPages,id);if(row.getString("url").isEmpty()||!row.getString("url").equals(url))throw new StalePage("重开地址必须是主人已看到的原逻辑页地址；未恢复原授权或未保存表单");driver.recoveryUrl(row);for(Tab tab:tabs.values())if(tab.logicalPageId.equals(id))throw new StalePage("该逻辑页已经重建，未重复开页");return row;}
     private void recordPage(Tab tab,String url,String title,String state,String openedBy)throws Exception {logicalPages.put(tab.logicalPageId,driver.recoveryRecord(tab.logicalPageId,url,title,state,openedBy));while(logicalPages.size()>BrowserResearchPages.MAX_PAGES){String remove=null;for(Map.Entry<String,JSONObject> entry:logicalPages.entrySet())if(entry.getValue().getString("state").matches("closed|renderer_gone")){remove=entry.getKey();break;}if(remove==null)remove=logicalPages.keySet().iterator().next();logicalPages.remove(remove);}}
     private void recordCurrentPage(Tab tab,String state){try{JSONObject page=driver.metadata(tab);recordPage(tab,page.optString("url"),page.optString("title"),state,"task");}catch(Exception unavailable){JSONObject old=logicalPages.get(tab.logicalPageId);if(old!=null)try{old.put("state",state);}catch(Exception ignored){}}}

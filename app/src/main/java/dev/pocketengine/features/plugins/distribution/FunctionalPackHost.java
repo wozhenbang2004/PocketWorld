@@ -91,6 +91,12 @@ public final class FunctionalPackHost implements AutoCloseable {
             boolean whole=excluded.length()==0;JSONObject data=new JSONObject().put("id",id).put("package",pkg==null?JSONObject.NULL:pkg.view()).put("current",previous==null?JSONObject.NULL:publicRecord(previous)).put("removing",removing).put("restoring",restoring).put("components",rows).put("issues",issues).put("globalIssues",globalIssues).put("selectionProblems",selectionProblems).put("excludedComponents",excluded).put("selectionExplicit",explicit).put("wholePackageSelected",whole).put("recipeContentsCompleteIfActionsFinish",whole).put("ready",ready).put("atomic",false).put("executed",false).put("permissionsRestored",false).put("recipeExecution","instruction_only_original_runner");
             digest=TaskStore.capabilityFingerprint(data);view=data.put("reviewDigest",digest).toString();
         }
+        /** Compare owner edits with this review's frozen actions, without changing native approval. */
+        public boolean matchesSelection(Set<String> selectedKeys){
+            if(selectedKeys==null||selectedKeys.size()!=parts.size())return false;
+            for(Part part:parts)if(!selectedKeys.contains(part.key))return false;
+            return true;
+        }
         public JSONObject view()throws Exception{return new JSONObject(view);}
     }
     private static final class Part {

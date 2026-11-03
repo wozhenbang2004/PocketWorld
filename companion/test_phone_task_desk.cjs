@@ -145,6 +145,44 @@ async function submissionRechecksScopeAndPreservesCustomBudget() {
   await changed.get("submit").onsubmit({preventDefault(){}});await changed.flush();
   assert.equal(changed.calls.filter(c=>c.action==="run").length,0);assert.match(changed.get("notice").textContent,/scope or this draft changed/);changed.close();
 }
+async function submissionRejectsEditsDuringScopeCheck(kind) {
+  let doctors=0,release,pending;
+  const f=await fixture(async request=>{
+    if(request.action!=="doctor")return;
+    const value=description();value.grantReceipts[0].body.grant.resources.push({screenMode:"capabilities"});
+    if(++doctors===2)return new Promise(resolve=>{release=()=>resolve({description:value});});
+    return {description:value};
+  });
+  try {
+    await f.run('perform("doctor",{})');f.get("goal").value="original scoped goal";
+    pending=f.get("submit").onsubmit({preventDefault(){}});await f.flush();
+    assert.equal(typeof release,"function");
+    if(kind.startsWith("scope")) {
+      f.get("scope-choice").value="1";f.get("scope-choice").onchange();
+      if(kind==="scope-return") {f.get("scope-choice").value="0";f.get("scope-choice").onchange();}
+    } else {
+      const field=f.get(kind),original=field.value;
+      field.value=kind==="goal"?"changed goal":"2";field.dispatchEvent({type:"input"});
+      field.value=original;field.dispatchEvent({type:"input"});
+    }
+    const selected=f.get("scope-choice").value,goal=f.get("goal").value,tools=f.get("tools").value,models=f.get("models").value;
+    await f.get("submit").onsubmit({preventDefault(){}});
+    assert.equal(doctors,2,"Repeated Start must not start a second in-flight scope check");
+    release();await pending;await f.flush();
+    assert.equal(f.calls.filter(c=>c.action==="run").length,0,kind+": An edited draft must invalidate the pending Start, even after restoring its values");
+    assert.equal(f.run("submission"),null);assert.equal(f.get("operation").value,"");
+    assert.equal(f.get("scope-choice").value,selected);assert.equal(f.get("goal").value,goal);
+    assert.equal(f.get("tools").value,tools);assert.equal(f.get("models").value,models);
+    assert.match(f.get("notice").textContent,/scope or this draft changed/);assert.equal(f.get("start-task").disabled,false);
+    await f.get("submit").onsubmit({preventDefault(){}});await f.flush();
+    const runs=f.calls.filter(c=>c.action==="run");assert.equal(runs.length,1,"A new explicit Start may submit the reviewed draft once");
+    assert.equal(runs[0].params.resourceBinding.screenMode,selected==="1"?"capabilities":"main_screen");
+    assert.equal(runs[0].params.grantId,"grant-A");assert.equal(runs[0].params.peerDeviceId,PEER);
+    assert.equal(runs[0].params.goal,goal);assert.equal(runs[0].params.toolCalls,Number(tools));assert.equal(runs[0].params.modelCalls,Number(models));
+    await f.get("submit").onsubmit({preventDefault(){}});await f.flush();
+    assert.equal(f.calls.filter(c=>c.action==="run").length,1,"The submitted draft cannot be replayed");
+  } finally {release?.();if(pending)await pending;await f.flush();f.close();}
+}
 function contractRequire(condition, code) {
   if (!condition) { const error=new Error(code);error.contractCode=code;throw error; }
 }
@@ -243,6 +281,8 @@ async function cancelDuringOriginalWait(waitFinishesFirst) {
   process.stdout.write("Desk draft/unknown selection fixture: 2 cases passed\n");
   for(const test of [unknownSubmissionIsNeverResent,duplicateCancellationQueriesItsOriginalWrite,staleSourceAndScopeAreFenced,streamUsesCursorAndRejectsOtherPhone,resumeUsesPostLeaseRevisionAndOnlyRequestsPhoneReview,disconnectStopsWatchingWithoutMutation,submissionRechecksScopeAndPreservesCustomBudget])await test();
   process.stdout.write("Desk mutation, revision, event, cancellation and recovery fixtures: 7 cases passed\n");
+  for(const kind of ["scope-change","scope-return","goal","tools","models"])await submissionRejectsEditsDuringScopeCheck(kind);
+  process.stdout.write("Desk pending submission draft revision: 5 edit cases passed\n");
   await cancelDuringOriginalWait(false);await cancelDuringOriginalWait(true);
   process.stdout.write("Desk cancellation during pending wait: 2 settlement orders passed\n");
 })().catch(error=>{

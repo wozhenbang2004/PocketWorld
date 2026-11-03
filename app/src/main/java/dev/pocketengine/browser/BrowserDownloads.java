@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import org.json.JSONArray;
@@ -45,8 +46,8 @@ public final class BrowserDownloads {
         while(records.size()>=100){String oldest=null;for(String key:records.keySet())if(!cancellations.containsKey(key)){oldest=key;break;}if(oldest==null)throw new IllegalStateException("下载记录已满");records.remove(oldest);}
         String id=UUID.randomUUID().toString();JSONObject record=new JSONObject(identity.toString()).put("id",id).put("kind","download").put("status","queued").put("name",AttachmentBook.displayName(name)).put("acquisitionMethod","original_document_blob_data_stream").put("createdAt",System.currentTimeMillis()).put("verified",false);
         for(String key:new String[]{"profileId","profileRevision","browserSessionId"})record.put(key,session.identity().get(key));
-        AtomicBoolean cancelled=new AtomicBoolean();records.put(id,record);cancellations.put(id,cancelled);sessions.put(id,session);fences.put(id,fence);persist();
-        try{worker.execute(()->downloadDocument(id,source,cancelled,fence,updates));}catch(RuntimeException rejected){cancellations.remove(id);sessions.remove(id);fences.remove(id);update(id,"failed","文档下载线程不可用",null,updates);throw rejected;}return copy(record);
+        AtomicBoolean cancelled=new AtomicBoolean();records.put(id,record);cancellations.put(id,cancelled);sessions.put(id,session);fences.put(id,fence);
+        submit(id,()->downloadDocument(id,source,cancelled,fence,updates),updates);return copy(record);
     }
     private void downloadDocument(String id,DocumentSource source,AtomicBoolean cancellation,BrowserTransferFence fence,Consumer<JSONObject> updates){
         JSONObject committed=null;
@@ -78,8 +79,17 @@ public final class BrowserDownloads {
         if(identity!=null)for(String key:new String[]{"taskId","runId","leaseId","epoch","browserSpaceId","tabId","tabGeneration","operationId"})if(identity.has(key))record.put(key,identity.get(key));
         if(session!=null){record.put("profileId",session.profileId).put("profileRevision",session.profileRevision).put("browserSessionId",session.sessionId);sessions.put(id,session);}
         else record.put("profileId",BrowserLease.PROFILE);
-        if(fence!=null)fences.put(id,fence);records.put(id,record);cancellations.put(id,cancelled);persist();
-        worker.execute(()->download(id,target,userAgent,cookies,name,mime,cancelled,session,fence,updates));return copy(record);
+        if(fence!=null)fences.put(id,fence);records.put(id,record);cancellations.put(id,cancelled);
+        submit(id,()->download(id,target,userAgent,cookies,name,mime,cancelled,session,fence,updates),updates);return copy(record);
+    }
+    private void submit(String id,Runnable download,Consumer<JSONObject> updates)throws Exception {
+        try{persist();}catch(Exception notStarted){notSubmitted(id,"下载尚未开始，回执无法保存",notStarted,updates);throw notStarted;}
+        try{worker.execute(download);}catch(RejectedExecutionException rejected){notSubmitted(id,"下载尚未开始，线程不可用",rejected,updates);throw rejected;}
+    }
+    /** Only persistence before execute, or an explicit executor rejection, proves no worker owns this id. */
+    private void notSubmitted(String id,String message,Exception failure,Consumer<JSONObject> updates){
+        cancellations.remove(id);sessions.remove(id);fences.remove(id);
+        try{update(id,"failed",message,null,updates);}catch(Exception receiptFailure){failure.addSuppressed(receiptFailure);}
     }
     public synchronized JSONArray list()throws Exception{JSONArray array=new JSONArray();for(JSONObject record:records.values())array.put(copy(record));return array;}
     public synchronized JSONObject status(String id)throws Exception{return copy(required(id));}

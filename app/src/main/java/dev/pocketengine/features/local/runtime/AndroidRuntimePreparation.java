@@ -153,10 +153,11 @@ final class AndroidRuntimePreparation {
     }
     JSONObject prepare(ManagedProcessJobs.PreparationContext context) throws Exception {
         context.check();if(!engineVerified())throw new SecurityException("runtime_apk_engine_missing_or_changed");
-        synchronized(this) {if(active!=null&&catalog.identity.equals(active.optString("catalogIdentity"))) {
-            boolean unchanged=true;try{verifyTools(active,true);}catch(SecurityException changed){unchanged=false;/* Repair builds a fresh generation, never mutates or deletes this one. */}
-            if(unchanged){context.check();return preparedResult(active);}
-        }}
+        final JSONObject originalActive;synchronized(this){originalActive=active;}
+        if(originalActive!=null&&catalog.identity.equals(originalActive.optString("catalogIdentity"))) {
+            boolean unchanged=true;try{verifyTools(originalActive,true);}catch(SecurityException changed){unchanged=false;/* Repair builds a fresh generation, never mutates or deletes this one. */}
+            if(unchanged){context.check();synchronized(this){if(active!=originalActive)throw new SecurityException("runtime_reviewed_environment_changed");return preparedResult(originalActive);}}
+        }
         // A new layout never reuses a pre-L2S partially extracted rootfs. Old staging
         // and generations are retained, not silently deleted or modified by repair.
         File candidate=RuntimeFiles.directory(staging,catalog.identity+"-l2s-v1");File marker=new File(candidate,"owner.json");
@@ -211,21 +212,18 @@ final class AndroidRuntimePreparation {
             String generation=ProjectSources.digest(seal);seal.put("generationIdentity",generation);
             RuntimeFiles.write(new File(candidate,"generation.json"),seal);
             context.check();phase(context,"activating",1,1);
-            synchronized(this) {
-                environments.requireGenerationIdle(active==null?"":active.getString("generationIdentity"));
-                File target=new File(generations,generation);
-                if(target.exists()) {JSONObject existing=loadGeneration(generation);if(!ProjectSources.canonical(existing).equals(ProjectSources.canonical(seal)))throw new SecurityException("runtime_generation_collision");}
-                else Files.move(candidate.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE);
-                // Probe the moved generation before publishing active.json. The backing
-                // directory is not under staging, so both hard-link names must still
-                // have the same contents/inode, including after one name is unlinked.
-                phase(context,"probing_hardlinks_after_activation",0,1);
-                run(context,new File(target,"rootfs"),null,List.of("/usr/bin/python3","-c","import os; p='/var/tmp/pocketworld-link-probe'; a=p+'/original'; b=p+'/alias'; assert open(a).read()=='before-activation'; assert os.stat(a).st_ino==os.stat(b).st_ino and os.stat(b).st_nlink==2; os.unlink(a); assert open(b).read()=='before-activation'; os.unlink(b); os.rmdir(p)"),60000);
-                loadGeneration(generation);
-                context.check();
-                RuntimeFiles.write(new File(root,"active.json"),new JSONObject().put("generationIdentity",generation).put("catalogIdentity",catalog.identity));
-                active=loadGeneration(generation);
-            }
+            // The original gate may enter LocalModule/TaskStore. Keep it and native
+            // probes outside the profile monitor used by their foreground views.
+            environments.requireGenerationIdle(originalActive==null?"":originalActive.getString("generationIdentity"));
+            File target=new File(generations,generation);
+            if(target.exists()) {JSONObject existing=loadGeneration(generation);if(!ProjectSources.canonical(existing).equals(ProjectSources.canonical(seal)))throw new SecurityException("runtime_generation_collision");}
+            else Files.move(candidate.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE);
+            // Probe the moved generation before publishing active.json. The backing
+            // directory is not under staging, so both hard-link names must still
+            // have the same contents/inode, including after one name is unlinked.
+            phase(context,"probing_hardlinks_after_activation",0,1);
+            run(context,new File(target,"rootfs"),null,List.of("/usr/bin/python3","-c","import os; p='/var/tmp/pocketworld-link-probe'; a=p+'/original'; b=p+'/alias'; assert open(a).read()=='before-activation'; assert os.stat(a).st_ino==os.stat(b).st_ino and os.stat(b).st_nlink==2; os.unlink(a); assert open(b).read()=='before-activation'; os.unlink(b); os.rmdir(p)"),60000);
+            publishGeneration(context,loadGeneration(generation),originalActive);
             // Do not invoke the old identity's capability gate after activating a new identity.
             progress=new JSONObject().put("phase","ready").put("generationIdentity",generation).put("completedBytes",1).put("totalBytes",1);
             RuntimeFiles.write(new File(root,"preparation.json"),progress);return preparedResult(seal);
@@ -233,6 +231,18 @@ final class AndroidRuntimePreparation {
             progress=new JSONObject().put("phase",failed instanceof InterruptedException?"cancelled":"failed").put("catalogIdentity",catalog.identity)
                     .put("error",failed.getMessage()==null?"runtime_preparation_failed":failed.getMessage()).put("failure",RuntimeHealth.failure(failed)).put("resumableDownload",true).put("existingGenerationRetained",true);
             RuntimeFiles.write(new File(root,"preparation.json"),progress);throw failed;
+        }
+    }
+    private void publishGeneration(ManagedProcessJobs.PreparationContext context,JSONObject verified,JSONObject originalActive) throws Exception {
+        context.check();
+        synchronized(this) {
+            if(active!=originalActive)throw new SecurityException("runtime_reviewed_environment_changed");
+            // Acquiring an active-generation lease also holds this profile monitor.
+            // A lease admitted during the lock-free probe must prevent publication;
+            // this local recheck never invokes the external usage/gate callbacks.
+            environments.requireGenerationUnleased(originalActive==null?"":originalActive.getString("generationIdentity"));
+            RuntimeFiles.write(new File(root,"active.json"),new JSONObject().put("generationIdentity",verified.getString("generationIdentity")).put("catalogIdentity",catalog.identity));
+            active=verified;
         }
     }
     private JSONObject preparedResult(JSONObject receipt) throws Exception {return new JSONObject().put("preparedEnvironmentIdentity",receipt.getString("generationIdentity")).put("catalogIdentity",catalog.identity).put("toolProbeReceipt",ProjectSources.copy(receipt)).put("projectFilesRetained",true).put("businessVerified",false);}

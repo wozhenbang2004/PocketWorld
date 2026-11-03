@@ -136,15 +136,28 @@ public final class TermuxBridge implements AutoCloseable {
             JSONObject availability=status();if(!availability.optBoolean("installed")||!availability.optBoolean("permissionGranted")||!availability.optBoolean("enabled"))throw new IllegalStateException(availability.optString("message")+"；请先在本机连接设置明确启用Termux");
             File[] existing=receipt.getParentFile().listFiles((dir,n)->n.endsWith(".json"));if(existing!=null&&existing.length>=200)throw new IllegalStateException("Termux回执已达200条，需先导出归档；未释放旧操作编号");
             String nonce=UUID.randomUUID().toString();JSONObject value=new JSONObject().put("id",operation).put("operationId",operation).put("kind",kind).put("executable",name).put("argv",new JSONArray(args.toString())).put("checkoutId",checkout).put("workdir",kind.equals("project_stage")?directory(checkout,sourceCheckout==null?"":sourceCheckout.optString("sourceDigest")):workdir).put("fingerprint",digest(fingerprint)).put("nonce",nonce).put("status","unknown").put("createdAt",System.currentTimeMillis()).put("message","Termux派发已登记，等待实际回执").put("verified",false);if(sourceCheckout!=null){value.put("sourceCheckout",JsonFiles.copy(sourceCheckout));if(sourceCheckout.has("sourceDigest"))value.put("sourceDigest",sourceCheckout.getString("sourceDigest")).put("sourceGuardRequired",kind.equals("command")).put("atomicSourceFence",false).put("sourceCheckScope","manifest_files_only");if(sourceCheckout.has("requestedExecutable"))value.put("requestedExecutable",sourceCheckout.getString("requestedExecutable")).put("requestedArgv",sourceCheckout.getJSONArray("requestedArgv"));}value.put("updatedAt",value.getLong("createdAt"));JsonFiles.write(receipt,value);
-            if(sourceCheckout!=null&&sourceCheckout.has("projectExecution")){value.put("projectExecution",JsonFiles.copy(sourceCheckout.getJSONObject("projectExecution")));JsonFiles.write(receipt,value);}
-            if(!checkout.isEmpty())value.put("checkoutSequence",nextSequence(checkout,operation));
-            if(sourceCheckout!=null&&sourceCheckout.has("artifactSelection"))value.put("collectionMode","selected_text_artifact").put("artifactCollection",JsonFiles.copy(sourceCheckout.getJSONObject("artifactCollection"))).put("sourceGuardRequired",true).put("artifactReady",false);
-            JsonFiles.write(receipt,value);
-            Intent callback=new Intent(context.android,TermuxResultReceiver.class).setData(Uri.parse("pocketworld-local://result/"+operation+"/"+nonce));int flags=PendingIntent.FLAG_ONE_SHOT|PendingIntent.FLAG_CANCEL_CURRENT;if(android.os.Build.VERSION.SDK_INT>=31)flags|=PendingIntent.FLAG_MUTABLE;
-            PendingIntent pending=PendingIntent.getBroadcast(context.android,operation.hashCode(),callback,flags);
-            Intent command=new Intent("com.termux.RUN_COMMAND").setComponent(new ComponentName("com.termux","com.termux.app.RunCommandService")).putExtra("com.termux.RUN_COMMAND_PATH",PREFIX+name).putExtra("com.termux.RUN_COMMAND_ARGUMENTS",argv).putExtra("com.termux.RUN_COMMAND_WORKDIR",workdir).putExtra("com.termux.RUN_COMMAND_BACKGROUND",true).putExtra("com.termux.RUN_COMMAND_STDIN",stdin).putExtra("com.termux.RUN_COMMAND_PENDING_INTENT",pending);
-            if(call!=null)call.check();
-            try{ComponentName started=context.android.startService(command);if(started==null)throw new IllegalStateException("Termux未接收服务请求");value.put("status","awaiting_result").put("message","请求已交给Termux；只有收到实际执行回执才知道结果");JsonFiles.write(receipt,value);}catch(Exception failure){value.put("status","unknown").put("message","未取得Termux接收确认，请检查Termux与原操作；不会自动重试");JsonFiles.write(receipt,value);}
+            boolean dispatchEntered=false;PendingIntent pending=null;
+            try{
+                if(sourceCheckout!=null&&sourceCheckout.has("projectExecution")){value.put("projectExecution",JsonFiles.copy(sourceCheckout.getJSONObject("projectExecution")));JsonFiles.write(receipt,value);}
+                if(!checkout.isEmpty())value.put("checkoutSequence",nextSequence(checkout,operation));
+                if(sourceCheckout!=null&&sourceCheckout.has("artifactSelection"))value.put("collectionMode","selected_text_artifact").put("artifactCollection",JsonFiles.copy(sourceCheckout.getJSONObject("artifactCollection"))).put("sourceGuardRequired",true).put("artifactReady",false);
+                JsonFiles.write(receipt,value);
+                Intent callback=new Intent(context.android,TermuxResultReceiver.class).setData(Uri.parse("pocketworld-local://result/"+operation+"/"+nonce));int flags=PendingIntent.FLAG_ONE_SHOT|PendingIntent.FLAG_CANCEL_CURRENT;if(android.os.Build.VERSION.SDK_INT>=31)flags|=PendingIntent.FLAG_MUTABLE;
+                pending=PendingIntent.getBroadcast(context.android,operation.hashCode(),callback,flags);
+                Intent command=new Intent("com.termux.RUN_COMMAND").setComponent(new ComponentName("com.termux","com.termux.app.RunCommandService")).putExtra("com.termux.RUN_COMMAND_PATH",PREFIX+name).putExtra("com.termux.RUN_COMMAND_ARGUMENTS",argv).putExtra("com.termux.RUN_COMMAND_WORKDIR",workdir).putExtra("com.termux.RUN_COMMAND_BACKGROUND",true).putExtra("com.termux.RUN_COMMAND_STDIN",stdin).putExtra("com.termux.RUN_COMMAND_PENDING_INTENT",pending);
+                if(call!=null)call.check();
+                // Only this live native boundary proves no service call was entered. A cached
+                // unknown, a cancellation request or an exception after entry cannot prove it.
+                dispatchEntered=true;ComponentName started=context.android.startService(command);
+                if(started==null)throw new IllegalStateException("Termux未接收服务请求");
+                value.put("termuxDispatchEntered",true).put("status","awaiting_result").put("message","请求已交给Termux；只有收到实际执行回执才知道结果");JsonFiles.write(receipt,value);
+            }catch(Exception failure){
+                value.put("termuxDispatchEntered",dispatchEntered).put("updatedAt",Math.max(System.currentTimeMillis(),value.optLong("updatedAt")+1));
+                if(dispatchEntered)value.put("status","unknown").put("message","未取得Termux接收确认，请检查Termux与原操作；不会自动重试");
+                else value.put("status","failed").put("effectStatus","not_dispatched").put("accepted",false).put("receiptReceived",true).put("exitCode",-1).put("receiptSource","local_dispatch_admission").put("errorType",failure.getClass().getName()).put("businessVerified",false).put("replayAllowed",false).put("message","原操作已确认未进入Termux服务派发；保留此编号的本地失败回执，不会自动重试");
+                JsonFiles.write(receipt,value);
+                if(!dispatchEntered&&pending!=null)pending.cancel();
+            }
             return publicReceipt(value);
         }
     }

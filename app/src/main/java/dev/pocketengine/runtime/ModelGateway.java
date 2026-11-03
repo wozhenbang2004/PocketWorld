@@ -98,6 +98,15 @@ public final class ModelGateway {
         dev.pocketengine.runtime.models.AccountCatalogFacts facts=port.modelFacts(reference);
         if(port!=accountInference)throw new GatewayFailure("GATEWAY_CLOSED");return facts;
     }
+    /** Read-only UI readiness for this exact account/model. Never authorizes inference or renews credentials. */
+    public static boolean accountModelAvailableForDisplay(ModelConfig.AccountModelRef reference){
+        AccountInferencePort port=accountInference;if(port==null||reference==null)return false;
+        try{
+            if(!port.accountIdentityCurrent(reference))return false;
+            port.modelFacts(reference);
+            return port==accountInference&&port.accountIdentityCurrent(reference);
+        }catch(GatewayFailure|RuntimeException unavailable){return false;}
+    }
     /** Only this actual Run's accepted native renewal lineage may advance a captured budget identity. */
     public static ModelConfig accountBudgetConfig(ModelConfig captured,RunControl original)throws GatewayException {
         if(!captured.usesAccount())return captured;

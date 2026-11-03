@@ -8,6 +8,7 @@ import org.json.JSONObject;
 
 /** Executes one host-requested protocol step. There are no threads, timers, or automatic resubmissions. */
 public final class MediaJobs {
+    private static final long MAX_IMPORT_BYTES = 40L * 1024 * 1024;
     public interface ArtifactSink {
         JSONObject save(MediaTransport.Payload payload,JSONObject source,RunControl control)throws Exception;
         default JSONObject find(JSONObject source,RunControl control)throws Exception{return null;}
@@ -17,6 +18,7 @@ public final class MediaJobs {
     private final ArtifactSink artifacts;
     private final ReceiptSink events;
     private final java.util.Set<String> observing = new java.util.HashSet<>();
+    private final java.util.Map<String,String> ownerDownloadReviews = new java.util.HashMap<>();
 
     public MediaJobs(MediaJobJournal journal, ArtifactSink artifacts, ReceiptSink events) {
         this.journal = java.util.Objects.requireNonNull(journal);
@@ -133,7 +135,7 @@ public final class MediaJobs {
         }
         JSONObject record = new JSONObject().put("id", operation).put("operationId", operation).put("taskId", task).put("runId", run)
                 .put("provider", provider).put("kind", kind).put("configurationRevision", revision).put("_requestHash", hash)
-                .put("_configurationHash", configurationHash)
+                .put("_configurationHash", configurationHash).put("_providerCredentialHash", credentialHash(hash,key))
                 .put("_clientId", UUID.randomUUID().toString()).put("providerJobId", provider.equals("comfyui") ? UUID.randomUUID().toString() : "")
                 .put("providerJobIdConfirmed", false).put("status", "prepared").put("dispatched", false).put("verified", false)
                 .put("createdAt", System.currentTimeMillis()).put("expirySupported", false).put("expiresAt", JSONObject.NULL)
@@ -175,16 +177,84 @@ public final class MediaJobs {
     }
 
     private JSONObject fetchConfirmedUrl(JSONObject record,JSONObject config,String key,RunControl control)throws Exception {
+        return fetchConfirmedUrl(record,config,key,control,false);
+    }
+    private JSONObject fetchConfirmedUrl(JSONObject record,JSONObject config,String key,RunControl control,boolean ownerConfirmed)throws Exception {
         if(!record.optBoolean("resultDescriptorConfirmed")||!record.optString("providerState").equals("response_received")||!record.optString("_responseDigest").matches("[a-f0-9]{64}"))throw new SecurityException("缺少原服务实际返回并保存的结果描述");
         requireConfiguration(config,record);JSONObject origin=source(record,config,"response");
         try{
             control.check();JSONObject saved=artifacts.find(origin,control);
-            if(saved==null){if(!config.optBoolean("allowResultUrls"))return save(record.put("resultStatus","owner_download_policy_required").put("message","服务已返回原结果地址，但此配置未允许独立HTTPS公有下载。原响应保留，没有重发付费请求；请明确配置并重新审阅后续新任务。"));
+            if(saved==null){if(!ownerConfirmed&&!config.optBoolean("allowResultUrls"))return save(record.put("resultStatus","owner_download_policy_required").put("ownerResultDownloadReviewAvailable",true).put("message","服务已返回并保存原结果地址，但本次配置未允许下载。可在原操作中审阅并一次允许取回这个原结果；不会重新生成或开启其他地址下载。"));
                 byte[] bytes=dev.pocketengine.media.MediaResultDownload.getConfirmedResult(record.getString("_resultUrl"),config.getString("baseUrl"),key,control);try{saved=artifacts.save(MediaTransport.imagePayload(bytes),origin,control);}finally{java.util.Arrays.fill(bytes,(byte)0);}}
             record.put("attachments",new JSONArray().put(saved)).put("attachment",saved).put("resultStatus","saved").put("resultDownloadRetryAvailable",false).put("message","已获取原服务返回的固定图像并保存；未重新提交生成");
         }catch(Exception failure){record.put("resultStatus","unavailable").put("resultDownloadRetryAvailable",true).put("message","原结果GET或附件保存未确认；原响应描述保留，不重发生成。HTTPS/公有地址、取消或容量条件未满足时不会下载。");if(failure instanceof MediaTransport.Rejected)record.put("resultHttpStatus",((MediaTransport.Rejected)failure).status);}
         return save(record);
     }
+    /** Explicit native owner review only. The signed URL never leaves the private journal. */
+    public synchronized JSONObject reviewOriginalResultDownload(JSONObject input,JSONObject config,String key,RunControl control)throws Exception {
+        if(input.has("downloadReview"))throw new SecurityException("原结果审阅不能由参数预先指定");
+        JSONObject record=requireOriginalResultDownload(input,config,key,control);
+        if("saved".equals(record.optString("resultStatus")))throw new IllegalStateException("原结果已保存，请查看现有附件");
+        ownerDownloadReviews.remove(record.getString("operationId"));
+        record.put("_ownerResultDownloadReviewId",UUID.randomUUID().toString()).put("_ownerResultDownloadReviewUntil",System.currentTimeMillis()+300000).put("_ownerResultDownloadReviewEpoch",input.getInt("_epoch"));
+        JSONObject visible=save(record);
+        ownerDownloadReviews.put(record.getString("operationId"),record.getString("_ownerResultDownloadReviewId"));
+        return visible.put("resultDownloadReview",downloadReview(record,config));
+    }
+
+    /** Consume one exact owner confirmation BEFORE any GET. No persistent allow, URL input or POST. */
+    public synchronized JSONObject confirmOriginalResultDownload(JSONObject input,JSONObject config,String key,RunControl control)throws Exception {
+        JSONObject record=requireOriginalResultDownload(input,config,key,control);
+        if(!record.has("_ownerResultDownloadReviewId")||record.optInt("_ownerResultDownloadReviewEpoch",-1)!=input.getInt("_epoch")||record.optLong("_ownerResultDownloadReviewUntil")<=System.currentTimeMillis())throw new SecurityException("原结果的一次下载审阅已失效，请重新审阅");
+        JSONObject expected=downloadReview(record,config),supplied=input.getJSONObject("downloadReview");
+        if(!MediaJobJournal.hash(expected).equals(MediaJobJournal.hash(supplied)))throw new SecurityException("原操作、原响应或原结果地址的下载确认已变化");
+        control.check();
+        // A failed/uncertain consumption write cannot reuse the token in this process;
+        // a cold journal never restores live confirmations. The owner must review again.
+        if(!ownerDownloadReviews.remove(record.getString("operationId"),record.getString("_ownerResultDownloadReviewId")))throw new SecurityException("原结果的一次下载审阅已使用或已冷启动失效，请重新审阅");
+        record.put("_ownerResultDownloadConsumedId",record.getString("_ownerResultDownloadReviewId")).put("_ownerResultDownloadConsumedAt",System.currentTimeMillis()).put("ownerResultDownloadAttempted",true);
+        record.remove("_ownerResultDownloadReviewId");record.remove("_ownerResultDownloadReviewUntil");record.remove("_ownerResultDownloadReviewEpoch");
+        journal.put(record); // A crash/failure cannot reuse this owner's one-GET confirmation.
+        control.check();
+        return fetchConfirmedUrl(record,originalDownloadConfiguration(config,record),key,control,true);
+    }
+
+    private JSONObject requireOriginalResultDownload(JSONObject input,JSONObject config,String key,RunControl control)throws Exception {
+        control.check();for(var fields=input.keys();fields.hasNext();){String field=fields.next();if(!java.util.Set.of("operationId","_operationId","taskId","_taskId","runId","_runId","epoch","_epoch","configurationRevision","_configurationRevision","providerJobId","downloadReview").contains(field))throw new SecurityException("原结果下载含未授权字段："+field);}
+        JSONObject record=require(input);
+        if(!control.hasHostRun()||!control.matchesHostRun(record.optString("taskId"),record.optString("runId"),input.optInt("_epoch"))||!record.getString("configurationRevision").equals(input.optString("_configurationRevision")))throw new SecurityException("原结果下载需要原主人任务的实时控制与原配置身份");
+        if(!"openai_compatible".equals(record.optString("provider"))||!"image".equals(record.optString("kind"))||!record.optBoolean("resultDescriptorConfirmed")||!"response_received".equals(record.optString("providerState"))||!record.optString("_responseDigest").matches("[a-f0-9]{64}")||record.optString("_resultUrl").isEmpty())throw new SecurityException("缺少原服务实际返回并持久化的图像结果描述");
+        originalDownloadConfiguration(config,record);
+        // New receipts also pin the actual credential. Legacy configure receipts retain their
+        // immutable vault slot through the exact original configuration hash below.
+        if(record.has("_providerCredentialHash")&&!record.getString("_providerCredentialHash").equals(credentialHash(record.getString("_requestHash"),key)))throw new SecurityException("原媒体凭据已变化，不能授权下载");
+        if(!record.has("_providerCredentialHash")&&!config.has("secretSlot"))throw new SecurityException("原媒体回执没有可核对的原凭据槽位");
+        dev.pocketengine.media.MediaResultDownload.validate(record.getString("_resultUrl"));
+        return record;
+    }
+    private static JSONObject originalDownloadConfiguration(JSONObject config,JSONObject record)throws Exception {
+        // Only the original false policy can receive this one-off override. Reconstruct its
+        // exact configured revision and false flag, then require the ORIGINAL FULL hash.
+        // Provider/base URL/secret slot/models and every other setting still have to match.
+        JSONObject original=new JSONObject(config.toString()).put("revision",record.getString("configurationRevision")).put("allowResultUrls",false);
+        requireConfiguration(original,record);
+        return original;
+    }
+    private static JSONObject downloadReview(JSONObject record,JSONObject config)throws Exception {
+        java.net.URI target=dev.pocketengine.media.MediaResultDownload.validate(record.getString("_resultUrl")),provider=MediaTransport.base(config.getString("baseUrl"));
+        return new JSONObject().put("reviewId",record.getString("_ownerResultDownloadReviewId")).put("expiresAt",record.getLong("_ownerResultDownloadReviewUntil")).put("epoch",record.getInt("_ownerResultDownloadReviewEpoch"))
+                .put("operationId",record.getString("operationId")).put("taskId",record.getString("taskId")).put("runId",record.getString("runId"))
+                .put("configurationRevision",record.getString("configurationRevision")).put("currentConfigurationRevision",configurationRevision(config))
+                .put("provider",record.getString("provider")).put("providerOrigin",origin(provider)).put("resultOrigin",origin(target))
+                .put("providerResponseSha256",record.getString("_responseDigest")).put("resultUrlSha256",urlHash(record.getString("_resultUrl")))
+                .put("method","GET").put("maxAttempts",1).put("redirects",false).put("newGeneration",false).put("policyScope","original_false_policy_only");
+    }
+    private static String origin(java.net.URI uri)throws Exception{return new java.net.URI(uri.getScheme(),null,uri.getHost(),uri.getPort(),null,null,null).toASCIIString();}
+    private static String urlHash(String raw)throws Exception{
+        byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8));StringBuilder result=new StringBuilder();for(byte b:digest)result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();
+    }
+    private static String credentialHash(String requestHash,String key)throws Exception{return MediaJobJournal.hash(new JSONObject().put("requestIdentity",requestHash).put("credential",key==null?"":key));}
+
     private static JSONObject imageWorkflow(JSONObject config, JSONObject input) throws Exception {
         String prompt = input.getString("prompt");
         if (prompt.codePoints().allMatch(Character::isWhitespace) || prompt.length() > 8000) throw new IllegalArgumentException("媒体输入为空或超过长度限制");
@@ -245,15 +315,25 @@ public final class MediaJobs {
         long total = 0;
         for (int i = 0; i < saved.length(); i++) total += saved.getJSONObject(i).optLong("size");
         try {
+            if (total > MAX_IMPORT_BYTES) throw new IllegalStateException("本任务产物超过40MiB导入上限");
             for (int i = saved.length(); i < outputs.length(); i++) {
                 control.check();
                 JSONObject output = outputs.getJSONObject(i);
                 JSONObject found=artifacts.find(source(record,config,MediaJobJournal.hash(output)),control);
-                if(found!=null){saved.put(found);record.put("attachments",saved).put("resultStatus",saved.length()==outputs.length()?"saved":"partial");if(saved.length()==1)record.put("attachment",found);save(record);continue;}
+                if(found!=null){
+                    total += found.optLong("size");
+                    saved.put(found);
+                    record.put("attachments",saved).put("resultStatus",total<=MAX_IMPORT_BYTES&&saved.length()==outputs.length()?"saved":"partial");
+                    if(saved.length()==1)record.put("attachment",found);
+                    save(record); // The original already exists; retain its receipt even when over budget.
+                    if(total>MAX_IMPORT_BYTES)throw new IllegalStateException("本任务产物超过40MiB导入上限");
+                    continue;
+                }
+                if (total >= MAX_IMPORT_BYTES) throw new IllegalStateException("本任务产物超过40MiB导入上限");
                 byte[] bytes = MediaTransport.exchange(ComfyUiTransport.outputUri(config.getString("baseUrl"), output), key, "GET", null,
-                        MediaTransport.MAX_MEDIA_BYTES, control);
+                        (int) Math.min(MediaTransport.MAX_MEDIA_BYTES, MAX_IMPORT_BYTES - total), control);
                 total += bytes.length;
-                if (total > 40L * 1024 * 1024) throw new IllegalStateException("本任务产物超过40MiB导入上限");
+                if (total > MAX_IMPORT_BYTES) throw new IllegalStateException("本任务产物超过40MiB导入上限");
                 MediaTransport.Payload payload = MediaTransport.outputPayload(bytes);
                 control.check();
                 JSONObject attachment = artifacts.save(payload, source(record, config, MediaJobJournal.hash(output)), control);

@@ -112,7 +112,8 @@ public final class RemotePollIdentityTest {
     }
     @Test public void missingConditionalCapabilityNeverFallsBackToLegacyCancellation()throws Exception {
         try(Fixture f=new Fixture()){
-            f.submit();f.originalCancellation=false;assertThrows(SecurityException.class,()->f.module.handle("cancelJob",f.cancelTarget()));
+            f.submit();f.originalCancellation=false;JSONObject actual=f.module.handle("cancelJob",f.cancelTarget());
+            assertEquals("unknown",actual.getString("status"));assertEquals(Boolean.FALSE,actual.opt("cancellationDispatched"));
             assertEquals(0,f.cancels.get());assertEquals(0,f.legacyCancels.get());assertEquals("running",f.receipt.get().getString("status"));
         }
     }
@@ -141,6 +142,21 @@ public final class RemotePollIdentityTest {
             f.receipt.set(f.original());f.dropCancel=false;
             assertEquals("running",f.module.handle("cancelJob",f.cancelTarget()).getString("status"));
             assertEquals("unknown",f.cancelIntent().getString("status"));assertEquals(1,f.cancels.get());
+        }
+    }
+    @Test public void aTerminalObservationRequiresStrictFinalReleaseProofToSettleALostCancelReceipt()throws Exception {
+        try(Fixture f=new Fixture()){
+            f.submit();f.dropCancel=true;f.module.handle("cancelJob",f.cancelTarget());f.dropCancel=false;
+            f.receipt.set(f.original().put("status","cancelled"));
+            JSONObject unproved=f.module.handle("cancelJob",f.cancelTarget());assertEquals("cancelled",unproved.getString("status"));
+            assertEquals("unknown",f.cancelIntent().getString("status"));assertTrue(unproved.getBoolean("queryOnly"));
+            f.receipt.set(f.original().put("status","cancelled").put("dispatchFenceFinal","true").put("resourcesHeld","false"));
+            f.module.handle("cancelJob",f.cancelTarget());assertEquals("unknown",f.cancelIntent().getString("status"));
+            f.receipt.set(f.original().put("status","cancelled").put("dispatchFenceFinal",true).put("resourcesHeld",false));
+            JSONObject released=f.module.handle("cancelJob",f.cancelTarget());assertTrue(released.getBoolean("queryOnly"));
+            assertEquals("settled",f.cancelIntent().getString("status"));assertEquals("original_job_terminal_observation",f.cancelIntent().getString("settledBy"));
+            assertFalse(f.cancelIntent().getBoolean("cancelEffectConfirmed"));assertFalse(released.getBoolean("cancelRequestReplayed"));
+            assertEquals(1,f.cancels.get());assertEquals(0,f.legacyCancels.get());
         }
     }
     @Test public void cancellationCannotInferTheOperationFromOnlyAJobId()throws Exception {
@@ -190,7 +206,7 @@ public final class RemotePollIdentityTest {
                 }else if(path.endsWith("/cancel-original")){
                     cancels.incrementAndGet();JSONObject body=new JSONObject(new String(request,StandardCharsets.UTF_8));
                     if(!body.getString("jobOperationId").equals(actual.getString("operationId")))responseStatus=409;
-                    else{cancelEffects.incrementAndGet();actual.put("status","cancelled");receipt.set(new JSONObject(actual.toString()));actual.put("originalCancellation",new JSONObject().put("protocol",RemoteOriginalCancellation.PROTOCOL).put("jobId",actual.getString("id")).put("jobOperationId",actual.getString("operationId")).put("identityMatched",true).put("effectsReversed",false));}
+                    else{cancelEffects.incrementAndGet();actual.put("status","cancelled").put("dispatchFenceFinal",true).put("resourcesHeld",false);receipt.set(new JSONObject(actual.toString()));actual.put("originalCancellation",new JSONObject().put("protocol",RemoteOriginalCancellation.PROTOCOL).put("jobId",actual.getString("id")).put("jobOperationId",actual.getString("operationId")).put("identityMatched",true).put("effectsReversed",false));}
                     if(dropCancel)return;
                 }else if(path.endsWith("/cancel")){
                     legacyCancels.incrementAndGet();cancelEffects.incrementAndGet();actual.put("status","cancelled");receipt.set(new JSONObject(actual.toString()));

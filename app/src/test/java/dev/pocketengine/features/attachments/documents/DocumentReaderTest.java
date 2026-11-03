@@ -37,6 +37,40 @@ public final class DocumentReaderTest {
         DocumentContent.Result result=read(DocumentFixtures.presentation());assertEquals("pptx",result.format);assertEquals(2,result.totalUnits);assertEquals("Shown first",result.chunks.get(0).text);assertEquals("ppt/slides/slide2.xml",result.chunks.get(0).locator.get("part"));
         assertEquals("table_cell",result.chunks.get(1).kind);assertEquals("1",result.chunks.get(1).locator.get("row"));assertEquals("Shown second",result.chunks.get(2).text);assertEquals(2,result.chunks.get(2).unit);
     }
+    @Test public void repeatedSlidesKeepDistinctUnitsAndCursorsWithinTheWorkBudget()throws Exception {
+        for(boolean distinctRelationships:new boolean[]{false,true}) {
+            byte[] bytes=DocumentFixtures.repeatedPresentation(3,0,distinctRelationships);
+            for(int unit=1;unit<=3;unit++) {
+                DocumentContent.Result result=reader.read(bytes,new DocumentContent.Request(unit,0,1,2048,1),new RunControl());
+                assertEquals("partial",result.status);assertEquals("slide_text",result.coverage);assertEquals(3,result.totalUnits);
+                assertEquals(1,result.chunks.size());assertEquals(unit,result.chunks.get(0).unit);
+                assertEquals("Repeated slide",result.chunks.get(0).text);assertEquals(Integer.toString(unit),result.chunks.get(0).locator.get("slide"));
+                assertEquals("ppt/slides/slide1.xml",result.chunks.get(0).locator.get("part"));
+                assertEquals(unit<3?unit+1:0,result.nextUnit);assertEquals(0,result.nextChunk);assertEquals(unit<3,result.truncated);
+            }
+        }
+    }
+    @Test public void repeatedSlideParsingChargesEveryReferenceAndAcceptsTheExactBudget()throws Exception {
+        int slideBytes=1024*1024;
+        byte[] within=DocumentFixtures.repeatedPresentation(32,slideBytes,false);
+        DocumentContent.Result accepted=reader.read(within,new DocumentContent.Request(31,0,2,2048,2),new RunControl());
+        assertEquals("partial",accepted.status);assertEquals(32,accepted.totalUnits);assertEquals(2,accepted.chunks.size());assertFalse(accepted.truncated);
+        for(boolean distinctRelationships:new boolean[]{false,true}) {
+            byte[] repeated=DocumentFixtures.repeatedPresentation(33,slideBytes,distinctRelationships);
+            assertTrue("Adversarial ZIP remains small",repeated.length<64*1024);
+            DocumentContent.Result result=reader.read(repeated,new DocumentContent.Request(1,0,1,2048,1),new RunControl());
+            assertEquals("pptx",result.format);assertEquals("limit_exceeded",result.status);assertEquals("none",result.coverage);
+            assertTrue(result.chunks.isEmpty());assertEquals(0,result.totalUnits);assertFalse(result.truncated);
+            assertTrue(result.warnings.get(0).contains("32 MiB cumulative"));
+        }
+    }
+    @Test public void presentationReferenceCountIsBoundedWithoutRejectingLegalRepeats()throws Exception {
+        DocumentContent.Result accepted=reader.read(DocumentFixtures.repeatedPresentation(1024,0,false),new DocumentContent.Request(1024,0,1,2048,1),new RunControl());
+        assertEquals("partial",accepted.status);assertEquals(1024,accepted.totalUnits);assertEquals(1024,accepted.chunks.get(0).unit);assertFalse(accepted.truncated);
+        DocumentContent.Result result=read(DocumentFixtures.repeatedPresentation(1025,0,false));
+        assertEquals("limit_exceeded",result.status);assertTrue(result.chunks.isEmpty());assertEquals(0,result.totalUnits);
+        assertTrue(result.warnings.get(0).contains("1024 slide references"));
+    }
     @Test public void chunkCursorContinuesWithoutDuplicatesOrBrokenSurrogates()throws Exception {
         String text="a".repeat(1023)+"😀"+"z".repeat(4600);byte[] bytes=DocumentFixtures.word(DocumentFixtures.paragraph(text));
         StringBuilder restored=new StringBuilder();int unit=1,chunk=0,requests=0;

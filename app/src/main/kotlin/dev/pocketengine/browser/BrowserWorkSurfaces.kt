@@ -60,7 +60,8 @@ internal fun BrowserPageCard(page: JSONObject, selected: Boolean, onSelect: () -
 @Composable
 internal fun BrowserActivityTrail(task: JSONObject) {
     val operations = task.optJSONArray("operations") ?: JSONArray()
-    val records = TaskExecutionPresentation.records(JSONObject().put("entries", operations), "operations")
+    val window = TaskExecutionPresentation.recentOperations(operations)
+    val records = window.records
     var expanded by remember(task.optString("id")) { mutableStateOf(false) }
     var detail by remember(task.optString("id")) { mutableStateOf<String?>(null) }
     val events = task.optJSONArray("events") ?: JSONArray()
@@ -68,7 +69,7 @@ internal fun BrowserActivityTrail(task: JSONObject) {
     Column(Modifier.fillMaxWidth().testTag("browser-execution-activity").animateContentSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("执行活动", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-            if (records.size > 3) TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起" else "全部 ${records.size} 条") }
+            if (records.size > 3) TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起" else window.expandLabel) }
         }
         if (records.isEmpty()) Text(latest?.optString("message") ?: "尚无工具调用记录；不会把计划当作已经执行。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         val visible = if (expanded) records else records.takeLast(3)
@@ -96,6 +97,6 @@ internal fun BrowserActivityTrail(task: JSONObject) {
                 }
             }
         }
-        if (records.isNotEmpty() && !expanded && records.size > visible.size) Text("显示最近 ${visible.size} 条原调用；展开可回查更早记录。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        window.summary(expanded)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }

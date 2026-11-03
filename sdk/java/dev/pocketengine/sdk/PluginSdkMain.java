@@ -3,6 +3,7 @@ package dev.pocketengine.sdk;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.plugins.distribution.SdkPackageCodec;
 import dev.pocketengine.features.plugins.sdk.PluginSdk;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -51,15 +52,26 @@ public final class PluginSdkMain {
         JSONObject result = new JSONObject().put("receipt", prepared.receipt()).put("inspection", prepared.inspection().review());
         if (input.has("packageUrl")) result.put("catalogEntry", prepared.catalogEntry(input.getString("packageUrl"), input.getInt("minAndroidApi")));
         if ("pack".equals(action)) {
-            Path target = Path.of(input.getString("outputPath")); boolean created = false;
-            try {
-                try (OutputStream out = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
-                    created = true; sdk.write(prepared, out, control); out.flush();
-                }
-                control.check();
-            } catch (Exception failed) { if (created) Files.deleteIfExists(target); throw failed; }
+            Path target = Path.of(input.getString("outputPath"));
+            pack(sdk, prepared, target, control);
             result.put("saved", true).put("outputPath", target.toAbsolutePath().toString());
         }
         return result;
+    }
+
+    static void pack(PluginSdk sdk, PluginSdk.Prepared prepared, Path target, RunControl control) throws Exception {
+        boolean created = false;
+        try {
+            try (OutputStream out = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+                created = true; sdk.write(prepared, out, control); out.flush();
+            }
+            control.check();
+        } catch (Exception failure) {
+            if (!created) throw failure;
+            // The path may now name another process's file. There is no atomic
+            // compare-and-delete here, so retain any output rather than unlink it.
+            throw new IOException("Package creation failed; no output was removed. Output path may contain partial or replaced data: "
+                    + target.toAbsolutePath() + ". Inspect it before cleanup or retry. Cause: " + failure.getMessage(), failure);
+        }
     }
 }

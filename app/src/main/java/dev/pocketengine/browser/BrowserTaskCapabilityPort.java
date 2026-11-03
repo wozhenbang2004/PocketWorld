@@ -51,13 +51,15 @@ public final class BrowserTaskCapabilityPort implements CapabilityPort {
     private static final class ScopedReadCancel {final String scope;final PublicHttpReader.Budget budget;ScopedReadCancel(String scope,PublicHttpReader.Budget budget){this.scope=scope;this.budget=budget;}}
     private final java.util.concurrent.atomic.AtomicReference<ScopedReadCancel> scopedReadCancel=new java.util.concurrent.atomic.AtomicReference<>();
     private static final class OwnerReturnRead {
-        final String token=java.util.UUID.randomUUID().toString();final JSONObject confirmed;final ModelCapabilityAdapters.ResourceCheck retainedAuthority;volatile JSONObject observedPin;
+        final String token=java.util.UUID.randomUUID().toString();final JSONObject confirmed;final ModelCapabilityAdapters.ResourceCheck retainedAuthority;volatile JSONObject observedPin;volatile boolean sourceDelivered;
         OwnerReturnRead(JSONObject confirmed,ModelCapabilityAdapters.ResourceCheck retainedAuthority)throws Exception{this.confirmed=copy(confirmed);this.retainedAuthority=java.util.Objects.requireNonNull(retainedAuthority);}
     }
     private final java.util.concurrent.atomic.AtomicReference<OwnerReturnRead> ownerReturnRead=new java.util.concurrent.atomic.AtomicReference<>();
     private final AtomicBoolean returnReadInFlight=new AtomicBoolean();
     private volatile JSONObject completedOwnerReturnObservation;
     private volatile OwnerReturnRead completedOwnerReturnRead;
+    private record OwnerReturnDelivery(String requestId,OwnerReturnRead read,JSONObject observation) { }
+    private final java.util.concurrent.atomic.AtomicReference<OwnerReturnDelivery> ownerReturnDelivery=new java.util.concurrent.atomic.AtomicReference<>();
     /** Native host grant construction only; TaskStore remains the authority applying this list. */
     public static JSONArray taskToolNames(boolean sourceRetention)throws Exception {JSONArray names=new JSONArray();for(String command:new String[]{"open","select","observe","request_user","navigate","click","type","set_date","focus","press","select_option","set_checked","scroll","wait","download","download_status","retain_source","close","finish","observe_visual","evaluate","inspect","script","network","network_body","download_document","prepare_sequence","native_input","site_mode","resize","back","forward","reload","upload_artifact"})if(sourceRetention||!command.equals("retain_source"))names.put("browser_task_"+command);if(sourceRetention)names.put(PublicHttpReader.TOOL);return names;}
     public BrowserTaskCapabilityPort(BrowserTaskSpace space,ModelCapabilityAdapters.Authority authority,ModelCapabilityAdapters.ResourceCheck resource,ApprovalPort approvals,BrowserTaskSpace.Ui ui,CapabilityPort existing)throws Exception {
@@ -330,11 +332,35 @@ public final class BrowserTaskCapabilityPort implements CapabilityPort {
         try{onMain(()->{space.effectSettledNative(arguments,delivered);space.pageDialogOperationSettled(delivered.getString("operationId"),delivered);return new JSONObject();},control);}
         catch(Exception unavailable){/* Never replace an already journalled action result or clear its unknown-effect fence. */}
     }
-    @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception{if(closed)throw new Unavailable();if(space.ended())space.checkOriginalRun(control);else space.checkOriginal(control);if(existing!=null)existing.beforeModelRequest(requestId,messages,control);onMain(()->{space.beforeModelRequest(requestId,messages);return new JSONObject();},control);}
-    @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception{if(closed)throw new Unavailable();if(space.ended())space.checkOriginalRun(control);else space.checkOriginal(control);JSONObject result=existing==null?null:existing.afterModelResponse(requestId,answerId,control);onMain(()->{space.afterModelResponse(requestId);return new JSONObject();},control);return result;}
-    @Override public void modelRequestAbandoned(String requestId)throws Exception{if(existing!=null)existing.modelRequestAbandoned(requestId);onMain(()->{space.modelRequestAbandoned(requestId);return new JSONObject();},space.originalControl);}
-    @Override public void endRun(RunControl control)throws Exception {PlanDelivery plan=toolPlan.getAndSet(null);if(plan!=null)plan.plan.close();VisualDelivery pending=visualDelivery.getAndSet(null);if(pending!=null)pending.image.close();if(existing!=null)existing.endRun(control);}
-    @Override public void close(){closed=true;PlanDelivery plan=toolPlan.getAndSet(null);if(plan!=null)plan.plan.close();VisualDelivery pending=visualDelivery.getAndSet(null);if(pending!=null)pending.image.close();ui.post(()->{try{space.endNative("capability_closed");}catch(Exception ignored){}});if(existing!=null)existing.close();}
+    /** Owner-return context has no tool operation. Match its original native envelope on the
+     * final wire, then wait for a completed response. JSON flags/nonce alone prove no delivery. */
+    private JSONObject ownerReturnOnWire(JSONArray messages,JSONObject expected)throws Exception {
+        if(expected==null||!expected.optBoolean("freshObservationAvailable")||!expected.optBoolean("ok")||!expected.optString("kind").equals("browser_owner_return_observation"))return null;
+        String fingerprint=dev.pocketengine.store.TaskStore.capabilityFingerprint(dev.pocketengine.features.memory.TaskMemoryHistory.observationData(expected));
+        for(int i=messages.length()-1;i>=0;i--){JSONObject message=messages.optJSONObject(i);if(message==null||!"user".equals(message.optString("role")))continue;JSONArray parts=message.optJSONArray("content");
+            for(int j=0;parts!=null&&j<parts.length();j++){JSONObject part=parts.optJSONObject(j);if(part==null||!"text".equals(part.optString("type")))continue;String text=part.optString("text"),prefix=dev.pocketengine.features.memory.TaskMemoryHistory.OBSERVATION_PREFIX;if(!text.startsWith(prefix))continue;
+                try{org.json.JSONTokener parser=new org.json.JSONTokener(text.substring(prefix.length()));Object value=parser.nextValue();if(!(value instanceof JSONObject)||parser.nextClean()!=0)continue;JSONObject candidate=copy((JSONObject)value);candidate.remove("actualImageAttached");candidate.remove("visionNotice");if(fingerprint.equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(candidate)))return candidate;}catch(Exception omittedOrChanged){/* No exact native envelope survived safe projection. */}
+            }
+        }return null;
+    }
+    @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception {
+        nativeHookControl(control);ownerReturnDelivery.set(null);if(existing!=null)existing.beforeModelRequest(requestId,messages,control);onMain(()->{space.beforeModelRequest(requestId,messages);return new JSONObject();},control);
+        OwnerReturnRead read=completedOwnerReturnRead;JSONObject actual=read==null||read.sourceDelivered?null:ownerReturnOnWire(messages,completedOwnerReturnObservation);if(read!=null&&actual!=null&&read.token.equals(actual.optString("ownerReturnNonce")))ownerReturnDelivery.set(new OwnerReturnDelivery(requestId,read,actual));
+    }
+    @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception {
+        nativeHookControl(control);JSONObject result=existing==null?null:existing.afterModelResponse(requestId,answerId,control);onMain(()->{space.afterModelResponse(requestId);return new JSONObject();},control);
+        OwnerReturnDelivery delivered=ownerReturnDelivery.get();if(delivered!=null&&delivered.requestId.equals(requestId)&&ownerReturnDelivery.compareAndSet(delivered,null))try{
+            if(delivered.read!=completedOwnerReturnRead)throw new BrowserTaskSpace.StalePage("交还观察已被替换");delivered.read.retainedAuthority.check();live("browser_task_observe",control);
+            onMain(()->{JSONObject args=new JSONObject().put("tabId",delivered.observation.getString("tabId"));space.requirePin(delivered.read.observedPin,args);space.finalSequenceObservation(args,delivered.observation);return new JSONObject();},control);delivered.read.sourceDelivered=true;
+        }catch(Exception notRegistered){control.check();/* A missing original delivery proof never enables source retention. */}
+        return result;
+    }
+    @Override public void modelRequestAbandoned(String requestId)throws Exception {
+        OwnerReturnDelivery pending=ownerReturnDelivery.get();if(pending!=null&&pending.requestId.equals(requestId))ownerReturnDelivery.compareAndSet(pending,null);
+        if(existing!=null)existing.modelRequestAbandoned(requestId);onMain(()->{space.modelRequestAbandoned(requestId);return new JSONObject();},space.originalControl);
+    }
+    @Override public void endRun(RunControl control)throws Exception {ownerReturnDelivery.set(null);PlanDelivery plan=toolPlan.getAndSet(null);if(plan!=null)plan.plan.close();VisualDelivery pending=visualDelivery.getAndSet(null);if(pending!=null)pending.image.close();if(existing!=null)existing.endRun(control);}
+    @Override public void close(){closed=true;ownerReturnDelivery.set(null);PlanDelivery plan=toolPlan.getAndSet(null);if(plan!=null)plan.plan.close();VisualDelivery pending=visualDelivery.getAndSet(null);if(pending!=null)pending.image.close();ui.post(()->{try{space.endNative("capability_closed");}catch(Exception ignored){}});if(existing!=null)existing.close();}
     private static JSONObject copy(JSONObject value)throws Exception{return new JSONObject(value.toString());}
     private static JSONObject text(int length)throws Exception{return new JSONObject().put("type","string").put("maxLength",length);}
     private static JSONObject props(Object... values)throws Exception {JSONObject p=new JSONObject();for(int i=0;i<values.length;i+=2)p.put((String)values[i],values[i+1]);return p;}

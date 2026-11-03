@@ -319,7 +319,23 @@ public final class MediaJobsTest {
         Files.writeString(journalFile.toPath(), "broken"); assertThrows(Exception.class, () -> reopened());
         JSONObject receipts = new JSONObject(); for (int i = 0; i < MediaJobJournal.MAX_RECEIPTS; i++) receipts.put("old-" + i, new JSONObject().put("operationId", "old-" + i).put("status", "unknown"));
         Files.writeString(journalFile.toPath(), new JSONObject().put("version", 1).put("receipts", receipts).toString()); jobs = reopened();
-        assertThrows(IllegalStateException.class, () -> submit("new-op")); assertEquals(0, submissions.get());
+        byte[] before = Files.readAllBytes(journalFile.toPath());
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> submit("new-op"));
+        assertEquals("CapacityExceededException", failure.getClass().getSimpleName());
+        assertEquals("new-op", failure.getClass().getField("operationId").get(failure));
+        assertEquals(0, submissions.get()); assertArrayEquals(before, Files.readAllBytes(journalFile.toPath()));
+        assertEquals(MediaJobJournal.MAX_RECEIPTS, jobs.list().length());
+        MediaJobJournal journal = new MediaJobJournal(journalFile);
+        journal.put(journal.get("old-0").put("message", "original reconciliation remains available"));
+        assertEquals(MediaJobJournal.MAX_RECEIPTS, new MediaJobJournal(journalFile).list().length());
+        assertEquals("original reconciliation remains available", new MediaJobJournal(journalFile).get("old-0").getString("message"));
+    }
+
+    @Test public void ordinaryJournalWriteFailureIsNotAConfirmedCapacityRefusal() throws Exception {
+        assertTrue(journalFile.mkdir()); File unrelated = new File(journalFile, "unrelated"); Files.writeString(unrelated.toPath(), "preserve");
+        Exception failure = assertThrows(Exception.class, () -> submit("new-op"));
+        assertNotEquals("CapacityExceededException", failure.getClass().getSimpleName()); assertEquals(0, submissions.get());
+        assertEquals("preserve", Files.readString(unrelated.toPath()));
     }
 
     @Test public void hashesIgnoreObjectKeyOrderAndWorkflowDepthIsBounded() throws Exception {

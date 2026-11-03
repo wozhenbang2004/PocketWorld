@@ -110,7 +110,7 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
         }
         private JSONObject stopAndReconcile(JSONObject link,JSONObject receipt,String operation,Consumer<JSONObject> events)throws Exception {
             if(receipt.optString("id").isEmpty())return save(link,unknown(operation,"未取得电脑任务编号，无法确认停止；请按操作编号核对"),events);
-            JSONObject target=jobRequest(receipt);long deadline=System.nanoTime()+5_000_000_000L;
+            JSONObject target=jobRequest(receipt).put("jobOperationId",link.getString("operationId"));long deadline=System.nanoTime()+5_000_000_000L;
             try{
                 receipt=remote.call("cancelJob",target);save(link,receipt,events);
                 while(active(receipt.optString("status"))&&System.nanoTime()<deadline){Thread.sleep(100);receipt=remote.call("getJob",target);save(link,receipt,events);}

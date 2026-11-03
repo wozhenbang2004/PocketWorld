@@ -147,7 +147,7 @@ const notFound=()=>fail(session.reasons.size?'read_region_search_incomplete':'re
 const resumable=new Set(['node_budget','text_scan_budget','capture_time_budget','region_batch_budget']);
 function account(s){captured.nodes+=s.nodes;captured.chars+=s.chars;captured.frames+=s.frames;captured.shadows+=s.shadows;for(const reason of s.reasons){captured.reasons.add(reason);if(resumable.has(reason))temporary.add(reason);else session.reasons.add(reason)}if(!session.version)session.version=s.version}
 const expected=kind==='table'?new Set(['table','grid']):new Set(['list']);
-const ownedRow=row=>{let owner=row.parentElement;while(owner&&owner!==session.target&&!expected.has(role(owner)))owner=owner.parentElement;return owner===session.target};
+const ownedRow=row=>{let owner=composedParent(row),depth=0;while(owner&&depth++<128){if(owner===session.target)return true;if(expected.has(role(owner)))return false;owner=composedParent(owner)}if(owner)session.reasons.add('depth_budget');return false};
 function partFor(el,max){return {el,max,walk:walker(el),text:'',links:[],partial:false,done:false}}
 function readPart(part){const s=scan(part.el,false,part.walk,{track:session.track,captureLimit:part.max+1-part.text.length});account(s);part.text+=s.text.join('');for(const reason of s.reasons)if(!resumable.has(reason))part.partial=true;
  for(const a of s.elements){if(a.tagName!=='A'||!a.hasAttribute('href')||!hasRect(a))continue;try{const u=new URL(a.href,location.href);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.href.length>2048||part.links.length>=8){part.partial=true;continue}part.links.push({text:clip(labelText(a),160),href:u.href})}catch(_){part.partial=true}}

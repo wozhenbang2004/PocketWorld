@@ -34,7 +34,7 @@ import static org.junit.Assert.*;
 @Config(sdk=35,manifest=Config.NONE,application=Application.class)
 public final class FunctionalPackNativeJourneyTest {
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final Application app=RuntimeEnvironment.getApplication();final TaskStore tasks=new TaskStore(app);
         final FeatureContext context=new FeatureContext(app,null,new SecretVault(app),event->{});final PluginsModule plugins=new PluginsModule(context);final SkillsModule skills=new SkillsModule(context);
         final PluginCatalog configured=new PluginCatalog(plugins,new File(app.getFilesDir(),"plugin-catalog-sources.json"),35);
@@ -48,7 +48,7 @@ public final class FunctionalPackNativeJourneyTest {
         @Override public void close(){host.close();js.close();configured.close();plugins.close();}
     }
     private static byte[] zip(String version)throws Exception {ByteArrayOutputStream out=new ByteArrayOutputStream();try(ZipOutputStream archive=new ZipOutputStream(out,StandardCharsets.UTF_8)){ZipEntry manifest=new ZipEntry("release-notes/SKILL.md");manifest.setTime(1_600_000_000_000L);archive.putNextEntry(manifest);archive.write(("---\nname: release-notes\ndescription: 整理公开版本记录并比较变化\nlicense: MIT\nmetadata:\n  version: '"+version+"'\n---\n先使用已授权的 plugin:release-data:fetch 读取公开版本记录，再用 js:release-transform:count 做纯文本计算。\r\n这里只是 instruction recipe；不自动运行，不授予工具权限。\n").getBytes(StandardCharsets.UTF_8));archive.closeEntry();ZipEntry reference=new ZipEntry("release-notes/references/source.txt");reference.setTime(1_600_000_000_000L);archive.putNextEntry(reference);archive.write(("准确资源内容 "+version+"\r\n").getBytes(StandardCharsets.UTF_8));archive.closeEntry();}return out.toByteArray();}
-    private static byte[] packageBytes(String version,boolean mcp)throws Exception {
+    public static byte[] packageBytes(String version,boolean mcp)throws Exception {
         JSONObject tool=new JSONObject().put("name","fetch").put("kind",mcp?"mcp":"http").put("endpoint","http://127.0.0.1:1/releases").put("effect","read");
         if(mcp)tool.put("protocolVersion","2026-07-28").put("descriptorDigest","a".repeat(64)).put("serverDigest","b".repeat(64));
         byte[] declaration=SdkPackageCodec.declaration(new JSONObject().put("id","release-data").put("name","公开版本读取").put("version",version).put("tools",new JSONArray().put(tool)),new JSONObject().put("label","本机生命周期fixture作者"));

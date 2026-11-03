@@ -41,7 +41,7 @@ import org.json.JSONObject
     var editing by remember { mutableStateOf<Pair<JSONObject, JSONObject>?>(null) }
     var cancelling by remember { mutableStateOf<JSONObject?>(null) }
     var createRequest by remember { mutableStateOf<String?>(null) }
-    var dialogRequest by remember { mutableStateOf<String?>(null) }
+    var dialogRequest by remember { mutableStateOf<PlanDialogRequest?>(null) }
     var observedTasks by remember { mutableStateOf("") }
     val planChange = state.feature("automation").optLong("nativePlanChange")
     var observedPlanChange by remember { mutableStateOf(planChange) }
@@ -59,9 +59,15 @@ import org.json.JSONObject
         if (!busy && signature != observedTasks && plans.any { it.optJSONObject("execution") != null }) { observedTasks = signature; send("snapshot") }
     }
     LaunchedEffect(state.moduleResultInputs[key]?.optString("_requestId")) {
-        val acknowledgement = state.moduleResultInputs[key]?.optString("_requestId")
-        if (createRequest != null && acknowledgement == createRequest && result?.optString("command") == "create") result.optJSONObject("plan")?.let { selected = it.optString("id"); creating = false; reviewing = JSONObject(it.toString()); createRequest = null }
-        if (dialogRequest != null && acknowledgement == dialogRequest) { reviewing = null; editing = null; dialogRequest = null }
+        val acknowledgement = state.moduleResultInputs[key]
+        if (createRequest != null && acknowledgement?.optString("_requestId") == createRequest && result?.optString("command") == "create") result.optJSONObject("plan")?.let { selected = it.optString("id"); creating = false; reviewing = JSONObject(it.toString()); createRequest = null }
+        val pending = dialogRequest
+        val receipt = consumePlanDialogReceipt(pending, acknowledgement, result)
+        if (receipt.close) {
+            if (pending?.command == "approve") reviewing = null
+            if (pending?.command == "editStep") editing = null
+        }
+        dialogRequest = receipt.pending
     }
     LaunchedEffect(planChange, busy) {
         if (!busy && planChange != observedPlanChange) {
@@ -189,8 +195,8 @@ import org.json.JSONObject
     val remoteCandidates = snapshot?.optJSONArray("remoteWaitCandidates").objects()
     val businessCandidates = snapshot?.optJSONArray("businessWaitCandidates").objects()
     if (creating) ExecutionPlanEditor(state, remoteCandidates, businessCandidates, busy, { creating = false }) { definition -> createRequest = send("create", JSONObject().put("plan", definition)) }
-    reviewing?.let { frozen -> ExecutionPlanReview(frozen, state, busy, { reviewing = null }) { settings -> dialogRequest = send("approve", planRef(frozen).put("settings", settings)) } }
-    editing?.let { (frozen, step) -> ExecutionStepEditor(frozen, step, state, remoteCandidates, businessCandidates, busy, { editing = null }) { patch -> dialogRequest = send("editStep", planRef(frozen).put("stepId", step.getString("id")).put("stepRevision", step.getLong("revision")).put("patch", patch)) } }
+    reviewing?.let { frozen -> ExecutionPlanReview(frozen, state, busy, { reviewing = null; dialogRequest = null }) { settings -> dialogRequest = PlanDialogRequest(send("approve", planRef(frozen).put("settings", settings)), "approve", frozen.getString("id"), frozen.getLong("revision")) } }
+    editing?.let { (frozen, step) -> ExecutionStepEditor(frozen, step, state, remoteCandidates, businessCandidates, busy, { editing = null; dialogRequest = null }) { patch -> dialogRequest = PlanDialogRequest(send("editStep", planRef(frozen).put("stepId", step.getString("id")).put("stepRevision", step.getLong("revision")).put("patch", patch)), "editStep", frozen.getString("id"), frozen.getLong("revision")) } }
     cancelling?.let { frozen -> AlertDialog(onDismissRequest = { cancelling = null }, title = { Text("取消这个目标？") }, text = { Text("保留已核验成果，停止后继准入，并请求停止本目标创建的原任务。在途操作和未知结果仍需核对。" + if (frozen.optJSONArray("steps").objects().any { it.optJSONObject("remoteWait") != null }) " 独立电脑前置不会被此操作停止，需要停止时请打开电脑原任务。" else "") }, confirmButton = { TextButton(onClick = { send("cancel", planRef(frozen)); cancelling = null }) { Text("取消目标", color = Danger) } }, dismissButton = { TextButton(onClick = { cancelling = null }) { Text("保留") } }) }
 }
 

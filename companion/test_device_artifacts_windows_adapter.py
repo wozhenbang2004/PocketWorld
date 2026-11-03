@@ -5,9 +5,10 @@ import io
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import uuid
 
-from device_artifacts import ArtifactError, WindowsArtifactReceiver, CHUNK_BYTES
+from device_artifacts import ArtifactError, WindowsArtifactReceiver, CHUNK_BYTES, MAX_ENTRIES
 from test_device_artifacts import ref
 
 
@@ -56,7 +57,7 @@ class FixtureNativeBackend:
     def delete_private_snapshot(self, root, relative, expected_sha256, expected_bytes, current):
         self.calls.append(("delete", relative)); current()
         raw = self.read_bytes(root, relative, 20 * 1024 * 1024)
-        if raw is None: return {"status": "completed", "deleted": True, "verified": True, "alreadyAbsent": True}
+        if raw is None: return {"status": "completed", "deleted": False, "verified": True, "alreadyAbsent": True}
         if len(raw) != expected_bytes or hashlib.sha256(raw).hexdigest() != expected_sha256: raise ArtifactError("Fixture native delete identity mismatch")
         (Path(root) / relative).unlink()
         return {"status": "completed", "deleted": True, "verified": True}
@@ -120,3 +121,109 @@ class WindowsLandingAdapterTests(unittest.TestCase):
         self.allow = False
         with self.assertRaises(PermissionError): self.receiver.accept(descriptor, 0, raw, hashlib.sha256(raw).hexdigest())
         self.assertEqual(0, self.backend.snapshot_count)
+
+    def test_cancelled_unfinished_receives_release_durable_cache_slots(self):
+        raw = b"A" * CHUNK_BYTES + b"unfinished-tail"
+        for offset in (0, CHUNK_BYTES):
+            for attempt in range(MAX_ENTRIES + 1):
+                with self.subTest(offset=offset, attempt=attempt):
+                    descriptor = ref(raw); self.receiver.begin(descriptor)
+                    if offset:
+                        part = raw[:offset]
+                        self.receiver.accept(descriptor, 0, part, hashlib.sha256(part).hexdigest())
+                    self.receiver.remove(descriptor)
+                    self.receiver = WindowsArtifactReceiver(self.temp.name, backend=self.backend, current=self.current)
+                    self.assertEqual({}, self.receiver._load()[0]["transfers"])
+                    self.assertEqual([self.receiver.INDEX], [path.name for path in Path(self.temp.name).iterdir()])
+
+    def test_cleanup_retry_accepts_verified_absent_chunks_after_interruption(self):
+        raw = b"approved bytes"; descriptor = ref(raw); self.receiver.begin(descriptor)
+        self.receiver.accept(descriptor, 0, raw, hashlib.sha256(raw).hexdigest())
+        before = self.receiver._load()[1]
+        delete = self.backend.delete_private_snapshot
+        def interrupted(root, name, sha, size, current):
+            if name.endswith(".artifact"):
+                return {"status": "unknown", "deleted": None, "verified": False}
+            return delete(root, name, sha, size, current)
+        with patch.object(self.backend, "delete_private_snapshot", side_effect=interrupted):
+            with self.assertRaises(ArtifactError): self.receiver.remove(descriptor)
+        self.assertEqual(before, self.receiver._load()[1])
+        self.assertFalse((Path(self.temp.name) / (descriptor["transferId"] + ".chunk-0")).exists())
+        self.receiver.remove(descriptor)
+        self.assertEqual({}, self.receiver._load()[0]["transfers"])
+
+    def test_cleanup_rejects_unverified_or_malformed_absence_receipts(self):
+        descriptor = ref(b"not received"); self.receiver.begin(descriptor)
+        before = self.receiver._load()[1]
+        receipts = [None, {}, {"deleted": False, "verified": True},
+                    {"deleted": False, "alreadyAbsent": 1, "verified": True},
+                    {"deleted": False, "alreadyAbsent": True, "verified": 1},
+                    {"deleted": False, "alreadyAbsent": True},
+                    {"status": "unknown", "deleted": None, "alreadyAbsent": True, "verified": False},
+                    {"deleted": True, "verified": False}]
+        for receipt in receipts:
+            with self.subTest(receipt=receipt), patch.object(self.backend, "delete_private_snapshot", return_value=receipt):
+                with self.assertRaises(ArtifactError): self.receiver.remove(descriptor)
+                self.assertEqual(before, self.receiver._load()[1])
+
+    def test_cleanup_retains_changed_chunk_and_exact_reference_gate(self):
+        raw = b"approved bytes"; descriptor = ref(raw); self.receiver.begin(descriptor)
+        self.receiver.accept(descriptor, 0, raw, hashlib.sha256(raw).hexdigest())
+        before = self.receiver._load()[1]
+        for changed in (dict(descriptor, versionId="changed"), dict(descriptor, transferId=str(uuid.uuid4()))):
+            with self.subTest(changed=changed):
+                with patch.object(self.backend, "delete_private_snapshot") as delete:
+                    with self.assertRaises(ArtifactError): self.receiver.remove(changed)
+                    delete.assert_not_called()
+        path = Path(self.temp.name) / (descriptor["transferId"] + ".chunk-0")
+        changed = b"X" * len(raw); path.write_bytes(changed)
+        with self.assertRaises(ArtifactError): self.receiver.remove(descriptor)
+        self.assertEqual(changed, path.read_bytes())
+        self.assertEqual(before, self.receiver._load()[1])
+
+    def test_cleanup_still_checks_final_object_before_completion_checkpoint(self):
+        raw = b"approved final"; descriptor = ref(raw); self.receiver.begin(descriptor)
+        before = self.receiver._load()[1]
+        name = descriptor["transferId"] + ".artifact"
+        changed = b"X" * len(raw)
+        self.backend.create_private_snapshot(self.temp.name, name, changed)
+        with self.assertRaises(ArtifactError): self.receiver.remove(descriptor)
+        self.assertEqual(changed, (Path(self.temp.name) / name).read_bytes())
+        self.assertEqual(before, self.receiver._load()[1])
+        (Path(self.temp.name) / name).write_bytes(raw)
+        self.receiver.remove(descriptor)
+        self.assertFalse((Path(self.temp.name) / name).exists())
+        self.assertEqual({}, self.receiver._load()[0]["transfers"])
+
+    def test_cleanup_preserves_concurrent_index_cas_and_other_transfers(self):
+        descriptor, other = ref(b"first"), ref(b"second")
+        self.receiver.begin(descriptor)
+        concurrent = WindowsArtifactReceiver(self.temp.name, backend=self.backend, current=self.current)
+        delete = self.backend.delete_private_snapshot
+        def concurrent_begin(*args):
+            result = delete(*args)
+            concurrent.begin(other)
+            return result
+        with patch.object(self.backend, "delete_private_snapshot", side_effect=concurrent_begin):
+            with self.assertRaisesRegex(ArtifactError, "CAS mismatch"): self.receiver.remove(descriptor)
+        self.assertEqual({descriptor["transferId"], other["transferId"]}, set(self.receiver._load()[0]["transfers"]))
+        self.backend.unknown_cas = True  # Lost ACK is resolved from exact index bytes, not a second write.
+        self.receiver.remove(descriptor)
+        self.assertEqual({other["transferId"]}, set(self.receiver._load()[0]["transfers"]))
+        concurrent.close()
+
+    def test_cleanup_rechecks_grant_before_index_removal(self):
+        descriptor = ref(b"not received"); self.receiver.begin(descriptor)
+        before = self.receiver._load()[1]
+        self.allow = False
+        with patch.object(self.backend, "delete_private_snapshot") as delete:
+            with self.assertRaises(PermissionError): self.receiver.remove(descriptor)
+            delete.assert_not_called()
+        self.allow = True
+        delete = self.backend.delete_private_snapshot
+        def revoked_after_absence(*args):
+            result = delete(*args); self.allow = False
+            return result
+        with patch.object(self.backend, "delete_private_snapshot", side_effect=revoked_after_absence):
+            with self.assertRaises(PermissionError): self.receiver.remove(descriptor)
+        self.assertEqual(before, self.receiver._load()[1])

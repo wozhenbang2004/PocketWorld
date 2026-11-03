@@ -153,3 +153,5 @@
 .pw-task-event-copy+.pw-muted{margin-top:8px}
 .pw-task-operations{margin-top:24px}
 .pw-task-tool-empty{margin-top:20px}
+
+.pw-approval-copy{white-space:pre-wrap;overflow-wrap:anywhere}.pw-approval-json{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.7;margin:8px 0;max-height:45dvh;overflow:auto}
