@@ -175,7 +175,11 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
         assertEquals(taskId,finalAnswer.getString("taskId"));assertEquals(runId,finalAnswer.getString("runId"));assertEquals(epoch,finalAnswer.getInt("coordinatorEpoch"));assertTrue(finalAnswer.getBoolean("inputBoundaryEmpty"));
         assertEquals("needs_confirmation",scalar("SELECT status FROM runs WHERE run_id=?",runId));
         assertEquals(grant,grant());assertEquals(0,count("SELECT count(*) FROM leases WHERE resource_id='phone.local'"));
-        assertEquals(1,count("SELECT count(*) FROM runs WHERE task_id=?",taskId));assertEquals(0,count("SELECT count(*) FROM operations WHERE task_id=?",taskId));
+        assertEquals(1,count("SELECT count(*) FROM runs WHERE task_id=?",taskId));
+        // Each of the two original model turns records its native memory reference;
+        // no other operation or unknown effect is permitted by this read-only journey.
+        assertEquals(2,count("SELECT count(*) FROM operations WHERE task_id=? AND run_id=? AND tool='native_memory_reference' AND state='reference_provided'",taskId,runId));
+        assertEquals(2,count("SELECT count(*) FROM operations WHERE task_id=?",taskId));assertFalse(app.tasks.hasUnresolved(taskId));
         assertEquals(0,count("SELECT count(*) FROM assistant_sources"));assertEquals(1,finished.getJSONArray("ownerInputs").length());assertEquals(1,checkpointAnswerCount(message));
         assertFalse(finished.getJSONObject("ownerInputMailbox").getBoolean("open"));assertFalse(original.isCancelled());
         assertNull(get(app,"activePort"));assertNull(get(service,"heldPort"));assertEquals(0,physical.effects.get());assertTrue(physical.observations.get()>=3);

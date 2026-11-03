@@ -331,7 +331,6 @@ public final class PhoneRunService extends Service {
             if(manualOnly){
                 JSONObject frame=port.observe(true,control);holdForOwner(id,port,control,new RunOutcome("paused","独立屏已由主人接管，可操作后交回原任务",frame));backgroundPort=null;return;
             }
-            app.setStatus(id,"running","background".equals(app.mode(id))?"正在观察独立后台屏":"正在观察手机主屏",control);
             String sessionId;int displayId;
             if(backgroundPort!=null){
                 if(!backgroundPort.isConnected()||!(app.features.module("display") instanceof DisplayModule))throw new IllegalStateException("原后台屏会话已变化，请由主人重新连接核对");
@@ -342,7 +341,12 @@ public final class PhoneRunService extends Service {
             // Only the runner uses the adapter. app.activePort/heldPort and all owner/cleanup paths keep the physical port.
             AdaptivePhonePort agentPort=new AdaptivePhonePort(app.phoneAgentSource(id,control,port),new AdaptivePhonePort.Scope(id,runId,epoch,sessionId,displayId),config.localCaptureAllowed,config.localOcrAllowed,config.sendScreenshots,config.usesAccount()?dev.pocketengine.runtime.ModelGateway.accountSupportsImageInput(config.accountModel):config.supportsImageInput,android.os.SystemClock::uptimeMillis,app.localOcr);
             app.retainPhonePractice(id,control,agentPort);
-            RunOutcome result=new AgentRunner(agentPort,app.capabilitiesForTask(id,control,agentPort),dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),
+            // Declare this original port while a new task is still preparing. The
+            // existing scope pins its tool set on dispatch; retained continuations
+            // keep their original no-expansion fence.
+            dev.pocketengine.core.CapabilityPort capabilities=app.capabilitiesForTask(id,control,agentPort);
+            app.setStatus(id,"running","background".equals(app.mode(id))?"正在观察独立后台屏":"正在观察手机主屏",control);
+            RunOutcome result=new AgentRunner(agentPort,capabilities,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),
                     app.phoneOwnerProjection(id,control),app.phoneOwnerInputs(id,runId,epoch,control)).run(id,goal,config,control,event->app.record(id,event,control),
                     app.journalForTask(id,runId,epoch,control,config));
             app.snapshotPhonePractice(id,control,result.evidence);
