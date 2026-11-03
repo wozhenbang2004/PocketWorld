@@ -11,6 +11,29 @@ class TaskExecutionPresentationTest {
     private fun operation(state: String = "receipt", receipt: JSONObject? = JSONObject().put("ok", true)) = JSONObject().put("position", 7).put("operationId", "original-operation").put("runId", "run-a").put("tool", "project_execute").put("state", state).put("createdAt", 1234L).put("status", "available").put("arguments", JSONObject().put("planRef", "original-plan")).put("receipt", receipt ?: JSONObject.NULL)
     private fun page(vararg entries: JSONObject) = JSONObject().put("entries", JSONArray(entries.toList()))
 
+    private fun job(state: String, kind: String = "original_launch_record") = JSONObject().put("jobKey", "remote:original-task:old-run:2:original-operation").put("taskId", "original-task").put("runId", "old-run").put("epoch", 2).put("operationId", "original-operation").put("domain", "remote").put("state", state).put("entryKind", kind).put("observingOnly", true).put("executionAuthorized", false).put("statusSource", "original_operation_journal").put("status", "available").put("projectLogCandidate", false)
+
+    @Test fun jobDirectoryUsesOriginalIdentityAndRecordedFactsWithoutInventingLiveControl() {
+        val original = job("remote_job_unknown").put("reportedFacts", JSONObject().put("originalReceiptStatus", "unknown").put("reportedPendingApprovalCount", 1))
+        val shown = TaskExecutionPresentation.records(page(original), "jobs").single()
+        assertEquals("original-task", shown.jobTaskId); assertEquals("old-run", shown.runId); assertEquals(2, shown.jobEpoch); assertEquals("original-operation", shown.jobOperationId)
+        assertEquals(TaskExecutionPresentation.Tone.UNCERTAIN, shown.tone); assertNull(shown.projectExecutionId); assertTrue(shown.label.contains("未发起重试"))
+        assertTrue(shown.outputNotes.any { it.contains("待审批") }); assertFalse(shown.label.contains("已停止"))
+        val stopped = TaskExecutionPresentation.records(page(job("remote_job_receipt").put("reportedFacts", JSONObject().put("originalReceiptStatus", "cancelled"))), "jobs").single()
+        assertTrue(stopped.label.contains("资源释放须另行核对")); assertNotEquals(TaskExecutionPresentation.Tone.RETURNED, stopped.tone)
+        val intent = TaskExecutionPresentation.records(page(job("receipt", "approval_intent")), "jobs").single()
+        assertTrue(intent.label.contains("审批申请")); assertNotEquals(TaskExecutionPresentation.Tone.RUNNING, intent.tone)
+    }
+
+    @Test fun jobReadLocatorNeverAcceptsMalformedAuthorityOrLimitedLaunchDetails() {
+        val row = job("project_running").put("domain", "project").put("projectLogCandidate", true)
+        assertEquals("original-operation", TaskExecutionPresentation.records(page(row), "jobs").single().projectExecutionId)
+        row.put("status", "read_limited")
+        assertNull(TaskExecutionPresentation.records(page(row), "jobs").single().projectExecutionId)
+        row.put("observingOnly", "true")
+        assertTrue(TaskExecutionPresentation.records(page(row), "jobs").isEmpty())
+    }
+
     @Test fun unknownOperationOverridesSuperficiallyCompletedTask() {
         val source = task("completed").put("operations", JSONArray().put(operation("unknown", JSONObject().put("accepted", JSONObject.NULL))))
         val current = TaskExecutionPresentation.current(source, 100)

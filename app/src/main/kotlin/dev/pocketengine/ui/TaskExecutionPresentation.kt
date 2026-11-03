@@ -8,7 +8,7 @@ internal object TaskExecutionPresentation {
     enum class Tone { RUNNING, WAITING, UNCERTAIN, ERROR, RETURNED, STOPPED, NEUTRAL }
     enum class Target { NONE, PROCESS, APPROVAL, RECONCILIATION, RESULT, FEEDBACK }
     data class Current(val title: String, val detail: String, val tone: Tone, val target: Target = Target.NONE, val action: String = "")
-    data class Record(val key: String, val title: String, val label: String, val tone: Tone, val at: Long, val runId: String, val arguments: String, val receipt: String, val limited: Boolean, val bodyBytes: Long, val projectExecutionId: String? = null, val outputNotes: List<String> = emptyList())
+    data class Record(val key: String, val title: String, val label: String, val tone: Tone, val at: Long, val runId: String, val arguments: String, val receipt: String, val limited: Boolean, val bodyBytes: Long, val projectExecutionId: String? = null, val outputNotes: List<String> = emptyList(), val jobTaskId: String? = null, val jobOperationId: String? = null, val jobEpoch: Int? = null, val relatedTaskId: String? = null)
 
     /** A read locator only. The native factory rechecks the original SQL plan, receipt and owner. */
     fun projectExecutionObservationId(row: JSONObject): String? = row.optString("operationId").takeIf {
@@ -69,13 +69,47 @@ internal object TaskExecutionPresentation {
     }
 
     fun records(page: JSONObject, section: String): List<Record> = objects(page.optJSONArray("entries")).mapNotNull { row ->
-        if (section == "events") row.optJSONObject("event")?.let { event ->
+        if (section == "jobs") job(row)
+        else if (section == "events") row.optJSONObject("event")?.let { event ->
             val tool = event.optString("tool")
             val projectLog = tool in setOf("project_execute", "project_status", "project_stop")
             val notes = if (event.optString("type") == "tool" && (projectLog || tool == "ssh_exec")) outputNotes(event.optJSONObject("receipt"), projectLog) else emptyList()
             Record("event:" + row.optLong("position"), eventTitle(event.optString("type")), event.optString("status").let(::eventLabel), eventTone(event.optString("status")), event.optLong("at", event.optLong("timestamp")), event.optString("runId"), "", event.toString(), false, row.optLong("bodyBytes"), outputNotes = notes)
         } ?: if (row.optString("status") == "read_limited") Record("event:" + row.optLong("position"), eventTitle(row.optString("type")), "原正文未在本页展开", Tone.NEUTRAL, 0, "", "", "", true, row.optLong("bodyBytes")) else null
         else operation(row)
+    }
+
+    private fun job(row: JSONObject): Record? {
+        fun identity(key: String) = (row.opt(key) as? String)?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,120}")) }
+        if (row.opt("observingOnly") != true || row.opt("executionAuthorized") != false || row.optString("statusSource") != "original_operation_journal") return null
+        val task = identity("taskId") ?: return null
+        val operation = identity("operationId") ?: return null
+        val run = identity("runId") ?: return null
+        val epoch = (row.opt("epoch") as? Int)?.takeIf { it >= 0 }
+        val kind = row.optString("entryKind")
+        val facts = row.optJSONObject("reportedFacts") ?: JSONObject()
+        val state = row.optString("state")
+        val originalStatus = facts.optString("originalReceiptStatus")
+        val limited = row.optString("status") in setOf("read_limited", "source_unreadable")
+        val unknown = limited || state.contains("unknown") || originalStatus == "unknown"
+        val label = when {
+            unknown -> "原结果仍待核对 · 未发起重试"
+            kind == "approval_intent" -> "审批申请记录 · 请到原任务核对是否仍待处理"
+            kind in setOf("delegation_intent", "team_start_intent") -> "委派申请记录 · 不代表子执行已经开始"
+            facts.opt("resourcesReleased") == true -> "原回执已确认资源释放"
+            originalStatus in setOf("failed", "rejected") -> "原回执：执行未完成"
+            originalStatus in setOf("cancelled", "canceled", "stopped") -> "原回执：已停止 · 资源释放须另行核对"
+            originalStatus == "completed" -> "原回执：已返回结果 · 目标仍需核对"
+            state == "project_stopping" -> "原记录：正在收尾 · 释放尚未确认"
+            state in setOf("project_running", "remote_job_running") || originalStatus in setOf("running", "active") -> "原记录：运行中 · 当前状态未查询"
+            else -> "已登记原调用 · 当前状态请回原任务核对"
+        }
+        val title = when (row.optString("domain")) { "project" -> if (kind == "runtime_preparation_record") "手机环境准备" else "本机项目执行"; "remote" -> "远程执行"; "media" -> "媒体制作"; "child_work" -> "团队子工作"; else -> "原作业" }
+        val tone = if (unknown) Tone.UNCERTAIN else if (kind == "approval_intent") Tone.WAITING else Tone.NEUTRAL
+        val log = operation.takeIf { !limited && epoch != null && row.opt("projectLogCandidate") == true }
+        val notes = listOf("显示原调用记录，未自动查询外部服务；查看记录不会恢复旧授权。") +
+            if ((facts.opt("reportedPendingApprovalCount") as? Int)?.let { it > 0 } == true) listOf("原回执有待审批项，请到原任务核对当前请求。") else emptyList()
+        return Record("job:" + row.optString("jobKey"), title, label, tone, row.optLong("createdAt"), run, "", facts.toString(), limited, row.optLong("bodyBytes"), log, notes, task, operation, epoch, identity("relatedTaskId"))
     }
 
     private fun operation(row: JSONObject): Record {

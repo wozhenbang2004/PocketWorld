@@ -990,7 +990,9 @@
       "dev.pocketengine.ui.RuntimeActivityCaptionTest",
       "dev.pocketengine.features.local.project.ProjectCommandSpecTest",
       "dev.pocketengine.ui.TaskExecutionPresentationTest",
-      "dev.pocketengine.store.TaskAuditStoreTest"
+      "dev.pocketengine.store.TaskAuditStoreTest",
+      "dev.pocketengine.store.TaskJobProjectionTest",
+      "dev.pocketengine.ui.TaskJobMountedTest"
     ],
     "helpers": [
       "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest",

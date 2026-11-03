@@ -9101,6 +9101,7 @@ public final class TaskStore {
         }finally{db.endTransaction();}
     }
     public synchronized JSONObject taskHistoryPage(String id,String section,String cursor,int limit,int maxBytes)throws Exception{
+        if("jobs".equals(section)){JSONObject anchor=TaskJobProjection.ownerHeader(db,id);requirePrivateOwner(anchor);String conversation=anchor.optString("conversationId");if(!conversation.isEmpty()&&!conversationRepository.exists(conversation))throw new SecurityException("原会话已不可用，未借目录恢复读取来源");return TaskJobProjection.page(this,db,anchor,cursor,limit,maxBytes);}
         try(Cursor row=db.rawQuery("SELECT 1 FROM tasks WHERE task_id=?",new String[]{id})){if(!row.moveToFirst())throw new IllegalArgumentException("原任务不存在");}if("events".equals(section))return TaskAuditStore.eventPage(db,id,cursor,limit,maxBytes);if("operations".equals(section))return TaskAuditStore.operationPage(db,id,cursor,limit,maxBytes);throw new IllegalArgumentException("未知原历史范围");
     }
     /** Read-only full history on this authority's original table. No parallel task/usage database. */

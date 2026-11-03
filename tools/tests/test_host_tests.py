@@ -112,7 +112,9 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertEqual(['dev.pocketengine.ui.RuntimeActivityCaptionTest',
                           'dev.pocketengine.features.local.project.ProjectCommandSpecTest',
                           'dev.pocketengine.ui.TaskExecutionPresentationTest',
-                          'dev.pocketengine.store.TaskAuditStoreTest'], entry.get('additionalClasses', []))
+                          'dev.pocketengine.store.TaskAuditStoreTest',
+                          'dev.pocketengine.store.TaskJobProjectionTest',
+                          'dev.pocketengine.ui.TaskJobMountedTest'], entry.get('additionalClasses', []))
         self.assertEqual(['dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest',
                           'dev.pocketengine.testutil.HttpServer'], entry['helpers'])
         self.assertEqual(['runtime-development-continuity'], HOST.select(REGISTRY, [], [entry['class']]))

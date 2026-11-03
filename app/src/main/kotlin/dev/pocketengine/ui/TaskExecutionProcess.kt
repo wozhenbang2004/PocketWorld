@@ -83,14 +83,20 @@ internal fun TaskExecutionProcess(task: UiTask, controller: PocketWorldControlle
         }
         if (expanded) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            PocketSegmentedTabs(listOf("工具活动", "步骤记录"), if (section == "operations") 0 else 1,
-                onSelect = { load(if (it == 0) "operations" else "events") }, enabled = !busy)
-            Text("只读查看 · 最近记录在前", fontSize = 12.sp, lineHeight = 18.sp,
+            val privateOwner = task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private"
+            val sections = if (privateOwner) listOf("operations", "events", "jobs") else listOf("operations", "events")
+            PocketSegmentedTabs(if (privateOwner) listOf("工具活动", "步骤记录", "关联作业") else listOf("工具活动", "步骤记录"), sections.indexOf(section).coerceAtLeast(0),
+                onSelect = { load(sections[it]) }, enabled = !busy)
+            Text(if (section == "jobs") "同会话的原调用与申请 · 当前结果请回原任务核对" else "只读查看 · 最近记录在前", fontSize = 12.sp, lineHeight = 18.sp,
                 color = SecondaryInk, modifier = Modifier.padding(vertical = 8.dp))
+            if (section == "jobs") Text("团队完整子作业与早期独立任务仍请从原入口查看；此目录未据此宣称全部作业已列出。", fontSize = 12.sp, lineHeight = 18.sp, color = SecondaryInk)
             error?.let { message -> Text(message, color = MaterialTheme.colorScheme.error, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 8.dp)) }
             val shown = page?.let { TaskExecutionPresentation.records(it, section) }.orEmpty()
             if (shown.isEmpty() && !busy && page != null) Text("本页暂无记录。", fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(vertical = 12.dp))
-            shown.forEachIndexed { index, record -> key(record.key) { TaskExecutionRecord(record, task.id, run, index == shown.lastIndex) } }
+            shown.forEachIndexed { index, record -> key(record.key) {
+                if (record.jobTaskId != null) TaskJobRecord(record, controller::focusTask)
+                else TaskExecutionRecord(record, task.id, run, index == shown.lastIndex)
+            } }
             if (busy) Text("正在更新记录…", fontSize = 14.sp, lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
             page?.let { original ->
                 Text("本页 ${shown.size} 条" + if (original.optBoolean("readLimited")) " · 部分较大内容未加载" else " · 当前读取窗口", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -102,6 +108,22 @@ internal fun TaskExecutionProcess(task: UiTask, controller: PocketWorldControlle
                 }
             }
         }
+    }
+}
+
+/** Existing tool-card anatomy; navigation reads the original task, never dispatches or stops. */
+@Composable
+internal fun TaskJobRecord(record: TaskExecutionPresentation.Record, openTask: (String) -> Unit) {
+    val sourceTask = record.jobTaskId ?: return
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp).testTag("task_job_" + record.key)) {
+        AffectToolCallCard(id = record.key, name = record.title, statusLabel = record.label, tone = record.tone,
+            output = if (record.limited) "" else record.receipt, arguments = "", needsReview = record.tone == TaskExecutionPresentation.Tone.UNCERTAIN)
+        ProcessOutputNotes(record)
+        Text("原执行 ${record.runId.takeLast(8)} · 代次 ${record.jobEpoch ?: "未记录"} · 操作 ${record.jobOperationId}", fontSize = 12.sp, lineHeight = 18.sp, color = SecondaryInk)
+        if (record.limited) Text("本页未展开原作业详情，已有记录仍保留。", fontSize = 12.sp, lineHeight = 18.sp, color = SecondaryInk)
+        record.projectExecutionId?.let { NativeProjectExecutionObservation(sourceTask, it) }
+        TextButton(onClick = { openTask(sourceTask) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("回到原任务") }
+        record.relatedTaskId?.let { related -> TextButton(onClick = { openTask(related) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("查看原子任务") } }
     }
 }
 
