@@ -127,6 +127,8 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
                 try {
                     val request=JSONObject().put("profileId",profileId).put("bindingHash",binding).put("environmentId",environmentId).put("environmentBinding",selected.optString("bindingHash")).put("worker",worker).put("timeoutSeconds",timeout.toIntOrNull()?:0).put("prompt",goal).put("readOnly",worker=="codex_app_server"&&readOnly)
                     if(model.isNotBlank())request.put("model",model.trim())
+                    if (worker == "codex_app_server" && effort.isNotBlank()) request.put("effort", effort)
+                    if (worker == "codex_app_server" && model.isNotBlank()) probe?.optJSONObject("modelOptions")?.optString("digest")?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }?.let { request.put("modelOptionsDigest", it) }
                     RemoteTaskRequest.first(request);projectRequest=request;localError=null
                 }catch(failure:Exception){localError=failure.message}
             },enabled=canCreate&&goal.isNotBlank()){Text("先保留项目基线，再创建这次工作")}
@@ -138,6 +140,8 @@ internal fun RemoteTaskComposer(profile: JSONObject, state: PocketUiState, contr
                     val target = JSONObject().put("profileId", profileId).put("bindingHash", binding).put("environmentId", environmentId).put("environmentBinding", selected.optString("bindingHash")).put("worker", worker).put("timeoutSeconds", timeout.toIntOrNull() ?: 0)
                         .put("prompt", goal).put("readOnly", worker == "codex_app_server" && readOnly)
                     if (model.isNotBlank()) target.put("model", model.trim())
+                    if (worker == "codex_app_server" && effort.isNotBlank()) target.put("effort", effort)
+                    if (worker == "codex_app_server" && model.isNotBlank()) probe?.optJSONObject("modelOptions")?.optString("digest")?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }?.let { target.put("modelOptionsDigest", it) }
                     RemoteTaskRequest.first(target)
                     if (goal.length > 8000) throw IllegalArgumentException("带私人原件的首片目标最多8000字符")
                     inputRequest = target; localError = null

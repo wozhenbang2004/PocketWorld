@@ -79,6 +79,8 @@ internal fun RemoteProjectActionReview(snapshot:JSONObject,busy:Boolean,send:(St
             Text("从 ${source.optString("threadId")} / ${source.optString("turnId")} 分支到新任务。真实thread/fork及新历史核对成功后才送本次要求；旧端不支持时明确不可用，不退回新建空会话。",fontSize=14.sp,lineHeight=22.sp)
             Text("只分支对话，不恢复文件。工作区仍是现在的内容；不继承旧批准、旧job或旧预算。",fontSize=14.sp,lineHeight=22.sp)
         } else Text("版本目录：${request.optJSONObject("projectHistory")?.optString("projectRoot").orEmpty().ifBlank{"所配置工作区"}}\n原工作区：${scope.optString("workspace")}",fontSize=14.sp,lineHeight=22.sp)
+        Text(remoteWorkerLabel(request.optString("worker")) + " · " + request.optString("model").ifBlank { "执行端默认模型" },fontSize=14.sp,lineHeight=22.sp)
+        if(request.has("effort"))Text("本次请求档位：${request.optString("effort")}；真实读回在原任务另列，未因此增加额度或工具权限。",fontSize=14.sp,lineHeight=22.sp)
         SelectionContainer { Text(request.optString("prompt"),fontSize=14.sp,lineHeight=22.sp) }
         Text("新执行时限：${request.optInt("timeoutSeconds")}秒 · ${if(request.optBoolean("readOnly"))"Codex只读" else "按原工作区写入权限执行"}。CLI内部模型次数、tokens与费用不可硬限，旧未知费用不清零。",fontSize=14.sp,lineHeight=22.sp)
         Text("文件变化只证明这段时间实际观察到的差异。上游声明涉及某路径，不等于独占作者；同UID/外部写入者仍可能修改文件。",fontSize=14.sp,lineHeight=22.sp)

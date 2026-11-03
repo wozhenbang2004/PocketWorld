@@ -119,7 +119,7 @@ public final class RemoteModule implements EngineModule {
         if(action.equals("RESTORE")){
             for(String key:new String[]{"jobOperationId","snapshotId","snapshotVersion","path","expectedVersion","expectedFileVersion","environmentBinding"})body.put(key,request.get(key));body.put("approvalExpiresAt",scope.getLong("approvalExpiresAt"));path="/v1/jobs/"+identifier(scope.optJSONObject("versionSource")==null?scope.getJSONObject("source"):scope.getJSONObject("versionSource"),"jobId")+"/restore-project-file";details.put("jobId",(scope.optJSONObject("versionSource")==null?scope.getJSONObject("source"):scope.getJSONObject("versionSource")).getString("jobId")).put("path",body.getString("path"));
         }else if(action.equals("START")||action.equals("FORK")){
-            for(String key:new String[]{"environmentId","environmentBinding","worker","prompt","timeoutSeconds","model","readOnly","projectHistory","forkSource"})if(request.has(key))body.put(key,request.get(key));path="/v1/jobs";
+            body=projectCreateBody(request,operation);path="/v1/jobs";
             if(action.equals("START")&&!body.has("projectHistory")||action.equals("FORK")&&!body.has("forkSource"))throw new SecurityException("原项目/会话动作类型缺失");
         }else throw new SecurityException("未知原项目副作用类型");
         Reservation reservation=reserve(profile,operation,action.equals("RESTORE")?"file_restore":"job_submit",body,details);
@@ -135,6 +135,11 @@ public final class RemoteModule implements EngineModule {
         if(action.equals("START")&&(!RemoteProjectHistory.PROTOCOL.equals(result.optJSONObject("projectHistoryScope")==null?"":result.getJSONObject("projectHistoryScope").optString("protocol"))||!dev.pocketengine.store.TaskStore.capabilityFingerprint(body.getJSONObject("projectHistory")).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(result.getJSONObject("projectHistoryScope")))))return unknownOperation(reservation.intent);
         if(action.equals("FORK")&&(result.optJSONObject("sessionBranchSource")==null||!dev.pocketengine.store.TaskStore.capabilityFingerprint(body.getJSONObject("forkSource")).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(result.getJSONObject("sessionBranchSource")))))return unknownOperation(reservation.intent);
         reservation.intent.put("status","accepted").put("jobId",result.getString("id"));recordOperation(reservation.intent);acceptReceipt(result);return result;
+    }
+    static JSONObject projectCreateBody(JSONObject request,String operation)throws Exception {
+        JSONObject body=new JSONObject().put("operationId",operation);
+        for(String key:new String[]{"environmentId","environmentBinding","worker","prompt","timeoutSeconds","model","effort","modelOptionsDigest","readOnly","projectHistory","forkSource"})if(request.has(key))body.put(key,request.get(key));
+        return body;
     }
     /** Local original-ledger cancellation only, after original SQL proves its native claim unused. */
     public void settleProjectCancellation(dev.pocketengine.features.RemoteOwnerWorkflows.ProjectApproval approval)throws Exception {
@@ -469,10 +474,13 @@ public final class RemoteModule implements EngineModule {
         JSONObject scope=inputScope(claim);
         if(!claim.view().getString("action").equals("CREATE"))throw new SecurityException("不是原附件创建领取");
         if(!claim.canDispatch())return queryInputJob(scope,scope.optString("jobId"));
-        JSONObject selected=scope.getJSONObject("request"),body=new JSONObject();
-        for(String key:new String[]{"environmentId","environmentBinding","worker","prompt","model","readOnly","timeoutSeconds","inputContinuationProtocol","threadId","resumeJobId","sourceJobOperationId","recoveryProofId","recoveryOwnerAcknowledged","inferenceAudience","groupInputSource","externalGroupApiMode"})if(selected.has(key))body.put(key,selected.get(key));
-        body.put("operationId",scope.getString("jobOperationId")).put("inputProtocol",RemoteTaskRequest.INPUT_PROTOCOL).put("inputFiles",RemoteTaskRequest.inputManifest(scope.getJSONArray("files")));
+        JSONObject body=inputCreateBody(scope);
         return inputSend(claim,scope,"/v1/jobs",body,"job_submit",scope.getString("jobOperationId"));
+    }
+    static JSONObject inputCreateBody(JSONObject scope)throws Exception {
+        JSONObject selected=scope.getJSONObject("request"),body=new JSONObject();
+        for(String key:new String[]{"environmentId","environmentBinding","worker","prompt","model","effort","modelOptionsDigest","readOnly","timeoutSeconds","inputContinuationProtocol","threadId","resumeJobId","sourceJobOperationId","recoveryProofId","recoveryOwnerAcknowledged","inferenceAudience","groupInputSource","externalGroupApiMode"})if(selected.has(key))body.put(key,selected.get(key));
+        return body.put("operationId",scope.getString("jobOperationId")).put("inputProtocol",RemoteTaskRequest.INPUT_PROTOCOL).put("inputFiles",RemoteTaskRequest.inputManifest(scope.getJSONArray("files")));
     }
     public JSONObject startInputJob(dev.pocketengine.store.TaskStore.RemoteInputClaim claim)throws Exception {
         JSONObject scope=inputScope(claim);String operation=claim.view().getString("operationId"),job=scope.getString("jobId");
