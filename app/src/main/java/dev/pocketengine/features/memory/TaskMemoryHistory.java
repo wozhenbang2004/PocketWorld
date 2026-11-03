@@ -13,7 +13,9 @@ public final class TaskMemoryHistory {
     private TaskMemoryHistory(){}
     public static JSONObject dependency(JSONObject validation)throws Exception{
         JSONArray memory=validation==null?null:validation.optJSONArray("memory");
-        return memory==null?null:new JSONObject().put("format",1).put("memoryDigest",TaskStore.capabilityFingerprint(new JSONObject().put("memory",memory)));
+        if(memory==null)return null;JSONObject identity=new JSONObject().put("memory",memory);
+        JSONArray historical=validation.optJSONArray("historicalMemory");if(historical!=null&&historical.length()>0)identity.put("historicalMemory",historical);
+        return new JSONObject().put("format",1).put("memoryDigest",TaskStore.capabilityFingerprint(identity));
     }
     public static boolean current(JSONObject dependency,JSONObject validation)throws Exception{
         JSONObject actual=dependency(validation);
@@ -33,7 +35,7 @@ public final class TaskMemoryHistory {
             if("assistant".equals(role)){
                 boolean stale=allAssistant||row.optBoolean("memoryContextRetired")||row.has("memoryContext")&&!current(row.optJSONObject("memoryContext"),validation);
                 if(stale){
-                    if(!RETIRED.equals(row.opt("content"))||row.has("provider_data")){changed++;row.put("content",RETIRED).put("memoryContextRetired",true);}
+                    if(!RETIRED.equals(row.opt("content"))||row.has("provider_data")||!row.optBoolean("memoryContextRetired")){changed++;row.put("content",RETIRED).put("memoryContextRetired",true);}
                     // Native provider output can contain the original prose and opaque reasoning.
                     // Provider serializers prefer it over content, so retiring visible text alone is insufficient.
                     row.remove("provider_data");row.remove("reasoning_content");
@@ -49,7 +51,21 @@ public final class TaskMemoryHistory {
     /** Journal/provenance identities are native metadata, never extra wire fields or model instructions. */
     public static JSONArray wireMessages(JSONArray history)throws Exception{
         JSONArray copy=new JSONArray(history.toString());for(int i=0;i<copy.length();i++){
-            JSONObject row=copy.getJSONObject(i);row.remove("memoryContext");row.remove("memoryReference");row.remove("memoryContextRetired");row.remove("ownerMessageRevision");row.remove("ownerSourceRefs");row.remove("ownerSourceRefsUnavailable");row.remove("ownerRecallFeedback");row.remove("hostObservation");row.remove("toolOutputCapture");
+            JSONObject row=copy.getJSONObject(i);
+            if("assistant".equals(row.optString("role"))&&row.optBoolean("memoryContextRetired")){
+                // Both a reference query and an effect's old model arguments may repeat a
+                // withdrawn source. Keep exact call/result pairing on the wire, with no old
+                // arguments, provider continuation or extra body-bearing fields. The original
+                // checkpoint arguments and native operation/effect receipts are not modified;
+                // reconciliation still queries the original operation rather than replaying it.
+                JSONObject retired=new JSONObject().put("role","assistant").put("content",RETIRED);JSONArray calls=row.optJSONArray("tool_calls");
+                if(calls!=null){JSONArray identities=new JSONArray();for(int j=0;j<calls.length();j++){
+                    JSONObject call=calls.getJSONObject(j);identities.put(new JSONObject().put("id",call.getString("id")).put("type","function")
+                            .put("function",new JSONObject().put("name",call.getJSONObject("function").getString("name")).put("arguments","{}")));
+                }retired.put("tool_calls",identities);}
+                copy.put(i,retired);row=retired;
+            }
+            row.remove("memoryContext");row.remove("memoryReference");row.remove("memoryContextRetired");row.remove("ownerMessageRevision");row.remove("ownerSourceRefs");row.remove("ownerSourceRefsUnavailable");row.remove("ownerRecallFeedback");row.remove("hostObservation");row.remove("toolOutputCapture");
         }return copy;
     }
     /** F012: only a validated private carrier exactly matching its public tool receipt is

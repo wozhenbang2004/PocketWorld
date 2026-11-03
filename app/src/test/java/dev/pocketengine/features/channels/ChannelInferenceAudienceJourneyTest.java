@@ -35,7 +35,7 @@ public final class ChannelInferenceAudienceJourneyTest {
     private static final String SECRET="channel-billing-fixture-at-least-32-bytes";
     private final AtomicInteger accountEntries=new AtomicInteger(),accountModelWrites=new AtomicInteger();
     private interface Checked {void run()throws Exception;}
-    @Before public void fixtureKey(){java.security.Security.addProvider(new java.security.Provider("ChannelBillingKeyStore","1","Explicit fixture"){{put("KeyStore.AndroidKeyStore",ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    @Before public void fixtureKey(){java.security.Security.addProvider(new java.security.Provider("ChannelBillingKeyStore",1.0,"Explicit fixture"){{put("KeyStore.AndroidKeyStore",ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
     @After public void release(){ModelGateway.installAccountInferencePort(null);java.security.Security.removeProvider("ChannelBillingKeyStore");}
     private void account(FeatureContext context,Checked beforePhysical)throws Exception {
         context.settings.selectAccountModel(new JSONObject().put("provider",ModelConfig.ACCOUNT_PROVIDER).put("accountId","fixture-original-account").put("accountVersion",1L).put("modelId","fixture-model"));

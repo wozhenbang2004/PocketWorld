@@ -1,6 +1,7 @@
 package dev.pocketengine.runtime.context;
 
 import dev.pocketengine.core.ModelConfig;
+import dev.pocketengine.features.memory.TaskMemoryHistory;
 import dev.pocketengine.features.memory.TaskStoreMemoryReader;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -162,8 +163,17 @@ public final class CompactionPlan {
             ||role.equals("user")&&(!Boolean.TRUE.equals(row.opt("hostObservation"))||row.has("ownerMessageId")||row.has("ownerRecallFeedback")||row.has("ownerAttachmentRefs"));}
     private static boolean hasImage(JSONObject row){JSONArray parts=row.optJSONArray("content");for(int i=0;parts!=null&&i<parts.length();i++)if("image_url".equals(parts.optJSONObject(i)==null?"":parts.optJSONObject(i).optString("type")))return true;return false;}
     private static boolean unresolved(String body){try{JSONObject value=new JSONObject(body);String code=value.optString("code",value.optString("error")),state=value.optString("state"),status=value.optString("status");return code.contains("unknown")||code.equals("action_timeout")||code.equals("not_replayed")||state.contains("unknown")||state.matches("prepared|pending|queued|running|waiting|submitted")||status.contains("unknown")||status.matches("prepared|pending|queued|running|waiting|submitted")||value.optBoolean("requiresReconciliation")||value.optBoolean("requiresPostconditionCheck")||value.has("unresolvedOperationId")||value.has("accepted")&&value.isNull("accepted");}catch(Exception unclassified){return true;}}
-    private static boolean sameProtocolIdentity(JSONObject a,JSONObject b){return a.optString("role").equals(b.optString("role"))&&a.optString("tool_call_id").equals(b.optString("tool_call_id"))
-            &&String.valueOf(a.opt("tool_calls")).equals(String.valueOf(b.opt("tool_calls")));}
+    private static boolean sameProtocolIdentity(JSONObject a,JSONObject b)throws Exception{
+        if(!a.optString("role").equals(b.optString("role"))||!a.optString("tool_call_id").equals(b.optString("tool_call_id")))return false;
+        if(String.valueOf(a.opt("tool_calls")).equals(String.valueOf(b.opt("tool_calls"))))return true;
+        if(!"assistant".equals(a.optString("role"))||!Boolean.TRUE.equals(a.opt("memoryContextRetired")))return false;
+        // Only the exact native retirement projection may differ from the original calls.
+        // It retains call pairing while withholding stale argument/body carriers. A changed
+        // provider call type, injected field, or any other projection remains a mismatch.
+        JSONArray calls=a.optJSONArray("tool_calls");for(int i=0;calls!=null&&i<calls.length();i++)if(!"function".equals(calls.getJSONObject(i).optString("type")))return false;
+        JSONObject retired=TaskMemoryHistory.wireMessages(new JSONArray().put(a)).getJSONObject(0);
+        return fingerprint(retired).equals(fingerprint(b));
+    }
     private static boolean sameWireContent(JSONObject stored,JSONObject visible)throws Exception{
         JSONObject wire=dev.pocketengine.features.memory.TaskMemoryHistory.withoutOutputCarrier(stored);
         for(String key:List.of("memoryContext","memoryReference","memoryContextRetired","ownerMessageRevision","ownerRecallFeedback","hostObservation"))wire.remove(key);

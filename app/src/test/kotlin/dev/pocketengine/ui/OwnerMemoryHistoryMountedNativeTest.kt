@@ -30,6 +30,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowChoreographer
+import org.robolectric.shadows.ShadowDialog
 import org.robolectric.annotation.*
 
 /** Mounted existing cognition controls -> actual Controller/native owner/Book/SQLite.
@@ -48,12 +49,13 @@ class OwnerMemoryHistoryMountedNativeTest {
         if (view is ViewGroup) repeat(view.childCount) { compose(view.getChildAt(it))?.let { found -> return found } }
         return null
     }
-    private fun nodes(): List<SemanticsNode> {
+    private fun nodes(root: View? = mountedRoot): List<SemanticsNode> {
         val result = mutableListOf<SemanticsNode>()
         fun visit(node: SemanticsNode) { result += node; node.children.forEach(::visit) }
-        mountedRoot?.let { root -> assertTrue("Read only the actually mounted Activity root", root.isAttachedToWindow); compose(root)?.let { visit((it.javaClass.getMethod("getSemanticsOwner").invoke(it) as SemanticsOwner).rootSemanticsNode) } }
+        root?.let { assertTrue("Read only an actually mounted window root", it.isAttachedToWindow); compose(it)?.let { view -> visit((view.javaClass.getMethod("getSemanticsOwner").invoke(view) as SemanticsOwner).rootSemanticsNode) } }
         return result
     }
+    private fun dialogNodes(): List<SemanticsNode> = nodes(ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView)
     private fun text(node: SemanticsNode) = node.config.getOrNull(SemanticsProperties.Text)?.joinToString(" ") { it.text }.orEmpty()
     private fun scope() = JSONObject().put("ownerId", "owner").put("spaceId", "private")
     private fun fact(text: String, city: String, at: Long) = JSONObject().put("text", text).put("layer", "fact").put("assertion", JSONObject().put("version", 1).put("kind", "told").put("subjectId", "owner").put("subjectType", "owner").put("subjectLabel", "主人").put("predicate", "居住城市").put("object", city).put("eventTime", at).put("validFrom", at).put("evidenceSpans", JSONArray()))
@@ -97,10 +99,13 @@ class OwnerMemoryHistoryMountedNativeTest {
                 frameNanos += 32_000_000L
                 frames.sendFrame(frameNanos)
                 shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
-                val root = activity.get().window.decorView
-                root.measure(View.MeasureSpec.makeMeasureSpec(1200, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(4800, View.MeasureSpec.AT_MOST))
-                root.layout(0, 0, root.measuredWidth, root.measuredHeight)
-                layout(root); root.invalidate()
+                val roots = mutableListOf(activity.get().window.decorView)
+                ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView?.let { roots += it }
+                roots.forEach { root ->
+                    root.measure(View.MeasureSpec.makeMeasureSpec(1200, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(4800, View.MeasureSpec.AT_MOST))
+                    root.layout(0, 0, root.measuredWidth, root.measuredHeight)
+                    layout(root); root.invalidate()
+                }
                 Thread.sleep(5)
             }
         }
@@ -108,6 +113,8 @@ class OwnerMemoryHistoryMountedNativeTest {
         fun click(label: String) { val node = button(label); assertNull("Fresh native action must not be disabled", node.config.getOrNull(SemanticsProperties.Disabled)); assertTrue(node.config[SemanticsActions.OnClick].action!!.invoke()); frame() }
         fun clickContaining(value: String) { val node = nodes().first { text(it).contains(value) && it.config.getOrNull(SemanticsActions.OnClick)?.action != null }; assertNull(node.config.getOrNull(SemanticsProperties.Disabled)); assertTrue(node.config[SemanticsActions.OnClick].action!!.invoke()); frame() }
         fun edit(query: String) { val node = nodes().firstOrNull { it.config.getOrNull(SemanticsActions.SetText)?.action != null } ?: error("Missing actual editable history query; ${nodes().map(::text)}"); assertTrue(node.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(query))); frame() }
+        fun dialogButton(label: String) = dialogNodes().firstOrNull { text(it) == label && it.config.getOrNull(SemanticsActions.OnClick)?.action != null } ?: error("Missing actual dialog action $label; ${dialogNodes().map(::text)}")
+        fun editDialog(value: String) { val node = dialogNodes().single { it.config.getOrNull(SemanticsActions.SetText)?.action != null }; assertNull(node.config.getOrNull(SemanticsProperties.Disabled)); assertTrue(node.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(value))); frame() }
         override fun close() { mountedRoot = null; view.disposeComposition(); recomposer.close(); recomposition.cancel(); scope.cancel(); activity.pause().stop().destroy(); repeat(8) { shadowOf(Looper.getMainLooper()).runOneTask() }; native.close() }
     }
     @Test fun userCanFindAnOldFactThroughTheExistingPanelWhileCurrentRecallStillKeepsTheNewFact() {
@@ -133,6 +140,50 @@ class OwnerMemoryHistoryMountedNativeTest {
                 f.click("收起主体认知与冲突")
             }
             f.click("查看主体认知、历史与冲突…"); f.edit("旧事"); f.click("查旧事（只读）"); assertTrue(nodes().any { text(it).contains("一段旧事") })
+        }
+    }
+    @Test fun ownerCanCorrectAnExactHistoryVersionAndOldMountedButtonsCannotRepeatOrCrossScope() {
+        Fixture().use { f ->
+            val oldText = "曾经记作旧A城经历"
+            val correctedText = "主人纠正为C城的经历"
+            f.save(fact(oldText, "A城", 100)); f.save(fact("后来的B城记载", "B城", 200))
+            f.mount(); f.edit("A城"); f.click("查旧事（只读）"); f.clickContaining(oldText)
+            val before = f.native.response("readHistoryRecord").getJSONObject("result").getJSONObject("record")
+            assertEquals("historical", before.getString("temporalStatus"))
+            val oldOpen = f.button("纠正这条已存记忆…").config[SemanticsActions.OnClick].action!!
+            f.click("纠正这条已存记忆…"); assertTrue(dialogNodes().any { text(it) == "纠正这条记忆？" })
+            f.editDialog(correctedText)
+            val confirm = f.dialogButton("保存这次纠正")
+            assertNull(confirm.config.getOrNull(SemanticsProperties.Disabled))
+            val oldConfirm = confirm.config[SemanticsActions.OnClick].action!!
+            assertTrue(oldConfirm.invoke()); oldConfirm.invoke() // Same mounted callback before recomposition.
+            assertEquals(1, f.calls.count { it == "correctReviewed" })
+            f.frame()
+            val reply = f.native.response("correctReviewed")
+            assertTrue(reply.toString(), reply.getBoolean("ok"))
+            val saved = reply.getJSONObject("result").getJSONObject("record")
+            assertEquals(before.getString("id"), saved.getString("id"))
+            assertEquals(before.getLong("revision") + 1, saved.getLong("revision"))
+            assertEquals(correctedText, saved.getString("text")); assertTrue(saved.has("assertionReview"))
+            assertEquals("inferred", saved.getJSONObject("assertion").getString("kind"))
+            assertFalse(reply.getJSONObject("result").getBoolean("executionAuthorized"))
+            assertTrue(dialogNodes().isEmpty()); assertFalse(nodes().any { text(it).contains(oldText) })
+            oldOpen.invoke(); oldConfirm.invoke(); f.frame()
+            assertEquals(1, f.calls.count { it == "correctReviewed" }); assertTrue(dialogNodes().isEmpty())
+
+            f.edit("C城"); f.click("查旧事（只读）"); f.clickContaining(correctedText)
+            assertEquals(saved.getLong("revision"), f.native.response("readHistoryRecord").getJSONObject("result").getJSONObject("record").getLong("revision"))
+            f.click("纠正这条已存记忆…"); f.editDialog("范围改变后不应保存的D城文字")
+            val abandonedConfirm = f.dialogButton("保存这次纠正").config[SemanticsActions.OnClick].action!!
+            val project = f.native.create("纠正期间切换到项目")
+            f.native.choose(project); f.frame()
+            assertTrue(dialogNodes().isEmpty()); abandonedConfirm.invoke(); oldOpen.invoke(); f.frame()
+            assertEquals(1, f.calls.count { it == "correctReviewed" })
+            assertFalse(nodes().any { text(it).contains(correctedText) })
+            f.native.choose(null); f.frame(); abandonedConfirm.invoke(); oldConfirm.invoke(); f.frame()
+            assertEquals(1, f.calls.count { it == "correctReviewed" }); assertTrue(dialogNodes().isEmpty())
+            val actual = f.native.memory.handle("get", JSONObject().put("scope", scope()).put("id", saved.getString("id"))).getJSONObject("record")
+            assertEquals(saved.getLong("revision"), actual.getLong("revision")); assertEquals(correctedText, actual.getString("text"))
         }
     }
     @Test fun exactOriginalSpanUsesTheRealNativeReaderAndChangingScopeDisposesItsOldCallback() {

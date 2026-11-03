@@ -70,7 +70,9 @@ public final class MemoryCandidateRetentionTest {
     @Test public void acceptedCleanupKeepsFormalMemoryAndItsCorrectionsAndProvenance()throws Exception {
         Host host=new Host();SourceRef source=ref("source",1);host.live(source);MemoryBook book=new MemoryBook(file(),host);
         JSONObject c=book.proposeLearning(own(),draft("已接受正文"),1,source),accepted=book.acceptCandidate(own(),c.getString("id"),1,2);
-        JSONObject record=accepted.getJSONObject("record");book.save(own(),new JSONObject(record.toString()).put("text","机主纠正的正式记忆"),3);
+        JSONObject record=accepted.getJSONObject("record");
+        assertThrows(SecurityException.class,()->book.save(own(),new JSONObject(record.toString()).put("text","机主纠正的正式记忆"),3));
+        book.save(own(),new JSONObject().put("id",record.getString("id")).put("revision",record.getLong("revision")).put("text","机主纠正的正式记忆"),3);
         String recordsBefore=new JSONObject(bytes()).getJSONArray("records").toString(),sourcesBefore=new JSONObject(bytes()).getJSONArray("sources").toString();
         book.archiveCandidates(own(),selection(accepted.getJSONObject("candidate")),4);
         assertEquals(recordsBefore,new JSONObject(bytes()).getJSONArray("records").toString());assertEquals(sourcesBefore,new JSONObject(bytes()).getJSONArray("sources").toString());
