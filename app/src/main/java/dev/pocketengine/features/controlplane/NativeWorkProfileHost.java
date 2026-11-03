@@ -78,7 +78,7 @@ public final class NativeWorkProfileHost {
         if(task.optJSONObject("workProfileRef")!=null||task.optJSONObject("workProfileIntent")!=null)throw new SecurityException("原任务已有冻结配置，须沿原配置恢复，不能另选替换");
         WorkProfile profile=stored(profileId,revision);JSONObject definition=profile.toJson();
         if(!definition.getJSONObject("modelPolicies").has("RELAY"))throw new SecurityException("此仅网关入口须明确选择Profile的API RELAY");
-        for(String field:new String[]{"instructionRefs","skillRefs","pluginRefs","extensionRefs"})if(definition.getJSONArray(field).length()!=0)throw new SecurityException("远端指导/技能/工具资产投射尚未接入，请保留编辑；此入口仅应用模型和准确目标引用");
+        for(String field:new String[]{"pluginRefs","extensionRefs"})if(definition.getJSONArray(field).length()!=0)throw new SecurityException("远端MCP/扩展授权投射尚未接入，请保留编辑；文本参考不复制工具权限");
         if(!definition.isNull("teamTemplateRef"))throw new SecurityException("仅网关入口不启动团队或应用团队模板");
         RunControl observation=new RunControl();var resolution=WorkProfileResolver.resolve(profile,sources,observation);
         if(!resolution.view().getBoolean("ready")){JSONArray blocked=new JSONArray(),items=resolution.view().getJSONArray("items");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);if(!item.getBoolean("included")&&!item.getBoolean("optional")){JSONObject row=new JSONObject().put("kind",item.getString("kind")).put("id",item.getString("id")).put("status",item.getString("status"));JSONObject evidence=item.optJSONObject("sourceEvidence");if(evidence!=null)row.put("reasonCode",evidence.optString("reasonCode"));blocked.put(row);}}throw new SecurityException("工作配置来源尚未就绪，未发行新run："+blocked);}
@@ -159,6 +159,48 @@ public final class NativeWorkProfileHost {
                 .put("resolutionDigest",digest).put("model",saved.getJSONObject("modelPolicies").getJSONObject("RELAY"))
                 .put("purpose","RELAY").put("audience","EXTERNAL_RELAY").put("configurationApplied",false).put("runtimeVerified",false);
         }
+    }
+    /** Complete exact Book revisions for one existing owner run. This opaque object adds
+     * no grant and cannot be reconstructed from the config request's content or digest. */
+    public static final class HarnessReferences {
+        private final NativeWorkProfileHost issuer;private final dev.pocketengine.store.TaskStore tasks;private final RunControl original;
+        private final String task,run,resolution,frozen,payload;private final int epoch;private final long pauseRevision;
+        private HarnessReferences(NativeWorkProfileHost issuer,dev.pocketengine.store.TaskStore tasks,String task,String run,int epoch,RunControl original,JSONObject frozen,JSONObject payload)throws Exception{
+            this.issuer=issuer;this.tasks=tasks;this.task=task;this.run=run;this.epoch=epoch;this.original=original;this.frozen=frozen.toString();resolution=frozen.getString("resolutionDigest");this.payload=payload.toString();pauseRevision=original.pauseRevision();
+        }
+        public JSONObject view()throws Exception{return new JSONObject(payload);}
+        public void checkCurrent()throws Exception{original.check();if(original.isPaused()||original.pauseRevision()!=pauseRevision||!original.matchesHostRun(task,run,epoch))throw new SecurityException("原文本投射任务control已失效");tasks.checkWorkProfileRun(task,run,epoch,resolution,original);WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen),issuer.sources,original);}
+        /** SQL-only binding check. Book/source reads stay outside TaskStore monitors. */
+        public void requireSqlBinding(dev.pocketengine.store.TaskStore actual,JSONObject owner)throws Exception{
+            if(actual!=tasks||!task.equals(owner.optString("parentTaskId"))||!run.equals(owner.optString("parentRunId"))||epoch!=owner.optInt("parentEpoch",-1)||!resolution.equals(actual.workProfileRunSnapshot(task,run,epoch).getString("resolutionDigest")))throw new SecurityException("文本投射不是此原父任务冻结版本");
+            requireGatewayTargetScope(new JSONObject(frozen),actual.remoteOwnerTarget(owner.getString("taskId")));
+        }
+    }
+    public HarnessReferences harnessReferencesForRun(dev.pocketengine.store.TaskStore tasks,String task,String run,int epoch,RunControl original)throws Exception{
+        if(original==null||!original.matchesHostRun(task,run,epoch))throw new SecurityException("原文本投射control必需");original.check();JSONObject frozen=tasks.workProfileRunSnapshot(task,run,epoch),definition=frozen.getJSONObject("definition");
+        for(String field:new String[]{"pluginRefs","extensionRefs"})if(definition.getJSONArray(field).length()!=0)throw new SecurityException("目标MCP/扩展投射仍未支持，请明确减选，未省略配置");
+        if(!definition.isNull("teamTemplateRef"))throw new SecurityException("原CLI配置不应用团队模板");
+        JSONArray assets=new JSONArray(),items=frozen.getJSONArray("items");java.util.Map<String,JSONObject> captured=new java.util.LinkedHashMap<>();int count=0;
+        for(String section:new String[]{"instructionRefs","skillRefs"}){JSONArray refs=definition.getJSONArray(section);for(int i=0;i<refs.length();i++){
+            JSONObject ref=refs.getJSONObject(i);String id=ref.getString("id"),kind=section.equals("instructionRefs")?"instruction":"skill";boolean included=false;
+            for(int n=0;n<items.length();n++){JSONObject item=items.getJSONObject(n);if(kind.equals(item.getString("kind"))&&id.equals(item.getString("id")))included=item.getBoolean("included");}
+            if(!included)throw new SecurityException("所选文本参考不可用，包括可选项；请保留编辑并明确减选，未静默丢弃");
+            JSONObject asset=captured.get(id);if(asset==null){asset=issuerPackage(ref,original).put("kinds",new JSONArray());captured.put(id,asset);assets.put(asset);count+=asset.getJSONArray("files").length();}
+            else if(asset.getInt("revision")!=ref.getInt("revision")||!asset.getString("digest").equals(ref.getString("digest")))throw new SecurityException("同一来源选择了不同版本，未投射");
+            asset.getJSONArray("kinds").put(kind);
+            if(count>160||assets.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>65536)throw new SecurityException("所选完整文本包超过64KiB/160文件投射窗口，请明确减选；没有截断内容");
+        }}
+        if(assets.length()==0)return null;
+        JSONObject payload=new JSONObject().put("format","pocketworld.harness-reference-assets.v1").put("profileId",frozen.getString("profileId")).put("profileRevision",frozen.getLong("profileRevision")).put("resolutionDigest",frozen.getString("resolutionDigest")).put("assets",assets).put("permissionsChanged",false).put("scriptsExecutable",false);
+        if(count>160||payload.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>65536)throw new SecurityException("所选完整文本包超过64KiB/160文件投射窗口，请明确减选；没有截断内容或改变任务上下文预算");
+        HarnessReferences result=new HarnessReferences(this,tasks,task,run,epoch,original,frozen,payload);result.checkCurrent();return result;
+    }
+    private JSONObject issuerPackage(JSONObject reference,RunControl original)throws Exception{return sources.referencePackage(new JSONObject(reference.toString()),original);}
+    /** Language-neutral identity hash: exact package digests cover every literal byte.
+     * Do not hash JSON-escaped source text differently on Android and Companion. */
+    public static String harnessReferenceDigest(JSONObject payload)throws Exception{
+        JSONArray assets=new JSONArray(),rows=payload.getJSONArray("assets");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);assets.put(new JSONObject().put("id",row.getString("id")).put("revision",row.getInt("revision")).put("digest",row.getString("digest")).put("kinds",row.getJSONArray("kinds")));}
+        return WorkProfile.fingerprint(new JSONObject().put("format",payload.getString("format")).put("profileId",payload.getString("profileId")).put("profileRevision",payload.getLong("profileRevision")).put("resolutionDigest",payload.getString("resolutionDigest")).put("assets",assets));
     }
     /** Planning-only defaults for an actual native team proposal. The opaque plan supplies the
      * original parent and selected slots; this is not a start token, grant or second team plan.

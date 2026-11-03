@@ -485,6 +485,30 @@ public final class ConversationRepository {
         saveSource(state);saveMessage(selected.conversationId,reply);JSONObject header=header(selected.conversationId);header.put("updatedAt",now);saveConversation(header);
         return new JSONObject().put("duplicate",false).put("message",reply).put("consumed",consumedRows);
     }
+// Original TaskStore transaction commits the accepted answer and real USER source together.
+    public void recordOwnerQuestionInput(dev.pocketengine.store.TaskStore original,OwnerQuestionInputs.Reply accepted)throws Exception{
+        if(monitor!=original||!Thread.holdsLock(monitor)||!db.inTransaction()||accepted.duplicate())throw new SecurityException("问题原文只能随原TaskStore首次接收事务保存");
+        JSONObject supplied=accepted.row(),task=original.get(accepted.result().getString("taskId"),false);OwnerQuestionInputs.requirePrivateTask(task);
+        String conversation=task.getString("conversationId");if(!exists(conversation))throw new SecurityException("原私人对话已删除或不可用，未复活旧会话");
+        JSONObject row=null;JSONArray rows=task.getJSONArray("ownerInputs");
+        for(int i=0;i<rows.length();i++)if(supplied.getString("messageId").equals(rows.getJSONObject(i).optString("messageId"))){if(row!=null)throw new SecurityException("原问题输入身份重复");row=rows.getJSONObject(i);}
+        if(row==null)throw new SecurityException("问题答复尚未在同一原生任务接收");
+        for(String key:List.of("messageId","clientMessageId","content","mode","acceptedTaskId","acceptedRunId","acceptedEpoch","ownerMessageRevision","ownerRequestFingerprint"))
+            if(!Objects.equals(supplied.get(key),row.get(key)))throw new SecurityException("问题输入不等于原生已接收记录");
+        if(!"pending".equals(row.optString("queueState"))||!Integer.valueOf(1).equals(row.opt("queueFormat"))
+                ||!task.getString("id").equals(row.getString("acceptedTaskId"))||!task.getString("runId").equals(row.getString("acceptedRunId"))||task.getInt("coordinatorEpoch")!=row.getInt("acceptedEpoch")
+                ||!row.getString("messageId").equals(task.getJSONObject("evidence").getJSONObject("ownerQuestion").optString("replyMessageId")))throw new SecurityException("原问题接收身份已改变");
+        String id=row.getString("messageId"),client=row.getString("clientMessageId");if(source(id)!=null||sourceByClient(client)!=null)throw new SecurityException("问题输入不能覆盖旧主人来源");
+        long now=row.getLong("acceptedAt");JSONObject ack=new JSONObject().put("status","accepted").put("messageId",id).put("clientMessageId",client).put("conversationId",conversation)
+                .put("taskId",task.getString("id")).put("runId",row.getString("acceptedRunId")).put("epoch",row.getInt("acceptedEpoch")).put("acceptedAt",now)
+                .put("queueRevision",row.getLong("queueRevision")).put("queueState","pending").put("ownerMessageRevision",1L).put("mode","queue").put("reconciliationRequired",false).put("executionAuthorized",false);
+        JSONObject message=new JSONObject().put("id",id).put("revision",1L).put("role","user").put("content",row.getString("content")).put("at",now).put("conversationId",conversation)
+                .put("clientMessageId",client).put("inputMode","queue").put("attachments",new JSONArray()).put("requestFingerprint",row.getString("ownerRequestFingerprint")).put("submission",new JSONObject(ack.toString()));
+        JSONObject state=new JSONObject().put("kind","message").put("sourceId",id).put("revision",1L).put("ownerId","owner").put("spaceId","private").put("role","user")
+                .put("conversationId",conversation).put("deleted",false).put("updatedAt",now).put("clientMessageId",client).put("requestFingerprint",row.getString("ownerRequestFingerprint")).put("submission",ack);
+        saveSource(state);saveMessage(conversation,message);JSONObject header=header(conversation);header.put("updatedAt",now);saveConversation(header);
+        requireQueuedOwnerMessageCurrent(conversation,row);
+    }
     /** Native owner/UI window, not a retention operation. Import records never become SourceRefs. */
     public JSONObject window(String conversation,String cursor,int limit)throws Exception{
         if(limit<1||limit>80)throw new IllegalArgumentException("消息窗口最多80条");JSONObject result=header(conversation),pos=decode(cursor);long upper=pos.optLong("before",Long.MAX_VALUE);JSONArray reverse=new JSONArray();long bytes=result.toString().getBytes(StandardCharsets.UTF_8).length,last=-1;boolean more=false;int scanned=0;JSONArray gaps=new JSONArray();

@@ -11,6 +11,7 @@ import org.json.JSONObject;
 public final class RuntimeWorkspace {
     private final File root;
     private final String projectId,checkoutId;
+    private File nativeGitPool;private JSONObject nativeGitOwner;private boolean creatingGitPool;
     public RuntimeWorkspace(File activeRoot,String projectId,String checkoutId) throws Exception {
         root=java.util.Objects.requireNonNull(activeRoot).getAbsoluteFile();
         if(!root.equals(root.getCanonicalFile()) || !root.isDirectory() || Files.isSymbolicLink(root.toPath()))
@@ -18,6 +19,13 @@ public final class RuntimeWorkspace {
         this.projectId=java.util.Objects.requireNonNull(projectId);
         this.checkoutId=java.util.Objects.requireNonNull(checkoutId);
     }
+    /** Only a native owner Git factory supplies this extra private mount; no model path/config API. */
+    public static RuntimeWorkspace privateGitForHost(File activeRoot,String projectId,String checkoutId,File pool,JSONObject owner,boolean creation)throws Exception {
+        RuntimeWorkspace selected=new RuntimeWorkspace(activeRoot,projectId,checkoutId);selected.nativeGitOwner=dev.pocketengine.features.local.project.ProjectGitIsolation.ownership(owner);selected.nativeGitPool=pool.getAbsoluteFile();selected.creatingGitPool=creation;
+        selected.verifyPrivateGit();return selected;
+    }
+    public File privateGitPoolForHost()throws Exception {verifyPrivateGit();return nativeGitPool;}
+    private void verifyPrivateGit()throws Exception {if(nativeGitPool==null)return;dev.pocketengine.features.local.project.ProjectGitIsolation.requirePool(nativeGitPool,nativeGitOwner);if(!projectId.equals(nativeGitOwner.getString("projectId"))||!checkoutId.equals(nativeGitOwner.getString(creatingGitPool?"sourceCheckoutId":"targetCheckoutId")))throw new SecurityException("runtime_private_git_owner_mismatch");if(!creatingGitPool){if(!root.equals(new File(nativeGitPool,"files").getCanonicalFile()))throw new SecurityException("runtime_private_git_checkout_changed");dev.pocketengine.features.local.project.ProjectGitIsolation.requireReadyFiles(nativeGitPool,nativeGitOwner);}}
     public File directory() { return root; }
     public String projectId() { return projectId; }
     public String checkoutId() { return checkoutId; }
@@ -36,7 +44,7 @@ public final class RuntimeWorkspace {
         return current;
     }
     public void verify(RuntimeInvocation invocation) throws Exception {
-        RuntimeExecutionRef ref=invocation.executionRef();
+        verifyPrivateGit();RuntimeExecutionRef ref=invocation.executionRef();
         if(!projectId.equals(ref.projectId()) || !checkoutId.equals(ref.checkoutId()))
             throw new SecurityException("runtime_active_checkout_mismatch");
         JSONObject source=ProjectSources.describe(invocation.sourceSnapshot());

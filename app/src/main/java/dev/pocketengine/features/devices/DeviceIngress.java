@@ -59,6 +59,8 @@ public final class DeviceIngress {
             case "task.pause" -> tasks.control(permission, "pause");
             case "task.cancel" -> tasks.control(permission, "cancel");
             case "task.respond" -> tasks.respond(permission);
+            case "task.answerQuestion", "task.steer" -> tasks.ownerInput(permission);
+            case "task.requestResume" -> tasks.requestResume(permission);
             case "artifact.describe", "artifact.readChunk" -> {
                 if (artifacts == null) throw new SecurityException("本机准确成果通道未配置，不能以元数据冒充真实字节");
                 yield artifacts.receive(permission);
@@ -69,7 +71,7 @@ public final class DeviceIngress {
         return response(request,result);
     }
     private JSONObject response(DeviceTaskEnvelope request,JSONObject result)throws Exception{
-        if(java.util.Set.of("tool.invoke","task.submitGoal","operation.get","task.pause","task.cancel","task.respond","task.acquireControl").contains(request.method()))result=tasks.operationReceipt(request,result);
+        if(java.util.Set.of("tool.invoke","task.submitGoal","operation.get","task.pause","task.cancel","task.respond","task.acquireControl","task.answerQuestion","task.steer","task.requestResume").contains(request.method()))result=tasks.operationReceipt(request,result);
         return DeviceProtocol.validateMessage(new JSONObject().put("protocolVersion", DeviceProtocol.VERSION).put("protocolProfile",DeviceProtocol.PROFILE).put("messageType", "DeviceResponse")
                 .put("requestId", request.requestId()).put("method", request.method()).put("executorDeviceId", localDeviceId)
                 .put("instanceId", localInstanceId).put("result", result));

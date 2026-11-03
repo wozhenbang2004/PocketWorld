@@ -107,11 +107,33 @@ public final class TaskStoreDeviceTasks {
             GoalModelReview review=reviewGoalModel(id,current.getLong("deviceStateRevision"),admission,selected);review.confirmed=true;review.policyKey=modelPolicyKey(admission);review.policyDigest=TaskStore.capabilityFingerprint(policy);return new GoalModelApproval(review);
         }
     }
-    private void checkGoalModel(GoalModelApproval proof,RunControl actual)throws Exception{
+    private void checkGoalModel(GoalModelApproval proof,RunControl actual)throws Exception{checkGoalModel(proof,actual,false);}
+    private void checkGoalModel(GoalModelApproval proof,RunControl actual,boolean supervisionOnly)throws Exception{
         proof.review.admission.checkCurrent();synchronized(owner){
             if(proof.review.issuer!=this||!proof.matchesOriginal(actual)||goalModels.get(proof.run)!=proof||actual.isCancelled())throw new SecurityException("没有该本机owner选定模型的原生准入");
             if(!proof.review.policyKey.isEmpty()){JSONObject policy=modelPolicy(proof.review.policyKey);if(policy==null||!proof.review.policyDigest.equals(TaskStore.capabilityFingerprint(policy)))throw new SecurityException("B本机模型策略已撤销或换版");requireModelPolicyScope(policy,proof.review.admission);}
-            JSONObject current=task(proof.review.id);requireDevice(current);if(!proof.run.equals(current.optString("runId"))||proof.epoch!=current.optInt("coordinatorEpoch")||current.optBoolean("cancelRequested")||!current.optString("status").matches("preparing|running|pausing|paused|awaiting_user"))throw new SecurityException("原设备模型任务已停止或换代");
+            JSONObject current=task(proof.review.id);requireDevice(current);if(!proof.run.equals(current.optString("runId"))||proof.epoch!=current.optInt("coordinatorEpoch")||current.optBoolean("cancelRequested")||!(current.optString("status").matches("preparing|running|pausing|paused|awaiting_user")||supervisionOnly&&"needs_confirmation".equals(current.optString("status"))))throw new SecurityException("原设备模型任务已停止或换代");
+        }
+    }
+    /** Read-only service supervision of the original native GoalSession. The Runner
+     * publishes its result before returning its Finished proof; that short closing
+     * phase must retain the old deadline without reopening any model/effect fence. */
+    public long goalSupervisionDeadline(dev.pocketengine.features.devices.DeviceGoalSession session)throws Exception{
+        if(session==null)throw new SecurityException("没有原设备目标会话");
+        RunControl original=session.originalControl();GoalModelApproval approved=session.modelApproval();
+        checkGoalModel(approved,original,true);
+        synchronized(owner){
+            JSONObject current=task(session.taskId());requireDevice(current);requireSameSession(current,session.admission());
+            String run=current.getString("runId");int epoch=current.getInt("coordinatorEpoch");Live active=live.get(run);
+            if(active==null||active.original!=original||active.admission!=session.admission()||goalModels.get(run)!=approved
+                    ||!approved.matchesOriginal(original)||!original.matchesHostRun(session.taskId(),run,epoch)
+                    ||original.isCancelled()||current.optBoolean("cancelRequested"))throw new SecurityException("原设备目标监管身份已变化");
+            if(!"needs_confirmation".equals(current.optString("status")))return owner.taskExecutionDeadline(session.taskId(),run,epoch);
+            try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{session.taskId(),run,String.valueOf(epoch)})){
+                if(!row.moveToFirst()||!"running".equals(row.getString(0)))throw new SecurityException("原设备目标run已结束");
+            }
+            long deadline=Math.min(access.grant(run).getLong("expiresAt"),session.admission().deadline());
+            if(deadline<1)throw new SecurityException("没有原设备目标期限");return deadline;
         }
     }
     /** Explicit local owner revocation; a current run notices it at the next model/effect fence. */
@@ -936,6 +958,14 @@ public final class TaskStoreDeviceTasks {
     public void resumeGoal(String id, DeviceExecutionAdmission admission, RunControl original) throws Exception {
         admission.checkCurrent();
         synchronized (owner) {
+            JSONObject current=requireResumableGoal(id,admission,original);
+            JSONObject requested=current.optJSONObject("deviceResumeRequest");
+            if(requested!=null&&"pending_owner_confirmation".equals(requested.optString("state")))throw new SecurityException("请在原设备任务页核对并确认这次外部恢复请求");
+            current.put("status","running").put("summary","原设备目标继续，仍使用原run和剩余预算");access.write(current);original.resume();
+        }
+    }
+    /** Existing resume checks shared by the local Resume button and an exact owner decision. */
+    private JSONObject requireResumableGoal(String id,DeviceExecutionAdmission admission,RunControl original)throws Exception{
             JSONObject current=task(id);requireDevice(current);requireSameSession(current,admission);String run=current.getString("runId");Live binding=live.get(run);
             if(binding==null||binding.original!=original||binding.admission!=admission||admission.kind()!=DeviceExecutionAdmission.Kind.GOAL||original.isCancelled()
                     ||!original.matchesHostRun(id,run,current.getInt("coordinatorEpoch"))||current.optBoolean("cancelRequested")||!current.optString("status").matches("preparing|running|pausing|paused|awaiting_user")||owner.hasUnresolved(id))throw new SecurityException("旧设备执行已停止、未决或没有原控制器");
@@ -943,7 +973,84 @@ public final class TaskStoreDeviceTasks {
             JSONObject scope=current.getJSONObject("deviceExecutionScope");if(scope.getInt("modelCallsUsed")>=scope.getInt("modelCallLimit")-heldBudget(id,run,true)||scope.getLong("deadline")<=System.currentTimeMillis())throw new SecurityException("原目标模型预算或期限已耗尽；不补额度");
             if(scope.optJSONObject("sourceShare")!=null){SourcePool pool=sourcePool(scope.getJSONObject("sourceShare"),null);if(scope.optLong("localModelCallsUsed")>=sourceLocalLimit(scope,true)||pool.modelsSpent>=pool.models||System.currentTimeMillis()>=pool.deadline)throw new SecurityException("A留给本机模型的份额已耗尽；下游份额不能被本机再花一次");}
             try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(current.getInt("coordinatorEpoch"))})){if(!row.moveToFirst()||!"running".equals(row.getString(0)))throw new SecurityException("原run已结束，不重建");}
-            current.put("status","running").put("summary","原设备目标继续，仍使用原run和剩余预算");access.write(current);original.resume();
+            return current;
+    }
+    /** Safe display/correlation only. This JSON cannot grant execution or construct a control. */
+    public static JSONObject resumeRequestView(JSONObject task)throws Exception{
+        if(!deviceTask(task))return null;
+        JSONObject saved=task.optJSONObject("deviceResumeRequest");
+        if(saved==null)return null;
+        JSONObject view=new JSONObject();
+        for(String key:new String[]{"format","resumeRequestId","state","callerDeviceId","taskId","runId","executorEpoch","allocationId","requestedRevision","reviewRevision","requestedAt","decidedAt"})
+            if(saved.has(key))view.put(key,saved.get(key));
+        boolean pending="pending_owner_confirmation".equals(saved.optString("state"));
+        return view.put("ownerActionRequired",pending)
+                .put("stale",pending&&(saved.optLong("reviewRevision")!=task.optLong("deviceStateRevision")
+                        ||!saved.optString("runId").equals(task.optString("runId"))||saved.optInt("executorEpoch")!=task.optInt("coordinatorEpoch")))
+                .put("newRun",false).put("newGrant",false).put("executionAuthorized",false);
+    }
+    /** Original controlOperation transaction only. No resume, dispatch or permission renewal. */
+    public JSONObject requestResume(dev.pocketengine.features.devices.PairingCoordinator.Permission permission)throws Exception{
+        permission.checkCurrent(System.currentTimeMillis());
+        synchronized(owner){
+            if(!db.inTransaction()||!"task.requestResume".equals(permission.envelope().method()))throw new SecurityException("恢复请求必须随原控制操作持久接收");
+            JSONObject args=permission.envelope().arguments();String id=args.getString("taskId"),run=args.getString("runId");int epoch=args.getInt("executorEpoch");
+            JSONObject current=task(id);requireDevice(current);JSONObject scope=current.getJSONObject("deviceExecutionScope"),origin=current.getJSONObject("origin");
+            if(!"GOAL".equals(current.optString("deviceExecutionKind"))||!run.equals(current.optString("runId"))||epoch!=current.optInt("coordinatorEpoch")
+                    ||!args.getString("allocationId").equals(scope.getString("allocationId"))||args.getLong("expectedRevision")!=current.optLong("deviceStateRevision")
+                    ||!permission.callerDeviceId().equals(origin.optString("callerDeviceId"))||!permission.originDeviceId().equals(origin.optString("originDeviceId"))
+                    ||!permission.grantId().equals(origin.optString("grantId"))||permission.authorizationEpoch()!=origin.optLong("authorizationEpoch")
+                    ||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(permission.envelope().resourceBinding(),scope.getJSONObject("resourceBinding")))
+                throw new SecurityException("恢复请求的原任务、来源或版本已改变，请重新读取同任务");
+            requireControlLease(permission.callerDeviceId(),id,run,epoch,args.getString("controlLeaseId"));
+            Live retained=live.get(run);
+            if(retained==null||retained.original.isCancelled()||!retained.original.isPaused()||!retained.original.matchesHostRun(id,run,epoch)
+                    ||current.optBoolean("cancelRequested")||!current.optString("status").matches("pausing|paused|awaiting_user")||owner.hasUnresolved(id))
+                throw new SecurityException("原执行未暂停、已停止或有结果待核对，不请求重放");
+            if(dev.pocketengine.features.devices.DeviceOwnerInputs.question(current.optJSONObject("evidence"),id,run,epoch)!=null)
+                throw new SecurityException("原普通问题须回答确切问题，恢复请求不代替回答");
+            JSONArray approvals=current.optJSONArray("approvals");
+            for(int i=0;approvals!=null&&i<approvals.length();i++)if("pending".equals(approvals.getJSONObject(i).optString("state")))throw new SecurityException("先处理原准确操作审批，恢复请求不替代审批");
+            JSONObject previous=current.optJSONObject("deviceResumeRequest");
+            if(previous!=null&&"pending_owner_confirmation".equals(previous.optString("state")))throw new SecurityException("已有原恢复请求待手机核对；请查询同操作或在手机拒绝后重新请求");
+            long revision=current.getLong("deviceStateRevision");
+            JSONObject request=new JSONObject().put("format","pocketworld.phone-resume-request.v1").put("resumeRequestId",permission.envelope().operationId())
+                    .put("state","pending_owner_confirmation").put("taskId",id).put("runId",run).put("executorEpoch",epoch).put("allocationId",scope.getString("allocationId"))
+                    .put("callerDeviceId",permission.callerDeviceId()).put("originDeviceId",permission.originDeviceId()).put("grantId",permission.grantId()).put("authorizationEpoch",permission.authorizationEpoch())
+                    .put("requestedRevision",revision).put("reviewRevision",Math.addExact(revision,1)).put("requestedAt",System.currentTimeMillis())
+                    .put("pauseRevision",retained.original.pauseRevision()).put("scopeDigest",TaskStore.capabilityFingerprint(scope));
+            current.put("deviceResumeRequest",request);
+            access.event(current,new JSONObject().put("type","device_resume_requested").put("resumeRequestId",request.getString("resumeRequestId"))
+                    .put("runId",run).put("coordinatorEpoch",epoch).put("ownerActionRequired",true).put("executionAuthorized",false));
+            return resumeRequestView(current).put("requested",true);
+        }
+    }
+    /** Called by the native owner's original task window. An old callback can only fail;
+     * it cannot consume a different request, recreate a run or acquire another grant. */
+    public JSONObject decideResumeRequest(String id,String requestId,long reviewRevision,boolean approved,
+            DeviceExecutionAdmission admission,RunControl original)throws Exception{
+        if(approved){if(admission==null||original==null)throw new SecurityException("没有原设备执行器，不重建执行");admission.checkCurrent();}
+        synchronized(owner){
+            db.beginTransaction();try{
+                JSONObject current=task(id);requireDevice(current);JSONObject request=current.optJSONObject("deviceResumeRequest");
+                if(request==null||!requestId.equals(request.optString("resumeRequestId"))||reviewRevision!=request.optLong("reviewRevision")
+                        ||!"pending_owner_confirmation".equals(request.optString("state")))throw new SecurityException("这次恢复请求已改变或已处理，请重新读取任务");
+                if(approved){
+                    if(current.optLong("deviceStateRevision")!=reviewRevision||!original.isPaused()||original.pauseRevision()!=request.getLong("pauseRevision")
+                            ||!request.getString("runId").equals(current.optString("runId"))||request.getInt("executorEpoch")!=current.optInt("coordinatorEpoch")
+                            ||!request.getString("allocationId").equals(current.getJSONObject("deviceExecutionScope").getString("allocationId"))
+                            ||!request.getString("scopeDigest").equals(TaskStore.capabilityFingerprint(current.getJSONObject("deviceExecutionScope"))))
+                        throw new SecurityException("原来源、任务版本或暂停代次已变化；旧确认不恢复执行");
+                    current=requireResumableGoal(id,admission,original);request=current.getJSONObject("deviceResumeRequest");
+                    current.put("status","running").put("summary","手机主人已确认这次恢复请求，继续原执行与剩余预算");
+                }
+                request.put("state",approved?"owner_approved":"owner_denied").put("decidedAt",System.currentTimeMillis());
+                access.event(current,new JSONObject().put("type","device_resume_owner_decision").put("resumeRequestId",requestId)
+                        .put("approved",approved).put("runId",request.getString("runId")).put("coordinatorEpoch",request.getInt("executorEpoch")).put("newRun",false).put("newGrant",false));
+                if(approved)original.resumeAtPauseRevision(request.getLong("pauseRevision"));
+                db.setTransactionSuccessful();
+                return resumeRequestView(current).put("continuedOriginalRun",approved);
+            }finally{db.endTransaction();}
         }
     }
     public void release(String run, RunControl original) {
@@ -1024,6 +1131,14 @@ public final class TaskStoreDeviceTasks {
             try(Cursor row=db.rawQuery("SELECT local_task_id,arguments_digest,accepted_at,envelope_json,local_operation_id FROM device_inbound WHERE caller_device_id=? AND remote_operation_id=?",new String[]{request.callerDeviceId(),remote})){
                 if(!row.moveToFirst())return dev.pocketengine.features.devices.DeviceProtocol.operationReceipt(executorDeviceId,instanceId,remote,null,"not_found",false,"unknown",duplicate(payload),null);
                 String id=row.getString(0);JSONObject original=new JSONObject(row.getString(3)),audience=historyAudience(request,"operation",remote,id,original,row.getLong(2)),facts=new JSONObject().put("acceptedAt",row.getLong(2)).put("audience",audience).put("localTaskId",id);if(audience.has("runId"))facts.put("runId",audience.getString("runId")).put("executorEpoch",audience.getLong("executorEpoch"));
+                if(request.method().equals("operation.get")&&original.optString("method").equals("operation.cancel")){
+                    // Refresh only the original committed cancellation's native facts.
+                    // Its SQL envelope fixes the target; neither payload nor a second
+                    // cancel request supplies authority or proof that execution stopped.
+                    JSONObject target=original.getJSONObject("arguments"),actual=managementState(id,target.getString("operationId"),target.getString("argumentsDigest"));
+                    facts.put("cancellation",new JSONObject().put("targetOperationId",actual.getString("targetOperationId")).put("targetArgumentsDigest",actual.getString("targetArgumentsDigest")).put("requested",actual.getBoolean("requested")).put("stopped",actual.getBoolean("stopped")));
+                    return dev.pocketengine.features.devices.DeviceProtocol.operationReceipt(executorDeviceId,instanceId,remote,row.getString(1),actual.getBoolean("stopped")?"succeeded":"cancel_requested",true,"reported",new JSONObject().put("managementOnly",true),facts);
+                }
                 String status=payload.optString("status",wireState(task(id)));if(request.method().equals("task.acquireControl"))status="succeeded";if(!dev.pocketengine.features.devices.DeviceProtocol.TASK_STATES.contains(status)&&!status.matches("prepared|unknown"))status=wireState(task(id));String effect="GoalSubmission".equals(original.optString("messageType"))?"reported":"not_dispatched";
                 if(!row.isNull(4))try(Cursor operation=db.rawQuery("SELECT state,receipt FROM operations WHERE task_id=? AND operation_id=?",new String[]{id,row.getString(4)})){if(operation.moveToFirst()){String state=operation.getString(0);effect=state.equals("receipt")?"reported":state.equals("prepared")?"not_dispatched":"unknown";if(state.contains("unknown")){effect="unknown";status="unknown";}}}
                 return dev.pocketengine.features.devices.DeviceProtocol.operationReceipt(executorDeviceId,instanceId,remote,row.getString(1),status,true,effect,duplicate(payload),facts);
