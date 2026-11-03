@@ -21,6 +21,7 @@ public final class TeamBudgetPort implements CapabilityPort {
     @Override public void admitCapabilities(CapabilitySnapshot snapshot,RunControl control)throws Exception{original.admitCapabilities(snapshot,control);}
     @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{return original.prepareTurn(query,round,steps,control);}
     @Override public boolean responseCurrent(RunControl control)throws Exception{return original.responseCurrent(control);}
+    @Override public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl control)throws Exception{return allowed(tool)&&(!roundParent||control==roundControl)&&original.stepReadSourceCurrent(tool,receipt,control);}
     @Override public void beforeModelRequest(String request,JSONArray messages,RunControl control)throws Exception{original.beforeModelRequest(request,messages,control);}
     @Override public JSONObject afterModelResponse(String request,String answer,RunControl control)throws Exception{return original.afterModelResponse(request,answer,control);}
     @Override public void modelRequestAbandoned(String request)throws Exception{original.modelRequestAbandoned(request);}

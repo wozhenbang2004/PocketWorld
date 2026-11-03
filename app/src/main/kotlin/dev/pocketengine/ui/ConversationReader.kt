@@ -11,6 +11,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import org.json.JSONObject
 import dev.pocketengine.ui.memory.TaskMemoryWorkflowSheet
+import dev.pocketengine.ui.memory.FinalAnswerSourcesSheet
+import dev.pocketengine.ui.memory.finalAnswerSourceSelection
 
 /** Read-only window. The active conversation, draft and original Runner always remain elsewhere. */
 internal data class ConversationReadPage(
@@ -53,6 +55,9 @@ internal fun ConversationReader(controller: PocketWorldController) {
     val scroll = remember(page.window) { LazyListState(page.index, page.offset) }
     var reference by remember(page.window) { mutableStateOf<JSONObject?>(null) }
     reference?.let { TaskMemoryWorkflowSheet(controller,it) { reference=null } }
+    var answerSources by remember(page.window) { mutableStateOf<JSONObject?>(null) }
+    var answerSourceMemory by remember(page.window) { mutableStateOf<JSONObject?>(null) }
+    answerSources?.let { FinalAnswerSourcesSheet(controller, it, answerSourceMemory) { answerSources = null } }
     var restored by remember(page.window) { mutableStateOf(false) }
     LaunchedEffect(page.window, page.initialized, page.messages.firstOrNull()?.id) {
         if (page.initialized && !restored) { scroll.scrollToItem(page.locate(), page.offset); restored = true }
@@ -79,6 +84,7 @@ internal fun ConversationReader(controller: PocketWorldController) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(if (message.role == "user") "主人" else if (message.role == "assistant") "助手" else "历史记录", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         RichConversationMessageBody(message.content)
+                        finalAnswerSourceSelection(message)?.let { selection -> TextButton(onClick = { answerSources = selection; answerSourceMemory = message.memoryReference }) { Text("这次回答的来源") } }
                         message.attachments.forEach { file -> ConversationFileRow(file, controller.state, { controller.openReaderAttachment(page.window, message.id!!, file) }) }
                         if (message.attachmentCount > message.attachments.size) Text("另有 ${message.attachmentCount - message.attachments.size} 个原附件引用，当前元数据不可读。", style = MaterialTheme.typography.bodySmall)
                         message.memoryReference?.let { native -> TextButton(onClick = { reference=JSONObject(native.toString()) }) { Text("这次答复的记忆来源") } }

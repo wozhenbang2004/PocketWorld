@@ -795,6 +795,14 @@
     "robolectric": true,
     "description": "Nineteen exact original owner/read-scope/native SQLite/Runner and mounted Compose semantics methods in six classes. Original parent pool, native worker scope and stale approval boundaries; explicit HTTP/model/project fixtures, not real provider, network, visual or device acceptance. Kotlin sources are exact registered includes, not the ordinary test matrix."
   },
+  "model-quality-routing": {
+    "class": "dev.pocketengine.store.StepModelRoutingNativeJourneyTest",
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "description": "Original native SettingsStore/catalog, SQL TaskStore, AgentRunner and Gateway with actual loopback physical requests: opt-in, source revision, rejected risky proposal, revoked callback, definite failure, interrupted stream and duplicate owner request. No device acceptance.",
+    "robolectric": true
+  },
   "runtime-diagnostic-metadata": {
     "class": "dev.pocketengine.features.local.runtime.NativeDiagnosticSourcesTest",
     "additionalClasses": [
@@ -848,18 +856,86 @@
     "robolectric": true,
     "description": "Original native owner/Supervisor/TaskStore remote Tasks, resources/subscriptions and synthetic OAuth over real loopback HTTP/TLS; exact identity, unknown no replay, cold result retention, cancellation and stale UI callbacks. Production and selected tests compile against SDK35. No actual account authorization or Android device claim."
   },
-  "phone-task-platform": {
-    "class": "dev.pocketengine.features.devices.PhoneTaskInputsNativeTest",
+  "model-quality-observability": {
+    "class": "dev.pocketengine.store.NativeDiagnosticsJourneyTest",
     "additionalClasses": [
-      "dev.pocketengine.features.devices.PhoneTaskApplicationFlowTest",
-      "dev.pocketengine.features.devices.DeviceProtocolTest"
+      "dev.pocketengine.runtime.usage.UsageTrendProjectionTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
-    "python": true,
-    "description": "Inbound phone task HTTP/MCP/CLI/Desk on the original native pairing, TaskStore, owner confirmation, PhoneRunService and Runner. Real loopback Python Client/CompanionHTTP/mTLS/native ingress and synthetic model fixture; exact ordinary question and phone-reviewed resume gates, no new task/runner/grant or automatic replay. Shared Java/Python protocol vectors retained. No physical Android/USB, real model/account or public relay deployment claim."
+    "description": "Original SQL physical-receipt trends with owner scope, unknown values and timezones; default-off redacted diagnostics, bounded private storage, generation invalidation, actual loopback OTLP partial/cancel/duplicate export. No live collector or device acceptance."
+  },
+  "model-evaluation": {
+    "class": "dev.pocketengine.features.evaluation.EvaluationNativeJourneyTest",
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "native": false,
+    "description": "Original TaskStore/Runner/Gateway synthetic evaluation with independent file/operation probes, tune-holdout separation, fixed identity, source revisions, cancel/stale/duplicate requests, false success and unknown effects. Loopback model fixture, not provider or real-app acceptance."
+  },
+  "model-quality-sources": {
+    "class": "dev.pocketengine.browser.FinalAnswerSourcesNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.memory.FinalAnswerSourceReadCancellationTest",
+      "dev.pocketengine.browser.BrowserStepReadSourceCurrentTest",
+      "dev.pocketengine.features.memory.FinalAnswerSourcesBoundaryTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserSemanticReadSqlTest",
+      "dev.pocketengine.browser.BrowserSemanticReadTest",
+      "dev.pocketengine.browser.BrowserTaskPersistenceTest",
+      "dev.pocketengine.browser.BrowserTaskSpaceTest",
+      "dev.pocketengine.browser.BrowserProfileCapabilityBindingTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original Runner/HTTP gateway/browser source port/SQL/native owner reader: exact retained text across old runs, forget and revision fences, partial sources, stale or cancelled callbacks, frame identity, unknown operations and output ranges. Controlled DOM/phone/model fixtures, not device or live website proof. Original final-answer boundary accepts only the exact native post-answer observation envelope and rejects new owner/tool/unknown tails."
+  },
+  "memory-recall-quality": {
+    "class": "dev.pocketengine.features.memory.MemoryRecallQualityTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.MemoryRecallAgentJourneyNativeTest",
+      "dev.pocketengine.features.memory.MemorySemanticRecallNativeTest",
+      "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest",
+      "dev.pocketengine.features.memory.MemoryEntityAliasRetrievalNativeTest",
+      "dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackendTest",
+      "dev.pocketengine.features.memory.MemoryReadAudienceTest",
+      "dev.pocketengine.features.memory.MemoryQueryPlanTest",
+      "dev.pocketengine.features.memory.MemoryRecallAgentCorpusNativeTest",
+      "dev.pocketengine.runtime.ReferenceHistoryTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Frozen synthetic 16-development/8-holdout corpus: default lexical, pre-existing query suggestions, and bounded constrained entity paths. Real Book/SQLite/TaskStore/Runner/HTTP fixture, original history rereads, reference refusal/retirement, revision/forget/audience and SDK35 test-source boundaries; no live model rewrite accuracy, causal effect, phone UI or device acceptance."
+  },
+  "memory-evidence-plan": {
+    "class": "dev.pocketengine.features.memory.MemoryEvidencePlanNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.ConversationHistoryNativeTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original history capability with real SQLite multi-session originals and bounded conversation/message and task/run/operation plans, exact version/span/hash rereads, cancellation/withdrawal/cost/partial guards. Producer-window reservation is not a physical SQLite I/O measurement."
+  },
+  "memory-method-quality": {
+    "class": "dev.pocketengine.features.memory.MethodEffectEvidenceTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.MethodEffectComparisonTest",
+      "dev.pocketengine.features.memory.LearnedMethodDecisionNativeTest",
+      "dev.pocketengine.features.skills.LearnedMethodApplicationsNativeTest",
+      "dev.pocketengine.features.memory.LearnedMethodReceiptTest",
+      "dev.pocketengine.features.skills.SkillQualityLifecycleTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original operation and native input/environment/version evidence, owner quality feedback, repeat/cancel/stale callback/legacy compatibility, bounded observational comparison; real original Runner and workspace write with scripted loopback model. No inferred business success, causality, promotion or new authorization."
   },
   "browser-owner-interactions": {
     "class": "dev.pocketengine.browser.BrowserPopupNativeTest",
@@ -920,48 +996,18 @@
     "robolectric": true,
     "description": "Task-scoped CDP transport, response metadata/body pins and bounded DOM/network quiet barriers, through the original approval and cancellation paths. SDK35 host fixtures; physical WebView devtools transport requires device validation."
   },
-  "memory-recall-quality": {
-    "class": "dev.pocketengine.features.memory.MemoryRecallQualityTest",
+  "phone-task-platform": {
+    "class": "dev.pocketengine.features.devices.PhoneTaskInputsNativeTest",
     "additionalClasses": [
-      "dev.pocketengine.features.memory.MemoryRecallAgentJourneyNativeTest",
-      "dev.pocketengine.features.memory.MemorySemanticRecallNativeTest",
-      "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest",
-      "dev.pocketengine.features.memory.MemoryEntityAliasRetrievalNativeTest",
-      "dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackendTest",
-      "dev.pocketengine.features.memory.MemoryReadAudienceTest",
-      "dev.pocketengine.features.memory.MemoryQueryPlanTest",
-      "dev.pocketengine.features.memory.MemoryRecallAgentCorpusNativeTest",
-      "dev.pocketengine.runtime.ReferenceHistoryTest"
+      "dev.pocketengine.features.devices.PhoneTaskApplicationFlowTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
-    "description": "Frozen synthetic 16-development/8-holdout corpus: default lexical, pre-existing query suggestions, and bounded constrained entity paths. Real Book/SQLite/TaskStore/Runner/HTTP fixture, original history rereads, reference refusal/retirement, revision/forget/audience and SDK35 test-source boundaries; no live model rewrite accuracy, causal effect, phone UI or device acceptance."
-  },
-  "memory-evidence-plan": {
-    "class": "dev.pocketengine.features.memory.MemoryEvidencePlanNativeTest",
-    "additionalClasses": [
-      "dev.pocketengine.features.memory.ConversationHistoryNativeTest"
-    ],
-    "helpers": [],
-    "robolectric": true,
-    "description": "Original history capability with real SQLite multi-session originals and bounded conversation/message and task/run/operation plans, exact version/span/hash rereads, cancellation/withdrawal/cost/partial guards. Producer-window reservation is not a physical SQLite I/O measurement."
-  },
-  "memory-method-quality": {
-    "class": "dev.pocketengine.features.memory.MethodEffectEvidenceTest",
-    "additionalClasses": [
-      "dev.pocketengine.features.memory.MethodEffectComparisonTest",
-      "dev.pocketengine.features.memory.LearnedMethodDecisionNativeTest",
-      "dev.pocketengine.features.skills.LearnedMethodApplicationsNativeTest",
-      "dev.pocketengine.features.memory.LearnedMethodReceiptTest",
-      "dev.pocketengine.features.skills.SkillQualityLifecycleTest"
-    ],
-    "helpers": [
-      "dev.pocketengine.testutil.HttpServer"
-    ],
-    "robolectric": true,
-    "description": "Original operation and native input/environment/version evidence, owner quality feedback, repeat/cancel/stale callback/legacy compatibility, bounded observational comparison; real original Runner and workspace write with scripted loopback model. No inferred business success, causality, promotion or new authorization."
+    "python": true,
+    "description": "Inbound phone task HTTP/MCP/CLI/Desk on the original native pairing, TaskStore, owner confirmation, PhoneRunService and Runner. Real loopback Python Client/CompanionHTTP/mTLS/native ingress and synthetic model fixture; exact ordinary question and phone-reviewed resume gates, no new task/runner/grant or automatic replay. Shared Java/Python protocol vectors retained. No physical Android/USB, real model/account or public relay deployment claim."
   },
   "runtime-development-continuity": {
     "class": "dev.pocketengine.features.local.project.ProjectExecutionContinuityJourneyTest",

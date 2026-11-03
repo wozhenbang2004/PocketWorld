@@ -1,7 +1,7 @@
 package dev.pocketengine.browser;
 
 import android.app.Application;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunOutcome;
 import dev.pocketengine.features.capabilities.ModelCapabilityAdapters;

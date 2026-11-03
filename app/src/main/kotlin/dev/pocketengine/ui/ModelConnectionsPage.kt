@@ -97,6 +97,7 @@ internal fun ModelConnectionsPage(service: ModelConnectionService, runOnWorker: 
                 ModelGroupsPanel(snapshot.optJSONObject("modelGroups") ?: JSONObject(), snapshot.optJSONObject("connections") ?: JSONObject(), busy,
                     { id, revision, name, definition, saved -> execute(saved) { service.saveGroup(id, revision, name, definition) } },
                     { purpose, target -> execute { service.selectPurpose(purpose, target) } })
+                StepRoutingControls(service, runOnWorker)
                 Text(if (snapshot.optString("activeRoute") == "account") "当前主模型使用 ChatGPT 套餐。账号与所选模型可在 ChatGPT 账号页核对；此页管理保留的 API key 连接。" else "当前 API 模型：${api.optString("model").ifBlank { "尚未配置" }}", fontSize = 14.sp)
                 if (snapshot.optString("activeRoute") == "account") TextButton(onClick = {
                     try { uriHandler.openUri(ChatGptRecovery.MANAGE_USAGE_URL) } catch (_: Exception) { error = "无法打开 Manage usage，请在 ChatGPT 设置中查看用量。" }
