@@ -47,6 +47,25 @@ public class McpResultCaptureTest {
         JSONObject small=source("真实小回执").put("structuredContent",new JSONObject().put("answer",7));
         JSONObject same=McpResultCapture.view(McpData.resultForCapture(small,""));assertEquals(7,same.getJSONObject("structuredContent").getInt("answer"));assertFalse(same.getBoolean("viewTruncated"));
     }
+    @Test public void returnedBusinessFieldsSurviveCaptureAndViewWhileOnlyActualCredentialsAreRedacted()throws Exception {
+        String secret="synthetic-mcp-business-credential";
+        JSONObject business=new JSONObject().put("token",new JSONArray().put("word").put(7).put(JSONObject.NULL))
+            .put("authorization",new JSONObject().put("apiKey","business-key-id").put("private",false).put("echo",secret))
+            .put("ApiKey","literal field value").put("_nativeMcpJob",new JSONObject().put("token","remote business data"))
+            .put("key-"+secret,"key credential echo");
+        JSONObject response=source("actual result "+secret).put("structuredContent",business);String unchanged=response.toString();
+        AtomicReference<JSONObject> archived=new AtomicReference<>();RunControl c=original();
+        McpResultCapture capture=McpResultCapture.open((name,op,kind,live)->(data,truncated)->{
+            archived.set(data);return ToolOutputCapture.unavailable("native_output_run_budget");
+        },"plugin_0123456789abcdef01234567",id(),c,new JSONObject().put("remoteTool","lookup"));
+        JSONObject view=capture.result(response,secret),retained=archived.get().getJSONObject("result").getJSONObject("structuredContent");
+        assertEquals("word",retained.getJSONArray("token").getString(0));assertEquals(7,retained.getJSONArray("token").getInt(1));assertTrue(retained.getJSONArray("token").isNull(2));
+        assertEquals("business-key-id",retained.getJSONObject("authorization").getString("apiKey"));assertFalse(retained.getJSONObject("authorization").getBoolean("private"));
+        assertEquals("[凭据已隐藏]",retained.getJSONObject("authorization").getString("echo"));assertEquals("literal field value",retained.getString("ApiKey"));
+        assertEquals("remote business data",retained.getJSONObject("_nativeMcpJob").getString("token"));assertEquals("key credential echo",retained.getString("key-[凭据已隐藏]"));
+        assertEquals(McpData.digest(retained),McpData.digest(view.getJSONObject("structuredContent")));assertFalse(archived.get().toString().contains(secret));assertFalse(view.toString().contains(secret));
+        assertEquals(unchanged,response.toString());assertThrows(SecurityException.class,()->capture.result(response,secret));
+    }
     @Test public void archiveFailureDoesNotTurnAMatchedErrorIntoSuccessOrAcceptServerForgedCaptureMetadata()throws Exception {
         AtomicReference<JSONObject> actual=new AtomicReference<>();RunControl c=original();
         McpResultCapture capture=McpResultCapture.open((name,op,kind,live)->(data,truncated)->{actual.set(data);throw new IOException("synthetic full disk");},

@@ -33,7 +33,7 @@ public class McpClientTest {
             assertEquals("write",tool.getString("effect"));assertTrue(tool.getJSONObject("schema").getJSONObject("properties").getJSONObject("region").has("description"));
             JSONObject result=client.call(tool,new JSONObject().put("region","你好\n東京"),new RunControl());
             assertTrue(result.getBoolean("isError"));assertTrue(result.getBoolean("untrusted"));assertTrue(result.getBoolean("instructionsAreData"));
-            assertFalse(result.toString().contains("test-secret"));assertFalse(result.toString().contains("do-not-forward"));assertFalse(result.getJSONObject("structuredContent").has("token"));
+            assertFalse(result.toString().contains("test-secret"));assertFalse(result.toString().contains("do-not-forward"));assertEquals("hidden",result.getJSONObject("structuredContent").getString("token"));
             assertEquals(1,result.getJSONArray("omittedContent").length());assertEquals(1,f.count("tools/call"));assertEquals(0,f.count("initialize"));
             for(McpFixture.Exchange e:f.received){
                 assertEquals(McpData.VERSION,e.requestHeaders.get("mcp-protocol-version"));assertEquals(e.method(),e.requestHeaders.get("mcp-method"));
@@ -42,6 +42,26 @@ public class McpClientTest {
                 assertEquals(0,meta.getJSONObject("io.modelcontextprotocol/clientCapabilities").length());
                 if(e.method().equals("tools/call")){assertEquals("lookup",e.requestHeaders.get("mcp-name"));assertEquals(McpHeaders.encode("你好\n東京"),e.requestHeaders.get("mcp-param-region"));}
             }
+        }
+    }
+    @Test public void numericCredentialEchoIsRedactedWithoutDroppingBusinessAuthorizationFields()throws Exception {
+        try(McpFixture f=new McpFixture();McpClient client=new McpClient(f.endpoint(),"713531137")){
+            f.result=new JSONObject().put("resultType","complete").put("content",new JSONArray())
+                .put("structuredContent",new JSONObject().put("token",713531137L).put("apiKey","Bearer 713531137")
+                    .put("authorization",new JSONObject().put("status","owner_reviewed").put("token",new JSONArray().put("lexeme").put(17))).put("private",true));
+            JSONObject result=client.call(declaration(client,client.discover(new RunControl())),new JSONObject(),new RunControl());
+            JSONObject data=result.getJSONObject("structuredContent");assertEquals("[凭据已隐藏]",data.getString("token"));assertEquals("Bearer [凭据已隐藏]",data.getString("apiKey"));
+            assertEquals("owner_reviewed",data.getJSONObject("authorization").getString("status"));assertEquals("lexeme",data.getJSONObject("authorization").getJSONArray("token").getString(0));
+            assertEquals(17,data.getJSONObject("authorization").getJSONArray("token").getInt(1));assertTrue(data.getBoolean("private"));assertFalse(result.toString().contains("713531137"));assertEquals(1,f.count("tools/call"));
+        }
+    }
+    @Test public void credentialRedactionKeyCollisionCannotSilentlyReplaceReturnedBusinessData()throws Exception {
+        try(McpFixture f=new McpFixture();McpClient client=new McpClient(f.endpoint(),"test-secret")){
+            f.result=new JSONObject().put("resultType","complete").put("content",new JSONArray())
+                .put("structuredContent",new JSONObject().put("test-secret","first business value").put("[凭据已隐藏]","second business value"));
+            JSONObject tool=declaration(client,client.discover(new RunControl()));
+            McpClient.CallFailure failure=assertThrows(McpClient.CallFailure.class,()->client.call(tool,new JSONObject(),new RunControl()));
+            assertTrue(failure.dispatched);assertFalse(failure.getMessage().contains("test-secret"));assertEquals(1,f.count("tools/call"));
         }
     }
     @Test public void legacyRequiresInitializeThenInitializedAndSessionHeaders()throws Exception {

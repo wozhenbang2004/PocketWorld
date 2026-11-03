@@ -132,7 +132,9 @@ public final class McpTaskNativeJourneyTest {
             if (!creation && complete) result.put("result", new JSONObject().put("resultType", "complete").put("isError", true)
                     .put("content", new JSONArray().put(new JSONObject().put("type", "text")
                             .put("text", "A".repeat(25000) + NEEDLE + "Z".repeat(35000) + TOKEN)))
-                    .put("structuredContent", new JSONObject().put("detail", "S".repeat(40000)).put("authorization", TOKEN)));
+                    .put("structuredContent", new JSONObject().put("detail", "S".repeat(40000)).put("token", "business-result-token")
+                            .put("authorization", new JSONObject().put("state", "owner_reviewed").put("apiKey", "business-key-id").put("credentialEcho", TOKEN))
+                            .put("private", new JSONObject().put("token", new JSONArray().put("word").put(17)))));
             return result;
         }
 
@@ -262,7 +264,12 @@ public final class McpTaskNativeJourneyTest {
         assertEquals("text", content.getJSONObject(0).getString("type"));
         assertEquals("A".repeat(25000) + NEEDLE + "Z".repeat(35000) + "[凭据已隐藏]", content.getJSONObject(0).getString("text"));
         JSONObject structured = result.getJSONObject("structuredContent");
-        assertEquals("S".repeat(40000), structured.getString("detail")); assertFalse(structured.has("authorization"));
+        assertEquals("S".repeat(40000), structured.getString("detail")); assertEquals("business-result-token", structured.getString("token"));
+        assertEquals("owner_reviewed", structured.getJSONObject("authorization").getString("state"));
+        assertEquals("business-key-id", structured.getJSONObject("authorization").getString("apiKey"));
+        assertEquals("[凭据已隐藏]", structured.getJSONObject("authorization").getString("credentialEcho"));
+        assertEquals("word", structured.getJSONObject("private").getJSONArray("token").getString(0));
+        assertEquals(17, structured.getJSONObject("private").getJSONArray("token").getInt(1));
         byte[] bytes = retained.getBytes(StandardCharsets.UTF_8);
         JSONObject range = ref.getJSONObject("retainedRange");
         assertEquals(0, range.getInt("offset")); assertEquals("UTF-16", range.getString("unit"));

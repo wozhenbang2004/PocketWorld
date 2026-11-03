@@ -79,6 +79,7 @@
     "additionalClasses": [
       "dev.pocketengine.features.local.project.ProjectFileQueriesTest",
       "dev.pocketengine.features.local.project.ProjectRegexSearchTest",
+      "dev.pocketengine.features.local.project.ProjectFuzzySearchTest",
       "dev.pocketengine.features.local.project.ProjectFileMetadataTest",
       "dev.pocketengine.features.local.project.ProjectHexReadTest",
       "dev.pocketengine.features.local.project.ProjectHexPatternTest",

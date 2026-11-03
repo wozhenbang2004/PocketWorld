@@ -171,6 +171,29 @@ public final class McpOutputNativeRunnerJourneyTest {
             }
         }
     }
+    @Test public void originalRunnerAndBookKeepRemoteBusinessFieldsThroughReceiptQueryAndRead()throws Exception {
+        try(McpFixture wire=new McpFixture();Peer peer=new Peer(false)){
+            setupWire(wire);wire.result=new JSONObject().put("resultType","complete").put("isError",false)
+                .put("content",new JSONArray().put(new JSONObject().put("type","text").put("text","actual structured business record")))
+                .put("structuredContent",new JSONObject().put("token",NEEDLE)
+                    .put("authorization",new JSONObject().put("state","reviewed").put("apiKey","business-key-id").put("echo",TOKEN))
+                    .put("private",true).put("_nativeMcpJob",new JSONObject().put("token","remote-business-field"))
+                    .put("modelSecret",MODEL_KEY));
+            try(Domain d=new Domain(wire)){
+                String task=d.tasks.createCapabilityTask("原MCP业务字段保留与凭据脱敏","").getString("id");
+                assertEquals("awaiting_user",run(d,peer,task).status);assertEquals(0,wire.count("tools/call"));approveExactOriginal(d,task);
+                RunOutcome actual=run(d,peer,task);assertEquals(actual.summary,"needs_confirmation",actual.status);assertTrue(peer.failures.toString(),peer.failures.isEmpty());
+                assertTrue(peer.found);assertTrue(peer.actualRawReads>0);assertEquals(1,wire.count("tools/call"));assertEquals(1,d.outputs());
+                String saved=d.retained(peer.reference);JSONObject business=new JSONObject(saved).getJSONObject("result").getJSONObject("structuredContent");
+                assertEquals(NEEDLE,business.getString("token"));assertEquals("reviewed",business.getJSONObject("authorization").getString("state"));
+                assertEquals("business-key-id",business.getJSONObject("authorization").getString("apiKey"));assertEquals("[凭据已隐藏]",business.getJSONObject("authorization").getString("echo"));
+                assertTrue(business.getBoolean("private"));assertEquals("remote-business-field",business.getJSONObject("_nativeMcpJob").getString("token"));
+                assertTrue(peer.bodies.toString().contains(NEEDLE));assertTrue(peer.bodies.toString().contains("business-key-id"));
+                assertFalse(saved.contains(TOKEN));assertFalse(saved.contains(MODEL_KEY));assertFalse(peer.bodies.toString().contains(TOKEN));assertFalse(peer.bodies.toString().contains(MODEL_KEY));
+                assertEquals(peer.reference.getString("revision"),fingerprint(saved));assertFalse(d.tasks.get(task,false).toString().contains(TOKEN));
+            }
+        }
+    }
     @Test public void mismatchedRpcAfterActualToolDispatchStaysUnknownWithoutReplayOrCounterfeitStoredRef()throws Exception {
         try(McpFixture wire=new McpFixture();Peer peer=new Peer(false)){
             setupWire(wire);wire.handler=exchange->{if(exchange.method().equals("tools/call"))exchange.raw(200,"application/json",new JSONObject().put("jsonrpc","2.0").put("id","not-the-original-id").put("result",wire.result).toString());else wire.standard(exchange);};

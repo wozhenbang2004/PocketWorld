@@ -132,9 +132,15 @@ final class McpData {
     static Object scrub(Object value,String token,int depth)throws Exception {
         if(depth>32)throw new IllegalArgumentException("MCP回复嵌套过深");
         if(value instanceof JSONObject){JSONObject out=new JSONObject(),object=(JSONObject)value;java.util.Iterator<String> keys=object.keys();while(keys.hasNext()){
-            String key=keys.next();if(key.equalsIgnoreCase("authorization")||key.equalsIgnoreCase("token")||key.equalsIgnoreCase("apiKey"))continue;
-            out.put(redact(key,token),scrub(object.get(key),token,depth+1));}return out;}
+            // These are remote business fields, not host headers or private native metadata.
+            // Only the actual bound credential is secret; field names confer no authority.
+            String key=keys.next(),safeKey=redact(key,token);
+            if(out.has(safeKey))throw new IllegalArgumentException("MCP凭据脱敏后字段冲突，不能覆盖原返回字段");
+            out.put(safeKey,scrub(object.get(key),token,depth+1));}return out;}
         if(value instanceof JSONArray){JSONArray out=new JSONArray(),array=(JSONArray)value;for(int i=0;i<array.length();i++)out.put(scrub(array.get(i),token,depth+1));return out;}
+        // A numeric JSON echo can still contain an all-digit credential. Keep ordinary numeric
+        // values typed, but do not expose the credential merely because its field is retained.
+        if(value instanceof Number&&!token.isEmpty()&&value.toString().contains(token))return redact(value.toString(),token);
         return value instanceof String?redact((String)value,token):value;
     }
     static boolean containsSecret(Object value,String token,int depth)throws Exception {
