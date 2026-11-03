@@ -2496,6 +2496,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
     }
+    /** Order original native readbacks only; this never schedules or authorizes an occurrence. */
+    private fun mergeAutomationReadback(incoming: JSONObject): JSONObject {
+        val current = JSONObject(state.feature("automation").toString())
+        val generation = incoming.optString("observationGeneration")
+        val rawSequence = incoming.opt("observationSequence")
+        if (!generation.matches(Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")) || rawSequence !is Long && rawSequence !is Int || incoming.optLong("observationSequence") < 1) return current
+        if (current.has("observationGeneration") && (current.optString("observationGeneration") != generation || current.optLong("observationSequence") > incoming.optLong("observationSequence"))) return current
+        for (name in incoming.keys()) current.put(name, incoming.get(name))
+        return current
+    }
     private fun receive(event: JSONObject) {
         when (event.optString("type")) {
             "device_workspace_changed" -> deviceWorkspaceRevision++
@@ -2516,6 +2526,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             "task" -> event.optJSONObject("task")?.let(::mergeTask)
             "features_state" -> {
                 val features = event.optJSONObject("features") ?: return
+                features.optJSONObject("automation")?.let { features.put("automation", mergeAutomationReadback(it)) }
                 features.optJSONObject("realtime")?.let { features.put("realtime", mergeRealtimeSnapshot(state.feature("realtime"), it)) }
                 val assistant = features.optJSONObject("assistant") ?: JSONObject()
                 val active=assistant.optJSONObject("activeTurn")?.takeIf{it.optString("runId") !in closedChatRuns} ?: state.chatActiveTurn?.takeIf{it.optString("runId") !in closedChatRuns && try{app.chatInputModel(it).optBoolean("available")}catch(_:Exception){false}}
@@ -2546,6 +2557,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
                 if (event.optString("feature") in setOf("display", "phone_setup") || event.optString("feature") == "channels" && payload.optString("type") in setOf("qq_gateway_state", "weixin_state", "channel_background_state")) native("getFeatures")
                 if (event.optString("feature") == "realtime") payload.optJSONObject("snapshot")?.let(::receiveRealtimeSnapshot)
+                if (event.optString("feature") == "automation" && payload.optString("event") == "automation_changed") {
+                    payload.optJSONObject("snapshot")?.let { snapshot ->
+                        state = state.copy(features = JSONObject(state.features.toString()).put("automation", mergeAutomationReadback(snapshot)))
+                    }
+                    if (state.moduleResults.containsKey("automation.receipts") && "automation.receipts" !in state.moduleBusy) feature("automation", "receipts")
+                }
                 if (event.optString("feature") == "automation" && payload.optString("event") == "commitments_changed") {
                     val automation = JSONObject(state.feature("automation").toString()).put("nativePlanChange", state.feature("automation").optLong("nativePlanChange") + 1)
                     state = state.copy(features = JSONObject(state.features.toString()).put("automation", automation))
@@ -2645,6 +2662,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val publicResult = if (feature == "ssh" && command == "doctor") dev.pocketengine.features.ssh.SshPrivacy.doctorMetadata(result) else JSONObject(result.toString())
         state = state.copy(moduleResults = state.moduleResults + (key to publicResult), moduleResultInputs = state.moduleResultInputs + (key to metadata), moduleErrors = state.moduleErrors - key)
         when (feature) {
+            "automation" -> {
+                if (command == "list") result.optJSONArray("rules")?.let {
+                    state = state.copy(features = JSONObject(state.features.toString()).put("automation", mergeAutomationReadback(result)))
+                }
+                if (command == "save") result.optJSONObject("saveReceipt")?.takeIf { it.optString("state") == "saved" }?.let { receipt ->
+                    val confirmed = receipt.optString("alarmReplan") == "api_accepted" && receipt.optString("changePublication") == "emitted" && receipt.optString("ruleReadback") == "same_revision" && receipt.optString("sourceState") in setOf("current", "not_applicable")
+                    state = state.copy(notice = if (confirmed) "提醒已保存，实际投递以原记录为准。" else "提醒已保存；后续调度、来源或状态回传仍需核对。请刷新记录查看已有提醒，勿重复新建。")
+                }
+            }
             "realtime" -> if (command in setOf("commitTurn", "commitVoiceTask", "reconcileTurn")) {
                 val task = result.optJSONObject("task")
                 if (task != null) {

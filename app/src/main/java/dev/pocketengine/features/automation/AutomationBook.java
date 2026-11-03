@@ -76,9 +76,11 @@ public final class AutomationBook {
     private JSONObject save(JSONObject input,long now,String forcedId,JSONObject nativeOrigin)throws Exception {
         synchronized(lock){JSONObject state=read();JSONArray rules=state.getJSONArray("rules");String id=forcedId==null?input.optString("id"):forcedId;int index=indexOf(rules,id);
             JSONObject old=index<0?null:rules.getJSONObject(index);if(old!=null&&old.optBoolean("sourceInvalidated"))throw new SecurityException("旧来源已撤回，不能修改或恢复此规则，请重新明确提出");
+            if(old!=null&&old.optBoolean("sourceCheckPending"))throw new SecurityException("原提醒来源正在核对，请等待原来源确认后再修改");
             if(!id.isEmpty()&&old==null&&forcedId==null)throw new IllegalArgumentException("规则不存在，请刷新后重试");
             if(old==null&&rules.length()>=100)throw new IllegalStateException("最多保存100条规则");
-            if(old!=null&&input.has("revision")&&input.optInt("revision",-1)!=old.getInt("revision"))throw new IllegalStateException("规则已被修改，请刷新后再保存");
+            if(old!=null&&!sameInteger(input.opt("revision"),old.getInt("revision")))throw new IllegalStateException("保存修改须核对原规则的当前版本，请刷新后再保存");
+            if(old!=null)AutomationSchedule.version(old.getJSONObject("schedule"));
             String title=text(input.optString("title"),1,200,"提醒名称");String kind=input.optString("kind",old==null?"reminder":old.optString("kind"));
             if(!kind.equals("reminder")&&!kind.equals("phone_goal"))throw new IllegalArgumentException("未知规则类型");
             String goal=kind.equals("phone_goal")?text(input.optString("goal",old==null?"":old.optString("goal")),1,4000,"手机目标"):"";
@@ -101,7 +103,9 @@ public final class AutomationBook {
             if(onceRearmBlocked)rule.put("resumeBlockedReason","once_requires_new_future_time");
             if(nativeOrigin!=null)rule.put("nativeOrigin",copy(nativeOrigin));else if(old!=null&&old.optJSONObject("nativeOrigin")!=null)rule.put("nativeOrigin",copy(old.getJSONObject("nativeOrigin")));
             if(old!=null){if(old.has("onceClaimedAt"))rule.put("onceClaimedAt",old.get("onceClaimedAt"));else if("once".equals(old.getJSONObject("schedule").getString("type"))&&onceAlreadyClaimed(state,old))rule.put("onceClaimedAt",old.getJSONObject("schedule").getLong("at"));}
-            arm(rule,initialAt(schedule,now));
+            long first=initialAt(schedule,now);
+            if("cron".equals(schedule.getString("type"))&&first<0)throw new IllegalArgumentException("cron 在未来8年或支持的日期范围内没有下一次安排，未保存");
+            arm(rule,first);
             if(index<0)rules.put(rule);else{rules.put(index,rule);cancelPending(state,id,"规则已修改，旧版本未投递的提醒已取消",now);}write(state);return copy(rule);
         }
     }
@@ -165,9 +169,14 @@ public final class AutomationBook {
         byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));StringBuilder text=new StringBuilder();for(byte b:hash)text.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return text.toString();
     }
     private static String canonicalObject(JSONObject value)throws Exception{java.util.List<String> keys=new java.util.ArrayList<>();value.keys().forEachRemaining(keys::add);keys.sort(String::compareTo);JSONArray result=new JSONArray();for(String key:keys)result.put(new JSONArray().put(key).put(value.get(key)));return result.toString();}
-    public JSONObject setEnabled(String id,boolean enabled,long now)throws Exception {
+    public JSONObject setEnabled(String id,boolean enabled,long now)throws Exception {return setEnabled(id,enabled,now,-1);}
+    /** The native editor supplies the revision it actually displayed. Legacy callers keep their original API. */
+    public JSONObject setEnabled(String id,boolean enabled,long now,long expectedRevision)throws Exception {
         synchronized(lock){JSONObject state=read();JSONArray rules=state.getJSONArray("rules");int index=indexOf(rules,id);
             if(index<0)throw new IllegalArgumentException("规则不存在");JSONObject rule=rules.getJSONObject(index);if(enabled&&rule.optBoolean("sourceInvalidated"))throw new SecurityException("旧来源规则已撤回，不能重新启用");
+            if(expectedRevision>=0&&expectedRevision!=rule.getInt("revision"))throw new IllegalStateException("规则版本已变化，请刷新后再调整启用状态");
+            if(enabled)AutomationSchedule.version(rule.getJSONObject("schedule"));
+            if(enabled&&"cron".equals(rule.getJSONObject("schedule").optString("type"))&&initialAt(rule.getJSONObject("schedule"),now)<0)throw new IllegalStateException("cron 在支持的范围内没有下一次安排，未启用");
             // Once rules are disabled at claim time. An explicit pause must still cancel their
             // outstanding claim instead of returning early and delivering an obsolete goal.
             if(rule.getBoolean("enabled")==enabled){if(!enabled){boolean changed=cancelPending(state,id,"规则已暂停，尚未投递的提醒已取消",now);if(!rule.optBoolean("taskRequestsRevoked")){rule.put("taskRequestsRevoked",true).put("revision",rule.getInt("revision")+1).put("updatedAt",now);changed=true;}if(changed)write(state);}return copy(rule);}
@@ -176,14 +185,15 @@ public final class AutomationBook {
                 throw new IllegalStateException("一次性提醒不能通过开关重放原发生；请重新安排一个未来时间，旧回执和未知结果会保留");
             rule.put("enabled",enabled).put("taskRequestsRevoked",!enabled).put("revision",rule.getInt("revision")+1).put("updatedAt",now)
                     .put("claimedCount",claimedCount(state,rule));
-            arm(rule,initialAt(rule.getJSONObject("schedule"),now));
+            if(enabled)arm(rule,initialAt(rule.getJSONObject("schedule"),now));else rule.put("nextAt",JSONObject.NULL).put("ruleState","paused");
             if(!enabled)cancelPending(state,id,"规则已暂停，尚未投递的提醒已取消",now);
             write(state);return copy(rule);
         }
     }
-    public JSONArray delete(String id)throws Exception {
+    public JSONArray delete(String id)throws Exception {return delete(id,-1);}
+    public JSONArray delete(String id,long expectedRevision)throws Exception {
         synchronized(lock){JSONObject state=read();JSONArray rules=state.getJSONArray("rules"),receipts=state.getJSONArray("receipts");int index=indexOf(rules,id);
-            if(index<0)throw new IllegalArgumentException("规则不存在");rules.remove(index);JSONArray removed=new JSONArray(),kept=new JSONArray();
+            if(index<0)throw new IllegalArgumentException("规则不存在");if(expectedRevision>=0&&expectedRevision!=rules.getJSONObject(index).getInt("revision"))throw new IllegalStateException("规则版本已变化，请刷新后再删除");rules.remove(index);JSONArray removed=new JSONArray(),kept=new JSONArray();
             for(int i=0;i<receipts.length();i++){JSONObject value=receipts.getJSONObject(i);if(id.equals(value.optString("ruleId")))removed.put(value);else kept.put(value);}
             state.put("receipts",kept);write(state);return removed;
         }
@@ -247,6 +257,7 @@ public final class AutomationBook {
             JSONObject receipt=state.getJSONArray("receipts").getJSONObject(position);if(!receipt.optString("kind").equals("phone_goal"))throw new IllegalArgumentException("此提醒没有手机任务目标");
             if(!receipt.optString("status").matches("awaiting_user|blocked_notifications|delivery_unknown"))throw new IllegalStateException("此提醒尚未交由机主处理或已取消");
             int ruleIndex=indexOf(state.getJSONArray("rules"),receipt.getString("ruleId"));if(ruleIndex<0)throw new IllegalStateException("提醒规则已删除");JSONObject rule=state.getJSONArray("rules").getJSONObject(ruleIndex);
+            AutomationSchedule.version(rule.getJSONObject("schedule"));
             if(rule.getInt("revision")!=receipt.getInt("revision")||!rule.getString("goal").equals(receipt.getString("goal")))throw new IllegalStateException("提醒规则已更新，旧目标不能继续授权");
             if(rule.optBoolean("sourceCheckPending"))throw new ScheduleSourceState.Unavailable();
             if(rule.optBoolean("taskRequestsRevoked"))throw new IllegalStateException("提醒目标授权已撤销，不能由旧提醒启动执行");
@@ -394,6 +405,7 @@ public final class AutomationBook {
     private String receiptBlocked(JSONObject state,JSONObject receipt,long now)throws Exception {
         int index=indexOf(state.getJSONArray("rules"),receipt.getString("ruleId"));if(index<0)return "cancelled";
         JSONObject rule=state.getJSONArray("rules").getJSONObject(index);
+        AutomationSchedule.version(rule.getJSONObject("schedule"));
         if(rule.optBoolean("sourceCheckPending")){receipt.put("dispatchAfter",Math.max(now+60_000L,rule.optLong("sourceRetryAt")));return "source_unavailable";}
         if(rule.getInt("revision")!=receipt.getInt("revision")||rule.optBoolean("taskRequestsRevoked"))return "cancelled";
         JSONObject policy=policy(rule);long deadline=AutomationPolicy.deadline(policy,receipt.getLong("occurrenceAt"));

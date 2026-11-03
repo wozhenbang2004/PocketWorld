@@ -1,6 +1,7 @@
 package dev.pocketengine.ui
 
 import dev.pocketengine.features.automation.AutomationSchedule
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.Instant
@@ -40,5 +41,44 @@ class ReminderScheduleDraftTest {
         val small = draft("interval", 1000L, "1")
         assertEquals(61000L, small.getLong("anchorAt"))
         assertEquals(61000L, AutomationSchedule.nextAt(small, 1000L))
+    }
+    @Test fun cronEditorUsesTheSameVersionedCalendarAndRejectsAmbiguousDates() {
+        val now = Instant.parse("2027-01-04T00:00:00Z").toEpochMilli()
+        val schedule = reminderScheduleDraft("cron", "30", "09:00", "Asia/Shanghai", "", "1", false, true, true, now, "0 9 * * 1-5")
+        assertEquals("cron", schedule.getString("type"))
+        assertEquals(1, schedule.getInt("scheduleVersion"))
+        assertEquals("skip", schedule.getString("dstGap"))
+        assertEquals("later", schedule.getString("dstOverlap"))
+        assertEquals(Instant.parse("2027-01-04T01:00:00Z").toEpochMilli(), AutomationSchedule.preview(schedule, now, 3).getJSONArray("occurrences").getJSONObject(0).getLong("at"))
+        assertThrows(IllegalArgumentException::class.java) { reminderScheduleDraft("cron", "30", "09:00", "UTC", "", "1", false, false, false, now, "0 9 1 * 1") }
+    }
+    @Test fun editingKeepsTheExactAnchorNativeRevisionAndAllExistingPolicyLimits() {
+        val source = JSONObject().put("type", "interval").put("anchorAt", 1700000123456L).put("intervalMillis", 90001L)
+        val preserved = reminderPreservedSchedule(source)
+        assertEquals(source.getLong("anchorAt"), preserved.getLong("anchorAt"))
+        assertEquals(source.getLong("intervalMillis"), preserved.getLong("intervalMillis"))
+        assertEquals(1, preserved.getInt("scheduleVersion"))
+        assertFalse(source.has("scheduleVersion"))
+        val old = JSONObject().put("id", "original-rule").put("revision", 7).put("enabled", false).put("claimedCount", 4)
+            .put("policy", JSONObject().put("maxOccurrences", 5).put("expiresAt", 1700009999999L).put("requiresNetwork", true).put("quietHours", JSONObject().put("start", "22:00").put("end", "07:00")))
+        val rule = reminderRuleDraft(old, "更新文字", false, "", preserved, "coalesce", "buffer_one", 2)
+        assertEquals("original-rule", rule.getString("id")); assertEquals(7, rule.getInt("revision"))
+        assertFalse(rule.has("enabled")); assertFalse(rule.has("claimedCount")); assertFalse(rule.has("executionAuthorized"))
+        assertEquals(5, rule.getJSONObject("policy").getInt("maxOccurrences"))
+        assertEquals(old.getJSONObject("policy").getLong("expiresAt"), rule.getJSONObject("policy").getLong("expiresAt"))
+        assertTrue(rule.getJSONObject("policy").getBoolean("requiresNetwork"))
+        assertEquals("22:00", rule.getJSONObject("policy").getJSONObject("quietHours").getString("start"))
+        assertFalse(old.getJSONObject("policy").has("misfire"))
+        assertThrows(IllegalArgumentException::class.java) { reminderPreservedSchedule(JSONObject(source.toString()).put("scheduleVersion", 2)) }
+    }
+    @Test fun reschedulingRequiresSameLiveRuleAndNoRevocation() {
+        val source = JSONObject().put("id", "original").put("revision", 4)
+        fun rules(value: JSONObject) = org.json.JSONArray().put(value)
+        assertTrue(reminderRescheduleSourceCurrent(source, rules(JSONObject(source.toString()))))
+        assertFalse(reminderRescheduleSourceCurrent(source, rules(JSONObject(source.toString()).put("revision", 5))))
+        assertFalse(reminderRescheduleSourceCurrent(source, rules(JSONObject(source.toString()).put("sourceInvalidated", true))))
+        assertFalse(reminderRescheduleSourceCurrent(source, rules(JSONObject(source.toString()).put("sourceCheckPending", true))))
+        assertFalse(reminderRescheduleSourceCurrent(source, org.json.JSONArray()))
+        assertTrue(reminderRescheduleSourceCurrent(null, null))
     }
 }
