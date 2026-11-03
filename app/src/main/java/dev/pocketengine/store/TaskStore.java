@@ -8549,12 +8549,26 @@ public final class TaskStore {
     public synchronized JSONArray saveSkillArtifacts(dev.pocketengine.features.skills.CompanionSkillBackend.ReceiptRef ref,dev.pocketengine.features.skills.CompanionSkillBackend.ArtifactInventory inventory)throws Exception {
         requirePrivateOwner(required(ref.taskId));JSONObject row=skillOperation(ref.taskId,ref.operationId);JSONObject metadata=skillMetadata(row.getJSONObject("arguments"));checkSkillRef(ref,metadata);if(metadata.has("nativeCacheRetirement"))throw new SecurityException("主人已撤回原执行缓存，不能从遗留字节重新回收成果");
         JSONObject receipt=row.optJSONObject("receipt");if(receipt==null||!receipt.optString("status").matches("completed|failed|timed_out"))throw new SecurityException("没有原脚本的终态成果回执");
-        JSONArray refs=new JSONArray();int total=0;
-        for(var artifact:inventory.files){byte[] bytes=artifact.bytes();total+=bytes.length;if(total>ref.maxOutputBytes)throw new SecurityException("成果超过原输出预算");
-            String identity=capabilityFingerprint(new JSONObject().put("operationId",ref.operationId).put("path",artifact.path).put("sha256",artifact.sha256));
-            AtomicFile target=new AtomicFile(new File(artifacts,"skill-"+identity+".bin"));FileOutputStream stream=null;
-            try{stream=target.startWrite();stream.write(bytes);target.finishWrite(stream);}catch(Exception failure){if(stream!=null)target.failWrite(stream);throw failure;}
-            refs.put(new JSONObject().put("artifactId",identity).put("path",artifact.path).put("sha256",artifact.sha256).put("bytes",bytes.length).put("untrusted",true).put("imported",false));
+        JSONArray requested=metadata.getJSONObject("review").getJSONObject("request").getJSONArray("outputPaths"),refs=new JSONArray();Set<String> approved=new java.util.HashSet<>();for(int i=0;i<requested.length();i++)approved.add(requested.getString(i));
+        java.util.Map<String,JSONObject> retained=new java.util.LinkedHashMap<>();java.util.Map<String,byte[]> additions=new java.util.LinkedHashMap<>();long total=0;
+        // A later observation of the original copy cannot withdraw a fixed result already saved here.
+        JSONArray previous=receipt.optJSONArray("artifacts");for(int i=0;previous!=null&&i<previous.length();i++){
+            JSONObject saved=previous.getJSONObject(i);String path=saved.getString("path"),sha=saved.getString("sha256"),identity=saved.getString("artifactId");
+            if(!approved.contains(path)||retained.containsKey(path)||!identity.equals(capabilityFingerprint(new JSONObject().put("operationId",ref.operationId).put("path",path).put("sha256",sha))))throw new SecurityException("已保存成果不属于原批准路径或身份");
+            total+=readSkillArtifact(ref.taskId,ref.operationId,identity,sha).length;if(total>ref.maxOutputBytes)throw new SecurityException("成果超过原输出预算");retained.put(path,saved);refs.put(saved);
+        }
+        Set<String> observed=new java.util.HashSet<>();for(var artifact:inventory.files){
+            byte[] bytes=artifact.bytes();StringBuilder hash=new StringBuilder();for(byte value:java.security.MessageDigest.getInstance("SHA-256").digest(bytes))hash.append(String.format(java.util.Locale.ROOT,"%02x",value&255));
+            if(!approved.contains(artifact.path)||!observed.add(artifact.path)||!hash.toString().equals(artifact.sha256))throw new SecurityException("成果不是原批准路径的完整固定字节");
+            JSONObject saved=retained.get(artifact.path);if(saved!=null){if(!artifact.sha256.equals(saved.getString("sha256"))||bytes.length!=saved.getLong("bytes"))throw new SecurityException("同一原成果路径不能替换已保存字节");continue;}
+            total+=bytes.length;if(total>ref.maxOutputBytes)throw new SecurityException("成果超过原累计输出预算");String identity=capabilityFingerprint(new JSONObject().put("operationId",ref.operationId).put("path",artifact.path).put("sha256",artifact.sha256));
+            additions.put(identity,bytes);refs.put(new JSONObject().put("artifactId",identity).put("path",artifact.path).put("sha256",artifact.sha256).put("bytes",bytes.length).put("untrusted",true).put("imported",false));
+        }
+        for(String missing:inventory.missingPaths)if(!approved.contains(missing)||!observed.add(missing))throw new SecurityException("成果缺失观察不属于原批准路径或重复");
+        // Validate the complete recheck before writing any new file; repeated exact refs are read-only.
+        for(var addition:additions.entrySet()){
+            AtomicFile target=new AtomicFile(new File(artifacts,"skill-"+addition.getKey()+".bin"));FileOutputStream stream=null;
+            try{stream=target.startWrite();stream.write(addition.getValue());target.finishWrite(stream);}catch(Exception failure){if(stream!=null)target.failWrite(stream);throw failure;}
         }
         receipt.put("artifacts",refs).put("missingArtifactPaths",new JSONArray(inventory.missingPaths)).put("artifactsTruncated",inventory.truncated);
         ContentValues update=new ContentValues();update.put("receipt",receipt.toString());db.update("operations",update,"task_id=? AND operation_id=?",new String[]{ref.taskId,ref.operationId});return refs;

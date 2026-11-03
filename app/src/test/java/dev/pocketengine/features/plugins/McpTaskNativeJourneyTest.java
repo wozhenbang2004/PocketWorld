@@ -132,9 +132,12 @@ public final class McpTaskNativeJourneyTest {
             if (!creation && complete) result.put("result", new JSONObject().put("resultType", "complete").put("isError", true)
                     .put("content", new JSONArray().put(new JSONObject().put("type", "text")
                             .put("text", "A".repeat(25000) + NEEDLE + "Z".repeat(35000) + TOKEN)))
-                    .put("structuredContent", new JSONObject().put("detail", "S".repeat(40000)).put("token", "business-result-token")
-                            .put("authorization", new JSONObject().put("state", "owner_reviewed").put("apiKey", "business-key-id").put("credentialEcho", TOKEN))
-                            .put("private", new JSONObject().put("token", new JSONArray().put("word").put(17)))));
+                    .put("structuredContent", new JSONObject().put("detail", "S".repeat(40000)).put("token", "UNRELATED_ASYNC_TOKEN")
+                            .put("authorization", new JSONObject().put("state", "owner_reviewed").put("apiKey", "UNRELATED_ASYNC_API_KEY").put("credentialEcho", TOKEN))
+                            .put("private", new JSONObject().put("token", new JSONArray().put("word").put(17)).put("count", 17))
+                            .put("nested", new JSONArray().put(new JSONObject().put("API_KEY", "UNRELATED_NESTED_ASYNC_KEY")))
+                            .put("notes", "Authorization: Bearer UNRELATED_ASYNC_BEARER")
+                            .put("tokenCount", 17)));
             return result;
         }
 
@@ -264,12 +267,18 @@ public final class McpTaskNativeJourneyTest {
         assertEquals("text", content.getJSONObject(0).getString("type"));
         assertEquals("A".repeat(25000) + NEEDLE + "Z".repeat(35000) + "[凭据已隐藏]", content.getJSONObject(0).getString("text"));
         JSONObject structured = result.getJSONObject("structuredContent");
-        assertEquals("S".repeat(40000), structured.getString("detail")); assertEquals("business-result-token", structured.getString("token"));
-        assertEquals("owner_reviewed", structured.getJSONObject("authorization").getString("state"));
-        assertEquals("business-key-id", structured.getJSONObject("authorization").getString("apiKey"));
+        assertEquals("S".repeat(40000), structured.getString("detail")); assertEquals("[凭据已隐藏]", structured.getString("token"));
+        assertEquals("[凭据已隐藏]", structured.getJSONObject("authorization").getString("state"));
+        assertEquals("[凭据已隐藏]", structured.getJSONObject("authorization").getString("apiKey"));
         assertEquals("[凭据已隐藏]", structured.getJSONObject("authorization").getString("credentialEcho"));
-        assertEquals("word", structured.getJSONObject("private").getJSONArray("token").getString(0));
-        assertEquals(17, structured.getJSONObject("private").getJSONArray("token").getInt(1));
+        assertEquals(2, structured.getJSONObject("private").getJSONArray("token").length());
+        assertEquals("[凭据已隐藏]", structured.getJSONObject("private").getJSONArray("token").getString(0));
+        assertEquals("[凭据已隐藏]", structured.getJSONObject("private").getJSONArray("token").getString(1));
+        assertEquals(17, structured.getJSONObject("private").getInt("count")); assertEquals(17, structured.getInt("tokenCount"));
+        assertEquals("[凭据已隐藏]", structured.getJSONArray("nested").getJSONObject(0).getString("API_KEY"));
+        assertEquals("Authorization: Bearer [凭据已隐藏]", structured.getString("notes"));
+        assertFalse(result.getJSONObject("outputProjection").getBoolean("allSecretsDetected"));
+        for (String secret : new String[]{"UNRELATED_ASYNC_TOKEN", "UNRELATED_ASYNC_API_KEY", "UNRELATED_NESTED_ASYNC_KEY", "UNRELATED_ASYNC_BEARER"}) assertFalse(retained.contains(secret));
         byte[] bytes = retained.getBytes(StandardCharsets.UTF_8);
         JSONObject range = ref.getJSONObject("retainedRange");
         assertEquals(0, range.getInt("offset")); assertEquals("UTF-16", range.getString("unit"));

@@ -171,25 +171,37 @@ public final class McpOutputNativeRunnerJourneyTest {
             }
         }
     }
-    @Test public void originalRunnerAndBookKeepRemoteBusinessFieldsThroughReceiptQueryAndRead()throws Exception {
+    @Test public void originalRunnerAndBookMaskCredentialCandidatesAndKeepOrdinaryBusinessDataThroughQueryAndRead()throws Exception {
         try(McpFixture wire=new McpFixture();Peer peer=new Peer(false)){
             setupWire(wire);wire.result=new JSONObject().put("resultType","complete").put("isError",false)
-                .put("content",new JSONArray().put(new JSONObject().put("type","text").put("text","actual structured business record")))
-                .put("structuredContent",new JSONObject().put("token",NEEDLE)
-                    .put("authorization",new JSONObject().put("state","reviewed").put("apiKey","business-key-id").put("echo",TOKEN))
-                    .put("private",true).put("_nativeMcpJob",new JSONObject().put("token","remote-business-field"))
+                .put("content",new JSONArray().put(new JSONObject().put("type","text").put("text","actual structured business record\nAuthorization: Bearer UNRELATED_RUNNER_BEARER\nBasic dW5yZWxhdGVkOnNlY3JldA==\n-----BEGIN PRIVATE KEY-----\n"))
+                    .put(new JSONObject().put("type","text").put("text","UNRELATED_RUNNER_PEM_BODY\n-----END PRIVATE KEY-----\nordinary tail")))
+                .put("outputProjection",new JSONObject().put("allSecretsDetected",true))
+                .put("structuredContent",new JSONObject().put("document",NEEDLE).put("token","UNRELATED_RUNNER_TOKEN")
+                    .put("authorization",new JSONObject().put("state","reviewed").put("apiKey","UNRELATED_RUNNER_API_KEY").put("echo",TOKEN))
+                    .put("nested",new JSONArray().put(new JSONObject().put("aPi_KeY","UNRELATED_RUNNER_NESTED_KEY")))
+                    .put("private",true).put("tokenCount",17).put("_nativeMcpJob",new JSONObject().put("business","remote-business-field"))
+                    .put("outputProjection",new JSONObject().put("policy","remote business policy"))
                     .put("modelSecret",MODEL_KEY));
             try(Domain d=new Domain(wire)){
                 String task=d.tasks.createCapabilityTask("原MCP业务字段保留与凭据脱敏","").getString("id");
                 assertEquals("awaiting_user",run(d,peer,task).status);assertEquals(0,wire.count("tools/call"));approveExactOriginal(d,task);
                 RunOutcome actual=run(d,peer,task);assertEquals(actual.summary,"needs_confirmation",actual.status);assertTrue(peer.failures.toString(),peer.failures.isEmpty());
                 assertTrue(peer.found);assertTrue(peer.actualRawReads>0);assertEquals(1,wire.count("tools/call"));assertEquals(1,d.outputs());
-                String saved=d.retained(peer.reference);JSONObject business=new JSONObject(saved).getJSONObject("result").getJSONObject("structuredContent");
-                assertEquals(NEEDLE,business.getString("token"));assertEquals("reviewed",business.getJSONObject("authorization").getString("state"));
-                assertEquals("business-key-id",business.getJSONObject("authorization").getString("apiKey"));assertEquals("[凭据已隐藏]",business.getJSONObject("authorization").getString("echo"));
-                assertTrue(business.getBoolean("private"));assertEquals("remote-business-field",business.getJSONObject("_nativeMcpJob").getString("token"));
-                assertTrue(peer.bodies.toString().contains(NEEDLE));assertTrue(peer.bodies.toString().contains("business-key-id"));
-                assertFalse(saved.contains(TOKEN));assertFalse(saved.contains(MODEL_KEY));assertFalse(peer.bodies.toString().contains(TOKEN));assertFalse(peer.bodies.toString().contains(MODEL_KEY));
+                String saved=d.retained(peer.reference);JSONObject result=new JSONObject(saved).getJSONObject("result"),business=result.getJSONObject("structuredContent");
+                assertEquals(2,result.getJSONArray("content").length());assertTrue(result.getJSONArray("content").getJSONObject(1).getString("text").contains("ordinary tail"));
+                assertEquals(NEEDLE,business.getString("document"));assertEquals("[凭据已隐藏]",business.getString("token"));
+                assertEquals("[凭据已隐藏]",business.getJSONObject("authorization").getString("state"));
+                assertEquals("[凭据已隐藏]",business.getJSONObject("authorization").getString("apiKey"));assertEquals("[凭据已隐藏]",business.getJSONObject("authorization").getString("echo"));
+                assertEquals("[凭据已隐藏]",business.getJSONArray("nested").getJSONObject(0).getString("aPi_KeY"));
+                assertTrue(business.getBoolean("private"));assertEquals(17,business.getInt("tokenCount"));assertEquals("remote-business-field",business.getJSONObject("_nativeMcpJob").getString("business"));
+                assertEquals("remote business policy",business.getJSONObject("outputProjection").getString("policy"));assertFalse(result.getJSONObject("outputProjection").getBoolean("allSecretsDetected"));
+                assertTrue(result.getJSONObject("outputProjection").getBoolean("mayRedactBusinessValues"));
+                String modelBodies=peer.bodies.toString(),receipts=d.tasks.get(task,false).toString();
+                assertTrue(modelBodies.contains(NEEDLE));assertTrue(modelBodies.contains("remote-business-field"));assertTrue(modelBodies.contains("ordinary tail"));
+                for(String secret:new String[]{TOKEN,MODEL_KEY,"UNRELATED_RUNNER_TOKEN","UNRELATED_RUNNER_API_KEY","UNRELATED_RUNNER_NESTED_KEY","UNRELATED_RUNNER_BEARER","dW5yZWxhdGVkOnNlY3JldA==","UNRELATED_RUNNER_PEM_BODY"}){
+                    assertFalse(saved.contains(secret));assertFalse(modelBodies.contains(secret));assertFalse(receipts.contains(secret));
+                }
                 assertEquals(peer.reference.getString("revision"),fingerprint(saved));assertFalse(d.tasks.get(task,false).toString().contains(TOKEN));
             }
         }

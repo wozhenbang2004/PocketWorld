@@ -148,6 +148,46 @@ public final class ManagedSkillNativeJourneyTest {
         }
     }
 
+    @Test public void missingOrSubsetRecheckKeepsExactPhoneSkillArtifactsAfterColdReopen()throws Exception {
+        String script="from pathlib import Path\nPath('output').mkdir(exist_ok=True)\nPath('output/result.bin').write_bytes(b'first exact result')\nPath('output/second.bin').write_bytes(b'second exact result')\n";
+        try(Fixture f=new Fixture("python3",script)){
+            var configuration=f.host.inspectPhoneConfiguration(f.id(),f.configuration("python3").put("outputPaths",new JSONArray().put("output/result.bin").put("output/second.bin")));f.host.installConfiguration(f.window,configuration,configuration.digest);
+            var work=f.execute();f.approve(f.review());JSONObject result=work.get(15,TimeUnit.SECONDS);assertEquals(result.toString(),"completed",result.getString("status"));
+            JSONArray original=f.record().getJSONObject("receipt").getJSONArray("artifacts");assertEquals(2,original.length());String job=f.record().getJSONObject("nativeManagedJob").toString();
+            f.tasks.journal(f.id(),f.task.getString("runId"),f.task.getInt("coordinatorEpoch"),f.control).finishOperation(f.operation(),result);
+            assertEquals(original.toString(),f.host.retrieveArtifacts(f.id(),f.operation()).getJSONObject("receipt").getJSONArray("artifacts").toString());
+            Files.delete(f.copy().resolve("workspace/output/result.bin"));JSONObject subset=f.host.retrieveArtifacts(f.id(),f.operation());
+            assertEquals(original.toString(),subset.getJSONObject("receipt").getJSONArray("artifacts").toString());assertEquals("output/result.bin",subset.getJSONObject("receipt").getJSONArray("missingArtifactPaths").getString(0));
+            Files.delete(f.copy().resolve("workspace/output/second.bin"));f.host.removeConfiguration(f.window,f.host.configuration().getLong("revision"),f.host.configuration().getString("stateFingerprint"));f.skills.handle("delete",new JSONObject().put("id",f.installed.getString("id")));f.reopenForReceiptOnly();
+            JSONObject cold=f.host.retrieveArtifacts(f.id(),f.operation());assertEquals(original.toString(),cold.getJSONObject("receipt").getJSONArray("artifacts").toString());assertEquals(2,cold.getJSONObject("receipt").getJSONArray("missingArtifactPaths").length());assertFalse(cold.getBoolean("replayAllowed"));
+            for(int i=0;i<original.length();i++){JSONObject file=original.getJSONObject(i);byte[] expected=(file.getString("path").equals("output/result.bin")?"first exact result":"second exact result").getBytes(StandardCharsets.UTF_8);assertArrayEquals(expected,f.tasks.readSkillArtifact(f.id(),f.operation(),file.getString("artifactId"),file.getString("sha256")));}
+            assertEquals(job,cold.getJSONObject("nativeManagedJob").toString());assertEquals(1,f.tasks.get(f.id(),false).getJSONArray("operations").length());assertEquals("40.00",f.originalInput());assertNull(f.callbackFailure.get());
+        }
+    }
+
+    @Test public void changedPhoneSkillOutputCannotReplaceTheOriginalSavedArtifact()throws Exception {
+        String script="from pathlib import Path\nPath('output').mkdir(exist_ok=True)\nPath('output/result.bin').write_bytes(b'first exact result')\n";
+        try(Fixture f=new Fixture("python3",script)){
+            var work=f.execute();f.approve(f.review());JSONObject result=work.get(15,TimeUnit.SECONDS);assertEquals(result.toString(),"completed",result.getString("status"));byte[] original=f.saved();String refs=f.record().getJSONObject("receipt").getJSONArray("artifacts").toString();
+            Files.write(f.copy().resolve("workspace/output/result.bin"),"later changed bytes".getBytes(StandardCharsets.UTF_8));
+            assertThrows(IllegalStateException.class,()->f.host.retrieveArtifacts(f.id(),f.operation()));assertEquals(refs,f.record().getJSONObject("receipt").getJSONArray("artifacts").toString());assertEquals("completed",f.record().getJSONObject("receipt").getString("status"));assertArrayEquals(original,f.saved());
+            assertEquals(1,f.tasks.get(f.id(),false).getJSONArray("operations").length());assertEquals("40.00",f.originalInput());assertNull(f.callbackFailure.get());
+        }
+    }
+
+    @Test public void recoveredPhoneSkillOutputCountsAlreadySavedBytesAgainstOriginalBudget()throws Exception {
+        String script="from pathlib import Path\nPath('output').mkdir(exist_ok=True)\nPath('output/result.bin').write_bytes(b'a'*40000)\n";
+        try(Fixture f=new Fixture("python3",script)){
+            var configuration=f.host.inspectPhoneConfiguration(f.id(),f.configuration("python3").put("outputPaths",new JSONArray().put("output/result.bin").put("output/second.bin")));f.host.installConfiguration(f.window,configuration,configuration.digest);
+            var work=f.execute();f.approve(f.review());JSONObject result=work.get(15,TimeUnit.SECONDS);assertEquals(result.toString(),"completed",result.getString("status"));byte[] original=f.saved();assertEquals(40000,original.length);String refs=f.record().getJSONObject("receipt").getJSONArray("artifacts").toString();
+            Files.delete(f.copy().resolve("workspace/output/result.bin"));Path recovered=f.copy().resolve("workspace/output/second.bin");Files.write(recovered,new byte[40000]);
+            assertThrows(IllegalStateException.class,()->f.host.retrieveArtifacts(f.id(),f.operation()));assertEquals(refs,f.record().getJSONObject("receipt").getJSONArray("artifacts").toString());assertEquals("completed",f.record().getJSONObject("receipt").getString("status"));assertArrayEquals(original,f.saved());
+            byte[] bounded="approved recovered output".getBytes(StandardCharsets.UTF_8);Files.write(recovered,bounded);JSONObject actual=f.host.retrieveArtifacts(f.id(),f.operation());JSONArray files=actual.getJSONObject("receipt").getJSONArray("artifacts");assertEquals(2,files.length());assertArrayEquals(original,f.saved());
+            JSONObject second=files.getJSONObject(1);assertEquals("output/second.bin",second.getString("path"));assertArrayEquals(bounded,f.tasks.readSkillArtifact(f.id(),f.operation(),second.getString("artifactId"),second.getString("sha256")));
+            assertEquals(files.toString(),f.host.retrieveArtifacts(f.id(),f.operation()).getJSONObject("receipt").getJSONArray("artifacts").toString());assertEquals(1,f.tasks.get(f.id(),false).getJSONArray("operations").length());assertEquals("40.00",f.originalInput());assertNull(f.callbackFailure.get());
+        }
+    }
+
     @Test public void damagedConfigurationKeepsTheRecoveryEntryVisibleEvenWithNoMatchingSkillOrExecution()throws Exception {
         try(Fixture f=new Fixture("python3",PY,"not-executed")){
             f.skills.handle("delete",new JSONObject().put("id",f.installed.getString("id")));byte[] damaged="{optional-config-broken".getBytes(StandardCharsets.UTF_8);Path file=f.android.getFilesDir().toPath().resolve("skill-execution.json");Files.write(file,damaged);

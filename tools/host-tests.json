@@ -13,7 +13,9 @@
       "dev.pocketengine.features.plugins.McpLocalStartupFenceNativeTest",
       "dev.pocketengine.features.plugins.McpLocalPackageNativeTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
     "native": true,
     "robolectric": true,
     "description": "Native owner discovery and separate disabled/no-grant installation from completed original SQL facts; real Python/Node stdio calls through original Supervisor approvals, debited prepared rows, same managed JNI Job, Book9 capture and TaskDetail cancellation. Progressive discovery/catalogue/independent installation presentation consumes the native facts and unchanged manifest support rules. Private exact refs stay out of task/UI/history/model operation projections. Original profile/no-runner/unknown guards preserved; no phone visual acceptance or automatic packages/credentials. Original storage cleanup protects unknown business/process facts and explicitly retires only exact settled MCP copies, including release of the real sixteen-copy ceiling. Same original checkout lease covers both typed purposes and a real delayed-owner-queue/admitted-invoke race; a cleaned business-RPC unknown is not a plugin blacklist. Explicit exact installed npm11/pnpm10 preparation is separately reviewed, frozen-lock/integrity pinned, no lifecycle scripts, same original managed pipe job; no automatic manager download or Android device claim."
@@ -79,6 +81,7 @@
     "additionalClasses": [
       "dev.pocketengine.features.local.project.ProjectFileQueriesTest",
       "dev.pocketengine.features.local.project.ProjectRegexSearchTest",
+      "dev.pocketengine.features.local.project.ProjectRegexMatchesTest",
       "dev.pocketengine.features.local.project.ProjectFuzzySearchTest",
       "dev.pocketengine.features.local.project.ProjectFileMetadataTest",
       "dev.pocketengine.features.local.project.ProjectHexReadTest",

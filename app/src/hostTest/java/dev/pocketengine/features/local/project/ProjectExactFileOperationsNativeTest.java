@@ -63,6 +63,27 @@ public final class ProjectExactFileOperationsNativeTest {
         String operation=journal.beginOperation("project_execute",args);JSONObject pending=port.execute("project_execute",new JSONObject(args.toString()).put("_hostOperationId",operation),original);journal.finishOperation(operation,pending);assertEquals("approval_required",pending.getString("code"));
         assertFalse(Files.exists(files.resolve("nested/copied.txt")));assertEquals("before\n",readUtf8(files.resolve("target.txt")));tasks.decideCapabilityApproval(task,pending.getString("approvalId"),true);
     }
+    @Test public void changesReadPreservesOriginalAndCurrentHashesWithoutCreatingAnOperation()throws Exception{
+        int initialTasks=tasks.list().length();
+        assertThrows(SecurityException.class,()->port.execute("project_changes",new JSONObject(),original));
+        tasks.authorizeTools(task,run,new JSONArray().put("project_changes"));
+        JSONObject clean=port.execute("project_changes",new JSONObject().put("changedOnly",false),original);
+        assertEquals(0,clean.getInt("changedCount"));assertEquals(2,clean.getJSONArray("files").length());
+        for(int i=0;i<clean.getJSONArray("files").length();i++){
+            JSONObject row=clean.getJSONArray("files").getJSONObject(i);String expected=sha(row.getString("path").equals("source.txt")?"source 中文🙂\n":"before\n");
+            assertEquals("unchanged",row.getString("change"));assertEquals(expected,row.getString("beforeHash"));assertEquals(expected,row.getString("sha256"));
+        }
+        byte[] binary=new byte[]{0,1,(byte)255,2};writeUtf8(files.resolve("source.txt"),"changed 中文🙂\n");Files.delete(files.resolve("target.txt"));Files.write(files.resolve("new.bin"),binary);
+        JSONObject changed=port.execute("project_changes",new JSONObject(),original);assertEquals(3,changed.getInt("changedCount"));assertTrue(changed.getBoolean("complete"));
+        java.util.Map<String,JSONObject> rows=new java.util.HashMap<>();for(int i=0;i<changed.getJSONArray("files").length();i++){JSONObject row=changed.getJSONArray("files").getJSONObject(i);assertNull(rows.put(row.getString("path"),row));}assertEquals(3,rows.size());
+        JSONObject modified=rows.get("source.txt"),deleted=rows.get("target.txt"),added=rows.get("new.bin");assertNotNull(modified);assertNotNull(deleted);assertNotNull(added);
+        assertEquals("modified",modified.getString("change"));assertEquals(sha("source 中文🙂\n"),modified.getString("beforeHash"));assertEquals(sha("changed 中文🙂\n"),modified.getString("sha256"));
+        assertEquals("deleted",deleted.getString("change"));assertEquals(sha("before\n"),deleted.getString("beforeHash"));assertEquals("absent",deleted.getString("sha256"));
+        assertEquals("added",added.getString("change"));assertEquals("absent",added.getString("beforeHash"));assertEquals(ProjectSources.sha256(binary),added.getString("sha256"));assertTrue(added.getBoolean("binary"));
+        tasks.authorizeTools(task,run,new JSONArray());assertThrows(SecurityException.class,()->port.execute("project_changes",new JSONObject(),original));
+        assertEquals(initialTasks,tasks.list().length());assertEquals(0,tasks.get(task,false).getJSONArray("operations").length());assertFalse(tasks.hasUnresolved(task));
+        assertEquals("changed 中文🙂\n",readUtf8(files.resolve("source.txt")));assertFalse(Files.exists(files.resolve("target.txt")));assertArrayEquals(binary,Files.readAllBytes(files.resolve("new.bin")));
+    }
     @Test public void copyAndAppendUseTheOriginalReviewedOperationAndActualAfterShaReceipts()throws Exception{
         int initialTasks=tasks.list().length();JSONObject proposal=propose(new JSONArray().put(copy()).put(append())),args=arguments(proposal);assertTrue(proposal.has("planRef"));approve(args);
         String operation=journal.beginOperation("project_execute",args);JSONObject receipt=port.execute("project_execute",new JSONObject(args.toString()).put("_hostOperationId",operation),original);journal.finishOperation(operation,receipt);
@@ -84,6 +105,38 @@ public final class ProjectExactFileOperationsNativeTest {
         assertNotNull(schema);assertTrue(schema.getJSONObject("properties").has("syntax"));assertEquals(20,schema.getJSONObject("properties").getJSONObject("contextAfter").getInt("maximum"));
         JSONObject input=new JSONObject().put("mode","text").put("syntax","regex").put("query","source\\s+中文.").put("contextBefore",2).put("contextAfter",2);port.validate("project_search",input);JSONObject result=port.execute("project_search",input,original);
         assertEquals("RE2J_1.8",result.getString("regexEngine"));assertEquals(1,result.getJSONArray("matches").length());assertTrue(result.getBoolean("contextComplete"));JSONObject block=result.getJSONArray("contextBlocks").getJSONObject(0);assertEquals("source.txt",block.getString("path"));assertEquals(sha("source 中文🙂\n"),block.getString("sha256"));assertEquals("source 中文🙂",block.getJSONArray("lines").getJSONObject(0).getString("text"));assertEquals(0,tasks.get(task,false).getJSONArray("operations").length());
+    }
+    @Test public void everyRegexMatchAndNullCaptureUseTheOriginalReadPortAndBookWithoutAWriteIntent()throws Exception{
+        String text="🙂id=1 id=2\n";writeUtf8(files.resolve("source.txt"),text);JSONObject definition=null;JSONArray available=port.tools();for(int i=0;i<available.length();i++){JSONObject function=available.getJSONObject(i).getJSONObject("function");if("project_search".equals(function.getString("name")))definition=function;}
+        assertNotNull(definition);assertTrue(definition.getJSONObject("parameters").getJSONObject("properties").getJSONObject("mode").getJSONArray("enum").toString().contains("\"regex_matches\""));assertFalse(port.sideEffecting("project_search"));
+        var binding=new ModelCapabilityAdapters.Binding(task,run,epoch,original,true,project);
+        try(var captured=new ProjectCapabilityPort(binding,new TaskStoreCapabilityAuthority(tasks,binding,event->{}),original,null,local,tasks,checkout,"termux",tasks.toolOutputFactory(task,run,epoch,original,value->value))){
+            JSONObject input=new JSONObject().put("mode","regex_matches").put("path","source.txt").put("query","(id)=([0-9])(x)?()").put("limit",1);captured.validate("project_search",input);JSONObject first=captured.execute("project_search",input,original),row=first.getJSONArray("matches").getJSONObject(0);
+            assertEquals(2,row.getInt("startOffset"));assertEquals(6,row.getInt("endOffset"));assertEquals(sha(text),row.getString("sha256"));assertFalse(row.getJSONArray("groups").getJSONObject(2).getBoolean("matched"));assertTrue(row.getJSONArray("groups").getJSONObject(2).isNull("text"));assertTrue(row.getJSONArray("groups").getJSONObject(3).getBoolean("matched"));assertEquals("",row.getJSONArray("groups").getJSONObject(3).getString("text"));
+            JSONObject ref=first.getJSONObject("outputCapture").getJSONArray("outputRefs").getJSONObject(0);assertEquals(task,ref.getString("taskId"));assertEquals(run,ref.getString("runId"));assertEquals("project_search",ref.getString("tool"));assertEquals("",ref.getString("operationId"));assertTrue(ref.getBoolean("upstreamTruncated"));
+            JSONObject last=captured.execute("project_search",new JSONObject(input.toString()).put("cursor",first.getJSONObject("nextCursor")),original);assertEquals(7,last.getJSONArray("matches").getJSONObject(0).getInt("startOffset"));assertFalse(last.getBoolean("hasMore"));assertEquals("stored",last.getJSONObject("outputCapture").getString("status"));
+            var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);StringBuilder body=new StringBuilder();try(android.database.Cursor rows=((SQLiteDatabase)field.get(tasks)).rawQuery("SELECT body FROM task_output_chunks ORDER BY rowid",null)){while(rows.moveToNext())body.append(rows.getString(0));}assertTrue(body.toString().contains("regex_re2j_file"));assertTrue(body.toString().contains(sha(text)));assertTrue(body.toString().contains("startOffset"));
+        }
+        assertEquals(text,readUtf8(files.resolve("source.txt")));assertEquals(0,tasks.get(task,false).getJSONArray("operations").length());assertEquals(1,tasks.list().length());
+    }
+    @Test public void crossLineRegexPreviewTruncationIsPreservedByTheOriginalBookCapture()throws Exception{
+        String text="a".repeat(8000)+"\nbb";writeUtf8(files.resolve("source.txt"),text);var binding=new ModelCapabilityAdapters.Binding(task,run,epoch,original,true,project);
+        try(var captured=new ProjectCapabilityPort(binding,new TaskStoreCapabilityAuthority(tasks,binding,event->{}),original,null,local,tasks,checkout,"termux",tasks.toolOutputFactory(task,run,epoch,original,value->value))){
+            JSONObject result=captured.execute("project_search",new JSONObject().put("mode","regex_matches").put("path","source.txt").put("query","(a+)\n(b+)"),original);JSONObject row=result.getJSONArray("matches").getJSONObject(0);
+            assertEquals(8003,row.getInt("endOffset"));assertEquals(2,row.getInt("endLine"));assertEquals(3,row.getInt("endColumn"));assertTrue(result.getBoolean("matchesComplete"));assertFalse(result.getBoolean("contentComplete"));assertFalse(result.getBoolean("complete"));assertFalse(result.getBoolean("hasMore"));assertTrue(row.getInt("previewChars")<=512);
+            JSONObject ref=result.getJSONObject("outputCapture").getJSONArray("outputRefs").getJSONObject(0);assertTrue(ref.getBoolean("upstreamTruncated"));assertTrue(ref.getBoolean("retainedNativeDataComplete"));assertEquals("native_output_upstream_truncated",result.getJSONObject("outputCapture").getString("reason"));
+        }
+        assertEquals(text,readUtf8(files.resolve("source.txt")));assertEquals(0,tasks.get(task,false).getJSONArray("operations").length());assertEquals("source 中文🙂\n",workspace.handle("read",new JSONObject().put("projectId",project).put("path","source.txt")).getString("content"));
+    }
+    @Test public void regexMatchSourceCursorAndCancellationKeepTheOriginalRunReadOnly()throws Exception{
+        writeUtf8(files.resolve("source.txt"),"hit hit");JSONObject input=new JSONObject().put("mode","regex_matches").put("path","source.txt").put("query","hit").put("limit",1),first=port.execute("project_search",input,original),duplicate=port.execute("project_search",input,original);assertEquals(first.getString("queryHash"),duplicate.getString("queryHash"));assertEquals(0,duplicate.getJSONArray("matches").getJSONObject(0).getInt("startOffset"));
+        writeUtf8(files.resolve("source.txt"),"owner changed hit");assertThrows(SecurityException.class,()->port.execute("project_search",new JSONObject(input.toString()).put("cursor",first.getJSONObject("nextCursor")),original));
+        original.cancel();assertThrows(Exception.class,()->port.execute("project_search",input,original));assertEquals("owner changed hit",readUtf8(files.resolve("source.txt")));assertEquals(0,tasks.get(task,false).getJSONArray("operations").length());assertEquals(1,tasks.list().length());
+    }
+    @Test public void regexMatchPageRejectsAnOldRunEvenWithUnchangedBytesAndCursor()throws Exception{
+        writeUtf8(files.resolve("source.txt"),"hit hit");JSONObject input=new JSONObject().put("mode","regex_matches").put("path","source.txt").put("query","hit").put("limit",1),cursor=port.execute("project_search",input,original).getJSONObject("nextCursor");
+        tasks.endAttempt(task,run,"awaiting_user","原读取回合结束",new JSONObject());JSONObject next=tasks.startAttempt(task,"capabilities",20);assertNotEquals(run,next.getString("runId"));assertTrue(next.getInt("coordinatorEpoch")>epoch);
+        assertThrows(SecurityException.class,()->port.execute("project_search",new JSONObject(input.toString()).put("cursor",cursor),original));assertEquals("hit hit",readUtf8(files.resolve("source.txt")));assertEquals(0,tasks.get(task,false).getJSONArray("operations").length());assertEquals(1,tasks.list().length());
     }
     @Test public void fuzzyLocationIsCapturedAsEvidenceAndOnlyTheChosenExactTextCanEnterOriginalApproval()throws Exception{
         JSONObject schema=null;JSONArray tools=port.tools();for(int i=0;i<tools.length();i++){JSONObject function=tools.getJSONObject(i).getJSONObject("function");if("project_search".equals(function.getString("name")))schema=function.getJSONObject("parameters");}

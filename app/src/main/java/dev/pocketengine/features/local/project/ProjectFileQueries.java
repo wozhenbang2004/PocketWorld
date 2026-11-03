@@ -28,6 +28,8 @@ public final class ProjectFileQueries {
     public static final int PAGE_CHARS=8000,MAX_RESULTS=40;
     public static final int MAX_HEX_WINDOW_BYTES=2048;
     public static final int MAX_CONTEXT_LINES=20,MAX_CONTEXT_BYTES=12000;
+    public static final int MAX_REGEX_GROUPS=32;
+    private static final int MATCH_PREVIEW_CHARS=512,MAX_REGEX_VISITS=ProjectSources.MAX_FILES*4;
     private static final int CONTEXT_LINE_CHARS=400;
     @FunctionalInterface public interface Current {void check()throws Exception;}
     private ProjectFileQueries() {}
@@ -186,22 +188,24 @@ public final class ProjectFileQueries {
     }
     public static JSONObject search(File root,String checkout,JSONObject input,Current current)throws Exception {
         if("hex".equals(input.optString("mode")))return searchHex(root,checkout,input,current);
-        String mode=input.optString("mode","text"),query=input.getString("query"),scope=input.optString("path","");boolean includeHidden=input.optBoolean("hidden"),caseSensitive=input.optBoolean("caseSensitive",true);
-        if(!java.util.Set.of("path","text").contains(mode)||query.isEmpty()||query.length()>240)throw new IllegalArgumentException("搜索模式/查询无效");
-        String syntax=input.optString("syntax","literal");if(!java.util.Set.of("literal","regex","fuzzy").contains(syntax)||!mode.equals("text")&&!syntax.equals("literal"))throw new IllegalArgumentException("syntax仅支持literal或正文regex/fuzzy；路径仍使用glob");
+        String mode=input.optString("mode","text"),query=input.getString("query"),scope=input.optString("path","");boolean includeHidden=input.optBoolean("hidden"),caseSensitive=input.optBoolean("caseSensitive",true),matchPage=mode.equals("regex_matches");
+        if(!java.util.Set.of("path","text","regex_matches").contains(mode)||query.isEmpty()||query.length()>240)throw new IllegalArgumentException("搜索模式/查询无效");
+        String syntax=input.optString("syntax",matchPage?"regex":"literal");if(!java.util.Set.of("literal","regex","fuzzy").contains(syntax)||mode.equals("path")&&!syntax.equals("literal")||matchPage&&!syntax.equals("regex"))throw new IllegalArgumentException("syntax仅支持literal或正文regex/fuzzy；路径使用glob，regex_matches仅使用RE2/J正则");
+        if(matchPage){for(String option:new String[]{"maxEdits","contextBefore","contextAfter"})if(input.has(option))throw new IllegalArgumentException("regex_matches返回实际匹配与捕获组，不能混用fuzzy/逐行context选项");for(String option:new String[]{"hidden","caseSensitive"})if(input.has(option)&&!(input.opt(option) instanceof Boolean))throw new IllegalArgumentException(option+"需明确布尔值");if(query.indexOf('\0')>=0)throw new IllegalArgumentException("正则查询不能含空字节");if(input.has("limit"))matchInteger(input.get("limit"),"limit");}
         int maxEdits=1;
         if(input.has("maxEdits")){Object value=input.opt("maxEdits");if(!syntax.equals("fuzzy")||!(value instanceof Integer||value instanceof Long)||((Number)value).longValue()<1||((Number)value).longValue()>ProjectFuzzyPattern.MAX_EDITS)throw new IllegalArgumentException("maxEdits仅用于正文fuzzy定位，需1至2整数");maxEdits=((Number)value).intValue();}
         ProjectFuzzyPattern fuzzy=syntax.equals("fuzzy")?new ProjectFuzzyPattern(query,caseSensitive,maxEdits):null;
         if(mode.equals("text")&&(query.indexOf('\n')>=0||query.indexOf('\r')>=0||query.indexOf('\0')>=0))throw new IllegalArgumentException("正文搜索按行定位；查询不能包含换行或空字节，不支持跨行正则");
         current.check();ProjectSearchPattern expression=syntax.equals("regex")?new ProjectSearchPattern(query,caseSensitive):null;current.check();
+        if(matchPage&&expression.groupCount()>MAX_REGEX_GROUPS)throw new IllegalArgumentException("regex_matches最多32个捕获组；请缩小表达式，不丢弃多余捕获组");
         int contextBefore=contextLines(input,"contextBefore"),contextAfter=contextLines(input,"contextAfter");boolean wantsContext=contextBefore>0||contextAfter>0;
         if(wantsContext&&!mode.equals("text"))throw new IllegalArgumentException("前后文仅适用于正文搜索，不静默忽略路径搜索参数");
         if(!scope.isEmpty())VersionedWorkspace.path(scope);String include=input.optString("include","**");if(include.isEmpty())include="**";if(input.has("exclude")&&!(input.opt("exclude") instanceof String))throw new IllegalArgumentException("exclude需为相对文件路径glob文字");String exclude=input.optString("exclude","");Glob exclusion=exclude.isEmpty()?null:glob(exclude),filter=glob(include),pathQuery=mode.equals("path")?glob(query,caseSensitive):null;int limit=input.optInt("limit",20);if(limit<1||limit>MAX_RESULTS)throw new IllegalArgumentException("搜索页最多40项");
-        Map<String,Path> paths=new TreeMap<>();JSONArray skipped=new JSONArray();long[] skippedCount={0},excludedByQuery={0};boolean[] enumerationComplete={true};
+        Map<String,Path> paths=new TreeMap<>();JSONArray skipped=new JSONArray();long[] skippedCount={0},excludedByQuery={0};int[] visited={0};boolean[] enumerationComplete={true};
         Path base=scope.isEmpty()?root.toPath():NativeCommandExecutor.within(root,scope).toPath();if(!Files.exists(base,LinkOption.NOFOLLOW_LINKS))throw new IllegalArgumentException("搜索范围不存在");
         Files.walkFileTree(base,new java.nio.file.SimpleFileVisitor<Path>(){
-            @Override public java.nio.file.FileVisitResult preVisitDirectory(Path path,BasicFileAttributes attrs)throws java.io.IOException {try{current.check();String name=root.toPath().relativize(path).toString();return !ProjectSources.sourcePath(name)||!includeHidden&&!name.isEmpty()&&hidden(name)?java.nio.file.FileVisitResult.SKIP_SUBTREE:java.nio.file.FileVisitResult.CONTINUE;}catch(Exception stop){throw new java.io.IOException(stop);}}
-            @Override public java.nio.file.FileVisitResult visitFile(Path path,BasicFileAttributes attrs)throws java.io.IOException {try{current.check();String name=root.toPath().relativize(path).toString();if(!ProjectSources.sourcePath(name)||!includeHidden&&hidden(name))return java.nio.file.FileVisitResult.CONTINUE;
+            @Override public java.nio.file.FileVisitResult preVisitDirectory(Path path,BasicFileAttributes attrs)throws java.io.IOException {try{current.check();if(matchPage&&++visited[0]>MAX_REGEX_VISITS){enumerationComplete[0]=false;return java.nio.file.FileVisitResult.TERMINATE;}String name=root.toPath().relativize(path).toString();return !ProjectSources.sourcePath(name)||!includeHidden&&!name.isEmpty()&&hidden(name)?java.nio.file.FileVisitResult.SKIP_SUBTREE:java.nio.file.FileVisitResult.CONTINUE;}catch(Exception stop){throw new java.io.IOException(stop);}}
+            @Override public java.nio.file.FileVisitResult visitFile(Path path,BasicFileAttributes attrs)throws java.io.IOException {try{current.check();if(matchPage&&++visited[0]>MAX_REGEX_VISITS){enumerationComplete[0]=false;return java.nio.file.FileVisitResult.TERMINATE;}String name=root.toPath().relativize(path).toString();if(!ProjectSources.sourcePath(name)||!includeHidden&&hidden(name))return java.nio.file.FileVisitResult.CONTINUE;
                 // Explicit query exclusions happen before any content read/hash; they still
                 // spend the original 2000-entry enumeration budget, never create a wider sweep.
                 if(exclusion!=null&&exclusion.matches(name,current)){if(paths.size()+excludedByQuery[0]>=ProjectSources.MAX_FILES){enumerationComplete[0]=false;return java.nio.file.FileVisitResult.TERMINATE;}excludedByQuery[0]++;return java.nio.file.FileVisitResult.CONTINUE;}
@@ -212,6 +216,7 @@ public final class ProjectFileQueries {
         List<FileInfo> facts=new ArrayList<>();JSONArray manifest=new JSONArray();long total=0;int binary=0;boolean byteBudget=true;
         for(String path:paths.keySet()){current.check();FileInfo info=describe(root,path,current);if(total+info.bytes>ProjectSources.MAX_TOTAL_BYTES){byteBudget=false;break;}total+=info.bytes;facts.add(info);manifest.put(new JSONObject().put("path",path).put("sha256",info.sha).put("bytes",info.bytes));if(info.binary)binary++;}
         String manifestHash=ProjectSources.manifestDigest(manifest);JSONObject searchIdentity=new JSONObject().put("checkoutId",checkout).put("manifestHash",manifestHash).put("mode",mode).put("query",query).put("syntax",syntax).put("path",scope).put("include",include).put("hidden",includeHidden).put("caseSensitive",caseSensitive).put("contextBefore",contextBefore).put("contextAfter",contextAfter);if(!exclude.isEmpty())searchIdentity.put("exclude",exclude);if(fuzzy!=null)searchIdentity.put("maxEdits",maxEdits).put("fuzzyEngine",ProjectFuzzyPattern.ENGINE);String queryHash=ProjectSources.digest(searchIdentity);
+        if(matchPage){JSONObject extent=new JSONObject().put("enumerationComplete",enumerationComplete[0]).put("byteBudgetComplete",byteBudget).put("scannedFiles",facts.size()).put("scannedBytes",total).put("binaryFilesSkippedForText",binary).put("skippedCount",skippedCount[0]).put("skipped",skipped).put("scope",scope).put("include",include).put("hidden",includeHidden).put("excludedByQuery",excludedByQuery[0]).put("enumeratedEntries",Math.min(visited[0],MAX_REGEX_VISITS)).put("maxEnumeratedEntries",MAX_REGEX_VISITS);if(!exclude.isEmpty())extent.put("exclude",exclude).put("excludeScope","case_sensitive_relative_file_paths_before_content_read");return regexMatches(root,checkout,input,current,expression,filter,facts,manifestHash,queryHash,extent,limit);}
         JSONObject cursor=input.optJSONObject("cursor");String afterPath="";int afterLine=0;if(cursor!=null){if(!queryHash.equals(cursor.getString("queryHash"))||!manifestHash.equals(cursor.getString("manifestHash")))throw new SecurityException("搜索cursor所属查询或实际文件版本已变化，请重新搜索");afterPath=VersionedWorkspace.path(cursor.getString("path"));afterLine=cursor.getInt("line");if(afterLine<0)throw new SecurityException("搜索cursor无效");}
         JSONArray matches=new JSONArray();int resultBytes=0;boolean more=false;String lastPath="";int lastLine=0;String needle=query;
         search:for(FileInfo info:facts){if(!filter.matches(info.path,current)||info.path.compareTo(afterPath)<0)continue;
@@ -229,6 +234,75 @@ public final class ProjectFileQueries {
         if(expression!=null)result.put("searchSyntax","regex_re2j_line").put("regexEngine","RE2J_1.8").put("regexUnsupported",new JSONArray(new String[]{"backreferences","lookaround","cross_line_matches"})).put("regexMatchTimeBudgetMillis",3000).put("regexCharacterReadBudget",64L*1024*1024).put("regexConservativeCompileExpansionBudget",ProjectSearchPattern.MAX_COMPILE_EXPANSION);
         if(fuzzy!=null)result.put("searchSyntax","fuzzy_levenshtein_substring").put("fuzzyEngine",ProjectFuzzyPattern.ENGINE).put("maxEdits",maxEdits).put("distanceUnit","unicode_code_points").put("normalization","none").put("fuzzyCellBudget",ProjectFuzzyPattern.MAX_CELLS).put("fuzzyTimeBudgetMillis",ProjectFuzzyPattern.MAX_MATCH_MILLIS).put("matchSemantics","lowest_distance_then_first_start_then_longest_span_per_line").put("suggestionOnly",true).put("writeAuthorityAdded",false).put("nextAction","选择候选后按真实path/line/SHA读取原文；写入仍需原expectedHash/sourceDigest/精确patch和审批，候选不自动应用");
         if(contexts!=null)for(java.util.Iterator<String> keys=contexts.keys();keys.hasNext();){String key=keys.next();result.put(key,contexts.get(key));}return result;
+    }
+    /** Explicit whole-file regex pages share the original source enumeration and capture route.
+     * A cursor is a read position, never a grant, write proposal or a syntax-tree claim. */
+    private static JSONObject regexMatches(File root,String checkout,JSONObject input,Current current,ProjectSearchPattern expression,Glob filter,List<FileInfo> facts,String manifestHash,String queryHash,JSONObject result,int limit)throws Exception {
+        String afterPath="";int afterOffset=0;
+        if(input.has("cursor")){
+            JSONObject cursor=input.optJSONObject("cursor");if(cursor==null)throw new IllegalArgumentException("regex_matches cursor需为原对象");java.util.Set<String> keys=new java.util.HashSet<>();cursor.keys().forEachRemaining(keys::add);
+            if(!keys.equals(java.util.Set.of("queryHash","manifestHash","path","offset"))||!queryHash.equals(cursor.getString("queryHash"))||!manifestHash.equals(cursor.getString("manifestHash")))throw new SecurityException("正则匹配cursor的查询或实际源码版本已变化");
+            afterPath=VersionedWorkspace.path(cursor.getString("path"));afterOffset=matchInteger(cursor.get("offset"),"cursor.offset");FileInfo selected=null;for(FileInfo info:facts)if(info.path.equals(afterPath))selected=info;
+            if(selected==null||selected.binary||!filter.matches(afterPath,current)||afterOffset<0||afterOffset>selected.chars+1)throw new SecurityException("正则匹配cursor不在本次原UTF8文件范围内");
+        }
+        JSONArray matches=new JSONArray(),sample=new JSONArray(),skipped=result.getJSONArray("skipped");for(int i=0;i<Math.min(2,skipped.length());i++)sample.put(skipped.get(i));
+        boolean coverage=result.getBoolean("enumerationComplete")&&result.getBoolean("byteBudgetComplete")&&result.getLong("skippedCount")==0;
+        result.put("skipped",sample).put("skippedSampleTruncated",sample.length()<result.getLong("skippedCount"))
+            .put("checkoutId",checkout).put("queryHash",queryHash).put("manifestHash",manifestHash).put("mode","regex_matches").put("matches",matches).put("nextCursor",JSONObject.NULL).put("hasMore",false)
+            .put("coverageComplete",coverage).put("coverageScope","eligible_UTF8_files_from_cursor_not_unread_prefix").put("complete",false).put("matchesComplete",false).put("contentComplete",true)
+            .put("startPath",afterPath).put("startOffset",afterOffset).put("offsetUnit","UTF16_code_units").put("lineNumbering","one_based_LF_boundaries_CR_preserved").put("rangeConvention","start_inclusive_end_exclusive")
+            .put("searchSyntax","regex_re2j_file").put("regexEngine","RE2J_1.8").put("matchSemantics","all_non_overlapping_matches_zero_width_advances_one_unicode_code_point").put("regexUnsupported",new JSONArray(new String[]{"backreferences","lookaround"}))
+            .put("captureGroups",expression.groupCount()).put("maxCaptureGroups",MAX_REGEX_GROUPS).put("captureGroupNumbering","1_based_group_0_is_match").put("maxPreviewCharsPerMatch",MATCH_PREVIEW_CHARS)
+            .put("regexMatchTimeBudgetMillis",3000).put("regexCharacterReadBudget",64L*1024*1024).put("regexConservativeCompileExpansionBudget",ProjectSearchPattern.MAX_COMPILE_EXPANSION).put("maxResultBytes",MAX_CONTEXT_BYTES)
+            .put("excluded",new JSONArray(new String[]{"dependency_caches","build_outputs","symlinks","special_files"})).put("untrusted",true).put("atomicReadFence",false).put("writeAuthorityAdded",false);
+        JSONObject next=null;boolean contentComplete=true,resultBudget=false;
+        search:for(FileInfo info:facts){
+            current.check();if(info.binary||!filter.matches(info.path,current)||info.path.compareTo(afterPath)<0)continue;
+            String text=matchingText(root,info,current);int at=info.path.equals(afterPath)?afterOffset:0;if(at>text.length())continue;requireBoundary(text,at);int[] lines=matchLines(text,current);
+            while(at<=text.length()){
+                current.check();int[][] groups=expression.findGroups(text,at,current);if(groups==null)break;int start=groups[0][0],end=groups[0][1];
+                for(int[] group:groups)if(group[0]>=0){requireBoundary(text,group[0]);requireBoundary(text,group[1]);}
+                JSONObject continuation=new JSONObject().put("queryHash",queryHash).put("manifestHash",manifestHash).put("path",info.path).put("offset",start);
+                if(matches.length()==limit){next=continuation;break search;}
+                int preview=MATCH_PREVIEW_CHARS;JSONObject row=matchRow(info,text,lines,groups,preview);matches.put(row);
+                // Reserve the complete next cursor plus final metadata. The unreturned match is
+                // retried at its own start, never skipped because its preview did not fit.
+                if(result.toString().getBytes(StandardCharsets.UTF_8).length>MAX_CONTEXT_BYTES-1200){
+                    if(matches.length()>1){matches.remove(matches.length()-1);next=continuation;resultBudget=true;break search;}
+                    while(result.toString().getBytes(StandardCharsets.UTF_8).length>MAX_CONTEXT_BYTES-1200&&preview>0){preview/=2;row=matchRow(info,text,lines,groups,preview);matches.put(0,row);}
+                    while(result.toString().getBytes(StandardCharsets.UTF_8).length>MAX_CONTEXT_BYTES-1200&&sample.length()>0){sample.remove(sample.length()-1);result.put("skippedSampleTruncated",true);}
+                    if(result.toString().getBytes(StandardCharsets.UTF_8).length>MAX_CONTEXT_BYTES-1200)throw new IllegalArgumentException("原匹配位置元数据超过本页范围，请缩小捕获组或路径；未签发零进度cursor");
+                }
+                contentComplete&=row.getBoolean("contentComplete");at=end>start?end:end==text.length()?text.length()+1:end+Character.charCount(text.codePointAt(end));
+            }
+        }
+        for(FileInfo info:facts)unchanged(root,info,current);current.check();
+        result.put("nextCursor",next==null?JSONObject.NULL:next).put("hasMore",next!=null).put("resultBudgetExhausted",resultBudget).put("contentComplete",contentComplete).put("matchesComplete",coverage&&next==null).put("complete",coverage&&next==null&&contentComplete);
+        if(result.toString().getBytes(StandardCharsets.UTF_8).length>MAX_CONTEXT_BYTES)throw new IllegalStateException("原正则结果超过12KiB，未截断JSON或丢弃匹配");return result;
+    }
+    private static int matchInteger(Object value,String name){
+        if(!(value instanceof Number))throw new IllegalArgumentException(name+"需为准确整数");try{return new java.math.BigDecimal(value.toString()).intValueExact();}catch(NumberFormatException|ArithmeticException invalid){throw new IllegalArgumentException(name+"需为准确整数",invalid);}
+    }
+    private static String matchingText(File root,FileInfo info,Current current)throws Exception {
+        java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();int zeroReads=0;byte[] buffer=new byte[8192];
+        try(var input=Channels.newInputStream(open(target(root,info.path)))){for(int n;(n=input.read(buffer))>=0;){current.check();if(n==0){if(++zeroReads>16)throw new java.io.IOException("原文件读取没有前进");continue;}zeroReads=0;if(bytes.size()+n>ProjectSources.MAX_FILE_BYTES)throw new IllegalArgumentException("文件在匹配读取时超过2MiB");bytes.write(buffer,0,n);}}
+        byte[] actual=bytes.toByteArray();if(actual.length!=info.bytes||!info.sha.equals(ProjectSources.sha256(actual)))throw new SecurityException("实际正则输入字节不是原文件SHA，未返回跨版本匹配");current.check();return StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(actual)).toString();
+    }
+    private static void requireBoundary(String text,int offset){if(offset<0||offset>text.length()||offset>0&&offset<text.length()&&Character.isHighSurrogate(text.charAt(offset-1))&&Character.isLowSurrogate(text.charAt(offset)))throw new SecurityException("正则匹配cursor或范围切断Unicode字符");}
+    private static int[] matchLines(String text,Current current)throws Exception {
+        int count=1;for(int i=0;i<text.length();i++){if((i&4095)==0)current.check();if(text.charAt(i)=='\n')count++;}int[] starts=new int[count];int at=1;for(int i=0;i<text.length();i++){if((i&4095)==0)current.check();if(text.charAt(i)=='\n')starts[at++]=i+1;}return starts;
+    }
+    private static int lineIndex(int[] starts,int offset){int found=java.util.Arrays.binarySearch(starts,offset);return found>=0?found:-found-2;}
+    private static JSONObject matchRow(FileInfo info,String text,int[] lines,int[][] groups,int previewBudget)throws Exception {
+        int start=groups[0][0],end=groups[0][1],first=lineIndex(lines,start),last=lineIndex(lines,end);int[] remaining={previewBudget};
+        JSONObject row=new JSONObject().put("path",info.path).put("sha256",info.sha).put("startOffset",start).put("endOffset",end).put("line",first+1).put("column",start-lines[first]+1).put("endLine",last+1).put("endColumn",end-lines[last]+1).put("zeroWidth",start==end);
+        JSONObject match=matchPreview(text,start,end,remaining,256);row.put("text",match.get("text")).put("textComplete",match.getBoolean("complete"));boolean complete=match.getBoolean("complete");JSONArray captures=new JSONArray();
+        for(int i=1;i<groups.length;i++){int a=groups[i][0],b=groups[i][1];JSONObject group=new JSONObject().put("index",i).put("matched",a>=0).put("startOffset",a<0?JSONObject.NULL:a).put("endOffset",a<0?JSONObject.NULL:b);
+            if(a<0)group.put("text",JSONObject.NULL).put("textComplete",true);else{JSONObject content=matchPreview(text,a,b,remaining,128);group.put("text",content.get("text")).put("textComplete",content.getBoolean("complete"));complete&=content.getBoolean("complete");}captures.put(group);}
+        return row.put("groups",captures).put("contentComplete",complete).put("previewChars",previewBudget-remaining[0]);
+    }
+    private static JSONObject matchPreview(String text,int start,int end,int[] remaining,int cap)throws Exception {
+        int until=Math.min(end,start+Math.min(remaining[0],cap));if(until>start&&until<end&&Character.isHighSurrogate(text.charAt(until-1))&&Character.isLowSurrogate(text.charAt(until)))until--;remaining[0]-=until-start;return new JSONObject().put("text",text.substring(start,until)).put("complete",until==end);
     }
     private static int contextLines(JSONObject input,String key){
         if(!input.has(key))return 0;Object value=input.opt(key);

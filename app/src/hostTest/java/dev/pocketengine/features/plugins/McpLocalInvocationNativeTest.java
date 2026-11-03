@@ -6,10 +6,18 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunJournal;
+import dev.pocketengine.core.RunOutcome;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.*;
 import dev.pocketengine.features.memory.TaskMemoryTrace;
+import dev.pocketengine.features.memory.ToolOutputCapture;
+import dev.pocketengine.features.memory.ToolOutputSourcePort;
+import dev.pocketengine.runtime.AgentRunner;
+import dev.pocketengine.runtime.context.ContextBudgetPolicy;
+import dev.pocketengine.runtime.context.ContextWindow;
 import dev.pocketengine.store.*;
+import dev.pocketengine.testutil.HttpServer;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.concurrent.*;
@@ -21,7 +29,8 @@ import org.robolectric.annotation.Config;
 import org.robolectric.annotation.SQLiteMode;
 
 /** Actual installed source -> original Supervisor approval/debit/prepared -> same managed JNI Job.
- * No fake launcher, task ID, Skill grant, model response, HTTP proxy or alternate dispatcher. */
+ * No fake launcher, task ID, Skill grant, HTTP proxy or alternate dispatcher. The credential
+ * regression also uses original Runner HTTP against a synthetic model, never a live provider. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35,manifest=Config.NONE,application=Application.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
@@ -39,8 +48,8 @@ public final class McpLocalInvocationNativeTest {
         public void close()throws Exception{host.close();if(ownsFixture)f.close();}
     }
     static final class Call implements AutoCloseable {
-        final Fixture owner;final String task,run;final int epoch;final RunControl control=new RunControl();final HostToolSupervisor supervisor;final RunJournal journal;final JSONObject arguments=new JSONObject().put("text","Owner explicit call");String operation;
-        Call(Fixture owner,boolean capture)throws Exception{this.owner=owner;task=owner.f.tasks.createCapabilityTask("Run the reviewed local tool","").getString("id");owner.f.tasks.initializeExecutionScope(task,8);JSONObject attempt=owner.f.tasks.startAttempt(task,"capabilities",8);run=attempt.getString("runId");epoch=attempt.getInt("coordinatorEpoch");control.bindHostRun(task,run,epoch);owner.f.tasks.authorizeTools(task,run,new JSONArray().put(owner.tool));control.setAuthorityCheck(()->owner.f.tasks.checkCapabilityCurrent(task,run,epoch,owner.tool));supervisor=capture?new HostToolSupervisor(owner.host,owner.f.tasks,task,run,epoch,true,owner.f.tasks.toolOutputFactory(task,run,epoch,control,text->text)):new HostToolSupervisor(owner.host,owner.f.tasks,task,run,epoch,true);supervisor.tools();journal=owner.f.tasks.journal(task,run,epoch,control);}
+        final Fixture owner;final String task,run;final int epoch;final RunControl control=new RunControl();final HostToolSupervisor supervisor;final RunJournal journal;final ToolOutputCapture.Factory outputFactory;final JSONObject arguments=new JSONObject().put("text","Owner explicit call");String operation;
+        Call(Fixture owner,boolean capture)throws Exception{this.owner=owner;task=owner.f.tasks.createCapabilityTask("Run the reviewed local tool","").getString("id");owner.f.tasks.initializeExecutionScope(task,8);JSONObject attempt=owner.f.tasks.startAttempt(task,"capabilities",8);run=attempt.getString("runId");epoch=attempt.getInt("coordinatorEpoch");control.bindHostRun(task,run,epoch);owner.f.tasks.authorizeTools(task,run,new JSONArray().put(owner.tool));control.setAuthorityCheck(()->owner.f.tasks.checkCapabilityCurrent(task,run,epoch,owner.tool));outputFactory=capture?owner.f.tasks.toolOutputFactory(task,run,epoch,control,text->text):null;supervisor=capture?new HostToolSupervisor(owner.host,owner.f.tasks,task,run,epoch,true,outputFactory):new HostToolSupervisor(owner.host,owner.f.tasks,task,run,epoch,true);supervisor.tools();journal=owner.f.tasks.journal(task,run,epoch,control);}
         JSONObject nativeInput()throws Exception{return new JSONObject().put("id","local_probe").put("tool","lookup").put("expectedInstallationId",owner.installation).put("expectedVersion",owner.registry.getString("version")).put("expectedExecutionIdentity",TaskStore.capabilityFingerprint(owner.registry.getJSONObject("executionBinding"))).put("arguments",new JSONObject(arguments.toString())).put("_operationId",operation).put("_taskId",task).put("_runId",run);}
         JSONObject capability()throws Exception{return new JSONObject().put("feature","plugins").put("command","invoke").put("pluginId","local_probe").put("tool","lookup").put("installationId",owner.installation).put("version",owner.registry.getString("version")).put("expectedExecutionIdentity",TaskStore.capabilityFingerprint(owner.registry.getJSONObject("executionBinding"))).put("nativeProgram",owner.f.plugins.localMcpApprovalSummaryForHost(nativeInput()));}
         JSONObject approve()throws Exception{JSONObject pending=supervisor.execute(owner.tool,new JSONObject(arguments.toString()),control);assertEquals("approval_required",pending.getString("code"));return owner.f.tasks.decideCapabilityApproval(task,pending.getString("approvalId"),true);}
@@ -55,6 +64,65 @@ public final class McpLocalInvocationNativeTest {
     @Test public void aNativeProgramObjectStillCannotReplaceTheOriginalConsumedApprovalAndLosslessPreparedRow()throws Exception{try(Fixture x=new Fixture();Call call=x.call()){call.approve();call.operation=call.journal.beginOperation(x.tool,new JSONObject(call.arguments.toString()));JSONObject capability=call.capability();try(var program=x.f.plugins.localMcpProgramForTask(call.nativeInput(),x.tool,call.control)){assertThrows(SecurityException.class,()->x.f.tasks.admitLocalMcpInvocationForHost(call.task,call.run,call.epoch,x.tool,call.operation,call.arguments,capability,java.util.UUID.randomUUID().toString(),program,call.control));assertEquals(0,x.f.runtime.environmentManager().describe(x.f.pack).getInt("activeLeases"));assertEquals(0,x.f.tasks.localMcpInvocationsForOwner(call.task).size());assertTrue(x.f.tasks.hasUnresolved(call.task));}}}
     @Test public void counterfeitControlOrSecondClaimCannotReuseTheOneOriginalSqlFenceOrCreateAJob()throws Exception{try(Fixture x=new Fixture();Call call=x.call()){call.approve();call.operation=call.journal.beginOperation(x.tool,new JSONObject(call.arguments.toString()));JSONObject capability=call.capability(),approved=x.f.tasks.requireCapabilityApproval(call.task,call.run,x.tool,call.arguments,capability);assertTrue(approved.getBoolean("approved"));try(var program=x.f.plugins.localMcpProgramForTask(call.nativeInput(),x.tool,call.control)){var admission=x.f.tasks.admitLocalMcpInvocationForHost(call.task,call.run,call.epoch,x.tool,call.operation,call.arguments,capability,approved.getString("approvalId"),program,call.control);var prepared=x.f.local.prepareMcpForTask(admission);var actual=prepared.invocationForHost();JSONObject binding=dev.pocketengine.features.local.runtime.NativePipeAdmission.bindingForHost(McpLocalInvocation.pipeIdentityForHost(prepared.scopeForHost()),actual.binding(),actual.executionRef().sourceDigest(),McpLocalInvocation.WRITE_BYTE_LIMIT);RunControl counterfeit=new RunControl();counterfeit.bindHostRun(call.task,call.run,call.epoch);var copied=new dev.pocketengine.features.local.runtime.RuntimeInvocation(actual.exact(),actual.binding(),actual.sourceSnapshot(),counterfeit,()->{},actual.workspace());assertThrows(SecurityException.class,()->x.f.tasks.claimLocalMcpInvocationForHost(admission,copied,binding));x.f.tasks.claimLocalMcpInvocationForHost(admission,actual,binding);assertThrows(SecurityException.class,()->x.f.tasks.claimLocalMcpInvocationForHost(admission,actual,binding));assertEquals(1,x.f.tasks.localMcpInvocationsForOwner(call.task).size());assertEquals(0,x.f.runtime.environmentManager().describe(x.f.pack).getInt("activeLeases"));assertThrows(SecurityException.class,()->x.f.tasks.resolveOperation(call.task,call.operation,"not_occurred"));}}}
     @Test public void realOriginalBook9OutputFactoryCapturesTheMatchedRpcWithoutPrivateArgvOrASecondOperation()throws Exception{try(Fixture x=new Fixture();Call call=x.capturedCall()){JSONObject result=call.invoke();assertEquals(result.toString(),"response_received",result.getString("status"));JSONObject capture=result.getJSONObject("outputCapture");assertEquals(capture.toString(),1,capture.getJSONArray("outputRefs").length());JSONObject reference=capture.getJSONArray("outputRefs").getJSONObject(0);assertEquals("MCP_RESULT_JSON",reference.getString("captureKind"));assertEquals(call.task,reference.getString("taskId"));assertEquals(call.operation,reference.getString("operationId"));call.journal.finishOperation(call.operation,result);assertEquals(1,call.record().publicReceiptForHost().getJSONObject("outputCapture").getJSONArray("outputRefs").length());StringBuilder retained=new StringBuilder();try(Cursor row=x.db().rawQuery("SELECT body FROM task_output_chunks",null)){while(row.moveToNext())retained.append(row.getString(0));}assertTrue(retained.toString().contains("Actual local result"));assertTrue(retained.toString().contains("stdio"));assertFalse(retained.toString().contains("--public-mode"));assertEquals(1,x.f.tasks.get(call.task,false).getJSONArray("operations").length());}}
+    @Test public void actualEmptyTokenStdioMasksUnrelatedCredentialsBeforeBookReceiptAndOriginalRunnerModelInput()throws Exception{
+        JSONObject remote=new JSONObject().put("content",new JSONArray().put(new JSONObject().put("type","text").put("text",
+            "Actual native record\nAuthorization: Bearer UNRELATED_STDIO_BEARER\nBasic c3RkaW86c2VjcmV0\n-----BEGIN RSA PRIVATE KEY-----\n"))
+            .put(new JSONObject().put("type","text").put("text","SPLIT_STDIO_PEM_BODY\n-----END RSA PRIVATE KEY-----\nordinary after native key")))
+            .put("outputProjection",new JSONObject().put("allSecretsDetected",true))
+            .put("structuredContent",new JSONObject().put("document","NATIVE_STDIO_BUSINESS_714").put("apiKey","OTHER_SYNTHETIC_VALUE")
+                .put("token",new JSONArray().put("UNRELATED_STDIO_TOKEN").put(713531137).put(JSONObject.NULL))
+                .put("nested",new JSONArray().put(new JSONObject().put("aUtHoRiZaTiOn",new JSONObject().put("API_KEY","UNRELATED_STDIO_NESTED_KEY").put("enabled",true))))
+                .put("tokenCount",17).put("private",new JSONObject().put("business","ordinary private-labelled object"))
+                .put("notes","-----BEGIN PRIVATE KEY-----\nTRUNCATED_STDIO_PEM_BODY")
+                .put("_nativeMcpJob",new JSONObject().put("business","ordinary remote host-named object"))
+                .put("outputProjection",new JSONObject().put("policy","remote business policy")));
+        String original="  result={'content':[{'type':'text','text':'Actual local result🙂: '+q['params']['arguments']['text']}]}";
+        String program=python("ok");assertTrue(program.contains(original));
+        program=program.replace(original,"  result=json.loads("+JSONObject.quote(remote.toString())+")");
+        try(Fixture x=new Fixture("python3","server.py",program);Call call=x.capturedCall()){
+            call.approve();assertEquals(0,x.f.tasks.localMcpInvocationsForOwner(call.task).size());
+            CopyOnWriteArrayList<JSONObject> requests=new CopyOnWriteArrayList<>();CopyOnWriteArrayList<Throwable> failures=new CopyOnWriteArrayList<>();
+            HttpServer model=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+            model.createContext("/",exchange->{try{
+                JSONObject request=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));requests.add(request);
+                JSONObject actualReceipt=null;JSONArray messages=request.getJSONArray("messages");
+                for(int i=0;i<messages.length();i++){JSONObject message=messages.getJSONObject(i);if("tool".equals(message.optString("role")))actualReceipt=new JSONObject(message.getString("content"));}
+                JSONObject answer=new JSONObject().put("role","assistant");
+                if(actualReceipt==null)answer.put("content",JSONObject.NULL).put("tool_calls",new JSONArray().put(new JSONObject().put("id","native-stdio-credential-projection").put("type","function")
+                    .put("function",new JSONObject().put("name",x.tool).put("arguments",call.arguments.toString()))));
+                else{assertEquals(actualReceipt.toString(),"response_received",actualReceipt.getString("status"));assertTrue(actualReceipt.toString().contains("NATIVE_STDIO_BUSINESS_714"));answer.put("content","已取得原本机结果；凭据候选已遮盖，业务结果仍需主人确认。");}
+                byte[] response=new JSONObject().put("model","controlled-native-stdio-projection").put("choices",new JSONArray().put(new JSONObject().put("index",0).put("message",answer).put("finish_reason",answer.has("tool_calls")?"tool_calls":"stop")))
+                    .put("usage",new JSONObject().put("prompt_tokens",23).put("completion_tokens",7).put("total_tokens",30)).toString().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,response.length);exchange.getResponseBody().write(response);
+            }catch(Throwable failure){failures.add(failure);try{exchange.sendResponseHeaders(500,0);}catch(Exception ignored){}}finally{exchange.close();}});model.start();
+            ContextBudgetPolicy.installHostSource(c->ContextBudgetPolicy.RouteBudget.forRoute(c,new ContextWindow.Budget(128000,1000,1000,2L*1024*1024,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,System.currentTimeMillis()));
+            try{
+                ModelConfig config=new ModelConfig("http://127.0.0.1:"+model.getAddress().getPort()+"/v1","synthetic-native-stdio-model-key","controlled-native-stdio-projection",false,8,20,"openai_chat",512);
+                RunOutcome outcome=new AgentRunner(null,new ToolOutputSourcePort(call.supervisor,call.outputFactory,call.control),ContextBudgetPolicy.currentHostSource()).run(call.task,"调用主人已准确批准的本机工具一次，保留普通结果，不能把遮盖当完整秘密检测或业务验证。",config,call.control,
+                    event->{try{x.f.tasks.event(call.task,call.run,call.epoch,event);}catch(Exception failure){throw new IllegalStateException(failure);}},call.journal);
+                assertEquals(outcome.summary,"needs_confirmation",outcome.status);assertTrue(failures.toString(),failures.isEmpty());assertEquals(2,requests.size());
+                JSONObject receipt=call.record().publicReceiptForHost();assertEquals("response_received",receipt.getString("status"));
+                JSONObject reference=receipt.getJSONObject("outputCapture").getJSONArray("outputRefs").getJSONObject(0);
+                assertEquals("MCP_RESULT_JSON",reference.getString("captureKind"));assertEquals(call.task,reference.getString("taskId"));assertEquals(call.run,reference.getString("runId"));
+                String outputId=ToolOutputStore.outputId(call.task,call.run,reference.getString("sourceId"));StringBuilder retained=new StringBuilder();
+                try(Cursor row=x.db().rawQuery("SELECT body FROM task_output_chunks WHERE output_id=? ORDER BY chunk_index",new String[]{outputId})){while(row.moveToNext())retained.append(row.getString(0));}
+                JSONObject saved=new JSONObject(retained.toString()).getJSONObject("result"),business=saved.getJSONObject("structuredContent");
+                assertEquals(2,saved.getJSONArray("content").length());assertTrue(saved.getJSONArray("content").getJSONObject(1).getString("text").contains("ordinary after native key"));
+                assertEquals("[凭据已隐藏]",business.getString("apiKey"));assertEquals(3,business.getJSONArray("token").length());
+                assertEquals("[凭据已隐藏]",business.getJSONArray("token").getString(0));assertEquals("[凭据已隐藏]",business.getJSONArray("token").getString(1));assertTrue(business.getJSONArray("token").isNull(2));
+                assertEquals("[凭据已隐藏]",business.getJSONArray("nested").getJSONObject(0).getJSONObject("aUtHoRiZaTiOn").getString("API_KEY"));
+                assertTrue(business.getJSONArray("nested").getJSONObject(0).getJSONObject("aUtHoRiZaTiOn").getBoolean("enabled"));assertEquals(17,business.getInt("tokenCount"));
+                assertEquals("ordinary private-labelled object",business.getJSONObject("private").getString("business"));assertEquals("ordinary remote host-named object",business.getJSONObject("_nativeMcpJob").getString("business"));
+                assertEquals("remote business policy",business.getJSONObject("outputProjection").getString("policy"));assertFalse(saved.getJSONObject("outputProjection").getBoolean("allSecretsDetected"));
+                String allPublic=retained+receipt.toString()+requests+x.f.tasks.getForUi(call.task,false)+x.f.tasks.taskHistoryPage(call.task,"operations","",8,65536);
+                for(String secret:new String[]{"OTHER_SYNTHETIC_VALUE","UNRELATED_STDIO_TOKEN","713531137","UNRELATED_STDIO_NESTED_KEY","UNRELATED_STDIO_BEARER","c3RkaW86c2VjcmV0","SPLIT_STDIO_PEM_BODY","TRUNCATED_STDIO_PEM_BODY"})assertFalse(allPublic.contains(secret));
+                assertTrue(requests.toString().contains("NATIVE_STDIO_BUSINESS_714"));assertTrue(requests.toString().contains("ordinary remote host-named object"));assertTrue(requests.toString().contains("ordinary after native key"));assertFalse(allPublic.contains("--public-mode"));
+                assertEquals(1,x.f.tasks.get(call.task,false).getJSONArray("operations").length());assertTrue(Files.exists(x.copy(reference.getString("operationId")).resolve("RPC_EFFECT")));
+                assertTrue(receipt.getJSONObject("nativeMcp").getBoolean("processSettled"));assertEquals(0,x.f.runtime.environmentManager().describe(x.f.pack).getInt("activeLeases"));
+                x.f.tasks.endAttempt(call.task,call.run,"awaiting_user",outcome.summary,outcome.evidence);
+            }finally{ContextBudgetPolicy.installHostSource(c->null);model.stop(0);}
+        }
+    }
     @Test public void changedInstalledSourceIsTypedNotDispatchedBeforeAnyRuntimeEntryWithoutRefundingTheOriginalDebit()throws Exception{try(Fixture x=new Fixture();Call call=x.call()){Path entry=x.f.android.getFilesDir().toPath().resolve("local-development/checkouts").resolve(x.f.checkout).resolve("files/server.py");Files.write(entry,"raise Exception('changed source')\n".getBytes(StandardCharsets.UTF_8));JSONObject result=call.invoke();assertEquals("failed",result.getString("status"));assertFalse(result.getBoolean("dispatched"));assertTrue(result.getBoolean("nativeHostNeverEnteredDispatch"));assertFalse(result.getBoolean("nativeProcessReceiptAvailable"));assertEquals(0,x.f.tasks.localMcpInvocationsForOwner(call.task).size());assertFalse(Files.exists(x.copy(call.operation)));assertEquals(0,x.f.runtime.environmentManager().describe(x.f.pack).getInt("activeLeases"));}}
     @Test public void changedFreshToolDescriptorDoesNotCallTheToolOrRelabelStartupAsNoEffects()throws Exception{try(Fixture x=new Fixture("changed");Call call=x.call()){JSONObject result=call.invoke();assertEquals(result.toString(),"failed",result.getString("status"));assertTrue(result.getBoolean("dispatched"));assertFalse(result.getBoolean("rpcMayHaveDispatched"));assertTrue(result.getJSONObject("nativeMcp").getBoolean("serverStartupEffectMayHaveOccurred"));assertFalse(result.getJSONObject("nativeMcp").getBoolean("wholeInvocationNotDispatchedConfirmed"));assertTrue(Files.exists(x.copy(call.operation).resolve("START_EFFECT")));assertFalse(Files.exists(x.copy(call.operation).resolve("RPC_EFFECT")));assertEquals(0,x.f.runtime.environmentManager().describe(x.f.pack).getInt("activeLeases"));}}
     @Test public void lostRpcReplyKeepsTheOriginalUnknownAndGenericJournalCannotReplaceItWithSuccess()throws Exception{try(Fixture x=new Fixture("lost");Call call=x.call()){JSONObject result=call.invoke();assertEquals(result.toString(),"unknown",result.getString("status"));assertTrue(result.getBoolean("rpcMayHaveDispatched"));assertTrue(result.getJSONObject("nativeMcp").getBoolean("processSettled"));assertTrue(Files.exists(x.copy(call.operation).resolve("RPC_EFFECT")));call.journal.finishOperation(call.operation,new JSONObject().put("status","completed").put("ok",true));assertTrue(x.f.tasks.hasUnresolved(call.task));assertEquals("unknown",call.record().publicReceiptForHost().getString("status"));JSONObject resolved=x.f.tasks.resolveOperation(call.task,call.operation,"occurred");assertFalse(x.f.tasks.hasUnresolved(call.task));JSONObject receipt=call.record().publicReceiptForHost();assertEquals("owner_reconciled",receipt.getString("status"));assertTrue(receipt.getJSONObject("nativeMcp").getBoolean("serverStartupEffectMayHaveOccurred"));assertFalse(receipt.getBoolean("automaticallyVerified"));assertEquals("paused",resolved.getString("status"));}}

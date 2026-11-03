@@ -47,11 +47,12 @@ public class McpResultCaptureTest {
         JSONObject small=source("真实小回执").put("structuredContent",new JSONObject().put("answer",7));
         JSONObject same=McpResultCapture.view(McpData.resultForCapture(small,""));assertEquals(7,same.getJSONObject("structuredContent").getInt("answer"));assertFalse(same.getBoolean("viewTruncated"));
     }
-    @Test public void returnedBusinessFieldsSurviveCaptureAndViewWhileOnlyActualCredentialsAreRedacted()throws Exception {
+    @Test public void captureAndViewPreserveBusinessContainersWhileMaskingUnrelatedCredentialValues()throws Exception {
         String secret="synthetic-mcp-business-credential";
         JSONObject business=new JSONObject().put("token",new JSONArray().put("word").put(7).put(JSONObject.NULL))
             .put("authorization",new JSONObject().put("apiKey","business-key-id").put("private",false).put("echo",secret))
-            .put("ApiKey","literal field value").put("_nativeMcpJob",new JSONObject().put("token","remote business data"))
+            .put("ApiKey","OTHER_SYNTHETIC_VALUE").put("_nativeMcpJob",new JSONObject().put("token","remote business data").put("business","retained nested value"))
+            .put("tokenCount",7).put("outputProjection",new JSONObject().put("policy","remote business field"))
             .put("key-"+secret,"key credential echo");
         JSONObject response=source("actual result "+secret).put("structuredContent",business);String unchanged=response.toString();
         AtomicReference<JSONObject> archived=new AtomicReference<>();RunControl c=original();
@@ -59,12 +60,38 @@ public class McpResultCaptureTest {
             archived.set(data);return ToolOutputCapture.unavailable("native_output_run_budget");
         },"plugin_0123456789abcdef01234567",id(),c,new JSONObject().put("remoteTool","lookup"));
         JSONObject view=capture.result(response,secret),retained=archived.get().getJSONObject("result").getJSONObject("structuredContent");
-        assertEquals("word",retained.getJSONArray("token").getString(0));assertEquals(7,retained.getJSONArray("token").getInt(1));assertTrue(retained.getJSONArray("token").isNull(2));
-        assertEquals("business-key-id",retained.getJSONObject("authorization").getString("apiKey"));assertFalse(retained.getJSONObject("authorization").getBoolean("private"));
-        assertEquals("[凭据已隐藏]",retained.getJSONObject("authorization").getString("echo"));assertEquals("literal field value",retained.getString("ApiKey"));
-        assertEquals("remote business data",retained.getJSONObject("_nativeMcpJob").getString("token"));assertEquals("key credential echo",retained.getString("key-[凭据已隐藏]"));
+        assertEquals(3,retained.getJSONArray("token").length());assertEquals("[凭据已隐藏]",retained.getJSONArray("token").getString(0));assertEquals("[凭据已隐藏]",retained.getJSONArray("token").getString(1));assertTrue(retained.getJSONArray("token").isNull(2));
+        assertEquals("[凭据已隐藏]",retained.getJSONObject("authorization").getString("apiKey"));assertFalse(retained.getJSONObject("authorization").getBoolean("private"));
+        assertEquals("[凭据已隐藏]",retained.getJSONObject("authorization").getString("echo"));assertEquals("[凭据已隐藏]",retained.getString("ApiKey"));
+        assertEquals("[凭据已隐藏]",retained.getJSONObject("_nativeMcpJob").getString("token"));assertEquals("retained nested value",retained.getJSONObject("_nativeMcpJob").getString("business"));assertEquals("key credential echo",retained.getString("key-[凭据已隐藏]"));
+        assertEquals(7,retained.getInt("tokenCount"));assertEquals("remote business field",retained.getJSONObject("outputProjection").getString("policy"));
+        assertFalse(view.getJSONObject("outputProjection").getBoolean("allSecretsDetected"));assertTrue(view.getJSONObject("outputProjection").getBoolean("mayRedactBusinessValues"));
+        assertFalse(archived.get().toString().contains("OTHER_SYNTHETIC_VALUE"));assertFalse(view.toString().contains("OTHER_SYNTHETIC_VALUE"));
         assertEquals(McpData.digest(retained),McpData.digest(view.getJSONObject("structuredContent")));assertFalse(archived.get().toString().contains(secret));assertFalse(view.toString().contains(secret));
         assertEquals(unchanged,response.toString());assertThrows(SecurityException.class,()->capture.result(response,secret));
+    }
+    @Test public void emptyCredentialCaptureMasksNestedSecretsBearerBasicAndIncompletePrivateKeys()throws Exception {
+        JSONObject response=source("before Authorization: Bearer UNRELATED_BEARER_714\nBasic dXNlcjpwYXNz\n-----BEGIN PRIVATE KEY-----\n")
+                .put("structuredContent",new JSONObject().put("nested",new JSONArray().put(new JSONObject().put("aPi_KeY","UNRELATED_KEY_714")))
+                        .put("notes","-----BEGIN RSA PRIVATE KEY-----\nTRUNCATED_MATERIAL_714").put("private",true).put("count",19));
+        response.getJSONArray("content").put(new JSONObject().put("type","text").put("text","PRIVATE_MATERIAL_714\n-----END PRIVATE KEY-----\nafter"));
+        AtomicReference<JSONObject> archived=new AtomicReference<>();McpResultCapture capture=McpResultCapture.open((name,op,kind,live)->(data,truncated)->{
+            archived.set(data);return ToolOutputCapture.unavailable("native_output_run_budget");
+        },"plugin_0123456789abcdef01234567",id(),original(),new JSONObject().put("transport","stdio"));
+        JSONObject view=capture.result(response,"");
+        for(String secret:new String[]{"UNRELATED_BEARER_714","dXNlcjpwYXNz","PRIVATE_MATERIAL_714","UNRELATED_KEY_714","TRUNCATED_MATERIAL_714"}){
+            assertFalse(archived.get().toString().contains(secret));assertFalse(view.toString().contains(secret));
+        }
+        assertEquals(2,view.getJSONArray("content").length());assertEquals(2,archived.get().getJSONObject("result").getJSONArray("content").length());
+        assertTrue(view.getJSONArray("content").getJSONObject(0).getString("text").contains("before"));assertTrue(view.getJSONArray("content").getJSONObject(1).getString("text").contains("after"));
+        assertEquals(19,view.getJSONObject("structuredContent").getInt("count"));assertTrue(view.getJSONObject("structuredContent").getBoolean("private"));
+        // An incomplete key in one RPC cannot mask unrelated output in a later RPC.
+        McpData.resultForCapture(source("-----BEGIN PRIVATE KEY-----\n"),"");
+        assertEquals("ordinary separate result",McpData.resultForCapture(source("ordinary separate result"),"").getJSONArray("content").getJSONObject(0).getString("text"));
+        // A bound token equal to marker text must not defeat the unrelated-secret detector.
+        String privateBlock="-----BEGIN PRIVATE KEY-----\nUNRELATED_MARKER_MATERIAL\n-----END PRIVATE KEY-----";
+        assertFalse(McpData.resultForCapture(source(privateBlock),"PRIVATE").toString().contains("UNRELATED_MARKER_MATERIAL"));
+        assertFalse(McpData.resultForCapture(source("Bearer UNRELATED_MARKER_TOKEN"),"Bearer").toString().contains("UNRELATED_MARKER_TOKEN"));
     }
     @Test public void archiveFailureDoesNotTurnAMatchedErrorIntoSuccessOrAcceptServerForgedCaptureMetadata()throws Exception {
         AtomicReference<JSONObject> actual=new AtomicReference<>();RunControl c=original();

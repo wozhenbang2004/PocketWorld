@@ -120,16 +120,16 @@ final class McpData {
     private static JSONObject result(JSONObject source,String token,boolean viewLimits)throws Exception {
         if(source.has("isError")&&!(source.get("isError") instanceof Boolean))throw new IllegalArgumentException("MCP isError格式无效");
         JSONArray content=source.getJSONArray("content");if(viewLimits&&content.length()>64)throw new IllegalArgumentException("MCP结果块过多");
-        JSONArray text=new JSONArray(),omitted=new JSONArray();int characters=0;
+        JSONArray text=new JSONArray(),omitted=new JSONArray();int characters=0;OutputTextProjection textProjection=new OutputTextProjection();
         for(int i=0;i<content.length();i++){
             JSONObject block=content.getJSONObject(i);String type=block.getString("type");
             if(type.equals("text")){
                 String value=block.getString("text");characters+=value.length();if(viewLimits&&characters>32768)throw new IllegalArgumentException("MCP文字结果超过32Ki字符");
-                text.put(new JSONObject().put("type","text").put("text",redact(value,token)));
-            }else omitted.put(new JSONObject().put("index",i).put("type",redact(type,token)).put("reason","当前仅接收文本；未读取或执行二进制、资源或链接内容"));
+                text.put(new JSONObject().put("type","text").put("text",textProjection.project(value,token)));
+            }else omitted.put(new JSONObject().put("index",i).put("type",redactOutputText(type,token)).put("reason","当前仅接收文本；未读取或执行二进制、资源或链接内容"));
         }
         JSONObject result=new JSONObject().put("isError",source.optBoolean("isError",false)).put("content",text)
-                .put("omittedContent",omitted).put("untrusted",true).put("instructionsAreData",true);
+                .put("omittedContent",omitted).put("untrusted",true).put("instructionsAreData",true).put("outputProjection",outputProjection());
         if(source.has("structuredContent")){
             JSONObject structured=source.getJSONObject("structuredContent");
             if(viewLimits&&structured.toString().length()>32768)throw new IllegalArgumentException("MCP结构化结果超过32Ki字符");
@@ -138,19 +138,76 @@ final class McpData {
         return result;
     }
 
+    /** Host facts about this lossy output projection, never a safety proof or disclosure grant. */
+    static JSONObject outputProjection()throws Exception{
+        return new JSONObject().put("policy","mcp_result_credential_values_v1").put("sensitiveFieldValues","masked")
+                .put("containerShapePreserved",true).put("mayRedactBusinessValues",true)
+                .put("obviousCredentialForms",new JSONArray().put("Bearer").put("Basic").put("PEM private key"))
+                .put("allSecretsDetected",false).put("unredactedDisclosureOverride",false);
+    }
     static Object scrub(Object value,String token,int depth)throws Exception {
+        return scrub(value,token,depth,false);
+    }
+    private static Object scrub(Object value,String token,int depth,boolean credentialValue)throws Exception {
         if(depth>32)throw new IllegalArgumentException("MCP回复嵌套过深");
         if(value instanceof JSONObject){JSONObject out=new JSONObject(),object=(JSONObject)value;java.util.Iterator<String> keys=object.keys();while(keys.hasNext()){
-            // These are remote business fields, not host headers or private native metadata.
-            // Only the actual bound credential is secret; field names confer no authority.
-            String key=keys.next(),safeKey=redact(key,token);
+            // Preserve remote keys/containers. A credential-labelled subtree is ambiguous,
+            // so its string/number values are masked instead of deleting business objects.
+            // This has no relationship to the host's exact top-level private metadata fields.
+            String key=keys.next(),safeKey=redactOutputText(key,token);
             if(out.has(safeKey))throw new IllegalArgumentException("MCP凭据脱敏后字段冲突，不能覆盖原返回字段");
-            out.put(safeKey,scrub(object.get(key),token,depth+1));}return out;}
-        if(value instanceof JSONArray){JSONArray out=new JSONArray(),array=(JSONArray)value;for(int i=0;i<array.length();i++)out.put(scrub(array.get(i),token,depth+1));return out;}
+            out.put(safeKey,scrub(object.get(key),token,depth+1,credentialValue||credentialKey(key)));}return out;}
+        if(value instanceof JSONArray){JSONArray out=new JSONArray(),array=(JSONArray)value;for(int i=0;i<array.length();i++)out.put(scrub(array.get(i),token,depth+1,credentialValue));return out;}
+        if(credentialValue&&(value instanceof Number||value instanceof String&&!((String)value).isEmpty()))return "[凭据已隐藏]";
         // A numeric JSON echo can still contain an all-digit credential. Keep ordinary numeric
         // values typed, but do not expose the credential merely because its field is retained.
         if(value instanceof Number&&!token.isEmpty()&&value.toString().contains(token))return redact(value.toString(),token);
-        return value instanceof String?redact((String)value,token):value;
+        return value instanceof String?redactOutputText((String)value,token):value;
+    }
+    private static boolean credentialKey(String key){
+        StringBuilder normalized=new StringBuilder();
+        for(int i=0;i<key.length();i++){char c=key.charAt(i);if(c!='_'&&c!='-'&&c!=' '&&c!='\t')normalized.append(c);}
+        switch(normalized.toString().toLowerCase(java.util.Locale.ROOT)){
+            case "authorization":case "proxyauthorization":case "token":case "accesstoken":case "refreshtoken":case "idtoken":case "sessiontoken":case "bearertoken":
+            case "apikey":case "xapikey":case "clientsecret":case "secret":case "secretkey":case "password":case "passwd":case "passphrase":case "privatekey":case "credential":case "credentials":
+            case "cookie":case "setcookie":return true;
+            default:return false;
+        }
+    }
+    private static final java.util.regex.Pattern OUTPUT_AUTH=java.util.regex.Pattern.compile("\\b(Bearer|Basic)[ \\t]+([^\\s\"'<>\\\\]+)",java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern OUTPUT_PRIVATE_PEM=java.util.regex.Pattern.compile("-----BEGIN[ \\t]+((?:[A-Z0-9]+[ \\t]+){0,3}PRIVATE[ \\t]+KEY)\\b",java.util.regex.Pattern.CASE_INSENSITIVE);
+    /** Result-only scanning. Definitions/digests keep the original literal-only redact path.
+     * Inputs are already bounded by the matched transport; incomplete private blocks consume
+     * the remaining output, rather than returning their undecidable tail as public text. */
+    private static String redactOutputText(String value,String token){
+        return new OutputTextProjection().project(value,token);
+    }
+    /** A result's ordered text blocks share only this in-call unfinished-PEM state. It never
+     * crosses RPC results or treats unrelated structured fields as a shared text stream. */
+    private static final class OutputTextProjection {
+        private java.util.regex.Pattern privateEnd;
+        String project(String value,String token){
+            // Recognize forms before replacing the bound literal: a bound value such as
+            // "PRIVATE" or "Bearer" must not destroy a marker and expose another credential.
+            StringBuilder pemSafe=new StringBuilder();int offset=0;
+            if(privateEnd!=null){
+                java.util.regex.Matcher end=privateEnd.matcher(value);
+                if(!end.find())return value.isEmpty()?"":redact("[凭据已隐藏]",token);
+                pemSafe.append("[凭据已隐藏]");offset=end.end();privateEnd=null;
+            }
+            java.util.regex.Matcher begin=OUTPUT_PRIVATE_PEM.matcher(value);
+            while(begin.find(offset)){
+                pemSafe.append(value,offset,begin.start()).append("[凭据已隐藏]");
+                java.util.regex.Pattern closing=java.util.regex.Pattern.compile("-----END[ \\t]+"+java.util.regex.Pattern.quote(begin.group(1))+"-----",java.util.regex.Pattern.CASE_INSENSITIVE);
+                java.util.regex.Matcher end=closing.matcher(value);
+                if(!end.find(begin.end())){privateEnd=closing;offset=value.length();break;}
+                offset=end.end();
+            }
+            pemSafe.append(value,offset,value.length());
+            java.util.regex.Matcher auth=OUTPUT_AUTH.matcher(pemSafe);StringBuffer safe=new StringBuffer();
+            while(auth.find())auth.appendReplacement(safe,java.util.regex.Matcher.quoteReplacement(auth.group(1)+" [凭据已隐藏]"));
+            auth.appendTail(safe);return redact(safe.toString(),token);
+        }
     }
     static boolean containsSecret(Object value,String token,int depth)throws Exception {
         if(token.isEmpty())return false;
