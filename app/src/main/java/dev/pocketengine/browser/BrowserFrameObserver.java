@@ -66,6 +66,35 @@ public final class BrowserFrameObserver implements AutoCloseable {
     }
     /** Unexpected links/redirects/restores are explicitly limited until a future admitted load; no old proxy is rebound. */
     public String documentIdentityForNative(){if(closed)throw new IllegalStateException("原网页读取宿主已关闭");Frame<JavaScriptReplyProxy> main=frames.main();return main==null?document:main.document;}
+    /** This marker came through the original native, origin-checked isolated-world registration.
+     * It is never an argument from a URL/page/model and must never be included in a receipt. */
+    public BrowserNativeNetwork.DocumentProof nativeNetworkProof()throws Exception {
+        Frame<JavaScriptReplyProxy> main=frames.main();
+        if(closed||!supported||main==null||!frames.current(main))throw new IllegalStateException("原网页没有可认证的隔离文档；未用URL猜测CDP目标");
+        return new BrowserNativeNetwork.DocumentProof(documentKey,main.documentToken,main.document);
+    }
+    public DomBarrier beginDomBarrier()throws Exception {
+        Frame<JavaScriptReplyProxy> main=frames.main();
+        if(closed||!supported||main==null||!frames.current(main))throw new IllegalStateException("DOM屏障需要原主文档隔离通道");
+        return new DomBarrier(main);
+    }
+    /** One nonce-local MutationObserver owned by one original wait. No page-world fallback. */
+    public final class DomBarrier implements AutoCloseable {
+        private final Frame<JavaScriptReplyProxy> selected;private final long expected=revision;
+        private final String nonce=UUID.randomUUID().toString(),stateKey=key+"_barrier";private boolean released;
+        private DomBarrier(Frame<JavaScriptReplyProxy> selected){this.selected=selected;}
+        public void probe(Check current,CompletableFuture<JSONObject> result)throws Exception {
+            current.check();if(released||closed||revision!=expected||!frames.current(selected))throw new BrowserTaskSpace.StalePage("DOM屏障的原文档已变化");
+            selected.proxy.executeJavaScript(guarded(BrowserWaitBarrier.domScript(stateKey,nonce),selected,"barrierProbe"),new WebViewOutcomeReceiver<String,JavaScriptExecutionException>(){
+                public void onResult(String value){if(result.isDone())return;try{current.check();if(released||closed||revision!=expected||!frames.current(selected))throw new BrowserTaskSpace.StalePage("DOM屏障回调的原文档已变化");if(value==null||value.length()>4096)throw new IllegalStateException("DOM屏障返回无效证据");Object decoded=new org.json.JSONTokener(value).nextValue();JSONObject raw=decoded instanceof String?new JSONObject((String)decoded):decoded instanceof JSONObject?(JSONObject)decoded:null;if(raw==null)throw new IllegalStateException("DOM屏障没有返回JSON");result.complete(raw);}catch(Exception changed){result.completeExceptionally(changed);}}
+                public void onError(JavaScriptExecutionException unavailable){try{result.complete(new JSONObject().put("available",false));}catch(Exception invalid){result.completeExceptionally(invalid);}}
+            });
+        }
+        @Override public void close(){
+            if(released)return;released=true;
+            try{selected.proxy.executeJavaScript(guarded(BrowserWaitBarrier.cleanupScript(stateKey,nonce),selected,"barrierProbe"),new WebViewOutcomeReceiver<String,JavaScriptExecutionException>(){public void onResult(String ignored){}public void onError(JavaScriptExecutionException ignored){}});}catch(Exception|LinkageError gone){/* The original document's fixed 6.5s timer disconnects the observer. */}
+        }
+    }
     public JSONObject framePinForNative(String ref)throws Exception {Frame<JavaScriptReplyProxy> frame=frames.requirePresentedChild(ref,android.os.SystemClock.elapsedRealtime());return new JSONObject().put("frameId",frame.id).put("documentId",frame.document).put("sourceOrigin",frame.origin).put("topDocumentId",document);}
     public void documentStarted(){
         frames.clear();issued.clear();awaitingDelivery.clear();deltas.clear();clearPresentation();revision++;document=UUID.randomUUID().toString();active=armed;armed="";try{frames.reset(document,active,origin,admittedOrigins);}catch(Exception invalid){active="";frames.clear();}
@@ -238,7 +267,7 @@ public final class BrowserFrameObserver implements AutoCloseable {
     private static JSONObject unavailableFrame(String topUrl,String code)throws Exception {return new JSONObject().put("semanticRead",true).put("status","unavailable").put("code",code).put("url",topUrl).put("title","").put("readOnlyEvidence",true).put("accepted",true).put("verified",false).put("automaticReplayAllowed",false).put("message","嵌入网页已变化或引用未展示，请重新读取frame目录；没有把它改指向新文档。");}
     private String guarded(String code,Frame<JavaScriptReplyProxy> selected,String type)throws Exception {return guardScript(code,documentKey,selected.documentToken,type);}
     static String guardScript(String code,String nativeDocumentKey,String nativeDocumentToken,String type)throws Exception {
-        if(!Set.of("semanticRead","targetProbe","visualProbe","frameAction","liveEvaluation").contains(type)||!nativeDocumentToken.matches("[a-f0-9]{32}"))throw new IllegalArgumentException("原frame探针类型或文档标记无效");
+        if(!Set.of("semanticRead","targetProbe","visualProbe","frameAction","liveEvaluation","barrierProbe").contains(type)||!nativeDocumentToken.matches("[a-f0-9]{32}"))throw new IllegalArgumentException("原frame探针类型或文档标记无效");
         String refusal="JSON.stringify({"+type+":true,status:'unavailable',accepted:false,code:'frame_document_changed',url:location.href,title:document.title||'',readOnlyEvidence:true,automaticReplayAllowed:false})";
         return "(()=>{if(globalThis["+JSONObject.quote(nativeDocumentKey)+"]!=="+JSONObject.quote(nativeDocumentToken)+"||globalThis.closed||!document.documentElement||!document.documentElement.isConnected)return "+refusal+";return "+code+";})()";
     }

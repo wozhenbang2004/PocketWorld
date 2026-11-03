@@ -1,10 +1,10 @@
 package dev.pocketengine.browser;
 
-import android.app.Application;
 import android.os.Looper;
 import android.webkit.CookieManager;
 import android.webkit.WebView;
 import dev.pocketengine.BrowserActivity;
+import dev.pocketengine.EngineApplication;
 import dev.pocketengine.core.ExecutionResources;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunJournal;
@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.junit.After;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
@@ -39,14 +40,20 @@ import static org.junit.Assert.*;
 
 /** Real Activity/TaskStore/HTTP; evaluateJavascript results are explicit page fixtures, not rendered JS. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,application=Application.class)
+@Config(sdk=35,application=EngineApplication.class)
 @LooperMode(LooperMode.Mode.PAUSED)
 public final class BrowserTaskActivityTest {
+    // Activity and fixture must share the original application store, including its run deadline.
+    // Tear it down once per test, after every Fixture in that test has released its Activity.
+    @After public void shutdownOriginalApplication()throws Exception {
+        EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();app.onTerminate();if(app.features!=null)app.features.close();
+        Field database=TaskStore.class.getDeclaredField("db");database.setAccessible(true);((android.database.sqlite.SQLiteDatabase)database.get(app.tasks)).close();
+    }
     private static final String[] TOOLS={"open","select","observe","navigate","click","type","scroll","download","download_status","retain_source","close","finish"};
     private static JSONObject obj(Object... values)throws Exception {JSONObject out=new JSONObject();for(int i=0;i<values.length;i+=2)out.put((String)values[i],values[i+1]);return out;}
     private static WebView web(BrowserActivity browser)throws Exception {Field f=BrowserActivity.class.getDeclaredField("web");f.setAccessible(true);return (WebView)f.get(browser);}
     final class Fixture implements AutoCloseable {
-        final org.robolectric.android.controller.ActivityController<BrowserActivity> activity=Robolectric.buildActivity(BrowserActivity.class).create().start().resume().visible();final BrowserActivity browser=activity.get();final WebView owner=web(browser);final String ownerId=browser.tabsForOwner().getJSONArray("tabs").getJSONObject(0).getString("tabId");final TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());final ExecutionResources resources=new ExecutionResources();final ExecutorService worker=Executors.newSingleThreadExecutor();final Set<Object> callbacks=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());final java.util.Map<String,JSONObject> sources=new java.util.concurrent.ConcurrentHashMap<>();String taskId;Attempt current;Runnable approvalHook;HttpServer server;
+        final org.robolectric.android.controller.ActivityController<BrowserActivity> activity=Robolectric.buildActivity(BrowserActivity.class).create().start().resume().visible();final BrowserActivity browser=activity.get();final WebView owner=web(browser);final String ownerId=browser.tabsForOwner().getJSONArray("tabs").getJSONObject(0).getString("tabId");final TaskStore tasks=((EngineApplication)RuntimeEnvironment.getApplication()).tasks;final ExecutionResources resources=new ExecutionResources();final ExecutorService worker=Executors.newSingleThreadExecutor();final Set<Object> callbacks=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());final java.util.Map<String,JSONObject> sources=new java.util.concurrent.ConcurrentHashMap<>();String taskId;Attempt current;Runnable approvalHook;HttpServer server;
         Fixture()throws Exception {browser.openForOwner("https://owner.example/original");taskId=tasks.createCapabilityTask("三个来源的浏览研究","").getString("id");current=attach();}
         final class Attempt {
             final JSONObject task;final ModelCapabilityAdapters.Binding binding;final RunControl control;final RunJournal journal;final BrowserTaskCapabilityPort port;final String token;
@@ -67,7 +74,7 @@ public final class BrowserTaskActivityTest {
         }
         String open(String path)throws Exception {JSONObject receipt=tool("open",obj("url","https://example.com/"+path));assertTrue(receipt.toString(),receipt.optBoolean("ok"));return receipt.getString("tabId");}
         JSONObject observe(String tab)throws Exception {JSONObject observed=tool("observe",obj("tabId",tab));assertEquals(observed.toString(),"observed",observed.optString("status"));return observed;}
-        public void close()throws Exception {try{browser.endTaskSpaceForOwner("fixture_end");Shadows.shadowOf(Looper.getMainLooper()).idle();}finally{if(server!=null)server.stop(0);BrowserDownloads.closeFor(browser);worker.shutdownNow();activity.pause().stop().destroy();BrowserActivity.setEvents(null);worker.awaitTermination(2,TimeUnit.SECONDS);Field database=TaskStore.class.getDeclaredField("db");database.setAccessible(true);((android.database.sqlite.SQLiteDatabase)database.get(tasks)).close();}}
+        public void close()throws Exception {try{browser.endTaskSpaceForOwner("fixture_end");Shadows.shadowOf(Looper.getMainLooper()).idle();}finally{if(server!=null)server.stop(0);BrowserDownloads.closeFor(browser);worker.shutdownNow();activity.pause().stop().destroy();BrowserActivity.setEvents(null);worker.awaitTermination(2,TimeUnit.SECONDS);}}
     }
     @Test public void realActivityJourneyUsesOriginalSQLiteJournalAndApprovalsAndKeepsOwnerPages()throws Exception {try(Fixture h=new Fixture()){
         String[] tabs={h.open("one"),h.open("two"),h.open("three")};for(String tab:tabs){JSONObject observed=h.observe(tab);JSONObject retained=h.tool("retain_source",obj("tabId",tab,"observationId",observed.getString("observationId"),"excerpt","research evidence"));assertTrue(retained.toString(),retained.getBoolean("sourceRetained"));}
