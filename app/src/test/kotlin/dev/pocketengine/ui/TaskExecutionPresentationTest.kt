@@ -11,6 +11,29 @@ class TaskExecutionPresentationTest {
     private fun operation(state: String = "receipt", receipt: JSONObject? = JSONObject().put("ok", true)) = JSONObject().put("position", 7).put("operationId", "original-operation").put("runId", "run-a").put("tool", "project_execute").put("state", state).put("createdAt", 1234L).put("status", "available").put("arguments", JSONObject().put("planRef", "original-plan")).put("receipt", receipt ?: JSONObject.NULL)
     private fun page(vararg entries: JSONObject) = JSONObject().put("entries", JSONArray(entries.toList()))
 
+    private fun job(state: String, kind: String = "original_launch_record") = JSONObject().put("jobKey", "remote:original-task:old-run:2:original-operation").put("taskId", "original-task").put("runId", "old-run").put("epoch", 2).put("operationId", "original-operation").put("domain", "remote").put("state", state).put("entryKind", kind).put("observingOnly", true).put("executionAuthorized", false).put("statusSource", "original_operation_journal").put("status", "available").put("projectLogCandidate", false)
+
+    @Test fun jobDirectoryUsesOriginalIdentityAndRecordedFactsWithoutInventingLiveControl() {
+        val original = job("remote_job_unknown").put("reportedFacts", JSONObject().put("originalReceiptStatus", "unknown").put("reportedPendingApprovalCount", 1))
+        val shown = TaskExecutionPresentation.records(page(original), "jobs").single()
+        assertEquals("original-task", shown.jobTaskId); assertEquals("old-run", shown.runId); assertEquals(2, shown.jobEpoch); assertEquals("original-operation", shown.jobOperationId)
+        assertEquals(TaskExecutionPresentation.Tone.UNCERTAIN, shown.tone); assertNull(shown.projectExecutionId); assertTrue(shown.label.contains("未发起重试"))
+        assertTrue(shown.outputNotes.any { it.contains("待审批") }); assertFalse(shown.label.contains("已停止"))
+        val stopped = TaskExecutionPresentation.records(page(job("remote_job_receipt").put("reportedFacts", JSONObject().put("originalReceiptStatus", "cancelled"))), "jobs").single()
+        assertTrue(stopped.label.contains("资源释放须另行核对")); assertNotEquals(TaskExecutionPresentation.Tone.RETURNED, stopped.tone)
+        val intent = TaskExecutionPresentation.records(page(job("receipt", "approval_intent")), "jobs").single()
+        assertTrue(intent.label.contains("审批申请")); assertNotEquals(TaskExecutionPresentation.Tone.RUNNING, intent.tone)
+    }
+
+    @Test fun jobReadLocatorNeverAcceptsMalformedAuthorityOrLimitedLaunchDetails() {
+        val row = job("project_running").put("domain", "project").put("projectLogCandidate", true)
+        assertEquals("original-operation", TaskExecutionPresentation.records(page(row), "jobs").single().projectExecutionId)
+        row.put("status", "read_limited")
+        assertNull(TaskExecutionPresentation.records(page(row), "jobs").single().projectExecutionId)
+        row.put("observingOnly", "true")
+        assertTrue(TaskExecutionPresentation.records(page(row), "jobs").isEmpty())
+    }
+
     @Test fun unknownOperationOverridesSuperficiallyCompletedTask() {
         val source = task("completed").put("operations", JSONArray().put(operation("unknown", JSONObject().put("accepted", JSONObject.NULL))))
         val current = TaskExecutionPresentation.current(source, 100)
@@ -72,6 +95,8 @@ class TaskExecutionPresentationTest {
         assertEquals("", row.receipt)
         assertEquals(100000L, row.bodyBytes)
         assertEquals(TaskExecutionPresentation.Tone.RUNNING, row.tone)
+        assertEquals("original-operation", row.projectExecutionId)
+        assertEquals("run-a", row.runId)
     }
     @Test fun ownerReconciliationIsNotRelabelledAsAnAutomaticExecutionReceipt() {
         val source = operation("resolved", JSONObject().put("source", "owner_reconciliation").put("outcome", "not_occurred"))
@@ -100,5 +125,84 @@ class TaskExecutionPresentationTest {
         assertTrue(shown.startsWith("🙂".repeat(4)))
         assertFalse(Character.isHighSurrogate(shown[7]))
         assertEquals(60, text.length)
+    }
+    @Test fun originalProjectLocatorCannotBeInventedFromReceiptTitlePositionOrAnotherTool() {
+        val original = operation("unknown", null).put("status", "read_limited").put("runId", "old-run")
+        assertEquals("original-operation", TaskExecutionPresentation.projectExecutionObservationId(original))
+        assertEquals("old-run", TaskExecutionPresentation.records(page(original), "operations").single().runId)
+        for (tool in listOf("project_status", "project_process_input", "remote_work_start", "media_generate", "project_execute "))
+            assertNull(TaskExecutionPresentation.projectExecutionObservationId(JSONObject(original.toString()).put("tool", tool)))
+        for (id in listOf("", "../original-operation", "a".repeat(81)))
+            assertNull(TaskExecutionPresentation.projectExecutionObservationId(JSONObject(original.toString()).put("operationId", id)))
+        original.remove("operationId")
+        assertNull(TaskExecutionPresentation.projectExecutionObservationId(original))
+    }
+    @Test fun retainedReturnUpstreamLossAndExactDisplayOmissionsStaySeparateInOriginalRecord() {
+        val text = "HEAD" + "🙂界".repeat(4000) + "TAIL"
+        val excerpt = dev.pocketengine.features.capabilities.ToolTextDisplay.clip(text, 4096)
+        val task = java.util.UUID.randomUUID().toString()
+        val run = java.util.UUID.randomUUID().toString()
+        val ref = JSONObject().put("taskId", task).put("runId", run).put("epoch", 1).put("tool", "ssh_exec").put("operationId", java.util.UUID.randomUUID().toString()).put("sourceId", "task:$task:run:$run:output:" + java.util.UUID.randomUUID()).put("revision", "sha256:" + "a".repeat(64)).put("captureKind", "NATIVE_RESULT_DATA_JSON").put("retainedRange", JSONObject().put("offset", 0).put("chars", 12).put("unit", "UTF-16").put("utf8Bytes", 20).put("previewChars", 12)).put("retainedNativeDataComplete", true).put("upstreamTruncated", true)
+        val capture = dev.pocketengine.features.memory.ToolOutputCapture.recorded("partial", "native_output_upstream_truncated", JSONArray().put(ref)).metadata()
+        val receipt = JSONObject().put("status", "unknown").put("outputCapture", capture).put("displayTruncated", true).put("displayOmissions", JSONObject().put("stdout", excerpt.metadata()))
+        val before = receipt.toString()
+        val row = TaskExecutionPresentation.records(page(operation("unknown", receipt).put("tool", "ssh_exec")), "operations").single()
+        assertEquals(TaskExecutionPresentation.Tone.UNCERTAIN, row.tone)
+        assertTrue(row.outputNotes.any { it.contains("允许留存的返回数据已完整保存，共 20 字节") })
+        assertTrue(row.outputNotes.any { it.contains("上游返回内容已截断") })
+        assertTrue(row.outputNotes.any { it.contains("省略 ${excerpt.omittedBytes} 字节") })
+        assertTrue(row.outputNotes.any { it.contains("没有按模型 token 数估算") })
+        assertEquals(before, receipt.toString())
+        assertEquals("utf8_json_bytes", excerpt.metadata().getString("budgetBasis"))
+        assertFalse(excerpt.metadata().getBoolean("tokenEstimateUsed"))
+    }
+    @Test fun malformedOrAbsentOutputMetadataCannotInventRetentionOrExactOmissionCounts() {
+        assertTrue(TaskExecutionPresentation.outputNotes(JSONObject()).isEmpty())
+        val malformed = JSONObject().put("sourceByteScope", "returned_text_utf8").put("sourceUtf8Bytes", 10).put("headUtf8Bytes", 9).put("tailUtf8Bytes", 9).put("omittedUtf8Bytes", 3).put("nativeOutputChanged", false)
+        val receipt = JSONObject().put("displayTruncated", true).put("displayOmissions", JSONObject().put("stdout", malformed)).put("outputCapture", JSONObject().put("status", "stored"))
+        val notes = TaskExecutionPresentation.outputNotes(receipt)
+        assertTrue(notes.any { it.contains("信息无法核对") })
+        assertTrue(notes.any { it.contains("准确遗漏量未记录") })
+        assertFalse(notes.any { it.contains("省略 3 字节") || it.contains("已完整保存") })
+    }
+    @Test fun originalToolEventDisplaysModelOmissionsWithoutReplacingNativeOperationReceipt() {
+        val text = "HEAD" + "🙂界".repeat(4000) + "TAIL"
+        val excerpt = dev.pocketengine.features.capabilities.ToolTextDisplay.clip(text, 4096)
+        val nativeReceipt = JSONObject().put("projectExecution", JSONObject().put("id", "original-operation"))
+            .put("executionReceipt", JSONObject().put("stdout", text).put("outputTruncated", false))
+        val delivered = JSONObject().put("stdout", excerpt.text).put("displayTruncated", true)
+            .put("displayOmissions", JSONObject().put("stdout", excerpt.metadata()))
+        val event = JSONObject().put("type", "tool").put("tool", "project_execute").put("status", "unknown")
+            .put("runId", "old-run").put("receipt", delivered)
+        val original = event.toString()
+        val row = TaskExecutionPresentation.records(page(JSONObject().put("position", 9).put("event", event)), "events").single()
+        assertEquals(TaskExecutionPresentation.Tone.UNCERTAIN, row.tone)
+        assertEquals("old-run", row.runId)
+        assertNull(row.projectExecutionId)
+        assertTrue(row.outputNotes.any { it.contains("省略 ${excerpt.omittedBytes} 字节") })
+        assertTrue(row.outputNotes.any { it.contains("没有按模型 token 数估算") })
+        assertEquals(original, event.toString())
+        assertTrue(TaskExecutionPresentation.records(page(operation(receipt = nativeReceipt)), "operations").single().outputNotes.isEmpty())
+        assertEquals(text, nativeReceipt.getJSONObject("executionReceipt").getString("stdout"))
+        val oldFact = excerpt.metadata().apply { remove("budgetBasis"); remove("tokenEstimateUsed") }
+        delivered.put("displayOmissions", JSONObject().put("stdout", oldFact))
+        val oldNotes = TaskExecutionPresentation.records(page(JSONObject().put("event", event)), "events").single().outputNotes
+        assertTrue(oldNotes.any { it.contains("省略 ${excerpt.omittedBytes} 字节") })
+        assertFalse(oldNotes.any { it.contains("预算") || it.contains("token") })
+        event.put("type", "observation")
+        assertTrue(TaskExecutionPresentation.records(page(JSONObject().put("event", event)), "events").single().outputNotes.isEmpty())
+        event.put("type", "tool").put("tool", "unrecognized_tool")
+        assertTrue(TaskExecutionPresentation.records(page(JSONObject().put("event", event)), "events").single().outputNotes.isEmpty())
+    }
+    @Test fun tornLogTailIsDistinctFromStorageLossAndOriginalSummary() {
+        val receipt = JSONObject().put("runtimeId", "managed_process_v1").put("logIncompleteTail", true).put("outputTruncated", false).put("summaryOutputTruncated", true)
+        val notes = TaskExecutionPresentation.outputNotes(receipt, true)
+        assertTrue(notes.any { it.contains("末条未写完整") && it.contains("不能证明已达到存储上限") })
+        assertTrue(notes.any { it.contains("原回执仅含日志摘要") })
+        assertFalse(notes.any { it.contains("未留存部分不能") })
+        assertEquals(notes, TaskExecutionPresentation.records(page(operation(receipt = JSONObject().put("executionReceipt", receipt))), "operations").single().outputNotes)
+        receipt.put("outputTruncated", true)
+        assertTrue(TaskExecutionPresentation.outputNotes(receipt, true).any { it.contains("未留存部分不能由摘要恢复") })
+        assertTrue(TaskExecutionPresentation.outputNotes(JSONObject().put("runtimeId", "managed_process_v1").put("outputTruncated", "true"), true).isEmpty())
     }
 }

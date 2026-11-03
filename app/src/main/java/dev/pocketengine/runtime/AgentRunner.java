@@ -48,6 +48,8 @@ public final class AgentRunner {
     /** The existing task store owns admission, dedup and the atomic terminal/send fence. */
     public interface OwnerInputs {
         JSONArray poll(JSONArray includedMessageIds,boolean turnBoundary,boolean closeIfEmpty,RunControl control)throws Exception;
+        /** Native provenance for already included rows only; default is missing, never host-zone inference. */
+        default JSONObject clockContext(java.util.List<String> includedMessageIds,RunControl control)throws Exception{return null;}
         /** Called only after this actual request completed and its text reached the original journal. */
         default void completed(OwnerReply reply,RunControl original)throws Exception { }
     }
@@ -294,7 +296,8 @@ public final class AgentRunner {
                 emit(taskId, "model", "running", "正在决定下一步操作。", null, null, config, sink);
                 JSONArray requestHistory=history;
                 JSONObject memoryDependency=null;
-                String nativeReference=clean(requestClock.referenceData(),config);
+                JSONObject inputClock=ownerInputs==null?null:ownerInputs.clockContext(ownerMessageIds(history),control);
+                control.check();String nativeReference=clean(requestClock.referenceData(inputClock),config);
                 String repeatNotice=repeatedTools.referenceData();if(!repeatNotice.isEmpty())nativeReference+="\n\n"+repeatNotice;
                 if(!recovery.referenceData().isEmpty())nativeReference+="\n\n"+recovery.referenceData();
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();

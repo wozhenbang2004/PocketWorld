@@ -1160,6 +1160,10 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(original!=retainedTaskControl(id))throw new SecurityException("原手机输入控制器已变化");
         tasks.openPhoneOwnerInputMailbox(id,run,epoch,original);
         return new dev.pocketengine.runtime.AgentRunner.OwnerInputs(){
+            @Override public JSONObject clockContext(java.util.List<String> included,RunControl live)throws Exception {
+                if(live!=original||original!=retainedTaskControl(id))throw new SecurityException("原手机输入控制器已变化");
+                return tasks.ownerInputClockContext(id,run,epoch,included,original,true);
+            }
             @Override public JSONArray poll(JSONArray included,boolean boundary,boolean close,RunControl live)throws Exception {
                 if(live!=original||original!=retainedTaskControl(id))throw new SecurityException("原手机输入控制器已变化");
                 return tasks.pollPhoneOwnerInputs(id,run,epoch,included,boundary,close,original);
@@ -1698,6 +1702,9 @@ public final class EngineApplication extends Application implements dev.pocketen
             }:null;
             final String[] lastOwnerReplyAttempted={null},lastOwnerReplyRecorded={null};
             dev.pocketengine.runtime.AgentRunner.OwnerInputs inputs=ownerMailbox?new dev.pocketengine.runtime.AgentRunner.OwnerInputs(){
+                @Override public JSONObject clockContext(java.util.List<String> included,RunControl live)throws Exception{
+                    if(capabilityControls.get(id)!=control||live!=control)throw new SecurityException("原聊天输入控制器已变化");return tasks.ownerInputClockContext(id,admittedRun,admittedEpoch,included,live,false);
+                }
                 @Override public JSONArray poll(JSONArray included,boolean boundary,boolean close,RunControl live)throws Exception{
                     if(capabilityControls.get(id)!=control||live!=control)throw new SecurityException("原聊天输入控制器已变化");return tasks.pollOwnerInputs(id,admittedRun,admittedEpoch,included,boundary,close,live);
                 }

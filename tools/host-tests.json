@@ -504,10 +504,12 @@
       "dev.pocketengine.features.local.runtime.AndroidRuntimePreparationTest",
       "dev.pocketengine.features.local.runtime.RuntimeOwnerMaintenanceTest",
       "dev.pocketengine.features.local.runtime.RuntimeContractsTest",
-      "dev.pocketengine.features.local.runtime.RuntimeStorageActiveIdentityTest"
+      "dev.pocketengine.features.local.runtime.RuntimeStorageActiveIdentityTest",
+      "dev.pocketengine.ui.ProjectRuntimeHealthMountedTest"
     ],
     "helpers": [],
-    "description": "Original catalog/seal/body-free health projection, corrupt progress recovery, archive/lease/control-boundary regressions with real temporary files. Synthetic tool seals are fixtures, not ARM64 probes, Android device or plugin safe-mode acceptance. Active-pointer unknown/stale storage protection and pair-aware final deletion fence preserve all recoverable generation/backing versions; both legitimate pair cleanup orders covered."
+    "robolectric": true,
+    "description": "Original catalog/seal/body-free health projection, corrupt progress recovery, archive/lease/control-boundary regressions with real temporary files. Actual existing Compose owner preparation details consume the production health DTO with synthetic seal inputs, including executable runtime, stale failure and original disabled prepare action. Synthetic tool seals are fixtures, not ARM64 probes, Android device, pixel or plugin safe-mode acceptance. Active-pointer unknown/stale storage protection and pair-aware final deletion fence preserve all recoverable generation/backing versions; both legitimate pair cleanup orders covered."
   },
   "managed-skills": {
     "class": "dev.pocketengine.features.skills.ManagedSkillNativeJourneyTest",
@@ -562,7 +564,7 @@
     ],
     "native": true,
     "robolectric": true,
-    "description": "Fifteen focused original-runtime checks: actual approval/SQLite/Node JNI PTY uses only automatic viewer pages 32KiB/8KiB; explicit reads and original task/run/control/identity/input/stop/lease stay unchanged. Scoped production PowerManager adapter is tested with simulated OS statuses, fresh cold reread and 30s hysteresis, stale/closed generation guards and original Factory lifecycle. No model/worker concurrency changes or OEM/energy/temperature/VT/device proof. Terminal-only helper declares only its real sh/node/python, no npm prerequisite or mock tool."
+    "description": "Twenty-three focused original-runtime checks: actual approval/SQLite/Node JNI PTY and diagnostic cache use native thermal/memory facts only for future automatic viewer pages 32KiB/8KiB; explicit reads and original task/run/control/identity/input/stop/lease stay unchanged. Production PowerManager/ActivityManager adapters use simulated OS facts, fresh recovery rereads, 30s hysteresis and memory expiry; bounded uncooperative-reader fixtures check cancellation, invalidation and no replacement readers. No model/process concurrency changes or OEM/energy/physical memory/temperature/VT/device proof. Terminal-only helper declares only its real sh/node/python, no npm prerequisite or mock tool."
   },
   "aion-mcp-config": {
     "class": "dev.pocketengine.features.plugins.McpConfigImportAdapterTest",
@@ -695,12 +697,17 @@
   "request-clock": {
     "class": "dev.pocketengine.runtime.RequestClockContextTest",
     "additionalClasses": [
-      "dev.pocketengine.runtime.RequestClockRunnerTest"
+      "dev.pocketengine.runtime.RequestClockRunnerTest",
+      "dev.pocketengine.store.OwnerInputClockNativeTest",
+      "dev.pocketengine.features.assistant.QueuedOwnerInputRunnerJourneyTest",
+      "dev.pocketengine.features.assistant.OwnerQuestionInputsNativeTest"
     ],
     "helpers": [
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.store.OwnerInputMailboxTest"
     ],
-    "description": "Deterministic same-instant OS clock/zone/DST/missing facts plus actual bounded Gateway/Runner cross-midnight request-only projection. No external time verification, input-origin zone/mixed admission, scheduler or device acceptance."
+    "robolectric": true,
+    "description": "Same-instant host clock/DST/missing facts plus real SQLite native owner admissions and actual bounded Gateway/Runner requests. Original admitted IANA zones/time survive duplicate/new-run recovery and project as unique/mixed/missing only for included owner input; pending or legacy/remote sources cannot borrow the executor zone. Request references never become checkpoint messages, execution authority or changed schedules. Simulated OS zones, no physical second-device or external time verification."
   },
   "runner-repeat-notice": {
     "class": "dev.pocketengine.runtime.RepeatToolNoticeTest",
@@ -765,11 +772,17 @@
   },
   "native-normal-cleanup": {
     "class": "dev.pocketengine.features.local.runtime.NativeNormalCleanupTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.runtime.ManagedProcessJobsLeaseTest",
+      "dev.pocketengine.features.local.runtime.ManagedProcessJobsLifecycleTest"
+    ],
     "helpers": [
-      "dev.pocketengine.features.local.runtime.OwnedGroupObservationProbe"
+      "dev.pocketengine.features.local.runtime.OwnedGroupObservationProbe",
+      "dev.pocketengine.features.local.runtime.LostWaitOwnershipProbe",
+      "dev.pocketengine.features.local.runtime.RuntimeContractsTest"
     ],
     "native": true,
-    "description": "Actual Linux JNI ordinary protocol2 bounded read-only original-group drain: controlled 400ms orphan reap settles, beyond-deadline held member stays unknown; exact historical exit7 contracts preserved. Separate fixture launcher only, not App-wide subreaper, full task/device or global PID cleanup."
+    "description": "Actual Linux JNI ordinary protocol3 bounded read-only original-group drain and original ManagedProcessJobs/preparation leases: controlled orphan reap settles, beyond-deadline held member keeps its actual lease and unknown receipt across cold reads, cancel and close. Isolated real competing waitpid fixtures compare the pinned historical protocol2 nonconvergence with current lost-wait convergence before/after observed exit; lost identity forbids later signals and release. Exact historical exit7 contracts preserved; failed lease close also remains unresolved. Separate fixture launcher only, not App-wide subreaper, full task/device or global PID cleanup."
   },
   "memory-archive-currentness": {
     "class": "dev.pocketengine.features.memory.MemoryArchiveCurrentnessTest",
@@ -1047,14 +1060,31 @@
     "class": "dev.pocketengine.features.local.project.ProjectExecutionContinuityJourneyTest",
     "additionalClasses": [
       "dev.pocketengine.ui.RuntimeActivityCaptionTest",
-      "dev.pocketengine.features.local.project.ProjectCommandSpecTest"
+      "dev.pocketengine.features.local.project.ProjectCommandSpecTest",
+      "dev.pocketengine.ui.TaskExecutionPresentationTest",
+      "dev.pocketengine.store.TaskAuditStoreTest",
+      "dev.pocketengine.store.TaskJobProjectionTest",
+      "dev.pocketengine.ui.TaskJobMountedTest"
     ],
     "helpers": [
-      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest"
+      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest",
+      "dev.pocketengine.testutil.HttpServer"
     ],
     "native": true,
     "robolectric": true,
-    "description": "Original approved command short wait then same-execution observation, exact total deadline and native cancel/drain. Real original SQLite/JNI Node exit7, live silence, immutable cursor logs, read-only owner reopening without input/stop authority, no per-poll activity journal growth and original private artifact capture. Includes exact command normalization/consent and same-operation UI enum projection; existing activity/PTY groups stay separate. No second Runner/job ledger, automatic replay, inferred input readiness, hardware or performance acceptance."
+    "description": "Original approved command short wait then same-execution observation, exact total deadline and native cancel/drain. Real original SQLite/JNI Node exit7, live silence, immutable cursor logs, read-only owner reopening beyond the recent operation window, original private artifact capture and bounded Unicode head/tail on actual Runner HTTP wire with complete original log pages. Includes exact command normalization/consent and same-operation UI projection; existing activity/PTY groups stay separate. No second Runner/job ledger, automatic replay, inferred input readiness, hardware or performance acceptance."
+  },
+  "runtime-output-display": {
+    "class": "dev.pocketengine.features.capabilities.ToolTextDisplayTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.capabilities.ModelCapabilityAdaptersTest",
+      "dev.pocketengine.features.memory.ToolOutputBoundaryNativeTest",
+      "dev.pocketengine.features.memory.ToolOutputStoreNativeTest",
+      "dev.pocketengine.features.memory.ProjectNativeOutputCaptureTest"
+    ],
+    "helpers": ["dev.pocketengine.testutil.HttpServer"],
+    "robolectric": true,
+    "description": "Explicit text display UTF-8/JSON budgets and exact head/tail omission facts; preserve native receipt, original source/SHA/cursor, whole document chunks and browser references. Existing real SQLite output capture/raw recovery, redaction, authority loss and storage-failure contracts remain active. Controlled SSH producer is not a real remote SSH test; no replacement spool, image import or physical device claim."
   },
   "project-git-isolation": {
     "class": "dev.pocketengine.features.local.project.ProjectGitIsolationNativeJourneyTest",

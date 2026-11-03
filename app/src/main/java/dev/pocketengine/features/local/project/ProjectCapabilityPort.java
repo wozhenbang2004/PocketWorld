@@ -3,6 +3,7 @@ package dev.pocketengine.features.local.project;
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.capabilities.ModelCapabilityAdapters;
+import dev.pocketengine.features.capabilities.ToolTextDisplay;
 import dev.pocketengine.features.local.LocalModule;
 import dev.pocketengine.features.plugins.PluginRules;
 import dev.pocketengine.store.TaskStore;
@@ -221,7 +222,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
             }
         }
         if(!name.equals(TaskStoreProjectHost.TOOL))check(name,control);
-        JSONObject modelView=view(result);
+        JSONObject modelView=view(name,result);
         if(nativeSuccessCode!=null){
             // Native control-flow evidence only, never an arbitrary JSON success claim.
             // Only the copied outer view changes; immutable plan/catalog bytes stay intact.
@@ -323,11 +324,17 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         JSONArray dependencies=result.getJSONArray("dependencies");if(dependencies.length()>20){JSONArray first=new JSONArray();for(int i=0;i<20;i++)first.put(dependencies.get(i));result.put("dependencies",first).put("dependencyDeclarationsOmitted",dependencies.length()-20);}
         result.put("limits",new JSONObject().put("sourceFiles",ProjectSources.MAX_FILES).put("sourceFileBytes",ProjectSources.MAX_FILE_BYTES).put("sourceTotalBytes",ProjectSources.MAX_TOTAL_BYTES).put("modelArgumentChars",30000).put("readPageChars",ProjectFileQueries.PAGE_CHARS).put("inlineJournalStringChars",12000).put("inlineJournalArrayItems",200).put("inlineModelArrayItems",100).put("modelLiveEditPaths",100).put("nativePlanBytes",ProjectPlanRecords.MAX_PLAN_BYTES).put("exactPatchFiles",ProjectExactPatch.MAX_FILES).put("exactPatchFileBytes",ProjectExactPatch.MAX_TEXT_BYTES).put("formalRepositoryFiles",100).put("formalRepositoryFileChars",65536));return result;
     }
-    private static JSONObject view(JSONObject source)throws Exception {
+    private static JSONObject view(String tool,JSONObject source)throws Exception {
         if("pocketworld.project-plan.v1".equals(source.optString("format")))return new JSONObject().put("plan",source).put("untrusted",true).put("businessVerified",false);
         JSONObject copy=new JSONObject(source.toString());copy.remove("log");copy.put("untrusted",true).put("businessVerified",false);
         if(copy.optJSONArray("resources")!=null&&copy.getJSONArray("resources").length()>16){JSONArray first=new JSONArray();for(int i=0;i<16;i++)first.put(copy.getJSONArray("resources").get(i));copy.put("resources",first).put("resourceManifestOmitted",true);}
-        for(String key:new String[]{"stdout","stderr","content","diff"})if(copy.opt(key) instanceof String&&copy.getString(key).length()>12000){copy.put(key,copy.getString(key).substring(0,12000));copy.put("outputTruncated",true);}
+        if(java.util.Set.of("project_execute","project_status","project_stop").contains(tool)){
+            java.util.List<JSONObject> owners=new java.util.ArrayList<>();owners.add(copy);JSONObject observation=copy.optJSONObject("observation");if(observation!=null){observation.remove("log");owners.add(observation);}
+            java.util.List<JSONObject> slots=new java.util.ArrayList<>();java.util.List<String> fields=new java.util.ArrayList<>(),values=new java.util.ArrayList<>(),paths=new java.util.ArrayList<>();
+            for(int i=0;i<owners.size();i++)for(String key:new String[]{"stdout","stderr"}){JSONObject owner=owners.get(i);if(owner.opt(key) instanceof String){slots.add(owner);fields.add(key);values.add(owner.getString(key));paths.add((i==0?"":"observation.")+key);owner.remove(key);}}
+            JSONObject omissions=new JSONObject();copy.put("displayOmissions",omissions).put("displayTruncated",false);
+            for(int i=0;i<slots.size();i++){int count=slots.size()-i,available=Math.max(0,30000-copy.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length-count*512);ToolTextDisplay.Excerpt part=ToolTextDisplay.clip(values.get(i),Math.min(12000,available/count));slots.get(i).put(fields.get(i),part.text);if(part.truncated()){omissions.put(paths.get(i),part.metadata());copy.put("displayTruncated",true);}}
+        }else for(String key:new String[]{"stdout","stderr","content","diff"})if(copy.opt(key) instanceof String&&copy.getString(key).length()>12000){String value=copy.getString(key);int end=12000;if(Character.isHighSurrogate(value.charAt(end-1)))end--;copy.put(key,value.substring(0,end));copy.put("outputTruncated",true);}
         if(copy.toString().length()>32000||copy.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>30000)throw new IllegalStateException("项目回执超过模型预算，保留原native回执供主人查看");return copy;
     }
     private void rememberPreview(JSONObject result,String kind)throws Exception {JSONObject selected=new JSONObject().put("kind",kind);for(String key:new String[]{"previewId","projectId","checkoutId","sourceDigest","entryPath","packageArtifact"})if(result.has(key))selected.put(key,result.get(key));observedFilePreview=selected;}
