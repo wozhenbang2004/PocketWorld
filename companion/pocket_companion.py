@@ -56,6 +56,16 @@ WORKERS = {"codex_app_server": "codex", "codex": "codex", "claude": "claude", "p
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 
 
+
+ORIGINAL_JOB_CANCELLATION_PROTOCOL = "pocketworld.original-job-cancel.v1"
+
+
+def original_job_cancellation_capability():
+    return {"protocol": ORIGINAL_JOB_CANCELLATION_PROTOCOL, "supported": True,
+            "endpoint": "/v1/jobs/{jobId}/cancel-original", "requiredFields": ["jobOperationId"],
+            "identityCheck": "locked_job_operation_before_mutation", "scope": "job_manager_cli_jobs_only"}
+
+
 def worker_capabilities(worker):
     native = worker == "codex_app_server"
     claude = worker == "claude"
@@ -1156,13 +1166,44 @@ class JobManager:
             proof.update(observed)
         return proof
 
-    def cancel(self, jobid):
+    def cancel_original(self, jobid, request):
+        # A separate endpoint prevents an older server from silently ignoring the
+        # operation precondition. No caller may retry this as an unqualified cancel.
+        if not isinstance(request, dict) or set(request) != {"jobOperationId"}:
+            raise RequestError("Original cancellation requires only jobOperationId")
+        expected = identifier(request["jobOperationId"], "jobOperationId")
+        result = self.cancel(jobid, expected_operation_id=expected)
+        if result.get("id") != jobid or result.get("operationId") != expected:
+            raise RequestError("Original cancellation outcome is unconfirmed; query the original operation", 409)
+        result["originalCancellation"] = {"protocol": ORIGINAL_JOB_CANCELLATION_PROTOCOL,
+                                          "jobId": jobid, "jobOperationId": expected,
+                                          "identityMatched": True, "effectsReversed": False}
+        return result
+
+    def _original_cancel_job_locked(self, jobid, expected):
+        job = self.jobs.get(jobid)
+        if job is None:
+            raise RequestError("Job not found", 404)
+        if job.get("operationId") != expected:
+            raise RequestError("Original cancellation operation does not match this job", 409)
+        if (job.get("protocol") == "desktop-v1" or "nativeDeviceOperation" in job
+                or job.get("worker") not in {"command", "codex_app_server", "claude", "pi"}):
+            raise RequestError("Original CLI cancellation does not grant native desktop/device control", 409)
+        return job
+
+    def cancel(self, jobid, expected_operation_id=None):
+        jobid = identifier(jobid, "jobId")
+        expected = None if expected_operation_id is None else identifier(expected_operation_id, "jobOperationId")
         with self.lock:
+            if expected is not None:
+                self._original_cancel_job_locked(jobid, expected)
             desktop = self.jobs.get(jobid, {}).get("protocol") == "desktop-v1" and self.jobs.get(jobid, {}).get("status") not in TERMINAL
         if desktop and self.device_companion is not None:
             return self.device_companion.cancel_desktop(jobid)
         with self.lock:
-            job = self.jobs.get(identifier(jobid, "jobId"))
+            # Re-read after the desktop branch. This check and every stop mutation
+            # share this lock; an earlier HTTP/GET identity check is not authority.
+            job = self._original_cancel_job_locked(jobid, expected) if expected is not None else self.jobs.get(jobid)
             if job is None:
                 raise RequestError("Job not found", 404)
             if (job.get("nativeDeviceOperation", {}).get("toolName") in {"workspace.receive", "workspace.project.receive"}
@@ -1191,8 +1232,14 @@ class JobManager:
         if process is not None and (driver is None or job.get("assignmentWorkspace")):
             proof = self._terminate(process, hard=bool(job.get("assignmentWorkspace")))
             with self.lock:
-                self.jobs[jobid]["processCleanupProof"] = proof
-                self._save(self.jobs[jobid])
+                if self.jobs.get(jobid) is job:
+                    job["processCleanupProof"] = proof
+                    self._save(job)
+        with self.lock:
+            if expected is not None:
+                if self.jobs.get(jobid) is not job or job.get("operationId") != expected:
+                    raise RequestError("Original cancellation outcome changed; query the original operation", 409)
+                return self._public(job)
         return self.get(jobid)
 
     def _run(self, jobid, argv, cwd, timeout, remote, codex=None):
@@ -2076,7 +2123,8 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 result = {"name": "Pocket World Companion", "protocolVersion": 1, "sshTransport": "system_openssh", "directPhoneSsh": False, "jobsPersistent": True, "processSandbox": False,
                           "localArtifactTransfer": os.name != "nt" and hasattr(os, "O_NOFOLLOW"), "sshArtifactTransfer": False,
                           "operationReconciliation": True, "perWorkspaceExecutionLease": True,
-                          "gatewayBridge": manager.harness_gateway.capability()}
+                          "gatewayBridge": manager.harness_gateway.capability(),
+                          "originalJobCancellation": original_job_cancellation_capability()}
             elif not post and parts == ["v1", "environments"]:
                 result = manager.list_environments()
             elif len(parts) >= 2 and parts[:2] in (["v1", "harnesses"], ["v1", "harness-config"]):
@@ -2140,7 +2188,13 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 result = manager.steer(parts[2], request)
             elif len(parts) == 5 and parts[:2] == ["v1", "jobs"] and parts[3] == "messages" and not post:
                 result = manager.steer_message(parts[2], parts[4])
+            elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "cancel-original" and post:
+                if url.query:
+                    raise RequestError("Original cancellation accepts no replacement query scope")
+                result = manager.cancel_original(parts[2], request)
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "cancel" and post:
+                if request:
+                    raise RequestError("Legacy cancellation accepts no identity precondition; use advertised original cancellation")
                 result = manager.cancel(parts[2])
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "restore-project-file" and post:
                 result = project_history.restore(manager, parts[2], request, RequestError)
