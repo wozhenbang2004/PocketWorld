@@ -1048,7 +1048,7 @@ async function runViewport(origin, viewport) {
     const teamList = page.locator('.pw-team-workspace[data-team-layer="list"]');
     const teamDetail = page.locator('.pw-team-workspace[data-team-layer="detail"]');
     await teamList.waitFor({ state: 'visible' });
-    const teamSearch = page.getByRole('textbox', { name: '搜索共同工作', exact: true });
+    const teamSearch = page.getByRole('searchbox', { name: '搜索共同工作', exact: true });
     await teamSearch.fill('发布');
     const sharedWork = teamList.locator('.pw-object-row').filter({ hasText: '整理发布前资料' });
     await reachable(sharedWork, { minSize: 48 });
