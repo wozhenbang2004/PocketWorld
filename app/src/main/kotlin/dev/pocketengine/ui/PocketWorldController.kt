@@ -218,8 +218,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private var livePreviewRequest = 0
     private var livePreviewObservation: dev.pocketengine.core.RunControl? = null
     private var livePreviewCurrentCheck = false
+    private var livePreviewForeground = false
+    internal fun projectLivePreviewForeground(visible: Boolean) {
+        livePreviewForeground = visible
+        if (!visible) closeProjectLivePreview()
+    }
     fun openProjectLivePreview(taskId: String, checkoutId: String, executionId: String) {
-        if (!privateWorkspaceView()) return
+        if (!livePreviewForeground || !privateWorkspaceView()) return
         closeProjectLivePreview()
         val request = ++livePreviewRequest
         val navigationRevision = projectWorkbench.navigationRevision()
@@ -232,7 +237,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 val local = app.features.module("local") as? dev.pocketengine.features.local.LocalModule ?: error("原项目模块不可用")
                 val binding = JSONObject().put("taskId", taskId).put("runId", task.getString("runId")).put("coordinatorEpoch", task.getInt("coordinatorEpoch")).put("operationId", executionId)
                 val observed = local.projectLivePreviewForHost(binding, executionId, observation)
-                main.post { if (!closed && request == livePreviewRequest && privateWorkspaceView()) { projectLivePreview = observed; projectLivePreviewTaskId = taskId; projectLivePreviewChecking = false; enterProjectPreviewIfSelected(task, checkoutId, taskId, navigationRevision) } }
+                main.post { if (!closed && livePreviewForeground && request == livePreviewRequest && privateWorkspaceView()) { projectLivePreview = observed; projectLivePreviewTaskId = taskId; projectLivePreviewChecking = false; enterProjectPreviewIfSelected(task, checkoutId, taskId, navigationRevision) } }
             } catch (failure: Exception) { main.post { if (!closed && request == livePreviewRequest) { projectLivePreviewChecking = false; state = state.copy(error = "活预览未打开：" + message(failure)) } } }
         }
     }
