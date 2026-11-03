@@ -315,7 +315,13 @@ class WssByteChannel:
         if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
             raise TransportError("Relay TLS requires platform chain and hostname verification")
         from websockets.asyncio.client import connect
-        websocket = await connect(endpoint, ssl=context, additional_headers={"Authorization": "Bearer " + route_token},
+
+        class ExactRouteConnect(connect):
+            def process_redirect(self, exc):
+                # Reject before another handshake can send this route's bearer.
+                return exc
+
+        websocket = await ExactRouteConnect(endpoint, ssl=context, additional_headers={"Authorization": "Bearer " + route_token},
                                   subprotocols=[SUBPROTOCOL], compression=None, max_size=MAX_PACKET, max_queue=4,
                                   write_limit=16_384, open_timeout=10, close_timeout=2, ping_interval=20, ping_timeout=20,
                                   proxy=None, logger=logging.Logger("pocketworld.device-wss", logging.WARNING))
