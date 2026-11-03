@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.util.UUID
+import dev.pocketengine.features.remote.RemoteMessageTarget
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -16,22 +17,26 @@ internal object RemoteSteerGuard {
         if (task.optString("feature") != "remote" || task.optString("actorId") != "owner" || task.optString("spaceId") != "private") return null
         val evidence = task.optJSONObject("evidence") ?: return null
         val refs = task.optJSONObject("externalRefs") ?: return null
-        if (evidence.optString("protocol") != "codex_app_server") return null
+        val inputTarget = try { RemoteMessageTarget.observed(evidence) } catch (_: Exception) { return null }
+        if (RemoteMessageTarget.pi(inputTarget) && (task.has("teamRunId") || task.has("memberId") || task.optJSONObject("origin")?.optString("kind")?.startsWith("team") == true)) return null
         val result = JSONObject().put("taskId", task.optString("id")).put("runId", task.optString("runId"))
             .put("coordinatorEpoch", task.optInt("coordinatorEpoch", -1)).put("profileId", refs.optString("profileId"))
             .put("jobId", task.optString("externalId")).put("jobOperationId", task.optString("operationId"))
-            .put("threadId", evidence.optString("threadId")).put("expectedTurnId", evidence.optString("turnId"))
+            .put("threadId", evidence.optString("threadId"))
+        RemoteMessageTarget.copy(inputTarget, result)
         if (fields.any { result.optString(it).isBlank() } || result.optInt("coordinatorEpoch") < 0 ||
             result.optString("profileId") != evidence.optString("profileId") || result.optString("jobOperationId") != evidence.optString("operationId")) return null
         return result
     }
-    private val fields = listOf("taskId", "runId", "profileId", "jobId", "jobOperationId", "threadId", "expectedTurnId")
-    @JvmStatic fun sameTarget(a: JSONObject?, b: JSONObject?): Boolean = a != null && b != null &&
-        fields.all { a.optString(it).isNotBlank() && a.optString(it) == b.optString(it) } && a.optInt("coordinatorEpoch", -1) >= 0 && a.optInt("coordinatorEpoch") == b.optInt("coordinatorEpoch", -1)
+    private val fields = listOf("taskId", "runId", "profileId", "jobId", "jobOperationId", "threadId")
+    @JvmStatic fun sameTarget(a: JSONObject?, b: JSONObject?): Boolean = try {
+        a != null && b != null && fields.all { a.optString(it).isNotBlank() && a.optString(it) == b.optString(it) } &&
+            a.optInt("coordinatorEpoch", -1) >= 0 && a.optInt("coordinatorEpoch") == b.optInt("coordinatorEpoch", -1) && RemoteMessageTarget.same(a, b)
+    } catch (_: Exception) { false }
     @JvmStatic fun messages(task: JSONObject): List<JSONObject> = rows(task.optJSONArray("operations")).filter { it.optString("tool") == "remote_message" }
     @JvmStatic fun canSend(task: JSONObject, reviewed: JSONObject?): Boolean {
         val evidence = task.optJSONObject("evidence") ?: return false
-        return sameTarget(reviewed, target(task)) && !task.optBoolean("cancelRequested") && task.optString("status") in setOf("running", "awaiting_user") &&
+        return sameTarget(reviewed, target(task)) && !task.optBoolean("cancelRequested") && !evidence.optBoolean("steeringUnknown") && task.optString("status") in setOf("running", "awaiting_user") &&
             evidence.optString("executorStatus") in setOf("running", "awaiting_approval") && evidence.optJSONObject("controls")?.optBoolean("inputSteering") == true &&
             messages(task).none { it.optString("state") != "message_receipt" }
     }
@@ -51,6 +56,8 @@ internal object RemoteSteerGuard {
         "sending" -> "发送中 · 尚未确认接收"
         else -> "接收结果未知 · 仅核对原消息"
     }
+    @JvmStatic fun receiptLabel(receipt: JSONObject): String = if (RemoteMessageTarget.pi(receipt) && receipt.optString("status") == "accepted")
+        "原Pi队列已接收 · 是否处理未知" else statusLabel(receipt.optString("status"))
     private fun rows(array: JSONArray?): List<JSONObject> = if (array == null) emptyList() else (0 until array.length()).mapNotNull { array.optJSONObject(it) }
 }
 
@@ -60,6 +67,8 @@ internal fun RemoteSteerPanel(task: JSONObject, busy: Boolean, error: String?, r
     if (task.optString("feature") != "remote") return
     val taskId = task.optString("id")
     val current = RemoteSteerGuard.target(task)
+    val pi = task.optJSONObject("evidence")?.optString("protocol") == "pi_rpc_v1"
+    val targetLabel = if (pi) "原Pi队列" else "原turn"
     var reviewed by remember(taskId) { mutableStateOf(current?.let { JSONObject(it.toString()) }) }
     var text by remember(taskId) { mutableStateOf("") }
     var submitted by remember(taskId) { mutableStateOf<String?>(null) }
@@ -76,15 +85,15 @@ internal fun RemoteSteerPanel(task: JSONObject, busy: Boolean, error: String?, r
         if (ownStatus == "accepted") { text = ""; submitted = null; reviewed = current?.let { JSONObject(it.toString()) } }
     }
     Column(Modifier.fillMaxWidth().padding(top = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("补充给正在运行的 Codex", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        Text("只向当前会话的原turn补充，不暂停、不恢复，也不新开任务。接收成功不等于任务完成。", style = MaterialTheme.typography.bodySmall)
+        Text(if (pi) "补充给正在运行的 Pi" else "补充给正在运行的 Codex", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        Text(if (pi) "只向这个无工具任务的原Pi队列追加。排队回执不证明模型已经处理；不会另开prompt，也不增加任务额度。" else "只向当前会话的原turn补充，不暂停、不恢复，也不新开任务。接收成功不等于任务完成。", style = MaterialTheme.typography.bodySmall)
         if (current != null) {
-            Text("当前会话：${current.optString("threadId").take(36)}\n当前turn：${current.optString("expectedTurnId").take(36)}", style = MaterialTheme.typography.bodySmall)
+            Text("当前会话：${current.optString("threadId").take(36)}\n${if (pi) "原请求" else "当前turn"}：${current.optString(if (pi) "expectedPromptRequestId" else "expectedTurnId").take(36)}", style = MaterialTheme.typography.bodySmall)
             if (!RemoteSteerGuard.sameTarget(reviewed, current)) {
                 Text("会话或执行代次已改变，草稿没有自动转发。", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = { reviewed = JSONObject(current.toString()); localError = null }, enabled = !busy && submitted == null) { Text("核对并改为当前turn") }
+                TextButton(onClick = { reviewed = JSONObject(current.toString()); localError = null }, enabled = !busy && submitted == null) { Text("核对当前输入目标") }
             }
-            OutlinedTextField(value = text, onValueChange = { if (it.length <= 12000) text = it }, label = { Text("给原turn的补充要求") },
+            OutlinedTextField(value = text, onValueChange = { if (it.length <= 12000) text = it }, label = { Text("给${targetLabel}的补充要求") },
                 minLines = 2, maxLines = 5, enabled = submitted == null && !busy, modifier = Modifier.fillMaxWidth())
             Button(onClick = {
                 try {
@@ -92,20 +101,20 @@ internal fun RemoteSteerPanel(task: JSONObject, busy: Boolean, error: String?, r
                     val payload = RemoteSteerGuard.payload(task, reviewed ?: kotlin.error("请重新核对目标"), messageId, text)
                     submitted = messageId; localError = null; onRequest("steerJob", payload)
                 } catch (failure: Exception) { localError = failure.message ?: "补充尚未发送" }
-            }, enabled = !busy && submitted == null && text.isNotBlank() && RemoteSteerGuard.canSend(task, reviewed)) { Text("发送到原turn") }
+            }, enabled = !busy && submitted == null && text.isNotBlank() && RemoteSteerGuard.canSend(task, reviewed)) { Text("发送到${targetLabel}") }
             if (submitted != null && own == null) {
                 Text("等待原生消息登记与回执；未确认前不会生成另一条补充。", style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = { onRequest("getSteerMessage", JSONObject().put("taskId", taskId).put("messageId", submitted)) }, enabled = !busy) { Text("核对本次消息") }
             }
             if (ownStatus == "rejected") TextButton(onClick = { submitted = null; reviewed = JSONObject(current.toString()); localError = null }, enabled = !busy) { Text("编辑后另发一条") }
-        } else Text("尚无已确认的活动 Codex 会话。请先核对原电脑任务；其他CLI不会伪装支持运行中输入。", style = MaterialTheme.typography.bodySmall)
+        } else Text("尚无可补充的准确执行目标。发送情况请核对下方原消息回执；未知结果只查询，不重发。", style = MaterialTheme.typography.bodySmall)
         (localError ?: error)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         if (messages.isNotEmpty()) {
             Text("消息回执（与任务结果独立）", style = MaterialTheme.typography.labelLarge)
             (if (expanded) messages else messages.takeLast(4)).asReversed().forEach { operation ->
                 val receipt = operation.optJSONObject("receipt") ?: JSONObject()
                 val messageId = operation.optString("operationId")
-                Text(RemoteSteerGuard.statusLabel(receipt.optString("status")) + " · " + messageId.takeLast(8), style = MaterialTheme.typography.bodySmall)
+                Text(RemoteSteerGuard.receiptLabel(receipt) + " · " + messageId.takeLast(8), style = MaterialTheme.typography.bodySmall)
                 if (receipt.optString("status") !in setOf("accepted", "rejected")) {
                     TextButton(onClick = { onRequest("getSteerMessage", JSONObject().put("taskId", taskId).put("messageId", messageId)) }, enabled = !busy) { Text("查询原消息 · 不重发") }
                 }

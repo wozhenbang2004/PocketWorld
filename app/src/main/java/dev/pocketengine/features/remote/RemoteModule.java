@@ -157,9 +157,13 @@ public final class RemoteModule implements EngineModule {
     private JSONObject steerJob(JSONObject input)throws Exception {
         if(input.has("_profileBinding"))requireProfileBinding(input.getString("profileId"),input.getString("_profileBinding"));
         String profileId=identifier(input,"profileId"),jobId=identifier(input,"jobId"),messageId=identifier(input,"messageId");
-        String expected=required(input,"expectedTurnId",200),content=required(input,"text",12000);
-        JSONObject body=new JSONObject().put("messageId",messageId).put("expectedTurnId",expected).put("text",content);
-        JSONObject details=new JSONObject().put("messageId",messageId).put("jobId",jobId).put("expectedTurnId",expected);
+        String content=required(input,"text",12000);
+        JSONObject body=RemoteMessageTarget.copy(input,new JSONObject().put("messageId",messageId).put("text",content));
+        JSONObject details=RemoteMessageTarget.copy(input,new JSONObject().put("messageId",messageId).put("jobId",jobId));
+        if(RemoteMessageTarget.pi(input)){
+            if(!required(input,"sessionId",200).equals(required(input,"threadId",200)))throw new SecurityException("Pi补充不是原session/thread");
+            required(input,"jobOperationId",200);
+        }
         if(input.has("_profileBinding"))details.put("profileBinding",required(input,"_profileBinding",64)).put("sourceServiceBase",required(input,"serviceBase",2048));
         for(String key:new String[]{"threadId","jobOperationId"})if(input.has(key)){String value=required(input,key,200);body.put(key,value);details.put(key,value);}
         Reservation reserved=reserve(profileId,messageId,"steer_message",body,details);
@@ -187,20 +191,22 @@ public final class RemoteModule implements EngineModule {
         String status=result.optString("status");
         if(!status.matches("queued|sending|accepted|unknown|rejected|not_found"))return unknownSteer(intent);
         if(!intent.getString("operationId").equals(result.optString("operationId",result.optString("messageId")))
-                ||!intent.getString("messageId").equals(result.optString("messageId"))||!intent.getString("jobId").equals(result.optString("jobId"))
-                ||!status.equals("not_found")&&!intent.getString("expectedTurnId").equals(result.optString("expectedTurnId"))
-                ||status.equals("accepted")&&!intent.getString("expectedTurnId").equals(result.optString("turnId")))return unknownSteer(intent);
+                ||!intent.getString("messageId").equals(result.optString("messageId"))||!intent.getString("jobId").equals(result.optString("jobId")))return unknownSteer(intent);
+        if(!status.equals("not_found")){
+            try{if(!RemoteMessageTarget.receiptMatches(intent,result))return unknownSteer(intent);}
+            catch(SecurityException|org.json.JSONException malformed){return unknownSteer(intent);}
+        }
         for(String key:new String[]{"threadId","jobOperationId"}){
-            if(intent.has(key)&&(status.equals("accepted")||result.has(key))&&!intent.getString(key).equals(result.optString(key)))return unknownSteer(intent);
+            if(intent.has(key)&&(RemoteMessageTarget.pi(intent)&&!status.equals("not_found")||status.equals("accepted")||result.has(key))&&!intent.getString(key).equals(result.optString(key)))return unknownSteer(intent);
             if(intent.has(key)&&!result.has(key))result.put(key,intent.get(key));
         }
-        if(!result.has("expectedTurnId"))result.put("expectedTurnId",intent.getString("expectedTurnId"));
+        if(status.equals("not_found"))RemoteMessageTarget.copy(intent,result);
         intent.put("status",status.equals("accepted")?"settled":status.equals("rejected")?"rejected":status.equals("queued")||status.equals("sending")?"pending":"unknown").put("executorStatus",status);
         recordOperation(intent);result.put("profileId",intent.getString("profileId"));result.remove("fingerprint");
         context.emit(id(),new JSONObject().put("kind","steer_message").put("receipt",metadata(result)));return result;
     }
     private JSONObject unknownSteer(JSONObject intent)throws Exception {
-        intent.put("status","unknown").put("message","补充要求是否被原turn接收尚未确认；仅查询消息编号，不会重发或开启新turn。原任务未被此回执停止。");recordOperation(intent);
+        intent.put("status","unknown").put("message",RemoteMessageTarget.pi(intent)?"补充是否进入原Pi队列尚未确认；仅查询原消息，不重发、不另开prompt。此回执不证明模型已处理或任务已停止。":"补充要求是否被原turn接收尚未确认；仅查询消息编号，不会重发或开启新turn。原任务未被此回执停止。");recordOperation(intent);
         JSONObject result=new JSONObject(intent.toString());result.remove("fingerprint");
         context.emit(id(),new JSONObject().put("kind","steer_message").put("receipt",metadata(result)));return result;
     }
@@ -877,7 +883,7 @@ public final class RemoteModule implements EngineModule {
         if(recent.size()>=30&&!recent.containsKey(job.optString("profileId")+":"+job.optString("id"))){String oldest=null;long time=Long.MAX_VALUE;for(Map.Entry<String,JSONObject> item:recent.entrySet()){long at=item.getValue().optLong("updatedAt");if(at<time){time=at;oldest=item.getKey();}}if(oldest!=null)recent.remove(oldest);}
         recent.put(job.optString("profileId")+":"+job.getString("id"),metadata(job).put("serviceBase",job.optString("serviceBase")));
     }
-    private static JSONObject metadata(JSONObject job)throws Exception {JSONObject value=new JSONObject();for(String key:new String[]{"id","profileId","serviceBase","operationId","environmentId","worker","status","message","createdAt","updatedAt","exitCode","outputTruncated","timedOut","archived","lastKnownStatus","path","version","previousVersion","desiredVersion","verified","protocol","protocolVerified","controlProtocolVerified","sessionIdentityConfirmed","sessionId","promptRequestId","threadId","turnId","pendingApprovals","approvalReceipts","pendingQuestions","questionReceipts","progress","promptResultIdentity","diffTruncated","model","reportedModel","readOnly","readOnlyConfirmed","externalToolsDisabled","teamReadOnlyTools","capabilities","controls","inputSteeringVerified","steeringUnknown","lastSteerMessage","interruptAcknowledged","turnStartAcknowledged","resumeJobId","sourceServiceBase","remoteEffectsVerified","eventCount","resultSubtype","permissionDenialCount","messageId","jobId","jobOperationId","expectedTurnId","dispatched","errorCode","resultSnapshotId","resultSnapshotVersion","snapshotPrelaunchVerified","snapshotBaseVerifiedAt","workspaceIdentity","assignmentWorkspace","externalJobLimits","inferenceUsage","modelCallHardCapSupported","tokenHardCapSupported","costHardCapSupported","wallTimeHardCapSupported","wallTimeEnforcement","detachedDescendantIsolationVerified","assignmentWriteSandboxVerified","osReadIsolationVerified","modelOptions","modelRuntime","effort","noTools","nativeSettled","resourcesHeld","commandAllowlistEnforced","processStarted","dispatchFenceFinal","notStartedConfirmed","processCleanupProof","outputLimitExceeded","inputState","recoveryProof","coldRecovery","projectHistory","sessionBranchSource","sessionBranch","inferenceAudience","groupInputSource","externalGroupApiMode","externalGroupApiRead"})if(job.has(key))value.put(key,job.get(key));return new JSONObject(value.toString());}
+    private static JSONObject metadata(JSONObject job)throws Exception {JSONObject value=new JSONObject();for(String key:new String[]{"id","profileId","serviceBase","operationId","environmentId","worker","status","message","createdAt","updatedAt","exitCode","outputTruncated","timedOut","archived","lastKnownStatus","path","version","previousVersion","desiredVersion","verified","protocol","protocolVerified","controlProtocolVerified","sessionIdentityConfirmed","sessionId","promptRequestId","threadId","turnId","pendingApprovals","approvalReceipts","pendingQuestions","questionReceipts","progress","promptResultIdentity","diffTruncated","model","reportedModel","readOnly","readOnlyConfirmed","externalToolsDisabled","teamReadOnlyTools","capabilities","controls","inputSteeringVerified","steeringUnknown","lastSteerMessage","interruptAcknowledged","turnStartAcknowledged","resumeJobId","sourceServiceBase","remoteEffectsVerified","eventCount","resultSubtype","permissionDenialCount","messageId","jobId","jobOperationId","expectedTurnId","expectedPromptRequestId","disposition","delivery","consumed","dispatched","errorCode","resultSnapshotId","resultSnapshotVersion","snapshotPrelaunchVerified","snapshotBaseVerifiedAt","workspaceIdentity","assignmentWorkspace","externalJobLimits","inferenceUsage","modelCallHardCapSupported","tokenHardCapSupported","costHardCapSupported","wallTimeHardCapSupported","wallTimeEnforcement","detachedDescendantIsolationVerified","assignmentWriteSandboxVerified","osReadIsolationVerified","modelOptions","modelRuntime","effort","noTools","nativeSettled","nativeQueueEmptyConfirmed","resourcesHeld","commandAllowlistEnforced","processStarted","dispatchFenceFinal","notStartedConfirmed","processCleanupProof","outputLimitExceeded","inputState","recoveryProof","coldRecovery","projectHistory","sessionBranchSource","sessionBranch","inferenceAudience","groupInputSource","externalGroupApiMode","externalGroupApiRead"})if(job.has(key))value.put(key,job.get(key));return new JSONObject(value.toString());}
     /** Native WorkProfile source inspection only. Not reachable through handle or model commands. */
     public JSONObject workProfileTargetFacts(JSONObject reference,dev.pocketengine.core.RunControl observation)throws Exception {
         workProfileReference(reference);java.util.Objects.requireNonNull(observation).check();
