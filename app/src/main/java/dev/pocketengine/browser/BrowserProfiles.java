@@ -37,6 +37,7 @@ public final class BrowserProfiles {
     }
     public String selectedId(){main();return registry.selectedId();}
     public void requireRevision(long expected){main();registry.requireRevision(expected);}
+    String preflightChangeForOwner(String id,long expected,boolean deleting)throws Exception {main();if(deleting)registry.checkDelete(id,expected,supported);else registry.checkSelect(id,expected,supported);return registry.selectedId();}
     public JSONObject createForOwner(String label,long expected)throws Exception {main();registry.create(label,expected,supported);return snapshot();}
     public JSONObject selectForOwner(String id,long expected)throws Exception {main();registry.select(id,expected,supported);return snapshot();}
     public JSONObject deleteForOwner(String id,long expected)throws Exception {main();registry.requestDelete(id,expected,supported);return snapshot();}

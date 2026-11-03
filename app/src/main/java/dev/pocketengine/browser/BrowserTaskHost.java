@@ -253,9 +253,28 @@ public final class BrowserTaskHost {
     public JSONObject selectHistoryForOwner(String taskId)throws Exception {JSONObject task=taskForOwner(taskId);latestTask=taskId;return task;}
     public void openUiForOwner()throws Exception {onMain(()->{browser.nativeOpenResearchUi();return new JSONObject();});}
     public void openUiForOwner(String taskId)throws Exception {if(taskId.isEmpty()){openUiForOwner();return;}worker();taskForOwner(taskId);latestTask=taskId;onMain(()->{browser.nativeOpenResearchUi(taskId);return new JSONObject();});}
-    public JSONObject selectProfileForOwner(String profileId,long revision)throws Exception {endForOwner();return onMain(()->browser.nativeSelectProfile(profileId,revision));}
+    public JSONObject selectProfileForOwner(String profileId,long revision)throws Exception {return changeProfileForOwner(profileId,revision,false);}
     public JSONObject createProfileForOwner(String label,long revision)throws Exception {return onMain(()->browser.nativeCreateProfile(label,revision));}
-    public JSONObject deleteProfileForOwner(String profileId,long revision)throws Exception {if(profileId.equals(onMain(()->browser.snapshot()).optString("profileId")))endForOwner();JSONObject deleted=onMain(()->browser.nativeDeleteProfile(profileId,revision));try{browser.nativeClearResearchDraftProfile(profileId);deleted.put("researchDraftsCleared",true);}catch(Exception cleanup){deleted.put("researchDraftsCleared",false).put("researchDraftCleanupMessage","资料已停用；本机文字草稿清理未确认，未恢复任何授权。");}return deleted;}
+    public JSONObject deleteProfileForOwner(String profileId,long revision)throws Exception {JSONObject deleted=changeProfileForOwner(profileId,revision,true);try{browser.nativeClearResearchDraftProfile(profileId);deleted.put("researchDraftsCleared",true);}catch(Exception cleanup){deleted.put("researchDraftsCleared",false).put("researchDraftCleanupMessage","资料已停用；本机文字草稿清理未确认，未恢复任何授权。");}return deleted;}
+    private JSONObject changeProfileForOwner(String profileId,long revision,boolean deleting)throws Exception {
+        return onMain(()->{
+            String previous=browser.nativePreflightProfileChange(profileId,revision,deleting);
+            boolean stop=!deleting||profileId.equals(previous);
+            // Pin objects before cancellation callbacks. Never reselect a later task/run/control.
+            Plan[] pending=stop?plans.values().stream().filter(plan->previous.equals(plan.identity.optString("profileId"))).toArray(Plan[]::new):new Plan[0];
+            Scope[] running=stop?active.values().stream().filter(scope->!scope.closed&&previous.equals(scope.plan.identity.optString("profileId"))).toArray(Scope[]::new):new Scope[0];
+            boolean requested=pending.length>0||running.length>0;
+            try{
+                for(Plan plan:pending)plan.cancelled=true;
+                for(Plan plan:pending)if(plan.selectedControl!=null)plan.selectedControl.cancel();
+                for(Scope scope:running){scope.control.cancel();BrowserTaskCapabilityPort port=scope.port;if(port!=null&&!scope.closed)port.endForOwner("owner_changed_profile");}
+                // Same main-thread turn, but not a registry transaction: cancellation callbacks or
+                // persistence can still fail. The original commit must recheck its revision/target.
+                JSONObject changed=deleting?browser.nativeDeleteProfile(profileId,revision):browser.nativeSelectProfile(profileId,revision);
+                return changed.put("researchStopRequested",requested);
+            }catch(Exception failed){if(requested)throw new IllegalStateException("原浏览研究已请求停止，但登录资料变更未确认；请刷新核对："+failed.getMessage(),failed);throw failed;}
+        });
+    }
     public void selectOwnerPage(String tabId)throws Exception {onMain(()->{browser.nativeSelectOwnerTab(tabId);return new JSONObject();});}
     public void closeOwnerPage(String tabId)throws Exception {onMain(()->{browser.nativeCloseOwnerTab(tabId);return new JSONObject();});}
     public void takeOverPage(String tabId)throws Exception {onMain(()->{browser.nativeTakeOverTaskTab(tabId);return new JSONObject();});}

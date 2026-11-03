@@ -62,6 +62,8 @@ public final class BrowserModule implements EngineModule {
     public void nativeOpenResearchUi(){nativeOpenResearchUi("");}
     public void nativeOpenResearchUi(String taskId){BrowserProfiles.main();if(closed)throw new IllegalStateException("浏览器模块已关闭");if(!taskId.isEmpty())BrowserTaskSpace.uuid(taskId);context.android.startActivity(new android.content.Intent(context.android,BrowserActivity.class).putExtra("showResearch",true).putExtra("browserResearchTaskId",taskId).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK|android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT|android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP));BrowserActivity browser=BrowserActivity.current();if(browser!=null)browser.showResearchPanelForOwner(taskId);}
     public JSONObject nativeCreateProfile(String label,long expectedRevision)throws Exception {nativeProfiles();return BrowserProfiles.get(context.android).createForOwner(label,expectedRevision);}
+    /** Native owner validation on the initialized adapter; first use retains normal registry initialization. */
+    public String nativePreflightProfileChange(String id,long expectedRevision,boolean deleting)throws Exception {BrowserProfiles.main();if(closed)throw new IllegalStateException("浏览器模块已关闭");return BrowserProfiles.get(context.android).preflightChangeForOwner(id,expectedRevision,deleting);}
     public JSONObject nativeSelectProfile(String id,long expectedRevision)throws Exception {
         nativeProfiles();BrowserProfiles profiles=BrowserProfiles.get(context.android);profiles.requireRevision(expectedRevision);ownerProfileGeneration++;profiles.selectForOwner(id,expectedRevision);
         BrowserActivity browser=BrowserActivity.current();if(browser!=null)browser.profileChangedForOwner();return profiles.snapshot();
