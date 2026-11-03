@@ -86,15 +86,24 @@ import org.json.JSONObject
         }
         data.optJSONArray("issues")?.let { issues -> (0 until issues.length()).forEach { Text(issues.optString(it), color = Danger, fontSize = 13.sp, lineHeight = 21.sp) } }
         Text("按组件分别记入原任务，不承诺跨模块原子安装。中途停止或失败会明确保留已确认部分；未知只查询原操作，不回滚已发生的效果，也不自动重提。", color = SecondaryInk, fontSize = 13.sp, lineHeight = 21.sp)
-        var chosen by remember(retained.digest) { mutableStateOf(functionalRows(data.optJSONArray("components")).filter { it.optBoolean("selected", true) && it.optBoolean("selectable", true) }.map { it.getString("key") }.toSet()) }
+        var chosen by remember(retained) { mutableStateOf(functionalRows(data.optJSONArray("components")).filter { it.optBoolean("selected", true) && it.optBoolean("selectable", true) }.map { it.getString("key") }.toSet()) }
+        val selectionReviewed = removing || retained.matchesSelection(chosen)
         if (!removing) {
             Text("独立组件选择", fontSize = 15.sp, fontWeight = FontWeight.Medium)
             functionalRows(data.optJSONArray("components")).forEach { component ->
                 val key = component.getString("key")
-                Row { Checkbox(key in chosen, { chosen = if (key in chosen) chosen - key else chosen + key; acknowledged = false }, enabled = !busy && component.optBoolean("selectable", true)); Text("$key · ${if (component.optBoolean("selectable", true)) "可选择" else "受阻，未派发"}", fontSize = 13.sp) }
+                Row { Checkbox(key in chosen, { selected ->
+                    if (!busy && alive && review === retained && component.optBoolean("selectable", true)) {
+                        chosen = if (selected) chosen + key else chosen - key; acknowledged = false
+                    }
+                }, enabled = !busy && component.optBoolean("selectable", true)); Text("$key · ${if (component.optBoolean("selectable", true)) "可选择" else "受阻，未派发"}", fontSize = 13.sp) }
                 component.optJSONObject("inspection")?.optString("reason")?.takeIf { it.isNotBlank() }?.let { Text(it, color = SecondaryInk, fontSize = 12.sp) }
             }
-            TextButton(onClick = { work({ page.selectComponents(retained, JSONArray(chosen.toList())) }) { review = it; acknowledged = false } }, enabled = !busy && chosen.isNotEmpty()) { Text("重新审阅仅所选独立组件及依赖") }
+            TextButton(onClick = {
+                val selected = chosen.toSet()
+                work({ page.selectComponents(retained, JSONArray(selected.toList())) }) { review = it; acknowledged = false }
+            }, enabled = !busy && chosen.isNotEmpty()) { Text("重新审阅仅所选独立组件及依赖") }
+            if (!selectionReviewed) Text("组件选择已变更，请先重新审阅所选组件，再确认安装。", color = SecondaryInk, fontSize = 13.sp)
             data.optJSONArray("selectionProblems")?.let { problems -> (0 until problems.length()).forEach { Text(problems.optString(it), color = Danger, fontSize = 13.sp) } }
             if (data.optBoolean("selectionExplicit") && !data.optBoolean("wholePackageSelected")) Text("本次为部分组件安装：未选/受阻部分不派发，保留原组件/手工修改，不声明整包或配方可用。", color = SecondaryInk, fontSize = 13.sp)
         }
@@ -109,8 +118,17 @@ import org.json.JSONObject
             if (component.optString("kind") == "executable_js" && inspected.has("source")) SelectionContainer { Text(inspected.getString("source"), fontSize = 12.sp, lineHeight = 19.sp, fontFamily = FontFamily.Monospace) }
             SelectionContainer { Text(component.toString(2), fontSize = 11.sp, lineHeight = 18.sp) }
         }
-        Row { Checkbox(acknowledged, { acknowledged = it }, enabled = !busy && retained.ready); Text(if (removing) "我已核对归属与保留项；仅移除本次准确原组件" else "我已核对准确组件与所需能力；只导入内容，不批准或开始运行", modifier = Modifier.weight(1f), fontSize = 13.sp, lineHeight = 21.sp) }
-        Button(onClick = { work({ val actual = page.submit(retained, retained.digest); actual to page.snapshot() }) { (actual, current) -> result = actual; snapshot = current; review = null; notice = actual.optString("message") } }, enabled = !busy && acknowledged && retained.ready) { Text(if (removing) "仅卸载原包确认组件" else if (data.optBoolean("selectionExplicit") && !data.optBoolean("wholePackageSelected")) "仅安装已审所选组件，整包仍部分完成" else "安装为停用组件，不运行") }
+        Row { Checkbox(acknowledged, { checked ->
+            acknowledged = checked && !busy && alive && review === retained && retained.ready && (removing || retained.matchesSelection(chosen))
+        }, enabled = !busy && retained.ready && selectionReviewed); Text(if (removing) "我已核对归属与保留项；仅移除本次准确原组件" else "我已核对准确组件与所需能力；只导入内容，不批准或开始运行", modifier = Modifier.weight(1f), fontSize = 13.sp, lineHeight = 21.sp) }
+        Button(onClick = {
+            if (review !== retained || !acknowledged || !retained.ready || (!removing && !retained.matchesSelection(chosen))) return@Button
+            val selected = chosen.toSet()
+            work({
+                check(removing || retained.matchesSelection(selected)) { "组件选择已变更，请重新审阅并确认" }
+                val actual = page.submit(retained, retained.digest); actual to page.snapshot()
+            }) { (actual, current) -> result = actual; snapshot = current; review = null; notice = actual.optString("message") }
+        }, enabled = !busy && acknowledged && retained.ready && selectionReviewed) { Text(if (removing) "仅卸载原包确认组件" else if (data.optBoolean("selectionExplicit") && !data.optBoolean("wholePackageSelected")) "仅安装已审所选组件，整包仍部分完成" else "安装为停用组件，不运行") }
         TextButton(onClick = { review = null }, enabled = !busy) { Text("放弃这次审阅") }
     }
     result.optString("taskId").takeIf { it.isNotBlank() }?.let { task -> TextButton(onClick = { onOpenTask(task) }) { Text("打开这次原任务与回执") } }
