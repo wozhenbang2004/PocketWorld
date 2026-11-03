@@ -684,11 +684,16 @@
   },
   "native-normal-cleanup": {
     "class": "dev.pocketengine.features.local.runtime.NativeNormalCleanupTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.runtime.ManagedProcessJobsLeaseTest",
+      "dev.pocketengine.features.local.runtime.ManagedProcessJobsLifecycleTest"
+    ],
     "helpers": [
-      "dev.pocketengine.features.local.runtime.OwnedGroupObservationProbe"
+      "dev.pocketengine.features.local.runtime.OwnedGroupObservationProbe",
+      "dev.pocketengine.features.local.runtime.RuntimeContractsTest"
     ],
     "native": true,
-    "description": "Actual Linux JNI ordinary protocol2 bounded read-only original-group drain: controlled 400ms orphan reap settles, beyond-deadline held member stays unknown; exact historical exit7 contracts preserved. Separate fixture launcher only, not App-wide subreaper, full task/device or global PID cleanup."
+    "description": "Actual Linux JNI ordinary protocol2 bounded read-only original-group drain and original ManagedProcessJobs/preparation leases: controlled orphan reap settles, beyond-deadline held member keeps its actual lease and unknown receipt across cold reads, cancel and close. Exact historical exit7 contracts preserved; failed lease close also remains unresolved. Separate fixture launcher only, not App-wide subreaper, full task/device or global PID cleanup."
   },
   "memory-archive-currentness": {
     "class": "dev.pocketengine.features.memory.MemoryArchiveCurrentnessTest",

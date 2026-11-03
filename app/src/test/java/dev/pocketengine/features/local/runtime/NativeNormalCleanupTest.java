@@ -45,6 +45,21 @@ public final class NativeNormalCleanupTest {
         JSONObject record=fixture("held-through-receipt"),receipt=record.getJSONObject("receipt");
         assertTrue(receipt.getBoolean("cancelled"));assertTrue(receipt.getBoolean("outputComplete"));assertFalse(receipt.getBoolean("groupAbsent"));assertEquals(15,receipt.getInt("signal"));assertEquals(NativeProcessSupervisor.EXIT_RESULT_CONTRACT,receipt.getString("contract"));assertTrue(receipt.getLong("elapsedMillis")>=2000);assertTrue(receipt.getLong("elapsedMillis")<5000);
     }
+    @Test public void ordinaryUnknownRetainsItsActualLeaseThroughColdReadCancelAndClose()throws Exception {
+        assertManagedLeaseHeld(fixture("managed-held-through-receipt"));
+    }
+    @Test public void preparationUnknownRetainsItsActualLeaseWithoutReplayingItsSubprocess()throws Exception {
+        assertManagedLeaseHeld(fixture("preparation-held-through-receipt"));
+    }
+    private static void assertManagedLeaseHeld(JSONObject record)throws Exception {
+        JSONObject result=record.getJSONObject("receipt"),actual=result.getJSONObject("actual"),cold=result.getJSONObject("cold"),cancel=result.getJSONObject("coldCancel");
+        assertEquals(0,result.getInt("leaseCloseCount"));assertTrue(result.getBoolean("closeRejected"));assertTrue(result.getBoolean("maintenanceRejected"));
+        assertEquals("unknown",actual.getString("status"));assertFalse(actual.getBoolean("processGroupAbsent"));assertFalse(actual.getBoolean("resourcesReleased"));assertFalse(actual.getBoolean("ownedWorkerLive"));
+        assertEquals("unknown",cold.getString("status"));assertFalse(cold.getBoolean("resourcesReleased"));assertEquals("no_owned_live_process",cancel.getString("cancelDelivery"));assertFalse(cancel.getBoolean("resourcesReleased"));
+        assertEquals(actual.getJSONObject("projectExecution").toString(),cold.getJSONObject("projectExecution").toString());
+        assertEquals(actual.getString("operationId"),cancel.getString("operationId"));assertTrue(result.getLong("elapsedMillis")<8000);
+        assertEquals("exact_own_child_reaped",record.getJSONArray("observations").getJSONObject(2).getString("event"));
+    }
     @Test public void exactHistoricalContractsRemainValidWithoutRelabellingThemAsTheNewAlgorithm()throws Exception {
         assertNotEquals(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT);
         for(String contract:List.of(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT)){
