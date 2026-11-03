@@ -7,6 +7,8 @@ import dev.pocketengine.features.HostToolSupervisor;
 import dev.pocketengine.features.workspace.JsonFiles;
 import dev.pocketengine.features.local.LocalModule;
 import dev.pocketengine.features.local.project.ProjectOwnerWorkflows;
+import dev.pocketengine.features.memory.TaskMemoryJournal;
+import dev.pocketengine.features.memory.TaskMemoryUse;
 import dev.pocketengine.features.skills.SkillSourcePolicy;
 import dev.pocketengine.features.skills.SkillsModule;
 import dev.pocketengine.runtime.models.ModelTargetRef;
@@ -249,7 +251,18 @@ public final class NativeWorkProfileSkillScopeTest {
                 JSONObject result=app.continueOwnerWorkProfile(task.getString("id"),null,selected,next);assertEquals(task.getString("id"),result.getString("taskId"));assertEquals(1,app.tasks.list().length());
                 JSONObject continued=app.tasks.get(task.getString("id"),false),scope=continued.getJSONObject("executionScope");assertEquals(task.getInt("coordinatorEpoch")+1,continued.getInt("coordinatorEpoch"));
                 for(String field:new String[]{"revision","deadlineAt","toolLimit","modelCallLimit"})assertEquals(originalScope.get(field),scope.get(field));
-                assertEquals(originalTools.toString(),scope.getJSONArray("tools").toString());assertEquals(originalScope.getJSONArray("tools").toString(),scope.getJSONArray("tools").toString());assertEquals(0,continued.getJSONArray("operations").length());return result;
+                assertEquals(originalTools.toString(),scope.getJSONArray("tools").toString());assertEquals(originalScope.getJSONArray("tools").toString(),scope.getJSONArray("tools").toString());
+                assertEquals(0,scope.getInt("toolsUsed"));assertEquals(originalScope.getInt("modelCallsUsed")+1,scope.getInt("modelCallsUsed"));
+                // The real App records reference delivery in its original journal, even for
+                // an empty recall. This is provenance, not a tool call or execution grant.
+                JSONArray operations=continued.getJSONArray("operations");assertEquals(operations.toString(),1,operations.length());
+                JSONObject operation=operations.getJSONObject(0);assertEquals(TaskMemoryJournal.TOOL,operation.getString("tool"));assertEquals(TaskMemoryJournal.PROVIDED,operation.getString("state"));assertEquals(continued.getString("runId"),operation.getString("runId"));
+                JSONObject evidence=continued.getJSONObject("evidence"),reference=evidence.getJSONObject("memoryReference");
+                var expected=new TaskMemoryUse.ReceiptRef(new TaskMemoryUse.TaskRef(task.getString("id"),continued.getString("runId"),continued.getInt("coordinatorEpoch"),"owner","private"),reference.getString("requestId"),reference.getString("answerId"));
+                var provided=TaskMemoryJournal.readProvided(continued,expected);assertNotNull(provided);assertFalse(provided.revoked);assertEquals(reference.getString("receiptId"),provided.selectionId);
+                assertFalse(operation.getJSONObject("receipt").getBoolean("executionAuthorized"));assertFalse(operation.getJSONObject("receipt").getBoolean("modelUseVerified"));
+                JSONObject answer=evidence.getJSONObject("nativeFinalAnswer");assertEquals(task.getString("id"),answer.getString("taskId"));assertEquals(continued.getString("runId"),answer.getString("runId"));assertEquals(continued.getInt("coordinatorEpoch"),answer.getInt("coordinatorEpoch"));assertTrue(answer.getBoolean("inputBoundaryEmpty"));
+                return result;
             }finally{originalPage.close();}
         }).get(40,TimeUnit.SECONDS);assertEquals(continuedResult.toString(),1,requests.size());boolean delivered=false;
         JSONArray messages=requests.get(0).getJSONArray("messages");for(int i=0;i<messages.length();i++){JSONObject message=messages.getJSONObject(i);String content=message.optString("content");assertFalse("Old global pin must not gain the shadowing project source",content.contains(MARKER));if(content.contains("GLOBAL_REFERENCE_ONLY")){delivered=true;assertEquals("user",message.getString("role"));assertTrue(content.contains("<host_reference_data>"));}}assertTrue("Legacy cold continuation must read its original global body through the actual Runner",delivered);
