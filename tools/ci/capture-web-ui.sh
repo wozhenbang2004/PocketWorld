@@ -21,6 +21,7 @@ PW_STAGE=preflight
 PW_EMULATOR_PID=
 PW_LOGCAT_PID=
 PW_RECORD_PID=
+PW_LAYOUT_DUMP_SEQUENCE=0
 
 pw_adb() {
     local limit=30 remaining
@@ -169,21 +170,53 @@ python3 tools/ci/verify-web-ui.py foreground --dump "$PW_CAPTURE_DIR/activity-re
     --out "$PW_CAPTURE_DIR/foreground-ready.json"
 
 pw_dump_layout() {
-    local name=$1 attempt
-    local remote=/sdcard/pocketworld-web-layout.xml
+    local name=$1 attempt remote dump_log dump_status reason started=$SECONDS
+    local target="$PW_CAPTURE_DIR/$name" temporary="$PW_CAPTURE_DIR/$name.tmp"
+    # A null-root UIAutomator command can exit zero without replacing its file.
+    # Neither an earlier remote dump nor a previous local scene is fresh evidence.
+    rm -f "$target" "$temporary" || return 1
     for attempt in 1 2 3 4 5; do
         if [[ -n "${PW_ADB_DEADLINE:-}" ]] && (( SECONDS >= PW_ADB_DEADLINE )); then break; fi
-        if pw_adb shell uiautomator dump --compressed "$remote" >> "$PW_CAPTURE_DIR/uiautomator.txt" 2>&1 &&
-            pw_adb exec-out cat "$remote" > "$PW_CAPTURE_DIR/$name.tmp"; then
-            if python3 - "$PW_CAPTURE_DIR/$name.tmp" <<'PY'
+        PW_LAYOUT_DUMP_SEQUENCE=$((PW_LAYOUT_DUMP_SEQUENCE + 1))
+        remote="/sdcard/$PW_AVD_NAME-layout-$PW_LAYOUT_DUMP_SEQUENCE.xml"
+        dump_log="$PW_CAPTURE_DIR/$name-dump-$PW_LAYOUT_DUMP_SEQUENCE.txt"
+        printf 'layout=%s attempt=%s started=%s remote=%s\n' \
+            "$name" "$attempt" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$remote" > "$dump_log"
+        if pw_adb shell uiautomator dump --compressed "$remote" >> "$dump_log" 2>&1; then
+            dump_status=0
+        else
+            dump_status=$?
+        fi
+        reason=
+        if [[ "$dump_status" != 0 ]]; then
+            reason="UIAutomator command exited $dump_status"
+        elif grep -Fq 'ERROR:' "$dump_log"; then
+            reason='UIAutomator reported an error; no fresh hierarchy accepted'
+        elif ! grep -Fxq "UI hierchary dumped to: $remote" "$dump_log"; then
+            reason='UIAutomator did not confirm the output file for this attempt'
+        elif ! pw_adb shell test -s "$remote" >> "$dump_log" 2>&1; then
+            reason='This attempt did not create a non-empty remote XML file'
+        elif ! pw_adb exec-out cat "$remote" > "$temporary" 2>> "$dump_log"; then
+            reason='The remote XML file for this attempt could not be read'
+        elif ! python3 - "$temporary" >> "$dump_log" 2>&1 <<'PY'
 import sys, xml.etree.ElementTree as ET
 assert ET.parse(sys.argv[1]).getroot().tag == 'hierarchy'
 PY
-            then
-                mv "$PW_CAPTURE_DIR/$name.tmp" "$PW_CAPTURE_DIR/$name"
-                return 0
-            fi
+        then
+            reason='This attempt did not produce a parseable hierarchy'
         fi
+        if [[ -z "$reason" && -n "${PW_ADB_DEADLINE:-}" ]] && (( SECONDS >= PW_ADB_DEADLINE )); then
+            reason='Scene deadline reached before fresh XML could be accepted'
+        fi
+        printf 'command_exit=%s elapsed=%ss result=%s\n' \
+            "$dump_status" "$((SECONDS - started))" "${reason:-fresh-hierarchy}" >> "$dump_log"
+        cat "$dump_log" >> "$PW_CAPTURE_DIR/uiautomator.txt"
+        if [[ -z "$reason" ]]; then
+            mv "$temporary" "$target" || return 1
+            return 0
+        fi
+        cat "$dump_log" >&2
+        rm -f "$temporary"
         if [[ -n "${PW_ADB_DEADLINE:-}" ]] && (( SECONDS >= PW_ADB_DEADLINE )); then break; fi
         sleep 1
     done
