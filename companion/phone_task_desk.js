@@ -6,7 +6,7 @@ const byId = id => document.getElementById(id);
 const mutations = new Set(["run", "cancel", "acquire_control", "answer", "steer", "resume"]);
 const controls = new Set(["acquire_control", "answer", "steer", "resume"]);
 const settled = new Set(["succeeded", "failed", "cancelled", "interrupted", "expired", "rejected"]);
-let peer = null, busy = false, scopes = [], description = null, currentTask = null;
+let peer = null, busy = false, waitPending = false, scopes = [], description = null, currentTask = null;
 let selectedOperation = "", selectionVersion = 0, lockedControl = null, submission = null;
 let watchVersion = 0, watchTimer = null, watching = false;
 const inputDrafts = new Map(), cancelRecords = new Map(), eventViews = new Map();
@@ -112,6 +112,7 @@ function signedMethod(method) {
     && item.grant.expiresAt > Date.now() && item.grant.capabilities?.includes(method));
 }
 function refreshInputs() {
+  const blocked = busy || waitPending;
   const input = currentInput(), question = input?.ordinaryQuestion, lease = currentTask?.result?.controlLease;
   const ordinary = question && question.approval === false && question.takeover === false;
   const leaseValid = !!lease?.controlLeaseId && lease.expiresAt > Date.now();
@@ -120,20 +121,20 @@ function refreshInputs() {
   byId("ordinary-question").hidden = !ordinary;
   byId("question-text").textContent = ordinary ? question.question : "";
   byId("running-steer").hidden = input?.runningInputState !== "requires_current_write_grant_and_control_lease";
-  byId("acquire-control").disabled = busy || !input || !signedMethod("task.acquireControl") || !!lockedControl || fenced;
+  byId("acquire-control").disabled = blocked || !input || !signedMethod("task.acquireControl") || !!lockedControl || fenced;
   byId("acquire-control").textContent = leaseValid ? "Renew task control" : "Acquire task control";
-  byId("answer").disabled = busy || !ordinary || !leaseValid || !signedMethod("task.answerQuestion") || !!lockedControl || fenced || !byId("answer-text").value.trim();
-  byId("steer").disabled = busy || !input || byId("running-steer").hidden || !leaseValid || !signedMethod("task.steer") || !!lockedControl || fenced || !byId("steer-text").value.trim();
+  byId("answer").disabled = blocked || !ordinary || !leaseValid || !signedMethod("task.answerQuestion") || !!lockedControl || fenced || !byId("answer-text").value.trim();
+  byId("steer").disabled = blocked || !input || byId("running-steer").hidden || !leaseValid || !signedMethod("task.steer") || !!lockedControl || fenced || !byId("steer-text").value.trim();
   byId("resume-panel").hidden = !input || !signedMethod("task.requestResume");
-  byId("resume").disabled = busy || !input || !leaseValid || !signedMethod("task.requestResume") || !!lockedControl || fenced || !Number.isSafeInteger(currentTask?.revision);
-  byId("control-status").disabled = busy || !byId("control-operation").value;
-  for (const id of ["doctor", "list", "status", "wait", "events", "reconnect"]) byId(id).disabled = busy || !peer;
-  byId("watch").disabled = busy || !peer || !selectedOperation || watching;
+  byId("resume").disabled = blocked || !input || !leaseValid || !signedMethod("task.requestResume") || !!lockedControl || fenced || !Number.isSafeInteger(currentTask?.revision);
+  byId("control-status").disabled = blocked || !byId("control-operation").value;
+  for (const id of ["doctor", "list", "status", "wait", "events", "reconnect"]) byId(id).disabled = blocked || !peer;
+  byId("watch").disabled = blocked || !peer || !selectedOperation || watching;
   byId("stop-watch").hidden = !watching; byId("progress").hidden = !watching;
   byId("cancel").disabled = busy || !peer || !selectedOperation || (!cancel && settled.has(currentTask?.state));
   byId("cancel").textContent = cancel ? "Read cancellation" : "Cancel task";
-  byId("new-task").disabled = busy || !peer || !!submission && !submission.confirmed;
-  byId("start-task").disabled = busy || !peer || !scopePresent() || !byId("grant").value || !byId("version").value || !!submission;
+  byId("new-task").disabled = blocked || !peer || !!submission && !submission.confirmed;
+  byId("start-task").disabled = blocked || !peer || !scopePresent() || !byId("grant").value || !byId("version").value || !!submission;
 }
 function updateScopes(value) {
   const previousGrant = byId("grant").value, previousBinding = byId("binding").value;
@@ -224,13 +225,20 @@ async function readEvents(operation, revision) {
   view.cursor = page.nextCursor; renderEvents(operation); return page;
 }
 async function perform(action, params) {
-  if (busy || !peer) return;
-  busy = true; const revision = selectionVersion, operation = params.operationId ?? selectedOperation;
+  const cancellation = action === "cancel" || action === "status" && [...cancelRecords.values()].some(record => record.id === params.operationId);
+  if (busy || waitPending && !cancellation || !peer) return;
+  // An observational wait owns only its local read slot. Cancellation and its
+  // original receipt read remain available without replaying either operation.
+  const waiting = action === "wait";
+  if (waiting) waitPending = true; else busy = true;
+  const revision = selectionVersion, operation = params.operationId ?? selectedOperation;
+  const originalCancellation = cancelRecords.get(operation);
   if (mutations.has(action)) stopWatching();
   refreshInputs(); notice(mutations.has(action) ? "Sending one request to the selected phone…" : "Reading the selected phone…");
   let result;
   try {
     result = await call(action, {peerDeviceId:peer,...params});
+    if (waiting && cancelRecords.get(operation) !== originalCancellation) return result;
     if (action === "doctor") { updateScopes(result.description); markConnection(!!scopeFresh()); byId("connection-help").open = !scopeFresh(); }
     if (action === "list") renderRecent(result);
     if (controls.has(action)) recordInputResult(action, params, result);
@@ -265,11 +273,11 @@ async function perform(action, params) {
     }
     if (action === "doctor") { updateScopes(null); markConnection(false); byId("connection-help").open = true; }
     if (isCurrent(operation, revision) || action === "doctor" || action === "list") notice(error.message || "The original response is unconfirmed. Read the same operation.");
-  } finally { busy = false; refreshInputs(); }
+  } finally { if (waiting) waitPending = false; else busy = false; refreshInputs(); }
   return result;
 }
 function writeInput(action) {
-  const input = currentInput(); if (!input || busy || lockedControl || cancelRecords.has(selectedOperation) || byId(action === "acquire_control" ? "acquire-control" : action).disabled) return;
+  const input = currentInput(); if (!input || busy || waitPending || lockedControl || cancelRecords.has(selectedOperation) || byId(action === "acquire_control" ? "acquire-control" : action).disabled) return;
   const controlOperationId = crypto.randomUUID(); byId("control-operation").value = controlOperationId;
   const params = {operationId:selectedOperation, controlOperationId, taskId:input.taskId, runId:input.runId, executorEpoch:input.executorEpoch, allocationId:input.allocationId};
   const lease = currentTask.result.controlLease;
@@ -287,7 +295,7 @@ function stopWatching() {
   watching = false; watchVersion++; if (watchTimer !== null) clearTimeout(watchTimer); watchTimer = null; refreshInputs();
 }
 function startWatching() {
-  if (!peer || !selectedOperation || busy) return;
+  if (!peer || !selectedOperation || busy || waitPending) return;
   stopWatching(); watching = true; const version = watchVersion, operation = selectedOperation, revision = selectionVersion;
   refreshInputs();
   async function tick() {
@@ -318,7 +326,7 @@ byId("control-status").onclick = () => perform("status", {operationId:byId("cont
 byId("list").onclick = () => perform("list", {});
 byId("doctor").onclick = () => perform("doctor", {});
 for (const action of ["status","wait"]) byId(action).onclick = () => perform(action, {operationId:selectedOperation,...(action === "wait" ? {timeoutMs:30000} : {})});
-byId("events").onclick = async () => { try { if (!busy) await readEvents(selectedOperation, selectionVersion); } catch(error) { notice(error.message); } };
+byId("events").onclick = async () => { try { if (!busy && !waitPending) await readEvents(selectedOperation, selectionVersion); } catch(error) { notice(error.message); } };
 byId("watch").onclick = startWatching; byId("stop-watch").onclick = stopWatching;
 byId("reconnect").onclick = async () => { const operation=selectedOperation, revision=selectionVersion; await perform("doctor",{}); if (isCurrent(operation,revision) && scopeFresh()) startWatching(); };
 byId("cancel").onclick = () => {
@@ -330,12 +338,12 @@ byId("cancel").onclick = () => {
   void perform("cancel", {operationId:selectedOperation,cancelOperationId:id});
 };
 byId("new-task").onclick = () => {
-  if (busy || !peer || submission && !submission.confirmed) return;
+  if (busy || waitPending || !peer || submission && !submission.confirmed) return;
   submission = null; byId("goal").value = ""; byId("submission-state").textContent = ""; byId("composer").hidden = false; refreshInputs(); byId("goal").focus();
 };
 byId("dismiss-draft").onclick = () => { byId("composer").hidden = true; };
 byId("submit").onsubmit = async event => {
-  event.preventDefault(); if (busy || !peer || submission) return;
+  event.preventDefault(); if (busy || waitPending || !peer || submission) return;
   try {
     if (!scopePresent() || !byId("grant").value || !byId("version").value || !byId("goal").value.trim()) { notice("Check the phone’s current scope and enter a goal first."); return; }
     const index = byId("scope-choice").value, selected = index === "" ? null : scopes[Number(index)];

@@ -145,9 +145,39 @@ async function submissionRechecksScopeAndPreservesCustomBudget() {
   await changed.get("submit").onsubmit({preventDefault(){}});await changed.flush();
   assert.equal(changed.calls.filter(c=>c.action==="run").length,0);assert.match(changed.get("notice").textContent,/scope or this draft changed/);changed.close();
 }
+async function cancelDuringOriginalWait(waitFinishesFirst) {
+  let releaseWait,releaseCancel,pending;
+  const f=await fixture(async request=>{
+    if(request.action==="wait")return new Promise(resolve=>{releaseWait=resolve;});
+    if(request.action==="cancel")return new Promise(resolve=>{releaseCancel=resolve;});
+  });
+  try {
+    await f.connected();pending=f.get("wait").onclick();await f.flush();
+    assert.equal(f.get("cancel").disabled,false,"A read-only wait must leave cancellation available");
+    f.get("cancel").onclick();await f.flush();
+    const cancel=f.calls.find(c=>c.action==="cancel");assert.ok(cancel);
+    assert.equal(cancel.params.operationId,"goal-A");assert.equal(cancel.params.peerDeviceId,PEER);
+    f.get("cancel").onclick();await f.flush();assert.equal(f.calls.filter(c=>c.action==="cancel").length,1);
+    if(waitFinishesFirst){releaseWait(snapshot("goal-A"));await pending;assert.equal(f.get("cancel").disabled,true,"Wait completion must not unlock an in-flight cancellation");}
+    releaseCancel({operationId:cancel.params.cancelOperationId,status:"unknown",effectState:"unknown"});await f.flush();
+    assert.equal(f.get("cancel").disabled,false);
+    f.get("cancel").onclick();await f.flush();
+    assert.ok(f.calls.some(c=>c.action==="status"&&c.params.operationId===cancel.params.cancelOperationId));
+    assert.equal(f.calls.filter(c=>c.action==="cancel").length,1,"Unknown cancellation is queried, never replayed");
+    if(!waitFinishesFirst){releaseWait(snapshot("goal-A"));await pending;}
+    assert.equal(f.run("selectedOperation"),"goal-A");assert.equal(f.get("operation").value,"goal-A");
+    assert.equal(f.run("currentTask"),null,"An older wait cannot overwrite an unknown original cancellation");
+    assert.equal(f.calls.filter(c=>c.action==="run").length,0);
+  } finally {
+    releaseWait?.(snapshot("goal-A"));releaseCancel?.({status:"unknown",effectState:"unknown"});
+    if(pending)await pending;await f.flush();f.close();
+  }
+}
 (async()=>{
   await changedSelectionDuringWrite(true);await changedSelectionDuringWrite(false);
   process.stdout.write("Desk draft/unknown selection fixture: 2 cases passed\n");
   for(const test of [unknownSubmissionIsNeverResent,duplicateCancellationQueriesItsOriginalWrite,staleSourceAndScopeAreFenced,streamUsesCursorAndRejectsOtherPhone,resumeUsesPostLeaseRevisionAndOnlyRequestsPhoneReview,disconnectStopsWatchingWithoutMutation,submissionRechecksScopeAndPreservesCustomBudget])await test();
   process.stdout.write("Desk mutation, revision, event, cancellation and recovery fixtures: 7 cases passed\n");
+  await cancelDuringOriginalWait(false);await cancelDuringOriginalWait(true);
+  process.stdout.write("Desk cancellation during pending wait: 2 settlement orders passed\n");
 })().catch(error=>{process.stderr.write(error.stack+"\n");process.exitCode=1;});
