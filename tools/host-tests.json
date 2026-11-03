@@ -894,6 +894,8 @@
       "dev.pocketengine.features.memory.MemoryRecallAgentJourneyNativeTest",
       "dev.pocketengine.features.memory.HistoricalMemoryRecallAgentNativeTest",
       "dev.pocketengine.features.memory.TaskMemoryHistoryTest",
+      "dev.pocketengine.runtime.context.CompactionPlanTest",
+      "dev.pocketengine.runtime.context.ContextCompactorTest",
       "dev.pocketengine.features.memory.MemorySemanticRecallNativeTest",
       "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest",
       "dev.pocketengine.features.memory.MemoryEntityAliasRetrievalNativeTest",

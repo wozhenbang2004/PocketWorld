@@ -5,7 +5,9 @@ import static org.junit.Assert.*;
 
 import android.app.Application;
 import android.database.sqlite.SQLiteDatabase;
+import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.core.RunJournal;
 import dev.pocketengine.core.RunOutcome;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.FeatureHost;
@@ -14,7 +16,12 @@ import dev.pocketengine.runtime.AgentRunner;
 import dev.pocketengine.runtime.context.ContextBudgetPolicy;
 import dev.pocketengine.runtime.context.ContextWindow;
 import dev.pocketengine.store.TaskStore;
+import dev.pocketengine.testutil.HttpServer;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -156,6 +163,39 @@ public final class HistoricalMemoryRecallAgentNativeTest {
             JSONObject call=calls.getJSONObject(j);if(callId.equals(call.optString("id")))return call.getJSONObject("function").getString("arguments");
         }}throw new AssertionError("original call pairing missing: "+callId);
     }
+
+    @Test public void coldHistoricalArgumentsStayRetiredThroughOriginalAgentContextLimitCompaction()throws Exception{
+        try(Fixture f=new Fixture("Review the recorded residency timeline.")){
+            save(f,OLD,"Cedar harbor",PAST);save(f,NOW,"Maple harbor",PAST+1000);
+            JSONObject args=arguments("historical");args.getJSONObject("constraints").put("eventBefore",PAST);
+            try(Gateway first=new Gateway(f,(request,body)->request==1?calls(recall("before-limit-history",args)):
+                    request==2?calls(recall("derived-query-with-old-text",new JSONObject(args.toString()).put("query",OLD))):answer("Historical retained prose: "+OLD))){
+                assertEquals("needs_confirmation",f.run(first).status);first.assertHealthy();assertEquals(3,first.requests.size());
+            }
+            RunJournal original=f.tasks.journal(f.id,f.run,f.epoch,f.control);JSONObject stored=original.restore();JSONArray raw=stored.getJSONArray("messages");
+            // Other native observation fixtures belong to this same original checkpoint. They
+            // contain no memory-derived prose and can be summarized without replaying a tool.
+            for(int i=0;i<5;i++)raw.put(new JSONObject().put("role","user").put("hostObservation",true).put("content",new JSONArray().put(new JSONObject().put("type","text")
+                    .put("text",TaskMemoryHistory.OBSERVATION_PREFIX+new JSONObject().put("actualImageAttached",false).put("visionNotice","fixture native observation")
+                            .put("nativeObservation","SAFE_NATIVE_OBSERVATION_"+i+" "+String.valueOf((char)('a'+i)).repeat(9000))))));
+            original.checkpoint(raw,stored.getInt("steps"),new JSONObject().put("noDeviceObservation",true));
+            String originalArguments=callArguments(raw,"derived-query-with-old-text"),originalCheckpoint=checkpoint(f.database,f.run).toString();assertTrue(originalArguments.contains(OLD));
+            f.tasks.endAttempt(f.id,f.run,"needs_confirmation","Native fixture cold boundary",new JSONObject());
+            try(ColdRun cold=new ColdRun(f);ContextLimitGateway provider=new ContextLimitGateway()){
+                RunOutcome outcome=cold.runCompacting(f.goal,provider.config());provider.assertHealthy();assertEquals("needs_confirmation",outcome.status);assertEquals(3,provider.requests.size());
+                assertEquals(6,cold.tasks.inferenceUsage(f.id).getInt("attempts"));assertEquals(2,events(cold.tasks.get(f.id,false),"memory_history_reference_prepared").size());
+                assertEquals(originalCheckpoint,checkpoint(f.database,f.run).toString());assertEquals(originalArguments,callArguments(checkpoint(f.database,cold.run),"derived-query-with-old-text"));
+                JSONObject publication;
+                try(var row=f.database.rawQuery("SELECT checkpoint FROM runs WHERE run_id=?",new String[]{cold.run})){
+                    assertTrue(row.moveToFirst());publication=new JSONObject(row.getString(0)).getJSONObject("contextCompaction");
+                }
+                assertTrue(publication.getJSONArray("sources").length()>0);assertTrue(publication.getJSONObject("coverage").getBoolean("rawRetained"));
+                assertEquals("SUMMARY",publication.getJSONObject("inferenceReceipt").getJSONObject("context").getString("purpose"));
+                assertEquals("COMPLETED",publication.getJSONObject("inferenceReceipt").getString("outcome"));
+            }
+        }
+    }
+
     private static JSONArray checkpoint(SQLiteDatabase database,String run)throws Exception{
         try(var row=database.rawQuery("SELECT checkpoint FROM runs WHERE run_id=?",new String[]{run})){
             assertTrue(row.moveToFirst());return new JSONObject(row.getString(0)).getJSONArray("messages");
@@ -190,9 +230,46 @@ public final class HistoricalMemoryRecallAgentNativeTest {
             var originals=tasks.conversationRepository();host.register(new MemoryModule(new FeatureContext(previous.context,null,null,event->{}),(scope,kind,id)->"message".equals(kind)?originals.resolveMetadata(id).state:tasks.resolveMemorySource(scope,kind,id),SQLiteMemoryRetrievalBackend.create()));
         }
         RunOutcome run(String goal,Gateway gateway)throws Exception{
-            ContextBudgetPolicy.Source budgets=selected->ContextBudgetPolicy.RouteBudget.forRoute(selected,new ContextWindow.Budget(131072,2048,1024,262144,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,1);
-            return new AgentRunner(null,new HostToolSupervisor(host,tasks,task,run,epoch,false),budgets).run(task,goal,gateway.config(),control,event->{try{tasks.event(task,run,epoch,event);}catch(Exception failure){throw new AssertionError(failure);}},tasks.journal(task,run,epoch,control));
+            return run(goal,gateway.config(),false);
+        }
+        RunOutcome runCompacting(String goal,ModelConfig selected)throws Exception{return run(goal,selected,true);}
+        private RunOutcome run(String goal,ModelConfig selected,boolean compact)throws Exception{
+            ContextBudgetPolicy.Source budgets=route->ContextBudgetPolicy.RouteBudget.forRoute(route,new ContextWindow.Budget(131072,2048,1024,262144,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,1);
+            RunJournal journal=tasks.journal(task,run,epoch,control);
+            if(compact){
+                MemoryHostFence fence=new MemoryHostFence(){
+                    public void check()throws Exception{control.check();tasks.checkExtensionRun(task,run,epoch,control);}
+                    public JSONObject admit(Admission action)throws Exception{synchronized(tasks){check();return action.run();}}
+                };
+                var raw=new TaskStoreMemoryReader.RawBinding(task,run,epoch,control,fence,host::memoryContextRevision);tasks.bindRawModelExposure(raw);
+                journal=journal.withCompaction(tasks.compactionJournal(task,run,epoch,control,raw,()->selected));
+            }
+            return new AgentRunner(null,new HostToolSupervisor(host,tasks,task,run,epoch,false),budgets).run(task,goal,selected,control,event->{try{tasks.event(task,run,epoch,event);}catch(Exception failure){throw new AssertionError(failure);}},journal);
         }
         public void close()throws Exception{host.close();var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);((SQLiteDatabase)field.get(tasks)).close();}
+    }
+
+    private static final class ContextLimitGateway implements AutoCloseable{
+        final HttpServer server;final List<JSONObject> requests=new CopyOnWriteArrayList<>();final AtomicReference<Throwable> failure=new AtomicReference<>();
+        ContextLimitGateway()throws Exception{
+            server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.createContext("/v1/chat/completions",exchange->{
+                try{
+                    JSONObject body=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));requests.add(body);int count=requests.size(),status=200;JSONObject response;
+                    try{
+                        assertFalse(body.toString().contains(OLD));
+                        if(count==1){assertTrue(body.toString().contains("reference_expired"));assertEquals("{}",callArguments(body.getJSONArray("messages"),"derived-query-with-old-text"));status=400;
+                            response=new JSONObject().put("error",new JSONObject().put("code","context_length_exceeded").put("message","maximum context length exceeded"));
+                        }else if(count==2){assertFalse(body.has("tools"));assertTrue(body.toString().contains("settled_history_data"));assertTrue(body.toString().contains("SAFE_NATIVE_OBSERVATION_"));
+                            assertFalse(body.toString().contains("derived-query-with-old-text"));response=answer("Retained native observations only; original sources remain available.");
+                        }else{assertEquals("one main rejection, one summary, one resumed main",3,count);assertTrue(body.toString().contains("derived_history_summary"));
+                            assertEquals("{}",callArguments(body.getJSONArray("messages"),"derived-query-with-old-text"));response=answer("Continued after bounded native compaction; historical sources need a fresh explicit read.");}
+                    }catch(Throwable invalid){failure.compareAndSet(null,invalid);status=200;response=answer("Fixture assertion failed.");}
+                    byte[] bytes=response.toString().getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(status,bytes.length);exchange.getResponseBody().write(bytes);
+                }catch(Throwable invalid){failure.compareAndSet(null,invalid);}finally{exchange.close();}
+            });server.start();
+        }
+        ModelConfig config(){return new ModelConfig("http://127.0.0.1:"+server.getAddress().getPort()+"/v1","fixture-key","fixture",false,8,10,"openai_chat",500);}
+        void assertHealthy(){if(failure.get()!=null)throw new AssertionError("Native context-limit journey fixture failed",failure.get());}
+        public void close(){server.stop(0);}
     }
 }
