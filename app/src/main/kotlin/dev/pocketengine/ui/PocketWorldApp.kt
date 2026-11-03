@@ -181,9 +181,29 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
     LaunchedEffect(tab, settings, connections, selectedTaskId, conversationPicker, teamLaunch) {
         if(tab!=0||settings||connections||selectedTaskId!=null||conversationPicker||teamLaunch)controller.voiceInputModeChanged()
     }
+    fun canLeaveNative(): Boolean {
+        val latest = controller.state
+        val openLayer = tab != 0 || settings || connections || teamLaunch || selectedTaskId != null ||
+            taskMemorySearch || conversationPicker || conversationRename != null ||
+            chatTaskMemoryReference.value != null || chatAnswerSources.value != null ||
+            projectDialog || fileDialog || consentGoal != null || suggestedGoal != null ||
+            latest.teamRunId != null || latest.inspectionTaskId != null || latest.backgroundSetupOpen ||
+            latest.filePath != null || latest.workspaceArtifactView != null || latest.chatAttachmentPickerOpen ||
+            controller.notificationPreviewsOpen || controller.attachmentOutcomes.state.open ||
+            controller.nativeEvaluationOpen || controller.nativeInferenceHistoryOpen ||
+            controller.conversationReader != null || controller.queuedInputsPage != null
+        val pendingWork = latest.ownerPending.isNotEmpty() || latest.moduleBusy.isNotEmpty() ||
+            latest.chatSubmitting || latest.phoneSubmitting || latest.fileSaving || latest.modelSaving ||
+            latest.modelTesting || latest.agentPreferencesSaving || latest.inspectionBusy ||
+            latest.exportPending || controller.composerSaving || controller.voicePresentationBusy()
+        return nativeWorkspaceExitAllowed(openLayer, pendingWork)
+    }
     if (controller.notificationPreviewsOpen) {
         PocketWorldTheme { OwnerNotificationPreviewsPage(controller) }
         return
+    }
+    BackHandler(enabled = requestWebWorkspace != null && canLeaveNative()) {
+        requestWebWorkspace?.invoke(::canLeaveNative)
     }
     PocketWorldTheme {
         Scaffold(
@@ -196,23 +216,6 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
                     Text(" / ", fontSize = 14.sp, color = SecondaryInk)
                     Text(listOf("对话", "任务", "项目")[tab], fontSize = 14.sp, color = SecondaryInk)
                     Spacer(Modifier.weight(1f))
-                    fun canLeaveNative(): Boolean {
-                        val latest = controller.state
-                        val openLayer = tab != 0 || settings || connections || teamLaunch || selectedTaskId != null ||
-                            taskMemorySearch || conversationPicker || conversationRename != null ||
-                            chatTaskMemoryReference.value != null || chatAnswerSources.value != null ||
-                            projectDialog || fileDialog || consentGoal != null || suggestedGoal != null ||
-                            latest.teamRunId != null || latest.inspectionTaskId != null || latest.backgroundSetupOpen ||
-                            latest.filePath != null || latest.workspaceArtifactView != null || latest.chatAttachmentPickerOpen ||
-                            controller.notificationPreviewsOpen || controller.attachmentOutcomes.state.open ||
-                            controller.nativeEvaluationOpen || controller.nativeInferenceHistoryOpen ||
-                            controller.conversationReader != null || controller.queuedInputsPage != null
-                        val pendingWork = latest.ownerPending.isNotEmpty() || latest.moduleBusy.isNotEmpty() ||
-                            latest.chatSubmitting || latest.phoneSubmitting || latest.fileSaving || latest.modelSaving ||
-                            latest.modelTesting || latest.agentPreferencesSaving || latest.inspectionBusy ||
-                            latest.exportPending || controller.composerSaving || controller.voicePresentationBusy()
-                        return nativeWorkspaceExitAllowed(openLayer, pendingWork)
-                    }
                     if (requestWebWorkspace != null && canLeaveNative()) {
                         TextButton(onClick = { requestWebWorkspace(::canLeaveNative) }) { Text("网页工作台") }
                     }
