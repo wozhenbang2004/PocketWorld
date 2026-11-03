@@ -1252,6 +1252,60 @@ class HarnessConfigs:
             callback(plan["request"]["endpointLeaseRef"], job, plan["request"])
         return {SUPPORTED[target["family"]][3]: target["root"]}
 
+    def cold_codex_source(self, job, env):
+        """Read-only source identity, never a live lease or dispatch authorization.
+
+        Restart changes the environment generation. Only stable, previously recorded
+        file/root identities may cross it for a stored-turn read. In particular this
+        must not call job_environment, _lease, _receipt or endpoint callbacks.
+        """
+        operation = identifier(job.get("harnessConfigOperationId"))
+        row = self.db.execute("SELECT private_plan,digest FROM harness_plans WHERE operation_id=?", (operation,)).fetchone()
+        if row is None:
+            raise ConfigError("Original Codex configuration source is missing")
+        plan = json.loads(row[0])
+        receipt = self._operation(operation)
+        if row[1] != plan["planDigest"] or receipt.get("planDigest") != plan["planDigest"] or receipt["state"] != "COMMITTED" or plan["restoreOf"] is not None:
+            raise ConfigError("Original Codex configuration source is not committed/unchanged")
+        _, target = self._target(plan["request"], current=False)
+        identity = plan["identity"]
+        stable = ("family", "root", "rootIdentity", "bindingId", "physicalRootKey", "scope", "executable")
+        if job.get("worker") != "codex_app_server" or target["family"] != "codex" or job.get("environmentId") != target["environmentId"] or any(target.get(key) != plan["target"].get(key) for key in stable):
+            raise ConfigError("Original Codex configuration home/root identity changed")
+        request = {"harnessConfigOperationId": operation, "harnessOwnerBinding": {key: plan["request"][key] for key in ("taskId", "runId", "epoch", "profileDigest", "endpointLeaseRef")}}
+        if job.get("_harnessConfigRequest") != request:
+            raise ConfigError("Original Codex configuration owner/source binding is missing")
+        executable, stamp = self._executable(target)
+        if str(executable) != identity["executable"] or stamp != identity["executableIdentity"] or identity["rootIdentity"] != target["rootIdentity"] or identity["adapterRevision"] != ADAPTER:
+            raise ConfigError("Original Codex configuration executable identity changed")
+        self._overrides(env, target)
+        if self._read(target) != plan["afterRaw"] or not self._references_current(target, plan):
+            raise ConfigError("Original Codex configuration contents changed")
+        return {"format": "codex_config_home_v1", "operationId": operation, "planDigest": plan["planDigest"], "receiptDigest": digest(receipt),
+                "ownerBindingDigest": digest(request), "home": target["root"], "rootIdentity": target["rootIdentity"], "bindingId": target["bindingId"],
+                "executable": str(executable), "executableIdentity": stamp, "configurationDigest": digest(plan["afterRaw"]), "harnessDefinitionsDigest": digest(env.get("harnesses", []))}
+
+    def cold_codex_continuation(self, source, request, env):
+        """A new current owner configuration may continue only the original home.
+
+        This check does not revive the old endpoint or release/rebind its root. The
+        normal job_environment hook still requires and binds the new live lease.
+        """
+        pin = source.get("_coldConfigHome")
+        if not pin and source.get("status") != "interrupted":
+            return  # Legacy ordinary settled continuations retain their existing contract.
+        if not ("harnessConfigOperationId" in source or "_harnessConfigRequest" in source):
+            if source.get("status") == "interrupted" and any(key in request for key in ("harnessConfigOperationId", "harnessOwnerBinding")):
+                raise ConfigError("An unconfigured cold proof cannot switch into a Harness configuration home")
+            return
+        if not isinstance(pin, dict) or pin.get("format") != "codex_config_home_v1" or "harnessConfigOperationId" not in request or "harnessOwnerBinding" not in request:
+            raise ConfigError("Configured Codex continuation requires its pinned home and a NEW current owner configuration")
+        candidate = {"environmentId": source["environmentId"], "worker": "codex_app_server", "harnessConfigOperationId": request["harnessConfigOperationId"],
+                     "_harnessConfigRequest": {key: request[key] for key in ("harnessConfigOperationId", "harnessOwnerBinding")}}
+        current = self.cold_codex_source(candidate, env)
+        if any(current.get(key) != pin.get(key) for key in ("home", "rootIdentity", "bindingId", "executable", "executableIdentity")):
+            raise ConfigError("Configured Codex continuation cannot switch the original home/root/executable")
+
     @staticmethod
     def _pi_worker_identity(env, plan):
         # The original Pi flag probe executes "pi" with this cwd/PATH. Bind its
