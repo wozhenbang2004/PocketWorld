@@ -744,5 +744,19 @@
     ],
     "robolectric": true,
     "description": "Nineteen exact original owner/read-scope/native SQLite/Runner and mounted Compose semantics methods in six classes. Original parent pool, native worker scope and stale approval boundaries; explicit HTTP/model/project fixtures, not real provider, network, visual or device acceptance. Kotlin sources are exact registered includes, not the ordinary test matrix."
+  },
+  "browser-owner-interactions": {
+    "class": "dev.pocketengine.browser.BrowserPopupNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserPopupRouteTest",
+      "dev.pocketengine.browser.BrowserSiteDecisionTest",
+      "dev.pocketengine.browser.BrowserSiteRequirementTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserTaskActivityTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Native popup/permission callbacks in the original Activity, TaskStore and RunControl; exact parent/document lifecycle and once-only owner decisions. Android SDK35 host fixtures; physical WebView and device unverified."
   }
 }

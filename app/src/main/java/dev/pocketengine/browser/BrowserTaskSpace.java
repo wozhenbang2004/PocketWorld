@@ -123,6 +123,7 @@ public final class BrowserTaskSpace {
     private final Map<String,BrowserPageDialog.Call> callDialogs=new java.util.concurrent.ConcurrentHashMap<>();
     private volatile JSONObject lastPageDialog;
     private final Map<String,Long> handedOff=new java.util.concurrent.ConcurrentHashMap<>();private final Map<String,String> handoffLogical=new LinkedHashMap<>();
+    private final Map<String,String> popupParents=new LinkedHashMap<>();
     private String handoffReason="";
     private String lastTaskTab="";
     private volatile boolean ended,suspended;
@@ -163,6 +164,7 @@ public final class BrowserTaskSpace {
         JSONArray downloads=new JSONArray();for(Map.Entry<String,JSONObject> entry:downloadRefs.entrySet())downloads.put(new JSONObject().put("id",entry.getKey()).put("tabId",entry.getValue().getString("tabId")));
         JSONArray returnable=new JSONArray();for(String tabId:handedOff.keySet())try{returnable.put(returnPinNative(tabId));}catch(Exception unavailable){returnable.put(new JSONObject().put("tabId",tabId).put("unavailable",true));}
         JSONObject snapshot=identity().put("revision",revision).put("status",ended?"ended":suspended?"owner_control":"active").put("tabs",pages).put("handoffPages",returnable).put("interactionCandidates",interactionCandidatesForOwner()).put("handoffReason",handoffReason).put("downloads",downloads).put("maxTaskTabs",MAX_TASK_TABS).put("sourceRetentionAvailable",sources!=null).put("transientPageOwnership",true).put("semanticReads",new JSONObject().put("modes",new JSONArray().put("outline").put("text").put("table").put("list")).put("optionalObserveRead",true).put("dynamicSettle",new JSONObject().put("maxTimeoutMs",6000).put("maxSamples",32).put("afterProjectionChange",true).put("networkIdleProven",false)).put("queryMatching","literal_case_insensitive").put("regionAndCursorRefs","read_only_evidence_not_action_refs").put("regionRefresh","actual_model_known_base_complete_region_ordered_delta_or_explicit_full_resync").put("maxOutputBytes",32768).put("scope","selected_admitted_frame_light_open_shadow_and_slots_with_explicit_unread_frames").put("extraFrameOrigins",new JSONArray(frameOrigins)));
+        JSONArray popupRelations=new JSONArray();for(var popup:popupParents.entrySet())popupRelations.put(new JSONObject().put("tabId",popup.getKey()).put("openerTabId",popup.getValue()).put("automaticReturn",false));snapshot.put("popupRelations",popupRelations);
         if(recoveryPages!=null)snapshot.put("recovery",copy(recoveryPages));snapshot.put("logicalPageManifestSaved",manifestSaved);if(lastPageDialog!=null)snapshot.put("pageDialog",copy(lastPageDialog));
         if(!ended&&suspended&&originalControl.isPaused()&&!originalControl.isCancelled())snapshot.put("continuePin",returnPinNative(""));return snapshot;
     }
@@ -414,6 +416,25 @@ if(value.has("observationId")&&value.optLong("navigation",-1)==page.getLong("nav
         main();if(ended||events==null||!profile.current()||originalControl.isCancelled()||!originalControl.matchesHostRun(binding.taskId,binding.runId,binding.epoch))return;
         JSONObject expected=identity();for(String key:new String[]{"taskId","runId","epoch","profileId","profileRevision","profileIsolation","browserSessionId","browserSpaceId"})if(!String.valueOf(expected.get(key)).equals(String.valueOf(notice.opt(key))))throw new SecurityException("站点权限反馈不属于原任务");
         String tab=notice.getString("tabId");if(!tabs.containsKey(tab)&&!handedOff.containsKey(tab))return;events.siteRequirement(binding,originalControl,spaceId,copy(notice));
+    }
+    /** Register a real WebChromeClient child after its opener has been handed to the owner. */
+    public JSONObject registerOwnerPopupNative(String openerId,String childId,JSONObject originalOpener)throws Exception {
+        main();uuid(openerId);uuid(childId);
+        if(ended||!suspended||!profile.current()||originalControl.isCancelled()||!originalControl.matchesHostRun(binding.taskId,binding.runId,binding.epoch)||!handedOff.containsKey(openerId))throw new SecurityException("弹窗的原任务接管已失效");
+        if(tabs.size()+handedOff.size()>=MAX_TASK_TABS||tabs.containsKey(childId)||handedOff.containsKey(childId))throw new SecurityException("原任务没有可用的弹窗位置");
+        JSONObject expected=identity();for(String key:new String[]{"taskId","runId","epoch","profileId","profileRevision","browserSessionId","browserSpaceId"})if(!String.valueOf(expected.get(key)).equals(String.valueOf(originalOpener.get(key))))throw new SecurityException("弹窗不能改变原任务或资料");
+        JSONObject opener=driver.ownerMetadata(openerId);if(!openerId.equals(originalOpener.getString("tabId"))||opener.getLong("navigation")!=originalOpener.getLong("navigation")||!opener.getString("documentId").equals(originalOpener.getString("documentId")))throw new StalePage("弹窗的原父文档已变化");
+        driver.ownerMetadata(childId);long generation=System.nanoTime();handedOff.put(childId,generation);handoffLogical.put(childId,UUID.randomUUID().toString());popupParents.put(childId,openerId);revision++;publishManifest();
+        return identity().put("tabId",childId).put("tabGeneration",generation).put("openerTabId",openerId).put("openedBy","native_popup");
+    }
+    public void ownerPopupNavigatedNative(String childId)throws Exception {
+        main();if(ended||!popupParents.containsKey(childId)||!handedOff.containsKey(childId)||originalControl.isCancelled())return;
+        JSONObject page=driver.ownerMetadata(childId);String logical=handoffLogical.get(childId);if(logical!=null)logicalPages.put(logical,driver.recoveryRecord(logical,page.optString("url"),page.optString("title"),"owner_control","owner_adopted"));publishManifest();
+    }
+    public void popupClosedNative(String childId)throws Exception {
+        main();if(!popupParents.containsKey(childId))return;
+        Tab tab=tabs.remove(childId);try{if(tab!=null){recordCurrentPage(tab,"closed");tab.invalidate();}else if(handedOff.containsKey(childId)){JSONObject page=driver.ownerMetadata(childId);String logical=handoffLogical.get(childId);if(logical!=null)logicalPages.put(logical,driver.recoveryRecord(logical,page.optString("url"),page.optString("title"),"closed","owner_adopted"));}}
+        finally{handedOff.remove(childId);handoffLogical.remove(childId);popupParents.remove(childId);observations.remove(childId);clearReadObservations(childId);revision++;publishManifest();}
     }
     public void takeOverNative(String tabId)throws Exception {main();Tab tab=tabs.get(tabId);if(tab==null||ended||!profile.current())throw new SecurityException("原任务页已不再可接管");suspended=true;for(Tab active:tabs.values())active.stopTransfers();tab.invalidate();driver.releaseToOwner(tab);tabs.remove(tabId);handedOff.put(tabId,tab.generation);handoffLogical.put(tabId,tab.logicalPageId);recordCurrentPage(tab,"owner_control");publishManifest();observations.clear();readObservations.clear();deliveredStructuredObservations.clear();revision++;if(events!=null)events.takenOver(binding,originalControl,spaceId,tabId);}
     /** Native return confirmation binds the actual post-login document, never an old observation. */
