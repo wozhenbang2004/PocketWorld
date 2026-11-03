@@ -321,10 +321,10 @@ jobs:
           (
             python3 -B protocol/device-v1/verify_profile.py
             cd companion
-            python3 -B -m unittest test_phone_tasks test_phone_task_client test_phone_task_api test_phone_task_usb \
-              test_device_protocol test_device_transport test_device_pairing test_device_companion -v
+            python3 -B -m unittest test_phone_tasks test_phone_task_client test_phone_task_api test_phone_task_receipts test_phone_task_usb \
+              test_device_protocol test_device_transport test_device_pairing test_device_companion test_device_relay_leases -v
             cd ../relay
-            python3 -B -m unittest test_relay test_selfhost -v
+            python3 -B -m unittest test_selfhost -v
           ) 2>&1 | tee build-artifacts/host-tests/phone-platform-boundaries.log
 
       - name: Prepare official isolated Chromium fixture runtime

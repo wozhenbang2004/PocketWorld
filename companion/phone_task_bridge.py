@@ -19,6 +19,7 @@ import device_protocol as wire
 PROTOCOL = "pocketworld.phone-task-dispatch.v1"
 SETTLED = {"succeeded", "failed", "cancelled", "interrupted", "expired"}
 WAITING = {"waiting_approval", "waiting_dependency"}
+CONTROL_METHODS = {"task.acquireControl", "task.answerQuestion", "task.steer", "task.requestResume"}
 
 
 class PhoneTaskError(Exception):
@@ -105,26 +106,8 @@ class PhoneTaskRouter:
                     if (cancelled.get("targetOperationId") != request.arguments["operationId"]
                             or cancelled.get("targetArgumentsDigest") != request.arguments["argumentsDigest"]):
                         raise PhoneTaskError("Cancellation receipt changed its original target", 502)
-                if request.method in {"task.acquireControl", "task.answerQuestion", "task.steer", "task.requestResume"} and payload.get("accepted"):
-                    if payload.get("localTaskId") != request.arguments["taskId"]:
-                        raise PhoneTaskError("Control receipt belongs to another original task", 502)
-                    if request.method in {"task.answerQuestion", "task.steer"}:
-                        native = payload.get("payload", {})
-                        if (native.get("inputSaved") is not True or native.get("taskId") != request.arguments["taskId"]
-                                or native.get("runId") != request.arguments["runId"] or native.get("executorEpoch") != request.arguments["executorEpoch"]
-                                or native.get("allocationId") != request.arguments["allocationId"] or native.get("sourceKind") != "native_paired_task_input"):
-                            raise PhoneTaskError("Input receipt changed the original native scope", 502)
-                    if request.method == "task.requestResume":
-                        native = payload.get("payload", {})
-                        if (native.get("requested") is not True or native.get("ownerActionRequired") is not True
-                                or native.get("resumeRequestId") != request.get("operationId")
-                                or native.get("taskId") != request.arguments["taskId"]
-                                or native.get("runId") != request.arguments["runId"]
-                                or native.get("executorEpoch") != request.arguments["executorEpoch"]
-                                or native.get("allocationId") != request.arguments["allocationId"]
-                                or native.get("requestedRevision") != request.arguments["expectedRevision"]
-                                or native.get("executionAuthorized") is not False):
-                            raise PhoneTaskError("Resume receipt changed the original phone review", 502)
+                if request.method in CONTROL_METHODS and payload.get("accepted"):
+                    self._control_native_receipt(request.method, request.get("operationId"), request.arguments, payload)
             future.set_result(result)
         except Exception:
             future.set_exception(PhoneTaskError("Invalid original response; its outcome remains unknown", 502))
@@ -231,6 +214,14 @@ class PhoneTaskRouter:
             if envelope.get(name) is not None}
         if original is not None:
             value["targetOperationId"] = original["operationId"]
+        if envelope.method in CONTROL_METHODS:
+            # Correlate both a first reply and a later original-op read. Keep no
+            # input text, question text or lease credential in dispatch metadata.
+            value["controlScope"] = {name: copy.deepcopy(semantic[name]) for name in
+                ("taskId", "runId", "executorEpoch", "allocationId", "expectedRevision") if name in semantic}
+        elif envelope.method == "operation.cancel":
+            value["controlScope"] = {"targetOperationId": envelope.arguments["operationId"],
+                                     "targetArgumentsDigest": envelope.arguments["argumentsDigest"]}
         allocation = envelope.get("budget", {}).get("allocationId") or envelope.arguments.get("allocationId")
         if allocation:
             value["allocationId"] = allocation
@@ -259,7 +250,67 @@ class PhoneTaskRouter:
         return self._public(value)
 
     @staticmethod
+    def _control_native_receipt(method, operation_id, scope, receipt):
+        """The same native facts must confirm a first ACK and an original-op read."""
+        required = {"taskId", "runId", "executorEpoch"}
+        if method != "task.acquireControl":
+            required.add("allocationId")
+        if method == "task.requestResume":
+            required.add("expectedRevision")
+        if not isinstance(scope, dict) or not required <= scope.keys():
+            raise PhoneTaskError("Original control scope was not retained; no outcome was inferred", 502)
+        for saved, received in (("taskId", "localTaskId"), ("runId", "runId"), ("executorEpoch", "executorEpoch")):
+            if wire.canonical_bytes(scope[saved]) != wire.canonical_bytes(receipt.get(received)):
+                raise PhoneTaskError("Control receipt changed its original task or run", 502)
+        native = receipt.get("payload", {})
+        if isinstance(native, dict) and "operationState" in native:
+            if native["operationState"] != "receipt" or not isinstance(native.get("receipt"), dict):
+                raise PhoneTaskError("Original native control receipt is not confirmed", 502)
+            native = native["receipt"]
+        if not isinstance(native, dict):
+            raise PhoneTaskError("Original native control receipt is unavailable", 502)
+        if method == "task.acquireControl":
+            wire.identifier(native.get("leaseId"), "leaseId")
+            wire.integer(native.get("expiresAt"), "expiresAt", 1)
+            if native.get("executionMoved") is not False:
+                raise PhoneTaskError("Control lease cannot move original execution", 502)
+            # The typed outer receipt binds the exact run. Check redundant
+            # native lease fields whenever the original result includes them.
+            for name in ("runId", "executorEpoch"):
+                if name in native and wire.canonical_bytes(native[name]) != wire.canonical_bytes(scope[name]):
+                    raise PhoneTaskError("Control lease changed its original run", 502)
+        else:
+            for name in ("taskId", "runId", "executorEpoch", "allocationId"):
+                if wire.canonical_bytes(native.get(name)) != wire.canonical_bytes(scope[name]):
+                    raise PhoneTaskError("Native control result changed its original input scope", 502)
+            if native.get("executionAuthorized") is not False:
+                raise PhoneTaskError("A control receipt cannot authorize execution", 502)
+            if method == "task.requestResume":
+                if (native.get("requested") is not True or native.get("ownerActionRequired") is not True
+                        or native.get("resumeRequestId") != operation_id or native.get("newRun") is not False
+                        or native.get("newGrant") is not False
+                        or wire.canonical_bytes(native.get("requestedRevision")) != wire.canonical_bytes(scope["expectedRevision"])):
+                    raise PhoneTaskError("Resume receipt changed the original phone review", 502)
+                wire.integer(native.get("reviewRevision"), "reviewRevision", 1)
+                if native["reviewRevision"] != scope["expectedRevision"] + 1:
+                    raise PhoneTaskError("Resume receipt changed the original review revision", 502)
+            else:
+                if (native.get("inputSaved") is not True or native.get("sourceKind") != "native_paired_task_input"
+                        or native.get("formalSourceRefAvailable") is not False or native.get("newGrant", False) is not False):
+                    raise PhoneTaskError("Input receipt changed the original native input contract", 502)
+                wire.identifier(native.get("messageId"), "messageId")
+                expected_kind = "answer" if method == "task.answerQuestion" else "steer"
+                if native.get("inputKind", expected_kind) != expected_kind:
+                    raise PhoneTaskError("Input receipt changed its original input kind", 502)
+                if "continuationRequested" in native and type(native["continuationRequested"]) is not bool:
+                    raise PhoneTaskError("Input continuation is not a confirmed native flag", 502)
+                if "continuationState" in native:
+                    wire.text(native["continuationState"], "continuationState", 128)
+        return native
+
+    @staticmethod
     def _remember_receipt(value, receipt):
+        updates = {}
         if receipt.get("operationId") != value["operationId"] or receipt.get("argumentsDigest") not in (None, value["argumentsDigest"]):
             raise PhoneTaskError("Original operation receipt changed", 502)
         if receipt.get("accepted"):
@@ -273,33 +324,37 @@ class PhoneTaskRouter:
             for saved, received in (("taskId", "localTaskId"), ("runId", "runId"), ("executorEpoch", "executorEpoch")):
                 if saved in value and received in receipt and value[saved] != receipt[received]:
                     raise PhoneTaskError("Receipt changed the original receiver task or run", 502)
-            value["acceptedAudience"] = fixed
+            updates["acceptedAudience"] = fixed
+        native = receipt.get("payload", {})
+        if receipt.get("accepted") and value.get("kind") in CONTROL_METHODS:
+            native = PhoneTaskRouter._control_native_receipt(value["kind"], value["operationId"], value.get("controlScope"), receipt)
+        if "cancellation" in receipt:
+            cancelled, scope = receipt["cancellation"], value.get("controlScope", {})
+            if (value.get("kind") != "operation.cancel" or not isinstance(scope, dict)
+                    or any(cancelled.get(name) != scope.get(name) for name in ("targetOperationId", "targetArgumentsDigest"))):
+                raise PhoneTaskError("Original cancellation read changed its target", 502)
+            updates["cancellation"] = copy.deepcopy(cancelled)
         for key in ("status", "effectState", "accepted", "runId", "executorEpoch"):
             if key in receipt:
-                value[key] = receipt[key]
-        if "cancellation" in receipt:
-            value["cancellation"] = copy.deepcopy(receipt["cancellation"])
+                updates[key] = receipt[key]
         if receipt.get("accepted") and receipt.get("localTaskId"):
-            value["taskId"] = receipt["localTaskId"]
-        native = receipt.get("payload", {})
-        # A fresh operation.get returns the original native snapshot, whose
-        # committed control receipt is nested. Lost ACK recovery reads these
-        # exact facts; it never resends the input or manufactures a continuation.
-        if isinstance(native, dict) and native.get("operationState") == "receipt" and isinstance(native.get("receipt"), dict):
-            native = native["receipt"]
+            updates["taskId"] = receipt["localTaskId"]
         if receipt.get("accepted") and isinstance(native, dict):
             if value.get("kind") == "task.acquireControl" and native.get("leaseId"):
-                value.update(controlLeaseId=native["leaseId"], controlLeaseExpiresAt=native["expiresAt"])
+                updates.update(controlLeaseId=native["leaseId"], controlLeaseExpiresAt=native["expiresAt"])
             if value.get("kind") in {"task.answerQuestion", "task.steer"}:
                 for name in ("inputSaved", "continuationRequested", "continuationState"):
                     if name in native:
-                        value[name] = native[name]
+                        updates[name] = native[name]
                 if native.get("messageId"):
-                    value["inputMessageId"] = native["messageId"]
+                    updates["inputMessageId"] = native["messageId"]
             if value.get("kind") == "task.requestResume":
                 for name in ("ownerActionRequired", "resumeRequestId", "requestedRevision", "reviewRevision"):
                     if name in native:
-                        value[name] = native[name]
+                        updates[name] = native[name]
+        # Invalid nested records must not partially upgrade an unknown result in
+        # memory or SQL. All immutable scope and native semantics passed first.
+        value.update(updates)
 
     async def execute(self, action, params):
         if self.closed:
