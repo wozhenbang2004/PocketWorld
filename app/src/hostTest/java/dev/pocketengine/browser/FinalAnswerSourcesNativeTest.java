@@ -44,6 +44,9 @@ import static org.junit.Assert.*;
 @Config(sdk=35,manifest=Config.NONE,application=Application.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class FinalAnswerSourcesNativeTest {
+    private static JSONObject call(String name,JSONObject arguments)throws Exception{
+        return j("role","assistant","content","","tool_calls",new JSONArray().put(j("id","source-call-"+UUID.randomUUID(),"type","function","function",j("name",name,"arguments",arguments.toString()))));
+    }
     private static JSONObject scope()throws Exception{return j("ownerId","owner","spaceId","private");}
     private static SQLiteDatabase database(TaskStore tasks)throws Exception{var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);return (SQLiteDatabase)field.get(tasks);}
     private static JSONObject selection(JSONObject proof)throws Exception{return j("taskId",proof.getString("taskId"),"runId",proof.getString("runId"),"epoch",proof.getInt("coordinatorEpoch"),"answerFingerprint",proof.getString("answerFingerprint"));}

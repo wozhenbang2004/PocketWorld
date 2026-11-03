@@ -62,7 +62,10 @@ public final class EvaluationNativeJourneyTest {
                 tasks.warmToolOutputSources(task,control);JSONObject attempt=tasks.requireCapabilityAttempt(task,control);CapabilityPort port=host.capability(task,control);
                 ContextBudgetPolicy.Source budget=c->ContextBudgetPolicy.RouteBudget.forRoute(c,new ContextWindow.Budget(128000,1000,1000,2L*1024*1024,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,System.currentTimeMillis());
                 RunJournal journal=tasks.journal(task,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),control);
-                RunOutcome result=new AgentRunner(null,port,budget).run(task,attempt.getString("goal"),model,control,e->tasks.event(task,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),e),journal);
+                RunOutcome result=new AgentRunner(null,port,budget).run(task,attempt.getString("goal"),model,control,e->{
+                    try{tasks.event(task,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),e);}
+                    catch(Exception auditFailure){throw new IllegalStateException("Original evaluation audit event was not recorded",auditFailure);}
+                },journal);
                 tasks.finishCapabilityAttempt(task,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),control,result);
             }catch(Exception unavailable){failure=unavailable;tasks.endAttempt(task,lastTask.getString("runId"),control.isCancelled()?"cancelled":"failed","fixture execution unavailable",new JSONObject());}
             finally{completion.finished(failure);}
