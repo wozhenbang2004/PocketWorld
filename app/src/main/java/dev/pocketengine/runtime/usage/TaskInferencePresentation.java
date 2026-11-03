@@ -25,7 +25,21 @@ public final class TaskInferencePresentation {
             own.put(event);
         }
         // Reuse the same dedup/conflict/partial rules as TaskStore.inferenceUsage, not a second sum.
-        JSONObject projection=InferenceProjection.fromEvents(own);List<String> warnings=new ArrayList<>();
+        return present(task,InferenceProjection.fromEvents(own),foreign,"当前展示窗口中的模型调用；这是窗口小计，不是原任务累计。",0);
+    }
+    public static Snapshot fromNativeUsage(JSONObject task,JSONObject nativeUsage)throws Exception {
+        String taskId=task.optString("id");
+        if(blank(taskId)||nativeUsage==null||!"pocketworld.task-inference-usage.v1".equals(nativeUsage.optString("format"))
+                ||!taskId.equals(nativeUsage.optString("taskId"))||!Boolean.TRUE.equals(nativeUsage.opt("allRetainedRuns"))
+                ||!Boolean.TRUE.equals(nativeUsage.opt("readOnly"))||!Boolean.FALSE.equals(nativeUsage.opt("executionAuthorized"))
+                ||!(nativeUsage.opt("queryLimited") instanceof Boolean))throw new SecurityException("不是这个原任务的累计用量读取回执");
+        JSONObject projection=nativeUsage.getJSONObject("projection");JSONArray receipts=projection.getJSONArray("receipts");
+        for(int i=0;i<receipts.length();i++)if(!taskId.equals(receipts.getJSONObject(i).getJSONObject("context").optString("taskId")))throw new SecurityException("累计调用混入其他任务");
+        String coverage=nativeUsage.getBoolean("queryLimited")?"原任务累计读取达到行数／字节预算，或含不可读取记录；以下仍是部分小计，不能视作完整累计。":"此原任务所有当前保留 run 的累计调用，包含主模型、摘要与失败／取消调用。";
+        return present(task,projection,0,coverage,nativeUsage.optLong("sourceReadAt"));
+    }
+    private static Snapshot present(JSONObject task,JSONObject projection,int foreign,String scope,long readAt)throws Exception {
+        JSONArray events=task.optJSONArray("events");List<String> warnings=new ArrayList<>();
         int attempts=projection.getInt("attempts"),conflicts=projection.getInt("conflictingCalls"),invalid=projection.getInt("invalidReceipts");
         String headline=attempts==0?"暂无保留的模型调用记录":attempts+" 次调用 · 完成 "+projection.getInt("completed")+" · 失败 "+projection.getInt("failed")+" · 取消 "+projection.getInt("cancelled");
         if(projection.getInt("unfinished")>0)warnings.add(projection.getInt("unfinished")+" 次未见终态：可能已发出，不代表仍在运行，也不会在此自动重试。");
@@ -58,7 +72,7 @@ public final class TaskInferencePresentation {
             calls.add(new Call(receipt.getString("callId"),purpose(context.optString("purpose"),context.optString("memberId")),status,route(route),
                     "run "+label(context.optString("runId"),"未知")+" · epoch "+context.optInt("epoch"),positive(receipt.opt("finishedAt"),receipt.opt("startedAt")),immutable(counters),pricing(receipt),failure(receipt),"api_key".equals(route.optString("kind"))));
         }
-        String coverage="仅此原任务当前保留的原生调用记录，不是全应用或服务账单；无记录不等于实际用量为 0。token来自实际原回执，估价只用冻结价目；实际账单和套餐剩余量：未知。";
+        String coverage=scope+" 仅此原任务当前保留的原生调用记录，不是全应用或服务账单；无记录不等于实际用量为 0。token来自实际原回执，估价只用冻结价目；实际账单和套餐剩余量：未知。"+(readAt>0?" 核对时间："+priceTime(readAt)+"。之后的新调用需刷新。":"");
         return new Snapshot(headline,coverage,money(projection.getJSONObject("money")),immutable(warnings),immutable(groups),immutable(calls),context(task,events),account);
     }
     private static List<String> failure(JSONObject receipt){

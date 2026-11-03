@@ -1722,6 +1722,16 @@ public final class EngineApplication extends Application implements dev.pocketen
         }
         return answerOwnerQuestionFromNotification(exact,text);
     }
+    private JSONObject answerOwnerQuestionChoiceFromTaskPage(JSONObject exact,String optionId)throws Exception {
+        String text;
+        synchronized(tasks){
+            JSONObject task=tasks.get(exact.getString("taskId"),false);
+            JSONObject evidence=task.optJSONObject("evidence");
+            text=dev.pocketengine.runtime.policy.OwnerQuestionChoices.answer(evidence==null?null:evidence.optJSONObject("ownerQuestion"),exact,optionId);
+        }
+        // The existing native reply path rechecks identity, budgets and duplicate receipts at commit.
+        return answerOwnerQuestionFromTaskPage(exact,text);
+    }
     private void retainOwnerQuestionAfterSettlement(String id,RunControl original,ModelConfig captured){
         ownerQuestionInputs.forget(id);try{tasks.retainOwnerQuestionOriginal(ownerQuestionInputs,id,original,captured);}catch(Exception unavailable){/* No restored JSON becomes live authority. */}
     }
@@ -2134,6 +2144,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             case "getState":{JSONObject state=state();publish(state);return state;}
             case "getFeatures":features.sendState();return null;
             case "answerOwnerQuestion":return answerOwnerQuestionFromTaskPage(input.getJSONObject("questionIdentity"),input.getString("text"));
+            case "answerOwnerQuestionChoice":return answerOwnerQuestionChoiceFromTaskPage(input.getJSONObject("questionIdentity"),input.getString("optionId"));
             case "saveTaskMemory":case "resaveTaskMemory":return saveSourceMemory("task_evidence","task:"+input.getString("taskId")+":verified_result",input,action.equals("resaveTaskMemory"));
             case "saveMessageMemory":case "resaveMessageMemory":return saveSourceMemory("message",input.getString("messageId"),input,action.equals("resaveMessageMemory"));
             case "setFollowUpPolicy":{

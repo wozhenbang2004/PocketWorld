@@ -17,6 +17,24 @@ public final class TaskInferencePresentationTest {
         ProviderUsage.Collector usage=new ProviderUsage.Collector("openai_chat");usage.observe(new JSONObject().put("usage",new JSONObject().put("prompt_tokens",input).put("completion_tokens",output).put("total_tokens",input+output)),stage);return usage;
     }
     private static String counter(TaskInferencePresentation.Group group,String name){return group.counters().stream().filter(x->x.name().equals(name)).findFirst().orElseThrow().text();}
+    private static JSONObject retained(JSONArray receipts,boolean limited)throws Exception{return new JSONObject().put("format","pocketworld.task-inference-usage.v1").put("taskId","task")
+            .put("allRetainedRuns",true).put("readOnly",true).put("executionAuthorized",false).put("queryLimited",limited).put("sourceReadAt",150)
+            .put("projection",InferenceProjection.fromEvents(receipts));}
+    @Test public void cumulativeUsageIncludesCallsOutsideTheUiWindowAndAcrossOriginalRuns()throws Exception{
+        JSONArray all=new JSONArray(),window=new JSONArray();
+        for(int i=0;i<48;i++){JSONObject row=receipt(UUID.randomUUID().toString(),i%2==0?InferenceReceipt.Purpose.MAIN:InferenceReceipt.Purpose.SUMMARY,InferenceReceipt.Outcome.COMPLETED,usage(10,2,ProviderUsage.Stage.FINAL));
+            row.getJSONObject("context").put("runId",i<24?"run-old":"run-current");all.put(row);if(i>=44)window.put(row);}
+        JSONObject current=task(window);var partial=TaskInferencePresentation.fromTask(current);assertEquals(4,partial.calls().size());assertTrue(partial.coverage().contains("窗口小计"));
+        JSONObject nativeRead=retained(all,false);String before=nativeRead.toString();var cumulative=TaskInferencePresentation.fromNativeUsage(current,nativeRead);
+        assertEquals(48,cumulative.calls().size());assertEquals(2,cumulative.groups().size());assertTrue(cumulative.coverage().contains("所有当前保留 run"));assertTrue(cumulative.coverage().contains("需刷新"));assertEquals(before,nativeRead.toString());
+        for(var group:cumulative.groups())assertTrue(counter(group,"输入").startsWith("240（已返回小计）"));
+    }
+    @Test public void boundedIncompleteQueryAndForeignTaskNeverMasqueradeAsCompleteUsage()throws Exception{
+        JSONArray rows=new JSONArray().put(receipt(UUID.randomUUID().toString(),InferenceReceipt.Purpose.MAIN,InferenceReceipt.Outcome.FAILED,new ProviderUsage.Collector("openai_chat")));
+        var limited=TaskInferencePresentation.fromNativeUsage(task(new JSONArray()),retained(rows,true));assertTrue(limited.coverage().contains("部分小计"));assertTrue(limited.coverage().contains("不能视作完整累计"));
+        JSONObject other=retained(rows,false).put("taskId","other");assertThrows(SecurityException.class,()->TaskInferencePresentation.fromNativeUsage(task(new JSONArray()),other));
+        rows.getJSONObject(0).getJSONObject("context").put("taskId","other");JSONObject mixed=retained(rows,false);assertThrows(SecurityException.class,()->TaskInferencePresentation.fromNativeUsage(task(new JSONArray()),mixed));
+    }
     @Test public void absentRecordsAreUnknownNotAZeroBillAndOpeningIsReadOnly()throws Exception {
         JSONObject task=task(new JSONArray());String before=task.toString();var view=TaskInferencePresentation.fromTask(task);
         assertTrue(view.headline().contains("暂无保留"));assertTrue(view.coverage().contains("不等于实际用量为 0"));assertTrue(view.coverage().contains("套餐剩余量：未知"));assertTrue(view.groups().isEmpty());assertFalse(view.hasAccount());assertEquals(before,task.toString());

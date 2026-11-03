@@ -8169,6 +8169,9 @@ public final class TaskStore {
     public synchronized JSONObject inferenceUsage(String id)throws Exception{
         required(id);return InferenceProjection.fromEvents(TaskAuditStore.events(db,id,"inference_receipt")).put("logicalRequests",InferenceRequestStore.list(db,id));
     }
+    public synchronized JSONObject ownerTaskInferenceUsage(String id,RunControl control)throws Exception{
+        return TaskUsageQuery.taskUsage(db,id,control);
+    }
     /** Native owner diagnostics: bounded, scoped read views of the original physical receipts. */
     public synchronized JSONObject ownerInferenceTrends(dev.pocketengine.runtime.usage.UsageTrendProjection.Query query,RunControl control)throws Exception{
         return TaskUsageQuery.trends(db,query,control);

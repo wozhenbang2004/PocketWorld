@@ -148,6 +148,19 @@ public final class OwnerSourceProjectionNativeTest {
     }
     private static void idle(AssistantModule assistant)throws Exception{long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(6);while(System.nanoTime()<until){if(!assistant.snapshot().getBoolean("running"))return;Thread.sleep(5);}throw new AssertionError("original assistant remained active");}
 
+    @Test public void visibleMessageQuoteUsesTheOriginalLocatorAndRejectsChangedRevision()throws Exception{try(Fixture f=new Fixture()){
+        String messageId=id(),body="原话甲🙂乙";f.save(SOURCE,messageId,7,body,null);
+        JSONObject visible=f.assistant.readOriginalConversation(SOURCE,"",80).getJSONArray("messages").getJSONObject(0);
+        JSONObject locator=visible.getJSONObject("ownerOriginalLocator");
+        assertEquals(messageId,locator.getString("recordId"));assertEquals(7,locator.getLong("recordVersion"));assertEquals(SOURCE,locator.getString("conversationId"));
+        assertEquals("sha256:"+ConversationRepository.shaBytes(body.getBytes(StandardCharsets.UTF_8)),locator.getString("fingerprint"));
+        JSONObject receipt=f.nativeHost.handle("selectOwnerOriginalReference",new JSONObject().put("ownerLocator",locator).put("offset",0).put("chars",body.length()),new RunControl());
+        assertTrue(receipt.getBoolean("selectionValidated"));assertFalse(receipt.getBoolean("modelCalled"));assertFalse(receipt.getBoolean("executionAuthorized"));assertFalse(receipt.getBoolean("formalMemorySaved"));
+        assertEquals(body.length(),receipt.getJSONObject("ownerSourceRef").getInt("chars"));
+        assertFalse(f.repo.message(SOURCE,messageId).has("ownerOriginalLocator"));
+        f.save(SOURCE,messageId,8,"修订后的原话",null);
+        assertThrows(Exception.class,()->f.nativeHost.handle("selectOwnerOriginalReference",new JSONObject().put("ownerLocator",locator).put("offset",0).put("chars",body.length()),new RunControl()));
+    }}
     @Test public void nativeSelectionIsMetadataOnlyAndDoesNotWidenModelHistorySearch()throws Exception{try(Fixture f=new Fixture()){
         JSONArray refs=f.source(CANARY);JSONObject ref=refs.getJSONObject(0);assertEquals(9_000_000_000L,ref.getJSONObject("sourceRef").getLong("revision"));assertFalse(ref.has("body"));assertFalse(ref.has("executionAuthorized"));
         JSONObject history=f.assistant.queryRetainedHistory(f.assistant.openHistoryConversation(TARGET),new JSONObject().put("query",CANARY).put("cursor","").put("limit",20).put("maxChars",16000),new RunControl());assertEquals(0,history.getJSONArray("entries").length());

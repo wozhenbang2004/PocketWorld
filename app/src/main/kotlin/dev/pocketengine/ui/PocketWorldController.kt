@@ -2380,6 +2380,23 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal var taskListNextCursor by mutableStateOf("")
         private set
+    /** Original receipt query only; closing the panel cancels the read and never a task. */
+    internal fun readTaskInferenceUsage(task: JSONObject, done: (dev.pocketengine.runtime.usage.TaskInferencePresentation.Snapshot?, String?) -> Unit): () -> Unit {
+        val read = dev.pocketengine.core.RunControl()
+        if (closed || !privateWorkspaceView()) { done(null, "请在原私人任务中核对用量"); return { read.cancel() } }
+        val original = JSONObject(task.toString())
+        val taskId = original.optString("id")
+        try { io.execute {
+            val result = runCatching {
+                read.check()
+                val usage = app.tasks.ownerTaskInferenceUsage(taskId, read)
+                read.check()
+                dev.pocketengine.runtime.usage.TaskInferencePresentation.fromNativeUsage(original, usage).also { read.check() }
+            }
+            main.post { if (!closed && privateWorkspaceView() && !read.isCancelled) result.fold({ done(it, null) }, { done(null, message(it)) }) }
+        } } catch (failure: Exception) { done(null, message(failure)) }
+        return { read.cancel() }
+    }
     /** Alternate quote only. Original bounded native receipt read; no request, replay or setting write. */
     internal fun reestimateInference(taskId: String, callId: String, done: (JSONObject?, String?) -> Unit) {
         if (closed) return
@@ -2392,9 +2409,28 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal var conversationSourceRevision by mutableStateOf(0L)
         private set
-    internal fun answerOwnerQuestion(question: JSONObject, text: String) {
-        if (!closed && privateWorkspaceView() && text.isNotBlank() && text.length <= 4000)
-            native("answerOwnerQuestion", JSONObject().put("questionIdentity", JSONObject(question.toString())).put("text", text))
+    internal fun answerOwnerQuestion(question: JSONObject, text: String, done: (JSONObject?, String?) -> Unit) {
+        if (text.isBlank() || text.length > 4000) { done(null, "请填写不超过4000字的回答"); return }
+        submitOwnerQuestion("answerOwnerQuestion", question, JSONObject().put("text", text), done)
+    }
+    internal fun answerOwnerQuestionChoice(question: JSONObject, optionId: String, done: (JSONObject?, String?) -> Unit) {
+        if (!optionId.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,63}"))) { done(null, "原选项不可用，请刷新原任务"); return }
+        submitOwnerQuestion("answerOwnerQuestionChoice", question, JSONObject().put("optionId", optionId), done)
+    }
+    private fun submitOwnerQuestion(action: String, question: JSONObject, input: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        if (closed || !privateWorkspaceView()) { done(null, "请回到原私人任务核对问题"); return }
+        val exact = JSONObject(question.toString())
+        input.put("questionIdentity", exact)
+        try { io.execute {
+            val result = runCatching {
+                check(!closed && privateWorkspaceView()) { "原回答窗口已关闭" }
+                app.dispatchOwnerAction(action, input)
+            }
+            main.post { if (!closed && privateWorkspaceView()) {
+                result.fold({ done(it, null) }, { done(null, "回答回执未确认，请核对原任务；没有自动重发。" ) })
+                getTask(exact.optString("taskId"))
+            } }
+        } } catch (failure: Exception) { done(null, message(failure)) }
     }
     /** Source-bound original interrupted prefixes. Never the general raw audit route. */
     internal fun readConversationInterrupted(taskId: String, conversationId: String?, cursor: String, done: (JSONObject?, String?) -> Unit) {
@@ -2689,7 +2725,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 "get" -> {
                     if(requestId!=latestChatGet)return
                     val id = result.optString("conversationId")
-                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference")) });resolveOriginalMessageAttachments(id)
+                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator")) });resolveOriginalMessageAttachments(id)
                 }
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
                 "getSubmission" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"),true);native("getFeatures") }

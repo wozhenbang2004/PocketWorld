@@ -236,7 +236,9 @@ private fun WirelessSetup(state: PocketUiState, connection: BackgroundConnection
     }
     SetupHeading(if (connecting) "最后一步 · 完成连接" else "第一步 · 开启系统连接开关")
     SetupCaption(if (connecting) "配对后回到系统无线调试主页，使用页面上的连接端口。它与配对窗口的端口不同。" else "在开发者选项中开启“无线调试”，再打开“使用配对码配对设备”。保持配对窗口打开；切回时若窗口关闭，可使用系统分屏，重新读取当前码。")
+    DeveloperOptionsGuidance("无线调试与配对")
     OutlinedButton(onClick = { code = ""; controller.openWirelessSettings() }, enabled = !connection.taskOwned && !connection.busy) { Text("前往系统设置", fontSize = 12.sp) }
+    SetupCaption("只连接这台手机的当前地址。无线调试由 Android 系统开关控制；停止 PocketWorld 助手后，若不再需要调试，请在系统设置中关闭无线调试。")
     if (connection.requiresConnectionCheck && !connection.busy) SetupCaption("上次请求的结果尚未确认。先连接核对原助手，不重复提交配对码。")
     val kind = if (connecting) "connect" else "pairing"
     val endpoints = wirelessEndpoints(discovery, kind)
@@ -296,8 +298,14 @@ private fun ShizukuSetup(state: PocketUiState, connection: BackgroundConnectionS
 private fun ComputerAdbSetup(state: PocketUiState, connection: BackgroundConnectionState, controller: PocketWorldController) {
     SetupHeading("使用受信任电脑 ADB")
     SetupCaption("这是备用连接方式，需要电脑、debug 安装包和手机上的 ADB 授权。准备命令后在你信任的电脑执行，再核对真实助手连接。")
+    DeveloperOptionsGuidance("USB 调试与这台受信任电脑的授权")
+    SetupCaption("完成后可拔掉 USB 并关闭系统 USB 调试。停止本应用的助手不会代替系统关闭调试授权。")
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = { controller.display("setup") }, enabled = connection.canChangeBackend) { Text("准备电脑命令", fontSize = 12.sp) }; OutlinedButton(onClick = { controller.display("connect") }, enabled = !connection.taskOwned && !connection.busy && connection.backend == "adb") { Text("核对助手连接", fontSize = 12.sp) } }
     state.setupCommands.forEach { command -> SelectionContainer { Text(command, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 19.sp, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) } }
+}
+@Composable
+private fun DeveloperOptionsGuidance(required: String) {
+    SetupCaption("本次只需 $required。不要更改“以 16 KB 页面大小启动”、OEM 解锁、引导加载程序或清除数据选项。若系统提示擦除数据、恢复出厂设置或解锁设备，请取消并返回本页；这些操作不属于本次启用步骤。")
 }
 @Composable private fun SetupCaption(text: String) { if (text.isNotBlank()) Text(text, color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 8.dp, bottom = 10.dp)) }
 @Composable private fun SetupHeading(text: String) { Text(text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 22.dp, bottom = 6.dp)) }
