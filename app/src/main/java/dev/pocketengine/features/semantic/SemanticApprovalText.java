@@ -18,8 +18,13 @@ public final class SemanticApprovalText {
                     .append("\n版本：").append(identity.getLong("versionCode"));
             JSONArray certificates=identity.getJSONArray("certificates");
             for(int i=0;i<certificates.length();i++)text.append("\n签名 SHA-256：").append(certificates.getString(i));
-            text.append("\n位置：手机主屏，执行时会切换应用并占用屏幕。\n");
+            JSONObject resource=capability.optJSONObject("resource");
+            if(resource!=null&&"background".equals(resource.optString("executionMode")))
+                text.append("\n位置：原任务后台屏 ").append(resource.optInt("displayId",-1)).append("，不回落到主屏。\n");
+            else text.append("\n位置：手机主屏，执行时会切换应用并占用屏幕。\n");
+            if(identity.has("userId"))text.append("Android 资料：").append(identity.getInt("userId")).append(" / 序列 ").append(identity.getLong("profileSerial")).append('\n');
             switch(request.getString("kind")) {
+                case "show_alarms":text.append("打开当前资料中的闹钟列表；不会据此宣称创建或更改闹钟。\n");break;
                 case "web":field(text,request,"url","网址");break;
                 case "app_link":
                     field(text,request,"packageName","准确目标包名");field(text,request,"url","完整 HTTPS 链接");

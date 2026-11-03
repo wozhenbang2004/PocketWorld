@@ -483,6 +483,14 @@ public final class TaskStore {
         JSONObject t=base(UUID.randomUUID().toString(),goal,"phone",mode).put("displayId",mode.equals("background")?-1:0);
         write(t);return copy(t,false);
     }
+    /** Explicit native owner rehearsal; this flag is stored on the existing task, never accepted from model JSON. */
+    public synchronized JSONObject createOwnerPhonePractice(String goal,String mode)throws Exception {
+        JSONObject task=create(goal,mode);task.put("ownerPhonePractice",true);write(task);return copy(task,false);
+    }
+    public synchronized void requireOwnerPhonePractice(String id,String run,int epoch,RunControl original)throws Exception {
+        checkExtensionRun(id,run,epoch,original);JSONObject task=required(id);
+        if(!task.optBoolean("ownerPhonePractice")||!"phone".equals(task.optString("kind")))throw new SecurityException("owner_practice_required");
+    }
     public synchronized JSONObject createCapabilityTask(String goal,String conversationId)throws Exception{
         JSONObject task=base(UUID.randomUUID().toString(),goal,"assistant","capabilities").put("conversationId",conversationId==null?"":conversationId);
         write(task);return copy(task,false);

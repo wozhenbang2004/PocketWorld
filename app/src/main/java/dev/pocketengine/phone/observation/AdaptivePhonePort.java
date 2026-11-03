@@ -48,6 +48,8 @@ public final class AdaptivePhonePort implements PhonePort {
     private final java.util.Map<String,OcrTextTarget> textTargets=new java.util.LinkedHashMap<>();
     private NativeSensitiveStep.OcrEvidence ocrSensitive;
     private final PhoneReadGate sensitiveReads=new PhoneReadGate();
+    private dev.pocketengine.phone.diagnostics.PhonePracticeEvidence practice;
+    private Long historyPolicyRevision;
 
     /** All arguments come from the native host, including verified model image support and its uptime clock. */
     public AdaptivePhonePort(PhonePort source, Scope scope, boolean sendScreenshots,
@@ -69,6 +71,135 @@ public final class AdaptivePhonePort implements PhonePort {
     @Override public boolean isConnected() { return source.isConnected(); }
     public boolean textTargetingAvailable(){return localCaptureAllowed&&localOcrAllowed&&source instanceof NativeOcrTapPort&&ocrAvailable();}
     public boolean matchesHostScope(String task,String run,int epoch){return scope.taskId.equals(task)&&scope.runId.equals(run)&&scope.epoch==epoch;}
+    public PhonePort physicalPort(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort?((dev.pocketengine.phone.access.GuardedPhonePort)source).physicalPort():source;}
+    public long appPolicyRevision(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort?((dev.pocketengine.phone.access.GuardedPhonePort)source).policyRevision():0;}
+    /** Owner diagnostics may read only these booleans from the exact original run; no execution or content capture. */
+    public synchronized JSONObject ownerPracticeResult(String task,String run,int epoch)throws Exception {
+        if(!matchesHostScope(task,run,epoch))return failure("practice_run_mismatch","演练证据不属于当前原任务。");
+        return practice==null?failure("practice_not_started","本原任务尚未启动演练。"):practice.result();
+    }
+    /** Historical frames retain evidence only while their original authority and policy stay current. */
+    public synchronized void requireHistoryCurrent(RunControl original)throws Exception {
+        String blocked=authority(original);
+        long revision=appPolicyRevision();
+        if(blocked!=null||!source.isConnected()||historyPolicyRevision!=null&&historyPolicyRevision.longValue()!=revision){
+            clearReferences();historyPolicyRevision=revision;
+            throw new SecurityException(blocked==null?"historical_phone_source_or_policy_changed":blocked);
+        }
+        historyPolicyRevision=revision;
+    }
+    /** All side effects enter from the existing CapabilityPort's original prepared operation. */
+    public JSONObject nativeExtension(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        PhoneExtensionTools.validate(tool,args);
+        boolean write=PhoneExtensionTools.writes(tool);
+        boolean opening=tool.equals("phone_launch_app_copy")||tool.equals("phone_practice_target")||tool.equals("phone_app_after_task");
+        boolean listing=tool.equals("phone_list_app_copies");
+        synchronized(this){
+            String blocked=authority(control);if(blocked!=null)return failure(blocked,"原手机任务控制已变化。");
+            if(reconciliationRequired||safetyPause!=null)return failure(reconciliationRequired?"reconciliation_required":safetyPause,"先核对原操作和权限。");
+            if(tool.equals("phone_practice_result"))return practice==null?failure("practice_not_started","请先由主人启动本次自有测试页。"):practice.result();
+            String observation=tool.equals("phone_practice_frame_check")&&latest!=null?latest.optString("observationId"):args.optString("observationId");
+            if(!opening&&!listing&&!current(observation,control))return failure("stale_observation","扩展工具需要当前原观察。");
+            if(tool.equals("phone_dialog"))return PhoneDialogEvidence.read(latest);
+            if(tool.equals("phone_gesture")){
+                if(!imageCeiling||!ObservationReport.hasImage(latest))return failure("coordinate_unverifiable","复杂手势需要已发送模型的当前真实图片。");
+                prepareCoordinateSensitiveEvidence(control);
+                if(!current(observation,control))return failure("stale_observation","本地风险读取期间原手势观察已变化。");
+                if(ocrSensitive!=null){JSONArray paths=args.getJSONArray("paths");for(int i=0;i<paths.length();i++){JSONArray points=paths.getJSONArray(i);for(int j=1;j<points.length();j++){JSONArray a=points.getJSONArray(j-1),b=points.getJSONArray(j);ocrSensitive.requireCoordinate(a.getInt(0),a.getInt(1),b.getInt(0),b.getInt(1),true,control,control.pauseRevision());}}}
+            }
+        }
+        if(tool.equals("phone_practice_frame_check"))return practiceFrame(control);
+        if(tool.equals("phone_event"))return waitNativeEvent(args,control);
+        if(write&&admission==null)return failure("host_authority_required","扩展动作需要原prepared操作准入。");
+        if(write&&!actionEffectInFlight.compareAndSet(false,true))return failure("original_action_in_flight","原手机动作仍在进行。");
+        try{
+            if(tool.equals("phone_set_wheel"))return wheelStep(args,control,admission);
+            JSONObject result;
+            if(tool.equals("phone_clear_text")){
+                JSONObject text=new JSONObject().put("observationId",args.getString("observationId")).put("nodeId",args.getString("nodeId")).put("text","");
+                admission.check();result=source.execute("phone_type",text,control);
+            }else if(source instanceof NativePhoneExtensions)result=((NativePhoneExtensions)source).extension(tool,args,control,admission);
+            else return failure("native_extension_unavailable","所选原生端口不支持该扩展，不切换执行后端。");
+            if(result==null)result=new JSONObject().put("ok",false).put("accepted",write?JSONObject.NULL:false).put("error",write?"action_unknown":"native_extension_unavailable");
+            boolean unknown=result.has("accepted")&&result.isNull("accepted")||ObservationSafety.unknownEffect(result.optString("error",result.optString("code")))||result.optBoolean("requiresReconciliation");
+            synchronized(this){
+                if(tool.equals("phone_practice_target")&&Boolean.TRUE.equals(result.opt("accepted")))practice=new dev.pocketengine.phone.diagnostics.PhonePracticeEvidence(args.getString("packageName"),scope.displayId,result.optString("practiceSessionId"));
+                if(practice!=null){practice.action(tool,args,result);practice.nativeFacts(result);}
+                if(write)clearReferences();if(unknown)reconciliationRequired=true;
+                if(!result.optBoolean("ok")){ObservationReport.annotateFailure(result);retainSafetyFence(result);}
+            }
+            if(write&&Boolean.TRUE.equals(result.opt("accepted"))&&!unknown){
+                JSONObject fresh=readOnlyTree(control);result.put("freshObservationAvailable",fresh.optBoolean("ok"));
+                if(fresh.optBoolean("ok"))result.put("afterObservationId",fresh.getString("observationId"));
+            }
+            return result.put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false);
+        }catch(NativeSensitiveStep.OwnerRequired owner){synchronized(this){clearReferences();}throw owner;}
+        finally{if(write)actionEffectInFlight.set(false);}
+    }
+    private JSONObject practiceFrame(RunControl control)throws Exception {
+        final dev.pocketengine.phone.diagnostics.PhonePracticeEvidence captured;final long revision;
+        synchronized(this){
+            captured=practice;revision=control.pauseRevision();
+            if(captured==null||!localCaptureAllowed||latest==null||!captured.targetCurrent(latest))return failure("practice_capture_not_authorized","需要本次自有演练目标与本地取图许可。");
+        }
+        JSONObject actual=source.observe(true,control);
+        synchronized(this){
+            String blocked=authority(control);
+            if(captured!=practice||blocked!=null||control.pauseRevision()!=revision){clearReferences();throw new SecurityException("practice_session_changed");}
+        }
+        JSONObject frame=captured.targetCurrent(actual)?dev.pocketengine.phone.diagnostics.PhonePracticeFrame.inspect(actual,scope.displayId,scope.sessionId,revision):new JSONObject().put("state","unknown").put("reason","practice_target_not_current").put("localOnly",true).put("imageUploaded",false);
+        synchronized(this){captured.frame(frame);clearReferences();}
+        JSONObject fresh=readOnlyTree(control);if(fresh.optBoolean("ok"))frame.put("observationId",fresh.getString("observationId"));return frame.put("ok",true);
+    }
+    private JSONObject waitNativeEvent(JSONObject args,RunControl control)throws Exception {
+        final java.util.Set<Integer> windows=new java.util.LinkedHashSet<>();final long revision,policyRevision;final String session;
+        synchronized(this){
+            String blocked=authority(control);if(blocked!=null||!current(args.getString("observationId"),control))return failure(blocked==null?"stale_observation":blocked,"事件等待起点已经变化。");
+            JSONArray rows=latest.optJSONArray("windows");if(rows!=null)for(int i=0;i<rows.length();i++)windows.add(rows.getJSONObject(i).getInt("windowId"));
+            if(windows.isEmpty())return failure("event_window_unavailable","没有可绑定的当前窗口，不跨显示等待全局事件。");
+            revision=control.pauseRevision();policyRevision=appPolicyRevision();session=latest.getString("sessionId");
+        }
+        dev.pocketengine.phone.PhoneUiSignals signals=source instanceof NativePhoneSignals?((NativePhoneSignals)source).uiSignals(control):null;
+        if(signals==null)return failure("event_source_unavailable","原显示无可用界面事件源。");
+        long until=System.nanoTime()+args.getInt("timeoutMs")*1_000_000L;
+        dev.pocketengine.phone.PhoneUiSignals.Stamp before=signals.snapshot(windows),after=before;
+        if(before.closed)return failure("event_source_closed","原界面事件源已经关闭。");
+        while(before.same(after)&&System.nanoTime()<until){
+            requireEventCurrent(control,revision,policyRevision,session);
+            signals.awaitChange(before,windows,Math.min(250,Math.max(1,(until-System.nanoTime())/1_000_000L)),control,revision);
+            after=signals.snapshot(windows);if(after.closed)break;
+        }
+        requireEventCurrent(control,revision,policyRevision,session);
+        JSONObject result=new JSONObject().put("ok",true).put("eventObserved",!before.same(after)&&!after.closed).put("status",after.closed?"source_closed":before.same(after)?"timeout":"event_hint").put("containsNotificationText",false).put("eventProvesBusinessOutcome",false).put("eventScope","current_windows_or_global_invalidation").put("displayId",scope.displayId).put("sessionId",scope.sessionId);
+        if(after.closed){synchronized(this){clearReferences();}return result;}
+        if(!before.same(after)){
+            JSONObject fresh=readOnlyTree(control);result.put("freshObservationAvailable",fresh.optBoolean("ok"));
+            if(fresh.optBoolean("ok"))result.put("observationId",fresh.getString("observationId"));
+        }
+        return result;
+    }
+    private synchronized void requireEventCurrent(RunControl control,long revision,long policyRevision,String session)throws Exception {
+        String blocked=authority(control);
+        if(blocked!=null||control.pauseRevision()!=revision||policyRevision!=appPolicyRevision()||!scope.sessionId.equals(session)||!source.isConnected()){
+            clearReferences();throw new SecurityException("event_original_run_or_source_changed");
+        }
+    }
+    private JSONObject wheelStep(JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        final JSONObject original;final String packageName;
+        synchronized(this){
+            original=PhoneTreeExtract.index(latest).get(args.getString("nodeId"));packageName=latest.optString("packageName");
+            if(original==null||original.optBoolean("password")||!original.optBoolean("scrollable"))return failure("not_a_wheel","需要原树内可滚动的精确滚轮节点。");
+        }
+        JSONObject scroll=new JSONObject().put("observationId",args.getString("observationId")).put("nodeId",args.getString("nodeId")).put("direction",args.getString("direction"));
+        JSONObject result=scrollNode(scroll,control,admission);String value=null;
+        synchronized(this){
+            if(Boolean.TRUE.equals(result.opt("accepted"))&&latest!=null&&packageName.equals(latest.optString("packageName")))for(JSONObject n:PhoneTreeExtract.index(latest).values()){
+                if(!n.optBoolean("password")&&n.optInt("windowId",-1)==original.optInt("windowId",-2)&&n.optJSONArray("path")!=null&&n.getJSONArray("path").toString().equals(original.getJSONArray("path").toString())&&n.optString("resourceId").equals(original.optString("resourceId"))&&n.optString("role").equals(original.optString("role"))){value=n.optString("text");if(value.isEmpty())value=null;break;}
+            }
+        }
+        boolean reached=value!=null&&value.equals(args.getString("value"));
+        return result.put("target",args.getString("value")).put("actualValue",value==null?JSONObject.NULL:value).put("reached",reached).put("status",reached?"target_observed":value==null?"unreadable":"partial").put("stepsPerformed",Boolean.TRUE.equals(result.opt("accepted"))?1:0).put("verifiedBusinessSuccess",false);
+    }
     @Override public synchronized void clearReferences() {
         latest = null; latestBinding = null; textTargets.clear();ocrSensitive=null;source.clearReferences();
         // Clearing references cannot reconcile a possibly dispatched operation.
@@ -219,7 +350,7 @@ public final class AdaptivePhonePort implements PhonePort {
         latestBinding=scope.observation(observed.getString("observationId"),revision);
         observed.put("observationBinding",bindingJson(latestBinding)).put("observationDecision",new JSONObject()
                 .put("request","nodes").put("reason","read_only_condition").put("adequacy","not_asserted"));
-        latest=new JSONObject(observed.toString());return observed;
+        latest=new JSONObject(observed.toString());if(practice!=null)practice.observation(observed);return observed;
         }
     }
 
@@ -347,6 +478,7 @@ public final class AdaptivePhonePort implements PhonePort {
         }
         if (result == null) result = new JSONObject().put("ok", false).put("error", "action_unknown")
                 .put("accepted", JSONObject.NULL).put("verified", false).put("message", "操作没有确定回执，请由主人核对。");
+        if(practice!=null)practice.action(tool,args,result);
         if (!"phone_list_apps".equals(tool)) {
             clearReferences();
             String code = result.optString("error", result.optString("code"));
@@ -433,6 +565,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 .put("ocrReason", ocrAvailable() ? "mounted_local_engine" : "engine_not_installed")
                 .put("localCaptureAllowed",localCaptureAllowed).put("localOcrAllowed",localOcrAllowed).put("ocrTextMayBeSentToModel",true).put("uploadImageAllowed",imageCeiling).put("screenshotsAllowed", imageCeiling).put("automaticReplayAllowed", false));
         latest = new JSONObject(out.toString()); pendingNeed = Need.AUTOMATIC;
+        if(practice!=null)practice.observation(out);
         return out;
     }
     private boolean ocrAvailable() { return ocr != null && ocr.available(); }
@@ -504,6 +637,7 @@ public final class AdaptivePhonePort implements PhonePort {
     }
     private String authority(RunControl control) throws Exception {
         Objects.requireNonNull(control).check();
+        if(source instanceof dev.pocketengine.phone.access.GuardedPhonePort&&!((dev.pocketengine.phone.access.GuardedPhonePort)source).referencePolicyCurrent()){clearReferences();return "app_policy_changed";}
         if (!control.hasHostRun() || !control.matchesHostRun(scope.taskId, scope.runId, scope.epoch)
                 || boundControl != null && boundControl != control) return "identity_mismatch";
         if (boundControl == null) boundControl = control;

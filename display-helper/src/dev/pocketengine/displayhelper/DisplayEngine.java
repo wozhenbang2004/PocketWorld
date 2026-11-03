@@ -39,6 +39,7 @@ final class DisplayEngine {
     private volatile LeasePolicy lease;
     private OwnerTaskTransfer ownerTransfer;
     private final DisplayTaskTopology taskTopology=new DisplayTaskTopology();
+    private final DisplayGesturePaths gesturePaths;
     private int width,height,density;
     private int requiredDisplayFlags;
     private String packageName="";
@@ -65,7 +66,7 @@ final class DisplayEngine {
         TouchSequence(LeasePolicy lease,VirtualDisplay display,long downTime){this.lease=lease;this.display=display;this.downTime=downTime;}
     }
     private static final ThreadLocal<Long> DISPATCH_DEADLINE=new ThreadLocal<>();
-    DisplayEngine(Context context,Handler main){this.context=context;this.main=main;requirePrivilegedEnvironment();}
+    DisplayEngine(Context context,Handler main){this.context=context;this.main=main;this.gesturePaths=new DisplayGesturePaths(main);requirePrivilegedEnvironment();}
 
     private void requirePrivilegedEnvironment(){
         int uid=android.os.Process.myUid();
@@ -86,24 +87,40 @@ final class DisplayEngine {
             if(lease!=null||display!=null||reader!=null)throw new Failure("audio_recovery_busy","原后台屏尚未证实释放，音频恢复记录已保留。",false);
             return DisplayAudioCommands.handle(cmd.endsWith(".get")?"audio.get":"audio.set",request);
         });
+        if("primary_ownership".equals(cmd)){
+            requirePrivilegedEnvironment();JSONObject facts=DisplayAppOwnership.enrich(DisplayOwnershipSnapshot.parse(taskDump(),0),taskTopology.read(),0);
+            return ok().put("ownership",facts);
+        }
         if("create".equals(cmd))return create(request);
         LeasePolicy current=lease;
         if(current==null||!current.accepts(request.optString("sessionId"),request.optInt("displayId",-1),SystemClock.uptimeMillis()))
             throw new Failure("invalid_lease","后台显示会话已结束，请重新建立。",false);
         JSONObject result;
-        if(ownerTransfer!=null&&ownerTransfer.blocksInput()&&cmd.matches("launch|tap|swipe|key"))throw new Failure("owner_handoff_active","应用由主人在主屏接管，未派发副屏输入。",false);
+        if(ownerTransfer!=null&&ownerTransfer.blocksInput()&&cmd.matches("launch|launch_copy|intent|gesture|tap|swipe|key"))throw new Failure("owner_handoff_active","应用由主人在主屏接管，未派发副屏输入。",false);
         if(cmd.startsWith("owner_handoff_"))result=ownerHandoff(current,request,cmd);
         else if("release".equals(cmd)){current.release();onMain(()->{if(lease==current)release();return null;});result=ok().put("released",true);}
         else if("heartbeat".equals(cmd)){long lifetime=integer(request,"lifetimeMs",1,30_000,30_000);if(!current.renew(request.optString("sessionId"),request.optInt("displayId",-1),SystemClock.uptimeMillis(),lifetime))throw new Failure("invalid_lease","原后台显示不能续期。",false);result=ok().put("renewed",true).put("leaseExpiresAtUptimeMs",current.expiresAt());}
         else if("frame".equals(cmd))result=frame(current,request);
         else if("launch".equals(cmd))result=launch(current,request);
+        else if("intent".equals(cmd)||"launch_copy".equals(cmd))result=onMain(()->{
+            valid(current);if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，未打开应用。",false);
+            DisplayTypedIntent.Gate gate=new DisplayTypedIntent.Gate(){public void check()throws Exception{valid(current);dispatchDeadline();}
+                public void requireAppFree(String pkg,int user)throws Exception{if(!DisplayAppOwnership.free(taskTopology.read(),pkg,user,current.display()))throw new Failure("app_user_busy_or_unknown","同一App资料的完整占用不能排除，未抢占其他屏幕。",false);}};
+            JSONObject answer="intent".equals(cmd)?DisplayTypedIntent.dispatch(context,current.display(),request,gate):DisplayAppCopies.launch(context,current.display(),request,gate);
+            if(Boolean.TRUE.equals(answer.opt("accepted")))packageName=request.has("target")?request.getJSONObject("target").getString("packageName"):request.getString("packageName");return answer;
+        });
+        else if("gesture".equals(cmd)){
+            long generation=request.optLong("frameGeneration",-1);
+            if(framePending||generation<0||generation!=frameGeneration.get())throw new Failure("stale_observation","多指动作需要当前副屏帧。",false);
+            result=gesturePaths.run(current,request,width,height,()->{valid(current);if(activeTouch!=null)throw new Failure("gesture_in_flight","原单指动作未结束。",false);},event->{inject(current,event,event.getActionMasked()==MotionEvent.ACTION_DOWN?generation:-1);return true;});
+        }
         else if("apps".equals(cmd))result=apps();
         else if("audio.get".equals(cmd)||"audio.set".equals(cmd)){
             valid(current);if(request.optInt("userId",-1)!=context.getApplicationInfo().uid/100000)throw new Failure("audio_profile_mismatch","音频资料不是原本机启动用户。",false);
             result=DisplayAudioCommands.handle(cmd,request);
         }
-        else if("ownership".equals(cmd)){valid(current);JSONObject facts=DisplayOwnershipSnapshot.parse(taskDump(),current.display());
-            facts.put("taskTopology",taskTopology.read());valid(current);result=ok().put("ownership",facts);}
+        else if("ownership".equals(cmd)){valid(current);JSONObject facts=DisplayAppOwnership.enrich(DisplayOwnershipSnapshot.parse(taskDump(),current.display()),taskTopology.read(),current.display());
+            valid(current);result=ok().put("ownership",facts);}
         else if("tap".equals(cmd)||"swipe".equals(cmd))result=gesture(current,request,"swipe".equals(cmd));
         else if("key".equals(cmd))result=key(current,request);
         else throw new Failure("unsupported_command","后台助手不支持该命令。",false);
@@ -141,7 +158,7 @@ final class DisplayEngine {
             if(current!=null&&(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current)))release();
             if(lease!=null)probeIme(lease.display(),false);
             return ok().put("protocol",1).put("uid",android.os.Process.myUid()).put("sdk",Build.VERSION.SDK_INT)
-                    .put("frameMetadataOnly",true).put("backgroundOnly",true).put("minimumSdk",34).put("sessionActive",lease!=null)
+                    .put("parallelPhone",dev.pocketengine.phone.display.PhoneParallelCapabilities.current()).put("frameMetadataOnly",true).put("backgroundOnly",true).put("minimumSdk",34).put("sessionActive",lease!=null)
                     .put("displayId",lease==null?JSONObject.NULL:lease.display()).put("sessionId",lease==null?JSONObject.NULL:lease.session())
                     .put("width",width).put("height",height).put("density",density).put("requestedPackageName",packageName)
                     .put("focusIsolationRequested",lease!=null).put("displayFlagsConfirmed",lease!=null&&displayIsValid(lease))
@@ -149,6 +166,7 @@ final class DisplayEngine {
         });
     }
     private JSONObject create(JSONObject request)throws Exception {
+        dev.pocketengine.phone.display.PhoneParallelCapabilities.require(request);
         if(Build.VERSION.SDK_INT<34)throw new Failure("android_version","后台隔离焦点模式需要 Android14 或以上。",false);
         int w=integer(request,"width",320,1600,720),h=integer(request,"height",320,2400,1280),d=integer(request,"density",120,640,240);
         if((long)w*h>2_400_000)throw new Failure("invalid_dimensions","后台屏尺寸过大。",false);
@@ -248,7 +266,8 @@ final class DisplayEngine {
         onMain(()->{
             valid(expected);
             android.app.ActivityOptions options=android.app.ActivityOptions.makeBasic().setLaunchDisplayId(expected.display());
-            context.startActivity(intent,options.toBundle());packageName=pkg;return null;
+            if(!DisplayAppOwnership.free(taskTopology.read(),pkg,context.getApplicationInfo().uid/100000,expected.display()))throw new Failure("app_user_busy_or_unknown","同一App资料的完整任务占用不能排除，未移动或打开应用。",false);
+            dispatchDeadline();context.startActivity(intent,options.toBundle());packageName=pkg;return null;
         });
         return receipt().put("packageName",pkg);
     }
@@ -303,7 +322,7 @@ final class DisplayEngine {
         long start=SystemClock.uptimeMillis();
         TouchSequence touch=onMain(()->{
             valid(expected);
-            if(activeTouch!=null)throw new Failure("gesture_in_flight","原触摸尚未结束，请核对或释放原副屏后再操作。",false);
+            if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，请核对或释放原副屏后再操作。",false);
             activeTouch=new TouchSequence(expected,display,start);return activeTouch;
         });
         try{
@@ -432,6 +451,7 @@ final class DisplayEngine {
     void tick(){LeasePolicy current=lease;if(current!=null)try{onMain(()->{if(lease==current&&(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current)))release();return null;});}catch(Exception ignored){}}
     void close(){try{onMain(()->{release();return null;});}catch(Exception ignored){ /* Process teardown also revokes its display token. */ }}
     private void release(){
+        LeasePolicy cancelling=lease;if(cancelling!=null)gesturePaths.cancelLease(cancelling,event->{inject(cancelling,event,-1);return true;});
         ownerTransfer=null;taskTopology.clear();
         main.removeCallbacks(trailingFrame);scheduledFrameReader=null;framePending=false;lastFrameConsumed=0;
         LeasePolicy old=lease;lease=null;activeTouch=null;if(old!=null)old.release();latestPixels=null;frameAt=0;packageName="";requiredDisplayFlags=0;

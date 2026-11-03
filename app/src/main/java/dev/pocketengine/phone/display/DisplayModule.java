@@ -55,9 +55,10 @@ public final class DisplayModule implements EngineModule {
         JSONObject result=new JSONObject(state.toString());
         return result.put("configured",!prefs.getString("socketName","").isEmpty()).put("helperConnected",isConnected())
                 .put("sessionActive",isConnected()&&result.optBoolean("sessionActive",false)).put("releasePending",releasePending)
+                .put("setupRevision",bootstrapEpoch).put("appAccess",new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context.android).snapshot()).put("clipboardPasteAllowed",dev.pocketengine.phone.setup.AndroidClipboardRecovery.allowed(context.android))
                 .put("authorizationBackend",backend()).put("requiresAdbBootstrap","adb".equals(backend())).put("shizuku",shizuku.snapshot()).put("adb",adb.snapshot())
                 .put("onDeviceAdbSupported",Build.VERSION.SDK_INT>=34).put("bootstrapBusy",bootstrapBusy())
-                .put("backgroundOnly",true).put("minimumSdk",34).put("supportedAndroid",Build.VERSION.SDK_INT>=34)
+                .put("parallelPhone",PhoneParallelCapabilities.current()).put("backgroundOnly",true).put("minimumSdk",34).put("supportedAndroid",Build.VERSION.SDK_INT>=34)
                 .put("readyForTask",hasSession()).put("taskOwned",!ownerTaskId.isEmpty()).put("deviceVerified",false).put("message",message)
                 .put("audioSilenceEnabled",dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(context.android));
     }
@@ -72,8 +73,22 @@ public final class DisplayModule implements EngineModule {
     public synchronized void unpinOwner(String taskId){if(ownerTaskId.equals(taskId))ownerTaskId="";}
     synchronized boolean ownedBy(String taskId){return !ownerTaskId.isEmpty()&&ownerTaskId.equals(taskId);}
     @Override public synchronized JSONObject handle(String command,JSONObject input)throws Exception {
-        if(!ownerTaskId.isEmpty())throw new IllegalStateException("手机任务正在使用后台资源，请先停止任务再更改或探测连接");
         if(input==null)input=new JSONObject();
+        // Native owner controls remain available during a run so revocation reaches its live fences.
+        if("access.set".equals(command)){
+            new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context.android).setOwnerRule(
+                    new dev.pocketengine.phone.access.AppCopyKey(input.getString("packageName"),input.getInt("userId")),
+                    input.getBoolean("automation"),input.getBoolean("ownerShare"),input.getLong("expectedRevision"));
+            return snapshot();
+        }
+        if("clipboard.consent".equals(command)){
+            dev.pocketengine.phone.setup.AndroidClipboardRecovery.setOwnerAllowed(context.android,input.getBoolean("enabled"));return snapshot();
+        }
+        if("clipboard.restore".equals(command)){
+            if(!ownerTaskId.isEmpty())throw new IllegalStateException("请先停止输入操作，再恢复原剪贴板");
+            boolean restored=dev.pocketengine.phone.setup.AndroidClipboardRecovery.create(context.android).recover();return new JSONObject().put("ok",restored).put("clipboardRestored",restored).put("automaticReplayAllowed",false);
+        }
+        if(!ownerTaskId.isEmpty())throw new IllegalStateException("手机任务正在使用后台资源，请先停止任务再更改或探测连接");
         if(bootstrapBusy()&&!java.util.Set.of("adb.status","adb.discover","adb.cancel","status","shizuku.status").contains(command))
             throw new IllegalStateException("后台授权启动或回收正在进行，请先等待或取消");
         if(adb.snapshot().optBoolean("recoveryRequired")&&!java.util.Set.of("adb.status","adb.discover","adb.connect","adb.cancel","adb.forget","status","shizuku.status").contains(command))
@@ -175,6 +190,13 @@ public final class DisplayModule implements EngineModule {
         }
         return new JSONObject().put("socketName",socket).put("token",secret).put("ownerUid",android.os.Process.myUid());
     }
+    /** Metadata only: no new display, authorization or business operation is started. */
+    public JSONObject primaryOwnership(RunControl original,boolean ownerPausedRead)throws Exception {
+        if(original==null||!original.hasHostRun()||!isConnected())throw new SecurityException("phone_owner_identity_unavailable");
+        JSONObject answer=client().call("primary_ownership",new JSONObject(),original,original.pauseRevision(),ownerPausedRead);
+        requireOk(answer);return answer.getJSONObject("ownership");
+    }
+    public android.content.Context hostContext(){return context.android;}
     public synchronized JSONObject connect(RunControl control)throws Exception {
         try{
             if("wireless_adb".equals(backend())&&(bootstrapBusy()||adb.snapshot().optBoolean("recoveryRequired")))throw new IllegalStateException("无线ADB启动尚未确认，请先在本机连接入口核对原助手");
@@ -209,6 +231,7 @@ public final class DisplayModule implements EngineModule {
             throw new SecurityException("后台助手返回的会话身份无效");
     }
     public synchronized JSONObject create(JSONObject input,RunControl control)throws Exception {
+        PhoneParallelCapabilities.require(input);
         connect(control);
         if(state.optBoolean("sessionActive"))throw new IllegalStateException("后台屏已有会话，请先释放");
         JSONObject answer=client().call("create",input,control);
@@ -247,6 +270,12 @@ public final class DisplayModule implements EngineModule {
             dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
         JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
         return request("tap",pinned,control,expectedRevision,false,java.util.Objects.requireNonNull(admission));
+    }
+    /** Extensions keep the same native transport admission and exact original display. */
+    JSONObject requestAdmitted(String command,JSONObject payload,RunControl control,long revision,String expectedSession,int expectedDisplay,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+        JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
+        return request(command,pinned,control,revision,false,java.util.Objects.requireNonNull(admission));
     }
     /** Native ledger calls only. Active mutations retain the original admitted wire write;
      * cleanup is limited to the pinned original session and its still-pinned task. */
