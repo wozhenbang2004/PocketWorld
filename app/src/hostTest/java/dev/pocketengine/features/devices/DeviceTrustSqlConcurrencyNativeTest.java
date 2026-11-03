@@ -5,10 +5,6 @@ import android.content.ContentValues;
 import android.database.sqlite.SQLiteDatabase;
 import dev.pocketengine.store.TaskStore;
 import dev.pocketengine.store.TaskStoreDeviceTrust;
-import java.lang.management.ManagementFactory;
-import java.lang.management.MonitorInfo;
-import java.lang.management.ThreadInfo;
-import java.lang.management.ThreadMXBean;
 import java.lang.reflect.Field;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -40,13 +36,11 @@ public final class DeviceTrustSqlConcurrencyNativeTest {
     private TaskStore tasks;
     private SQLiteDatabase sql;
     private TaskStoreDeviceTrust trust;
-    private final ThreadMXBean threads=ManagementFactory.getThreadMXBean();
 
     @Before public void openOriginalDatabase()throws Exception {
         Application app=RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");
         tasks=new TaskStore(app);Field field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);
         sql=(SQLiteDatabase)field.get(tasks);trust=tasks.deviceTrust();
-        assertTrue("The host must expose actual monitor ownership for this deadlock regression",threads.isObjectMonitorUsageSupported());
         assertFalse("Exercise the original non-WAL connection boundary",sql.isWriteAheadLoggingEnabled());
         ContentValues peer=new ContentValues();peer.put("device_id",PEER);peer.put("certificate_der",new byte[]{1,2,3});
         peer.put("fingerprint","a".repeat(64));peer.put("instance_id","sql-fixture-instance");peer.put("authorization_epoch",1);peer.put("revoked",0);peer.put("updated_at",NOW);
@@ -78,24 +72,26 @@ public final class DeviceTrustSqlConcurrencyNativeTest {
         }
     }
     /** Wait for actual pool contention, never infer it from a fixed sleep or an unfinished future. */
-    private ThreadInfo awaitOriginalConnectionWait(Pending<?> pending)throws Exception {
+    private void awaitOriginalConnectionWait(Pending<?> pending)throws Exception {
         assertTrue("SQL contender did not enter",pending.entered.await(BARRIER_SECONDS,TimeUnit.SECONDS));
         long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(BARRIER_SECONDS);
         while(System.nanoTime()<end){
             if(pending.result.isDone()){pending.awaitCompletion();fail("Contender did not wait for the original transaction connection");}
-            ThreadInfo info=threads.getThreadInfo(new long[]{pending.thread.getId()},true,true)[0];
-            if(info!=null)for(StackTraceElement frame:info.getStackTrace()){
+            for(StackTraceElement frame:pending.thread.getStackTrace()){
                 // Robolectric instruments Android method names; keep the native owner class exact.
-                if(frame.getClassName().equals("android.database.sqlite.SQLiteConnectionPool")&&frame.getMethodName().contains("waitForConnection"))return info;
+                if(frame.getClassName().equals("android.database.sqlite.SQLiteConnectionPool")&&frame.getMethodName().contains("waitForConnection"))return;
             }
             LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
         }
         throw new AssertionError("Original SQLite connection wait barrier was not reached");
     }
-    private boolean holdsTrustMonitor(ThreadInfo info){
-        for(MonitorInfo monitor:info.getLockedMonitors())if(monitor.getIdentityHashCode()==System.identityHashCode(trust)
-                &&monitor.getClassName().equals(TaskStoreDeviceTrust.class.getName()))return true;
-        return false;
+    private void assertTrustMonitorAvailable(String label)throws Exception {
+        CountDownLatch acquired=new CountDownLatch(1);
+        Thread probe=new Thread(()->{synchronized(trust){acquired.countDown();}},"native-trust-monitor-"+label);
+        probe.setDaemon(true);probe.start();
+        assertTrue("Queued "+label+" read holds Trust while waiting for the original SQL connection needed by the transaction's current-authority recheck",acquired.await(2,TimeUnit.SECONDS));
+        probe.join(TimeUnit.SECONDS.toMillis(BARRIER_SECONDS));
+        assertFalse("The monitor probe must exit",probe.isAlive());
     }
     /** The assertion precedes the same-thread recheck, so the old implementation fails without
      * leaving an irreversible two-thread deadlock. The finally always releases the real SQL owner.
@@ -105,8 +101,8 @@ public final class DeviceTrustSqlConcurrencyNativeTest {
         try{
             synchronized(tasks){sql.beginTransaction();try{
                 assertTrue(sql.inTransaction());assertTrue(sql.isDbLockedByCurrentThread());
-                queued=new Pending<>("native-trust-sql-"+label,read);ThreadInfo waiting=awaitOriginalConnectionWait(queued);
-                assertFalse("Queued "+label+" read holds Trust while waiting for the original SQL connection needed by the transaction's current-authority recheck",holdsTrustMonitor(waiting));
+                queued=new Pending<>("native-trust-sql-"+label,read);awaitOriginalConnectionWait(queued);
+                assertTrustMonitorAvailable(label);
                 inside=read.run();assertNotNull(inside);sql.setTransactionSuccessful();
             }finally{sql.endTransaction();}}
         }finally{if(queued!=null){JSONObject after=queued.awaitCompletion();if(inside!=null)assertEquals(DeviceProtocol.canonical(inside),DeviceProtocol.canonical(after));}}
