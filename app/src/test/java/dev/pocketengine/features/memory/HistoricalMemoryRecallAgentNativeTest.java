@@ -252,7 +252,9 @@ public final class HistoricalMemoryRecallAgentNativeTest {
                     public void check()throws Exception{control.check();tasks.checkExtensionRun(task,run,epoch,control);}
                     public JSONObject admit(Admission action)throws Exception{synchronized(tasks){check();return action.run();}}
                 };
-                var raw=new TaskStoreMemoryReader.RawBinding(task,run,epoch,control,fence,host::memoryContextRevision);tasks.bindRawModelExposure(raw);
+                var raw=new TaskStoreMemoryReader.RawBinding(task,run,epoch,control,fence,host::memoryContextRevision);
+                // Match EngineApplication's original source binding before attaching its exposure gate.
+                raw.bindOutputSources(tasks.toolOutputSources());assertSame(tasks.toolOutputSources(),raw.outputSources());tasks.bindRawModelExposure(raw);
                 journal=journal.withCompaction(tasks.compactionJournal(task,run,epoch,control,raw,()->selected));
             }
             return new AgentRunner(null,new HostToolSupervisor(host,tasks,task,run,epoch,false),budgets).run(task,goal,selected,control,event->{try{tasks.event(task,run,epoch,event);}catch(Exception failure){throw new AssertionError(failure);}},journal);

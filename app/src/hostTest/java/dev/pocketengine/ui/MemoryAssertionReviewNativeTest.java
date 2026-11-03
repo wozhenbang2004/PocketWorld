@@ -6,6 +6,7 @@ import dev.pocketengine.features.memory.MemoryModule;
 import dev.pocketengine.features.memory.SourceRef;
 import java.io.File;
 import java.nio.file.Files;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -32,10 +33,19 @@ public final class MemoryAssertionReviewNativeTest {
     static JSONObject input(JSONObject candidate,JSONObject subject,String predicate,String object)throws Exception{return ref(candidate).put("subject",subject).put("kind","told").put("predicate",predicate).put("object",object);}
     static SourceRef original(ProjectMemoryReviewUiNativeTest.Fixture f,String text)throws Exception {
         return f.io.submit(()->{
-            String project=f.workspace.handle("create",j("name","身份审核原件")).getString("id");
-            f.workspace.handle("write",j("projectId",project,"path","notes.txt","content",text,"expectedVersion",0));
-            var file=f.workspace.fileSnapshotForHost(project,"notes.txt",0);
-            return SourceRef.workspaceFile(project,"notes.txt",file.version,file.revisionId,file.sha256,0,text.length(),"owner","private");
+            // Independent originals share one real project, so the 21-source case tests
+            // the memory source budget instead of the unrelated 20-project capacity.
+            String project=null;JSONArray projects=f.workspace.snapshot().getJSONArray("projects");
+            for(int i=0;i<projects.length();i++)if("身份审核原件".equals(projects.getJSONObject(i).getString("name"))){project=projects.getJSONObject(i).getString("id");break;}
+            if(project==null)project=f.workspace.handle("create",j("name","身份审核原件")).getString("id");
+            String path="source-"+UUID.randomUUID()+".txt";
+            f.workspace.handle("write",j("projectId",project,"path",path,"content",text,"expectedVersion",0));
+            var file=f.workspace.fileSnapshotForHost(project,path,0);
+            // Native production entry points bootstrap a selected path on IO before
+            // Book's non-locking resolver can regard its head as known/current.
+            var head=f.workspace.refreshFileHeadForHost(project,path);
+            assertTrue(head.authorityKnown);assertFalse(head.deleted);assertEquals(file.version,head.version);assertEquals(file.revisionId,head.revisionId);assertEquals(file.sha256,head.sha256);
+            return SourceRef.workspaceFile(project,path,file.version,file.revisionId,file.sha256,0,text.length(),"owner","private");
         }).get(10,TimeUnit.SECONDS);
     }
     static JSONObject stage(ProjectMemoryReviewUiNativeTest.Fixture f,String text)throws Exception{return stage(f,text,new SourceRef[]{original(f,text)});}
