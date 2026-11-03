@@ -107,6 +107,24 @@ public final class SkillsModule implements EngineModule {
     public void requireTaskScopeForHost(JSONObject originalTask,JSONObject expectedScope)throws Exception {
         if(!SkillSourcePolicy.scopeFingerprint(taskScopeForHost(originalTask)).equals(SkillSourcePolicy.scopeFingerprint(expectedScope)))throw new SecurityException("原任务项目已变化或解绑，旧技能正文与脚本选择已失效");
     }
+    /** Native Profile preflight only. The opaque original project selection, not imported
+     * Profile/model JSON, supplies the project. The original namespace pins this checkout
+     * occurrence independently from the source bytes reviewed before starting a task. */
+    public JSONObject profileScopeForHost(dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection selected)throws Exception {
+        if(selected==null)return privateScope();
+        JSONObject original=selected.view(),actual=projectChoice(original.getString("projectId"),original.getString("checkoutId"));
+        return SkillSourcePolicy.checkedScope(privateScope().put("projectId",actual.getString("projectId")).put("checkoutId",actual.getString("checkoutId")).put("projectRevision",actual.getString("revision")));
+    }
+    /** Currentness guard over a scope already issued by a native caller. It cannot issue a
+     * selection, change a task, or grant model access. Ordinary source edits do not replace
+     * the original checkout occurrence and therefore do not revoke this namespace. */
+    public void requireProjectScopeForHost(JSONObject expectedScope)throws Exception {
+        JSONObject expected=SkillSourcePolicy.checkedScope(expectedScope);
+        if(!"owner".equals(expected.getString("ownerId"))||!"private".equals(expected.getString("spaceId")))throw new SecurityException("工作配置技能范围必须来自原私人主人");
+        if(!expected.has("projectId"))return;
+        JSONObject actual=projectChoice(expected.getString("projectId"),expected.getString("checkoutId"));
+        if(!actual.getString("revision").equals(expected.getString("projectRevision")))throw new SecurityException("原项目副本身份已变化，请重新预检工作配置");
+    }
     public JSONObject readForHost(JSONObject scope,String id,String path,int offset,int length,String expectedDigest,Set<String> hostCapabilities)throws Exception{return book.readForHost(scope,id,path,offset,length,expectedDigest,hostCapabilities,System.currentTimeMillis());}
     public JSONObject readForHost(JSONObject scope,String id,String path,int offset,int length,int expectedRevision,String expectedDigest,Set<String> hostCapabilities)throws Exception{return book.readForHost(scope,id,path,offset,length,expectedRevision,expectedDigest,hostCapabilities,System.currentTimeMillis());}
     /** Trusted native owner/model-worker bridge. Draft is only content; origin and options are host state. */

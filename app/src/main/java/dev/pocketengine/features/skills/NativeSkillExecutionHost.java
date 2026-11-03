@@ -51,14 +51,14 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
         private final Set<String> capabilities;
         private final dev.pocketengine.core.CapabilitySnapshot.CurrentCheck capabilityCurrent;
         private final SkillBook.OwnerExecutionSelection ownerSelection;
-        private final String nativeScope;
+        private final String nativeScope,assetScope;
         private final Object decision=new Object();
         private Boolean approved;
         private boolean dispatched,finished;
         private final java.util.concurrent.atomic.AtomicLong publicationRevision=new java.util.concurrent.atomic.AtomicLong();
         public long publicationRevision(){return publicationRevision.get();}
-        private Review(SkillExecution.Plan plan,SkillExecution.Grant grant,SkillExecutionConfiguration.Selection selected,RunControl control,SkillExecution execution,NativeSkillBackend backend,Set<String> capabilities,dev.pocketengine.core.CapabilitySnapshot.CurrentCheck capabilityCurrent,SkillBook.OwnerExecutionSelection ownerSelection,JSONObject nativeScope){
-            this.plan=plan;this.grant=grant;this.selected=selected;this.control=control;this.execution=execution;this.backend=backend;this.capabilities=Set.copyOf(capabilities);this.capabilityCurrent=capabilityCurrent;this.ownerSelection=ownerSelection;this.nativeScope=nativeScope.toString();
+        private Review(SkillExecution.Plan plan,SkillExecution.Grant grant,SkillExecutionConfiguration.Selection selected,RunControl control,SkillExecution execution,NativeSkillBackend backend,Set<String> capabilities,dev.pocketengine.core.CapabilitySnapshot.CurrentCheck capabilityCurrent,SkillBook.OwnerExecutionSelection ownerSelection,JSONObject nativeScope,JSONObject assetScope){
+            this.plan=plan;this.grant=grant;this.selected=selected;this.control=control;this.execution=execution;this.backend=backend;this.capabilities=Set.copyOf(capabilities);this.capabilityCurrent=capabilityCurrent;this.ownerSelection=ownerSelection;this.nativeScope=nativeScope.toString();this.assetScope=assetScope.toString();
         }
     }
     /** Native UI lifecycle only. Closing/backgrounding during a remote probe fences its late decision. */
@@ -217,11 +217,16 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
     }
     /** The actual native port retains its current dependency check through review and dispatch. */
     public JSONObject execute(String task,String run,int epoch,JSONObject input,Set<String> capabilities,RunControl original,dev.pocketengine.core.CapabilitySnapshot.CurrentCheck capabilityCurrent)throws Exception {
+        return execute(task,run,epoch,input,capabilities,original,capabilityCurrent,null);
+    }
+    public JSONObject execute(String task,String run,int epoch,JSONObject input,Set<String> capabilities,RunControl original,dev.pocketengine.core.CapabilitySnapshot.CurrentCheck capabilityCurrent,dev.pocketengine.features.controlplane.WorkProfileToolSelection.PreparedTool profile)throws Exception {
+        if(profile!=null)profile.requireSkillExecution(task,run,epoch,input,original);
         java.util.Objects.requireNonNull(capabilityCurrent).check();
         open();live.check(task,run,epoch,original);String operation=input.getString("_hostOperationId");
         SkillExecutionConfiguration.Selection selected;
         try{selected=configuration.current();}catch(SkillExecution.Unavailable missing){return rejected(operation,"needs_user","请选择手机托管执行或电脑隔离执行，并在原任务准备；没有运行脚本");}
         JSONObject nativeScope=skills.taskScopeForHost(tasks.get(task,false));
+        JSONObject assetScope=profile==null?nativeScope:profile.skillScopeForHost(nativeScope);
         try{requireExecutionProject(nativeScope,selected);}catch(SecurityException different){return rejected(operation,"needs_user",different.getMessage());}
         NativeSkillBackend backend=backend(selected,operation,original);Review review=null;OwnerInvocation ownerChoice=ownerInvocations.remove(original);
         try {
@@ -229,7 +234,7 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
             // worker and artifact callback gates, not just until the first dispatch.
             dev.pocketengine.core.CapabilitySnapshot.CurrentCheck source;
             if(ownerChoice!=null){ownerChoice.claim(task,run,epoch,input,original);source=()->{skills.requireTaskScopeForHost(tasks.get(task,false),nativeScope);requireExecutionProject(nativeScope,selected);ownerChoice.source.checkCurrent();};}
-            else {SkillBook.ReferenceSelection modelSource=skills.selectReferenceForHost(nativeScope,input.getString("id"),input.getInt("revision"),input.getString("digest"),capabilities);source=()->{skills.requireTaskScopeForHost(tasks.get(task,false),nativeScope);requireExecutionProject(nativeScope,selected);modelSource.checkCurrent();};}
+            else {SkillBook.ReferenceSelection modelSource=skills.selectReferenceForHost(assetScope,input.getString("id"),input.getInt("revision"),input.getString("digest"),capabilities);source=()->{skills.requireTaskScopeForHost(tasks.get(task,false),nativeScope);requireExecutionProject(nativeScope,selected);if(profile!=null)profile.checkSkillExecutionCurrent();modelSource.checkCurrent();};}
             CompanionSkillHostPort port=new CompanionSkillHostPort(new CompanionSkillHostPort.Store(){
                 public void checkCurrent(SkillExecution.Plan plan,SkillExecution.Grant grant,RunControl control)throws Exception {open();source.check();configuration.check(selected);capabilityCurrent.check();live.check(task,run,epoch,control);tasks.checkSkillExecution(plan,grant,control);}
                 public boolean claimFresh(SkillExecution.Plan plan,SkillExecution.Grant grant,CompanionSkillBackend.ReceiptRef ref,RunControl control)throws Exception {checkCurrent(plan,grant,control);return tasks.claimSkillExecution(plan,grant,ref,control);}
@@ -239,11 +244,11 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
             },backend);
             SkillExecution execution=ownerChoice==null?skills.executionForHost(backend,port):skills.executionForOwner(backend,port,ownerChoice.source);
             SkillExecution.Request request=selected.request(input.getString("scriptPath"),strings(input.optJSONArray("arguments")),input.optInt("timeoutSeconds",30),input.optInt("maxOutputBytes",16384));
-            SkillExecution.Run identity=new SkillExecution.Run(nativeScope,task,run,epoch,capabilities);
+            SkillExecution.Run identity=new SkillExecution.Run(assetScope,task,run,epoch,capabilities);
             SkillExecution.Plan plan=execution.prepare(identity,input.getString("id"),input.getInt("revision"),input.getString("digest"),request,original);
             SkillExecution.Grant grant=new SkillExecution.Grant(operation,UUID.randomUUID().toString(),selected.backendGrantId,plan.digest,task,run,epoch,SkillExecution.environmentBinding(plan),plan.expiresAt);
             configuration.check(selected);live.check(task,run,epoch,original);tasks.reserveSkillExecution(plan,grant,selected.recordedDeployment(),original);
-            review=new Review(plan,grant,selected,original,execution,backend,capabilities,capabilityCurrent,ownerChoice==null?null:ownerChoice.source,nativeScope);if(pending.putIfAbsent(task,review)!=null)throw new SecurityException("原任务已有具体脚本审阅，不能开第二执行器");changed.accept(task);
+            review=new Review(plan,grant,selected,original,execution,backend,capabilities,capabilityCurrent,ownerChoice==null?null:ownerChoice.source,nativeScope,assetScope);if(pending.putIfAbsent(task,review)!=null)throw new SecurityException("原任务已有具体脚本审阅，不能开第二执行器");changed.accept(task);
             while(true){
                 original.check();source.check();configuration.check(selected);capabilityCurrent.check();live.check(task,run,epoch,original);
                 synchronized(review.decision){if(review.approved!=null)break;long remaining=plan.expiresAt-System.currentTimeMillis();if(remaining<=0)break;review.decision.wait(Math.min(250,remaining));}
@@ -293,7 +298,7 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
             if(review.approved!=null||review.dispatched)throw new SecurityException("原脚本审阅已经处理");tasks.decideSkillExecution(review.plan,review.grant,review.control,approved);review.approved=approved;review.decision.notifyAll();}
     }
     public JSONObject readScript(Review review)throws Exception {
-        validateReview(review);JSONObject p=review.plan.review().getJSONObject("package"),scope=new JSONObject(review.nativeScope);String path=review.plan.review().getJSONObject("request").getString("scriptPath");
+        validateReview(review);JSONObject p=review.plan.review().getJSONObject("package"),scope=new JSONObject(review.assetScope);String path=review.plan.review().getJSONObject("request").getString("scriptPath");
         StringBuilder text=new StringBuilder();int offset=0;JSONObject page;
         do{page=review.ownerSelection==null?skills.readForHost(scope,p.getString("id"),path,offset,12000,p.getInt("revision"),p.getString("digest"),review.capabilities):review.ownerSelection.read(path,offset,12000,System.currentTimeMillis());text.append(page.getString("content"));int next=page.getInt("nextOffset");
             if(text.length()>64000||page.getBoolean("hasMore")&&next<=offset)throw new SecurityException("当前脚本超过可审阅范围或分页已变化");offset=next;

@@ -1,5 +1,5 @@
 name: Build private debug APK
-run-name: ${{ github.event_name == 'pull_request' && 'MCP, Skills and memory host tests' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
+run-name: ${{ github.event_name == 'pull_request' && 'MCP, Skills, profiles and memory host tests' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
 
 on:
   pull_request:
@@ -34,6 +34,10 @@ on:
       - 'app/src/hostTest/**/store/TaskStoreMcpTasksTest.java'
       - 'app/src/main/java/dev/pocketengine/features/MemorySourceBridge.java'
       - 'app/src/main/java/dev/pocketengine/features/controlplane/WorkProfileToolSelection.java'
+      - 'app/src/main/java/dev/pocketengine/features/controlplane/NativeWorkProfile*.java'
+      - 'app/src/main/java/dev/pocketengine/features/controlplane/WorkProfileResolver.java'
+      - 'app/src/main/kotlin/dev/pocketengine/ui/WorkProfile*.kt'
+      - 'app/src/test/**/controlplane/**'
       - 'app/src/main/java/dev/pocketengine/features/local/project/ProjectCapabilityPort.java'
       - 'app/src/main/kotlin/dev/pocketengine/ui/plugins/**'
       - 'app/src/test/java/dev/pocketengine/features/local/project/ProjectSkillCapabilityProjectionNativeTest.java'
@@ -48,7 +52,7 @@ on:
         description: 'Used only for target=host-tests; deliberately no full-suite option'
         type: choice
         default: device-receiver
-        options: [mcp-ecosystem, mcp-local-discovery, mcp-stdio-framing, mcp-prompts, mcp-health, project-file-operations, project-file-search, browser-expression, device-receiver, managed-runtime, gateway-continuation, memory-automatic, memory-assertion-recall, memory-consolidation, memory-learning-assertions, memory-experience, browser-long-page, phone-observation-boundaries, phone-sensitive-owner, agent-preferences, aion-core, aion-mcp-skills, aion-office, aion-conversations, remote-transport, aion-team-catalog, magpie-work-profile, native-operation-event, browser-document-download, browser-native-sequence, retained-development-admission, runtime-health, managed-skills, aion-work-profile-targets, aion-worker-entrypoint, runtime-activity, runtime-thermal-log-policy, aion-mcp-config, aion-capability-observations, aion-team-templates, local-phone-leases, script-artifact-publication, phone-audio-owner, schedule-proposals, native-duplex-pipes, aion-tool-discovery, aion-team-wake, memory-project-namespaces, request-clock, runner-repeat-notice, runner-budget-stream, alma-child-sources, alma-pi-no-tools, native-normal-cleanup, memory-archive-currentness, runtime-preparation-cancel, runtime-log-tail-recovery, managed-skill-private-artifacts, model-capability-probe, runtime-recovery-admission, aion-team-research-read, runtime-diagnostic-metadata, legacy-command-receipt-recovery, memory-recall-quality, memory-evidence-plan, memory-method-quality, browser-owner-interactions, browser-native-input, browser-artifact-upload, browser-network-barriers]
+        options: [mcp-ecosystem, mcp-local-discovery, mcp-stdio-framing, mcp-prompts, mcp-health, project-file-operations, project-file-search, browser-expression, device-receiver, managed-runtime, gateway-continuation, memory-automatic, memory-assertion-recall, memory-consolidation, memory-learning-assertions, memory-experience, browser-long-page, phone-observation-boundaries, phone-sensitive-owner, agent-preferences, aion-core, aion-mcp-skills, aion-office, aion-conversations, remote-transport, aion-team-catalog, magpie-work-profile, native-operation-event, browser-document-download, browser-native-sequence, retained-development-admission, runtime-health, managed-skills, aion-work-profile-targets, aion-worker-entrypoint, runtime-activity, runtime-thermal-log-policy, aion-mcp-config, aion-capability-observations, aion-team-templates, local-phone-leases, script-artifact-publication, phone-audio-owner, schedule-proposals, native-duplex-pipes, aion-tool-discovery, aion-team-wake, memory-project-namespaces, request-clock, runner-repeat-notice, runner-budget-stream, alma-child-sources, alma-pi-no-tools, native-normal-cleanup, memory-archive-currentness, runtime-preparation-cancel, runtime-log-tail-recovery, managed-skill-private-artifacts, model-capability-probe, runtime-recovery-admission, aion-team-research-read, runtime-diagnostic-metadata, legacy-command-receipt-recovery, memory-recall-quality, memory-evidence-plan, memory-method-quality, browser-owner-interactions, browser-native-input, browser-artifact-upload, browser-network-barriers, runtime-development-continuity]
       host_groups:
         description: 'Optional explicit comma-separated batch (max 16); overrides host_group, no full-suite wildcard. Chromium groups use individual mode.'
         type: string
@@ -246,7 +250,7 @@ jobs:
           retention-days: 7
 
   host-tests:
-    # Bounded MCP/Skills and memory groups on affected private PRs, or explicit owner selection.
+    # Bounded MCP/Skills, Profile composition and memory groups on affected private PRs.
     # Separate from APK pushes; no PR packaging or signing.
     if: ${{ github.event.repository.private && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests') }}
     runs-on: ubuntu-24.04
@@ -256,7 +260,7 @@ jobs:
         shell: bash
     env:
       HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && 'mcp-ecosystem' || inputs.host_group }}
-      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && 'mcp-ecosystem,mcp-local-discovery,mcp-stdio-framing,mcp-prompts,mcp-health,aion-mcp-skills,managed-skills,managed-skill-private-artifacts,memory-recall-quality,memory-evidence-plan,memory-method-quality' || inputs.host_groups }}
+      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && 'mcp-ecosystem,mcp-local-discovery,mcp-stdio-framing,mcp-prompts,mcp-health,aion-mcp-skills,managed-skills,managed-skill-private-artifacts,magpie-work-profile,aion-work-profile-targets,memory-recall-quality,memory-evidence-plan,memory-method-quality' || inputs.host_groups }}
       POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
     steps:
       - name: Check out selected revision

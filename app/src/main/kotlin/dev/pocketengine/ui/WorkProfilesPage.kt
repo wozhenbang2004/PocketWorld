@@ -80,7 +80,7 @@ internal fun WorkProfilesPage(host: NativeWorkProfileHost, runWork: (Runnable) -
             } } }
         }) } catch (_: Exception) { busy = false; running = false; notice = "原工作队列暂不可用，请稍后重开；不自动重试。" }
     }
-    fun refresh() { val observation = RunControl(); control = observation; work({ page.snapshot() to page.choices(observation) }) { snapshot = it.first; choices = it.second; review = null } }
+    fun refresh() { val observation = RunControl(); control = observation; val project = selectedProject; work({ page.snapshot() to page.choices(observation, project) }) { snapshot = it.first; choices = it.second; review = null } }
     fun edit(row: JSONObject?) {
         review = null; original = row?.let { JSONObject(it.toString()) }
         editor = row?.let { JSONObject(it.toString()) } ?: WorkProfile.definition("draft-profile", 1, "新工作配置"); name = editor!!.getString("name")
@@ -175,17 +175,25 @@ internal fun WorkProfilesPage(host: NativeWorkProfileHost, runWork: (Runnable) -
                     TextButton(onClick = { openOriginal("pluginCatalog") }) { Text("在原目录管理安装、MCP 与源码审批") }
                 }
                 SettingsSurface("预检后，再明确启动", "预检只核原来源，不运行工具，不代表配置已应用或目标已连通。此入口接入主任务、摘要、任务指导参考及已支持的技能与工具选用。") {
-                    Text("本机成员模型沿原团队计划与主人审批生效；须选择真实原项目副本。远端、运行目标 apply/readback 仍未接入，不会静默忽略。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
-                    if (reviewProject != null) TextButton(onClick = { work({ reviewProject().let { it to it.view() } }) { selectedProject = it.first; selectedProjectView = it.second; consent = false } }, enabled = !busy && foreground, modifier = Modifier.testTag("work_profile_choose_original_project")) { Text(if (selectedProject == null) "选择当前原项目工作台副本（团队必选）" else "重新核对原项目副本") }
+                    Text("本机成员模型沿原团队计划与主人审批生效；须选择真实原项目副本。本主任务入口不应用运行目标；Codex/Claude 的准确目标配置请到原电脑任务页单独预览、确认与读回，其他目标仍未接入。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                    if (reviewProject != null) TextButton(onClick = {
+                        val observing = RunControl(); control = observing; review = null; consent = false
+                        work({ val project = reviewProject(); Triple(project, project.view(), page.choices(observing, project)) }) {
+                            selectedProject = it.first; selectedProjectView = it.second; choices = it.third
+                        }
+                    }, enabled = !busy && foreground, modifier = Modifier.testTag("work_profile_choose_original_project")) { Text(if (selectedProject == null) "选择当前原项目工作台副本（项目技能与团队必选）" else "重新核对原项目副本") }
                     if (selectedProject != null) {
                         Text("原项目 ${selectedProjectView.optString("projectId")} · ${selectedProjectView.optString("runtime")}；只关联这份准确源码，不追加权限或预算。", style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = { selectedProject = null; selectedProjectView = JSONObject(); consent = false }, enabled = !busy && foreground) { Text("不关联项目") }
+                        TextButton(onClick = {
+                            val observing = RunControl(); control = observing; review = null; consent = false
+                            work({ page.choices(observing) }) { selectedProject = null; selectedProjectView = JSONObject(); choices = it }
+                        }, enabled = !busy && foreground) { Text("不关联项目") }
                     }
-                    Button(onClick = { val saved = original ?: return@Button; val observing = RunControl(); control = observing; work({ page.review(saved.getString("profileId"), saved.getLong("revision"), observing) }) { review = it; reviewed = it.view() } }, enabled = !busy && foreground && original != null && name == original!!.optString("name") && WorkProfile.fingerprint(draft) == WorkProfile.fingerprint(original!!), modifier = Modifier.testTag("work_profile_preflight")) { Text("预检这项已保存修订") }
+                    Button(onClick = { val saved = original ?: return@Button; val observing = RunControl(); control = observing; val project = selectedProject; work({ page.review(saved.getString("profileId"), saved.getLong("revision"), observing, project) }) { review = it; reviewed = it.view() } }, enabled = !busy && foreground && original != null && name == original!!.optString("name") && WorkProfile.fingerprint(draft) == WorkProfile.fingerprint(original!!), modifier = Modifier.testTag("work_profile_preflight")) { Text("预检这项已保存修订") }
                     if (review != null) {
                         Text(if (reviewed.optBoolean("ready")) "原来源预检通过 · 尚未运行" else "预检有阻塞 · 未启动", style = MaterialTheme.typography.titleSmall)
                         profileRows(reviewed.optJSONArray("items")).forEach { item -> Text("${item.optString("kind")} · ${item.optString("id")} · ${item.optString("status")}${if (item.optBoolean("optional") && !item.optBoolean("included")) "（明确省略可选项）" else ""}", style = MaterialTheme.typography.bodySmall, color = SecondaryInk) }
-                        if (!WorkProfileDrafts.runnable(reviewed, selectedProject != null)) Text("该配置尚不能由本入口运行。请补齐两项模型；含成员/团队时先选择原项目；运行目标配置仍未接入，请保留编辑，不会删字段后运行。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        if (!WorkProfileDrafts.runnable(reviewed, selectedProject != null)) Text("该配置尚不能由本入口运行。请补齐两项模型；含成员/团队时先选择原项目；本主任务入口不应用运行目标，请保留编辑；已支持的准确电脑目标须在原电脑任务页另行确认，不会删字段后运行。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         OutlinedTextField(goal, { goal = it.take(4000) }, enabled = !busy && foreground, label = { Text("本次原任务目标") }, minLines = 2, maxLines = 5, modifier = Modifier.fillMaxWidth().testTag("work_profile_goal"))
                         Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(consent, { consent = it }, enabled = !busy && foreground, modifier = Modifier.testTag("work_profile_owner_consent")); Text("核对以上引用，按原任务范围开始；外部效果仍逐项走原授权。", style = MaterialTheme.typography.bodySmall) }
                         Button(onClick = { begin() }, enabled = !busy && foreground && consent && goal.isNotBlank() && WorkProfileDrafts.runnable(reviewed, selectedProject != null), modifier = Modifier.heightIn(min = 48.dp).testTag("work_profile_start_exact")) { Text("按这项修订开始原任务") }

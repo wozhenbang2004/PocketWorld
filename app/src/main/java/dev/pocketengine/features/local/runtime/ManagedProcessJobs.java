@@ -134,6 +134,10 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 .put("timeoutMillis",timeoutMillis).put("runMode",ref.exact().getJSONObject("payload").optString("runMode","foreground"));
             Job job=new Job(invocation,jobDirectory,receipt,ownedLease,pipeAdmission);
             JSONObject reviewed=invocation.exact().getJSONObject("payload");
+            if(reviewed.has("foregroundWaitMillis")){
+                dev.pocketengine.features.local.project.ProjectCommandSpec.fromPayload(reviewed);
+                receipt.put("foregroundWaitMillis",reviewed.getLong("foregroundWaitMillis")).put("backgroundObservationExplicitlyIncluded",true);
+            }
             if("command".equals(invocation.exact().optString("intent"))||NativePipeAdmission.exact(invocation.exact())||dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())||dev.pocketengine.features.skills.ManagedSkillBackend.exact(invocation.exact())||dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())){JSONArray requested=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(reviewed):dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGitImport.arguments(reviewed):reviewed.getJSONArray("argv");receipt.remove("argv");receipt.remove("requestedArgv");receipt.put("argvCount",requested.length()).put("argvDigest",ProjectSources.digest(new JSONObject().put("argv",requested))).put("argumentValuesIncluded",false).put("workingDirectory",reviewed.getString("workingDirectory")).put("terminalMode",reviewed.getString("terminalMode"));}
             if(job.terminalInput!=null)receipt.put("terminalNativeContract",reviewed.getString("terminalNativeContract")).put("terminalOutputMerged",true).put("inputByteLimit",reviewed.getLong("inputByteLimit")).put("terminalRows",reviewed.getInt("terminalRows")).put("terminalColumns",reviewed.getInt("terminalColumns")).put("cleanupScope","owned_session_and_observed_descendants").put("allDescendantsTerminated",false).put("unobservedDetachedDescendantsPossible",true);
             if(pipeAdmission!=null)receipt.put("nativeDuplexPipes",true).put("pipeNativeContract",NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT).put("nativePipeBindingDigest",ProjectSources.digest(pipeAdmission.binding())).put("inputByteLimit",pipeAdmission.byteBudget).put("cleanupScope","owned_session_and_observed_descendants").put("allDescendantsTerminated",false).put("unobservedDetachedDescendantsPossible",true);
@@ -485,15 +489,16 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 receipt.put("status","unknown").put("observation","owner_process_restarted_no_replay");
         }
         ref.requireReceipt(receipt);
-        Long silence=null;boolean outputObserved=false;
+        Long silence=null,uptime=null;boolean outputObserved=false;
         if(job!=null)synchronized(job){
             outputObserved=job.receivedBytes>0;
             if(Boolean.TRUE.equals(job.receipt.opt("nativeStartObserved"))){
+                long age=System.nanoTime()-job.startedNanos;if(age>=0)uptime=java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(age);
                 long elapsed=System.nanoTime()-(outputObserved?job.lastOutputNanos:job.startedNanos);
                 if(elapsed>=0)silence=java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(elapsed);
             }
         }
-        receipt.put("activity",RuntimeActivity.describe(ref.operationId(),receipt,silence,outputObserved));
+        receipt.put("activity",RuntimeActivity.describe(ref.operationId(),receipt,silence,outputObserved,uptime));
         return RuntimeReceipt.fromBackend(ref,summary(ref,receipt));
     }
     /** Retained native currentness only: no Control/TaskStore/LocalModule callback or lease lock. */

@@ -124,8 +124,9 @@ private fun HarnessGatewayContinuationPanel(snapshot: JSONObject, gateway: JSONO
             if (profiles.length() == 0) Text("原任务已有冻结配置，或尚无含 RELAY 的保存引用；不替换原配置，也不新建授权。", color = SecondaryInk, style = MaterialTheme.typography.bodySmall)
             profiles.objects().forEach { profile ->
                 OutlinedButton(onClick = { send("gateway.reviewParentProfile", JSONObject().put("profileId", profile.optString("profileId")).put("profileRevision", profile.optLong("revision"))) }, enabled = enabled) { Text("预检并审阅 ${profile.optString("name")} · 修订 ${profile.optLong("revision")}") }
+                TextButton(onClick = { send("gateway.saveProfileTarget", JSONObject().put("profileId", profile.optString("profileId")).put("profileRevision", profile.optLong("revision"))) }, enabled = enabled) { Text("将本页准确电脑目标加入此配置") }
             }
-            Text("只在原累计范围内绑定明确 API RELAY 和本任务准确目标；其他资产投射尚未接入。预检读取原目标事实，不运行任务；实际配置仍须下一步逐字段确认与读回。", color = SecondaryInk, style = MaterialTheme.typography.bodySmall)
+            Text("保存目标只增加本页原引用、保留已有目标，不修改电脑文件。只在原累计范围内绑定明确 API RELAY 和本任务准确目标；其他资产投射尚未接入。预检读取原目标事实，不运行任务；实际配置仍须下一步逐字段确认与读回。", color = SecondaryInk, style = MaterialTheme.typography.bodySmall)
         }
     }
     if (parentScope != null && !uncertain) {

@@ -36,7 +36,10 @@ public final class FeatureHost implements AutoCloseable {
         var host=skillExecutionHost;if(host==null)throw new IllegalStateException("脚本执行宿主不可用");return host.execute(task,run,epoch,input,capabilities,control);
     }
     public JSONObject executeSkillForTask(String task,String run,int epoch,JSONObject input,java.util.Set<String> capabilities,dev.pocketengine.core.RunControl control,dev.pocketengine.core.CapabilitySnapshot.CurrentCheck current)throws Exception {
-        var host=skillExecutionHost;if(host==null)throw new IllegalStateException("脚本执行宿主不可用");return host.execute(task,run,epoch,input,capabilities,control,current);
+        return executeSkillForTask(task,run,epoch,input,capabilities,control,current,null);
+    }
+    public JSONObject executeSkillForTask(String task,String run,int epoch,JSONObject input,java.util.Set<String> capabilities,dev.pocketengine.core.RunControl control,dev.pocketengine.core.CapabilitySnapshot.CurrentCheck current,dev.pocketengine.features.controlplane.WorkProfileToolSelection.PreparedTool profile)throws Exception {
+        var host=skillExecutionHost;if(host==null)throw new IllegalStateException("脚本执行宿主不可用");return host.execute(task,run,epoch,input,capabilities,control,current,profile);
     }
     public void setMemorySynchronizer(MemorySynchronizer synchronizer){memorySynchronizer=synchronizer;}
     public void synchronizeMemory(JSONObject scope)throws Exception{MemorySynchronizer synchronizer=memorySynchronizer;if(synchronizer!=null)synchronizer.synchronize(scope);}
@@ -126,6 +129,9 @@ public final class FeatureHost implements AutoCloseable {
     /** Native original-project UI only; never a generic feature/model JSON command. */
     public dev.pocketengine.features.local.project.ProjectOwnerTerminal.Session openProjectTerminalForOwner(String task,String execution,dev.pocketengine.core.RunControl observation)throws Exception{
         var host=projectHost;if(host==null)throw new IllegalStateException("原项目宿主尚未挂载");return host.ownerTerminals().open(task,execution,observation);
+    }
+    public dev.pocketengine.features.local.project.ProjectOwnerTerminal.Session openProjectExecutionForOwner(String task,String execution,dev.pocketengine.core.RunControl observation)throws Exception{
+        var host=projectHost;if(host==null)throw new IllegalStateException("原项目宿主尚未挂载");return host.ownerTerminals().openObservation(task,execution,observation);
     }
     public void setAutomationPlanHost(AutomationPlanHost plans){automationPlans=java.util.Objects.requireNonNull(plans);}
     public JSONObject proposeScheduleForTask(String task,String run,int epoch,String operation,JSONObject draft,RunControl original)throws Exception {if(automationPlans==null||!(module("automation") instanceof dev.pocketengine.features.automation.AutomationModule selected))throw new SecurityException("原计划宿主尚未挂载");return automationPlans.proposeScheduleForTask(selected,task,run,epoch,operation,draft,original);}

@@ -12,5 +12,5 @@ internal fun WorkProfileTaskRecoveryControls(task: UiTask, controller: PocketWor
     if (host == null) { Text("原工作配置来源宿主暂不可用，原任务与引用保留；请稍后重新打开核对。"); return }
     WorkProfileTaskRecoveryPanel(task.raw, host, controller::runWorkProfileWork,
         controller::runWorkProfileControl, controller::originalTaskWorkProfileSnapshot,
-        controller::reviewOriginalTaskWorkProfile, controller::continueOwnerWorkProfile, controller::reviewWorkProfileProject, controller::continueOwnerWorkProfileProject)
+        controller::reviewOriginalTaskWorkProfile, controller::continueOwnerWorkProfile, controller::reviewWorkProfileProject, controller::continueOwnerWorkProfileProject, controller::reviewOriginalTaskWorkProfileProject)
 }

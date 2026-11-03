@@ -693,6 +693,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
     fun reviewOriginalTaskWorkProfile(page: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Page, id: String, run: String, epoch: Int, control: dev.pocketengine.core.RunControl): dev.pocketengine.features.controlplane.NativeWorkProfileHost.Review = page.reviewForTask(app.tasks, id, run, epoch, control)
+    fun reviewOriginalTaskWorkProfileProject(page: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Page, id: String, run: String, epoch: Int, control: dev.pocketengine.core.RunControl, project: dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection): dev.pocketengine.features.controlplane.NativeWorkProfileHost.Review = page.reviewForTask(app.tasks, id, run, epoch, control, project)
     fun originalTaskWorkProfileSnapshot(id: String, run: String, epoch: Int): JSONObject = if (run.isEmpty()) app.tasks.pendingWorkProfileTaskSnapshot(id) else app.tasks.workProfileRunSnapshot(id, run, epoch)
     fun continueOwnerWorkProfile(id: String, selected: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection, control: dev.pocketengine.core.RunControl, complete: (Result<JSONObject>) -> Unit) {
         check(!closed)
