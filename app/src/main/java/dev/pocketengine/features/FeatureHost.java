@@ -500,11 +500,21 @@ public final class FeatureHost implements AutoCloseable {
                 if(tasks!=null&&feature.equals("ssh")&&command.matches("readPty|closePty|cancel|getOperation")){String id=findTask(feature,result,input);if(id!=null)updateTask(id,result);}
                 if(tasks!=null&&((feature.equals("remote")&&command.matches("getJob|cancelJob|reconcileOperation|approveJob"))||(feature.equals("local")&&command.matches("getJob|cancelJob|termux.get|termux.cancel")))){String id=findTask(feature,result,input);if(id!=null)updateTask(id,result);}
                 if(tasks!=null&&feature.equals("teams")&&command.matches("get|cancel|pause|resume|feedback|continueMessages|reviseAssignment|continueOutcome|sendMessage")){
-                    if(reviewedTeamTask!=null){tasks.updateReviewedTeamControl(reviewedTeamTask,input,result);emitTask(reviewedTeamTask);}
+                    if(reviewedTeamTask!=null){
+                        try{tasks.updateReviewedTeamControl(reviewedTeamTask,input,result);}
+                        catch(Exception unconfirmed){
+                            if(!command.matches("reviseAssignment|continueOutcome"))throw unconfirmed;
+                            // Feedback or the assignment may already be saved. Preserve the real snapshot and never replay them.
+                            result.put("ok",false).put("ownerReceiptState","unknown").put("requiresOwnerReview",true).put("replayAllowed",false).put("message","修订的原团队回执保存未取得确定确认；反馈、暂停或修订可能已发生。请核对原assignment，不要重送本次反馈。");
+                        }
+                        emitTask(reviewedTeamTask);
+                    }
                     else{String id=findTask(feature,result,input);if(id!=null)updateTask(id,result);}
                 }
                 if(tasks!=null&&feature.equals("plugins")&&command.equals("cancel")){String id=tasks.operationTask(feature,input.optString("operationId"));if(id!=null)updateTask(id,result);}
-                reply(feature,command,requestId,true,result==null?new JSONObject():result,null);
+                JSONObject actualResult=result==null?new JSONObject():result;
+                boolean revisionNeedsOwnerReview=feature.equals("teams")&&command.matches("reviseAssignment|continueOutcome")&&!actualResult.optBoolean("ok",true);
+                reply(feature,command,requestId,!revisionNeedsOwnerReview,actualResult,revisionNeedsOwnerReview?actualResult.optString("message","修订状态待核对，请勿重送本次反馈"):null);
                 sendState();
             }catch(Exception error){
                 if(feature.equals("media")&&tasks!=null){try{JSONObject input=request.optJSONObject("payload");String id=input==null?"":input.optString("taskId");if(id.isEmpty()&&input!=null&&!input.optString("operationId").isEmpty())id=tasks.operationTask("media",input.getString("operationId"));if(id!=null&&!id.isEmpty())emitTask(id);sendState();}catch(Exception unavailable){}}
@@ -647,7 +657,7 @@ public final class FeatureHost implements AutoCloseable {
         for(EngineModule module:copy.values())try{JSONObject actual=module.snapshot();if(module.id().equals("media")&&mediaWorkflows!=null)actual.put("hostReadContinuations",mediaWorkflows.continuationSnapshot());snapshots.put(module.id(),actual);}catch(Exception e){try{snapshots.put(module.id(),new JSONObject().put("available",false).put("message",safe(e)));}catch(Exception ignored){}}
         events.emit(json("type","features_state","features",snapshots));
     });}catch(RejectedExecutionException ignored){}}
-    private void reply(String feature,String command,String requestId,boolean ok,JSONObject result,String message){JSONObject event=json("type","feature_result","feature",feature,"command",command,"requestId",requestId,"ok",ok);try{if(ok)event.put("result",feature.equals("ssh")&&command.equals("doctor")?dev.pocketengine.features.ssh.SshPrivacy.doctorMetadata(result):result);else event.put("message",message);}catch(Exception ignored){}events.emit(event);}
+    private void reply(String feature,String command,String requestId,boolean ok,JSONObject result,String message){JSONObject event=json("type","feature_result","feature",feature,"command",command,"requestId",requestId,"ok",ok);try{if(ok||(result!=null&&feature.equals("teams")&&command.matches("reviseAssignment|continueOutcome")))event.put("result",feature.equals("ssh")&&command.equals("doctor")?dev.pocketengine.features.ssh.SshPrivacy.doctorMetadata(result):result);if(!ok)event.put("message",message);}catch(Exception ignored){}events.emit(event);}
     private static JSONObject failedAdmission(String feature,String run,Exception error)throws Exception{
         JSONObject receipt=json("runId",run,"status",error instanceof IllegalArgumentException||error instanceof SecurityException?"failed":"unknown","message",safe(error));
         if(feature.equals("remote"))receipt.put("operationId",run); // Native admission identity, never an inferred remote reply.

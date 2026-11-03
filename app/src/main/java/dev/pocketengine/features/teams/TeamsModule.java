@@ -106,8 +106,7 @@ public final class TeamsModule implements EngineModule {
             case "resume":{JSONObject result=coordinator.resume(input.getString("runId"),input.optString("memberId"),context.model(),evidenceFactory,externalFactory);if(writeHost!=null&&input.optString("memberId").isEmpty())writeHost.resume(input.getString("runId"));return result;}
             case "sendMessage":return coordinator.sendMessage(input,writeHost);
             case "answerAssignment":return input.has("expectedRevision")?coordinator.answerAssignment(input,requireWriteHost(),context.model(),evidenceFactory,externalFactory):requireWriteHost().answer(input);
-            case "continueOutcome":{coordinator.reviewedControl("feedback",input,context.model(),evidenceFactory,externalFactory);TaskStoreTeamWriteHost.OutcomeContinuation next=requireWriteHost().continueOutcome(input);return coordinator.adoptOutcomeContinuation(input.getString("runId"),next.scope).put("revisedAssignment",next.receipt);}
-            case "reviseAssignment":{JSONObject paused=coordinator.reviewedControl("feedback",input,context.model(),evidenceFactory,externalFactory);JSONObject revision=requireWriteHost().revise(input);return paused.put("revisedAssignment",revision);}
+            case "continueOutcome":case "reviseAssignment":return reviseAssignment(command,input);
             case "reviewOutputs":return requireWriteHost().reviewSnapshot(input.getString("runId"),new dev.pocketengine.core.RunControl());
             case "approveOutputs":return requireWriteHost().approve(input.getString("runId"),input.getString("expectedPlanHash"),new dev.pocketengine.core.RunControl());
             case "feedback":return coordinator.feedback(input.getString("runId"),input.optString("memberId"),input.getString("text"));
@@ -117,6 +116,24 @@ public final class TeamsModule implements EngineModule {
             }
             case "probeMember":{JSONArray all=definitions();for(int i=0;i<all.length();i++)if(input.getString("teamId").equals(all.getJSONObject(i).getString("id"))){JSONArray slots=all.getJSONObject(i).getJSONArray("members");for(int m=0;m<slots.length();m++){JSONObject slot=AgentSlot.normalize(slots.getJSONObject(m),m);if(input.getString("memberId").equals(slot.getString("id"))){if(slot.getString("runner").equals("model"))return new JSONObject().put("available",true).put("runner","model").put("connectionVerified",false);if(!slot.getString("runner").matches("codex_app_server|claude")||externalFactory==null)return new JSONObject().put("available",false).put("runner",slot.getString("runner")).put("message","没有实际接入的成员适配器");return externalFactory.forSlot(slot).probe(slot,new dev.pocketengine.core.RunControl());}}}throw new IllegalArgumentException("团队成员不存在");}
             default:throw new IllegalArgumentException("不支持的团队操作");
+        }
+    }
+    private JSONObject reviseAssignment(String command,JSONObject input)throws Exception {
+        TaskStoreTeamWriteHost host=requireWriteHost();boolean outcome=command.equals("continueOutcome");
+        if(coordinator.revisionFeedback(command,input)!=null){JSONObject state=host.revisionState(input);throw new IllegalStateException(state.getString("state").equals("saved")?"原修订已保存；本次只核对原assignment，不重复反馈或提交修订":"原修订已有反馈预留或部分效果，保存结果待核对；不重复反馈或提交修订");}
+        TeamWriteScope nextScope=host.checkRevision(input,outcome);coordinator.checkRevision(input,nextScope);
+        boolean feedbackSaved=false,revisionSaved=false,revisionAttempted=false,scopeSaved=!outcome;
+        try{
+            coordinator.reviewedRevisionFeedback(command,input,nextScope);feedbackSaved=true;
+            JSONObject revision;revisionAttempted=true;
+            if(outcome){TaskStoreTeamWriteHost.OutcomeContinuation next=host.continueOutcome(input);revision=next.receipt;revisionSaved=true;coordinator.adoptOutcomeContinuation(input.getString("runId"),next.scope);scopeSaved=true;}
+            else{revision=host.revise(input);revisionSaved=true;}
+            return coordinator.get(input.getString("runId")).put("revisedAssignment",revision);
+        }catch(Exception failure){
+            // Feedback can already have cancelled live controls. Never replace JSON to pretend they were restored.
+            JSONObject actual=coordinator.get(input.getString("runId")),attempt=new JSONObject().put("revisionRequestId",input.getString("revisionRequestId")).put("state",feedbackSaved?"partial":"unknown").put("feedbackState",feedbackSaved?"saved":"unknown").put("assignmentRevisionState",revisionSaved?"saved":revisionAttempted?"unknown":"not_attempted").put("scopeAdoptionState",outcome?(scopeSaved?"saved":"unknown"):"not_applicable");
+            try{attempt.put("assignmentReadback",host.revisionState(input));}catch(Exception unavailable){attempt.put("assignmentReadback",new JSONObject().put("state","unknown"));}
+            return actual.put("ok",false).put("partial",feedbackSaved||revisionSaved).put("requiresOwnerReview",true).put("replayAllowed",false).put("message","修订未取得确定完成回执；反馈、暂停或取消可能已发生。请核对原assignment，不要重送本次反馈。").put("revisionAttempt",attempt);
         }
     }
     @Override public void close(){TaskStoreTeamWriteHost host=writeHost;if(host!=null)host.close();coordinator.close();}
