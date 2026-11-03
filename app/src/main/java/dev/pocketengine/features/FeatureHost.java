@@ -127,6 +127,9 @@ public final class FeatureHost implements AutoCloseable {
     public dev.pocketengine.features.local.project.ProjectOwnerTerminal.Session openProjectTerminalForOwner(String task,String execution,dev.pocketengine.core.RunControl observation)throws Exception{
         var host=projectHost;if(host==null)throw new IllegalStateException("原项目宿主尚未挂载");return host.ownerTerminals().open(task,execution,observation);
     }
+    public dev.pocketengine.features.local.project.ProjectOwnerTerminal.Session openProjectExecutionForOwner(String task,String execution,dev.pocketengine.core.RunControl observation)throws Exception{
+        var host=projectHost;if(host==null)throw new IllegalStateException("原项目宿主尚未挂载");return host.ownerTerminals().openObservation(task,execution,observation);
+    }
     public void setAutomationPlanHost(AutomationPlanHost plans){automationPlans=java.util.Objects.requireNonNull(plans);}
     public JSONObject proposeScheduleForTask(String task,String run,int epoch,String operation,JSONObject draft,RunControl original)throws Exception {if(automationPlans==null||!(module("automation") instanceof dev.pocketengine.features.automation.AutomationModule selected))throw new SecurityException("原计划宿主尚未挂载");return automationPlans.proposeScheduleForTask(selected,task,run,epoch,operation,draft,original);}
     public JSONObject scheduleProposalsForTask(String task,String run,int epoch,RunControl original)throws Exception {if(automationPlans==null||!(module("automation") instanceof dev.pocketengine.features.automation.AutomationModule selected))throw new SecurityException("原计划宿主尚未挂载");return automationPlans.scheduleProposalsForTask(selected,task,run,epoch,original);}

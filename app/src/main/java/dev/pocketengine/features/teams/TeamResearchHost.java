@@ -28,15 +28,31 @@ public final class TeamResearchHost implements TeamCoordinator.ResearchFactory {
     /** Owner foreground window; approval changes only the existing pool and never starts work. */
     public final class Page implements AutoCloseable {
         private final TeamCoordinator coordinator;private final String teamRun;private final TaskStore.TeamWorkWindow window;private volatile boolean alive=true;
-        private TeamCoordinator.ResearchBudgetPlan source;private TaskStore.TeamResearchBudgetReview pending;
+        private TeamCoordinator.ResearchBudgetPlan source;private TaskStore.TeamResearchBudgetReview pending;private TaskStore.TeamWakePolicyReview pendingWake;
         private Page(TeamCoordinator coordinator,String teamRun)throws Exception{this.coordinator=coordinator;this.teamRun=teamRun;window=tasks.openTeamWorkWindow(teamRun);}
         public void setForeground(boolean foreground){window.setForeground(alive&&foreground);}
         private void require(){if(!alive)throw new SecurityException("原研究预算页已关闭");}
         public synchronized JSONObject current()throws Exception{require();return tasks.teamResearchBudgetStatus(window,coordinator.researchBudgetPlan(teamRun));}
         public synchronized TaskStore.TeamResearchBudgetReview review(int models,int reads)throws Exception{require();source=coordinator.researchBudgetPlan(teamRun);pending=tasks.reviewTeamResearchBudget(window,source,models,reads);return pending;}
         public synchronized JSONObject approve(TaskStore.TeamResearchBudgetReview exact,String digest)throws Exception{require();if(exact==null||exact!=pending||source==null)throw new SecurityException("请先审阅此页准确研究预算");JSONObject saved=coordinator.approveResearchBudget(source,()->tasks.approveTeamResearchBudget(exact,digest));pending=null;return saved;}
+        public synchronized JSONObject wakePolicyStatus()throws Exception{require();JSONObject value=tasks.teamWakeStateForOwner(window);String notice=coordinator.get(teamRun).optString("researchWakeNotice");if(!notice.isEmpty())value.put("researchWakeNotice",notice);return value;}
+        public synchronized TaskStore.TeamWakePolicyReview reviewWakePolicy(boolean enabled,int perRound,int cumulative,long expiresAt,long expectedRevision)throws Exception{return reviewWakePolicy(enabled,false,perRound,cumulative,expiresAt,expectedRevision);}
+        public synchronized TaskStore.TeamWakePolicyReview reviewWakePolicy(boolean enabled,boolean allowPeer,int perRound,int cumulative,long expiresAt,long expectedRevision)throws Exception {require();pendingWake=null;TeamCoordinator.ResearchBudgetPlan actual=enabled?coordinator.researchBudgetPlan(teamRun):null;var sources=allowPeer?java.util.Set.of(TeamWakeQueue.SourceKind.AUTHORIZED_CONTROL,TeamWakeQueue.SourceKind.DIRECTED_PEER):java.util.Set.of(TeamWakeQueue.SourceKind.AUTHORIZED_CONTROL);pendingWake=tasks.prepareTeamResearchWakePolicy(window,actual,expectedRevision,new TeamWakeQueue.OwnerPolicy(enabled,sources,perRound,cumulative,expiresAt));return pendingWake;}
+        public synchronized JSONObject approveWakePolicy(TaskStore.TeamWakePolicyReview exact,String digest)throws Exception{require();if(exact==null||exact!=pendingWake)throw new SecurityException("请先审阅本研究页原父消息wake策略");JSONObject saved=tasks.approveTeamResearchWakePolicy(exact,digest);pendingWake=null;return saved;}
         public synchronized JSONObject synchronize()throws Exception{require();current();coordinator.synchronizeResearchBudget(teamRun);return current();}
         public void close(){alive=false;window.close();}
+    }
+
+    /** Runs only after the original Coordinator joined all submitted child work,
+     * including native Runner/port finally blocks. No timer, new worker or model turn. */
+    @Override public void afterOriginalChildrenJoined(TeamCoordinator.ResearchIdleSource idle)throws Exception {
+        idle.checkCurrent();for(TeamCoordinator.WakeSource source:idle.candidates()){
+            TaskStore.TeamResearchWakeAdmission admission=tasks.prepareTeamPeerResearchWake(source);if(admission==null||!admission.hasCandidate())continue;
+            checkPeerWakeMaterials(admission);idle.checkCurrent();idle.continueWake(admission);return;
+        }
+    }
+    private void checkPeerWakeMaterials(TaskStore.TeamResearchWakeAdmission admission)throws Exception {
+        for(TaskStore.TeamResearchSourceProof proof:admission.peerSourceProofs()){proof.checkCurrent();materials.checkMaterialMetadata(proof.view(),proof);proof.checkCurrent();}
     }
 
     public RunControl currentControl(String task){Active row=active.get(task);return row==null?null:row.control();}
@@ -60,6 +76,7 @@ public final class TeamResearchHost implements TeamCoordinator.ResearchFactory {
     @Override public JSONObject execute(TeamCoordinator.ResearchCall call,ModelConfig captured,
             RunControl original,Consumer<JSONObject> progress)throws Exception {
         call.checkCurrent();original.check();
+        if(call.wakeAdmission()!=null){call.wakeAdmission().beforeWorker(call);checkPeerWakeMaterials(call.wakeAdmission());}
         TaskStore.TeamResearchBinding binding=tasks.beginTeamResearch(call,original);
         if(binding.inspectOnly())return tasks.teamResearchResult(binding);
         String task=binding.taskId(),run=binding.runId();int epoch=binding.epoch();

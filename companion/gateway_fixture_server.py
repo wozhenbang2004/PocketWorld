@@ -106,7 +106,18 @@ def main():
     # Deterministic native-approval HTTP gate, fixture only. The real request has arrived;
     # hold before decide, outside manager/driver locks, while the phone SQL receipt is pending.
     original_approve=manager.approve
+    original_get=manager.get
+    def controlled_get(jobid):
+        result=original_get(jobid)
+        if (root/'mask-owner-approval-ack').exists():result['approvalReceipts']=[]
+        return result
+    manager.get=controlled_get
     def controlled_approve(jobid, request):
+        # A real POST may return the last valid native observation before its asynchronous
+        # writer emits a sent receipt. The next original GET observes the real driver ack.
+        delayed=root/'withhold-first-owner-approval-ack'
+        if delayed.exists():(root/'mask-owner-approval-ack').write_text('native ack temporarily hidden from fixture HTTP observations\n')
+        prior=manager.get(jobid) if delayed.exists() else None
         armed=root/'hold-next-owner-approval'
         if armed.exists():
             armed.unlink();(root/'owner-approval-response-held').write_text('real approval HTTP arrived; original dispatch held\n')
@@ -114,7 +125,11 @@ def main():
             while not (root/'release-owner-approval-response').exists():
                 if time.monotonic()>=deadline:raise TimeoutError('bounded fixture owner approval response hold')
                 time.sleep(.01)
-        return original_approve(jobid,request)
+        result=original_approve(jobid,request)
+        if prior is not None:
+            delayed.unlink();prior['approvalReceipts']=[]
+            return prior
+        return result
     manager.approve=controlled_approve
     server=CompanionServer(('127.0.0.1',0),manager)
     signal.signal(signal.SIGTERM,lambda *_:threading.Thread(target=server.shutdown,daemon=True).start())
