@@ -35,8 +35,17 @@ assert args[args.index('--permission-prompt-tool')+1] == 'stdio'
 assert args[args.index('--allowedTools')+1] == 'Read,Glob,Grep'
 session = args[args.index('--resume' if '--resume' in args else '--session-id')+1]
 tools = args[args.index('--tools')+1].split(',')
+child_progress = mode.startswith('child-progress')
+progress_version = '2.1.318' if mode == 'child-progress-unknown-version' else '2.1.317'
 def emit(value):
     print(json.dumps(value), flush=True)
+def progress(suffix):
+    return {'type':'tool_progress','session_id':session,'tool_use_id':'same-child-tool',
+            'tool_name':'Read','parent_tool_use_id':'toolu_child_'+suffix,
+            'uuid':'11223344-5566-7788-9900-11223344556'+('1' if suffix=='a' else '2'),
+            'elapsed_time_seconds':1,'text':'NEVER_PROJECT_PROGRESS_TEXT',
+            'task_id':'not-a-controllable-child','subagent_retry':{'agent_id':'NEVER_PROJECT_RETRY_AGENT'},
+            'usage':{'total_tokens':999999}}
 def result(error=False):
     emit({'type':'result', 'session_id':session, 'is_error':error,
           'subtype':'error_during_execution' if error else 'success',
@@ -48,6 +57,10 @@ for line in sys.stdin:
         assert value['request'] == {'subtype':'initialize', 'hooks':None}
         if mode == 'no-handshake': sys.exit()
         if mode == 'handshake-wait': time.sleep(20)
+        if child_progress:
+            emit({'type':'control_response','response':{'subtype':'success',
+                  'request_id':value['request_id'],'response':{} if mode=='child-progress-missing-version' else {'claude_code_version':progress_version}}})
+            continue
         emit({'type':'control_response','response':{'subtype':'success',
               'request_id':'wrong-id' if mode=='wrong-handshake' else value['request_id'],'response':{}}})
     elif kind == 'user':
@@ -55,10 +68,12 @@ for line in sys.stdin:
         assert value['parent_tool_use_id'] is None and value['message']['role'] == 'user'
         count=Path('claude-prompt-count')
         count.write_text(count.read_text()+'1' if count.exists() else '1')
+        if mode == 'child-progress-before-init': emit(progress('a'))
         emit({'type':'system','subtype':'init','session_id':'wrong-session' if mode=='wrong-session' else session,
               'permissionMode':'bypassPermissions' if mode=='wrong-mode' else 'default',
               'tools':['mcp__external'] if mode=='wrong-tools' else tools,'mcp_servers':[],
-              'model':'fixture-model'})
+              'model':'fixture-model',
+              **({'claude_code_version':'2.1.318' if mode=='child-progress-system-version-changed' else progress_version} if child_progress and mode!='child-progress-missing-system-version' else {})})
         if mode == 'disconnect': sys.exit()
         if mode == 'invalid-json':
             print('not JSON',flush=True);sys.exit()
@@ -80,6 +95,19 @@ for line in sys.stdin:
               'event':{'type':'content_block_delta','delta':{'type':'text_delta','text':'streamed '}}})
         emit({'type':'stream_event','session_id':session,'parent_tool_use_id':'child-tool',
               'event':{'type':'content_block_delta','delta':{'type':'text_delta','text':'child private'}}})
+        if child_progress:
+            for suffix in ('a','b'):
+                event=progress(suffix)
+                if mode == 'child-progress-missing-session': event.pop('session_id')
+                if mode == 'child-progress-invalid-parent': event['parent_tool_use_id']={'bad':'identity'}
+                if mode == 'child-progress-missing-event-id': event.pop('uuid')
+                if mode == 'child-progress-invalid-event-id': event['uuid']='not-a-uuid'
+                if mode == 'child-progress-invalid-tool-id': event['tool_use_id']='bad\nidentity'
+                if mode == 'child-progress-invalid-tool-name': event['tool_name']='bad\nname'
+                if mode == 'child-progress-foreign-session': event['session_id']='22334455-6677-8899-0011-223344556677'
+                if mode == 'child-progress-foreign-prompt': event['user_message_uuid']='22334455-6677-8899-0011-223344556677'
+                if mode == 'child-progress-foreign-prompts': event['user_message_uuids']=[value['uuid'],'22334455-6677-8899-0011-223344556677']
+                emit(event);emit(event)
         if mode == 'child-complete':
             for suffix in ('a','b'):
                 child={'type':'assistant','session_id':session,'uuid':'event-child-'+suffix,
@@ -252,6 +280,59 @@ class ClaudeDriverTests(unittest.TestCase):
                     driver.run("Read only")
                 self.assertNotIn("must not attach", json.dumps(states))
         self.assertEqual("111", (self.root / "claude-prompt-count").read_text())
+
+    def test_parallel_child_tool_progress_keeps_original_sources_and_deduplicates_only_exact_events(self):
+        driver, states = self.driver("child-progress")
+        result = driver.run("Read the original project")
+        rows = [row for row in result["progress"]["events"] if row["nativeType"] == "tool_progress"]
+        self.assertEqual(2, len(rows))
+        self.assertEqual(["toolu_child_a", "toolu_child_b"], [row["parentToolUseId"] for row in rows])
+        self.assertEqual(["same-child-tool"] * 2, [row["itemId"] for row in rows])
+        for row in rows:
+            self.assertEqual("claude_complete_child_v1", row["childSourceProtocol"])
+            self.assertEqual("2.1.317", row["nativeLineageVersion"])
+            self.assertEqual(driver.session_id, row["parentSessionId"])
+            self.assertEqual(driver.prompt_id, row["parentPromptRequestId"])
+            self.assertEqual("Read", row["tool"])
+            self.assertEqual("running", row["status"])
+            self.assertEqual(str(uuid.UUID(row["nativeEventId"])), row["nativeEventId"])
+            self.assertNotIn("text", row)
+        self.assertEqual("2.1.317", result["modelRuntime"]["runtimeVersion"])
+        self.assertEqual("真实 fixture response", result["output"])
+        self.assertEqual([], result["pendingQuestions"])
+        self.assertEqual([], result["pendingApprovals"])
+        self.assertFalse(driver.can_steer())
+        for private in ("NEVER_PROJECT_PROGRESS_TEXT", "NEVER_PROJECT_RETRY_AGENT", "not-a-controllable-child", "999999"):
+            self.assertNotIn(private, json.dumps(states))
+        self.assertEqual("1", (self.root / "claude-prompt-count").read_text())
+
+    def test_child_progress_without_exact_existing_initialize_and_system_version_is_explicitly_unavailable(self):
+        for mode in ("child-progress-unknown-version", "child-progress-missing-version", "child-progress-missing-system-version"):
+            with self.subTest(mode=mode):
+                driver, _ = self.driver(mode)
+                result = driver.run("Original approved invocation only")
+                rows = result["progress"]["events"]
+                self.assertFalse(any(row["nativeType"] == "tool_progress" for row in rows))
+                notice = [row for row in rows if row["nativeType"] == "claude/child_progress/unavailable"]
+                self.assertEqual(1, len(notice))
+                self.assertNotIn("parentToolUseId", notice[0])
+                self.assertNotIn("tool", notice[0])
+                self.assertNotIn("text", notice[0])
+                self.assertEqual("completed", result["status"])
+        self.assertEqual("111", (self.root / "claude-prompt-count").read_text())
+
+    def test_child_progress_identity_failures_never_become_parent_progress_or_replayed_invocations(self):
+        modes = ("child-progress-before-init", "child-progress-missing-session", "child-progress-invalid-parent",
+                 "child-progress-missing-event-id", "child-progress-invalid-event-id", "child-progress-invalid-tool-id",
+                 "child-progress-invalid-tool-name", "child-progress-foreign-session", "child-progress-foreign-prompt",
+                 "child-progress-foreign-prompts", "child-progress-system-version-changed")
+        for mode in modes:
+            with self.subTest(mode=mode):
+                driver, states = self.driver(mode)
+                with self.assertRaises(DriverError):
+                    driver.run("No replacement prompt")
+                self.assertFalse(any(row["nativeType"] == "tool_progress" for state in states for row in state["progress"]["events"]))
+        self.assertEqual("1" * len(modes), (self.root / "claude-prompt-count").read_text())
 
     def test_mismatched_identity_and_unconfirmed_permissions_never_become_success(self):
         for mode in ["wrong-session", "session-result", "wrong-mode", "wrong-tools", "invalid-json", "large-frame", "disconnect"]:

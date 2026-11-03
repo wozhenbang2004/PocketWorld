@@ -541,7 +541,8 @@ public final class FeatureHost implements AutoCloseable {
     }
     private JSONObject dispatchRemoteMessage(EngineModule module,String command,JSONObject binding,String text)throws Exception{return dispatchRemoteMessage(module,command,binding,text,null);}
     private JSONObject dispatchRemoteMessage(EngineModule module,String command,JSONObject binding,String text,String profileGeneration)throws Exception{
-        JSONObject target=new JSONObject();for(String key:new String[]{"profileId","jobId","jobOperationId","threadId","expectedTurnId","messageId"})target.put(key,binding.get(key));
+        JSONObject target=new JSONObject();for(String key:new String[]{"profileId","jobId","jobOperationId","threadId","messageId"})target.put(key,binding.get(key));
+        dev.pocketengine.features.remote.RemoteMessageTarget.copy(binding,target);
         if(text!=null)target.put("text",text);if(profileGeneration!=null)target.put("_profileBinding",profileGeneration).put("serviceBase",binding.getString("serviceBase"));
         JSONObject saved;
         try{saved=tasks.recordRemoteMessage(module.handle(command,target));}
