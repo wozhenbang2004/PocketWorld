@@ -26,6 +26,7 @@ import org.xml.sax.ext.DefaultHandler2;
 /** Bounded text projection of OPC parts, independently authored from public OOXML contracts. */
 final class OfficeDocumentReader {
     private static final int MAX_ENTRIES=1024, MAX_ENTRY=8*1024*1024, MAX_EXPANDED=32*1024*1024;
+    private static final int MAX_SLIDE_REFERENCES=1024;
     private static final String REL="http://schemas.openxmlformats.org/package/2006/relationships";
     private static final String CONTENT_TYPES="http://schemas.openxmlformats.org/package/2006/content-types";
     private final Map<String,byte[]> parts=new LinkedHashMap<>();
@@ -301,10 +302,15 @@ final class OfficeDocumentReader {
         Map<String,Relation> rels=relationships(part);List<String> slides=new ArrayList<>();
         parse(part,new Handler(){@Override void start(String uri,String n,Attributes a)throws Exception{
             if(depth==1&&(!ns(uri,"presentationml")||!n.equals("presentation")))throw new Invalid("Invalid PPTX presentation root");
-            if(ns(uri,"presentationml")&&n.equals("sldId"))slides.add(relationshipId(a));}});
-        int index=0;for(String id:slides) {
+            if(ns(uri,"presentationml")&&n.equals("sldId")) {
+                if(slides.size()>=MAX_SLIDE_REFERENCES)throw new Limit("Presentation has more than 1024 slide references");
+                slides.add(relationshipId(a));}}});
+        int index=0;long parsedBytes=0;for(String id:slides) {
             control.checkpoint();final int unit=++index;out.unit(unit);Relation r=rels.get(id);
             if(r==null||!r.type.endsWith("/slide"))throw new Invalid("Slide relationship missing");String path=r.target;
+            byte[] slide=parts.get(path);if(slide==null)throw new Invalid("Required XML part missing: "+path);
+            // Charge every reference, including aliases of one part and slides outside the requested range.
+            parsedBytes+=slide.length;if(parsedBytes>MAX_EXPANDED)throw new Limit("Slide XML exceeds 32 MiB cumulative parsing budget");
             parse(path,new Handler(){StringBuilder text;boolean capture;int paragraph,table,row,column;
                 @Override void start(String uri,String n,Attributes a)throws Exception{
                     if(depth==1&&(!ns(uri,"presentationml")||!n.equals("sld")))throw new Invalid("Invalid slide root");
