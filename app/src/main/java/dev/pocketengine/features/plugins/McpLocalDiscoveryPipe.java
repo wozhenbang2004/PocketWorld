@@ -69,7 +69,7 @@ public final class McpLocalDiscoveryPipe {
             };
             NativePipeAdmission admission=runtime.admitPipesForHost(invocation,McpLocalDiscovery.pipeIdentityForHost(confirmed.scope()),authorization,channel);
             // Beyond this boundary a failure is uncertain even if no disk receipt is yet readable.
-            runtimeEntered=true;channel.attach(runtime.dispatchPipesForHost(invocation,admission));protocol=new McpStdioClient(channel,original);JSONArray tools=protocol.discover();channel.metadata.set(McpLocalDiscovery.metadataForHost(confirmed,tasks,original,protocol,tools));protocolSucceeded=true;
+            runtimeEntered=true;channel.attach(runtime.dispatchPipesForHost(invocation,admission));protocol=McpStdioClient.forOriginalProgram(channel,original,confirmed.scope());JSONArray tools=protocol.discover();channel.metadata.set(McpLocalDiscovery.metadataForHost(confirmed,tasks,original,protocol,tools));protocolSucceeded=true;
             RuntimeReceipt observed=channel.observed();if(!channel.cleanlyClosed(observed)){
                 JSONObject eof=channel.handle.eof(original,UUID.randomUUID().toString(),channel::current,2000);
                 if(!Boolean.TRUE.equals(eof.opt("stdinClosed")))throw new IOException("原MCP EOF字节票未确认；没有重发");

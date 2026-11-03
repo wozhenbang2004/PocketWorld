@@ -20,6 +20,11 @@ public final class WorkProfileToolSelectionTest {
         policy.requireSkillRequest(new JSONObject().put("id", "selected").put("digest", "a".repeat(64))); assertFalse(policy.includesSkill(skill("selected", 3, "a".repeat(64))));
         assertThrows(SecurityException.class, () -> policy.requireSkillRequest(new JSONObject().put("id", "other").put("digest", "a".repeat(64))));
         assertThrows(SecurityException.class, () -> policy.requireSkillRequest(new JSONObject().put("id", "selected").put("digest", "a".repeat(64)).put("revision", 3)));
+        JSONObject scoped=skill("selected",2,"a".repeat(64)).put("executionGeneration",7).put("skillScopeFingerprint","b".repeat(64));
+        var pinned=new WorkProfileToolSelection(snapshot(new JSONArray().put(item("skill",scoped,true))),()->{});
+        assertTrue(pinned.includesSkill(scoped));assertFalse(pinned.includesSkill(new JSONObject(scoped.toString()).put("executionGeneration",8)));
+        assertFalse(pinned.includesSkill(new JSONObject(scoped.toString()).put("skillScopeFingerprint","c".repeat(64))));
+        assertFalse(pinned.includesSkill(skill("selected",2,"a".repeat(64))));assertTrue(policy.includesSkill(scoped));
     }
     @Test public void pluginToolRequiresOriginalInstallStateGrantDigestAndExplicitToolSubset() throws Exception {
         JSONObject binding = new JSONObject().put("id", "plugin-a").put("installationId", "install-a").put("stateRevision", 3).put("grantsDigest", "a".repeat(64)).put("tools", new JSONArray().put("read"));

@@ -53,4 +53,13 @@ public final class SkillCataloguePagingTest {
         JSONObject extra=new JSONObject(cursor.toString()).put("ownerId","owner");assertThrows(SecurityException.class,()->book.cataloguePageForHost(scope(),Set.of(),extra,1,1200));
     }
 
+    @Test public void sameContentReapprovalInvalidatesCatalogueCursor()throws Exception {
+        File root=new File(temp.getRoot(),"skills");SkillBook book=new SkillBook(root);JSONObject first=add(book,"a-guide");add(book,"b-guide");
+        JSONObject cursor=book.cataloguePageForHost(scope(),Set.of(),null,1,1200).getJSONObject("nextCursor");SkillBook reopened=new SkillBook(root);
+        reopened.setEnabled(scope(),first.getString("id"),false,"",false,1300);reopened.setEnabled(scope(),first.getString("id"),true,first.getString("digest"),true,1400);
+        assertThrows(SecurityException.class,()->book.cataloguePageForHost(scope(),Set.of(),cursor,1,1500));
+        JSONObject fresh=book.cataloguePageForHost(scope(),Set.of(),null,1,1500).getJSONArray("skills").getJSONObject(0);
+        assertEquals(1,fresh.getInt("revision"));assertEquals(first.getString("digest"),fresh.getString("digest"));assertEquals(3,fresh.getLong("executionGeneration"));
+    }
+
 }

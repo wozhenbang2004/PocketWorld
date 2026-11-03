@@ -106,7 +106,7 @@ public final class SkillExecutionTest {
     @Test public void enablementAllowedToolsAndRequiredCapabilitiesDoNotConferExecutionApproval()throws Exception {
         Fixture f=new Fixture();f.disable();assertThrows(SecurityException.class,f::plan);f.book.setEnabled(scope(),f.row.getString("id"),true,f.row.getString("digest"),true,now[0]);
         SkillExecution.Plan plan=f.plan();f.host.approved=false;assertThrows(SecurityException.class,()->f.execution.dispatch(plan,f.grant(plan),f.control));assertEquals(0,f.host.reserved);assertEquals(0,f.backend.submitted);
-        JSONObject row=f.book.install(scope(),input().put("requiredCapabilities",new JSONArray().put("workspace_write")),now[0]);f.book.setEnabled(scope(),row.getString("id"),true,row.getString("digest"),true,now[0]);
+        f.disable();JSONObject row=f.book.install(scope(),input().put("requiredCapabilities",new JSONArray().put("workspace_write")),now[0]);f.book.setEnabled(scope(),row.getString("id"),true,row.getString("digest"),true,now[0]);
         assertThrows(SecurityException.class,()->f.execution.prepare(run(),row.getString("id"),1,row.getString("digest"),request(),f.control));
     }
     @Test public void invalidPathsOutputTargetsArgumentsAndEvaluationModesAreRejected()throws Exception {
@@ -141,7 +141,7 @@ public final class SkillExecutionTest {
         Fixture expired=new Fixture();SkillExecution.Plan ep=expired.plan();SkillExecution.Grant grant=expired.grant(ep);now[0]=ep.expiresAt;assertThrows(SecurityException.class,()->expired.execution.dispatch(ep,grant,expired.control));assertEquals(0,expired.backend.submitted);
     }
     @Test public void packageExpiryBoundsReviewAndGrantLifetime()throws Exception {
-        Fixture f=new Fixture();JSONObject row=f.book.install(scope(),input().put("expiresAt",11000),now[0]);f.book.setEnabled(scope(),row.getString("id"),true,row.getString("digest"),true,now[0]);
+        Fixture f=new Fixture();f.disable();JSONObject row=f.book.install(scope(),input().put("expiresAt",11000),now[0]);f.book.setEnabled(scope(),row.getString("id"),true,row.getString("digest"),true,now[0]);
         SkillExecution.Plan plan=f.execution.prepare(run(),row.getString("id"),1,row.getString("digest"),request(),f.control);assertEquals(11000,plan.expiresAt);SkillExecution.Grant grant=f.grant(plan);now[0]=11000;assertThrows(SecurityException.class,()->f.execution.dispatch(plan,grant,f.control));
     }
     @Test public void changedRuntimeWorkspaceOrRevokedNativeGrantRequiresNewReview()throws Exception {

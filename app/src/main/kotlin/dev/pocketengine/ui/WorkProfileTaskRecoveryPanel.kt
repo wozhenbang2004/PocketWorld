@@ -24,7 +24,8 @@ internal fun WorkProfileTaskRecoveryPanel(task: JSONObject, host: NativeWorkProf
     inspect: (NativeWorkProfileHost.Page, String, String, Int, RunControl) -> NativeWorkProfileHost.Review,
     continueTask: (String, NativeWorkProfileHost.Selection, RunControl, (Result<JSONObject>) -> Unit) -> Unit,
     reviewProject: (() -> dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection)? = null,
-    continueProject: ((String, NativeWorkProfileHost.Selection, RunControl, dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection, (Result<JSONObject>) -> Unit) -> Unit)? = null) {
+    continueProject: ((String, NativeWorkProfileHost.Selection, RunControl, dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection, (Result<JSONObject>) -> Unit) -> Unit)? = null,
+    inspectProject: ((NativeWorkProfileHost.Page, String, String, Int, RunControl, dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection) -> NativeWorkProfileHost.Review)? = null) {
     val id = task.getString("id")
     val run = task.optString("runId")
     val epoch = task.optInt("coordinatorEpoch")
@@ -117,9 +118,17 @@ internal fun WorkProfileTaskRecoveryPanel(task: JSONObject, host: NativeWorkProf
                 TextButton(onClick = { refresh() }, enabled = !busy) { Text("刷新冻结记录") }
                 if (busy) TextButton(onClick = { val current = control; if (current != null) try { runControl(Runnable { current.cancel() }) } catch (_: Exception) { notice = "停止请求尚未入队，请用原任务停止入口核对。" } }) { Text(if (continuing) "请求停止原任务" else "取消预检") }
             }
+            if (originalProject == null && (task.optJSONArray("operations")?.length() ?: 0) == 0 && reviewProject != null && inspectProject != null) {
+                TextButton(onClick = {
+                    review = null; consent = false
+                    work({ reviewProject().let { it to it.view() } }) { selectedProject = it.first; selectedProjectView = it.second }
+                }, enabled = !busy && foreground) { Text("原任务尚未关联项目：选择当前原项目副本") }
+                if (selectedProject != null) Text("将关联原项目 ${selectedProjectView.optString("projectId")}；仅在本次原run仍为0动作时绑定，不增加预算。", style = MaterialTheme.typography.bodySmall)
+            }
             Button(onClick = {
                 val observing = RunControl(); control = observing; review = null
-                work({ inspect(page, id, run, epoch, observing) }) { review = it; reviewed = it.view() }
+                val project = selectedProject
+                work({ if (project != null && inspectProject != null) inspectProject(page, id, run, epoch, observing, project) else inspect(page, id, run, epoch, observing) }) { review = it; reviewed = it.view() }
             }, enabled = !busy && foreground && frozen != null) { Text("核对这项原任务的准确来源") }
             if (review != null) {
                 Text(if (reviewed.optBoolean("ready")) "原来源预检通过 · 尚未继续" else "原来源有阻塞 · 未继续", style = MaterialTheme.typography.titleSmall)
@@ -127,10 +136,6 @@ internal fun WorkProfileTaskRecoveryPanel(task: JSONObject, host: NativeWorkProf
                 for (index in 0 until (items?.length() ?: 0)) {
                     val item = items!!.getJSONObject(index)
                     Text("${item.optString("kind")} · ${item.optString("id")} · ${item.optString("status")}${if (item.optBoolean("optional") && !item.optBoolean("included")) "（明确省略可选项）" else ""}", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
-                }
-                if (originalProject == null && (task.optJSONArray("operations")?.length() ?: 0) == 0 && reviewProject != null) {
-                    TextButton(onClick = { work({ reviewProject().let { it to it.view() } }) { selectedProject = it.first; selectedProjectView = it.second; consent = false } }, enabled = !busy && foreground) { Text("原任务尚未关联项目：选择当前原项目副本") }
-                    if (selectedProject != null) Text("将关联原项目 ${selectedProjectView.optString("projectId")}；仅在本次原run仍为0动作时绑定，不增加预算。", style = MaterialTheme.typography.bodySmall)
                 }
                 originalProject?.let { Text("继续原项目 ${it.optString("projectId")} · ${it.optString("runtime")}；不更换副本或追加原预算。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk) }
                 if (!WorkProfileDrafts.runnable(reviewed, originalProject != null || selectedProject != null)) Text("原配置含本入口尚未应用的字段或模型不完整。只保留引用，不静默忽略、改写原任务或替换模型。", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)

@@ -884,7 +884,7 @@ public final class LocalModule implements EngineModule {
         for(String path:paths){JSONObject before=original.get(path),now=current.get(path);String hash=now==null?"absent":now.getString("sha256"),old=before==null?"absent":before.optString("sha256");
             String change=hash.equals(old)?"unchanged":now==null?"deleted":old.equals("absent")?"added":"modified";if(!change.equals("unchanged"))changed++;
             if(now==null&&change.equals("unchanged"))continue;
-            entries.put(new JSONObject().put("path",path).put("change",change).put("sha256",hash).put("bytes",now==null?0:now.getLong("bytes")).put("sourceVersion",before==null?0:before.optInt("sourceVersion")).put("binary",now!=null?now.optBoolean("binary"):before!=null&&before.optBoolean("binary")));
+            entries.put(new JSONObject().put("path",path).put("change",change).put("beforeHash",old).put("sha256",hash).put("bytes",now==null?0:now.getLong("bytes")).put("sourceVersion",before==null?0:before.optInt("sourceVersion")).put("binary",now!=null?now.optBoolean("binary"):before!=null&&before.optBoolean("binary")));
         }
         JSONArray baseline=new JSONArray();for(String path:new TreeSet<>(original.keySet()))baseline.put(original.get(path));
         return new JSONObject().put("checkoutId",id).put("projectId",checkout.getString("projectId")).put("files",entries).put("changedCount",changed).put("fileCount",current.size())
