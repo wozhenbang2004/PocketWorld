@@ -117,4 +117,24 @@ public final class BrowserSemanticReadSqlTest {
             if(failed.get()!=null)throw new AssertionError("local model fixture",failed.get());assertTrue(outcome.summary,outcome.status.matches("completed|needs_confirmation"));assertEquals(4,step[0]);assertEquals(2,x.driver.reads);assertEquals(0,x.driver.original.mutableDispatches);assertNotNull(last[0]);JSONObject task=x.f.tasks.get(x.f.binding.taskId,false);assertEquals(3,task.getJSONArray("operations").length());assertEquals(1,BrowserTaskSourcePort.sourcesForOwner(x.f.tasks,x.f.binding.taskId).length());assertTrue(x.f.journal.restore().getJSONArray("messages").toString().contains("projectionSha256"));assertEquals(x.f.binding.runId,task.getString("runId"));
         }finally{worker.shutdownNow();worker.awaitTermination(2,TimeUnit.SECONDS);server.stop(0);}
     }}
+    @Test public void originalRunnerOrdinarySourcesUseFinalSafeTextAndRejectNativeTail()throws Exception {try(F x=new F()){
+        String canary="ordinary-fixture-model-key-008",tail="native-only-undelivered-tail-008";x.driver.original.observationText="Visible "+canary+" safe evidence "+"x".repeat(6100)+tail;
+        AtomicReference<Throwable> failure=new AtomicReference<>();JSONObject[] observed={null};String[] excerpt={null};int[] rounds={0};HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        server.createContext("/",exchange->{try{
+            String wire=new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8);assertFalse(wire.contains(canary));if(rounds[0]<2)assertFalse(wire.contains(tail));JSONObject request=new JSONObject(wire),receipt=null;JSONArray messages=request.getJSONArray("messages");for(int k=messages.length()-1;k>=0;k--)if(messages.getJSONObject(k).optString("role").equals("tool")){receipt=new JSONObject(messages.getJSONObject(k).getString("content"));break;}
+            JSONObject answer;int round=rounds[0]++;
+            if(round==0)answer=call("browser_task_observe",j("tabId",x.tab));
+            else if(round==1){assertNotNull(receipt);observed[0]=receipt;excerpt[0]=receipt.getString("text").substring(0,80);assertFalse(x.driver.original.observationText.contains(excerpt[0]));answer=call("browser_task_retain_source",j("tabId",x.tab,"observationId",receipt.getString("observationId"),"excerpt",tail));}
+            else if(round==2){assertNotNull(receipt);assertFalse(receipt.getBoolean("accepted"));assertEquals(0,BrowserTaskSourcePort.sourcesForOwner(x.f.tasks,x.f.binding.taskId).length());answer=call("browser_task_retain_source",j("tabId",x.tab,"observationId",observed[0].getString("observationId"),"excerpt",excerpt[0]));}
+            else{assertNotNull(receipt);assertTrue(receipt.toString(),receipt.getBoolean("sourceRetained"));answer=j("role","assistant","content","已保存本次实际交付摘录，未保存未交付尾文。");}
+            byte[] bytes=j("choices",new JSONArray().put(j("message",answer,"finish_reason",answer.has("tool_calls")?"tool_calls":"stop"))).toString().getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+        }catch(Throwable error){failure.compareAndSet(null,error);try{exchange.sendResponseHeaders(500,-1);}catch(Exception ignored){}}finally{exchange.close();}});server.start();ExecutorService runner=Executors.newSingleThreadExecutor();
+        try{
+            ModelConfig config=new ModelConfig("http://127.0.0.1:"+server.getAddress().getPort(),canary,"ordinary-source-original-runner",false,30,6);RunOutcome outcome=runner.submit(()->new AgentRunner(null,x.port).run(x.f.binding.taskId,"读取原网页并保留真实来源摘录",config,x.f.control,event->{},x.f.journal)).get(20,TimeUnit.SECONDS);
+            if(failure.get()!=null)throw new AssertionError("loopback model fixture",failure.get());assertTrue(outcome.summary,outcome.status.matches("completed|needs_confirmation"));assertEquals(4,rounds[0]);JSONArray sources=BrowserTaskSourcePort.sourcesForOwner(x.f.tasks,x.f.binding.taskId);assertEquals(1,sources.length());assertEquals(excerpt[0],sources.getJSONObject(0).getString("excerpt"));assertFalse(sources.toString().contains(canary));assertFalse(sources.toString().contains(tail));assertEquals(1,x.driver.original.observationReads.get());assertEquals(0,x.driver.original.mutableDispatches);
+        }finally{runner.shutdownNow();runner.awaitTermination(2,TimeUnit.SECONDS);server.stop(0);}
+    }}
+
+    private static JSONObject call(String name,JSONObject args)throws Exception {return j("role","assistant","content",JSONObject.NULL,"tool_calls",new JSONArray().put(j("id",UUID.randomUUID().toString(),"type","function","function",j("name",name,"arguments",args.toString()))));}
+
 }
